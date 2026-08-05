@@ -1,0 +1,19 @@
+# Node
+node_modules/
+dist/
+.env
+
+# Python
+__pycache__/
+*.pyc
+venv/
+env/
+.pytest_cache/
+
+# Docker & OS
+.DS_Store
+postgres-data/
+
+AGENTS.md
+.codex/
+.agents/

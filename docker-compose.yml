@@ -1,0 +1,42 @@
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: clinicforce-db
+    environment:
+      POSTGRES_DB: hapi
+      POSTGRES_USER: hapi
+      # Change this before using the stack outside of local development.
+      POSTGRES_PASSWORD: "K8r!mZ2qV7xL4pN9sT6wC3yH5dF1aB0e"
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - ./postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U hapi -d hapi"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+    networks:
+      - clinicforce
+
+  fhir:
+    image: hapiproject/hapi:latest
+    container_name: clinicforce-fhir
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/hapi
+      SPRING_DATASOURCE_USERNAME: hapi
+      SPRING_DATASOURCE_PASSWORD: "K8r!mZ2qV7xL4pN9sT6wC3yH5dF1aB0e"
+      SPRING_DATASOURCE_DRIVERCLASSNAME: org.postgresql.Driver
+      SPRING_JPA_PROPERTIES_HIBERNATE_DIALECT: org.hibernate.dialect.PostgreSQLDialect
+    ports:
+      - "8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - clinicforce
+
+networks:
+  clinicforce:
+    driver: bridge

@@ -1,0 +1,14 @@
+fastapi
+uvicorn
+pydantic
+passlib[bcrypt]
+httpx
+jwcrypto
+qrcode
+pillow
+pymupdf
+jinja2
+weasyprint
+python-multipart
+boto3
+lxml
