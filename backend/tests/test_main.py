@@ -15,6 +15,7 @@ import httpx
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.core.shl import encrypt_bundle, generate_symmetric_key, hash_pin  # noqa: E402
+from app.core import patient_store  # noqa: E402
 from app.ingestion.bedrock_extractor import ExtractedFact, facts_to_fhir_bundle  # noqa: E402
 from app.ingestion.pdf_parser import parse_pdf_text_with_llm, pdf_extraction_to_fhir_bundle  # noqa: E402
 from app.main import app  # noqa: E402
@@ -35,6 +36,23 @@ class MainRouteTests(unittest.IsolatedAsyncioTestCase):
         response = await self.client.get("/healthz")
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json(), {"status": "ok"})
+
+    def test_patient_store_schema_initializes_only_once_per_process(self) -> None:
+        """Concurrent request connections must not each issue schema-altering DDL."""
+        previous_state = patient_store._schema_initialized
+        patient_store._schema_initialized = False
+        first_connection, second_connection = Mock(), Mock()
+        try:
+            with (
+                patch("app.core.patient_store._database_url", return_value="postgresql://test"),
+                patch("app.core.patient_store.psycopg.connect", side_effect=[first_connection, second_connection]),
+                patch("app.core.patient_store._initialize_schema") as initialize,
+            ):
+                self.assertIs(patient_store._connection(), first_connection)
+                self.assertIs(patient_store._connection(), second_connection)
+            initialize.assert_called_once_with(first_connection)
+        finally:
+            patient_store._schema_initialized = previous_state
 
     async def test_integration_route_creates_an_encrypted_manifest(self) -> None:
         patient = {"resourceType": "Patient", "id": "patient-1"}

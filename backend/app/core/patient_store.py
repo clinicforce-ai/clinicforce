@@ -6,6 +6,7 @@ import json
 import os
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from threading import Lock
 from typing import Any
 from uuid import uuid4
 
@@ -14,6 +15,8 @@ from psycopg.rows import dict_row
 
 
 DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
+_schema_lock = Lock()
+_schema_initialized = False
 
 
 def _database_url() -> str:
@@ -62,10 +65,15 @@ class StoredPatientDocument(StoredDocument):
     patient_id: str = ""
 
 
-def _connection() -> psycopg.Connection[Any]:
-    """Connect to the ClinicForce PostgreSQL database configured by the deployment."""
-    connection = psycopg.connect(_database_url(), row_factory=dict_row)
+def _initialize_schema(connection: psycopg.Connection[Any]) -> None:
+    """Run the one-time, cross-process-safe storage migration.
+
+    Schema DDL takes exclusive PostgreSQL locks.  Running it for every request can
+    deadlock when endpoints fetch documents and records concurrently, so it is
+    guarded both in-process and across ECS tasks.
+    """
     with connection.cursor() as cursor:
+        cursor.execute("SELECT pg_advisory_xact_lock(%s)", (8_240_715_301,))
         cursor.execute("""CREATE TABLE IF NOT EXISTS patients (
             patient_id TEXT PRIMARY KEY, password_hash TEXT NOT NULL, created_at TEXT NOT NULL
         )""")
@@ -113,6 +121,21 @@ def _connection() -> psycopg.Connection[Any]:
             filename TEXT NOT NULL, s3_key TEXT NOT NULL, created_at TEXT NOT NULL
         )""")
     connection.commit()
+
+
+def _connection() -> psycopg.Connection[Any]:
+    """Connect to PostgreSQL, initializing the storage schema only once per task."""
+    global _schema_initialized
+    connection = psycopg.connect(_database_url(), row_factory=dict_row)
+    try:
+        if not _schema_initialized:
+            with _schema_lock:
+                if not _schema_initialized:
+                    _initialize_schema(connection)
+                    _schema_initialized = True
+    except Exception:
+        connection.close()
+        raise
     return connection
 
 
