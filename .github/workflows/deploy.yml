@@ -1,0 +1,113 @@
+name: Deploy ClinicForce application
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'backend/**'
+      - 'frontend/**'
+      - 'hapi/**'
+      - '.github/workflows/deploy.yml'
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+concurrency:
+  group: clinicforce-production-deploy
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: us-east-1
+  AWS_ACCOUNT_ID: '311057178360'
+  STACK_NAME: clinicforce-production
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate backend source
+        run: |
+          python3 -m pip install -r backend/requirements.txt
+          python3 -m compileall -q backend/app
+          python3 -m pytest -q backend/tests
+
+      - name: Validate frontend
+        working-directory: frontend
+        run: |
+          npm ci
+          npm run lint
+          npm run build
+
+  deploy:
+    needs: verify
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::311057178360:role/clinicforce-github-actions-deploy-managed
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Log in to Amazon ECR
+        id: ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build and publish immutable application images
+        env:
+          REGISTRY: ${{ steps.ecr.outputs.registry }}
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          docker build --pull --tag "$REGISTRY/clinicforce-backend:$IMAGE_TAG" backend
+          docker build --pull --tag "$REGISTRY/clinicforce-hapi:$IMAGE_TAG" hapi
+          docker push "$REGISTRY/clinicforce-backend:$IMAGE_TAG"
+          docker push "$REGISTRY/clinicforce-hapi:$IMAGE_TAG"
+
+      - name: Update only the released image parameters
+        env:
+          REGISTRY: ${{ steps.ecr.outputs.registry }}
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          aws cloudformation update-stack \
+            --stack-name "$STACK_NAME" \
+            --use-previous-template \
+            --capabilities CAPABILITY_NAMED_IAM \
+            --parameters \
+              "ParameterKey=BackendImageUri,ParameterValue=$REGISTRY/clinicforce-backend:$IMAGE_TAG" \
+              "ParameterKey=HapiImageUri,ParameterValue=$REGISTRY/clinicforce-hapi:$IMAGE_TAG" \
+              ParameterKey=HostedZoneId,UsePreviousValue=true \
+              ParameterKey=AppDomainName,UsePreviousValue=true \
+              ParameterKey=CloudFrontOriginPrefixListId,UsePreviousValue=true \
+              ParameterKey=BedrockModelId,UsePreviousValue=true
+          aws cloudformation wait stack-update-complete --stack-name "$STACK_NAME"
+          aws ecs wait services-stable --cluster clinicforce-production --services backend hapi
+
+      - name: Build and publish frontend assets
+        id: frontend
+        working-directory: frontend
+        run: |
+          set -euo pipefail
+          npm ci
+          npm run build
+          echo "bucket=$(aws cloudformation describe-stacks --stack-name "$STACK_NAME" --query 'Stacks[0].Outputs[?OutputKey==`StaticBucketName`].OutputValue' --output text)" >> "$GITHUB_OUTPUT"
+          echo "distribution=$(aws cloudformation describe-stacks --stack-name "$STACK_NAME" --query 'Stacks[0].Outputs[?OutputKey==`DistributionId`].OutputValue' --output text)" >> "$GITHUB_OUTPUT"
+
+      - name: Publish frontend and invalidate CloudFront
+        working-directory: frontend
+        env:
+          STATIC_BUCKET: ${{ steps.frontend.outputs.bucket }}
+          DISTRIBUTION_ID: ${{ steps.frontend.outputs.distribution }}
+        run: |
+          set -euo pipefail
+          test -n "$STATIC_BUCKET"
+          test -n "$DISTRIBUTION_ID"
+          aws s3 sync dist/ "s3://$STATIC_BUCKET/" --delete
+          aws cloudfront create-invalidation --distribution-id "$DISTRIBUTION_ID" --paths '/*'
