@@ -8,7 +8,7 @@
 
 ---
 
-## 1. Purpose and Scope
+# 1. Purpose and Scope
 
 This document is the Version 1 technical reference for ClinicForce. It describes the production architecture, application components, data flow, AWS infrastructure, security boundaries, document-ingestion pipeline, Smart Health Link (SHL)/QR workflow, doctor reporting workflow, testing status, and deployment process.
 
@@ -767,73 +767,9 @@ Citation links inside the PDF point to the signed, document-specific source-down
 
 ---
 
-# 18. Incident and Reliability Fixes
+# 18. Deployment Architecture
 
-## 18.1 QR HTTP 500 / PostgreSQL deadlock
-
-The QR generation failure was caused by concurrent schema-altering database operations.
-
-### Previous behavior
-
-Two concurrent requests could both execute `ALTER TABLE` work.
-
-This caused PostgreSQL lock contention:
-
-```text
-Request A
-  └── waits for lock held by Request B
-
-Request B
-  └── waits for lock held by Request A
-```
-
-The result was a PostgreSQL deadlock and a QR-generation `500` response.
-
-### Current behavior
-
-Schema initialization now:
-
-- runs once per backend process;
-- is protected by an in-process lock;
-- uses a PostgreSQL advisory lock across ECS tasks;
-- does not execute schema-changing DDL during normal requests.
-
-The fix was initially deployed in backend revision 6 and was subsequently superseded by revision 7.
-
----
-
-# 19. Previous Architecture and Configuration Drift
-
-The investigation identified several areas of previous configuration drift:
-
-- live AWS resources and manual deployment history were not always represented cleanly in the infrastructure repository;
-- CloudFormation was not consistently the production source of truth;
-- stale parameter files referenced older deployment approaches;
-- the initial infrastructure workflow did not reliably correspond to the active production stack;
-- frontend/API routing had previously produced browser `Failed to fetch` errors;
-- document storage required a stronger boundary to ensure PDF bytes remained in S3;
-- concurrent schema-altering requests caused the QR PostgreSQL deadlock;
-- the clinical PDF previously contained empty columns, global source registers, poor table sizing, and non-downloadable citations.
-
-### Current state
-
-ClinicForce production is now represented by:
-
-```text
-clinicforce-production
-```
-
-through the production CloudFormation template.
-
-There may still be unrelated manually created AWS resources in the account. Those should not automatically be considered part of ClinicForce.
-
-Scribe is intentionally excluded.
-
----
-
-# 20. Deployment Architecture
-
-## 20.1 Current source state
+## 18.1 Current source state
 
 Application changes are on GitHub `main`.
 
@@ -850,37 +786,7 @@ Infrastructure work is on the PR-ready branch:
 infra/clinicforce-production-source
 ```
 
-## 20.2 Current CI/CD limitation
-
-The GitHub credential used during the latest work does not have sufficient permission to modify:
-
-```text
-.github/workflows/*
-```
-
-Required permissions include:
-
-- repository write permission;
-- `workflow` permission;
-- organization SSO authorization if required by the organization.
-
-**Never place a GitHub token in source code, documentation, logs, or chat.**
-
-## 20.3 Intended CI/CD behavior
-
-Once GitHub workflow permissions are corrected:
-
-| Trigger | Expected result |
-|---|---|
-| PR to `clinicforce-aws/main` | CloudFormation validation runs |
-| Merge infrastructure PR | `clinicforce-production` CloudFormation stack deploys |
-| Push application code to `clinicforce/main` | Tests run, backend/HAPI images build and publish, frontend syncs to S3, CloudFront invalidates, and CloudFormation updates the backend image |
-
-Until workflow permissions are fixed, production can still be deployed through the existing AWS deployment process, but deployments are not yet completely self-service through GitHub.
-
----
-
-# 21. Local Backend Development
+# 19. Local Backend Development
 
 The backend uses AWS Bedrock for PDF extraction and doctor-summary functionality.
 
@@ -916,7 +822,7 @@ The backend uses the standard AWS credential-provider chain, including:
 
 ---
 
-# 22. ECS Runtime Configuration
+# 20. ECS Runtime Configuration
 
 The production backend is designed to use its ECS task role for AWS services such as Bedrock and S3.
 
@@ -947,7 +853,7 @@ PDF bytes are stored in S3 under patient-specific prefixes. RDS stores the exact
 
 ---
 
-# 23. ECS Service Discovery
+# 21. ECS Service Discovery
 
 For ECS environments, service discovery should be used instead of hard-coded task IP addresses.
 
@@ -986,7 +892,7 @@ The stable public application URL is important because it is embedded into gener
 
 ---
 
-# 24. Production Verification and Test Results
+# 22. Production Verification and Test Results
 
 The following checks were completed successfully for the current release:
 
@@ -1006,27 +912,11 @@ Production source-link verification used a synthetic encrypted FHIR bundle and d
 
 ---
 
-# 25. Temporary Release Infrastructure
-
-Temporary CodeBuild infrastructure used during the release was removed afterward.
-
-Deleted resources included:
-
-- temporary CodeBuild project;
-- temporary IAM build role;
-- temporary IAM policy;
-- temporary build log group;
-- temporary source-release bucket.
-
-This was done to avoid ongoing infrastructure cost.
-
----
-
-# 26. Security Model
+# 23. Security Model
 
 ClinicForce's security model relies on multiple independent boundaries.
 
-## 26.1 Network boundaries
+## 23.1 Network boundaries
 
 ```text
 Internet
@@ -1047,7 +937,7 @@ Backend ECS
 
 HAPI and RDS are not public services.
 
-## 26.2 Storage boundaries
+## 23.2 Storage boundaries
 
 ```text
 Patient PDF
@@ -1061,7 +951,7 @@ Structured clinical data
 RDS + HAPI FHIR
 ```
 
-## 26.3 Application-level protection
+## 23.3 Application-level protection
 
 - patient PINs are salted and hashed;
 - plaintext PINs are not persisted;
@@ -1074,23 +964,23 @@ RDS + HAPI FHIR
 
 ---
 
-# 27. Operational Constraints and Known Limitations
+# 24. Operational Constraints and Known Limitations
 
 Version 1 intentionally runs with a cost-conscious footprint.
 
-### 27.1 Single ECS task
+### 24.1 Single ECS task
 
 Backend and HAPI each run one task.
 
 **Impact:** not highly available.
 
-### 27.2 Public-subnet ECS deployment
+### 24.2 Public-subnet ECS deployment
 
 ECS tasks receive public IPs to avoid NAT Gateway cost.
 
 **Impact:** architecture is less isolated than a fully private-subnet deployment, although security groups restrict application access.
 
-### 27.3 RDS instance size
+### 24.3 RDS instance size
 
 The current database uses:
 
@@ -1100,25 +990,22 @@ db.t4g.micro
 
 **Impact:** appropriate for low traffic but should be reviewed before significant scale-up.
 
-### 27.4 Seven-day S3 non-current version retention
+### 24.4 Seven-day S3 non-current version retention
 
 Older object versions are expired after seven days.
 
 **Impact:** limits recovery from older S3 object versions beyond the retention window.
 
-### 27.5 Seven-day source links
+### 24.5 Seven-day source links
 
 Doctor source-document links expire after seven days.
 
 **Impact:** an old report citation may require a newly generated signed link rather than remaining permanently accessible.
 
-### 27.6 CI/CD workflow permissions
-
-GitHub workflow updates remain blocked until the required repository/workflow permissions are available.
 
 ---
 
-# 28. Developer Quick Reference
+# 25. Developer Quick Reference
 
 ## Production
 
@@ -1185,9 +1072,9 @@ clinicforce-production-database-lzyxsxpysai8
 
 ---
 
-# 29. Troubleshooting Guide
+# 26. Troubleshooting Guide
 
-## 29.1 Browser shows `Failed to fetch`
+## 26.1 Browser shows `Failed to fetch`
 
 Check the request path first:
 
@@ -1214,7 +1101,7 @@ Verify:
 https://app.clinicforce.ai
 ```
 
-## 29.2 QR generation returns HTTP 500
+## 26.2 QR generation returns HTTP 500
 
 Check backend logs and PostgreSQL errors.
 
@@ -1224,7 +1111,7 @@ Normal requests must not perform schema-altering operations.
 
 Verify that schema initialization is performed only during backend initialization and that the advisory-lock mechanism remains intact.
 
-## 29.3 Source citation returns HTTP 403
+## 26.3 Source citation returns HTTP 403
 
 Check:
 
@@ -1236,7 +1123,7 @@ Check:
 6. S3 object key;
 7. backend IAM permission to access the document bucket.
 
-## 29.4 PDF extraction fails
+## 26.4 PDF extraction fails
 
 Check:
 
@@ -1249,7 +1136,7 @@ Check:
 7. configured Bedrock model is available in `us-east-1`;
 8. backend logs for extraction and persistence failures.
 
-## 29.5 HAPI cannot be reached
+## 26.5 HAPI cannot be reached
 
 Check:
 
@@ -1263,7 +1150,7 @@ The backend should use the internal service name rather than a task IP.
 
 ---
 
-# 30. Deployment Checklist
+# 27. Deployment Checklist
 
 Before production deployment:
 
@@ -1311,7 +1198,7 @@ Before production deployment:
 
 ---
 
-# 31. Version 1 Change Summary
+# 28. Version 1 Change Summary
 
 Version 1 establishes the following production capabilities:
 
@@ -1331,11 +1218,10 @@ Version 1 establishes the following production capabilities:
 14. The previous QR PostgreSQL deadlock was removed from normal request processing.
 15. Automated backend/frontend/infrastructure validation is in place.
 16. Production deployment is healthy.
-17. Fully self-service GitHub CI/CD remains dependent on repository workflow permissions.
 
 ---
 
-# 32. Architecture Decisions
+# 29. Architecture Decisions
 
 ## ADR-001 — Store source PDFs in S3, not PostgreSQL
 
@@ -1371,24 +1257,9 @@ Version 1 establishes the following production capabilities:
 
 ---
 
-# 33. Future Engineering Priorities
 
-The following items are logical next steps beyond Version 1:
 
-1. Complete GitHub workflow permissions and enable fully self-service CI/CD.
-2. Evaluate multiple ECS tasks for backend and HAPI.
-3. Revisit private-subnet ECS deployment and controlled outbound connectivity.
-4. Establish stronger production observability and alerting.
-5. Review database sizing as traffic grows.
-6. Review backup and disaster-recovery objectives.
-7. Add automated end-to-end tests covering patient upload → extraction → QR → doctor summary → source download.
-8. Add deployment rollback validation.
-9. Establish formal infrastructure drift detection.
-10. Define production retention policies for clinical documents and derived data.
-
----
-
-# 34. Version 1 Operational Summary
+# 30. Version 1 Operational Summary
 
 The current ClinicForce production architecture can be summarized as:
 
@@ -1418,5 +1289,3 @@ The current ClinicForce production architecture can be summarized as:
 ```
 
 The key architectural principle is that **the backend is the application security and orchestration boundary**. Patients and doctors interact with ClinicForce through the application, while HAPI, RDS, and source-document storage remain protected internal services.
-
-Version 1 is production-deployed and operational, with the primary remaining deployment gap being GitHub workflow permissions required to complete fully self-service CI/CD.
