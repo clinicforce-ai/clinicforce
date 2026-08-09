@@ -1,5 +1,6 @@
 import { Html5Qrcode } from 'html5-qrcode'
 import { useEffect, useId, useRef, useState } from 'react'
+import { ArrowLeft, Camera, ScanLine, ShieldCheck } from 'lucide-react'
 import { parseSmartHealthLink, type SmartHealthLink } from '../services/shl'
 
 interface ScannerProps { onScanned: (link: SmartHealthLink) => void; onCancel: () => void }
@@ -98,5 +99,16 @@ export default function Scanner({ onScanned, onCancel }: ScannerProps) {
 
   const cancel = () => { stopCamera.current(); onCancel() }
 
-  return <><button className="back-link" type="button" onClick={cancel}>← Back to home</button><section className="card scanner-card" aria-labelledby="scan-heading"><p className="step-label">Step 1 of 2</p><h1 id="scan-heading">Scan patient QR code</h1><p className="muted">Use the patient’s Smart Health Link to securely retrieve their clinical record.</p><div id={id} className="scanner-frame" /><p className="scanner-status">{status}</p>{error && <p className="scanner-error" role="alert">{error}</p>}</section></>
+  return <section className="narrow-panel animate-enter" aria-labelledby="scan-heading">
+    <button className="back-control" type="button" onClick={cancel}><ArrowLeft aria-hidden="true" className="size-4" /> Back to home</button>
+    <div className="panel scanner-panel">
+      <p className="eyebrow"><ScanLine aria-hidden="true" className="size-4" /> Clinician access · Step 1 of 2</p>
+      <h1 id="scan-heading">Scan the patient’s QR code</h1>
+      <p className="lead-small">Use the QR code the patient created in ClinicForce. You will ask for their passcode in the next step.</p>
+      <div className="scanner-frame"><div id={id} /></div>
+      <p className="scanner-status"><Camera aria-hidden="true" className="size-4" /> {status}</p>
+      {error && <p className="form-error" role="alert">{error}</p>}
+      <p className="scanner-privacy"><ShieldCheck aria-hidden="true" /> Camera access is used only to scan the QR code.</p>
+    </div>
+  </section>
 }

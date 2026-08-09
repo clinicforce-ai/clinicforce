@@ -1,58 +1,343 @@
-import { useState, type FormEvent } from 'react'
+import * as Dialog from '@radix-ui/react-dialog'
+import { useRef, useState, type FormEvent } from 'react'
+import {
+  ArrowLeft,
+  CheckCircle2,
+  ChevronRight,
+  ClipboardPlus,
+  Eye,
+  EyeOff,
+  FileText,
+  FolderOpen,
+  KeyRound,
+  LockKeyhole,
+  LoaderCircle,
+  LogOut,
+  Plus,
+  QrCode,
+  ShieldCheck,
+  Upload,
+  X,
+} from 'lucide-react'
+import {
+  downloadPatientDocument,
+  generatePatientLink,
+  loginPatient,
+  registerPatient,
+  savePatientRecord,
+  type LinkResponse,
+  type ManualRecordInput,
+  type PatientDocument,
+  type PatientSession,
+  type RecordCategory,
+  uploadPatientPdfs,
+} from '../services/api'
 
-const API_BASE_URL = 'http://localhost:8000'
-type RecordCategory = 'hospital' | 'lab' | 'vital' | 'condition' | 'allergy' | 'medication'
-interface PatientPortalProps { onBack: () => void }
-interface PatientDocument { id: number; filename: string; uploaded_at: string; resource_count: number }
-interface PatientRecord { id: number; category: RecordCategory; label: string; created_at: string }
-interface PatientSession { patient_id: string; documents: PatientDocument[]; records: PatientRecord[] }
-interface LinkResponse { shl_uri: string; qr_code_base64: string }
-const categoryNames: Record<RecordCategory, string> = { hospital: 'Hospital / clinic visit', lab: 'Lab result', vital: 'Vital sign', condition: 'Condition', allergy: 'Allergy', medication: 'Medication' }
+interface PatientPortalProps {
+  onBack: () => void
+}
 
-async function responseBody(response: Response): Promise<unknown> {
-  const body: unknown = await response.json().catch(() => null)
-  if (!response.ok) { const detail = body && typeof body === 'object' && 'detail' in body ? body.detail : null; throw new Error(typeof detail === 'string' ? detail : 'The request could not be completed.') }
-  return body
+type AuthMode = 'login' | 'register'
+type FormState = Record<Exclude<keyof ManualRecordInput, 'category'>, string>
+
+const emptyForm: FormState = {
+  hospital: '', name: '', value: '', unit: '', date: '', details: '', dosage: '',
+}
+
+const categoryMeta: Record<RecordCategory, { label: string; help: string; icon: string }> = {
+  hospital: { label: 'Care visit', help: 'A hospital, clinic, or care-team visit', icon: '01' },
+  lab: { label: 'Lab result', help: 'A test name and result', icon: '02' },
+  vital: { label: 'Vital sign', help: 'A measurement such as blood pressure', icon: '03' },
+  condition: { label: 'Condition', help: 'A diagnosis or ongoing condition', icon: '04' },
+  allergy: { label: 'Allergy', help: 'An allergy or intolerance', icon: '05' },
+  medication: { label: 'Medication', help: 'A medication you currently take', icon: '06' },
+}
+
+function dateLabel(value: string): string {
+  const date = new Date(value)
+  return Number.isNaN(date.getTime()) ? value : date.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })
+}
+
+function patientInitials(patientId: string): string {
+  return patientId.slice(0, 2).toUpperCase() || 'PT'
+}
+
+function messageFrom(error: unknown, fallback: string): string {
+  return error instanceof Error ? error.message : fallback
 }
 
 export default function PatientPortal({ onBack }: PatientPortalProps) {
-  const [mode, setMode] = useState<'login' | 'register'>('login')
-  const [patientId, setPatientId] = useState(''); const [password, setPassword] = useState('')
-  const [session, setSession] = useState<PatientSession | null>(null); const [files, setFiles] = useState<File[]>([])
-  const [sharePasscode, setSharePasscode] = useState(''); const [result, setResult] = useState<LinkResponse | null>(null)
-  const [category, setCategory] = useState<RecordCategory>('hospital'); const [form, setForm] = useState({ hospital: '', name: '', value: '', unit: '', date: '', details: '', dosage: '' })
-  const [loading, setLoading] = useState(false); const [error, setError] = useState('')
-  const updateForm = (key: keyof typeof form, value: string) => setForm((current) => ({ ...current, [key]: value }))
-  const setWorkspace = (body: unknown) => {
-    if (!body || typeof body !== 'object' || !('patient_id' in body) || !('documents' in body) || !('records' in body)) throw new Error('The server returned an invalid patient workspace.')
-    setSession(body as PatientSession)
-  }
+  const [mode, setMode] = useState<AuthMode>('login')
+  const [patientId, setPatientId] = useState('')
+  const [password, setPassword] = useState('')
+  const [showPassword, setShowPassword] = useState(false)
+  const [session, setSession] = useState<PatientSession | null>(null)
+  const [files, setFiles] = useState<File[]>([])
+  const [category, setCategory] = useState<RecordCategory>('hospital')
+  const [form, setForm] = useState<FormState>(emptyForm)
+  const [sharePasscode, setSharePasscode] = useState('')
+  const [link, setLink] = useState<LinkResponse | null>(null)
+  const [busy, setBusy] = useState<'auth' | 'upload' | 'record' | 'share' | 'download' | null>(null)
+  const [error, setError] = useState('')
+  const [notice, setNotice] = useState('')
+  const fileInput = useRef<HTMLInputElement>(null)
+
+  const setField = (key: keyof FormState, value: string) => setForm((current) => ({ ...current, [key]: value }))
+  const clearFeedback = () => { setError(''); setNotice('') }
+
   const authenticate = async (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault(); if (!patientId.trim() || !password) { setError('Enter your patient ID and password.'); return }
-    setLoading(true); setError(''); try { const response = await fetch(`${API_BASE_URL}/api/patient/${mode}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ patient_id: patientId.trim(), password }) }); setWorkspace(await responseBody(response)) } catch (caught) { setError(caught instanceof Error ? caught.message : 'Unable to open your workspace.') } finally { setLoading(false) }
+    event.preventDefault()
+    const normalizedId = patientId.trim()
+    if (!normalizedId || !password) {
+      setError('Enter both your patient ID and password.')
+      return
+    }
+    if (mode === 'register' && password.length < 12) {
+      setError('Use a password with at least 12 characters.')
+      return
+    }
+    clearFeedback()
+    setBusy('auth')
+    try {
+      setSession(mode === 'login' ? await loginPatient(normalizedId, password) : await registerPatient(normalizedId, password))
+      setNotice(mode === 'login' ? 'Your workspace is ready.' : 'Your account is ready. Add a report or health detail to get started.')
+    } catch (caught) {
+      setError(messageFrom(caught, 'Unable to open your workspace.'))
+    } finally {
+      setBusy(null)
+    }
   }
+
+  const chooseFiles = (nextFiles: File[]) => {
+    const invalid = nextFiles.find((file) => !file.name.toLowerCase().endsWith('.pdf'))
+    if (invalid) {
+      setFiles([])
+      if (fileInput.current) fileInput.current.value = ''
+      setError(`${invalid.name} is not a PDF. Choose PDF reports only.`)
+      return
+    }
+    const oversized = nextFiles.find((file) => file.size > 15 * 1024 * 1024)
+    if (oversized) {
+      setFiles([])
+      if (fileInput.current) fileInput.current.value = ''
+      setError(`${oversized.name} exceeds the 15 MB limit.`)
+      return
+    }
+    clearFeedback()
+    setFiles(nextFiles)
+  }
+
   const upload = async () => {
-    if (!session || !files.length) { setError('Choose one or more PDF reports to upload.'); return }
-    setLoading(true); setError(''); const data = new FormData(); data.append('patient_id', session.patient_id); data.append('password', password); files.forEach((file) => data.append('file', file))
-    try { setWorkspace(await responseBody(await fetch(`${API_BASE_URL}/api/patient/upload`, { method: 'POST', body: data }))); setFiles([]) } catch (caught) { setError(caught instanceof Error ? caught.message : 'Unable to upload the selected reports.') } finally { setLoading(false) }
+    if (!session || !files.length) {
+      setError('Choose at least one PDF report before uploading.')
+      return
+    }
+    clearFeedback()
+    setBusy('upload')
+    try {
+      setSession(await uploadPatientPdfs(session.patient_id, password, files))
+      setFiles([])
+      if (fileInput.current) fileInput.current.value = ''
+      setNotice(`${files.length === 1 ? 'Report' : `${files.length} reports`} added to your workspace.`)
+    } catch (caught) {
+      setError(messageFrom(caught, 'Unable to upload the selected reports.'))
+    } finally {
+      setBusy(null)
+    }
   }
+
+  const recordPayload = (): ManualRecordInput | null => {
+    const trimmed = Object.fromEntries(Object.entries(form).map(([key, value]) => [key, value.trim()])) as FormState
+    if (category === 'hospital' && !trimmed.hospital) {
+      setError('Enter the hospital or clinic for this care visit.')
+      return null
+    }
+    if ((category === 'lab' || category === 'vital') && (!trimmed.name || !trimmed.value)) {
+      setError('Enter both a measurement name and its result.')
+      return null
+    }
+    if (['condition', 'allergy', 'medication'].includes(category) && !trimmed.name) {
+      setError(`Enter the ${categoryMeta[category].label.toLowerCase()} name.`)
+      return null
+    }
+    return { category, ...trimmed }
+  }
+
   const saveRecord = async (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault(); if (!session) return
-    setLoading(true); setError(''); try { setWorkspace(await responseBody(await fetch(`${API_BASE_URL}/api/patient/records`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ patient_id: session.patient_id, password, category, ...form }) }))); setForm({ hospital: '', name: '', value: '', unit: '', date: '', details: '', dosage: '' }) } catch (caught) { setError(caught instanceof Error ? caught.message : 'Unable to save this health record.') } finally { setLoading(false) }
+    event.preventDefault()
+    if (!session) return
+    const payload = recordPayload()
+    if (!payload) return
+    clearFeedback()
+    setBusy('record')
+    try {
+      setSession(await savePatientRecord(session.patient_id, password, payload))
+      setForm(emptyForm)
+      setNotice('Health detail added to your workspace.')
+    } catch (caught) {
+      setError(messageFrom(caught, 'Unable to save this health detail.'))
+    } finally {
+      setBusy(null)
+    }
   }
+
   const generateLink = async () => {
-    if (!session || !/^\d{4}$/.test(sharePasscode)) { setError('Choose a four-digit sharing passcode.'); return }
-    setLoading(true); setError(''); try { const body = await responseBody(await fetch(`${API_BASE_URL}/api/patient/generate-link`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ patient_id: session.patient_id, password, passcode: sharePasscode }) })); if (!body || typeof body !== 'object' || !('qr_code_base64' in body) || !('shl_uri' in body)) throw new Error('The server returned an invalid secure link.'); setResult(body as LinkResponse) } catch (caught) { setError(caught instanceof Error ? caught.message : 'Unable to generate the secure link.') } finally { setLoading(false) }
+    if (!session) return
+    if (!/^\d{4}$/.test(sharePasscode)) {
+      setError('Choose a four-digit passcode for the clinician.')
+      return
+    }
+    if (!session.documents.length && !session.records.length) {
+      setError('Add a PDF report or health detail before creating a share link.')
+      return
+    }
+    clearFeedback()
+    setBusy('share')
+    try {
+      setLink(await generatePatientLink(session.patient_id, password, sharePasscode))
+    } catch (caught) {
+      setError(messageFrom(caught, 'Unable to generate the secure link.'))
+    } finally {
+      setBusy(null)
+    }
   }
+
   const openDocument = async (document: PatientDocument) => {
-    if (!session) return; setError(''); try { const response = await fetch(`${API_BASE_URL}/api/patient/documents/${document.id}/download`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ patient_id: session.patient_id, password }) }); if (!response.ok) throw new Error(await response.text() || 'Unable to open this report.'); const url = URL.createObjectURL(await response.blob()); window.open(url, '_blank', 'noopener,noreferrer'); window.setTimeout(() => URL.revokeObjectURL(url), 60_000) } catch (caught) { setError(caught instanceof Error ? caught.message : 'Unable to open this report.') }
+    if (!session) return
+    clearFeedback()
+    setBusy('download')
+    try {
+      const url = URL.createObjectURL(await downloadPatientDocument(session.patient_id, password, document.id))
+      window.open(url, '_blank', 'noopener,noreferrer')
+      window.setTimeout(() => URL.revokeObjectURL(url), 60_000)
+    } catch (caught) {
+      setError(messageFrom(caught, 'Unable to open this report.'))
+    } finally {
+      setBusy(null)
+    }
   }
-  if (loading) return <section className="card status-card" aria-live="polite"><span className="spinner" aria-hidden="true" /><h1>Updating your health workspace…</h1><p className="muted">Your records are processed locally and retained in your patient record.</p></section>
-  if (!session) return <section className="card patient-card" aria-labelledby="patient-heading"><p className="step-label">Patient portal</p><h1 id="patient-heading">Your health-record workspace</h1><p className="muted">Sign in to manage uploaded reports and the health details you enter yourself.</p><div className="button-row"><button className="secondary-button" type="button" onClick={() => { setMode('login'); setError('') }}>Sign in</button><button className="secondary-button" type="button" onClick={() => { setMode('register'); setError('') }}>Create account</button></div><form className="patient-form" onSubmit={authenticate}><label htmlFor="patient-id">Patient ID</label><input id="patient-id" value={patientId} onChange={(event) => setPatientId(event.target.value)} autoComplete="username" /><label htmlFor="patient-password">Password</label><input id="patient-password" type="password" value={password} onChange={(event) => setPassword(event.target.value)} autoComplete={mode === 'login' ? 'current-password' : 'new-password'} />{mode === 'register' && <p className="muted">Use at least four characters.</p>}{error && <p className="form-error" role="alert">{error}</p>}<div className="button-row"><button className="secondary-button" type="button" onClick={onBack}>Back</button><button className="primary-button" type="submit">{mode === 'login' ? 'Open my dashboard' : 'Create my account'}</button></div></form></section>
-  if (result) return <section className="card qr-card" aria-labelledby="qr-heading"><p className="step-label">Your secure health link is ready</p><h1 id="qr-heading">Show this QR code to your doctor</h1><p className="muted">It includes {session.documents.length} uploaded report{session.documents.length === 1 ? '' : 's'} and {session.records.length} entered health record{session.records.length === 1 ? '' : 's'}. Share the four-digit passcode separately.</p><img className="shl-qr-code" src={`data:image/png;base64,${result.qr_code_base64}`} alt="Smart Health Link QR code" /><button className="secondary-button" type="button" onClick={() => setResult(null)}>Back to my dashboard</button></section>
-  const needsValue = category === 'lab' || category === 'vital'; const needsName = category !== 'hospital'
-  return <section className="card patient-card patient-dashboard" aria-labelledby="workspace-heading"><p className="step-label">Patient dashboard</p><h1 id="workspace-heading">My health record</h1><p className="muted">Signed in as {session.patient_id}. Everything below is included when you create a doctor QR code.</p><section className="data-section"><h2>Uploaded reports</h2>{session.documents.length ? <ul className="clinical-list">{session.documents.map((document) => <li key={document.id}><button className="report-link" type="button" onClick={() => void openDocument(document)}>{document.filename}</button><br /><span className="muted">Uploaded {new Date(document.uploaded_at).toLocaleString()} · {document.resource_count} extracted clinical items</span></li>)}</ul> : <p className="empty-state">No PDF reports uploaded yet.</p>}</section><label htmlFor="medical-pdf">Add PDF reports</label><input id="medical-pdf" type="file" accept=".pdf,application/pdf" multiple onChange={(event) => setFiles(Array.from(event.target.files ?? []))} />{files.length > 0 && <p className="muted">{files.length} PDF{files.length === 1 ? '' : 's'} selected.</p>}<div className="button-row"><button className="primary-button" type="button" onClick={upload}>Save selected reports</button></div>
-    <section className="data-section structured-section"><h2>Entered health details</h2>{session.records.length ? <ul className="clinical-list">{session.records.map((record) => <li key={record.id}><strong>{categoryNames[record.category]}</strong>: {record.label}<br /><span className="muted">Added {new Date(record.created_at).toLocaleString()}</span></li>)}</ul> : <p className="empty-state">Add hospitals, lab reports, medications, and other health details here.</p>}</section>
-    <form className="patient-form record-form" onSubmit={saveRecord}><h2>Add a health detail</h2><label htmlFor="record-category">Record type</label><select id="record-category" value={category} onChange={(event) => setCategory(event.target.value as RecordCategory)}>{(Object.keys(categoryNames) as RecordCategory[]).map((key) => <option key={key} value={key}>{categoryNames[key]}</option>)}</select>{category === 'hospital' && <><label htmlFor="hospital">Hospital or clinic</label><input id="hospital" value={form.hospital} onChange={(event) => updateForm('hospital', event.target.value)} placeholder="e.g. City General Hospital" /></>}{needsName && <><label htmlFor="record-name">{category === 'lab' ? 'Test name' : category === 'vital' ? 'Measurement' : 'Name'}</label><input id="record-name" value={form.name} onChange={(event) => updateForm('name', event.target.value)} placeholder={category === 'lab' ? 'e.g. Hemoglobin A1c' : category === 'vital' ? 'e.g. Blood pressure' : undefined} /></>}{needsValue && <><label htmlFor="record-value">Result</label><input id="record-value" value={form.value} onChange={(event) => updateForm('value', event.target.value)} placeholder="e.g. 5.8 or Negative" /><label htmlFor="record-unit">Unit (optional)</label><input id="record-unit" value={form.unit} onChange={(event) => updateForm('unit', event.target.value)} placeholder="e.g. %, mg/dL" /></>}{category === 'medication' && <><label htmlFor="dosage">Dosage or instructions (optional)</label><input id="dosage" value={form.dosage} onChange={(event) => updateForm('dosage', event.target.value)} /></>}<label htmlFor="record-date">Date (optional)</label><input id="record-date" type="date" value={form.date} onChange={(event) => updateForm('date', event.target.value)} /><label htmlFor="details">Notes / reason (optional)</label><textarea id="details" value={form.details} onChange={(event) => updateForm('details', event.target.value)} placeholder="Anything your doctor should know" /><div className="button-row"><button className="primary-button" type="submit">Add to my dashboard</button></div></form>
-    <label htmlFor="share-passcode">Four-digit passcode for your doctor</label><input id="share-passcode" type="password" inputMode="numeric" maxLength={4} value={sharePasscode} onChange={(event) => setSharePasscode(event.target.value.replace(/\D/g, ''))} placeholder="••••" />{error && <p className="form-error" role="alert">{error}</p>}<div className="button-row"><button className="secondary-button" type="button" onClick={() => { setSession(null); setPassword(''); setResult(null); setError('') }}>Sign out</button><button className="primary-button" type="button" onClick={generateLink} disabled={!session.documents.length && !session.records.length}>Generate QR code</button></div></section>
+
+  const signOut = () => {
+    setSession(null)
+    setPassword('')
+    setFiles([])
+    setLink(null)
+    setSharePasscode('')
+    clearFeedback()
+  }
+
+  if (!session) {
+    return (
+      <section className="auth-layout animate-enter" aria-labelledby="patient-heading">
+        <button className="back-control" type="button" onClick={onBack}><ArrowLeft aria-hidden="true" className="size-4" /> Back to home</button>
+        <div className="auth-aside">
+          <p className="eyebrow"><ShieldCheck aria-hidden="true" className="size-4" /> Patient workspace</p>
+          <h1 id="patient-heading">Build a record you can carry into care.</h1>
+          <p className="lead-small">Add source reports and the health details you know. When you are ready, create a time-limited QR code for your clinician to scan.</p>
+          <div className="auth-note"><LockKeyhole aria-hidden="true" /><p><strong>You remain in control.</strong><br />Share only after you choose a passcode and show the QR code.</p></div>
+        </div>
+        <div className="panel auth-panel">
+          <div className="mode-tabs" role="tablist" aria-label="Patient account options">
+            <button className={mode === 'login' ? 'active' : ''} role="tab" aria-selected={mode === 'login'} type="button" onClick={() => { setMode('login'); clearFeedback() }}>Sign in</button>
+            <button className={mode === 'register' ? 'active' : ''} role="tab" aria-selected={mode === 'register'} type="button" onClick={() => { setMode('register'); clearFeedback() }}>Create account</button>
+          </div>
+          <h2>{mode === 'login' ? 'Welcome back' : 'Create your workspace'}</h2>
+          <p className="text-sm leading-6 text-[var(--muted-ink)]">{mode === 'login' ? 'Enter your account details to open your health record.' : 'Use a memorable patient ID and a strong password.'}</p>
+          <form className="stack-form" onSubmit={authenticate} noValidate>
+            <label htmlFor="patient-id">Patient ID</label>
+            <input id="patient-id" autoComplete="username" value={patientId} onChange={(event) => setPatientId(event.target.value)} placeholder="e.g. alex-morgan" />
+            <label htmlFor="patient-password">Password</label>
+            <div className="password-field">
+              <input id="patient-password" type={showPassword ? 'text' : 'password'} autoComplete={mode === 'login' ? 'current-password' : 'new-password'} value={password} onChange={(event) => setPassword(event.target.value)} aria-describedby={mode === 'register' ? 'password-help' : undefined} />
+              <button className="icon-button" type="button" onClick={() => setShowPassword((visible) => !visible)} aria-label={showPassword ? 'Hide password' : 'Show password'}>{showPassword ? <EyeOff aria-hidden="true" /> : <Eye aria-hidden="true" />}</button>
+            </div>
+            {mode === 'register' && <p id="password-help" className="field-help">Use at least 12 characters.</p>}
+            {error && <p className="form-error" role="alert">{error}</p>}
+            <button className="button button-primary w-full" type="submit" disabled={busy === 'auth'}>{busy === 'auth' ? <><LoaderCircle className="size-4 animate-spin" aria-hidden="true" /> Opening workspace</> : <>{mode === 'login' ? 'Open my workspace' : 'Create my workspace'} <ChevronRight aria-hidden="true" className="size-4" /></>}</button>
+          </form>
+        </div>
+      </section>
+    )
+  }
+
+  const recordsAvailable = session.documents.length + session.records.length
+  const needsName = category !== 'hospital'
+  const needsResult = category === 'lab' || category === 'vital'
+
+  return (
+    <section className="workspace animate-enter" aria-labelledby="workspace-heading">
+      <div className="workspace-banner">
+        <div className="avatar" aria-hidden="true">{patientInitials(session.patient_id)}</div>
+        <div><p className="eyebrow">Patient workspace</p><h1 id="workspace-heading">Your health record</h1><p>Signed in as <strong>{session.patient_id}</strong></p></div>
+        <button className="button button-ghost signout-button" type="button" onClick={signOut}><LogOut aria-hidden="true" className="size-4" /> Sign out</button>
+      </div>
+
+      {(error || notice) && <div className={error ? 'feedback feedback-error' : 'feedback feedback-success'} role={error ? 'alert' : 'status'}>{error ? <X aria-hidden="true" /> : <CheckCircle2 aria-hidden="true" />}<span>{error || notice}</span><button type="button" onClick={clearFeedback} aria-label="Dismiss message"><X aria-hidden="true" className="size-4" /></button></div>}
+
+      <div className="workspace-stats" aria-label="Workspace summary">
+        <div><FileText aria-hidden="true" /><span><strong>{session.documents.length}</strong> report{session.documents.length === 1 ? '' : 's'} stored</span></div>
+        <div><ClipboardPlus aria-hidden="true" /><span><strong>{session.records.length}</strong> health detail{session.records.length === 1 ? '' : 's'} added</span></div>
+        <div><ShieldCheck aria-hidden="true" /><span>{recordsAvailable ? 'Ready to share' : 'Add your first item'}</span></div>
+      </div>
+
+      <div className="workspace-grid">
+        <div className="workspace-main">
+          <section className="section-card" aria-labelledby="reports-heading">
+            <div className="section-heading"><div><p className="section-kicker">Source documents</p><h2 id="reports-heading">PDF reports</h2></div><FileText aria-hidden="true" className="section-icon" /></div>
+            {session.documents.length ? <ul className="item-list">{session.documents.map((document) => <li key={document.id}><div className="file-mark"><FileText aria-hidden="true" /></div><div className="min-w-0 flex-1"><button type="button" className="document-name" onClick={() => void openDocument(document)} disabled={busy === 'download'}>{document.filename}</button><p>{dateLabel(document.uploaded_at)} · {document.resource_count} extracted item{document.resource_count === 1 ? '' : 's'}</p></div><button className="item-action" type="button" onClick={() => void openDocument(document)} disabled={busy === 'download'} aria-label={`Open ${document.filename}`}>{busy === 'download' ? <LoaderCircle className="animate-spin" aria-hidden="true" /> : <Eye aria-hidden="true" />}</button></li>)}</ul> : <div className="empty-block"><FolderOpen aria-hidden="true" /><p><strong>No reports yet</strong><br />Upload a PDF to keep it with this workspace.</p></div>}
+            <div className="upload-zone">
+              <input ref={fileInput} id="medical-pdf" type="file" accept="application/pdf,.pdf" multiple onChange={(event) => chooseFiles(Array.from(event.target.files ?? []))} />
+              <label htmlFor="medical-pdf"><Upload aria-hidden="true" /><span><strong>Choose PDF reports</strong><small>PDF only · up to 15 MB each</small></span></label>
+              {files.length > 0 && <div className="selected-files"><span>{files.length} report{files.length === 1 ? '' : 's'} ready to add</span><button className="button button-secondary" type="button" disabled={busy === 'upload'} onClick={() => void upload()}>{busy === 'upload' ? <LoaderCircle className="size-4 animate-spin" aria-hidden="true" /> : <Upload aria-hidden="true" className="size-4" />} Add reports</button></div>}
+            </div>
+          </section>
+
+          <section className="section-card" aria-labelledby="detail-heading">
+            <div className="section-heading"><div><p className="section-kicker">Structured details</p><h2 id="detail-heading">Health details</h2></div><ClipboardPlus aria-hidden="true" className="section-icon" /></div>
+            {session.records.length ? <ul className="record-list">{session.records.map((record) => <li key={record.id}><span className="record-number">{categoryMeta[record.category].icon}</span><div><strong>{record.label}</strong><p>{categoryMeta[record.category].label} · added {dateLabel(record.created_at)}</p></div></li>)}</ul> : <div className="empty-block compact"><ClipboardPlus aria-hidden="true" /><p><strong>Add a health detail</strong><br />Include care visits, lab results, medications, and more.</p></div>}
+            <form className="record-form" onSubmit={saveRecord} noValidate>
+              <fieldset><legend>Add a detail</legend><div className="category-picker">{(Object.keys(categoryMeta) as RecordCategory[]).map((key) => <button className={category === key ? 'selected' : ''} type="button" key={key} onClick={() => { setCategory(key); setError('') }}><span>{categoryMeta[key].icon}</span>{categoryMeta[key].label}</button>)}</div></fieldset>
+              <p className="field-help mb-4">{categoryMeta[category].help}</p>
+              <div className="form-grid">
+                {category === 'hospital' && <div className="field full"><label htmlFor="hospital">Hospital or clinic <em>Required</em></label><input id="hospital" value={form.hospital} onChange={(event) => setField('hospital', event.target.value)} placeholder="e.g. City General Hospital" /></div>}
+                {needsName && <div className="field"><label htmlFor="record-name">{category === 'lab' ? 'Test name' : category === 'vital' ? 'Measurement' : 'Name'} <em>Required</em></label><input id="record-name" value={form.name} onChange={(event) => setField('name', event.target.value)} placeholder={category === 'lab' ? 'e.g. Hemoglobin A1c' : category === 'vital' ? 'e.g. Blood pressure' : 'Enter a name'} /></div>}
+                {needsResult && <div className="field"><label htmlFor="record-value">Result <em>Required</em></label><input id="record-value" value={form.value} onChange={(event) => setField('value', event.target.value)} placeholder="e.g. 5.8 or Negative" /></div>}
+                {needsResult && <div className="field"><label htmlFor="record-unit">Unit <span>Optional</span></label><input id="record-unit" value={form.unit} onChange={(event) => setField('unit', event.target.value)} placeholder="e.g. %, mg/dL" /></div>}
+                {category === 'medication' && <div className="field"><label htmlFor="dosage">Dosage <span>Optional</span></label><input id="dosage" value={form.dosage} onChange={(event) => setField('dosage', event.target.value)} placeholder="e.g. Take once daily" /></div>}
+                <div className="field"><label htmlFor="record-date">Date <span>Optional</span></label><input id="record-date" type="date" value={form.date} onChange={(event) => setField('date', event.target.value)} /></div>
+                <div className="field full"><label htmlFor="details">Notes <span>Optional</span></label><textarea id="details" value={form.details} onChange={(event) => setField('details', event.target.value)} placeholder="Anything you want your clinician to know" /></div>
+              </div>
+              <button className="button button-secondary" type="submit" disabled={busy === 'record'}>{busy === 'record' ? <LoaderCircle className="size-4 animate-spin" aria-hidden="true" /> : <Plus aria-hidden="true" className="size-4" />} Add health detail</button>
+            </form>
+          </section>
+        </div>
+
+        <aside className="share-card" aria-labelledby="share-heading">
+          <div className="share-icon"><QrCode aria-hidden="true" /></div>
+          <p className="eyebrow">Share with your clinician</p>
+          <h2 id="share-heading">Create a secure QR code</h2>
+          <p>It includes the {recordsAvailable} item{recordsAvailable === 1 ? '' : 's'} in this workspace. Give the clinician your passcode separately.</p>
+          <label htmlFor="share-passcode">Four-digit passcode</label>
+          <div className="passcode-field"><KeyRound aria-hidden="true" /><input id="share-passcode" type="password" inputMode="numeric" autoComplete="off" maxLength={4} value={sharePasscode} onChange={(event) => setSharePasscode(event.target.value.replace(/\D/g, ''))} placeholder="0000" /></div>
+          <button className="button button-primary w-full" type="button" onClick={() => void generateLink()} disabled={busy === 'share' || !recordsAvailable}>{busy === 'share' ? <LoaderCircle className="size-4 animate-spin" aria-hidden="true" /> : <QrCode aria-hidden="true" className="size-4" />} Generate QR code</button>
+          <p className="share-footnote"><ShieldCheck aria-hidden="true" /> The clinician needs both this QR code and your passcode.</p>
+        </aside>
+      </div>
+
+      <Dialog.Root open={Boolean(link)} onOpenChange={(open) => { if (!open) setLink(null) }}>
+        <Dialog.Portal>
+          <Dialog.Overlay className="dialog-overlay" />
+          <Dialog.Content className="dialog-content" aria-describedby="qr-description">
+            <Dialog.Close className="dialog-close" aria-label="Close QR code"><X aria-hidden="true" /></Dialog.Close>
+            <p className="eyebrow">Secure link created</p>
+            <Dialog.Title>Show this QR code to your clinician</Dialog.Title>
+            <Dialog.Description id="qr-description">They can scan it with ClinicForce, then enter the four-digit passcode you selected.</Dialog.Description>
+            {link && <img className="qr-image" src={`data:image/png;base64,${link.qr_code_base64}`} alt="Smart Health Link QR code for the current health record" />}
+            <div className="dialog-note"><KeyRound aria-hidden="true" /><span>Passcode: <strong>{sharePasscode}</strong></span></div>
+            <Dialog.Close className="button button-secondary w-full">Done</Dialog.Close>
+          </Dialog.Content>
+        </Dialog.Portal>
+      </Dialog.Root>
+    </section>
+  )
 }

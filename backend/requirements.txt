@@ -12,3 +12,4 @@ weasyprint
 python-multipart
 boto3
 lxml
+psycopg[binary]

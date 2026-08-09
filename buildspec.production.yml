@@ -1,0 +1,18 @@
+version: 0.2
+
+phases:
+  pre_build:
+    commands:
+      - ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+      - REGION=$AWS_DEFAULT_REGION
+      - REGISTRY=$ACCOUNT_ID.dkr.ecr.$REGION.amazonaws.com
+      - ': "${RELEASE_TAG:?Set RELEASE_TAG to an immutable release tag}"'
+      - aws ecr get-login-password --region $REGION | docker login --username AWS --password-stdin $REGISTRY
+  build:
+    commands:
+      - docker build -t $REGISTRY/clinicforce-backend:$RELEASE_TAG backend
+      - docker build -t $REGISTRY/clinicforce-hapi:$RELEASE_TAG hapi
+  post_build:
+    commands:
+      - docker push $REGISTRY/clinicforce-backend:$RELEASE_TAG
+      - docker push $REGISTRY/clinicforce-hapi:$RELEASE_TAG

@@ -1,7 +1,12 @@
-import { useState, type FormEvent } from 'react'
-import Dashboard from './components/Dashboard'
-import PatientPortal from './components/PatientPortal'
-import Scanner from './components/Scanner'
+import { lazy, Suspense, useState, type FormEvent } from 'react'
+import {
+  ArrowRight,
+  HeartPulse,
+  LockKeyhole,
+  ShieldCheck,
+  Stethoscope,
+  UserRound,
+} from 'lucide-react'
 import { decryptAndSummarize, fetchManifest, type DoctorSummary } from './services/api'
 import type { SmartHealthLink } from './services/shl'
 import clinicforceLogo from './assets/clinicforce-logo.png'
@@ -9,29 +14,162 @@ import './App.css'
 
 type View = 'landing' | 'patient' | 'scan' | 'pin' | 'loading' | 'dashboard'
 
+const Dashboard = lazy(() => import('./components/Dashboard'))
+const PatientPortal = lazy(() => import('./components/PatientPortal'))
+const Scanner = lazy(() => import('./components/Scanner'))
+
+function FeatureFallback() {
+  return <section className="narrow-panel" aria-live="polite"><div className="panel status-panel"><span className="spinner" aria-hidden="true" /><p className="lead-small">Loading your workspace…</p></div></section>
+}
+
 function App() {
   const [view, setView] = useState<View>('landing')
   const [link, setLink] = useState<SmartHealthLink | null>(null)
   const [pin, setPin] = useState('')
   const [summary, setSummary] = useState<DoctorSummary | null>(null)
   const [error, setError] = useState('')
-  const handleLinkScanned = (nextLink: SmartHealthLink) => { setLink(nextLink); setError(''); setView('pin') }
+
+  const handleLinkScanned = (nextLink: SmartHealthLink) => {
+    setLink(nextLink)
+    setError('')
+    setView('pin')
+  }
+
   const handleSubmitPin = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
-    if (!link || !/^\d{4}$/.test(pin)) { setError('Enter the four-digit PIN supplied by the patient.'); return }
-    setError(''); setView('loading')
-    try { const jwe = await fetchManifest(link.manifestUrl, pin); setSummary(await decryptAndSummarize(jwe, link.key)); setView('dashboard') }
-    catch (caughtError) { setError(caughtError instanceof Error ? caughtError.message : 'Unable to retrieve the patient file.'); setView('pin') }
+    if (!link || !/^\d{4}$/.test(pin)) {
+      setError('Enter the four-digit PIN supplied by the patient.')
+      return
+    }
+    setError('')
+    setView('loading')
+    try {
+      const jwe = await fetchManifest(link.manifestUrl, pin)
+      setSummary(await decryptAndSummarize(jwe, link.key))
+      setView('dashboard')
+    } catch (caughtError) {
+      setError(caughtError instanceof Error ? caughtError.message : 'Unable to retrieve the patient file.')
+      setView('pin')
+    }
   }
-  const restart = () => { setView('scan'); setLink(null); setPin(''); setSummary(null); setError('') }
-  const returnHome = () => { setView('landing'); setLink(null); setPin(''); setSummary(null); setError('') }
-  return <main className="app-shell"><header className="app-header"><img className="brand-logo" src={clinicforceLogo} alt="ClinicForce" /><div><p className="eyebrow">Secure health records</p><p className="header-title">{view === 'patient' ? 'Patient portal' : view === 'landing' ? 'Health portal' : 'Doctor portal'}</p></div><span className="secure-badge">Secure local session</span></header>
-    {view === 'landing' && <section className="landing-card" aria-labelledby="welcome-heading"><p className="step-label">Private health-data sharing</p><h1 id="welcome-heading">Welcome to ClinicForce</h1><p className="muted">Choose how you’d like to continue.</p><div className="portal-choice"><button className="portal-button patient-choice" type="button" onClick={() => setView('patient')}><span aria-hidden="true">⌁</span><strong>I am a Patient</strong><small>Upload records and create a secure QR code</small></button><button className="portal-button doctor-choice" type="button" onClick={() => setView('scan')}><span aria-hidden="true">+</span><strong>I am a Doctor</strong><small>Scan a patient’s secure QR code</small></button></div></section>}
-    {view === 'patient' && <PatientPortal onBack={returnHome} />}
-    {view === 'scan' && <Scanner onScanned={handleLinkScanned} onCancel={returnHome} />}
-    {view === 'pin' && <section className="card pin-card" aria-labelledby="pin-heading"><p className="step-label">Step 2 of 2</p><h1 id="pin-heading">Enter patient access PIN</h1><p className="muted">The QR link was read successfully. Enter the four-digit PIN provided by the patient to open this file.</p><form onSubmit={handleSubmitPin}><label htmlFor="pin">Four-digit PIN</label><input id="pin" inputMode="numeric" autoComplete="one-time-code" maxLength={4} pattern="[0-9]{4}" placeholder="••••" value={pin} onChange={(event) => setPin(event.target.value.replace(/\D/g, ''))} autoFocus />{error && <p className="form-error" role="alert">{error}</p>}<div className="button-row"><button className="secondary-button" type="button" onClick={restart}>Scan another code</button><button className="primary-button" type="submit">Open patient file</button></div></form></section>}
-    {view === 'loading' && <section className="card status-card" aria-live="polite"><span className="spinner" aria-hidden="true" /><h1>Decrypting &amp; summarizing patient file…</h1><p className="muted">This may take a moment while the local clinical summary is prepared.</p></section>}
-    {view === 'dashboard' && summary && <Dashboard data={summary} onScanAnother={restart} />}
-  </main>
+
+  const restart = () => {
+    setView('scan')
+    setLink(null)
+    setPin('')
+    setSummary(null)
+    setError('')
+  }
+
+  const returnHome = () => {
+    setView('landing')
+    setLink(null)
+    setPin('')
+    setSummary(null)
+    setError('')
+  }
+
+  return (
+    <div className="min-h-dvh bg-[var(--canvas)] text-[var(--ink)]">
+      <a className="skip-link" href="#main-content">Skip to content</a>
+      <header className="site-header">
+        <div className="shell flex min-h-20 items-center justify-between gap-4">
+          <button className="brand" type="button" onClick={returnHome} aria-label="ClinicForce home">
+            <img src={clinicforceLogo} alt="ClinicForce" width="180" height="48" />
+            <span className="hidden border-l border-[var(--line)] pl-4 text-left text-xs font-semibold uppercase tracking-[0.15em] text-[var(--muted-ink)] sm:block">
+              Personal health records
+            </span>
+          </button>
+          <div className="flex items-center gap-2 text-sm font-semibold text-[var(--muted-ink)]">
+            <ShieldCheck aria-hidden="true" className="size-5 text-[var(--green)]" />
+            <span className="hidden sm:inline">Private, patient-controlled</span>
+          </div>
+        </div>
+      </header>
+
+      <main id="main-content" className="shell py-8 sm:py-12">
+        {view === 'landing' && (
+          <section className="landing-grid animate-enter" aria-labelledby="welcome-heading">
+            <div className="landing-copy">
+              <p className="eyebrow"><HeartPulse aria-hidden="true" className="size-4" /> One record, on your terms</p>
+              <h1 id="welcome-heading">Health information that stays in your hands.</h1>
+              <p className="lead">
+                ClinicForce helps patients bring reports and health details together, then share an encrypted snapshot with a clinician when they choose.
+              </p>
+              <div className="trust-list" aria-label="How ClinicForce protects your information">
+                <p><LockKeyhole aria-hidden="true" /> A passcode protects every shared link</p>
+                <p><ShieldCheck aria-hidden="true" /> Source reports stay in secure document storage</p>
+              </div>
+            </div>
+            <div className="role-panel" aria-label="Choose your portal">
+              <p className="eyebrow">Choose a workspace</p>
+              <button className="role-card" type="button" onClick={() => setView('patient')}>
+                <span className="role-icon patient-icon"><UserRound aria-hidden="true" /></span>
+                <span><strong>Patient workspace</strong><small>Add reports, organize health details, and create a QR code for your clinician.</small></span>
+                <ArrowRight aria-hidden="true" className="role-arrow" />
+              </button>
+              <button className="role-card" type="button" onClick={() => setView('scan')}>
+                <span className="role-icon doctor-icon"><Stethoscope aria-hidden="true" /></span>
+                <span><strong>Clinician access</strong><small>Scan a patient’s QR code and open the health summary they chose to share.</small></span>
+                <ArrowRight aria-hidden="true" className="role-arrow" />
+              </button>
+              <p className="mt-5 text-sm leading-6 text-[var(--muted-ink)]">Use the patient workspace to create and manage your own account.</p>
+            </div>
+          </section>
+        )}
+
+        <Suspense fallback={<FeatureFallback />}>
+          {view === 'patient' && <PatientPortal onBack={returnHome} />}
+          {view === 'scan' && <Scanner onScanned={handleLinkScanned} onCancel={returnHome} />}
+
+        {view === 'pin' && (
+          <section className="narrow-panel animate-enter" aria-labelledby="pin-heading">
+            <button className="back-control" type="button" onClick={restart}>Back to scan</button>
+            <div className="panel">
+              <p className="eyebrow">Clinician access · Step 2 of 2</p>
+              <h1 id="pin-heading">Enter the patient’s passcode</h1>
+              <p className="lead-small">The QR code was read. Ask the patient for the four-digit passcode they set when sharing this record.</p>
+              <form className="stack-form" onSubmit={handleSubmitPin} noValidate>
+                <label htmlFor="pin">Four-digit passcode</label>
+                <input
+                  id="pin"
+                  className="pin-input"
+                  inputMode="numeric"
+                  autoComplete="one-time-code"
+                  maxLength={4}
+                  pattern="[0-9]{4}"
+                  placeholder="0000"
+                  value={pin}
+                  onChange={(event) => setPin(event.target.value.replace(/\D/g, ''))}
+                  autoFocus
+                  aria-describedby={error ? 'pin-error' : undefined}
+                />
+                {error && <p id="pin-error" className="form-error" role="alert">{error}</p>}
+                <button className="button button-primary w-full" type="submit"><LockKeyhole aria-hidden="true" className="size-4" /> Open shared record</button>
+              </form>
+            </div>
+          </section>
+        )}
+
+        {view === 'loading' && (
+          <section className="narrow-panel" aria-live="polite">
+            <div className="panel status-panel">
+              <span className="spinner" aria-hidden="true" />
+              <p className="eyebrow">Preparing the shared record</p>
+              <h1>Decrypting the clinical summary</h1>
+              <p className="lead-small">This can take a moment while ClinicForce safely prepares the information for review.</p>
+            </div>
+          </section>
+        )}
+
+          {view === 'dashboard' && summary && <Dashboard data={summary} onScanAnother={restart} onHome={returnHome} />}
+        </Suspense>
+      </main>
+      <footer className="shell border-t border-[var(--line)] py-6 text-sm text-[var(--muted-ink)]">
+        ClinicForce · Patient-controlled record sharing
+      </footer>
+    </div>
+  )
 }
+
 export default App

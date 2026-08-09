@@ -1,14 +1,18 @@
-"""Asynchronous client for the local HAPI FHIR R4 server."""
+"""Asynchronous client for the configured HAPI FHIR R4 server."""
 
 from __future__ import annotations
 
 from copy import deepcopy
+import os
 from typing import Any
 from uuid import uuid4
 
 import httpx
 
-FHIR_BASE_URL = "http://localhost:8080/fhir"
+HAPI_FHIR_URL = os.getenv("HAPI_FHIR_URL", "http://localhost:8080").rstrip("/")
+FHIR_BASE_URL = (
+    HAPI_FHIR_URL if HAPI_FHIR_URL.endswith("/fhir") else f"{HAPI_FHIR_URL}/fhir"
+)
 
 
 class FHIRRequestError(httpx.HTTPStatusError):
@@ -44,7 +48,11 @@ def _transaction_from_collection(bundle: dict[str, Any]) -> dict[str, Any]:
                         {"system": "urn:clinicforce:patient-id", "value": reference.removeprefix("Patient/")}
                     ],
                 },
-                "request": {"method": "POST", "url": "Patient"},
+                "request": {
+                    "method": "POST",
+                    "url": "Patient",
+                    "ifNoneExist": f"identifier=urn:clinicforce:patient-id|{reference.removeprefix('Patient/')}",
+                },
             }
         )
 
@@ -114,7 +122,7 @@ async def post_to_fhir(resource: dict) -> dict[str, Any]:
 
 
 async def get_patient_records(patient_id: str) -> dict[str, Any]:
-    """Retrieve a patient's complete record bundle from the local HAPI server."""
+    """Retrieve a patient's complete record bundle from HAPI."""
     url = f"{FHIR_BASE_URL}/Patient/{patient_id}/$everything"
     async with httpx.AsyncClient(timeout=30.0) as client:
         response = await client.get(url, headers={"Accept": "application/fhir+json"})

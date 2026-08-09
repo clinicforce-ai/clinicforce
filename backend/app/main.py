@@ -7,15 +7,16 @@ import base64
 import json
 import os
 from html import escape
+from pathlib import Path
 from typing import Any, Literal
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import fitz
 from fastapi import File, Form, UploadFile, FastAPI, HTTPException, Request, status
 from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse, Response
-from pydantic import BaseModel
+from fastapi.responses import JSONResponse, Response
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.core.shl import (
     create_shl_uri,
@@ -31,8 +32,9 @@ from app.logs.logger import log_error, log_info, log_warning
 from app.reports.pdf_builder import generate_doctor_pdf
 from app.reports.summarizer import summarize_fhir_bundle
 from jwcrypto import jwe, jwk
-from app.core.store import create_manifest, get_manifest
-from app.core.patient_store import add_document, add_record, create_patient, get_document, get_password_hash, list_documents, list_records
+from app.core.object_store import delete_object, enabled as s3_enabled, get_pdf, put_patient_pdf
+from app.core.patient_store import add_document, add_record, create_manifest, create_patient, get_document, get_manifest, get_password_hash, list_documents, list_records, update_document_extraction
+from app.ingestion.bedrock_extractor import EXTRACTION_VERSION, extract_pdf_to_fhir_bundle
 from app.ingestion.ccda_parser import parse_ccda_to_fhir_bundle
 from app.ingestion.fhir_client import FHIRRequestError, get_patient_records, post_to_fhir
 from app.ingestion.pdf_parser import (
@@ -47,17 +49,24 @@ from app.ingestion.wearables import (
 )
 
 
-MANIFEST_BASE_URL = os.getenv("MANIFEST_BASE_URL", "http://localhost:8000").rstrip("/")
-DOCTOR_PDF_PATH = "/tmp/clinical_summary.pdf"
+PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", "http://localhost:8000").rstrip("/")
+ALLOWED_ORIGINS = [origin.strip() for origin in os.getenv("CORS_ALLOW_ORIGINS", PUBLIC_BASE_URL).split(",") if origin.strip()]
+MAX_UPLOAD_BYTES = 15 * 1024 * 1024
 
 app = FastAPI(title="ClinicForce")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://localhost:5173"],
-    allow_credentials=True,
+    allow_origins=ALLOWED_ORIGINS,
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.get("/healthz", include_in_schema=False)
+async def healthz() -> dict[str, str]:
+    """Liveness endpoint used by the load balancer; it exposes no PHI."""
+    return {"status": "ok"}
 
 
 class IntegrationFailure(Exception):
@@ -69,48 +78,78 @@ class IntegrationFailure(Exception):
         super().__init__(f"{component}: {cause}")
 
 
-class ManifestRequest(BaseModel):
-    passcode: str
+class RequestModel(BaseModel):
+    """Strict JSON contract shared by every browser-facing endpoint."""
+
+    model_config = ConfigDict(extra="forbid")
 
 
-class IntegrationTestRequest(BaseModel):
-    patient_id: str
-    passcode: str
+class ManifestRequest(RequestModel):
+    passcode: str = Field(min_length=1, max_length=128)
+
+    @field_validator("passcode")
+    @classmethod
+    def normalize_passcode(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("Passcode is required")
+        return value
 
 
-class DoctorSummaryRequest(BaseModel):
-    jwe_payload: str
-    key: str
+class IntegrationTestRequest(RequestModel):
+    patient_id: str = Field(min_length=1, max_length=128)
+    passcode: str = Field(min_length=1, max_length=128)
 
 
-class PatientCredentials(BaseModel):
-    patient_id: str
-    password: str
+class DoctorSummaryRequest(RequestModel):
+    jwe_payload: str = Field(min_length=1, max_length=2_000_000)
+    key: str = Field(min_length=1, max_length=256)
+
+
+class PatientCredentials(RequestModel):
+    patient_id: str = Field(min_length=1, max_length=128)
+    password: str = Field(min_length=1, max_length=256)
+
+    @field_validator("patient_id")
+    @classmethod
+    def normalize_patient_id(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("Patient ID is required")
+        return value
 
 
 class GeneratePatientLinkRequest(PatientCredentials):
-    passcode: str
+    passcode: str = Field(min_length=4, max_length=128)
+
+    @field_validator("passcode")
+    @classmethod
+    def normalize_link_passcode(cls, value: str) -> str:
+        value = value.strip()
+        if len(value) < 4:
+            raise ValueError("Choose a sharing passcode of at least four characters")
+        return value
 
 
 class ManualRecordRequest(PatientCredentials):
     category: Literal["hospital", "lab", "vital", "condition", "allergy", "medication"]
-    hospital: str | None = None
-    name: str | None = None
-    value: str | None = None
-    unit: str | None = None
-    date: str | None = None
-    details: str | None = None
-    dosage: str | None = None
+    hospital: str | None = Field(default=None, max_length=256)
+    name: str | None = Field(default=None, max_length=256)
+    value: str | None = Field(default=None, max_length=256)
+    unit: str | None = Field(default=None, max_length=64)
+    date: str | None = Field(default=None, max_length=32)
+    details: str | None = Field(default=None, max_length=4_000)
+    dosage: str | None = Field(default=None, max_length=512)
 
 
-def _create_upload_shl(fhir_bundle: dict[str, Any], passcode: str) -> tuple[str, str, str]:
+def _create_upload_shl(patient_id: str | None, fhir_bundle: dict[str, Any], passcode: str) -> tuple[str, str, str]:
     """Create and retain the encrypted SHL payload outside the event loop."""
     key = generate_symmetric_key()
     key_bytes = base64.urlsafe_b64decode(key + "=" * (-len(key) % 4))
     encrypted_jwe = encrypt_bundle(fhir_bundle, key_bytes)
-    manifest_id = create_manifest(encrypted_jwe, hash_pin(passcode))
+    manifest_id = create_manifest(patient_id, encrypted_jwe, hash_pin(passcode))
     shl_uri = create_shl_uri(
-        f"{MANIFEST_BASE_URL}/manifest/{manifest_id}", key, "ClinicForce records"
+        f"{PUBLIC_BASE_URL}/manifest/{manifest_id}", key, "ClinicForce records"
     )
     return shl_uri, generate_qr_code(shl_uri), str(manifest_id)
 
@@ -140,6 +179,7 @@ def _document_payload(document: Any) -> dict[str, Any]:
         "filename": document.filename,
         "uploaded_at": document.uploaded_at,
         "resource_count": len(document.fhir_bundle.get("entry", [])),
+        "extraction_version": getattr(document, "extraction_version", None),
     }
 
 
@@ -160,6 +200,33 @@ def _workspace_payload(patient_id: str, documents: list[Any], records: list[Any]
         "documents": [_document_payload(document) for document in documents],
         "records": [_record_payload(record) for record in records],
     }
+
+
+async def _ensure_documents_extracted(patient_id: str, documents: list[Any]) -> None:
+    """Upgrade legacy document facts from their encrypted S3 source before sharing.
+
+    This is cached per document by extraction version.  It intentionally reads only
+    RDS-mapped keys for the authenticated patient, never lists the S3 bucket.
+    """
+    for document in documents:
+        if getattr(document, "extraction_version", None) == EXTRACTION_VERSION:
+            continue
+        pdf_bytes = await asyncio.to_thread(get_pdf, document.s3_key)
+        bundle = await extract_pdf_to_fhir_bundle(pdf_bytes, patient_id, document.filename)
+        if not bundle.get("entry"):
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"No supported clinical facts could be verified in {document.filename}",
+            )
+        updated = await asyncio.to_thread(
+            update_document_extraction,
+            patient_id,
+            document.id,
+            bundle,
+            EXTRACTION_VERSION,
+        )
+        if not updated:
+            raise RuntimeError(f"Document {document.id} was no longer available for extraction")
 
 
 def _manual_record_bundle(request: ManualRecordRequest, patient_id: str) -> tuple[str, dict[str, Any]]:
@@ -316,7 +383,7 @@ async def _build_ingestion_resources(patient_id: str) -> list[dict[str, Any]]:
         _make_demo_pdf, "Patient reports no additional symptoms in this demo form."
     )
     pdf_text = await extract_text_from_pdf_bytes(pdf_bytes)
-    log_info("Ingestion", "Sending extracted PDF text to AWS Bedrock")
+    log_info("Ingestion", "Parsing extracted PDF text locally")
     pdf_bundle = pdf_extraction_to_fhir_bundle(
         await parse_pdf_text_with_llm(pdf_text, "demo-intake.pdf"), patient_id
     )
@@ -338,8 +405,8 @@ async def _build_ingestion_resources(patient_id: str) -> list[dict[str, Any]]:
 async def register_patient(request: PatientCredentials) -> dict[str, Any]:
     """Create a local patient account for the persistent document workspace."""
     patient_id, password = _validate_patient_credentials(request.patient_id, request.password)
-    if len(password) < 4:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Password must contain at least four characters")
+    if len(password) < 12:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Password must contain at least 12 characters")
     created = await asyncio.to_thread(create_patient, patient_id, hash_password(password))
     if not created:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="A patient account with this ID already exists")
@@ -357,31 +424,56 @@ async def login_patient(request: PatientCredentials) -> dict[str, Any]:
 
 @app.post("/api/patient/upload")
 async def upload_patient_pdf(
-    files: list[UploadFile] = File(..., alias="file"),
+    file: list[UploadFile] | None = File(default=None),
+    files: list[UploadFile] | None = File(default=None),
     patient_id: str = Form(...),
     password: str = Form(...),
 ) -> dict[str, Any]:
-    """Ingest and persist one or more PDFs in the authenticated patient's workspace."""
+    """Ingest one or more PDFs, accepting both ``file`` and ``files`` form keys.
+
+    Supporting both keys makes the API resilient to standard FormData helpers while
+    preserving the original browser contract. Source bytes never enter PostgreSQL.
+    """
     patient_id = await _authenticate_patient(patient_id, password)
-    if not files or any(not file.filename or not file.filename.lower().endswith(".pdf") for file in files):
+    if not s3_enabled():
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Document storage is unavailable")
+    uploaded_files = [*(file or []), *(files or [])]
+    if not uploaded_files or any(
+        not uploaded.filename or not uploaded.filename.lower().endswith(".pdf")
+        for uploaded in uploaded_files
+    ):
         raise HTTPException(status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE, detail="Upload one or more PDF files")
 
     try:
-        for file in files:
+        for uploaded in uploaded_files:
             try:
-                pdf_bytes = await file.read()
+                pdf_bytes = await uploaded.read()
             finally:
-                await file.close()
+                await uploaded.close()
             if not pdf_bytes:
-                raise ValueError(f"Uploaded PDF '{file.filename}' is empty")
-            log_info("Ingestion", "Received in-memory PDF upload: %s", file.filename)
-            pdf_text = await extract_text_from_pdf_bytes(pdf_bytes)
-            extraction = await parse_pdf_text_with_llm(pdf_text, file.filename)
-            fhir_bundle = pdf_extraction_to_fhir_bundle(extraction, patient_id)
-            log_info("Ingestion", "Generated %d FHIR resources from %s", len(fhir_bundle.get("entry", [])), file.filename)
-            log_info("Database", "Posting uploaded FHIR resources to local HAPI as a transaction")
-            await post_to_fhir(fhir_bundle)
-            await asyncio.to_thread(add_document, patient_id, file.filename, pdf_bytes, fhir_bundle)
+                raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=f"Uploaded PDF '{uploaded.filename}' is empty")
+            if len(pdf_bytes) > MAX_UPLOAD_BYTES:
+                raise HTTPException(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail=f"'{uploaded.filename}' exceeds the 15 MB upload limit")
+            if not pdf_bytes.startswith(b"%PDF-"):
+                raise HTTPException(status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE, detail=f"'{uploaded.filename}' is not a valid PDF file")
+            log_info("Ingestion", "Received in-memory PDF upload: %s", uploaded.filename)
+            s3_key = await asyncio.to_thread(put_patient_pdf, patient_id, uploaded.filename, pdf_bytes, "source")
+            try:
+                fhir_bundle = await extract_pdf_to_fhir_bundle(pdf_bytes, patient_id, uploaded.filename)
+                if not fhir_bundle.get("entry"):
+                    raise HTTPException(
+                        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                        detail=f"No supported clinical facts could be verified in {uploaded.filename}",
+                    )
+                log_info("Ingestion", "Generated %d citation-backed FHIR resources from %s", len(fhir_bundle.get("entry", [])), uploaded.filename)
+                log_info("Database", "Posting uploaded FHIR resources to local HAPI as a transaction")
+                await post_to_fhir(fhir_bundle)
+                await asyncio.to_thread(add_document, patient_id, uploaded.filename, fhir_bundle, s3_key, EXTRACTION_VERSION)
+            except Exception:
+                await asyncio.to_thread(delete_object, s3_key)
+                raise
+    except HTTPException:
+        raise
     except Exception as exc:
         component = "Database" if isinstance(exc, FHIRRequestError) else "Ingestion"
         raise IntegrationFailure(component, exc) from exc
@@ -397,7 +489,11 @@ async def save_patient_record(request: ManualRecordRequest) -> dict[str, Any]:
     """Save a structured patient-entered record as FHIR R4 for dashboard and sharing."""
     patient_id = await _authenticate_patient(request.patient_id, request.password)
     label, fhir_bundle = _manual_record_bundle(request, patient_id)
-    await asyncio.to_thread(add_record, patient_id, request.category, label, fhir_bundle)
+    try:
+        await post_to_fhir(fhir_bundle)
+        await asyncio.to_thread(add_record, patient_id, request.category, label, fhir_bundle)
+    except Exception as exc:
+        raise IntegrationFailure("FHIR persistence", exc) from exc
     documents, records = await asyncio.gather(
         asyncio.to_thread(list_documents, patient_id), asyncio.to_thread(list_records, patient_id)
     )
@@ -415,8 +511,12 @@ async def generate_patient_link(request: GeneratePatientLinkRequest) -> dict[str
     if not documents and not records:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Add a PDF or a health record before generating a secure link")
     try:
+        await _ensure_documents_extracted(patient_id, documents)
+        documents = await asyncio.to_thread(list_documents, patient_id)
         fhir_bundle = _combine_document_bundles(documents, records)
-        shl_uri, qr_code_base64, manifest_id = await asyncio.to_thread(_create_upload_shl, fhir_bundle, request.passcode)
+        if not fhir_bundle["entry"]:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="No verified clinical facts are available to share")
+        shl_uri, qr_code_base64, manifest_id = await asyncio.to_thread(_create_upload_shl, patient_id, fhir_bundle, request.passcode)
         log_info("Secure Sharing", "Stored encrypted manifest %s for %d documents and %d structured records", manifest_id, len(documents), len(records))
         return {"shl_uri": shl_uri, "qr_code_base64": qr_code_base64}
     except Exception as exc:
@@ -428,10 +528,14 @@ async def download_patient_document(document_id: int, request: PatientCredential
     """Return one saved source PDF after re-authenticating the patient."""
     patient_id = await _authenticate_patient(request.patient_id, request.password)
     document = await asyncio.to_thread(get_document, patient_id, document_id)
-    if document is None or document.pdf_bytes is None:
+    if document is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Report not found")
+    try:
+        content = await asyncio.to_thread(get_pdf, document.s3_key)
+    except Exception as exc:
+        raise IntegrationFailure("Document storage", exc) from exc
     return Response(
-        content=document.pdf_bytes,
+        content=content,
         media_type="application/pdf",
         headers={"Content-Disposition": f'inline; filename="{document.filename}"'},
     )
@@ -474,9 +578,9 @@ async def test_integration(request: IntegrationTestRequest) -> dict[str, Any]:
             key = generate_symmetric_key()
             key_bytes = base64.urlsafe_b64decode(key + "=" * (-len(key) % 4))
             encrypted_jwe = encrypt_bundle(fhir_bundle, key_bytes)
-            manifest_id = create_manifest(encrypted_jwe, hash_pin(request.passcode))
+            manifest_id = create_manifest(None, encrypted_jwe, hash_pin(request.passcode))
             shl_uri = create_shl_uri(
-                f"{MANIFEST_BASE_URL}/manifest/{manifest_id}", key, "ClinicForce records"
+                f"{PUBLIC_BASE_URL}/manifest/{manifest_id}", key, "ClinicForce records"
             )
             qr_code_base64 = generate_qr_code(shl_uri)
             log_info("Secure Sharing", "Stored encrypted manifest %s and rendered PNG QR code", manifest_id)
@@ -498,8 +602,8 @@ async def test_integration(request: IntegrationTestRequest) -> dict[str, Any]:
 async def retrieve_manifest(manifest_id: UUID, request: ManifestRequest) -> dict:
     """Return an encrypted SHL payload after successful passcode verification."""
     log_info("Secure Sharing", "Manifest lookup for %s with passcode=%s", manifest_id, _mask_passcode(request.passcode))
-    manifest = get_manifest(manifest_id)
-    if manifest is None or not verify_pin(request.passcode, manifest.hashed_pin):
+    manifest = await asyncio.to_thread(get_manifest, str(manifest_id))
+    if manifest is None or not verify_pin(request.passcode, manifest["hashed_pin"]):
         log_warning("Secure Sharing", "Invalid manifest credentials for %s", manifest_id)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -510,7 +614,7 @@ async def retrieve_manifest(manifest_id: UUID, request: ManifestRequest) -> dict
         "files": [
             {
                 "contentType": "application/fhir+json",
-                "embedded": manifest.encrypted_jwe,
+                "embedded": manifest["encrypted_jwe"],
             }
         ]
     }
@@ -522,25 +626,22 @@ async def decrypt_and_summarize(request: DoctorSummaryRequest) -> dict[str, Any]
     try:
         log_info("Clinical Summary", "Decrypting clinician-provided JWE payload")
         fhir_bundle = await asyncio.to_thread(_decrypt_jwe_payload, request.jwe_payload, request.key)
-        log_info("Clinical Summary", "Generating AWS Bedrock clinical narrative")
+        log_info("Clinical Summary", "Generating deterministic clinical narrative")
         summary = await summarize_fhir_bundle(fhir_bundle)
         log_info("Clinical Summary", "Rendering local WeasyPrint clinical PDF")
-        await run_in_threadpool(generate_doctor_pdf, summary, DOCTOR_PDF_PATH)
+        report_path = f"/tmp/clinical_summary_{uuid4()}.pdf"
+        await run_in_threadpool(generate_doctor_pdf, summary, report_path)
+        try:
+            report_bytes = await asyncio.to_thread(Path(report_path).read_bytes)
+        finally:
+            await asyncio.to_thread(Path(report_path).unlink, missing_ok=True)
         return {
             "summary": summary,
-            # This must be the backend origin. A relative /api URL is otherwise
-            # handled by the Vite frontend and downloaded as index.html.
-            "pdf_url": f"{MANIFEST_BASE_URL}/api/doctor/download-summary",
+            # The caller already proved possession of the SHL decryption key.
+            # Avoid a reusable unauthenticated report URL and shared task file.
+            "pdf_url": "data:application/pdf;base64," + base64.b64encode(report_bytes).decode("ascii"),
         }
     except Exception as exc:
         failure = IntegrationFailure("Clinical Summary", exc)
         log_error(failure.component, failure.cause)
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(failure)) from exc
-
-
-@app.get("/api/doctor/download-summary")
-async def download_doctor_summary() -> FileResponse:
-    """Download the most recently compiled local doctor report."""
-    if not os.path.isfile(DOCTOR_PDF_PATH):
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No compiled clinical summary is available")
-    return FileResponse(DOCTOR_PDF_PATH, media_type="application/pdf", filename="clinicforce-clinical-summary.pdf")
