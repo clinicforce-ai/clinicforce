@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import os
 import sys
 import unittest
 from pathlib import Path
@@ -15,6 +16,7 @@ import httpx
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.core.shl import encrypt_bundle, generate_symmetric_key, hash_pin  # noqa: E402
+from app.core.source_links import create_document_download_token, verify_document_download_token  # noqa: E402
 from app.core import patient_store  # noqa: E402
 from app.ingestion.bedrock_extractor import ExtractedFact, facts_to_fhir_bundle  # noqa: E402
 from app.ingestion.pdf_parser import parse_pdf_text_with_llm, pdf_extraction_to_fhir_bundle  # noqa: E402
@@ -169,6 +171,25 @@ class MainRouteTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.content, b"%PDF-1.4")
         get_pdf.assert_called_once_with(document.s3_key)
 
+    async def test_doctor_source_download_uses_a_verified_single_document_capability(self) -> None:
+        document = Mock(s3_key="clinicforce/patients/hash/source/id/record.pdf", filename="record.pdf")
+        with (
+            patch("app.main.verify_document_download_token") as verify,
+            patch("app.main.get_document_by_id", return_value=document),
+            patch("app.main.get_pdf", return_value=b"%PDF-1.4") as get_pdf,
+        ):
+            response = await self.client.get("/api/doctor/documents/7/download?token=signed-capability")
+        self.assertEqual(response.status_code, 200)
+        verify.assert_called_once_with("signed-capability", 7)
+        get_pdf.assert_called_once_with(document.s3_key)
+        self.assertIn("attachment", response.headers["content-disposition"])
+        self.assertEqual(response.headers["cache-control"], "no-store, private")
+
+    async def test_doctor_source_download_rejects_an_invalid_capability(self) -> None:
+        with patch("app.main.verify_document_download_token", side_effect=ValueError("Invalid source download link")):
+            response = await self.client.get("/api/doctor/documents/7/download?token=invalid")
+        self.assertEqual(response.status_code, 403)
+
     async def test_doctor_report_is_returned_inline_not_left_on_task_storage(self) -> None:
         key = generate_symmetric_key()
         key_bytes = base64.urlsafe_b64decode(key + "=" * (-len(key) % 4))
@@ -212,11 +233,11 @@ class MainRouteTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("72", html.call_args.kwargs["string"])
         self.assertIn("cardiology.pdf · p. 3", html.call_args.kwargs["string"])
 
-    def test_pdf_builder_includes_source_register_and_cited_trend_chart(self) -> None:
+    def test_pdf_builder_only_renders_populated_sections_and_fact_level_sources(self) -> None:
         summary = {
             "narrative": "Clinical history reviewed.",
             "vitals": [
-                {"name": "Heart rate", "value": value, "unit": "bpm", "date": f"2026-08-0{index}", "citation": {"source_filename": "vitals.pdf", "page_number": index}}
+                {"name": "Heart rate", "value": value, "unit": "bpm", "date": f"2026-08-0{index}", "citation": {"source_filename": "vitals.pdf", "page_number": index, "download_url": "https://app.example/api/doctor/documents/9/download?token=signed"}}
                 for index, value in enumerate((70, 72, 74, 73), start=1)
             ],
             "labs": [], "medications": [], "conditions": [], "allergies": [], "care_events": [],
@@ -225,10 +246,22 @@ class MainRouteTests(unittest.IsolatedAsyncioTestCase):
             html.return_value.write_pdf = Mock()
             generate_doctor_pdf(summary, "/tmp/mock-summary.pdf")
         rendered = html.call_args.kwargs["string"]
-        self.assertIn("Original Source Register", rendered)
-        self.assertIn("vitals.pdf", rendered)
-        self.assertIn("Clinical overview sources: vitals.pdf · p. 1; vitals.pdf · p. 2", rendered)
+        self.assertNotIn("Original Source Register", rendered)
+        self.assertNotIn("Clinical overview sources", rendered)
+        self.assertIn('href="https://app.example/api/doctor/documents/9/download?token=signed"', rendered)
+        self.assertNotIn("Care visits", rendered)
+        self.assertNotIn("Historical Value", rendered)
+        self.assertIn("table-layout: auto", rendered)
         self.assertIn('aria-label="Heart rate (bpm) trend with 4 values"', rendered)
+
+    def test_source_capability_is_document_scoped_and_expiring(self) -> None:
+        with patch.dict(os.environ, {"SOURCE_LINK_SECRET": "a" * 32}, clear=False):
+            token = create_document_download_token(9, now=1_000, ttl_seconds=120)
+            verify_document_download_token(token, 9, now=1_120)
+            with self.assertRaisesRegex(ValueError, "Invalid source download link"):
+                verify_document_download_token(token, 10, now=1_120)
+            with self.assertRaisesRegex(ValueError, "expired"):
+                verify_document_download_token(token, 9, now=1_121)
 
     def test_bedrock_facts_become_citation_backed_fhir_without_model_fhir_output(self) -> None:
         bundle = facts_to_fhir_bundle(

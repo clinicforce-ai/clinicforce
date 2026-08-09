@@ -55,6 +55,7 @@ export interface SourceCitation {
   source_filename: string
   page_number: number
   document_id?: number
+  download_url?: string
 }
 
 export interface Medication {

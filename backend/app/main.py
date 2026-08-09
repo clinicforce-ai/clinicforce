@@ -7,8 +7,10 @@ import base64
 import json
 import os
 from html import escape
+from copy import deepcopy
 from pathlib import Path
 from typing import Any, Literal
+from urllib.parse import quote
 from uuid import UUID, uuid4
 
 import fitz
@@ -33,7 +35,8 @@ from app.reports.pdf_builder import generate_doctor_pdf
 from app.reports.summarizer import summarize_fhir_bundle
 from jwcrypto import jwe, jwk
 from app.core.object_store import delete_object, enabled as s3_enabled, get_pdf, put_patient_pdf
-from app.core.patient_store import add_document, add_record, create_manifest, create_patient, get_document, get_manifest, get_password_hash, list_documents, list_records, update_document_extraction
+from app.core.patient_store import add_document, add_record, create_manifest, create_patient, get_document, get_document_by_id, get_manifest, get_password_hash, list_documents, list_records, update_document_extraction
+from app.core.source_links import document_download_url, verify_document_download_token
 from app.ingestion.bedrock_extractor import EXTRACTION_VERSION, extract_pdf_to_fhir_bundle
 from app.ingestion.ccda_parser import parse_ccda_to_fhir_bundle
 from app.ingestion.fhir_client import FHIRRequestError, get_patient_records, post_to_fhir
@@ -185,9 +188,51 @@ def _document_payload(document: Any) -> dict[str, Any]:
 
 def _combine_document_bundles(documents: list[Any], records: list[Any] | None = None) -> dict[str, Any]:
     entries: list[dict[str, Any]] = []
-    for document in [*documents, *(records or [])]:
-        entries.extend(entry for entry in document.fhir_bundle.get("entry", []) if isinstance(entry, dict))
+    for document in documents:
+        # A few early records predate persisted citation document IDs.  Add the ID
+        # as the share bundle is assembled, so every original PDF cited in a newly
+        # generated SHL can receive its own download capability.
+        bundle = deepcopy(document.fhir_bundle)
+        for entry in bundle.get("entry", []):
+            resource = entry.get("resource") if isinstance(entry, dict) else None
+            if not isinstance(resource, dict):
+                continue
+            for extension in resource.get("extension", []):
+                if not isinstance(extension, dict) or extension.get("url") != "https://clinicforce.example/fhir/StructureDefinition/source-citation":
+                    continue
+                children = extension.setdefault("extension", [])
+                if isinstance(children, list) and not any(
+                    isinstance(child, dict) and child.get("url") == "document_id" for child in children
+                ):
+                    children.append({"url": "document_id", "valuePositiveInt": document.id})
+        entries.extend(entry for entry in bundle.get("entry", []) if isinstance(entry, dict))
+    for record in records or []:
+        entries.extend(entry for entry in record.fhir_bundle.get("entry", []) if isinstance(entry, dict))
     return {"resourceType": "Bundle", "type": "collection", "entry": entries}
+
+
+def _with_source_download_links(summary: dict[str, Any]) -> dict[str, Any]:
+    """Attach a signed source URL only to facts that have an original PDF citation."""
+    rendered = deepcopy(summary)
+    for section in ("vitals", "labs", "medications", "conditions", "allergies", "care_events"):
+        for item in rendered.get(section, []):
+            citation = item.get("citation") if isinstance(item, dict) else None
+            document_id = citation.get("document_id") if isinstance(citation, dict) else None
+            if isinstance(document_id, int) and document_id > 0:
+                citation["download_url"] = document_download_url(PUBLIC_BASE_URL, document_id)
+    return rendered
+
+
+def _download_headers(filename: str) -> dict[str, str]:
+    """Prevent filename header injection and make all source links download PDFs."""
+    safe_filename = "".join(char if char.isalnum() or char in "._-" else "_" for char in Path(filename).name) or "source.pdf"
+    if not safe_filename.lower().endswith(".pdf"):
+        safe_filename += ".pdf"
+    return {
+        "Content-Disposition": f"attachment; filename*=UTF-8''{quote(safe_filename)}",
+        "Cache-Control": "no-store, private",
+        "X-Content-Type-Options": "nosniff",
+    }
 
 
 def _record_payload(record: Any) -> dict[str, Any]:
@@ -456,7 +501,7 @@ async def upload_patient_pdf(
                 raise HTTPException(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail=f"'{uploaded.filename}' exceeds the 15 MB upload limit")
             if not pdf_bytes.startswith(b"%PDF-"):
                 raise HTTPException(status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE, detail=f"'{uploaded.filename}' is not a valid PDF file")
-            log_info("Ingestion", "Received in-memory PDF upload: %s", uploaded.filename)
+            log_info("Ingestion", "Received an in-memory PDF upload")
             s3_key = await asyncio.to_thread(put_patient_pdf, patient_id, uploaded.filename, pdf_bytes, "source")
             try:
                 fhir_bundle = await extract_pdf_to_fhir_bundle(pdf_bytes, patient_id, uploaded.filename)
@@ -465,7 +510,7 @@ async def upload_patient_pdf(
                         status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                         detail=f"No supported clinical facts could be verified in {uploaded.filename}",
                     )
-                log_info("Ingestion", "Generated %d citation-backed FHIR resources from %s", len(fhir_bundle.get("entry", [])), uploaded.filename)
+                log_info("Ingestion", "Generated %d citation-backed FHIR resources", len(fhir_bundle.get("entry", [])))
                 log_info("Database", "Posting uploaded FHIR resources to local HAPI as a transaction")
                 await post_to_fhir(fhir_bundle)
                 await asyncio.to_thread(add_document, patient_id, uploaded.filename, fhir_bundle, s3_key, EXTRACTION_VERSION)
@@ -519,6 +564,8 @@ async def generate_patient_link(request: GeneratePatientLinkRequest) -> dict[str
         shl_uri, qr_code_base64, manifest_id = await asyncio.to_thread(_create_upload_shl, patient_id, fhir_bundle, request.passcode)
         log_info("Secure Sharing", "Stored encrypted manifest %s for %d documents and %d structured records", manifest_id, len(documents), len(records))
         return {"shl_uri": shl_uri, "qr_code_base64": qr_code_base64}
+    except HTTPException:
+        raise
     except Exception as exc:
         raise IntegrationFailure("Secure Sharing", exc) from exc
 
@@ -537,8 +584,26 @@ async def download_patient_document(document_id: int, request: PatientCredential
     return Response(
         content=content,
         media_type="application/pdf",
-        headers={"Content-Disposition": f'inline; filename="{document.filename}"'},
+        headers=_download_headers(document.filename),
     )
+
+
+@app.get("/api/doctor/documents/{document_id}/download")
+async def download_doctor_document(document_id: int, token: str) -> Response:
+    """Download exactly one cited original PDF after capability verification."""
+    try:
+        verify_document_download_token(token, document_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+    document = await asyncio.to_thread(get_document_by_id, document_id)
+    if document is None:
+        # Do not distinguish a stale/deleted ID from an unauthorized one.
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Source report is no longer available")
+    try:
+        content = await asyncio.to_thread(get_pdf, document.s3_key)
+    except Exception as exc:
+        raise IntegrationFailure("Document storage", exc) from exc
+    return Response(content=content, media_type="application/pdf", headers=_download_headers(document.filename))
 
 
 
@@ -627,7 +692,7 @@ async def decrypt_and_summarize(request: DoctorSummaryRequest) -> dict[str, Any]
         log_info("Clinical Summary", "Decrypting clinician-provided JWE payload")
         fhir_bundle = await asyncio.to_thread(_decrypt_jwe_payload, request.jwe_payload, request.key)
         log_info("Clinical Summary", "Generating deterministic clinical narrative")
-        summary = await summarize_fhir_bundle(fhir_bundle)
+        summary = _with_source_download_links(await summarize_fhir_bundle(fhir_bundle))
         log_info("Clinical Summary", "Rendering local WeasyPrint clinical PDF")
         report_path = f"/tmp/clinical_summary_{uuid4()}.pdf"
         await run_in_threadpool(generate_doctor_pdf, summary, report_path)

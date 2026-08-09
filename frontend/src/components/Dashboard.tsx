@@ -21,26 +21,38 @@ interface DashboardProps {
 
 function SourceNote({ citation }: { citation?: SourceCitation | null }) {
   if (!citation) return <span className="source-note source-note-manual">Patient-entered</span>
-  return <span className="source-note"><FileHeart aria-hidden="true" /> {citation.source_filename} · p. {citation.page_number}</span>
+  const label = <><FileHeart aria-hidden="true" /> {citation.source_filename} · p. {citation.page_number}</>
+  if (!citation.download_url) return <span className="source-note">{label}</span>
+  return <a className="source-note source-link" href={citation.download_url} download aria-label={`Download source PDF ${citation.source_filename}, page ${citation.page_number}`}>{label}</a>
 }
 
 function MeasureTable({ rows, title, testLabel, icon: Icon }: { rows: ClinicalMeasure[]; title: string; testLabel: string; icon: typeof Activity }) {
+  if (!rows.length) return null
+  const hasSources = rows.some((row) => Boolean(row.citation))
   return <section className="summary-section">
     <div className="summary-section-title"><span><Icon aria-hidden="true" /></span><h2>{title}</h2></div>
-    {rows.length ? <div className="table-wrap"><table><thead><tr><th>{testLabel}</th><th>Value</th><th>Unit</th><th>Date</th><th>Notes</th><th>Source</th></tr></thead><tbody>{rows.map((row, index) => <tr key={`${row.name}-${index}`}><td>{row.name}</td><td>{row.value}</td><td>{row.unit ?? '—'}</td><td>{row.date ?? '—'}</td><td>{row.details ?? '—'}</td><td><SourceNote citation={row.citation} /></td></tr>)}</tbody></table></div> : <p className="summary-empty">No {title.toLowerCase()} are included in this shared record.</p>}
+    <div className="table-wrap"><table><thead><tr><th>{testLabel}</th><th>Value</th>{rows.some((row) => row.unit) && <th>Unit</th>}{rows.some((row) => row.date) && <th>Date</th>}{rows.some((row) => row.details) && <th>Notes</th>}{hasSources && <th>Original source</th>}</tr></thead><tbody>{rows.map((row, index) => <tr key={`${row.name}-${index}`}><td>{row.name}</td><td>{row.value}</td>{rows.some((item) => item.unit) && <td>{row.unit ?? '—'}</td>}{rows.some((item) => item.date) && <td>{row.date ?? '—'}</td>}{rows.some((item) => item.details) && <td>{row.details ?? '—'}</td>}{hasSources && <td><SourceNote citation={row.citation} /></td>}</tr>)}</tbody></table></div>
   </section>
 }
 
 function MedicationTable({ rows }: { rows: Medication[] }) {
-  return <section className="summary-section"><div className="summary-section-title"><span><Pill aria-hidden="true" /></span><h2>Medications</h2></div>{rows.length ? <div className="table-wrap"><table><thead><tr><th>Medication</th><th>Dosage</th><th>Notes</th><th>Source</th></tr></thead><tbody>{rows.map((row, index) => <tr key={`${row.name}-${index}`}><td>{row.name}</td><td>{row.dosage}</td><td>{row.details ?? '—'}</td><td><SourceNote citation={row.citation} /></td></tr>)}</tbody></table></div> : <p className="summary-empty">No medications are included in this shared record.</p>}</section>
+  if (!rows.length) return null
+  const hasSources = rows.some((row) => Boolean(row.citation))
+  const hasNotes = rows.some((row) => Boolean(row.details))
+  return <section className="summary-section"><div className="summary-section-title"><span><Pill aria-hidden="true" /></span><h2>Medications</h2></div><div className="table-wrap"><table><thead><tr><th>Medication</th><th>Dosage</th>{hasNotes && <th>Notes</th>}{hasSources && <th>Original source</th>}</tr></thead><tbody>{rows.map((row, index) => <tr key={`${row.name}-${index}`}><td>{row.name}</td><td>{row.dosage}</td>{hasNotes && <td>{row.details ?? '—'}</td>}{hasSources && <td><SourceNote citation={row.citation} /></td>}</tr>)}</tbody></table></div></section>
 }
 
 function ClinicalItemList({ rows, title, icon: Icon }: { rows: ClinicalItem[]; title: string; icon: typeof Activity }) {
-  return <section className="summary-section"><div className="summary-section-title"><span><Icon aria-hidden="true" /></span><h2>{title}</h2></div>{rows.length ? <ul className="summary-list">{rows.map((row, index) => <li key={`${row.name}-${index}`}><strong>{row.name}</strong>{row.details && <p>{row.details}</p>}<SourceNote citation={row.citation} /></li>)}</ul> : <p className="summary-empty">No {title.toLowerCase()} are included in this shared record.</p>}</section>
+  if (!rows.length) return null
+  return <section className="summary-section"><div className="summary-section-title"><span><Icon aria-hidden="true" /></span><h2>{title}</h2></div><ul className="summary-list">{rows.map((row, index) => <li key={`${row.name}-${index}`}><strong>{row.name}</strong>{row.details && <p>{row.details}</p>}<SourceNote citation={row.citation} /></li>)}</ul></section>
 }
 
 function CareEvents({ rows }: { rows: CareEvent[] }) {
-  return <section className="summary-section"><div className="summary-section-title"><span><Hospital aria-hidden="true" /></span><h2>Care visits</h2></div>{rows.length ? <div className="table-wrap"><table><thead><tr><th>Facility</th><th>Date</th><th>Details</th><th>Source</th></tr></thead><tbody>{rows.map((row, index) => <tr key={`${row.facility}-${index}`}><td>{row.facility}</td><td>{row.date ?? '—'}</td><td>{row.details ?? '—'}</td><td><SourceNote citation={row.citation} /></td></tr>)}</tbody></table></div> : <p className="summary-empty">No care visits are included in this shared record.</p>}</section>
+  if (!rows.length) return null
+  const hasSources = rows.some((row) => Boolean(row.citation))
+  const hasDate = rows.some((row) => Boolean(row.date))
+  const hasDetails = rows.some((row) => Boolean(row.details))
+  return <section className="summary-section"><div className="summary-section-title"><span><Hospital aria-hidden="true" /></span><h2>Care visits</h2></div><div className="table-wrap"><table><thead><tr><th>Facility</th>{hasDate && <th>Date</th>}{hasDetails && <th>Details</th>}{hasSources && <th>Original source</th>}</tr></thead><tbody>{rows.map((row, index) => <tr key={`${row.facility}-${index}`}><td>{row.facility}</td>{hasDate && <td>{row.date ?? '—'}</td>}{hasDetails && <td>{row.details ?? '—'}</td>}{hasSources && <td><SourceNote citation={row.citation} /></td>}</tr>)}</tbody></table></div></section>
 }
 
 function TrendCharts({ rows }: { rows: ClinicalMeasure[] }) {
@@ -92,7 +104,7 @@ export default function Dashboard({ data, onScanAnother, onHome }: DashboardProp
   return <section className="summary-page animate-enter" aria-labelledby="summary-heading">
     <button className="back-control" type="button" onClick={onHome}><ArrowLeft aria-hidden="true" className="size-4" /> Back to home</button>
     <header className="summary-hero"><div><p className="eyebrow"><FileHeart aria-hidden="true" className="size-4" /> Clinician view · shared record</p><h1 id="summary-heading">Clinical summary</h1><p>{itemCount} shared health item{itemCount === 1 ? '' : 's'} · {sourcedCount} linked to original report pages.</p></div><div className="summary-actions"><button className="button button-secondary" type="button" onClick={onScanAnother}><ScanLine aria-hidden="true" className="size-4" /> Scan another</button><button className="button button-primary" type="button" onClick={download}><Download aria-hidden="true" className="size-4" /> Download cited PDF</button></div></header>
-    <div className="source-assurance"><ShieldCheck aria-hidden="true" /><span>Every source label identifies the original PDF and page used for that fact. Patient-entered items are marked separately.</span></div>
+    <div className="source-assurance"><ShieldCheck aria-hidden="true" /><span>Each linked source label downloads the original private PDF for that fact. Patient-entered items are marked separately.</span></div>
     <article className="clinical-narrative"><div className="narrative-mark"><HeartPulse aria-hidden="true" /></div><div><p className="section-kicker">Clinical overview</p><h2>Patient history at a glance</h2><p>{summary.narrative}</p></div></article>
     <TrendCharts rows={[...summary.vitals, ...summary.labs]} />
     <div className="summary-grid"><CareEvents rows={summary.care_events} /><ClinicalItemList title="Conditions" rows={summary.conditions} icon={Activity} /><ClinicalItemList title="Allergies" rows={summary.allergies} icon={AlertTriangle} /><MeasureTable title="Vitals" testLabel="Measurement" rows={summary.vitals} icon={HeartPulse} /><MeasureTable title="Labs" testLabel="Test" rows={summary.labs} icon={FileHeart} /><MedicationTable rows={summary.medications} /></div>

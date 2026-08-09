@@ -231,6 +231,23 @@ def get_document(patient_id: str, document_id: int) -> StoredDocument | None:
     )
 
 
+def get_document_by_id(document_id: int) -> StoredDocument | None:
+    """Fetch one document by its internal ID after a signed capability is verified."""
+    with _connection() as connection:
+        row = connection.execute(
+            """SELECT id, filename, uploaded_at, fhir_bundle_json, s3_key, extraction_version
+               FROM patient_documents WHERE id = %s""",
+            (document_id,),
+        ).fetchone()
+    if row is None:
+        return None
+    return StoredDocument(
+        id=row["id"], filename=row["filename"], uploaded_at=row["uploaded_at"],
+        fhir_bundle=json.loads(row["fhir_bundle_json"]), s3_key=row["s3_key"],
+        extraction_version=row["extraction_version"],
+    )
+
+
 def update_document_extraction(
     patient_id: str,
     document_id: int,

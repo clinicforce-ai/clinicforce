@@ -1,4 +1,4 @@
-"""WeasyPrint rendering for doctor-facing, citation-linked clinical summaries."""
+"""WeasyPrint rendering for doctor-facing, fact-level cited clinical summaries."""
 
 from __future__ import annotations
 
@@ -13,40 +13,35 @@ from weasyprint import HTML
 
 _TEMPLATE = """<!doctype html>
 <html><head><meta charset="utf-8"><style>
-@page { margin: 18mm; }
-body { font-family: Arial, sans-serif; color: #20252b; font-size: 10pt; }
-h1 { font-size: 18pt; margin: 0 0 8px; } h2 { font-size: 13pt; margin: 20px 0 8px; }
+@page { margin: 16mm 15mm 18mm; }
+body { font-family: Arial, sans-serif; color: #20252b; font-size: 9.5pt; line-height: 1.42; }
+h1 { font-size: 18pt; margin: 0 0 4px; } h2 { color: #173a4d; font-size: 13pt; margin: 19px 0 7px; }
 .patient-header { border-bottom: 2px solid #3b4045; padding-bottom: 8px; }
-.narrative { line-height: 1.4; }
-.narrative-provenance { color: #075985; font-size: 8.5pt; font-weight: 700; line-height: 1.35; }
-table { border-collapse: collapse; width: 100%; margin: 8px 0 18px; table-layout: fixed; }
-th, td { border-bottom: 1px solid #aeb5bb; padding: 7px 6px; text-align: left; vertical-align: top; overflow-wrap: anywhere; }
-th { background: #e9edf0; font-weight: 700; } .metric { width: 17%; font-weight: 700; }
-.history { width: 15%; } .recent { width: 18%; } .status { width: 25%; } .source { width: 10%; }
-.muted { color: #59636d; font-style: italic; } a { color: #075985; text-decoration: underline; }
-ul { margin: 4px 0 0; padding-left: 20px; }
-.trend-figure { border: 1px solid #b9d5df; background: #f8fcfd; margin: 8px 0 10px; padding: 8px; }
+.narrative { margin: 16px 0 0; line-height: 1.55; }
+table { border-collapse: collapse; width: 100%; margin: 7px 0 15px; table-layout: auto; }
+th, td { border-bottom: 1px solid #b9c6cc; padding: 7px 8px; text-align: left; vertical-align: top; }
+th { background: #e9f1f4; color: #173a4d; font-size: 8pt; font-weight: 700; letter-spacing: .02em; }
+td { overflow-wrap: break-word; word-break: normal; }
+td.fact-name { color: #173a4d; font-weight: 700; } .fact-name { width: 20%; }
+.measure-value { width: 35%; } .source { width: 25%; }
+td.source { font-size: 8.3pt; } a { color: #075985; font-weight: 700; text-decoration: underline; }
+.patient-entered { color: #59636d; font-size: 8.3pt; font-style: italic; }
+.trend-figure { break-inside: avoid; border: 1px solid #b9d5df; background: #f8fcfd; margin: 7px 0 8px; padding: 8px; }
 .trend-figure svg { display: block; width: 100%; height: auto; }
-.trend-caption { margin: 6px 0 0; color: #59636d; font-size: 8.5pt; line-height: 1.35; }
+.trend-caption { color: #59636d; font-size: 8.3pt; line-height: 1.35; margin: 5px 0 0; }
 </style></head><body>
-    <div class="patient-header"><h1>Clinical Summary</h1><div>{{ patient_label or 'Patient clinical record' }}</div></div>
-<p class="narrative">{{ narrative }}</p>
-{% if narrative_sources %}<p class="narrative-provenance">Clinical overview sources: {{ narrative_sources | join('; ') }}</p>{% endif %}
-<h2>Key Trend Data</h2>
-{% if trend_chart_svg %}<div class="trend-figure">{{ trend_chart_svg | safe }}</div><p class="trend-caption">Trend visualization for {{ trend_chart_name }}. Individual values and their original-document citations are listed in the table below.</p>{% endif %}
-<table><thead><tr><th class="metric">Metric</th><th class="history">Historical Value</th><th class="history">Historical Value</th><th class="recent">Most Recent Value</th><th class="status">Direction of Change / Status</th><th class="source">Source</th></tr></thead>
-<tbody>{% for item in trend_data %}<tr><td class="metric">{{ item.name }}</td><td>{{ item.historical_one or '—' }}</td><td>{{ item.historical_two or '—' }}</td><td>{{ item.value }}{% if item.unit %} {{ item.unit }}{% endif %}</td><td>{{ item.details or '—' }}</td><td>{{ item.source_label or 'Patient-entered' }}</td></tr>{% else %}<tr><td colspan="6" class="muted">No trend data available.</td></tr>{% endfor %}</tbody></table>
-<h2>Encounter Details</h2>
-<table><thead><tr><th>Encounter / Item</th><th>Date</th><th>Details</th><th>Source</th></tr></thead><tbody>
-{% for item in care_events %}<tr><td>{{ item.facility }}</td><td>{{ item.date or '—' }}</td><td>{{ item.details or '—' }}</td><td>{{ item.source_label or 'Patient-entered' }}</td></tr>{% endfor %}
-{% for item in conditions %}<tr><td>Condition: {{ item.name }}</td><td>—</td><td>{{ item.details or '—' }}</td><td>{{ item.source_label or 'Patient-entered' }}</td></tr>{% endfor %}
-{% for item in allergies %}<tr><td>Allergy: {{ item.name }}</td><td>—</td><td>{{ item.details or '—' }}</td><td>{{ item.source_label or 'Patient-entered' }}</td></tr>{% endfor %}
-{% for item in medications %}<tr><td>Medication: {{ item.name }}</td><td>—</td><td>{{ item.dosage or '—' }}{% if item.details %}; {{ item.details }}{% endif %}</td><td>{{ item.source_label or 'Patient-entered' }}</td></tr>{% endfor %}
-</tbody></table>
-{% if source_register %}<h2>Original Source Register</h2>
-<table><thead><tr><th>Original PDF</th><th>Pages cited in this summary</th></tr></thead><tbody>
-{% for source in source_register %}<tr><td>{{ source.filename }}</td><td>{{ source.pages }}</td></tr>{% endfor %}
-</tbody></table>{% endif %}</body></html>"""
+  <div class="patient-header"><h1>Clinical Summary</h1><div>{{ patient_label or 'Patient clinical record' }}</div></div>
+  {% if narrative %}<p class="narrative">{{ narrative }}</p>{% endif %}
+  {% if trend_chart_svg %}<h2>Documented trend</h2><div class="trend-figure">{{ trend_chart_svg | safe }}</div><p class="trend-caption">Trend visualization for {{ trend_chart_name }}. The cited measurements below are the clinical record.</p>{% endif %}
+  {% for section in sections %}
+    <h2>{{ section.title }}</h2>
+    <table><thead><tr>{% for column in section.columns %}<th class="{{ column.css_class }}">{{ column.label }}</th>{% endfor %}</tr></thead><tbody>
+      {% for row in section.rows %}<tr>{% for column in section.columns %}
+        <td class="{{ column.css_class }}">{% if column.key == 'source' %}{% if row.source_url %}<a href="{{ row.source_url }}">{{ row.source_label }}</a>{% elif row.source_label %}{{ row.source_label }}{% else %}<span class="patient-entered">Patient-entered</span>{% endif %}{% else %}{{ row[column.key] }}{% endif %}</td>
+      {% endfor %}</tr>{% endfor %}
+    </tbody></table>
+  {% endfor %}
+</body></html>"""
 
 
 def _source_label(citation: Any) -> str | None:
@@ -60,7 +55,7 @@ def _source_label(citation: Any) -> str | None:
 
 
 def _number(value: Any) -> float | None:
-    """Use only directly numeric values in a plotted series (never parse clinical prose)."""
+    """Use only directly numeric values in a plotted series (never parse prose)."""
     if isinstance(value, bool):
         return None
     if isinstance(value, (int, float)):
@@ -76,12 +71,7 @@ def _number(value: Any) -> float | None:
 
 
 def _trend_chart_svg(items: list[dict[str, Any]]) -> tuple[str | None, str | None]:
-    """Create a compact, deterministic SVG chart for the strongest numeric series.
-
-    WeasyPrint renders inline SVG reliably, so a PDF chart does not need a browser,
-    JavaScript runtime, or a second client-side charting dependency.  The cited table
-    remains the source of truth; this chart is an aid for visual scanning only.
-    """
+    """Create one compact chart when a single metric has four cited values."""
     groups: dict[tuple[str, str], list[dict[str, Any]]] = {}
     for item in items:
         numeric = _number(item.get("value"))
@@ -89,36 +79,26 @@ def _trend_chart_svg(items: list[dict[str, Any]]) -> tuple[str | None, str | Non
         if numeric is None or not isinstance(name, str) or not name.strip():
             continue
         unit = item.get("unit") if isinstance(item.get("unit"), str) else ""
-        prepared = {**item, "numeric_value": numeric}
-        groups.setdefault((name.strip(), unit.strip()), []).append(prepared)
-
+        groups.setdefault((name.strip(), unit.strip()), []).append({**item, "numeric_value": numeric})
     candidates = [
         ((name, unit), sorted(values, key=lambda item: str(item.get("date") or "")))
-        for (name, unit), values in groups.items()
-        if len(values) >= 4
+        for (name, unit), values in groups.items() if len(values) >= 4
     ]
     if not candidates:
         return None, None
     (name, unit), points = max(candidates, key=lambda item: len(item[1]))
-    # Limit one report chart to the newest eight values.  The full cited history stays
-    # in the table and source register below it.
     points = points[-8:]
     values = [point["numeric_value"] for point in points]
     low, high = min(values), max(values)
     if low == high:
         low -= 1
         high += 1
-    padding = 36
-    width, height = 660, 220
+    padding, width, height = 36, 660, 220
     plot_width, plot_height = width - (padding * 2), height - 70
-    def x_at(index: int) -> float:
-        return padding + (plot_width * index / max(len(points) - 1, 1))
-    def y_at(value: float) -> float:
-        return 24 + ((high - value) / (high - low) * plot_height)
-
+    x_at = lambda index: padding + (plot_width * index / max(len(points) - 1, 1))
+    y_at = lambda value: 24 + ((high - value) / (high - low) * plot_height)
     polyline = " ".join(f"{x_at(index):.1f},{y_at(value):.1f}" for index, value in enumerate(values))
-    labels = []
-    dots = []
+    dots, labels = [], []
     for index, point in enumerate(points):
         date = escape(str(point.get("date") or f"Record {index + 1}"))
         value = escape(str(point.get("value")))
@@ -134,41 +114,75 @@ def _trend_chart_svg(items: list[dict[str, Any]]) -> tuple[str | None, str | Non
         f'<line x1="{padding}" y1="24" x2="{padding}" y2="{24 + plot_height:.1f}" stroke="#aeb5bb" />'
         f'<text x="4" y="30" font-size="10" fill="#547084">{high:g}</text>'
         f'<text x="4" y="{24 + plot_height:.1f}" font-size="10" fill="#547084">{low:g}</text>'
-        f'<polyline fill="none" stroke="#087ca7" stroke-width="3" points="{polyline}" />'
-        f"{''.join(dots)}{''.join(labels)}</svg>"
+        f'<polyline fill="none" stroke="#087ca7" stroke-width="3" points="{polyline}" />{("".join(dots))}{("".join(labels))}</svg>'
     )
     return svg, f"{name}{f' ({unit})' if unit else ''}"
 
 
-def _with_source_links(summary_data: dict[str, Any]) -> dict[str, Any]:
+def _display(value: Any) -> str:
+    if value is None or value == "":
+        return "—"
+    return str(value)
+
+
+def _section(title: str, rows: list[dict[str, Any]], columns: list[tuple[str, str, str]]) -> dict[str, Any] | None:
+    """Create a table only when its clinical category actually has rows."""
+    if not rows:
+        return None
+    visible_columns = []
+    for key, label, css_class in columns:
+        if key == "source":
+            show = any(_source_label(row.get("citation")) for row in rows)
+        elif key in {"name", "value", "facility"}:
+            show = True
+        else:
+            show = any(row.get(key) not in (None, "") for row in rows)
+        if show:
+            visible_columns.append({"key": key, "label": label, "css_class": css_class})
+    prepared = []
+    for raw in rows:
+        citation = raw.get("citation") if isinstance(raw.get("citation"), dict) else None
+        prepared.append({
+            **{key: _display(raw.get(key)) for key, _, _ in columns if key != "source"},
+            "source_label": _source_label(citation),
+            "source_url": citation.get("download_url") if citation else None,
+        })
+    return {"title": title, "columns": visible_columns, "rows": prepared}
+
+
+def _report_sections(summary: dict[str, Any]) -> list[dict[str, Any]]:
+    sections = [
+        _section("Clinical measurements", [*summary.get("vitals", []), *summary.get("labs", [])], [
+            ("name", "Measurement", "fact-name"), ("value", "Result", "measure-value"),
+            ("unit", "Unit", ""), ("date", "Date", ""), ("details", "Notes", ""), ("source", "Original source", "source"),
+        ]),
+        _section("Care visits", summary.get("care_events", []), [
+            ("facility", "Facility", "fact-name"), ("date", "Date", ""), ("details", "Details", ""), ("source", "Original source", "source"),
+        ]),
+        _section("Conditions", summary.get("conditions", []), [
+            ("name", "Condition", "fact-name"), ("details", "Details", ""), ("source", "Original source", "source"),
+        ]),
+        _section("Allergies", summary.get("allergies", []), [
+            ("name", "Allergy or intolerance", "fact-name"), ("details", "Details", ""), ("source", "Original source", "source"),
+        ]),
+        _section("Medications", summary.get("medications", []), [
+            ("name", "Medication", "fact-name"), ("dosage", "Dosage", ""), ("details", "Notes", ""), ("source", "Original source", "source"),
+        ]),
+    ]
+    return [section for section in sections if section is not None]
+
+
+def _render_data(summary_data: dict[str, Any]) -> dict[str, Any]:
     rendered = deepcopy(summary_data)
-    citations: dict[str, set[int]] = {}
-    for section in ("vitals", "labs", "medications", "conditions", "allergies", "care_events"):
-        for item in rendered.get(section, []):
-            if not isinstance(item, dict):
-                continue
-            source_label = _source_label(item.get("citation"))
-            if source_label:
-                item["source_label"] = source_label
-                filename, page = source_label.rsplit(" · p. ", 1)
-                citations.setdefault(filename, set()).add(int(page))
-    rendered["trend_data"] = [*rendered.get("vitals", []), *rendered.get("labs", [])]
-    rendered["narrative_sources"] = [
-        f"{filename} · p. {page}"
-        for filename, pages in sorted(citations.items(), key=lambda item: item[0].casefold())
-        for page in sorted(pages)
-    ]
-    rendered["source_register"] = [
-        {"filename": filename, "pages": ", ".join(str(page) for page in sorted(pages))}
-        for filename, pages in sorted(citations.items(), key=lambda item: item[0].casefold())
-    ]
-    rendered["trend_chart_svg"], rendered["trend_chart_name"] = _trend_chart_svg(rendered["trend_data"])
+    trend_data = [*rendered.get("vitals", []), *rendered.get("labs", [])]
+    rendered["sections"] = _report_sections(rendered)
+    rendered["trend_chart_svg"], rendered["trend_chart_name"] = _trend_chart_svg(trend_data)
     return rendered
 
 
-def generate_doctor_pdf(summary_data: dict, output_path: str = "/tmp/clinical_summary.pdf") -> str:
-    """Render the report. Call this function in a worker thread from FastAPI."""
-    data = _with_source_links(summary_data)
+def generate_doctor_pdf(summary_data: dict[str, Any], output_path: str = "/tmp/clinical_summary.pdf") -> str:
+    """Render a report with only populated sections and fact-level source links."""
+    data = _render_data(summary_data)
     html = Environment(autoescape=select_autoescape(default_for_string=True)).from_string(_TEMPLATE).render(**data)
     HTML(string=html).write_pdf(output_path)
     return output_path
