@@ -71,6 +71,27 @@ def _token_response(data: dict[str, str]) -> dict[str, Any]:
     return payload
 
 
+def _raise_for_google_error(response: httpx.Response, operation: str) -> None:
+    """Raise an actionable Drive error without exposing OAuth credentials."""
+    if response.is_success:
+        return
+    try:
+        payload = response.json()
+        error = payload.get("error", {}) if isinstance(payload, dict) else {}
+        message = error.get("message") if isinstance(error, dict) else None
+        reason = ""
+        if isinstance(error, dict) and isinstance(error.get("errors"), list) and error["errors"]:
+            first = error["errors"][0]
+            if isinstance(first, dict) and isinstance(first.get("reason"), str):
+                reason = first["reason"]
+        detail = ": ".join(part for part in (reason, message) if isinstance(part, str) and part)
+    except (ValueError, TypeError):
+        detail = ""
+    if detail:
+        raise RuntimeError(f"Google Drive {operation} failed ({response.status_code}): {detail}")
+    response.raise_for_status()
+
+
 def complete_authorization(code: str) -> tuple[str, str, str]:
     """Exchange a callback code and create the patient-visible ClinicForce folder."""
     if not enabled():
@@ -108,7 +129,7 @@ def _access_token(connection: StoredDriveConnection) -> str:
 def _find_or_create_folder(headers: dict[str, str]) -> str:
     query = "mimeType = 'application/vnd.google-apps.folder' and trashed = false and appProperties has { key='clinicforce_kind' and value='root' }"
     response = httpx.get("https://www.googleapis.com/drive/v3/files", headers=headers, params={"q": query, "fields": "files(id)"}, timeout=20.0)
-    response.raise_for_status()
+    _raise_for_google_error(response, "folder lookup")
     files = response.json().get("files", [])
     if files and isinstance(files[0].get("id"), str):
         return files[0]["id"]
@@ -117,7 +138,7 @@ def _find_or_create_folder(headers: dict[str, str]) -> str:
         "mimeType": "application/vnd.google-apps.folder",
         "appProperties": {"clinicforce_kind": "root"},
     }, params={"fields": "id"}, timeout=20.0)
-    created.raise_for_status()
+    _raise_for_google_error(created, "folder creation")
     folder_id = created.json().get("id")
     if not isinstance(folder_id, str):
         raise RuntimeError("Google did not create the ClinicForce folder")
