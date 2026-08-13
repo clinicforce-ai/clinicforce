@@ -42,7 +42,7 @@ from app.core.patient_store import (
     create_google_patient, create_manifest, create_patient, create_patient_session,
     get_document, get_document_by_id, get_drive_connection, get_manifest, get_password_hash,
     get_patient_by_google_subject, get_patient_session, get_storage_preference, list_documents, list_records,
-    remove_documents, revoke_patient_session, save_drive_oauth_state, save_google_login_state,
+    remove_documents, revoke_patient_manifests, revoke_patient_session, save_drive_oauth_state, save_google_login_state,
     set_drive_summary_file, set_storage_preference, update_document_extraction,
     upsert_drive_connection, verify_manifest_pin,
 )
@@ -308,6 +308,7 @@ async def _load_workspace(patient_id: str) -> dict[str, Any]:
             missing_document_ids = [document.id for document in drive_documents if document.s3_key not in existing_ids]
             if missing_document_ids:
                 removed = await asyncio.to_thread(remove_documents, patient_id, missing_document_ids)
+                await asyncio.to_thread(revoke_patient_manifests, patient_id)
                 log_warning("Google Drive", "Removed %d stale Drive document mappings after patient-side deletion", removed)
                 documents = await asyncio.to_thread(list_documents, patient_id)
     return _workspace_payload(patient_id, documents, records, storage_provider, connection is not None)

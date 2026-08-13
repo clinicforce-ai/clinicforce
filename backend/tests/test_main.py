@@ -171,11 +171,13 @@ class MainRouteTests(unittest.IsolatedAsyncioTestCase):
             patch("app.main.get_drive_connection", return_value=connection),
             patch("app.main.google_drive.existing_file_ids", return_value=set()),
             patch("app.main.remove_documents", return_value=1) as remove_documents,
+            patch("app.main.revoke_patient_manifests", return_value=1) as revoke_manifests,
         ):
             workspace = await __import__("app.main", fromlist=["_load_workspace"])._load_workspace("patient-1")
 
         self.assertEqual(workspace["documents"], [])
         remove_documents.assert_called_once_with("patient-1", [12])
+        revoke_manifests.assert_called_once_with("patient-1")
 
     async def test_unchanged_drive_record_does_not_replace_its_single_summary_file(self) -> None:
         bundle = {

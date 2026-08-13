@@ -333,6 +333,16 @@ def remove_documents(patient_id: str, document_ids: list[int]) -> int:
     return cursor.rowcount
 
 
+def revoke_patient_manifests(patient_id: str) -> int:
+    """Immediately withdraw old QR snapshots after a patient removes a source."""
+    with _connection() as connection:
+        cursor = connection.execute(
+            "UPDATE shl_manifests SET revoked_at = %s WHERE patient_id = %s AND revoked_at IS NULL",
+            (datetime.now(timezone.utc).isoformat(), patient_id),
+        )
+    return cursor.rowcount
+
+
 def update_document_extraction(
     patient_id: str,
     document_id: int,
