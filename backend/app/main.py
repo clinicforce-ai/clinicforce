@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import hashlib
 import json
 import os
 from html import escape
@@ -17,7 +18,7 @@ import fitz
 from fastapi import File, Form, UploadFile, FastAPI, HTTPException, Request, status
 from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, Response
+from fastapi.responses import HTMLResponse, JSONResponse, Response
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.core.shl import (
@@ -28,14 +29,20 @@ from app.core.shl import (
     hash_password,
     hash_pin,
     verify_password,
-    verify_pin,
 )
 from app.logs.logger import log_error, log_info, log_warning
-from app.reports.pdf_builder import generate_doctor_pdf
+from app.reports.pdf_builder import render_doctor_pdf_bytes
 from app.reports.summarizer import summarize_fhir_bundle
 from jwcrypto import jwe, jwk
-from app.core.object_store import delete_object, enabled as s3_enabled, get_pdf, put_patient_pdf
-from app.core.patient_store import add_document, add_record, create_manifest, create_patient, get_document, get_document_by_id, get_manifest, get_password_hash, list_documents, list_records, update_document_extraction
+from app.core.object_store import delete_object as delete_s3_object, enabled as s3_enabled, get_pdf as get_s3_pdf, put_patient_pdf
+from app.core import google_drive
+from app.core.patient_store import (
+    add_document, add_record, consume_drive_oauth_state, create_manifest, create_patient,
+    get_document, get_document_by_id, get_drive_connection, get_manifest, get_password_hash,
+    get_storage_preference, list_documents, list_records, save_drive_oauth_state,
+    set_drive_summary_file, set_storage_preference, update_document_extraction,
+    upsert_drive_connection, verify_manifest_pin,
+)
 from app.core.source_links import document_download_url, verify_document_download_token
 from app.ingestion.bedrock_extractor import EXTRACTION_VERSION, extract_pdf_to_fhir_bundle
 from app.ingestion.ccda_parser import parse_ccda_to_fhir_bundle
@@ -105,8 +112,9 @@ class IntegrationTestRequest(RequestModel):
 
 
 class DoctorSummaryRequest(RequestModel):
-    jwe_payload: str = Field(min_length=1, max_length=2_000_000)
+    manifest_id: UUID
     key: str = Field(min_length=1, max_length=256)
+    passcode: str = Field(min_length=4, max_length=4)
 
 
 class PatientCredentials(RequestModel):
@@ -120,6 +128,10 @@ class PatientCredentials(RequestModel):
         if not value:
             raise ValueError("Patient ID is required")
         return value
+
+
+class StoragePreferenceRequest(PatientCredentials):
+    storage_provider: Literal["s3", "google_drive"]
 
 
 class GeneratePatientLinkRequest(PatientCredentials):
@@ -183,6 +195,7 @@ def _document_payload(document: Any) -> dict[str, Any]:
         "uploaded_at": document.uploaded_at,
         "resource_count": len(document.fhir_bundle.get("entry", [])),
         "extraction_version": getattr(document, "extraction_version", None),
+        "storage_provider": getattr(document, "storage_provider", "s3"),
     }
 
 
@@ -211,15 +224,15 @@ def _combine_document_bundles(documents: list[Any], records: list[Any] | None = 
     return {"resourceType": "Bundle", "type": "collection", "entry": entries}
 
 
-def _with_source_download_links(summary: dict[str, Any]) -> dict[str, Any]:
-    """Attach a signed source URL only to facts that have an original PDF citation."""
+def _with_source_download_links(summary: dict[str, Any], manifest_id: str) -> dict[str, Any]:
+    """Attach a source URL bound to the QR manifest, never raw client input."""
     rendered = deepcopy(summary)
     for section in ("vitals", "labs", "medications", "conditions", "allergies", "care_events"):
         for item in rendered.get(section, []):
             citation = item.get("citation") if isinstance(item, dict) else None
             document_id = citation.get("document_id") if isinstance(citation, dict) else None
             if isinstance(document_id, int) and document_id > 0:
-                citation["download_url"] = document_download_url(PUBLIC_BASE_URL, document_id)
+                citation["download_url"] = document_download_url(PUBLIC_BASE_URL, document_id, manifest_id)
     return rendered
 
 
@@ -239,12 +252,24 @@ def _record_payload(record: Any) -> dict[str, Any]:
     return {"id": record.id, "category": record.category, "label": record.label, "created_at": record.created_at}
 
 
-def _workspace_payload(patient_id: str, documents: list[Any], records: list[Any]) -> dict[str, Any]:
+def _workspace_payload(patient_id: str, documents: list[Any], records: list[Any], storage_provider: str = "s3", drive_connected: bool = False) -> dict[str, Any]:
     return {
         "patient_id": patient_id,
         "documents": [_document_payload(document) for document in documents],
         "records": [_record_payload(record) for record in records],
+        "storage_provider": storage_provider,
+        "drive_connected": drive_connected,
     }
+
+
+async def _load_workspace(patient_id: str) -> dict[str, Any]:
+    documents, records, storage_provider, connection = await asyncio.gather(
+        asyncio.to_thread(list_documents, patient_id),
+        asyncio.to_thread(list_records, patient_id),
+        asyncio.to_thread(get_storage_preference, patient_id),
+        asyncio.to_thread(get_drive_connection, patient_id),
+    )
+    return _workspace_payload(patient_id, documents, records, storage_provider, connection is not None)
 
 
 async def _ensure_documents_extracted(patient_id: str, documents: list[Any]) -> None:
@@ -256,7 +281,7 @@ async def _ensure_documents_extracted(patient_id: str, documents: list[Any]) -> 
     for document in documents:
         if getattr(document, "extraction_version", None) == EXTRACTION_VERSION:
             continue
-        pdf_bytes = await asyncio.to_thread(get_pdf, document.s3_key)
+        pdf_bytes = await _read_document_bytes(patient_id, document)
         bundle = await extract_pdf_to_fhir_bundle(pdf_bytes, patient_id, document.filename)
         if not bundle.get("entry"):
             raise HTTPException(
@@ -272,6 +297,16 @@ async def _ensure_documents_extracted(patient_id: str, documents: list[Any]) -> 
         )
         if not updated:
             raise RuntimeError(f"Document {document.id} was no longer available for extraction")
+
+
+async def _read_document_bytes(patient_id: str, document: Any) -> bytes:
+    """Read exactly one RDS-mapped source from its selected backing store."""
+    if getattr(document, "storage_provider", "s3") == "google_drive":
+        connection = await asyncio.to_thread(get_drive_connection, patient_id)
+        if connection is None:
+            raise RuntimeError("Google Drive is no longer connected for this patient")
+        return await asyncio.to_thread(google_drive.get_pdf, connection, document.s3_key)
+    return await asyncio.to_thread(get_s3_pdf, document.s3_key)
 
 
 def _manual_record_bundle(request: ManualRecordRequest, patient_id: str) -> tuple[str, dict[str, Any]]:
@@ -455,16 +490,52 @@ async def register_patient(request: PatientCredentials) -> dict[str, Any]:
     created = await asyncio.to_thread(create_patient, patient_id, hash_password(password))
     if not created:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="A patient account with this ID already exists")
-    return {"patient_id": patient_id, "documents": [], "records": []}
+    return _workspace_payload(patient_id, [], [], "s3", False)
 
 
 @app.post("/api/patient/login")
 async def login_patient(request: PatientCredentials) -> dict[str, Any]:
     patient_id = await _authenticate_patient(request.patient_id, request.password)
-    documents, records = await asyncio.gather(
-        asyncio.to_thread(list_documents, patient_id), asyncio.to_thread(list_records, patient_id)
-    )
-    return _workspace_payload(patient_id, documents, records)
+    return await _load_workspace(patient_id)
+
+
+@app.post("/api/patient/storage-preference")
+async def change_storage_preference(request: StoragePreferenceRequest) -> dict[str, Any]:
+    patient_id = await _authenticate_patient(request.patient_id, request.password)
+    if request.storage_provider == "google_drive":
+        if not google_drive.enabled():
+            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Google Drive storage is not configured")
+        if await asyncio.to_thread(get_drive_connection, patient_id) is None:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Connect Google Drive before selecting it")
+    await asyncio.to_thread(set_storage_preference, patient_id, request.storage_provider)
+    return await _load_workspace(patient_id)
+
+
+@app.post("/api/patient/google-drive/connect")
+async def connect_google_drive(request: PatientCredentials) -> dict[str, str]:
+    patient_id = await _authenticate_patient(request.patient_id, request.password)
+    if not google_drive.enabled():
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Google Drive integration is not configured")
+    state = await asyncio.to_thread(save_drive_oauth_state, patient_id)
+    return {"authorization_url": google_drive.authorization_url(state)}
+
+
+@app.get("/api/patient/google-drive/callback")
+async def google_drive_callback(state: str = "", code: str = "", error: str = "") -> HTMLResponse:
+    """Finish OAuth in a separate page; the original portal never receives tokens."""
+    patient_id = await asyncio.to_thread(consume_drive_oauth_state, state)
+    if patient_id is None:
+        return HTMLResponse("<h1>Google Drive connection could not be verified.</h1><p>Return to ClinicForce and try again.</p>", status_code=400)
+    if error or not code:
+        return HTMLResponse("<h1>Google Drive was not connected.</h1><p>Return to ClinicForce and try again when you are ready.</p>", status_code=400)
+    try:
+        subject, encrypted_refresh_token, folder_id = await asyncio.to_thread(google_drive.complete_authorization, code)
+        await asyncio.to_thread(upsert_drive_connection, patient_id, subject, encrypted_refresh_token, folder_id)
+        await asyncio.to_thread(set_storage_preference, patient_id, "google_drive")
+    except Exception as exc:
+        log_error("Google Drive", exc)
+        return HTMLResponse("<h1>Google Drive could not be connected.</h1><p>Return to ClinicForce and try again.</p>", status_code=502)
+    return HTMLResponse("<h1>Google Drive connected.</h1><p>Your ClinicForce folder is ready. Return to the ClinicForce tab and sign in again.</p>")
 
 
 @app.post("/api/patient/upload")
@@ -480,7 +551,12 @@ async def upload_patient_pdf(
     preserving the original browser contract. Source bytes never enter PostgreSQL.
     """
     patient_id = await _authenticate_patient(patient_id, password)
-    if not s3_enabled():
+    storage_provider, drive_connection = await asyncio.gather(
+        asyncio.to_thread(get_storage_preference, patient_id), asyncio.to_thread(get_drive_connection, patient_id)
+    )
+    if storage_provider == "google_drive" and drive_connection is None:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Connect Google Drive before uploading there")
+    if storage_provider == "s3" and not s3_enabled():
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Document storage is unavailable")
     uploaded_files = [*(file or []), *(files or [])]
     if not uploaded_files or any(
@@ -502,7 +578,11 @@ async def upload_patient_pdf(
             if not pdf_bytes.startswith(b"%PDF-"):
                 raise HTTPException(status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE, detail=f"'{uploaded.filename}' is not a valid PDF file")
             log_info("Ingestion", "Received an in-memory PDF upload")
-            s3_key = await asyncio.to_thread(put_patient_pdf, patient_id, uploaded.filename, pdf_bytes, "source")
+            locator = (
+                await asyncio.to_thread(google_drive.put_pdf, drive_connection, uploaded.filename, pdf_bytes, "source")
+                if storage_provider == "google_drive"
+                else await asyncio.to_thread(put_patient_pdf, patient_id, uploaded.filename, pdf_bytes, "source")
+            )
             try:
                 fhir_bundle = await extract_pdf_to_fhir_bundle(pdf_bytes, patient_id, uploaded.filename)
                 if not fhir_bundle.get("entry"):
@@ -513,9 +593,12 @@ async def upload_patient_pdf(
                 log_info("Ingestion", "Generated %d citation-backed FHIR resources", len(fhir_bundle.get("entry", [])))
                 log_info("Database", "Posting uploaded FHIR resources to local HAPI as a transaction")
                 await post_to_fhir(fhir_bundle)
-                await asyncio.to_thread(add_document, patient_id, uploaded.filename, fhir_bundle, s3_key, EXTRACTION_VERSION)
+                await asyncio.to_thread(add_document, patient_id, uploaded.filename, fhir_bundle, locator, EXTRACTION_VERSION, storage_provider)
             except Exception:
-                await asyncio.to_thread(delete_object, s3_key)
+                if storage_provider == "google_drive":
+                    await asyncio.to_thread(google_drive.delete_file, drive_connection, locator)
+                else:
+                    await asyncio.to_thread(delete_s3_object, locator)
                 raise
     except HTTPException:
         raise
@@ -523,10 +606,7 @@ async def upload_patient_pdf(
         component = "Database" if isinstance(exc, FHIRRequestError) else "Ingestion"
         raise IntegrationFailure(component, exc) from exc
 
-    documents, records = await asyncio.gather(
-        asyncio.to_thread(list_documents, patient_id), asyncio.to_thread(list_records, patient_id)
-    )
-    return _workspace_payload(patient_id, documents, records)
+    return await _load_workspace(patient_id)
 
 
 @app.post("/api/patient/records")
@@ -539,10 +619,7 @@ async def save_patient_record(request: ManualRecordRequest) -> dict[str, Any]:
         await asyncio.to_thread(add_record, patient_id, request.category, label, fhir_bundle)
     except Exception as exc:
         raise IntegrationFailure("FHIR persistence", exc) from exc
-    documents, records = await asyncio.gather(
-        asyncio.to_thread(list_documents, patient_id), asyncio.to_thread(list_records, patient_id)
-    )
-    return _workspace_payload(patient_id, documents, records)
+    return await _load_workspace(patient_id)
 
 
 @app.post("/api/patient/generate-link")
@@ -562,6 +639,18 @@ async def generate_patient_link(request: GeneratePatientLinkRequest) -> dict[str
         if not fhir_bundle["entry"]:
             raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="No verified clinical facts are available to share")
         shl_uri, qr_code_base64, manifest_id = await asyncio.to_thread(_create_upload_shl, patient_id, fhir_bundle, request.passcode)
+        # Drive patients receive one stable, replaced-on-new-QR PDF in their own
+        # ClinicForce folder. S3 patients retain the existing non-persisted report flow.
+        if await asyncio.to_thread(get_storage_preference, patient_id) == "google_drive":
+            connection = await asyncio.to_thread(get_drive_connection, patient_id)
+            if connection is None:
+                raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Reconnect Google Drive before creating a share")
+            fingerprint = hashlib.sha256(json.dumps(fhir_bundle, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
+            if connection.summary_fingerprint != fingerprint or not connection.summary_file_id:
+                summary = _with_source_download_links(await summarize_fhir_bundle(fhir_bundle), manifest_id)
+                report_bytes = await run_in_threadpool(render_doctor_pdf_bytes, summary)
+                summary_file_id = await asyncio.to_thread(google_drive.replace_summary, connection, report_bytes)
+                await asyncio.to_thread(set_drive_summary_file, patient_id, summary_file_id, fingerprint)
         log_info("Secure Sharing", "Stored encrypted manifest %s for %d documents and %d structured records", manifest_id, len(documents), len(records))
         return {"shl_uri": shl_uri, "qr_code_base64": qr_code_base64}
     except HTTPException:
@@ -578,7 +667,7 @@ async def download_patient_document(document_id: int, request: PatientCredential
     if document is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Report not found")
     try:
-        content = await asyncio.to_thread(get_pdf, document.s3_key)
+        content = await _read_document_bytes(patient_id, document)
     except Exception as exc:
         raise IntegrationFailure("Document storage", exc) from exc
     return Response(
@@ -590,20 +679,27 @@ async def download_patient_document(document_id: int, request: PatientCredential
 
 @app.get("/api/doctor/documents/{document_id}/download")
 async def download_doctor_document(document_id: int, token: str) -> Response:
-    """Download exactly one cited original PDF after capability verification."""
+    """Download a cited source only if it belongs to the QR manifest's patient."""
     try:
-        verify_document_download_token(token, document_id)
+        manifest_id = verify_document_download_token(token, document_id)
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
     document = await asyncio.to_thread(get_document_by_id, document_id)
     if document is None:
         # Do not distinguish a stale/deleted ID from an unauthorized one.
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Source report is no longer available")
+    manifest = await asyncio.to_thread(get_manifest, manifest_id)
+    if manifest is None or not manifest.get("patient_id"):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="The shared record is no longer available")
+    patient_id = str(manifest["patient_id"])
+    owned_document = await asyncio.to_thread(get_document, patient_id, document_id)
+    if owned_document is None:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="This source is not part of the shared record")
     try:
-        content = await asyncio.to_thread(get_pdf, document.s3_key)
+        content = await _read_document_bytes(patient_id, owned_document)
     except Exception as exc:
         raise IntegrationFailure("Document storage", exc) from exc
-    return Response(content=content, media_type="application/pdf", headers=_download_headers(document.filename))
+    return Response(content=content, media_type="application/pdf", headers=_download_headers(owned_document.filename))
 
 
 
@@ -667,8 +763,8 @@ async def test_integration(request: IntegrationTestRequest) -> dict[str, Any]:
 async def retrieve_manifest(manifest_id: UUID, request: ManifestRequest) -> dict:
     """Return an encrypted SHL payload after successful passcode verification."""
     log_info("Secure Sharing", "Manifest lookup for %s with passcode=%s", manifest_id, _mask_passcode(request.passcode))
-    manifest = await asyncio.to_thread(get_manifest, str(manifest_id))
-    if manifest is None or not verify_pin(request.passcode, manifest["hashed_pin"]):
+    manifest = await asyncio.to_thread(verify_manifest_pin, str(manifest_id), request.passcode)
+    if manifest is None:
         log_warning("Secure Sharing", "Invalid manifest credentials for %s", manifest_id)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -687,25 +783,27 @@ async def retrieve_manifest(manifest_id: UUID, request: ManifestRequest) -> dict
 
 @app.post("/api/doctor/decrypt-and-summarize")
 async def decrypt_and_summarize(request: DoctorSummaryRequest) -> dict[str, Any]:
-    """Decrypt an SHL payload, locally summarize it, and render a doctor PDF."""
+    """Build a dashboard from the stored QR manifest, never browser-supplied FHIR."""
     try:
-        log_info("Clinical Summary", "Decrypting clinician-provided JWE payload")
-        fhir_bundle = await asyncio.to_thread(_decrypt_jwe_payload, request.jwe_payload, request.key)
+        manifest = await asyncio.to_thread(verify_manifest_pin, str(request.manifest_id), request.passcode)
+        if manifest is None:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid shared-record credentials")
+        log_info("Clinical Summary", "Decrypting server-stored QR manifest")
+        fhir_bundle = await asyncio.to_thread(_decrypt_jwe_payload, manifest["encrypted_jwe"], request.key)
         log_info("Clinical Summary", "Generating deterministic clinical narrative")
-        summary = _with_source_download_links(await summarize_fhir_bundle(fhir_bundle))
-        log_info("Clinical Summary", "Rendering local WeasyPrint clinical PDF")
-        report_path = f"/tmp/clinical_summary_{uuid4()}.pdf"
-        await run_in_threadpool(generate_doctor_pdf, summary, report_path)
-        try:
-            report_bytes = await asyncio.to_thread(Path(report_path).read_bytes)
-        finally:
-            await asyncio.to_thread(Path(report_path).unlink, missing_ok=True)
+        summary = _with_source_download_links(await summarize_fhir_bundle(fhir_bundle), str(request.manifest_id))
+        patient_id = manifest.get("patient_id")
+        connection = await asyncio.to_thread(get_drive_connection, str(patient_id)) if patient_id else None
+        if connection and connection.summary_file_id:
+            report_bytes = await asyncio.to_thread(google_drive.get_pdf, connection, connection.summary_file_id)
+        else:
+            report_bytes = await run_in_threadpool(render_doctor_pdf_bytes, summary)
         return {
             "summary": summary,
-            # The caller already proved possession of the SHL decryption key.
-            # Avoid a reusable unauthenticated report URL and shared task file.
             "pdf_url": "data:application/pdf;base64," + base64.b64encode(report_bytes).decode("ascii"),
         }
+    except HTTPException:
+        raise
     except Exception as exc:
         failure = IntegrationFailure("Clinical Summary", exc)
         log_error(failure.component, failure.cause)

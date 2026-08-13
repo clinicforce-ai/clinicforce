@@ -38,6 +38,10 @@ HAPI_FHIR_URL=http://hapi:8080
 PUBLIC_APP_URL=https://app.example.com
 CORS_ALLOW_ORIGINS=https://app.example.com
 AWS_REGION=us-east-1
+# Optional patient-owned Google Drive storage (client secret belongs in Secrets Manager)
+GOOGLE_OAUTH_CLIENT_ID=<google-oauth-web-client-id>
+GOOGLE_OAUTH_CLIENT_SECRET=<google-oauth-client-secret>
+GOOGLE_TOKEN_KMS_KEY_ID=<kms-key-arn>
 ```
 
 `DATABASE_URL` is required and must target the PostgreSQL/RDS database named
@@ -45,6 +49,22 @@ AWS_REGION=us-east-1
 on startup: patients, source-document metadata, SHL manifests, and doctor-report
 metadata. The PDF bytes are stored in S3 under patient-specific prefixes; RDS stores
 the exact S3 key, so a report and its source PDFs stay associated with one patient.
+
+## Optional patient-owned Google Drive
+
+When the Google OAuth variables are configured, a patient can connect their
+Google Drive and choose it for future uploads. ClinicForce creates a `ClinicForce`
+folder, stores source PDFs and one replace-in-place `Clinical Summary.pdf` there,
+and stores only Drive IDs plus a KMS-encrypted OAuth refresh token in RDS. The
+configured OAuth redirect URI must be:
+
+```text
+https://<your-public-domain>/api/patient/google-drive/callback
+```
+
+The integration uses the least-privilege `drive.file` scope. It processes PDFs
+uploaded through the ClinicForce portal; it does not silently ingest arbitrary
+files a patient adds elsewhere in Drive.
 
 For ECS, use Service Connect aliases rather than task IP addresses:
 

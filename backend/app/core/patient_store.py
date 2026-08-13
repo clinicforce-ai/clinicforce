@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import os
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from threading import Lock
 from typing import Any
 from uuid import uuid4
@@ -40,6 +40,7 @@ class StoredDocument:
     uploaded_at: str
     fhir_bundle: dict[str, Any]
     s3_key: str
+    storage_provider: str = "s3"
     extraction_version: str | None = None
 
 
@@ -65,6 +66,16 @@ class StoredPatientDocument(StoredDocument):
     patient_id: str = ""
 
 
+@dataclass(frozen=True)
+class StoredDriveConnection:
+    patient_id: str
+    google_subject: str
+    refresh_token_ciphertext: str
+    folder_id: str
+    summary_file_id: str | None
+    summary_fingerprint: str | None
+
+
 def _initialize_schema(connection: psycopg.Connection[Any]) -> None:
     """Run the one-time, cross-process-safe storage migration.
 
@@ -75,8 +86,14 @@ def _initialize_schema(connection: psycopg.Connection[Any]) -> None:
     with connection.cursor() as cursor:
         cursor.execute("SELECT pg_advisory_xact_lock(%s)", (8_240_715_301,))
         cursor.execute("""CREATE TABLE IF NOT EXISTS patients (
-            patient_id TEXT PRIMARY KEY, password_hash TEXT NOT NULL, created_at TEXT NOT NULL
+            patient_id TEXT PRIMARY KEY, password_hash TEXT NOT NULL, created_at TEXT NOT NULL,
+            storage_preference TEXT NOT NULL DEFAULT 's3'
         )""")
+        cursor.execute("ALTER TABLE patients ADD COLUMN IF NOT EXISTS storage_preference TEXT NOT NULL DEFAULT 's3'")
+        cursor.execute("""DO $$ BEGIN
+            ALTER TABLE patients ADD CONSTRAINT patients_storage_preference_check
+                CHECK (storage_preference IN ('s3', 'google_drive'));
+        EXCEPTION WHEN duplicate_object THEN NULL; END $$""")
         cursor.execute("""CREATE TABLE IF NOT EXISTS patient_records (
             id BIGSERIAL PRIMARY KEY, patient_id TEXT NOT NULL REFERENCES patients(patient_id),
             category TEXT NOT NULL, label TEXT NOT NULL, created_at TEXT NOT NULL, fhir_bundle_json TEXT NOT NULL
@@ -112,13 +129,37 @@ def _initialize_schema(connection: psycopg.Connection[Any]) -> None:
             cursor.execute("ALTER TABLE patient_documents DROP COLUMN pdf_bytes")
         cursor.execute("ALTER TABLE patient_documents ALTER COLUMN s3_key SET NOT NULL")
         cursor.execute("ALTER TABLE patient_documents ADD COLUMN IF NOT EXISTS extraction_version TEXT")
+        cursor.execute("ALTER TABLE patient_documents ADD COLUMN IF NOT EXISTS storage_provider TEXT NOT NULL DEFAULT 's3'")
+        cursor.execute("""DO $$ BEGIN
+            ALTER TABLE patient_documents ADD CONSTRAINT patient_documents_storage_provider_check
+                CHECK (storage_provider IN ('s3', 'google_drive'));
+        EXCEPTION WHEN duplicate_object THEN NULL; END $$""")
         cursor.execute("""CREATE TABLE IF NOT EXISTS shl_manifests (
             manifest_id TEXT PRIMARY KEY, patient_id TEXT REFERENCES patients(patient_id),
-            encrypted_jwe TEXT NOT NULL, hashed_pin TEXT NOT NULL, created_at TEXT NOT NULL
+            encrypted_jwe TEXT NOT NULL, hashed_pin TEXT NOT NULL, created_at TEXT NOT NULL,
+            failed_pin_attempts INTEGER NOT NULL DEFAULT 0, pin_locked_until TEXT, revoked_at TEXT
         )""")
+        cursor.execute("ALTER TABLE shl_manifests ADD COLUMN IF NOT EXISTS failed_pin_attempts INTEGER NOT NULL DEFAULT 0")
+        cursor.execute("ALTER TABLE shl_manifests ADD COLUMN IF NOT EXISTS pin_locked_until TEXT")
+        cursor.execute("ALTER TABLE shl_manifests ADD COLUMN IF NOT EXISTS revoked_at TEXT")
         cursor.execute("""CREATE TABLE IF NOT EXISTS doctor_reports (
             id TEXT PRIMARY KEY, patient_id TEXT NOT NULL REFERENCES patients(patient_id),
             filename TEXT NOT NULL, s3_key TEXT NOT NULL, created_at TEXT NOT NULL
+        )""")
+        cursor.execute("""CREATE TABLE IF NOT EXISTS patient_drive_connections (
+            patient_id TEXT PRIMARY KEY REFERENCES patients(patient_id),
+            google_subject TEXT NOT NULL,
+            refresh_token_ciphertext TEXT NOT NULL,
+            folder_id TEXT NOT NULL,
+            summary_file_id TEXT,
+            summary_fingerprint TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )""")
+        cursor.execute("ALTER TABLE patient_drive_connections ADD COLUMN IF NOT EXISTS summary_fingerprint TEXT")
+        cursor.execute("""CREATE TABLE IF NOT EXISTS drive_oauth_states (
+            state TEXT PRIMARY KEY, patient_id TEXT NOT NULL REFERENCES patients(patient_id),
+            expires_at TEXT NOT NULL
         )""")
     connection.commit()
 
@@ -159,6 +200,20 @@ def get_password_hash(patient_id: str) -> str | None:
     return row["password_hash"] if row else None
 
 
+def get_storage_preference(patient_id: str) -> str:
+    with _connection() as connection:
+        row = connection.execute("SELECT storage_preference FROM patients WHERE patient_id = %s", (patient_id,)).fetchone()
+    return str(row["storage_preference"]) if row else "s3"
+
+
+def set_storage_preference(patient_id: str, storage_provider: str) -> bool:
+    if storage_provider not in {"s3", "google_drive"}:
+        raise ValueError("Unsupported storage provider")
+    with _connection() as connection:
+        cursor = connection.execute("UPDATE patients SET storage_preference = %s WHERE patient_id = %s", (storage_provider, patient_id))
+    return cursor.rowcount == 1
+
+
 def _attach_document_id(fhir_bundle: dict[str, Any], document_id: int) -> None:
     """Attach the persisted artifact ID to each citation extension in the bundle."""
     for entry in fhir_bundle.get("entry", []):
@@ -181,14 +236,15 @@ def add_document(
     fhir_bundle: dict[str, Any],
     s3_key: str,
     extraction_version: str | None = None,
+    storage_provider: str = "s3",
 ) -> int:
-    if not s3_key:
-        raise ValueError("A document must have an S3 object key")
+    if not s3_key or storage_provider not in {"s3", "google_drive"}:
+        raise ValueError("A document must have a valid storage locator and provider")
     with _connection() as connection:
-        parameters = (patient_id, filename, datetime.now(timezone.utc).isoformat(), s3_key, "{}", extraction_version)
+        parameters = (patient_id, filename, datetime.now(timezone.utc).isoformat(), s3_key, "{}", extraction_version, storage_provider)
         cursor = connection.execute("""INSERT INTO patient_documents
-            (patient_id, filename, uploaded_at, s3_key, fhir_bundle_json, extraction_version)
-            VALUES (%s, %s, %s, %s, %s, %s) RETURNING id""", parameters)
+            (patient_id, filename, uploaded_at, s3_key, fhir_bundle_json, extraction_version, storage_provider)
+            VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING id""", parameters)
         document_id = int(cursor.fetchone()["id"])
         _attach_document_id(fhir_bundle, document_id)
         connection.execute(
@@ -201,7 +257,7 @@ def add_document(
 def list_documents(patient_id: str) -> list[StoredDocument]:
     with _connection() as connection:
         rows = connection.execute(
-            """SELECT id, filename, uploaded_at, fhir_bundle_json, s3_key, extraction_version
+            """SELECT id, filename, uploaded_at, fhir_bundle_json, s3_key, extraction_version, storage_provider
                FROM patient_documents WHERE patient_id = %s ORDER BY id DESC""",
             (patient_id,),
         ).fetchall()
@@ -209,7 +265,7 @@ def list_documents(patient_id: str) -> list[StoredDocument]:
         StoredDocument(
             id=row["id"], filename=row["filename"], uploaded_at=row["uploaded_at"],
             fhir_bundle=json.loads(row["fhir_bundle_json"]), s3_key=row["s3_key"],
-            extraction_version=row["extraction_version"],
+            extraction_version=row["extraction_version"], storage_provider=row["storage_provider"],
         )
         for row in rows
     ]
@@ -218,7 +274,7 @@ def list_documents(patient_id: str) -> list[StoredDocument]:
 def get_document(patient_id: str, document_id: int) -> StoredDocument | None:
     with _connection() as connection:
         row = connection.execute(
-            """SELECT id, filename, uploaded_at, fhir_bundle_json, s3_key, extraction_version
+            """SELECT id, filename, uploaded_at, fhir_bundle_json, s3_key, extraction_version, storage_provider
                FROM patient_documents WHERE patient_id = %s AND id = %s""",
             (patient_id, document_id),
         ).fetchone()
@@ -227,7 +283,7 @@ def get_document(patient_id: str, document_id: int) -> StoredDocument | None:
     return StoredDocument(
         id=row["id"], filename=row["filename"], uploaded_at=row["uploaded_at"],
         fhir_bundle=json.loads(row["fhir_bundle_json"]), s3_key=row["s3_key"],
-        extraction_version=row["extraction_version"],
+        extraction_version=row["extraction_version"], storage_provider=row["storage_provider"],
     )
 
 
@@ -235,7 +291,7 @@ def get_document_by_id(document_id: int) -> StoredDocument | None:
     """Fetch one document by its internal ID after a signed capability is verified."""
     with _connection() as connection:
         row = connection.execute(
-            """SELECT id, filename, uploaded_at, fhir_bundle_json, s3_key, extraction_version
+            """SELECT id, filename, uploaded_at, fhir_bundle_json, s3_key, extraction_version, storage_provider
                FROM patient_documents WHERE id = %s""",
             (document_id,),
         ).fetchone()
@@ -244,7 +300,7 @@ def get_document_by_id(document_id: int) -> StoredDocument | None:
     return StoredDocument(
         id=row["id"], filename=row["filename"], uploaded_at=row["uploaded_at"],
         fhir_bundle=json.loads(row["fhir_bundle_json"]), s3_key=row["s3_key"],
-        extraction_version=row["extraction_version"],
+        extraction_version=row["extraction_version"], storage_provider=row["storage_provider"],
     )
 
 
@@ -270,7 +326,7 @@ def list_documents_requiring_extraction(extraction_version: str) -> list[StoredP
     """List metadata-only document rows needing an explicit migration job."""
     with _connection() as connection:
         rows = connection.execute(
-            """SELECT id, patient_id, filename, uploaded_at, fhir_bundle_json, s3_key, extraction_version
+            """SELECT id, patient_id, filename, uploaded_at, fhir_bundle_json, s3_key, extraction_version, storage_provider
                FROM patient_documents
                WHERE extraction_version IS DISTINCT FROM %s
                ORDER BY patient_id, id""",
@@ -280,7 +336,7 @@ def list_documents_requiring_extraction(extraction_version: str) -> list[StoredP
         StoredPatientDocument(
             id=row["id"], patient_id=row["patient_id"], filename=row["filename"],
             uploaded_at=row["uploaded_at"], fhir_bundle=json.loads(row["fhir_bundle_json"]),
-            s3_key=row["s3_key"], extraction_version=row["extraction_version"],
+            s3_key=row["s3_key"], extraction_version=row["extraction_version"], storage_provider=row["storage_provider"],
         )
         for row in rows
     ]
@@ -316,6 +372,8 @@ def list_records(patient_id: str) -> list[StoredRecord]:
 def create_manifest(patient_id: str | None, encrypted_jwe: str, hashed_pin: str) -> str:
     manifest_id = str(uuid4())
     with _connection() as connection:
+        if patient_id:
+            connection.execute("UPDATE shl_manifests SET revoked_at = %s WHERE patient_id = %s AND revoked_at IS NULL", (datetime.now(timezone.utc).isoformat(), patient_id))
         connection.execute("""INSERT INTO shl_manifests
             (manifest_id, patient_id, encrypted_jwe, hashed_pin, created_at) VALUES (%s, %s, %s, %s, %s)""",
             (manifest_id, patient_id, encrypted_jwe, hashed_pin, datetime.now(timezone.utc).isoformat()))
@@ -324,8 +382,34 @@ def create_manifest(patient_id: str | None, encrypted_jwe: str, hashed_pin: str)
 
 def get_manifest(manifest_id: str) -> dict[str, str] | None:
     with _connection() as connection:
-        row = connection.execute("SELECT patient_id, encrypted_jwe, hashed_pin FROM shl_manifests WHERE manifest_id = %s", (manifest_id,)).fetchone()
+        row = connection.execute("SELECT patient_id, encrypted_jwe, hashed_pin FROM shl_manifests WHERE manifest_id = %s AND revoked_at IS NULL", (manifest_id,)).fetchone()
     return dict(row) if row else None
+
+
+def verify_manifest_pin(manifest_id: str, passcode: str) -> dict[str, str] | None:
+    """Verify a manifest PIN with persistent brute-force protection.
+
+    A valid in-person visit remains unlimited; only five consecutive wrong PINs
+    pause attempts for five minutes.
+    """
+    from app.core.shl import verify_pin
+
+    now = datetime.now(timezone.utc)
+    with _connection() as connection:
+        row = connection.execute("""SELECT patient_id, encrypted_jwe, hashed_pin, failed_pin_attempts, pin_locked_until
+            FROM shl_manifests WHERE manifest_id = %s AND revoked_at IS NULL""", (manifest_id,)).fetchone()
+        if row is None:
+            return None
+        locked_until = row["pin_locked_until"]
+        if isinstance(locked_until, str) and locked_until > now.isoformat():
+            return None
+        if verify_pin(passcode, row["hashed_pin"]):
+            connection.execute("UPDATE shl_manifests SET failed_pin_attempts = 0, pin_locked_until = NULL WHERE manifest_id = %s", (manifest_id,))
+            return {key: row[key] for key in ("patient_id", "encrypted_jwe", "hashed_pin")}
+        attempts = int(row["failed_pin_attempts"] or 0) + 1
+        lock_until = (now + timedelta(minutes=5)).isoformat() if attempts >= 5 else None
+        connection.execute("UPDATE shl_manifests SET failed_pin_attempts = %s, pin_locked_until = %s WHERE manifest_id = %s", (attempts, lock_until, manifest_id))
+    return None
 
 
 def add_doctor_report(patient_id: str, filename: str, s3_key: str) -> str:
@@ -340,3 +424,57 @@ def get_doctor_report(report_id: str) -> StoredDoctorReport | None:
     with _connection() as connection:
         row = connection.execute("SELECT id, patient_id, filename, s3_key FROM doctor_reports WHERE id = %s", (report_id,)).fetchone()
     return StoredDoctorReport(**dict(row)) if row else None
+
+
+def save_drive_oauth_state(patient_id: str) -> str:
+    """Persist a short-lived, single-use OAuth CSRF state for a logged-in patient."""
+    state = str(uuid4())
+    now = datetime.now(timezone.utc)
+    with _connection() as connection:
+        connection.execute("DELETE FROM drive_oauth_states WHERE expires_at < %s", (now.isoformat(),))
+        connection.execute(
+            "INSERT INTO drive_oauth_states (state, patient_id, expires_at) VALUES (%s, %s, %s)",
+            (state, patient_id, (now + timedelta(minutes=10)).isoformat()),
+        )
+    return state
+
+
+def consume_drive_oauth_state(state: str) -> str | None:
+    """Return the connected patient once, rejecting expired or replayed callbacks."""
+    with _connection() as connection:
+        row = connection.execute(
+            "DELETE FROM drive_oauth_states WHERE state = %s AND expires_at >= %s RETURNING patient_id",
+            (state, datetime.now(timezone.utc).isoformat()),
+        ).fetchone()
+    return row["patient_id"] if row else None
+
+
+def upsert_drive_connection(
+    patient_id: str, google_subject: str, refresh_token_ciphertext: str, folder_id: str,
+) -> None:
+    now = datetime.now(timezone.utc).isoformat()
+    with _connection() as connection:
+        connection.execute("""INSERT INTO patient_drive_connections
+            (patient_id, google_subject, refresh_token_ciphertext, folder_id, summary_file_id, summary_fingerprint, created_at, updated_at)
+            VALUES (%s, %s, %s, %s, NULL, NULL, %s, %s)
+            ON CONFLICT (patient_id) DO UPDATE SET google_subject = EXCLUDED.google_subject,
+              refresh_token_ciphertext = EXCLUDED.refresh_token_ciphertext, folder_id = EXCLUDED.folder_id,
+              summary_file_id = NULL, summary_fingerprint = NULL, updated_at = EXCLUDED.updated_at""",
+            (patient_id, google_subject, refresh_token_ciphertext, folder_id, now, now),
+        )
+
+
+def get_drive_connection(patient_id: str) -> StoredDriveConnection | None:
+    with _connection() as connection:
+        row = connection.execute("""SELECT patient_id, google_subject, refresh_token_ciphertext, folder_id, summary_file_id, summary_fingerprint
+            FROM patient_drive_connections WHERE patient_id = %s""", (patient_id,)).fetchone()
+    return StoredDriveConnection(**dict(row)) if row else None
+
+
+def set_drive_summary_file(patient_id: str, summary_file_id: str, summary_fingerprint: str) -> bool:
+    with _connection() as connection:
+        cursor = connection.execute("""UPDATE patient_drive_connections
+            SET summary_file_id = %s, summary_fingerprint = %s, updated_at = %s WHERE patient_id = %s""",
+            (summary_file_id, summary_fingerprint, datetime.now(timezone.utc).isoformat(), patient_id),
+        )
+    return cursor.rowcount == 1
