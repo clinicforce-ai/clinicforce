@@ -148,25 +148,24 @@ def _find_or_create_folder(headers: dict[str, str]) -> str:
 def existing_file_ids(connection: StoredDriveConnection, file_ids: list[str]) -> set[str]:
     """Return the app-created Drive files that still exist and are not trashed."""
     ids = list(dict.fromkeys(file_id for file_id in file_ids if file_id))
-    if not ids:
-        return set()
+    found: set[str] = set()
+    # Drive's search DSL does not support ``id =`` clauses. Check each RDS-mapped
+    # ID directly so file IDs containing punctuation are always handled safely.
     access_token = _access_token(connection)
     headers = {"Authorization": f"Bearer {access_token}"}
-    found: set[str] = set()
-    # Keep each Drive query comfortably below URL and query-complexity limits.
-    for offset in range(0, len(ids), 50):
-        group = ids[offset:offset + 50]
-        query = "(" + " or ".join(f"id = '{file_id}'" for file_id in group) + ") and trashed = false"
+    for file_id in ids:
         response = httpx.get(
-            "https://www.googleapis.com/drive/v3/files",
+            f"https://www.googleapis.com/drive/v3/files/{file_id}",
             headers=headers,
-            params={"q": query, "fields": "files(id)", "pageSize": len(group)},
+            params={"fields": "id,trashed"},
             timeout=20.0,
         )
+        if response.status_code == 404:
+            continue
         _raise_for_google_error(response, "file reconciliation")
-        for item in response.json().get("files", []):
-            if isinstance(item, dict) and isinstance(item.get("id"), str):
-                found.add(item["id"])
+        item = response.json()
+        if isinstance(item, dict) and isinstance(item.get("id"), str) and not item.get("trashed", False):
+            found.add(item["id"])
     return found
 
 
