@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import base64
+import hashlib
+import json
 import os
 import sys
 import unittest
@@ -150,6 +152,69 @@ class MainRouteTests(unittest.IsolatedAsyncioTestCase):
         put_drive.assert_called_once()
         put_s3.assert_not_called()
         self.assertEqual(add_document.call_args.args[-1], "google_drive")
+
+    async def test_unchanged_drive_record_does_not_replace_its_single_summary_file(self) -> None:
+        bundle = {
+            "resourceType": "Bundle", "type": "collection",
+            "entry": [{"resource": {"resourceType": "Condition", "code": {"text": "Asthma"}}}],
+        }
+        fingerprint = hashlib.sha256(
+            json.dumps(bundle, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        ).hexdigest()
+        document = Mock(fhir_bundle=bundle)
+        connection = Mock(summary_fingerprint=fingerprint, summary_file_id="drive-summary-id")
+        with (
+            patch("app.main._authenticate_patient", new=AsyncMock(return_value="patient-1")),
+            patch("app.main.list_documents", return_value=[document]),
+            patch("app.main.list_records", return_value=[]),
+            patch("app.main._ensure_documents_extracted", new=AsyncMock()),
+            patch("app.main._create_upload_shl", return_value=("shlink:/value", "qr", "manifest-1")),
+            patch("app.main.get_storage_preference", return_value="google_drive"),
+            patch("app.main.get_drive_connection", return_value=connection),
+            patch("app.main.summarize_fhir_bundle", new=AsyncMock()) as summarize,
+            patch("app.main.google_drive.replace_summary") as replace_summary,
+        ):
+            response = await self.client.post(
+                "/api/patient/generate-link",
+                json={"patient_id": "patient-1", "password": "long-password", "passcode": "1234"},
+            )
+        self.assertEqual(response.status_code, 200, response.text)
+        summarize.assert_not_awaited()
+        replace_summary.assert_not_called()
+
+    async def test_changed_drive_record_replaces_summary_without_embedded_source_capabilities(self) -> None:
+        bundle = {
+            "resourceType": "Bundle", "type": "collection",
+            "entry": [{"resource": {"resourceType": "Condition", "code": {"text": "Asthma"}}}],
+        }
+        document = Mock(fhir_bundle=bundle)
+        connection = Mock(summary_fingerprint="stale", summary_file_id="drive-summary-id")
+        summary = {
+            "narrative": "Clinical history reviewed.", "vitals": [], "labs": [], "medications": [],
+            "conditions": [{"name": "Asthma", "citation": {"source_filename": "report.pdf", "page_number": 1, "document_id": 7}}],
+            "allergies": [], "care_events": [],
+        }
+        with (
+            patch("app.main._authenticate_patient", new=AsyncMock(return_value="patient-1")),
+            patch("app.main.list_documents", return_value=[document]),
+            patch("app.main.list_records", return_value=[]),
+            patch("app.main._ensure_documents_extracted", new=AsyncMock()),
+            patch("app.main._create_upload_shl", return_value=("shlink:/value", "qr", "manifest-1")),
+            patch("app.main.get_storage_preference", return_value="google_drive"),
+            patch("app.main.get_drive_connection", return_value=connection),
+            patch("app.main.summarize_fhir_bundle", new=AsyncMock(return_value=summary)) as summarize,
+            patch("app.main.render_doctor_pdf_bytes", return_value=b"%PDF-1.4"),
+            patch("app.main.google_drive.replace_summary", return_value="drive-summary-id") as replace_summary,
+            patch("app.main.set_drive_summary_file", return_value=True),
+        ):
+            response = await self.client.post(
+                "/api/patient/generate-link",
+                json={"patient_id": "patient-1", "password": "long-password", "passcode": "1234"},
+            )
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(summarize.await_args.args[0], bundle)
+        self.assertNotIn("download_url", summary["conditions"][0]["citation"])
+        replace_summary.assert_called_once()
 
     async def test_patient_record_contract_matches_the_browser_form(self) -> None:
         with (
