@@ -209,6 +209,8 @@ async def _authenticate_patient(patient_id: str | None, password: str | None, re
             if patient_id and patient_id.strip() != session_patient_id:
                 raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Patient session does not match this workspace")
             return session_patient_id
+        if not patient_id and not password:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Sign in to open your workspace")
     normalized_id, password = _validate_patient_credentials(patient_id, password)
     stored_hash = await asyncio.to_thread(get_password_hash, normalized_id)
     if stored_hash is None or not verify_password(password, stored_hash):
