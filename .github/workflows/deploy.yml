@@ -85,6 +85,7 @@ jobs:
           docker push "$REGISTRY/clinicforce-hapi:$IMAGE_TAG"
 
       - name: Update only the released image parameters
+        id: release_stack
         env:
           REGISTRY: ${{ steps.ecr.outputs.registry }}
           IMAGE_TAG: ${{ github.sha }}
@@ -105,6 +106,29 @@ jobs:
               ParameterKey=GoogleOAuthClientSecretArn,UsePreviousValue=true
           aws cloudformation wait stack-update-complete --stack-name "$STACK_NAME"
           aws ecs wait services-stable --cluster clinicforce-production --services backend hapi
+
+      - name: Report stack rollback details
+        if: ${{ failure() && steps.release_stack.outcome == 'failure' }}
+        run: |
+          set +e
+          aws cloudformation describe-stacks \
+            --stack-name "$STACK_NAME" \
+            --query 'Stacks[0].{status:StackStatus,reason:StackStatusReason}' \
+            --output table
+          aws cloudformation describe-stack-events \
+            --stack-name "$STACK_NAME" \
+            --max-items 40 \
+            --query 'StackEvents[?contains(ResourceStatus, `FAILED`) || contains(ResourceStatus, `ROLLBACK`)].{time:Timestamp,resource:LogicalResourceId,type:ResourceType,status:ResourceStatus,reason:ResourceStatusReason}' \
+            --output table
+          for service in backend hapi; do
+            echo "Stopped tasks for $service"
+            task_arns=$(aws ecs list-tasks --cluster clinicforce-production --service-name "$service" --desired-status STOPPED --query 'taskArns' --output text)
+            if [ -n "$task_arns" ] && [ "$task_arns" != "None" ]; then
+              aws ecs describe-tasks --cluster clinicforce-production --tasks $task_arns \
+                --query 'tasks[].{task:taskArn,stopped:stoppedReason,containers:containers[].{name:name,reason:reason,exit:exitCode}}' \
+                --output json
+            fi
+          done
 
       - name: Build and publish frontend assets
         id: frontend

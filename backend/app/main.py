@@ -647,7 +647,12 @@ async def generate_patient_link(request: GeneratePatientLinkRequest) -> dict[str
                 raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Reconnect Google Drive before creating a share")
             fingerprint = hashlib.sha256(json.dumps(fhir_bundle, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
             if connection.summary_fingerprint != fingerprint or not connection.summary_file_id:
-                summary = _with_source_download_links(await summarize_fhir_bundle(fhir_bundle), manifest_id)
+                # The stored Drive PDF keeps report/page citations but deliberately
+                # omits QR-bound download capabilities. The current clinician
+                # dashboard adds those just-in-time after QR/PIN verification.
+                # This lets the one Drive PDF remain unchanged for an unchanged
+                # patient record while preserving access control for source files.
+                summary = await summarize_fhir_bundle(fhir_bundle)
                 report_bytes = await run_in_threadpool(render_doctor_pdf_bytes, summary)
                 summary_file_id = await asyncio.to_thread(google_drive.replace_summary, connection, report_bytes)
                 await asyncio.to_thread(set_drive_summary_file, patient_id, summary_file_id, fingerprint)
@@ -794,7 +799,10 @@ async def decrypt_and_summarize(request: DoctorSummaryRequest) -> dict[str, Any]
         summary = _with_source_download_links(await summarize_fhir_bundle(fhir_bundle), str(request.manifest_id))
         patient_id = manifest.get("patient_id")
         connection = await asyncio.to_thread(get_drive_connection, str(patient_id)) if patient_id else None
-        if connection and connection.summary_file_id:
+        storage_provider = (
+            await asyncio.to_thread(get_storage_preference, str(patient_id)) if connection else "s3"
+        )
+        if storage_provider == "google_drive" and connection and connection.summary_file_id:
             report_bytes = await asyncio.to_thread(google_drive.get_pdf, connection, connection.summary_file_id)
         else:
             report_bytes = await run_in_threadpool(render_doctor_pdf_bytes, summary)
