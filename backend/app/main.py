@@ -728,6 +728,9 @@ async def generate_patient_link(request: GeneratePatientLinkRequest, http_reques
             summary_exists = bool(connection.summary_file_id) and await asyncio.to_thread(
                 google_drive.file_exists, connection, connection.summary_file_id
             )
+            summary_in_folder = summary_exists and await asyncio.to_thread(
+                google_drive.file_is_in_folder, connection, connection.summary_file_id
+            )
             if connection.summary_fingerprint != fingerprint or not summary_exists:
                 # The stored Drive PDF keeps report/page citations but deliberately
                 # omits QR-bound download capabilities. The current clinician
@@ -738,6 +741,10 @@ async def generate_patient_link(request: GeneratePatientLinkRequest, http_reques
                 report_bytes = await run_in_threadpool(render_doctor_pdf_bytes, summary)
                 summary_file_id = await asyncio.to_thread(google_drive.replace_summary, connection, report_bytes)
                 await asyncio.to_thread(set_drive_summary_file, patient_id, summary_file_id, fingerprint)
+            elif not summary_in_folder:
+                # Keep an unchanged summary file in the current patient-owned
+                # folder without regenerating it or creating a second PDF.
+                await asyncio.to_thread(google_drive.ensure_summary_in_folder, connection, connection.summary_file_id)
         log_info("Secure Sharing", "Stored encrypted manifest %s for %d documents and %d structured records", manifest_id, len(documents), len(records))
         return {"shl_uri": shl_uri, "qr_code_base64": qr_code_base64}
     except HTTPException:

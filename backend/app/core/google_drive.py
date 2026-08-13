@@ -183,6 +183,44 @@ def file_exists(connection: StoredDriveConnection, file_id: str) -> bool:
     return True
 
 
+def file_is_in_folder(connection: StoredDriveConnection, file_id: str) -> bool:
+    """Return whether a Drive file is still present in this patient's folder."""
+    response = httpx.get(
+        f"https://www.googleapis.com/drive/v3/files/{file_id}",
+        headers={"Authorization": f"Bearer {_access_token(connection)}"},
+        params={"fields": "id,trashed,parents"},
+        timeout=20.0,
+    )
+    if response.status_code == 404:
+        return False
+    _raise_for_google_error(response, "file location lookup")
+    item = response.json()
+    parents = item.get("parents", []) if isinstance(item, dict) else []
+    return (
+        isinstance(item, dict)
+        and isinstance(item.get("id"), str)
+        and not item.get("trashed", False)
+        and connection.folder_id in parents
+    )
+
+
+def ensure_summary_in_folder(connection: StoredDriveConnection, file_id: str) -> None:
+    """Place an existing summary in the connected ClinicForce folder.
+
+    This covers patients who connected a new folder after a summary had already
+    been generated.  The file ID and contents remain stable; only its Drive
+    location and visible metadata are corrected.
+    """
+    response = httpx.patch(
+        f"https://www.googleapis.com/drive/v3/files/{file_id}",
+        headers={"Authorization": f"Bearer {_access_token(connection)}", "Content-Type": "application/json"},
+        params={"addParents": connection.folder_id, "fields": "id,parents"},
+        json={"name": "Clinical Summary.pdf", "appProperties": {"clinicforce_kind": "clinical_summary"}},
+        timeout=20.0,
+    )
+    _raise_for_google_error(response, "summary folder update")
+
+
 def _multipart(metadata: dict[str, Any], content: bytes) -> tuple[bytes, str]:
     boundary = "clinicforce_drive_upload"
     payload = (
@@ -222,7 +260,9 @@ def replace_summary(connection: StoredDriveConnection, content: bytes) -> str:
             params={"uploadType": "media", "fields": "id"}, content=content, timeout=60.0,
         )
         if response.status_code != 404:
-            response.raise_for_status()
+            _raise_for_google_error(response, "summary replacement")
+            if not file_is_in_folder(connection, connection.summary_file_id):
+                ensure_summary_in_folder(connection, connection.summary_file_id)
             return connection.summary_file_id
     return put_pdf(connection, "Clinical Summary.pdf", content, "clinical_summary")
 
