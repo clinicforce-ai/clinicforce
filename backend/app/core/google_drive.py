@@ -145,6 +145,45 @@ def _find_or_create_folder(headers: dict[str, str]) -> str:
     return folder_id
 
 
+def existing_file_ids(connection: StoredDriveConnection, file_ids: list[str]) -> set[str]:
+    """Return the app-created Drive files that still exist and are not trashed."""
+    ids = list(dict.fromkeys(file_id for file_id in file_ids if file_id))
+    if not ids:
+        return set()
+    access_token = _access_token(connection)
+    headers = {"Authorization": f"Bearer {access_token}"}
+    found: set[str] = set()
+    # Keep each Drive query comfortably below URL and query-complexity limits.
+    for offset in range(0, len(ids), 50):
+        group = ids[offset:offset + 50]
+        query = "(" + " or ".join(f"id = '{file_id}'" for file_id in group) + ") and trashed = false"
+        response = httpx.get(
+            "https://www.googleapis.com/drive/v3/files",
+            headers=headers,
+            params={"q": query, "fields": "files(id)", "pageSize": len(group)},
+            timeout=20.0,
+        )
+        _raise_for_google_error(response, "file reconciliation")
+        for item in response.json().get("files", []):
+            if isinstance(item, dict) and isinstance(item.get("id"), str):
+                found.add(item["id"])
+    return found
+
+
+def file_exists(connection: StoredDriveConnection, file_id: str) -> bool:
+    """Check a known Drive artifact without downloading its PDF content."""
+    response = httpx.get(
+        f"https://www.googleapis.com/drive/v3/files/{file_id}",
+        headers={"Authorization": f"Bearer {_access_token(connection)}"},
+        params={"fields": "id"},
+        timeout=20.0,
+    )
+    if response.status_code == 404:
+        return False
+    _raise_for_google_error(response, "file lookup")
+    return True
+
+
 def _multipart(metadata: dict[str, Any], content: bytes) -> tuple[bytes, str]:
     boundary = "clinicforce_drive_upload"
     payload = (

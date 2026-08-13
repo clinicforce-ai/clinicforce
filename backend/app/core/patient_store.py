@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import os
+import hashlib
+import secrets
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from threading import Lock
@@ -157,10 +159,19 @@ def _initialize_schema(connection: psycopg.Connection[Any]) -> None:
             updated_at TEXT NOT NULL
         )""")
         cursor.execute("ALTER TABLE patient_drive_connections ADD COLUMN IF NOT EXISTS summary_fingerprint TEXT")
+        cursor.execute("CREATE UNIQUE INDEX IF NOT EXISTS patient_drive_connections_google_subject_idx ON patient_drive_connections (google_subject)")
         cursor.execute("""CREATE TABLE IF NOT EXISTS drive_oauth_states (
             state TEXT PRIMARY KEY, patient_id TEXT NOT NULL REFERENCES patients(patient_id),
             expires_at TEXT NOT NULL
         )""")
+        cursor.execute("""CREATE TABLE IF NOT EXISTS google_login_states (
+            state TEXT PRIMARY KEY, expires_at TEXT NOT NULL
+        )""")
+        cursor.execute("""CREATE TABLE IF NOT EXISTS patient_sessions (
+            session_hash TEXT PRIMARY KEY, patient_id TEXT NOT NULL REFERENCES patients(patient_id),
+            expires_at TEXT NOT NULL, created_at TEXT NOT NULL
+        )""")
+        cursor.execute("CREATE INDEX IF NOT EXISTS patient_sessions_patient_id_idx ON patient_sessions (patient_id)")
     connection.commit()
 
 
@@ -304,6 +315,24 @@ def get_document_by_id(document_id: int) -> StoredDocument | None:
     )
 
 
+def remove_documents(patient_id: str, document_ids: list[int]) -> int:
+    """Remove Drive artifact mappings after the patient deletes source files.
+
+    The clinical facts remain only until this mapping is removed; new workspaces and
+    QR snapshots therefore cannot continue to present a source that no longer exists
+    in the patient's selected storage provider.
+    """
+    ids = sorted({document_id for document_id in document_ids if document_id > 0})
+    if not ids:
+        return 0
+    with _connection() as connection:
+        cursor = connection.execute(
+            "DELETE FROM patient_documents WHERE patient_id = %s AND id = ANY(%s)",
+            (patient_id, ids),
+        )
+    return cursor.rowcount
+
+
 def update_document_extraction(
     patient_id: str,
     document_id: int,
@@ -439,6 +468,19 @@ def save_drive_oauth_state(patient_id: str) -> str:
     return state
 
 
+def save_google_login_state() -> str:
+    """Create a single-use OAuth state for passwordless Google patient sign-in."""
+    state = str(uuid4())
+    now = datetime.now(timezone.utc)
+    with _connection() as connection:
+        connection.execute("DELETE FROM google_login_states WHERE expires_at < %s", (now.isoformat(),))
+        connection.execute(
+            "INSERT INTO google_login_states (state, expires_at) VALUES (%s, %s)",
+            (state, (now + timedelta(minutes=10)).isoformat()),
+        )
+    return state
+
+
 def consume_drive_oauth_state(state: str) -> str | None:
     """Return the connected patient once, rejecting expired or replayed callbacks."""
     with _connection() as connection:
@@ -447,6 +489,16 @@ def consume_drive_oauth_state(state: str) -> str | None:
             (state, datetime.now(timezone.utc).isoformat()),
         ).fetchone()
     return row["patient_id"] if row else None
+
+
+def consume_google_login_state(state: str) -> bool:
+    """Consume a Google sign-in state exactly once."""
+    with _connection() as connection:
+        row = connection.execute(
+            "DELETE FROM google_login_states WHERE state = %s AND expires_at >= %s RETURNING state",
+            (state, datetime.now(timezone.utc).isoformat()),
+        ).fetchone()
+    return row is not None
 
 
 def upsert_drive_connection(
@@ -459,9 +511,69 @@ def upsert_drive_connection(
             VALUES (%s, %s, %s, %s, NULL, NULL, %s, %s)
             ON CONFLICT (patient_id) DO UPDATE SET google_subject = EXCLUDED.google_subject,
               refresh_token_ciphertext = EXCLUDED.refresh_token_ciphertext, folder_id = EXCLUDED.folder_id,
-              summary_file_id = NULL, summary_fingerprint = NULL, updated_at = EXCLUDED.updated_at""",
+              summary_file_id = CASE WHEN patient_drive_connections.folder_id = EXCLUDED.folder_id
+                  THEN patient_drive_connections.summary_file_id ELSE NULL END,
+              summary_fingerprint = CASE WHEN patient_drive_connections.folder_id = EXCLUDED.folder_id
+                  THEN patient_drive_connections.summary_fingerprint ELSE NULL END,
+              updated_at = EXCLUDED.updated_at""",
             (patient_id, google_subject, refresh_token_ciphertext, folder_id, now, now),
         )
+
+
+def get_patient_by_google_subject(google_subject: str) -> str | None:
+    with _connection() as connection:
+        row = connection.execute(
+            "SELECT patient_id FROM patient_drive_connections WHERE google_subject = %s",
+            (google_subject,),
+        ).fetchone()
+    return str(row["patient_id"]) if row else None
+
+
+def create_google_patient(google_subject: str, password_hash: str) -> str:
+    """Create a stable, non-guessable local workspace for a Google identity."""
+    digest = hashlib.sha256(google_subject.encode("utf-8")).hexdigest()[:20]
+    patient_id = f"google-{digest}"
+    with _connection() as connection:
+        connection.execute(
+            "INSERT INTO patients (patient_id, password_hash, created_at) VALUES (%s, %s, %s) ON CONFLICT (patient_id) DO NOTHING",
+            (patient_id, password_hash, datetime.now(timezone.utc).isoformat()),
+        )
+    return patient_id
+
+
+def _hash_session_token(token: str) -> str:
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
+def create_patient_session(patient_id: str) -> str:
+    """Persist only a SHA-256 token hash; the raw session exists only in the cookie."""
+    token = secrets.token_urlsafe(32)
+    now = datetime.now(timezone.utc)
+    with _connection() as connection:
+        connection.execute("DELETE FROM patient_sessions WHERE expires_at < %s", (now.isoformat(),))
+        connection.execute(
+            "INSERT INTO patient_sessions (session_hash, patient_id, expires_at, created_at) VALUES (%s, %s, %s, %s)",
+            (_hash_session_token(token), patient_id, (now + timedelta(days=30)).isoformat(), now.isoformat()),
+        )
+    return token
+
+
+def get_patient_session(token: str) -> str | None:
+    if not token:
+        return None
+    with _connection() as connection:
+        row = connection.execute(
+            "SELECT patient_id FROM patient_sessions WHERE session_hash = %s AND expires_at >= %s",
+            (_hash_session_token(token), datetime.now(timezone.utc).isoformat()),
+        ).fetchone()
+    return str(row["patient_id"]) if row else None
+
+
+def revoke_patient_session(token: str) -> None:
+    if not token:
+        return
+    with _connection() as connection:
+        connection.execute("DELETE FROM patient_sessions WHERE session_hash = %s", (_hash_session_token(token),))
 
 
 def get_drive_connection(patient_id: str) -> StoredDriveConnection | None:
@@ -476,5 +588,14 @@ def set_drive_summary_file(patient_id: str, summary_file_id: str, summary_finger
         cursor = connection.execute("""UPDATE patient_drive_connections
             SET summary_file_id = %s, summary_fingerprint = %s, updated_at = %s WHERE patient_id = %s""",
             (summary_file_id, summary_fingerprint, datetime.now(timezone.utc).isoformat(), patient_id),
+        )
+    return cursor.rowcount == 1
+
+
+def clear_drive_summary_file(patient_id: str) -> bool:
+    with _connection() as connection:
+        cursor = connection.execute("""UPDATE patient_drive_connections
+            SET summary_file_id = NULL, summary_fingerprint = NULL, updated_at = %s WHERE patient_id = %s""",
+            (datetime.now(timezone.utc).isoformat(), patient_id),
         )
     return cursor.rowcount == 1

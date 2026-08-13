@@ -153,6 +153,30 @@ class MainRouteTests(unittest.IsolatedAsyncioTestCase):
         put_s3.assert_not_called()
         self.assertEqual(add_document.call_args.args[-1], "google_drive")
 
+    async def test_drive_workspace_removes_documents_deleted_by_the_patient(self) -> None:
+        deleted_drive_document = Mock(
+            id=12,
+            filename="deleted-report.pdf",
+            uploaded_at="2026-08-13T00:00:00+00:00",
+            fhir_bundle={"entry": []},
+            s3_key="deleted-drive-file-id",
+            storage_provider="google_drive",
+            extraction_version="v1",
+        )
+        connection = Mock(summary_file_id=None)
+        with (
+            patch("app.main.list_documents", side_effect=[[deleted_drive_document], []]),
+            patch("app.main.list_records", return_value=[]),
+            patch("app.main.get_storage_preference", return_value="google_drive"),
+            patch("app.main.get_drive_connection", return_value=connection),
+            patch("app.main.google_drive.existing_file_ids", return_value=set()),
+            patch("app.main.remove_documents", return_value=1) as remove_documents,
+        ):
+            workspace = await __import__("app.main", fromlist=["_load_workspace"])._load_workspace("patient-1")
+
+        self.assertEqual(workspace["documents"], [])
+        remove_documents.assert_called_once_with("patient-1", [12])
+
     async def test_unchanged_drive_record_does_not_replace_its_single_summary_file(self) -> None:
         bundle = {
             "resourceType": "Bundle", "type": "collection",
@@ -171,6 +195,7 @@ class MainRouteTests(unittest.IsolatedAsyncioTestCase):
             patch("app.main._create_upload_shl", return_value=("shlink:/value", "qr", "manifest-1")),
             patch("app.main.get_storage_preference", return_value="google_drive"),
             patch("app.main.get_drive_connection", return_value=connection),
+            patch("app.main.google_drive.file_exists", return_value=True),
             patch("app.main.summarize_fhir_bundle", new=AsyncMock()) as summarize,
             patch("app.main.google_drive.replace_summary") as replace_summary,
         ):
@@ -202,6 +227,7 @@ class MainRouteTests(unittest.IsolatedAsyncioTestCase):
             patch("app.main._create_upload_shl", return_value=("shlink:/value", "qr", "manifest-1")),
             patch("app.main.get_storage_preference", return_value="google_drive"),
             patch("app.main.get_drive_connection", return_value=connection),
+            patch("app.main.google_drive.file_exists", return_value=True),
             patch("app.main.summarize_fhir_bundle", new=AsyncMock(return_value=summary)) as summarize,
             patch("app.main.render_doctor_pdf_bytes", return_value=b"%PDF-1.4"),
             patch("app.main.google_drive.replace_summary", return_value="drive-summary-id") as replace_summary,

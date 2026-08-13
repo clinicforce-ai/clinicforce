@@ -1,5 +1,5 @@
 import * as Dialog from '@radix-ui/react-dialog'
-import { useRef, useState, type FormEvent } from 'react'
+import { useEffect, useRef, useState, type FormEvent } from 'react'
 import {
   ArrowLeft,
   CheckCircle2,
@@ -21,11 +21,15 @@ import {
   X,
 } from 'lucide-react'
 import {
+  ApiError,
   beginGoogleDriveConnection,
+  beginGoogleSignIn,
   chooseStorageProvider,
   downloadPatientDocument,
   generatePatientLink,
+  getCurrentPatientSession,
   loginPatient,
+  logoutPatient,
   registerPatient,
   savePatientRecord,
   type LinkResponse,
@@ -80,10 +84,29 @@ export default function PatientPortal({ onBack }: PatientPortalProps) {
   const [form, setForm] = useState<FormState>(emptyForm)
   const [sharePasscode, setSharePasscode] = useState('')
   const [link, setLink] = useState<LinkResponse | null>(null)
-  const [busy, setBusy] = useState<'auth' | 'upload' | 'record' | 'share' | 'download' | 'drive' | null>(null)
+  const [busy, setBusy] = useState<'auth' | 'upload' | 'record' | 'share' | 'download' | 'drive' | 'google' | null>(null)
+  const [restoringSession, setRestoringSession] = useState(true)
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
   const fileInput = useRef<HTMLInputElement>(null)
+
+  useEffect(() => {
+    let active = true
+    void getCurrentPatientSession()
+      .then((workspace) => {
+        if (active) {
+          setSession(workspace)
+          setNotice('Your Google Drive workspace is ready.')
+        }
+      })
+      .catch((caught) => {
+        if (active && !(caught instanceof ApiError && caught.status === 401)) {
+          setError(messageFrom(caught, 'Unable to restore your workspace.'))
+        }
+      })
+      .finally(() => { if (active) setRestoringSession(false) })
+    return () => { active = false }
+  }, [])
 
   const setField = (key: keyof FormState, value: string) => setForm((current) => ({ ...current, [key]: value }))
   const clearFeedback = () => { setError(''); setNotice('') }
@@ -158,6 +181,17 @@ export default function PatientPortal({ onBack }: PatientPortalProps) {
     } catch (caught) {
       setBusy(null)
       setError(messageFrom(caught, 'Unable to start the Google Drive connection.'))
+    }
+  }
+
+  const signInWithGoogle = async () => {
+    clearFeedback()
+    setBusy('google')
+    try {
+      window.location.assign(await beginGoogleSignIn())
+    } catch (caught) {
+      setBusy(null)
+      setError(messageFrom(caught, 'Unable to start Google sign-in.'))
     }
   }
 
@@ -251,6 +285,7 @@ export default function PatientPortal({ onBack }: PatientPortalProps) {
   }
 
   const signOut = () => {
+    void logoutPatient()
     setSession(null)
     setPassword('')
     setFiles([])
@@ -276,7 +311,7 @@ export default function PatientPortal({ onBack }: PatientPortalProps) {
           </div>
           <h2>{mode === 'login' ? 'Welcome back' : 'Create your workspace'}</h2>
           <p className="text-sm leading-6 text-[var(--muted-ink)]">{mode === 'login' ? 'Enter your account details to open your health record.' : 'Use a memorable patient ID and a strong password.'}</p>
-          <form className="stack-form" onSubmit={authenticate} noValidate>
+          {restoringSession ? <div className="status-panel"><LoaderCircle className="size-5 animate-spin" aria-hidden="true" /><p>Opening your secure workspace…</p></div> : <form className="stack-form" onSubmit={authenticate} noValidate>
             <label htmlFor="patient-id">Patient ID</label>
             <input id="patient-id" autoComplete="username" value={patientId} onChange={(event) => setPatientId(event.target.value)} placeholder="e.g. alex-morgan" />
             <label htmlFor="patient-password">Password</label>
@@ -287,7 +322,8 @@ export default function PatientPortal({ onBack }: PatientPortalProps) {
             {mode === 'register' && <p id="password-help" className="field-help">Use at least 12 characters.</p>}
             {error && <p className="form-error" role="alert">{error}</p>}
             <button className="button button-primary w-full" type="submit" disabled={busy === 'auth'}>{busy === 'auth' ? <><LoaderCircle className="size-4 animate-spin" aria-hidden="true" /> Opening workspace</> : <>{mode === 'login' ? 'Open my workspace' : 'Create my workspace'} <ChevronRight aria-hidden="true" className="size-4" /></>}</button>
-          </form>
+          </form>}
+          {!restoringSession && <><div className="divider"><span>or</span></div><button className="button button-secondary w-full" type="button" disabled={busy === 'google'} onClick={() => void signInWithGoogle()}>{busy === 'google' ? <LoaderCircle className="size-4 animate-spin" aria-hidden="true" /> : <Cloud aria-hidden="true" className="size-4" />} Continue with Google</button><p className="field-help">Google sign-in opens your patient workspace and stores new PDFs in your ClinicForce Drive folder.</p></>}
         </div>
       </section>
     )

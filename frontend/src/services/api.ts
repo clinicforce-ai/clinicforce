@@ -126,7 +126,7 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   const controller = new AbortController()
   const timeout = window.setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS)
   try {
-    const response = await fetch(path, { ...init, signal: controller.signal })
+    const response = await fetch(path, { ...init, credentials: 'same-origin', signal: controller.signal })
     const body: unknown = await response.json().catch(() => null)
     if (!response.ok) {
       throw new ApiError(response.status, detailFrom(body, `Request failed (${response.status}).`))
@@ -179,20 +179,42 @@ export async function loginPatient(patientId: string, password: string): Promise
   return assertWorkspace(await request('/api/patient/login', json({ patient_id: patientId.trim(), password })))
 }
 
-export async function uploadPatientPdfs(patientId: string, password: string, files: File[]): Promise<PatientSession> {
+function credentialsPayload(patientId?: string, password?: string): Record<string, string> {
+  return patientId && password ? { patient_id: patientId.trim(), password } : {}
+}
+
+export async function getCurrentPatientSession(): Promise<PatientSession> {
+  return assertWorkspace(await request('/api/patient/session'))
+}
+
+export async function logoutPatient(): Promise<void> {
+  await request('/api/patient/logout', { method: 'POST' })
+}
+
+export async function beginGoogleSignIn(): Promise<string> {
+  const value = await request<unknown>('/api/patient/google-login/start', { method: 'POST' })
+  if (!value || typeof value !== 'object' || !('authorization_url' in value) || typeof value.authorization_url !== 'string') {
+    throw new ApiError(502, 'ClinicForce could not start Google sign-in.')
+  }
+  return value.authorization_url
+}
+
+export async function uploadPatientPdfs(patientId: string | undefined, password: string | undefined, files: File[]): Promise<PatientSession> {
   const form = new FormData()
-  form.append('patient_id', patientId)
-  form.append('password', password)
+  if (patientId && password) {
+    form.append('patient_id', patientId)
+    form.append('password', password)
+  }
   files.forEach((file) => form.append('file', file, file.name))
   return assertWorkspace(await request('/api/patient/upload', { method: 'POST', body: form }))
 }
 
-export async function chooseStorageProvider(patientId: string, password: string, storageProvider: 's3' | 'google_drive'): Promise<PatientSession> {
-  return assertWorkspace(await request('/api/patient/storage-preference', json({ patient_id: patientId, password, storage_provider: storageProvider })))
+export async function chooseStorageProvider(patientId: string | undefined, password: string | undefined, storageProvider: 's3' | 'google_drive'): Promise<PatientSession> {
+  return assertWorkspace(await request('/api/patient/storage-preference', json({ ...credentialsPayload(patientId, password), storage_provider: storageProvider })))
 }
 
-export async function beginGoogleDriveConnection(patientId: string, password: string): Promise<string> {
-  const value = await request<unknown>('/api/patient/google-drive/connect', json({ patient_id: patientId, password }))
+export async function beginGoogleDriveConnection(patientId?: string, password?: string): Promise<string> {
+  const value = await request<unknown>('/api/patient/google-drive/connect', json(credentialsPayload(patientId, password)))
   if (!value || typeof value !== 'object' || !('authorization_url' in value) || typeof value.authorization_url !== 'string') {
     throw new ApiError(502, 'ClinicForce could not start the Google Drive connection.')
   }
@@ -200,23 +222,23 @@ export async function beginGoogleDriveConnection(patientId: string, password: st
 }
 
 export async function savePatientRecord(
-  patientId: string,
-  password: string,
+  patientId: string | undefined,
+  password: string | undefined,
   record: ManualRecordInput,
 ): Promise<PatientSession> {
   return assertWorkspace(
-    await request('/api/patient/records', json({ patient_id: patientId, password, ...record })),
+    await request('/api/patient/records', json({ ...credentialsPayload(patientId, password), ...record })),
   )
 }
 
 export async function generatePatientLink(
-  patientId: string,
-  password: string,
+  patientId: string | undefined,
+  password: string | undefined,
   passcode: string,
 ): Promise<LinkResponse> {
   const value = await request<unknown>(
     '/api/patient/generate-link',
-    json({ patient_id: patientId, password, passcode }),
+    json({ ...credentialsPayload(patientId, password), passcode }),
   )
   if (
     !value ||
@@ -232,15 +254,16 @@ export async function generatePatientLink(
 }
 
 export async function downloadPatientDocument(
-  patientId: string,
-  password: string,
+  patientId: string | undefined,
+  password: string | undefined,
   documentId: number,
 ): Promise<Blob> {
   const controller = new AbortController()
   const timeout = window.setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS)
   try {
     const response = await fetch(`/api/patient/documents/${documentId}/download`, {
-      ...json({ patient_id: patientId, password }),
+      ...json(credentialsPayload(patientId, password)),
+      credentials: 'same-origin',
       signal: controller.signal,
     })
     if (!response.ok) {

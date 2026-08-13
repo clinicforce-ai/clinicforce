@@ -1,4 +1,4 @@
-import { lazy, Suspense, useState, type FormEvent } from 'react'
+import { lazy, Suspense, useEffect, useState, type FormEvent } from 'react'
 import {
   ArrowRight,
   HeartPulse,
@@ -23,11 +23,15 @@ function FeatureFallback() {
 }
 
 function App() {
-  const [view, setView] = useState<View>('landing')
+  const [view, setView] = useState<View>(() => new URLSearchParams(window.location.search).has('patient') ? 'patient' : 'landing')
   const [link, setLink] = useState<SmartHealthLink | null>(null)
   const [pin, setPin] = useState('')
   const [summary, setSummary] = useState<DoctorSummary | null>(null)
   const [error, setError] = useState('')
+
+  useEffect(() => {
+    if (window.location.search) window.history.replaceState({}, '', window.location.pathname)
+  }, [])
 
   const handleLinkScanned = (nextLink: SmartHealthLink) => {
     setLink(nextLink)

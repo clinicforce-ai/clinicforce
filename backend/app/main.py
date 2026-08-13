@@ -7,6 +7,7 @@ import base64
 import hashlib
 import json
 import os
+import secrets
 from html import escape
 from copy import deepcopy
 from pathlib import Path
@@ -18,7 +19,7 @@ import fitz
 from fastapi import File, Form, UploadFile, FastAPI, HTTPException, Request, status
 from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse, JSONResponse, Response
+from fastapi.responses import JSONResponse, RedirectResponse, Response
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.core.shl import (
@@ -37,9 +38,11 @@ from jwcrypto import jwe, jwk
 from app.core.object_store import delete_object as delete_s3_object, enabled as s3_enabled, get_pdf as get_s3_pdf, put_patient_pdf
 from app.core import google_drive
 from app.core.patient_store import (
-    add_document, add_record, consume_drive_oauth_state, create_manifest, create_patient,
+    add_document, add_record, consume_drive_oauth_state, consume_google_login_state,
+    create_google_patient, create_manifest, create_patient, create_patient_session,
     get_document, get_document_by_id, get_drive_connection, get_manifest, get_password_hash,
-    get_storage_preference, list_documents, list_records, save_drive_oauth_state,
+    get_patient_by_google_subject, get_patient_session, get_storage_preference, list_documents, list_records,
+    remove_documents, revoke_patient_session, save_drive_oauth_state, save_google_login_state,
     set_drive_summary_file, set_storage_preference, update_document_extraction,
     upsert_drive_connection, verify_manifest_pin,
 )
@@ -62,6 +65,8 @@ from app.ingestion.wearables import (
 PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", "http://localhost:8000").rstrip("/")
 ALLOWED_ORIGINS = [origin.strip() for origin in os.getenv("CORS_ALLOW_ORIGINS", PUBLIC_BASE_URL).split(",") if origin.strip()]
 MAX_UPLOAD_BYTES = 15 * 1024 * 1024
+PATIENT_SESSION_COOKIE = "clinicforce_patient_session"
+PATIENT_SESSION_MAX_AGE = 30 * 24 * 60 * 60
 
 app = FastAPI(title="ClinicForce")
 app.add_middleware(
@@ -118,15 +123,17 @@ class DoctorSummaryRequest(RequestModel):
 
 
 class PatientCredentials(RequestModel):
-    patient_id: str = Field(min_length=1, max_length=128)
-    password: str = Field(min_length=1, max_length=256)
+    patient_id: str | None = Field(default=None, max_length=128)
+    password: str | None = Field(default=None, max_length=256)
 
     @field_validator("patient_id")
     @classmethod
-    def normalize_patient_id(cls, value: str) -> str:
+    def normalize_patient_id(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
         value = value.strip()
         if not value:
-            raise ValueError("Patient ID is required")
+            raise ValueError("Patient ID cannot be empty")
         return value
 
 
@@ -173,14 +180,35 @@ def _mask_passcode(passcode: str) -> str:
     return "*" * len(passcode)
 
 
-def _validate_patient_credentials(patient_id: str, password: str) -> tuple[str, str]:
-    normalized_id = patient_id.strip()
+def _validate_patient_credentials(patient_id: str | None, password: str | None) -> tuple[str, str]:
+    normalized_id = (patient_id or "").strip()
     if not normalized_id or not password:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Patient ID and password are required")
     return normalized_id, password
 
 
-async def _authenticate_patient(patient_id: str, password: str) -> str:
+def _set_patient_session(response: Response, patient_id: str) -> None:
+    response.set_cookie(
+        key=PATIENT_SESSION_COOKIE,
+        value=create_patient_session(patient_id),
+        max_age=PATIENT_SESSION_MAX_AGE,
+        httponly=True,
+        secure=PUBLIC_BASE_URL.startswith("https://"),
+        samesite="lax",
+        path="/",
+    )
+
+
+async def _authenticate_patient(patient_id: str | None, password: str | None, request: Request | None = None) -> str:
+    if request is not None:
+        session_patient_id = await asyncio.to_thread(get_patient_session, request.cookies.get(PATIENT_SESSION_COOKIE, ""))
+        if session_patient_id:
+            origin = request.headers.get("origin", "").rstrip("/")
+            if origin and origin != PUBLIC_BASE_URL:
+                raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Patient session requests must come from ClinicForce")
+            if patient_id and patient_id.strip() != session_patient_id:
+                raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Patient session does not match this workspace")
+            return session_patient_id
     normalized_id, password = _validate_patient_credentials(patient_id, password)
     stored_hash = await asyncio.to_thread(get_password_hash, normalized_id)
     if stored_hash is None or not verify_password(password, stored_hash):
@@ -269,6 +297,17 @@ async def _load_workspace(patient_id: str) -> dict[str, Any]:
         asyncio.to_thread(get_storage_preference, patient_id),
         asyncio.to_thread(get_drive_connection, patient_id),
     )
+    if storage_provider == "google_drive" and connection is not None:
+        drive_documents = [document for document in documents if getattr(document, "storage_provider", "s3") == "google_drive"]
+        if drive_documents:
+            existing_ids = await asyncio.to_thread(
+                google_drive.existing_file_ids, connection, [document.s3_key for document in drive_documents]
+            )
+            missing_document_ids = [document.id for document in drive_documents if document.s3_key not in existing_ids]
+            if missing_document_ids:
+                removed = await asyncio.to_thread(remove_documents, patient_id, missing_document_ids)
+                log_warning("Google Drive", "Removed %d stale Drive document mappings after patient-side deletion", removed)
+                documents = await asyncio.to_thread(list_documents, patient_id)
     return _workspace_payload(patient_id, documents, records, storage_provider, connection is not None)
 
 
@@ -482,7 +521,7 @@ async def _build_ingestion_resources(patient_id: str) -> list[dict[str, Any]]:
 
 
 @app.post("/api/patient/register")
-async def register_patient(request: PatientCredentials) -> dict[str, Any]:
+async def register_patient(request: PatientCredentials) -> JSONResponse:
     """Create a local patient account for the persistent document workspace."""
     patient_id, password = _validate_patient_credentials(request.patient_id, request.password)
     if len(password) < 12:
@@ -490,18 +529,36 @@ async def register_patient(request: PatientCredentials) -> dict[str, Any]:
     created = await asyncio.to_thread(create_patient, patient_id, hash_password(password))
     if not created:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="A patient account with this ID already exists")
-    return _workspace_payload(patient_id, [], [], "s3", False)
+    response = JSONResponse(_workspace_payload(patient_id, [], [], "s3", False))
+    _set_patient_session(response, patient_id)
+    return response
 
 
 @app.post("/api/patient/login")
-async def login_patient(request: PatientCredentials) -> dict[str, Any]:
+async def login_patient(request: PatientCredentials) -> JSONResponse:
     patient_id = await _authenticate_patient(request.patient_id, request.password)
+    response = JSONResponse(await _load_workspace(patient_id))
+    _set_patient_session(response, patient_id)
+    return response
+
+
+@app.get("/api/patient/session")
+async def get_current_patient_session(request: Request) -> dict[str, Any]:
+    patient_id = await _authenticate_patient(None, None, request)
     return await _load_workspace(patient_id)
 
 
+@app.post("/api/patient/logout")
+async def logout_patient(request: Request) -> Response:
+    await asyncio.to_thread(revoke_patient_session, request.cookies.get(PATIENT_SESSION_COOKIE, ""))
+    response = Response(status_code=status.HTTP_204_NO_CONTENT)
+    response.delete_cookie(PATIENT_SESSION_COOKIE, path="/")
+    return response
+
+
 @app.post("/api/patient/storage-preference")
-async def change_storage_preference(request: StoragePreferenceRequest) -> dict[str, Any]:
-    patient_id = await _authenticate_patient(request.patient_id, request.password)
+async def change_storage_preference(request: StoragePreferenceRequest, http_request: Request) -> dict[str, Any]:
+    patient_id = await _authenticate_patient(request.patient_id, request.password, http_request)
     if request.storage_provider == "google_drive":
         if not google_drive.enabled():
             raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Google Drive storage is not configured")
@@ -512,45 +569,62 @@ async def change_storage_preference(request: StoragePreferenceRequest) -> dict[s
 
 
 @app.post("/api/patient/google-drive/connect")
-async def connect_google_drive(request: PatientCredentials) -> dict[str, str]:
-    patient_id = await _authenticate_patient(request.patient_id, request.password)
+async def connect_google_drive(request: PatientCredentials, http_request: Request) -> dict[str, str]:
+    patient_id = await _authenticate_patient(request.patient_id, request.password, http_request)
     if not google_drive.enabled():
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Google Drive integration is not configured")
     state = await asyncio.to_thread(save_drive_oauth_state, patient_id)
     return {"authorization_url": google_drive.authorization_url(state)}
 
 
+@app.post("/api/patient/google-login/start")
+async def start_google_login() -> dict[str, str]:
+    if not google_drive.enabled():
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Google sign-in is not configured")
+    state = await asyncio.to_thread(save_google_login_state)
+    return {"authorization_url": google_drive.authorization_url(state)}
+
+
 @app.get("/api/patient/google-drive/callback")
-async def google_drive_callback(state: str = "", code: str = "", error: str = "") -> HTMLResponse:
-    """Finish OAuth in a separate page; the original portal never receives tokens."""
-    patient_id = await asyncio.to_thread(consume_drive_oauth_state, state)
-    if patient_id is None:
-        return HTMLResponse("<h1>Google Drive connection could not be verified.</h1><p>Return to ClinicForce and try again.</p>", status_code=400)
+async def google_drive_callback(state: str = "", code: str = "", error: str = "") -> RedirectResponse:
+    """Finish OAuth and return to the portal; browser code never receives tokens."""
+    google_login = await asyncio.to_thread(consume_google_login_state, state)
+    patient_id = None if google_login else await asyncio.to_thread(consume_drive_oauth_state, state)
+    if not google_login and patient_id is None:
+        return RedirectResponse(f"{PUBLIC_BASE_URL}/?drive=error", status_code=status.HTTP_303_SEE_OTHER)
     if error or not code:
-        return HTMLResponse("<h1>Google Drive was not connected.</h1><p>Return to ClinicForce and try again when you are ready.</p>", status_code=400)
+        return RedirectResponse(f"{PUBLIC_BASE_URL}/?drive=cancelled", status_code=status.HTTP_303_SEE_OTHER)
     try:
         subject, encrypted_refresh_token, folder_id = await asyncio.to_thread(google_drive.complete_authorization, code)
+        if google_login:
+            patient_id = await asyncio.to_thread(get_patient_by_google_subject, subject)
+            if patient_id is None:
+                patient_id = await asyncio.to_thread(create_google_patient, subject, hash_password(secrets.token_urlsafe(48)))
+        assert patient_id is not None
         await asyncio.to_thread(upsert_drive_connection, patient_id, subject, encrypted_refresh_token, folder_id)
         await asyncio.to_thread(set_storage_preference, patient_id, "google_drive")
     except Exception as exc:
         log_error("Google Drive", exc)
-        return HTMLResponse("<h1>Google Drive could not be connected.</h1><p>Return to ClinicForce and try again.</p>", status_code=502)
-    return HTMLResponse("<h1>Google Drive connected.</h1><p>Your ClinicForce folder is ready. Return to the ClinicForce tab and sign in again.</p>")
+        return RedirectResponse(f"{PUBLIC_BASE_URL}/?drive=error", status_code=status.HTTP_303_SEE_OTHER)
+    response = RedirectResponse(f"{PUBLIC_BASE_URL}/?patient=google&drive=connected", status_code=status.HTTP_303_SEE_OTHER)
+    _set_patient_session(response, patient_id)
+    return response
 
 
 @app.post("/api/patient/upload")
 async def upload_patient_pdf(
+    http_request: Request,
     file: list[UploadFile] | None = File(default=None),
     files: list[UploadFile] | None = File(default=None),
-    patient_id: str = Form(...),
-    password: str = Form(...),
+    patient_id: str | None = Form(default=None),
+    password: str | None = Form(default=None),
 ) -> dict[str, Any]:
     """Ingest one or more PDFs, accepting both ``file`` and ``files`` form keys.
 
     Supporting both keys makes the API resilient to standard FormData helpers while
     preserving the original browser contract. Source bytes never enter PostgreSQL.
     """
-    patient_id = await _authenticate_patient(patient_id, password)
+    patient_id = await _authenticate_patient(patient_id, password, http_request)
     storage_provider, drive_connection = await asyncio.gather(
         asyncio.to_thread(get_storage_preference, patient_id), asyncio.to_thread(get_drive_connection, patient_id)
     )
@@ -610,9 +684,9 @@ async def upload_patient_pdf(
 
 
 @app.post("/api/patient/records")
-async def save_patient_record(request: ManualRecordRequest) -> dict[str, Any]:
+async def save_patient_record(request: ManualRecordRequest, http_request: Request) -> dict[str, Any]:
     """Save a structured patient-entered record as FHIR R4 for dashboard and sharing."""
-    patient_id = await _authenticate_patient(request.patient_id, request.password)
+    patient_id = await _authenticate_patient(request.patient_id, request.password, http_request)
     label, fhir_bundle = _manual_record_bundle(request, patient_id)
     try:
         await post_to_fhir(fhir_bundle)
@@ -623,10 +697,12 @@ async def save_patient_record(request: ManualRecordRequest) -> dict[str, Any]:
 
 
 @app.post("/api/patient/generate-link")
-async def generate_patient_link(request: GeneratePatientLinkRequest) -> dict[str, str]:
-    patient_id = await _authenticate_patient(request.patient_id, request.password)
+async def generate_patient_link(request: GeneratePatientLinkRequest, http_request: Request) -> dict[str, str]:
+    patient_id = await _authenticate_patient(request.patient_id, request.password, http_request)
     if not request.passcode or len(request.passcode) < 4:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Choose a sharing passcode of at least four characters")
+    # Reconcile patient-managed Drive deletions before this snapshot is encrypted.
+    await _load_workspace(patient_id)
     documents, records = await asyncio.gather(
         asyncio.to_thread(list_documents, patient_id), asyncio.to_thread(list_records, patient_id)
     )
@@ -646,7 +722,10 @@ async def generate_patient_link(request: GeneratePatientLinkRequest) -> dict[str
             if connection is None:
                 raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Reconnect Google Drive before creating a share")
             fingerprint = hashlib.sha256(json.dumps(fhir_bundle, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
-            if connection.summary_fingerprint != fingerprint or not connection.summary_file_id:
+            summary_exists = bool(connection.summary_file_id) and await asyncio.to_thread(
+                google_drive.file_exists, connection, connection.summary_file_id
+            )
+            if connection.summary_fingerprint != fingerprint or not summary_exists:
                 # The stored Drive PDF keeps report/page citations but deliberately
                 # omits QR-bound download capabilities. The current clinician
                 # dashboard adds those just-in-time after QR/PIN verification.
@@ -665,9 +744,9 @@ async def generate_patient_link(request: GeneratePatientLinkRequest) -> dict[str
 
 
 @app.post("/api/patient/documents/{document_id}/download")
-async def download_patient_document(document_id: int, request: PatientCredentials) -> Response:
+async def download_patient_document(document_id: int, request: PatientCredentials, http_request: Request) -> Response:
     """Return one saved source PDF after re-authenticating the patient."""
-    patient_id = await _authenticate_patient(request.patient_id, request.password)
+    patient_id = await _authenticate_patient(request.patient_id, request.password, http_request)
     document = await asyncio.to_thread(get_document, patient_id, document_id)
     if document is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Report not found")
@@ -803,7 +882,14 @@ async def decrypt_and_summarize(request: DoctorSummaryRequest) -> dict[str, Any]
             await asyncio.to_thread(get_storage_preference, str(patient_id)) if connection else "s3"
         )
         if storage_provider == "google_drive" and connection and connection.summary_file_id:
-            report_bytes = await asyncio.to_thread(google_drive.get_pdf, connection, connection.summary_file_id)
+            try:
+                report_bytes = await asyncio.to_thread(google_drive.get_pdf, connection, connection.summary_file_id)
+            except Exception as exc:
+                # A patient may delete their Drive summary after making the QR. The
+                # doctor can still view that already-authorized QR snapshot; no S3
+                # fallback is used and the next QR recreates the Drive summary.
+                log_warning("Google Drive", "Stored summary unavailable for clinician view: %s", type(exc).__name__)
+                report_bytes = await run_in_threadpool(render_doctor_pdf_bytes, summary)
         else:
             report_bytes = await run_in_threadpool(render_doctor_pdf_bytes, summary)
         return {
