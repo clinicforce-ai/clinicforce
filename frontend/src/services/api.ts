@@ -11,6 +11,7 @@ export interface PatientDocument {
   filename: string
   uploaded_at: string
   resource_count: number
+  storage_provider: 's3' | 'google_drive'
 }
 
 export interface PatientRecord {
@@ -24,6 +25,8 @@ export interface PatientSession {
   patient_id: string
   documents: PatientDocument[]
   records: PatientRecord[]
+  storage_provider: 's3' | 'google_drive'
+  drive_connected: boolean
 }
 
 export interface LinkResponse {
@@ -155,9 +158,13 @@ function assertWorkspace(value: unknown): PatientSession {
     !('patient_id' in value) ||
     !('documents' in value) ||
     !('records' in value) ||
+    !('storage_provider' in value) ||
+    !('drive_connected' in value) ||
     typeof value.patient_id !== 'string' ||
     !Array.isArray(value.documents) ||
-    !Array.isArray(value.records)
+    !Array.isArray(value.records) ||
+    (value.storage_provider !== 's3' && value.storage_provider !== 'google_drive') ||
+    typeof value.drive_connected !== 'boolean'
   ) {
     throw new ApiError(502, 'The server returned an invalid patient workspace. Please try again.')
   }
@@ -178,6 +185,18 @@ export async function uploadPatientPdfs(patientId: string, password: string, fil
   form.append('password', password)
   files.forEach((file) => form.append('file', file, file.name))
   return assertWorkspace(await request('/api/patient/upload', { method: 'POST', body: form }))
+}
+
+export async function chooseStorageProvider(patientId: string, password: string, storageProvider: 's3' | 'google_drive'): Promise<PatientSession> {
+  return assertWorkspace(await request('/api/patient/storage-preference', json({ patient_id: patientId, password, storage_provider: storageProvider })))
+}
+
+export async function beginGoogleDriveConnection(patientId: string, password: string): Promise<string> {
+  const value = await request<unknown>('/api/patient/google-drive/connect', json({ patient_id: patientId, password }))
+  if (!value || typeof value !== 'object' || !('authorization_url' in value) || typeof value.authorization_url !== 'string') {
+    throw new ApiError(502, 'ClinicForce could not start the Google Drive connection.')
+  }
+  return value.authorization_url
 }
 
 export async function savePatientRecord(
@@ -255,6 +274,6 @@ export async function fetchManifest(manifestUrl: string, pin: string): Promise<s
   return jwe
 }
 
-export async function decryptAndSummarize(jwe: string, key: string): Promise<DoctorSummary> {
-  return request<DoctorSummary>('/api/doctor/decrypt-and-summarize', json({ jwe_payload: jwe, key }))
+export async function decryptAndSummarize(manifestId: string, key: string, passcode: string): Promise<DoctorSummary> {
+  return request<DoctorSummary>('/api/doctor/decrypt-and-summarize', json({ manifest_id: manifestId, key, passcode }))
 }

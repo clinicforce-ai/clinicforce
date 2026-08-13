@@ -1,7 +1,7 @@
 """Signed, least-privilege source-document download capabilities.
 
 The original PDFs remain private S3 objects.  A clinician who has decrypted a
-patient's SMART Health Link receives an expiring, single-document capability
+patient's SMART Health Link receives a manifest-bound, single-document capability
 for each cited fact; it cannot enumerate or access any other patient document.
 """
 
@@ -13,12 +13,8 @@ import hashlib
 import hmac
 import json
 import os
-import time
 from typing import Any
 from urllib.parse import quote
-
-
-DEFAULT_TTL_SECONDS = 7 * 24 * 60 * 60
 
 
 def _base64url(value: bytes) -> str:
@@ -36,43 +32,43 @@ def _secret() -> bytes:
     return value.encode("utf-8")
 
 
-def create_document_download_token(document_id: int, *, now: int | None = None, ttl_seconds: int | None = None) -> str:
-    """Create an authenticated, expiring capability for one source document."""
-    if document_id < 1:
-        raise ValueError("A valid document ID is required")
-    issued_at = int(time.time() if now is None else now)
-    lifetime = DEFAULT_TTL_SECONDS if ttl_seconds is None else ttl_seconds
-    if lifetime < 60:
-        raise ValueError("Source-link lifetime must be at least one minute")
+def create_document_download_token(document_id: int, manifest_id: str) -> str:
+    """Bind one cited document to the QR manifest that authorized it.
+
+    The patient explicitly requested non-expiring visit links.  Revocation is
+    therefore achieved by deleting/revoking the manifest rather than a timer.
+    """
+    if document_id < 1 or not manifest_id:
+        raise ValueError("A valid document and manifest are required")
     payload = _base64url(json.dumps(
-        {"v": 1, "document_id": document_id, "exp": issued_at + lifetime},
+        {"v": 2, "document_id": document_id, "manifest_id": manifest_id},
         separators=(",", ":"), sort_keys=True,
     ).encode("utf-8"))
     signature = _base64url(hmac.new(_secret(), payload.encode("ascii"), hashlib.sha256).digest())
     return f"{payload}.{signature}"
 
 
-def verify_document_download_token(token: str, document_id: int, *, now: int | None = None) -> None:
-    """Verify a source capability without leaking whether a document exists."""
+def verify_document_download_token(token: str, document_id: int) -> str:
+    """Verify a source capability and return its immutable QR manifest ID."""
     try:
         payload, signature = token.split(".", 1)
         expected = _base64url(hmac.new(_secret(), payload.encode("ascii"), hashlib.sha256).digest())
         if not hmac.compare_digest(signature, expected):
             raise ValueError("Invalid source download link")
         decoded: Any = json.loads(_decode_base64url(payload))
-        if not isinstance(decoded, dict) or decoded.get("v") != 1:
+        if not isinstance(decoded, dict) or decoded.get("v") != 2:
             raise ValueError("Invalid source download link")
-        if decoded.get("document_id") != document_id or not isinstance(decoded.get("exp"), int):
+        manifest_id = decoded.get("manifest_id")
+        if decoded.get("document_id") != document_id or not isinstance(manifest_id, str) or not manifest_id:
             raise ValueError("Invalid source download link")
-        if decoded["exp"] < int(time.time() if now is None else now):
-            raise ValueError("This source download link has expired")
+        return manifest_id
     except (ValueError, TypeError, UnicodeDecodeError, json.JSONDecodeError, binascii.Error) as exc:
-        if isinstance(exc, ValueError) and str(exc) in {"Invalid source download link", "This source download link has expired"}:
+        if isinstance(exc, ValueError) and str(exc) == "Invalid source download link":
             raise
         raise ValueError("Invalid source download link") from exc
 
 
-def document_download_url(base_url: str, document_id: int) -> str:
+def document_download_url(base_url: str, document_id: int, manifest_id: str) -> str:
     """Return an absolute attachment URL suitable for the dashboard and PDF."""
-    token = create_document_download_token(document_id)
+    token = create_document_download_token(document_id, manifest_id)
     return f"{base_url.rstrip('/')}/api/doctor/documents/{document_id}/download?token={quote(token, safe='')}"

@@ -359,6 +359,27 @@ Production verification confirmed that active uploaded-document records use S3 k
 
 # 7. S3 Document Storage
 
+## 7.0 Optional patient-owned Google Drive storage
+
+Patients can keep newly uploaded PDFs in a Google Drive folder named
+`ClinicForce` instead of the ClinicForce S3 bucket. The patient connects Drive
+through Google OAuth; the backend encrypts the offline refresh token with the
+ClinicForce KMS key and stores only the encrypted token and Drive file IDs in
+RDS. The browser never receives the refresh token.
+
+When Drive is selected, the backend uploads the PDF to that folder, processes
+the in-memory upload with the normal Bedrock/FHIR pipeline, and stores the
+Drive file ID as the document locator. Existing S3 documents remain in S3.
+
+Drive patients have one `Clinical Summary.pdf` in the same folder. ClinicForce
+replaces that single file only when the shared clinical bundle changes and the
+patient creates a new QR code. Patients who select ClinicForce storage retain
+the existing S3 behavior.
+
+Drive folder changes made outside ClinicForce are not automatically imported;
+patients use **Upload to my Drive** so ClinicForce can validate and ingest the
+file with the narrowly scoped Drive authorization.
+
 Source PDFs are stored in:
 
 ```text
@@ -405,7 +426,7 @@ The backend receives secrets through AWS Secrets Manager.
 | Secret | Purpose |
 |---|---|
 | `DATABASE_PASSWORD` | RDS connection password |
-| `SOURCE_LINK_SECRET` | Signs expiring source-PDF download links |
+| `SOURCE_LINK_SECRET` | Signs QR-manifest-bound source-PDF download links |
 
 `SOURCE_LINK_SECRET` was introduced for secure doctor source-document downloads.
 
@@ -618,6 +639,22 @@ The QR workflow uses a Smart Health Link (SHL) containing an encrypted clinical 
 
 The plaintext PIN is never stored.
 
+### QR-bound source citations
+
+Every source-PDF citation is bound to the manifest ID that produced the QR.
+The doctor-summary endpoint decrypts the server-stored manifest only after the
+PIN is verified; it never trusts a browser-supplied FHIR bundle or document ID.
+Each cited download verifies that the document belongs to the manifest's
+patient before retrieving it from S3 or Google Drive. This prevents a caller
+from constructing a bundle with another patient's document ID to obtain a
+source link.
+
+There is no clinician session or visit expiry. A patient may sign out while a
+doctor reviews the open dashboard. Five consecutive incorrect PIN entries for
+one manifest cause a five-minute attempt pause. Creating a new patient QR
+revokes any prior QR manifests for that patient, so old dashboards and source
+links stop working.
+
 ---
 
 # 14. Doctor QR Scanning Workflow
@@ -640,7 +677,7 @@ The plaintext PIN is never stored.
     - source PDF filename;
     - source page number;
     - source document ID.
-11. Backend generates a signed seven-day source-document download URL for each citation.
+11. Backend generates a signed source-document URL bound to that QR manifest for each citation.
 12. Frontend renders the doctor dashboard.
 
 The doctor dashboard displays populated clinical categories only.
@@ -682,13 +719,13 @@ Clinical fact
      │
      ▼
 Signed source link
-valid for 7 days
+bound to one QR manifest
      │
      ▼
 GET /api/doctor/documents/{document_id}/download
      │
      ├── Verify HMAC signature
-     ├── Verify expiration
+     ├── Verify the QR manifest binding
      ├── Load document metadata from RDS
      ├── Retrieve exact object from private S3
      └── Return PDF as no-cache attachment
@@ -699,7 +736,7 @@ GET /api/doctor/documents/{document_id}/download
 A source link:
 
 - identifies one exact document;
-- expires after seven days;
+- is valid only while its referenced QR manifest remains available;
 - is protected by HMAC signing;
 - cannot be altered without invalidating the signature;
 - never exposes the S3 bucket publicly.
@@ -759,7 +796,11 @@ PDF returned to browser
 Doctor downloads report
 ```
 
-The generated report is not persisted as a reusable public file.
+For S3-backed patients, the generated report is not persisted as a reusable
+public file. For Google Drive-backed patients, the report was generated at QR
+creation time and is retrieved from the patient's single `Clinical Summary.pdf`
+file after PIN verification. It is never exposed using a public Google Drive
+link.
 
 Citation links inside the PDF point to the signed, document-specific source-download endpoint.
 
@@ -957,7 +998,7 @@ RDS + HAPI FHIR
 - plaintext PINs are not persisted;
 - SHL payloads are encrypted using AES-256/JWE;
 - source-document links are HMAC signed;
-- source-document links expire after seven days;
+- source-document links are bound to their originating QR manifest;
 - source PDFs are never exposed through public S3 URLs;
 - source-link secrets remain backend-only;
 - RDS is not publicly accessible.
@@ -996,9 +1037,11 @@ Older object versions are expired after seven days.
 
 **Impact:** limits recovery from older S3 object versions beyond the retention window.
 
-### 24.5 Seven-day source links
+### 24.5 QR-manifest-bound source links
 
-Doctor source-document links expire after seven days.
+Doctor source-document links are bound to the QR manifest that authorized the
+record. The backend verifies the cited document belongs to that manifest's
+patient before returning it.
 
 **Impact:** an old report citation may require a newly generated signed link rather than remaining permanently accessible.
 
@@ -1116,7 +1159,7 @@ Verify that schema initialization is performed only during backend initializatio
 Check:
 
 1. URL signature;
-2. expiration timestamp;
+2. QR manifest ID;
 3. document ID;
 4. backend `SOURCE_LINK_SECRET`;
 5. RDS document metadata;
@@ -1185,7 +1228,7 @@ Before production deployment:
 - [ ] Doctor summary renders.
 - [ ] Source citations appear beside facts.
 - [ ] Source PDF download works.
-- [ ] Invalid/expired source links return `403`.
+- [ ] Invalid or cross-patient source links return `403`.
 - [ ] Clinical summary PDF generates successfully.
 
 ### Post-deployment
@@ -1213,7 +1256,7 @@ Version 1 establishes the following production capabilities:
 9. QR sharing uses encrypted Smart Health Links.
 10. Patient PINs are salted/hashed rather than stored in plaintext.
 11. Clinical facts retain source filename, page, and document identifiers.
-12. Doctor citations can retrieve the exact source PDF through signed seven-day links.
+12. Doctor citations can retrieve the exact source PDF through signed QR-manifest-bound links.
 13. Doctor summaries and source citations are available in the generated PDF.
 14. The previous QR PostgreSQL deadlock was removed from normal request processing.
 15. Automated backend/frontend/infrastructure validation is in place.
@@ -1237,7 +1280,7 @@ Version 1 establishes the following production capabilities:
 
 ## ADR-003 — Use signed source-document links
 
-**Decision:** Source documents are accessed through backend-generated HMAC-signed, expiring URLs.
+**Decision:** Source documents are accessed through backend-generated HMAC-signed URLs bound to the originating QR manifest.
 
 **Reason:** A citation should grant access only to the exact document it references without making the S3 bucket public.
 

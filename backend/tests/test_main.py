@@ -79,15 +79,17 @@ class MainRouteTests(unittest.IsolatedAsyncioTestCase):
     async def test_manifest_rejects_an_incorrect_passcode(self) -> None:
         manifest_id = uuid4()
         with patch(
-            "app.main.get_manifest",
-            return_value={"encrypted_jwe": "encrypted", "hashed_pin": hash_pin("1234")},
+            "app.main.verify_manifest_pin",
+            return_value=None,
         ):
             response = await self.client.post(f"/manifest/{manifest_id}", json={"passcode": "0000"})
         self.assertEqual(response.status_code, 401)
 
-    async def test_upload_requires_s3_instead_of_database_fallback(self) -> None:
+    async def test_upload_requires_configured_selected_storage(self) -> None:
         with (
             patch("app.main._authenticate_patient", new=AsyncMock(return_value="patient-1")),
+            patch("app.main.get_storage_preference", return_value="s3"),
+            patch("app.main.get_drive_connection", return_value=None),
             patch("app.main.s3_enabled", return_value=False),
             patch("app.main.add_document") as add_document,
         ):
@@ -102,6 +104,8 @@ class MainRouteTests(unittest.IsolatedAsyncioTestCase):
     async def test_upload_accepts_the_standard_plural_formdata_key(self) -> None:
         with (
             patch("app.main._authenticate_patient", new=AsyncMock(return_value="patient-1")),
+            patch("app.main.get_storage_preference", return_value="s3"),
+            patch("app.main.get_drive_connection", return_value=None),
             patch("app.main.s3_enabled", return_value=True),
             patch(
                 "app.main.extract_pdf_to_fhir_bundle",
@@ -124,9 +128,34 @@ class MainRouteTests(unittest.IsolatedAsyncioTestCase):
             )
         self.assertEqual(response.status_code, 200, response.text)
 
+    async def test_drive_upload_never_writes_the_source_to_s3(self) -> None:
+        connection = Mock()
+        with (
+            patch("app.main._authenticate_patient", new=AsyncMock(return_value="patient-1")),
+            patch("app.main.get_storage_preference", return_value="google_drive"),
+            patch("app.main.get_drive_connection", return_value=connection),
+            patch("app.main.google_drive.put_pdf", return_value="drive-source-id") as put_drive,
+            patch("app.main.put_patient_pdf") as put_s3,
+            patch("app.main.extract_pdf_to_fhir_bundle", new=AsyncMock(return_value={"resourceType": "Bundle", "type": "collection", "entry": [{"resource": {"resourceType": "Condition", "code": {"text": "Asthma"}}}]})),
+            patch("app.main.post_to_fhir", new=AsyncMock()),
+            patch("app.main.add_document", return_value=1) as add_document,
+            patch("app.main.list_documents", return_value=[]),
+            patch("app.main.list_records", return_value=[]),
+        ):
+            response = await self.client.post(
+                "/api/patient/upload", data={"patient_id": "patient-1", "password": "long-password"},
+                files={"file": ("record.pdf", b"%PDF-1.4 valid", "application/pdf")},
+            )
+        self.assertEqual(response.status_code, 200, response.text)
+        put_drive.assert_called_once()
+        put_s3.assert_not_called()
+        self.assertEqual(add_document.call_args.args[-1], "google_drive")
+
     async def test_patient_record_contract_matches_the_browser_form(self) -> None:
         with (
             patch("app.main._authenticate_patient", new=AsyncMock(return_value="patient-1")),
+            patch("app.main.get_storage_preference", return_value="s3"),
+            patch("app.main.get_drive_connection", return_value=None),
             patch("app.main.post_to_fhir", new=AsyncMock()),
             patch("app.main.add_record"),
             patch("app.main.list_documents", return_value=[]),
@@ -161,7 +190,7 @@ class MainRouteTests(unittest.IsolatedAsyncioTestCase):
         with (
             patch("app.main._authenticate_patient", new=AsyncMock(return_value="patient-1")),
             patch("app.main.get_document", return_value=document),
-            patch("app.main.get_pdf", return_value=b"%PDF-1.4") as get_pdf,
+            patch("app.main.get_s3_pdf", return_value=b"%PDF-1.4") as get_pdf,
         ):
             response = await self.client.post(
                 "/api/patient/documents/7/download",
@@ -174,9 +203,11 @@ class MainRouteTests(unittest.IsolatedAsyncioTestCase):
     async def test_doctor_source_download_uses_a_verified_single_document_capability(self) -> None:
         document = Mock(s3_key="clinicforce/patients/hash/source/id/record.pdf", filename="record.pdf")
         with (
-            patch("app.main.verify_document_download_token") as verify,
+            patch("app.main.verify_document_download_token", return_value="manifest-1") as verify,
             patch("app.main.get_document_by_id", return_value=document),
-            patch("app.main.get_pdf", return_value=b"%PDF-1.4") as get_pdf,
+            patch("app.main.get_manifest", return_value={"patient_id": "patient-1"}),
+            patch("app.main.get_document", return_value=document),
+            patch("app.main.get_s3_pdf", return_value=b"%PDF-1.4") as get_pdf,
         ):
             response = await self.client.get("/api/doctor/documents/7/download?token=signed-capability")
         self.assertEqual(response.status_code, 200)
@@ -201,15 +232,29 @@ class MainRouteTests(unittest.IsolatedAsyncioTestCase):
             return filename
 
         with (
+            patch("app.main.verify_manifest_pin", return_value={"patient_id": "patient-1", "encrypted_jwe": encrypted, "hashed_pin": hash_pin("1234")}),
+            patch("app.main.get_drive_connection", return_value=None),
             patch("app.main.summarize_fhir_bundle", new=AsyncMock(return_value=summary)),
-            patch("app.main.generate_doctor_pdf", side_effect=render_pdf),
+            patch("app.main.render_doctor_pdf_bytes", return_value=b"%PDF-1.4 test"),
         ):
             response = await self.client.post(
-                "/api/doctor/decrypt-and-summarize", json={"jwe_payload": encrypted, "key": key}
+                f"/api/doctor/decrypt-and-summarize", json={"manifest_id": str(uuid4()), "key": key, "passcode": "1234"}
             )
         self.assertEqual(response.status_code, 200, response.text)
         self.assertEqual(response.json()["summary"], summary)
         self.assertEqual(response.json()["pdf_url"], "data:application/pdf;base64," + base64.b64encode(b"%PDF-1.4 test").decode())
+
+    async def test_doctor_summary_requires_manifest_pin_before_decrypting(self) -> None:
+        with (
+            patch("app.main.verify_manifest_pin", return_value=None),
+            patch("app.main._decrypt_jwe_payload") as decrypt,
+        ):
+            response = await self.client.post(
+                "/api/doctor/decrypt-and-summarize",
+                json={"manifest_id": str(uuid4()), "key": generate_symmetric_key(), "passcode": "0000"},
+            )
+        self.assertEqual(response.status_code, 401)
+        decrypt.assert_not_called()
 
     async def test_local_pdf_extraction_preserves_citations_without_bedrock(self) -> None:
         extraction = await parse_pdf_text_with_llm("[PAGE 2]\nConditions: Asthma\nMedications: Albuterol", "report.pdf")
@@ -254,14 +299,12 @@ class MainRouteTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("table-layout: auto", rendered)
         self.assertIn('aria-label="Heart rate (bpm) trend with 4 values"', rendered)
 
-    def test_source_capability_is_document_scoped_and_expiring(self) -> None:
+    def test_source_capability_is_document_and_manifest_scoped(self) -> None:
         with patch.dict(os.environ, {"SOURCE_LINK_SECRET": "a" * 32}, clear=False):
-            token = create_document_download_token(9, now=1_000, ttl_seconds=120)
-            verify_document_download_token(token, 9, now=1_120)
+            token = create_document_download_token(9, "manifest-1")
+            self.assertEqual(verify_document_download_token(token, 9), "manifest-1")
             with self.assertRaisesRegex(ValueError, "Invalid source download link"):
-                verify_document_download_token(token, 10, now=1_120)
-            with self.assertRaisesRegex(ValueError, "expired"):
-                verify_document_download_token(token, 9, now=1_121)
+                verify_document_download_token(token, 10)
 
     def test_bedrock_facts_become_citation_backed_fhir_without_model_fhir_output(self) -> None:
         bundle = facts_to_fhir_bundle(

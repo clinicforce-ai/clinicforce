@@ -133,6 +133,11 @@ input:focus, textarea:focus, select:focus { border-color: var(--blue); box-shado
 .upload-zone > label small { margin-top: 2px; color: var(--muted-ink); font-size: .76rem; font-weight: 600; }
 .selected-files { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 11px; color: var(--green-deep); font-size: .84rem; font-weight: 700; }
 .selected-files .button { min-height: 40px; }
+.storage-choice { display: flex; align-items: center; justify-content: space-between; gap: 18px; margin: 4px 0 18px; border: 1px solid #b5d9c9; border-radius: 11px; background: #f2fbf7; padding: 13px 14px; }
+.storage-choice strong { color: var(--green-deep); font-size: .86rem; }
+.storage-choice p { margin: 3px 0 0; color: var(--muted-ink); font-size: .76rem; line-height: 1.45; }
+.storage-actions { display: flex; flex: 0 0 auto; flex-wrap: wrap; justify-content: flex-end; gap: 7px; }
+.storage-actions .button { min-height: 40px; font-size: .75rem; }
 .record-form { border-top: 1px solid var(--line); margin-top: 23px; padding-top: 23px; }
 .record-form fieldset { margin: 0; padding: 0; border: 0; }
 .record-form legend { margin-bottom: 12px; color: var(--ink); font-size: .92rem; font-weight: 700; }
@@ -235,6 +240,8 @@ td { line-height: 1.45; }
   .auth-aside { padding-block: 0; }
   .auth-panel { max-width: 580px; }
   .workspace-grid { grid-template-columns: 1fr; }
+  .storage-choice { align-items: flex-start; flex-direction: column; }
+  .storage-actions { justify-content: flex-start; }
   .share-card { position: static; }
 }
 @media (max-width: 680px) {

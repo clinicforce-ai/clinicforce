@@ -13,3 +13,9 @@ export function parseSmartHealthLink(value: string): SmartHealthLink {
   if (!match) throw new Error('Please scan a QR code containing a shlink: URI.')
   return decodePayload(match[1])
 }
+
+export function manifestIdFromUrl(manifestUrl: string): string {
+  const match = new URL(manifestUrl).pathname.match(/\/manifest\/([0-9a-f-]{36})$/i)
+  if (!match) throw new Error('This Smart Health Link does not identify a valid shared record.')
+  return match[1]
+}

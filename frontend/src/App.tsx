@@ -7,8 +7,8 @@ import {
   Stethoscope,
   UserRound,
 } from 'lucide-react'
-import { decryptAndSummarize, fetchManifest, type DoctorSummary } from './services/api'
-import type { SmartHealthLink } from './services/shl'
+import { decryptAndSummarize, type DoctorSummary } from './services/api'
+import { manifestIdFromUrl, type SmartHealthLink } from './services/shl'
 import clinicforceLogo from './assets/clinicforce-logo.png'
 import './App.css'
 
@@ -44,8 +44,7 @@ function App() {
     setError('')
     setView('loading')
     try {
-      const jwe = await fetchManifest(link.manifestUrl, pin)
-      setSummary(await decryptAndSummarize(jwe, link.key))
+      setSummary(await decryptAndSummarize(manifestIdFromUrl(link.manifestUrl), link.key, pin))
       setView('dashboard')
     } catch (caughtError) {
       setError(caughtError instanceof Error ? caughtError.message : 'Unable to retrieve the patient file.')

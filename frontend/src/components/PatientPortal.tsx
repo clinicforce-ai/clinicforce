@@ -5,6 +5,7 @@ import {
   CheckCircle2,
   ChevronRight,
   ClipboardPlus,
+  Cloud,
   Eye,
   EyeOff,
   FileText,
@@ -20,6 +21,8 @@ import {
   X,
 } from 'lucide-react'
 import {
+  beginGoogleDriveConnection,
+  chooseStorageProvider,
   downloadPatientDocument,
   generatePatientLink,
   loginPatient,
@@ -77,7 +80,7 @@ export default function PatientPortal({ onBack }: PatientPortalProps) {
   const [form, setForm] = useState<FormState>(emptyForm)
   const [sharePasscode, setSharePasscode] = useState('')
   const [link, setLink] = useState<LinkResponse | null>(null)
-  const [busy, setBusy] = useState<'auth' | 'upload' | 'record' | 'share' | 'download' | null>(null)
+  const [busy, setBusy] = useState<'auth' | 'upload' | 'record' | 'share' | 'download' | 'drive' | null>(null)
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
   const fileInput = useRef<HTMLInputElement>(null)
@@ -138,9 +141,39 @@ export default function PatientPortal({ onBack }: PatientPortalProps) {
       setSession(await uploadPatientPdfs(session.patient_id, password, files))
       setFiles([])
       if (fileInput.current) fileInput.current.value = ''
-      setNotice(`${files.length === 1 ? 'Report' : `${files.length} reports`} added to your workspace.`)
+      setNotice(`${files.length === 1 ? 'Report' : `${files.length} reports`} added to ${session.storage_provider === 'google_drive' ? 'your Google Drive folder' : 'your secure workspace'}.`)
     } catch (caught) {
       setError(messageFrom(caught, 'Unable to upload the selected reports.'))
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  const connectGoogleDrive = async () => {
+    if (!session) return
+    clearFeedback()
+    setBusy('drive')
+    try {
+      window.location.assign(await beginGoogleDriveConnection(session.patient_id, password))
+    } catch (caught) {
+      setBusy(null)
+      setError(messageFrom(caught, 'Unable to start the Google Drive connection.'))
+    }
+  }
+
+  const selectStorage = async (storageProvider: 's3' | 'google_drive') => {
+    if (!session) return
+    if (storageProvider === 'google_drive' && !session.drive_connected) {
+      await connectGoogleDrive()
+      return
+    }
+    clearFeedback()
+    setBusy('drive')
+    try {
+      setSession(await chooseStorageProvider(session.patient_id, password, storageProvider))
+      setNotice(storageProvider === 'google_drive' ? 'New reports will be stored in your ClinicForce Google Drive folder.' : 'New reports will be stored in ClinicForce secure storage.')
+    } catch (caught) {
+      setError(messageFrom(caught, 'Unable to change document storage.'))
     } finally {
       setBusy(null)
     }
@@ -233,7 +266,7 @@ export default function PatientPortal({ onBack }: PatientPortalProps) {
         <div className="auth-aside">
           <p className="eyebrow"><ShieldCheck aria-hidden="true" className="size-4" /> Patient workspace</p>
           <h1 id="patient-heading">Build a record you can carry into care.</h1>
-          <p className="lead-small">Add source reports and the health details you know. When you are ready, create a time-limited QR code for your clinician to scan.</p>
+          <p className="lead-small">Add source reports and the health details you know. When you are ready, create a QR code for your clinician to scan.</p>
           <div className="auth-note"><LockKeyhole aria-hidden="true" /><p><strong>You remain in control.</strong><br />Share only after you choose a passcode and show the QR code.</p></div>
         </div>
         <div className="panel auth-panel">
@@ -284,10 +317,17 @@ export default function PatientPortal({ onBack }: PatientPortalProps) {
         <div className="workspace-main">
           <section className="section-card" aria-labelledby="reports-heading">
             <div className="section-heading"><div><p className="section-kicker">Source documents</p><h2 id="reports-heading">PDF reports</h2></div><FileText aria-hidden="true" className="section-icon" /></div>
+            <div className="storage-choice" aria-label="Choose where new reports are stored">
+              <div><strong>{session.storage_provider === 'google_drive' ? 'Your Google Drive is selected' : 'ClinicForce secure storage is selected'}</strong><p>{session.storage_provider === 'google_drive' ? 'New PDFs and your single Clinical Summary.pdf stay in your ClinicForce Drive folder.' : 'New PDFs stay in ClinicForce encrypted document storage.'}</p></div>
+              <div className="storage-actions">
+                <button className="button button-secondary" type="button" disabled={busy === 'drive' || session.storage_provider === 's3'} onClick={() => void selectStorage('s3')}>Use ClinicForce storage</button>
+                <button className="button button-secondary" type="button" disabled={busy === 'drive' || session.storage_provider === 'google_drive'} onClick={() => void selectStorage('google_drive')}><Cloud aria-hidden="true" className="size-4" /> {session.drive_connected ? 'Use my Drive' : 'Connect Google Drive'}</button>
+              </div>
+            </div>
             {session.documents.length ? <ul className="item-list">{session.documents.map((document) => <li key={document.id}><div className="file-mark"><FileText aria-hidden="true" /></div><div className="min-w-0 flex-1"><button type="button" className="document-name" onClick={() => void openDocument(document)} disabled={busy === 'download'}>{document.filename}</button><p>{dateLabel(document.uploaded_at)} · {document.resource_count} extracted item{document.resource_count === 1 ? '' : 's'}</p></div><button className="item-action" type="button" onClick={() => void openDocument(document)} disabled={busy === 'download'} aria-label={`Open ${document.filename}`}>{busy === 'download' ? <LoaderCircle className="animate-spin" aria-hidden="true" /> : <Eye aria-hidden="true" />}</button></li>)}</ul> : <div className="empty-block"><FolderOpen aria-hidden="true" /><p><strong>No reports yet</strong><br />Upload a PDF to keep it with this workspace.</p></div>}
             <div className="upload-zone">
               <input ref={fileInput} id="medical-pdf" type="file" accept="application/pdf,.pdf" multiple onChange={(event) => chooseFiles(Array.from(event.target.files ?? []))} />
-              <label htmlFor="medical-pdf"><Upload aria-hidden="true" /><span><strong>Choose PDF reports</strong><small>PDF only · up to 15 MB each</small></span></label>
+              <label htmlFor="medical-pdf"><Upload aria-hidden="true" /><span><strong>{session.storage_provider === 'google_drive' ? 'Upload to my Drive' : 'Choose PDF reports'}</strong><small>PDF only · up to 15 MB each</small></span></label>
               {files.length > 0 && <div className="selected-files"><span>{files.length} report{files.length === 1 ? '' : 's'} ready to add</span><button className="button button-secondary" type="button" disabled={busy === 'upload'} onClick={() => void upload()}>{busy === 'upload' ? <LoaderCircle className="size-4 animate-spin" aria-hidden="true" /> : <Upload aria-hidden="true" className="size-4" />} Add reports</button></div>}
             </div>
           </section>

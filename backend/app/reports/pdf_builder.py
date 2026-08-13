@@ -186,3 +186,13 @@ def generate_doctor_pdf(summary_data: dict[str, Any], output_path: str = "/tmp/c
     html = Environment(autoescape=select_autoescape(default_for_string=True)).from_string(_TEMPLATE).render(**data)
     HTML(string=html).write_pdf(output_path)
     return output_path
+
+
+def render_doctor_pdf_bytes(summary_data: dict[str, Any]) -> bytes:
+    """Render a report without creating a task-local file."""
+    data = _render_data(summary_data)
+    html = Environment(autoescape=select_autoescape(default_for_string=True)).from_string(_TEMPLATE).render(**data)
+    result = HTML(string=html).write_pdf()
+    if not isinstance(result, bytes):
+        raise RuntimeError("WeasyPrint did not return PDF bytes")
+    return result
