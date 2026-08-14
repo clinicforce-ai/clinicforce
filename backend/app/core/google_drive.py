@@ -10,8 +10,10 @@ from __future__ import annotations
 import base64
 import json
 import os
+from dataclasses import dataclass
 from typing import Any
 from urllib.parse import urlencode
+from uuid import uuid4
 
 import boto3
 import httpx
@@ -23,7 +25,19 @@ GOOGLE_CLIENT_ID = os.getenv("GOOGLE_OAUTH_CLIENT_ID", "").strip()
 GOOGLE_CLIENT_SECRET = os.getenv("GOOGLE_OAUTH_CLIENT_SECRET", "").strip()
 GOOGLE_TOKEN_KMS_KEY_ID = os.getenv("GOOGLE_TOKEN_KMS_KEY_ID", "").strip()
 PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", "http://localhost:8000").rstrip("/")
-_DRIVE_SCOPE = "https://www.googleapis.com/auth/drive.file"
+# Full Drive access is required only because a patient may place a new PDF in
+# the ClinicForce folder using the Drive UI and ask ClinicForce to import it.
+# The backend only lists direct children of the per-patient app folder.
+_DRIVE_SCOPE = "https://www.googleapis.com/auth/drive"
+
+
+@dataclass(frozen=True)
+class DriveFolderFile:
+    file_id: str
+    filename: str
+    mime_type: str
+    size: int | None
+    encrypted: bool
 
 
 def enabled() -> bool:
@@ -221,53 +235,85 @@ def ensure_summary_in_folder(connection: StoredDriveConnection, file_id: str) ->
     _raise_for_google_error(response, "summary folder update")
 
 
-def _multipart(metadata: dict[str, Any], content: bytes) -> tuple[bytes, str]:
+def list_folder_files(connection: StoredDriveConnection) -> list[DriveFolderFile]:
+    """List direct ClinicForce-folder children for the patient-initiated import flow."""
+    headers = {"Authorization": f"Bearer {_access_token(connection)}"}
+    query = f"'{connection.folder_id}' in parents and trashed = false"
+    files: list[DriveFolderFile] = []
+    page_token: str | None = None
+    while True:
+        params: dict[str, Any] = {
+            "q": query,
+            "fields": "nextPageToken,files(id,name,mimeType,size,appProperties)",
+            "pageSize": 100,
+        }
+        if page_token:
+            params["pageToken"] = page_token
+        response = httpx.get("https://www.googleapis.com/drive/v3/files", headers=headers, params=params, timeout=20.0)
+        _raise_for_google_error(response, "folder reconciliation")
+        payload = response.json()
+        for item in payload.get("files", []):
+            if not isinstance(item, dict) or not isinstance(item.get("id"), str):
+                continue
+            properties = item.get("appProperties") if isinstance(item.get("appProperties"), dict) else {}
+            size = item.get("size")
+            files.append(DriveFolderFile(
+                file_id=item["id"],
+                filename=str(item.get("name") or "Drive document"),
+                mime_type=str(item.get("mimeType") or ""),
+                size=int(size) if isinstance(size, str) and size.isdigit() else None,
+                encrypted=properties.get("clinicforce_encrypted") == "v1",
+            ))
+        page_token = payload.get("nextPageToken") if isinstance(payload, dict) else None
+        if not isinstance(page_token, str) or not page_token:
+            return files
+
+
+def _multipart(metadata: dict[str, Any], content: bytes, content_type: str) -> tuple[bytes, str]:
     boundary = "clinicforce_drive_upload"
     payload = (
         f"--{boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n".encode() +
         json.dumps(metadata, separators=(",", ":")).encode() +
-        f"\r\n--{boundary}\r\nContent-Type: application/pdf\r\n\r\n".encode() + content +
+        f"\r\n--{boundary}\r\nContent-Type: {content_type}\r\n\r\n".encode() + content +
         f"\r\n--{boundary}--\r\n".encode()
     )
     return payload, boundary
 
 
-def put_pdf(connection: StoredDriveConnection, filename: str, content: bytes, kind: str) -> str:
+def put_encrypted_blob(connection: StoredDriveConnection, content: bytes, kind: str) -> str:
+    """Upload opaque encrypted bytes; no patient filename or PDF MIME type reaches Drive."""
     access_token = _access_token(connection)
     payload, boundary = _multipart({
-        "name": filename,
+        "name": f"clinicforce-{uuid4().hex}.cforce",
         "parents": [connection.folder_id],
-        "mimeType": "application/pdf",
-        "appProperties": {"clinicforce_kind": kind},
-    }, content)
+        "mimeType": "application/octet-stream",
+        "appProperties": {"clinicforce_kind": kind, "clinicforce_encrypted": "v1"},
+    }, content, "application/octet-stream")
     response = httpx.post("https://www.googleapis.com/upload/drive/v3/files", headers={
         "Authorization": f"Bearer {access_token}", "Content-Type": f"multipart/related; boundary={boundary}",
     }, params={"uploadType": "multipart", "fields": "id"}, content=payload, timeout=60.0)
-    response.raise_for_status()
+    _raise_for_google_error(response, "encrypted upload")
     file_id = response.json().get("id")
     if not isinstance(file_id, str):
         raise RuntimeError("Google did not return a file ID")
     return file_id
 
 
-def replace_summary(connection: StoredDriveConnection, content: bytes) -> str:
-    """Keep exactly one patient-visible summary file by replacing its content in place."""
+def replace_encrypted_blob(connection: StoredDriveConnection, file_id: str, content: bytes) -> bool:
+    """Replace an existing encrypted artifact in place; False means it was deleted."""
     access_token = _access_token(connection)
-    if connection.summary_file_id:
-        response = httpx.patch(
-            f"https://www.googleapis.com/upload/drive/v3/files/{connection.summary_file_id}",
-            headers={"Authorization": f"Bearer {access_token}", "Content-Type": "application/pdf"},
-            params={"uploadType": "media", "fields": "id"}, content=content, timeout=60.0,
-        )
-        if response.status_code != 404:
-            _raise_for_google_error(response, "summary replacement")
-            if not file_is_in_folder(connection, connection.summary_file_id):
-                ensure_summary_in_folder(connection, connection.summary_file_id)
-            return connection.summary_file_id
-    return put_pdf(connection, "Clinical Summary.pdf", content, "clinical_summary")
+    response = httpx.patch(
+        f"https://www.googleapis.com/upload/drive/v3/files/{file_id}",
+        headers={"Authorization": f"Bearer {access_token}", "Content-Type": "application/octet-stream"},
+        params={"uploadType": "media", "fields": "id"}, content=content, timeout=60.0,
+    )
+    if response.status_code == 404:
+        return False
+    _raise_for_google_error(response, "encrypted replacement")
+    return True
 
 
-def get_pdf(connection: StoredDriveConnection, file_id: str) -> bytes:
+def get_file_bytes(connection: StoredDriveConnection, file_id: str) -> bytes:
     response = httpx.get(
         f"https://www.googleapis.com/drive/v3/files/{file_id}",
         headers={"Authorization": f"Bearer {_access_token(connection)}"}, params={"alt": "media"}, timeout=60.0,

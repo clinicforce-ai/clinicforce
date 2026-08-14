@@ -136,7 +136,7 @@ class MainRouteTests(unittest.IsolatedAsyncioTestCase):
             patch("app.main._authenticate_patient", new=AsyncMock(return_value="patient-1")),
             patch("app.main.get_storage_preference", return_value="google_drive"),
             patch("app.main.get_drive_connection", return_value=connection),
-            patch("app.main.google_drive.put_pdf", return_value="drive-source-id") as put_drive,
+            patch("app.main._store_encrypted_drive_pdf", new=AsyncMock(return_value="drive-source-id")) as put_drive,
             patch("app.main.put_patient_pdf") as put_s3,
             patch("app.main.extract_pdf_to_fhir_bundle", new=AsyncMock(return_value={"resourceType": "Bundle", "type": "collection", "entry": [{"resource": {"resourceType": "Condition", "code": {"text": "Asthma"}}}]})),
             patch("app.main.post_to_fhir", new=AsyncMock()),
@@ -149,7 +149,7 @@ class MainRouteTests(unittest.IsolatedAsyncioTestCase):
                 files={"file": ("record.pdf", b"%PDF-1.4 valid", "application/pdf")},
             )
         self.assertEqual(response.status_code, 200, response.text)
-        put_drive.assert_called_once()
+        put_drive.assert_awaited_once()
         put_s3.assert_not_called()
         self.assertEqual(add_document.call_args.args[-1], "google_drive")
 
@@ -172,6 +172,9 @@ class MainRouteTests(unittest.IsolatedAsyncioTestCase):
             patch("app.main.google_drive.existing_file_ids", return_value=set()),
             patch("app.main.remove_documents", return_value=1) as remove_documents,
             patch("app.main.revoke_patient_manifests", return_value=1) as revoke_manifests,
+            patch("app.main.delete_drive_file_crypto"),
+            patch("app.main.google_drive.list_folder_files", return_value=[]),
+            patch("app.main.list_pending_drive_deletions", return_value=[]),
         ):
             workspace = await __import__("app.main", fromlist=["_load_workspace"])._load_workspace("patient-1")
 
@@ -198,9 +201,9 @@ class MainRouteTests(unittest.IsolatedAsyncioTestCase):
             patch("app.main.get_storage_preference", return_value="google_drive"),
             patch("app.main.get_drive_connection", return_value=connection),
             patch("app.main.google_drive.file_exists", return_value=True),
-            patch("app.main.google_drive.file_is_in_folder", return_value=True),
+            patch("app.main.get_drive_file_crypto", return_value=Mock()),
             patch("app.main.summarize_fhir_bundle", new=AsyncMock()) as summarize,
-            patch("app.main.google_drive.replace_summary") as replace_summary,
+            patch("app.main._replace_encrypted_drive_summary") as replace_summary,
         ):
             response = await self.client.post(
                 "/api/patient/generate-link",
@@ -231,10 +234,10 @@ class MainRouteTests(unittest.IsolatedAsyncioTestCase):
             patch("app.main.get_storage_preference", return_value="google_drive"),
             patch("app.main.get_drive_connection", return_value=connection),
             patch("app.main.google_drive.file_exists", return_value=True),
-            patch("app.main.google_drive.file_is_in_folder", return_value=True),
+            patch("app.main.get_drive_file_crypto", return_value=Mock()),
             patch("app.main.summarize_fhir_bundle", new=AsyncMock(return_value=summary)) as summarize,
             patch("app.main.render_doctor_pdf_bytes", return_value=b"%PDF-1.4"),
-            patch("app.main.google_drive.replace_summary", return_value="drive-summary-id") as replace_summary,
+            patch("app.main._replace_encrypted_drive_summary", new=AsyncMock(return_value="drive-summary-id")) as replace_summary,
             patch("app.main.set_drive_summary_file", return_value=True),
         ):
             response = await self.client.post(
@@ -246,7 +249,7 @@ class MainRouteTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("download_url", summary["conditions"][0]["citation"])
         replace_summary.assert_called_once()
 
-    async def test_unchanged_drive_summary_is_moved_to_the_connected_folder(self) -> None:
+    async def test_legacy_drive_summary_is_replaced_with_an_encrypted_summary(self) -> None:
         bundle = {
             "resourceType": "Bundle", "type": "collection",
             "entry": [{"resource": {"resourceType": "Condition", "code": {"text": "Asthma"}}}],
@@ -265,19 +268,19 @@ class MainRouteTests(unittest.IsolatedAsyncioTestCase):
             patch("app.main.get_storage_preference", return_value="google_drive"),
             patch("app.main.get_drive_connection", return_value=connection),
             patch("app.main.google_drive.file_exists", return_value=True),
-            patch("app.main.google_drive.file_is_in_folder", return_value=False),
-            patch("app.main.google_drive.ensure_summary_in_folder") as move_summary,
-            patch("app.main.google_drive.replace_summary") as replace_summary,
-            patch("app.main.summarize_fhir_bundle", new=AsyncMock()) as summarize,
+            patch("app.main.get_drive_file_crypto", return_value=None),
+            patch("app.main._replace_encrypted_drive_summary", new=AsyncMock(return_value="drive-summary-id")) as replace_summary,
+            patch("app.main.summarize_fhir_bundle", new=AsyncMock(return_value={"narrative": "", "vitals": [], "labs": [], "medications": [], "conditions": [], "allergies": [], "care_events": []})) as summarize,
+            patch("app.main.render_doctor_pdf_bytes", return_value=b"%PDF-1.4"),
+            patch("app.main.set_drive_summary_file", return_value=True),
         ):
             response = await self.client.post(
                 "/api/patient/generate-link",
                 json={"patient_id": "patient-1", "password": "long-password", "passcode": "1234"},
             )
         self.assertEqual(response.status_code, 200, response.text)
-        move_summary.assert_called_once_with(connection, "drive-summary-id")
-        replace_summary.assert_not_called()
-        summarize.assert_not_awaited()
+        replace_summary.assert_awaited_once()
+        summarize.assert_awaited_once()
 
     async def test_patient_record_contract_matches_the_browser_form(self) -> None:
         with (

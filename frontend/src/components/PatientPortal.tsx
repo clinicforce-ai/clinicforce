@@ -17,6 +17,7 @@ import {
   Plus,
   QrCode,
   ShieldCheck,
+  Trash2,
   Upload,
   X,
 } from 'lucide-react'
@@ -25,10 +26,12 @@ import {
   beginGoogleDriveConnection,
   beginGoogleSignIn,
   chooseStorageProvider,
+  deletePatientDocument,
   downloadPatientDocument,
   generatePatientLink,
   getCurrentPatientSession,
   loginPatient,
+  importGoogleDriveChanges,
   logoutPatient,
   registerPatient,
   savePatientRecord,
@@ -84,7 +87,7 @@ export default function PatientPortal({ onBack }: PatientPortalProps) {
   const [form, setForm] = useState<FormState>(emptyForm)
   const [sharePasscode, setSharePasscode] = useState('')
   const [link, setLink] = useState<LinkResponse | null>(null)
-  const [busy, setBusy] = useState<'auth' | 'upload' | 'record' | 'share' | 'download' | 'drive' | 'google' | null>(null)
+  const [busy, setBusy] = useState<'auth' | 'upload' | 'record' | 'share' | 'download' | 'delete' | 'import' | 'drive' | 'google' | null>(null)
   const [restoringSession, setRestoringSession] = useState(true)
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
@@ -96,7 +99,7 @@ export default function PatientPortal({ onBack }: PatientPortalProps) {
       .then((workspace) => {
         if (active) {
           setSession(workspace)
-          setNotice('Your Google Drive workspace is ready.')
+          setNotice(workspace.drive_sync_message ?? 'Your Google Drive workspace is ready.')
         }
       })
       .catch((caught) => {
@@ -284,6 +287,36 @@ export default function PatientPortal({ onBack }: PatientPortalProps) {
     }
   }
 
+  const importDriveChanges = async () => {
+    if (!session) return
+    clearFeedback()
+    setBusy('import')
+    try {
+      const workspace = await importGoogleDriveChanges(session.patient_id, password)
+      setSession(workspace)
+      setNotice(workspace.drive_sync_message ?? 'Drive changes were imported securely.')
+    } catch (caught) {
+      setError(messageFrom(caught, 'Unable to import the detected Drive files.'))
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  const deleteDocument = async (document: PatientDocument) => {
+    if (!session || !window.confirm(`Delete ${document.filename}? This removes it from ClinicForce and its selected storage.`)) return
+    clearFeedback()
+    setBusy('delete')
+    try {
+      const workspace = await deletePatientDocument(session.patient_id, password, document.id)
+      setSession(workspace)
+      setNotice(workspace.drive_sync_message ?? 'Report deleted.')
+    } catch (caught) {
+      setError(messageFrom(caught, 'Unable to delete this report.'))
+    } finally {
+      setBusy(null)
+    }
+  }
+
   const signOut = () => {
     void logoutPatient()
     setSession(null)
@@ -354,13 +387,15 @@ export default function PatientPortal({ onBack }: PatientPortalProps) {
           <section className="section-card" aria-labelledby="reports-heading">
             <div className="section-heading"><div><p className="section-kicker">Source documents</p><h2 id="reports-heading">PDF reports</h2></div><FileText aria-hidden="true" className="section-icon" /></div>
             <div className="storage-choice" aria-label="Choose where new reports are stored">
-              <div><strong>{session.storage_provider === 'google_drive' ? 'Your Google Drive is selected' : 'ClinicForce secure storage is selected'}</strong><p>{session.storage_provider === 'google_drive' ? 'New PDFs and your single Clinical Summary.pdf stay in your ClinicForce Drive folder.' : 'New PDFs stay in ClinicForce encrypted document storage.'}</p></div>
+              <div><strong>{session.storage_provider === 'google_drive' ? 'Your Google Drive is selected' : 'ClinicForce secure storage is selected'}</strong><p>{session.storage_provider === 'google_drive' ? 'Drive contains encrypted ClinicForce files. Open reports here to read them.' : 'New PDFs stay in ClinicForce encrypted document storage.'}</p></div>
               <div className="storage-actions">
                 <button className="button button-secondary" type="button" disabled={busy === 'drive' || session.storage_provider === 's3'} onClick={() => void selectStorage('s3')}>Use ClinicForce storage</button>
                 <button className="button button-secondary" type="button" disabled={busy === 'drive' || session.storage_provider === 'google_drive'} onClick={() => void selectStorage('google_drive')}><Cloud aria-hidden="true" className="size-4" /> {session.drive_connected ? 'Use my Drive' : 'Connect Google Drive'}</button>
               </div>
             </div>
-            {session.documents.length ? <ul className="item-list">{session.documents.map((document) => <li key={document.id}><div className="file-mark"><FileText aria-hidden="true" /></div><div className="min-w-0 flex-1"><button type="button" className="document-name" onClick={() => void openDocument(document)} disabled={busy === 'download'}>{document.filename}</button><p>{dateLabel(document.uploaded_at)} · {document.resource_count} extracted item{document.resource_count === 1 ? '' : 's'}</p></div><button className="item-action" type="button" onClick={() => void openDocument(document)} disabled={busy === 'download'} aria-label={`Open ${document.filename}`}>{busy === 'download' ? <LoaderCircle className="animate-spin" aria-hidden="true" /> : <Eye aria-hidden="true" />}</button></li>)}</ul> : <div className="empty-block"><FolderOpen aria-hidden="true" /><p><strong>No reports yet</strong><br />Upload a PDF to keep it with this workspace.</p></div>}
+            {session.storage_provider === 'google_drive' && session.drive_access_upgrade_required && <div className="feedback feedback-error" role="status"><Cloud aria-hidden="true" /><span>Reconnect Google Drive to enable secure folder import. Your existing reports remain available.</span><button className="button button-secondary" type="button" disabled={busy === 'drive'} onClick={() => void connectGoogleDrive()}>Reconnect Drive</button></div>}
+            {session.storage_provider === 'google_drive' && session.drive_pending_import_count > 0 && !session.drive_access_upgrade_required && <div className="feedback feedback-success" role="status"><ShieldCheck aria-hidden="true" /><span>{session.drive_pending_import_count} Drive PDF{session.drive_pending_import_count === 1 ? '' : 's'} need secure import. Plaintext originals will be replaced with encrypted ClinicForce files.</span><button className="button button-secondary" type="button" disabled={busy === 'import'} onClick={() => void importDriveChanges()}>{busy === 'import' ? <LoaderCircle className="size-4 animate-spin" aria-hidden="true" /> : <LockKeyhole aria-hidden="true" className="size-4" />} Import securely</button></div>}
+            {session.documents.length ? <ul className="item-list">{session.documents.map((document) => <li key={document.id}><div className="file-mark"><FileText aria-hidden="true" /></div><div className="min-w-0 flex-1"><button type="button" className="document-name" onClick={() => void openDocument(document)} disabled={busy === 'download'}>{document.filename}</button><p>{dateLabel(document.uploaded_at)} · {document.resource_count} extracted item{document.resource_count === 1 ? '' : 's'}</p></div><button className="item-action" type="button" onClick={() => void openDocument(document)} disabled={busy === 'download'} aria-label={`Open ${document.filename}`}>{busy === 'download' ? <LoaderCircle className="animate-spin" aria-hidden="true" /> : <Eye aria-hidden="true" />}</button><button className="item-action" type="button" onClick={() => void deleteDocument(document)} disabled={busy === 'delete'} aria-label={`Delete ${document.filename}`}>{busy === 'delete' ? <LoaderCircle className="animate-spin" aria-hidden="true" /> : <Trash2 aria-hidden="true" />}</button></li>)}</ul> : <div className="empty-block"><FolderOpen aria-hidden="true" /><p><strong>No reports yet</strong><br />Upload a PDF to keep it with this workspace.</p></div>}
             <div className="upload-zone">
               <input ref={fileInput} id="medical-pdf" type="file" accept="application/pdf,.pdf" multiple onChange={(event) => chooseFiles(Array.from(event.target.files ?? []))} />
               <label htmlFor="medical-pdf"><Upload aria-hidden="true" /><span><strong>{session.storage_provider === 'google_drive' ? 'Upload to my Drive' : 'Choose PDF reports'}</strong><small>PDF only · up to 15 MB each</small></span></label>

@@ -78,6 +78,18 @@ class StoredDriveConnection:
     summary_fingerprint: str | None
 
 
+@dataclass(frozen=True)
+class StoredDriveCrypto:
+    file_id: str
+    patient_id: str
+    artifact_id: str
+    purpose: str
+    encrypted_data_key: str
+    nonce: str
+    plaintext_sha256: str
+    algorithm: str
+
+
 def _initialize_schema(connection: psycopg.Connection[Any]) -> None:
     """Run the one-time, cross-process-safe storage migration.
 
@@ -160,6 +172,24 @@ def _initialize_schema(connection: psycopg.Connection[Any]) -> None:
         )""")
         cursor.execute("ALTER TABLE patient_drive_connections ADD COLUMN IF NOT EXISTS summary_fingerprint TEXT")
         cursor.execute("CREATE UNIQUE INDEX IF NOT EXISTS patient_drive_connections_google_subject_idx ON patient_drive_connections (google_subject)")
+        cursor.execute("""CREATE TABLE IF NOT EXISTS drive_file_crypto (
+            file_id TEXT PRIMARY KEY,
+            patient_id TEXT NOT NULL REFERENCES patients(patient_id),
+            artifact_id TEXT NOT NULL UNIQUE,
+            purpose TEXT NOT NULL CHECK (purpose IN ('source', 'summary')),
+            encrypted_data_key TEXT NOT NULL,
+            nonce TEXT NOT NULL,
+            plaintext_sha256 TEXT NOT NULL,
+            algorithm TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        )""")
+        cursor.execute("CREATE INDEX IF NOT EXISTS drive_file_crypto_patient_id_idx ON drive_file_crypto (patient_id)")
+        cursor.execute("""CREATE TABLE IF NOT EXISTS drive_pending_deletions (
+            patient_id TEXT NOT NULL REFERENCES patients(patient_id),
+            file_id TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            PRIMARY KEY (patient_id, file_id)
+        )""")
         cursor.execute("""CREATE TABLE IF NOT EXISTS drive_oauth_states (
             state TEXT PRIMARY KEY, patient_id TEXT NOT NULL REFERENCES patients(patient_id),
             expires_at TEXT NOT NULL
@@ -331,6 +361,66 @@ def remove_documents(patient_id: str, document_ids: list[int]) -> int:
             (patient_id, ids),
         )
     return cursor.rowcount
+
+
+def update_document_locator(patient_id: str, document_id: int, drive_file_id: str) -> bool:
+    """Atomically point an existing Drive document at its encrypted replacement."""
+    with _connection() as connection:
+        cursor = connection.execute(
+            "UPDATE patient_documents SET s3_key = %s WHERE patient_id = %s AND id = %s AND storage_provider = 'google_drive'",
+            (drive_file_id, patient_id, document_id),
+        )
+    return cursor.rowcount == 1
+
+
+def save_drive_file_crypto(
+    file_id: str, patient_id: str, artifact_id: str, purpose: str,
+    encrypted_data_key: str, nonce: str, plaintext_sha256: str, algorithm: str,
+) -> None:
+    if purpose not in {"source", "summary"}:
+        raise ValueError("Unsupported Drive artifact purpose")
+    with _connection() as connection:
+        connection.execute("""INSERT INTO drive_file_crypto
+            (file_id, patient_id, artifact_id, purpose, encrypted_data_key, nonce, plaintext_sha256, algorithm, created_at)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (file_id) DO UPDATE SET artifact_id = EXCLUDED.artifact_id,
+              purpose = EXCLUDED.purpose, encrypted_data_key = EXCLUDED.encrypted_data_key,
+              nonce = EXCLUDED.nonce, plaintext_sha256 = EXCLUDED.plaintext_sha256,
+              algorithm = EXCLUDED.algorithm, created_at = EXCLUDED.created_at""",
+            (file_id, patient_id, artifact_id, purpose, encrypted_data_key, nonce, plaintext_sha256, algorithm,
+             datetime.now(timezone.utc).isoformat()),
+        )
+
+
+def get_drive_file_crypto(patient_id: str, file_id: str) -> StoredDriveCrypto | None:
+    with _connection() as connection:
+        row = connection.execute("""SELECT file_id, patient_id, artifact_id, purpose, encrypted_data_key,
+            nonce, plaintext_sha256, algorithm FROM drive_file_crypto
+            WHERE patient_id = %s AND file_id = %s""", (patient_id, file_id)).fetchone()
+    return StoredDriveCrypto(**dict(row)) if row else None
+
+
+def delete_drive_file_crypto(patient_id: str, file_id: str) -> None:
+    with _connection() as connection:
+        connection.execute("DELETE FROM drive_file_crypto WHERE patient_id = %s AND file_id = %s", (patient_id, file_id))
+
+
+def add_pending_drive_deletion(patient_id: str, file_id: str) -> None:
+    with _connection() as connection:
+        connection.execute("""INSERT INTO drive_pending_deletions (patient_id, file_id, created_at)
+            VALUES (%s, %s, %s) ON CONFLICT DO NOTHING""",
+            (patient_id, file_id, datetime.now(timezone.utc).isoformat()))
+
+
+def list_pending_drive_deletions(patient_id: str) -> list[str]:
+    with _connection() as connection:
+        rows = connection.execute("SELECT file_id FROM drive_pending_deletions WHERE patient_id = %s", (patient_id,)).fetchall()
+    return [str(row["file_id"]) for row in rows]
+
+
+def clear_pending_drive_deletion(patient_id: str, file_id: str) -> None:
+    with _connection() as connection:
+        connection.execute("DELETE FROM drive_pending_deletions WHERE patient_id = %s AND file_id = %s", (patient_id, file_id))
 
 
 def revoke_patient_manifests(patient_id: str) -> int:

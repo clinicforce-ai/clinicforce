@@ -37,13 +37,15 @@ from app.reports.summarizer import summarize_fhir_bundle
 from jwcrypto import jwe, jwk
 from app.core.object_store import delete_object as delete_s3_object, enabled as s3_enabled, get_pdf as get_s3_pdf, put_patient_pdf
 from app.core import google_drive
+from app.core.drive_crypto import decrypt_pdf as decrypt_drive_pdf, encrypt_pdf as encrypt_drive_pdf
 from app.core.patient_store import (
-    add_document, add_record, consume_drive_oauth_state, consume_google_login_state,
+    add_document, add_pending_drive_deletion, add_record, clear_pending_drive_deletion, consume_drive_oauth_state, consume_google_login_state,
     create_google_patient, create_manifest, create_patient, create_patient_session,
-    get_document, get_document_by_id, get_drive_connection, get_manifest, get_password_hash,
+    delete_drive_file_crypto, get_document, get_document_by_id, get_drive_connection, get_drive_file_crypto, get_manifest, get_password_hash,
     get_patient_by_google_subject, get_patient_session, get_storage_preference, list_documents, list_records,
-    remove_documents, revoke_patient_manifests, revoke_patient_session, save_drive_oauth_state, save_google_login_state,
-    set_drive_summary_file, set_storage_preference, update_document_extraction,
+    list_pending_drive_deletions, remove_documents, revoke_patient_manifests, revoke_patient_session, save_drive_file_crypto,
+    save_drive_oauth_state, save_google_login_state, set_drive_summary_file, set_storage_preference, update_document_extraction,
+    update_document_locator,
     upsert_drive_connection, verify_manifest_pin,
 )
 from app.core.source_links import document_download_url, verify_document_download_token
@@ -282,13 +284,20 @@ def _record_payload(record: Any) -> dict[str, Any]:
     return {"id": record.id, "category": record.category, "label": record.label, "created_at": record.created_at}
 
 
-def _workspace_payload(patient_id: str, documents: list[Any], records: list[Any], storage_provider: str = "s3", drive_connected: bool = False) -> dict[str, Any]:
+def _workspace_payload(
+    patient_id: str, documents: list[Any], records: list[Any], storage_provider: str = "s3",
+    drive_connected: bool = False, drive_pending_import_count: int = 0,
+    drive_sync_message: str | None = None, drive_access_upgrade_required: bool = False,
+) -> dict[str, Any]:
     return {
         "patient_id": patient_id,
         "documents": [_document_payload(document) for document in documents],
         "records": [_record_payload(record) for record in records],
         "storage_provider": storage_provider,
         "drive_connected": drive_connected,
+        "drive_pending_import_count": drive_pending_import_count,
+        "drive_sync_message": drive_sync_message,
+        "drive_access_upgrade_required": drive_access_upgrade_required,
     }
 
 
@@ -299,6 +308,9 @@ async def _load_workspace(patient_id: str) -> dict[str, Any]:
         asyncio.to_thread(get_storage_preference, patient_id),
         asyncio.to_thread(get_drive_connection, patient_id),
     )
+    pending_import_count = 0
+    sync_message: str | None = None
+    access_upgrade_required = False
     if storage_provider == "google_drive" and connection is not None:
         drive_documents = [document for document in documents if getattr(document, "storage_provider", "s3") == "google_drive"]
         if drive_documents:
@@ -308,10 +320,52 @@ async def _load_workspace(patient_id: str) -> dict[str, Any]:
             missing_document_ids = [document.id for document in drive_documents if document.s3_key not in existing_ids]
             if missing_document_ids:
                 removed = await asyncio.to_thread(remove_documents, patient_id, missing_document_ids)
+                if removed:
+                    for document in drive_documents:
+                        if document.id in missing_document_ids:
+                            await asyncio.to_thread(delete_drive_file_crypto, patient_id, document.s3_key)
                 await asyncio.to_thread(revoke_patient_manifests, patient_id)
                 log_warning("Google Drive", "Removed %d stale Drive document mappings after patient-side deletion", removed)
                 documents = await asyncio.to_thread(list_documents, patient_id)
-    return _workspace_payload(patient_id, documents, records, storage_provider, connection is not None)
+                sync_message = f"{removed} deleted Drive report{' was' if removed == 1 else 's were'} removed from ClinicForce. Existing QR codes were revoked."
+        try:
+            folder_files = await asyncio.to_thread(google_drive.list_folder_files, connection)
+            known_ids = {document.s3_key for document in documents if getattr(document, "storage_provider", "s3") == "google_drive"}
+            if connection.summary_file_id:
+                known_ids.add(connection.summary_file_id)
+            pending_delete_ids = set(await asyncio.to_thread(list_pending_drive_deletions, patient_id))
+            for file_id in pending_delete_ids:
+                try:
+                    await asyncio.to_thread(google_drive.delete_file, connection, file_id)
+                    await asyncio.to_thread(clear_pending_drive_deletion, patient_id, file_id)
+                except Exception as exc:
+                    log_warning("Google Drive", "Could not remove already-imported plaintext file: %s", type(exc).__name__)
+            external_pdf_count = sum(
+                1 for item in folder_files
+                if item.file_id not in known_ids and item.file_id not in pending_delete_ids
+                and not item.encrypted and (item.mime_type == "application/pdf" or item.filename.lower().endswith(".pdf"))
+            )
+            legacy_count = 0
+            for document in documents:
+                if getattr(document, "storage_provider", "s3") != "google_drive":
+                    continue
+                if await asyncio.to_thread(get_drive_file_crypto, patient_id, document.s3_key) is None:
+                    legacy_count += 1
+            if connection.summary_file_id and await asyncio.to_thread(
+                get_drive_file_crypto, patient_id, connection.summary_file_id
+            ) is None:
+                legacy_count += 1
+            pending_import_count = external_pdf_count + legacy_count
+        except Exception as exc:
+            # Existing Drive artifacts remain usable with the original narrow grant.
+            # The new folder-import feature becomes available after the patient
+            # consents to the upgraded Drive scope.
+            access_upgrade_required = True
+            log_warning("Google Drive", "Folder import reconciliation unavailable: %s", type(exc).__name__)
+    return _workspace_payload(
+        patient_id, documents, records, storage_provider, connection is not None,
+        pending_import_count, sync_message, access_upgrade_required,
+    )
 
 
 async def _ensure_documents_extracted(patient_id: str, documents: list[Any]) -> None:
@@ -347,8 +401,134 @@ async def _read_document_bytes(patient_id: str, document: Any) -> bytes:
         connection = await asyncio.to_thread(get_drive_connection, patient_id)
         if connection is None:
             raise RuntimeError("Google Drive is no longer connected for this patient")
-        return await asyncio.to_thread(google_drive.get_pdf, connection, document.s3_key)
+        ciphertext = await asyncio.to_thread(google_drive.get_file_bytes, connection, document.s3_key)
+        crypto = await asyncio.to_thread(get_drive_file_crypto, patient_id, document.s3_key)
+        # Legacy Drive documents stay readable only until the patient imports the
+        # detected change; all new artifacts have mandatory envelope metadata.
+        if crypto is None:
+            return ciphertext
+        return await asyncio.to_thread(decrypt_drive_pdf, patient_id, crypto, ciphertext)
     return await asyncio.to_thread(get_s3_pdf, document.s3_key)
+
+
+async def _store_encrypted_drive_pdf(
+    patient_id: str, connection: Any, pdf_bytes: bytes, purpose: Literal["source", "summary"],
+) -> str:
+    """Upload ciphertext to Drive and persist its KMS envelope before use."""
+    encrypted = await asyncio.to_thread(encrypt_drive_pdf, patient_id, purpose, pdf_bytes)
+    file_id = await asyncio.to_thread(google_drive.put_encrypted_blob, connection, encrypted.ciphertext, purpose)
+    try:
+        await asyncio.to_thread(
+            save_drive_file_crypto, file_id, patient_id, encrypted.artifact_id, encrypted.purpose,
+            encrypted.encrypted_data_key, encrypted.nonce, encrypted.plaintext_sha256, encrypted.algorithm,
+        )
+    except Exception:
+        await asyncio.to_thread(google_drive.delete_file, connection, file_id)
+        raise
+    return file_id
+
+
+async def _replace_encrypted_drive_summary(
+    patient_id: str, connection: Any, report_bytes: bytes,
+) -> str:
+    """Create a replacement summary before its old Drive object is removed.
+
+    A fresh object avoids a window where ciphertext has been replaced but RDS
+    still holds the old wrapped key.  The caller updates the pointer first and
+    then retires the old object.
+    """
+    return await _store_encrypted_drive_pdf(patient_id, connection, report_bytes, "summary")
+
+
+async def _retire_plaintext_drive_file(patient_id: str, connection: Any, file_id: str) -> None:
+    """Delete a plaintext import source, retrying safely on the next workspace load."""
+    await asyncio.to_thread(add_pending_drive_deletion, patient_id, file_id)
+    try:
+        await asyncio.to_thread(google_drive.delete_file, connection, file_id)
+    except Exception as exc:
+        log_warning("Google Drive", "Encrypted replacement is stored but plaintext cleanup is pending: %s", type(exc).__name__)
+        return
+    await asyncio.to_thread(clear_pending_drive_deletion, patient_id, file_id)
+
+
+def _validate_drive_pdf(content: bytes, filename: str) -> None:
+    if not content or not content.startswith(b"%PDF-"):
+        raise HTTPException(status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE, detail=f"'{filename}' is not a valid PDF file")
+    if len(content) > MAX_UPLOAD_BYTES:
+        raise HTTPException(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail=f"'{filename}' exceeds the 15 MB upload limit")
+
+
+async def _import_drive_folder_changes(patient_id: str, connection: Any) -> int:
+    """Encrypt legacy/new direct-folder PDFs and remove their plaintext originals."""
+    documents = await asyncio.to_thread(list_documents, patient_id)
+    drive_documents = [doc for doc in documents if getattr(doc, "storage_provider", "s3") == "google_drive"]
+    imported = 0
+
+    # Migrate a prior plaintext summary without regenerating its clinical content.
+    if connection.summary_file_id and await asyncio.to_thread(
+        get_drive_file_crypto, patient_id, connection.summary_file_id
+    ) is None:
+        legacy_summary = await asyncio.to_thread(google_drive.get_file_bytes, connection, connection.summary_file_id)
+        _validate_drive_pdf(legacy_summary, "Clinical Summary.pdf")
+        encrypted_summary_id = await _store_encrypted_drive_pdf(patient_id, connection, legacy_summary, "summary")
+        saved = await asyncio.to_thread(
+            set_drive_summary_file, patient_id, encrypted_summary_id, connection.summary_fingerprint or "",
+        )
+        if not saved:
+            await asyncio.to_thread(google_drive.delete_file, connection, encrypted_summary_id)
+            await asyncio.to_thread(delete_drive_file_crypto, patient_id, encrypted_summary_id)
+            raise RuntimeError("Google Drive summary changed while its encryption migration was running")
+        await _retire_plaintext_drive_file(patient_id, connection, connection.summary_file_id)
+        imported += 1
+
+    # Migrate previously stored plaintext Drive reports without changing their
+    # existing FHIR facts or citation document IDs.
+    for document in drive_documents:
+        if await asyncio.to_thread(get_drive_file_crypto, patient_id, document.s3_key) is not None:
+            continue
+        plaintext = await asyncio.to_thread(google_drive.get_file_bytes, connection, document.s3_key)
+        _validate_drive_pdf(plaintext, document.filename)
+        encrypted_file_id = await _store_encrypted_drive_pdf(patient_id, connection, plaintext, "source")
+        updated = await asyncio.to_thread(update_document_locator, patient_id, document.id, encrypted_file_id)
+        if not updated:
+            await asyncio.to_thread(google_drive.delete_file, connection, encrypted_file_id)
+            await asyncio.to_thread(delete_drive_file_crypto, patient_id, encrypted_file_id)
+            raise RuntimeError("Document changed while its Drive encryption migration was running")
+        await _retire_plaintext_drive_file(patient_id, connection, document.s3_key)
+        imported += 1
+
+    documents = await asyncio.to_thread(list_documents, patient_id)
+    known_ids = {doc.s3_key for doc in documents if getattr(doc, "storage_provider", "s3") == "google_drive"}
+    drive_connection = await asyncio.to_thread(get_drive_connection, patient_id)
+    if drive_connection and drive_connection.summary_file_id:
+        known_ids.add(drive_connection.summary_file_id)
+    pending_deletes = set(await asyncio.to_thread(list_pending_drive_deletions, patient_id))
+    folder_files = await asyncio.to_thread(google_drive.list_folder_files, connection)
+    for item in folder_files:
+        if item.file_id in known_ids or item.file_id in pending_deletes or item.encrypted:
+            continue
+        if item.mime_type != "application/pdf" and not item.filename.lower().endswith(".pdf"):
+            continue
+        if item.size is not None and item.size > MAX_UPLOAD_BYTES:
+            raise HTTPException(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail=f"'{item.filename}' exceeds the 15 MB upload limit")
+        plaintext = await asyncio.to_thread(google_drive.get_file_bytes, connection, item.file_id)
+        _validate_drive_pdf(plaintext, item.filename)
+        fhir_bundle = await extract_pdf_to_fhir_bundle(plaintext, patient_id, item.filename)
+        if not fhir_bundle.get("entry"):
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=f"No supported clinical facts could be verified in {item.filename}")
+        await post_to_fhir(fhir_bundle)
+        encrypted_file_id = await _store_encrypted_drive_pdf(patient_id, connection, plaintext, "source")
+        try:
+            await asyncio.to_thread(add_document, patient_id, item.filename, fhir_bundle, encrypted_file_id, EXTRACTION_VERSION, "google_drive")
+        except Exception:
+            await asyncio.to_thread(google_drive.delete_file, connection, encrypted_file_id)
+            await asyncio.to_thread(delete_drive_file_crypto, patient_id, encrypted_file_id)
+            raise
+        await _retire_plaintext_drive_file(patient_id, connection, item.file_id)
+        imported += 1
+    if imported:
+        await asyncio.to_thread(revoke_patient_manifests, patient_id)
+    return imported
 
 
 def _manual_record_bundle(request: ManualRecordRequest, patient_id: str) -> tuple[str, dict[str, Any]]:
@@ -655,11 +835,7 @@ async def upload_patient_pdf(
             if not pdf_bytes.startswith(b"%PDF-"):
                 raise HTTPException(status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE, detail=f"'{uploaded.filename}' is not a valid PDF file")
             log_info("Ingestion", "Received an in-memory PDF upload")
-            locator = (
-                await asyncio.to_thread(google_drive.put_pdf, drive_connection, uploaded.filename, pdf_bytes, "source")
-                if storage_provider == "google_drive"
-                else await asyncio.to_thread(put_patient_pdf, patient_id, uploaded.filename, pdf_bytes, "source")
-            )
+            locator: str | None = None
             try:
                 fhir_bundle = await extract_pdf_to_fhir_bundle(pdf_bytes, patient_id, uploaded.filename)
                 if not fhir_bundle.get("entry"):
@@ -670,11 +846,17 @@ async def upload_patient_pdf(
                 log_info("Ingestion", "Generated %d citation-backed FHIR resources", len(fhir_bundle.get("entry", [])))
                 log_info("Database", "Posting uploaded FHIR resources to local HAPI as a transaction")
                 await post_to_fhir(fhir_bundle)
+                locator = (
+                    await _store_encrypted_drive_pdf(patient_id, drive_connection, pdf_bytes, "source")
+                    if storage_provider == "google_drive"
+                    else await asyncio.to_thread(put_patient_pdf, patient_id, uploaded.filename, pdf_bytes, "source")
+                )
                 await asyncio.to_thread(add_document, patient_id, uploaded.filename, fhir_bundle, locator, EXTRACTION_VERSION, storage_provider)
             except Exception:
-                if storage_provider == "google_drive":
+                if storage_provider == "google_drive" and locator:
                     await asyncio.to_thread(google_drive.delete_file, drive_connection, locator)
-                else:
+                    await asyncio.to_thread(delete_drive_file_crypto, patient_id, locator)
+                elif locator:
                     await asyncio.to_thread(delete_s3_object, locator)
                 raise
     except HTTPException:
@@ -684,6 +866,29 @@ async def upload_patient_pdf(
         raise IntegrationFailure(component, exc) from exc
 
     return await _load_workspace(patient_id)
+
+
+@app.post("/api/patient/google-drive/import")
+async def import_google_drive_changes(request: PatientCredentials, http_request: Request) -> dict[str, Any]:
+    """Import direct-folder PDFs selected by the patient into encrypted Drive storage."""
+    patient_id = await _authenticate_patient(request.patient_id, request.password, http_request)
+    storage_provider, connection = await asyncio.gather(
+        asyncio.to_thread(get_storage_preference, patient_id), asyncio.to_thread(get_drive_connection, patient_id),
+    )
+    if storage_provider != "google_drive" or connection is None:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Connect and select Google Drive before importing Drive files")
+    try:
+        imported = await _import_drive_folder_changes(patient_id, connection)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise IntegrationFailure("Google Drive import", exc) from exc
+    workspace = await _load_workspace(patient_id)
+    workspace["drive_sync_message"] = (
+        f"{imported} Drive PDF{' was' if imported == 1 else 's were'} encrypted and imported."
+        if imported else "No new Drive PDFs need importing."
+    )
+    return workspace
 
 
 @app.post("/api/patient/records")
@@ -728,10 +933,11 @@ async def generate_patient_link(request: GeneratePatientLinkRequest, http_reques
             summary_exists = bool(connection.summary_file_id) and await asyncio.to_thread(
                 google_drive.file_exists, connection, connection.summary_file_id
             )
-            summary_in_folder = summary_exists and await asyncio.to_thread(
-                google_drive.file_is_in_folder, connection, connection.summary_file_id
+            summary_crypto = (
+                await asyncio.to_thread(get_drive_file_crypto, patient_id, connection.summary_file_id)
+                if summary_exists and connection.summary_file_id else None
             )
-            if connection.summary_fingerprint != fingerprint or not summary_exists:
+            if connection.summary_fingerprint != fingerprint or not summary_exists or summary_crypto is None:
                 # The stored Drive PDF keeps report/page citations but deliberately
                 # omits QR-bound download capabilities. The current clinician
                 # dashboard adds those just-in-time after QR/PIN verification.
@@ -739,12 +945,11 @@ async def generate_patient_link(request: GeneratePatientLinkRequest, http_reques
                 # patient record while preserving access control for source files.
                 summary = await summarize_fhir_bundle(fhir_bundle)
                 report_bytes = await run_in_threadpool(render_doctor_pdf_bytes, summary)
-                summary_file_id = await asyncio.to_thread(google_drive.replace_summary, connection, report_bytes)
+                previous_summary_file_id = connection.summary_file_id
+                summary_file_id = await _replace_encrypted_drive_summary(patient_id, connection, report_bytes)
                 await asyncio.to_thread(set_drive_summary_file, patient_id, summary_file_id, fingerprint)
-            elif not summary_in_folder:
-                # Keep an unchanged summary file in the current patient-owned
-                # folder without regenerating it or creating a second PDF.
-                await asyncio.to_thread(google_drive.ensure_summary_in_folder, connection, connection.summary_file_id)
+                if previous_summary_file_id and previous_summary_file_id != summary_file_id:
+                    await _retire_plaintext_drive_file(patient_id, connection, previous_summary_file_id)
         log_info("Secure Sharing", "Stored encrypted manifest %s for %d documents and %d structured records", manifest_id, len(documents), len(records))
         return {"shl_uri": shl_uri, "qr_code_base64": qr_code_base64}
     except HTTPException:
@@ -769,6 +974,35 @@ async def download_patient_document(document_id: int, request: PatientCredential
         media_type="application/pdf",
         headers=_download_headers(document.filename),
     )
+
+
+@app.delete("/api/patient/documents/{document_id}")
+async def delete_patient_document(document_id: int, request: PatientCredentials, http_request: Request) -> dict[str, Any]:
+    """Delete a patient-selected source from its chosen storage and revoke old QR shares."""
+    patient_id = await _authenticate_patient(request.patient_id, request.password, http_request)
+    document = await asyncio.to_thread(get_document, patient_id, document_id)
+    if document is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Report not found")
+    try:
+        if getattr(document, "storage_provider", "s3") == "google_drive":
+            connection = await asyncio.to_thread(get_drive_connection, patient_id)
+            if connection is None:
+                raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Reconnect Google Drive before deleting this report")
+            await asyncio.to_thread(google_drive.delete_file, connection, document.s3_key)
+            await asyncio.to_thread(delete_drive_file_crypto, patient_id, document.s3_key)
+        else:
+            await asyncio.to_thread(delete_s3_object, document.s3_key)
+        removed = await asyncio.to_thread(remove_documents, patient_id, [document_id])
+        if not removed:
+            raise RuntimeError("Document was not removed from ClinicForce")
+        await asyncio.to_thread(revoke_patient_manifests, patient_id)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise IntegrationFailure("Document deletion", exc) from exc
+    workspace = await _load_workspace(patient_id)
+    workspace["drive_sync_message"] = "Report deleted. Existing QR codes were revoked."
+    return workspace
 
 
 @app.get("/api/doctor/documents/{document_id}/download")
@@ -893,11 +1127,15 @@ async def decrypt_and_summarize(request: DoctorSummaryRequest) -> dict[str, Any]
         )
         if storage_provider == "google_drive" and connection and connection.summary_file_id:
             try:
-                report_bytes = await asyncio.to_thread(google_drive.get_pdf, connection, connection.summary_file_id)
+                crypto = await asyncio.to_thread(get_drive_file_crypto, str(patient_id), connection.summary_file_id)
+                if crypto is None:
+                    raise RuntimeError("Drive summary is awaiting encryption migration")
+                ciphertext = await asyncio.to_thread(google_drive.get_file_bytes, connection, connection.summary_file_id)
+                report_bytes = await asyncio.to_thread(decrypt_drive_pdf, str(patient_id), crypto, ciphertext)
             except Exception as exc:
                 # A patient may delete their Drive summary after making the QR. The
-                # doctor can still view that already-authorized QR snapshot; no S3
-                # fallback is used and the next QR recreates the Drive summary.
+                # doctor can still view that already-authorized QR snapshot; no
+                # Drive or S3 plaintext fallback is persisted.
                 log_warning("Google Drive", "Stored summary unavailable for clinician view: %s", type(exc).__name__)
                 report_bytes = await run_in_threadpool(render_doctor_pdf_bytes, summary)
         else:
