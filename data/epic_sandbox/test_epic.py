@@ -324,7 +324,21 @@ def login():
         "code_challenge": code_challenge_for(verifier),
         "code_challenge_method": "S256",
     }
-    return redirect(f"{authorize_url}?{urlencode(params)}")
+    target = f"{authorize_url}?{urlencode(params)}"
+
+    # Epic rejects the authorize request before any redirect back, so a failure
+    # here leaves no trace in our logs at all -- the browser just lands on an
+    # Epic error page. Print what we sent; `redirect_uri` and `client_id` must
+    # match the open.epic registration byte for byte. Nothing here is secret:
+    # the client_id is public and the PKCE challenge is single-use.
+    print("\n[login] sending patient to Epic")
+    print(f"[login]   authorize_url : {authorize_url}")
+    print(f"[login]   client_id     : {CLIENT_ID}")
+    print(f"[login]   redirect_uri  : {REDIRECT_URI}")
+    print(f"[login]   aud           : {FHIR_BASE}")
+    print(f"[login]   scope         : {' '.join(SCOPES)}")
+    print(f"[login] full URL:\n{target}\n")
+    return redirect(target)
 
 
 @app.route("/callback")
@@ -344,14 +358,27 @@ def callback():
             )
         return "State mismatch: the returned state does not match the session", 403
 
+    # Every failure below happens BEFORE save_tokens(), so the symptom is always
+    # the same -- "tokens.json was not created" -- while the cause differs. Echo
+    # each one to the terminal so the reason is visible without reading the
+    # browser page.
+    def fail(where: str, detail: str, status: int = 400):
+        print(f"\n[callback] FAILED at {where}\n           {detail}\n")
+        return f"{where}: {detail}", status
+
     code = request.args.get("code")
     if not code:
-        return "No authorization code returned", 400
+        return fail("no authorization code",
+                    f"Epic redirected back without ?code. Query string was: "
+                    f"{dict(request.args)}")
 
     verifier = session.pop("code_verifier", None)
     if not verifier:
-        return "Missing PKCE code verifier", 400
+        return fail("missing PKCE verifier",
+                    "The session cookie did not survive the round trip. Start at "
+                    f"{REDIRECT_URI.rsplit('/', 1)[0]}/ and do not change hostname mid-flow.")
 
+    print(f"[callback] got code, exchanging at {session.get('token_url')}")
     res = requests.post(
         session["token_url"],
         data={
@@ -365,7 +392,7 @@ def callback():
         timeout=30,
     )
     if not res.ok:
-        return f"Token exchange failed ({res.status_code}): {res.text}", 400
+        return fail(f"token exchange rejected ({res.status_code})", res.text[:600])
 
     token_data = res.json()
     session["access_token"] = token_data.get("access_token")
@@ -373,10 +400,24 @@ def callback():
     session["patient_id"] = token_data.get("patient")
     session["expires_at"] = time.time() + int(token_data.get("expires_in", 3600))
 
+    # Token values are never printed; the shape of the response is what matters
+    # when diagnosing a missing patient context or a missing refresh token.
+    print(f"[callback] token OK. keys={sorted(token_data)}")
+    print(f"[callback] patient={token_data.get('patient')!r}  "
+          f"refresh_token={'yes' if token_data.get('refresh_token') else 'NO'}")
+    print(f"[callback] granted scope: {token_data.get('scope')}")
+
     if not session["patient_id"]:
-        return f"No patient context in token response: {json.dumps(token_data)}", 400
+        return fail(
+            "no patient context",
+            "Epic returned a token with no `patient` field, so we do not know whose "
+            "record this is. That means the app registration is not patient-facing: "
+            "in open.epic set Application Audience to Patients and request the "
+            "launch/patient scope. Response keys: " + ", ".join(sorted(token_data)),
+        )
 
     save_tokens(token_data)
+    print(f"[callback] wrote {TOKEN_FILE}\n")
     return redirect(url_for("dashboard"))
 
 
@@ -448,4 +489,25 @@ if __name__ == "__main__":
     print(f"Client ID        : {CLIENT_ID or 'MISSING - check .env'}")
     print(f"FHIR base        : {FHIR_BASE or 'MISSING - check .env'}")
     print(f"Redirect URI     : {REDIRECT_URI}")
-    app.run(port=8000, debug=True)
+
+    # Derive the listening port from REDIRECT_URI instead of hardcoding it.
+    # Epic matches the redirect URI exactly, so if the two ever disagree the
+    # browser gets ERR_CONNECTION_REFUSED on one port while the server sits on
+    # the other -- which looks like an Epic problem and is not.
+    _parsed = urlparse(REDIRECT_URI)
+    _port = _parsed.port or (443 if _parsed.scheme == "https" else 80)
+    _host = _parsed.hostname or "localhost"
+
+    # Epic matches redirect_uri byte for byte, scheme included. If the
+    # registration says https, serving plain HTTP gets the request bounced to
+    # /OAuth/Start?error=4 -- indistinguishable from an unregistered URI, and
+    # it never reaches /callback so nothing appears in our logs. Serve TLS with
+    # a self-signed cert so the scheme matches.
+    _ssl = None
+    if _parsed.scheme == "https":
+        _ssl = "adhoc"
+        print("TLS              : self-signed (ssl_context='adhoc')")
+        print("                   the browser will warn once -- click through it")
+
+    print(f"Listening on     : {_parsed.scheme}://{_host}:{_port}\n")
+    app.run(host=_host, port=_port, debug=True, ssl_context=_ssl)
