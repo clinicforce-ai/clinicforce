@@ -10,10 +10,12 @@ import os
 import secrets
 from html import escape
 from copy import deepcopy
+from io import BytesIO
 from pathlib import Path
 from typing import Any, Literal
 from urllib.parse import quote
 from uuid import UUID, uuid4
+from zipfile import ZIP_DEFLATED, ZipFile
 
 import fitz
 from fastapi import File, Form, UploadFile, FastAPI, HTTPException, Request, status
@@ -67,6 +69,8 @@ from app.ingestion.wearables import (
 PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", "http://localhost:8000").rstrip("/")
 ALLOWED_ORIGINS = [origin.strip() for origin in os.getenv("CORS_ALLOW_ORIGINS", PUBLIC_BASE_URL).split(",") if origin.strip()]
 MAX_UPLOAD_BYTES = 15 * 1024 * 1024
+MAX_BULK_DOWNLOAD_DOCUMENTS = 50
+MAX_BULK_DOWNLOAD_BYTES = 150 * 1024 * 1024
 PATIENT_SESSION_COOKIE = "clinicforce_patient_session"
 PATIENT_SESSION_MAX_AGE = 30 * 24 * 60 * 60
 
@@ -141,6 +145,20 @@ class PatientCredentials(RequestModel):
 
 class StoragePreferenceRequest(PatientCredentials):
     storage_provider: Literal["s3", "google_drive"]
+
+
+class DocumentBatchRequest(PatientCredentials):
+    """Authenticated, bounded list of reports selected in the patient UI."""
+
+    document_ids: list[int] = Field(min_length=1, max_length=MAX_BULK_DOWNLOAD_DOCUMENTS)
+
+    @field_validator("document_ids")
+    @classmethod
+    def validate_document_ids(cls, value: list[int]) -> list[int]:
+        if any(document_id <= 0 for document_id in value):
+            raise ValueError("Document IDs must be positive")
+        # Deduplication makes retries and select-all behaviour deterministic.
+        return list(dict.fromkeys(value))
 
 
 class GeneratePatientLinkRequest(PatientCredentials):
@@ -278,6 +296,29 @@ def _download_headers(filename: str) -> dict[str, str]:
         "Cache-Control": "no-store, private",
         "X-Content-Type-Options": "nosniff",
     }
+
+
+def _zip_download_headers() -> dict[str, str]:
+    """Private download headers for a generated patient-report archive."""
+    return {
+        "Content-Disposition": "attachment; filename*=UTF-8''clinicforce-reports.zip",
+        "Cache-Control": "no-store, private",
+        "X-Content-Type-Options": "nosniff",
+    }
+
+
+def _zip_entry_name(filename: str, used_names: set[str]) -> str:
+    """Produce a unique, safe PDF filename inside a ZIP archive."""
+    safe_name = "".join(char if char.isalnum() or char in "._-" else "_" for char in Path(filename).name) or "report.pdf"
+    if not safe_name.lower().endswith(".pdf"):
+        safe_name += ".pdf"
+    stem, suffix = Path(safe_name).stem, Path(safe_name).suffix
+    candidate, counter = safe_name, 2
+    while candidate.lower() in used_names:
+        candidate = f"{stem}_{counter}{suffix}"
+        counter += 1
+    used_names.add(candidate.lower())
+    return candidate
 
 
 def _record_payload(record: Any) -> dict[str, Any]:
@@ -976,6 +1017,52 @@ async def download_patient_document(document_id: int, request: PatientCredential
     )
 
 
+@app.post("/api/patient/documents/bulk-download")
+async def bulk_download_patient_documents(request: DocumentBatchRequest, http_request: Request) -> Response:
+    """Return patient-selected, decrypted source PDFs as one private ZIP download."""
+    patient_id = await _authenticate_patient(request.patient_id, request.password, http_request)
+    documents = await asyncio.gather(*[
+        asyncio.to_thread(get_document, patient_id, document_id) for document_id in request.document_ids
+    ])
+    if any(document is None for document in documents):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="One or more selected reports no longer exist")
+    try:
+        contents = await asyncio.gather(*[
+            _read_document_bytes(patient_id, document) for document in documents if document is not None
+        ])
+        if sum(len(content) for content in contents) > MAX_BULK_DOWNLOAD_BYTES:
+            raise HTTPException(
+                status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                detail="Selected reports exceed the 150 MB bulk-download limit",
+            )
+        archive = BytesIO()
+        used_names: set[str] = set()
+        with ZipFile(archive, "w", compression=ZIP_DEFLATED) as zip_file:
+            for document, content in zip(documents, contents, strict=True):
+                assert document is not None
+                zip_file.writestr(_zip_entry_name(document.filename, used_names), content)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise IntegrationFailure("Document storage", exc) from exc
+    return Response(content=archive.getvalue(), media_type="application/zip", headers=_zip_download_headers())
+
+
+async def _delete_patient_document(patient_id: str, document: Any) -> None:
+    """Remove one RDS-owned document from its backing store and envelope registry."""
+    if getattr(document, "storage_provider", "s3") == "google_drive":
+        connection = await asyncio.to_thread(get_drive_connection, patient_id)
+        if connection is None:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Reconnect Google Drive before deleting this report")
+        await asyncio.to_thread(google_drive.delete_file, connection, document.s3_key)
+        await asyncio.to_thread(delete_drive_file_crypto, patient_id, document.s3_key)
+    else:
+        await asyncio.to_thread(delete_s3_object, document.s3_key)
+    removed = await asyncio.to_thread(remove_documents, patient_id, [document.id])
+    if not removed:
+        raise RuntimeError("Document was not removed from ClinicForce")
+
+
 @app.delete("/api/patient/documents/{document_id}")
 async def delete_patient_document(document_id: int, request: PatientCredentials, http_request: Request) -> dict[str, Any]:
     """Delete a patient-selected source from its chosen storage and revoke old QR shares."""
@@ -984,17 +1071,7 @@ async def delete_patient_document(document_id: int, request: PatientCredentials,
     if document is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Report not found")
     try:
-        if getattr(document, "storage_provider", "s3") == "google_drive":
-            connection = await asyncio.to_thread(get_drive_connection, patient_id)
-            if connection is None:
-                raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Reconnect Google Drive before deleting this report")
-            await asyncio.to_thread(google_drive.delete_file, connection, document.s3_key)
-            await asyncio.to_thread(delete_drive_file_crypto, patient_id, document.s3_key)
-        else:
-            await asyncio.to_thread(delete_s3_object, document.s3_key)
-        removed = await asyncio.to_thread(remove_documents, patient_id, [document_id])
-        if not removed:
-            raise RuntimeError("Document was not removed from ClinicForce")
+        await _delete_patient_document(patient_id, document)
         await asyncio.to_thread(revoke_patient_manifests, patient_id)
     except HTTPException:
         raise
@@ -1002,6 +1079,33 @@ async def delete_patient_document(document_id: int, request: PatientCredentials,
         raise IntegrationFailure("Document deletion", exc) from exc
     workspace = await _load_workspace(patient_id)
     workspace["drive_sync_message"] = "Report deleted. Existing QR codes were revoked."
+    return workspace
+
+
+@app.post("/api/patient/documents/bulk-delete")
+async def bulk_delete_patient_documents(request: DocumentBatchRequest, http_request: Request) -> dict[str, Any]:
+    """Delete all selected reports and invalidate QR manifests once at the end."""
+    patient_id = await _authenticate_patient(request.patient_id, request.password, http_request)
+    documents = await asyncio.gather(*[
+        asyncio.to_thread(get_document, patient_id, document_id) for document_id in request.document_ids
+    ])
+    if any(document is None for document in documents):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="One or more selected reports no longer exist")
+    try:
+        for document in documents:
+            assert document is not None
+            await _delete_patient_document(patient_id, document)
+        await asyncio.to_thread(revoke_patient_manifests, patient_id)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        # A successful deletion changes the record set even if a later one fails,
+        # so invalidate existing shares before surfacing the recoverable error.
+        await asyncio.to_thread(revoke_patient_manifests, patient_id)
+        raise IntegrationFailure("Document deletion", exc) from exc
+    workspace = await _load_workspace(patient_id)
+    count = len(documents)
+    workspace["drive_sync_message"] = f"{count} report{' was' if count == 1 else 's were'} deleted. Existing QR codes were revoked."
     return workspace
 
 

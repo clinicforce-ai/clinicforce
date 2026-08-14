@@ -291,6 +291,35 @@ export async function downloadPatientDocument(
   }
 }
 
+export async function downloadPatientDocumentsArchive(
+  patientId: string | undefined,
+  password: string | undefined,
+  documentIds: number[],
+): Promise<Blob> {
+  const controller = new AbortController()
+  const timeout = window.setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS)
+  try {
+    const response = await fetch('/api/patient/documents/bulk-download', {
+      ...json({ ...credentialsPayload(patientId, password), document_ids: documentIds }),
+      credentials: 'same-origin',
+      signal: controller.signal,
+    })
+    if (!response.ok) {
+      const body: unknown = await response.json().catch(() => null)
+      throw new ApiError(response.status, detailFrom(body, 'Unable to download the selected reports.'))
+    }
+    return response.blob()
+  } catch (error) {
+    if (error instanceof ApiError) throw error
+    if (error instanceof DOMException && error.name === 'AbortError') {
+      throw new ApiError(408, 'The selected reports took too long to download. Please try again.')
+    }
+    throw new ApiError(0, 'Unable to reach ClinicForce. Check your connection and try again.')
+  } finally {
+    window.clearTimeout(timeout)
+  }
+}
+
 export async function importGoogleDriveChanges(patientId: string | undefined, password: string | undefined): Promise<PatientSession> {
   return assertWorkspace(await request('/api/patient/google-drive/import', json(credentialsPayload(patientId, password))))
 }
@@ -316,6 +345,17 @@ export async function deletePatientDocument(patientId: string | undefined, passw
   } finally {
     window.clearTimeout(timeout)
   }
+}
+
+export async function deletePatientDocuments(
+  patientId: string | undefined,
+  password: string | undefined,
+  documentIds: number[],
+): Promise<PatientSession> {
+  return assertWorkspace(await request(
+    '/api/patient/documents/bulk-delete',
+    json({ ...credentialsPayload(patientId, password), document_ids: documentIds }),
+  ))
 }
 
 export async function fetchManifest(manifestUrl: string, pin: string): Promise<string> {

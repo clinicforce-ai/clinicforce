@@ -6,6 +6,7 @@ import {
   ChevronRight,
   ClipboardPlus,
   Cloud,
+  Download,
   Eye,
   EyeOff,
   FileText,
@@ -27,7 +28,9 @@ import {
   beginGoogleSignIn,
   chooseStorageProvider,
   deletePatientDocument,
+  deletePatientDocuments,
   downloadPatientDocument,
+  downloadPatientDocumentsArchive,
   generatePatientLink,
   getCurrentPatientSession,
   loginPatient,
@@ -87,7 +90,8 @@ export default function PatientPortal({ onBack }: PatientPortalProps) {
   const [form, setForm] = useState<FormState>(emptyForm)
   const [sharePasscode, setSharePasscode] = useState('')
   const [link, setLink] = useState<LinkResponse | null>(null)
-  const [busy, setBusy] = useState<'auth' | 'upload' | 'record' | 'share' | 'download' | 'delete' | 'import' | 'drive' | 'google' | null>(null)
+  const [selectedDocumentIds, setSelectedDocumentIds] = useState<Set<number>>(new Set())
+  const [busy, setBusy] = useState<'auth' | 'upload' | 'record' | 'share' | 'download' | 'delete' | 'bulk-download' | 'bulk-delete' | 'import' | 'drive' | 'google' | null>(null)
   const [restoringSession, setRestoringSession] = useState(true)
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
@@ -309,9 +313,70 @@ export default function PatientPortal({ onBack }: PatientPortalProps) {
     try {
       const workspace = await deletePatientDocument(session.patient_id, password, document.id)
       setSession(workspace)
+      setSelectedDocumentIds((current) => {
+        const next = new Set(current)
+        next.delete(document.id)
+        return next
+      })
       setNotice(workspace.drive_sync_message ?? 'Report deleted.')
     } catch (caught) {
       setError(messageFrom(caught, 'Unable to delete this report.'))
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  const toggleDocumentSelection = (documentId: number) => {
+    setSelectedDocumentIds((current) => {
+      const next = new Set(current)
+      if (next.has(documentId)) next.delete(documentId)
+      else next.add(documentId)
+      return next
+    })
+  }
+
+  const toggleAllDocumentSelection = () => {
+    if (!session) return
+    setSelectedDocumentIds((current) => current.size === session.documents.length
+      ? new Set()
+      : new Set(session.documents.map((document) => document.id)))
+  }
+
+  const downloadSelectedDocuments = async () => {
+    if (!session || selectedDocumentIds.size === 0) return
+    clearFeedback()
+    setBusy('bulk-download')
+    try {
+      const archive = await downloadPatientDocumentsArchive(session.patient_id, password, Array.from(selectedDocumentIds))
+      const url = URL.createObjectURL(archive)
+      const linkElement = document.createElement('a')
+      linkElement.href = url
+      linkElement.download = 'clinicforce-reports.zip'
+      document.body.appendChild(linkElement)
+      linkElement.click()
+      linkElement.remove()
+      window.setTimeout(() => URL.revokeObjectURL(url), 60_000)
+      setNotice(`${selectedDocumentIds.size} selected report${selectedDocumentIds.size === 1 ? '' : 's'} downloaded as a ZIP file.`)
+    } catch (caught) {
+      setError(messageFrom(caught, 'Unable to download the selected reports.'))
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  const deleteSelectedDocuments = async () => {
+    if (!session || selectedDocumentIds.size === 0) return
+    const count = selectedDocumentIds.size
+    if (!window.confirm(`Delete ${count} selected report${count === 1 ? '' : 's'}? This removes them from ClinicForce and their selected storage.`)) return
+    clearFeedback()
+    setBusy('bulk-delete')
+    try {
+      const workspace = await deletePatientDocuments(session.patient_id, password, Array.from(selectedDocumentIds))
+      setSession(workspace)
+      setSelectedDocumentIds(new Set())
+      setNotice(workspace.drive_sync_message ?? 'Selected reports deleted.')
+    } catch (caught) {
+      setError(messageFrom(caught, 'Unable to delete the selected reports.'))
     } finally {
       setBusy(null)
     }
@@ -323,6 +388,7 @@ export default function PatientPortal({ onBack }: PatientPortalProps) {
     setPassword('')
     setFiles([])
     setLink(null)
+    setSelectedDocumentIds(new Set())
     setSharePasscode('')
     clearFeedback()
   }
@@ -395,7 +461,37 @@ export default function PatientPortal({ onBack }: PatientPortalProps) {
             </div>
             {session.storage_provider === 'google_drive' && session.drive_access_upgrade_required && <div className="feedback feedback-error" role="status"><Cloud aria-hidden="true" /><span>Reconnect Google Drive to enable secure folder import. Your existing reports remain available.</span><button className="button button-secondary" type="button" disabled={busy === 'drive'} onClick={() => void connectGoogleDrive()}>Reconnect Drive</button></div>}
             {session.storage_provider === 'google_drive' && session.drive_pending_import_count > 0 && !session.drive_access_upgrade_required && <div className="feedback feedback-success" role="status"><ShieldCheck aria-hidden="true" /><span>{session.drive_pending_import_count} Drive PDF{session.drive_pending_import_count === 1 ? '' : 's'} need secure import. Plaintext originals will be replaced with encrypted ClinicForce files.</span><button className="button button-secondary" type="button" disabled={busy === 'import'} onClick={() => void importDriveChanges()}>{busy === 'import' ? <LoaderCircle className="size-4 animate-spin" aria-hidden="true" /> : <LockKeyhole aria-hidden="true" className="size-4" />} Import securely</button></div>}
-            {session.documents.length ? <ul className="item-list">{session.documents.map((document) => <li key={document.id}><div className="file-mark"><FileText aria-hidden="true" /></div><div className="min-w-0 flex-1"><button type="button" className="document-name" onClick={() => void openDocument(document)} disabled={busy === 'download'}>{document.filename}</button><p>{dateLabel(document.uploaded_at)} · {document.resource_count} extracted item{document.resource_count === 1 ? '' : 's'}</p></div><button className="item-action" type="button" onClick={() => void openDocument(document)} disabled={busy === 'download'} aria-label={`Open ${document.filename}`}>{busy === 'download' ? <LoaderCircle className="animate-spin" aria-hidden="true" /> : <Eye aria-hidden="true" />}</button><button className="item-action" type="button" onClick={() => void deleteDocument(document)} disabled={busy === 'delete'} aria-label={`Delete ${document.filename}`}>{busy === 'delete' ? <LoaderCircle className="animate-spin" aria-hidden="true" /> : <Trash2 aria-hidden="true" />}</button></li>)}</ul> : <div className="empty-block"><FolderOpen aria-hidden="true" /><p><strong>No reports yet</strong><br />Upload a PDF to keep it with this workspace.</p></div>}
+            {session.documents.length ? <>
+              <div className="document-selection-toolbar">
+                <label className="select-all-control">
+                  <input
+                    type="checkbox"
+                    checked={selectedDocumentIds.size === session.documents.length}
+                    onChange={toggleAllDocumentSelection}
+                    disabled={busy === 'bulk-download' || busy === 'bulk-delete'}
+                  />
+                  <span>Select all reports</span>
+                </label>
+                {selectedDocumentIds.size > 0 && <div className="document-bulk-actions" role="status">
+                  <span>{selectedDocumentIds.size} selected</span>
+                  <button className="button button-secondary" type="button" onClick={() => void downloadSelectedDocuments()} disabled={busy === 'bulk-download' || busy === 'bulk-delete'}>
+                    {busy === 'bulk-download' ? <LoaderCircle className="size-4 animate-spin" aria-hidden="true" /> : <Download className="size-4" aria-hidden="true" />} Download ZIP
+                  </button>
+                  <button className="button button-danger" type="button" onClick={() => void deleteSelectedDocuments()} disabled={busy === 'bulk-download' || busy === 'bulk-delete'}>
+                    {busy === 'bulk-delete' ? <LoaderCircle className="size-4 animate-spin" aria-hidden="true" /> : <Trash2 className="size-4" aria-hidden="true" />} Delete
+                  </button>
+                </div>}
+              </div>
+              <ul className="item-list">{session.documents.map((document) => <li key={document.id}>
+                <label className="document-select" aria-label={`Select ${document.filename}`}>
+                  <input type="checkbox" checked={selectedDocumentIds.has(document.id)} onChange={() => toggleDocumentSelection(document.id)} disabled={busy === 'bulk-download' || busy === 'bulk-delete'} />
+                </label>
+                <div className="file-mark"><FileText aria-hidden="true" /></div>
+                <div className="min-w-0 flex-1"><button type="button" className="document-name" onClick={() => void openDocument(document)} disabled={busy === 'download'}>{document.filename}</button><p>{dateLabel(document.uploaded_at)} · {document.resource_count} extracted item{document.resource_count === 1 ? '' : 's'}</p></div>
+                <button className="item-action" type="button" onClick={() => void openDocument(document)} disabled={busy === 'download'} aria-label={`Open ${document.filename}`}>{busy === 'download' ? <LoaderCircle className="animate-spin" aria-hidden="true" /> : <Eye aria-hidden="true" />}</button>
+                <button className="item-action" type="button" onClick={() => void deleteDocument(document)} disabled={busy === 'delete'} aria-label={`Delete ${document.filename}`}>{busy === 'delete' ? <LoaderCircle className="animate-spin" aria-hidden="true" /> : <Trash2 aria-hidden="true" />}</button>
+              </li>)}</ul>
+            </> : <div className="empty-block"><FolderOpen aria-hidden="true" /><p><strong>No reports yet</strong><br />Upload a PDF to keep it with this workspace.</p></div>}
             <div className="upload-zone">
               <input ref={fileInput} id="medical-pdf" type="file" accept="application/pdf,.pdf" multiple onChange={(event) => chooseFiles(Array.from(event.target.files ?? []))} />
               <label htmlFor="medical-pdf"><Upload aria-hidden="true" /><span><strong>{session.storage_provider === 'google_drive' ? 'Upload to my Drive' : 'Choose PDF reports'}</strong><small>PDF only · up to 15 MB each</small></span></label>

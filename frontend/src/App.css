@@ -110,6 +110,14 @@ input:focus, textarea:focus, select:focus { border-color: var(--blue); box-shado
 .item-list, .record-list, .summary-list { margin: 0; padding: 0; list-style: none; }
 .item-list { border-top: 1px solid var(--line); }
 .item-list li { display: flex; align-items: center; gap: 12px; min-height: 72px; border-bottom: 1px solid var(--line); padding: 11px 0; }
+.document-selection-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 0 0 12px; }
+.select-all-control, .document-select { display: inline-flex; align-items: center; gap: 8px; color: var(--blue-deep); font-size: .82rem; font-weight: 700; cursor: pointer; }
+.select-all-control input, .document-select input { width: 18px; height: 18px; margin: 0; accent-color: var(--green); cursor: pointer; }
+.document-select { width: 18px; flex: 0 0 auto; }
+.document-bulk-actions { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 8px; color: var(--green-deep); font-size: .82rem; font-weight: 700; }
+.document-bulk-actions .button { min-height: 38px; padding: 8px 11px; font-size: .78rem; }
+.button-danger { border-color: #dca2aa; background: #fff; color: var(--danger); }
+.button-danger:not(:disabled):hover { border-color: var(--danger); background: var(--danger-soft); }
 .file-mark { display: grid; width: 38px; height: 42px; flex: 0 0 auto; place-items: center; border: 1px solid #b9d5de; border-radius: 8px; background: var(--surface-soft); color: var(--blue-deep); }
 .file-mark svg { width: 19px; }
 .document-name { max-width: 100%; overflow: hidden; border: 0; background: transparent; padding: 0; color: var(--ink); font-size: .94rem; font-weight: 700; text-align: left; text-overflow: ellipsis; white-space: nowrap; }
@@ -257,6 +265,8 @@ td { line-height: 1.45; }
   .summary-actions .button { flex: 1; }
   .summary-grid { grid-template-columns: 1fr; }
   .trend-chart-grid { grid-template-columns: 1fr; }
+  .document-selection-toolbar { align-items: flex-start; flex-direction: column; }
+  .document-bulk-actions { justify-content: flex-start; }
 }
 @media (max-width: 480px) {
   .site-header .shell { min-height: 66px; }

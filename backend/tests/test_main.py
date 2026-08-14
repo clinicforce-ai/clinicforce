@@ -8,9 +8,11 @@ import json
 import os
 import sys
 import unittest
+from io import BytesIO
 from pathlib import Path
 from unittest.mock import AsyncMock, Mock, patch
 from uuid import uuid4
+from zipfile import ZipFile
 
 import httpx
 
@@ -331,6 +333,50 @@ class MainRouteTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.content, b"%PDF-1.4")
         get_pdf.assert_called_once_with(document.s3_key)
 
+    async def test_bulk_download_returns_only_the_selected_documents_as_a_private_zip(self) -> None:
+        first = Mock(id=7, filename="cardiology.pdf")
+        second = Mock(id=8, filename="cardiology.pdf")
+        with (
+            patch("app.main._authenticate_patient", new=AsyncMock(return_value="patient-1")),
+            patch("app.main.get_document", side_effect=[first, second]),
+            patch("app.main._read_document_bytes", new=AsyncMock(side_effect=[b"first", b"second"])),
+        ):
+            response = await self.client.post(
+                "/api/patient/documents/bulk-download",
+                json={"patient_id": "patient-1", "password": "long-password", "document_ids": [7, 8]},
+            )
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.headers["cache-control"], "no-store, private")
+        self.assertIn("clinicforce-reports.zip", response.headers["content-disposition"])
+        with ZipFile(BytesIO(response.content)) as archive:
+            self.assertEqual(set(archive.namelist()), {"cardiology.pdf", "cardiology_2.pdf"})
+            self.assertEqual(archive.read("cardiology.pdf"), b"first")
+            self.assertEqual(archive.read("cardiology_2.pdf"), b"second")
+
+    async def test_bulk_delete_removes_every_selected_document_and_revokes_once(self) -> None:
+        first = Mock(id=7, s3_key="patient-1/first.pdf", storage_provider="s3")
+        second = Mock(id=8, s3_key="patient-1/second.pdf", storage_provider="s3")
+        workspace = {"documents": [], "records": []}
+        with (
+            patch("app.main._authenticate_patient", new=AsyncMock(return_value="patient-1")),
+            patch("app.main.get_document", side_effect=[first, second]),
+            patch("app.main.delete_s3_object") as delete_object,
+            patch("app.main.remove_documents", return_value=1) as remove_documents,
+            patch("app.main.revoke_patient_manifests", return_value=1) as revoke_manifests,
+            patch("app.main._load_workspace", new=AsyncMock(return_value=workspace)),
+        ):
+            response = await self.client.post(
+                "/api/patient/documents/bulk-delete",
+                json={"patient_id": "patient-1", "password": "long-password", "document_ids": [7, 8]},
+            )
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(delete_object.call_args_list[0].args, ("patient-1/first.pdf",))
+        self.assertEqual(delete_object.call_args_list[1].args, ("patient-1/second.pdf",))
+        self.assertEqual(remove_documents.call_args_list[0].args, ("patient-1", [7]))
+        self.assertEqual(remove_documents.call_args_list[1].args, ("patient-1", [8]))
+        revoke_manifests.assert_called_once_with("patient-1")
+        self.assertEqual(response.json()["drive_sync_message"], "2 reports were deleted. Existing QR codes were revoked.")
+
     async def test_doctor_source_download_uses_a_verified_single_document_capability(self) -> None:
         document = Mock(s3_key="clinicforce/patients/hash/source/id/record.pdf", filename="record.pdf")
         with (
@@ -398,6 +444,35 @@ class MainRouteTests(unittest.IsolatedAsyncioTestCase):
         summary = await summarize_fhir_bundle(bundle)
         self.assertIn("Asthma", summary["narrative"])
         self.assertEqual(summary["conditions"][0]["name"], "Asthma")
+
+    async def test_sparse_summary_preserves_qualitative_numeric_and_condition_facts(self) -> None:
+        bundle = {
+            "resourceType": "Bundle",
+            "entry": [
+                {"resource": {
+                    "resourceType": "Observation", "code": {"text": "Hemoglobin A1c"},
+                    "valueQuantity": {"value": 5.8, "unit": "%"}, "effectiveDateTime": "2026-08-10",
+                    "extension": [{"url": "https://clinicforce.example/fhir/StructureDefinition/source-citation", "extension": [
+                        {"url": "source_filename", "valueString": "labs.pdf"}, {"url": "page_number", "valuePositiveInt": 2},
+                    ]}],
+                }},
+                {"resource": {
+                    "resourceType": "Observation", "code": {"text": "COVID-19 result"},
+                    "valueCodeableConcept": {"text": "Not detected"}, "effectiveDateTime": "2026-08-10",
+                }},
+                {"resource": {"resourceType": "Condition", "code": {"text": "Asthma"}}},
+            ],
+        }
+        summary = await summarize_fhir_bundle(bundle)
+        self.assertEqual(summary["labs"][0]["value"], 5.8)
+        self.assertEqual(summary["labs"][1]["value"], "Not detected")
+        self.assertEqual(summary["conditions"][0]["name"], "Asthma")
+        with patch("app.reports.pdf_builder.HTML") as html:
+            html.return_value.write_pdf = Mock()
+            generate_doctor_pdf(summary, "/tmp/mock-summary.pdf")
+        rendered = html.call_args.kwargs["string"]
+        for expected in ("Hemoglobin A1c", "5.8", "COVID-19 result", "Not detected", "Asthma", "labs.pdf · p. 2"):
+            self.assertIn(expected, rendered)
 
     def test_pdf_builder_uses_weasyprint_with_rendered_structured_values(self) -> None:
         summary = {"narrative": "Clinical history reviewed.", "vitals": [{"name": "Heart rate", "value": 72, "unit": "beats/min", "date": "2026-08-02", "citation": {"source_filename": "cardiology.pdf", "page_number": 3}}], "labs": [], "medications": [], "conditions": [], "allergies": [], "care_events": []}

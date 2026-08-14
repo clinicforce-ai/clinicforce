@@ -41,6 +41,47 @@ def _quantity(value: Any) -> tuple[Any, str | None] | None:
     return value["value"], unit if isinstance(unit, str) else None
 
 
+def _observation_value(resource: dict[str, Any]) -> tuple[Any, str | None] | None:
+    """Return every common FHIR Observation value without coercing clinical facts.
+
+    A report with only one or two results is especially sensitive to omissions.
+    Preserve qualitative, calculated, and component values exactly as represented
+    in FHIR; the PDF renderer displays them as documented rather than deriving a
+    clinical interpretation.
+    """
+    quantity = _quantity(resource.get("valueQuantity"))
+    if quantity:
+        return quantity
+    string_value = resource.get("valueString")
+    if isinstance(string_value, str) and string_value.strip():
+        return string_value.strip(), None
+    coded_value = _coded_text(resource.get("valueCodeableConcept"))
+    if coded_value:
+        return coded_value, None
+    for key in ("valueInteger", "valueDecimal", "valueBoolean", "valueDateTime", "valueTime"):
+        value = resource.get(key)
+        if isinstance(value, str) and value.strip():
+            return value, None
+        if isinstance(value, (int, float, bool)):
+            return value, None
+    value_range = resource.get("valueRange")
+    if isinstance(value_range, dict):
+        low, high = _quantity(value_range.get("low")), _quantity(value_range.get("high"))
+        if low or high:
+            unit = (low or high)[1]
+            lower = str(low[0]) if low else "Below"
+            upper = str(high[0]) if high else "Above"
+            return f"{lower}–{upper}", unit
+    ratio = resource.get("valueRatio")
+    if isinstance(ratio, dict):
+        numerator, denominator = _quantity(ratio.get("numerator")), _quantity(ratio.get("denominator"))
+        if numerator and denominator:
+            numerator_text = f"{numerator[0]} {numerator[1] or ''}".strip()
+            denominator_text = f"{denominator[0]} {denominator[1] or ''}".strip()
+            return f"{numerator_text} / {denominator_text}", None
+    return None
+
+
 def _observation_date(resource: dict[str, Any]) -> str | None:
     for key in ("effectiveDateTime", "issued"):
         if isinstance(resource.get(key), str):
@@ -113,18 +154,17 @@ def extract_structured_data(fhir_bundle: dict[str, Any]) -> dict[str, list[dict[
                 for component in components:
                     if not isinstance(component, dict):
                         continue
-                    quantity = _quantity(component.get("valueQuantity"))
-                    if quantity:
+                    observation_value = _observation_value(component)
+                    if observation_value:
                         name = _coded_text(component.get("code")) or "Blood pressure component"
-                        result["vitals"].append({"name": name, "value": quantity[0], "unit": quantity[1], "date": date, "citation": _citation(resource)})
+                        result["vitals"].append({"name": name, "value": observation_value[0], "unit": observation_value[1], "date": date, "citation": _citation(resource)})
                 continue
-            quantity = _quantity(resource.get("valueQuantity"))
-            string_value = resource.get("valueString")
-            if not quantity and not isinstance(string_value, str):
+            observation_value = _observation_value(resource)
+            if not observation_value:
                 continue
             item = {
-                "name": code, "value": quantity[0] if quantity else string_value,
-                "unit": quantity[1] if quantity else None, "date": date,
+                "name": code, "value": observation_value[0],
+                "unit": observation_value[1], "date": date,
                 "details": _note_text(resource), "citation": _citation(resource),
             }
             categories = resource.get("category", [])
