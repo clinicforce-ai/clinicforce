@@ -39,7 +39,8 @@ def _parse(bundle: dict) -> list[dict[str, object]]:
     return result
 
 
-async def main() -> None:
+async def sync_once() -> int:
+    """Mirror the public directory once; callers decide scheduling policy."""
     async with httpx.AsyncClient(timeout=45.0, follow_redirects=False) as client:
         response = await client.get(BRANDS_URL, headers={"Accept": "application/fhir+json"})
     response.raise_for_status()
@@ -51,6 +52,11 @@ async def main() -> None:
         raise RuntimeError("Epic endpoint catalog contained no active endpoints")
     await asyncio.to_thread(replace_epic_endpoints, endpoints)
     log_info("Epic endpoint catalog", "Updated %d Epic endpoint records", len(endpoints))
+    return len(endpoints)
+
+
+async def main() -> None:
+    await sync_once()
 
 
 if __name__ == "__main__":

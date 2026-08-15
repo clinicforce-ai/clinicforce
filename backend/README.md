@@ -87,8 +87,8 @@ restart. They must never be sent to HAPI, S3, Google Drive, browser storage, or
 patient-record tables.
 
 `python -m app.scripts.sync_epic_endpoints` mirrors Epic's public Brands Bundle
-into the non-patient `epic_endpoints` catalog. Production runs it weekly through
-the EventBridge schedule in the infrastructure stack and derives a
+into the non-patient `epic_endpoints` catalog. The single production backend
+starts an isolated weekly background refresh outside patient requests and derives a
 domain-separated state-encryption key from the existing task-only source-link
 secret. The sole persistence
 exception is an explicit patient-created QR share: it stores an encrypted,

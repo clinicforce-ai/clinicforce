@@ -67,6 +67,7 @@ from app.ingestion.wearables import (
     parse_apple_health_heartrate,
     parse_fitbit_steps,
 )
+from app.scripts.sync_epic_endpoints import sync_once as sync_epic_endpoint_catalog
 
 
 PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", "http://localhost:8000").rstrip("/")
@@ -78,6 +79,9 @@ PATIENT_SESSION_COOKIE = "clinicforce_patient_session"
 PATIENT_SESSION_MAX_AGE = 30 * 24 * 60 * 60
 EPIC_OAUTH_STATE_COOKIE = "clinicforce_epic_oauth"
 EPIC_LIVE_SESSION_COOKIE = "clinicforce_epic_live"
+EPIC_ENDPOINT_SYNC_ENABLED = os.getenv("EPIC_ENDPOINT_SYNC_ENABLED", "").lower() == "true"
+EPIC_ENDPOINT_SYNC_INTERVAL_SECONDS = 7 * 24 * 60 * 60
+_epic_endpoint_sync_task: asyncio.Task[None] | None = None
 
 app = FastAPI(title="ClinicForce")
 app.add_middleware(
@@ -87,6 +91,33 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+async def _epic_endpoint_sync_loop() -> None:
+    """Refresh Epic's public directory outside patient request handling."""
+    while True:
+        try:
+            await sync_epic_endpoint_catalog()
+        except Exception as exc:
+            # The catalog is non-patient metadata. Do not let a temporary Epic
+            # directory outage block the health-record service or leak details.
+            log_warning("Epic endpoint catalog", "Weekly sync failed: %s", type(exc).__name__)
+        await asyncio.sleep(EPIC_ENDPOINT_SYNC_INTERVAL_SECONDS)
+
+
+@app.on_event("startup")
+async def start_epic_endpoint_sync() -> None:
+    global _epic_endpoint_sync_task
+    if EPIC_ENDPOINT_SYNC_ENABLED:
+        _epic_endpoint_sync_task = asyncio.create_task(_epic_endpoint_sync_loop())
+
+
+@app.on_event("shutdown")
+async def stop_epic_endpoint_sync() -> None:
+    global _epic_endpoint_sync_task
+    if _epic_endpoint_sync_task is not None:
+        _epic_endpoint_sync_task.cancel()
+        _epic_endpoint_sync_task = None
 
 
 @app.get("/healthz", include_in_schema=False)
