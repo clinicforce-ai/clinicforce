@@ -303,7 +303,10 @@ def replace_epic_endpoints(endpoints: list[dict[str, object]]) -> None:
         raise ValueError("No valid Epic endpoints supplied")
     with _connection() as connection:
         connection.execute("DELETE FROM epic_endpoints")
-        connection.executemany(
+        # psycopg exposes batch execution on a cursor, not the connection.
+        # Keeping the delete and insert in one connection makes the catalog
+        # replacement atomic from the patient-facing search endpoint's view.
+        connection.cursor().executemany(
             """INSERT INTO epic_endpoints (id, name, aliases_json, addresses_json, fhir_base, updated_at)
                VALUES (%s, %s, %s, %s, %s, %s)""", normalized,
         )
