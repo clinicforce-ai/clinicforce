@@ -118,6 +118,8 @@ export default function PatientPortal({ onBack }: PatientPortalProps) {
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
   const fileInput = useRef<HTMLInputElement>(null)
+  const epicPopup = useRef<Window | null>(null)
+  const epicPopupWatch = useRef<number | null>(null)
 
   useEffect(() => {
     let active = true
@@ -170,6 +172,35 @@ export default function PatientPortal({ onBack }: PatientPortalProps) {
     }, 250)
     return () => { active = false; window.clearTimeout(timer) }
   }, [epicQuery, session])
+
+  useEffect(() => {
+    const stopWatchingPopup = () => {
+      if (epicPopupWatch.current !== null) window.clearInterval(epicPopupWatch.current)
+      epicPopupWatch.current = null
+      epicPopup.current = null
+    }
+    const onMessage = (event: MessageEvent<unknown>) => {
+      if (event.origin !== window.location.origin || !event.data || typeof event.data !== 'object' || !('type' in event.data)) return
+      const type = (event.data as { type?: unknown }).type
+      if (type !== 'clinicforce:epic-connected' && type !== 'clinicforce:epic-not-connected') return
+      stopWatchingPopup()
+      setBusy(null)
+      if (type === 'clinicforce:epic-not-connected') {
+        setError('Epic authorization was not completed. If you do not have a MyChart account, create one with the hospital; otherwise, try again or select another hospital.')
+        return
+      }
+      void getEpicRecord().then((record) => {
+        setEpicRecord(record)
+        setNotice(`Live Epic record connected from ${record.source.organization_name}.`)
+        void getEpicShares().then(setEpicShares)
+      }).catch((caught) => setError(messageFrom(caught, 'Epic connected, but the live record could not be loaded.')))
+    }
+    window.addEventListener('message', onMessage)
+    return () => {
+      window.removeEventListener('message', onMessage)
+      stopWatchingPopup()
+    }
+  }, [])
 
   const setField = (key: keyof FormState, value: string) => setForm((current) => ({ ...current, [key]: value }))
   const clearFeedback = () => { setError(''); setNotice('') }
@@ -347,13 +378,38 @@ export default function PatientPortal({ onBack }: PatientPortalProps) {
   const connectEpic = async (endpoint: EpicEndpoint) => {
     if (!session) return
     clearFeedback()
+    const popup = window.open('', 'clinicforce-epic-authorize', 'popup,width=540,height=760')
+    if (!popup) {
+      setError('Your browser blocked the secure MyChart window. Allow pop-ups for ClinicForce and try again.')
+      return
+    }
+    epicPopup.current = popup
     setBusy('epic-connect')
     try {
-      window.location.assign(await beginEpicAuthorization(session.patient_id, password, endpoint.id))
+      popup.location.replace(await beginEpicAuthorization(session.patient_id, password, endpoint.id, true))
+      epicPopupWatch.current = window.setInterval(() => {
+        if (!popup.closed) return
+        if (epicPopupWatch.current !== null) window.clearInterval(epicPopupWatch.current)
+        epicPopupWatch.current = null
+        epicPopup.current = null
+        setBusy(null)
+        setError('Epic authorization was not completed. If you do not have a MyChart account, create one with the hospital; otherwise, try again or select another hospital.')
+      }, 500)
     } catch (caught) {
+      popup.close()
+      epicPopup.current = null
       setBusy(null)
       setError(messageFrom(caught, 'Unable to start the Epic connection.'))
     }
+  }
+
+  const cancelEpicConnection = () => {
+    epicPopup.current?.close()
+    if (epicPopupWatch.current !== null) window.clearInterval(epicPopupWatch.current)
+    epicPopup.current = null
+    epicPopupWatch.current = null
+    setBusy(null)
+    setNotice('Epic connection cancelled. No Epic data was imported.')
   }
 
   const refreshEpic = async () => {
@@ -640,6 +696,7 @@ export default function PatientPortal({ onBack }: PatientPortalProps) {
             {!epicRecord ? <>
               <p className="text-sm leading-6 text-[var(--muted-ink)]">Connect a hospital you have used to view its current Epic record in this browser. ClinicForce does not save Epic records, access tokens, or attached PDFs.</p>
               <div className="storage-choice mt-4"><div className="flex-1"><label htmlFor="epic-hospital"><strong>Hospital or health system</strong></label><input id="epic-hospital" list="epic-hospital-suggestions" value={epicQuery} onChange={(event) => chooseEpicHospital(event.target.value)} placeholder="Start typing, e.g. Houston Methodist" autoComplete="organization" aria-describedby="epic-hospital-help" /><datalist id="epic-hospital-suggestions">{epicEndpoints.map((endpoint) => <option key={endpoint.id} value={endpoint.name} label={endpoint.aliases.slice(0, 2).join(' · ')} />)}</datalist><p id="epic-hospital-help" className="field-help mt-2" aria-live="polite">{epicSearching ? 'Looking up Epic hospitals…' : selectedEpicEndpoint ? `Selected: ${selectedEpicEndpoint.name}. Continue to MyChart to authorize ClinicForce.` : epicDirectoryError || (epicQuery.trim().length >= 2 && epicEndpoints.length === 0 ? 'No matching Epic hospital found. Try the hospital or health-system name.' : 'Type at least two letters, then select a suggestion.')}</p></div><button className="button button-primary" type="button" disabled={!selectedEpicEndpoint || busy === 'epic-connect'} onClick={() => selectedEpicEndpoint && void connectEpic(selectedEpicEndpoint)}>{busy === 'epic-connect' ? <LoaderCircle className="size-4 animate-spin" aria-hidden="true" /> : 'Continue to MyChart'}</button></div>
+              {busy === 'epic-connect' && <div className="feedback feedback-success mt-3" role="status"><LoaderCircle className="size-4 animate-spin" aria-hidden="true" /><span>MyChart opened in a secure window. Complete sign-in there. If Epic shows an error, close that window or cancel here to return safely.</span><button className="button button-secondary" type="button" onClick={cancelEpicConnection}>Cancel connection</button></div>}
             </> : <>
               <div className="storage-choice mt-4"><div><strong>Live from {epicRecord.source.organization_name}</strong><p>Retrieved {dateLabel(epicRecord.source.retrieved_at)}. This connection ends when you disconnect, its token expires, or the service restarts.</p></div><div className="storage-actions"><button className="button button-secondary" type="button" onClick={() => void refreshEpic()} disabled={busy === 'epic-load'}>{busy === 'epic-load' ? <LoaderCircle className="size-4 animate-spin" aria-hidden="true" /> : <RefreshCw className="size-4" aria-hidden="true" />} Refresh</button><button className="button button-secondary" type="button" onClick={() => void endEpicSession()}>Disconnect</button></div></div>
               <div className="workspace-stats mt-4" aria-label="Live Epic data counts">{Object.entries(epicCounts).slice(0, 6).map(([type, count]) => <div key={type}><FileText aria-hidden="true" /><span><strong>{count}</strong> {type}</span></div>)}</div>

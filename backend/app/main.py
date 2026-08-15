@@ -21,7 +21,7 @@ import fitz
 from fastapi import File, Form, UploadFile, FastAPI, HTTPException, Request, status
 from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, RedirectResponse, Response
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.core.shl import (
@@ -211,6 +211,7 @@ class GeneratePatientLinkRequest(PatientCredentials):
 
 class EpicAuthorizeRequest(PatientCredentials):
     endpoint_id: str = Field(min_length=1, max_length=256)
+    popup: bool = False
 
 
 class EpicShareRequest(GeneratePatientLinkRequest):
@@ -281,6 +282,20 @@ def _set_epic_cookie(response: Response, name: str, value: str, max_age: int) ->
 def _clear_epic_cookies(response: Response) -> None:
     response.delete_cookie(EPIC_OAUTH_STATE_COOKIE, path="/")
     response.delete_cookie(EPIC_LIVE_SESSION_COOKIE, path="/")
+
+
+def _epic_popup_result(connected: bool) -> HTMLResponse:
+    """Notify the same-origin ClinicForce opener without exposing OAuth values."""
+    event_name = "clinicforce:epic-connected" if connected else "clinicforce:epic-not-connected"
+    detail = "Epic is connected. This window can close." if connected else "Epic authorization was not completed. This window can close."
+    response = HTMLResponse(
+        "<!doctype html><html><head><meta charset=\"utf-8\"><title>ClinicForce</title></head>"
+        f"<body><p>{escape(detail)}</p><script>"
+        f"if (window.opener && !window.opener.closed) {{ window.opener.postMessage({json.dumps({'type': event_name})}, {json.dumps(PUBLIC_BASE_URL)}); window.close(); }}"
+        "</script></body></html>",
+        headers={"Cache-Control": "no-store"},
+    )
+    return response
 
 
 async def _live_epic_session(request: Request, patient_id: str) -> epic.LiveEpicSession:
@@ -898,7 +913,7 @@ async def authorize_epic(request: EpicAuthorizeRequest, http_request: Request) -
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Choose a hospital from the ClinicForce Epic directory")
     try:
         started = await epic.begin_authorization(
-            endpoint.fhir_base, endpoint.name, patient_id, f"{PUBLIC_BASE_URL}/api/patient/epic/callback",
+            endpoint.fhir_base, endpoint.name, patient_id, f"{PUBLIC_BASE_URL}/api/patient/epic/callback", popup=request.popup,
         )
     except epic.EpicError as exc:
         raise _epic_error(exc) from exc
@@ -908,21 +923,29 @@ async def authorize_epic(request: EpicAuthorizeRequest, http_request: Request) -
 
 
 @app.get("/api/patient/epic/callback")
-async def epic_callback(request: Request, state: str = "", code: str = "", error: str = "") -> RedirectResponse:
+async def epic_callback(request: Request, state: str = "", code: str = "", error: str = "") -> Response:
     """Exchange a SMART code server-side; tokens never reach the browser."""
     state_cookie = request.cookies.get(EPIC_OAUTH_STATE_COOKIE, "")
+    popup = epic.popup_requested(state_cookie)
     try:
         patient_id = await _authenticate_patient(None, None, request)
         if error or not code:
             raise epic.EpicError("Epic authorization was cancelled or denied")
-        live_session_id = await epic.complete_authorization(
+        live_session_id, popup = await epic.complete_authorization(
             state_cookie, state, code, f"{PUBLIC_BASE_URL}/api/patient/epic/callback", patient_id,
         )
     except (HTTPException, epic.EpicError):
+        if popup:
+            response = _epic_popup_result(False)
+            _clear_epic_cookies(response)
+            return response
         response = RedirectResponse(f"{PUBLIC_BASE_URL}/?epic=error", status_code=status.HTTP_303_SEE_OTHER)
         _clear_epic_cookies(response)
         return response
-    response = RedirectResponse(f"{PUBLIC_BASE_URL}/?epic=connected", status_code=status.HTTP_303_SEE_OTHER)
+    if popup:
+        response = _epic_popup_result(True)
+    else:
+        response = RedirectResponse(f"{PUBLIC_BASE_URL}/?epic=connected", status_code=status.HTTP_303_SEE_OTHER)
     response.delete_cookie(EPIC_OAUTH_STATE_COOKIE, path="/")
     _set_epic_cookie(response, EPIC_LIVE_SESSION_COOKIE, live_session_id, epic.LIVE_SESSION_MAX_AGE_SECONDS)
     return response
