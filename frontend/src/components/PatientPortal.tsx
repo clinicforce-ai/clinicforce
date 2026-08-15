@@ -109,9 +109,11 @@ export default function PatientPortal({ onBack }: PatientPortalProps) {
   const [epicEndpoints, setEpicEndpoints] = useState<EpicEndpoint[]>([])
   const [epicQuery, setEpicQuery] = useState('')
   const [selectedEpicEndpointId, setSelectedEpicEndpointId] = useState('')
+  const [epicSearching, setEpicSearching] = useState(false)
+  const [epicDirectoryError, setEpicDirectoryError] = useState('')
   const [epicShares, setEpicShares] = useState<EpicShare[]>([])
   const [selectedDocumentIds, setSelectedDocumentIds] = useState<Set<number>>(new Set())
-  const [busy, setBusy] = useState<'auth' | 'upload' | 'record' | 'share' | 'download' | 'delete' | 'bulk-download' | 'bulk-delete' | 'import' | 'drive' | 'google' | 'epic-search' | 'epic-connect' | 'epic-load' | 'epic-share' | 'epic-report' | 'epic-document' | 'epic-revoke' | null>(null)
+  const [busy, setBusy] = useState<'auth' | 'upload' | 'record' | 'share' | 'download' | 'delete' | 'bulk-download' | 'bulk-delete' | 'import' | 'drive' | 'google' | 'epic-connect' | 'epic-load' | 'epic-share' | 'epic-report' | 'epic-document' | 'epic-revoke' | null>(null)
   const [restoringSession, setRestoringSession] = useState(true)
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
@@ -143,6 +145,31 @@ export default function PatientPortal({ onBack }: PatientPortalProps) {
       .finally(() => { if (active) setRestoringSession(false) })
     return () => { active = false }
   }, [])
+
+  useEffect(() => {
+    const query = epicQuery.trim()
+    if (!session || query.length < 2) return
+
+    let active = true
+    const timer = window.setTimeout(() => {
+      setEpicSearching(true)
+      setEpicDirectoryError('')
+      void searchEpicEndpoints(query)
+        .then((endpoints) => {
+          if (!active) return
+          setEpicEndpoints(endpoints)
+          setSelectedEpicEndpointId((current) => endpoints.some((endpoint) => endpoint.id === current) ? current : '')
+        })
+        .catch((caught) => {
+          if (!active) return
+          setEpicEndpoints([])
+          setSelectedEpicEndpointId('')
+          setEpicDirectoryError(messageFrom(caught, 'Unable to load Epic hospital suggestions.'))
+        })
+        .finally(() => { if (active) setEpicSearching(false) })
+    }, 250)
+    return () => { active = false; window.clearTimeout(timer) }
+  }, [epicQuery, session])
 
   const setField = (key: keyof FormState, value: string) => setForm((current) => ({ ...current, [key]: value }))
   const clearFeedback = () => { setError(''); setNotice('') }
@@ -305,21 +332,15 @@ export default function PatientPortal({ onBack }: PatientPortalProps) {
     }
   }
 
-  const searchEpic = async (event?: FormEvent<HTMLFormElement>) => {
-    event?.preventDefault()
-    if (epicQuery.trim().length < 2) {
-      setError('Enter at least two letters of your hospital or health system name.')
-      return
-    }
-    clearFeedback()
-    setBusy('epic-search')
-    try {
-      setEpicEndpoints(await searchEpicEndpoints(epicQuery))
-      setSelectedEpicEndpointId('')
-    } catch (caught) {
-      setError(messageFrom(caught, 'Unable to search the Epic hospital directory.'))
-    } finally {
-      setBusy(null)
+  const chooseEpicHospital = (value: string) => {
+    const normalized = value.trim().toLocaleLowerCase()
+    const endpoint = epicEndpoints.find((candidate) => candidate.name.toLocaleLowerCase() === normalized)
+    setEpicQuery(value)
+    setSelectedEpicEndpointId(endpoint?.id ?? '')
+    setEpicDirectoryError('')
+    if (normalized.length < 2) {
+      setEpicEndpoints([])
+      setEpicSearching(false)
     }
   }
 
@@ -356,7 +377,9 @@ export default function PatientPortal({ onBack }: PatientPortalProps) {
       await disconnectEpic()
       setEpicRecord(null)
       setEpicEndpoints([])
+      setEpicQuery('')
       setSelectedEpicEndpointId('')
+      setEpicDirectoryError('')
       setNotice('Epic disconnected. ClinicForce no longer has live access to this record.')
     } catch (caught) {
       setError(messageFrom(caught, 'Unable to end the Epic connection.'))
@@ -616,12 +639,7 @@ export default function PatientPortal({ onBack }: PatientPortalProps) {
             <div className="section-heading"><div><p className="section-kicker">Live patient-authorized connection</p><h2 id="epic-heading">Epic / MyChart</h2></div><Building2 aria-hidden="true" className="section-icon" /></div>
             {!epicRecord ? <>
               <p className="text-sm leading-6 text-[var(--muted-ink)]">Connect a hospital you have used to view its current Epic record in this browser. ClinicForce does not save Epic records, access tokens, or attached PDFs.</p>
-              <form className="storage-choice mt-4" onSubmit={(event) => void searchEpic(event)}>
-                <div className="flex-1"><label htmlFor="epic-hospital-search"><strong>Find your hospital or health system</strong></label><input id="epic-hospital-search" value={epicQuery} onChange={(event) => setEpicQuery(event.target.value)} placeholder="e.g. Houston Methodist" autoComplete="organization" /></div>
-                <button className="button button-secondary" type="submit" disabled={busy === 'epic-search'}>{busy === 'epic-search' ? <LoaderCircle className="size-4 animate-spin" aria-hidden="true" /> : <Building2 className="size-4" aria-hidden="true" />} Find hospitals</button>
-              </form>
-              {epicEndpoints.length > 0 && <div className="storage-choice mt-4"><div className="flex-1"><label htmlFor="epic-hospital"><strong>Select a hospital</strong></label><select id="epic-hospital" value={selectedEpicEndpointId} onChange={(event) => setSelectedEpicEndpointId(event.target.value)}><option value="">Choose a hospital or health system</option>{epicEndpoints.map((endpoint) => <option key={endpoint.id} value={endpoint.id}>{endpoint.name}{endpoint.aliases.length > 0 ? ` — ${endpoint.aliases.slice(0, 2).join(', ')}` : ''}</option>)}</select>{selectedEpicEndpoint?.aliases.length ? <p className="field-help mt-2">Also known as {selectedEpicEndpoint.aliases.slice(0, 3).join(' · ')}</p> : null}</div><button className="button button-primary" type="button" disabled={!selectedEpicEndpoint || busy === 'epic-connect'} onClick={() => selectedEpicEndpoint && void connectEpic(selectedEpicEndpoint)}>{busy === 'epic-connect' ? <LoaderCircle className="size-4 animate-spin" aria-hidden="true" /> : 'Connect MyChart'}</button></div>}
-              {epicQuery && busy !== 'epic-search' && epicEndpoints.length === 0 && <p className="field-help mt-3">No matching Epic hospital was found. Try the exact hospital or health-system name.</p>}
+              <div className="storage-choice mt-4"><div className="flex-1"><label htmlFor="epic-hospital"><strong>Hospital or health system</strong></label><input id="epic-hospital" list="epic-hospital-suggestions" value={epicQuery} onChange={(event) => chooseEpicHospital(event.target.value)} placeholder="Start typing, e.g. Houston Methodist" autoComplete="organization" aria-describedby="epic-hospital-help" /><datalist id="epic-hospital-suggestions">{epicEndpoints.map((endpoint) => <option key={endpoint.id} value={endpoint.name} label={endpoint.aliases.slice(0, 2).join(' · ')} />)}</datalist><p id="epic-hospital-help" className="field-help mt-2" aria-live="polite">{epicSearching ? 'Looking up Epic hospitals…' : selectedEpicEndpoint ? `Selected: ${selectedEpicEndpoint.name}. Continue to MyChart to authorize ClinicForce.` : epicDirectoryError || (epicQuery.trim().length >= 2 && epicEndpoints.length === 0 ? 'No matching Epic hospital found. Try the hospital or health-system name.' : 'Type at least two letters, then select a suggestion.')}</p></div><button className="button button-primary" type="button" disabled={!selectedEpicEndpoint || busy === 'epic-connect'} onClick={() => selectedEpicEndpoint && void connectEpic(selectedEpicEndpoint)}>{busy === 'epic-connect' ? <LoaderCircle className="size-4 animate-spin" aria-hidden="true" /> : 'Continue to MyChart'}</button></div>
             </> : <>
               <div className="storage-choice mt-4"><div><strong>Live from {epicRecord.source.organization_name}</strong><p>Retrieved {dateLabel(epicRecord.source.retrieved_at)}. This connection ends when you disconnect, its token expires, or the service restarts.</p></div><div className="storage-actions"><button className="button button-secondary" type="button" onClick={() => void refreshEpic()} disabled={busy === 'epic-load'}>{busy === 'epic-load' ? <LoaderCircle className="size-4 animate-spin" aria-hidden="true" /> : <RefreshCw className="size-4" aria-hidden="true" />} Refresh</button><button className="button button-secondary" type="button" onClick={() => void endEpicSession()}>Disconnect</button></div></div>
               <div className="workspace-stats mt-4" aria-label="Live Epic data counts">{Object.entries(epicCounts).slice(0, 6).map(([type, count]) => <div key={type}><FileText aria-hidden="true" /><span><strong>{count}</strong> {type}</span></div>)}</div>
