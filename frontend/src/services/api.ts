@@ -37,6 +37,30 @@ export interface LinkResponse {
   qr_code_base64: string
 }
 
+export interface EpicEndpoint {
+  id: string
+  name: string
+  aliases: string[]
+  addresses: Array<Record<string, unknown>>
+}
+
+export interface FhirResource {
+  resourceType?: string
+  id?: string
+  [key: string]: unknown
+}
+
+export interface EpicRecord {
+  bundle: { resourceType: string; entry: Array<{ resource: FhirResource }> }
+  availability: Record<string, string>
+  source: { organization_name: string; retrieved_at: string }
+}
+
+export interface EpicShare {
+  manifest_id: string
+  created_at: string
+}
+
 export interface ManualRecordInput {
   category: RecordCategory
   hospital?: string
@@ -198,6 +222,74 @@ export async function getCurrentPatientSession(): Promise<PatientSession> {
 
 export async function logoutPatient(): Promise<void> {
   await request('/api/patient/logout', { method: 'POST' })
+}
+
+export async function searchEpicEndpoints(query: string): Promise<EpicEndpoint[]> {
+  const value = await request<unknown>(`/api/patient/epic/endpoints?q=${encodeURIComponent(query.trim())}`)
+  if (!value || typeof value !== 'object' || !('endpoints' in value) || !Array.isArray(value.endpoints)) {
+    throw new ApiError(502, 'ClinicForce could not load the Epic hospital directory.')
+  }
+  return value.endpoints.filter((item): item is EpicEndpoint => Boolean(
+    item && typeof item === 'object' && 'id' in item && 'name' in item &&
+    typeof item.id === 'string' && typeof item.name === 'string',
+  ))
+}
+
+export async function beginEpicAuthorization(patientId: string | undefined, password: string | undefined, endpointId: string): Promise<string> {
+  const value = await request<unknown>('/api/patient/epic/authorize', json({ ...credentialsPayload(patientId, password), endpoint_id: endpointId }))
+  if (!value || typeof value !== 'object' || !('authorization_url' in value) || typeof value.authorization_url !== 'string') {
+    throw new ApiError(502, 'ClinicForce could not start the Epic connection.')
+  }
+  return value.authorization_url
+}
+
+export async function getEpicRecord(): Promise<EpicRecord> {
+  const value = await request<unknown>('/api/patient/epic/record')
+  if (!value || typeof value !== 'object' || !('bundle' in value) || !('availability' in value) || !('source' in value)) {
+    throw new ApiError(502, 'Epic returned an invalid clinical-data response.')
+  }
+  return value as EpicRecord
+}
+
+export async function disconnectEpic(): Promise<void> {
+  await request('/api/patient/epic/live-session', { method: 'DELETE' })
+}
+
+export async function generateEpicLink(patientId: string | undefined, password: string | undefined, passcode: string): Promise<LinkResponse> {
+  const value = await request<unknown>('/api/patient/epic/generate-link', json({ ...credentialsPayload(patientId, password), passcode }))
+  if (!value || typeof value !== 'object' || !('qr_code_base64' in value) || !('shl_uri' in value) || typeof value.qr_code_base64 !== 'string' || typeof value.shl_uri !== 'string') {
+    throw new ApiError(502, 'The server returned an invalid Epic share link.')
+  }
+  return value as LinkResponse
+}
+
+export async function getEpicShares(): Promise<EpicShare[]> {
+  const value = await request<unknown>('/api/patient/epic/shares')
+  if (!value || typeof value !== 'object' || !('shares' in value) || !Array.isArray(value.shares)) {
+    throw new ApiError(502, 'ClinicForce could not load your Epic share snapshots.')
+  }
+  return value.shares.filter((item): item is EpicShare => Boolean(item && typeof item === 'object' && 'manifest_id' in item && 'created_at' in item && typeof item.manifest_id === 'string' && typeof item.created_at === 'string'))
+}
+
+export async function revokeEpicShare(manifestId: string): Promise<void> {
+  await request(`/api/patient/epic/shares/${encodeURIComponent(manifestId)}`, { method: 'DELETE' })
+}
+
+async function liveEpicPdf(path: string, init: RequestInit, fallback: string): Promise<Blob> {
+  const response = await fetch(path, { ...init, credentials: 'same-origin' })
+  if (!response.ok) {
+    const body: unknown = await response.json().catch(() => null)
+    throw new ApiError(response.status, detailFrom(body, fallback))
+  }
+  return response.blob()
+}
+
+export function downloadEpicReport(patientId?: string, password?: string): Promise<Blob> {
+  return liveEpicPdf('/api/patient/epic/report', json(credentialsPayload(patientId, password)), 'Unable to create the live Epic report.')
+}
+
+export function downloadEpicDocument(documentId: string): Promise<Blob> {
+  return liveEpicPdf(`/api/patient/epic/documents/${encodeURIComponent(documentId)}`, { method: 'GET' }, 'Unable to open this Epic document.')
 }
 
 export async function beginGoogleSignIn(): Promise<string> {

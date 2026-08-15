@@ -42,6 +42,9 @@ AWS_REGION=us-east-1
 GOOGLE_OAUTH_CLIENT_ID=<google-oauth-web-client-id>
 GOOGLE_OAUTH_CLIENT_SECRET=<google-oauth-client-secret>
 GOOGLE_TOKEN_KMS_KEY_ID=<kms-key-arn>
+# Epic production SMART-on-FHIR (local development must use a dedicated random value)
+EPIC_CLIENT_ID=<epic-production-client-id>
+EPIC_OAUTH_STATE_SECRET=<random-64-character-secret>
 ```
 
 `DATABASE_URL` is required and must target the PostgreSQL/RDS database named
@@ -65,6 +68,32 @@ https://<your-public-domain>/api/patient/google-drive/callback
 The integration uses the least-privilege `drive.file` scope. It processes PDFs
 uploaded through the ClinicForce portal; it does not silently ingest arbitrary
 files a patient adds elsewhere in Drive.
+
+## Epic / MyChart live connection
+
+ClinicForce uses an Epic-registered, standalone SMART-on-FHIR R4 public client.
+Register this exact production callback URI with Epic:
+
+```text
+https://app.clinicforce.ai/api/patient/epic/callback
+```
+
+Configure the app as patient-facing, read-only, USCDI v3 automatic-distribution
+access. Request no `offline_access` or write scopes. A patient chooses an Epic
+hospital from the weekly mirrored endpoint catalog and authorizes at that
+hospital's MyChart page. Access tokens, PDFs, and retrieved FHIR resources stay
+only in the live backend process and are cleared on logout, token expiry, or
+restart. They must never be sent to HAPI, S3, Google Drive, browser storage, or
+patient-record tables.
+
+`python -m app.scripts.sync_epic_endpoints` mirrors Epic's public Brands Bundle
+into the non-patient `epic_endpoints` catalog. The single production backend
+starts an isolated weekly background refresh outside patient requests and derives a
+domain-separated state-encryption key from the existing task-only source-link
+secret. The sole persistence
+exception is an explicit patient-created QR share: it stores an encrypted,
+timestamped FHIR snapshot in `shl_manifests`, excludes Epic attachments, and can
+be revoked from the patient workspace immediately.
 
 For ECS, use Service Connect aliases rather than task IP addresses:
 

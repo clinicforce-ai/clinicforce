@@ -172,8 +172,10 @@ def extract_structured_data(fhir_bundle: dict[str, Any]) -> dict[str, list[dict[
                 isinstance(category, dict) and _coded_text(category) == "Vital Signs" for category in categories
             )
             (result["vitals"] if is_vital else result["labs"]).append(item)
-        elif resource_type == "MedicationStatement":
+        elif resource_type in {"MedicationStatement", "MedicationRequest"}:
             name = _coded_text(resource.get("medicationCodeableConcept"))
+            if name is None:
+                name = _coded_text(resource.get("medicationReference"))
             if name:
                 result["medications"].append({"name": name, "dosage": _medication_dosage(resource), "details": _note_text(resource), "citation": _citation(resource)})
         elif resource_type == "Condition":

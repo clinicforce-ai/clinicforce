@@ -49,11 +49,14 @@ from app.core.patient_store import (
     save_drive_oauth_state, save_google_login_state, set_drive_summary_file, set_storage_preference, update_document_extraction,
     update_document_locator,
     upsert_drive_connection, verify_manifest_pin,
+    get_epic_endpoint, search_epic_endpoints,
+    list_epic_manifests, revoke_epic_manifest,
 )
 from app.core.source_links import document_download_url, verify_document_download_token
 from app.ingestion.bedrock_extractor import EXTRACTION_VERSION, extract_pdf_to_fhir_bundle
 from app.ingestion.ccda_parser import parse_ccda_to_fhir_bundle
 from app.ingestion.fhir_client import FHIRRequestError, get_patient_records, post_to_fhir
+from app.ingestion import epic
 from app.ingestion.pdf_parser import (
     extract_text_from_pdf_bytes,
     parse_pdf_text_with_llm,
@@ -64,6 +67,7 @@ from app.ingestion.wearables import (
     parse_apple_health_heartrate,
     parse_fitbit_steps,
 )
+from app.scripts.sync_epic_endpoints import sync_once as sync_epic_endpoint_catalog
 
 
 PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", "http://localhost:8000").rstrip("/")
@@ -73,6 +77,11 @@ MAX_BULK_DOWNLOAD_DOCUMENTS = 50
 MAX_BULK_DOWNLOAD_BYTES = 150 * 1024 * 1024
 PATIENT_SESSION_COOKIE = "clinicforce_patient_session"
 PATIENT_SESSION_MAX_AGE = 30 * 24 * 60 * 60
+EPIC_OAUTH_STATE_COOKIE = "clinicforce_epic_oauth"
+EPIC_LIVE_SESSION_COOKIE = "clinicforce_epic_live"
+EPIC_ENDPOINT_SYNC_ENABLED = os.getenv("EPIC_ENDPOINT_SYNC_ENABLED", "").lower() == "true"
+EPIC_ENDPOINT_SYNC_INTERVAL_SECONDS = 7 * 24 * 60 * 60
+_epic_endpoint_sync_task: asyncio.Task[None] | None = None
 
 app = FastAPI(title="ClinicForce")
 app.add_middleware(
@@ -82,6 +91,33 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+async def _epic_endpoint_sync_loop() -> None:
+    """Refresh Epic's public directory outside patient request handling."""
+    while True:
+        try:
+            await sync_epic_endpoint_catalog()
+        except Exception as exc:
+            # The catalog is non-patient metadata. Do not let a temporary Epic
+            # directory outage block the health-record service or leak details.
+            log_warning("Epic endpoint catalog", "Weekly sync failed: %s", type(exc).__name__)
+        await asyncio.sleep(EPIC_ENDPOINT_SYNC_INTERVAL_SECONDS)
+
+
+@app.on_event("startup")
+async def start_epic_endpoint_sync() -> None:
+    global _epic_endpoint_sync_task
+    if EPIC_ENDPOINT_SYNC_ENABLED:
+        _epic_endpoint_sync_task = asyncio.create_task(_epic_endpoint_sync_loop())
+
+
+@app.on_event("shutdown")
+async def stop_epic_endpoint_sync() -> None:
+    global _epic_endpoint_sync_task
+    if _epic_endpoint_sync_task is not None:
+        _epic_endpoint_sync_task.cancel()
+        _epic_endpoint_sync_task = None
 
 
 @app.get("/healthz", include_in_schema=False)
@@ -173,6 +209,14 @@ class GeneratePatientLinkRequest(PatientCredentials):
         return value
 
 
+class EpicAuthorizeRequest(PatientCredentials):
+    endpoint_id: str = Field(min_length=1, max_length=256)
+
+
+class EpicShareRequest(GeneratePatientLinkRequest):
+    """The explicit, patient-requested exception to live-only Epic data."""
+
+
 class ManualRecordRequest(PatientCredentials):
     category: Literal["hospital", "lab", "vital", "condition", "allergy", "medication"]
     hospital: str | None = Field(default=None, max_length=256)
@@ -184,12 +228,14 @@ class ManualRecordRequest(PatientCredentials):
     dosage: str | None = Field(default=None, max_length=512)
 
 
-def _create_upload_shl(patient_id: str | None, fhir_bundle: dict[str, Any], passcode: str) -> tuple[str, str, str]:
+def _create_upload_shl(
+    patient_id: str | None, fhir_bundle: dict[str, Any], passcode: str, source: str = "local",
+) -> tuple[str, str, str]:
     """Create and retain the encrypted SHL payload outside the event loop."""
     key = generate_symmetric_key()
     key_bytes = base64.urlsafe_b64decode(key + "=" * (-len(key) % 4))
     encrypted_jwe = encrypt_bundle(fhir_bundle, key_bytes)
-    manifest_id = create_manifest(patient_id, encrypted_jwe, hash_pin(passcode))
+    manifest_id = create_manifest(patient_id, encrypted_jwe, hash_pin(passcode), source)
     shl_uri = create_shl_uri(
         f"{PUBLIC_BASE_URL}/manifest/{manifest_id}", key, "ClinicForce records"
     )
@@ -217,6 +263,36 @@ def _set_patient_session(response: Response, patient_id: str) -> None:
         samesite="lax",
         path="/",
     )
+
+
+def _set_epic_cookie(response: Response, name: str, value: str, max_age: int) -> None:
+    """Keep opaque OAuth/session handles out of JavaScript and persistent storage."""
+    response.set_cookie(
+        key=name,
+        value=value,
+        max_age=max_age,
+        httponly=True,
+        secure=PUBLIC_BASE_URL.startswith("https://"),
+        samesite="lax",
+        path="/",
+    )
+
+
+def _clear_epic_cookies(response: Response) -> None:
+    response.delete_cookie(EPIC_OAUTH_STATE_COOKIE, path="/")
+    response.delete_cookie(EPIC_LIVE_SESSION_COOKIE, path="/")
+
+
+async def _live_epic_session(request: Request, patient_id: str) -> epic.LiveEpicSession:
+    try:
+        return epic.get_live_session(request.cookies.get(EPIC_LIVE_SESSION_COOKIE, ""), patient_id)
+    except epic.EpicError as exc:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc)) from exc
+
+
+def _epic_error(exc: epic.EpicError) -> HTTPException:
+    """Return only our fixed, safe errors--never an Epic response body."""
+    return HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc))
 
 
 async def _authenticate_patient(patient_id: str | None, password: str | None, request: Request | None = None) -> str:
@@ -272,6 +348,27 @@ def _combine_document_bundles(documents: list[Any], records: list[Any] | None = 
     for record in records or []:
         entries.extend(entry for entry in record.fhir_bundle.get("entry", []) if isinstance(entry, dict))
     return {"resourceType": "Bundle", "type": "collection", "entry": entries}
+
+
+def _epic_share_snapshot(bundle: dict[str, Any]) -> dict[str, Any]:
+    """Remove attachment bytes and URLs before the explicit Epic-share exception.
+
+    DocumentReference metadata can help a clinician understand that a document
+    exists, but attachment data and provider URLs are never retained by
+    ClinicForce--including inside an encrypted patient-requested snapshot.
+    """
+    snapshot = deepcopy(bundle)
+    for entry in snapshot.get("entry", []):
+        resource = entry.get("resource") if isinstance(entry, dict) else None
+        if not isinstance(resource, dict) or resource.get("resourceType") != "DocumentReference":
+            continue
+        for content in resource.get("content", []):
+            attachment = content.get("attachment") if isinstance(content, dict) else None
+            if isinstance(attachment, dict):
+                attachment.pop("data", None)
+                attachment.pop("url", None)
+    snapshot["meta"] = {"tag": [{"system": "urn:clinicforce", "code": "epic-live-snapshot"}]}
+    return snapshot
 
 
 def _with_source_download_links(summary: dict[str, Any], manifest_id: str) -> dict[str, Any]:
@@ -775,8 +872,150 @@ async def get_current_patient_session(request: Request) -> dict[str, Any]:
 @app.post("/api/patient/logout")
 async def logout_patient(request: Request) -> Response:
     await asyncio.to_thread(revoke_patient_session, request.cookies.get(PATIENT_SESSION_COOKIE, ""))
+    epic.clear_live_session(request.cookies.get(EPIC_LIVE_SESSION_COOKIE, ""))
     response = Response(status_code=status.HTTP_204_NO_CONTENT)
     response.delete_cookie(PATIENT_SESSION_COOKIE, path="/")
+    _clear_epic_cookies(response)
+    return response
+
+
+@app.get("/api/patient/epic/endpoints")
+async def epic_endpoints(request: Request, q: str = "") -> dict[str, list[dict[str, Any]]]:
+    """Search the locally mirrored, non-patient Epic hospital catalog."""
+    await _authenticate_patient(None, None, request)
+    endpoints = await asyncio.to_thread(search_epic_endpoints, q, 25)
+    return {"endpoints": [
+        {"id": endpoint.id, "name": endpoint.name, "aliases": endpoint.aliases, "addresses": endpoint.addresses}
+        for endpoint in endpoints
+    ]}
+
+
+@app.post("/api/patient/epic/authorize")
+async def authorize_epic(request: EpicAuthorizeRequest, http_request: Request) -> JSONResponse:
+    patient_id = await _authenticate_patient(request.patient_id, request.password, http_request)
+    endpoint = await asyncio.to_thread(get_epic_endpoint, request.endpoint_id)
+    if endpoint is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Choose a hospital from the ClinicForce Epic directory")
+    try:
+        started = await epic.begin_authorization(
+            endpoint.fhir_base, endpoint.name, patient_id, f"{PUBLIC_BASE_URL}/api/patient/epic/callback",
+        )
+    except epic.EpicError as exc:
+        raise _epic_error(exc) from exc
+    response = JSONResponse({"authorization_url": started.authorization_url})
+    _set_epic_cookie(response, EPIC_OAUTH_STATE_COOKIE, started.state_cookie, epic.OAUTH_STATE_MAX_AGE_SECONDS)
+    return response
+
+
+@app.get("/api/patient/epic/callback")
+async def epic_callback(request: Request, state: str = "", code: str = "", error: str = "") -> RedirectResponse:
+    """Exchange a SMART code server-side; tokens never reach the browser."""
+    state_cookie = request.cookies.get(EPIC_OAUTH_STATE_COOKIE, "")
+    try:
+        patient_id = await _authenticate_patient(None, None, request)
+        if error or not code:
+            raise epic.EpicError("Epic authorization was cancelled or denied")
+        live_session_id = await epic.complete_authorization(
+            state_cookie, state, code, f"{PUBLIC_BASE_URL}/api/patient/epic/callback", patient_id,
+        )
+    except (HTTPException, epic.EpicError):
+        response = RedirectResponse(f"{PUBLIC_BASE_URL}/?epic=error", status_code=status.HTTP_303_SEE_OTHER)
+        _clear_epic_cookies(response)
+        return response
+    response = RedirectResponse(f"{PUBLIC_BASE_URL}/?epic=connected", status_code=status.HTTP_303_SEE_OTHER)
+    response.delete_cookie(EPIC_OAUTH_STATE_COOKIE, path="/")
+    _set_epic_cookie(response, EPIC_LIVE_SESSION_COOKIE, live_session_id, epic.LIVE_SESSION_MAX_AGE_SECONDS)
+    return response
+
+
+@app.get("/api/patient/epic/record")
+async def epic_record(request: Request) -> dict[str, Any]:
+    patient_id = await _authenticate_patient(None, None, request)
+    session = await _live_epic_session(request, patient_id)
+    try:
+        bundle, availability = await epic.fetch_record(session)
+    except epic.EpicError as exc:
+        raise _epic_error(exc) from exc
+    return {"bundle": bundle, "availability": availability, "source": epic.source_metadata(session)}
+
+
+@app.get("/api/patient/epic/resources/{resource_type}")
+async def epic_resource(resource_type: str, request: Request) -> dict[str, Any]:
+    patient_id = await _authenticate_patient(None, None, request)
+    session = await _live_epic_session(request, patient_id)
+    try:
+        bundle = await epic.fetch_resource_type(session, resource_type)
+    except epic.EpicError as exc:
+        raise _epic_error(exc) from exc
+    return {"bundle": bundle, "source": epic.source_metadata(session)}
+
+
+@app.get("/api/patient/epic/documents/{document_id}")
+async def epic_document(document_id: str, request: Request) -> Response:
+    patient_id = await _authenticate_patient(None, None, request)
+    session = await _live_epic_session(request, patient_id)
+    try:
+        content, filename = await epic.stream_document(session, document_id)
+    except epic.EpicError as exc:
+        raise _epic_error(exc) from exc
+    return Response(content=content, media_type="application/pdf", headers=_download_headers(filename))
+
+
+@app.post("/api/patient/epic/report")
+async def epic_report(request: PatientCredentials, http_request: Request) -> Response:
+    patient_id = await _authenticate_patient(request.patient_id, request.password, http_request)
+    session = await _live_epic_session(http_request, patient_id)
+    try:
+        bundle, _ = await epic.fetch_record(session)
+        summary = await summarize_fhir_bundle(bundle)
+        report = await run_in_threadpool(render_doctor_pdf_bytes, summary, bundle, epic.source_metadata(session))
+    except epic.EpicError as exc:
+        raise _epic_error(exc) from exc
+    return Response(content=report, media_type="application/pdf", headers=_download_headers("clinicforce-epic-live-record.pdf"))
+
+
+@app.post("/api/patient/epic/generate-link")
+async def generate_epic_link(request: EpicShareRequest, http_request: Request) -> dict[str, str]:
+    """Persist only the patient-selected encrypted FHIR snapshot, never attachments."""
+    patient_id = await _authenticate_patient(request.patient_id, request.password, http_request)
+    session = await _live_epic_session(http_request, patient_id)
+    try:
+        bundle, _ = await epic.fetch_record(session)
+    except epic.EpicError as exc:
+        raise _epic_error(exc) from exc
+    if not bundle.get("entry"):
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Epic did not provide any shareable clinical data")
+    bundle = _epic_share_snapshot(bundle)
+    shl_uri, qr_code_base64, manifest_id = await asyncio.to_thread(
+        _create_upload_shl, patient_id, bundle, request.passcode, "epic",
+    )
+    return {"shl_uri": shl_uri, "qr_code_base64": qr_code_base64, "manifest_id": manifest_id}
+
+
+@app.get("/api/patient/epic/shares")
+async def epic_shares(request: Request) -> dict[str, list[dict[str, str]]]:
+    patient_id = await _authenticate_patient(None, None, request)
+    manifests = await asyncio.to_thread(list_epic_manifests, patient_id)
+    return {"shares": [{"manifest_id": item.manifest_id, "created_at": item.created_at} for item in manifests]}
+
+
+@app.delete("/api/patient/epic/shares/{manifest_id}")
+async def revoke_epic_share(manifest_id: UUID, request: Request) -> Response:
+    patient_id = await _authenticate_patient(None, None, request)
+    revoked = await asyncio.to_thread(revoke_epic_manifest, patient_id, str(manifest_id))
+    if not revoked:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Epic share not found")
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@app.delete("/api/patient/epic/live-session")
+async def disconnect_epic(request: Request) -> Response:
+    patient_id = await _authenticate_patient(None, None, request)
+    # Check ownership before removal so a forged cookie cannot affect another account.
+    await _live_epic_session(request, patient_id)
+    epic.clear_live_session(request.cookies.get(EPIC_LIVE_SESSION_COOKIE, ""))
+    response = Response(status_code=status.HTTP_204_NO_CONTENT)
+    response.delete_cookie(EPIC_LIVE_SESSION_COOKIE, path="/")
     return response
 
 

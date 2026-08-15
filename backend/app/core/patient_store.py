@@ -90,6 +90,21 @@ class StoredDriveCrypto:
     algorithm: str
 
 
+@dataclass(frozen=True)
+class EpicEndpoint:
+    id: str
+    name: str
+    aliases: list[str]
+    addresses: list[dict[str, Any]]
+    fhir_base: str
+
+
+@dataclass(frozen=True)
+class StoredEpicManifest:
+    manifest_id: str
+    created_at: str
+
+
 def _initialize_schema(connection: psycopg.Connection[Any]) -> None:
     """Run the one-time, cross-process-safe storage migration.
 
@@ -156,6 +171,7 @@ def _initialize_schema(connection: psycopg.Connection[Any]) -> None:
         cursor.execute("ALTER TABLE shl_manifests ADD COLUMN IF NOT EXISTS failed_pin_attempts INTEGER NOT NULL DEFAULT 0")
         cursor.execute("ALTER TABLE shl_manifests ADD COLUMN IF NOT EXISTS pin_locked_until TEXT")
         cursor.execute("ALTER TABLE shl_manifests ADD COLUMN IF NOT EXISTS revoked_at TEXT")
+        cursor.execute("ALTER TABLE shl_manifests ADD COLUMN IF NOT EXISTS source TEXT NOT NULL DEFAULT 'local'")
         cursor.execute("""CREATE TABLE IF NOT EXISTS doctor_reports (
             id TEXT PRIMARY KEY, patient_id TEXT NOT NULL REFERENCES patients(patient_id),
             filename TEXT NOT NULL, s3_key TEXT NOT NULL, created_at TEXT NOT NULL
@@ -202,6 +218,17 @@ def _initialize_schema(connection: psycopg.Connection[Any]) -> None:
             expires_at TEXT NOT NULL, created_at TEXT NOT NULL
         )""")
         cursor.execute("CREATE INDEX IF NOT EXISTS patient_sessions_patient_id_idx ON patient_sessions (patient_id)")
+        # This is public provider-directory metadata only.  It intentionally has
+        # no patient reference and must never be used to store Epic chart data.
+        cursor.execute("""CREATE TABLE IF NOT EXISTS epic_endpoints (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            aliases_json TEXT NOT NULL,
+            addresses_json TEXT NOT NULL,
+            fhir_base TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )""")
+        cursor.execute("CREATE INDEX IF NOT EXISTS epic_endpoints_name_idx ON epic_endpoints (name)")
     connection.commit()
 
 
@@ -253,6 +280,67 @@ def set_storage_preference(patient_id: str, storage_provider: str) -> bool:
     with _connection() as connection:
         cursor = connection.execute("UPDATE patients SET storage_preference = %s WHERE patient_id = %s", (storage_provider, patient_id))
     return cursor.rowcount == 1
+
+
+def replace_epic_endpoints(endpoints: list[dict[str, object]]) -> None:
+    """Atomically replace public Epic directory metadata after validation."""
+    now = datetime.now(timezone.utc).isoformat()
+    normalized: list[tuple[str, str, str, str, str, str]] = []
+    for endpoint in endpoints:
+        identifier, name, fhir_base = endpoint.get("id"), endpoint.get("name"), endpoint.get("fhir_base")
+        aliases, addresses = endpoint.get("aliases", []), endpoint.get("addresses", [])
+        if not all(isinstance(value, str) and value.strip() for value in (identifier, name, fhir_base)):
+            continue
+        if not str(fhir_base).startswith("https://"):
+            continue
+        normalized.append((
+            str(identifier), str(name),
+            json.dumps([value for value in aliases if isinstance(value, str)], separators=(",", ":")),
+            json.dumps([value for value in addresses if isinstance(value, dict)], separators=(",", ":")),
+            str(fhir_base).rstrip("/"), now,
+        ))
+    if not normalized:
+        raise ValueError("No valid Epic endpoints supplied")
+    with _connection() as connection:
+        connection.execute("DELETE FROM epic_endpoints")
+        connection.executemany(
+            """INSERT INTO epic_endpoints (id, name, aliases_json, addresses_json, fhir_base, updated_at)
+               VALUES (%s, %s, %s, %s, %s, %s)""", normalized,
+        )
+
+
+def search_epic_endpoints(query: str, limit: int = 25) -> list[EpicEndpoint]:
+    """Search public provider names/aliases without ever using patient data."""
+    term = query.strip()
+    if len(term) < 2:
+        return []
+    safe_limit = min(max(limit, 1), 50)
+    pattern = f"%{term}%"
+    with _connection() as connection:
+        rows = connection.execute(
+            """SELECT id, name, aliases_json, addresses_json, fhir_base FROM epic_endpoints
+               WHERE name ILIKE %s OR aliases_json ILIKE %s
+               ORDER BY name ASC LIMIT %s""", (pattern, pattern, safe_limit),
+        ).fetchall()
+    return [
+        EpicEndpoint(
+            id=str(row["id"]), name=str(row["name"]), aliases=json.loads(row["aliases_json"]),
+            addresses=json.loads(row["addresses_json"]), fhir_base=str(row["fhir_base"]),
+        ) for row in rows
+    ]
+
+
+def get_epic_endpoint(endpoint_id: str) -> EpicEndpoint | None:
+    with _connection() as connection:
+        row = connection.execute(
+            "SELECT id, name, aliases_json, addresses_json, fhir_base FROM epic_endpoints WHERE id = %s", (endpoint_id,)
+        ).fetchone()
+    if row is None:
+        return None
+    return EpicEndpoint(
+        id=str(row["id"]), name=str(row["name"]), aliases=json.loads(row["aliases_json"]),
+        addresses=json.loads(row["addresses_json"]), fhir_base=str(row["fhir_base"]),
+    )
 
 
 def _attach_document_id(fhir_bundle: dict[str, Any], document_id: int) -> None:
@@ -424,10 +512,14 @@ def clear_pending_drive_deletion(patient_id: str, file_id: str) -> None:
 
 
 def revoke_patient_manifests(patient_id: str) -> int:
-    """Immediately withdraw old QR snapshots after a patient removes a source."""
+    """Withdraw local-record QR snapshots after a local source is removed.
+
+    Epic snapshots have their own explicit revoke control and must not be altered
+    by changes to unrelated uploaded/manual records.
+    """
     with _connection() as connection:
         cursor = connection.execute(
-            "UPDATE shl_manifests SET revoked_at = %s WHERE patient_id = %s AND revoked_at IS NULL",
+            "UPDATE shl_manifests SET revoked_at = %s WHERE patient_id = %s AND source = 'local' AND revoked_at IS NULL",
             (datetime.now(timezone.utc).isoformat(), patient_id),
         )
     return cursor.rowcount
@@ -498,15 +590,43 @@ def list_records(patient_id: str) -> list[StoredRecord]:
     ]
 
 
-def create_manifest(patient_id: str | None, encrypted_jwe: str, hashed_pin: str) -> str:
+def create_manifest(patient_id: str | None, encrypted_jwe: str, hashed_pin: str, source: str = "local") -> str:
+    if source not in {"local", "epic"}:
+        raise ValueError("Unknown manifest source")
     manifest_id = str(uuid4())
     with _connection() as connection:
         if patient_id:
-            connection.execute("UPDATE shl_manifests SET revoked_at = %s WHERE patient_id = %s AND revoked_at IS NULL", (datetime.now(timezone.utc).isoformat(), patient_id))
+            # Existing local QR behavior remains one-current-link-per-patient;
+            # a new Epic share does not revoke unrelated local data sharing.
+            predicate = "source = 'epic'" if source == "epic" else "source = 'local'"
+            connection.execute(
+                f"UPDATE shl_manifests SET revoked_at = %s WHERE patient_id = %s AND {predicate} AND revoked_at IS NULL",
+                (datetime.now(timezone.utc).isoformat(), patient_id),
+            )
         connection.execute("""INSERT INTO shl_manifests
-            (manifest_id, patient_id, encrypted_jwe, hashed_pin, created_at) VALUES (%s, %s, %s, %s, %s)""",
-            (manifest_id, patient_id, encrypted_jwe, hashed_pin, datetime.now(timezone.utc).isoformat()))
+            (manifest_id, patient_id, encrypted_jwe, hashed_pin, created_at, source) VALUES (%s, %s, %s, %s, %s, %s)""",
+            (manifest_id, patient_id, encrypted_jwe, hashed_pin, datetime.now(timezone.utc).isoformat(), source))
     return manifest_id
+
+
+def list_epic_manifests(patient_id: str) -> list[StoredEpicManifest]:
+    with _connection() as connection:
+        rows = connection.execute(
+            """SELECT manifest_id, created_at FROM shl_manifests
+               WHERE patient_id = %s AND source = 'epic' AND revoked_at IS NULL
+               ORDER BY created_at DESC""", (patient_id,)
+        ).fetchall()
+    return [StoredEpicManifest(manifest_id=str(row["manifest_id"]), created_at=str(row["created_at"])) for row in rows]
+
+
+def revoke_epic_manifest(patient_id: str, manifest_id: str) -> bool:
+    with _connection() as connection:
+        cursor = connection.execute(
+            """UPDATE shl_manifests SET revoked_at = %s
+               WHERE patient_id = %s AND manifest_id = %s AND source = 'epic' AND revoked_at IS NULL""",
+            (datetime.now(timezone.utc).isoformat(), patient_id, manifest_id),
+        )
+    return cursor.rowcount == 1
 
 
 def get_manifest(manifest_id: str) -> dict[str, str] | None:

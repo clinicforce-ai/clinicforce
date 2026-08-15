@@ -1,0 +1,386 @@
+"""Live, patient-authorized Epic SMART-on-FHIR access.
+
+This module deliberately keeps Epic access tokens and retrieved resources out of
+RDS, S3, HAPI, browser storage, and logs.  A live connection survives only for
+the current backend process and its short-lived browser session cookie.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import base64
+import hashlib
+import hmac
+import json
+import os
+import secrets
+import time
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from typing import Any
+from urllib.parse import urlencode, urljoin, urlparse
+
+import httpx
+from jwcrypto import jwe, jwk
+
+
+EPIC_CLIENT_ID = os.getenv("EPIC_CLIENT_ID", "").strip()
+EPIC_OAUTH_STATE_SECRET = os.getenv("EPIC_OAUTH_STATE_SECRET", "").strip()
+OAUTH_STATE_MAX_AGE_SECONDS = 10 * 60
+LIVE_SESSION_MAX_AGE_SECONDS = 55 * 60
+MAX_PAGES_PER_RESOURCE = 50
+MAX_RESOURCES_PER_TYPE = 5_000
+MAX_DOCUMENT_BYTES = 15 * 1024 * 1024
+
+# Patient-linked R4 resources selected in ClinicForce's Epic client record.
+# This includes the additional resource families Epic documents for USCDI v3
+# automatic distribution. A hospital may still disable, filter, or omit any
+# family; 403/404 and malformed/partial results are displayed as availability,
+# never treated as an empty chart.
+USCDI_RESOURCE_TYPES = (
+    "Patient", "AllergyIntolerance", "CarePlan", "CareTeam", "Condition",
+    "Coverage", "Device", "DiagnosticReport", "DocumentReference", "Encounter",
+    "Goal", "Immunization", "Media", "Medication", "MedicationDispense",
+    "MedicationRequest", "MedicationStatement", "Observation", "Procedure",
+    "Provenance", "QuestionnaireResponse", "RelatedPerson", "ServiceRequest",
+    "Specimen",
+)
+
+
+class EpicError(RuntimeError):
+    """A safe, patient-facing Epic integration failure."""
+
+
+@dataclass(frozen=True)
+class EpicOAuthStart:
+    authorization_url: str
+    state_cookie: str
+
+
+@dataclass
+class LiveEpicSession:
+    patient_id: str
+    fhir_base: str
+    remote_patient_id: str
+    access_token: str
+    expires_at: float
+    organization_name: str
+
+
+_live_sessions: dict[str, LiveEpicSession] = {}
+
+
+def enabled() -> bool:
+    return bool(EPIC_CLIENT_ID and EPIC_OAUTH_STATE_SECRET)
+
+
+def _state_key() -> jwk.JWK:
+    if not EPIC_OAUTH_STATE_SECRET:
+        raise EpicError("Epic connection is not configured")
+    # Production reuses the existing task-only root secret rather than storing
+    # a second secret. HMAC domain separation gives the Epic state-encryption
+    # key independent key material from source-link signing.
+    digest = hmac.new(
+        EPIC_OAUTH_STATE_SECRET.encode("utf-8"), b"clinicforce:epic-oauth-state:v1", hashlib.sha256,
+    ).digest()
+    return jwk.JWK(kty="oct", k=base64.urlsafe_b64encode(digest).rstrip(b"=").decode("ascii"))
+
+
+def _valid_https_url(value: str, *, name: str) -> str:
+    parsed = urlparse(value)
+    if parsed.scheme != "https" or not parsed.netloc or parsed.username or parsed.password:
+        raise EpicError(f"The selected hospital returned an invalid {name}")
+    return value.rstrip("/")
+
+
+def _same_origin(left: str, right: str) -> bool:
+    first, second = urlparse(left), urlparse(right)
+    return (first.scheme, first.netloc) == (second.scheme, second.netloc)
+
+
+async def _smart_configuration(fhir_base: str) -> dict[str, Any]:
+    fhir_base = _valid_https_url(fhir_base, name="FHIR endpoint")
+    url = f"{fhir_base}/.well-known/smart-configuration"
+    try:
+        async with httpx.AsyncClient(timeout=15.0, follow_redirects=False) as client:
+            response = await client.get(url, headers={"Accept": "application/json"})
+        response.raise_for_status()
+        payload = response.json()
+    except (httpx.HTTPError, ValueError) as exc:
+        raise EpicError("This hospital's secure connection details are unavailable") from exc
+    if not isinstance(payload, dict):
+        raise EpicError("This hospital returned invalid secure connection details")
+    authorization_endpoint = payload.get("authorization_endpoint")
+    token_endpoint = payload.get("token_endpoint")
+    if not isinstance(authorization_endpoint, str) or not isinstance(token_endpoint, str):
+        raise EpicError("This hospital does not provide the required SMART OAuth endpoints")
+    authorization_endpoint = _valid_https_url(authorization_endpoint, name="authorization endpoint")
+    token_endpoint = _valid_https_url(token_endpoint, name="token endpoint")
+    # Epic production endpoints normally use the same origin. Rejecting a
+    # cross-origin response prevents endpoint catalog poisoning from turning the
+    # app into an OAuth credential relay.
+    if not _same_origin(fhir_base, authorization_endpoint) or not _same_origin(fhir_base, token_endpoint):
+        raise EpicError("This hospital's OAuth endpoints are not trusted for this connection")
+    return {"authorization_endpoint": authorization_endpoint, "token_endpoint": token_endpoint}
+
+
+def _pkce_challenge(verifier: str) -> str:
+    return base64.urlsafe_b64encode(hashlib.sha256(verifier.encode("ascii")).digest()).rstrip(b"=").decode("ascii")
+
+
+def _seal_state(payload: dict[str, Any]) -> str:
+    token = jwe.JWE(json.dumps(payload, separators=(",", ":")).encode("utf-8"), protected={"alg": "dir", "enc": "A256GCM"})
+    token.add_recipient(_state_key())
+    return token.serialize(compact=True)
+
+
+def _open_state(value: str) -> dict[str, Any]:
+    try:
+        token = jwe.JWE()
+        token.deserialize(value, key=_state_key())
+        payload = json.loads(token.payload.decode("utf-8"))
+    except Exception as exc:
+        raise EpicError("Your Epic connection session expired. Start again.") from exc
+    if not isinstance(payload, dict) or not isinstance(payload.get("expires_at"), (int, float)):
+        raise EpicError("Your Epic connection session expired. Start again.")
+    if payload["expires_at"] < time.time():
+        raise EpicError("Your Epic connection session expired. Start again.")
+    return payload
+
+
+async def begin_authorization(fhir_base: str, organization_name: str, patient_id: str, redirect_uri: str) -> EpicOAuthStart:
+    if not enabled():
+        raise EpicError("Epic connection is not configured yet")
+    fhir_base = _valid_https_url(fhir_base, name="FHIR endpoint")
+    configuration = await _smart_configuration(fhir_base)
+    state = secrets.token_urlsafe(32)
+    verifier = secrets.token_urlsafe(64)
+    payload = {
+        "state": state,
+        "verifier": verifier,
+        "patient_id": patient_id,
+        "fhir_base": fhir_base,
+        "organization_name": organization_name[:256],
+        "token_endpoint": configuration["token_endpoint"],
+        "expires_at": time.time() + OAUTH_STATE_MAX_AGE_SECONDS,
+    }
+    scopes = ["launch/patient", "openid", "fhirUser"] + [f"patient/{resource}.read" for resource in USCDI_RESOURCE_TYPES]
+    query = urlencode({
+        "response_type": "code",
+        "client_id": EPIC_CLIENT_ID,
+        "redirect_uri": redirect_uri,
+        "scope": " ".join(scopes),
+        "state": state,
+        "aud": fhir_base,
+        "code_challenge": _pkce_challenge(verifier),
+        "code_challenge_method": "S256",
+    })
+    return EpicOAuthStart(f"{configuration['authorization_endpoint']}?{query}", _seal_state(payload))
+
+
+async def complete_authorization(
+    state_cookie: str, state: str, code: str, redirect_uri: str, patient_id: str,
+) -> str:
+    payload = _open_state(state_cookie)
+    if not secrets.compare_digest(state, str(payload.get("state", ""))) or not code:
+        raise EpicError("Your Epic connection could not be verified. Start again.")
+    # The callback must still belong to the ClinicForce account that initiated
+    # it.  State is encrypted, but tying it to the current local session also
+    # prevents a callback URL from being replayed in another signed-in browser.
+    if not secrets.compare_digest(patient_id, str(payload.get("patient_id", ""))):
+        raise EpicError("This Epic connection belongs to a different ClinicForce session.")
+    try:
+        async with httpx.AsyncClient(timeout=20.0, follow_redirects=False) as client:
+            response = await client.post(
+                str(payload["token_endpoint"]),
+                data={
+                    "grant_type": "authorization_code", "code": code,
+                    "client_id": EPIC_CLIENT_ID, "redirect_uri": redirect_uri,
+                    "code_verifier": str(payload["verifier"]),
+                },
+                headers={"Accept": "application/json"},
+            )
+        response.raise_for_status()
+        token = response.json()
+    except (httpx.HTTPError, ValueError) as exc:
+        raise EpicError("Epic could not complete this connection. Check the app authorization and try again.") from exc
+    access_token, remote_patient_id = token.get("access_token"), token.get("patient")
+    if not isinstance(access_token, str) or not access_token or not isinstance(remote_patient_id, str) or not remote_patient_id:
+        raise EpicError("Epic did not return a patient record for this connection")
+    expires_in = token.get("expires_in", 3600)
+    try:
+        lifetime = min(max(int(expires_in), 60), LIVE_SESSION_MAX_AGE_SECONDS)
+    except (TypeError, ValueError):
+        lifetime = LIVE_SESSION_MAX_AGE_SECONDS
+    session_id = secrets.token_urlsafe(32)
+    _live_sessions[session_id] = LiveEpicSession(
+        patient_id=str(payload["patient_id"]), fhir_base=str(payload["fhir_base"]),
+        remote_patient_id=remote_patient_id, access_token=access_token,
+        expires_at=time.time() + lifetime, organization_name=str(payload["organization_name"]),
+    )
+    return session_id
+
+
+def clear_live_session(session_id: str) -> None:
+    _live_sessions.pop(session_id, None)
+
+
+def get_live_session(session_id: str, patient_id: str) -> LiveEpicSession:
+    session = _live_sessions.get(session_id)
+    if session is None or session.patient_id != patient_id or session.expires_at <= time.time():
+        if session_id:
+            clear_live_session(session_id)
+        raise EpicError("Your live Epic session has ended. Connect MyChart again.")
+    return session
+
+
+def _safe_next_url(fhir_base: str, value: str) -> str:
+    target = urljoin(f"{fhir_base}/", value)
+    if not _same_origin(fhir_base, target) or not target.startswith(f"{fhir_base}/"):
+        raise EpicError("Epic returned an unsafe continuation link")
+    return target
+
+
+async def _get_json(session: LiveEpicSession, url: str, params: dict[str, str] | None = None) -> tuple[int, dict[str, Any], dict[str, str]]:
+    headers = {"Authorization": f"Bearer {session.access_token}", "Accept": "application/fhir+json"}
+    for attempt in range(3):
+        try:
+            async with httpx.AsyncClient(timeout=30.0, follow_redirects=False) as client:
+                response = await client.get(url, params=params, headers=headers)
+        except httpx.HTTPError as exc:
+            if attempt == 2:
+                raise EpicError("Epic is temporarily unavailable. Try again shortly.") from exc
+            await asyncio.sleep(2 ** attempt)
+            continue
+        if response.status_code == 429 or response.status_code >= 500:
+            if attempt == 2:
+                raise EpicError("Epic is temporarily unavailable. Try again shortly.")
+            retry_after = response.headers.get("Retry-After", "")
+            try:
+                delay = min(max(int(retry_after), 1), 15)
+            except ValueError:
+                delay = 2 ** attempt
+            await asyncio.sleep(delay)
+            continue
+        if response.status_code in {401, 403, 404}:
+            return response.status_code, {}, dict(response.headers)
+        try:
+            response.raise_for_status()
+            payload = response.json()
+        except (httpx.HTTPError, ValueError) as exc:
+            raise EpicError("Epic returned an unreadable clinical-data response") from exc
+        if not isinstance(payload, dict):
+            raise EpicError("Epic returned an invalid clinical-data response")
+        return response.status_code, payload, dict(response.headers)
+    raise EpicError("Epic is temporarily unavailable. Try again shortly.")
+
+
+async def fetch_resource_type(session: LiveEpicSession, resource_type: str) -> dict[str, Any]:
+    if resource_type not in USCDI_RESOURCE_TYPES:
+        raise EpicError("That Epic resource type is not available in ClinicForce")
+    if resource_type == "Patient":
+        status, patient, _ = await _get_json(session, f"{session.fhir_base}/Patient/{session.remote_patient_id}")
+        if status == 401:
+            clear_live_session_by_value(session)
+            raise EpicError("Your live Epic session has ended. Connect MyChart again.")
+        if status in {403, 404}:
+            return {"resourceType": "Bundle", "type": "collection", "entry": [], "extension": [{"url": "urn:clinicforce:epic-status", "valueString": "unavailable"}]}
+        return {"resourceType": "Bundle", "type": "collection", "entry": [{"resource": patient}]}
+
+    status, bundle, _ = await _get_json(
+        session, f"{session.fhir_base}/{resource_type}", {"patient": session.remote_patient_id}
+    )
+    if status == 401:
+        clear_live_session_by_value(session)
+        raise EpicError("Your live Epic session has ended. Connect MyChart again.")
+    if status in {403, 404}:
+        return {"resourceType": "Bundle", "type": "collection", "entry": [], "extension": [{"url": "urn:clinicforce:epic-status", "valueString": "forbidden" if status == 403 else "unavailable"}]}
+    resources: list[dict[str, Any]] = []
+    pages = 0
+    visited_pages: set[str] = set()
+    while True:
+        for entry in bundle.get("entry", []):
+            resource = entry.get("resource") if isinstance(entry, dict) else None
+            if isinstance(resource, dict) and resource.get("resourceType") != "OperationOutcome":
+                resources.append(resource)
+                if len(resources) >= MAX_RESOURCES_PER_TYPE:
+                    return {"resourceType": "Bundle", "type": "collection", "entry": [{"resource": resource} for resource in resources], "extension": [{"url": "urn:clinicforce:epic-status", "valueString": "truncated"}]}
+        next_url = next((link.get("url") for link in bundle.get("link", []) if isinstance(link, dict) and link.get("relation") == "next" and isinstance(link.get("url"), str)), None)
+        if not next_url:
+            break
+        target = _safe_next_url(session.fhir_base, next_url)
+        if target in visited_pages:
+            return {"resourceType": "Bundle", "type": "collection", "entry": [{"resource": resource} for resource in resources], "extension": [{"url": "urn:clinicforce:epic-status", "valueString": "partial"}]}
+        visited_pages.add(target)
+        pages += 1
+        if pages >= MAX_PAGES_PER_RESOURCE:
+            return {"resourceType": "Bundle", "type": "collection", "entry": [{"resource": resource} for resource in resources], "extension": [{"url": "urn:clinicforce:epic-status", "valueString": "truncated"}]}
+        status, bundle, _ = await _get_json(session, target)
+        if status != 200:
+            return {"resourceType": "Bundle", "type": "collection", "entry": [{"resource": resource} for resource in resources], "extension": [{"url": "urn:clinicforce:epic-status", "valueString": "partial"}]}
+    return {"resourceType": "Bundle", "type": "collection", "entry": [{"resource": resource} for resource in resources]}
+
+
+def clear_live_session_by_value(value: LiveEpicSession) -> None:
+    for key, session in list(_live_sessions.items()):
+        if session is value:
+            _live_sessions.pop(key, None)
+
+
+async def fetch_record(session: LiveEpicSession) -> tuple[dict[str, Any], dict[str, str]]:
+    # Some patient records span many families. Keep the first live retrieval
+    # responsive without issuing an unbounded burst against a hospital's FHIR
+    # service.
+    concurrency = asyncio.Semaphore(6)
+
+    async def bounded_fetch(resource_type: str) -> dict[str, Any]:
+        async with concurrency:
+            return await fetch_resource_type(session, resource_type)
+
+    bundles = await asyncio.gather(
+        *(bounded_fetch(resource_type) for resource_type in USCDI_RESOURCE_TYPES),
+        return_exceptions=True,
+    )
+    entries: list[dict[str, Any]] = []
+    availability: dict[str, str] = {}
+    for resource_type, bundle in zip(USCDI_RESOURCE_TYPES, bundles, strict=True):
+        if isinstance(bundle, Exception):
+            if "session has ended" in str(bundle):
+                raise bundle
+            availability[resource_type] = "partial"
+            continue
+        entries.extend(entry for entry in bundle.get("entry", []) if isinstance(entry, dict))
+        status = next((extension.get("valueString") for extension in bundle.get("extension", []) if isinstance(extension, dict) and extension.get("url") == "urn:clinicforce:epic-status"), "ok")
+        availability[resource_type] = str(status)
+    return {"resourceType": "Bundle", "type": "collection", "entry": entries}, availability
+
+
+async def stream_document(session: LiveEpicSession, document_id: str) -> tuple[bytes, str]:
+    if not document_id or "/" in document_id:
+        raise EpicError("Invalid Epic document")
+    status, document, _ = await _get_json(session, f"{session.fhir_base}/DocumentReference/{document_id}")
+    if status == 401:
+        clear_live_session_by_value(session)
+        raise EpicError("Your live Epic session has ended. Connect MyChart again.")
+    if status != 200:
+        raise EpicError("This Epic document is no longer available")
+    contents = document.get("content", [])
+    attachment = next((item.get("attachment") for item in contents if isinstance(item, dict) and isinstance(item.get("attachment"), dict) and str(item["attachment"].get("contentType", "")).lower() == "application/pdf"), None)
+    if not isinstance(attachment, dict) or not isinstance(attachment.get("url"), str):
+        raise EpicError("Epic did not provide a PDF for this document")
+    target = _safe_next_url(session.fhir_base, attachment["url"])
+    headers = {"Authorization": f"Bearer {session.access_token}", "Accept": "application/pdf"}
+    try:
+        async with httpx.AsyncClient(timeout=45.0, follow_redirects=False) as client:
+            response = await client.get(target, headers=headers)
+        response.raise_for_status()
+    except httpx.HTTPError as exc:
+        raise EpicError("Epic could not open this PDF") from exc
+    if len(response.content) > MAX_DOCUMENT_BYTES or not response.content.startswith(b"%PDF-"):
+        raise EpicError("Epic returned an unsupported PDF")
+    title = attachment.get("title") if isinstance(attachment.get("title"), str) else "epic-document.pdf"
+    return response.content, title
+
+
+def source_metadata(session: LiveEpicSession) -> dict[str, str]:
+    return {"organization_name": session.organization_name, "retrieved_at": datetime.now(timezone.utc).isoformat(timespec="seconds")}
