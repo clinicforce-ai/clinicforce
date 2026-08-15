@@ -42,7 +42,7 @@ AWS_REGION=us-east-1
 GOOGLE_OAUTH_CLIENT_ID=<google-oauth-web-client-id>
 GOOGLE_OAUTH_CLIENT_SECRET=<google-oauth-client-secret>
 GOOGLE_TOKEN_KMS_KEY_ID=<kms-key-arn>
-# Epic production SMART-on-FHIR (state secret belongs in Secrets Manager)
+# Epic production SMART-on-FHIR (local development must use a dedicated random value)
 EPIC_CLIENT_ID=<epic-production-client-id>
 EPIC_OAUTH_STATE_SECRET=<random-64-character-secret>
 ```
@@ -88,7 +88,9 @@ patient-record tables.
 
 `python -m app.scripts.sync_epic_endpoints` mirrors Epic's public Brands Bundle
 into the non-patient `epic_endpoints` catalog. Production runs it weekly through
-the EventBridge schedule in the infrastructure stack. The sole persistence
+the EventBridge schedule in the infrastructure stack and derives a
+domain-separated state-encryption key from the existing task-only source-link
+secret. The sole persistence
 exception is an explicit patient-created QR share: it stores an encrypted,
 timestamped FHIR snapshot in `shl_manifests`, excludes Epic attachments, and can
 be revoked from the patient workspace immediately.

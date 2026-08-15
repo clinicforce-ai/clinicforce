@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import hashlib
+import hmac
 import json
 import os
 import secrets
@@ -76,7 +77,12 @@ def enabled() -> bool:
 def _state_key() -> jwk.JWK:
     if not EPIC_OAUTH_STATE_SECRET:
         raise EpicError("Epic connection is not configured")
-    digest = hashlib.sha256(EPIC_OAUTH_STATE_SECRET.encode("utf-8")).digest()
+    # Production reuses the existing task-only root secret rather than storing
+    # a second secret. HMAC domain separation gives the Epic state-encryption
+    # key independent key material from source-link signing.
+    digest = hmac.new(
+        EPIC_OAUTH_STATE_SECRET.encode("utf-8"), b"clinicforce:epic-oauth-state:v1", hashlib.sha256,
+    ).digest()
     return jwk.JWK(kty="oct", k=base64.urlsafe_b64encode(digest).rstrip(b"=").decode("ascii"))
 
 
