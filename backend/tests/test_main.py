@@ -58,6 +58,25 @@ class MainRouteTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("HttpOnly", response.headers["set-cookie"])
         self.assertNotIn("access_token", response.text)
 
+    async def test_epic_popup_callback_notifies_opener_without_redirecting(self) -> None:
+        with (
+            patch("app.main._authenticate_patient", new=AsyncMock(return_value="patient-1")),
+            patch("app.main.epic.popup_requested", return_value=True),
+            patch("app.main.epic.complete_authorization", new=AsyncMock(return_value=("live-session", True))),
+        ):
+            response = await self.client.get("/api/patient/epic/callback?state=state&code=code")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("clinicforce:epic-connected", response.text)
+        self.assertIn("window.opener.postMessage", response.text)
+        self.assertIn("clinicforce_epic_live=live-session", response.headers["set-cookie"])
+
+    async def test_epic_popup_callback_reports_denied_authorization_to_opener(self) -> None:
+        with patch("app.main.epic.popup_requested", return_value=True):
+            response = await self.client.get("/api/patient/epic/callback?error=access_denied")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("clinicforce:epic-not-connected", response.text)
+        self.assertIn("Cache-Control", response.headers)
+
     async def test_epic_record_is_live_and_does_not_call_persistent_ingestion(self) -> None:
         live_session = Mock()
         bundle = {"resourceType": "Bundle", "type": "collection", "entry": [{"resource": {"resourceType": "Condition", "id": "c1"}}]}

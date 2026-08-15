@@ -148,7 +148,9 @@ def _open_state(value: str) -> dict[str, Any]:
     return payload
 
 
-async def begin_authorization(fhir_base: str, organization_name: str, patient_id: str, redirect_uri: str) -> EpicOAuthStart:
+async def begin_authorization(
+    fhir_base: str, organization_name: str, patient_id: str, redirect_uri: str, *, popup: bool = False,
+) -> EpicOAuthStart:
     if not enabled():
         raise EpicError("Epic connection is not configured yet")
     fhir_base = _valid_https_url(fhir_base, name="FHIR endpoint")
@@ -162,6 +164,7 @@ async def begin_authorization(fhir_base: str, organization_name: str, patient_id
         "fhir_base": fhir_base,
         "organization_name": organization_name[:256],
         "token_endpoint": configuration["token_endpoint"],
+        "popup": popup,
         "expires_at": time.time() + OAUTH_STATE_MAX_AGE_SECONDS,
     }
     scopes = ["launch/patient", "openid", "fhirUser"] + [f"patient/{resource}.read" for resource in USCDI_RESOURCE_TYPES]
@@ -180,7 +183,7 @@ async def begin_authorization(fhir_base: str, organization_name: str, patient_id
 
 async def complete_authorization(
     state_cookie: str, state: str, code: str, redirect_uri: str, patient_id: str,
-) -> str:
+) -> tuple[str, bool]:
     payload = _open_state(state_cookie)
     if not secrets.compare_digest(state, str(payload.get("state", ""))) or not code:
         raise EpicError("Your Epic connection could not be verified. Start again.")
@@ -218,7 +221,15 @@ async def complete_authorization(
         remote_patient_id=remote_patient_id, access_token=access_token,
         expires_at=time.time() + lifetime, organization_name=str(payload["organization_name"]),
     )
-    return session_id
+    return session_id, bool(payload.get("popup"))
+
+
+def popup_requested(state_cookie: str) -> bool:
+    """Return the requested presentation mode without trusting a query value."""
+    try:
+        return bool(_open_state(state_cookie).get("popup"))
+    except EpicError:
+        return False
 
 
 def clear_live_session(session_id: str) -> None:

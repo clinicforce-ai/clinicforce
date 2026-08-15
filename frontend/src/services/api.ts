@@ -235,8 +235,8 @@ export async function searchEpicEndpoints(query: string): Promise<EpicEndpoint[]
   ))
 }
 
-export async function beginEpicAuthorization(patientId: string | undefined, password: string | undefined, endpointId: string): Promise<string> {
-  const value = await request<unknown>('/api/patient/epic/authorize', json({ ...credentialsPayload(patientId, password), endpoint_id: endpointId }))
+export async function beginEpicAuthorization(patientId: string | undefined, password: string | undefined, endpointId: string, popup = false): Promise<string> {
+  const value = await request<unknown>('/api/patient/epic/authorize', json({ ...credentialsPayload(patientId, password), endpoint_id: endpointId, popup }))
   if (!value || typeof value !== 'object' || !('authorization_url' in value) || typeof value.authorization_url !== 'string') {
     throw new ApiError(502, 'ClinicForce could not start the Epic connection.')
   }
