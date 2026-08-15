@@ -186,7 +186,7 @@ export default function PatientPortal({ onBack }: PatientPortalProps) {
       stopWatchingPopup()
       setBusy(null)
       if (type === 'clinicforce:epic-not-connected') {
-        setError('Epic authorization was not completed. If you do not have a MyChart account, create one with the hospital; otherwise, try again or select another hospital.')
+        setError('Epic did not complete authorization. If Epic showed an OAuth2 error before its sign-in page, the hospital has not activated ClinicForce yet—try again after activation completes. Otherwise, complete or retry MyChart sign-in. No Epic data was imported.')
         return
       }
       void getEpicRecord().then((record) => {
@@ -393,7 +393,7 @@ export default function PatientPortal({ onBack }: PatientPortalProps) {
         epicPopupWatch.current = null
         epicPopup.current = null
         setBusy(null)
-        setError('Epic authorization was not completed. If you do not have a MyChart account, create one with the hospital; otherwise, try again or select another hospital.')
+        setError('Epic did not complete authorization. If Epic showed an OAuth2 error before its sign-in page, the hospital has not activated ClinicForce yet—try again after activation completes. Otherwise, complete or retry MyChart sign-in. No Epic data was imported.')
       }, 500)
     } catch (caught) {
       popup.close()
