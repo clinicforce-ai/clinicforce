@@ -2,6 +2,7 @@ import * as Dialog from '@radix-ui/react-dialog'
 import { useEffect, useRef, useState, type FormEvent } from 'react'
 import {
   ArrowLeft,
+  Building2,
   CheckCircle2,
   ChevronRight,
   ClipboardPlus,
@@ -17,6 +18,7 @@ import {
   LogOut,
   Plus,
   QrCode,
+  RefreshCw,
   ShieldCheck,
   Trash2,
   Upload,
@@ -25,10 +27,17 @@ import {
 import {
   ApiError,
   beginGoogleDriveConnection,
+  beginEpicAuthorization,
   beginGoogleSignIn,
   chooseStorageProvider,
   deletePatientDocument,
   deletePatientDocuments,
+  disconnectEpic,
+  downloadEpicDocument,
+  downloadEpicReport,
+  generateEpicLink,
+  getEpicRecord,
+  getEpicShares,
   downloadPatientDocument,
   downloadPatientDocumentsArchive,
   generatePatientLink,
@@ -37,8 +46,13 @@ import {
   importGoogleDriveChanges,
   logoutPatient,
   registerPatient,
+  revokeEpicShare,
+  searchEpicEndpoints,
   savePatientRecord,
   type LinkResponse,
+  type EpicEndpoint,
+  type EpicRecord,
+  type EpicShare,
   type ManualRecordInput,
   type PatientDocument,
   type PatientSession,
@@ -89,9 +103,14 @@ export default function PatientPortal({ onBack }: PatientPortalProps) {
   const [category, setCategory] = useState<RecordCategory>('hospital')
   const [form, setForm] = useState<FormState>(emptyForm)
   const [sharePasscode, setSharePasscode] = useState('')
+  const [epicSharePasscode, setEpicSharePasscode] = useState('')
   const [link, setLink] = useState<LinkResponse | null>(null)
+  const [epicRecord, setEpicRecord] = useState<EpicRecord | null>(null)
+  const [epicEndpoints, setEpicEndpoints] = useState<EpicEndpoint[]>([])
+  const [epicQuery, setEpicQuery] = useState('')
+  const [epicShares, setEpicShares] = useState<EpicShare[]>([])
   const [selectedDocumentIds, setSelectedDocumentIds] = useState<Set<number>>(new Set())
-  const [busy, setBusy] = useState<'auth' | 'upload' | 'record' | 'share' | 'download' | 'delete' | 'bulk-download' | 'bulk-delete' | 'import' | 'drive' | 'google' | null>(null)
+  const [busy, setBusy] = useState<'auth' | 'upload' | 'record' | 'share' | 'download' | 'delete' | 'bulk-download' | 'bulk-delete' | 'import' | 'drive' | 'google' | 'epic-search' | 'epic-connect' | 'epic-load' | 'epic-share' | 'epic-report' | 'epic-document' | 'epic-revoke' | null>(null)
   const [restoringSession, setRestoringSession] = useState(true)
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
@@ -104,6 +123,15 @@ export default function PatientPortal({ onBack }: PatientPortalProps) {
         if (active) {
           setSession(workspace)
           setNotice(workspace.drive_sync_message ?? 'Your Google Drive workspace is ready.')
+          if (new URLSearchParams(window.location.search).get('epic') === 'connected') {
+            void getEpicRecord().then((record) => {
+              if (!active) return
+              setEpicRecord(record)
+              setNotice(`Live Epic record connected from ${record.source.organization_name}.`)
+              void getEpicShares().then((shares) => { if (active) setEpicShares(shares) })
+            }).catch((caught) => { if (active) setError(messageFrom(caught, 'Epic connected, but the live record could not be loaded.')) })
+            window.history.replaceState({}, '', window.location.pathname)
+          }
         }
       })
       .catch((caught) => {
@@ -276,6 +304,128 @@ export default function PatientPortal({ onBack }: PatientPortalProps) {
     }
   }
 
+  const searchEpic = async (event?: FormEvent<HTMLFormElement>) => {
+    event?.preventDefault()
+    if (epicQuery.trim().length < 2) {
+      setError('Enter at least two letters of your hospital or health system name.')
+      return
+    }
+    clearFeedback()
+    setBusy('epic-search')
+    try {
+      setEpicEndpoints(await searchEpicEndpoints(epicQuery))
+    } catch (caught) {
+      setError(messageFrom(caught, 'Unable to search the Epic hospital directory.'))
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  const connectEpic = async (endpoint: EpicEndpoint) => {
+    if (!session) return
+    clearFeedback()
+    setBusy('epic-connect')
+    try {
+      window.location.assign(await beginEpicAuthorization(session.patient_id, password, endpoint.id))
+    } catch (caught) {
+      setBusy(null)
+      setError(messageFrom(caught, 'Unable to start the Epic connection.'))
+    }
+  }
+
+  const refreshEpic = async () => {
+    clearFeedback()
+    setBusy('epic-load')
+    try {
+      const record = await getEpicRecord()
+      setEpicRecord(record)
+      setNotice(`Live Epic data refreshed from ${record.source.organization_name}.`)
+    } catch (caught) {
+      setEpicRecord(null)
+      setError(messageFrom(caught, 'Your Epic session needs to be reconnected.'))
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  const endEpicSession = async () => {
+    clearFeedback()
+    try {
+      await disconnectEpic()
+      setEpicRecord(null)
+      setEpicEndpoints([])
+      setNotice('Epic disconnected. ClinicForce no longer has live access to this record.')
+    } catch (caught) {
+      setError(messageFrom(caught, 'Unable to end the Epic connection.'))
+    }
+  }
+
+  const generateEpicShare = async () => {
+    if (!session || !/^\d{4}$/.test(epicSharePasscode)) {
+      setError('Choose a four-digit passcode for the Epic snapshot.')
+      return
+    }
+    clearFeedback()
+    setBusy('epic-share')
+    try {
+      setLink(await generateEpicLink(session.patient_id, password, epicSharePasscode))
+      setEpicShares(await getEpicShares())
+      setNotice('A timestamped Epic snapshot was encrypted for sharing. It excludes Epic PDF attachments.')
+    } catch (caught) {
+      setError(messageFrom(caught, 'Unable to create the Epic share snapshot.'))
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  const downloadLiveEpicReport = async () => {
+    if (!session) return
+    clearFeedback()
+    setBusy('epic-report')
+    try {
+      const url = URL.createObjectURL(await downloadEpicReport(session.patient_id, password))
+      const linkElement = document.createElement('a')
+      linkElement.href = url
+      linkElement.download = 'clinicforce-epic-live-record.pdf'
+      document.body.appendChild(linkElement)
+      linkElement.click()
+      linkElement.remove()
+      window.setTimeout(() => URL.revokeObjectURL(url), 60_000)
+    } catch (caught) {
+      setError(messageFrom(caught, 'Unable to create the live Epic PDF.'))
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  const openEpicDocument = async (documentId: string) => {
+    clearFeedback()
+    setBusy('epic-document')
+    try {
+      const url = URL.createObjectURL(await downloadEpicDocument(documentId))
+      window.open(url, '_blank', 'noopener,noreferrer')
+      window.setTimeout(() => URL.revokeObjectURL(url), 60_000)
+    } catch (caught) {
+      setError(messageFrom(caught, 'Unable to open this live Epic PDF.'))
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  const removeEpicShare = async (manifestId: string) => {
+    clearFeedback()
+    setBusy('epic-revoke')
+    try {
+      await revokeEpicShare(manifestId)
+      setEpicShares((shares) => shares.filter((share) => share.manifest_id !== manifestId))
+      setNotice('Epic share snapshot revoked immediately.')
+    } catch (caught) {
+      setError(messageFrom(caught, 'Unable to revoke this Epic snapshot.'))
+    } finally {
+      setBusy(null)
+    }
+  }
+
   const openDocument = async (document: PatientDocument) => {
     if (!session) return
     clearFeedback()
@@ -388,6 +538,8 @@ export default function PatientPortal({ onBack }: PatientPortalProps) {
     setPassword('')
     setFiles([])
     setLink(null)
+    setEpicRecord(null)
+    setEpicShares([])
     setSelectedDocumentIds(new Set())
     setSharePasscode('')
     clearFeedback()
@@ -431,6 +583,12 @@ export default function PatientPortal({ onBack }: PatientPortalProps) {
   const recordsAvailable = session.documents.length + session.records.length
   const needsName = category !== 'hospital'
   const needsResult = category === 'lab' || category === 'vital'
+  const epicResources = (epicRecord?.bundle.entry ?? []).map((entry) => entry.resource).filter(Boolean)
+  const epicCounts = epicResources.reduce<Record<string, number>>((counts, resource) => {
+    const type = typeof resource.resourceType === 'string' ? resource.resourceType : 'FHIR resource'
+    counts[type] = (counts[type] ?? 0) + 1
+    return counts
+  }, {})
 
   return (
     <section className="workspace animate-enter" aria-labelledby="workspace-heading">
@@ -450,6 +608,26 @@ export default function PatientPortal({ onBack }: PatientPortalProps) {
 
       <div className="workspace-grid">
         <div className="workspace-main">
+          <section className="section-card" aria-labelledby="epic-heading">
+            <div className="section-heading"><div><p className="section-kicker">Live patient-authorized connection</p><h2 id="epic-heading">Epic / MyChart</h2></div><Building2 aria-hidden="true" className="section-icon" /></div>
+            {!epicRecord ? <>
+              <p className="text-sm leading-6 text-[var(--muted-ink)]">Connect a hospital you have used to view its current Epic record in this browser. ClinicForce does not save Epic records, access tokens, or attached PDFs.</p>
+              <form className="storage-choice mt-4" onSubmit={(event) => void searchEpic(event)}>
+                <div className="flex-1"><label htmlFor="epic-hospital"><strong>Hospital or health system</strong></label><input id="epic-hospital" value={epicQuery} onChange={(event) => setEpicQuery(event.target.value)} placeholder="e.g. Johns Hopkins, UCLA Health" autoComplete="off" /></div>
+                <button className="button button-secondary" type="submit" disabled={busy === 'epic-search'}>{busy === 'epic-search' ? <LoaderCircle className="size-4 animate-spin" aria-hidden="true" /> : <Building2 className="size-4" aria-hidden="true" />} Search Epic hospitals</button>
+              </form>
+              {epicEndpoints.length > 0 && <ul className="item-list mt-4" aria-label="Epic hospital matches">{epicEndpoints.map((endpoint) => <li key={endpoint.id}><div className="file-mark"><Building2 aria-hidden="true" /></div><div className="min-w-0 flex-1"><strong>{endpoint.name}</strong>{endpoint.aliases.length > 0 && <p>{endpoint.aliases.slice(0, 2).join(' · ')}</p>}</div><button className="button button-secondary" type="button" disabled={busy === 'epic-connect'} onClick={() => void connectEpic(endpoint)}>{busy === 'epic-connect' ? <LoaderCircle className="size-4 animate-spin" aria-hidden="true" /> : 'Connect MyChart'}</button></li>)}</ul>}
+              {epicQuery && busy !== 'epic-search' && epicEndpoints.length === 0 && <p className="field-help mt-3">Search the exact hospital or health-system name. Only hospitals enabled in Epic’s patient-facing directory can appear.</p>}
+            </> : <>
+              <div className="storage-choice mt-4"><div><strong>Live from {epicRecord.source.organization_name}</strong><p>Retrieved {dateLabel(epicRecord.source.retrieved_at)}. This connection ends when you disconnect, its token expires, or the service restarts.</p></div><div className="storage-actions"><button className="button button-secondary" type="button" onClick={() => void refreshEpic()} disabled={busy === 'epic-load'}>{busy === 'epic-load' ? <LoaderCircle className="size-4 animate-spin" aria-hidden="true" /> : <RefreshCw className="size-4" aria-hidden="true" />} Refresh</button><button className="button button-secondary" type="button" onClick={() => void endEpicSession()}>Disconnect</button></div></div>
+              <div className="workspace-stats mt-4" aria-label="Live Epic data counts">{Object.entries(epicCounts).slice(0, 6).map(([type, count]) => <div key={type}><FileText aria-hidden="true" /><span><strong>{count}</strong> {type}</span></div>)}</div>
+              <div className="storage-actions mt-4"><button className="button button-secondary" type="button" onClick={() => void downloadLiveEpicReport()} disabled={busy === 'epic-report'}>{busy === 'epic-report' ? <LoaderCircle className="size-4 animate-spin" aria-hidden="true" /> : <Download className="size-4" aria-hidden="true" />} Download live PDF</button></div>
+              <details className="mt-4"><summary className="document-name">More from Epic ({epicResources.length} resources)</summary><p className="field-help mt-2">Availability: {Object.entries(epicRecord.availability).filter(([, value]) => value !== 'ok').map(([type, value]) => `${type}: ${value}`).join(' · ') || 'All requested supported resource families responded.'}</p><div className="record-list mt-3">{epicResources.map((resource, index) => <details key={`${resource.resourceType ?? 'resource'}-${resource.id ?? index}`} className="border-b border-[var(--border)] py-3"><summary><strong>{String(resource.resourceType ?? 'FHIR resource')}</strong>{resource.id ? ` · ${String(resource.id)}` : ''}</summary>{resource.resourceType === 'DocumentReference' && typeof resource.id === 'string' && <button className="button button-secondary mt-3" type="button" disabled={busy === 'epic-document'} onClick={() => void openEpicDocument(resource.id!)}>Open live PDF if Epic provides one</button>}<pre className="mt-3 max-h-80 overflow-auto rounded-md bg-slate-950 p-3 text-xs text-slate-100">{JSON.stringify(resource, null, 2)}</pre></details>)}</div></details>
+              <div className="storage-choice mt-4"><div><strong>Create a timestamped Epic snapshot</strong><p>This is the one exception: it encrypts a fresh, bounded FHIR snapshot for a clinician QR share. It never includes Epic attachment files.</p><label className="sr-only" htmlFor="epic-share-passcode">Four-digit Epic snapshot passcode</label><input id="epic-share-passcode" className="mt-2" type="password" inputMode="numeric" maxLength={4} value={epicSharePasscode} onChange={(event) => setEpicSharePasscode(event.target.value.replace(/\D/g, ''))} placeholder="Four-digit passcode" /></div><button className="button button-primary" type="button" disabled={busy === 'epic-share'} onClick={() => void generateEpicShare()}>{busy === 'epic-share' ? <LoaderCircle className="size-4 animate-spin" aria-hidden="true" /> : <QrCode className="size-4" aria-hidden="true" />} Share Epic snapshot</button></div>
+              {epicShares.length > 0 && <div className="mt-4"><p className="field-help">Active Epic snapshots (each can be revoked immediately)</p><ul className="item-list">{epicShares.map((share) => <li key={share.manifest_id}><div className="file-mark"><QrCode aria-hidden="true" /></div><div className="min-w-0 flex-1"><strong>Epic snapshot</strong><p>{dateLabel(share.created_at)}</p></div><button className="button button-danger" type="button" disabled={busy === 'epic-revoke'} onClick={() => void removeEpicShare(share.manifest_id)}>{busy === 'epic-revoke' ? <LoaderCircle className="size-4 animate-spin" aria-hidden="true" /> : <Trash2 className="size-4" aria-hidden="true" />} Revoke</button></li>)}</ul></div>}
+            </>}
+          </section>
+
           <section className="section-card" aria-labelledby="reports-heading">
             <div className="section-heading"><div><p className="section-kicker">Source documents</p><h2 id="reports-heading">PDF reports</h2></div><FileText aria-hidden="true" className="section-icon" /></div>
             <div className="storage-choice" aria-label="Choose where new reports are stored">

@@ -24,7 +24,7 @@ from app.core.source_links import create_document_download_token, verify_documen
 from app.core import patient_store  # noqa: E402
 from app.ingestion.bedrock_extractor import ExtractedFact, facts_to_fhir_bundle  # noqa: E402
 from app.ingestion.pdf_parser import parse_pdf_text_with_llm, pdf_extraction_to_fhir_bundle  # noqa: E402
-from app.main import app  # noqa: E402
+from app.main import _epic_share_snapshot, app  # noqa: E402
 from app.reports.pdf_builder import generate_doctor_pdf  # noqa: E402
 from app.reports.summarizer import summarize_fhir_bundle  # noqa: E402
 
@@ -42,6 +42,70 @@ class MainRouteTests(unittest.IsolatedAsyncioTestCase):
         response = await self.client.get("/healthz")
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json(), {"status": "ok"})
+
+    async def test_epic_authorization_sets_only_an_http_only_state_cookie(self) -> None:
+        endpoint = Mock(id="epic:demo:1", name="Demo Health", fhir_base="https://fhir.demo.example")
+        started = Mock(authorization_url="https://mychart.demo.example/authorize", state_cookie="sealed-state")
+        with (
+            patch("app.main._authenticate_patient", new=AsyncMock(return_value="patient-1")),
+            patch("app.main.get_epic_endpoint", return_value=endpoint),
+            patch("app.main.epic.begin_authorization", new=AsyncMock(return_value=started)),
+        ):
+            response = await self.client.post("/api/patient/epic/authorize", json={"endpoint_id": endpoint.id})
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json(), {"authorization_url": started.authorization_url})
+        self.assertIn("clinicforce_epic_oauth=sealed-state", response.headers["set-cookie"])
+        self.assertIn("HttpOnly", response.headers["set-cookie"])
+        self.assertNotIn("access_token", response.text)
+
+    async def test_epic_record_is_live_and_does_not_call_persistent_ingestion(self) -> None:
+        live_session = Mock()
+        bundle = {"resourceType": "Bundle", "type": "collection", "entry": [{"resource": {"resourceType": "Condition", "id": "c1"}}]}
+        with (
+            patch("app.main._authenticate_patient", new=AsyncMock(return_value="patient-1")),
+            patch("app.main._live_epic_session", new=AsyncMock(return_value=live_session)),
+            patch("app.main.epic.fetch_record", new=AsyncMock(return_value=(bundle, {"Condition": "ok"}))),
+            patch("app.main.epic.source_metadata", return_value={"organization_name": "Demo Health", "retrieved_at": "2026-08-14T00:00:00+00:00"}),
+            patch("app.main.add_document") as add_document,
+            patch("app.main.add_record") as add_record,
+            patch("app.main.post_to_fhir", new=AsyncMock()) as post_to_fhir,
+        ):
+            response = await self.client.get("/api/patient/epic/record")
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()["bundle"], bundle)
+        add_document.assert_not_called()
+        add_record.assert_not_called()
+        post_to_fhir.assert_not_awaited()
+
+    async def test_epic_share_is_explicit_encrypted_snapshot_only(self) -> None:
+        live_session = Mock()
+        bundle = {"resourceType": "Bundle", "type": "collection", "entry": [{"resource": {"resourceType": "Condition", "id": "c1"}}]}
+        with (
+            patch("app.main._authenticate_patient", new=AsyncMock(return_value="patient-1")),
+            patch("app.main._live_epic_session", new=AsyncMock(return_value=live_session)),
+            patch("app.main.epic.fetch_record", new=AsyncMock(return_value=(bundle, {}))),
+            patch("app.main._create_upload_shl", return_value=("shlink:/epic", "qr", "manifest-1")) as create_snapshot,
+            patch("app.main.add_document") as add_document,
+            patch("app.main.post_to_fhir", new=AsyncMock()) as post_to_fhir,
+        ):
+            response = await self.client.post("/api/patient/epic/generate-link", json={"passcode": "1234"})
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()["manifest_id"], "manifest-1")
+        self.assertEqual(create_snapshot.call_args.args[-1], "epic")
+        add_document.assert_not_called()
+        post_to_fhir.assert_not_awaited()
+
+    def test_epic_share_snapshot_strips_document_attachment_urls_and_data(self) -> None:
+        bundle = {"resourceType": "Bundle", "entry": [{"resource": {
+            "resourceType": "DocumentReference", "content": [{"attachment": {
+                "contentType": "application/pdf", "url": "https://example.test/Binary/1", "data": "bytes",
+            }}],
+        }}]}
+        snapshot = _epic_share_snapshot(bundle)
+        attachment = snapshot["entry"][0]["resource"]["content"][0]["attachment"]
+        self.assertNotIn("url", attachment)
+        self.assertNotIn("data", attachment)
+        self.assertIn("url", bundle["entry"][0]["resource"]["content"][0]["attachment"])
 
     def test_patient_store_schema_initializes_only_once_per_process(self) -> None:
         """Concurrent request connections must not each issue schema-altering DDL."""
