@@ -15,7 +15,13 @@ BRANDS_URL = "https://open.epic.com/Endpoints/Brands"
 def _reference_id(value: object) -> str | None:
     if not isinstance(value, dict) or not isinstance(value.get("reference"), str):
         return None
-    return value["reference"].rsplit("/", 1)[-1]
+    reference = value["reference"].strip()
+    # Epic's Brands Bundle uses fullUrl-style URN references (for example,
+    # ``urn:uuid:...``), while resource IDs are bare UUIDs.  Support both
+    # those and conventional relative FHIR references.
+    if reference.startswith("urn:uuid:"):
+        return reference.removeprefix("urn:uuid:")
+    return reference.rsplit("/", 1)[-1]
 
 
 def _parse(bundle: dict) -> list[dict[str, object]]:
