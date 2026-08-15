@@ -108,6 +108,7 @@ export default function PatientPortal({ onBack }: PatientPortalProps) {
   const [epicRecord, setEpicRecord] = useState<EpicRecord | null>(null)
   const [epicEndpoints, setEpicEndpoints] = useState<EpicEndpoint[]>([])
   const [epicQuery, setEpicQuery] = useState('')
+  const [selectedEpicEndpointId, setSelectedEpicEndpointId] = useState('')
   const [epicShares, setEpicShares] = useState<EpicShare[]>([])
   const [selectedDocumentIds, setSelectedDocumentIds] = useState<Set<number>>(new Set())
   const [busy, setBusy] = useState<'auth' | 'upload' | 'record' | 'share' | 'download' | 'delete' | 'bulk-download' | 'bulk-delete' | 'import' | 'drive' | 'google' | 'epic-search' | 'epic-connect' | 'epic-load' | 'epic-share' | 'epic-report' | 'epic-document' | 'epic-revoke' | null>(null)
@@ -314,6 +315,7 @@ export default function PatientPortal({ onBack }: PatientPortalProps) {
     setBusy('epic-search')
     try {
       setEpicEndpoints(await searchEpicEndpoints(epicQuery))
+      setSelectedEpicEndpointId('')
     } catch (caught) {
       setError(messageFrom(caught, 'Unable to search the Epic hospital directory.'))
     } finally {
@@ -354,6 +356,7 @@ export default function PatientPortal({ onBack }: PatientPortalProps) {
       await disconnectEpic()
       setEpicRecord(null)
       setEpicEndpoints([])
+      setSelectedEpicEndpointId('')
       setNotice('Epic disconnected. ClinicForce no longer has live access to this record.')
     } catch (caught) {
       setError(messageFrom(caught, 'Unable to end the Epic connection.'))
@@ -589,6 +592,7 @@ export default function PatientPortal({ onBack }: PatientPortalProps) {
     counts[type] = (counts[type] ?? 0) + 1
     return counts
   }, {})
+  const selectedEpicEndpoint = epicEndpoints.find((endpoint) => endpoint.id === selectedEpicEndpointId)
 
   return (
     <section className="workspace animate-enter" aria-labelledby="workspace-heading">
@@ -613,11 +617,11 @@ export default function PatientPortal({ onBack }: PatientPortalProps) {
             {!epicRecord ? <>
               <p className="text-sm leading-6 text-[var(--muted-ink)]">Connect a hospital you have used to view its current Epic record in this browser. ClinicForce does not save Epic records, access tokens, or attached PDFs.</p>
               <form className="storage-choice mt-4" onSubmit={(event) => void searchEpic(event)}>
-                <div className="flex-1"><label htmlFor="epic-hospital"><strong>Hospital or health system</strong></label><input id="epic-hospital" value={epicQuery} onChange={(event) => setEpicQuery(event.target.value)} placeholder="e.g. Johns Hopkins, UCLA Health" autoComplete="off" /></div>
-                <button className="button button-secondary" type="submit" disabled={busy === 'epic-search'}>{busy === 'epic-search' ? <LoaderCircle className="size-4 animate-spin" aria-hidden="true" /> : <Building2 className="size-4" aria-hidden="true" />} Search Epic hospitals</button>
+                <div className="flex-1"><label htmlFor="epic-hospital-search"><strong>Find your hospital or health system</strong></label><input id="epic-hospital-search" value={epicQuery} onChange={(event) => setEpicQuery(event.target.value)} placeholder="e.g. Houston Methodist" autoComplete="organization" /></div>
+                <button className="button button-secondary" type="submit" disabled={busy === 'epic-search'}>{busy === 'epic-search' ? <LoaderCircle className="size-4 animate-spin" aria-hidden="true" /> : <Building2 className="size-4" aria-hidden="true" />} Find hospitals</button>
               </form>
-              {epicEndpoints.length > 0 && <ul className="item-list mt-4" aria-label="Epic hospital matches">{epicEndpoints.map((endpoint) => <li key={endpoint.id}><div className="file-mark"><Building2 aria-hidden="true" /></div><div className="min-w-0 flex-1"><strong>{endpoint.name}</strong>{endpoint.aliases.length > 0 && <p>{endpoint.aliases.slice(0, 2).join(' · ')}</p>}</div><button className="button button-secondary" type="button" disabled={busy === 'epic-connect'} onClick={() => void connectEpic(endpoint)}>{busy === 'epic-connect' ? <LoaderCircle className="size-4 animate-spin" aria-hidden="true" /> : 'Connect MyChart'}</button></li>)}</ul>}
-              {epicQuery && busy !== 'epic-search' && epicEndpoints.length === 0 && <p className="field-help mt-3">Search the exact hospital or health-system name. Only hospitals enabled in Epic’s patient-facing directory can appear.</p>}
+              {epicEndpoints.length > 0 && <div className="storage-choice mt-4"><div className="flex-1"><label htmlFor="epic-hospital"><strong>Select a hospital</strong></label><select id="epic-hospital" value={selectedEpicEndpointId} onChange={(event) => setSelectedEpicEndpointId(event.target.value)}><option value="">Choose a hospital or health system</option>{epicEndpoints.map((endpoint) => <option key={endpoint.id} value={endpoint.id}>{endpoint.name}{endpoint.aliases.length > 0 ? ` — ${endpoint.aliases.slice(0, 2).join(', ')}` : ''}</option>)}</select>{selectedEpicEndpoint?.aliases.length ? <p className="field-help mt-2">Also known as {selectedEpicEndpoint.aliases.slice(0, 3).join(' · ')}</p> : null}</div><button className="button button-primary" type="button" disabled={!selectedEpicEndpoint || busy === 'epic-connect'} onClick={() => selectedEpicEndpoint && void connectEpic(selectedEpicEndpoint)}>{busy === 'epic-connect' ? <LoaderCircle className="size-4 animate-spin" aria-hidden="true" /> : 'Connect MyChart'}</button></div>}
+              {epicQuery && busy !== 'epic-search' && epicEndpoints.length === 0 && <p className="field-help mt-3">No matching Epic hospital was found. Try the exact hospital or health-system name.</p>}
             </> : <>
               <div className="storage-choice mt-4"><div><strong>Live from {epicRecord.source.organization_name}</strong><p>Retrieved {dateLabel(epicRecord.source.retrieved_at)}. This connection ends when you disconnect, its token expires, or the service restarts.</p></div><div className="storage-actions"><button className="button button-secondary" type="button" onClick={() => void refreshEpic()} disabled={busy === 'epic-load'}>{busy === 'epic-load' ? <LoaderCircle className="size-4 animate-spin" aria-hidden="true" /> : <RefreshCw className="size-4" aria-hidden="true" />} Refresh</button><button className="button button-secondary" type="button" onClick={() => void endEpicSession()}>Disconnect</button></div></div>
               <div className="workspace-stats mt-4" aria-label="Live Epic data counts">{Object.entries(epicCounts).slice(0, 6).map(([type, count]) => <div key={type}><FileText aria-hidden="true" /><span><strong>{count}</strong> {type}</span></div>)}</div>
