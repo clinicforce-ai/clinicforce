@@ -18,6 +18,7 @@ from uuid import UUID, uuid4
 from zipfile import ZIP_DEFLATED, ZipFile
 
 import fitz
+import psycopg
 from fastapi import File, Form, UploadFile, FastAPI, HTTPException, Request, status
 from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
@@ -42,7 +43,7 @@ from app.core import google_drive
 from app.core.drive_crypto import decrypt_pdf as decrypt_drive_pdf, encrypt_pdf as encrypt_drive_pdf
 from app.core.patient_store import (
     add_document, add_pending_drive_deletion, add_record, clear_pending_drive_deletion, consume_drive_oauth_state, consume_google_login_state,
-    create_google_patient, create_manifest, create_patient, create_patient_session,
+    check_database_connection, create_google_patient, create_manifest, create_patient, create_patient_session,
     delete_drive_file_crypto, get_document, get_document_by_id, get_drive_connection, get_drive_file_crypto, get_manifest, get_password_hash,
     get_patient_by_google_subject, get_patient_session, get_storage_preference, list_documents, list_records,
     list_pending_drive_deletions, remove_documents, revoke_patient_manifests, revoke_patient_session, save_drive_file_crypto,
@@ -122,7 +123,14 @@ async def stop_epic_endpoint_sync() -> None:
 
 @app.get("/healthz", include_in_schema=False)
 async def healthz() -> dict[str, str]:
-    """Liveness endpoint used by the load balancer; it exposes no PHI."""
+    """Liveness endpoint that confirms the HTTP server is running."""
+    return {"status": "ok"}
+
+
+@app.get("/readyz", include_in_schema=False)
+async def readyz() -> dict[str, str]:
+    """Readiness endpoint that confirms the task can serve database-backed requests."""
+    await asyncio.to_thread(check_database_connection)
     return {"status": "ok"}
 
 
@@ -254,10 +262,11 @@ def _validate_patient_credentials(patient_id: str | None, password: str | None) 
     return normalized_id, password
 
 
-def _set_patient_session(response: Response, patient_id: str) -> None:
+async def _set_patient_session(response: Response, patient_id: str) -> None:
+    session_token = await asyncio.to_thread(create_patient_session, patient_id)
     response.set_cookie(
         key=PATIENT_SESSION_COOKIE,
-        value=create_patient_session(patient_id),
+        value=session_token,
         max_age=PATIENT_SESSION_MAX_AGE,
         httponly=True,
         secure=PUBLIC_BASE_URL.startswith("https://"),
@@ -327,6 +336,16 @@ async def _authenticate_patient(patient_id: str | None, password: str | None, re
     if stored_hash is None or not verify_password(password, stored_hash):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid patient ID or password")
     return normalized_id
+
+
+@app.exception_handler(psycopg.OperationalError)
+async def handle_database_unavailable(_: Request, exc: psycopg.OperationalError) -> JSONResponse:
+    """Avoid exposing database failures or returning an unhelpful generic 500."""
+    log_error("Database", exc)
+    return JSONResponse(
+        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        content={"detail": "Patient data is temporarily unavailable. Please try again shortly."},
+    )
 
 
 def _document_payload(document: Any) -> dict[str, Any]:
@@ -866,7 +885,7 @@ async def register_patient(request: PatientCredentials) -> JSONResponse:
     if not created:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="A patient account with this ID already exists")
     response = JSONResponse(_workspace_payload(patient_id, [], [], "s3", False))
-    _set_patient_session(response, patient_id)
+    await _set_patient_session(response, patient_id)
     return response
 
 
@@ -874,7 +893,7 @@ async def register_patient(request: PatientCredentials) -> JSONResponse:
 async def login_patient(request: PatientCredentials) -> JSONResponse:
     patient_id = await _authenticate_patient(request.patient_id, request.password)
     response = JSONResponse(await _load_workspace(patient_id))
-    _set_patient_session(response, patient_id)
+    await _set_patient_session(response, patient_id)
     return response
 
 
@@ -1093,7 +1112,7 @@ async def google_drive_callback(state: str = "", code: str = "", error: str = ""
         log_error("Google Drive", exc)
         return RedirectResponse(f"{PUBLIC_BASE_URL}/?drive=error", status_code=status.HTTP_303_SEE_OTHER)
     response = RedirectResponse(f"{PUBLIC_BASE_URL}/?patient=google&drive=connected", status_code=status.HTTP_303_SEE_OTHER)
-    _set_patient_session(response, patient_id)
+    await _set_patient_session(response, patient_id)
     return response
 
 

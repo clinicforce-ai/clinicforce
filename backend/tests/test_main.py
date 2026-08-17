@@ -15,6 +15,7 @@ from uuid import uuid4
 from zipfile import ZipFile
 
 import httpx
+import psycopg
 
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -42,6 +43,41 @@ class MainRouteTests(unittest.IsolatedAsyncioTestCase):
         response = await self.client.get("/healthz")
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json(), {"status": "ok"})
+
+    async def test_readiness_check_requires_a_usable_database_connection(self) -> None:
+        with patch("app.main.check_database_connection") as check_database_connection:
+            response = await self.client.get("/readyz")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {"status": "ok"})
+        check_database_connection.assert_called_once_with()
+
+    async def test_database_connection_error_returns_a_safe_service_unavailable_response(self) -> None:
+        with patch(
+            "app.main.check_database_connection",
+            side_effect=psycopg.OperationalError("password authentication failed"),
+        ):
+            response = await self.client.get("/readyz")
+        self.assertEqual(response.status_code, 503)
+        self.assertEqual(response.json(), {
+            "detail": "Patient data is temporarily unavailable. Please try again shortly.",
+        })
+
+    async def test_login_awaits_persistent_session_creation(self) -> None:
+        workspace = {
+            "patient_id": "patient-1", "documents": [], "records": [], "storage_provider": "s3",
+            "drive_connected": False, "drive_pending_import_count": 0, "drive_sync_message": None,
+            "drive_access_upgrade_required": False,
+        }
+        with (
+            patch("app.main._authenticate_patient", new=AsyncMock(return_value="patient-1")),
+            patch("app.main._load_workspace", new=AsyncMock(return_value=workspace)),
+            patch("app.main._set_patient_session", new=AsyncMock()) as set_patient_session,
+        ):
+            response = await self.client.post(
+                "/api/patient/login", json={"patient_id": "patient-1", "password": "long-password"}
+            )
+        self.assertEqual(response.status_code, 200, response.text)
+        set_patient_session.assert_awaited_once()
 
     async def test_epic_authorization_sets_only_an_http_only_state_cookie(self) -> None:
         endpoint = Mock(id="epic:demo:1", name="Demo Health", fhir_base="https://fhir.demo.example")

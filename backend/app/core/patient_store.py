@@ -268,6 +268,12 @@ def get_password_hash(patient_id: str) -> str | None:
     return row["password_hash"] if row else None
 
 
+def check_database_connection() -> None:
+    """Verify that this task can authenticate to and query its PostgreSQL database."""
+    with _connection() as connection:
+        connection.execute("SELECT 1").fetchone()
+
+
 def get_storage_preference(patient_id: str) -> str:
     with _connection() as connection:
         row = connection.execute("SELECT storage_preference FROM patients WHERE patient_id = %s", (patient_id,)).fetchone()
