@@ -37,18 +37,16 @@ CONDITION_SEARCH_CATEGORIES = (
     "encounter-diagnosis",
 )
 
-# Patient-linked R4 resources selected in ClinicForce's Epic client record.
-# This includes the additional resource families Epic documents for USCDI v3
-# automatic distribution. A hospital may still disable, filter, or omit any
-# family; 403/404 and malformed/partial results are displayed as availability,
-# never treated as an empty chart.
+# Only standard patient-facing USCDI v3 R4 resources. This list deliberately
+# excludes Outside Record, research, and proprietary APIs so ClinicForce's
+# OAuth request stays compatible with Epic Automatic Client ID Distribution.
+# A hospital can still filter a permitted family; 403/404 and malformed/partial
+# results are surfaced as availability rather than being mistaken for an empty
+# chart.
 USCDI_RESOURCE_TYPES = (
     "Patient", "AllergyIntolerance", "CarePlan", "CareTeam", "Condition",
     "Coverage", "Device", "DiagnosticReport", "DocumentReference", "Encounter",
-    "Goal", "Immunization", "Media", "Medication", "MedicationDispense",
-    "MedicationRequest", "MedicationStatement", "Observation", "Procedure",
-    "Provenance", "QuestionnaireResponse", "RelatedPerson", "ServiceRequest",
-    "Specimen",
+    "Goal", "Immunization", "MedicationRequest", "Observation",
 )
 
 
