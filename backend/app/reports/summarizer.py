@@ -10,6 +10,7 @@ _UNSAFE_NARRATIVE = re.compile(
     r"mmhg|bpm|percent|tablet|capsule)\b",
     re.IGNORECASE,
 )
+EPIC_SOURCE_SYSTEM = "https://clinicforce.example/fhir/source"
 
 
 def _resources(fhir_bundle: dict[str, Any]) -> list[dict[str, Any]]:
@@ -116,7 +117,66 @@ def _citation(resource: dict[str, Any]) -> dict[str, Any] | None:
                 citation["document_id"] = child["valuePositiveInt"]
         if "source_filename" in citation and "page_number" in citation:
             return citation
+    # Epic resources are part of the same encrypted QR snapshot, but do not
+    # have a patient-uploaded PDF page to link to. A standard FHIR meta.tag is
+    # enough to keep their provenance visible without exposing an Epic URL or
+    # opaque resource ID in the clinician UI.
+    meta = resource.get("meta")
+    tags = meta.get("tag") if isinstance(meta, dict) else []
+    for tag in tags if isinstance(tags, list) else []:
+        if not isinstance(tag, dict) or tag.get("system") != EPIC_SOURCE_SYSTEM or tag.get("code") != "epic-mychart":
+            continue
+        organization = tag.get("display")
+        return {
+            "source_type": "epic",
+            "organization_name": organization.strip() if isinstance(organization, str) and organization.strip() else "Epic / MyChart",
+        }
     return None
+
+
+def _first_coded_text(values: Any) -> str | None:
+    if isinstance(values, (str, bytes, dict)):
+        return None
+    try:
+        iterator = iter(values)
+    except TypeError:
+        return None
+    for value in iterator:
+        text = _coded_text(value)
+        if text:
+            return text
+    return None
+
+
+def _join_details(*values: str | None) -> str | None:
+    unique = list(dict.fromkeys(value.strip() for value in values if isinstance(value, str) and value.strip()))
+    return " · ".join(unique) if unique else None
+
+
+def _allergy_name(resource: dict[str, Any]) -> str:
+    name = _coded_text(resource.get("code")) or _first_coded_text(
+        reaction.get("manifestation") for reaction in resource.get("reaction", []) if isinstance(reaction, dict)
+    )
+    if name:
+        return name
+    allergy_type = resource.get("type")
+    return "Allergy or intolerance" if allergy_type not in {"allergy", "intolerance"} else f"{allergy_type.title()} recorded"
+
+
+def _document_reference_details(resource: dict[str, Any]) -> tuple[str, str | None, str | None]:
+    """Turn a DocumentReference into a readable summary row, never a raw ID."""
+    content = resource.get("content")
+    attachment = next((item.get("attachment") for item in content if isinstance(item, dict) and isinstance(item.get("attachment"), dict)), None) if isinstance(content, list) else None
+    title = attachment.get("title") if isinstance(attachment, dict) and isinstance(attachment.get("title"), str) else None
+    description = resource.get("description") if isinstance(resource.get("description"), str) else None
+    name = _coded_text(resource.get("type")) or description or title or "Clinical document"
+    date = resource.get("date") if isinstance(resource.get("date"), str) else None
+    details = _join_details(
+        description if description != name else None,
+        _coded_text(resource.get("category")) if isinstance(resource.get("category"), dict) else _first_coded_text(resource.get("category")),
+        resource.get("status") if isinstance(resource.get("status"), str) else None,
+    )
+    return name, date, details
 
 
 def _medication_dosage(resource: dict[str, Any]) -> str:
@@ -172,7 +232,7 @@ def extract_structured_data(fhir_bundle: dict[str, Any]) -> dict[str, list[dict[
                 isinstance(category, dict) and _coded_text(category) == "Vital Signs" for category in categories
             )
             (result["vitals"] if is_vital else result["labs"]).append(item)
-        elif resource_type in {"MedicationStatement", "MedicationRequest"}:
+        elif resource_type in {"MedicationStatement", "MedicationRequest", "MedicationDispense"}:
             name = _coded_text(resource.get("medicationCodeableConcept"))
             if name is None:
                 name = _coded_text(resource.get("medicationReference"))
@@ -183,9 +243,17 @@ def extract_structured_data(fhir_bundle: dict[str, Any]) -> dict[str, list[dict[
             if name:
                 result["conditions"].append({"name": name, "details": _note_text(resource), "citation": _citation(resource)})
         elif resource_type == "AllergyIntolerance":
-            name = _coded_text(resource.get("code"))
-            if name:
-                result["allergies"].append({"name": name, "details": _note_text(resource), "citation": _citation(resource)})
+            reaction_details = _first_coded_text(
+                reaction.get("manifestation") for reaction in resource.get("reaction", []) if isinstance(reaction, dict)
+            )
+            result["allergies"].append({
+                "name": _allergy_name(resource),
+                "details": _join_details(
+                    _note_text(resource), reaction_details, _coded_text(resource.get("clinicalStatus")),
+                    _coded_text(resource.get("verificationStatus")),
+                ),
+                "citation": _citation(resource),
+            })
         elif resource_type == "Encounter":
             provider = resource.get("serviceProvider")
             facility = provider.get("display") if isinstance(provider, dict) else None
@@ -195,6 +263,14 @@ def extract_structured_data(fhir_bundle: dict[str, Any]) -> dict[str, list[dict[
             details = _coded_text(reason[0]) if isinstance(reason, list) and reason else None
             if isinstance(facility, str) and facility.strip():
                 result["care_events"].append({"facility": facility.strip(), "date": date, "details": details, "citation": _citation(resource)})
+        elif resource_type == "DocumentReference":
+            name, date, details = _document_reference_details(resource)
+            result["care_events"].append({
+                "facility": "Clinical document",
+                "date": date,
+                "details": _join_details(name, details),
+                "citation": _citation(resource),
+            })
     return result
 
 

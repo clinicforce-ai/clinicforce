@@ -26,7 +26,6 @@ td.fact-name { color: #173a4d; font-weight: 700; } .fact-name { width: 20%; }
 .measure-value { width: 35%; } .source { width: 25%; }
 td.source { font-size: 8.3pt; } a { color: #075985; font-weight: 700; text-decoration: underline; }
 .patient-entered { color: #59636d; font-size: 8.3pt; font-style: italic; }
-.epic-note { color: #59636d; font-size: 8.3pt; margin: 0 0 8px; }
 .trend-figure { break-inside: avoid; border: 1px solid #b9d5df; background: #f8fcfd; margin: 7px 0 8px; padding: 8px; }
 .trend-figure svg { display: block; width: 100%; height: auto; }
 .trend-caption { color: #59636d; font-size: 8.3pt; line-height: 1.35; margin: 5px 0 0; }
@@ -42,13 +41,6 @@ td.source { font-size: 8.3pt; } a { color: #075985; font-weight: 700; text-decor
       {% endfor %}</tr>{% endfor %}
     </tbody></table>
   {% endfor %}
-  {% if epic_appendix %}
-    <h2>Epic data appendix</h2>
-    <p class="epic-note">Live retrieval from {{ epic_source.organization_name }} at {{ epic_source.retrieved_at }}. Epic resource IDs identify the source record; ClinicForce did not save this report.</p>
-    <table><thead><tr><th>Resource</th><th>Source ID</th><th>Structured fields</th></tr></thead><tbody>
-      {% for item in epic_appendix %}<tr><td class="fact-name">{{ item.resource_type }}</td><td>{{ item.resource_id }}</td><td>{{ item.fields }}</td></tr>{% endfor %}
-    </tbody></table>
-  {% endif %}
 </body></html>"""
 
 
@@ -59,6 +51,9 @@ def _source_label(citation: Any) -> str | None:
     page = citation.get("page_number")
     if isinstance(filename, str) and filename.strip() and isinstance(page, int) and page > 0:
         return f"{filename.strip()} · p. {page}"
+    if citation.get("source_type") == "epic":
+        organization = citation.get("organization_name")
+        return f"Epic / MyChart · {organization.strip()}" if isinstance(organization, str) and organization.strip() else "Epic / MyChart"
     return None
 
 
@@ -188,52 +183,6 @@ def _render_data(summary_data: dict[str, Any]) -> dict[str, Any]:
     return rendered
 
 
-def _epic_value(resource: dict[str, Any], key: str) -> str | None:
-    value = resource.get(key)
-    if isinstance(value, str) and value.strip():
-        return value.strip()
-    if isinstance(value, dict):
-        text = value.get("text")
-        if isinstance(text, str) and text.strip():
-            return text.strip()
-        coding = value.get("coding")
-        if isinstance(coding, list):
-            for item in coding:
-                if isinstance(item, dict):
-                    display = item.get("display") or item.get("code")
-                    if isinstance(display, str) and display.strip():
-                        return display.strip()
-    return None
-
-
-def _epic_appendix(bundle: dict[str, Any], limit: int = 500) -> list[dict[str, str]]:
-    """Render safe structured fields; FHIR narrative HTML is intentionally ignored."""
-    rows: list[dict[str, str]] = []
-    for entry in bundle.get("entry", []) if isinstance(bundle.get("entry"), list) else []:
-        resource = entry.get("resource") if isinstance(entry, dict) else None
-        if not isinstance(resource, dict):
-            continue
-        resource_type = resource.get("resourceType")
-        if not isinstance(resource_type, str) or resource_type == "OperationOutcome":
-            continue
-        fields = [
-            value for value in (
-                _epic_value(resource, "code"), _epic_value(resource, "status"),
-                _epic_value(resource, "effectiveDateTime"), _epic_value(resource, "recordedDate"),
-                _epic_value(resource, "authoredOn"), _epic_value(resource, "description"),
-            ) if value
-        ]
-        rows.append({
-            "resource_type": resource_type,
-            "resource_id": str(resource.get("id") or "—"),
-            "fields": " · ".join(dict.fromkeys(fields)) or "Structured data available in ClinicForce",
-        })
-        if len(rows) >= limit:
-            rows.append({"resource_type": "Appendix limit", "resource_id": "—", "fields": "Additional Epic resources were not included in this PDF."})
-            break
-    return rows
-
-
 def generate_doctor_pdf(summary_data: dict[str, Any], output_path: str = "/tmp/clinical_summary.pdf") -> str:
     """Render a report with only populated sections and fact-level source links."""
     data = _render_data(summary_data)
@@ -246,10 +195,13 @@ def render_doctor_pdf_bytes(
     summary_data: dict[str, Any], epic_bundle: dict[str, Any] | None = None,
     epic_source: dict[str, str] | None = None,
 ) -> bytes:
-    """Render a report without creating a task-local file."""
+    """Render a report without creating a task-local file.
+
+    ``epic_bundle`` and ``epic_source`` remain accepted for backwards-compatible
+    callers, but Epic facts must now be included in ``summary_data`` alongside
+    uploaded-document facts rather than rendered as a raw-resource appendix.
+    """
     data = _render_data(summary_data)
-    data["epic_appendix"] = _epic_appendix(epic_bundle) if isinstance(epic_bundle, dict) else []
-    data["epic_source"] = epic_source or {}
     html = Environment(autoescape=select_autoescape(default_for_string=True)).from_string(_TEMPLATE).render(**data)
     result = HTML(string=html).write_pdf()
     if not isinstance(result, bytes):

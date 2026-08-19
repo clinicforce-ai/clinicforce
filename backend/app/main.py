@@ -51,7 +51,6 @@ from app.core.patient_store import (
     update_document_locator,
     upsert_drive_connection, verify_manifest_pin,
     get_epic_endpoint, search_epic_endpoints,
-    list_epic_manifests, revoke_epic_manifest,
 )
 from app.core.source_links import document_download_url, verify_document_download_token
 from app.ingestion.bedrock_extractor import EXTRACTION_VERSION, extract_pdf_to_fhir_bundle
@@ -222,10 +221,6 @@ class EpicAuthorizeRequest(PatientCredentials):
     popup: bool = False
 
 
-class EpicShareRequest(GeneratePatientLinkRequest):
-    """The explicit, patient-requested exception to live-only Epic data."""
-
-
 class ManualRecordRequest(PatientCredentials):
     category: Literal["hospital", "lab", "vital", "condition", "allergy", "medication"]
     hospital: str | None = Field(default=None, max_length=256)
@@ -384,24 +379,37 @@ def _combine_document_bundles(documents: list[Any], records: list[Any] | None = 
     return {"resourceType": "Bundle", "type": "collection", "entry": entries}
 
 
-def _epic_share_snapshot(bundle: dict[str, Any]) -> dict[str, Any]:
-    """Remove attachment bytes and URLs before the explicit Epic-share exception.
+def _epic_share_snapshot(bundle: dict[str, Any], source: dict[str, str]) -> dict[str, Any]:
+    """Prepare live Epic data for the combined patient-authorized QR snapshot.
 
     DocumentReference metadata can help a clinician understand that a document
     exists, but attachment data and provider URLs are never retained by
-    ClinicForce--including inside an encrypted patient-requested snapshot.
+    ClinicForce--including inside an encrypted patient-requested snapshot. Each
+    resource receives a standard FHIR ``meta.tag`` so the clinician summary can
+    label it as Epic data rather than presenting an opaque source ID.
     """
     snapshot = deepcopy(bundle)
+    organization_name = source.get("organization_name", "Epic / MyChart").strip() or "Epic / MyChart"
     for entry in snapshot.get("entry", []):
         resource = entry.get("resource") if isinstance(entry, dict) else None
-        if not isinstance(resource, dict) or resource.get("resourceType") != "DocumentReference":
+        if not isinstance(resource, dict):
+            continue
+        meta = resource.get("meta")
+        if not isinstance(meta, dict):
+            meta = {}
+            resource["meta"] = meta
+        tags = meta.get("tag")
+        if not isinstance(tags, list):
+            tags = []
+            meta["tag"] = tags
+        tags.append({"system": "https://clinicforce.example/fhir/source", "code": "epic-mychart", "display": organization_name})
+        if resource.get("resourceType") != "DocumentReference":
             continue
         for content in resource.get("content", []):
             attachment = content.get("attachment") if isinstance(content, dict) else None
             if isinstance(attachment, dict):
                 attachment.pop("data", None)
                 attachment.pop("url", None)
-    snapshot["meta"] = {"tag": [{"system": "urn:clinicforce", "code": "epic-live-snapshot"}]}
     return snapshot
 
 
@@ -1003,53 +1011,6 @@ async def epic_document(document_id: str, request: Request) -> Response:
     return Response(content=content, media_type="application/pdf", headers=_download_headers(filename))
 
 
-@app.post("/api/patient/epic/report")
-async def epic_report(request: PatientCredentials, http_request: Request) -> Response:
-    patient_id = await _authenticate_patient(request.patient_id, request.password, http_request)
-    session = await _live_epic_session(http_request, patient_id)
-    try:
-        bundle, _ = await epic.fetch_record(session)
-        summary = await summarize_fhir_bundle(bundle)
-        report = await run_in_threadpool(render_doctor_pdf_bytes, summary, bundle, epic.source_metadata(session))
-    except epic.EpicError as exc:
-        raise _epic_error(exc) from exc
-    return Response(content=report, media_type="application/pdf", headers=_download_headers("clinicforce-epic-live-record.pdf"))
-
-
-@app.post("/api/patient/epic/generate-link")
-async def generate_epic_link(request: EpicShareRequest, http_request: Request) -> dict[str, str]:
-    """Persist only the patient-selected encrypted FHIR snapshot, never attachments."""
-    patient_id = await _authenticate_patient(request.patient_id, request.password, http_request)
-    session = await _live_epic_session(http_request, patient_id)
-    try:
-        bundle, _ = await epic.fetch_record(session)
-    except epic.EpicError as exc:
-        raise _epic_error(exc) from exc
-    if not bundle.get("entry"):
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Epic did not provide any shareable clinical data")
-    bundle = _epic_share_snapshot(bundle)
-    shl_uri, qr_code_base64, manifest_id = await asyncio.to_thread(
-        _create_upload_shl, patient_id, bundle, request.passcode, "epic",
-    )
-    return {"shl_uri": shl_uri, "qr_code_base64": qr_code_base64, "manifest_id": manifest_id}
-
-
-@app.get("/api/patient/epic/shares")
-async def epic_shares(request: Request) -> dict[str, list[dict[str, str]]]:
-    patient_id = await _authenticate_patient(None, None, request)
-    manifests = await asyncio.to_thread(list_epic_manifests, patient_id)
-    return {"shares": [{"manifest_id": item.manifest_id, "created_at": item.created_at} for item in manifests]}
-
-
-@app.delete("/api/patient/epic/shares/{manifest_id}")
-async def revoke_epic_share(manifest_id: UUID, request: Request) -> Response:
-    patient_id = await _authenticate_patient(None, None, request)
-    revoked = await asyncio.to_thread(revoke_epic_manifest, patient_id, str(manifest_id))
-    if not revoked:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Epic share not found")
-    return Response(status_code=status.HTTP_204_NO_CONTENT)
-
-
 @app.delete("/api/patient/epic/live-session")
 async def disconnect_epic(request: Request) -> Response:
     patient_id = await _authenticate_patient(None, None, request)
@@ -1227,7 +1188,7 @@ async def save_patient_record(request: ManualRecordRequest, http_request: Reques
 
 
 @app.post("/api/patient/generate-link")
-async def generate_patient_link(request: GeneratePatientLinkRequest, http_request: Request) -> dict[str, str]:
+async def generate_patient_link(request: GeneratePatientLinkRequest, http_request: Request) -> dict[str, Any]:
     patient_id = await _authenticate_patient(request.patient_id, request.password, http_request)
     if not request.passcode or len(request.passcode) < 4:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Choose a sharing passcode of at least four characters")
@@ -1236,12 +1197,28 @@ async def generate_patient_link(request: GeneratePatientLinkRequest, http_reques
     documents, records = await asyncio.gather(
         asyncio.to_thread(list_documents, patient_id), asyncio.to_thread(list_records, patient_id)
     )
-    if not documents and not records:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Add a PDF or a health record before generating a secure link")
     try:
         await _ensure_documents_extracted(patient_id, documents)
         documents = await asyncio.to_thread(list_documents, patient_id)
-        fhir_bundle = _combine_document_bundles(documents, records)
+        workspace_bundle = _combine_document_bundles(documents, records)
+
+        # MyChart is deliberately fetched only at the moment the patient creates
+        # the one clinician QR. The unencrypted workspace never stores Epic
+        # resources, tokens, or document attachments.
+        epic_snapshot: dict[str, Any] | None = None
+        if http_request.cookies.get(EPIC_LIVE_SESSION_COOKIE):
+            session = await _live_epic_session(http_request, patient_id)
+            try:
+                epic_bundle, _ = await epic.fetch_record(session)
+            except epic.EpicError as exc:
+                raise _epic_error(exc) from exc
+            if epic_bundle.get("entry"):
+                epic_snapshot = _epic_share_snapshot(epic_bundle, epic.source_metadata(session))
+
+        fhir_bundle = {
+            "resourceType": "Bundle", "type": "collection",
+            "entry": [*workspace_bundle["entry"], *(epic_snapshot or {}).get("entry", [])],
+        }
         if not fhir_bundle["entry"]:
             raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="No verified clinical facts are available to share")
         shl_uri, qr_code_base64, manifest_id = await asyncio.to_thread(_create_upload_shl, patient_id, fhir_bundle, request.passcode)
@@ -1251,7 +1228,10 @@ async def generate_patient_link(request: GeneratePatientLinkRequest, http_reques
             connection = await asyncio.to_thread(get_drive_connection, patient_id)
             if connection is None:
                 raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Reconnect Google Drive before creating a share")
-            fingerprint = hashlib.sha256(json.dumps(fhir_bundle, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
+            # The stable Drive summary remains limited to the patient workspace.
+            # Live Epic data is visible only in the encrypted QR snapshot that the
+            # patient has just chosen to share with a clinician.
+            fingerprint = hashlib.sha256(json.dumps(workspace_bundle, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
             summary_exists = bool(connection.summary_file_id) and await asyncio.to_thread(
                 google_drive.file_exists, connection, connection.summary_file_id
             )
@@ -1265,15 +1245,15 @@ async def generate_patient_link(request: GeneratePatientLinkRequest, http_reques
                 # dashboard adds those just-in-time after QR/PIN verification.
                 # This lets the one Drive PDF remain unchanged for an unchanged
                 # patient record while preserving access control for source files.
-                summary = await summarize_fhir_bundle(fhir_bundle)
+                summary = await summarize_fhir_bundle(workspace_bundle)
                 report_bytes = await run_in_threadpool(render_doctor_pdf_bytes, summary)
                 previous_summary_file_id = connection.summary_file_id
                 summary_file_id = await _replace_encrypted_drive_summary(patient_id, connection, report_bytes)
                 await asyncio.to_thread(set_drive_summary_file, patient_id, summary_file_id, fingerprint)
                 if previous_summary_file_id and previous_summary_file_id != summary_file_id:
                     await _retire_plaintext_drive_file(patient_id, connection, previous_summary_file_id)
-        log_info("Secure Sharing", "Stored encrypted manifest %s for %d documents and %d structured records", manifest_id, len(documents), len(records))
-        return {"shl_uri": shl_uri, "qr_code_base64": qr_code_base64}
+        log_info("Secure Sharing", "Stored combined encrypted manifest %s for %d documents, %d structured records, Epic=%s", manifest_id, len(documents), len(records), bool(epic_snapshot))
+        return {"shl_uri": shl_uri, "qr_code_base64": qr_code_base64, "epic_included": bool(epic_snapshot)}
     except HTTPException:
         raise
     except Exception as exc:

@@ -521,11 +521,7 @@ def clear_pending_drive_deletion(patient_id: str, file_id: str) -> None:
 
 
 def revoke_patient_manifests(patient_id: str) -> int:
-    """Withdraw local-record QR snapshots after a local source is removed.
-
-    Epic snapshots have their own explicit revoke control and must not be altered
-    by changes to unrelated uploaded/manual records.
-    """
+    """Withdraw combined clinician QR snapshots after a workspace source is removed."""
     with _connection() as connection:
         cursor = connection.execute(
             "UPDATE shl_manifests SET revoked_at = %s WHERE patient_id = %s AND source = 'local' AND revoked_at IS NULL",
@@ -605,9 +601,11 @@ def create_manifest(patient_id: str | None, encrypted_jwe: str, hashed_pin: str,
     manifest_id = str(uuid4())
     with _connection() as connection:
         if patient_id:
-            # Existing local QR behavior remains one-current-link-per-patient;
-            # a new Epic share does not revoke unrelated local data sharing.
-            predicate = "source = 'epic'" if source == "epic" else "source = 'local'"
+            # A current combined QR supersedes every older patient share,
+            # including legacy Epic-only manifests created before this flow.
+            # The legacy ``epic`` source remains supported solely so existing
+            # data can be read and revoked safely during migration.
+            predicate = "source = 'epic'" if source == "epic" else "TRUE"
             connection.execute(
                 f"UPDATE shl_manifests SET revoked_at = %s WHERE patient_id = %s AND {predicate} AND revoked_at IS NULL",
                 (datetime.now(timezone.utc).isoformat(), patient_id),

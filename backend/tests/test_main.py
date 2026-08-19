@@ -26,7 +26,7 @@ from app.core import patient_store  # noqa: E402
 from app.ingestion.bedrock_extractor import ExtractedFact, facts_to_fhir_bundle  # noqa: E402
 from app.ingestion.pdf_parser import parse_pdf_text_with_llm, pdf_extraction_to_fhir_bundle  # noqa: E402
 from app.main import _epic_share_snapshot, app  # noqa: E402
-from app.reports.pdf_builder import generate_doctor_pdf  # noqa: E402
+from app.reports.pdf_builder import generate_doctor_pdf, render_doctor_pdf_bytes  # noqa: E402
 from app.reports.summarizer import summarize_fhir_bundle  # noqa: E402
 
 
@@ -132,21 +132,30 @@ class MainRouteTests(unittest.IsolatedAsyncioTestCase):
         add_record.assert_not_called()
         post_to_fhir.assert_not_awaited()
 
-    async def test_epic_share_is_explicit_encrypted_snapshot_only(self) -> None:
+    async def test_standard_share_combines_current_epic_data_into_one_qr(self) -> None:
         live_session = Mock()
-        bundle = {"resourceType": "Bundle", "type": "collection", "entry": [{"resource": {"resourceType": "Condition", "id": "c1"}}]}
+        bundle = {"resourceType": "Bundle", "type": "collection", "entry": [{"resource": {"resourceType": "Condition", "id": "c1", "code": {"text": "Asthma"}}}]}
         with (
             patch("app.main._authenticate_patient", new=AsyncMock(return_value="patient-1")),
+            patch("app.main._load_workspace", new=AsyncMock(return_value={})),
+            patch("app.main.list_documents", return_value=[]),
+            patch("app.main.list_records", return_value=[]),
+            patch("app.main._ensure_documents_extracted", new=AsyncMock()),
             patch("app.main._live_epic_session", new=AsyncMock(return_value=live_session)),
             patch("app.main.epic.fetch_record", new=AsyncMock(return_value=(bundle, {}))),
-            patch("app.main._create_upload_shl", return_value=("shlink:/epic", "qr", "manifest-1")) as create_snapshot,
+            patch("app.main.epic.source_metadata", return_value={"organization_name": "Demo Health", "retrieved_at": "2026-08-14T00:00:00+00:00"}),
+            patch("app.main._create_upload_shl", return_value=("shlink:/combined", "qr", "manifest-1")) as create_snapshot,
+            patch("app.main.get_storage_preference", return_value="s3"),
             patch("app.main.add_document") as add_document,
             patch("app.main.post_to_fhir", new=AsyncMock()) as post_to_fhir,
         ):
-            response = await self.client.post("/api/patient/epic/generate-link", json={"passcode": "1234"})
+            self.client.cookies.set("clinicforce_epic_live", "live-session")
+            response = await self.client.post("/api/patient/generate-link", json={"passcode": "1234"})
         self.assertEqual(response.status_code, 200, response.text)
-        self.assertEqual(response.json()["manifest_id"], "manifest-1")
-        self.assertEqual(create_snapshot.call_args.args[-1], "epic")
+        self.assertTrue(response.json()["epic_included"])
+        shared_bundle = create_snapshot.call_args.args[1]
+        self.assertEqual(shared_bundle["entry"][0]["resource"]["code"]["text"], "Asthma")
+        self.assertEqual(shared_bundle["entry"][0]["resource"]["meta"]["tag"][-1]["display"], "Demo Health")
         add_document.assert_not_called()
         post_to_fhir.assert_not_awaited()
 
@@ -156,10 +165,11 @@ class MainRouteTests(unittest.IsolatedAsyncioTestCase):
                 "contentType": "application/pdf", "url": "https://example.test/Binary/1", "data": "bytes",
             }}],
         }}]}
-        snapshot = _epic_share_snapshot(bundle)
+        snapshot = _epic_share_snapshot(bundle, {"organization_name": "Demo Health"})
         attachment = snapshot["entry"][0]["resource"]["content"][0]["attachment"]
         self.assertNotIn("url", attachment)
         self.assertNotIn("data", attachment)
+        self.assertEqual(snapshot["entry"][0]["resource"]["meta"]["tag"][-1]["code"], "epic-mychart")
         self.assertIn("url", bundle["entry"][0]["resource"]["content"][0]["attachment"])
 
     def test_patient_store_schema_initializes_only_once_per_process(self) -> None:
@@ -592,6 +602,27 @@ class MainRouteTests(unittest.IsolatedAsyncioTestCase):
         rendered = html.call_args.kwargs["string"]
         for expected in ("Hemoglobin A1c", "5.8", "COVID-19 result", "Not detected", "Asthma", "labs.pdf · p. 2"):
             self.assertIn(expected, rendered)
+
+    async def test_epic_allergy_and_document_details_are_in_the_clinical_summary(self) -> None:
+        bundle = _epic_share_snapshot({
+            "resourceType": "Bundle", "type": "collection", "entry": [
+                {"resource": {"resourceType": "AllergyIntolerance", "code": {"text": "Peanuts"}, "clinicalStatus": {"text": "Active"}}},
+                {"resource": {"resourceType": "DocumentReference", "description": "Hospital discharge summary", "date": "2026-08-19", "status": "current"}},
+            ],
+        }, {"organization_name": "Houston Methodist"})
+        summary = await summarize_fhir_bundle(bundle)
+        self.assertEqual(summary["allergies"][0]["name"], "Peanuts")
+        self.assertEqual(summary["allergies"][0]["citation"]["organization_name"], "Houston Methodist")
+        self.assertEqual(summary["care_events"][0]["details"], "Hospital discharge summary · current")
+        self.assertEqual(summary["care_events"][0]["citation"]["source_type"], "epic")
+        with patch("app.reports.pdf_builder.HTML") as html:
+            html.return_value.write_pdf = Mock(return_value=b"%PDF-1.4")
+            render_doctor_pdf_bytes(summary, bundle, {"organization_name": "Houston Methodist"})
+        rendered = html.call_args.kwargs["string"]
+        self.assertIn("Peanuts", rendered)
+        self.assertIn("Hospital discharge summary", rendered)
+        self.assertIn("Epic / MyChart · Houston Methodist", rendered)
+        self.assertNotIn("Epic data appendix", rendered)
 
     def test_pdf_builder_uses_weasyprint_with_rendered_structured_values(self) -> None:
         summary = {"narrative": "Clinical history reviewed.", "vitals": [{"name": "Heart rate", "value": 72, "unit": "beats/min", "date": "2026-08-02", "citation": {"source_filename": "cardiology.pdf", "page_number": 3}}], "labs": [], "medications": [], "conditions": [], "allergies": [], "care_events": []}
