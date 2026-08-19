@@ -31,6 +31,11 @@ LIVE_SESSION_MAX_AGE_SECONDS = 55 * 60
 MAX_PAGES_PER_RESOURCE = 50
 MAX_RESOURCES_PER_TYPE = 5_000
 MAX_DOCUMENT_BYTES = 15 * 1024 * 1024
+CONDITION_SEARCH_CATEGORIES = (
+    "problem-list-item",
+    "health-concern",
+    "encounter-diagnosis",
+)
 
 # Patient-linked R4 resources selected in ClinicForce's Epic client record.
 # This includes the additional resource families Epic documents for USCDI v3
@@ -286,26 +291,16 @@ async def _get_json(session: LiveEpicSession, url: str, params: dict[str, str] |
     raise EpicError("Epic is temporarily unavailable. Try again shortly.")
 
 
-async def fetch_resource_type(session: LiveEpicSession, resource_type: str) -> dict[str, Any]:
-    if resource_type not in USCDI_RESOURCE_TYPES:
-        raise EpicError("That Epic resource type is not available in ClinicForce")
-    if resource_type == "Patient":
-        status, patient, _ = await _get_json(session, f"{session.fhir_base}/Patient/{session.remote_patient_id}")
-        if status == 401:
-            clear_live_session_by_value(session)
-            raise EpicError("Your live Epic session has ended. Connect MyChart again.")
-        if status in {403, 404}:
-            return {"resourceType": "Bundle", "type": "collection", "entry": [], "extension": [{"url": "urn:clinicforce:epic-status", "valueString": "unavailable"}]}
-        return {"resourceType": "Bundle", "type": "collection", "entry": [{"resource": patient}]}
-
-    status, bundle, _ = await _get_json(
-        session, f"{session.fhir_base}/{resource_type}", {"patient": session.remote_patient_id}
-    )
+async def _search_resources(
+    session: LiveEpicSession, resource_type: str, params: dict[str, str],
+) -> tuple[list[dict[str, Any]], str]:
+    """Read one paginated FHIR search without treating an empty result as an error."""
+    status, bundle, _ = await _get_json(session, f"{session.fhir_base}/{resource_type}", params)
     if status == 401:
         clear_live_session_by_value(session)
         raise EpicError("Your live Epic session has ended. Connect MyChart again.")
     if status in {403, 404}:
-        return {"resourceType": "Bundle", "type": "collection", "entry": [], "extension": [{"url": "urn:clinicforce:epic-status", "valueString": "forbidden" if status == 403 else "unavailable"}]}
+        return [], "forbidden" if status == 403 else "unavailable"
     resources: list[dict[str, Any]] = []
     pages = 0
     visited_pages: set[str] = set()
@@ -315,21 +310,93 @@ async def fetch_resource_type(session: LiveEpicSession, resource_type: str) -> d
             if isinstance(resource, dict) and resource.get("resourceType") != "OperationOutcome":
                 resources.append(resource)
                 if len(resources) >= MAX_RESOURCES_PER_TYPE:
-                    return {"resourceType": "Bundle", "type": "collection", "entry": [{"resource": resource} for resource in resources], "extension": [{"url": "urn:clinicforce:epic-status", "valueString": "truncated"}]}
+                    return resources, "truncated"
         next_url = next((link.get("url") for link in bundle.get("link", []) if isinstance(link, dict) and link.get("relation") == "next" and isinstance(link.get("url"), str)), None)
         if not next_url:
             break
         target = _safe_next_url(session.fhir_base, next_url)
         if target in visited_pages:
-            return {"resourceType": "Bundle", "type": "collection", "entry": [{"resource": resource} for resource in resources], "extension": [{"url": "urn:clinicforce:epic-status", "valueString": "partial"}]}
+            return resources, "partial"
         visited_pages.add(target)
         pages += 1
         if pages >= MAX_PAGES_PER_RESOURCE:
-            return {"resourceType": "Bundle", "type": "collection", "entry": [{"resource": resource} for resource in resources], "extension": [{"url": "urn:clinicforce:epic-status", "valueString": "truncated"}]}
+            return resources, "truncated"
         status, bundle, _ = await _get_json(session, target)
         if status != 200:
-            return {"resourceType": "Bundle", "type": "collection", "entry": [{"resource": resource} for resource in resources], "extension": [{"url": "urn:clinicforce:epic-status", "valueString": "partial"}]}
-    return {"resourceType": "Bundle", "type": "collection", "entry": [{"resource": resource} for resource in resources]}
+            return resources, "partial"
+    return resources, "ok"
+
+
+def _collection(resources: list[dict[str, Any]], status: str = "ok") -> dict[str, Any]:
+    bundle: dict[str, Any] = {
+        "resourceType": "Bundle",
+        "type": "collection",
+        "entry": [{"resource": resource} for resource in resources],
+    }
+    if status != "ok":
+        bundle["extension"] = [{
+            "url": "urn:clinicforce:epic-status",
+            "valueString": status,
+        }]
+    return bundle
+
+
+async def fetch_resource_type(session: LiveEpicSession, resource_type: str) -> dict[str, Any]:
+    if resource_type not in USCDI_RESOURCE_TYPES:
+        raise EpicError("That Epic resource type is not available in ClinicForce")
+    if resource_type == "Patient":
+        status, patient, _ = await _get_json(session, f"{session.fhir_base}/Patient/{session.remote_patient_id}")
+        if status == 401:
+            clear_live_session_by_value(session)
+            raise EpicError("Your live Epic session has ended. Connect MyChart again.")
+        if status in {403, 404}:
+            return _collection([], "unavailable")
+        return _collection([patient])
+
+    # Epic exposes MyChart condition data in distinct search categories. Asking
+    # for each category prevents a generic empty Condition search from hiding a
+    # problem list or health concern that the patient can see in MyChart.
+    search_params = [{"patient": session.remote_patient_id}]
+    if resource_type == "Condition":
+        search_params.extend({"patient": session.remote_patient_id, "category": category} for category in CONDITION_SEARCH_CATEGORIES)
+
+    resources: list[dict[str, Any]] = []
+    statuses: list[str] = []
+    for params in search_params:
+        try:
+            returned, search_status = await _search_resources(session, resource_type, params)
+        except EpicError:
+            if resource_type != "Condition":
+                raise
+            # A legacy Epic tenant can decline an optional category while still
+            # serving its regular Condition search. Preserve its usable data.
+            statuses.append("partial")
+            continue
+        resources.extend(returned)
+        statuses.append(search_status)
+
+    unique_resources: list[dict[str, Any]] = []
+    seen: set[tuple[str, str]] = set()
+    for resource in resources:
+        resource_id = resource.get("id")
+        key = (str(resource.get("resourceType", resource_type)), str(resource_id))
+        if resource_id is not None and key in seen:
+            continue
+        if resource_id is not None:
+            seen.add(key)
+        unique_resources.append(resource)
+        if len(unique_resources) >= MAX_RESOURCES_PER_TYPE:
+            return _collection(unique_resources, "truncated")
+
+    if any(status == "ok" for status in statuses):
+        overall_status = "partial" if any(status in {"partial", "truncated"} for status in statuses) else "ok"
+    elif "forbidden" in statuses:
+        overall_status = "forbidden"
+    elif "unavailable" in statuses:
+        overall_status = "unavailable"
+    else:
+        overall_status = "partial"
+    return _collection(unique_resources, overall_status)
 
 
 def clear_live_session_by_value(value: LiveEpicSession) -> None:
@@ -362,7 +429,7 @@ async def fetch_record(session: LiveEpicSession) -> tuple[dict[str, Any], dict[s
             continue
         entries.extend(entry for entry in bundle.get("entry", []) if isinstance(entry, dict))
         status = next((extension.get("valueString") for extension in bundle.get("extension", []) if isinstance(extension, dict) and extension.get("url") == "urn:clinicforce:epic-status"), "ok")
-        availability[resource_type] = str(status)
+        availability[resource_type] = "empty" if status == "ok" and not bundle.get("entry") else str(status)
     return {"resourceType": "Bundle", "type": "collection", "entry": entries}, availability
 
 

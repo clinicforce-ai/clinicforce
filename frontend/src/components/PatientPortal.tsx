@@ -104,6 +104,11 @@ function codedText(value: unknown): string | null {
 
 function epicResourceSummary(resource: Record<string, unknown>): string {
   const resourceType = typeof resource.resourceType === 'string' ? resource.resourceType : 'FHIR resource'
+  if (resourceType === 'Condition') {
+    const condition = codedText(resource.code) ?? (typeof resource.description === 'string' ? resource.description : null)
+    const status = codedText(resource.clinicalStatus) ?? (typeof resource.clinicalStatus === 'string' ? resource.clinicalStatus : null)
+    return [condition, status].filter(Boolean).join(' · ') || 'Condition record retrieved; Epic did not include a readable condition name.'
+  }
   if (resourceType === 'AllergyIntolerance') {
     return codedText(resource.code) ?? codedText(resource.clinicalStatus) ?? 'Allergy record retrieved; its clinical details will be included in the combined QR summary.'
   }
@@ -125,6 +130,27 @@ function epicResourceSummary(resource: Record<string, unknown>): string {
     return details.join(' · ') || 'Patient profile retrieved for this authorized connection.'
   }
   return codedText(resource.code) ?? (typeof resource.description === 'string' ? resource.description : null) ?? (typeof resource.status === 'string' ? resource.status : null) ?? 'Clinical data retrieved.'
+}
+
+function hasEpicPdfLink(resource: Record<string, unknown>): boolean {
+  if (resource.resourceType !== 'DocumentReference' || !Array.isArray(resource.content)) return false
+  return resource.content.some((item) => {
+    if (!item || typeof item !== 'object' || !('attachment' in item) || !item.attachment || typeof item.attachment !== 'object') return false
+    const attachment = item.attachment as { contentType?: unknown; url?: unknown }
+    return typeof attachment.url === 'string' && attachment.url.trim().length > 0 && String(attachment.contentType ?? '').toLowerCase().split(';', 1)[0] === 'application/pdf'
+  })
+}
+
+function epicAvailabilityMessage(availability: Record<string, string>): string {
+  const unavailable = Object.entries(availability)
+    .filter(([, value]) => value !== 'ok')
+    .map(([type, value]) => {
+      if (value === 'empty') return `${type}: Epic returned no records`
+      if (value === 'forbidden') return `${type}: access not granted`
+      if (value === 'unavailable') return `${type}: not available from this hospital`
+      return `${type}: ${value}`
+    })
+  return unavailable.join(' · ') || 'All requested supported resource families responded.'
 }
 
 export default function PatientPortal({ onBack }: PatientPortalProps) {
@@ -708,7 +734,7 @@ export default function PatientPortal({ onBack }: PatientPortalProps) {
             </> : <>
               <div className="storage-choice mt-4"><div><strong>Live from {epicRecord.source.organization_name}</strong><p>Retrieved {dateLabel(epicRecord.source.retrieved_at)}. This connection ends when you disconnect, its token expires, or the service restarts.</p></div><div className="storage-actions"><button className="button button-secondary" type="button" onClick={() => void refreshEpic()} disabled={busy === 'epic-load'}>{busy === 'epic-load' ? <LoaderCircle className="size-4 animate-spin" aria-hidden="true" /> : <RefreshCw className="size-4" aria-hidden="true" />} Refresh</button><button className="button button-secondary" type="button" onClick={() => void endEpicSession()}>Disconnect</button></div></div>
               <div className="workspace-stats mt-4" aria-label="Live Epic data counts">{Object.entries(epicCounts).slice(0, 6).map(([type, count]) => <div key={type}><FileText aria-hidden="true" /><span><strong>{count}</strong> {type}</span></div>)}</div>
-              <section className="mt-4" aria-label="MyChart details"><p className="document-name">MyChart details ({epicResources.length} resources)</p><p className="field-help mt-2">Availability: {Object.entries(epicRecord.availability).filter(([, value]) => value !== 'ok').map(([type, value]) => `${type}: ${value}`).join(' · ') || 'All requested supported resource families responded.'}</p><ul className="record-list mt-3">{epicResources.map((resource, index) => <li key={`${resource.resourceType ?? 'resource'}-${resource.id ?? index}`}><div><strong>{String(resource.resourceType ?? 'FHIR resource')}</strong><p>{epicResourceSummary(resource)}</p>{resource.resourceType === 'DocumentReference' && typeof resource.id === 'string' && <button className="button button-secondary mt-3" type="button" disabled={busy === 'epic-document'} onClick={() => void openEpicDocument(resource.id!)}>Open the source document</button>}</div></li>)}</ul></section>
+              <section className="mt-4" aria-label="MyChart details"><p className="document-name">MyChart details ({epicResources.length} resources)</p><p className="field-help mt-2">Availability: {epicAvailabilityMessage(epicRecord.availability)}</p><ul className="record-list mt-3">{epicRecord.availability.Condition === 'empty' && <li><div><strong>Conditions</strong><p>Epic did not return any condition records for this connection. Reconnect after the expanded condition search is available; if it remains empty, Houston Methodist must authorize ClinicForce to read the problem list or health concerns shown in MyChart.</p></div></li>}{epicResources.map((resource, index) => <li key={`${resource.resourceType ?? 'resource'}-${resource.id ?? index}`}><div><strong>{String(resource.resourceType ?? 'FHIR resource')}</strong><p>{epicResourceSummary(resource)}</p>{resource.resourceType === 'DocumentReference' && typeof resource.id === 'string' && (hasEpicPdfLink(resource) ? <button className="button button-secondary mt-3" type="button" disabled={busy === 'epic-document'} onClick={() => void openEpicDocument(resource.id!)}>Open the source PDF</button> : <p className="field-help mt-2">Epic shared this document’s title but not a downloadable PDF.</p>)}</div></li>)}</ul></section>
             </>}
           </section>
 
