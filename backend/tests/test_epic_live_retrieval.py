@@ -24,6 +24,13 @@ class EpicLiveRetrievalTests(unittest.IsolatedAsyncioTestCase):
             organization_name="Example Health",
         )
 
+    def test_requested_resources_are_limited_to_patient_facing_usdci_v3(self) -> None:
+        self.assertEqual(epic.USCDI_RESOURCE_TYPES, (
+            "Patient", "AllergyIntolerance", "CarePlan", "CareTeam", "Condition",
+            "Coverage", "Device", "DiagnosticReport", "DocumentReference", "Encounter",
+            "Goal", "Immunization", "MedicationRequest", "Observation",
+        ))
+
     async def test_condition_search_includes_problem_list_health_concerns_and_encounter_diagnoses(self) -> None:
         async def get_json(_session, _url, params=None):
             category = (params or {}).get("category")
@@ -49,4 +56,3 @@ class EpicLiveRetrievalTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(bundle["entry"], [])
         self.assertEqual(availability["Condition"], "empty")
-
