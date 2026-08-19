@@ -35,6 +35,7 @@ export interface PatientSession {
 export interface LinkResponse {
   shl_uri: string
   qr_code_base64: string
+  epic_included?: boolean
 }
 
 export interface EpicEndpoint {
@@ -54,11 +55,6 @@ export interface EpicRecord {
   bundle: { resourceType: string; entry: Array<{ resource: FhirResource }> }
   availability: Record<string, string>
   source: { organization_name: string; retrieved_at: string }
-}
-
-export interface EpicShare {
-  manifest_id: string
-  created_at: string
 }
 
 export interface ManualRecordInput {
@@ -82,10 +78,12 @@ export interface ClinicalMeasure {
 }
 
 export interface SourceCitation {
-  source_filename: string
-  page_number: number
+  source_filename?: string
+  page_number?: number
   document_id?: number
   download_url?: string
+  source_type?: 'epic'
+  organization_name?: string
 }
 
 export interface Medication {
@@ -255,26 +253,6 @@ export async function disconnectEpic(): Promise<void> {
   await request('/api/patient/epic/live-session', { method: 'DELETE' })
 }
 
-export async function generateEpicLink(patientId: string | undefined, password: string | undefined, passcode: string): Promise<LinkResponse> {
-  const value = await request<unknown>('/api/patient/epic/generate-link', json({ ...credentialsPayload(patientId, password), passcode }))
-  if (!value || typeof value !== 'object' || !('qr_code_base64' in value) || !('shl_uri' in value) || typeof value.qr_code_base64 !== 'string' || typeof value.shl_uri !== 'string') {
-    throw new ApiError(502, 'The server returned an invalid Epic share link.')
-  }
-  return value as LinkResponse
-}
-
-export async function getEpicShares(): Promise<EpicShare[]> {
-  const value = await request<unknown>('/api/patient/epic/shares')
-  if (!value || typeof value !== 'object' || !('shares' in value) || !Array.isArray(value.shares)) {
-    throw new ApiError(502, 'ClinicForce could not load your Epic share snapshots.')
-  }
-  return value.shares.filter((item): item is EpicShare => Boolean(item && typeof item === 'object' && 'manifest_id' in item && 'created_at' in item && typeof item.manifest_id === 'string' && typeof item.created_at === 'string'))
-}
-
-export async function revokeEpicShare(manifestId: string): Promise<void> {
-  await request(`/api/patient/epic/shares/${encodeURIComponent(manifestId)}`, { method: 'DELETE' })
-}
-
 async function liveEpicPdf(path: string, init: RequestInit, fallback: string): Promise<Blob> {
   const response = await fetch(path, { ...init, credentials: 'same-origin' })
   if (!response.ok) {
@@ -282,10 +260,6 @@ async function liveEpicPdf(path: string, init: RequestInit, fallback: string): P
     throw new ApiError(response.status, detailFrom(body, fallback))
   }
   return response.blob()
-}
-
-export function downloadEpicReport(patientId?: string, password?: string): Promise<Blob> {
-  return liveEpicPdf('/api/patient/epic/report', json(credentialsPayload(patientId, password)), 'Unable to create the live Epic report.')
 }
 
 export function downloadEpicDocument(documentId: string): Promise<Blob> {

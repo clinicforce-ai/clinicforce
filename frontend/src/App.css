@@ -146,6 +146,11 @@ input:focus, textarea:focus, select:focus { border-color: var(--blue); box-shado
 .storage-choice p { margin: 3px 0 0; color: var(--muted-ink); font-size: .76rem; line-height: 1.45; }
 .storage-actions { display: flex; flex: 0 0 auto; flex-wrap: wrap; justify-content: flex-end; gap: 7px; }
 .storage-actions .button { min-height: 40px; font-size: .75rem; }
+.epic-endpoint-options { display: grid; gap: 6px; margin-top: 8px; }
+.epic-endpoint-option { display: grid; gap: 2px; width: 100%; min-height: 44px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); padding: 9px 11px; color: var(--ink); text-align: left; transition: border-color .2s ease, background .2s ease; }
+.epic-endpoint-option:hover, .epic-endpoint-option[aria-selected="true"] { border-color: var(--blue); background: var(--blue-soft); }
+.epic-endpoint-option strong { font-size: .84rem; }
+.epic-endpoint-option span { color: var(--muted-ink); font-size: .74rem; font-weight: 600; line-height: 1.35; }
 .record-form { border-top: 1px solid var(--line); margin-top: 23px; padding-top: 23px; }
 .record-form fieldset { margin: 0; padding: 0; border: 0; }
 .record-form legend { margin-bottom: 12px; color: var(--ink); font-size: .92rem; font-weight: 700; }

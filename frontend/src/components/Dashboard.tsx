@@ -21,6 +21,9 @@ interface DashboardProps {
 
 function SourceNote({ citation }: { citation?: SourceCitation | null }) {
   if (!citation) return <span className="source-note source-note-manual">Patient-entered</span>
+  if (citation.source_type === 'epic') {
+    return <span className="source-note"><FileHeart aria-hidden="true" /> Epic / MyChart{citation.organization_name ? ` · ${citation.organization_name}` : ''}</span>
+  }
   const label = <><FileHeart aria-hidden="true" /> {citation.source_filename} · p. {citation.page_number}</>
   if (!citation.download_url) return <span className="source-note">{label}</span>
   return <a className="source-note source-link" href={citation.download_url} download aria-label={`Download source PDF ${citation.source_filename}, page ${citation.page_number}`}>{label}</a>
@@ -77,7 +80,7 @@ function TrendCharts({ rows }: { rows: ClinicalMeasure[] }) {
       const metric = `${group.name}${group.unit ? ` (${group.unit})` : ''}`
       const points = [...group.rows]
         .sort((left, right) => (left.date ?? '').localeCompare(right.date ?? ''))
-        .map((row, index) => ({ label: row.date ?? `Record ${index + 1}`, value: Number(row.value), source: row.citation ? `${row.citation.source_filename} · p. ${row.citation.page_number}` : 'Patient-entered' }))
+        .map((row, index) => ({ label: row.date ?? `Record ${index + 1}`, value: Number(row.value), source: row.citation?.source_type === 'epic' ? `Epic / MyChart · ${row.citation.organization_name ?? ''}` : row.citation ? `${row.citation.source_filename} · p. ${row.citation.page_number}` : 'Patient-entered' }))
       return <article className="trend-chart" key={`${group.name}-${group.unit ?? ''}`}>
         <h3>{metric}</h3>
         <div role="img" aria-label={`${metric} trend chart with ${points.length} documented values`}>
