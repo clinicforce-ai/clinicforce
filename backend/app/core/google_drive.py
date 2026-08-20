@@ -55,7 +55,9 @@ def authorization_url(state: str) -> str:
         "client_id": GOOGLE_CLIENT_ID,
         "redirect_uri": _callback_url(),
         "response_type": "code",
-        "scope": f"openid {_DRIVE_SCOPE}",
+        # ``profile`` lets us offer Google-provided names as editable form
+        # suggestions. Date of birth is deliberately not requested from Google.
+        "scope": f"openid profile {_DRIVE_SCOPE}",
         "access_type": "offline",
         "prompt": "consent",
         "include_granted_scopes": "true",
@@ -106,7 +108,7 @@ def _raise_for_google_error(response: httpx.Response, operation: str) -> None:
     response.raise_for_status()
 
 
-def complete_authorization(code: str) -> tuple[str, str, str]:
+def complete_authorization(code: str) -> tuple[str, str, str, str | None, str | None]:
     """Exchange a callback code and create the patient-visible ClinicForce folder."""
     if not enabled():
         raise RuntimeError("Google Drive is not configured")
@@ -123,11 +125,20 @@ def complete_authorization(code: str) -> tuple[str, str, str]:
     headers = {"Authorization": f"Bearer {tokens['access_token']}"}
     profile = httpx.get("https://openidconnect.googleapis.com/v1/userinfo", headers=headers, timeout=20.0)
     profile.raise_for_status()
-    subject = profile.json().get("sub")
+    profile_data = profile.json()
+    subject = profile_data.get("sub")
     if not isinstance(subject, str) or not subject:
         raise RuntimeError("Google did not return an account identifier")
     folder_id = _find_or_create_folder(headers)
-    return subject, _encrypt(refresh_token), folder_id
+    given_name = profile_data.get("given_name")
+    family_name = profile_data.get("family_name")
+    return (
+        subject,
+        _encrypt(refresh_token),
+        folder_id,
+        given_name if isinstance(given_name, str) else None,
+        family_name if isinstance(family_name, str) else None,
+    )
 
 
 def _access_token(connection: StoredDriveConnection) -> str:

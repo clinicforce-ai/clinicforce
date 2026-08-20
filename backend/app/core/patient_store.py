@@ -69,6 +69,18 @@ class PatientProfile:
 
 
 @dataclass(frozen=True)
+class PatientProfileSuggestions:
+    """Non-canonical name hints returned by a consented Google profile.
+
+    These values are never used in an exchange bundle until the patient saves
+    the demographic profile, explicitly confirming the legal name.
+    """
+
+    given_name: str | None
+    family_name: str | None
+
+
+@dataclass(frozen=True)
 class StoredDoctorReport:
     id: str
     patient_id: str
@@ -151,6 +163,8 @@ def _initialize_schema(connection: psycopg.Connection[Any]) -> None:
         cursor.execute("ALTER TABLE patients ADD COLUMN IF NOT EXISTS family_name TEXT")
         cursor.execute("ALTER TABLE patients ADD COLUMN IF NOT EXISTS birth_date DATE")
         cursor.execute("ALTER TABLE patients ADD COLUMN IF NOT EXISTS administrative_gender TEXT")
+        cursor.execute("ALTER TABLE patients ADD COLUMN IF NOT EXISTS google_given_name TEXT")
+        cursor.execute("ALTER TABLE patients ADD COLUMN IF NOT EXISTS google_family_name TEXT")
         cursor.execute("""DO $$ BEGIN
             ALTER TABLE patients ADD CONSTRAINT patients_administrative_gender_check
                 CHECK (administrative_gender IS NULL OR administrative_gender IN ('male', 'female', 'other', 'unknown'));
@@ -323,6 +337,39 @@ def get_patient_profile(patient_id: str) -> PatientProfile | None:
         birth_date=birth_date.isoformat() if hasattr(birth_date, "isoformat") else (str(birth_date) if birth_date else None),
         administrative_gender=str(row["administrative_gender"]) if row["administrative_gender"] else None,
     )
+
+
+def get_patient_profile_suggestions(patient_id: str) -> PatientProfileSuggestions:
+    """Return optional Google profile names as form suggestions only."""
+    with _connection() as connection:
+        row = connection.execute(
+            "SELECT google_given_name, google_family_name FROM patients WHERE patient_id = %s",
+            (patient_id,),
+        ).fetchone()
+    if row is None:
+        return PatientProfileSuggestions(None, None)
+    return PatientProfileSuggestions(
+        given_name=str(row["google_given_name"]) if row["google_given_name"] else None,
+        family_name=str(row["google_family_name"]) if row["google_family_name"] else None,
+    )
+
+
+def _google_name_hint(value: str | None) -> str | None:
+    """Keep unverified Google display names bounded before storing a suggestion."""
+    if not isinstance(value, str):
+        return None
+    value = value.strip()
+    return value[:100] if value else None
+
+
+def set_google_profile_suggestions(patient_id: str, given_name: str | None, family_name: str | None) -> None:
+    """Persist current consented Google display names without treating them as legal names."""
+    with _connection() as connection:
+        connection.execute(
+            """UPDATE patients SET google_given_name = %s, google_family_name = %s
+               WHERE patient_id = %s""",
+            (_google_name_hint(given_name), _google_name_hint(family_name), patient_id),
+        )
 
 
 def update_patient_profile(
@@ -918,14 +965,17 @@ def get_patient_by_google_subject(google_subject: str) -> str | None:
     return str(row["patient_id"]) if row else None
 
 
-def create_google_patient(google_subject: str, password_hash: str) -> str:
+def create_google_patient(
+    google_subject: str, password_hash: str, google_given_name: str | None = None, google_family_name: str | None = None,
+) -> str:
     """Create a stable, non-guessable local workspace for a Google identity."""
     digest = hashlib.sha256(google_subject.encode("utf-8")).hexdigest()[:20]
     patient_id = f"google-{digest}"
     with _connection() as connection:
         connection.execute(
-            "INSERT INTO patients (patient_id, password_hash, created_at) VALUES (%s, %s, %s) ON CONFLICT (patient_id) DO NOTHING",
-            (patient_id, password_hash, datetime.now(timezone.utc).isoformat()),
+            """INSERT INTO patients (patient_id, password_hash, google_given_name, google_family_name, created_at)
+               VALUES (%s, %s, %s, %s, %s) ON CONFLICT (patient_id) DO NOTHING""",
+            (patient_id, password_hash, _google_name_hint(google_given_name), _google_name_hint(google_family_name), datetime.now(timezone.utc).isoformat()),
         )
     return patient_id
 

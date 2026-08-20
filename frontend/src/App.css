@@ -107,6 +107,14 @@ input:focus, textarea:focus, select:focus { border-color: var(--blue); box-shado
 .section-heading h2 { margin: 2px 0 0; font-size: 1.45rem; }
 .section-kicker { margin: 0; color: var(--blue-deep); font-size: .72rem; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; }
 .section-icon { width: 22px; color: var(--blue); }
+.demographics-card { border-color: #a9cdd7; background: #fbfeff; }
+.demographics-intro { max-width: 74ch; margin: -4px 0 20px; color: var(--muted-ink); font-size: .88rem; line-height: 1.55; }
+.demographics-form { margin: 0; }
+.demographics-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; }
+.demographics-complete, .share-requirement { display: flex; align-items: flex-start; gap: 7px; margin: 0; font-size: .8rem; font-weight: 700; line-height: 1.45; }
+.demographics-complete { color: var(--green-deep); }
+.share-requirement { margin: -9px 0 17px; border: 1px solid #e4c5a9; border-radius: 9px; background: #fff8ef; padding: 10px; color: var(--warning); }
+.demographics-complete svg, .share-requirement svg { width: 18px; flex: 0 0 auto; }
 .item-list, .record-list, .summary-list { margin: 0; padding: 0; list-style: none; }
 .item-list { border-top: 1px solid var(--line); }
 .item-list li { display: flex; align-items: center; gap: 12px; min-height: 72px; border-bottom: 1px solid var(--line); padding: 11px 0; }

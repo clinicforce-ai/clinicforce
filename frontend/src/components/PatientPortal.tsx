@@ -22,6 +22,7 @@ import {
   ShieldCheck,
   Trash2,
   Upload,
+  UserRound,
   X,
 } from 'lucide-react'
 import {
@@ -39,17 +40,21 @@ import {
   downloadPatientDocumentsArchive,
   generatePatientLink,
   getCurrentPatientSession,
+  getPatientProfile,
   loginPatient,
   importGoogleDriveChanges,
   logoutPatient,
   registerPatient,
   searchEpicEndpoints,
   savePatientRecord,
+  savePatientProfile,
   type LinkResponse,
   type EpicEndpoint,
   type EpicRecord,
   type ManualRecordInput,
   type PatientDocument,
+  type PatientProfile,
+  type PatientProfileInput,
   type PatientSession,
   type RecordCategory,
   uploadPatientPdfs,
@@ -61,9 +66,27 @@ interface PatientPortalProps {
 
 type AuthMode = 'login' | 'register'
 type FormState = Record<Exclude<keyof ManualRecordInput, 'category'>, string>
+type ProfileFormState = PatientProfileInput
 
 const emptyForm: FormState = {
   hospital: '', name: '', value: '', unit: '', date: '', details: '', dosage: '',
+}
+
+const emptyProfileForm: ProfileFormState = {
+  given_name: '', family_name: '', birth_date: '', administrative_gender: 'unknown',
+}
+
+function profileFormFrom(profile: PatientProfile): ProfileFormState {
+  return {
+    given_name: profile.given_name ?? profile.suggested_given_name ?? '',
+    family_name: profile.family_name ?? profile.suggested_family_name ?? '',
+    birth_date: profile.birth_date ?? '',
+    administrative_gender: profile.administrative_gender ?? 'unknown',
+  }
+}
+
+function profileIsComplete(profile: PatientProfile | null): boolean {
+  return Boolean(profile?.given_name && profile.family_name && profile.birth_date && profile.administrative_gender)
 }
 
 const categoryMeta: Record<RecordCategory, { label: string; help: string; icon: string }> = {
@@ -165,6 +188,8 @@ export default function PatientPortal({ onBack }: PatientPortalProps) {
   const [password, setPassword] = useState('')
   const [showPassword, setShowPassword] = useState(false)
   const [session, setSession] = useState<PatientSession | null>(null)
+  const [profile, setProfile] = useState<PatientProfile | null>(null)
+  const [profileForm, setProfileForm] = useState<ProfileFormState>(emptyProfileForm)
   const [files, setFiles] = useState<File[]>([])
   const [category, setCategory] = useState<RecordCategory>('hospital')
   const [form, setForm] = useState<FormState>(emptyForm)
@@ -177,7 +202,7 @@ export default function PatientPortal({ onBack }: PatientPortalProps) {
   const [epicSearching, setEpicSearching] = useState(false)
   const [epicDirectoryError, setEpicDirectoryError] = useState('')
   const [selectedDocumentIds, setSelectedDocumentIds] = useState<Set<number>>(new Set())
-  const [busy, setBusy] = useState<'auth' | 'upload' | 'record' | 'share' | 'download' | 'delete' | 'bulk-download' | 'bulk-delete' | 'import' | 'drive' | 'google' | 'epic-connect' | 'epic-load' | 'epic-document' | null>(null)
+  const [busy, setBusy] = useState<'auth' | 'profile' | 'upload' | 'record' | 'share' | 'download' | 'delete' | 'bulk-download' | 'bulk-delete' | 'import' | 'drive' | 'google' | 'epic-connect' | 'epic-load' | 'epic-document' | null>(null)
   const [restoringSession, setRestoringSession] = useState(true)
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
@@ -186,12 +211,20 @@ export default function PatientPortal({ onBack }: PatientPortalProps) {
   const epicPopupWatch = useRef<number | null>(null)
   const epicConnectionHandled = useRef(false)
 
+  const applyProfile = (nextProfile: PatientProfile) => {
+    setProfile(nextProfile)
+    setProfileForm(profileFormFrom(nextProfile))
+  }
+
   useEffect(() => {
     let active = true
     void getCurrentPatientSession()
       .then((workspace) => {
         if (active) {
           setSession(workspace)
+          void getPatientProfile()
+            .then((currentProfile) => { if (active) applyProfile(currentProfile) })
+            .catch((caught) => { if (active) setError(messageFrom(caught, 'Unable to load your demographic profile.')) })
           setNotice(workspace.drive_sync_message ?? 'Your Google Drive workspace is ready.')
           if (new URLSearchParams(window.location.search).get('epic') === 'connected') {
             void getEpicRecord().then((record) => {
@@ -285,7 +318,9 @@ export default function PatientPortal({ onBack }: PatientPortalProps) {
     clearFeedback()
     setBusy('auth')
     try {
-      setSession(mode === 'login' ? await loginPatient(normalizedId, password) : await registerPatient(normalizedId, password))
+      const workspace = mode === 'login' ? await loginPatient(normalizedId, password) : await registerPatient(normalizedId, password)
+      setSession(workspace)
+      applyProfile(await getPatientProfile())
       setNotice(mode === 'login' ? 'Your workspace is ready.' : 'Your account is ready. Add a report or health detail to get started.')
     } catch (caught) {
       setError(messageFrom(caught, 'Unable to open your workspace.'))
@@ -408,8 +443,37 @@ export default function PatientPortal({ onBack }: PatientPortalProps) {
     }
   }
 
+  const saveProfile = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    if (!session) return
+    const submitted: ProfileFormState = {
+      ...profileForm,
+      given_name: profileForm.given_name.trim(),
+      family_name: profileForm.family_name.trim(),
+    }
+    if (!submitted.given_name || !submitted.family_name || !submitted.birth_date) {
+      setError('Enter your legal first name, legal last name, and date of birth before creating an EHR QR code.')
+      return
+    }
+    clearFeedback()
+    setBusy('profile')
+    try {
+      applyProfile(await savePatientProfile(session.patient_id, password, submitted))
+      setNotice('Demographic profile saved. Your health QR can now be matched by a receiving EHR.')
+    } catch (caught) {
+      setError(messageFrom(caught, 'Unable to save your demographic profile.'))
+    } finally {
+      setBusy(null)
+    }
+  }
+
   const generateLink = async () => {
     if (!session) return
+    if (!profileIsComplete(profile)) {
+      setError('Complete and save your demographic profile before creating an EHR QR code.')
+      document.getElementById('demographics-heading')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+      return
+    }
     if (!/^\d{4}$/.test(sharePasscode)) {
       setError('Choose a four-digit passcode for the clinician.')
       return
@@ -660,6 +724,8 @@ export default function PatientPortal({ onBack }: PatientPortalProps) {
     setPassword('')
     setFiles([])
     setLink(null)
+    setProfile(null)
+    setProfileForm(emptyProfileForm)
     setEpicRecord(null)
     setSelectedDocumentIds(new Set())
     setSharePasscode('')
@@ -711,6 +777,7 @@ export default function PatientPortal({ onBack }: PatientPortalProps) {
     return counts
   }, {})
   const canCreateShare = recordsAvailable > 0 || epicResources.length > 0
+  const demographicProfileComplete = profileIsComplete(profile)
   const selectedEpicEndpoint = epicEndpoints.find((endpoint) => endpoint.id === selectedEpicEndpointId)
 
   return (
@@ -731,6 +798,20 @@ export default function PatientPortal({ onBack }: PatientPortalProps) {
 
       <div className="workspace-grid">
         <div className="workspace-main">
+          <section className="section-card demographics-card" aria-labelledby="demographics-heading">
+            <div className="section-heading"><div><p className="section-kicker">Required for EHR QR sharing</p><h2 id="demographics-heading">Confirm your demographics</h2></div><UserRound aria-hidden="true" className="section-icon" /></div>
+            <p className="demographics-intro">Receiving EHRs use these details to match your QR to the right chart. Google profile names, when available, are only suggestions—confirm your legal name before sharing.</p>
+            <form className="demographics-form" onSubmit={saveProfile} noValidate>
+              <div className="form-grid">
+                <div className="field"><label htmlFor="given-name">Legal first name <em>Required</em></label><input id="given-name" autoComplete="given-name" value={profileForm.given_name} onChange={(event) => setProfileForm((current) => ({ ...current, given_name: event.target.value }))} /></div>
+                <div className="field"><label htmlFor="family-name">Legal last name <em>Required</em></label><input id="family-name" autoComplete="family-name" value={profileForm.family_name} onChange={(event) => setProfileForm((current) => ({ ...current, family_name: event.target.value }))} /></div>
+                <div className="field"><label htmlFor="birth-date">Date of birth <em>Required</em></label><input id="birth-date" type="date" autoComplete="bday" value={profileForm.birth_date} onChange={(event) => setProfileForm((current) => ({ ...current, birth_date: event.target.value }))} /></div>
+                <div className="field"><label htmlFor="administrative-gender">Administrative sex/gender <em>Required</em></label><select id="administrative-gender" autoComplete="sex" value={profileForm.administrative_gender} onChange={(event) => setProfileForm((current) => ({ ...current, administrative_gender: event.target.value as ProfileFormState['administrative_gender'] }))}><option value="female">Female</option><option value="male">Male</option><option value="other">Other</option><option value="unknown">Unknown</option></select></div>
+              </div>
+              <div className="demographics-actions"><button className="button button-secondary" type="submit" disabled={busy === 'profile'}>{busy === 'profile' ? <LoaderCircle className="size-4 animate-spin" aria-hidden="true" /> : <ShieldCheck className="size-4" aria-hidden="true" />}{demographicProfileComplete ? 'Update demographic profile' : 'Save demographic profile'}</button>{demographicProfileComplete && <span className="demographics-complete"><CheckCircle2 aria-hidden="true" /> Ready for EHR QR sharing</span>}</div>
+            </form>
+          </section>
+
           <section className="section-card" aria-labelledby="epic-heading">
             <div className="section-heading"><div><p className="section-kicker">Live patient-authorized connection</p><h2 id="epic-heading">Epic / MyChart</h2></div><Building2 aria-hidden="true" className="section-icon" /></div>
             {!epicRecord ? <>
@@ -817,10 +898,11 @@ export default function PatientPortal({ onBack }: PatientPortalProps) {
           <div className="share-icon"><QrCode aria-hidden="true" /></div>
           <p className="eyebrow">Share with your clinician</p>
           <h2 id="share-heading">Create a secure QR code</h2>
-          <p>{epicRecord ? `This one QR combines ${recordsAvailable} workspace item${recordsAvailable === 1 ? '' : 's'} with ${epicResources.length} current MyChart resource${epicResources.length === 1 ? '' : 's'}.` : `It includes the ${recordsAvailable} item${recordsAvailable === 1 ? '' : 's'} in this workspace. Connect MyChart first to include its current record too.`} Give the clinician your passcode separately.</p>
+          <p>{epicRecord ? `This one QR combines ${recordsAvailable} workspace item${recordsAvailable === 1 ? '' : 's'} with ${epicResources.length} current MyChart resource${epicResources.length === 1 ? '' : 's'}.` : `It includes the ${recordsAvailable} item${recordsAvailable === 1 ? '' : 's'} in this workspace. You do not need to connect MyChart to share with eClinicalWorks.`} Give the clinician your passcode separately.</p>
+          {!demographicProfileComplete && <p className="share-requirement"><UserRound aria-hidden="true" /> Save the demographic profile first. It is required so the receiving EHR can match the patient safely.</p>}
           <label htmlFor="share-passcode">Four-digit passcode</label>
           <div className="passcode-field"><KeyRound aria-hidden="true" /><input id="share-passcode" type="password" inputMode="numeric" autoComplete="off" maxLength={4} value={sharePasscode} onChange={(event) => setSharePasscode(event.target.value.replace(/\D/g, ''))} placeholder="0000" /></div>
-          <button className="button button-primary w-full" type="button" onClick={() => void generateLink()} disabled={busy === 'share' || !canCreateShare}>{busy === 'share' ? <LoaderCircle className="size-4 animate-spin" aria-hidden="true" /> : <QrCode aria-hidden="true" className="size-4" />} Generate combined QR code</button>
+          <button className="button button-primary w-full" type="button" onClick={() => void generateLink()} disabled={busy === 'share' || !canCreateShare || !demographicProfileComplete}>{busy === 'share' ? <LoaderCircle className="size-4 animate-spin" aria-hidden="true" /> : <QrCode aria-hidden="true" className="size-4" />} Generate combined QR code</button>
           <p className="share-footnote"><ShieldCheck aria-hidden="true" /> The clinician needs both this QR code and your passcode.</p>
         </aside>
       </div>
