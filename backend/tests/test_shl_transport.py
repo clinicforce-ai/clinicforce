@@ -27,7 +27,7 @@ class _Result:
 class _ManifestConnection:
     """A thread-safe narrow fake for the SQL used by verify_manifest_pin()."""
 
-    def __init__(self, hashed_pin: str) -> None:
+    def __init__(self, hashed_pin: str | None) -> None:
         self.lock = threading.Lock()
         self.row: dict[str, object] = {
             "patient_id": "patient-1",
@@ -95,6 +95,29 @@ class ShlTransportTests(unittest.TestCase):
         payload = json.loads(base64.urlsafe_b64decode(encoded + "=" * (-len(encoded) % 4)))
         self.assertEqual(payload["url"], "https://app.example/manifest/" + "A" * 43)
         self.assertEqual(payload["flag"], "P")
+
+    def test_no_pin_shlink_is_a_bare_uri_without_the_passcode_flag(self) -> None:
+        uri = create_shl_uri(
+            "https://app.example/manifest/" + "A" * 43,
+            generate_symmetric_key(),
+            "ClinicForce eClinicalMobile test",
+            1_800_000_000,
+            require_passcode=False,
+        )
+        self.assertTrue(uri.startswith("shlink:/"))
+        self.assertNotIn("#", uri)
+        encoded = uri.removeprefix("shlink:/")
+        payload = json.loads(base64.urlsafe_b64decode(encoded + "=" * (-len(encoded) % 4)))
+        self.assertEqual(payload["v"], 1)
+        self.assertNotIn("flag", payload)
+        self.assertEqual(payload["exp"], 1_800_000_000)
+
+    def test_no_pin_manifest_resolves_without_consuming_a_pin_attempt(self) -> None:
+        connection = _ManifestConnection(None)
+        with patch("app.core.patient_store._connection", return_value=connection):
+            manifest = patient_store.verify_manifest_pin("A" * 43, "")
+        self.assertEqual(manifest["encrypted_jwe"] if manifest else None, "encrypted")
+        self.assertEqual(connection.row["failed_pin_attempts"], 0)
 
     def test_lifetime_pin_limit_is_not_reset_by_a_success_and_is_race_safe(self) -> None:
         connection = _ManifestConnection(hash_pin("1234"))

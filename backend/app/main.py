@@ -258,14 +258,19 @@ class DocumentBatchRequest(PatientCredentials):
 
 
 class GeneratePatientLinkRequest(PatientCredentials):
-    passcode: str = Field(min_length=4, max_length=128)
+    """Create either the default protected share or a bare SHL test share."""
+
+    share_mode: Literal["standard", "ecw_compat"] = "standard"
+    passcode: str | None = Field(default=None, min_length=4, max_length=4, pattern=r"^\d{4}$")
 
     @field_validator("passcode")
     @classmethod
-    def normalize_link_passcode(cls, value: str) -> str:
+    def normalize_link_passcode(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
         value = value.strip()
-        if len(value) < 4:
-            raise ValueError("Choose a sharing passcode of at least four characters")
+        if not value.isdigit() or len(value) != 4:
+            raise ValueError("Choose a four-digit sharing passcode")
         return value
 
 
@@ -301,9 +306,23 @@ class ExternalShlImportRequest(RequestModel):
 
 
 def _create_upload_shl(
-    patient_id: str | None, fhir_bundle: dict[str, Any], passcode: str, source: str = "local",
+    patient_id: str | None,
+    fhir_bundle: dict[str, Any],
+    passcode: str | None,
+    source: str = "local",
+    require_passcode: bool = True,
 ) -> tuple[str, str, str]:
-    """Create and retain the encrypted SHL payload outside the event loop."""
+    """Create and retain the encrypted SHL payload outside the event loop.
+
+    ``ecw_compat`` is deliberately a separate, short-lived, no-PIN test
+    share.  It emits the canonical bare SHL URI rather than the normal
+    browser-viewer wrapper, so a receiving application's parser can be tested
+    independently from its handling of the optional viewer URL.
+    """
+    if require_passcode and not passcode:
+        raise ValueError("A passcode is required for a protected SHL")
+    if not require_passcode and passcode is not None:
+        raise ValueError("An unprotected SHL cannot include a passcode")
     key = generate_symmetric_key()
     key_bytes = base64.urlsafe_b64decode(key + "=" * (-len(key) % 4))
     encrypted_jwe = encrypt_bundle(fhir_bundle, key_bytes)
@@ -311,7 +330,7 @@ def _create_upload_shl(
     manifest_id = create_manifest(
         patient_id,
         encrypted_jwe,
-        hash_pin(passcode),
+        hash_pin(passcode) if require_passcode and passcode is not None else None,
         source,
         expires_at.isoformat(),
     )
@@ -320,11 +339,11 @@ def _create_upload_shl(
         key,
         "ClinicForce records",
         int(expires_at.timestamp()),
-        # Keep the standards-compliant SHL in a URL fragment.  The fragment is
-        # not sent when the viewer URL is opened, while URL-first mobile QR
-        # readers can recognize it before handing the embedded shlink URI to
-        # their SHL parser.
-        viewer_url=f"{PUBLIC_BASE_URL}/",
+        # The protected default is wrapped in a browser viewer.  The explicit
+        # eClinicalMobile compatibility mode uses the requested bare
+        # ``shlink:/...`` protocol string with no ``P`` flag.
+        viewer_url=f"{PUBLIC_BASE_URL}/" if require_passcode else None,
+        require_passcode=require_passcode,
     )
     return shl_uri, generate_qr_code(shl_uri), str(manifest_id)
 
@@ -1579,8 +1598,11 @@ async def import_external_shl(request: ExternalShlImportRequest, http_request: R
 @app.post("/api/patient/generate-link")
 async def generate_patient_link(request: GeneratePatientLinkRequest, http_request: Request) -> dict[str, Any]:
     patient_id = await _authenticate_patient(request.patient_id, request.password, http_request)
-    if not request.passcode or len(request.passcode) < 4:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Choose a sharing passcode of at least four characters")
+    protected_share = request.share_mode == "standard"
+    if protected_share and (not request.passcode or len(request.passcode) != 4):
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Choose a four-digit sharing passcode")
+    if not protected_share and request.passcode is not None:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="The eClinicalMobile compatibility QR cannot include a passcode")
     # Reconcile patient-managed Drive deletions before this snapshot is encrypted.
     await _load_workspace(patient_id)
     documents, records = await asyncio.gather(
@@ -1618,7 +1640,14 @@ async def generate_patient_link(request: GeneratePatientLinkRequest, http_reques
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                 detail="Complete the patient's legal name and date of birth in the demographic profile before creating an external-EHR share.",
             )
-        shl_uri, qr_code_base64, manifest_id = await asyncio.to_thread(_create_upload_shl, patient_id, fhir_bundle, request.passcode)
+        shl_uri, qr_code_base64, manifest_id = await asyncio.to_thread(
+            _create_upload_shl,
+            patient_id,
+            fhir_bundle,
+            request.passcode if protected_share else None,
+            "local" if protected_share else "ecw_compat",
+            protected_share,
+        )
         # Drive patients receive one stable, replaced-on-new-QR PDF in their own
         # ClinicForce folder. S3 patients retain the existing non-persisted report flow.
         if await asyncio.to_thread(get_storage_preference, patient_id) == "google_drive":
@@ -1649,8 +1678,20 @@ async def generate_patient_link(request: GeneratePatientLinkRequest, http_reques
                 await asyncio.to_thread(set_drive_summary_file, patient_id, summary_file_id, fingerprint)
                 if previous_summary_file_id and previous_summary_file_id != summary_file_id:
                     await _retire_plaintext_drive_file(patient_id, connection, previous_summary_file_id)
-        log_info("Secure Sharing", "Created encrypted clinician share for %d documents, %d structured records, Epic=%s", len(documents), len(records), bool(epic_snapshot))
-        return {"shl_uri": shl_uri, "qr_code_base64": qr_code_base64, "epic_included": bool(epic_snapshot)}
+        log_info(
+            "Secure Sharing",
+            "Created encrypted clinician share mode=%s for %d documents, %d structured records, Epic=%s",
+            request.share_mode,
+            len(documents),
+            len(records),
+            bool(epic_snapshot),
+        )
+        return {
+            "shl_uri": shl_uri,
+            "qr_code_base64": qr_code_base64,
+            "epic_included": bool(epic_snapshot),
+            "share_mode": request.share_mode,
+        }
     except HTTPException:
         raise
     except Exception as exc:

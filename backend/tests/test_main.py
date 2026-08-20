@@ -176,6 +176,27 @@ class MainRouteTests(unittest.IsolatedAsyncioTestCase):
         add_document.assert_not_called()
         post_to_fhir.assert_not_awaited()
 
+    async def test_ecw_compat_share_uses_a_separate_no_pin_transport_mode(self) -> None:
+        exchange_bundle = {"resourceType": "Bundle", "type": "collection", "entry": [
+            {"resource": {"resourceType": "Patient", "id": "patient-1", "name": [{"given": ["Pat"], "family": "Example"}], "birthDate": "1980-01-01"}},
+            {"resource": {"resourceType": "Condition", "id": "condition-1", "code": {"text": "Asthma"}}},
+        ]}
+        with (
+            patch("app.main._authenticate_patient", new=AsyncMock(return_value="patient-1")),
+            patch("app.main._load_workspace", new=AsyncMock(return_value={})),
+            patch("app.main.list_documents", return_value=[]),
+            patch("app.main.list_records", return_value=[]),
+            patch("app.main._ensure_documents_extracted", new=AsyncMock()),
+            patch("app.main.get_patient_profile", return_value=MATCHABLE_PROFILE),
+            patch("app.main.build_exchange_bundle", return_value=exchange_bundle),
+            patch("app.main._create_upload_shl", return_value=("shlink:/bare", "qr", "manifest-1")) as create_share,
+            patch("app.main.get_storage_preference", return_value="s3"),
+        ):
+            response = await self.client.post("/api/patient/generate-link", json={"share_mode": "ecw_compat"})
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()["share_mode"], "ecw_compat")
+        self.assertEqual(create_share.call_args.args[2:], (None, "ecw_compat", False))
+
     async def test_share_rejects_an_unmatchable_patient_before_creating_a_qr(self) -> None:
         document = SimpleNamespace(
             id=7, filename="report.pdf", uploaded_at="2026-08-19T12:00:00+00:00",

@@ -52,6 +52,7 @@ export interface LinkResponse {
   shl_uri: string
   qr_code_base64: string
   epic_included?: boolean
+  share_mode?: 'standard' | 'ecw_compat'
 }
 
 export interface EpicEndpoint {
@@ -360,11 +361,17 @@ export async function savePatientRecord(
 export async function generatePatientLink(
   patientId: string | undefined,
   password: string | undefined,
-  passcode: string,
+  passcode: string | undefined,
+  shareMode: 'standard' | 'ecw_compat' = 'standard',
 ): Promise<LinkResponse> {
+  const requestBody = {
+    ...credentialsPayload(patientId, password),
+    share_mode: shareMode,
+    ...(shareMode === 'standard' ? { passcode } : {}),
+  }
   const value = await request<unknown>(
     '/api/patient/generate-link',
-    json({ ...credentialsPayload(patientId, password), passcode }),
+    json(requestBody),
   )
   if (
     !value ||
