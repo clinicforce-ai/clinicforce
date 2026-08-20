@@ -77,8 +77,21 @@ def verify_password(password: str, hashed_password: str) -> bool:
         return False
 
 
-def create_shl_uri(manifest_url: str, key: str, label: str, expires_at: int | None = None) -> str:
-    """Create an SHL URI containing the manifest URL and decryption key."""
+def create_shl_uri(
+    manifest_url: str,
+    key: str,
+    label: str,
+    expires_at: int | None = None,
+    viewer_url: str | None = None,
+) -> str:
+    """Create a standards-compliant SHL, optionally inside a viewer URL fragment.
+
+    A bare ``shlink:/...`` is the canonical SHL representation.  The SMART
+    Health Links specification also permits a viewer URL immediately before
+    it, separated by ``#``.  That form lets QR readers that classify URLs
+    before custom URI schemes hand the SHL to their parser without changing
+    the encrypted payload or its access controls.
+    """
     if len(label) > 80:
         raise ValueError("SHL labels must not exceed 80 characters")
     payload: dict[str, object] = {
@@ -93,7 +106,14 @@ def create_shl_uri(manifest_url: str, key: str, label: str, expires_at: int | No
     encoded_payload = _base64url_encode(
         json.dumps(payload, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
     )
-    return f"shlink:/{encoded_payload}"
+    shlink_uri = f"shlink:/{encoded_payload}"
+    if viewer_url is None:
+        return shlink_uri
+
+    normalized_viewer_url = viewer_url.rstrip("#")
+    if not normalized_viewer_url:
+        raise ValueError("SHL viewer URL must not be empty")
+    return f"{normalized_viewer_url}#{shlink_uri}"
 
 
 def generate_qr_code(shl_uri: str) -> str:

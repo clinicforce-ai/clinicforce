@@ -80,6 +80,22 @@ class ShlTransportTests(unittest.TestCase):
         self.assertEqual(payload["flag"], "P")
         self.assertEqual(payload["exp"], 1_800_000_000)
 
+    def test_viewer_wrapped_shlink_keeps_the_standard_payload_in_the_fragment(self) -> None:
+        uri = create_shl_uri(
+            "https://app.example/manifest/" + "A" * 43,
+            generate_symmetric_key(),
+            "ClinicForce records",
+            1_800_000_000,
+            viewer_url="https://viewer.example/",
+        )
+        viewer_url, shlink_uri = uri.split("#", 1)
+        self.assertEqual(viewer_url, "https://viewer.example/")
+        self.assertTrue(shlink_uri.startswith("shlink:/"))
+        encoded = shlink_uri.removeprefix("shlink:/")
+        payload = json.loads(base64.urlsafe_b64decode(encoded + "=" * (-len(encoded) % 4)))
+        self.assertEqual(payload["url"], "https://app.example/manifest/" + "A" * 43)
+        self.assertEqual(payload["flag"], "P")
+
     def test_lifetime_pin_limit_is_not_reset_by_a_success_and_is_race_safe(self) -> None:
         connection = _ManifestConnection(hash_pin("1234"))
         results: list[int | None] = []

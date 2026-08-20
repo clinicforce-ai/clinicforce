@@ -320,6 +320,11 @@ def _create_upload_shl(
         key,
         "ClinicForce records",
         int(expires_at.timestamp()),
+        # Keep the standards-compliant SHL in a URL fragment.  The fragment is
+        # not sent when the viewer URL is opened, while URL-first mobile QR
+        # readers can recognize it before handing the embedded shlink URI to
+        # their SHL parser.
+        viewer_url=f"{PUBLIC_BASE_URL}/",
     )
     return shl_uri, generate_qr_code(shl_uri), str(manifest_id)
 
