@@ -83,6 +83,7 @@ def create_shl_uri(
     label: str,
     expires_at: int | None = None,
     viewer_url: str | None = None,
+    require_passcode: bool = True,
 ) -> str:
     """Create a standards-compliant SHL, optionally inside a viewer URL fragment.
 
@@ -98,9 +99,13 @@ def create_shl_uri(
         "url": manifest_url,
         "key": key,
         "label": label,
-        "flag": "P",
         "v": 1,
     }
+    # ``P`` is deliberately omitted for unprotected SHLinks.  Its presence
+    # means a receiver MUST ask for a user-supplied passcode before resolving
+    # the manifest; an empty flag value is not equivalent to no flag.
+    if require_passcode:
+        payload["flag"] = "P"
     if expires_at is not None:
         payload["exp"] = expires_at
     encoded_payload = _base64url_encode(

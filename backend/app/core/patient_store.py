@@ -215,7 +215,7 @@ def _initialize_schema(connection: psycopg.Connection[Any]) -> None:
         EXCEPTION WHEN duplicate_object THEN NULL; END $$""")
         cursor.execute("""CREATE TABLE IF NOT EXISTS shl_manifests (
             manifest_id TEXT PRIMARY KEY, patient_id TEXT REFERENCES patients(patient_id),
-            encrypted_jwe TEXT NOT NULL, hashed_pin TEXT NOT NULL, created_at TEXT NOT NULL,
+            encrypted_jwe TEXT NOT NULL, hashed_pin TEXT, created_at TEXT NOT NULL,
             failed_pin_attempts INTEGER NOT NULL DEFAULT 0, pin_locked_until TEXT, revoked_at TEXT
         )""")
         cursor.execute("ALTER TABLE shl_manifests ADD COLUMN IF NOT EXISTS failed_pin_attempts INTEGER NOT NULL DEFAULT 0")
@@ -223,6 +223,10 @@ def _initialize_schema(connection: psycopg.Connection[Any]) -> None:
         cursor.execute("ALTER TABLE shl_manifests ADD COLUMN IF NOT EXISTS revoked_at TEXT")
         cursor.execute("ALTER TABLE shl_manifests ADD COLUMN IF NOT EXISTS source TEXT NOT NULL DEFAULT 'local'")
         cursor.execute("ALTER TABLE shl_manifests ADD COLUMN IF NOT EXISTS expires_at TEXT")
+        # Compatibility-test shares deliberately omit the SHL ``P`` flag and
+        # therefore have no PIN to hash.  Existing PIN-bearing shares retain
+        # their hashes unchanged.
+        cursor.execute("ALTER TABLE shl_manifests ALTER COLUMN hashed_pin DROP NOT NULL")
         cursor.execute("""CREATE TABLE IF NOT EXISTS doctor_reports (
             id TEXT PRIMARY KEY, patient_id TEXT NOT NULL REFERENCES patients(patient_id),
             filename TEXT NOT NULL, s3_key TEXT NOT NULL, created_at TEXT NOT NULL
@@ -703,7 +707,7 @@ def revoke_patient_manifests(patient_id: str) -> int:
     """Withdraw combined clinician QR snapshots after a workspace source is removed."""
     with _connection() as connection:
         cursor = connection.execute(
-            "UPDATE shl_manifests SET revoked_at = %s WHERE patient_id = %s AND source = 'local' AND revoked_at IS NULL",
+            "UPDATE shl_manifests SET revoked_at = %s WHERE patient_id = %s AND source IN ('local', 'ecw_compat') AND revoked_at IS NULL",
             (datetime.now(timezone.utc).isoformat(), patient_id),
         )
     if cursor.rowcount:
@@ -784,20 +788,25 @@ def generate_manifest_token() -> str:
 def create_manifest(
     patient_id: str | None,
     encrypted_jwe: str,
-    hashed_pin: str,
+    hashed_pin: str | None,
     source: str = "local",
     expires_at: str | None = None,
 ) -> str:
-    if source not in {"local", "epic"}:
+    if source not in {"local", "epic", "ecw_compat"}:
         raise ValueError("Unknown manifest source")
     manifest_id = generate_manifest_token()
     with _connection() as connection:
         if patient_id:
-            # A current combined QR supersedes every older patient share,
-            # including legacy Epic-only manifests created before this flow.
-            # The legacy ``epic`` source remains supported solely so existing
-            # data can be read and revoked safely during migration.
-            predicate = "source = 'epic'" if source == "epic" else "TRUE"
+            # The no-PIN compatibility QR is a separately disclosed test
+            # artifact, so generating either format must not silently revoke
+            # the other.  Standard shares retain the legacy behavior of
+            # superseding old standard and old Epic-only shares.
+            if source == "epic":
+                predicate = "source = 'epic'"
+            elif source == "ecw_compat":
+                predicate = "source = 'ecw_compat'"
+            else:
+                predicate = "source IN ('local', 'epic')"
             superseded = connection.execute(
                 f"UPDATE shl_manifests SET revoked_at = %s WHERE patient_id = %s AND {predicate} AND revoked_at IS NULL",
                 (datetime.now(timezone.utc).isoformat(), patient_id),
@@ -832,7 +841,7 @@ def revoke_epic_manifest(patient_id: str, manifest_id: str) -> bool:
     return cursor.rowcount == 1
 
 
-def get_manifest(manifest_id: str) -> dict[str, str] | None:
+def get_manifest(manifest_id: str) -> dict[str, str | None] | None:
     now = datetime.now(timezone.utc).isoformat()
     with _connection() as connection:
         row = connection.execute(
@@ -843,7 +852,7 @@ def get_manifest(manifest_id: str) -> dict[str, str] | None:
     return dict(row) if row else None
 
 
-def verify_manifest_pin(manifest_id: str, passcode: str) -> dict[str, str] | None:
+def verify_manifest_pin(manifest_id: str, passcode: str) -> dict[str, str | None] | None:
     """Verify a manifest PIN with a race-safe, lifetime brute-force limit."""
     from app.core.shl import verify_pin
 
@@ -861,6 +870,11 @@ def verify_manifest_pin(manifest_id: str, passcode: str) -> dict[str, str] | Non
             return None
         if int(row["failed_pin_attempts"] or 0) >= MANIFEST_PIN_MAX_ATTEMPTS:
             return None
+        # A manifest created without a hash represents an SHL without the
+        # ``P`` flag.  There is no PIN to validate and the receiver's request
+        # must be allowed to continue without consuming the PIN attempt cap.
+        if row["hashed_pin"] is None:
+            return {key: row[key] for key in ("patient_id", "encrypted_jwe", "hashed_pin")}
         if verify_pin(passcode, row["hashed_pin"]):
             return {key: row[key] for key in ("patient_id", "encrypted_jwe", "hashed_pin")}
         incremented = connection.execute("""UPDATE shl_manifests
