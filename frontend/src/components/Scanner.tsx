@@ -80,7 +80,7 @@ export default function Scanner({ onScanned, onCancel }: ScannerProps) {
           },
           () => undefined,
         )
-        if (active) setStatus('Point the camera at the patient’s ClinicForce QR code.')
+        if (active) setStatus('Point the camera at a Smart Health Link QR code.')
       } catch (cameraError) {
         if (active) setError(cameraError instanceof Error ? `Camera unavailable: ${cameraError.message}` : 'Camera access was unavailable.')
       } finally {
@@ -104,7 +104,7 @@ export default function Scanner({ onScanned, onCancel }: ScannerProps) {
     <div className="panel scanner-panel">
       <p className="eyebrow"><ScanLine aria-hidden="true" className="size-4" /> Clinician access · Step 1 of 2</p>
       <h1 id="scan-heading">Scan the patient’s QR code</h1>
-      <p className="lead-small">Use the QR code the patient created in ClinicForce. You will ask for their passcode in the next step.</p>
+      <p className="lead-small">Use a ClinicForce, eClinicalWorks, or other compatible Smart Health Link QR code. External links are reviewed and decrypted in this browser.</p>
       <div className="scanner-frame"><div id={id} /></div>
       <p className="scanner-status"><Camera aria-hidden="true" className="size-4" /> {status}</p>
       {error && <p className="form-error" role="alert">{error}</p>}

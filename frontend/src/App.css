@@ -206,6 +206,24 @@ input:focus, textarea:focus, select:focus { border-color: var(--blue); box-shado
 .scanner-privacy { display: flex; justify-content: center; gap: 7px; margin: 20px 0 0; color: var(--muted-ink); font-size: .77rem; }
 .scanner-privacy svg { width: 16px; color: var(--green); }
 
+.external-host { display: grid; grid-template-columns: 42px 1fr; gap: 12px; align-items: center; margin: 24px 0 17px; border: 1px solid #a9cdd7; border-radius: 12px; background: #eef9fb; padding: 14px; text-align: left; }
+.external-host > svg { width: 23px; color: var(--blue-deep); }
+.external-host span, .external-host strong { display: block; }
+.external-host span { color: var(--muted-ink); font-size: .69rem; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
+.external-host strong { overflow-wrap: anywhere; margin-top: 3px; color: var(--ink); font-family: ui-monospace, monospace; font-size: .87rem; }
+.external-review-panel h1 { max-width: 17ch; }
+.external-review-panel > .lead-small strong { color: var(--ink); }
+.external-review-block { margin-top: 18px; border-top: 1px solid var(--line); padding-top: 17px; }
+.external-review-block h2 { margin-bottom: 8px; font-size: 1.12rem; }
+.external-review-block p, .external-review-block ul { margin: 0; color: var(--muted-ink); font-size: .85rem; line-height: 1.55; }
+.external-review-block ul { display: grid; gap: 5px; padding-left: 19px; }
+.external-review-block li strong { color: var(--ink); }
+.external-warning { display: grid; grid-template-columns: 22px 1fr; gap: 10px; margin-top: 19px; border: 1px solid #e4c5a9; border-radius: 10px; background: #fff8ef; padding: 12px; color: var(--warning); font-size: .84rem; line-height: 1.5; }
+.external-warning svg { width: 19px; }
+.external-warning p { margin: 0; }
+.external-actions { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 9px; margin-top: 24px; }
+.external-success-icon { width: 42px; height: 42px; margin-bottom: 20px; color: var(--green); }
+
 .summary-page { padding-block: 24px 54px; }
 .summary-hero { display: flex; align-items: end; justify-content: space-between; gap: 20px; border-bottom: 1px solid var(--line); padding-bottom: 24px; }
 .summary-hero h1 { max-width: none; margin: 4px 0 6px; font-size: clamp(2.2rem, 4.2vw, 3.6rem); }

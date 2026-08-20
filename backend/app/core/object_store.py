@@ -63,3 +63,32 @@ def delete_object(key: str) -> None:
     """Remove an orphaned upload when a later persistence step fails."""
     if S3_BUCKET:
         boto3.client("s3").delete_object(Bucket=S3_BUCKET, Key=key)
+
+
+def put_shl_payload(manifest_id: str, encrypted_jwe: str) -> str:
+    """Store an already-encrypted SHL file for a short-lived signed download."""
+    if not S3_BUCKET:
+        raise RuntimeError("S3_BUCKET must be configured for oversized SHL files")
+    key = "/".join((S3_PREFIX, "shl", f"{manifest_id}.jwe"))
+    arguments = {
+        "Bucket": S3_BUCKET,
+        "Key": key,
+        "Body": encrypted_jwe.encode("ascii"),
+        "ContentType": "application/jose",
+        "ServerSideEncryption": "aws:kms",
+    }
+    if S3_KMS_KEY_ID:
+        arguments["SSEKMSKeyId"] = S3_KMS_KEY_ID
+    boto3.client("s3").put_object(**arguments)
+    return key
+
+
+def presign_shl_payload(key: str, expires_in: int = 3600) -> str:
+    """Return an SHL file URL valid for no more than the one-hour spec limit."""
+    if not S3_BUCKET:
+        raise RuntimeError("S3_BUCKET must be configured for oversized SHL files")
+    return boto3.client("s3").generate_presigned_url(
+        "get_object",
+        Params={"Bucket": S3_BUCKET, "Key": key, "ResponseContentType": "application/jose"},
+        ExpiresIn=min(max(expires_in, 1), 3600),
+    )

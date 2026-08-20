@@ -8,13 +8,14 @@ import hashlib
 import json
 import os
 import secrets
+from datetime import date, datetime, timedelta, timezone
 from html import escape
 from copy import deepcopy
 from io import BytesIO
 from pathlib import Path
 from typing import Any, Literal
 from urllib.parse import quote
-from uuid import UUID, uuid4
+from uuid import uuid4
 from zipfile import ZIP_DEFLATED, ZipFile
 
 import fitz
@@ -38,18 +39,25 @@ from app.logs.logger import log_error, log_info, log_warning
 from app.reports.pdf_builder import render_doctor_pdf_bytes
 from app.reports.summarizer import summarize_fhir_bundle
 from jwcrypto import jwe, jwk
-from app.core.object_store import delete_object as delete_s3_object, enabled as s3_enabled, get_pdf as get_s3_pdf, put_patient_pdf
+from app.core.object_store import (
+    delete_object as delete_s3_object,
+    enabled as s3_enabled,
+    get_pdf as get_s3_pdf,
+    presign_shl_payload,
+    put_patient_pdf,
+    put_shl_payload,
+)
 from app.core import google_drive
 from app.core.drive_crypto import decrypt_pdf as decrypt_drive_pdf, encrypt_pdf as encrypt_drive_pdf
 from app.core.patient_store import (
     add_document, add_pending_drive_deletion, add_record, clear_pending_drive_deletion, consume_drive_oauth_state, consume_google_login_state,
-    check_database_connection, create_google_patient, create_manifest, create_patient, create_patient_session,
+    backfill_patient_profile_from_epic, check_database_connection, create_google_patient, create_manifest, create_patient, create_patient_session,
     delete_drive_file_crypto, get_document, get_document_by_id, get_drive_connection, get_drive_file_crypto, get_manifest, get_password_hash,
-    get_patient_by_google_subject, get_patient_session, get_storage_preference, list_documents, list_records,
+    get_patient_by_google_subject, get_patient_profile, get_patient_session, get_storage_preference, list_documents, list_records,
     list_pending_drive_deletions, remove_documents, revoke_patient_manifests, revoke_patient_session, save_drive_file_crypto,
     save_drive_oauth_state, save_google_login_state, set_drive_summary_file, set_storage_preference, update_document_extraction,
     update_document_locator,
-    upsert_drive_connection, verify_manifest_pin,
+    InvalidManifestPin, PatientProfile, update_patient_profile, upsert_drive_connection, verify_manifest_pin,
     get_epic_endpoint, search_epic_endpoints,
 )
 from app.core.source_links import document_download_url, verify_document_download_token
@@ -81,7 +89,26 @@ EPIC_OAUTH_STATE_COOKIE = "clinicforce_epic_oauth"
 EPIC_LIVE_SESSION_COOKIE = "clinicforce_epic_live"
 EPIC_ENDPOINT_SYNC_ENABLED = os.getenv("EPIC_ENDPOINT_SYNC_ENABLED", "").lower() == "true"
 EPIC_ENDPOINT_SYNC_INTERVAL_SECONDS = 7 * 24 * 60 * 60
+SHL_SHARE_TTL_SECONDS = max(1, int(os.getenv("SHL_SHARE_TTL_SECONDS", "900")))
 _epic_endpoint_sync_task: asyncio.Task[None] | None = None
+
+# These are FHIR ``meta.tag`` values rather than a ClinicForce-specific
+# provenance resource.  They extend the tag already used for Epic snapshots,
+# keep the source visible to a receiving EHR, and leave the original source
+# citation extension intact for document-extracted facts.
+FHIR_SOURCE_TAG_SYSTEM = "https://clinicforce.example/fhir/source"
+FHIR_VERIFICATION_TAG_SYSTEM = "https://clinicforce.example/fhir/verification"
+_EXCHANGE_RESOURCE_TYPES = {
+    "AllergyIntolerance", "MedicationStatement", "MedicationRequest", "Condition",
+    "Observation", "Immunization", "Procedure", "Coverage", "DiagnosticReport",
+    "DocumentReference",
+}
+_SOURCE_TAGS = {
+    "patient-entered": "Patient-entered",
+    "document-extracted": "Extracted from patient-uploaded document",
+    "epic-mychart": "Epic / MyChart",
+    "external-shl": "Imported from an external SMART Health Link",
+}
 
 app = FastAPI(title="ClinicForce")
 app.add_middleware(
@@ -149,11 +176,19 @@ class RequestModel(BaseModel):
 
 
 class ManifestRequest(RequestModel):
-    passcode: str = Field(min_length=1, max_length=128)
+    """SHL manifest requests accept standard fields and ignore future additions."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    recipient: str = Field(min_length=1, max_length=512)
+    passcode: str | None = Field(default=None, min_length=1, max_length=128)
+    embeddedLengthMax: int | None = Field(default=None, ge=0)
 
     @field_validator("passcode")
     @classmethod
-    def normalize_passcode(cls, value: str) -> str:
+    def normalize_passcode(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
         value = value.strip()
         if not value:
             raise ValueError("Passcode is required")
@@ -166,7 +201,7 @@ class IntegrationTestRequest(RequestModel):
 
 
 class DoctorSummaryRequest(RequestModel):
-    manifest_id: UUID
+    manifest_id: str = Field(min_length=1, max_length=128)
     key: str = Field(min_length=1, max_length=256)
     passcode: str = Field(min_length=4, max_length=4)
 
@@ -183,6 +218,23 @@ class PatientCredentials(RequestModel):
         value = value.strip()
         if not value:
             raise ValueError("Patient ID cannot be empty")
+        return value
+
+
+class PatientProfileRequest(PatientCredentials):
+    """The minimum US Core matching demographics ClinicForce stores locally."""
+
+    given_name: str = Field(min_length=1, max_length=100)
+    family_name: str = Field(min_length=1, max_length=100)
+    birth_date: date
+    administrative_gender: Literal["male", "female", "other", "unknown"]
+
+    @field_validator("given_name", "family_name")
+    @classmethod
+    def normalize_legal_name(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("Legal name fields cannot be empty")
         return value
 
 
@@ -232,6 +284,21 @@ class ManualRecordRequest(PatientCredentials):
     dosage: str | None = Field(default=None, max_length=512)
 
 
+class ExternalShlImportRequest(RequestModel):
+    """Post-confirmation import only; retrieval and decryption stay in the browser."""
+
+    source_host: str = Field(min_length=1, max_length=253)
+    bundle: dict[str, Any]
+
+    @field_validator("source_host")
+    @classmethod
+    def validate_external_source_host(cls, value: str) -> str:
+        value = value.strip().lower()
+        if not value or "/" in value or ":" in value or any(character.isspace() for character in value):
+            raise ValueError("External source host is invalid")
+        return value
+
+
 def _create_upload_shl(
     patient_id: str | None, fhir_bundle: dict[str, Any], passcode: str, source: str = "local",
 ) -> tuple[str, str, str]:
@@ -239,9 +306,19 @@ def _create_upload_shl(
     key = generate_symmetric_key()
     key_bytes = base64.urlsafe_b64decode(key + "=" * (-len(key) % 4))
     encrypted_jwe = encrypt_bundle(fhir_bundle, key_bytes)
-    manifest_id = create_manifest(patient_id, encrypted_jwe, hash_pin(passcode), source)
+    expires_at = datetime.now(timezone.utc) + timedelta(seconds=SHL_SHARE_TTL_SECONDS)
+    manifest_id = create_manifest(
+        patient_id,
+        encrypted_jwe,
+        hash_pin(passcode),
+        source,
+        expires_at.isoformat(),
+    )
     shl_uri = create_shl_uri(
-        f"{PUBLIC_BASE_URL}/manifest/{manifest_id}", key, "ClinicForce records"
+        f"{PUBLIC_BASE_URL}/manifest/{manifest_id}",
+        key,
+        "ClinicForce records",
+        int(expires_at.timestamp()),
     )
     return shl_uri, generate_qr_code(shl_uri), str(manifest_id)
 
@@ -354,6 +431,36 @@ def _document_payload(document: Any) -> dict[str, Any]:
     }
 
 
+def _append_meta_tag(resource: dict[str, Any], system: str, code: str, display: str) -> None:
+    """Add one stable FHIR tag without discarding upstream source metadata."""
+    meta = resource.get("meta")
+    if not isinstance(meta, dict):
+        meta = {}
+        resource["meta"] = meta
+    tags = meta.get("tag")
+    if not isinstance(tags, list):
+        tags = []
+        meta["tag"] = tags
+    if not any(isinstance(tag, dict) and tag.get("system") == system and tag.get("code") == code for tag in tags):
+        tags.append({"system": system, "code": code, "display": display})
+
+
+def _tag_resource_source(resource: dict[str, Any], source: str, display: str | None = None) -> None:
+    """Apply the common source/verification tag convention to an exchange resource."""
+    if source not in _SOURCE_TAGS:
+        raise ValueError(f"Unsupported FHIR source tag: {source}")
+    _append_meta_tag(resource, FHIR_SOURCE_TAG_SYSTEM, source, display or _SOURCE_TAGS[source])
+    if source in {"document-extracted", "external-shl"}:
+        # Extraction is useful clinical context, not an EHR-verified assertion.
+        _append_meta_tag(
+            resource,
+            FHIR_VERIFICATION_TAG_SYSTEM,
+            "unverified",
+            "External document extraction; clinician reconciliation required"
+            if source == "document-extracted" else "External information; clinician reconciliation required",
+        )
+
+
 def _combine_document_bundles(documents: list[Any], records: list[Any] | None = None) -> dict[str, Any]:
     entries: list[dict[str, Any]] = []
     for document in documents:
@@ -394,15 +501,7 @@ def _epic_share_snapshot(bundle: dict[str, Any], source: dict[str, str]) -> dict
         resource = entry.get("resource") if isinstance(entry, dict) else None
         if not isinstance(resource, dict):
             continue
-        meta = resource.get("meta")
-        if not isinstance(meta, dict):
-            meta = {}
-            resource["meta"] = meta
-        tags = meta.get("tag")
-        if not isinstance(tags, list):
-            tags = []
-            meta["tag"] = tags
-        tags.append({"system": "https://clinicforce.example/fhir/source", "code": "epic-mychart", "display": organization_name})
+        _tag_resource_source(resource, "epic-mychart", organization_name)
         if resource.get("resourceType") != "DocumentReference":
             continue
         for content in resource.get("content", []):
@@ -411,6 +510,217 @@ def _epic_share_snapshot(bundle: dict[str, Any], source: dict[str, str]) -> dict
                 attachment.pop("data", None)
                 attachment.pop("url", None)
     return snapshot
+
+
+def _first_patient_resource(bundle: dict[str, Any] | None) -> dict[str, Any] | None:
+    if not bundle:
+        return None
+    for entry in bundle.get("entry", []):
+        resource = entry.get("resource") if isinstance(entry, dict) else None
+        if isinstance(resource, dict) and resource.get("resourceType") == "Patient":
+            return resource
+    return None
+
+
+def _exchange_patient(patient_id: str, profile: PatientProfile | None, epic_bundle: dict[str, Any] | None) -> dict[str, Any]:
+    """Build the one Patient resource used by an external-EHR exchange bundle.
+
+    ClinicForce's structured profile is the primary identity source. A live Epic
+    Patient can fill a missing field and contribute its transient telecom/address
+    data, but never replaces an explicitly saved ClinicForce profile field.
+    """
+    patient: dict[str, Any] = {"resourceType": "Patient", "id": patient_id}
+    if profile:
+        if profile.given_name or profile.family_name:
+            name: dict[str, Any] = {"use": "official"}
+            if profile.given_name:
+                name["given"] = [profile.given_name]
+            if profile.family_name:
+                name["family"] = profile.family_name
+            patient["name"] = [name]
+        if profile.birth_date:
+            patient["birthDate"] = profile.birth_date
+        if profile.administrative_gender:
+            patient["gender"] = profile.administrative_gender
+        if any((profile.given_name, profile.family_name, profile.birth_date, profile.administrative_gender)):
+            _tag_resource_source(patient, "patient-entered")
+    candidate = _first_patient_resource(epic_bundle)
+    if candidate:
+        for field in ("identifier", "telecom", "address"):
+            if candidate.get(field) is not None:
+                patient[field] = deepcopy(candidate[field])
+        if "name" not in patient and candidate.get("name") is not None:
+            patient["name"] = deepcopy(candidate["name"])
+        if "gender" not in patient and candidate.get("gender") is not None:
+            patient["gender"] = deepcopy(candidate["gender"])
+        if "birthDate" not in patient and candidate.get("birthDate") is not None:
+            patient["birthDate"] = deepcopy(candidate["birthDate"])
+        source_display = None
+        candidate_meta = candidate.get("meta")
+        candidate_tags = candidate_meta.get("tag", []) if isinstance(candidate_meta, dict) else []
+        for tag in candidate_tags:
+            if isinstance(tag, dict) and tag.get("system") == FHIR_SOURCE_TAG_SYSTEM and tag.get("code") == "epic-mychart":
+                source_display = tag.get("display")
+                break
+        _tag_resource_source(patient, "epic-mychart", source_display)
+    if "meta" not in patient:
+        _tag_resource_source(patient, "patient-entered")
+    return patient
+
+
+def _exchange_patient_reference(patient_id: str) -> dict[str, str]:
+    return {"reference": f"Patient/{patient_id}"}
+
+
+def _prepare_exchange_resource(resource: dict[str, Any], patient_id: str, source: str, display: str | None = None) -> dict[str, Any] | None:
+    """Create a transport-safe FHIR R4 resource for the external exchange.
+
+    We deliberately do not infer terminology codes from free text.  Existing
+    coded data (including Epic LOINC, RxNorm, SNOMED CT, UCUM, and CVX values)
+    is retained verbatim; free-text-only resources remain uncoded rather than
+    receiving a guessed clinical code.
+    """
+    if resource.get("resourceType") not in _EXCHANGE_RESOURCE_TYPES:
+        return None
+    prepared = deepcopy(resource)
+    patient_reference = _exchange_patient_reference(patient_id)
+    for field in ("subject", "patient", "beneficiary"):
+        if field in prepared:
+            prepared[field] = patient_reference
+    # Incoming resources sometimes omit the patient reference.  Add the FHIR R4
+    # field appropriate to each selected type so the bundle is self-contained.
+    resource_type = prepared["resourceType"]
+    if resource_type in {"AllergyIntolerance", "Immunization"}:
+        prepared.setdefault("patient", patient_reference)
+    elif resource_type == "Coverage":
+        prepared.setdefault("beneficiary", patient_reference)
+    else:
+        prepared.setdefault("subject", patient_reference)
+    if resource_type == "DocumentReference":
+        # An SHL recipient receives document metadata only in this first phase.
+        # Do not include an attachment URL or base64 data, even if an upstream
+        # source supplied one.
+        for content in prepared.get("content", []):
+            attachment = content.get("attachment") if isinstance(content, dict) else None
+            if isinstance(attachment, dict):
+                attachment.pop("data", None)
+                attachment.pop("url", None)
+    if source == "external-shl":
+        # The incoming bundle is untrusted. Do not let it impersonate the local
+        # provenance tag or alter the source host shown to ClinicForce users.
+        meta = prepared.get("meta")
+        if isinstance(meta, dict) and isinstance(meta.get("tag"), list):
+            meta["tag"] = [
+                tag for tag in meta["tag"]
+                if not (
+                    isinstance(tag, dict)
+                    and ((tag.get("system") == FHIR_SOURCE_TAG_SYSTEM and tag.get("code") == "external-shl")
+                         or (tag.get("system") == FHIR_VERIFICATION_TAG_SYSTEM and tag.get("code") == "unverified"))
+                )
+            ]
+    _tag_resource_source(prepared, source, display)
+    return prepared
+
+
+def _normalize_external_shl_bundle(bundle: dict[str, Any], patient_id: str, source_host: str) -> dict[str, Any]:
+    """Keep only import-safe R4 resources and attach trusted external provenance.
+
+    The client decrypts and validates the issuer's payload before this function is
+    called.  This server-side boundary still refuses unsupported resource types,
+    rewrites patient references to the authenticated ClinicForce workspace, and
+    never accepts issuer-supplied provenance as authoritative.
+    """
+    if bundle.get("resourceType") == "Bundle":
+        candidates = [entry.get("resource") for entry in bundle.get("entry", []) if isinstance(entry, dict)]
+    else:
+        candidates = [bundle]
+    entries: list[dict[str, Any]] = []
+    display = f"External SMART Health Link: {source_host}"
+    for candidate in candidates:
+        if not isinstance(candidate, dict):
+            continue
+        prepared = _prepare_exchange_resource(candidate, patient_id, "external-shl", display)
+        if prepared is not None:
+            entries.append({"resource": prepared})
+    return {"resourceType": "Bundle", "type": "collection", "entry": entries}
+
+
+def _uploaded_document_reference(document: Any, patient_id: str) -> dict[str, Any]:
+    """Represent an uploaded PDF without exposing its bytes or storage locator."""
+    reference = {
+        "resourceType": "DocumentReference",
+        "id": f"uploaded-document-{document.id}",
+        "status": "current",
+        "subject": _exchange_patient_reference(patient_id),
+        "type": {"text": "Patient-uploaded clinical document"},
+        "date": document.uploaded_at,
+        "description": "Patient-uploaded PDF; metadata only. Clinician reconciliation required.",
+        "content": [{"attachment": {"contentType": "application/pdf", "title": document.filename}}],
+    }
+    _tag_resource_source(reference, "document-extracted")
+    return reference
+
+
+def build_exchange_bundle(
+    patient_id: str,
+    documents: list[Any],
+    records: list[Any],
+    epic_bundle: dict[str, Any] | None = None,
+    profile: PatientProfile | None = None,
+) -> dict[str, Any]:
+    """Build the explicit FHIR R4 collection sent to external EHRs via SHL.
+
+    This is intentionally separate from the ClinicForce workspace/rendering
+    representation.  It contains only exchange-safe clinical resource types,
+    one canonical bundle Patient, and source/verification tags on every entry.
+    """
+    entries: list[dict[str, Any]] = [{"resource": _exchange_patient(patient_id, profile, epic_bundle)}]
+    for document in documents:
+        document_bundle = _combine_document_bundles([document])
+        for entry in document_bundle["entry"]:
+            resource = entry.get("resource") if isinstance(entry, dict) else None
+            if isinstance(resource, dict):
+                prepared = _prepare_exchange_resource(resource, patient_id, "document-extracted")
+                if prepared is not None:
+                    entries.append({"resource": prepared})
+        entries.append({"resource": _uploaded_document_reference(document, patient_id)})
+    for record in records:
+        record_bundle = _combine_document_bundles([], [record])
+        for entry in record_bundle["entry"]:
+            resource = entry.get("resource") if isinstance(entry, dict) else None
+            if isinstance(resource, dict):
+                prepared = _prepare_exchange_resource(resource, patient_id, "patient-entered")
+                if prepared is not None:
+                    entries.append({"resource": prepared})
+    if epic_bundle:
+        for entry in epic_bundle.get("entry", []):
+            resource = entry.get("resource") if isinstance(entry, dict) else None
+            if not isinstance(resource, dict) or resource.get("resourceType") == "Patient":
+                continue
+            prepared = _prepare_exchange_resource(resource, patient_id, "epic-mychart")
+            if prepared is not None:
+                entries.append({"resource": prepared})
+    return {"resourceType": "Bundle", "type": "collection", "entry": entries}
+
+
+async def _backfill_profile_from_live_epic(patient_id: str, bundle: dict[str, Any]) -> PatientProfile | None:
+    """Persist only missing matching demographics from an already-authorized Epic response."""
+    patient_resource = _first_patient_resource(bundle)
+    if patient_resource is None:
+        return await asyncio.to_thread(get_patient_profile, patient_id)
+    return await asyncio.to_thread(backfill_patient_profile_from_epic, patient_id, patient_resource)
+
+
+def _has_matchable_patient_demographics(patient: dict[str, Any]) -> bool:
+    names = patient.get("name")
+    has_name = isinstance(names, list) and any(
+        isinstance(name, dict)
+        and isinstance(name.get("family"), str)
+        and bool(name["family"].strip())
+        and any(isinstance(given, str) and given.strip() for given in name.get("given", []))
+        for name in names
+    )
+    return has_name and isinstance(patient.get("birthDate"), str) and bool(patient["birthDate"].strip())
 
 
 def _with_source_download_links(summary: dict[str, Any], manifest_id: str) -> dict[str, Any]:
@@ -911,6 +1221,38 @@ async def get_current_patient_session(request: Request) -> dict[str, Any]:
     return await _load_workspace(patient_id)
 
 
+def _patient_profile_payload(profile: PatientProfile | None) -> dict[str, str | None]:
+    return {
+        "given_name": profile.given_name if profile else None,
+        "family_name": profile.family_name if profile else None,
+        "birth_date": profile.birth_date if profile else None,
+        "administrative_gender": profile.administrative_gender if profile else None,
+    }
+
+
+@app.get("/api/patient/profile")
+async def get_patient_profile_endpoint(request: Request) -> dict[str, str | None]:
+    patient_id = await _authenticate_patient(None, None, request)
+    return _patient_profile_payload(await asyncio.to_thread(get_patient_profile, patient_id))
+
+
+@app.put("/api/patient/profile")
+async def save_patient_profile(request: PatientProfileRequest, http_request: Request) -> dict[str, Any]:
+    """Save the minimum canonical demographics required for external-EHR matching."""
+    patient_id = await _authenticate_patient(request.patient_id, request.password, http_request)
+    profile = await asyncio.to_thread(
+        update_patient_profile,
+        patient_id,
+        request.given_name,
+        request.family_name,
+        request.birth_date.isoformat(),
+        request.administrative_gender,
+    )
+    if profile is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Patient account not found")
+    return _patient_profile_payload(profile)
+
+
 @app.post("/api/patient/logout")
 async def logout_patient(request: Request) -> Response:
     await asyncio.to_thread(revoke_patient_session, request.cookies.get(PATIENT_SESSION_COOKIE, ""))
@@ -986,6 +1328,7 @@ async def epic_record(request: Request) -> dict[str, Any]:
         bundle, availability = await epic.fetch_record(session)
     except epic.EpicError as exc:
         raise _epic_error(exc) from exc
+    await _backfill_profile_from_live_epic(patient_id, bundle)
     return {"bundle": bundle, "availability": availability, "source": epic.source_metadata(session)}
 
 
@@ -1187,6 +1530,33 @@ async def save_patient_record(request: ManualRecordRequest, http_request: Reques
     return await _load_workspace(patient_id)
 
 
+@app.post("/api/patient/external-shl-import")
+async def import_external_shl(request: ExternalShlImportRequest, http_request: Request) -> dict[str, Any]:
+    """Persist a user-confirmed external SHL bundle, never its key, PIN, or JWE."""
+    patient_id = await _authenticate_patient(None, None, http_request)
+    try:
+        serialized = json.dumps(request.bundle, separators=(",", ":"))
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Imported clinical data must be valid JSON") from exc
+    if len(serialized.encode("utf-8")) > 5 * 1024 * 1024:
+        raise HTTPException(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail="Imported clinical data exceeds the 5 MB limit")
+    normalized = _normalize_external_shl_bundle(request.bundle, patient_id, request.source_host)
+    if not normalized["entry"]:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="The shared file contains no supported FHIR R4 resources to import")
+    try:
+        await asyncio.to_thread(
+            add_record,
+            patient_id,
+            "external-shl",
+            f"External SMART Health Link from {request.source_host}",
+            normalized,
+        )
+    except Exception as exc:
+        raise IntegrationFailure("External SHL import", exc) from exc
+    log_info("External SHL", "Imported %d user-confirmed external FHIR resources from %s", len(normalized["entry"]), request.source_host)
+    return await _load_workspace(patient_id)
+
+
 @app.post("/api/patient/generate-link")
 async def generate_patient_link(request: GeneratePatientLinkRequest, http_request: Request) -> dict[str, Any]:
     patient_id = await _authenticate_patient(request.patient_id, request.password, http_request)
@@ -1203,24 +1573,32 @@ async def generate_patient_link(request: GeneratePatientLinkRequest, http_reques
         workspace_bundle = _combine_document_bundles(documents, records)
 
         # MyChart is deliberately fetched only at the moment the patient creates
-        # the one clinician QR. The unencrypted workspace never stores Epic
-        # resources, tokens, or document attachments.
+        # the one clinician QR. ClinicForce never stores Epic clinical resources,
+        # tokens, or document attachments; the separate patient profile may retain
+        # only the minimum matching demographics explicitly backfilled below.
         epic_snapshot: dict[str, Any] | None = None
+        profile = await asyncio.to_thread(get_patient_profile, patient_id)
         if http_request.cookies.get(EPIC_LIVE_SESSION_COOKIE):
             session = await _live_epic_session(http_request, patient_id)
             try:
                 epic_bundle, _ = await epic.fetch_record(session)
             except epic.EpicError as exc:
                 raise _epic_error(exc) from exc
+            profile = await _backfill_profile_from_live_epic(patient_id, epic_bundle)
             if epic_bundle.get("entry"):
                 epic_snapshot = _epic_share_snapshot(epic_bundle, epic.source_metadata(session))
 
-        fhir_bundle = {
-            "resourceType": "Bundle", "type": "collection",
-            "entry": [*workspace_bundle["entry"], *(epic_snapshot or {}).get("entry", [])],
-        }
-        if not fhir_bundle["entry"]:
+        fhir_bundle = build_exchange_bundle(patient_id, documents, records, epic_snapshot, profile)
+        # The exchange bundle always contains Patient.  Do not issue a QR that
+        # has no clinical/document content beyond that identity shell.
+        if len(fhir_bundle["entry"]) == 1:
             raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="No verified clinical facts are available to share")
+        exchange_patient = fhir_bundle["entry"][0]["resource"]
+        if not _has_matchable_patient_demographics(exchange_patient):
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="Complete the patient's legal name and date of birth in the demographic profile before creating an external-EHR share.",
+            )
         shl_uri, qr_code_base64, manifest_id = await asyncio.to_thread(_create_upload_shl, patient_id, fhir_bundle, request.passcode)
         # Drive patients receive one stable, replaced-on-new-QR PDF in their own
         # ClinicForce folder. S3 patients retain the existing non-persisted report flow.
@@ -1252,7 +1630,7 @@ async def generate_patient_link(request: GeneratePatientLinkRequest, http_reques
                 await asyncio.to_thread(set_drive_summary_file, patient_id, summary_file_id, fingerprint)
                 if previous_summary_file_id and previous_summary_file_id != summary_file_id:
                     await _retire_plaintext_drive_file(patient_id, connection, previous_summary_file_id)
-        log_info("Secure Sharing", "Stored combined encrypted manifest %s for %d documents, %d structured records, Epic=%s", manifest_id, len(documents), len(records), bool(epic_snapshot))
+        log_info("Secure Sharing", "Created encrypted clinician share for %d documents, %d structured records, Epic=%s", len(documents), len(records), bool(epic_snapshot))
         return {"shl_uri": shl_uri, "qr_code_base64": qr_code_base64, "epic_included": bool(epic_snapshot)}
     except HTTPException:
         raise
@@ -1429,15 +1807,10 @@ async def test_integration(request: IntegrationTestRequest) -> dict[str, Any]:
 
         try:
             log_info("Secure Sharing", "Generating a 32-byte AES-256-GCM key and encrypting FHIR bundle")
-            key = generate_symmetric_key()
-            key_bytes = base64.urlsafe_b64decode(key + "=" * (-len(key) % 4))
-            encrypted_jwe = encrypt_bundle(fhir_bundle, key_bytes)
-            manifest_id = create_manifest(None, encrypted_jwe, hash_pin(request.passcode))
-            shl_uri = create_shl_uri(
-                f"{PUBLIC_BASE_URL}/manifest/{manifest_id}", key, "ClinicForce records"
+            shl_uri, qr_code_base64, manifest_id = _create_upload_shl(
+                None, fhir_bundle, request.passcode
             )
-            qr_code_base64 = generate_qr_code(shl_uri)
-            log_info("Secure Sharing", "Stored encrypted manifest %s and rendered PNG QR code", manifest_id)
+            log_info("Secure Sharing", "Created encrypted test share")
         except Exception as exc:
             raise IntegrationFailure("Secure Sharing", exc) from exc
 
@@ -1453,23 +1826,35 @@ async def test_integration(request: IntegrationTestRequest) -> dict[str, Any]:
 
 
 @app.post("/manifest/{manifest_id}")
-async def retrieve_manifest(manifest_id: UUID, request: ManifestRequest) -> dict:
+async def retrieve_manifest(manifest_id: str, request: ManifestRequest) -> dict[str, Any]:
     """Return an encrypted SHL payload after successful passcode verification."""
-    log_info("Secure Sharing", "Manifest lookup for %s with passcode=%s", manifest_id, _mask_passcode(request.passcode))
-    manifest = await asyncio.to_thread(verify_manifest_pin, str(manifest_id), request.passcode)
+    log_info("Secure Sharing", "SHL manifest fetch attempt")
+    try:
+        manifest = await asyncio.to_thread(verify_manifest_pin, manifest_id, request.passcode or "")
+    except InvalidManifestPin as exc:
+        log_warning("Secure Sharing", "SHL manifest fetch rejected: invalid passcode")
+        if exc.remaining_attempts == 0:
+            log_warning("Secure Sharing", "SHL share permanently disabled after lifetime PIN limit")
+        return JSONResponse(status_code=status.HTTP_401_UNAUTHORIZED, content={"remainingAttempts": exc.remaining_attempts})
     if manifest is None:
-        log_warning("Secure Sharing", "Invalid manifest credentials for %s", manifest_id)
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid manifest ID or passcode",
-        )
+        log_warning("Secure Sharing", "SHL manifest fetch rejected: unavailable")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Shared record is no longer available")
+
+    file: dict[str, str] = {"contentType": "application/fhir+json"}
+    max_embedded = request.embeddedLengthMax
+    if max_embedded is None or len(manifest["encrypted_jwe"]) <= max_embedded:
+        file["embedded"] = manifest["encrypted_jwe"]
+    else:
+        try:
+            object_key = await asyncio.to_thread(put_shl_payload, manifest_id, manifest["encrypted_jwe"])
+            file["location"] = await asyncio.to_thread(presign_shl_payload, object_key)
+        except Exception as exc:
+            log_error("Secure Sharing", exc)
+            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Shared record is temporarily unavailable") from exc
 
     return {
         "files": [
-            {
-                "contentType": "application/fhir+json",
-                "embedded": manifest["encrypted_jwe"],
-            }
+            file
         ]
     }
 
@@ -1478,7 +1863,12 @@ async def retrieve_manifest(manifest_id: UUID, request: ManifestRequest) -> dict
 async def decrypt_and_summarize(request: DoctorSummaryRequest) -> dict[str, Any]:
     """Build a dashboard from the stored QR manifest, never browser-supplied FHIR."""
     try:
-        manifest = await asyncio.to_thread(verify_manifest_pin, str(request.manifest_id), request.passcode)
+        try:
+            manifest = await asyncio.to_thread(verify_manifest_pin, request.manifest_id, request.passcode)
+        except InvalidManifestPin as exc:
+            if exc.remaining_attempts == 0:
+                log_warning("Secure Sharing", "SHL share permanently disabled after lifetime PIN limit")
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid shared-record credentials") from exc
         if manifest is None:
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid shared-record credentials")
         log_info("Clinical Summary", "Decrypting server-stored QR manifest")

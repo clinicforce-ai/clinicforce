@@ -10,6 +10,7 @@ import sys
 import unittest
 from io import BytesIO
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, patch
 from uuid import uuid4
 from zipfile import ZipFile
@@ -20,14 +21,21 @@ import psycopg
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from app.core.patient_store import InvalidManifestPin, PatientProfile  # noqa: E402
 from app.core.shl import encrypt_bundle, generate_symmetric_key, hash_pin  # noqa: E402
 from app.core.source_links import create_document_download_token, verify_document_download_token  # noqa: E402
 from app.core import patient_store  # noqa: E402
 from app.ingestion.bedrock_extractor import ExtractedFact, facts_to_fhir_bundle  # noqa: E402
 from app.ingestion.pdf_parser import parse_pdf_text_with_llm, pdf_extraction_to_fhir_bundle  # noqa: E402
-from app.main import _epic_share_snapshot, app  # noqa: E402
+from app.main import _epic_share_snapshot, app, build_exchange_bundle  # noqa: E402
 from app.reports.pdf_builder import generate_doctor_pdf, render_doctor_pdf_bytes  # noqa: E402
 from app.reports.summarizer import summarize_fhir_bundle  # noqa: E402
+
+
+MATCHABLE_PROFILE = PatientProfile(
+    patient_id="patient-1", given_name="Pat", family_name="Example",
+    birth_date="1980-01-01", administrative_gender="unknown",
+)
 
 
 class MainRouteTests(unittest.IsolatedAsyncioTestCase):
@@ -121,6 +129,7 @@ class MainRouteTests(unittest.IsolatedAsyncioTestCase):
             patch("app.main._live_epic_session", new=AsyncMock(return_value=live_session)),
             patch("app.main.epic.fetch_record", new=AsyncMock(return_value=(bundle, {"Condition": "ok"}))),
             patch("app.main.epic.source_metadata", return_value={"organization_name": "Demo Health", "retrieved_at": "2026-08-14T00:00:00+00:00"}),
+            patch("app.main._backfill_profile_from_live_epic", new=AsyncMock(return_value=MATCHABLE_PROFILE)) as backfill_profile,
             patch("app.main.add_document") as add_document,
             patch("app.main.add_record") as add_record,
             patch("app.main.post_to_fhir", new=AsyncMock()) as post_to_fhir,
@@ -128,19 +137,25 @@ class MainRouteTests(unittest.IsolatedAsyncioTestCase):
             response = await self.client.get("/api/patient/epic/record")
         self.assertEqual(response.status_code, 200, response.text)
         self.assertEqual(response.json()["bundle"], bundle)
+        backfill_profile.assert_awaited_once_with("patient-1", bundle)
         add_document.assert_not_called()
         add_record.assert_not_called()
         post_to_fhir.assert_not_awaited()
 
     async def test_standard_share_combines_current_epic_data_into_one_qr(self) -> None:
         live_session = Mock()
-        bundle = {"resourceType": "Bundle", "type": "collection", "entry": [{"resource": {"resourceType": "Condition", "id": "c1", "code": {"text": "Asthma"}}}]}
+        bundle = {"resourceType": "Bundle", "type": "collection", "entry": [
+            {"resource": {"resourceType": "Patient", "id": "epic-patient", "name": [{"given": ["Pat"], "family": "Example"}], "birthDate": "1980-01-01"}},
+            {"resource": {"resourceType": "Condition", "id": "c1", "code": {"text": "Asthma"}}},
+        ]}
         with (
             patch("app.main._authenticate_patient", new=AsyncMock(return_value="patient-1")),
             patch("app.main._load_workspace", new=AsyncMock(return_value={})),
             patch("app.main.list_documents", return_value=[]),
             patch("app.main.list_records", return_value=[]),
             patch("app.main._ensure_documents_extracted", new=AsyncMock()),
+            patch("app.main.get_patient_profile", return_value=None),
+            patch("app.main._backfill_profile_from_live_epic", new=AsyncMock(return_value=None)),
             patch("app.main._live_epic_session", new=AsyncMock(return_value=live_session)),
             patch("app.main.epic.fetch_record", new=AsyncMock(return_value=(bundle, {}))),
             patch("app.main.epic.source_metadata", return_value={"organization_name": "Demo Health", "retrieved_at": "2026-08-14T00:00:00+00:00"}),
@@ -154,10 +169,78 @@ class MainRouteTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status_code, 200, response.text)
         self.assertTrue(response.json()["epic_included"])
         shared_bundle = create_snapshot.call_args.args[1]
-        self.assertEqual(shared_bundle["entry"][0]["resource"]["code"]["text"], "Asthma")
-        self.assertEqual(shared_bundle["entry"][0]["resource"]["meta"]["tag"][-1]["display"], "Demo Health")
+        self.assertEqual(shared_bundle["entry"][0]["resource"]["resourceType"], "Patient")
+        shared_condition = next(entry["resource"] for entry in shared_bundle["entry"] if entry["resource"]["resourceType"] == "Condition")
+        self.assertEqual(shared_condition["code"]["text"], "Asthma")
+        self.assertEqual(shared_condition["meta"]["tag"][-1]["display"], "Demo Health")
         add_document.assert_not_called()
         post_to_fhir.assert_not_awaited()
+
+    async def test_share_rejects_an_unmatchable_patient_before_creating_a_qr(self) -> None:
+        document = SimpleNamespace(
+            id=7, filename="report.pdf", uploaded_at="2026-08-19T12:00:00+00:00",
+            fhir_bundle={"resourceType": "Bundle", "entry": [{"resource": {
+                "resourceType": "Condition", "code": {"text": "Asthma"},
+            }}]},
+        )
+        with (
+            patch("app.main._authenticate_patient", new=AsyncMock(return_value="patient-1")),
+            patch("app.main._load_workspace", new=AsyncMock(return_value={})),
+            patch("app.main.list_documents", return_value=[document]),
+            patch("app.main.list_records", return_value=[]),
+            patch("app.main._ensure_documents_extracted", new=AsyncMock()),
+            patch("app.main.get_patient_profile", return_value=None),
+            patch("app.main._create_upload_shl") as create_share,
+        ):
+            response = await self.client.post("/api/patient/generate-link", json={"passcode": "1234"})
+        self.assertEqual(response.status_code, 422, response.text)
+        self.assertIn("demographic profile", response.json()["detail"])
+        create_share.assert_not_called()
+
+    async def test_profile_endpoint_saves_the_us_core_matching_fields(self) -> None:
+        with (
+            patch("app.main._authenticate_patient", new=AsyncMock(return_value="patient-1")),
+            patch("app.main.update_patient_profile", return_value=MATCHABLE_PROFILE) as save_profile,
+        ):
+            response = await self.client.put("/api/patient/profile", json={
+                "given_name": "Pat", "family_name": "Example", "birth_date": "1980-01-01",
+                "administrative_gender": "unknown",
+            })
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()["birth_date"], "1980-01-01")
+        save_profile.assert_called_once_with("patient-1", "Pat", "Example", "1980-01-01", "unknown")
+
+    async def test_profile_endpoint_reads_nullable_existing_patient_demographics(self) -> None:
+        with (
+            patch("app.main._authenticate_patient", new=AsyncMock(return_value="patient-1")),
+            patch("app.main.get_patient_profile", return_value=None),
+        ):
+            response = await self.client.get("/api/patient/profile")
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json(), {
+            "given_name": None, "family_name": None, "birth_date": None, "administrative_gender": None,
+        })
+
+    async def test_external_shl_import_normalizes_and_marks_user_confirmed_resources(self) -> None:
+        workspace = {"patient_id": "patient-1", "documents": [], "records": [], "storage_provider": "s3", "drive_connected": False, "drive_pending_import_count": 0, "drive_sync_message": None, "drive_access_upgrade_required": False}
+        bundle = {"resourceType": "Bundle", "entry": [
+            {"resource": {"resourceType": "Patient", "name": [{"given": ["Outside"]}]}},
+            {"resource": {"resourceType": "Condition", "code": {"text": "Asthma"}, "subject": {"reference": "Patient/outside"}}},
+            {"resource": {"resourceType": "Binary", "contentType": "application/pdf", "data": "not-imported"}},
+        ]}
+        with (
+            patch("app.main._authenticate_patient", new=AsyncMock(return_value="patient-1")),
+            patch("app.main.add_record") as add_record,
+            patch("app.main._load_workspace", new=AsyncMock(return_value=workspace)),
+        ):
+            response = await self.client.post("/api/patient/external-shl-import", json={"source_host": "ehr.example", "bundle": bundle})
+        self.assertEqual(response.status_code, 200, response.text)
+        normalized = add_record.call_args.args[3]
+        self.assertEqual([entry["resource"]["resourceType"] for entry in normalized["entry"]], ["Condition"])
+        condition = normalized["entry"][0]["resource"]
+        self.assertEqual(condition["subject"], {"reference": "Patient/patient-1"})
+        self.assertIn({"system": "https://clinicforce.example/fhir/source", "code": "external-shl", "display": "External SMART Health Link: ehr.example"}, condition["meta"]["tag"])
+        self.assertIn({"system": "https://clinicforce.example/fhir/verification", "code": "unverified", "display": "External information; clinician reconciliation required"}, condition["meta"]["tag"])
 
     def test_epic_share_snapshot_strips_document_attachment_urls_and_data(self) -> None:
         bundle = {"resourceType": "Bundle", "entry": [{"resource": {
@@ -171,6 +254,78 @@ class MainRouteTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("data", attachment)
         self.assertEqual(snapshot["entry"][0]["resource"]["meta"]["tag"][-1]["code"], "epic-mychart")
         self.assertIn("url", bundle["entry"][0]["resource"]["content"][0]["attachment"])
+
+    def test_exchange_bundle_is_explicitly_source_tagged_and_pdf_metadata_only(self) -> None:
+        document = SimpleNamespace(
+            id=7,
+            filename="discharge.pdf",
+            uploaded_at="2026-08-19T12:00:00+00:00",
+            fhir_bundle={"resourceType": "Bundle", "entry": [
+                {"resource": {"resourceType": "Condition", "code": {"text": "Asthma"}, "subject": {"reference": "Patient/legacy"}, "extension": [{
+                    "url": "https://clinicforce.example/fhir/StructureDefinition/source-citation", "extension": [
+                        {"url": "source_filename", "valueString": "discharge.pdf"}, {"url": "page_number", "valuePositiveInt": 2},
+                    ],
+                }]}},
+                {"resource": {"resourceType": "Encounter", "status": "finished"}},
+            ]},
+        )
+        record = SimpleNamespace(
+            fhir_bundle={"resourceType": "Bundle", "entry": [{"resource": {
+                "resourceType": "MedicationStatement", "status": "active",
+                "medicationCodeableConcept": {"coding": [{"system": "http://www.nlm.nih.gov/research/umls/rxnorm", "code": "1191", "display": "Aspirin"}]},
+            }}]},
+        )
+        epic = _epic_share_snapshot({"resourceType": "Bundle", "entry": [
+            {"resource": {"resourceType": "Patient", "id": "epic-patient", "name": [{"family": "Example", "given": ["Pat"]}], "birthDate": "1980-01-01"}},
+            {"resource": {"resourceType": "Observation", "status": "final", "code": {"coding": [{"system": "http://loinc.org", "code": "4548-4"}]}, "valueQuantity": {"value": 5.8, "system": "http://unitsofmeasure.org", "code": "%", "unit": "%"}}},
+            {"resource": {"resourceType": "DocumentReference", "status": "current", "content": [{"attachment": {"url": "https://epic.example/file", "data": "cGRm", "title": "Epic PDF"}}]}},
+        ]}, {"organization_name": "Demo Health"})
+
+        bundle = build_exchange_bundle("patient-1", [document], [record], epic)
+        resources = [entry["resource"] for entry in bundle["entry"]]
+        resource_types = [resource["resourceType"] for resource in resources]
+        self.assertEqual(bundle["type"], "collection")
+        self.assertEqual(resource_types.count("Patient"), 1)
+        self.assertNotIn("Encounter", resource_types)
+
+        patient = resources[0]
+        self.assertEqual(patient["id"], "patient-1")
+        self.assertEqual(patient["name"][0]["family"], "Example")
+        self.assertEqual(patient["birthDate"], "1980-01-01")
+        self.assertIn({"system": "https://clinicforce.example/fhir/source", "code": "epic-mychart", "display": "Demo Health"}, patient["meta"]["tag"])
+
+        condition = next(resource for resource in resources if resource["resourceType"] == "Condition")
+        self.assertEqual(condition["subject"], {"reference": "Patient/patient-1"})
+        self.assertIn({"system": "https://clinicforce.example/fhir/source", "code": "document-extracted", "display": "Extracted from patient-uploaded document"}, condition["meta"]["tag"])
+        self.assertIn({"system": "https://clinicforce.example/fhir/verification", "code": "unverified", "display": "External document extraction; clinician reconciliation required"}, condition["meta"]["tag"])
+        self.assertIn({"url": "document_id", "valuePositiveInt": 7}, condition["extension"][0]["extension"])
+
+        medication = next(resource for resource in resources if resource["resourceType"] == "MedicationStatement")
+        self.assertEqual(medication["subject"], {"reference": "Patient/patient-1"})
+        self.assertEqual(medication["medicationCodeableConcept"]["coding"][0]["system"], "http://www.nlm.nih.gov/research/umls/rxnorm")
+        self.assertIn({"system": "https://clinicforce.example/fhir/source", "code": "patient-entered", "display": "Patient-entered"}, medication["meta"]["tag"])
+
+        observation = next(resource for resource in resources if resource["resourceType"] == "Observation")
+        self.assertEqual(observation["code"]["coding"][0]["system"], "http://loinc.org")
+        self.assertEqual(observation["valueQuantity"]["system"], "http://unitsofmeasure.org")
+        self.assertEqual(observation["subject"], {"reference": "Patient/patient-1"})
+
+        document_references = [resource for resource in resources if resource["resourceType"] == "DocumentReference"]
+        uploaded_reference = next(resource for resource in document_references if resource["id"] == "uploaded-document-7")
+        self.assertEqual(uploaded_reference["content"][0]["attachment"], {"contentType": "application/pdf", "title": "discharge.pdf"})
+        epic_reference = next(resource for resource in document_references if resource.get("id") != "uploaded-document-7")
+        self.assertNotIn("url", epic_reference["content"][0]["attachment"])
+        self.assertNotIn("data", epic_reference["content"][0]["attachment"])
+
+        saved_profile = PatientProfile(
+            patient_id="patient-1", given_name="Saved", family_name="Profile",
+            birth_date="1979-12-31", administrative_gender="female",
+        )
+        profiled_bundle = build_exchange_bundle("patient-1", [], [], epic, saved_profile)
+        profiled_patient = profiled_bundle["entry"][0]["resource"]
+        self.assertEqual(profiled_patient["name"], [{"use": "official", "given": ["Saved"], "family": "Profile"}])
+        self.assertEqual(profiled_patient["birthDate"], "1979-12-31")
+        self.assertEqual(profiled_patient["gender"], "female")
 
     def test_patient_store_schema_initializes_only_once_per_process(self) -> None:
         """Concurrent request connections must not each issue schema-altering DDL."""
@@ -197,7 +352,7 @@ class MainRouteTests(unittest.IsolatedAsyncioTestCase):
             patch("app.main._build_ingestion_resources", new=AsyncMock(return_value=[patient, observation])),
             patch("app.main.post_to_fhir", new=AsyncMock(side_effect=[{"id": "patient-1"}, {"id": "observation-1"}])),
             patch("app.main.get_patient_records", new=AsyncMock(return_value=fhir_bundle)),
-            patch("app.main.create_manifest", return_value=str(uuid4())),
+            patch("app.main._create_upload_shl", return_value=("shlink:/test", "qr", "manifest-token")),
         ):
             response = await self.client.post(
                 "/api/test/integration", json={"patient_id": "patient-1", "passcode": "1234"}
@@ -209,14 +364,76 @@ class MainRouteTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(payload["shl_uri"].startswith("shlink:/"))
         self.assertTrue(payload["qr_code_base64"])
 
-    async def test_manifest_rejects_an_incorrect_passcode(self) -> None:
-        manifest_id = uuid4()
+    async def test_manifest_rejects_an_incorrect_passcode_with_remaining_attempts(self) -> None:
+        manifest_id = "A" * 43
         with patch(
             "app.main.verify_manifest_pin",
-            return_value=None,
+            side_effect=InvalidManifestPin(4),
         ):
-            response = await self.client.post(f"/manifest/{manifest_id}", json={"passcode": "0000"})
+            response = await self.client.post(
+                f"/manifest/{manifest_id}",
+                json={"recipient": "eClinicalWorks", "passcode": "0000"},
+            )
         self.assertEqual(response.status_code, 401)
+        self.assertEqual(response.json(), {"remainingAttempts": 4})
+
+    async def test_manifest_requires_a_recipient(self) -> None:
+        response = await self.client.post(
+            f"/manifest/{'A' * 43}",
+            json={"passcode": "1234"},
+        )
+        self.assertEqual(response.status_code, 422)
+
+    async def test_manifest_returns_404_after_the_final_lifetime_pin_failure(self) -> None:
+        failures = [InvalidManifestPin(remaining) for remaining in (4, 3, 2, 1, 0)]
+        with patch("app.main.verify_manifest_pin", side_effect=[*failures, None]):
+            for expected_remaining in (4, 3, 2, 1, 0):
+                response = await self.client.post(
+                    f"/manifest/{'A' * 43}",
+                    json={"recipient": "eClinicalWorks", "passcode": "0000"},
+                )
+                self.assertEqual(response.status_code, 401)
+                self.assertEqual(response.json(), {"remainingAttempts": expected_remaining})
+
+            response = await self.client.post(
+                f"/manifest/{'A' * 43}",
+                json={"recipient": "eClinicalWorks", "passcode": "1234"},
+            )
+        self.assertEqual(response.status_code, 404)
+
+    async def test_manifest_accepts_standard_receiver_fields_and_ignores_extensions(self) -> None:
+        with patch(
+            "app.main.verify_manifest_pin",
+            return_value={"encrypted_jwe": "encrypted", "patient_id": "patient-1", "hashed_pin": "hash"},
+        ) as verify:
+            response = await self.client.post(
+                f"/manifest/{'A' * 43}",
+                json={"recipient": "eClinicalWorks", "passcode": "1234", "embeddedLengthMax": 1_000, "futureExtension": True},
+            )
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()["files"][0]["embedded"], "encrypted")
+        verify.assert_called_once_with("A" * 43, "1234")
+
+    async def test_manifest_returns_404_when_revoked_or_expired(self) -> None:
+        with patch("app.main.verify_manifest_pin", return_value=None):
+            response = await self.client.post(f"/manifest/{'A' * 43}", json={"recipient": "eClinicalWorks", "passcode": "1234"})
+        self.assertEqual(response.status_code, 404)
+
+    async def test_manifest_uses_short_lived_location_when_receiver_rejects_embedded_size(self) -> None:
+        with (
+            patch("app.main.verify_manifest_pin", return_value={"encrypted_jwe": "encrypted-payload", "patient_id": "patient-1", "hashed_pin": "hash"}),
+            patch("app.main.put_shl_payload", return_value="clinicforce/shl/token.jwe") as put_payload,
+            patch("app.main.presign_shl_payload", return_value="https://s3.example.test/signed") as presign,
+        ):
+            response = await self.client.post(
+                f"/manifest/{'A' * 43}",
+                json={"recipient": "eClinicalWorks", "passcode": "1234", "embeddedLengthMax": 1},
+            )
+        self.assertEqual(response.status_code, 200, response.text)
+        file = response.json()["files"][0]
+        self.assertEqual(file, {"contentType": "application/fhir+json", "location": "https://s3.example.test/signed"})
+        put_payload.assert_called_once_with("A" * 43, "encrypted-payload")
+        presign.assert_called_once_with("clinicforce/shl/token.jwe")
 
     async def test_upload_requires_configured_selected_storage(self) -> None:
         with (
@@ -328,6 +545,7 @@ class MainRouteTests(unittest.IsolatedAsyncioTestCase):
             patch("app.main.list_documents", return_value=[document]),
             patch("app.main.list_records", return_value=[]),
             patch("app.main._ensure_documents_extracted", new=AsyncMock()),
+            patch("app.main.get_patient_profile", return_value=MATCHABLE_PROFILE),
             patch("app.main._create_upload_shl", return_value=("shlink:/value", "qr", "manifest-1")),
             patch("app.main.get_storage_preference", return_value="google_drive"),
             patch("app.main.get_drive_connection", return_value=connection),
@@ -361,6 +579,7 @@ class MainRouteTests(unittest.IsolatedAsyncioTestCase):
             patch("app.main.list_documents", return_value=[document]),
             patch("app.main.list_records", return_value=[]),
             patch("app.main._ensure_documents_extracted", new=AsyncMock()),
+            patch("app.main.get_patient_profile", return_value=MATCHABLE_PROFILE),
             patch("app.main._create_upload_shl", return_value=("shlink:/value", "qr", "manifest-1")),
             patch("app.main.get_storage_preference", return_value="google_drive"),
             patch("app.main.get_drive_connection", return_value=connection),
@@ -395,6 +614,7 @@ class MainRouteTests(unittest.IsolatedAsyncioTestCase):
             patch("app.main.list_documents", return_value=[document]),
             patch("app.main.list_records", return_value=[]),
             patch("app.main._ensure_documents_extracted", new=AsyncMock()),
+            patch("app.main.get_patient_profile", return_value=MATCHABLE_PROFILE),
             patch("app.main._create_upload_shl", return_value=("shlink:/value", "qr", "manifest-1")),
             patch("app.main.get_storage_preference", return_value="google_drive"),
             patch("app.main.get_drive_connection", return_value=connection),
@@ -561,6 +781,14 @@ class MainRouteTests(unittest.IsolatedAsyncioTestCase):
             )
         self.assertEqual(response.status_code, 401)
         decrypt.assert_not_called()
+
+    async def test_doctor_summary_returns_401_when_lifetime_pin_limit_rejects_the_request(self) -> None:
+        with patch("app.main.verify_manifest_pin", side_effect=InvalidManifestPin(0)):
+            response = await self.client.post(
+                "/api/doctor/decrypt-and-summarize",
+                json={"manifest_id": "A" * 43, "key": generate_symmetric_key(), "passcode": "0000"},
+            )
+        self.assertEqual(response.status_code, 401)
 
     async def test_local_pdf_extraction_preserves_citations_without_bedrock(self) -> None:
         extraction = await parse_pdf_text_with_llm("[PAGE 2]\nConditions: Asthma\nMedications: Albuterol", "report.pdf")

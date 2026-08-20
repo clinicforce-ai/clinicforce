@@ -75,6 +75,12 @@ const categoryMeta: Record<RecordCategory, { label: string; help: string; icon: 
   medication: { label: 'Medication', help: 'A medication you currently take', icon: '06' },
 }
 
+const externalImportMeta = { label: 'External SHL import', icon: 'SHL' }
+
+function recordMeta(category: PatientSession['records'][number]['category']): { label: string; icon: string } {
+  return category === 'external-shl' ? externalImportMeta : categoryMeta[category]
+}
+
 function dateLabel(value: string): string {
   const date = new Date(value)
   return Number.isNaN(date.getTime()) ? value : date.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })
@@ -789,7 +795,7 @@ export default function PatientPortal({ onBack }: PatientPortalProps) {
 
           <section className="section-card" aria-labelledby="detail-heading">
             <div className="section-heading"><div><p className="section-kicker">Structured details</p><h2 id="detail-heading">Health details</h2></div><ClipboardPlus aria-hidden="true" className="section-icon" /></div>
-            {session.records.length ? <ul className="record-list">{session.records.map((record) => <li key={record.id}><span className="record-number">{categoryMeta[record.category].icon}</span><div><strong>{record.label}</strong><p>{categoryMeta[record.category].label} · added {dateLabel(record.created_at)}</p></div></li>)}</ul> : <div className="empty-block compact"><ClipboardPlus aria-hidden="true" /><p><strong>Add a health detail</strong><br />Include care visits, lab results, medications, and more.</p></div>}
+            {session.records.length ? <ul className="record-list">{session.records.map((record) => <li key={record.id}><span className="record-number">{recordMeta(record.category).icon}</span><div><strong>{record.label}</strong><p>{recordMeta(record.category).label} · added {dateLabel(record.created_at)}</p></div></li>)}</ul> : <div className="empty-block compact"><ClipboardPlus aria-hidden="true" /><p><strong>Add a health detail</strong><br />Include care visits, lab results, medications, and more.</p></div>}
             <form className="record-form" onSubmit={saveRecord} noValidate>
               <fieldset><legend>Add a detail</legend><div className="category-picker">{(Object.keys(categoryMeta) as RecordCategory[]).map((key) => <button className={category === key ? 'selected' : ''} type="button" key={key} onClick={() => { setCategory(key); setError('') }}><span>{categoryMeta[key].icon}</span>{categoryMeta[key].label}</button>)}</div></fieldset>
               <p className="field-help mb-4">{categoryMeta[category].help}</p>

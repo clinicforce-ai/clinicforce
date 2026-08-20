@@ -35,7 +35,10 @@ def encrypt_bundle(fhir_bundle: dict, key_bytes: bytes) -> str:
         fhir_bundle, separators=(",", ":"), ensure_ascii=False
     ).encode("utf-8")
     encryption_key = jwk.JWK(kty="oct", k=_base64url_encode(key_bytes))
-    token = jwe.JWE(plaintext=plaintext, protected={"alg": "dir", "enc": "A256GCM"})
+    token = jwe.JWE(
+        plaintext=plaintext,
+        protected={"alg": "dir", "enc": "A256GCM", "cty": "application/fhir+json"},
+    )
     token.add_recipient(encryption_key)
     return token.serialize(compact=True)
 
@@ -74,9 +77,19 @@ def verify_password(password: str, hashed_password: str) -> bool:
         return False
 
 
-def create_shl_uri(manifest_url: str, key: str, label: str) -> str:
+def create_shl_uri(manifest_url: str, key: str, label: str, expires_at: int | None = None) -> str:
     """Create an SHL URI containing the manifest URL and decryption key."""
-    payload = {"url": manifest_url, "key": key, "label": label, "flag": "P"}
+    if len(label) > 80:
+        raise ValueError("SHL labels must not exceed 80 characters")
+    payload: dict[str, object] = {
+        "url": manifest_url,
+        "key": key,
+        "label": label,
+        "flag": "P",
+        "v": 1,
+    }
+    if expires_at is not None:
+        payload["exp"] = expires_at
     encoded_payload = _base64url_encode(
         json.dumps(payload, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
     )
