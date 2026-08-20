@@ -57,7 +57,8 @@ from app.core.patient_store import (
     list_pending_drive_deletions, remove_documents, revoke_patient_manifests, revoke_patient_session, save_drive_file_crypto,
     save_drive_oauth_state, save_google_login_state, set_drive_summary_file, set_storage_preference, update_document_extraction,
     update_document_locator,
-    InvalidManifestPin, PatientProfile, update_patient_profile, upsert_drive_connection, verify_manifest_pin,
+    InvalidManifestPin, PatientProfile, PatientProfileSuggestions, get_patient_profile_suggestions,
+    set_google_profile_suggestions, update_patient_profile, upsert_drive_connection, verify_manifest_pin,
     get_epic_endpoint, search_epic_endpoints,
 )
 from app.core.source_links import document_download_url, verify_document_download_token
@@ -1221,19 +1222,27 @@ async def get_current_patient_session(request: Request) -> dict[str, Any]:
     return await _load_workspace(patient_id)
 
 
-def _patient_profile_payload(profile: PatientProfile | None) -> dict[str, str | None]:
+def _patient_profile_payload(
+    profile: PatientProfile | None, suggestions: PatientProfileSuggestions | None = None,
+) -> dict[str, str | None]:
     return {
         "given_name": profile.given_name if profile else None,
         "family_name": profile.family_name if profile else None,
         "birth_date": profile.birth_date if profile else None,
         "administrative_gender": profile.administrative_gender if profile else None,
+        "suggested_given_name": suggestions.given_name if suggestions else None,
+        "suggested_family_name": suggestions.family_name if suggestions else None,
     }
 
 
 @app.get("/api/patient/profile")
 async def get_patient_profile_endpoint(request: Request) -> dict[str, str | None]:
     patient_id = await _authenticate_patient(None, None, request)
-    return _patient_profile_payload(await asyncio.to_thread(get_patient_profile, patient_id))
+    profile, suggestions = await asyncio.gather(
+        asyncio.to_thread(get_patient_profile, patient_id),
+        asyncio.to_thread(get_patient_profile_suggestions, patient_id),
+    )
+    return _patient_profile_payload(profile, suggestions)
 
 
 @app.put("/api/patient/profile")
@@ -1250,7 +1259,8 @@ async def save_patient_profile(request: PatientProfileRequest, http_request: Req
     )
     if profile is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Patient account not found")
-    return _patient_profile_payload(profile)
+    suggestions = await asyncio.to_thread(get_patient_profile_suggestions, patient_id)
+    return _patient_profile_payload(profile, suggestions)
 
 
 @app.post("/api/patient/logout")
@@ -1404,11 +1414,15 @@ async def google_drive_callback(state: str = "", code: str = "", error: str = ""
     if error or not code:
         return RedirectResponse(f"{PUBLIC_BASE_URL}/?drive=cancelled", status_code=status.HTTP_303_SEE_OTHER)
     try:
-        subject, encrypted_refresh_token, folder_id = await asyncio.to_thread(google_drive.complete_authorization, code)
+        subject, encrypted_refresh_token, folder_id, google_given_name, google_family_name = await asyncio.to_thread(google_drive.complete_authorization, code)
         if google_login:
             patient_id = await asyncio.to_thread(get_patient_by_google_subject, subject)
             if patient_id is None:
-                patient_id = await asyncio.to_thread(create_google_patient, subject, hash_password(secrets.token_urlsafe(48)))
+                patient_id = await asyncio.to_thread(
+                    create_google_patient, subject, hash_password(secrets.token_urlsafe(48)), google_given_name, google_family_name,
+                )
+            else:
+                await asyncio.to_thread(set_google_profile_suggestions, patient_id, google_given_name, google_family_name)
         assert patient_id is not None
         await asyncio.to_thread(upsert_drive_connection, patient_id, subject, encrypted_refresh_token, folder_id)
         await asyncio.to_thread(set_storage_preference, patient_id, "google_drive")

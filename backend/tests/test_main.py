@@ -201,6 +201,7 @@ class MainRouteTests(unittest.IsolatedAsyncioTestCase):
         with (
             patch("app.main._authenticate_patient", new=AsyncMock(return_value="patient-1")),
             patch("app.main.update_patient_profile", return_value=MATCHABLE_PROFILE) as save_profile,
+            patch("app.main.get_patient_profile_suggestions", return_value=SimpleNamespace(given_name="Pat", family_name="Example")),
         ):
             response = await self.client.put("/api/patient/profile", json={
                 "given_name": "Pat", "family_name": "Example", "birth_date": "1980-01-01",
@@ -208,17 +209,20 @@ class MainRouteTests(unittest.IsolatedAsyncioTestCase):
             })
         self.assertEqual(response.status_code, 200, response.text)
         self.assertEqual(response.json()["birth_date"], "1980-01-01")
+        self.assertEqual(response.json()["suggested_given_name"], "Pat")
         save_profile.assert_called_once_with("patient-1", "Pat", "Example", "1980-01-01", "unknown")
 
     async def test_profile_endpoint_reads_nullable_existing_patient_demographics(self) -> None:
         with (
             patch("app.main._authenticate_patient", new=AsyncMock(return_value="patient-1")),
             patch("app.main.get_patient_profile", return_value=None),
+            patch("app.main.get_patient_profile_suggestions", return_value=SimpleNamespace(given_name=None, family_name=None)),
         ):
             response = await self.client.get("/api/patient/profile")
         self.assertEqual(response.status_code, 200, response.text)
         self.assertEqual(response.json(), {
             "given_name": None, "family_name": None, "birth_date": None, "administrative_gender": None,
+            "suggested_given_name": None, "suggested_family_name": None,
         })
 
     async def test_external_shl_import_normalizes_and_marks_user_confirmed_resources(self) -> None:
