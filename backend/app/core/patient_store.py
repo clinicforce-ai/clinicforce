@@ -7,13 +7,15 @@ import os
 import hashlib
 import secrets
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from threading import Lock
 from typing import Any
 from uuid import uuid4
 
 import psycopg
 from psycopg.rows import dict_row
+
+from app.logs.logger import log_info
 
 
 DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
@@ -53,6 +55,17 @@ class StoredRecord:
     label: str
     created_at: str
     fhir_bundle: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class PatientProfile:
+    """Canonical patient demographics used for external-EHR matching."""
+
+    patient_id: str
+    given_name: str | None
+    family_name: str | None
+    birth_date: str | None
+    administrative_gender: str | None
 
 
 @dataclass(frozen=True)
@@ -105,6 +118,17 @@ class StoredEpicManifest:
     created_at: str
 
 
+class InvalidManifestPin(Exception):
+    """A rejected PIN together with the remaining lifetime attempts."""
+
+    def __init__(self, remaining_attempts: int) -> None:
+        self.remaining_attempts = remaining_attempts
+        super().__init__("Invalid manifest passcode")
+
+
+MANIFEST_PIN_MAX_ATTEMPTS = 5
+
+
 def _initialize_schema(connection: psycopg.Connection[Any]) -> None:
     """Run the one-time, cross-process-safe storage migration.
 
@@ -119,6 +143,18 @@ def _initialize_schema(connection: psycopg.Connection[Any]) -> None:
             storage_preference TEXT NOT NULL DEFAULT 's3'
         )""")
         cursor.execute("ALTER TABLE patients ADD COLUMN IF NOT EXISTS storage_preference TEXT NOT NULL DEFAULT 's3'")
+        # Patient demographics are deliberately nullable for existing accounts:
+        # ClinicForce must never infer identity details from an uploaded document.
+        # Active Epic connections can populate them through the explicit
+        # backfill path below; all other existing rows remain empty.
+        cursor.execute("ALTER TABLE patients ADD COLUMN IF NOT EXISTS given_name TEXT")
+        cursor.execute("ALTER TABLE patients ADD COLUMN IF NOT EXISTS family_name TEXT")
+        cursor.execute("ALTER TABLE patients ADD COLUMN IF NOT EXISTS birth_date DATE")
+        cursor.execute("ALTER TABLE patients ADD COLUMN IF NOT EXISTS administrative_gender TEXT")
+        cursor.execute("""DO $$ BEGIN
+            ALTER TABLE patients ADD CONSTRAINT patients_administrative_gender_check
+                CHECK (administrative_gender IS NULL OR administrative_gender IN ('male', 'female', 'other', 'unknown'));
+        EXCEPTION WHEN duplicate_object THEN NULL; END $$""")
         cursor.execute("""DO $$ BEGIN
             ALTER TABLE patients ADD CONSTRAINT patients_storage_preference_check
                 CHECK (storage_preference IN ('s3', 'google_drive'));
@@ -172,6 +208,7 @@ def _initialize_schema(connection: psycopg.Connection[Any]) -> None:
         cursor.execute("ALTER TABLE shl_manifests ADD COLUMN IF NOT EXISTS pin_locked_until TEXT")
         cursor.execute("ALTER TABLE shl_manifests ADD COLUMN IF NOT EXISTS revoked_at TEXT")
         cursor.execute("ALTER TABLE shl_manifests ADD COLUMN IF NOT EXISTS source TEXT NOT NULL DEFAULT 'local'")
+        cursor.execute("ALTER TABLE shl_manifests ADD COLUMN IF NOT EXISTS expires_at TEXT")
         cursor.execute("""CREATE TABLE IF NOT EXISTS doctor_reports (
             id TEXT PRIMARY KEY, patient_id TEXT NOT NULL REFERENCES patients(patient_id),
             filename TEXT NOT NULL, s3_key TEXT NOT NULL, created_at TEXT NOT NULL
@@ -266,6 +303,101 @@ def get_password_hash(patient_id: str) -> str | None:
             "SELECT password_hash FROM patients WHERE patient_id = %s", (patient_id,)
         ).fetchone()
     return row["password_hash"] if row else None
+
+
+def get_patient_profile(patient_id: str) -> PatientProfile | None:
+    """Return only the canonical demographics intentionally stored for matching."""
+    with _connection() as connection:
+        row = connection.execute(
+            """SELECT patient_id, given_name, family_name, birth_date, administrative_gender
+               FROM patients WHERE patient_id = %s""",
+            (patient_id,),
+        ).fetchone()
+    if row is None:
+        return None
+    birth_date = row["birth_date"]
+    return PatientProfile(
+        patient_id=str(row["patient_id"]),
+        given_name=str(row["given_name"]) if row["given_name"] else None,
+        family_name=str(row["family_name"]) if row["family_name"] else None,
+        birth_date=birth_date.isoformat() if hasattr(birth_date, "isoformat") else (str(birth_date) if birth_date else None),
+        administrative_gender=str(row["administrative_gender"]) if row["administrative_gender"] else None,
+    )
+
+
+def update_patient_profile(
+    patient_id: str, given_name: str, family_name: str, birth_date: str, administrative_gender: str,
+) -> PatientProfile | None:
+    """Persist an explicitly entered canonical demographic profile."""
+    if administrative_gender not in {"male", "female", "other", "unknown"}:
+        raise ValueError("Unsupported administrative gender")
+    with _connection() as connection:
+        row = connection.execute(
+            """UPDATE patients
+               SET given_name = %s, family_name = %s, birth_date = %s, administrative_gender = %s
+               WHERE patient_id = %s
+               RETURNING patient_id, given_name, family_name, birth_date, administrative_gender""",
+            (given_name.strip(), family_name.strip(), birth_date, administrative_gender, patient_id),
+        ).fetchone()
+    if row is None:
+        return None
+    returned_birth_date = row["birth_date"]
+    return PatientProfile(
+        patient_id=str(row["patient_id"]),
+        given_name=str(row["given_name"]), family_name=str(row["family_name"]),
+        birth_date=returned_birth_date.isoformat() if hasattr(returned_birth_date, "isoformat") else str(returned_birth_date),
+        administrative_gender=str(row["administrative_gender"]),
+    )
+
+
+def backfill_patient_profile_from_epic(patient_id: str, patient_resource: dict[str, Any]) -> PatientProfile | None:
+    """Fill missing profile fields from a live Epic Patient resource only.
+
+    Existing patient-entered values win. This intentionally stores no Epic token,
+    remote identifier, or full chart--only the requested matching demographics.
+    """
+    if patient_resource.get("resourceType") != "Patient":
+        return get_patient_profile(patient_id)
+    selected_name: dict[str, Any] | None = None
+    for name in patient_resource.get("name", []):
+        if isinstance(name, dict) and name.get("use") == "official":
+            selected_name = name
+            break
+        if selected_name is None and isinstance(name, dict):
+            selected_name = name
+    given_values = selected_name.get("given", []) if selected_name else []
+    given_name = " ".join(value.strip() for value in given_values if isinstance(value, str) and value.strip()) or None
+    family_name = selected_name.get("family") if selected_name else None
+    family_name = family_name.strip() if isinstance(family_name, str) and family_name.strip() else None
+    birth_date = patient_resource.get("birthDate")
+    birth_date = birth_date.strip() if isinstance(birth_date, str) and birth_date.strip() else None
+    try:
+        birth_date_value = date.fromisoformat(birth_date) if birth_date else None
+    except ValueError:
+        # FHIR permits partial dates, but a partial Epic value is not suitable
+        # as the canonical matching date stored in this profile.
+        birth_date_value = None
+    gender = patient_resource.get("gender")
+    gender = gender if gender in {"male", "female", "other", "unknown"} else None
+    with _connection() as connection:
+        row = connection.execute(
+            """UPDATE patients
+               SET given_name = COALESCE(given_name, %s), family_name = COALESCE(family_name, %s),
+                   birth_date = COALESCE(birth_date, %s), administrative_gender = COALESCE(administrative_gender, %s)
+               WHERE patient_id = %s
+               RETURNING patient_id, given_name, family_name, birth_date, administrative_gender""",
+            (given_name, family_name, birth_date_value, gender, patient_id),
+        ).fetchone()
+    if row is None:
+        return None
+    returned_birth_date = row["birth_date"]
+    return PatientProfile(
+        patient_id=str(row["patient_id"]),
+        given_name=str(row["given_name"]) if row["given_name"] else None,
+        family_name=str(row["family_name"]) if row["family_name"] else None,
+        birth_date=returned_birth_date.isoformat() if hasattr(returned_birth_date, "isoformat") else (str(returned_birth_date) if returned_birth_date else None),
+        administrative_gender=str(row["administrative_gender"]) if row["administrative_gender"] else None,
+    )
 
 
 def check_database_connection() -> None:
@@ -527,6 +659,8 @@ def revoke_patient_manifests(patient_id: str) -> int:
             "UPDATE shl_manifests SET revoked_at = %s WHERE patient_id = %s AND source = 'local' AND revoked_at IS NULL",
             (datetime.now(timezone.utc).isoformat(), patient_id),
         )
+    if cursor.rowcount:
+        log_info("Secure Sharing", "Revoked %d active patient shares after a workspace change", cursor.rowcount)
     return cursor.rowcount
 
 
@@ -595,10 +729,21 @@ def list_records(patient_id: str) -> list[StoredRecord]:
     ]
 
 
-def create_manifest(patient_id: str | None, encrypted_jwe: str, hashed_pin: str, source: str = "local") -> str:
+def generate_manifest_token() -> str:
+    """Return the 256-bit, URL-safe public identifier required by SHL."""
+    return secrets.token_urlsafe(32)
+
+
+def create_manifest(
+    patient_id: str | None,
+    encrypted_jwe: str,
+    hashed_pin: str,
+    source: str = "local",
+    expires_at: str | None = None,
+) -> str:
     if source not in {"local", "epic"}:
         raise ValueError("Unknown manifest source")
-    manifest_id = str(uuid4())
+    manifest_id = generate_manifest_token()
     with _connection() as connection:
         if patient_id:
             # A current combined QR supersedes every older patient share,
@@ -606,13 +751,15 @@ def create_manifest(patient_id: str | None, encrypted_jwe: str, hashed_pin: str,
             # The legacy ``epic`` source remains supported solely so existing
             # data can be read and revoked safely during migration.
             predicate = "source = 'epic'" if source == "epic" else "TRUE"
-            connection.execute(
+            superseded = connection.execute(
                 f"UPDATE shl_manifests SET revoked_at = %s WHERE patient_id = %s AND {predicate} AND revoked_at IS NULL",
                 (datetime.now(timezone.utc).isoformat(), patient_id),
             )
         connection.execute("""INSERT INTO shl_manifests
-            (manifest_id, patient_id, encrypted_jwe, hashed_pin, created_at, source) VALUES (%s, %s, %s, %s, %s, %s)""",
-            (manifest_id, patient_id, encrypted_jwe, hashed_pin, datetime.now(timezone.utc).isoformat(), source))
+            (manifest_id, patient_id, encrypted_jwe, hashed_pin, created_at, source, expires_at) VALUES (%s, %s, %s, %s, %s, %s, %s)""",
+            (manifest_id, patient_id, encrypted_jwe, hashed_pin, datetime.now(timezone.utc).isoformat(), source, expires_at))
+    if patient_id and superseded.rowcount:
+        log_info("Secure Sharing", "Revoked %d superseded patient shares", superseded.rowcount)
     return manifest_id
 
 
@@ -633,39 +780,54 @@ def revoke_epic_manifest(patient_id: str, manifest_id: str) -> bool:
                WHERE patient_id = %s AND manifest_id = %s AND source = 'epic' AND revoked_at IS NULL""",
             (datetime.now(timezone.utc).isoformat(), patient_id, manifest_id),
         )
+    if cursor.rowcount:
+        log_info("Secure Sharing", "Revoked one patient-requested share")
     return cursor.rowcount == 1
 
 
 def get_manifest(manifest_id: str) -> dict[str, str] | None:
+    now = datetime.now(timezone.utc).isoformat()
     with _connection() as connection:
-        row = connection.execute("SELECT patient_id, encrypted_jwe, hashed_pin FROM shl_manifests WHERE manifest_id = %s AND revoked_at IS NULL", (manifest_id,)).fetchone()
+        row = connection.execute(
+            """SELECT patient_id, encrypted_jwe, hashed_pin FROM shl_manifests
+               WHERE manifest_id = %s AND revoked_at IS NULL AND (expires_at IS NULL OR expires_at > %s)""",
+            (manifest_id, now),
+        ).fetchone()
     return dict(row) if row else None
 
 
 def verify_manifest_pin(manifest_id: str, passcode: str) -> dict[str, str] | None:
-    """Verify a manifest PIN with persistent brute-force protection.
-
-    A valid in-person visit remains unlimited; only five consecutive wrong PINs
-    pause attempts for five minutes.
-    """
+    """Verify a manifest PIN with a race-safe, lifetime brute-force limit."""
     from app.core.shl import verify_pin
 
     now = datetime.now(timezone.utc)
     with _connection() as connection:
-        row = connection.execute("""SELECT patient_id, encrypted_jwe, hashed_pin, failed_pin_attempts, pin_locked_until
-            FROM shl_manifests WHERE manifest_id = %s AND revoked_at IS NULL""", (manifest_id,)).fetchone()
+        # Row locking serializes verification while the failed-attempt UPDATE below
+        # performs its increment atomically. This prevents parallel requests from
+        # observing and consuming the same remaining attempt.
+        row = connection.execute("""SELECT patient_id, encrypted_jwe, hashed_pin, failed_pin_attempts
+            FROM shl_manifests
+            WHERE manifest_id = %s AND revoked_at IS NULL
+              AND (expires_at IS NULL OR expires_at > %s)
+            FOR UPDATE""", (manifest_id, now.isoformat())).fetchone()
         if row is None:
             return None
-        locked_until = row["pin_locked_until"]
-        if isinstance(locked_until, str) and locked_until > now.isoformat():
+        if int(row["failed_pin_attempts"] or 0) >= MANIFEST_PIN_MAX_ATTEMPTS:
             return None
         if verify_pin(passcode, row["hashed_pin"]):
-            connection.execute("UPDATE shl_manifests SET failed_pin_attempts = 0, pin_locked_until = NULL WHERE manifest_id = %s", (manifest_id,))
             return {key: row[key] for key in ("patient_id", "encrypted_jwe", "hashed_pin")}
-        attempts = int(row["failed_pin_attempts"] or 0) + 1
-        lock_until = (now + timedelta(minutes=5)).isoformat() if attempts >= 5 else None
-        connection.execute("UPDATE shl_manifests SET failed_pin_attempts = %s, pin_locked_until = %s WHERE manifest_id = %s", (attempts, lock_until, manifest_id))
-    return None
+        incremented = connection.execute("""UPDATE shl_manifests
+            SET failed_pin_attempts = failed_pin_attempts + 1,
+                revoked_at = CASE WHEN failed_pin_attempts + 1 >= %s THEN %s ELSE revoked_at END,
+                pin_locked_until = NULL
+            WHERE manifest_id = %s AND revoked_at IS NULL
+            RETURNING failed_pin_attempts""", (
+                MANIFEST_PIN_MAX_ATTEMPTS, now.isoformat(), manifest_id,
+            )).fetchone()
+        if incremented is None:
+            return None
+        remaining_attempts = max(0, MANIFEST_PIN_MAX_ATTEMPTS - int(incremented["failed_pin_attempts"]))
+    raise InvalidManifestPin(remaining_attempts)
 
 
 def add_doctor_report(patient_id: str, filename: str, s3_key: str) -> str:

@@ -8,15 +8,16 @@ import {
   UserRound,
 } from 'lucide-react'
 import { decryptAndSummarize, type DoctorSummary } from './services/api'
-import { manifestIdFromUrl, type SmartHealthLink } from './services/shl'
+import { isClinicforceIssuedLink, manifestIdFromUrl, type SmartHealthLink } from './services/shl'
 import clinicforceLogo from './assets/clinicforce-logo.png'
 import './App.css'
 
-type View = 'landing' | 'patient' | 'scan' | 'pin' | 'loading' | 'dashboard'
+type View = 'landing' | 'patient' | 'scan' | 'pin' | 'external' | 'loading' | 'dashboard'
 
 const Dashboard = lazy(() => import('./components/Dashboard'))
 const PatientPortal = lazy(() => import('./components/PatientPortal'))
 const Scanner = lazy(() => import('./components/Scanner'))
+const ExternalShlReceiver = lazy(() => import('./components/ExternalShlReceiver'))
 
 function FeatureFallback() {
   return <section className="narrow-panel" aria-live="polite"><div className="panel status-panel"><span className="spinner" aria-hidden="true" /><p className="lead-small">Loading your workspace…</p></div></section>
@@ -36,7 +37,7 @@ function App() {
   const handleLinkScanned = (nextLink: SmartHealthLink) => {
     setLink(nextLink)
     setError('')
-    setView('pin')
+    setView(isClinicforceIssuedLink(nextLink) ? 'pin' : 'external')
   }
 
   const handleSubmitPin = async (event: FormEvent<HTMLFormElement>) => {
@@ -124,6 +125,7 @@ function App() {
         <Suspense fallback={<FeatureFallback />}>
           {view === 'patient' && <PatientPortal onBack={returnHome} />}
           {view === 'scan' && <Scanner onScanned={handleLinkScanned} onCancel={returnHome} />}
+          {view === 'external' && link && <ExternalShlReceiver link={link} onCancel={restart} onImported={() => { setLink(null); setView('patient') }} />}
 
         {view === 'pin' && (
           <section className="narrow-panel animate-enter" aria-labelledby="pin-heading">
