@@ -102,6 +102,22 @@ class MainRouteTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("HttpOnly", response.headers["set-cookie"])
         self.assertNotIn("access_token", response.text)
 
+    async def test_ecw_authorization_normalizes_bedbaa_and_sets_only_state_cookie(self) -> None:
+        started = Mock(authorization_url="https://auth.demo.example/authorize", state_cookie="sealed-ecw-state")
+        with (
+            patch("app.main._authenticate_patient", new=AsyncMock(return_value="patient-1")),
+            patch("app.main.ecw.begin_authorization", new=AsyncMock(return_value=started)) as begin,
+        ):
+            response = await self.client.post("/api/patient/ecw/authorize", json={"practice_code": "bedbaa"})
+        self.assertEqual(response.status_code, 200, response.text)
+        begin.assert_awaited_once_with(
+            "BEDBAA", "patient-1", "http://localhost:8000/api/patient/ecw/callback", popup=False,
+        )
+        self.assertEqual(response.json(), {"authorization_url": started.authorization_url})
+        self.assertIn("clinicforce_ecw_oauth=sealed-ecw-state", response.headers["set-cookie"])
+        self.assertIn("HttpOnly", response.headers["set-cookie"])
+        self.assertNotIn("access_token", response.text)
+
     async def test_epic_popup_callback_notifies_opener_without_redirecting(self) -> None:
         with (
             patch("app.main._authenticate_patient", new=AsyncMock(return_value="patient-1")),

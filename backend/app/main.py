@@ -65,7 +65,7 @@ from app.core.source_links import document_download_url, verify_document_downloa
 from app.ingestion.bedrock_extractor import EXTRACTION_VERSION, extract_pdf_to_fhir_bundle
 from app.ingestion.ccda_parser import parse_ccda_to_fhir_bundle
 from app.ingestion.fhir_client import FHIRRequestError, get_patient_records, post_to_fhir
-from app.ingestion import epic
+from app.ingestion import ecw, epic
 from app.ingestion.pdf_parser import (
     extract_text_from_pdf_bytes,
     parse_pdf_text_with_llm,
@@ -88,6 +88,8 @@ PATIENT_SESSION_COOKIE = "clinicforce_patient_session"
 PATIENT_SESSION_MAX_AGE = 30 * 24 * 60 * 60
 EPIC_OAUTH_STATE_COOKIE = "clinicforce_epic_oauth"
 EPIC_LIVE_SESSION_COOKIE = "clinicforce_epic_live"
+ECW_OAUTH_STATE_COOKIE = "clinicforce_ecw_oauth"
+ECW_LIVE_SESSION_COOKIE = "clinicforce_ecw_live"
 EPIC_ENDPOINT_SYNC_ENABLED = os.getenv("EPIC_ENDPOINT_SYNC_ENABLED", "").lower() == "true"
 EPIC_ENDPOINT_SYNC_INTERVAL_SECONDS = 7 * 24 * 60 * 60
 SHL_SHARE_TTL_SECONDS = max(1, int(os.getenv("SHL_SHARE_TTL_SECONDS", "900")))
@@ -279,6 +281,18 @@ class EpicAuthorizeRequest(PatientCredentials):
     popup: bool = False
 
 
+class EcwAuthorizeRequest(PatientCredentials):
+    """Start a standalone patient SMART launch for one eCW practice."""
+
+    practice_code: str = Field(min_length=1, max_length=32)
+    popup: bool = False
+
+    @field_validator("practice_code")
+    @classmethod
+    def normalize_ecw_practice_code(cls, value: str) -> str:
+        return ecw.normalize_practice_code(value)
+
+
 class ManualRecordRequest(PatientCredentials):
     category: Literal["hospital", "lab", "vital", "condition", "allergy", "medication"]
     hospital: str | None = Field(default=None, max_length=256)
@@ -390,6 +404,11 @@ def _clear_epic_cookies(response: Response) -> None:
     response.delete_cookie(EPIC_LIVE_SESSION_COOKIE, path="/")
 
 
+def _clear_ecw_cookies(response: Response) -> None:
+    response.delete_cookie(ECW_OAUTH_STATE_COOKIE, path="/")
+    response.delete_cookie(ECW_LIVE_SESSION_COOKIE, path="/")
+
+
 def _epic_popup_result(connected: bool) -> HTMLResponse:
     """Notify the same-origin ClinicForce opener without exposing OAuth values."""
     event_name = "clinicforce:epic-connected" if connected else "clinicforce:epic-not-connected"
@@ -402,6 +421,19 @@ def _epic_popup_result(connected: bool) -> HTMLResponse:
         headers={"Cache-Control": "no-store"},
     )
     return response
+
+
+def _ecw_popup_result(connected: bool) -> HTMLResponse:
+    """Notify the same-origin opener without exposing eCW OAuth values."""
+    event_name = "clinicforce:ecw-connected" if connected else "clinicforce:ecw-not-connected"
+    detail = "eClinicalWorks is connected. This window can close." if connected else "eClinicalWorks authorization was not completed. This window can close."
+    return HTMLResponse(
+        "<!doctype html><html><head><meta charset=\"utf-8\"><title>ClinicForce</title></head>"
+        f"<body><p>{escape(detail)}</p><script>"
+        f"if (window.opener && !window.opener.closed) {{ window.opener.postMessage({json.dumps({'type': event_name})}, {json.dumps(PUBLIC_BASE_URL)}); window.close(); }}"
+        "</script></body></html>",
+        headers={"Cache-Control": "no-store"},
+    )
 
 
 async def _live_epic_session(request: Request, patient_id: str) -> epic.LiveEpicSession:
@@ -1291,9 +1323,11 @@ async def save_patient_profile(request: PatientProfileRequest, http_request: Req
 async def logout_patient(request: Request) -> Response:
     await asyncio.to_thread(revoke_patient_session, request.cookies.get(PATIENT_SESSION_COOKIE, ""))
     epic.clear_live_session(request.cookies.get(EPIC_LIVE_SESSION_COOKIE, ""))
+    ecw.clear_live_session(request.cookies.get(ECW_LIVE_SESSION_COOKIE, ""))
     response = Response(status_code=status.HTTP_204_NO_CONTENT)
     response.delete_cookie(PATIENT_SESSION_COOKIE, path="/")
     _clear_epic_cookies(response)
+    _clear_ecw_cookies(response)
     return response
 
 
@@ -1325,6 +1359,30 @@ async def authorize_epic(request: EpicAuthorizeRequest, http_request: Request) -
     return response
 
 
+@app.get("/api/patient/ecw/jwks")
+async def ecw_jwks() -> dict[str, list[dict[str, Any]]]:
+    """Public JWKS registered in healow for private_key_jwt authentication."""
+    try:
+        return ecw.public_jwks()
+    except ecw.EcwError as exc:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
+
+
+@app.post("/api/patient/ecw/authorize")
+async def authorize_ecw(request: EcwAuthorizeRequest, http_request: Request) -> JSONResponse:
+    """Resolve one OEM code to its eCW FHIR endpoint and start SMART + PKCE."""
+    patient_id = await _authenticate_patient(request.patient_id, request.password, http_request)
+    try:
+        started = await ecw.begin_authorization(
+            request.practice_code, patient_id, f"{PUBLIC_BASE_URL}/api/patient/ecw/callback", popup=request.popup,
+        )
+    except ecw.EcwError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    response = JSONResponse({"authorization_url": started.authorization_url})
+    _set_epic_cookie(response, ECW_OAUTH_STATE_COOKIE, started.state_cookie, ecw.OAUTH_STATE_MAX_AGE_SECONDS)
+    return response
+
+
 @app.get("/api/patient/epic/callback")
 async def epic_callback(request: Request, state: str = "", code: str = "", error: str = "") -> Response:
     """Exchange a SMART code server-side; tokens never reach the browser."""
@@ -1351,6 +1409,35 @@ async def epic_callback(request: Request, state: str = "", code: str = "", error
         response = RedirectResponse(f"{PUBLIC_BASE_URL}/?epic=connected", status_code=status.HTTP_303_SEE_OTHER)
     response.delete_cookie(EPIC_OAUTH_STATE_COOKIE, path="/")
     _set_epic_cookie(response, EPIC_LIVE_SESSION_COOKIE, live_session_id, epic.LIVE_SESSION_MAX_AGE_SECONDS)
+    return response
+
+
+@app.get("/api/patient/ecw/callback")
+async def ecw_callback(request: Request, state: str = "", code: str = "", error: str = "") -> Response:
+    """Complete the confidential SMART authorization code + PKCE exchange."""
+    state_cookie = request.cookies.get(ECW_OAUTH_STATE_COOKIE, "")
+    popup = ecw.popup_requested(state_cookie)
+    try:
+        patient_id = await _authenticate_patient(None, None, request)
+        if error or not code:
+            raise ecw.EcwError("eClinicalWorks authorization was cancelled or denied")
+        live_session_id, popup = await ecw.complete_authorization(
+            state_cookie, state, code, f"{PUBLIC_BASE_URL}/api/patient/ecw/callback", patient_id,
+        )
+    except (HTTPException, ecw.EcwError):
+        if popup:
+            response = _ecw_popup_result(False)
+            _clear_ecw_cookies(response)
+            return response
+        response = RedirectResponse(f"{PUBLIC_BASE_URL}/?ecw=error", status_code=status.HTTP_303_SEE_OTHER)
+        _clear_ecw_cookies(response)
+        return response
+    if popup:
+        response = _ecw_popup_result(True)
+    else:
+        response = RedirectResponse(f"{PUBLIC_BASE_URL}/?ecw=connected", status_code=status.HTTP_303_SEE_OTHER)
+    response.delete_cookie(ECW_OAUTH_STATE_COOKIE, path="/")
+    _set_epic_cookie(response, ECW_LIVE_SESSION_COOKIE, live_session_id, ecw.LIVE_SESSION_MAX_AGE_SECONDS)
     return response
 
 

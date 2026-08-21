@@ -293,6 +293,14 @@ export async function beginEpicAuthorization(patientId: string | undefined, pass
   return value.authorization_url
 }
 
+export async function beginEcwAuthorization(patientId: string | undefined, password: string | undefined, practiceCode: string, popup = false): Promise<string> {
+  const value = await request<unknown>('/api/patient/ecw/authorize', json({ ...credentialsPayload(patientId, password), practice_code: practiceCode, popup }))
+  if (!value || typeof value !== 'object' || !('authorization_url' in value) || typeof value.authorization_url !== 'string') {
+    throw new ApiError(502, 'ClinicForce could not start the eClinicalWorks connection.')
+  }
+  return value.authorization_url
+}
+
 export async function getEpicRecord(): Promise<EpicRecord> {
   const value = await request<unknown>('/api/patient/epic/record')
   if (!value || typeof value !== 'object' || !('bundle' in value) || !('availability' in value) || !('source' in value)) {

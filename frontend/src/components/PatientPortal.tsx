@@ -28,6 +28,7 @@ import {
 } from 'lucide-react'
 import {
   ApiError,
+  beginEcwAuthorization,
   beginGoogleDriveConnection,
   beginEpicAuthorization,
   beginGoogleSignIn,
@@ -203,8 +204,10 @@ export default function PatientPortal({ onBack }: PatientPortalProps) {
   const [selectedEpicEndpointId, setSelectedEpicEndpointId] = useState('')
   const [epicSearching, setEpicSearching] = useState(false)
   const [epicDirectoryError, setEpicDirectoryError] = useState('')
+  const [ecwPracticeCode, setEcwPracticeCode] = useState('')
+  const [ecwPracticeCodeError, setEcwPracticeCodeError] = useState('')
   const [selectedDocumentIds, setSelectedDocumentIds] = useState<Set<number>>(new Set())
-  const [busy, setBusy] = useState<'auth' | 'profile' | 'upload' | 'record' | 'share' | 'download' | 'delete' | 'bulk-download' | 'bulk-delete' | 'import' | 'drive' | 'google' | 'epic-connect' | 'epic-load' | 'epic-document' | null>(null)
+  const [busy, setBusy] = useState<'auth' | 'profile' | 'upload' | 'record' | 'share' | 'download' | 'delete' | 'bulk-download' | 'bulk-delete' | 'import' | 'drive' | 'google' | 'epic-connect' | 'epic-load' | 'epic-document' | 'ecw-connect' | null>(null)
   const [restoringSession, setRestoringSession] = useState(true)
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
@@ -212,6 +215,9 @@ export default function PatientPortal({ onBack }: PatientPortalProps) {
   const epicPopup = useRef<Window | null>(null)
   const epicPopupWatch = useRef<number | null>(null)
   const epicConnectionHandled = useRef(false)
+  const ecwPopup = useRef<Window | null>(null)
+  const ecwPopupWatch = useRef<number | null>(null)
+  const ecwConnectionHandled = useRef(false)
 
   const applyProfile = (nextProfile: PatientProfile) => {
     setProfile(nextProfile)
@@ -245,6 +251,33 @@ export default function PatientPortal({ onBack }: PatientPortalProps) {
       })
       .finally(() => { if (active) setRestoringSession(false) })
     return () => { active = false }
+  }, [])
+
+  useEffect(() => {
+    const stopWatchingPopup = () => {
+      if (ecwPopupWatch.current !== null) window.clearInterval(ecwPopupWatch.current)
+      ecwPopupWatch.current = null
+      ecwPopup.current = null
+    }
+    const onMessage = (event: MessageEvent<unknown>) => {
+      if (event.origin !== window.location.origin || !event.data || typeof event.data !== 'object' || !('type' in event.data)) return
+      const type = (event.data as { type?: unknown }).type
+      if (type !== 'clinicforce:ecw-connected' && type !== 'clinicforce:ecw-not-connected') return
+      stopWatchingPopup()
+      setBusy(null)
+      ecwConnectionHandled.current = true
+      if (type === 'clinicforce:ecw-not-connected') {
+        setError('eClinicalWorks did not complete authorization. Check the six-character practice code and try again.')
+        return
+      }
+      setError('')
+      setNotice('eClinicalWorks authorization completed. ClinicForce has a short-lived, patient-authorized connection for this browser session.')
+    }
+    window.addEventListener('message', onMessage)
+    return () => {
+      window.removeEventListener('message', onMessage)
+      stopWatchingPopup()
+    }
   }, [])
 
   useEffect(() => {
@@ -567,6 +600,47 @@ export default function PatientPortal({ onBack }: PatientPortalProps) {
     }
   }
 
+  const validateEcwPracticeCode = (value: string): string | null => {
+    const normalized = value.trim().toUpperCase()
+    return /^[A-Z0-9]{6}$/.test(normalized) ? null : 'Enter the six-character eClinicalWorks practice code (letters and numbers only).'
+  }
+
+  const connectEcw = async () => {
+    if (!session) return
+    const normalizedCode = ecwPracticeCode.trim().toUpperCase()
+    const validationError = validateEcwPracticeCode(normalizedCode)
+    setEcwPracticeCode(normalizedCode)
+    setEcwPracticeCodeError(validationError ?? '')
+    if (validationError) return
+    clearFeedback()
+    const popup = window.open('', 'clinicforce-ecw-authorize', 'popup,width=540,height=760')
+    if (!popup) {
+      setError('Your browser blocked the secure eClinicalWorks window. Allow pop-ups for ClinicForce and try again.')
+      return
+    }
+    ecwPopup.current = popup
+    ecwConnectionHandled.current = false
+    setBusy('ecw-connect')
+    try {
+      popup.location.replace(await beginEcwAuthorization(session.patient_id, password, normalizedCode, true))
+      ecwPopupWatch.current = window.setInterval(() => {
+        if (!popup.closed) return
+        if (ecwPopupWatch.current !== null) window.clearInterval(ecwPopupWatch.current)
+        ecwPopupWatch.current = null
+        ecwPopup.current = null
+        if (ecwConnectionHandled.current) return
+        ecwConnectionHandled.current = true
+        setBusy(null)
+        setError('eClinicalWorks authorization was not completed. Close the healow window only after sign-in finishes, then try again.')
+      }, 500)
+    } catch (caught) {
+      popup.close()
+      ecwPopup.current = null
+      setBusy(null)
+      setError(messageFrom(caught, 'Unable to start the eClinicalWorks connection.'))
+    }
+  }
+
   const cancelEpicConnection = () => {
     epicPopup.current?.close()
     if (epicPopupWatch.current !== null) window.clearInterval(epicPopupWatch.current)
@@ -832,6 +906,13 @@ export default function PatientPortal({ onBack }: PatientPortalProps) {
               <div className="workspace-stats mt-4" aria-label="Live Epic data counts">{Object.entries(epicCounts).slice(0, 6).map(([type, count]) => <div key={type}><FileText aria-hidden="true" /><span><strong>{count}</strong> {type}</span></div>)}</div>
               <section className="mt-4" aria-label="MyChart details"><p className="document-name">MyChart details ({epicResources.length} resources)</p><p className="field-help mt-2">Availability: {epicAvailabilityMessage(epicRecord.availability)}</p><ul className="record-list mt-3">{epicRecord.availability.Condition === 'empty' && <li><div><strong>Conditions</strong><p>Epic did not return any condition records for this connection. Reconnect after the expanded condition search is available; if it remains empty, Houston Methodist must authorize ClinicForce to read the problem list or health concerns shown in MyChart.</p></div></li>}{epicResources.map((resource, index) => <li key={`${resource.resourceType ?? 'resource'}-${resource.id ?? index}`}><div><strong>{String(resource.resourceType ?? 'FHIR resource')}</strong><p>{epicResourceSummary(resource)}</p>{resource.resourceType === 'DocumentReference' && typeof resource.id === 'string' && (hasEpicPdfLink(resource) ? <button className="button button-secondary mt-3" type="button" disabled={busy === 'epic-document'} onClick={() => void openEpicDocument(resource.id!)}>Open the source PDF</button> : <p className="field-help mt-2">Epic shared this document’s title but not a downloadable PDF.</p>)}</div></li>)}</ul></section>
             </>}
+          </section>
+
+          <section className="section-card" aria-labelledby="ecw-heading">
+            <div className="section-heading"><div><p className="section-kicker">Live patient-authorized connection</p><h2 id="ecw-heading">eClinicalWorks / healow</h2></div><Building2 aria-hidden="true" className="section-icon" /></div>
+            <p className="text-sm leading-6 text-[var(--muted-ink)]">Enter the six-character OEM code for the eClinicalWorks practice where you receive care. ClinicForce derives that practice’s FHIR endpoint and opens its secure healow sign-in; it never asks you for an eCW password.</p>
+            <div className="storage-choice mt-4"><div className="flex-1"><label htmlFor="ecw-practice-code"><strong>eClinicalWorks practice OEM code</strong></label><input id="ecw-practice-code" value={ecwPracticeCode} onChange={(event) => { setEcwPracticeCode(event.target.value.toUpperCase()); if (ecwPracticeCodeError) setEcwPracticeCodeError('') }} onBlur={(event) => setEcwPracticeCodeError(validateEcwPracticeCode(event.target.value.trim().toUpperCase()) ?? '')} placeholder="e.g. BEDBAA" autoComplete="off" spellCheck="false" maxLength={6} aria-describedby="ecw-practice-code-help" aria-invalid={Boolean(ecwPracticeCodeError)} />{ecwPracticeCodeError ? <p id="ecw-practice-code-help" className="field-help mt-2" role="alert">{ecwPracticeCodeError}</p> : <p id="ecw-practice-code-help" className="field-help mt-2">This is supplied by the practice. It may contain letters, such as BEDBAA.</p>}</div><button className="button button-primary" type="button" disabled={busy === 'ecw-connect'} onClick={() => void connectEcw()}>{busy === 'ecw-connect' ? <LoaderCircle className="size-4 animate-spin" aria-hidden="true" /> : 'Continue to healow'}</button></div>
+            {busy === 'ecw-connect' && <div className="feedback feedback-success mt-3" role="status"><LoaderCircle className="size-4 animate-spin" aria-hidden="true" /><span>healow opened in a secure window. Complete sign-in there, then return here.</span></div>}
           </section>
 
           <section className="section-card" aria-labelledby="reports-heading">
