@@ -1,33 +1,33 @@
 @import "tailwindcss";
 
 @theme {
-  --font-display: "Lora", Georgia, serif;
-  --font-sans: "Raleway", ui-sans-serif, system-ui, sans-serif;
+  --font-display: "Fira Sans", ui-sans-serif, system-ui, sans-serif;
+  --font-sans: "Fira Sans", ui-sans-serif, system-ui, sans-serif;
 }
 
 :root {
   font-family: var(--font-sans);
-  color: #13344a;
-  background: #f5fbfc;
+  color: #10233f;
+  background: #f4f7fc;
   font-synthesis: none;
   text-rendering: optimizeLegibility;
-  --canvas: #f5fbfc;
+  --canvas: #f4f7fc;
   --surface: #ffffff;
-  --surface-soft: #edf8fa;
-  --ink: #13344a;
-  --muted-ink: #547084;
-  --line: #cfe2e6;
-  --blue: #087ca7;
-  --blue-deep: #075b80;
-  --blue-soft: #dceff4;
-  --green: #178563;
-  --green-deep: #0e6549;
-  --green-soft: #dcefe8;
-  --warning: #a55619;
-  --danger: #ad2d3b;
-  --danger-soft: #fcebed;
-  --shadow-sm: 0 1px 2px rgba(16, 56, 70, .06), 0 2px 8px rgba(16, 56, 70, .04);
-  --shadow-lg: 0 18px 48px rgba(17, 64, 80, .12);
+  --surface-soft: #eef4ff;
+  --ink: #10233f;
+  --muted-ink: #5b6c86;
+  --line: #d7e0ef;
+  --blue: #246bdb;
+  --blue-deep: #164a9e;
+  --blue-soft: #e5efff;
+  --green: #009b85;
+  --green-deep: #006d61;
+  --green-soft: #d8f5ed;
+  --warning: #a64d13;
+  --danger: #bd2f4d;
+  --danger-soft: #fff0f3;
+  --shadow-sm: 0 1px 2px rgba(23, 43, 77, .05), 0 7px 20px rgba(23, 43, 77, .06);
+  --shadow-lg: 0 24px 60px rgba(31, 57, 102, .14);
 }
 
 * { box-sizing: border-box; }

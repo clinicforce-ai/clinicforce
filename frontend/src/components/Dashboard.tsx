@@ -10,6 +10,8 @@ import {
   ScanLine,
   ShieldCheck,
 } from 'lucide-react'
+import { animate } from 'animejs'
+import { useEffect, useRef, useState } from 'react'
 import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import type { CareEvent, ClinicalItem, ClinicalMeasure, DoctorSummary, Medication, SourceCitation } from '../services/api'
 
@@ -18,6 +20,8 @@ interface DashboardProps {
   onScanAnother: () => void
   onHome: () => void
 }
+
+type SummaryTab = 'overview' | 'care' | 'measurements'
 
 function SourceNote({ citation }: { citation?: SourceCitation | null }) {
   if (!citation) return <span className="source-note source-note-manual">Patient-entered</span>
@@ -100,6 +104,14 @@ function TrendCharts({ rows }: { rows: ClinicalMeasure[] }) {
 }
 
 export default function Dashboard({ data, onScanAnother, onHome }: DashboardProps) {
+  const [summaryTab, setSummaryTab] = useState<SummaryTab>('overview')
+  const summaryPanel = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    const panel = summaryPanel.current
+    if (!panel || window.matchMedia('(prefers-reduced-motion: reduce)').matches) return
+    const animation = animate(panel, { opacity: [0, 1], translateY: [10, 0], duration: 240, ease: 'outQuad' })
+    return () => { animation.cancel() }
+  }, [summaryTab])
   const download = () => { const link = document.createElement('a'); link.href = data.pdf_url; link.download = 'clinicforce-clinical-summary.pdf'; link.click() }
   const { summary } = data
   const itemCount = summary.vitals.length + summary.labs.length + summary.medications.length + summary.conditions.length + summary.allergies.length + summary.care_events.length
@@ -108,8 +120,14 @@ export default function Dashboard({ data, onScanAnother, onHome }: DashboardProp
     <button className="back-control" type="button" onClick={onHome}><ArrowLeft aria-hidden="true" className="size-4" /> Back to home</button>
     <header className="summary-hero"><div><p className="eyebrow"><FileHeart aria-hidden="true" className="size-4" /> Clinician view · shared record</p><h1 id="summary-heading">Clinical summary</h1><p>{itemCount} shared health item{itemCount === 1 ? '' : 's'} · {sourcedCount} linked to original report pages.</p></div><div className="summary-actions"><button className="button button-secondary" type="button" onClick={onScanAnother}><ScanLine aria-hidden="true" className="size-4" /> Scan another</button><button className="button button-primary" type="button" onClick={download}><Download aria-hidden="true" className="size-4" /> Download cited PDF</button></div></header>
     <div className="source-assurance"><ShieldCheck aria-hidden="true" /><span>Each linked source label downloads the original private PDF for that fact. Patient-entered items are marked separately.</span></div>
-    <article className="clinical-narrative"><div className="narrative-mark"><HeartPulse aria-hidden="true" /></div><div><p className="section-kicker">Clinical overview</p><h2>Patient history at a glance</h2><p>{summary.narrative}</p></div></article>
-    <TrendCharts rows={[...summary.vitals, ...summary.labs]} />
-    <div className="summary-grid"><CareEvents rows={summary.care_events} /><ClinicalItemList title="Conditions" rows={summary.conditions} icon={Activity} /><ClinicalItemList title="Allergies" rows={summary.allergies} icon={AlertTriangle} /><MeasureTable title="Vitals" testLabel="Measurement" rows={summary.vitals} icon={HeartPulse} /><MeasureTable title="Labs" testLabel="Test" rows={summary.labs} icon={FileHeart} /><MedicationTable rows={summary.medications} /></div>
+    <nav className="summary-tabs" aria-label="Clinical summary sections">
+      <button className={summaryTab === 'overview' ? 'active' : ''} aria-pressed={summaryTab === 'overview'} type="button" onClick={() => setSummaryTab('overview')}><HeartPulse aria-hidden="true" /> Overview</button>
+      <button className={summaryTab === 'care' ? 'active' : ''} aria-pressed={summaryTab === 'care'} type="button" onClick={() => setSummaryTab('care')}><Hospital aria-hidden="true" /> Care & conditions</button>
+      <button className={summaryTab === 'measurements' ? 'active' : ''} aria-pressed={summaryTab === 'measurements'} type="button" onClick={() => setSummaryTab('measurements')}><Activity aria-hidden="true" /> Measurements</button>
+    </nav>
+    <p className="workspace-tabs-helper"><strong>Choose a section:</strong> only the information needed for the current review is shown, with original sources linked in each record.</p>
+    {summaryTab === 'overview' && <div className="summary-tab-panel" ref={summaryPanel}><article className="clinical-narrative"><div className="narrative-mark"><HeartPulse aria-hidden="true" /></div><div><p className="section-kicker">Clinical overview</p><h2>Patient history at a glance</h2><p>{summary.narrative}</p></div></article><TrendCharts rows={[...summary.vitals, ...summary.labs]} /></div>}
+    {summaryTab === 'care' && <div className="summary-grid summary-tab-panel" ref={summaryPanel}><CareEvents rows={summary.care_events} /><ClinicalItemList title="Conditions" rows={summary.conditions} icon={Activity} /><ClinicalItemList title="Allergies" rows={summary.allergies} icon={AlertTriangle} /></div>}
+    {summaryTab === 'measurements' && <div className="summary-grid summary-tab-panel" ref={summaryPanel}><MeasureTable title="Vitals" testLabel="Measurement" rows={summary.vitals} icon={HeartPulse} /><MeasureTable title="Labs" testLabel="Test" rows={summary.labs} icon={FileHeart} /><MedicationTable rows={summary.medications} /></div>}
   </section>
 }
