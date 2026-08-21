@@ -1,4 +1,5 @@
 import * as Dialog from '@radix-ui/react-dialog'
+import { animate, stagger } from 'animejs'
 import { useEffect, useRef, useState, type FormEvent } from 'react'
 import {
   ArrowLeft,
@@ -71,6 +72,7 @@ interface PatientPortalProps {
 }
 
 type AuthMode = 'login' | 'register'
+type WorkspaceTab = 'overview' | 'records' | 'connections'
 type FormState = Record<Exclude<keyof ManualRecordInput, 'category'>, string>
 type ProfileFormState = PatientProfileInput
 
@@ -220,12 +222,14 @@ export default function PatientPortal({ onBack }: PatientPortalProps) {
   const [ecwPracticeCode, setEcwPracticeCode] = useState('')
   const [ecwPracticeCodeError, setEcwPracticeCodeError] = useState('')
   const [ecwRecord, setEcwRecord] = useState<EcwRecord | null>(null)
+  const [workspaceTab, setWorkspaceTab] = useState<WorkspaceTab>('overview')
   const [selectedDocumentIds, setSelectedDocumentIds] = useState<Set<number>>(new Set())
   const [busy, setBusy] = useState<'auth' | 'profile' | 'upload' | 'record' | 'share' | 'download' | 'delete' | 'bulk-download' | 'bulk-delete' | 'import' | 'drive' | 'google' | 'epic-connect' | 'epic-load' | 'epic-document' | 'ecw-connect' | 'ecw-load' | 'ecw-import' | 'ecw-disconnect' | null>(null)
   const [restoringSession, setRestoringSession] = useState(true)
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
   const fileInput = useRef<HTMLInputElement>(null)
+  const workspacePanel = useRef<HTMLDivElement>(null)
   const epicPopup = useRef<Window | null>(null)
   const epicPopupWatch = useRef<number | null>(null)
   const epicConnectionHandled = useRef(false)
@@ -266,6 +270,19 @@ export default function PatientPortal({ onBack }: PatientPortalProps) {
       .finally(() => { if (active) setRestoringSession(false) })
     return () => { active = false }
   }, [])
+
+  useEffect(() => {
+    const panel = workspacePanel.current
+    if (!panel || window.matchMedia('(prefers-reduced-motion: reduce)').matches) return
+    const animation = animate(Array.from(panel.querySelectorAll<HTMLElement>('[data-workspace-panel]:not([hidden])')), {
+      opacity: [0, 1],
+      translateY: [10, 0],
+      duration: 240,
+      delay: stagger(45),
+      ease: 'outQuad',
+    })
+    return () => { animation.cancel() }
+  }, [workspaceTab, session?.patient_id])
 
   useEffect(() => {
     const stopWatchingPopup = () => {
@@ -958,9 +975,20 @@ export default function PatientPortal({ onBack }: PatientPortalProps) {
         <div><ShieldCheck aria-hidden="true" /><span>{recordsAvailable ? 'Ready to share' : 'Add your first item'}</span></div>
       </div>
 
-      <div className="workspace-grid">
+      <div className="workspace-grid" ref={workspacePanel}>
+        <nav className="workspace-tabs" aria-label="Health record sections">
+          <p className="workspace-nav-label">Record workspace</p>
+          <button className={workspaceTab === 'overview' ? 'active' : ''} aria-pressed={workspaceTab === 'overview'} type="button" onClick={() => setWorkspaceTab('overview')}><UserRound aria-hidden="true" /><span>Profile & sharing</span></button>
+          <button className={workspaceTab === 'records' ? 'active' : ''} aria-pressed={workspaceTab === 'records'} type="button" onClick={() => setWorkspaceTab('records')}><FileText aria-hidden="true" /><span>Reports & details</span></button>
+          <button className={workspaceTab === 'connections' ? 'active' : ''} aria-pressed={workspaceTab === 'connections'} type="button" onClick={() => setWorkspaceTab('connections')}><Building2 aria-hidden="true" /><span>Care connections</span></button>
+          <p className="workspace-tabs-helper" role="status">
+            {workspaceTab === 'overview' && <><strong>Start here.</strong> Confirm your profile, then share.</>}
+            {workspaceTab === 'records' && <><strong>Add information.</strong> Upload a report or add a detail.</>}
+            {workspaceTab === 'connections' && <><strong>Connect care.</strong> Authorize in a secure window.</>}
+          </p>
+        </nav>
         <div className="workspace-main">
-          <section className="section-card demographics-card" aria-labelledby="demographics-heading">
+          <section className="section-card demographics-card" data-workspace-panel aria-labelledby="demographics-heading" hidden={workspaceTab !== 'overview'}>
             <div className="section-heading"><div><p className="section-kicker">Required for EHR QR sharing</p><h2 id="demographics-heading">Confirm your demographics</h2></div><UserRound aria-hidden="true" className="section-icon" /></div>
             <p className="demographics-intro">Receiving EHRs use these details to match your QR to the right chart. Google profile names, when available, are only suggestions—confirm your legal name before sharing.</p>
             <form className="demographics-form" onSubmit={saveProfile} noValidate>
@@ -974,7 +1002,7 @@ export default function PatientPortal({ onBack }: PatientPortalProps) {
             </form>
           </section>
 
-          <section className="section-card" aria-labelledby="epic-heading">
+          <section className="section-card" data-workspace-panel aria-labelledby="epic-heading" hidden={workspaceTab !== 'connections'}>
             <div className="section-heading"><div><p className="section-kicker">Live patient-authorized connection</p><h2 id="epic-heading">Epic / MyChart</h2></div><Building2 aria-hidden="true" className="section-icon" /></div>
             {!epicRecord ? <>
               <p className="text-sm leading-6 text-[var(--muted-ink)]">Connect a hospital you have used to view its current Epic record in this browser. ClinicForce does not save Epic records, access tokens, or attached PDFs.</p>
@@ -987,7 +1015,7 @@ export default function PatientPortal({ onBack }: PatientPortalProps) {
             </>}
           </section>
 
-          <section className="section-card" aria-labelledby="ecw-heading">
+          <section className="section-card" data-workspace-panel aria-labelledby="ecw-heading" hidden={workspaceTab !== 'connections'}>
             <div className="section-heading"><div><p className="section-kicker">Live patient-authorized connection</p><h2 id="ecw-heading">eClinicalWorks / healow</h2></div><Building2 aria-hidden="true" className="section-icon" /></div>
             {!ecwRecord ? <>
               <p className="text-sm leading-6 text-[var(--muted-ink)]">Enter the six-character OEM code for the eClinicalWorks practice where you receive care. ClinicForce derives that practice’s FHIR endpoint and opens its secure healow sign-in; it never asks you for an eCW password.</p>
@@ -1002,7 +1030,7 @@ export default function PatientPortal({ onBack }: PatientPortalProps) {
             </>}
           </section>
 
-          <section className="section-card" aria-labelledby="reports-heading">
+          <section className="section-card" data-workspace-panel aria-labelledby="reports-heading" hidden={workspaceTab !== 'records'}>
             <div className="section-heading"><div><p className="section-kicker">Source documents</p><h2 id="reports-heading">PDF reports</h2></div><FileText aria-hidden="true" className="section-icon" /></div>
             <div className="storage-choice" aria-label="Choose where new reports are stored">
               <div><strong>{session.storage_provider === 'google_drive' ? 'Your Google Drive is selected' : 'ClinicForce secure storage is selected'}</strong><p>{session.storage_provider === 'google_drive' ? 'Drive contains encrypted ClinicForce files. Open reports here to read them.' : 'New PDFs stay in ClinicForce encrypted document storage.'}</p></div>
@@ -1051,7 +1079,7 @@ export default function PatientPortal({ onBack }: PatientPortalProps) {
             </div>
           </section>
 
-          <section className="section-card" aria-labelledby="detail-heading">
+          <section className="section-card" data-workspace-panel aria-labelledby="detail-heading" hidden={workspaceTab !== 'records'}>
             <div className="section-heading"><div><p className="section-kicker">Structured details</p><h2 id="detail-heading">Health details</h2></div><ClipboardPlus aria-hidden="true" className="section-icon" /></div>
             {session.records.length ? <ul className="record-list">{session.records.map((record) => <li key={record.id}><span className="record-number">{recordMeta(record.category).icon}</span><div><strong>{record.label}</strong><p>{recordMeta(record.category).label} · added {dateLabel(record.created_at)}</p></div></li>)}</ul> : <div className="empty-block compact"><ClipboardPlus aria-hidden="true" /><p><strong>Add a health detail</strong><br />Include care visits, lab results, medications, and more.</p></div>}
             <form className="record-form" onSubmit={saveRecord} noValidate>
@@ -1071,7 +1099,7 @@ export default function PatientPortal({ onBack }: PatientPortalProps) {
           </section>
         </div>
 
-        <aside className="share-card" aria-labelledby="share-heading">
+        <aside className="share-card" data-workspace-panel aria-labelledby="share-heading" hidden={workspaceTab !== 'overview'}>
           <div className="share-icon"><QrCode aria-hidden="true" /></div>
           <p className="eyebrow">Share with your clinician</p>
           <h2 id="share-heading">Create a secure QR code</h2>
