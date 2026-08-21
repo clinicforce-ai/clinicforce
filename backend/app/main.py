@@ -1416,6 +1416,12 @@ async def ecw_jwks() -> dict[str, list[dict[str, Any]]]:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
 
 
+@app.get("/.well-known/jwks.json", include_in_schema=False)
+async def ecw_registered_jwks() -> dict[str, list[dict[str, Any]]]:
+    """Serve the stable public JWKS URL registered with eClinicalWorks/healow."""
+    return await ecw_jwks()
+
+
 @app.post("/api/patient/ecw/authorize")
 async def authorize_ecw(request: EcwAuthorizeRequest, http_request: Request) -> JSONResponse:
     """Resolve one OEM code to its eCW FHIR endpoint and start SMART + PKCE."""

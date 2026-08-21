@@ -53,6 +53,13 @@ class MainRouteTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json(), {"status": "ok"})
 
+    async def test_registered_ecw_jwks_url_serves_the_public_key_set(self) -> None:
+        payload = {"keys": [{"kty": "RSA", "kid": "clinicforce-test-key"}]}
+        with patch("app.main.ecw.public_jwks", return_value=payload):
+            response = await self.client.get("/.well-known/jwks.json")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), payload)
+
     async def test_readiness_check_requires_a_usable_database_connection(self) -> None:
         with patch("app.main.check_database_connection") as check_database_connection:
             response = await self.client.get("/readyz")
