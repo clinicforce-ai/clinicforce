@@ -16,7 +16,7 @@ export interface PatientDocument {
 
 export interface PatientRecord {
   id: number
-  category: RecordCategory | 'external-shl'
+  category: RecordCategory | 'external-shl' | 'ecw'
   label: string
   created_at: string
 }
@@ -72,6 +72,12 @@ export interface EpicRecord {
   bundle: { resourceType: string; entry: Array<{ resource: FhirResource }> }
   availability: Record<string, string>
   source: { organization_name: string; retrieved_at: string }
+}
+
+export interface EcwRecord {
+  bundle: { resourceType: string; entry: Array<{ resource: FhirResource }> }
+  availability: Record<string, string>
+  source: { organization_name: string; practice_code: string; retrieved_at: string }
 }
 
 export interface ManualRecordInput {
@@ -307,6 +313,26 @@ export async function getEpicRecord(): Promise<EpicRecord> {
     throw new ApiError(502, 'Epic returned an invalid clinical-data response.')
   }
   return value as EpicRecord
+}
+
+export async function getEcwRecord(): Promise<EcwRecord> {
+  const value = await request<unknown>('/api/patient/ecw/record')
+  if (!value || typeof value !== 'object' || !('bundle' in value) || !('availability' in value) || !('source' in value)) {
+    throw new ApiError(502, 'eClinicalWorks returned an invalid clinical-data response.')
+  }
+  const source = value.source
+  if (!source || typeof source !== 'object' || !('organization_name' in source) || !('practice_code' in source) || !('retrieved_at' in source)) {
+    throw new ApiError(502, 'eClinicalWorks returned invalid source information.')
+  }
+  return value as EcwRecord
+}
+
+export async function importEcwRecord(): Promise<PatientSession> {
+  return assertWorkspace(await request('/api/patient/ecw/import', { method: 'POST' }))
+}
+
+export async function disconnectEcw(): Promise<void> {
+  await request('/api/patient/ecw/live-session', { method: 'DELETE' })
 }
 
 export async function disconnectEpic(): Promise<void> {

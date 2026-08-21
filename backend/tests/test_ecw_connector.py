@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sys
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
@@ -103,3 +104,32 @@ class EcwConnectorTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(kms.get_public_key_kwargs["KeyId"], "12345678-1234-1234-1234-123456789012")
         self.assertEqual(kms.sign_kwargs["SigningAlgorithm"], "RSASSA_PKCS1_V1_5_SHA_384")
         self.assertTrue(assertion.endswith(".a21zLXNpZ25hdHVyZQ"))
+
+    async def test_fetch_record_marks_denied_scopes_without_treating_them_as_empty(self) -> None:
+        session = ecw.LiveEcwSession(
+            patient_id="patient-1", practice_code="BEDBAA", fhir_base="https://fhir.example/FHIRServer/fhir/BEDBAA",
+            remote_patient_id="remote-1", access_token="test-token", expires_at=time.time() + 300,
+        )
+
+        async def fake_fetch(_session, resource_type):
+            if resource_type == "Patient":
+                return {"resourceType": "Bundle", "type": "collection", "entry": [{"resource": {"resourceType": "Patient", "id": "remote-1"}}]}
+            if resource_type == "Condition":
+                return {"resourceType": "Bundle", "type": "collection", "entry": [], "extension": [{"url": "urn:clinicforce:ecw-status", "valueString": "forbidden"}]}
+            return {"resourceType": "Bundle", "type": "collection", "entry": []}
+
+        with patch("app.ingestion.ecw.fetch_resource_type", side_effect=fake_fetch):
+            bundle, availability = await ecw.fetch_record(session)
+        self.assertEqual(len(bundle["entry"]), 1)
+        self.assertEqual(availability["Condition"], "forbidden")
+        self.assertEqual(availability["Observation"], "empty")
+        self.assertEqual(session.review_bundle, bundle)
+
+    def test_expired_live_session_is_removed_and_requires_reconnect(self) -> None:
+        ecw._live_sessions["expired"] = ecw.LiveEcwSession(
+            patient_id="patient-1", practice_code="BEDBAA", fhir_base="https://fhir.example/FHIRServer/fhir/BEDBAA",
+            remote_patient_id="remote-1", access_token="test-token", expires_at=time.time() - 1,
+        )
+        with self.assertRaisesRegex(ecw.EcwError, "session has ended"):
+            ecw.get_live_session("expired", "patient-1")
+        self.assertNotIn("expired", ecw._live_sessions)

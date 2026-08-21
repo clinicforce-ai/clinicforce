@@ -106,10 +106,17 @@ _EXCHANGE_RESOURCE_TYPES = {
     "Observation", "Immunization", "Procedure", "Coverage", "DiagnosticReport",
     "DocumentReference",
 }
+# These are additionally safe to retain in ClinicForce after an eCW patient
+# explicitly reviews them. They are not added to the external QR exchange
+# bundle, whose first release intentionally stays narrowly USCDI-focused.
+_ECW_IMPORT_RESOURCE_TYPES = _EXCHANGE_RESOURCE_TYPES | {
+    "CarePlan", "CareTeam", "Device", "Encounter", "Goal", "MedicationDispense", "ServiceRequest",
+}
 _SOURCE_TAGS = {
     "patient-entered": "Patient-entered",
     "document-extracted": "Extracted from patient-uploaded document",
     "epic-mychart": "Epic / MyChart",
+    "ecw-healow": "eClinicalWorks / healow",
     "external-shl": "Imported from an external SMART Health Link",
 }
 
@@ -443,8 +450,22 @@ async def _live_epic_session(request: Request, patient_id: str) -> epic.LiveEpic
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc)) from exc
 
 
+async def _live_ecw_session(request: Request, patient_id: str) -> ecw.LiveEcwSession:
+    try:
+        return ecw.get_live_session(request.cookies.get(ECW_LIVE_SESSION_COOKIE, ""), patient_id)
+    except ecw.EcwError as exc:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc)) from exc
+
+
 def _epic_error(exc: epic.EpicError) -> HTTPException:
     """Return only our fixed, safe errors--never an Epic response body."""
+    return HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc))
+
+
+def _ecw_error(exc: ecw.EcwError) -> HTTPException:
+    """Keep eCW errors safe and distinguish a reconnect from a partial chart."""
+    if "session has ended" in str(exc):
+        return HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc))
     return HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc))
 
 
@@ -629,7 +650,10 @@ def _exchange_patient_reference(patient_id: str) -> dict[str, str]:
     return {"reference": f"Patient/{patient_id}"}
 
 
-def _prepare_exchange_resource(resource: dict[str, Any], patient_id: str, source: str, display: str | None = None) -> dict[str, Any] | None:
+def _prepare_exchange_resource(
+    resource: dict[str, Any], patient_id: str, source: str, display: str | None = None,
+    allowed_resource_types: set[str] | None = None,
+) -> dict[str, Any] | None:
     """Create a transport-safe FHIR R4 resource for the external exchange.
 
     We deliberately do not infer terminology codes from free text.  Existing
@@ -637,7 +661,7 @@ def _prepare_exchange_resource(resource: dict[str, Any], patient_id: str, source
     is retained verbatim; free-text-only resources remain uncoded rather than
     receiving a guessed clinical code.
     """
-    if resource.get("resourceType") not in _EXCHANGE_RESOURCE_TYPES:
+    if resource.get("resourceType") not in (allowed_resource_types or _EXCHANGE_RESOURCE_TYPES):
         return None
     prepared = deepcopy(resource)
     patient_reference = _exchange_patient_reference(patient_id)
@@ -647,7 +671,7 @@ def _prepare_exchange_resource(resource: dict[str, Any], patient_id: str, source
     # Incoming resources sometimes omit the patient reference.  Add the FHIR R4
     # field appropriate to each selected type so the bundle is self-contained.
     resource_type = prepared["resourceType"]
-    if resource_type in {"AllergyIntolerance", "Immunization"}:
+    if resource_type in {"AllergyIntolerance", "Immunization", "Device"}:
         prepared.setdefault("patient", patient_reference)
     elif resource_type == "Coverage":
         prepared.setdefault("beneficiary", patient_reference)
@@ -662,16 +686,18 @@ def _prepare_exchange_resource(resource: dict[str, Any], patient_id: str, source
             if isinstance(attachment, dict):
                 attachment.pop("data", None)
                 attachment.pop("url", None)
-    if source == "external-shl":
+    if source in {"external-shl", "ecw-healow"}:
         # The incoming bundle is untrusted. Do not let it impersonate the local
-        # provenance tag or alter the source host shown to ClinicForce users.
+        # provenance tag or alter the source shown to ClinicForce users. The
+        # eCW server is trusted for transport, but its supplied FHIR tags still
+        # cannot be allowed to claim ClinicForce's source convention.
         meta = prepared.get("meta")
         if isinstance(meta, dict) and isinstance(meta.get("tag"), list):
             meta["tag"] = [
                 tag for tag in meta["tag"]
                 if not (
                     isinstance(tag, dict)
-                    and ((tag.get("system") == FHIR_SOURCE_TAG_SYSTEM and tag.get("code") == "external-shl")
+                    and ((tag.get("system") == FHIR_SOURCE_TAG_SYSTEM and tag.get("code") in {"external-shl", "ecw-healow"})
                          or (tag.get("system") == FHIR_VERIFICATION_TAG_SYSTEM and tag.get("code") == "unverified"))
                 )
             ]
@@ -697,6 +723,28 @@ def _normalize_external_shl_bundle(bundle: dict[str, Any], patient_id: str, sour
         if not isinstance(candidate, dict):
             continue
         prepared = _prepare_exchange_resource(candidate, patient_id, "external-shl", display)
+        if prepared is not None:
+            entries.append({"resource": prepared})
+    return {"resourceType": "Bundle", "type": "collection", "entry": entries}
+
+
+def _normalize_ecw_bundle(bundle: dict[str, Any], patient_id: str, practice_code: str) -> dict[str, Any]:
+    """Persist only user-confirmed, patient-linked eCW resources.
+
+    The live eCW Patient is shown during review, but ClinicForce keeps its own
+    confirmed demographic profile as the workspace identity. Each imported
+    clinical resource receives a trusted eCW source tag; document attachments
+    remain metadata-only just as they do for SHL sharing.
+    """
+    candidates = [entry.get("resource") for entry in bundle.get("entry", []) if isinstance(entry, dict)]
+    entries: list[dict[str, Any]] = []
+    display = f"eClinicalWorks / healow practice {practice_code}"
+    for candidate in candidates:
+        if not isinstance(candidate, dict) or candidate.get("resourceType") == "Patient":
+            continue
+        prepared = _prepare_exchange_resource(
+            candidate, patient_id, "ecw-healow", display, _ECW_IMPORT_RESOURCE_TYPES,
+        )
         if prepared is not None:
             entries.append({"resource": prepared})
     return {"resourceType": "Bundle", "type": "collection", "entry": entries}
@@ -1438,6 +1486,63 @@ async def ecw_callback(request: Request, state: str = "", code: str = "", error:
         response = RedirectResponse(f"{PUBLIC_BASE_URL}/?ecw=connected", status_code=status.HTTP_303_SEE_OTHER)
     response.delete_cookie(ECW_OAUTH_STATE_COOKIE, path="/")
     _set_epic_cookie(response, ECW_LIVE_SESSION_COOKIE, live_session_id, ecw.LIVE_SESSION_MAX_AGE_SECONDS)
+    return response
+
+
+@app.get("/api/patient/ecw/record")
+async def ecw_record(request: Request) -> dict[str, Any]:
+    """Fetch an authorized eCW record into a short-lived review snapshot only."""
+    patient_id = await _authenticate_patient(None, None, request)
+    session = await _live_ecw_session(request, patient_id)
+    try:
+        bundle, availability = await ecw.fetch_record(session)
+    except ecw.EcwError as exc:
+        raise _ecw_error(exc) from exc
+    log_info("eClinicalWorks", "Retrieved %d FHIR resources for patient review from practice %s", len(bundle["entry"]), session.practice_code)
+    return {"bundle": bundle, "availability": availability, "source": ecw.source_metadata(session)}
+
+
+@app.post("/api/patient/ecw/import")
+async def import_ecw_record(request: Request) -> JSONResponse:
+    """Persist the last reviewed eCW snapshot only after an explicit confirmation."""
+    patient_id = await _authenticate_patient(None, None, request)
+    session = await _live_ecw_session(request, patient_id)
+    if session.review_bundle is None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Review the eClinicalWorks data before importing it into ClinicForce",
+        )
+    normalized = _normalize_ecw_bundle(session.review_bundle, patient_id, session.practice_code)
+    if not normalized["entry"]:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="eClinicalWorks returned no supported clinical resources to import",
+        )
+    try:
+        await asyncio.to_thread(
+            add_record,
+            patient_id,
+            "ecw",
+            f"eClinicalWorks / healow import from practice {session.practice_code}",
+            normalized,
+        )
+    except Exception as exc:
+        raise IntegrationFailure("eClinicalWorks import", exc) from exc
+    log_info("eClinicalWorks", "Imported %d user-confirmed FHIR resources from practice %s", len(normalized["entry"]), session.practice_code)
+    ecw.clear_live_session(request.cookies.get(ECW_LIVE_SESSION_COOKIE, ""))
+    response = JSONResponse(await _load_workspace(patient_id))
+    response.delete_cookie(ECW_LIVE_SESSION_COOKIE, path="/")
+    return response
+
+
+@app.delete("/api/patient/ecw/live-session")
+async def disconnect_ecw(request: Request) -> Response:
+    """Discard the short-lived token and unconfirmed review snapshot."""
+    patient_id = await _authenticate_patient(None, None, request)
+    await _live_ecw_session(request, patient_id)
+    ecw.clear_live_session(request.cookies.get(ECW_LIVE_SESSION_COOKIE, ""))
+    response = Response(status_code=status.HTTP_204_NO_CONTENT)
+    response.delete_cookie(ECW_LIVE_SESSION_COOKIE, path="/")
     return response
 
 

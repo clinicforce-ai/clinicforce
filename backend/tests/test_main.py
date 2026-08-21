@@ -17,6 +17,7 @@ from zipfile import ZipFile
 
 import httpx
 import psycopg
+from fastapi import HTTPException
 
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -27,7 +28,7 @@ from app.core.source_links import create_document_download_token, verify_documen
 from app.core import patient_store  # noqa: E402
 from app.ingestion.bedrock_extractor import ExtractedFact, facts_to_fhir_bundle  # noqa: E402
 from app.ingestion.pdf_parser import parse_pdf_text_with_llm, pdf_extraction_to_fhir_bundle  # noqa: E402
-from app.main import _epic_share_snapshot, app, build_exchange_bundle  # noqa: E402
+from app.main import _epic_share_snapshot, _normalize_ecw_bundle, app, build_exchange_bundle  # noqa: E402
 from app.reports.pdf_builder import generate_doctor_pdf, render_doctor_pdf_bytes  # noqa: E402
 from app.reports.summarizer import summarize_fhir_bundle  # noqa: E402
 
@@ -117,6 +118,69 @@ class MainRouteTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("clinicforce_ecw_oauth=sealed-ecw-state", response.headers["set-cookie"])
         self.assertIn("HttpOnly", response.headers["set-cookie"])
         self.assertNotIn("access_token", response.text)
+
+    async def test_ecw_record_is_review_only_and_surfaces_partial_scope_access(self) -> None:
+        live = SimpleNamespace(practice_code="BEDBAA")
+        bundle = {"resourceType": "Bundle", "type": "collection", "entry": [{"resource": {"resourceType": "Patient", "id": "remote-1"}}]}
+        with (
+            patch("app.main._authenticate_patient", new=AsyncMock(return_value="patient-1")),
+            patch("app.main._live_ecw_session", new=AsyncMock(return_value=live)),
+            patch("app.main.ecw.fetch_record", new=AsyncMock(return_value=(bundle, {"Patient": "ok", "Condition": "forbidden"}))),
+            patch("app.main.ecw.source_metadata", return_value={"organization_name": "eClinicalWorks / healow (practice BEDBAA)", "practice_code": "BEDBAA", "retrieved_at": "2026-01-01T00:00:00+00:00"}),
+            patch("app.main.add_record") as add_record,
+        ):
+            response = await self.client.get("/api/patient/ecw/record")
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()["availability"]["Condition"], "forbidden")
+        add_record.assert_not_called()
+
+    async def test_ecw_expired_session_returns_reconnect_status(self) -> None:
+        with (
+            patch("app.main._authenticate_patient", new=AsyncMock(return_value="patient-1")),
+            patch("app.main._live_ecw_session", new=AsyncMock(side_effect=HTTPException(status_code=401, detail="Your eClinicalWorks session has ended. Reconnect healow to continue."))),
+        ):
+            response = await self.client.get("/api/patient/ecw/record")
+        self.assertEqual(response.status_code, 401)
+        self.assertIn("Reconnect healow", response.json()["detail"])
+
+    async def test_ecw_import_requires_review_then_persists_ecw_provenance(self) -> None:
+        review_bundle = {
+            "resourceType": "Bundle", "type": "collection", "entry": [
+                {"resource": {"resourceType": "Patient", "id": "remote-1"}},
+                {"resource": {"resourceType": "Condition", "id": "condition-1", "code": {"text": "Asthma"}}},
+                {"resource": {"resourceType": "DocumentReference", "id": "document-1", "content": [{"attachment": {"data": "secret", "url": "https://files.example/pdf", "title": "report.pdf"}}]}},
+            ],
+        }
+        live = SimpleNamespace(practice_code="BEDBAA", review_bundle=review_bundle)
+        workspace = {"patient_id": "patient-1", "documents": [], "records": [], "storage_provider": "s3", "drive_connected": False, "drive_pending_import_count": 0, "drive_sync_message": None, "drive_access_upgrade_required": False}
+        with (
+            patch("app.main._authenticate_patient", new=AsyncMock(return_value="patient-1")),
+            patch("app.main._live_ecw_session", new=AsyncMock(return_value=live)),
+            patch("app.main._load_workspace", new=AsyncMock(return_value=workspace)),
+            patch("app.main.add_record") as add_record,
+            patch("app.main.ecw.clear_live_session") as clear_live_session,
+        ):
+            response = await self.client.post("/api/patient/ecw/import")
+        self.assertEqual(response.status_code, 200, response.text)
+        stored = add_record.call_args.args[3]
+        self.assertEqual(add_record.call_args.args[:3], ("patient-1", "ecw", "eClinicalWorks / healow import from practice BEDBAA"))
+        self.assertEqual(len(stored["entry"]), 2)
+        condition = stored["entry"][0]["resource"]
+        self.assertIn({"system": "https://clinicforce.example/fhir/source", "code": "ecw-healow", "display": "eClinicalWorks / healow practice BEDBAA"}, condition["meta"]["tag"])
+        attachment = stored["entry"][1]["resource"]["content"][0]["attachment"]
+        self.assertNotIn("data", attachment)
+        self.assertNotIn("url", attachment)
+        clear_live_session.assert_called_once()
+
+    async def test_ecw_import_without_a_review_is_rejected(self) -> None:
+        live = SimpleNamespace(practice_code="BEDBAA", review_bundle=None)
+        with (
+            patch("app.main._authenticate_patient", new=AsyncMock(return_value="patient-1")),
+            patch("app.main._live_ecw_session", new=AsyncMock(return_value=live)),
+        ):
+            response = await self.client.post("/api/patient/ecw/import")
+        self.assertEqual(response.status_code, 409)
+        self.assertIn("Review the eClinicalWorks data", response.json()["detail"])
 
     async def test_epic_popup_callback_notifies_opener_without_redirecting(self) -> None:
         with (

@@ -8,6 +8,7 @@ endpoint.  This prevents the connector from becoming an OAuth credential relay.
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import boto3
 import hashlib
@@ -18,8 +19,9 @@ import re
 import secrets
 import time
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Any
-from urllib.parse import urlencode, urlparse
+from urllib.parse import urlencode, urljoin, urlparse
 
 import httpx
 from cryptography.hazmat.primitives.asymmetric import rsa
@@ -46,6 +48,9 @@ ECW_FHIR_BASE_TEMPLATE = os.getenv(
 
 OAUTH_STATE_MAX_AGE_SECONDS = 10 * 60
 LIVE_SESSION_MAX_AGE_SECONDS = 55 * 60
+MAX_PAGES_PER_RESOURCE = 50
+MAX_RESOURCES_PER_TYPE = 5_000
+MAX_FHIR_RESPONSE_BYTES = 10 * 1024 * 1024
 _PRACTICE_CODE = re.compile(r"^[A-Z0-9]{6}$")
 
 # Request only the patient-scoped, read-only set selected for ClinicForce's
@@ -58,6 +63,16 @@ PATIENT_READ_SCOPES = (
     "patient/MedicationDispense.read", "patient/MedicationRequest.read", "patient/Procedure.read",
     "patient/Provenance.read", "patient/Coverage.read", "patient/ServiceRequest.read",
     "patient/Condition.read", "patient/Observation.read",
+)
+
+# These are the patient-scoped resource families ClinicForce requests from
+# healow. A practice may grant only some of them; those denials are surfaced in
+# the review screen rather than being mistaken for an empty chart.
+USCDI_RESOURCE_TYPES = (
+    "Patient", "AllergyIntolerance", "CarePlan", "Condition", "Coverage",
+    "DiagnosticReport", "DocumentReference", "Encounter", "Goal", "Immunization",
+    "MedicationDispense", "MedicationRequest", "Observation", "Procedure",
+    "Provenance", "ServiceRequest",
 )
 
 
@@ -79,6 +94,9 @@ class LiveEcwSession:
     remote_patient_id: str
     access_token: str
     expires_at: float
+    review_bundle: dict[str, Any] | None = None
+    review_availability: dict[str, str] | None = None
+    retrieved_at: str | None = None
 
 
 _live_sessions: dict[str, LiveEcwSession] = {}
@@ -321,3 +339,187 @@ async def complete_authorization(state_cookie: str, state: str, code: str, redir
 
 def clear_live_session(session_id: str) -> None:
     _live_sessions.pop(session_id, None)
+
+
+def get_live_session(session_id: str, patient_id: str) -> LiveEcwSession:
+    """Return the current patient-owned connection without exposing its token."""
+    session = _live_sessions.get(session_id)
+    if session is None or session.patient_id != patient_id or session.expires_at <= time.time():
+        if session_id:
+            clear_live_session(session_id)
+        raise EcwError("Your eClinicalWorks session has ended. Reconnect healow to continue.")
+    return session
+
+
+def clear_live_session_by_value(value: LiveEcwSession) -> None:
+    for key, session in list(_live_sessions.items()):
+        if session is value:
+            _live_sessions.pop(key, None)
+
+
+def _same_origin(left: str, right: str) -> bool:
+    first, second = urlparse(left), urlparse(right)
+    return (first.scheme, first.netloc) == (second.scheme, second.netloc)
+
+
+def _safe_next_url(fhir_base: str, value: str) -> str:
+    target = urljoin(f"{fhir_base}/", value)
+    if not _same_origin(fhir_base, target) or not target.startswith(f"{fhir_base}/"):
+        raise EcwError("eClinicalWorks returned an unsafe continuation link")
+    return target
+
+
+async def _get_json(
+    session: LiveEcwSession, url: str, params: dict[str, str] | None = None,
+) -> tuple[int, dict[str, Any], dict[str, str]]:
+    """Read one bounded FHIR response, following neither redirects nor hosts."""
+    headers = {"Authorization": f"Bearer {session.access_token}", "Accept": "application/fhir+json"}
+    for attempt in range(3):
+        try:
+            async with httpx.AsyncClient(timeout=30.0, follow_redirects=False) as client:
+                response = await client.get(url, params=params, headers=headers)
+        except httpx.HTTPError as exc:
+            if attempt == 2:
+                raise EcwError("eClinicalWorks is temporarily unavailable. Try again shortly.") from exc
+            await asyncio.sleep(2 ** attempt)
+            continue
+        if response.status_code == 429 or response.status_code >= 500:
+            if attempt == 2:
+                raise EcwError("eClinicalWorks is temporarily unavailable. Try again shortly.")
+            try:
+                delay = min(max(int(response.headers.get("Retry-After", "")), 1), 15)
+            except ValueError:
+                delay = 2 ** attempt
+            await asyncio.sleep(delay)
+            continue
+        if response.status_code in {401, 403, 404}:
+            return response.status_code, {}, dict(response.headers)
+        if len(response.content) > MAX_FHIR_RESPONSE_BYTES:
+            raise EcwError("eClinicalWorks returned too much data for one resource family. Try again shortly.")
+        try:
+            response.raise_for_status()
+            payload = response.json()
+        except (httpx.HTTPError, ValueError) as exc:
+            raise EcwError("eClinicalWorks returned an unreadable clinical-data response") from exc
+        if not isinstance(payload, dict):
+            raise EcwError("eClinicalWorks returned an invalid clinical-data response")
+        return response.status_code, payload, dict(response.headers)
+    raise EcwError("eClinicalWorks is temporarily unavailable. Try again shortly.")
+
+
+def _collection(resources: list[dict[str, Any]], status: str = "ok") -> dict[str, Any]:
+    bundle: dict[str, Any] = {
+        "resourceType": "Bundle", "type": "collection",
+        "entry": [{"resource": resource} for resource in resources],
+    }
+    if status != "ok":
+        bundle["extension"] = [{"url": "urn:clinicforce:ecw-status", "valueString": status}]
+    return bundle
+
+
+def _sanitize_resource_for_review(resource: dict[str, Any]) -> dict[str, Any]:
+    """Do not send document bytes or provider download URLs to the browser."""
+    sanitized = json.loads(json.dumps(resource))
+    if sanitized.get("resourceType") == "DocumentReference":
+        for content in sanitized.get("content", []):
+            attachment = content.get("attachment") if isinstance(content, dict) else None
+            if isinstance(attachment, dict):
+                attachment.pop("data", None)
+                attachment.pop("url", None)
+    return sanitized
+
+
+async def _search_resources(
+    session: LiveEcwSession, resource_type: str, params: dict[str, str],
+) -> tuple[list[dict[str, Any]], str]:
+    status, bundle, _ = await _get_json(session, f"{session.fhir_base}/{resource_type}", params)
+    if status == 401:
+        clear_live_session_by_value(session)
+        raise EcwError("Your eClinicalWorks session has ended. Reconnect healow to continue.")
+    if status in {403, 404}:
+        return [], "forbidden" if status == 403 else "unavailable"
+    resources: list[dict[str, Any]] = []
+    pages = 0
+    visited_pages: set[str] = set()
+    while True:
+        for entry in bundle.get("entry", []):
+            resource = entry.get("resource") if isinstance(entry, dict) else None
+            if isinstance(resource, dict) and resource.get("resourceType") != "OperationOutcome":
+                resources.append(_sanitize_resource_for_review(resource))
+                if len(resources) >= MAX_RESOURCES_PER_TYPE:
+                    return resources, "truncated"
+        next_url = next((
+            link.get("url") for link in bundle.get("link", [])
+            if isinstance(link, dict) and link.get("relation") == "next" and isinstance(link.get("url"), str)
+        ), None)
+        if not next_url:
+            break
+        target = _safe_next_url(session.fhir_base, next_url)
+        if target in visited_pages:
+            return resources, "partial"
+        visited_pages.add(target)
+        pages += 1
+        if pages >= MAX_PAGES_PER_RESOURCE:
+            return resources, "truncated"
+        status, bundle, _ = await _get_json(session, target)
+        if status == 401:
+            clear_live_session_by_value(session)
+            raise EcwError("Your eClinicalWorks session has ended. Reconnect healow to continue.")
+        if status != 200:
+            return resources, "partial"
+    return resources, "ok"
+
+
+async def fetch_resource_type(session: LiveEcwSession, resource_type: str) -> dict[str, Any]:
+    if resource_type not in USCDI_RESOURCE_TYPES:
+        raise EcwError("That eClinicalWorks resource type is not available in ClinicForce")
+    if resource_type == "Patient":
+        status, patient, _ = await _get_json(session, f"{session.fhir_base}/Patient/{session.remote_patient_id}")
+        if status == 401:
+            clear_live_session_by_value(session)
+            raise EcwError("Your eClinicalWorks session has ended. Reconnect healow to continue.")
+        if status in {403, 404}:
+            return _collection([], "forbidden" if status == 403 else "unavailable")
+        return _collection([_sanitize_resource_for_review(patient)])
+    resources, resource_status = await _search_resources(session, resource_type, {"patient": session.remote_patient_id})
+    return _collection(resources, resource_status)
+
+
+async def fetch_record(session: LiveEcwSession) -> tuple[dict[str, Any], dict[str, str]]:
+    """Retrieve approved resources only; persistence waits for explicit review."""
+    concurrency = asyncio.Semaphore(5)
+
+    async def bounded_fetch(resource_type: str) -> dict[str, Any]:
+        async with concurrency:
+            return await fetch_resource_type(session, resource_type)
+
+    bundles = await asyncio.gather(
+        *(bounded_fetch(resource_type) for resource_type in USCDI_RESOURCE_TYPES), return_exceptions=True,
+    )
+    entries: list[dict[str, Any]] = []
+    availability: dict[str, str] = {}
+    for resource_type, bundle in zip(USCDI_RESOURCE_TYPES, bundles, strict=True):
+        if isinstance(bundle, Exception):
+            if "session has ended" in str(bundle):
+                raise bundle
+            availability[resource_type] = "partial"
+            continue
+        entries.extend(entry for entry in bundle.get("entry", []) if isinstance(entry, dict))
+        result_status = next((
+            extension.get("valueString") for extension in bundle.get("extension", [])
+            if isinstance(extension, dict) and extension.get("url") == "urn:clinicforce:ecw-status"
+        ), "ok")
+        availability[resource_type] = "empty" if result_status == "ok" and not bundle.get("entry") else str(result_status)
+    record = {"resourceType": "Bundle", "type": "collection", "entry": entries}
+    session.review_bundle = record
+    session.review_availability = availability
+    session.retrieved_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    return record, availability
+
+
+def source_metadata(session: LiveEcwSession) -> dict[str, str]:
+    return {
+        "organization_name": f"eClinicalWorks / healow (practice {session.practice_code})",
+        "practice_code": session.practice_code,
+        "retrieved_at": session.retrieved_at or datetime.now(timezone.utc).isoformat(timespec="seconds"),
+    }
