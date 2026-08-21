@@ -108,6 +108,17 @@ const categoryMeta: Record<RecordCategory, { label: string; help: string; icon: 
 
 const externalImportMeta = { label: 'External SHL import', icon: 'SHL' }
 const ecwImportMeta = { label: 'eClinicalWorks / healow import', icon: 'eCW' }
+const providerLogos = {
+  google: { src: 'https://www.gstatic.com/firebasejs/ui/2.0.0/images/auth/google.svg', alt: 'Google' },
+  mychart: { src: 'https://media.epic.com/mychartdotorg/site/en-us/images/logo/site-logo.svg', alt: 'MyChart' },
+  ecw: { src: 'https://www.eclinicalworks.com/wp-content/uploads/2014/08/main-logo.png', alt: 'eClinicalWorks' },
+  healow: { src: 'https://plus.healow.com/wp-content/uploads/2022/03/healow-logo@2x.png', alt: 'healow' },
+} as const
+
+function ProviderLogo({ provider }: { provider: keyof typeof providerLogos }) {
+  const logo = providerLogos[provider]
+  return <img className={`provider-logo provider-logo-${provider}`} src={logo.src} alt={logo.alt} />
+}
 const ecwImportableResourceTypes = new Set([
   'AllergyIntolerance', 'CarePlan', 'CareTeam', 'Condition', 'Coverage',
   'DiagnosticReport', 'Device', 'DocumentReference', 'Encounter', 'Goal',
@@ -925,7 +936,7 @@ export default function PatientPortal({ onBack }: PatientPortalProps) {
             {error && <p className="form-error" role="alert">{error}</p>}
             <button className="button button-primary w-full" type="submit" disabled={busy === 'auth'}>{busy === 'auth' ? <><LoaderCircle className="size-4 animate-spin" aria-hidden="true" /> Opening workspace</> : <>{mode === 'login' ? 'Open my workspace' : 'Create my workspace'} <ChevronRight aria-hidden="true" className="size-4" /></>}</button>
           </form>}
-          {!restoringSession && <><div className="divider"><span>or</span></div><button className="button button-secondary w-full" type="button" disabled={busy === 'google'} onClick={() => void signInWithGoogle()}>{busy === 'google' ? <LoaderCircle className="size-4 animate-spin" aria-hidden="true" /> : <Cloud aria-hidden="true" className="size-4" />} Continue with Google</button><p className="field-help">Google sign-in opens your patient workspace and stores new PDFs in your ClinicForce Drive folder.</p></>}
+          {!restoringSession && <><div className="divider"><span>or</span></div><button className="button google-signin-button w-full" type="button" disabled={busy === 'google'} onClick={() => void signInWithGoogle()}>{busy === 'google' ? <LoaderCircle className="size-4 animate-spin" aria-hidden="true" /> : <ProviderLogo provider="google" />} Continue with Google</button><p className="field-help">Google sign-in opens your patient workspace and stores new PDFs in your ClinicForce Drive folder.</p></>}
         </div>
       </section>
     )
@@ -977,16 +988,15 @@ export default function PatientPortal({ onBack }: PatientPortalProps) {
 
       <div className="workspace-grid" ref={workspacePanel}>
         <nav className="workspace-tabs" aria-label="Health record sections">
-          <p className="workspace-nav-label">Record workspace</p>
           <button className={workspaceTab === 'overview' ? 'active' : ''} aria-pressed={workspaceTab === 'overview'} type="button" onClick={() => setWorkspaceTab('overview')}><UserRound aria-hidden="true" /><span>Profile & sharing</span></button>
           <button className={workspaceTab === 'records' ? 'active' : ''} aria-pressed={workspaceTab === 'records'} type="button" onClick={() => setWorkspaceTab('records')}><FileText aria-hidden="true" /><span>Reports & details</span></button>
           <button className={workspaceTab === 'connections' ? 'active' : ''} aria-pressed={workspaceTab === 'connections'} type="button" onClick={() => setWorkspaceTab('connections')}><Building2 aria-hidden="true" /><span>Care connections</span></button>
-          <p className="workspace-tabs-helper" role="status">
-            {workspaceTab === 'overview' && <><strong>Start here.</strong> Confirm your profile, then share.</>}
-            {workspaceTab === 'records' && <><strong>Add information.</strong> Upload a report or add a detail.</>}
-            {workspaceTab === 'connections' && <><strong>Connect care.</strong> Authorize in a secure window.</>}
-          </p>
         </nav>
+        <p className="workspace-tabs-helper" role="status">
+          {workspaceTab === 'overview' && <><strong>Start here.</strong> Confirm your profile, then share.</>}
+          {workspaceTab === 'records' && <><strong>Add information.</strong> Upload a report or add a detail.</>}
+          {workspaceTab === 'connections' && <><strong>Connect care.</strong> Authorize in a secure window.</>}
+        </p>
         <div className="workspace-main">
           <section className="section-card demographics-card" data-workspace-panel aria-labelledby="demographics-heading" hidden={workspaceTab !== 'overview'}>
             <div className="section-heading"><div><p className="section-kicker">Required for EHR QR sharing</p><h2 id="demographics-heading">Confirm your demographics</h2></div><UserRound aria-hidden="true" className="section-icon" /></div>
@@ -1003,7 +1013,7 @@ export default function PatientPortal({ onBack }: PatientPortalProps) {
           </section>
 
           <section className="section-card" data-workspace-panel aria-labelledby="epic-heading" hidden={workspaceTab !== 'connections'}>
-            <div className="section-heading"><div><p className="section-kicker">Live patient-authorized connection</p><h2 id="epic-heading">Epic / MyChart</h2></div><Building2 aria-hidden="true" className="section-icon" /></div>
+            <div className="section-heading"><div><p className="section-kicker">Live patient-authorized connection</p><h2 id="epic-heading">Epic / MyChart</h2></div><div className="provider-lockup"><ProviderLogo provider="mychart" /></div></div>
             {!epicRecord ? <>
               <p className="text-sm leading-6 text-[var(--muted-ink)]">Connect a hospital you have used to view its current Epic record in this browser. ClinicForce does not save Epic records, access tokens, or attached PDFs.</p>
               <div className="storage-choice mt-4"><div className="flex-1"><label htmlFor="epic-hospital"><strong>Hospital or health system</strong></label><input id="epic-hospital" value={epicQuery} onChange={(event) => chooseEpicHospital(event.target.value)} placeholder="Start typing, e.g. Houston Methodist" autoComplete="organization" aria-describedby="epic-hospital-help epic-hospital-options" /><div id="epic-hospital-options" className="epic-endpoint-options" role="listbox" aria-label="Matching hospitals">{epicEndpoints.map((endpoint) => <button key={endpoint.id} className="epic-endpoint-option" role="option" type="button" aria-selected={endpoint.id === selectedEpicEndpointId} onClick={() => selectEpicHospital(endpoint)}><strong>{endpoint.name}</strong>{endpoint.aliases.length > 0 && <span>{endpoint.aliases.slice(0, 2).join(' · ')}</span>}</button>)}</div><p id="epic-hospital-help" className="field-help mt-2" aria-live="polite">{epicSearching ? 'Looking up Epic hospitals…' : selectedEpicEndpoint ? `Selected: ${selectedEpicEndpoint.name}. Continue to MyChart to authorize ClinicForce.` : epicDirectoryError || (epicQuery.trim().length >= 2 && epicEndpoints.length === 0 ? 'No matching Epic hospital found. Try the hospital or health-system name.' : 'Type at least two letters, then select a hospital.')}</p></div><button className="button button-primary" type="button" disabled={!selectedEpicEndpoint || busy === 'epic-connect'} onClick={() => selectedEpicEndpoint && void connectEpic(selectedEpicEndpoint)}>{busy === 'epic-connect' ? <LoaderCircle className="size-4 animate-spin" aria-hidden="true" /> : 'Continue to MyChart'}</button></div>
@@ -1016,7 +1026,7 @@ export default function PatientPortal({ onBack }: PatientPortalProps) {
           </section>
 
           <section className="section-card" data-workspace-panel aria-labelledby="ecw-heading" hidden={workspaceTab !== 'connections'}>
-            <div className="section-heading"><div><p className="section-kicker">Live patient-authorized connection</p><h2 id="ecw-heading">eClinicalWorks / healow</h2></div><Building2 aria-hidden="true" className="section-icon" /></div>
+            <div className="section-heading"><div><p className="section-kicker">Live patient-authorized connection</p><h2 id="ecw-heading">eClinicalWorks / healow</h2></div><div className="provider-lockup provider-lockup-dual"><ProviderLogo provider="ecw" /><ProviderLogo provider="healow" /></div></div>
             {!ecwRecord ? <>
               <p className="text-sm leading-6 text-[var(--muted-ink)]">Enter the six-character OEM code for the eClinicalWorks practice where you receive care. ClinicForce derives that practice’s FHIR endpoint and opens its secure healow sign-in; it never asks you for an eCW password.</p>
               <div className="storage-choice mt-4"><div className="flex-1"><label htmlFor="ecw-practice-code"><strong>eClinicalWorks practice OEM code</strong></label><input id="ecw-practice-code" value={ecwPracticeCode} onChange={(event) => { setEcwPracticeCode(event.target.value.toUpperCase()); if (ecwPracticeCodeError) setEcwPracticeCodeError('') }} onBlur={(event) => setEcwPracticeCodeError(validateEcwPracticeCode(event.target.value.trim().toUpperCase()) ?? '')} placeholder="e.g. BEDBAA" autoComplete="off" spellCheck="false" maxLength={6} aria-describedby="ecw-practice-code-help" aria-invalid={Boolean(ecwPracticeCodeError)} />{ecwPracticeCodeError ? <p id="ecw-practice-code-help" className="field-help mt-2" role="alert">{ecwPracticeCodeError}</p> : <p id="ecw-practice-code-help" className="field-help mt-2">This is supplied by the practice. It may contain letters, such as BEDBAA.</p>}</div><button className="button button-primary" type="button" disabled={busy === 'ecw-connect' || busy === 'ecw-load'} onClick={() => void connectEcw()}>{busy === 'ecw-connect' || busy === 'ecw-load' ? <LoaderCircle className="size-4 animate-spin" aria-hidden="true" /> : 'Continue to healow'}</button></div>
@@ -1036,7 +1046,7 @@ export default function PatientPortal({ onBack }: PatientPortalProps) {
               <div><strong>{session.storage_provider === 'google_drive' ? 'Your Google Drive is selected' : 'ClinicForce secure storage is selected'}</strong><p>{session.storage_provider === 'google_drive' ? 'Drive contains encrypted ClinicForce files. Open reports here to read them.' : 'New PDFs stay in ClinicForce encrypted document storage.'}</p></div>
               <div className="storage-actions">
                 <button className="button button-secondary" type="button" disabled={busy === 'drive' || session.storage_provider === 's3'} onClick={() => void selectStorage('s3')}>Use ClinicForce storage</button>
-                <button className="button button-secondary" type="button" disabled={busy === 'drive' || session.storage_provider === 'google_drive'} onClick={() => void selectStorage('google_drive')}><Cloud aria-hidden="true" className="size-4" /> {session.drive_connected ? 'Use my Drive' : 'Connect Google Drive'}</button>
+                <button className="button button-secondary" type="button" disabled={busy === 'drive' || session.storage_provider === 'google_drive'} onClick={() => void selectStorage('google_drive')}><ProviderLogo provider="google" /> {session.drive_connected ? 'Use my Drive' : 'Connect Google Drive'}</button>
               </div>
             </div>
             {session.storage_provider === 'google_drive' && session.drive_access_upgrade_required && <div className="feedback feedback-error" role="status"><Cloud aria-hidden="true" /><span>Reconnect Google Drive to enable secure folder import. Your existing reports remain available.</span><button className="button button-secondary" type="button" disabled={busy === 'drive'} onClick={() => void connectGoogleDrive()}>Reconnect Drive</button></div>}
