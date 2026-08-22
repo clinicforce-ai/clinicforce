@@ -159,23 +159,240 @@ function codedText(value: unknown): string | null {
   return null
 }
 
-function epicResourceSummary(resource: Record<string, unknown>): string {
+/** Human-readable labels and display order for grouped Epic resource types. */
+const epicResourceGroupMeta: Record<string, { label: string; singular: string; order: number }> = {
+  Patient: { label: 'Patient demographics', singular: 'Patient', order: 0 },
+  Condition: { label: 'Conditions & diagnoses', singular: 'Condition', order: 1 },
+  AllergyIntolerance: { label: 'Allergies & intolerances', singular: 'Allergy', order: 2 },
+  MedicationRequest: { label: 'Medications', singular: 'Medication', order: 3 },
+  Immunization: { label: 'Immunizations', singular: 'Immunization', order: 4 },
+  Observation: { label: 'Lab results & vitals', singular: 'Observation', order: 5 },
+  DiagnosticReport: { label: 'Diagnostic reports', singular: 'Diagnostic report', order: 6 },
+  Encounter: { label: 'Encounters & visits', singular: 'Encounter', order: 7 },
+  CarePlan: { label: 'Care plans', singular: 'Care plan', order: 8 },
+  CareTeam: { label: 'Care teams', singular: 'Care team', order: 9 },
+  Coverage: { label: 'Insurance coverage', singular: 'Coverage', order: 10 },
+  Goal: { label: 'Health goals', singular: 'Goal', order: 11 },
+  Device: { label: 'Devices', singular: 'Device', order: 12 },
+  DocumentReference: { label: 'Documents', singular: 'Document', order: 13 },
+}
+
+function groupEpicResources(resources: Array<Record<string, unknown>>): Array<{ type: string; meta: typeof epicResourceGroupMeta[string]; resources: Array<Record<string, unknown>> }> {
+  const groups: Record<string, Array<Record<string, unknown>>> = {}
+  for (const resource of resources) {
+    const type = typeof resource.resourceType === 'string' ? resource.resourceType : 'Unknown'
+    ;(groups[type] ??= []).push(resource)
+  }
+  return Object.entries(groups)
+    .map(([type, items]) => ({
+      type,
+      meta: epicResourceGroupMeta[type] ?? { label: type, singular: type, order: 99 },
+      resources: items,
+    }))
+    .sort((a, b) => a.meta.order - b.meta.order)
+}
+
+/** Extract a structured summary object from any FHIR resource Epic returns. */
+function epicResourceDetail(resource: Record<string, unknown>): { title: string; details: string[] } {
   const resourceType = typeof resource.resourceType === 'string' ? resource.resourceType : 'FHIR resource'
+
   if (resourceType === 'Condition') {
-    const condition = codedText(resource.code) ?? (typeof resource.description === 'string' ? resource.description : null)
-    const status = codedText(resource.clinicalStatus) ?? (typeof resource.clinicalStatus === 'string' ? resource.clinicalStatus : null)
-    return [condition, status].filter(Boolean).join(' · ') || 'Condition record retrieved; Epic did not include a readable condition name.'
+    const name = codedText(resource.code) ?? (typeof resource.description === 'string' ? resource.description : null)
+    const status = codedText(resource.clinicalStatus)
+    const severity = codedText(resource.severity)
+    const category = Array.isArray(resource.category) ? resource.category.map((cat) => codedText(cat)).filter(Boolean).join(', ') : null
+    const onset = typeof resource.onsetDateTime === 'string' ? `Onset: ${dateLabel(resource.onsetDateTime)}` : null
+    return { title: name ?? 'Unnamed condition', details: [status, severity, category, onset].filter(Boolean) as string[] }
   }
+
   if (resourceType === 'AllergyIntolerance') {
-    return codedText(resource.code) ?? codedText(resource.clinicalStatus) ?? 'Allergy record retrieved; its clinical details will be included in the combined QR summary.'
+    const substance = codedText(resource.code)
+    const status = codedText(resource.clinicalStatus)
+    const verification = codedText(resource.verificationStatus)
+    const criticality = typeof resource.criticality === 'string' ? `Criticality: ${resource.criticality}` : null
+    const categoryArr = Array.isArray(resource.category) ? resource.category.filter((c): c is string => typeof c === 'string').join(', ') : null
+    const reactions = Array.isArray(resource.reaction)
+      ? resource.reaction.map((r) => {
+          if (!r || typeof r !== 'object') return null
+          const manifestations = Array.isArray((r as Record<string, unknown>).manifestation)
+            ? ((r as Record<string, unknown>).manifestation as unknown[]).map((m) => codedText(m)).filter(Boolean).join(', ')
+            : null
+          return manifestations
+        }).filter(Boolean).join('; ')
+      : null
+    return {
+      title: substance ?? 'Unknown allergen',
+      details: [status, verification, categoryArr ? `Type: ${categoryArr}` : null, criticality, reactions ? `Reactions: ${reactions}` : null].filter(Boolean) as string[],
+    }
   }
+
+  if (resourceType === 'MedicationRequest') {
+    const medName = codedText(resource.medicationCodeableConcept) ?? (typeof resource.medicationReference === 'object' && resource.medicationReference ? codedText((resource.medicationReference as Record<string, unknown>).display ? { text: (resource.medicationReference as Record<string, unknown>).display } : resource.medicationReference) : null)
+    const status = typeof resource.status === 'string' ? resource.status : null
+    const intent = typeof resource.intent === 'string' ? resource.intent : null
+    const authored = typeof resource.authoredOn === 'string' ? `Prescribed: ${dateLabel(resource.authoredOn)}` : null
+    const dosageInstructions = Array.isArray(resource.dosageInstruction)
+      ? resource.dosageInstruction.map((d) => {
+          if (!d || typeof d !== 'object') return null
+          const text = typeof (d as Record<string, unknown>).text === 'string' ? (d as Record<string, unknown>).text as string : null
+          return text
+        }).filter(Boolean).join('; ')
+      : null
+    const requester = resource.requester && typeof resource.requester === 'object' ? (typeof (resource.requester as Record<string, unknown>).display === 'string' ? `Prescribed by: ${(resource.requester as Record<string, unknown>).display}` : null) : null
+    return {
+      title: medName ?? 'Unnamed medication',
+      details: [status, intent !== 'order' ? intent : null, dosageInstructions, authored, requester].filter(Boolean) as string[],
+    }
+  }
+
+  if (resourceType === 'Immunization') {
+    const vaccine = codedText(resource.vaccineCode)
+    const status = typeof resource.status === 'string' ? resource.status : null
+    const date = typeof resource.occurrenceDateTime === 'string' ? `Date: ${dateLabel(resource.occurrenceDateTime)}` : (typeof resource.occurrenceString === 'string' ? `Date: ${resource.occurrenceString}` : null)
+    const site = codedText(resource.site)
+    const primarySource = typeof resource.primarySource === 'boolean' ? (resource.primarySource ? 'Primary source' : 'Historical record') : null
+    return {
+      title: vaccine ?? 'Unnamed vaccine',
+      details: [status, date, site ? `Site: ${site}` : null, primarySource].filter(Boolean) as string[],
+    }
+  }
+
+  if (resourceType === 'Observation') {
+    const name = codedText(resource.code)
+    const status = typeof resource.status === 'string' && resource.status !== 'final' ? resource.status : null
+    const effectiveDate = typeof resource.effectiveDateTime === 'string' ? dateLabel(resource.effectiveDateTime) : null
+    let valueStr: string | null = null
+    if (resource.valueQuantity && typeof resource.valueQuantity === 'object') {
+      const q = resource.valueQuantity as { value?: unknown; unit?: unknown }
+      if (q.value !== undefined) valueStr = `${q.value}${typeof q.unit === 'string' ? ` ${q.unit}` : ''}`
+    } else if (typeof resource.valueString === 'string') {
+      valueStr = resource.valueString
+    } else if (resource.valueCodeableConcept) {
+      valueStr = codedText(resource.valueCodeableConcept)
+    }
+    const interpretation = Array.isArray(resource.interpretation) ? resource.interpretation.map((i) => codedText(i)).filter(Boolean).join(', ') : null
+    const refRange = Array.isArray(resource.referenceRange)
+      ? resource.referenceRange.map((r) => {
+          if (!r || typeof r !== 'object') return null
+          const rr = r as { low?: { value?: unknown; unit?: unknown }; high?: { value?: unknown; unit?: unknown }; text?: unknown }
+          if (typeof rr.text === 'string') return rr.text
+          const low = rr.low?.value !== undefined ? `${rr.low.value}` : null
+          const high = rr.high?.value !== undefined ? `${rr.high.value}` : null
+          const unit = typeof rr.low?.unit === 'string' ? ` ${rr.low.unit}` : (typeof rr.high?.unit === 'string' ? ` ${rr.high.unit}` : '')
+          if (low && high) return `Ref: ${low}–${high}${unit}`
+          if (low) return `Ref: ≥${low}${unit}`
+          if (high) return `Ref: ≤${high}${unit}`
+          return null
+        }).filter(Boolean).join('; ')
+      : null
+    // Handle component observations (e.g. blood pressure systolic/diastolic)
+    const components = Array.isArray(resource.component)
+      ? resource.component.map((c) => {
+          if (!c || typeof c !== 'object') return null
+          const comp = c as Record<string, unknown>
+          const cName = codedText(comp.code)
+          let cValue: string | null = null
+          if (comp.valueQuantity && typeof comp.valueQuantity === 'object') {
+            const q = comp.valueQuantity as { value?: unknown; unit?: unknown }
+            if (q.value !== undefined) cValue = `${q.value}${typeof q.unit === 'string' ? ` ${q.unit}` : ''}`
+          } else if (typeof comp.valueString === 'string') { cValue = comp.valueString }
+          return cName && cValue ? `${cName}: ${cValue}` : null
+        }).filter(Boolean).join(' / ')
+      : null
+    return {
+      title: name ?? 'Unnamed observation',
+      details: [valueStr ? `Value: ${valueStr}` : null, components, interpretation ? `Interpretation: ${interpretation}` : null, refRange, effectiveDate, status].filter(Boolean) as string[],
+    }
+  }
+
+  if (resourceType === 'DiagnosticReport') {
+    const name = codedText(resource.code)
+    const status = typeof resource.status === 'string' ? resource.status : null
+    const date = typeof resource.effectiveDateTime === 'string' ? dateLabel(resource.effectiveDateTime) : null
+    const conclusion = typeof resource.conclusion === 'string' ? resource.conclusion : null
+    const category = Array.isArray(resource.category) ? resource.category.map((cat) => codedText(cat)).filter(Boolean).join(', ') : null
+    return {
+      title: name ?? 'Unnamed report',
+      details: [status, category, date, conclusion ? `Conclusion: ${conclusion}` : null].filter(Boolean) as string[],
+    }
+  }
+
+  if (resourceType === 'Encounter') {
+    const encounterClass = resource.class && typeof resource.class === 'object'
+      ? ((resource.class as { display?: unknown }).display as string) ?? ((resource.class as { code?: unknown }).code as string) ?? null
+      : null
+    const status = typeof resource.status === 'string' ? resource.status : null
+    const typeArr = Array.isArray(resource.type) ? resource.type.map((t) => codedText(t)).filter(Boolean) : []
+    const period = resource.period && typeof resource.period === 'object'
+      ? (() => { const p = resource.period as { start?: string; end?: string }; return typeof p.start === 'string' ? `${dateLabel(p.start)}${typeof p.end === 'string' ? ` – ${dateLabel(p.end)}` : ''}` : null })()
+      : null
+    const reasonArr = Array.isArray(resource.reasonCode) ? resource.reasonCode.map((r) => codedText(r)).filter(Boolean) : []
+    return {
+      title: typeArr[0] ?? encounterClass ?? 'Clinical encounter',
+      details: [status, encounterClass && typeArr[0] ? `Class: ${encounterClass}` : null, period, reasonArr.length ? `Reason: ${reasonArr.join(', ')}` : null].filter(Boolean) as string[],
+    }
+  }
+
+  if (resourceType === 'CarePlan') {
+    const title = typeof resource.title === 'string' ? resource.title : codedText(Array.isArray(resource.category) ? resource.category[0] : null)
+    const status = typeof resource.status === 'string' ? resource.status : null
+    const intent = typeof resource.intent === 'string' ? resource.intent : null
+    const description = typeof resource.description === 'string' ? resource.description : null
+    return { title: title ?? 'Care plan', details: [status, intent, description].filter(Boolean) as string[] }
+  }
+
+  if (resourceType === 'CareTeam') {
+    const name = typeof resource.name === 'string' ? resource.name : null
+    const status = typeof resource.status === 'string' ? resource.status : null
+    const participants = Array.isArray(resource.participant)
+      ? resource.participant.slice(0, 5).map((p) => {
+          if (!p || typeof p !== 'object') return null
+          const member = (p as Record<string, unknown>).member
+          return member && typeof member === 'object' && typeof (member as Record<string, unknown>).display === 'string' ? (member as Record<string, unknown>).display as string : null
+        }).filter(Boolean).join(', ')
+      : null
+    return { title: name ?? 'Care team', details: [status, participants ? `Members: ${participants}` : null].filter(Boolean) as string[] }
+  }
+
+  if (resourceType === 'Coverage') {
+    const payor = Array.isArray(resource.payor) ? resource.payor.map((p) => (p && typeof p === 'object' && typeof (p as Record<string, unknown>).display === 'string' ? (p as Record<string, unknown>).display as string : null)).filter(Boolean).join(', ') : null
+    const status = typeof resource.status === 'string' ? resource.status : null
+    const subscriberId = typeof resource.subscriberId === 'string' ? `Subscriber ID: ${resource.subscriberId}` : null
+    const relationship = codedText(resource.relationship)
+    return { title: payor ?? 'Insurance coverage', details: [status, subscriberId, relationship ? `Relationship: ${relationship}` : null].filter(Boolean) as string[] }
+  }
+
+  if (resourceType === 'Goal') {
+    const description = codedText(resource.description) ?? (typeof resource.description === 'string' ? resource.description : null)
+    const lifecycleStatus = typeof resource.lifecycleStatus === 'string' ? resource.lifecycleStatus : null
+    const startDate = typeof resource.startDate === 'string' ? `Start: ${dateLabel(resource.startDate)}` : null
+    const targetDate = Array.isArray(resource.target) ? resource.target.map((t) => (t && typeof t === 'object' && typeof (t as Record<string, unknown>).dueDate === 'string' ? `Target: ${dateLabel((t as Record<string, unknown>).dueDate as string)}` : null)).filter(Boolean).join(', ') : null
+    return { title: description ?? 'Health goal', details: [lifecycleStatus, startDate, targetDate].filter(Boolean) as string[] }
+  }
+
+  if (resourceType === 'Device') {
+    const deviceName = Array.isArray(resource.deviceName) ? resource.deviceName.map((d) => (d && typeof d === 'object' && typeof (d as Record<string, unknown>).name === 'string' ? (d as Record<string, unknown>).name as string : null)).filter(Boolean)[0] : null
+    const type = codedText(resource.type)
+    const status = typeof resource.status === 'string' ? resource.status : null
+    const manufacturer = typeof resource.manufacturer === 'string' ? `Manufacturer: ${resource.manufacturer}` : null
+    const model = typeof resource.modelNumber === 'string' ? `Model: ${resource.modelNumber}` : null
+    return { title: deviceName ?? type ?? 'Medical device', details: [status, manufacturer, model].filter(Boolean) as string[] }
+  }
+
   if (resourceType === 'DocumentReference') {
     const content = Array.isArray(resource.content) ? resource.content : []
     const attachment = content.find((item) => item && typeof item === 'object' && 'attachment' in item)
     const title = attachment && typeof attachment === 'object' && 'attachment' in attachment && attachment.attachment && typeof attachment.attachment === 'object'
       ? (attachment.attachment as { title?: unknown }).title : null
-    return codedText(resource.type) ?? (typeof resource.description === 'string' ? resource.description : null) ?? (typeof title === 'string' ? title : null) ?? 'Clinical document metadata retrieved.'
+    const docType = codedText(resource.type)
+    const desc = typeof resource.description === 'string' ? resource.description : null
+    const docDate = typeof resource.date === 'string' ? dateLabel(resource.date) : null
+    return {
+      title: docType ?? desc ?? (typeof title === 'string' ? title : null) ?? 'Clinical document',
+      details: [docDate, desc && docType ? desc : null].filter(Boolean) as string[],
+    }
   }
+
   if (resourceType === 'Patient') {
     const names = Array.isArray(resource.name) ? resource.name : []
     const firstName = names.find((name) => name && typeof name === 'object') as { text?: unknown; given?: unknown; family?: unknown } | undefined
@@ -183,10 +400,20 @@ function epicResourceSummary(resource: Record<string, unknown>): string {
       ...(Array.isArray(firstName?.given) ? firstName.given.filter((part): part is string => typeof part === 'string') : []),
       typeof firstName?.family === 'string' ? firstName.family : '',
     ].filter(Boolean).join(' ')
-    const details = [name, typeof resource.birthDate === 'string' ? `Birth date: ${resource.birthDate}` : '', typeof resource.gender === 'string' ? resource.gender : ''].filter(Boolean)
-    return details.join(' · ') || 'Patient profile retrieved for this authorized connection.'
+    const birthDate = typeof resource.birthDate === 'string' ? `Born: ${dateLabel(resource.birthDate)}` : null
+    const gender = typeof resource.gender === 'string' ? `Sex: ${resource.gender}` : null
+    return { title: name || 'Patient', details: [birthDate, gender].filter(Boolean) as string[] }
   }
-  return codedText(resource.code) ?? (typeof resource.description === 'string' ? resource.description : null) ?? (typeof resource.status === 'string' ? resource.status : null) ?? 'Clinical data retrieved.'
+
+  // Generic fallback
+  const fallbackName = codedText(resource.code) ?? (typeof resource.description === 'string' ? resource.description : null) ?? (typeof resource.status === 'string' ? resource.status : null)
+  return { title: fallbackName ?? 'Clinical data retrieved', details: [] }
+}
+
+/** Legacy one-line summary kept for eCW review list compatibility. */
+function epicResourceSummary(resource: Record<string, unknown>): string {
+  const detail = epicResourceDetail(resource)
+  return detail.details.length ? `${detail.title} · ${detail.details.join(' · ')}` : detail.title
 }
 
 function hasEpicPdfLink(resource: Record<string, unknown>): boolean {
@@ -1020,8 +1247,39 @@ export default function PatientPortal({ onBack }: PatientPortalProps) {
               {busy === 'epic-connect' && <div className="feedback feedback-success mt-3" role="status"><LoaderCircle className="size-4 animate-spin" aria-hidden="true" /><span>MyChart opened in a secure window. Complete sign-in there. If Epic shows an error, close that window or cancel here to return safely.</span><button className="button button-secondary" type="button" onClick={cancelEpicConnection}>Cancel connection</button></div>}
             </> : <>
               <div className="storage-choice mt-4"><div><strong>Live from {epicRecord.source.organization_name}</strong><p>Retrieved {dateLabel(epicRecord.source.retrieved_at)}. This connection ends when you disconnect, its token expires, or the service restarts.</p></div><div className="storage-actions"><button className="button button-secondary" type="button" onClick={() => void refreshEpic()} disabled={busy === 'epic-load'}>{busy === 'epic-load' ? <LoaderCircle className="size-4 animate-spin" aria-hidden="true" /> : <RefreshCw className="size-4" aria-hidden="true" />} Refresh</button><button className="button button-secondary" type="button" onClick={() => void endEpicSession()}>Disconnect</button></div></div>
-              <div className="workspace-stats mt-4" aria-label="Live Epic data counts">{Object.entries(epicCounts).slice(0, 6).map(([type, count]) => <div key={type}><FileText aria-hidden="true" /><span><strong>{count}</strong> {type}</span></div>)}</div>
-              <section className="mt-4" aria-label="MyChart details"><p className="document-name">MyChart details ({epicResources.length} resources)</p><p className="field-help mt-2">Availability: {epicAvailabilityMessage(epicRecord.availability)}</p><ul className="record-list mt-3">{epicRecord.availability.Condition === 'empty' && <li><div><strong>Conditions</strong><p>Epic did not return any condition records for this connection. Reconnect after the expanded condition search is available; if it remains empty, Houston Methodist must authorize ClinicForce to read the problem list or health concerns shown in MyChart.</p></div></li>}{epicResources.map((resource, index) => <li key={`${resource.resourceType ?? 'resource'}-${resource.id ?? index}`}><div><strong>{String(resource.resourceType ?? 'FHIR resource')}</strong><p>{epicResourceSummary(resource)}</p>{resource.resourceType === 'DocumentReference' && typeof resource.id === 'string' && (hasEpicPdfLink(resource) ? <button className="button button-secondary mt-3" type="button" disabled={busy === 'epic-document'} onClick={() => void openEpicDocument(resource.id!)}>Open the source PDF</button> : <p className="field-help mt-2">Epic shared this document’s title but not a downloadable PDF.</p>)}</div></li>)}</ul></section>
+              <div className="workspace-stats mt-4" aria-label="Live Epic data counts">{Object.entries(epicCounts).map(([type, count]) => <div key={type}><FileText aria-hidden="true" /><span><strong>{count}</strong> {epicResourceGroupMeta[type]?.singular ?? type}{count !== 1 ? 's' : ''}</span></div>)}</div>
+              <p className="field-help mt-2">Availability: {epicAvailabilityMessage(epicRecord.availability)}</p>
+              {epicRecord.availability.Condition === 'empty' && <div className="feedback feedback-error mt-3" role="status"><ShieldAlert aria-hidden="true" /><span>Epic did not return any condition records. The hospital may need to authorize ClinicForce to read the problem list shown in MyChart.</span></div>}
+              <div className="epic-grouped-records mt-4">
+                {groupEpicResources(epicResources).map((group) => (
+                  <details key={group.type} className="epic-resource-group" open>
+                    <summary className="epic-group-header">
+                      <span className="epic-group-label">{group.meta.label}</span>
+                      <span className="epic-group-count">{group.resources.length}</span>
+                    </summary>
+                    <ul className="epic-resource-list">
+                      {group.resources.map((resource, index) => {
+                        const detail = epicResourceDetail(resource)
+                        return (
+                          <li key={`${resource.resourceType ?? 'resource'}-${resource.id ?? index}`} className="epic-resource-item">
+                            <div className="epic-resource-content">
+                              <strong className="epic-resource-title">{detail.title}</strong>
+                              {detail.details.length > 0 && (
+                                <div className="epic-resource-details">
+                                  {detail.details.map((line, i) => <span key={i} className="epic-detail-tag">{line}</span>)}
+                                </div>
+                              )}
+                              {resource.resourceType === 'DocumentReference' && typeof resource.id === 'string' && hasEpicPdfLink(resource) && (
+                                <button className="button button-secondary mt-3" type="button" disabled={busy === 'epic-document'} onClick={() => void openEpicDocument(resource.id!)}>Open source PDF</button>
+                              )}
+                            </div>
+                          </li>
+                        )
+                      })}
+                    </ul>
+                  </details>
+                ))}
+              </div>
             </>}
           </section>
 
