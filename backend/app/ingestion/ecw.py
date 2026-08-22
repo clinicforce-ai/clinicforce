@@ -43,7 +43,11 @@ ECW_OAUTH_STATE_SECRET = (
 )
 ECW_FHIR_BASE_TEMPLATE = os.getenv(
     "ECW_FHIR_BASE_TEMPLATE",
-    "https://ecwcms-drehlqyh14.azurewebsites.net/FHIRServer/fhir/{practice_code}",
+    # healow publishes active practice endpoints at
+    # https://connect4.healow.com/apps/jsp/dev/r4/fhirEndpoints.jsp. The
+    # former ecwcms Azure hostname was retired, so SMART discovery there
+    # fails before the browser can be sent to the healow sign-in page.
+    "https://fhir4.healow.com/fhir/r4/{practice_code}",
 ).strip()
 
 OAUTH_STATE_MAX_AGE_SECONDS = 10 * 60
@@ -58,7 +62,7 @@ _PRACTICE_CODE = re.compile(r"^[A-Z0-9]{6}$")
 # categories map to one SMART resource scope each.
 PATIENT_READ_SCOPES = (
     "patient/Patient.read", "patient/AllergyIntolerance.read", "patient/CarePlan.read",
-    "patient/DiagnosticReport.read", "patient/DocumentReference.read", "patient/Encounter.read",
+    "patient/CareTeam.read", "patient/DiagnosticReport.read", "patient/DocumentReference.read", "patient/Encounter.read",
     "patient/Goal.read", "patient/Immunization.read", "patient/Medication.read",
     "patient/MedicationDispense.read", "patient/MedicationRequest.read", "patient/Procedure.read",
     "patient/Provenance.read", "patient/Coverage.read", "patient/ServiceRequest.read",
@@ -69,7 +73,7 @@ PATIENT_READ_SCOPES = (
 # healow. A practice may grant only some of them; those denials are surfaced in
 # the review screen rather than being mistaken for an empty chart.
 USCDI_RESOURCE_TYPES = (
-    "Patient", "AllergyIntolerance", "CarePlan", "Condition", "Coverage",
+    "Patient", "AllergyIntolerance", "CarePlan", "CareTeam", "Condition", "Coverage",
     "DiagnosticReport", "DocumentReference", "Encounter", "Goal", "Immunization",
     "MedicationDispense", "MedicationRequest", "Observation", "Procedure",
     "Provenance", "ServiceRequest",
@@ -283,7 +287,9 @@ async def begin_authorization(practice_code: str, patient_id: str, redirect_uri:
         "response_type": "code",
         "client_id": ECW_CLIENT_ID,
         "redirect_uri": redirect_uri,
-        "scope": " ".join(("launch/patient", "openid", "profile", "fhirUser", "online_access", *PATIENT_READ_SCOPES)),
+        # ``offline_access`` is the SMART scope healow advertises for refresh
+        # tokens. ``online_access`` is not a SMART/healow scope.
+        "scope": " ".join(("launch/patient", "openid", "profile", "fhirUser", "offline_access", *PATIENT_READ_SCOPES)),
         "state": state,
         "aud": fhir_base,
         "code_challenge": pkce_challenge(verifier),
@@ -311,7 +317,10 @@ async def complete_authorization(state_cookie: str, state: str, code: str, redir
             response = await client.post(
                 token_endpoint,
                 data={
-                    "grant_type": "authorization_code", "code": code, "client_id": ECW_CLIENT_ID,
+                    # healow identifies a confidential asymmetric client from
+                    # the private_key_jwt assertion's iss/sub claims. Its
+                    # client_id form parameter is for public-client exchanges.
+                    "grant_type": "authorization_code", "code": code,
                     "redirect_uri": redirect_uri, "code_verifier": str(payload["verifier"]),
                     "client_assertion_type": "urn:ietf:params:oauth:client-assertion-type:jwt-bearer",
                     "client_assertion": _client_assertion(token_endpoint),

@@ -95,6 +95,31 @@ exception is an explicit patient-created QR share: it stores an encrypted,
 timestamped FHIR snapshot in `shl_manifests`, excludes Epic attachments, and can
 be revoked from the patient workspace immediately.
 
+## eClinicalWorks / healow live connection
+
+ClinicForce starts a patient-facing standalone SMART-on-FHIR R4 launch from the
+six-character practice OEM code. The current healow base URL is derived as:
+
+```text
+https://fhir4.healow.com/fhir/r4/<OEM-code>
+```
+
+It discovers the authorization and token endpoints at that practice's
+`/.well-known/smart-configuration` URL; do not configure the retired
+`ecwcms-*.azurewebsites.net` endpoint. Register the following exact values in
+the healow developer portal:
+
+```text
+Redirect URI: https://app.clinicforce.ai/api/patient/ecw/callback
+JWKS URL:     https://app.clinicforce.ai/api/patient/ecw/jwks
+```
+
+Set `ECW_CLIENT_ID` and `ECW_KMS_KEY_ID` in production (or `ECW_CLIENT_JWK` in
+local development). The connector requests healow's standard `offline_access`
+scope so a registration that requires a refresh token can authorize correctly,
+but it keeps neither access nor refresh tokens beyond the short-lived,
+patient-authorized live session.
+
 For ECS, use Service Connect aliases rather than task IP addresses:
 
 ```bash

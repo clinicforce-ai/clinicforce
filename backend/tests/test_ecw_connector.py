@@ -32,12 +32,12 @@ class EcwConnectorTests(unittest.IsolatedAsyncioTestCase):
     def tearDown(self) -> None:
         self.config.stop()
 
-    def test_bedbaa_constructs_the_documented_practice_specific_fhir_base(self) -> None:
+    def test_bedbaa_constructs_the_published_practice_specific_fhir_base(self) -> None:
         # BEDBAA intentionally contains letters: an OEM code is six characters,
         # not a six-digit numeric field.
         self.assertEqual(
             ecw.fhir_base_for_practice("bedbaa"),
-            "https://ecwcms-drehlqyh14.azurewebsites.net/FHIRServer/fhir/BEDBAA",
+            "https://fhir4.healow.com/fhir/r4/BEDBAA",
         )
         with self.assertRaises(ecw.EcwError):
             ecw.fhir_base_for_practice("https://untrusted.example")
@@ -52,7 +52,7 @@ class EcwConnectorTests(unittest.IsolatedAsyncioTestCase):
                 "BEDBAA", "clinicforce-patient", "https://app.clinicforce.ai/api/patient/ecw/callback", popup=True,
             )
 
-        expected_base = "https://ecwcms-drehlqyh14.azurewebsites.net/FHIRServer/fhir/BEDBAA"
+        expected_base = "https://fhir4.healow.com/fhir/r4/BEDBAA"
         discover.assert_awaited_once_with(expected_base)
         parsed = urlsplit(started.authorization_url)
         query = parse_qs(parsed.query)
@@ -62,6 +62,9 @@ class EcwConnectorTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(query["code_challenge_method"], ["S256"])
         self.assertIn("openid", query["scope"][0].split())
         self.assertIn("launch/patient", query["scope"][0].split())
+        self.assertIn("offline_access", query["scope"][0].split())
+        self.assertNotIn("online_access", query["scope"][0].split())
+        self.assertIn("patient/CareTeam.read", query["scope"][0].split())
 
         sealed = ecw._open_state(started.state_cookie)
         self.assertEqual(sealed["practice_code"], "BEDBAA")
@@ -69,6 +72,54 @@ class EcwConnectorTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(query["state"], [sealed["state"]])
         self.assertEqual(query["code_challenge"], [ecw.pkce_challenge(sealed["verifier"])])
         self.assertGreaterEqual(len(sealed["verifier"]), 64)
+
+    async def test_confidential_token_exchange_uses_private_key_jwt_not_client_id(self) -> None:
+        configuration = {
+            "authorization_endpoint": "https://auth.eclinicalworks.example/authorize",
+            "token_endpoint": "https://auth.eclinicalworks.example/token",
+        }
+        with patch("app.ingestion.ecw._smart_configuration", new=AsyncMock(return_value=configuration)):
+            started = await ecw.begin_authorization(
+                "BEDBAA", "clinicforce-patient", "https://app.clinicforce.ai/api/patient/ecw/callback",
+            )
+        state = parse_qs(urlsplit(started.authorization_url).query)["state"][0]
+
+        class TokenResponse:
+            def raise_for_status(self) -> None:
+                return None
+
+            def json(self) -> dict[str, object]:
+                return {"access_token": "access-token", "patient": "remote-patient", "expires_in": 300}
+
+        class TokenClient:
+            request_data: dict[str, str]
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *_args) -> None:
+                return None
+
+            async def post(self, _url: str, *, data: dict[str, str], headers: dict[str, str]) -> TokenResponse:
+                self.request_data = data
+                self.request_headers = headers
+                return TokenResponse()
+
+        client = TokenClient()
+        with (
+            patch("app.ingestion.ecw.httpx.AsyncClient", return_value=client),
+            patch("app.ingestion.ecw._client_assertion", return_value="signed-client-assertion"),
+        ):
+            session_id, popup = await ecw.complete_authorization(
+                started.state_cookie, state, "authorization-code",
+                "https://app.clinicforce.ai/api/patient/ecw/callback", "clinicforce-patient",
+            )
+
+        self.assertFalse(popup)
+        self.assertNotIn("client_id", client.request_data)
+        self.assertEqual(client.request_data["client_assertion"], "signed-client-assertion")
+        self.assertEqual(client.request_data["client_assertion_type"], "urn:ietf:params:oauth:client-assertion-type:jwt-bearer")
+        ecw.clear_live_session(session_id)
 
     def test_public_jwks_never_contains_private_key_material(self) -> None:
         payload = ecw.public_jwks()
