@@ -439,6 +439,16 @@ class MainRouteTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(profiled_patient["birthDate"], "1979-12-31")
         self.assertEqual(profiled_patient["gender"], "female")
 
+        compat_bundle = build_exchange_bundle("patient-1", [document], [record], epic, saved_profile, ecw_compat=True)
+        for entry in compat_bundle["entry"]:
+            res = entry["resource"]
+            sec = res.get("meta", {}).get("security", [])
+            self.assertTrue(any(s.get("system") == "https://smarthealth.cards/ial" and s.get("code") == "IAL2" for s in sec))
+            self.assertTrue(any(s.get("system") == "http://hl7.org/fhir/identity-assuranceLevel" and s.get("code") == "level3" for s in sec))
+
+        patient_res = compat_bundle["entry"][0]["resource"]
+        self.assertIn("http://hl7.org/fhir/us/identity-matching/StructureDefinition/IDI-Patient-L2", patient_res.get("meta", {}).get("profile", []))
+
     def test_patient_store_schema_initializes_only_once_per_process(self) -> None:
         """Concurrent request connections must not each issue schema-altering DDL."""
         previous_state = patient_store._schema_initialized

@@ -600,7 +600,12 @@ def _first_patient_resource(bundle: dict[str, Any] | None) -> dict[str, Any] | N
     return None
 
 
-def _exchange_patient(patient_id: str, profile: PatientProfile | None, epic_bundle: dict[str, Any] | None) -> dict[str, Any]:
+def _exchange_patient(
+    patient_id: str,
+    profile: PatientProfile | None,
+    epic_bundle: dict[str, Any] | None,
+    ecw_compat: bool = False,
+) -> dict[str, Any]:
     """Build the one Patient resource used by an external-EHR exchange bundle.
 
     ClinicForce's structured profile is the primary identity source. A live Epic
@@ -643,6 +648,26 @@ def _exchange_patient(patient_id: str, profile: PatientProfile | None, epic_bund
         _tag_resource_source(patient, "epic-mychart", source_display)
     if "meta" not in patient:
         _tag_resource_source(patient, "patient-entered")
+
+    if ecw_compat:
+        meta = patient.setdefault("meta", {})
+        security = meta.setdefault("security", [])
+        if not any(isinstance(sec, dict) and sec.get("system") == "https://smarthealth.cards/ial" and sec.get("code") == "IAL2" for sec in security):
+            security.append({
+                "system": "https://smarthealth.cards/ial",
+                "code": "IAL2",
+                "display": "Identity Assurance Level 2"
+            })
+        if not any(isinstance(sec, dict) and sec.get("system") == "http://hl7.org/fhir/identity-assuranceLevel" and sec.get("code") == "level3" for sec in security):
+            security.append({
+                "system": "http://hl7.org/fhir/identity-assuranceLevel",
+                "code": "level3",
+                "display": "High confidence"
+            })
+        profile_list = meta.setdefault("profile", [])
+        idi_profile = "http://hl7.org/fhir/us/identity-matching/StructureDefinition/IDI-Patient-L2"
+        if idi_profile not in profile_list:
+            profile_list.append(idi_profile)
     return patient
 
 
@@ -772,6 +797,7 @@ def build_exchange_bundle(
     records: list[Any],
     epic_bundle: dict[str, Any] | None = None,
     profile: PatientProfile | None = None,
+    ecw_compat: bool = False,
 ) -> dict[str, Any]:
     """Build the explicit FHIR R4 collection sent to external EHRs via SHL.
 
@@ -779,7 +805,7 @@ def build_exchange_bundle(
     representation.  It contains only exchange-safe clinical resource types,
     one canonical bundle Patient, and source/verification tags on every entry.
     """
-    entries: list[dict[str, Any]] = [{"resource": _exchange_patient(patient_id, profile, epic_bundle)}]
+    entries: list[dict[str, Any]] = [{"resource": _exchange_patient(patient_id, profile, epic_bundle, ecw_compat=ecw_compat)}]
     for document in documents:
         document_bundle = _combine_document_bundles([document])
         for entry in document_bundle["entry"]:
@@ -805,6 +831,26 @@ def build_exchange_bundle(
             prepared = _prepare_exchange_resource(resource, patient_id, "epic-mychart")
             if prepared is not None:
                 entries.append({"resource": prepared})
+
+    if ecw_compat:
+        for entry in entries:
+            resource = entry.get("resource")
+            if isinstance(resource, dict):
+                meta = resource.setdefault("meta", {})
+                security = meta.setdefault("security", [])
+                if not any(isinstance(sec, dict) and sec.get("system") == "https://smarthealth.cards/ial" and sec.get("code") == "IAL2" for sec in security):
+                    security.append({
+                        "system": "https://smarthealth.cards/ial",
+                        "code": "IAL2",
+                        "display": "Identity Assurance Level 2"
+                    })
+                if not any(isinstance(sec, dict) and sec.get("system") == "http://hl7.org/fhir/identity-assuranceLevel" and sec.get("code") == "level3" for sec in security):
+                    security.append({
+                        "system": "http://hl7.org/fhir/identity-assuranceLevel",
+                        "code": "level3",
+                        "display": "High confidence"
+                    })
+
     return {"resourceType": "Bundle", "type": "collection", "entry": entries}
 
 
@@ -1827,7 +1873,10 @@ async def generate_patient_link(request: GeneratePatientLinkRequest, http_reques
             if epic_bundle.get("entry"):
                 epic_snapshot = _epic_share_snapshot(epic_bundle, epic.source_metadata(session))
 
-        fhir_bundle = build_exchange_bundle(patient_id, documents, records, epic_snapshot, profile)
+        fhir_bundle = build_exchange_bundle(
+            patient_id, documents, records, epic_snapshot, profile,
+            ecw_compat=(request.share_mode == "ecw_compat")
+        )
         # The exchange bundle always contains Patient.  Do not issue a QR that
         # has no clinical/document content beyond that identity shell.
         if len(fhir_bundle["entry"]) == 1:
