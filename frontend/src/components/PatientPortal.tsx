@@ -1270,7 +1270,7 @@ export default function PatientPortal({ onBack }: PatientPortalProps) {
                                 </div>
                               )}
                               {resource.resourceType === 'DocumentReference' && typeof resource.id === 'string' && hasEpicPdfLink(resource) && (
-                                <button className="button button-secondary mt-3" type="button" disabled={busy === 'epic-document'} onClick={() => void openEpicDocument(resource.id!)}>Open source PDF</button>
+                                <button className="button button-secondary mt-3" type="button" disabled={busy === 'epic-document'} onClick={() => void openEpicDocument(String(resource.id))}>Open source PDF</button>
                               )}
                             </div>
                           </li>
