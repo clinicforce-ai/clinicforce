@@ -36,6 +36,17 @@ CONDITION_SEARCH_CATEGORIES = (
     "health-concern",
     "encounter-diagnosis",
 )
+OBSERVATION_SEARCH_CATEGORIES = (
+    "laboratory",
+    "vital-signs",
+    "social-history",
+    "core-characteristics",
+    "survey",
+)
+CAREPLAN_SEARCH_CATEGORIES = (
+    "assess-plan",
+    "longitudinal",
+)
 
 # Only standard patient-facing USCDI v3 R4 resources. This list deliberately
 # excludes Outside Record, research, and proprietary APIs so ClinicForce's
@@ -357,6 +368,10 @@ async def fetch_resource_type(session: LiveEpicSession, resource_type: str) -> d
     search_params = [{"patient": session.remote_patient_id}]
     if resource_type == "Condition":
         search_params.extend({"patient": session.remote_patient_id, "category": category} for category in CONDITION_SEARCH_CATEGORIES)
+    elif resource_type == "Observation":
+        search_params.extend({"patient": session.remote_patient_id, "category": category} for category in OBSERVATION_SEARCH_CATEGORIES)
+    elif resource_type == "CarePlan":
+        search_params.extend({"patient": session.remote_patient_id, "category": category} for category in CAREPLAN_SEARCH_CATEGORIES)
 
     resources: list[dict[str, Any]] = []
     statuses: list[str] = []
@@ -364,10 +379,8 @@ async def fetch_resource_type(session: LiveEpicSession, resource_type: str) -> d
         try:
             returned, search_status = await _search_resources(session, resource_type, params)
         except EpicError:
-            if resource_type != "Condition":
-                raise
             # A legacy Epic tenant can decline an optional category while still
-            # serving its regular Condition search. Preserve its usable data.
+            # serving its regular search. Preserve its usable data.
             statuses.append("partial")
             continue
         resources.extend(returned)
