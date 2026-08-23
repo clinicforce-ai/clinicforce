@@ -64,8 +64,8 @@ PATIENT_READ_SCOPES = (
     "patient/Patient.read", "patient/AllergyIntolerance.read", "patient/CarePlan.read",
     "patient/CareTeam.read", "patient/DiagnosticReport.read", "patient/DocumentReference.read", "patient/Encounter.read",
     "patient/Goal.read", "patient/Immunization.read", "patient/Medication.read",
-    "patient/MedicationDispense.read", "patient/MedicationRequest.read", "patient/Procedure.read",
-    "patient/Provenance.read", "patient/Coverage.read", "patient/ServiceRequest.read",
+    "patient/MedicationDispense.r", "patient/MedicationRequest.read", "patient/Procedure.read",
+    "patient/Provenance.read", "patient/Coverage.r", "patient/ServiceRequest.r",
     "patient/Condition.read", "patient/Observation.read",
 )
 
