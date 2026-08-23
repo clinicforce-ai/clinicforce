@@ -338,7 +338,17 @@ function epicResourceDetail(resource: Record<string, unknown>): { title: string;
     const status = typeof resource.status === 'string' ? resource.status : null
     const intent = typeof resource.intent === 'string' ? resource.intent : null
     const description = typeof resource.description === 'string' ? resource.description : null
-    return { title: title ?? 'Care plan', details: [status, intent, description].filter(Boolean) as string[] }
+    const activities = Array.isArray(resource.activity)
+      ? resource.activity.map((a) => {
+          if (!a || typeof a !== 'object') return null
+          const detail = (a as Record<string, unknown>).detail
+          if (!detail || typeof detail !== 'object') return null
+          const actDesc = typeof (detail as Record<string, unknown>).description === 'string' ? (detail as Record<string, unknown>).description as string : null
+          const actCode = codedText((detail as Record<string, unknown>).code)
+          return actDesc ?? actCode
+        }).filter(Boolean).join('; ')
+      : null
+    return { title: title ?? 'Care plan', details: [status, intent, description, activities ? `Activity: ${activities}` : null].filter(Boolean) as string[] }
   }
 
   if (resourceType === 'CareTeam') {
