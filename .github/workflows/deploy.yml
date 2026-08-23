@@ -91,12 +91,6 @@ jobs:
           IMAGE_TAG: ${{ github.sha }}
         run: |
           set -euo pipefail
-          STATUS=$(aws cloudformation describe-stacks --stack-name "$STACK_NAME" --query 'Stacks[0].StackStatus' --output text || echo "NONE")
-          if [ "$STATUS" = "UPDATE_ROLLBACK_FAILED" ]; then
-            echo "Stack is in UPDATE_ROLLBACK_FAILED. Attempting to continue rollback..."
-            aws cloudformation continue-update-rollback --stack-name "$STACK_NAME"
-            aws cloudformation wait stack-rollback-complete --stack-name "$STACK_NAME"
-          fi
           aws cloudformation update-stack \
             --stack-name "$STACK_NAME" \
             --use-previous-template \
