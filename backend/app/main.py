@@ -471,7 +471,8 @@ def _ecw_error(exc: ecw.EcwError) -> HTTPException:
 
 async def _authenticate_patient(patient_id: str | None, password: str | None, request: Request | None = None) -> str:
     if request is not None:
-        session_patient_id = await asyncio.to_thread(get_patient_session, request.cookies.get(PATIENT_SESSION_COOKIE, ""))
+        session_cookie = request.cookies.get(PATIENT_SESSION_COOKIE, "")
+        session_patient_id = await asyncio.to_thread(get_patient_session, session_cookie)
         if session_patient_id:
             origin = request.headers.get("origin", "").rstrip("/")
             if origin and origin != PUBLIC_BASE_URL:
@@ -480,10 +481,13 @@ async def _authenticate_patient(patient_id: str | None, password: str | None, re
                 raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Patient session does not match this workspace")
             return session_patient_id
         if not patient_id and not password:
+            log_warning("Patient authentication", "%s rejected: session cookie=%s, credentials=absent", request.url.path, "present" if session_cookie else "absent")
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Sign in to open your workspace")
     normalized_id, password = _validate_patient_credentials(patient_id, password)
     stored_hash = await asyncio.to_thread(get_password_hash, normalized_id)
     if stored_hash is None or not verify_password(password, stored_hash):
+        if request is not None:
+            log_warning("Patient authentication", "%s rejected: session cookie=%s, credentials=rejected", request.url.path, "present" if session_cookie else "absent")
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid patient ID or password")
     return normalized_id
 
