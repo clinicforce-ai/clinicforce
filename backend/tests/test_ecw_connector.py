@@ -65,6 +65,9 @@ class EcwConnectorTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("offline_access", query["scope"][0].split())
         self.assertNotIn("online_access", query["scope"][0].split())
         self.assertIn("patient/CareTeam.read", query["scope"][0].split())
+        self.assertIn("patient/MedicationDispense.read", query["scope"][0].split())
+        self.assertIn("patient/Coverage.read", query["scope"][0].split())
+        self.assertIn("patient/ServiceRequest.read", query["scope"][0].split())
 
         sealed = ecw._open_state(started.state_cookie)
         self.assertEqual(sealed["practice_code"], "BEDBAA")
