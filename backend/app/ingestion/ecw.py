@@ -205,10 +205,12 @@ async def _smart_configuration(fhir_base: str) -> dict[str, str]:
         raise EcwError("This practice's secure connection details are unavailable") from exc
     if not isinstance(payload, dict):
         raise EcwError("This practice returned invalid secure connection details")
+    issuer = payload.get("issuer")
     authorization_endpoint, token_endpoint = payload.get("authorization_endpoint"), payload.get("token_endpoint")
-    if not isinstance(authorization_endpoint, str) or not isinstance(token_endpoint, str):
+    if not isinstance(issuer, str) or not isinstance(authorization_endpoint, str) or not isinstance(token_endpoint, str):
         raise EcwError("This practice does not provide the required SMART OAuth endpoints")
     return {
+        "issuer": _valid_https_url(issuer, name="issuer"),
         "authorization_endpoint": _valid_https_url(authorization_endpoint, name="authorization endpoint"),
         "token_endpoint": _valid_https_url(token_endpoint, name="token endpoint"),
     }
@@ -272,6 +274,7 @@ async def begin_authorization(practice_code: str, patient_id: str, redirect_uri:
     practice_code = normalize_practice_code(practice_code)
     fhir_base = fhir_base_for_practice(practice_code)
     configuration = await _smart_configuration(fhir_base)
+    fhir_base = configuration["issuer"]
     state, verifier = secrets.token_urlsafe(32), secrets.token_urlsafe(64)
     payload = {
         "state": state,
@@ -287,9 +290,7 @@ async def begin_authorization(practice_code: str, patient_id: str, redirect_uri:
         "response_type": "code",
         "client_id": ECW_CLIENT_ID,
         "redirect_uri": redirect_uri,
-        # ``offline_access`` is the SMART scope healow advertises for refresh
-        # tokens. ``online_access`` is not a SMART/healow scope.
-        "scope": " ".join(("launch/patient", "openid", "profile", "fhirUser", "offline_access", *PATIENT_READ_SCOPES)),
+        "scope": " ".join(("launch/patient", "openid", "profile", "fhirUser", *PATIENT_READ_SCOPES)),
         "state": state,
         "aud": fhir_base,
         "code_challenge": pkce_challenge(verifier),

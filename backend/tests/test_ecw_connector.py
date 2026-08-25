@@ -44,6 +44,7 @@ class EcwConnectorTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_bedbaa_launch_uses_discovered_endpoints_and_s256_pkce(self) -> None:
         configuration = {
+            "issuer": "https://fhir4.healow.com/fhir/r4/BEDBAA",
             "authorization_endpoint": "https://auth.eclinicalworks.example/authorize",
             "token_endpoint": "https://auth.eclinicalworks.example/token",
         }
@@ -62,8 +63,7 @@ class EcwConnectorTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(query["code_challenge_method"], ["S256"])
         self.assertIn("openid", query["scope"][0].split())
         self.assertIn("launch/patient", query["scope"][0].split())
-        self.assertIn("offline_access", query["scope"][0].split())
-        self.assertNotIn("online_access", query["scope"][0].split())
+        self.assertNotIn("offline_access", query["scope"][0].split())
         self.assertIn("patient/CareTeam.read", query["scope"][0].split())
         self.assertIn("patient/MedicationDispense.read", query["scope"][0].split())
         self.assertIn("patient/Coverage.read", query["scope"][0].split())
@@ -78,6 +78,7 @@ class EcwConnectorTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_confidential_token_exchange_uses_private_key_jwt_not_client_id(self) -> None:
         configuration = {
+            "issuer": "https://fhir4.healow.com/fhir/r4/BEDBAA",
             "authorization_endpoint": "https://auth.eclinicalworks.example/authorize",
             "token_endpoint": "https://auth.eclinicalworks.example/token",
         }
