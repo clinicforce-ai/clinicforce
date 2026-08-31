@@ -7,6 +7,7 @@ import hashlib
 import json
 import os
 import sys
+import tempfile
 import unittest
 from io import BytesIO
 from pathlib import Path
@@ -17,6 +18,7 @@ from zipfile import ZipFile
 
 import httpx
 import psycopg
+from openpyxl import Workbook
 from fastapi import HTTPException
 
 
@@ -28,6 +30,9 @@ from app.core.source_links import create_document_download_token, verify_documen
 from app.core import patient_store  # noqa: E402
 from app.ingestion.bedrock_extractor import ExtractedFact, facts_to_fhir_bundle  # noqa: E402
 from app.ingestion.pdf_parser import parse_pdf_text_with_llm, pdf_extraction_to_fhir_bundle  # noqa: E402
+from app.insurance.demo import LocalCaseError  # noqa: E402
+from app.insurance import local_v2  # noqa: E402
+from app.insurance import plan_matrix  # noqa: E402
 from app.main import _epic_share_snapshot, _normalize_ecw_bundle, app, build_exchange_bundle  # noqa: E402
 from app.reports.pdf_builder import generate_doctor_pdf, render_doctor_pdf_bytes  # noqa: E402
 from app.reports.summarizer import summarize_fhir_bundle  # noqa: E402
@@ -37,6 +42,24 @@ MATCHABLE_PROFILE = PatientProfile(
     patient_id="patient-1", given_name="Pat", family_name="Example",
     birth_date="1980-01-01", administrative_gender="unknown",
 )
+
+DOCUMENT_BACKED_INSURANCE_CASE = {
+    "accepted_card_sha256": hashlib.sha256(b"approved-local-card").hexdigest(),
+    "verification": {
+        "demo": True,
+        "patient": {"id": "local-case", "name": "Local review patient", "birthDate": "1980-01-01"},
+        "appointment": {"resourceType": "Appointment", "status": "booked", "start": "2026-01-01T10:00:00-05:00", "end": "2026-01-01T10:30:00-05:00", "serviceType": [{"text": "Office visit"}], "reasonCode": [{"text": "Review"}]},
+        "coverage_fhir": {"resourceType": "Coverage", "status": "active", "subscriberId": "local", "payor": [{"display": "Local payer"}], "class": []},
+        "card": {"payer": "Local payer", "member_id": "local", "group_number": "local", "plan_name": "Local plan", "relationship": "self"},
+        "eligibility_transaction": {"inquiry": {"transaction_set": "270", "service_type": "30"}, "response": {"transaction_set": "271", "eligibility_code_display": "Active coverage"}},
+        "contract_match": {"provider": "Local clinic", "npi": "local", "tin": "local", "service_location": "Office", "source": "Local contract evidence"},
+        "network": {"status": "in_network", "has_out_of_network_benefits": False, "evidence": "Local network evidence"},
+        "source_conflicts": ["Reconcile the card and portal group identifiers before using a live estimate."],
+        "disclaimer": "Local evidence only.",
+    },
+    "service_evidence": {"description": "Documented service must be selected by clinician/coder.", "authorization_snapshot": "Local authorization snapshot", "billing_code_selection": "No selected service in supplied documents."},
+    "pricing": {"allowed_amount_cents": None, "missing_input": "A current contracted allowed amount or payer estimator result is required before calculating patient responsibility."},
+}
 
 
 class MainRouteTests(unittest.IsolatedAsyncioTestCase):
@@ -53,6 +76,182 @@ class MainRouteTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json(), {"status": "ok"})
 
+    async def test_local_insurance_demo_discards_card_and_returns_document_backed_evidence(self) -> None:
+        with patch("app.api.routers.insurance.insurance_demo._load_case", return_value=DOCUMENT_BACKED_INSURANCE_CASE):
+            response = await self.client.post(
+                "/api/clinician/insurance/demo-card",
+                files={"file": ("demo-card.pdf", b"approved-local-card", "application/pdf")},
+            )
+        self.assertEqual(response.status_code, 200, response.text)
+        payload = response.json()
+        self.assertTrue(payload["demo"])
+        self.assertEqual(payload["coverage_fhir"]["resourceType"], "Coverage")
+        self.assertEqual(payload["appointment"]["resourceType"], "Appointment")
+        self.assertEqual(payload["eligibility_transaction"]["response"]["transaction_set"], "271")
+        self.assertEqual(payload["network"]["status"], "in_network")
+        self.assertEqual(len(payload["source_conflicts"]), 1)
+        self.assertEqual(payload["card_scan"]["retention"], "Not stored. No OCR or payer request was made.")
+        self.assertEqual(response.headers["cache-control"], "no-store")
+
+    async def test_local_insurance_demo_rejects_unrecognized_card_content(self) -> None:
+        with patch("app.api.routers.insurance.insurance_demo._load_case", return_value=DOCUMENT_BACKED_INSURANCE_CASE):
+            response = await self.client.post(
+                "/api/clinician/insurance/demo-card",
+                files={"file": ("random.pdf", b"not-an-insurance-card", "application/pdf")},
+            )
+        self.assertEqual(response.status_code, 422)
+        self.assertIn("unrelated files are rejected", response.json()["detail"])
+
+    async def test_local_insurance_demo_requires_a_configured_document_case(self) -> None:
+        with patch("app.api.routers.insurance.insurance_demo._load_case", side_effect=LocalCaseError("Set INSURANCE_LOCAL_CASE_PATH")):
+            response = await self.client.post(
+                "/api/clinician/insurance/demo-card",
+                files={"file": ("demo-card.pdf", b"not-a-real-card", "application/pdf")},
+            )
+        self.assertEqual(response.status_code, 409)
+        self.assertIn("INSURANCE_LOCAL_CASE_PATH", response.json()["detail"])
+
+    async def test_local_service_estimate_requires_an_anticipated_service_and_never_invents_a_price(self) -> None:
+        with patch("app.api.routers.insurance.insurance_demo._load_case", return_value=DOCUMENT_BACKED_INSURANCE_CASE):
+            incomplete = await self.client.post("/api/clinician/insurance/demo-estimate", json={
+                "reason": "Medication follow-up", "anticipated_service": "",
+                "referral_status": "unknown", "authorization_status": "not_required",
+            })
+        self.assertEqual(incomplete.status_code, 200, incomplete.text)
+        self.assertIsNone(incomplete.json()["estimate"])
+        self.assertGreaterEqual(len(incomplete.json()["gates"]), 2)
+
+        with patch("app.api.routers.insurance.insurance_demo._load_case", return_value=DOCUMENT_BACKED_INSURANCE_CASE):
+            complete = await self.client.post("/api/clinician/insurance/demo-estimate", json={
+                "reason": "Medication follow-up for diabetes", "anticipated_service": "Scheduled office visit",
+                "referral_status": "not_required", "authorization_status": "not_required",
+            })
+        self.assertEqual(complete.status_code, 200, complete.text)
+        payload = complete.json()
+        self.assertEqual(payload["assistant"]["output"], "Pre-visit service facts only; no CPT/HCPCS code was generated.")
+        self.assertIsNone(payload["estimate"])
+        self.assertIn("contracted allowed amount", payload["gates"][-1])
+
+    async def test_local_insurance_workbench_stages_gate_and_branch_without_external_calls(self) -> None:
+        with patch("app.api.routers.insurance.insurance_demo._load_case", return_value=DOCUMENT_BACKED_INSURANCE_CASE):
+            eligibility = await self.client.post("/api/clinician/insurance/demo-stage", json={
+                "stage": "eligibility", "reason": "Medication follow-up",
+            })
+            self.assertEqual(eligibility.status_code, 200, eligibility.text)
+            self.assertEqual(eligibility.json()["status"], "review")
+            self.assertEqual(eligibility.json()["next_step"], "network")
+
+            rate = await self.client.post("/api/clinician/insurance/demo-stage", json={
+                "stage": "fee_schedule", "reason": "Medication follow-up",
+            })
+        self.assertEqual(rate.status_code, 200, rate.text)
+        payload = rate.json()
+        self.assertEqual(payload["status"], "blocked")
+        self.assertIn("contracted allowed amount", payload["gates"][0])
+
+    async def test_local_v2_unlocks_eligibility_only_after_each_document_is_reviewed(self) -> None:
+        with tempfile.TemporaryDirectory() as directory, patch.dict(
+            os.environ, {"INSURANCE_V2_LOCAL_STORE_PATH": str(Path(directory) / "insurance-v2.local.json")}, clear=False,
+        ):
+            card = local_v2.extract_document("insurance_card", "card.pdf", "Member ID Card\nMember ID: MEMBER-1234")
+            case = local_v2.create_case("Local test patient", [card])
+            blocked = local_v2.run_stage(case["id"], "eligibility")
+            self.assertEqual(blocked["status"], "blocked")
+
+            local_v2.review_document(case["id"], card["id"], card["fields"])
+            eligibility = local_v2.extract_document("eligibility_printout", "coverage.pdf", "Active Coverage\nMember ID: MEMBER-1234\nGroup Number: GROUP-123\nPayer: Test payer\nDate of Service: Aug 24, 2026\nPlan / Product: Test PPO\nNPI: 1234567890\nPlace Of Service: Office\nIn Network")
+            local_v2.add_document(case["id"], eligibility)
+            local_v2.review_document(case["id"], eligibility["id"], eligibility["fields"])
+
+            with patch("app.insurance.local_v2.plan_matrix.match_rule", return_value={"status": "matched", "rule": {"referral_required": "No"}}):
+                passed = local_v2.run_stage(case["id"], "eligibility")
+            self.assertEqual(passed["status"], "passed")
+            self.assertEqual(passed["next_step"], "network")
+
+            contract = local_v2.extract_document("provider_contract", "agreement.pdf", "Professional Provider Agreement\nParticipating Provider")
+            local_v2.add_document(case["id"], contract)
+            local_v2.review_document(case["id"], contract["id"], contract["fields"])
+            in_network = local_v2.run_stage(case["id"], "network")
+            self.assertEqual(in_network["status"], "passed")
+            self.assertEqual(in_network["inputs"]["network_status"], "in_network")
+
+            unsupported = local_v2.run_stage(case["id"], "authorization")
+            self.assertEqual(unsupported["status"], "blocked")
+            requirements = local_v2.extract_document("authorization_requirements", "requirements.pdf", "Referral not required. Prior authorization not required.")
+            local_v2.add_document(case["id"], requirements)
+            local_v2.review_document(case["id"], requirements["id"], requirements["fields"])
+            verified = local_v2.run_stage(case["id"], "authorization")
+            self.assertEqual(verified["status"], "passed")
+
+            updated_requirements = local_v2.extract_document("authorization_requirements", "requirements-2.pdf", "Referral required. Prior authorization required.")
+            local_v2.add_document(case["id"], updated_requirements)
+            local_v2.review_document(case["id"], updated_requirements["id"], updated_requirements["fields"])
+            with patch("app.insurance.local_v2._referral_required", return_value="required"):
+                missing_evidence = local_v2.run_stage(case["id"], "authorization")
+            self.assertEqual(missing_evidence["status"], "blocked")
+            referral = local_v2.extract_document("referral", "referral.pdf", "Referral Order\nReferring Provider")
+            local_v2.add_document(case["id"], referral)
+            local_v2.review_document(case["id"], referral["id"], referral["fields"])
+            with patch("app.insurance.local_v2._referral_required", return_value="required"):
+                authorization_missing = local_v2.run_stage(case["id"], "authorization")
+            self.assertEqual(authorization_missing["status"], "blocked")
+            approval = local_v2.extract_document("authorization", "approval.pdf", "Prior Authorization Approved")
+            local_v2.add_document(case["id"], approval)
+            local_v2.review_document(case["id"], approval["id"], approval["fields"])
+            with patch("app.insurance.local_v2._referral_required", return_value="required"):
+                approved = local_v2.run_stage(case["id"], "authorization")
+            self.assertEqual(approved["status"], "passed")
+
+    def test_local_v2_rejects_the_wrong_document_for_a_step(self) -> None:
+        with self.assertRaisesRegex(ValueError, "Eligibility needs"):
+            local_v2.extract_document("eligibility_printout", "card.pdf", "Member ID Card")
+
+    def test_local_v2_adds_matching_supplied_evidence_without_a_payer_call(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            fixture_path = Path(directory) / "case.json"
+            fixture_path.write_text(json.dumps({
+                "card_content_sha256": hashlib.sha256(b"test-card").hexdigest(),
+                "appointment": {"service": "Booked office visit"},
+                "documents": {"eligibility": {"kind": "eligibility_printout", "filename": "coverage.pdf", "evidence_pages": [], "fields": {"coverage_status": "active"}, "signals": []}},
+            }), encoding="utf-8")
+            with patch.dict(os.environ, {
+                "INSURANCE_V2_LOCAL_STORE_PATH": str(Path(directory) / "store.json"),
+                "INSURANCE_GOLDEN_CASE_PATH": str(fixture_path),
+            }, clear=False):
+                card = local_v2.extract_document("insurance_card", "card.pdf", "Member ID Card\nMember ID: MEMBER-1234")
+                card["content_sha256"] = hashlib.sha256(b"test-card").hexdigest()
+                case = local_v2.create_case("", [card])
+            self.assertEqual(case["service"], "Booked office visit")
+            self.assertEqual([document["kind"] for document in case["documents"]], ["insurance_card", "eligibility_printout"])
+            self.assertFalse(case["documents"][1]["reviewed"])
+
+    def test_plan_matrix_matches_bcbs_plan_family_without_using_patient_money(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "matrix.xlsx"
+            workbook = Workbook()
+            sheet = workbook.active
+            sheet.title = "Payer Plan Matrix"
+            headers = [
+                "Payer", "Plan Group (shared rule set)", "Specific Plan / Network Names on NMCT's Accepted List", "Plan Type",
+                "Referral Required Before NMCT Visit", "Referral Rule Detail (which CPT/services trigger it)", "Referral Rule Source",
+                "Prior Authorization Needed For", "Prior Auth Source / Submission Channel", "Verification Notes",
+            ]
+            sheet.append([])
+            sheet.append([])
+            sheet.append([])
+            sheet.append([])
+            sheet.append(headers)
+            sheet.append(["Blue Cross Blue Shield of Texas", "PPO", "Blue Choice PPO", "PPO", "No", "No PCP gatekeeper", "Payer portal", "Check current list by service", "Payer portal", "Verify at scheduling"])
+            sheet.append(["Blue Cross Blue Shield of Texas", "HMO", "Blue Essentials", "HMO", "Yes", "PCP referral required", "Payer portal", "Check current list by service", "Payer portal", "Verify at scheduling"])
+            workbook.save(path)
+            plan_matrix._load_rules.cache_clear()
+            with patch.dict(os.environ, {"INSURANCE_PLAN_MATRIX_PATH": str(path)}, clear=False):
+                ppo = plan_matrix.match_rule("BCBSTX", "Preferred Provider Option")
+                hmo = plan_matrix.match_rule("Blue Cross Blue Shield of Texas", "Blue Essentials")
+            self.assertEqual(ppo["status"], "matched")
+            self.assertEqual(ppo["rule"]["referral_required"], "No")
+            self.assertEqual(hmo["rule"]["referral_required"], "Yes")
+
     async def test_registered_ecw_jwks_url_serves_the_public_key_set(self) -> None:
         payload = {"keys": [{"kty": "RSA", "kid": "clinicforce-test-key"}]}
         with patch("app.main.ecw.public_jwks", return_value=payload):
@@ -61,7 +260,7 @@ class MainRouteTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.json(), payload)
 
     async def test_readiness_check_requires_a_usable_database_connection(self) -> None:
-        with patch("app.main.check_database_connection") as check_database_connection:
+        with patch("app.api.routers.system.check_database_connection") as check_database_connection:
             response = await self.client.get("/readyz")
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json(), {"status": "ok"})
@@ -69,7 +268,7 @@ class MainRouteTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_database_connection_error_returns_a_safe_service_unavailable_response(self) -> None:
         with patch(
-            "app.main.check_database_connection",
+            "app.api.routers.system.check_database_connection",
             side_effect=psycopg.OperationalError("password authentication failed"),
         ):
             response = await self.client.get("/readyz")

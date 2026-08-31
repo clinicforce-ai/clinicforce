@@ -21,6 +21,21 @@ Then start the backend from this directory:
 uvicorn app.main:app --reload --port 8000
 ```
 
+## Local insurance-estimator V2
+
+The clinician-only V2 workflow makes no payer, clearinghouse, eCW, OCR, or
+Bedrock call. It reads a clinic-owned plan matrix to determine referral rules;
+keep that workbook outside Git and configure its path before starting the
+backend:
+
+```bash
+export INSURANCE_PLAN_MATRIX_PATH='/absolute/path/to/NMCT_Payer_Plan_Matrix.xlsx'
+```
+
+It stores local workflow metadata in the ignored
+`backend/data/insurance-v2.local.json` by default. `INSURANCE_LOCAL_CASE_PATH`
+is for the older demo endpoint and is not required for V2.
+
 The backend targets `anthropic.claude-3-haiku-20240307-v1:0` and uses the standard AWS
 credential-provider chain (environment variables, shared profiles, or IAM roles).
 
@@ -111,7 +126,7 @@ the healow developer portal:
 
 ```text
 Redirect URI: https://app.clinicforce.ai/api/patient/ecw/callback
-JWKS URL:     https://app.clinicforce.ai/api/patient/ecw/jwks
+JWKS URL:     https://app.clinicforce.ai/.well-known/jwks.json
 ```
 
 Set `ECW_CLIENT_ID` and `ECW_KMS_KEY_ID` in production (or `ECW_CLIENT_JWK` in

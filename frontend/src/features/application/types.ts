@@ -1,0 +1,9 @@
+export type View =
+  | 'landing'
+  | 'patient'
+  | 'scan'
+  | 'pin'
+  | 'external'
+  | 'loading'
+  | 'dashboard'
+  | 'insurance'

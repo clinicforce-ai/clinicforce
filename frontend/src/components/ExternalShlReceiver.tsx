@@ -1,7 +1,7 @@
 import { useEffect, useState, type FormEvent } from 'react'
 import { ArrowLeft, CheckCircle2, FileCheck2, Globe2, KeyRound, LoaderCircle, ShieldAlert, ShieldCheck } from 'lucide-react'
 import { ApiError, getCurrentPatientSession, importExternalShl, type PatientSession } from '../services/api'
-import { receiveExternalShl, type ExternalShlReview } from '../services/externalShl'
+import { receiveExternalShl, type ExternalShlReview } from '../services/external-shl'
 import type { SmartHealthLink } from '../services/shl'
 
 interface ExternalShlReceiverProps {

@@ -23,4 +23,9 @@ AGENTS.md
 .aws/
 *.pem
 *.key
+*.insurance-case.local.json
+*.insurance-v2.local.json
+insurance-v2.local.json
+*.payer-plan-matrix.local.xlsx
+nmct-golden-patient.local.json
 design-system/
