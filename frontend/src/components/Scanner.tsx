@@ -93,15 +93,24 @@ export default function Scanner({ onScanned, onCancel }: ScannerProps) {
           },
         }
         const onSuccess = (decodedText: string) => { if (active) handleDecoded(decodedText) }
-        const preferredCamera = {
-          facingMode: { ideal: 'environment' }, width: { ideal: 1920 }, height: { ideal: 1440 },
-          advanced: [{ focusMode: 'continuous' }],
-        } as unknown as MediaTrackConstraints
-        try {
-          await reader.start(preferredCamera, scanConfig, onSuccess, () => undefined)
-        } catch {
-          // Some mobile browsers reject optional focus or resolution constraints.
-          await reader.start({ facingMode: { ideal: 'environment' } }, scanConfig, onSuccess, () => undefined)
+        const cameraOptions: MediaTrackConstraints[] = [
+          {
+            facingMode: { ideal: 'environment' }, width: { ideal: 1920 }, height: { ideal: 1440 },
+            advanced: [{ focusMode: 'continuous' }],
+          } as unknown as MediaTrackConstraints,
+          { facingMode: { ideal: 'environment' } },
+          {},
+        ]
+        let started = false
+        for (const camera of cameraOptions) {
+          try {
+            await reader.start(camera, scanConfig, onSuccess, () => undefined)
+            started = true
+            break
+          } catch { /* try the next supported camera configuration */ }
+        }
+        if (!started) {
+          throw new Error('No available camera could be started.')
         }
         if (active) setStatus('Keep the complete QR inside the frame and hold steady.')
       } catch (cameraError) {
