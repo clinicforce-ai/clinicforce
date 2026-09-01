@@ -38,9 +38,10 @@ jobs:
 
       - name: Validate backend source
         run: |
-          python3 -m pip install -r backend/requirements.txt pytest
-          python3 -m compileall -q backend/app
-          python3 -m pytest -q backend/tests
+          python3 -m venv .venv
+          .venv/bin/pip install -r backend/requirements.txt pytest
+          .venv/bin/python -m compileall -q backend/app
+          .venv/bin/python -m pytest -q backend/tests
 
       - name: Validate frontend
         working-directory: frontend
