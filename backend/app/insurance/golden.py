@@ -205,9 +205,10 @@ def read_card(content: bytes) -> dict[str, str]:
 def card_matches(fields: dict[str, str], manifest: dict[str, Any]) -> bool:
     identity = manifest["identity"]
     name_tokens = [part for part in re.split(r"\s+", fields.get("member_name", "").strip()) if part]
+    name_hashes = {_hash(part) for part in name_tokens}
     return len(name_tokens) >= 2 and all((
-        _hash(name_tokens[0]) == identity.get("given_name_sha256"),
-        _hash(name_tokens[-1]) == identity.get("family_name_sha256"),
+        identity.get("given_name_sha256") in name_hashes,
+        identity.get("family_name_sha256") in name_hashes,
         _hash(fields.get("member_id", "")) == identity.get("member_id_sha256"),
         _hash(fields.get("group_number", "")) == identity.get("group_number_sha256"),
     ))

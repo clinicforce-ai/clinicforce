@@ -266,6 +266,9 @@ class MainRouteTests(unittest.IsolatedAsyncioTestCase):
             "member_id": "MEMBER-123",
             "group_number": "GROUP-123",
         })
+        self.assertTrue(golden.card_matches({
+            **fields, "member_name": "PAT EXAMPLE Choice PPO Plan",
+        }, GOLDEN_MANIFEST))
 
     async def test_registered_ecw_jwks_url_serves_the_public_key_set(self) -> None:
         payload = {"keys": [{"kty": "RSA", "kid": "clinicforce-test-key"}]}
