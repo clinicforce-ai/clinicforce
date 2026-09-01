@@ -105,11 +105,30 @@ class MainRouteTests(unittest.IsolatedAsyncioTestCase):
         }, clear=False):
             token = golden.create_share_token("patient-1", "share-1")
             self.client.cookies.set("clinicforce_doctor_share", token, path="/api/doctor")
-            response = await self.client.post("/api/doctor/insurance/beta")
+            with patch("app.api.routers.insurance.golden.load_manifest", return_value=GOLDEN_MANIFEST), \
+                 patch("app.api.routers.insurance.get_patient_profile", return_value=MATCHABLE_PROFILE):
+                response = await self.client.post("/api/doctor/insurance/beta")
         self.assertEqual(response.status_code, 200, response.text)
         self.assertTrue(response.json()["beta_enabled"])
         self.assertIn("HttpOnly", response.headers["set-cookie"])
         self.assertIn("Max-Age=900", response.headers["set-cookie"])
+
+    async def test_beta_activation_identifies_a_mismatched_qr_before_card_upload(self) -> None:
+        different_profile = PatientProfile(
+            patient_id="patient-1", given_name="Different", family_name="Patient",
+            birth_date="1990-01-01", administrative_gender="unknown",
+        )
+        with patch.dict(os.environ, {
+            "INSURANCE_BETA_ENABLED": "true", "SOURCE_LINK_SECRET": "s" * 40,
+            "INSURANCE_GOLDEN_BUNDLE_KEY": "clinicforce/golden/test.zip",
+        }, clear=False):
+            token = golden.create_share_token("patient-1", "share-1")
+            self.client.cookies.set("clinicforce_doctor_share", token, path="/api/doctor")
+            with patch("app.api.routers.insurance.golden.load_manifest", return_value=GOLDEN_MANIFEST), \
+                 patch("app.api.routers.insurance.get_patient_profile", return_value=different_profile):
+                response = await self.client.post("/api/doctor/insurance/beta")
+        self.assertEqual(response.status_code, 422, response.text)
+        self.assertIn("opened QR patient does not match", response.json()["detail"])
 
     def test_insurance_session_expiry_malformed_files_and_bundle_hashes_fail_closed(self) -> None:
         with patch.dict(os.environ, {

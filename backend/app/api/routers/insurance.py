@@ -53,6 +53,16 @@ def _saved(case: dict | None) -> dict:
 @router.post("/beta")
 async def enable_beta(request: Request, response: Response) -> dict:
     session = _session(request, require_beta=False)
+    try:
+        manifest = await run_in_threadpool(golden.load_manifest)
+        profile = await run_in_threadpool(get_patient_profile, session["patient_id"])
+        if not golden.patient_matches(profile, manifest):
+            raise golden.GoldenCaseError(
+                "The opened QR patient does not match the reviewed golden case. "
+                "Open the matching patient QR before using insurance beta."
+            )
+    except golden.GoldenCaseError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     token = golden.create_share_token(session["patient_id"], session["share_manifest_id"], beta_enabled=True)
     response.set_cookie(
         CLINICIAN_SHARE_COOKIE, token, max_age=CLINICIAN_SHARE_MAX_AGE, httponly=True,
@@ -75,7 +85,10 @@ async def create_case(request: Request, file: UploadFile = File(...)) -> JSONRes
         manifest = await run_in_threadpool(golden.load_manifest)
         profile = await run_in_threadpool(get_patient_profile, session["patient_id"])
         if not golden.patient_matches(profile, manifest):
-            raise golden.GoldenCaseError("This beta supports only the reviewed BCBS/NMCT golden case")
+            raise golden.GoldenCaseError(
+                "The opened QR patient does not match the reviewed golden case. "
+                "Open the matching patient QR before uploading the insurance card."
+            )
         fields = await run_in_threadpool(golden.read_card, content)
         workflow = golden.pending_case(fields)
         workflow["evidence_manifest_id"] = manifest["manifest_id"]
