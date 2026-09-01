@@ -20,6 +20,10 @@ class InsuranceServiceLinesRequest(RequestModel):
     )
 
 
+class InsuranceClinicalContextRequest(RequestModel):
+    clinical_context: str = Field(min_length=3, max_length=1000)
+
+
 class InsuranceEvidenceRequest(RequestModel):
     clinic: Literal["NMCT"]
     payer: Literal["BCBSTX"]

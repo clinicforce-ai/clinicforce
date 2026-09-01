@@ -1356,14 +1356,9 @@ async def decrypt_and_summarize(request: DoctorSummaryRequest, response: Respons
         else:
             report_bytes = await run_in_threadpool(render_doctor_pdf_bytes, summary)
         if patient_id and insurance_beta_enabled():
-            conditions = [
-                " · ".join(value for value in (item.get("name"), item.get("details")) if isinstance(value, str) and value.strip())
-                for item in summary.get("conditions", [])
-                if isinstance(item, dict) and isinstance(item.get("name"), str)
-            ]
             response.set_cookie(
                 CLINICIAN_SHARE_COOKIE,
-                insurance_golden.create_share_token(str(patient_id), request.manifest_id, conditions=conditions),
+                insurance_golden.create_share_token(str(patient_id), request.manifest_id),
                 max_age=CLINICIAN_SHARE_MAX_AGE,
                 httponly=True,
                 secure=PUBLIC_BASE_URL.startswith("https://"),

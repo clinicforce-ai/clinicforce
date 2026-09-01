@@ -34,8 +34,8 @@ def card_matches_patient(fields: dict[str, str], profile: Any) -> bool:
     return _normalized(profile.given_name) in tokens and _normalized(profile.family_name) in tokens
 
 
-def service_lines(conditions: list[str], rate_lines: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    condition_text = " ".join(conditions).casefold()
+def service_lines(clinical_context: str, rate_lines: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    condition_text = clinical_context.casefold()
     codes = {"99202", "99203", "99204", "99205"}
     if any(term in condition_text for term in NEURODIAGNOSTIC_TERMS):
         codes.update(NEURODIAGNOSTIC_CODES)
@@ -45,7 +45,7 @@ def service_lines(conditions: list[str], rate_lines: list[dict[str, Any]]) -> li
             "selected": line["code"] == "99204",
             "confirmed": False,
             "available": True,
-            "suggested_by": "New-patient visit" if line["code"].startswith("992") else "Shared condition",
+            "suggested_by": "New-patient visit" if line["code"].startswith("992") else "Clinician-entered context",
         }
         for line in rate_lines
         if line["code"] in codes
@@ -53,11 +53,11 @@ def service_lines(conditions: list[str], rate_lines: list[dict[str, Any]]) -> li
     return lines
 
 
-def pending_case(fields: dict[str, str], conditions: list[str], rate_lines: list[dict[str, Any]]) -> dict[str, Any]:
+def pending_case(fields: dict[str, str]) -> dict[str, Any]:
     return {
         "source_mode": "documents", "status": "review", "next_stage": "intake",
-        "ocr": {**fields, "confirmed": False}, "conditions": conditions, "documents": {},
-        "appointment": None, "coverage": None, "service_lines": service_lines(conditions, rate_lines),
+        "ocr": {**fields, "confirmed": False}, "clinical_context": "", "documents": {},
+        "appointment": None, "coverage": None, "service_lines": [],
         "stage_decisions": [], "facts": [], "sources": [], "estimate": None,
     }
 
@@ -65,8 +65,7 @@ def pending_case(fields: dict[str, str], conditions: list[str], rate_lines: list
 def confirm_intake(case: dict[str, Any], profile: Any, fields: dict[str, str]) -> dict[str, Any]:
     if not card_matches_patient(fields, profile):
         raise GoldenCaseError("The member name on the card must match the patient opened from the QR")
-    conditions = case.get("conditions", [])
-    reason = ", ".join(conditions[:3]) if conditions else "Neurology consultation"
+    reason = "Neurology consultation"
     source = _citation("Patient QR", "Shared Patient and Condition resources", hashlib.sha256(case["id"].encode()).hexdigest())
     case.update({
         "status": "in_progress", "next_stage": "eligibility", "ocr": {**fields, "confirmed": True},
@@ -79,9 +78,19 @@ def confirm_intake(case: dict[str, Any], profile: Any, fields: dict[str, str]) -
         },
         "facts": [
             _fact("intake", "Patient and card", "QR patient name matches the reviewed member-card name", source),
-            _fact("intake", "Shared conditions", reason, source),
         ],
     })
+    return case
+
+
+def set_clinical_context(case: dict[str, Any], value: str, rate_lines: list[dict[str, Any]]) -> dict[str, Any]:
+    if case.get("next_stage") != "service":
+        raise GoldenCaseError("Complete network review before requesting CPT suggestions")
+    context = " ".join(value.split()).strip()
+    if len(context) < 3:
+        raise GoldenCaseError("Enter the conditions or symptoms for this anticipated visit")
+    case["clinical_context"] = context
+    case["service_lines"] = service_lines(context, rate_lines)
     return case
 
 

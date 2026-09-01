@@ -6,7 +6,10 @@ from fastapi import APIRouter, File, HTTPException, Request, Response, UploadFil
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import JSONResponse
 
-from app.api.schemas import InsuranceEvidenceRequest, InsuranceIntakeRequest, InsuranceServiceLinesRequest
+from app.api.schemas import (
+    InsuranceClinicalContextRequest, InsuranceEvidenceRequest, InsuranceIntakeRequest,
+    InsuranceServiceLinesRequest,
+)
 from app.api.settings import (
     CLINICIAN_SHARE_COOKIE, CLINICIAN_SHARE_MAX_AGE, MAX_INSURANCE_CARD_BYTES, MAX_UPLOAD_BYTES,
     PUBLIC_BASE_URL, insurance_beta_enabled,
@@ -58,7 +61,6 @@ async def enable_beta(request: Request, response: Response) -> dict:
         raise HTTPException(status_code=422, detail="The opened QR patient no longer has a matching ClinicForce profile")
     token = golden.create_share_token(
         session["patient_id"], session["share_manifest_id"], beta_enabled=True,
-        conditions=session.get("conditions", []),
     )
     response.set_cookie(
         CLINICIAN_SHARE_COOKIE, token, max_age=CLINICIAN_SHARE_MAX_AGE, httponly=True,
@@ -86,7 +88,7 @@ async def create_case(request: Request, file: UploadFile = File(...)) -> JSONRes
         else:
             if not documented.card_matches_patient(fields, profile):
                 raise golden.GoldenCaseError("The member name on the card must match the patient opened from the QR")
-            workflow = documented.pending_case(fields, session.get("conditions", []), manifest.get("rate_lines", []))
+            workflow = documented.pending_case(fields)
         workflow["evidence_manifest_id"] = manifest["manifest_id"]
         case = await run_in_threadpool(
             store.create_case, session["patient_id"], session["share_manifest_id"], manifest["manifest_id"], workflow,
@@ -179,6 +181,25 @@ async def confirm_service(case_id: str, selection: InsuranceServiceLinesRequest,
         else:
             documented.select_services(case, selection.codes, manifest["rates_source"])
         saved = await run_in_threadpool(store.save_case, case, session["patient_id"], session["share_manifest_id"], "service")
+        return _response(_saved(saved))
+    except golden.GoldenCaseError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.put("/cases/{case_id}/clinical-context")
+async def suggest_services(
+    case_id: str, request_body: InsuranceClinicalContextRequest, request: Request,
+) -> JSONResponse:
+    session = _session(request)
+    case = await run_in_threadpool(_load_case, case_id, session)
+    if case.get("source_mode") != "documents":
+        raise HTTPException(status_code=409, detail="The golden case uses its reviewed appointment evidence")
+    try:
+        manifest = await run_in_threadpool(golden.load_manifest)
+        documented.set_clinical_context(case, request_body.clinical_context, manifest.get("rate_lines", []))
+        saved = await run_in_threadpool(
+            store.save_case, case, session["patient_id"], session["share_manifest_id"], "clinical-context",
+        )
         return _response(_saved(saved))
     except golden.GoldenCaseError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc

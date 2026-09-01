@@ -81,6 +81,13 @@ export async function confirmInsuranceService(caseId: string, codes: string[]): 
   })
 }
 
+export async function suggestInsuranceServices(caseId: string, clinicalContext: string): Promise<InsuranceCase> {
+  return request<InsuranceCase>(`/api/doctor/insurance/cases/${encodeURIComponent(caseId)}/clinical-context`, {
+    method: 'PUT', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ clinical_context: clinicalContext }),
+  })
+}
+
 export async function uploadInsuranceEvidence(caseId: string, kind: 'eligibility' | 'contract', file: File): Promise<InsuranceCase> {
   const form = new FormData()
   form.append('file', file, file.name)

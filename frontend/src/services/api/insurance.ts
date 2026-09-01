@@ -29,7 +29,7 @@ export interface InsuranceCase {
   expires_at: string; ocr: { member_name: string; member_id: string; group_number: string; confirmed: boolean }
   appointment: NormalizedAppointment | null; service_lines: ServiceLine[]; stage_decisions: StageDecision[]
   facts: EvidenceFact[]; sources: InsuranceSource[]; estimate: EstimateBreakdown | null
-  conditions?: string[]; documents?: Record<string, InsuranceSource & { reference?: string }>
+  clinical_context?: string; documents?: Record<string, InsuranceSource & { reference?: string }>
 }
 
 export interface InsuranceEvidenceInput {

@@ -56,15 +56,11 @@ def evidence_binding() -> str:
     return hashlib.sha256((key or path).encode()).hexdigest()
 
 
-def create_share_token(
-    patient_id: str, share_manifest_id: str, beta_enabled: bool = False,
-    conditions: list[str] | None = None,
-) -> str:
+def create_share_token(patient_id: str, share_manifest_id: str, beta_enabled: bool = False) -> str:
     now = datetime.now(timezone.utc)
     payload = json.dumps({
         "v": 1, "patient_id": patient_id, "share_manifest_id": share_manifest_id,
         "evidence_binding": evidence_binding(), "beta_enabled": beta_enabled,
-        "conditions": [value.strip()[:100] for value in (conditions or []) if value.strip()][:20],
         "exp": int((now + COOKIE_TTL).timestamp()),
     }, separators=(",", ":"), sort_keys=True).encode()
     nonce = os.urandom(12)

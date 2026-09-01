@@ -232,7 +232,7 @@ class MainRouteTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(final.json()["estimate"]["plan_cents"], 15160)
         self.assertEqual(final.json()["status"], "complete")
 
-    async def test_document_backed_api_scenario_requires_both_pdfs_and_uses_qr_conditions(self) -> None:
+    async def test_document_backed_api_scenario_requires_evidence_and_clinician_context(self) -> None:
         cases: dict[str, dict] = {}
         profile = PatientProfile(
             patient_id="patient-2", given_name="Jordan", family_name="Rivera",
@@ -265,7 +265,6 @@ class MainRouteTests(unittest.IsolatedAsyncioTestCase):
                 "clinicforce_doctor_share",
                 golden.create_share_token(
                     "patient-2", "share-2", beta_enabled=True,
-                    conditions=["Burning, numbness and tingling in both feet"],
                 ),
                 path="/api/doctor",
             )
@@ -279,7 +278,7 @@ class MainRouteTests(unittest.IsolatedAsyncioTestCase):
                 created = await self.client.post("/api/doctor/insurance/cases", files={"file": ("card.png", b"png", "image/png")})
                 self.assertEqual(created.status_code, 200, created.text)
                 self.assertEqual(created.json()["source_mode"], "documents")
-                self.assertIn("95886", {line["code"] for line in created.json()["service_lines"]})
+                self.assertEqual(created.json()["service_lines"], [])
                 reviewed = await self.client.put("/api/doctor/insurance/cases/case-docs/intake", json={
                     "member_name": "JORDAN RIVERA", "member_id": "BCBS-456", "group_number": "GROUP-789",
                 })
@@ -300,6 +299,12 @@ class MainRouteTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(evidence.status_code, 200, evidence.text)
                 network = await self.client.post("/api/doctor/insurance/cases/case-docs/stages/network")
                 self.assertEqual(network.status_code, 200, network.text)
+                suggested = await self.client.put(
+                    "/api/doctor/insurance/cases/case-docs/clinical-context",
+                    json={"clinical_context": "Burning, numbness and tingling in both feet"},
+                )
+                self.assertEqual(suggested.status_code, 200, suggested.text)
+                self.assertIn("95886", {line["code"] for line in suggested.json()["service_lines"]})
                 selected = await self.client.put(
                     "/api/doctor/insurance/cases/case-docs/service-lines", json={"codes": ["99204", "95886"]},
                 )
@@ -351,11 +356,11 @@ class MainRouteTests(unittest.IsolatedAsyncioTestCase):
             birth_date="1991-02-03", administrative_gender="unknown",
         )
         fields = {"member_name": "JORDAN RIVERA", "member_id": "BCBS-456", "group_number": "GROUP-789"}
-        case = documented.pending_case(fields, ["Burning, numbness and tingling in both feet"], GOLDEN_MANIFEST["rate_lines"])
+        case = documented.pending_case(fields)
         case["id"] = "case-docs"
         documented.confirm_intake(case, profile, fields)
         self.assertEqual(case["next_stage"], "eligibility")
-        self.assertIn("95886", {line["code"] for line in case["service_lines"]})
+        self.assertEqual(case["service_lines"], [])
         documented.add_document(case, "eligibility", {
             "id": "eligibility", "filename": "eligibility.pdf", "sha256": "b" * 64,
             "observed_at": "2026-08-24", "reference": "Patient eligibility response",
@@ -372,6 +377,10 @@ class MainRouteTests(unittest.IsolatedAsyncioTestCase):
             "referral_status": "not_required", "authorization_status": "not_required",
         })
         documented.advance(case, "network", GOLDEN_MANIFEST["rates_source"])
+        documented.set_clinical_context(
+            case, "Burning, numbness and tingling in both feet", GOLDEN_MANIFEST["rate_lines"],
+        )
+        self.assertIn("95886", {line["code"] for line in case["service_lines"]})
         documented.select_services(case, ["99204", "95886"], GOLDEN_MANIFEST["rates_source"])
         documented.advance(case, "authorization", GOLDEN_MANIFEST["rates_source"])
         documented.advance(case, "benefits", GOLDEN_MANIFEST["rates_source"])
@@ -386,7 +395,7 @@ class MainRouteTests(unittest.IsolatedAsyncioTestCase):
             documented.select_services(duplicate_office, ["99203", "99204"], GOLDEN_MANIFEST["rates_source"])
 
     def test_document_fallback_accepts_free_text_and_validates_patient_evidence(self) -> None:
-        generic = documented.service_lines(["A concern not present in the reviewed procedure rules"], GOLDEN_MANIFEST["rate_lines"])
+        generic = documented.service_lines("A concern not present in the reviewed procedure rules", GOLDEN_MANIFEST["rate_lines"])
         self.assertEqual({line["code"] for line in generic}, {"99202", "99203", "99204", "99205"})
 
         def pdf(text: str) -> bytes:

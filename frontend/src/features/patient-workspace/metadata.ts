@@ -33,7 +33,7 @@ export const categoryMeta: Record<RecordCategory, { label: string; help: string;
   hospital: { label: 'Care visit', help: 'A hospital, clinic, or care-team visit', icon: '01' },
   lab: { label: 'Lab result', help: 'A test name and result', icon: '02' },
   vital: { label: 'Vital sign', help: 'A measurement such as blood pressure', icon: '03' },
-  condition: { label: 'Condition or symptoms', help: 'Describe what you are going through. It will be shared by QR so the clinician can review possible CPT candidates.', icon: '04' },
+  condition: { label: 'Condition', help: 'A diagnosis or ongoing condition', icon: '04' },
   allergy: { label: 'Allergy', help: 'An allergy or intolerance', icon: '05' },
   medication: { label: 'Medication', help: 'A medication you currently take', icon: '06' },
 }
