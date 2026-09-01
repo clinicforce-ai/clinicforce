@@ -7,7 +7,7 @@ WORKDIR /app
 # Copy the requirements file and install dependencies
 COPY requirements.txt .
 
-# Install WeasyPrint system dependencies
+# Install WeasyPrint dependencies and local insurance-card OCR.
 RUN apt-get update && apt-get install -y \
     libpango-1.0-0 \
     libharfbuzz0b \
@@ -15,6 +15,7 @@ RUN apt-get update && apt-get install -y \
     libglib2.0-0 \
     libffi-dev \
     shared-mime-info \
+    tesseract-ocr \
     && rm -rf /var/lib/apt/lists/*
 
 RUN pip install --no-cache-dir -r requirements.txt

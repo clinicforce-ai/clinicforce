@@ -1,152 +1,135 @@
-"""Local-only clinician insurance-review endpoints."""
+"""Clinician-only golden insurance beta endpoints."""
 
-from hashlib import sha256
 from pathlib import Path
-from fastapi import APIRouter, File, Form, HTTPException, UploadFile, status
+
+from fastapi import APIRouter, File, HTTPException, Request, Response, UploadFile, status
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import JSONResponse
 
-from app.api.schemas import InsuranceDemoStageRequest, InsuranceEstimateDemoRequest, InsuranceV2DocumentReviewRequest, InsuranceV2StageRequest
-from app.api.settings import MAX_INSURANCE_CARD_BYTES, MAX_INSURANCE_EVIDENCE_BYTES, insurance_demo_enabled
-from app.insurance import demo as insurance_demo
-from app.insurance import local_v2
-from app.ingestion.pdf_parser import extract_text_from_pdf_bytes
-
-router = APIRouter(prefix="/api/clinician/insurance", tags=["clinician-insurance"])
-_NO_STORE_HEADERS = {"Cache-Control": "no-store", "Pragma": "no-cache"}
-
-
-def _require_local_insurance_mode() -> None:
-    if not insurance_demo_enabled():
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Insurance verification is not enabled")
+from app.api.schemas import InsuranceIntakeRequest, InsuranceServiceLinesRequest
+from app.api.settings import (
+    CLINICIAN_SHARE_COOKIE, CLINICIAN_SHARE_MAX_AGE, MAX_INSURANCE_CARD_BYTES,
+    PUBLIC_BASE_URL, insurance_beta_enabled,
+)
+from app.core.patient_store import get_patient_profile
+from app.insurance import golden, store
 
 
-async def _local_v2_document(kind: str, upload: UploadFile | None) -> dict | None:
-    if upload is None:
-        return None
-    filename = Path(upload.filename or "insurance-document.pdf").name
-    if Path(filename).suffix.lower() != ".pdf":
-        raise HTTPException(status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE, detail="Local V2 accepts PDF printouts only")
-    content = await upload.read(MAX_INSURANCE_EVIDENCE_BYTES + 1)
-    if len(content) > MAX_INSURANCE_EVIDENCE_BYTES:
-        raise HTTPException(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail="Insurance evidence documents must be 25 MB or smaller")
+router = APIRouter(prefix="/api/doctor/insurance", tags=["doctor-insurance"])
+_NO_STORE = {"Cache-Control": "no-store", "Pragma": "no-cache"}
+
+
+def _enabled() -> None:
+    if not insurance_beta_enabled():
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Insurance beta is not enabled")
+
+
+def _session(request: Request, require_beta: bool = True) -> dict:
+    _enabled()
     try:
-        text = await extract_text_from_pdf_bytes(content)
-    except Exception as exc:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="The uploaded file is not a readable PDF printout") from exc
-    try:
-        document = await run_in_threadpool(local_v2.extract_document, kind, filename, text)
-        document["content_sha256"] = sha256(content).hexdigest()
-        return document
-    except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+        return golden.open_share_token(request.cookies.get(CLINICIAN_SHARE_COOKIE, ""), require_beta)
+    except golden.GoldenCaseError as exc:
+        code = status.HTTP_403_FORBIDDEN if require_beta else status.HTTP_401_UNAUTHORIZED
+        raise HTTPException(status_code=code, detail=str(exc)) from exc
 
 
-@router.post("/local-v2/cases")
-async def create_local_v2_case(
-    patient_label: str = Form(""), insurance_card: UploadFile | None = File(None),
-) -> JSONResponse:
-    """Start a local case with only its first required document."""
-    _require_local_insurance_mode()
-    document = await _local_v2_document("insurance_card", insurance_card)
-    try:
-        case = await run_in_threadpool(local_v2.create_case, patient_label, [document] if document else [])
-    except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
-    return JSONResponse(case, headers=_NO_STORE_HEADERS)
+def _response(payload: dict) -> JSONResponse:
+    return JSONResponse(payload, headers=_NO_STORE)
 
 
-@router.get("/local-v2/cases/{case_id}")
-async def get_local_v2_case(case_id: str) -> JSONResponse:
-    _require_local_insurance_mode()
-    try:
-        return JSONResponse(await run_in_threadpool(local_v2.get_case, case_id), headers=_NO_STORE_HEADERS)
-    except KeyError as exc:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+def _load_case(case_id: str, session: dict) -> dict:
+    case = store.get_case(case_id, session["patient_id"], session["share_manifest_id"])
+    if case is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Insurance case not found or expired")
+    return case
 
 
-@router.post("/local-v2/cases/{case_id}/documents")
-async def add_local_v2_document(case_id: str, kind: str = Form(...), file: UploadFile = File(...)) -> JSONResponse:
-    _require_local_insurance_mode()
-    if kind not in local_v2.DOCUMENT_KINDS:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Unsupported insurance document type")
-    document = await _local_v2_document(kind, file)
-    try:
-        return JSONResponse(await run_in_threadpool(local_v2.add_document, case_id, document), headers=_NO_STORE_HEADERS)
-    except KeyError as exc:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+def _saved(case: dict | None) -> dict:
+    if case is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Insurance case not found or expired")
+    return case
 
 
-@router.put("/local-v2/cases/{case_id}/documents/{document_id}")
-async def review_local_v2_document(case_id: str, document_id: str, request: InsuranceV2DocumentReviewRequest) -> JSONResponse:
-    _require_local_insurance_mode()
-    try:
-        return JSONResponse(await run_in_threadpool(local_v2.review_document, case_id, document_id, request.fields), headers=_NO_STORE_HEADERS)
-    except KeyError as exc:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+@router.post("/beta")
+async def enable_beta(request: Request, response: Response) -> dict:
+    session = _session(request, require_beta=False)
+    token = golden.create_share_token(session["patient_id"], session["share_manifest_id"], beta_enabled=True)
+    response.set_cookie(
+        CLINICIAN_SHARE_COOKIE, token, max_age=CLINICIAN_SHARE_MAX_AGE, httponly=True,
+        secure=PUBLIC_BASE_URL.startswith("https://"), samesite="lax", path="/api/doctor",
+    )
+    response.headers.update(_NO_STORE)
+    return {"beta_enabled": True, "expires_in_seconds": CLINICIAN_SHARE_MAX_AGE}
 
 
-@router.post("/local-v2/cases/{case_id}/stages/{stage}")
-async def run_local_v2_stage(case_id: str, stage: str, request: InsuranceV2StageRequest) -> JSONResponse:
-    _require_local_insurance_mode()
-    try:
-        result = await run_in_threadpool(local_v2.run_stage, case_id, stage, request.service)
-    except KeyError as exc:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
-    except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
-    return JSONResponse(result, headers=_NO_STORE_HEADERS)
-
-
-@router.post("/demo-card")
-async def verify_demo_insurance_card(
-    file: UploadFile = File(...),
-) -> JSONResponse:
-    """Exercise the UI without retaining a card or contacting a payer."""
-    if not insurance_demo_enabled():
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Insurance verification is not enabled")
+@router.post("/cases")
+async def create_case(request: Request, file: UploadFile = File(...)) -> JSONResponse:
+    session = _session(request)
     filename = Path(file.filename or "insurance-card").name
-    if Path(filename).suffix.lower() not in {".jpg", ".jpeg", ".png", ".pdf"}:
-        raise HTTPException(status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE, detail="Upload a JPG, PNG, or PDF insurance card")
+    if Path(filename).suffix.lower() not in {".pdf", ".jpg", ".jpeg", ".png"}:
+        raise HTTPException(status_code=415, detail="Upload a PDF, JPG, or PNG insurance card")
     content = await file.read(MAX_INSURANCE_CARD_BYTES + 1)
     if len(content) > MAX_INSURANCE_CARD_BYTES:
-        raise HTTPException(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail="Insurance card files must be 10 MB or smaller")
+        raise HTTPException(status_code=413, detail="Insurance card files must be 10 MB or smaller")
     try:
-        insurance_demo.validate_local_card_upload(content)
-        payload = insurance_demo.verification()
-    except insurance_demo.InsuranceCardContentError as exc:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
-    except insurance_demo.LocalCaseError as exc:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
-    payload["card_scan"] = {"filename": filename, "status": "document_evidence_applied", "retention": "Not stored. No OCR or payer request was made."}
-    return JSONResponse(payload, headers=_NO_STORE_HEADERS)
-
-
-@router.post("/demo-estimate")
-async def estimate_demo_service(request: InsuranceEstimateDemoRequest) -> JSONResponse:
-    """Return the document-backed, review-gated estimate state."""
-    if not insurance_demo_enabled():
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Insurance verification is not enabled")
-    try:
-        payload = insurance_demo.service_estimate(
-            reason=request.reason, anticipated_service=request.anticipated_service,
-            referral_status=request.referral_status, authorization_status=request.authorization_status,
+        manifest = await run_in_threadpool(golden.load_manifest)
+        profile = await run_in_threadpool(get_patient_profile, session["patient_id"])
+        if not golden.patient_matches(profile, manifest):
+            raise golden.GoldenCaseError("This beta supports only the reviewed BCBS/NMCT golden case")
+        fields = await run_in_threadpool(golden.read_card, content)
+        workflow = golden.pending_case(fields)
+        workflow["evidence_manifest_id"] = manifest["manifest_id"]
+        case = await run_in_threadpool(
+            store.create_case, session["patient_id"], session["share_manifest_id"], manifest["manifest_id"], workflow,
         )
-    except insurance_demo.LocalCaseError as exc:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
-    return JSONResponse(payload, headers=_NO_STORE_HEADERS)
+        return _response(case)
+    except golden.GoldenCaseError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail="Insurance card OCR is temporarily unavailable") from exc
 
 
-@router.post("/demo-stage")
-async def run_demo_insurance_stage(request: InsuranceDemoStageRequest) -> JSONResponse:
-    """Run one reviewed local flowchart stage without contacting an external system."""
-    if not insurance_demo_enabled():
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Insurance verification is not enabled")
+@router.get("/cases/{case_id}")
+async def get_case(case_id: str, request: Request) -> JSONResponse:
+    return _response(await run_in_threadpool(_load_case, case_id, _session(request)))
+
+
+@router.put("/cases/{case_id}/intake")
+async def confirm_intake(case_id: str, review: InsuranceIntakeRequest, request: Request) -> JSONResponse:
+    session = _session(request)
+    case = await run_in_threadpool(_load_case, case_id, session)
     try:
-        payload = insurance_demo.workbench_stage(
-            request.stage, reason=request.reason, anticipated_service=request.anticipated_service,
-            referral_status=request.referral_status, authorization_status=request.authorization_status,
-        )
-    except insurance_demo.LocalCaseError as exc:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
-    return JSONResponse(payload, headers=_NO_STORE_HEADERS)
+        manifest = await run_in_threadpool(golden.load_manifest)
+        if case.get("evidence_manifest_id") != manifest["manifest_id"]:
+            raise golden.GoldenCaseError("The reviewed evidence bundle changed; start a new case")
+        golden.unlock_case(case, manifest, review.model_dump())
+        saved = await run_in_threadpool(store.save_case, case, session["patient_id"], session["share_manifest_id"], "intake")
+        return _response(_saved(saved))
+    except golden.GoldenCaseError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.put("/cases/{case_id}/service-lines")
+async def confirm_service(case_id: str, selection: InsuranceServiceLinesRequest, request: Request) -> JSONResponse:
+    session = _session(request)
+    case = await run_in_threadpool(_load_case, case_id, session)
+    try:
+        manifest = await run_in_threadpool(golden.load_manifest)
+        golden.select_service(case, selection.code, manifest)
+        saved = await run_in_threadpool(store.save_case, case, session["patient_id"], session["share_manifest_id"], "service")
+        return _response(_saved(saved))
+    except golden.GoldenCaseError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.post("/cases/{case_id}/stages/{stage}")
+async def run_stage(case_id: str, stage: str, request: Request) -> JSONResponse:
+    session = _session(request)
+    case = await run_in_threadpool(_load_case, case_id, session)
+    try:
+        manifest = await run_in_threadpool(golden.load_manifest)
+        golden.advance(case, stage, manifest)
+        saved = await run_in_threadpool(store.save_case, case, session["patient_id"], session["share_manifest_id"], stage)
+        return _response(_saved(saved))
+    except golden.GoldenCaseError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc

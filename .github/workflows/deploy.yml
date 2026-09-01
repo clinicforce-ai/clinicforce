@@ -105,7 +105,9 @@ jobs:
               ParameterKey=GoogleOAuthClientId,UsePreviousValue=true \
               ParameterKey=GoogleOAuthClientSecretArn,UsePreviousValue=true \
               ParameterKey=EpicClientId,UsePreviousValue=true \
-              ParameterKey=EcwClientId,UsePreviousValue=true
+              ParameterKey=EcwClientId,UsePreviousValue=true \
+              ParameterKey=InsuranceBetaEnabled,UsePreviousValue=true \
+              ParameterKey=InsuranceGoldenBundleKey,UsePreviousValue=true
           aws cloudformation wait stack-update-complete --stack-name "$STACK_NAME"
           aws ecs wait services-stable --cluster clinicforce-production --services backend hapi
 

@@ -1,6 +1,8 @@
 """Validated HTTP contracts."""
 
-from .insurance import InsuranceDemoStageRequest, InsuranceEstimateDemoRequest, InsuranceV2DocumentReviewRequest, InsuranceV2StageRequest
+from .insurance import (
+    InsuranceIntakeRequest, InsuranceServiceLinesRequest,
+)
 from .integrations import EcwAuthorizeRequest, EpicAuthorizeRequest, IntegrationTestRequest
 from .patients import (
     DocumentBatchRequest,
@@ -18,8 +20,7 @@ from .sharing import (
 
 __all__ = [
     "DoctorSummaryRequest", "DocumentBatchRequest", "EcwAuthorizeRequest", "EpicAuthorizeRequest",
-    "ExternalShlImportRequest", "GeneratePatientLinkRequest", "InsuranceDemoStageRequest", "InsuranceEstimateDemoRequest",
-    "InsuranceV2DocumentReviewRequest", "InsuranceV2StageRequest",
+    "ExternalShlImportRequest", "GeneratePatientLinkRequest", "InsuranceIntakeRequest", "InsuranceServiceLinesRequest",
     "IntegrationTestRequest", "ManifestRequest", "ManualRecordRequest", "PatientCredentials",
     "PatientProfileRequest", "StoragePreferenceRequest",
 ]

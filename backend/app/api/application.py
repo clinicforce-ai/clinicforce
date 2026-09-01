@@ -120,7 +120,7 @@ from app.domain.documents.filenames import (
 )
 from app.api.schemas import (
     DoctorSummaryRequest, DocumentBatchRequest, EcwAuthorizeRequest, EpicAuthorizeRequest,
-    ExternalShlImportRequest, GeneratePatientLinkRequest, InsuranceEstimateDemoRequest,
+    ExternalShlImportRequest, GeneratePatientLinkRequest,
     IntegrationTestRequest, ManifestRequest, ManualRecordRequest, PatientCredentials,
     PatientProfileRequest, StoragePreferenceRequest,
 )
@@ -131,10 +131,11 @@ from app.api.settings import (
     EPIC_ENDPOINT_SYNC_INTERVAL_SECONDS, EPIC_LIVE_SESSION_COOKIE, EPIC_OAUTH_STATE_COOKIE,
     EXCHANGE_RESOURCE_TYPES as _EXCHANGE_RESOURCE_TYPES, FHIR_SOURCE_TAG_SYSTEM,
     FHIR_VERIFICATION_TAG_SYSTEM, MAX_BULK_DOWNLOAD_BYTES, MAX_BULK_DOWNLOAD_DOCUMENTS,
-    MAX_UPLOAD_BYTES, PATIENT_SESSION_COOKIE,
+    CLINICIAN_SHARE_COOKIE, CLINICIAN_SHARE_MAX_AGE, MAX_UPLOAD_BYTES, PATIENT_SESSION_COOKIE,
     PATIENT_SESSION_MAX_AGE, PUBLIC_BASE_URL, SHL_SHARE_TTL_SECONDS,
-    SOURCE_TAGS as _SOURCE_TAGS,
+    SOURCE_TAGS as _SOURCE_TAGS, insurance_beta_enabled,
 )
+from app.insurance import golden as insurance_golden
 
 
 _epic_endpoint_sync_task: asyncio.Task[None] | None = None
@@ -1319,7 +1320,7 @@ async def retrieve_manifest(manifest_id: str, request: ManifestRequest) -> dict[
 
 
 @app.post("/api/doctor/decrypt-and-summarize")
-async def decrypt_and_summarize(request: DoctorSummaryRequest) -> dict[str, Any]:
+async def decrypt_and_summarize(request: DoctorSummaryRequest, response: Response) -> dict[str, Any]:
     """Build a dashboard from the stored QR manifest, never browser-supplied FHIR."""
     try:
         try:
@@ -1354,6 +1355,17 @@ async def decrypt_and_summarize(request: DoctorSummaryRequest) -> dict[str, Any]
                 report_bytes = await run_in_threadpool(render_doctor_pdf_bytes, summary)
         else:
             report_bytes = await run_in_threadpool(render_doctor_pdf_bytes, summary)
+        if patient_id and insurance_beta_enabled():
+            response.set_cookie(
+                CLINICIAN_SHARE_COOKIE,
+                insurance_golden.create_share_token(str(patient_id), request.manifest_id),
+                max_age=CLINICIAN_SHARE_MAX_AGE,
+                httponly=True,
+                secure=PUBLIC_BASE_URL.startswith("https://"),
+                samesite="lax",
+                path="/api/doctor",
+            )
+            response.headers.update({"Cache-Control": "no-store", "Pragma": "no-cache"})
         return {
             "summary": summary,
             "pdf_url": "data:application/pdf;base64," + base64.b64encode(report_bytes).decode("ascii"),

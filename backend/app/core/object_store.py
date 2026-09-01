@@ -59,6 +59,14 @@ def get_pdf(key: str) -> bytes:
     return response["Body"].read()
 
 
+def get_object_bytes(key: str) -> bytes:
+    """Read an opaque private object without assuming its content type."""
+    if not S3_BUCKET:
+        raise RuntimeError("S3_BUCKET must be configured for S3 storage")
+    response = boto3.client("s3").get_object(Bucket=S3_BUCKET, Key=key)
+    return response["Body"].read()
+
+
 def delete_object(key: str) -> None:
     """Remove an orphaned upload when a later persistence step fails."""
     if S3_BUCKET:

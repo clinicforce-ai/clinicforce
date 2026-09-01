@@ -1,217 +1,141 @@
-import { ArrowLeft, CheckCircle2, Play, ShieldCheck, Upload } from 'lucide-react'
-import { useState, type ChangeEvent } from 'react'
+import { ArrowLeft, Camera, Check, FileCheck2, LoaderCircle, ShieldCheck, Upload } from 'lucide-react'
+import { useState } from 'react'
 import {
-  ApiError,
-  addLocalV2Document,
-  createLocalV2Case,
-  reviewLocalV2Document,
-  runLocalV2Stage,
-  type LocalV2Case,
-  type LocalV2Document,
-  type LocalV2DocumentKind,
-  type LocalV2StageResult,
+  confirmInsuranceIntake, confirmInsuranceService, createInsuranceCase, runInsuranceStage,
+  type InsuranceCase, type InsuranceStage,
 } from '../services/api'
 
-interface InsuranceVerificationProps {
-  onBack: () => void
+interface Props { onBack: () => void }
+const steps: Array<{ id: InsuranceStage; label: string }> = [
+  { id: 'intake', label: 'Intake' }, { id: 'eligibility', label: 'Eligibility' },
+  { id: 'network', label: 'Network' }, { id: 'service', label: 'Anticipated service' },
+  { id: 'authorization', label: 'Referral & authorization' },
+  { id: 'benefits', label: 'Rate & benefits' }, { id: 'estimate', label: 'Estimate' },
+]
+const stageCopy: Record<Exclude<InsuranceStage, 'intake' | 'service'>, { title: string; detail: string; action: string }> = {
+  eligibility: { title: 'Active medical coverage', detail: 'Review the dated medical benefit response and the individual—not family—accumulators.', action: 'Confirm eligibility' },
+  network: { title: 'Provider and location match', detail: 'Network status comes from the provider query, agreement, and payer matrix—not from the member card.', action: 'Confirm network' },
+  authorization: { title: 'Separate referral and authorization checks', detail: 'The PPO referral rule and CPT-specific authorization response are independently sourced.', action: 'Confirm requirements' },
+  benefits: { title: 'Contracted rate and benefit arithmetic', detail: 'Apply the selected fee-schedule rate, nominal coinsurance, and individual out-of-pocket cap.', action: 'Calculate estimate' },
+  estimate: { title: 'Pre-visit estimate', detail: 'Show the collection amount first, then the complete evidence-backed explanation.', action: 'Complete estimate' },
 }
 
-type WorkflowStep = 'insurance_details' | 'eligibility' | 'network' | 'service' | 'authorization' | 'fee_schedule' | 'calculation'
+const money = (cents: number) => new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(cents / 100)
 
-const steps: WorkflowStep[] = ['insurance_details', 'eligibility', 'network', 'service', 'authorization', 'fee_schedule', 'calculation']
-const labels: Record<WorkflowStep, string> = {
-  insurance_details: 'Insurance details',
-  eligibility: 'Eligibility',
-  network: 'Network status',
-  service: 'Anticipated service',
-  authorization: 'Referral and prior authorization',
-  fee_schedule: 'Fee schedule',
-  calculation: 'Patient responsibility',
-}
-const documentForStep: Partial<Record<WorkflowStep, { kind: LocalV2DocumentKind; label: string; help: string; exclude: string }>> = {
-  insurance_details: { kind: 'insurance_card', label: 'Insurance-card PDF', help: 'Member ID card for this patient. If there are two sides, combine them into one PDF.', exclude: 'Do not use an eligibility printout or provider agreement.' },
-  eligibility: { kind: 'eligibility_printout', label: 'Dated eligibility and benefits response', help: 'Run for the visit date. It must show coverage status plus member ID and payer/group details.', exclude: 'Do not re-upload the member ID card.' },
-  network: { kind: 'provider_contract', label: 'Clinic–payer provider participation agreement', help: 'Executed agreement that names the clinic/provider and payer, and describes participation or provider networks.', exclude: 'Do not use the patient’s coverage printout.' },
-  fee_schedule: { kind: 'fee_schedule', label: 'Current numeric CPT/HCPCS rate sheet', help: 'Rate sheet for this payer, plan, provider, location, and effective date, with service-line amounts.', exclude: 'A provider agreement that only references compensation or Attachment D is not enough.' },
-}
-const outOfNetworkBenefitsDocument = { kind: 'out_of_network_benefits' as const, label: 'Out-of-network benefits response', help: 'Dated payer benefits response that specifically states the out-of-network benefit for this plan and visit.', exclude: 'Only upload this after Network status is confirmed as out of network.' }
-const authorizationRequirementsDocument = { kind: 'authorization_requirements' as const, label: 'Payer referral and authorization requirements response', help: 'Payer portal or clearinghouse response for the planned service that states whether a referral and prior authorization are required.', exclude: 'Do not use a clinic note, scheduling message, or email.' }
-const referralDocument = { kind: 'referral' as const, label: 'Referral order', help: 'Order or referral record from the referring clinician for this patient and specialist/service.', exclude: 'Do not use a payer authorization approval in place of a referral.' }
-const authorizationDocument = { kind: 'authorization' as const, label: 'Payer prior-authorization determination', help: 'Payer approval for this service, provider, date range, and approved units, with its case or authorization reference.', exclude: 'Do not use a request submission, clinic note, or email.' }
-const fieldLabel = (field: string) => field.replaceAll('_', ' ').replace(/\b\w/g, (letter) => letter.toUpperCase())
-
-export default function InsuranceVerification({ onBack }: InsuranceVerificationProps) {
-  const [card, setCard] = useState<File | null>(null)
-  const [stageFile, setStageFile] = useState<File | null>(null)
-  const [caseData, setCaseData] = useState<LocalV2Case | null>(null)
-  const [active, setActive] = useState<WorkflowStep>('insurance_details')
-  const [result, setResult] = useState<LocalV2StageResult | null>(null)
-  const [service, setService] = useState('')
-  const [networkStatus, setNetworkStatus] = useState('unknown')
+export default function InsuranceVerification({ onBack }: Props) {
+  const [insuranceCase, setInsuranceCase] = useState<InsuranceCase | null>(null)
+  const [draft, setDraft] = useState({ member_name: '', member_id: '', group_number: '' })
+  const [selectedCode, setSelectedCode] = useState<'99204' | '99205'>('99204')
+  const [viewStage, setViewStage] = useState<InsuranceStage>('intake')
   const [busy, setBusy] = useState(false)
+  const [message, setMessage] = useState('Upload or capture the patient’s insurance card to begin.')
   const [error, setError] = useState('')
 
-  const fail = (caught: unknown) => setError(caught instanceof ApiError ? caught.message : 'The insurance review could not be completed.')
-  const refresh = (next: LocalV2Case) => {
-    setCaseData(next)
-    if (next.service) setService(next.service)
-    setNetworkStatus(next.network_status)
-    setStageFile(null)
-    setError('')
+  const replaceCase = (next: InsuranceCase, success: string) => {
+    setInsuranceCase(next); setViewStage(next.next_stage ?? 'estimate'); setMessage(success); setError('')
   }
-  const selected = (event: ChangeEvent<HTMLInputElement>) => setStageFile(event.target.files?.[0] ?? null)
-  const documentOfKind = (kind: LocalV2DocumentKind) => caseData?.documents.filter((document) => document.kind === kind).at(-1)
-  const authorizationRequirements = documentOfKind('authorization_requirements')
-  const referralEvidence = documentOfKind('referral')
-  const authorizationEvidence = documentOfKind('authorization')
-  const planRule = caseData?.plan_rule
-  const referralRequired = planRule?.rule?.referral_required.toLowerCase().startsWith('yes') || authorizationRequirements?.fields.referral_requirement === 'required'
-  const payerAuthorizationRequired = authorizationRequirements?.fields.authorization_requirement === 'required'
-  const authorizationEvidenceNeeded = referralRequired && (!referralEvidence || !referralEvidence.reviewed)
-    ? referralDocument
-    : !authorizationRequirements || !authorizationRequirements.reviewed
-      ? authorizationRequirementsDocument
-      : payerAuthorizationRequired && (!authorizationEvidence || !authorizationEvidence.reviewed)
-        ? authorizationDocument
-        : undefined
-  const stageDocument = active === 'authorization' ? authorizationEvidenceNeeded : active === 'network' && networkStatus === 'out_of_network' ? outOfNetworkBenefitsDocument : documentForStep[active]
-  const currentDocument = stageDocument && documentOfKind(stageDocument.kind)
-  const currentCard = caseData?.documents.filter((document) => document.kind === 'insurance_card').at(-1)
-  const statusFor = (step: WorkflowStep) => {
-    if (step === 'insurance_details') return currentCard?.reviewed ? 'passed' : 'review'
-    return caseData?.stages[step]?.status ?? 'Not started'
-  }
-  const activeIndex = steps.indexOf(active)
-  const priorComplete = steps.slice(0, activeIndex).every((step) => statusFor(step) === 'passed')
-
-  const create = async () => {
-    if (!card) {
-      setError('Upload the insurance card to begin.')
-      return
-    }
-    setBusy(true)
-    setError('')
+  const uploadCard = async (file?: File) => {
+    if (!file) return
+    setBusy(true); setError(''); setMessage('Reading the insurance card locally…')
     try {
-      refresh(await createLocalV2Case({ insurance_card: card }))
-    } catch (caught) {
-      fail(caught)
-    } finally {
-      setBusy(false)
-    }
+      const next = await createInsuranceCase(file)
+      setDraft(next.ocr); replaceCase(next, 'Card fields are ready for clinician review.')
+    } catch (caught) { setError(caught instanceof Error ? caught.message : 'Unable to read the card.') }
+    finally { setBusy(false) }
+  }
+  const confirmIntake = async () => {
+    if (!insuranceCase) return
+    setBusy(true); setError('')
+    try { replaceCase(await confirmInsuranceIntake(insuranceCase.id, { ...draft, confirmed: false }), 'Golden patient and card identity matched.') }
+    catch (caught) { setError(caught instanceof Error ? caught.message : 'The card could not be matched.') }
+    finally { setBusy(false) }
+  }
+  const confirmService = async () => {
+    if (!insuranceCase) return
+    setBusy(true); setError('')
+    try { replaceCase(await confirmInsuranceService(insuranceCase.id, selectedCode), `CPT ${selectedCode} confirmed as anticipated.`) }
+    catch (caught) { setError(caught instanceof Error ? caught.message : 'Unable to confirm the service.') }
+    finally { setBusy(false) }
+  }
+  const advance = async (stage: Exclude<InsuranceStage, 'intake' | 'service'>) => {
+    if (!insuranceCase) return
+    setBusy(true); setError('')
+    try { replaceCase(await runInsuranceStage(insuranceCase.id, stage), `${stageCopy[stage].title} confirmed.`) }
+    catch (caught) { setError(caught instanceof Error ? caught.message : 'Unable to complete this stage.') }
+    finally { setBusy(false) }
   }
 
-  const upload = async () => {
-    if (!caseData || !stageDocument || !stageFile) {
-      setError(`Upload ${stageDocument?.label ?? 'the required evidence'} to continue.`)
-      return
-    }
-    setBusy(true)
-    try {
-      refresh(await addLocalV2Document(caseData.id, stageDocument.kind, stageFile))
-    } catch (caught) {
-      fail(caught)
-    } finally {
-      setBusy(false)
-    }
-  }
+  const completed = new Set<InsuranceStage>(insuranceCase?.stage_decisions.map((item) => item.stage) ?? [])
+  if (insuranceCase?.ocr.confirmed) completed.add('intake')
+  const currentIndex = steps.findIndex((step) => step.id === (insuranceCase?.next_stage ?? 'estimate'))
+  const stageFacts = insuranceCase?.facts.filter((fact) => fact.stage === viewStage) ?? []
+  const ledgerFacts = viewStage === 'estimate' ? insuranceCase?.facts ?? [] : stageFacts
 
-  const review = async (document: LocalV2Document) => {
-    if (!caseData) return
-    setBusy(true)
-    try {
-      refresh(await reviewLocalV2Document(caseData.id, document))
-    } catch (caught) {
-      fail(caught)
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  const run = async () => {
-    if (!caseData || active === 'insurance_details') return
-    setBusy(true)
-    setError('')
-    try {
-      const next = await runLocalV2Stage(caseData.id, active, {
-        service,
-      })
-      setResult(next)
-      if (active === 'network') setNetworkStatus(next.inputs.network_status ?? 'unknown')
-      setCaseData({ ...caseData, plan_rule: next.inputs.plan_rule ?? caseData.plan_rule, stages: { ...caseData.stages, [active]: next } })
-    } catch (caught) {
-      fail(caught)
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  const continueTo = (step: WorkflowStep) => {
-    setActive(step)
-    setResult(caseData?.stages[step] ?? null)
-    setStageFile(null)
-  }
-
-  return <section className="insurance-page insurance-workbench animate-enter" aria-labelledby="insurance-heading">
-    <button className="back-control" type="button" onClick={onBack}><ArrowLeft className="size-4" /> Back to clinical summary</button>
-    <header className="insurance-hero workbench-hero">
-      <div>
-        <p className="eyebrow"><ShieldCheck className="size-4" /> Insurance estimate · staff review</p>
-        <h1 id="insurance-heading">Patient cost-estimate workflow.</h1>
-        <p>Complete one source check, review its result, then continue to the next check.</p>
-      </div>
+  return <section className="insurance-beta" aria-labelledby="insurance-heading">
+    <button className="back-control" type="button" onClick={onBack}><ArrowLeft aria-hidden="true" className="size-4" /> Back to clinical summary</button>
+    <header className="insurance-beta-hero">
+      <div><p className="eyebrow"><ShieldCheck aria-hidden="true" className="size-4" /> Evidence-backed beta · BCBS/NMCT golden case</p><h1 id="insurance-heading">Verify insurance before the visit</h1><p>One sourced decision at a time. No payer API or AI coding service is called in this beta.</p></div>
+      <div className="beta-session"><span>Secure share session</span><strong>15 minutes</strong></div>
     </header>
-
-    {!caseData ? <section className="workbench-current">
-      <p className="section-kicker">Step 1 of 7 · insurance details</p>
-      <h2>Start with the insurance card.</h2>
-      <div className="stage-form">
-        <label className="insurance-file-field"><span>Insurance-card PDF</span><span className="insurance-file-control"><input type="file" accept="application/pdf" onChange={(event) => setCard(event.target.files?.[0] ?? null)} /><span className="button button-secondary insurance-file-button"><Upload className="size-4" /> Choose file</span><span className={card ? 'insurance-file-name' : 'insurance-file-placeholder'}>{card?.name ?? 'No file selected'}</span></span></label>
-      </div>
-      {error && <p className="form-error workbench-error">{error}</p>}
-      <button className="button button-primary workbench-continue" onClick={create} type="button" disabled={busy}>
-        {busy ? 'Reading card…' : <><Upload className="size-4" /> Create estimate case</>}
-      </button>
-    </section> : <div className="workbench-layout">
-      <nav className="workbench-progress" aria-label="Estimate workflow">
-        <p className="section-kicker">Workflow</p>
-        {steps.map((step, index) => {
-          const previous = steps[index - 1]
-          const disabled = Boolean(previous && statusFor(previous) !== 'passed')
-          return <button className={`workbench-stage ${active === step ? 'workbench-stage-active' : ''}`} disabled={disabled} onClick={() => continueTo(step)} type="button" key={step}>
-            <span>{String(index + 1).padStart(2, '0')} · {labels[step]}</span>
-            <span>{statusFor(step)}</span>
-          </button>
-        })}
-      </nav>
-      <main className="workbench-current">
-        <p className="section-kicker">Step {String(activeIndex + 1).padStart(2, '0')} of 07</p>
-        <h2>{labels[active]}</h2>
-        {!priorComplete && <p className="form-error">Complete the preceding workflow step before continuing.</p>}
-        {priorComplete && <>
-          {stageDocument && !currentDocument && <section className="stage-content">
-            <p>{stageDocument.help}</p>
-            <p>{stageDocument.exclude}</p>
-            <label className="insurance-file-field"><span>{stageDocument.label}</span><span className="insurance-file-control"><input type="file" accept="application/pdf" onChange={selected} /><span className="button button-secondary insurance-file-button"><Upload className="size-4" /> Choose file</span><span className={stageFile ? 'insurance-file-name' : 'insurance-file-placeholder'}>{stageFile?.name ?? 'No file selected'}</span></span></label>
-            <button className="button button-primary workbench-continue" type="button" onClick={upload} disabled={busy || !stageFile}><Upload className="size-4" /> Upload for this step</button>
-          </section>}
-          {currentDocument && !currentDocument.reviewed && <section className="stage-result stage-result-review">
-            <div>
-              <h3>Review extracted document details</h3>
-              <p>{currentDocument.filename}</p>
-              {Object.entries(currentDocument.fields).length > 0 ? <dl className="result-facts">{Object.entries(currentDocument.fields).map(([key, value]) => <div key={key}><dt>{fieldLabel(key)}</dt><dd>{value}</dd></div>)}</dl> : <p>No labelled values were detected. Review the original printout before confirming.</p>}
-              {currentDocument.rate_lines?.length ? <div className="rate-lines"><h4>Contracted rates in this response</h4><table><thead><tr><th>Code</th><th>Service</th><th>Allowed amount</th></tr></thead><tbody>{currentDocument.rate_lines.map((line) => <tr key={line.code}><td>{line.code}</td><td>{line.description}</td><td>{line.amount}</td></tr>)}</tbody></table></div> : null}
-              {currentDocument.evidence_pages.length > 0 && <p>Relevant pages: {currentDocument.evidence_pages.join(', ')}</p>}
-              <button className="button button-secondary workbench-continue" type="button" onClick={() => review(currentDocument)} disabled={busy}><CheckCircle2 className="size-4" /> Confirm document evidence</button>
-            </div>
-          </section>}
-          {active === 'insurance_details' && currentDocument?.reviewed && <section className="stage-result stage-result-passed"><div><p className="section-kicker">Result</p><h3>Insurance-card evidence confirmed</h3><p>{currentDocument.fields.member_name ? `Patient name read from card: ${currentDocument.fields.member_name}` : 'Patient name is not printed in readable card text. Confirm the patient from the scheduled appointment before the coverage check.'}</p><button className="button button-secondary workbench-continue" type="button" onClick={() => continueTo('eligibility')}>Continue to Eligibility</button></div></section>}
-          {active === 'service' && <><p>Record the one booked service this estimate covers: the appointment visit or a separately scheduled procedure.</p>{caseData.appointment?.reason && <dl className="result-facts"><div><dt>Reason for visit</dt><dd>{caseData.appointment.reason}</dd></div><div><dt>Date and location</dt><dd>{caseData.appointment.date_of_service} · {caseData.appointment.place_of_service}</dd></div></dl>}<label className="stage-form">Planned service<input value={service} onChange={(event) => setService(event.target.value)} placeholder="e.g., New patient neurology visit" /></label></>}
-          {active === 'authorization' && planRule?.rule && <section className="stage-result stage-result-review"><div><p className="section-kicker">Plan requirements</p><h3>{planRule.rule.payer} · {planRule.rule.plan_group}</h3><p>Referral: {planRule.rule.referral_required}. {planRule.rule.referral_detail}</p><p>Prior authorization: {planRule.rule.prior_authorization_needed_for}</p></div></section>}
-          {active !== 'insurance_details' && (!stageDocument || currentDocument?.reviewed) && <button className="button button-primary workbench-continue" type="button" onClick={run} disabled={busy}><Play className="size-4" /> Run this check</button>}
-          {error && <p className="form-error workbench-error">{error}</p>}
-          {result && <section className={`stage-result stage-result-${result.status}`}><div><p className="section-kicker">Result</p><h3>{labels[result.stage as WorkflowStep]}</h3><p>{result.decision}</p>{result.recorded_collection && <dl className="result-facts"><div><dt>Recorded collection instruction</dt><dd>{result.recorded_collection.amount}</dd></div><div><dt>Source</dt><dd>{result.recorded_collection.source}</dd></div></dl>}{result.evidence_conflicts?.length ? <div className="stage-actions-needed"><strong>Items to resolve before quoting a final balance</strong><ul>{result.evidence_conflicts.map((conflict) => <li key={conflict}>{conflict}</li>)}</ul></div> : null}{result.next_step && <button className="button button-secondary workbench-continue" type="button" onClick={() => continueTo(result.next_step as WorkflowStep)}>Continue to {labels[result.next_step as WorkflowStep]}</button>}</div></section>}
+    <div className="insurance-stepper" aria-label="Insurance verification progress">
+      {steps.map((step, index) => {
+        const available = completed.has(step.id) || step.id === insuranceCase?.next_stage || (!insuranceCase && step.id === 'intake')
+        return <button key={step.id} type="button" disabled={!available} aria-current={viewStage === step.id ? 'step' : undefined} onClick={() => available && setViewStage(step.id)}>
+          <span>{completed.has(step.id) ? <Check aria-hidden="true" /> : index + 1}</span>{step.label}
+        </button>
+      })}
+    </div>
+    <p className="sr-status" aria-live="polite">{busy ? 'Working.' : error || message}</p>
+    <div className="insurance-layout">
+      <main className="insurance-stage-card">
+        {viewStage === 'intake' && !insuranceCase && <>
+          <p className="section-kicker">1 · Intake</p><h2>Read the member card locally</h2>
+          <p>PDF, JPG, and PNG cards are OCR’d inside ClinicForce. Images and extracted text are not sent to an external AI service.</p>
+          <div className="card-actions">
+            <label className="button button-primary"><Upload aria-hidden="true" className="size-4" /> Upload card<input type="file" accept=".pdf,.jpg,.jpeg,.png" onChange={(event) => void uploadCard(event.target.files?.[0])} /></label>
+            <label className="button button-secondary"><Camera aria-hidden="true" className="size-4" /> Capture live<input type="file" accept="image/*" capture="environment" onChange={(event) => void uploadCard(event.target.files?.[0])} /></label>
+          </div>
         </>}
+        {viewStage === 'intake' && insuranceCase && <>
+          <p className="section-kicker">1 · Intake</p><h2>Confirm OCR fields</h2><p>Compare these values with the card before unlocking the reviewed evidence.</p>
+          <div className="ocr-grid">
+            <label>Member name<input value={draft.member_name} onChange={(event) => setDraft({ ...draft, member_name: event.target.value })} /></label>
+            <label>Member ID<input value={draft.member_id} onChange={(event) => setDraft({ ...draft, member_id: event.target.value })} /></label>
+            <label>Group number<input value={draft.group_number} onChange={(event) => setDraft({ ...draft, group_number: event.target.value })} /></label>
+          </div>
+          {insuranceCase.next_stage === 'intake' && <button className="button button-primary" type="button" disabled={busy} onClick={() => void confirmIntake()}>{busy ? <LoaderCircle className="size-4 animate-spin" aria-hidden="true" /> : <FileCheck2 className="size-4" aria-hidden="true" />} Confirm card and appointment</button>}
+        </>}
+        {viewStage === 'service' && insuranceCase && <>
+          <p className="section-kicker">4 · Anticipated service</p><h2>Clinician confirmation required</h2><p>These are pre-visit candidates, not final post-encounter coding. EMG/NCS is excluded from this visit.</p>
+          <fieldset className="service-options"><legend>Choose the anticipated office visit</legend>{insuranceCase.service_lines.map((line) => <label key={line.code} className={selectedCode === line.code ? 'selected' : ''}><input type="radio" name="service" value={line.code} checked={selectedCode === line.code} onChange={() => setSelectedCode(line.code)} /><span><strong>{line.code}</strong>{line.description}<small>Contracted amount {money(line.allowed_cents)}</small></span></label>)}</fieldset>
+          {insuranceCase.next_stage === 'service' && <button className="button button-primary" disabled={busy} type="button" onClick={() => void confirmService()}>Confirm {selectedCode}</button>}
+        </>}
+        {viewStage !== 'intake' && viewStage !== 'service' && insuranceCase && <StagePanel stage={viewStage} insuranceCase={insuranceCase} facts={stageFacts} active={insuranceCase.next_stage === viewStage} busy={busy} onAdvance={advance} />}
+        {error && <p className="form-error" role="alert">{error}</p>}
+        {!error && <p className="insurance-status" role="status">{busy ? <LoaderCircle className="size-4 animate-spin" aria-hidden="true" /> : <ShieldCheck className="size-4" aria-hidden="true" />}{message}</p>}
       </main>
-    </div>}
+      <aside className="evidence-ledger" aria-label="Evidence ledger"><p className="section-kicker">Evidence ledger</p><h2>Every fact has a source</h2>
+        {!insuranceCase?.ocr.confirmed && <p>Reviewed evidence stays locked until the patient and card identities match.</p>}
+        {ledgerFacts.map((fact) => <article key={`${fact.stage}-${fact.label}-${fact.value}`}><span>{fact.label}</span><strong>{fact.value}</strong><small>{fact.citation.source_filename} · {fact.citation.reference} · {fact.citation.observed_at}</small><code>{fact.citation.sha256.slice(0, 12)}…</code></article>)}
+        {insuranceCase?.ocr.confirmed && ledgerFacts.length === 0 && <p>This completed stage contains clinician confirmation only; select another completed step to review its cited facts.</p>}
+      </aside>
+    </div>
+    {insuranceCase?.appointment && <footer className="insurance-appointment"><strong>{insuranceCase.appointment.appointment_type} · {insuranceCase.appointment.reason}</strong><span>{insuranceCase.appointment.date} · {insuranceCase.appointment.provider} · {insuranceCase.appointment.location}</span></footer>}
+    {currentIndex > -1 && <span className="visually-hidden">Current step {currentIndex + 1} of {steps.length}</span>}
   </section>
+}
+
+function StagePanel({ stage, insuranceCase, facts, active, busy, onAdvance }: {
+  stage: Exclude<InsuranceStage, 'intake' | 'service'>; insuranceCase: InsuranceCase
+  facts: InsuranceCase['facts']; active: boolean; busy: boolean
+  onAdvance: (stage: Exclude<InsuranceStage, 'intake' | 'service'>) => Promise<void>
+}) {
+  const copy = stageCopy[stage]
+  return <><p className="section-kicker">{steps.findIndex((step) => step.id === stage) + 1} · {steps.find((step) => step.id === stage)?.label}</p><h2>{copy.title}</h2><p>{copy.detail}</p>
+    {stage === 'estimate' && insuranceCase.estimate && <div className="estimate-lead"><span>Collect now</span><strong>{money(insuranceCase.estimate.patient_cents)}</strong><p>Estimated plan responsibility {money(insuranceCase.estimate.plan_cents)}</p><small>Calculated {new Date(insuranceCase.estimate.calculated_at).toLocaleString()}</small></div>}
+    <dl className="insurance-facts">{facts.map((fact) => <div key={fact.label}><dt>{fact.label}</dt><dd>{fact.value}<small>{fact.citation.reference}</small></dd></div>)}</dl>
+    {stage === 'benefits' && insuranceCase.estimate && <p className="calculation-line">{money(insuranceCase.estimate.allowed_cents)} × 20% = {money(insuranceCase.estimate.nominal_coinsurance_cents)}; OOP cap adjustment −{money(Math.abs(insuranceCase.estimate.oop_cap_adjustment_cents))} = {money(insuranceCase.estimate.patient_cents)}.</p>}
+    {stage === 'estimate' && insuranceCase.estimate && <p className="estimate-disclaimer">{insuranceCase.estimate.disclaimer}</p>}
+    {active && <button className="button button-primary" type="button" disabled={busy} onClick={() => void onAdvance(stage)}>{copy.action}</button>}
+  </>
 }

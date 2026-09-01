@@ -1,5 +1,5 @@
 import type { EcwRecord, EpicEndpoint, EpicRecord, PatientSession } from './patient-models'
-import type { InsuranceVerification, InsuranceWorkbenchResult, LocalV2Case, LocalV2Document, LocalV2StageResult, ServiceEstimate, ServiceEstimateInput } from './insurance'
+import type { InsuranceCase, InsuranceStage } from './insurance'
 import { ApiError, assertWorkspace, detailFrom, json, request } from './client'
 import { credentialsPayload } from './patient'
 
@@ -58,51 +58,31 @@ export async function disconnectEcw(): Promise<void> {
   await request('/api/patient/ecw/live-session', { method: 'DELETE' })
 }
 
-export async function verifyDemoInsuranceCard(file: File): Promise<InsuranceVerification> {
+export async function enableInsuranceBeta(): Promise<void> {
+  await request('/api/doctor/insurance/beta', { method: 'POST' })
+}
+
+export async function createInsuranceCase(file: File): Promise<InsuranceCase> {
   const form = new FormData()
   form.append('file', file, file.name)
-  const value = await request<unknown>('/api/clinician/insurance/demo-card', { method: 'POST', body: form })
-  if (!value || typeof value !== 'object' || !('demo' in value) || value.demo !== true || !('network' in value) || !('source_conflicts' in value)) {
-    throw new ApiError(502, 'The insurance verification demo returned an invalid response.')
-  }
-  return value as InsuranceVerification
+  return request<InsuranceCase>('/api/doctor/insurance/cases', { method: 'POST', body: form })
 }
 
-export async function estimateDemoService(input: ServiceEstimateInput): Promise<ServiceEstimate> {
-  const value = await request<unknown>('/api/clinician/insurance/demo-estimate', json(input))
-  if (!value || typeof value !== 'object' || !('demo' in value) || value.demo !== true || !('assistant' in value) || !('gates' in value)) {
-    throw new ApiError(502, 'The service estimate demo returned an invalid response.')
-  }
-  return value as ServiceEstimate
+export async function confirmInsuranceIntake(caseId: string, fields: InsuranceCase['ocr']): Promise<InsuranceCase> {
+  return request<InsuranceCase>(`/api/doctor/insurance/cases/${encodeURIComponent(caseId)}/intake`, {
+    method: 'PUT', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ member_name: fields.member_name, member_id: fields.member_id, group_number: fields.group_number }),
+  })
 }
 
-export async function runDemoInsuranceStage(input: ServiceEstimateInput & { stage: InsuranceWorkbenchResult['stage'] }): Promise<InsuranceWorkbenchResult> {
-  const value = await request<unknown>('/api/clinician/insurance/demo-stage', json(input))
-  if (!value || typeof value !== 'object' || !('demo' in value) || value.demo !== true || !('stage' in value) || !('status' in value) || !('decision' in value)) {
-    throw new ApiError(502, 'The insurance workflow returned an invalid response.')
-  }
-  return value as InsuranceWorkbenchResult
+export async function confirmInsuranceService(caseId: string, code: '99204' | '99205'): Promise<InsuranceCase> {
+  return request<InsuranceCase>(`/api/doctor/insurance/cases/${encodeURIComponent(caseId)}/service-lines`, {
+    method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ code }),
+  })
 }
 
-export async function createLocalV2Case(documents: Record<string, File | null>): Promise<LocalV2Case> {
-  const form = new FormData()
-  for (const [kind, file] of Object.entries(documents)) if (file) form.append(kind, file, file.name)
-  return request<LocalV2Case>('/api/clinician/insurance/local-v2/cases', { method: 'POST', body: form })
-}
-
-export async function reviewLocalV2Document(caseId: string, document: LocalV2Document): Promise<LocalV2Case> {
-  return request<LocalV2Case>(`/api/clinician/insurance/local-v2/cases/${encodeURIComponent(caseId)}/documents/${encodeURIComponent(document.id)}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ fields: document.fields }) })
-}
-
-export async function addLocalV2Document(caseId: string, kind: string, file: File): Promise<LocalV2Case> {
-  const form = new FormData()
-  form.append('kind', kind)
-  form.append('file', file, file.name)
-  return request<LocalV2Case>(`/api/clinician/insurance/local-v2/cases/${encodeURIComponent(caseId)}/documents`, { method: 'POST', body: form })
-}
-
-export async function runLocalV2Stage(caseId: string, stage: string, input: { service: string }): Promise<LocalV2StageResult> {
-  return request<LocalV2StageResult>(`/api/clinician/insurance/local-v2/cases/${encodeURIComponent(caseId)}/stages/${encodeURIComponent(stage)}`, json(input))
+export async function runInsuranceStage(caseId: string, stage: Exclude<InsuranceStage, 'intake' | 'service'>): Promise<InsuranceCase> {
+  return request<InsuranceCase>(`/api/doctor/insurance/cases/${encodeURIComponent(caseId)}/stages/${encodeURIComponent(stage)}`, { method: 'POST' })
 }
 
 export async function disconnectEpic(): Promise<void> {

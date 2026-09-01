@@ -6,11 +6,12 @@ PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", "http://localhost:8000").rstrip("
 ALLOWED_ORIGINS = [origin.strip() for origin in os.getenv("CORS_ALLOW_ORIGINS", PUBLIC_BASE_URL).split(",") if origin.strip()]
 MAX_UPLOAD_BYTES = 15 * 1024 * 1024
 MAX_INSURANCE_CARD_BYTES = 10 * 1024 * 1024
-MAX_INSURANCE_EVIDENCE_BYTES = 25 * 1024 * 1024
 MAX_BULK_DOWNLOAD_DOCUMENTS = 50
 MAX_BULK_DOWNLOAD_BYTES = 150 * 1024 * 1024
 PATIENT_SESSION_COOKIE = "clinicforce_patient_session"
 PATIENT_SESSION_MAX_AGE = 30 * 24 * 60 * 60
+CLINICIAN_SHARE_COOKIE = "clinicforce_doctor_share"
+CLINICIAN_SHARE_MAX_AGE = 15 * 60
 EPIC_OAUTH_STATE_COOKIE = "clinicforce_epic_oauth"
 EPIC_LIVE_SESSION_COOKIE = "clinicforce_epic_live"
 ECW_OAUTH_STATE_COOKIE = "clinicforce_ecw_oauth"
@@ -25,6 +26,5 @@ ECW_IMPORT_RESOURCE_TYPES = EXCHANGE_RESOURCE_TYPES | {"CarePlan", "CareTeam", "
 SOURCE_TAGS = {"patient-entered": "Patient-entered", "document-extracted": "Extracted from patient-uploaded document", "epic-mychart": "Epic / MyChart", "ecw-healow": "eClinicalWorks / healow", "external-shl": "Imported from an external SMART Health Link"}
 
 
-def insurance_demo_enabled() -> bool:
-    configured = os.getenv("INSURANCE_DEMO_ENABLED")
-    return configured.lower() == "true" if configured is not None else PUBLIC_BASE_URL.startswith("http://localhost")
+def insurance_beta_enabled() -> bool:
+    return os.getenv("INSURANCE_BETA_ENABLED", "false").lower() == "true"

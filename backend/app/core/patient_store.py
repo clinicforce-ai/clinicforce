@@ -184,6 +184,15 @@ def _initialize_schema(connection: psycopg.Connection[Any]) -> None:
             expires_at TEXT NOT NULL, created_at TEXT NOT NULL
         )""")
         cursor.execute("CREATE INDEX IF NOT EXISTS patient_sessions_patient_id_idx ON patient_sessions (patient_id)")
+        cursor.execute("""CREATE TABLE IF NOT EXISTS insurance_cases (
+            id TEXT PRIMARY KEY, patient_id TEXT NOT NULL REFERENCES patients(patient_id),
+            share_manifest_id TEXT NOT NULL, evidence_manifest_id TEXT NOT NULL,
+            workflow_json TEXT NOT NULL, created_at TEXT NOT NULL, expires_at TEXT NOT NULL
+        )""")
+        cursor.execute("CREATE INDEX IF NOT EXISTS insurance_cases_expiry_idx ON insurance_cases (expires_at)")
+        cursor.execute("""CREATE TABLE IF NOT EXISTS insurance_case_events (
+            id BIGSERIAL PRIMARY KEY, case_id TEXT NOT NULL, stage TEXT NOT NULL, created_at TEXT NOT NULL
+        )""")
         # This is public provider-directory metadata only.  It intentionally has
         # no patient reference and must never be used to store Epic chart data.
         cursor.execute("""CREATE TABLE IF NOT EXISTS epic_endpoints (

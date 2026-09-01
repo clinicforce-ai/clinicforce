@@ -10,7 +10,6 @@ pymupdf
 jinja2
 weasyprint
 python-multipart
-openpyxl
 boto3
 lxml
 psycopg[binary]
