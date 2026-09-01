@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import csv
 import hashlib
 import json
 import os
@@ -55,11 +56,15 @@ def evidence_binding() -> str:
     return hashlib.sha256((key or path).encode()).hexdigest()
 
 
-def create_share_token(patient_id: str, share_manifest_id: str, beta_enabled: bool = False) -> str:
+def create_share_token(
+    patient_id: str, share_manifest_id: str, beta_enabled: bool = False,
+    conditions: list[str] | None = None,
+) -> str:
     now = datetime.now(timezone.utc)
     payload = json.dumps({
         "v": 1, "patient_id": patient_id, "share_manifest_id": share_manifest_id,
         "evidence_binding": evidence_binding(), "beta_enabled": beta_enabled,
+        "conditions": [value.strip()[:100] for value in (conditions or []) if value.strip()][:20],
         "exp": int((now + COOKIE_TTL).timestamp()),
     }, separators=(",", ":"), sort_keys=True).encode()
     nonce = os.urandom(12)
@@ -107,6 +112,18 @@ def load_manifest() -> dict[str, Any]:
                     actual = hashlib.sha256(bundle.read(f"sources/{filename}")).hexdigest()
                     if actual != source.get("sha256"):
                         raise GoldenCaseError("The golden evidence bundle failed its SHA-256 review check")
+                rates_source = next((source for source in manifest["sources"] if source.get("id") == "rates"), None)
+                if rates_source:
+                    rows = csv.DictReader(bundle.read(f"sources/{rates_source['filename']}").decode("utf-8-sig").splitlines())
+                    manifest["rate_lines"] = [
+                        {
+                            "code": row["Procedure Code"].strip(),
+                            "description": row["Description"].strip(),
+                            "allowed_cents": int(row["Amount"].replace("$", "").replace(".", "")),
+                        }
+                        for row in rows
+                        if row.get("Procedure Code", "").strip().isdigit() and row.get("Amount", "").startswith("$")
+                    ]
         else:
             manifest = json.loads(content)
     except GoldenCaseError:

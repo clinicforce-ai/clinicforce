@@ -1,5 +1,5 @@
 import type { EcwRecord, EpicEndpoint, EpicRecord, PatientSession } from './patient-models'
-import type { InsuranceCase, InsuranceStage } from './insurance'
+import type { InsuranceCase, InsuranceEvidenceInput, InsuranceStage } from './insurance'
 import { ApiError, assertWorkspace, detailFrom, json, request } from './client'
 import { credentialsPayload } from './patient'
 
@@ -75,9 +75,21 @@ export async function confirmInsuranceIntake(caseId: string, fields: InsuranceCa
   })
 }
 
-export async function confirmInsuranceService(caseId: string, code: '99204' | '99205'): Promise<InsuranceCase> {
+export async function confirmInsuranceService(caseId: string, codes: string[]): Promise<InsuranceCase> {
   return request<InsuranceCase>(`/api/doctor/insurance/cases/${encodeURIComponent(caseId)}/service-lines`, {
-    method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ code }),
+    method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ codes }),
+  })
+}
+
+export async function uploadInsuranceEvidence(caseId: string, kind: 'eligibility' | 'contract', file: File): Promise<InsuranceCase> {
+  const form = new FormData()
+  form.append('file', file, file.name)
+  return request<InsuranceCase>(`/api/doctor/insurance/cases/${encodeURIComponent(caseId)}/documents/${kind}`, { method: 'POST', body: form })
+}
+
+export async function confirmInsuranceEvidence(caseId: string, evidence: InsuranceEvidenceInput): Promise<InsuranceCase> {
+  return request<InsuranceCase>(`/api/doctor/insurance/cases/${encodeURIComponent(caseId)}/evidence`, {
+    method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(evidence),
   })
 }
 

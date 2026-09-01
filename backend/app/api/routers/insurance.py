@@ -6,13 +6,13 @@ from fastapi import APIRouter, File, HTTPException, Request, Response, UploadFil
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import JSONResponse
 
-from app.api.schemas import InsuranceIntakeRequest, InsuranceServiceLinesRequest
+from app.api.schemas import InsuranceEvidenceRequest, InsuranceIntakeRequest, InsuranceServiceLinesRequest
 from app.api.settings import (
-    CLINICIAN_SHARE_COOKIE, CLINICIAN_SHARE_MAX_AGE, MAX_INSURANCE_CARD_BYTES,
+    CLINICIAN_SHARE_COOKIE, CLINICIAN_SHARE_MAX_AGE, MAX_INSURANCE_CARD_BYTES, MAX_UPLOAD_BYTES,
     PUBLIC_BASE_URL, insurance_beta_enabled,
 )
 from app.core.patient_store import get_patient_profile
-from app.insurance import golden, store
+from app.insurance import documented, golden, store
 
 
 router = APIRouter(prefix="/api/doctor/insurance", tags=["doctor-insurance"])
@@ -53,17 +53,13 @@ def _saved(case: dict | None) -> dict:
 @router.post("/beta")
 async def enable_beta(request: Request, response: Response) -> dict:
     session = _session(request, require_beta=False)
-    try:
-        manifest = await run_in_threadpool(golden.load_manifest)
-        profile = await run_in_threadpool(get_patient_profile, session["patient_id"])
-        if not golden.patient_matches(profile, manifest):
-            raise golden.GoldenCaseError(
-                "The opened QR patient does not match the reviewed golden case. "
-                "Open the matching patient QR before using insurance beta."
-            )
-    except golden.GoldenCaseError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-    token = golden.create_share_token(session["patient_id"], session["share_manifest_id"], beta_enabled=True)
+    profile = await run_in_threadpool(get_patient_profile, session["patient_id"])
+    if profile is None:
+        raise HTTPException(status_code=422, detail="The opened QR patient no longer has a matching ClinicForce profile")
+    token = golden.create_share_token(
+        session["patient_id"], session["share_manifest_id"], beta_enabled=True,
+        conditions=session.get("conditions", []),
+    )
     response.set_cookie(
         CLINICIAN_SHARE_COOKIE, token, max_age=CLINICIAN_SHARE_MAX_AGE, httponly=True,
         secure=PUBLIC_BASE_URL.startswith("https://"), samesite="lax", path="/api/doctor",
@@ -84,13 +80,13 @@ async def create_case(request: Request, file: UploadFile = File(...)) -> JSONRes
     try:
         manifest = await run_in_threadpool(golden.load_manifest)
         profile = await run_in_threadpool(get_patient_profile, session["patient_id"])
-        if not golden.patient_matches(profile, manifest):
-            raise golden.GoldenCaseError(
-                "The opened QR patient does not match the reviewed golden case. "
-                "Open the matching patient QR before uploading the insurance card."
-            )
         fields = await run_in_threadpool(golden.read_card, content)
-        workflow = golden.pending_case(fields)
+        if golden.patient_matches(profile, manifest):
+            workflow = golden.pending_case(fields)
+        else:
+            if not documented.card_matches_patient(fields, profile):
+                raise golden.GoldenCaseError("The member name on the card must match the patient opened from the QR")
+            workflow = documented.pending_case(fields, session.get("conditions", []), manifest.get("rate_lines", []))
         workflow["evidence_manifest_id"] = manifest["manifest_id"]
         case = await run_in_threadpool(
             store.create_case, session["patient_id"], session["share_manifest_id"], manifest["manifest_id"], workflow,
@@ -115,8 +111,56 @@ async def confirm_intake(case_id: str, review: InsuranceIntakeRequest, request: 
         manifest = await run_in_threadpool(golden.load_manifest)
         if case.get("evidence_manifest_id") != manifest["manifest_id"]:
             raise golden.GoldenCaseError("The reviewed evidence bundle changed; start a new case")
-        golden.unlock_case(case, manifest, review.model_dump())
+        if case.get("source_mode") == "golden":
+            golden.unlock_case(case, manifest, review.model_dump())
+        else:
+            profile = await run_in_threadpool(get_patient_profile, session["patient_id"])
+            documented.confirm_intake(case, profile, review.model_dump())
         saved = await run_in_threadpool(store.save_case, case, session["patient_id"], session["share_manifest_id"], "intake")
+        return _response(_saved(saved))
+    except golden.GoldenCaseError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.post("/cases/{case_id}/documents/{kind}")
+async def upload_evidence(case_id: str, kind: str, request: Request, file: UploadFile = File(...)) -> JSONResponse:
+    session = _session(request)
+    case = await run_in_threadpool(_load_case, case_id, session)
+    if case.get("source_mode") != "documents" or case.get("next_stage") != "eligibility":
+        raise HTTPException(status_code=409, detail="Evidence uploads are available during document-backed eligibility review")
+    filename = Path(file.filename or f"{kind}.pdf").name
+    if Path(filename).suffix.lower() != ".pdf":
+        raise HTTPException(status_code=415, detail="Upload a PDF evidence document")
+    content = await file.read(MAX_UPLOAD_BYTES + 1)
+    if len(content) > MAX_UPLOAD_BYTES:
+        raise HTTPException(status_code=413, detail="Evidence PDFs must be 15 MB or smaller")
+    try:
+        source = await run_in_threadpool(
+            documented.inspect_pdf, content, filename, kind,
+            case.get("ocr", {}).get("member_id", "") if kind == "eligibility" else "",
+        )
+        documented.add_document(case, kind, source)
+        saved = await run_in_threadpool(
+            store.save_case, case, session["patient_id"], session["share_manifest_id"], f"{kind}-uploaded",
+        )
+        return _response(_saved(saved))
+    except golden.GoldenCaseError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.put("/cases/{case_id}/evidence")
+async def confirm_evidence(
+    case_id: str, evidence: InsuranceEvidenceRequest, request: Request,
+) -> JSONResponse:
+    session = _session(request)
+    case = await run_in_threadpool(_load_case, case_id, session)
+    if case.get("source_mode") != "documents" or case.get("next_stage") != "eligibility":
+        raise HTTPException(status_code=409, detail="Document-backed eligibility is not ready for confirmation")
+    try:
+        documented.confirm_evidence(case, evidence.model_dump())
+        saved = await run_in_threadpool(
+            store.save_case, case, session["patient_id"], session["share_manifest_id"], "eligibility",
+        )
         return _response(_saved(saved))
     except golden.GoldenCaseError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
@@ -128,7 +172,12 @@ async def confirm_service(case_id: str, selection: InsuranceServiceLinesRequest,
     case = await run_in_threadpool(_load_case, case_id, session)
     try:
         manifest = await run_in_threadpool(golden.load_manifest)
-        golden.select_service(case, selection.code, manifest)
+        if case.get("source_mode") == "golden":
+            if len(selection.codes) != 1:
+                raise golden.GoldenCaseError("Choose one anticipated office-visit code for the golden case")
+            golden.select_service(case, selection.codes[0], manifest)
+        else:
+            documented.select_services(case, selection.codes, manifest["rates_source"])
         saved = await run_in_threadpool(store.save_case, case, session["patient_id"], session["share_manifest_id"], "service")
         return _response(_saved(saved))
     except golden.GoldenCaseError as exc:
@@ -141,7 +190,10 @@ async def run_stage(case_id: str, stage: str, request: Request) -> JSONResponse:
     case = await run_in_threadpool(_load_case, case_id, session)
     try:
         manifest = await run_in_threadpool(golden.load_manifest)
-        golden.advance(case, stage, manifest)
+        if case.get("source_mode") == "golden":
+            golden.advance(case, stage, manifest)
+        else:
+            documented.advance(case, stage, manifest["rates_source"])
         saved = await run_in_threadpool(store.save_case, case, session["patient_id"], session["share_manifest_id"], stage)
         return _response(_saved(saved))
     except golden.GoldenCaseError as exc:

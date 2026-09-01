@@ -9,6 +9,7 @@ import os
 import sys
 import unittest
 from copy import deepcopy
+from datetime import date
 from io import BytesIO
 from pathlib import Path
 from types import SimpleNamespace
@@ -17,6 +18,7 @@ from uuid import uuid4
 from zipfile import ZipFile
 
 import httpx
+import fitz
 import psycopg
 from fastapi import HTTPException
 
@@ -29,7 +31,7 @@ from app.core.source_links import create_document_download_token, verify_documen
 from app.core import patient_store  # noqa: E402
 from app.ingestion.bedrock_extractor import ExtractedFact, facts_to_fhir_bundle  # noqa: E402
 from app.ingestion.pdf_parser import parse_pdf_text_with_llm, pdf_extraction_to_fhir_bundle  # noqa: E402
-from app.insurance import golden  # noqa: E402
+from app.insurance import documented, golden  # noqa: E402
 from app.main import _epic_share_snapshot, _normalize_ecw_bundle, app, build_exchange_bundle  # noqa: E402
 from app.reports.pdf_builder import generate_doctor_pdf, render_doctor_pdf_bytes  # noqa: E402
 from app.reports.summarizer import summarize_fhir_bundle  # noqa: E402
@@ -64,6 +66,14 @@ GOLDEN_MANIFEST = {
     "network": {"display": "NMCT · Blue Choice PPO · in network", "source": TEST_CITATION, "agreement_source": TEST_CITATION},
     "authorization": {"referral_source": TEST_CITATION, "prior_auth_source": TEST_CITATION},
     "rates": {"99204": 15160, "99205": 20023}, "rates_source": TEST_CITATION,
+    "rate_lines": [
+        {"code": "99202", "description": "New patient office visit, straightforward", "allowed_cents": 6484},
+        {"code": "99203", "description": "New patient office visit, low MDM", "allowed_cents": 10117},
+        {"code": "99204", "description": "New patient office visit, moderate MDM", "allowed_cents": 15160},
+        {"code": "99205", "description": "New patient office visit, high MDM", "allowed_cents": 20023},
+        {"code": "95886", "description": "Needle EMG, complete", "allowed_cents": 8918},
+        {"code": "95907", "description": "Nerve conduction studies, 1-2", "allowed_cents": 8440},
+    ],
     "rejected_source": TEST_CITATION,
     "sources": [{"id": "reviewed", "filename": "reviewed.pdf", "sha256": "a" * 64, "observed_at": "2026-08-24"}],
 }
@@ -113,7 +123,7 @@ class MainRouteTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("HttpOnly", response.headers["set-cookie"])
         self.assertIn("Max-Age=900", response.headers["set-cookie"])
 
-    async def test_beta_activation_identifies_a_mismatched_qr_before_card_upload(self) -> None:
+    async def test_beta_activation_allows_another_qr_patient_to_start_document_review(self) -> None:
         different_profile = PatientProfile(
             patient_id="patient-1", given_name="Different", family_name="Patient",
             birth_date="1990-01-01", administrative_gender="unknown",
@@ -127,8 +137,8 @@ class MainRouteTests(unittest.IsolatedAsyncioTestCase):
             with patch("app.api.routers.insurance.golden.load_manifest", return_value=GOLDEN_MANIFEST), \
                  patch("app.api.routers.insurance.get_patient_profile", return_value=different_profile):
                 response = await self.client.post("/api/doctor/insurance/beta")
-        self.assertEqual(response.status_code, 422, response.text)
-        self.assertIn("opened QR patient does not match", response.json()["detail"])
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertTrue(response.json()["beta_enabled"])
 
     def test_insurance_session_expiry_malformed_files_and_bundle_hashes_fail_closed(self) -> None:
         with patch.dict(os.environ, {
@@ -211,7 +221,7 @@ class MainRouteTests(unittest.IsolatedAsyncioTestCase):
                 for stage in ("eligibility", "network"):
                     response = await self.client.post(f"/api/doctor/insurance/cases/case-1/stages/{stage}")
                     self.assertEqual(response.status_code, 200, response.text)
-                selected = await self.client.put("/api/doctor/insurance/cases/case-1/service-lines", json={"code": "99204"})
+                selected = await self.client.put("/api/doctor/insurance/cases/case-1/service-lines", json={"codes": ["99204"]})
                 self.assertEqual(selected.json()["next_stage"], "authorization")
                 for stage in ("authorization", "benefits", "estimate"):
                     response = await self.client.post(f"/api/doctor/insurance/cases/case-1/stages/{stage}")
@@ -221,6 +231,84 @@ class MainRouteTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(final.json()["estimate"]["patient_cents"], 0)
         self.assertEqual(final.json()["estimate"]["plan_cents"], 15160)
         self.assertEqual(final.json()["status"], "complete")
+
+    async def test_document_backed_api_scenario_requires_both_pdfs_and_uses_qr_conditions(self) -> None:
+        cases: dict[str, dict] = {}
+        profile = PatientProfile(
+            patient_id="patient-2", given_name="Jordan", family_name="Rivera",
+            birth_date="1991-02-03", administrative_gender="unknown",
+        )
+
+        def create(_patient: str, _share: str, _evidence: str, workflow: dict) -> dict:
+            case = {**workflow, "id": "case-docs", "created_at": "2026-08-24T00:00:00+00:00", "expires_at": "2026-08-25T00:00:00+00:00"}
+            cases[case["id"]] = deepcopy(case)
+            return case
+
+        def get(case_id: str, _patient: str, _share: str) -> dict | None:
+            return deepcopy(cases.get(case_id))
+
+        def save(case: dict, _patient: str, _share: str, _event: str) -> dict:
+            cases[case["id"]] = deepcopy(case)
+            return case
+
+        def inspect(_content: bytes, filename: str, kind: str, _member_id: str = "") -> dict:
+            return {
+                "id": kind, "filename": filename, "sha256": kind[0] * 64,
+                "observed_at": "2026-08-24", "reference": f"Reviewed {kind} PDF",
+            }
+
+        with patch.dict(os.environ, {
+            "INSURANCE_BETA_ENABLED": "true", "SOURCE_LINK_SECRET": "s" * 40,
+            "INSURANCE_GOLDEN_BUNDLE_KEY": "clinicforce/golden/test.zip",
+        }, clear=False):
+            self.client.cookies.set(
+                "clinicforce_doctor_share",
+                golden.create_share_token(
+                    "patient-2", "share-2", beta_enabled=True,
+                    conditions=["Burning, numbness and tingling in both feet"],
+                ),
+                path="/api/doctor",
+            )
+            with patch("app.api.routers.insurance.golden.load_manifest", return_value=GOLDEN_MANIFEST), \
+                 patch("app.api.routers.insurance.get_patient_profile", return_value=profile), \
+                 patch("app.api.routers.insurance.golden.read_card", return_value={"member_name": "JORDAN RIVERA", "member_id": "BCBS-456", "group_number": "GROUP-789"}), \
+                 patch("app.api.routers.insurance.documented.inspect_pdf", side_effect=inspect), \
+                 patch("app.api.routers.insurance.store.create_case", side_effect=create), \
+                 patch("app.api.routers.insurance.store.get_case", side_effect=get), \
+                 patch("app.api.routers.insurance.store.save_case", side_effect=save):
+                created = await self.client.post("/api/doctor/insurance/cases", files={"file": ("card.png", b"png", "image/png")})
+                self.assertEqual(created.status_code, 200, created.text)
+                self.assertEqual(created.json()["source_mode"], "documents")
+                self.assertIn("95886", {line["code"] for line in created.json()["service_lines"]})
+                reviewed = await self.client.put("/api/doctor/insurance/cases/case-docs/intake", json={
+                    "member_name": "JORDAN RIVERA", "member_id": "BCBS-456", "group_number": "GROUP-789",
+                })
+                self.assertEqual(reviewed.status_code, 200, reviewed.text)
+                for kind in ("eligibility", "contract"):
+                    uploaded = await self.client.post(
+                        f"/api/doctor/insurance/cases/case-docs/documents/{kind}",
+                        files={"file": (f"{kind}.pdf", b"%PDF reviewed", "application/pdf")},
+                    )
+                    self.assertEqual(uploaded.status_code, 200, uploaded.text)
+                evidence = await self.client.put("/api/doctor/insurance/cases/case-docs/evidence", json={
+                    "clinic": "NMCT", "payer": "BCBSTX", "plan_name": "Blue Choice PPO Medical",
+                    "eligibility_observed_at": "2026-08-24", "coverage_status": "active",
+                    "network_status": "in_network", "coinsurance_percent": 20, "copay_cents": 0,
+                    "individual_deductible_remaining_cents": 0, "individual_oop_remaining_cents": 0,
+                    "referral_status": "not_required", "authorization_status": "not_required",
+                })
+                self.assertEqual(evidence.status_code, 200, evidence.text)
+                network = await self.client.post("/api/doctor/insurance/cases/case-docs/stages/network")
+                self.assertEqual(network.status_code, 200, network.text)
+                selected = await self.client.put(
+                    "/api/doctor/insurance/cases/case-docs/service-lines", json={"codes": ["99204", "95886"]},
+                )
+                self.assertEqual(selected.status_code, 200, selected.text)
+                for stage in ("authorization", "benefits", "estimate"):
+                    response = await self.client.post(f"/api/doctor/insurance/cases/case-docs/stages/{stage}")
+                    self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()["estimate"]["allowed_cents"], 24078)
+        self.assertEqual(response.json()["estimate"]["patient_cents"], 0)
 
     def test_golden_case_enforces_order_matching_and_exact_cent_arithmetic(self) -> None:
         fields = {"member_name": "Pat Example", "member_id": "MEMBER-123", "group_number": "GROUP-123"}
@@ -256,6 +344,71 @@ class MainRouteTests(unittest.IsolatedAsyncioTestCase):
 
         with self.assertRaisesRegex(golden.GoldenCaseError, "only the reviewed"):
             golden.unlock_case(golden.pending_case(fields), GOLDEN_MANIFEST, {**fields, "member_id": "WRONG-123"})
+
+    def test_document_fallback_suggests_reviewed_codes_and_calculates_exact_cents(self) -> None:
+        profile = PatientProfile(
+            patient_id="patient-2", given_name="Jordan", family_name="Rivera",
+            birth_date="1991-02-03", administrative_gender="unknown",
+        )
+        fields = {"member_name": "JORDAN RIVERA", "member_id": "BCBS-456", "group_number": "GROUP-789"}
+        case = documented.pending_case(fields, ["Burning, numbness and tingling in both feet"], GOLDEN_MANIFEST["rate_lines"])
+        case["id"] = "case-docs"
+        documented.confirm_intake(case, profile, fields)
+        self.assertEqual(case["next_stage"], "eligibility")
+        self.assertIn("95886", {line["code"] for line in case["service_lines"]})
+        documented.add_document(case, "eligibility", {
+            "id": "eligibility", "filename": "eligibility.pdf", "sha256": "b" * 64,
+            "observed_at": "2026-08-24", "reference": "Patient eligibility response",
+        })
+        documented.add_document(case, "contract", {
+            "id": "contract", "filename": "contract.pdf", "sha256": "c" * 64,
+            "observed_at": "2026-08-24", "reference": "NMCT provider agreement",
+        })
+        documented.confirm_evidence(case, {
+            "clinic": "NMCT", "payer": "BCBSTX", "plan_name": "Blue Choice PPO Medical",
+            "eligibility_observed_at": date(2026, 8, 24), "coverage_status": "active",
+            "network_status": "in_network", "coinsurance_percent": 20, "copay_cents": 2500,
+            "individual_deductible_remaining_cents": 5000, "individual_oop_remaining_cents": 10000,
+            "referral_status": "not_required", "authorization_status": "not_required",
+        })
+        documented.advance(case, "network", GOLDEN_MANIFEST["rates_source"])
+        documented.select_services(case, ["99204", "95886"], GOLDEN_MANIFEST["rates_source"])
+        documented.advance(case, "authorization", GOLDEN_MANIFEST["rates_source"])
+        documented.advance(case, "benefits", GOLDEN_MANIFEST["rates_source"])
+        self.assertEqual(case["estimate"]["allowed_cents"], 24078)
+        self.assertEqual(case["estimate"]["deductible_applied_cents"], 5000)
+        self.assertEqual(case["estimate"]["nominal_coinsurance_cents"], 3816)
+        self.assertEqual(case["estimate"]["patient_cents"], 10000)
+        self.assertEqual(case["estimate"]["plan_cents"], 14078)
+        with self.assertRaisesRegex(golden.GoldenCaseError, "one anticipated"):
+            duplicate_office = deepcopy(case)
+            duplicate_office["next_stage"] = "service"
+            documented.select_services(duplicate_office, ["99203", "99204"], GOLDEN_MANIFEST["rates_source"])
+
+    def test_document_fallback_accepts_free_text_and_validates_patient_evidence(self) -> None:
+        generic = documented.service_lines(["A concern not present in the reviewed procedure rules"], GOLDEN_MANIFEST["rate_lines"])
+        self.assertEqual({line["code"] for line in generic}, {"99202", "99203", "99204", "99205"})
+
+        def pdf(text: str) -> bytes:
+            document = fitz.open()
+            page = document.new_page()
+            page.insert_textbox(fitz.Rect(72, 72, 520, 760), text)
+            return document.tobytes()
+
+        eligibility = pdf(
+            "Availity BCBSTX Active Coverage In Network Member ID BCBS-456 "
+            "Preferred Provider Option Medical individual benefits response dated 2026-08-24"
+        )
+        source = documented.inspect_pdf(eligibility, "eligibility.pdf", "eligibility", "BCBS-456")
+        self.assertEqual(source["id"], "eligibility")
+        with self.assertRaisesRegex(golden.GoldenCaseError, "patient's dated"):
+            documented.inspect_pdf(eligibility, "eligibility.pdf", "eligibility", "ANOTHER-ID")
+
+        contract = pdf(
+            "Professional Provider Agreement between Blue Cross and Blue Shield and Neurology and Movement Center "
+            "of Texas. Authorized Signature. Executed provider participation terms and fee schedule agreement."
+        )
+        self.assertEqual(documented.inspect_pdf(contract, "agreement.pdf", "contract")["id"], "contract")
 
     def test_card_ocr_accepts_the_reviewed_identification_number_label(self) -> None:
         reviewed_layout = """Member ID Card\nSubscriber Name:\nPAT EXAMPLE\nIdentification Number:\nMEMBER-123\nGroup Number:  GROUP-123\n"""
