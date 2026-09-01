@@ -257,6 +257,16 @@ class MainRouteTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaisesRegex(golden.GoldenCaseError, "only the reviewed"):
             golden.unlock_case(golden.pending_case(fields), GOLDEN_MANIFEST, {**fields, "member_id": "WRONG-123"})
 
+    def test_card_ocr_accepts_the_reviewed_identification_number_label(self) -> None:
+        reviewed_layout = """Subscriber Name:\nPAT EXAMPLE\nIdentification Number:\nMEMBER-123\nGroup Number:  GROUP-123\n"""
+        with patch("app.insurance.golden._pdf_text", return_value=reviewed_layout):
+            fields = golden.read_card(b"%PDF-reviewed-card")
+        self.assertEqual(fields, {
+            "member_name": "PAT EXAMPLE",
+            "member_id": "MEMBER-123",
+            "group_number": "GROUP-123",
+        })
+
     async def test_registered_ecw_jwks_url_serves_the_public_key_set(self) -> None:
         payload = {"keys": [{"kty": "RSA", "kid": "clinicforce-test-key"}]}
         with patch("app.main.ecw.public_jwks", return_value=payload):

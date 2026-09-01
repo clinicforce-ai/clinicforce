@@ -193,7 +193,7 @@ def read_card(content: bytes) -> dict[str, str]:
         raise GoldenCaseError("Upload a PDF, JPG, or PNG insurance card")
     patterns = {
         "member_name": r"(?im)^\s*(?:member|subscriber|patient)(?:\s+name)?\s*[:#-]?\s*([A-Z][A-Z .,'-]{3,70})\s*$",
-        "member_id": r"(?i)(?:member|subscriber)\s*(?:id|number|no\.?|#)\s*[:#-]?\s*([A-Z0-9-]{5,30})",
+        "member_id": r"(?i)(?:member|subscriber|identification)\s*(?:id|number|no\.?|#)\s*[:#-]?\s*([A-Z0-9-]{5,30})",
         "group_number": r"(?i)group\s*(?:number|no\.?|#)?\s*[:#-]?\s*([A-Z0-9-]{3,30})",
     }
     fields = {name: match.group(1).strip() for name, pattern in patterns.items() if (match := re.search(pattern, text))}
