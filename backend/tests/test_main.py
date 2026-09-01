@@ -258,7 +258,7 @@ class MainRouteTests(unittest.IsolatedAsyncioTestCase):
             golden.unlock_case(golden.pending_case(fields), GOLDEN_MANIFEST, {**fields, "member_id": "WRONG-123"})
 
     def test_card_ocr_accepts_the_reviewed_identification_number_label(self) -> None:
-        reviewed_layout = """Subscriber Name:\nPAT EXAMPLE\nIdentification Number:\nMEMBER-123\nGroup Number:  GROUP-123\n"""
+        reviewed_layout = """Member ID Card\nSubscriber Name:\nPAT EXAMPLE\nIdentification Number:\nMEMBER-123\nGroup Number:  GROUP-123\n"""
         with patch("app.insurance.golden._pdf_text", return_value=reviewed_layout):
             fields = golden.read_card(b"%PDF-reviewed-card")
         self.assertEqual(fields, {
