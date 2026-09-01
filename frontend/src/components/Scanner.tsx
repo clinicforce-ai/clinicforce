@@ -85,24 +85,27 @@ export default function Scanner({ onScanned, onCancel }: ScannerProps) {
 
       isInitializing.current = true
       try {
-        await reader.start(
-          {
-            facingMode: { ideal: 'environment' }, width: { ideal: 1920 }, height: { ideal: 1440 },
-            advanced: [{ focusMode: 'continuous' }],
-          } as unknown as MediaTrackConstraints,
-          {
-            fps: 15,
-            qrbox: (width, height) => {
-              const edge = Math.floor(Math.min(width, height) * .9)
-              return { width: edge, height: edge }
-            },
+        const scanConfig = {
+          fps: 15,
+          qrbox: (width: number, height: number) => {
+            const edge = Math.floor(Math.min(width, height) * .9)
+            return { width: edge, height: edge }
           },
-          (decodedText) => { if (active) handleDecoded(decodedText) },
-          () => undefined,
-        )
+        }
+        const onSuccess = (decodedText: string) => { if (active) handleDecoded(decodedText) }
+        const preferredCamera = {
+          facingMode: { ideal: 'environment' }, width: { ideal: 1920 }, height: { ideal: 1440 },
+          advanced: [{ focusMode: 'continuous' }],
+        } as unknown as MediaTrackConstraints
+        try {
+          await reader.start(preferredCamera, scanConfig, onSuccess, () => undefined)
+        } catch {
+          // Some mobile browsers reject optional focus or resolution constraints.
+          await reader.start({ facingMode: { ideal: 'environment' } }, scanConfig, onSuccess, () => undefined)
+        }
         if (active) setStatus('Keep the complete QR inside the frame and hold steady.')
       } catch (cameraError) {
-        if (active) setError(cameraError instanceof Error ? `Camera unavailable: ${cameraError.message}` : 'Camera access was unavailable.')
+        if (active) setError(cameraError instanceof Error ? `Camera unavailable: ${cameraError.message}` : 'Camera unavailable. Allow camera access in your browser, then try again.')
       } finally {
         isInitializing.current = false
       }
