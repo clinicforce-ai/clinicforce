@@ -15,9 +15,11 @@ const scannerConfig = {
 
 const cameraMessage = (error: unknown) => {
   const name = typeof error === 'object' && error && 'name' in error ? String(error.name) : ''
-  if (name === 'NotFoundError') return 'No camera is available on this device.'
-  if (name === 'NotReadableError') return 'The camera is being used by another app.'
-  if (name === 'NotAllowedError') return 'Camera access is blocked by the browser or device.'
+  const detail = `${name} ${error instanceof Error ? error.message : String(error)}`.toLowerCase()
+  if (/notfound|requested device not found/.test(detail)) return 'No camera is available on this device.'
+  if (/notreadable|could not start video source/.test(detail)) return 'The camera is being used by another app.'
+  if (/notallowed|permission denied|permission dismissed/.test(detail)) return 'Camera access is blocked by the browser or device.'
+  if (/secure|mediadevices/.test(detail)) return 'Camera access requires HTTPS in a supported browser.'
   return 'Camera could not be started.'
 }
 
@@ -49,22 +51,20 @@ export default function Scanner({ onScanned, onCancel }: ScannerProps) {
     const reader = new Html5Qrcode(id, { formatsToSupport: [Html5QrcodeSupportedFormats.QR_CODE], verbose: false })
     let closed = false
     let running = false
-
-    const start = reader.start(
-      { facingMode: { ideal: 'environment' } },
-      scannerConfig,
-      handleDecoded,
-      () => undefined,
-    ).then(() => {
-      running = true
-      if (!closed) setStatus('Keep the complete QR inside the frame and hold steady.')
-    }).catch((caught) => {
-      if (!closed) setError(`Camera unavailable: ${cameraMessage(caught)}`)
+    let start: Promise<void> | undefined
+    const openingFrame = window.requestAnimationFrame(() => {
+      start = reader.start({ facingMode: 'environment' }, scannerConfig, handleDecoded, () => undefined).then(() => {
+        running = true
+        if (!closed) setStatus('Keep the complete QR inside the frame and hold steady.')
+      }).catch((caught) => {
+        if (!closed) setError(`Camera unavailable: ${cameraMessage(caught)}`)
+      })
     })
 
     return () => {
       closed = true
-      void start.finally(async () => {
+      window.cancelAnimationFrame(openingFrame)
+      void start?.finally(async () => {
         if (running) await reader.stop().catch(() => undefined)
         try { reader.clear() } catch { /* scanner surface is already gone */ }
       })
