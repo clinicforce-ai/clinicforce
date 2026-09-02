@@ -203,14 +203,12 @@ def _pdf_text(content: bytes) -> str:
 def _tesseract(path: Path) -> str:
     executable = shutil.which("tesseract")
     if not executable:
-        raise RuntimeError("Tesseract OCR is not installed")
+        return ""
     result = subprocess.run(
         (executable, str(path), "stdout", "--psm", "6"), capture_output=True,
         text=True, check=False,
     )
-    if result.returncode != 0 or not result.stdout.strip():
-        raise GoldenCaseError("ClinicForce could not read the insurance card")
-    return result.stdout
+    return result.stdout if result.returncode == 0 else ""
 
 
 def read_card(content: bytes) -> dict[str, str]:
@@ -221,9 +219,7 @@ def read_card(content: bytes) -> dict[str, str]:
     else:
         raise GoldenCaseError("Upload a PDF, JPG, or PNG insurance card")
     fields = _card_fields(text)
-    if len(fields) != len(CARD_FIELD_PATTERNS):
-        raise GoldenCaseError("Confirm the member name, member ID, and group number from a clearer card image")
-    return fields
+    return {name: fields.get(name, "") for name in CARD_FIELD_PATTERNS}
 
 
 def card_matches(fields: dict[str, str], manifest: dict[str, Any]) -> bool:

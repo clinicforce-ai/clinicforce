@@ -45,7 +45,9 @@ export default function InsuranceVerification({ onBack }: Props) {
     setBusy(true); setError(''); setMessage('Reading the insurance card locally…')
     try {
       const next = await createInsuranceCase(file)
-      setDraft(next.ocr); replaceCase(next, 'Card fields are ready for clinician review.')
+      setDraft(next.ocr); replaceCase(next, [next.ocr.member_name, next.ocr.member_id, next.ocr.group_number].every(Boolean)
+        ? 'Card fields are ready for clinician review.'
+        : 'Some card fields could not be read. Complete them from the card before confirming.')
     } catch (caught) { setError(caught instanceof Error ? caught.message : 'Unable to read the card.') }
     finally { setBusy(false) }
   }
@@ -93,6 +95,7 @@ export default function InsuranceVerification({ onBack }: Props) {
   }
 
   const completed = new Set<InsuranceStage>(insuranceCase?.stage_decisions.map((item) => item.stage) ?? [])
+  const intakeReady = draft.member_name.trim().length >= 3 && draft.member_id.trim().length >= 5 && draft.group_number.trim().length >= 3
   if (insuranceCase?.ocr.confirmed) completed.add('intake')
   const currentIndex = steps.findIndex((step) => step.id === (insuranceCase?.next_stage ?? 'estimate'))
   const stageFacts = insuranceCase?.facts.filter((fact) => fact.stage === viewStage) ?? []
@@ -130,7 +133,8 @@ export default function InsuranceVerification({ onBack }: Props) {
             <label>Member ID<input value={draft.member_id} onChange={(event) => setDraft({ ...draft, member_id: event.target.value })} /></label>
             <label>Group number<input value={draft.group_number} onChange={(event) => setDraft({ ...draft, group_number: event.target.value })} /></label>
           </div>
-          {insuranceCase.next_stage === 'intake' && <button className="button button-primary" type="button" disabled={busy} onClick={() => void confirmIntake()}>{busy ? <LoaderCircle className="size-4 animate-spin" aria-hidden="true" /> : <FileCheck2 className="size-4" aria-hidden="true" />} Confirm card and appointment</button>}
+          {!intakeReady && <p className="estimate-disclaimer">Complete the member name, member ID, and group number from the card to continue.</p>}
+          {insuranceCase.next_stage === 'intake' && <button className="button button-primary" type="button" disabled={busy || !intakeReady} onClick={() => void confirmIntake()}>{busy ? <LoaderCircle className="size-4 animate-spin" aria-hidden="true" /> : <FileCheck2 className="size-4" aria-hidden="true" />} Confirm card and appointment</button>}
         </>}
         {viewStage === 'eligibility' && insuranceCase?.source_mode === 'documents' && insuranceCase.next_stage === 'eligibility' && <>
           <p className="section-kicker">2 · Eligibility</p><h2>Match this patient to the provider contract</h2>

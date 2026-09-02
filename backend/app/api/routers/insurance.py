@@ -87,8 +87,6 @@ async def create_case(request: Request, file: UploadFile = File(...)) -> JSONRes
         if golden.patient_matches(profile, manifest):
             workflow = golden.pending_case(fields)
         else:
-            if not documented.card_matches_patient(fields, profile):
-                raise golden.GoldenCaseError("The member name on the card must match the patient opened from the QR")
             workflow = documented.pending_case(fields)
         workflow["evidence_manifest_id"] = manifest["manifest_id"]
         case = await run_in_threadpool(

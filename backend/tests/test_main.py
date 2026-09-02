@@ -186,6 +186,16 @@ class MainRouteTests(unittest.IsolatedAsyncioTestCase):
             fields = golden.read_card(document.tobytes())
         self.assertEqual(fields, {"member_name": "PAT EXAMPLE", "member_id": "MEMBER-123", "group_number": "GROUP-123"})
 
+    def test_card_ocr_leaves_missing_fields_for_clinician_review(self) -> None:
+        with patch("app.insurance.golden._pdf_text", return_value="Identification Number: MEMBER-123\nGroup Number: GROUP-123"):
+            fields = golden.read_card(b"%PDF-reviewed-card")
+        self.assertEqual(fields, {"member_name": "", "member_id": "MEMBER-123", "group_number": "GROUP-123"})
+
+    def test_failed_card_ocr_leaves_every_field_for_clinician_review(self) -> None:
+        with patch("app.insurance.golden.shutil.which", return_value="tesseract"), \
+             patch("app.insurance.golden.subprocess.run", return_value=Mock(returncode=1, stdout="")):
+            self.assertEqual(golden._tesseract(Path("card.jpg")), "")
+
     async def test_card_ocr_stays_locked_until_clinician_review(self) -> None:
         def stored(_patient: str, _share: str, _evidence: str, workflow: dict) -> dict:
             return {**workflow, "id": "case-1", "created_at": "2026-08-24T00:00:00+00:00", "expires_at": "2026-08-25T00:00:00+00:00"}
@@ -283,7 +293,7 @@ class MainRouteTests(unittest.IsolatedAsyncioTestCase):
             )
             with patch("app.api.routers.insurance.golden.load_manifest", return_value=GOLDEN_MANIFEST), \
                  patch("app.api.routers.insurance.get_patient_profile", return_value=profile), \
-                 patch("app.api.routers.insurance.golden.read_card", return_value={"member_name": "JORDAN RIVERA", "member_id": "BCBS-456", "group_number": "GROUP-789"}), \
+                 patch("app.api.routers.insurance.golden.read_card", return_value={"member_name": "", "member_id": "BCBS-456", "group_number": "GROUP-789"}), \
                  patch("app.api.routers.insurance.documented.inspect_pdf", side_effect=inspect), \
                  patch("app.api.routers.insurance.store.create_case", side_effect=create), \
                  patch("app.api.routers.insurance.store.get_case", side_effect=get), \
@@ -291,6 +301,7 @@ class MainRouteTests(unittest.IsolatedAsyncioTestCase):
                 created = await self.client.post("/api/doctor/insurance/cases", files={"file": ("card.png", b"png", "image/png")})
                 self.assertEqual(created.status_code, 200, created.text)
                 self.assertEqual(created.json()["source_mode"], "documents")
+                self.assertEqual(created.json()["ocr"]["member_name"], "")
                 self.assertEqual(created.json()["service_lines"], [])
                 reviewed = await self.client.put("/api/doctor/insurance/cases/case-docs/intake", json={
                     "member_name": "JORDAN RIVERA", "member_id": "BCBS-456", "group_number": "GROUP-789",
