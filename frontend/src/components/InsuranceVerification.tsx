@@ -119,8 +119,8 @@ export default function InsuranceVerification({ onBack }: Props) {
           <p className="section-kicker">1 · Intake</p><h2>Read the member card locally</h2>
           <p>PDF, JPG, and PNG cards are OCR’d inside ClinicForce. Images and extracted text are not sent to an external AI service.</p>
           <div className="card-actions">
-            <label className="button button-primary"><Upload aria-hidden="true" className="size-4" /> Upload card<input type="file" accept=".pdf,.jpg,.jpeg,.png" onChange={(event) => void uploadCard(event.target.files?.[0])} /></label>
-            <label className="button button-secondary"><Camera aria-hidden="true" className="size-4" /> Capture live<input type="file" accept="image/*" capture="environment" onChange={(event) => void uploadCard(event.target.files?.[0])} /></label>
+            <label className="button button-primary"><Upload aria-hidden="true" className="size-4" /> Upload card<input type="file" accept=".pdf,.jpg,.jpeg,.png" onChange={(event) => { void uploadCard(event.target.files?.[0]); event.currentTarget.value = '' }} /></label>
+            <label className="button button-secondary"><Camera aria-hidden="true" className="size-4" /> Capture live<input type="file" accept="image/*" capture="environment" onChange={(event) => { void uploadCard(event.target.files?.[0]); event.currentTarget.value = '' }} /></label>
           </div>
         </>}
         {viewStage === 'intake' && insuranceCase && <>

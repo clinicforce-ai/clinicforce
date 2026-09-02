@@ -29,8 +29,12 @@ COOKIE_TTL = timedelta(minutes=15)
 MAX_PDF_PAGES = 2
 MAX_PIXELS = 20_000_000
 MAX_OCR_DIMENSION = 1600
-OCR_TIMEOUT_SECONDS = 12
 STAGES = ("eligibility", "network", "service", "authorization", "benefits", "estimate")
+CARD_FIELD_PATTERNS = {
+    "member_name": r"(?im)^[ \t]*(?:member|subscriber|patient)[ \t]+name[ \t]*[:#-]?[ \t]*(?:\r?\n[ \t]*)?([A-Z][A-Z .,'-]{3,70})[ \t]*$",
+    "member_id": r"(?i)(?:member|subscriber|identification)\s*(?:id|number|no\.?|#)\s*[:#-]?\s*([A-Z0-9-]{5,30})",
+    "group_number": r"(?i)group\s*(?:number|no\.?|#)?\s*[:#-]?\s*([A-Z0-9-]{3,30})",
+}
 
 
 class GoldenCaseError(ValueError):
@@ -153,6 +157,10 @@ def _write_ocr_image(image: Image.Image, path: Path) -> None:
     prepared.save(path, "JPEG", quality=85)
 
 
+def _card_fields(text: str) -> dict[str, str]:
+    return {name: match.group(1).strip() for name, pattern in CARD_FIELD_PATTERNS.items() if (match := re.search(pattern, text))}
+
+
 def _image_text(content: bytes) -> str:
     try:
         image = Image.open(BytesIO(content))
@@ -172,16 +180,19 @@ def _pdf_text(content: bytes) -> str:
         document = fitz.open(stream=content, filetype="pdf")
         if document.needs_pass or not 1 <= document.page_count <= MAX_PDF_PAGES:
             raise GoldenCaseError("Insurance card PDFs must contain one or two unlocked pages")
-        parts: list[str] = []
+        parts = [page.get_text() for page in document]
+        if len(_card_fields("\n".join(parts))) == len(CARD_FIELD_PATTERNS):
+            return "\n".join(parts)
         with tempfile.TemporaryDirectory() as directory:
             for index, page in enumerate(document):
-                parts.append(page.get_text())
                 pixmap = page.get_pixmap(matrix=fitz.Matrix(1.5, 1.5), alpha=False)
                 if pixmap.width * pixmap.height > MAX_PIXELS:
                     raise GoldenCaseError("The insurance card PDF pages are too large")
                 path = Path(directory) / f"page-{index}.jpg"
                 _write_ocr_image(Image.frombytes("RGB", (pixmap.width, pixmap.height), pixmap.samples), path)
                 parts.append(_tesseract(path))
+                if len(_card_fields("\n".join(parts))) == len(CARD_FIELD_PATTERNS):
+                    break
         return "\n".join(parts)
     except GoldenCaseError:
         raise
@@ -193,13 +204,10 @@ def _tesseract(path: Path) -> str:
     executable = shutil.which("tesseract")
     if not executable:
         raise RuntimeError("Tesseract OCR is not installed")
-    try:
-        result = subprocess.run(
-            (executable, str(path), "stdout", "--psm", "6"), capture_output=True,
-            text=True, timeout=OCR_TIMEOUT_SECONDS, check=False,
-        )
-    except subprocess.TimeoutExpired as exc:
-        raise GoldenCaseError("Insurance card OCR timed out") from exc
+    result = subprocess.run(
+        (executable, str(path), "stdout", "--psm", "6"), capture_output=True,
+        text=True, check=False,
+    )
     if result.returncode != 0 or not result.stdout.strip():
         raise GoldenCaseError("ClinicForce could not read the insurance card")
     return result.stdout
@@ -212,13 +220,8 @@ def read_card(content: bytes) -> dict[str, str]:
         text = _image_text(content)
     else:
         raise GoldenCaseError("Upload a PDF, JPG, or PNG insurance card")
-    patterns = {
-        "member_name": r"(?im)^[ \t]*(?:member|subscriber|patient)[ \t]+name[ \t]*[:#-]?[ \t]*(?:\r?\n[ \t]*)?([A-Z][A-Z .,'-]{3,70})[ \t]*$",
-        "member_id": r"(?i)(?:member|subscriber|identification)\s*(?:id|number|no\.?|#)\s*[:#-]?\s*([A-Z0-9-]{5,30})",
-        "group_number": r"(?i)group\s*(?:number|no\.?|#)?\s*[:#-]?\s*([A-Z0-9-]{3,30})",
-    }
-    fields = {name: match.group(1).strip() for name, pattern in patterns.items() if (match := re.search(pattern, text))}
-    if len(fields) != len(patterns):
+    fields = _card_fields(text)
+    if len(fields) != len(CARD_FIELD_PATTERNS):
         raise GoldenCaseError("Confirm the member name, member ID, and group number from a clearer card image")
     return fields
 

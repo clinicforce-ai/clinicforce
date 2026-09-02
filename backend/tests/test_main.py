@@ -178,6 +178,14 @@ class MainRouteTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(golden._image_text(card.getvalue()), "card text")
         self.assertEqual(dimensions, [(1600, 1200)])
 
+    def test_searchable_card_pdf_skips_ocr_and_reads_its_fields(self) -> None:
+        document = fitz.open()
+        page = document.new_page()
+        page.insert_text((72, 72), "Member Name: PAT EXAMPLE\nMember ID: MEMBER-123\nGroup Number: GROUP-123")
+        with patch("app.insurance.golden._tesseract", side_effect=AssertionError("OCR should not run")):
+            fields = golden.read_card(document.tobytes())
+        self.assertEqual(fields, {"member_name": "PAT EXAMPLE", "member_id": "MEMBER-123", "group_number": "GROUP-123"})
+
     async def test_card_ocr_stays_locked_until_clinician_review(self) -> None:
         def stored(_patient: str, _share: str, _evidence: str, workflow: dict) -> dict:
             return {**workflow, "id": "case-1", "created_at": "2026-08-24T00:00:00+00:00", "expires_at": "2026-08-25T00:00:00+00:00"}
