@@ -175,8 +175,8 @@ class MainRouteTests(unittest.IsolatedAsyncioTestCase):
             return "card text"
 
         with patch("app.insurance.golden._tesseract", side_effect=ocr):
-            self.assertEqual(golden._image_text(card.getvalue()), "card text")
-        self.assertEqual(dimensions, [(1600, 1200)])
+            self.assertEqual(golden._image_text(card.getvalue()), "card text\ncard text")
+        self.assertEqual(dimensions[0], (2400, 1800))
 
     def test_searchable_card_pdf_skips_ocr_and_reads_its_fields(self) -> None:
         document = fitz.open()

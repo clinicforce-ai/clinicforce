@@ -28,7 +28,7 @@ from app.core.object_store import get_object_bytes
 COOKIE_TTL = timedelta(minutes=15)
 MAX_PDF_PAGES = 2
 MAX_PIXELS = 20_000_000
-MAX_OCR_DIMENSION = 1600
+MAX_OCR_DIMENSION = 2400
 STAGES = ("eligibility", "network", "service", "authorization", "benefits", "estimate")
 CARD_FIELD_PATTERNS = {
     "member_name": r"(?im)^[ \t]*(?:member|subscriber|patient)[ \t]+name[ \t]*[:#-]?[ \t]*(?:\r?\n[ \t]*)?([A-Z][A-Z .,'-]{3,70})[ \t]*$",
@@ -161,6 +161,18 @@ def _card_fields(text: str) -> dict[str, str]:
     return {name: match.group(1).strip() for name, pattern in CARD_FIELD_PATTERNS.items() if (match := re.search(pattern, text))}
 
 
+def _retry_name_ocr(image: Image.Image) -> str:
+    """Crop the left-middle region of a card and re-run OCR to recover the subscriber name."""
+    crop = image.crop((
+        int(image.width * 0.05), int(image.height * 0.15),
+        int(image.width * 0.58), int(image.height * 0.65),
+    ))
+    with tempfile.TemporaryDirectory() as directory:
+        path = Path(directory) / "name-region.jpg"
+        _write_ocr_image(crop, path)
+        return _tesseract(path)
+
+
 def _image_text(content: bytes) -> str:
     try:
         image = Image.open(BytesIO(content))
@@ -172,7 +184,10 @@ def _image_text(content: bytes) -> str:
     with tempfile.TemporaryDirectory() as directory:
         path = Path(directory) / "card.jpg"
         _write_ocr_image(image, path)
-        return _tesseract(path)
+        text = _tesseract(path)
+        if "member_name" not in _card_fields(text):
+            text += "\n" + _retry_name_ocr(image)
+        return text
 
 
 def _pdf_text(content: bytes) -> str:
@@ -185,14 +200,21 @@ def _pdf_text(content: bytes) -> str:
             return "\n".join(parts)
         with tempfile.TemporaryDirectory() as directory:
             for index, page in enumerate(document):
-                pixmap = page.get_pixmap(matrix=fitz.Matrix(1.5, 1.5), alpha=False)
+                pixmap = page.get_pixmap(matrix=fitz.Matrix(3, 3), alpha=False)
                 if pixmap.width * pixmap.height > MAX_PIXELS:
                     raise GoldenCaseError("The insurance card PDF pages are too large")
+                image = Image.frombytes("RGB", (pixmap.width, pixmap.height), pixmap.samples)
                 path = Path(directory) / f"page-{index}.jpg"
-                _write_ocr_image(Image.frombytes("RGB", (pixmap.width, pixmap.height), pixmap.samples), path)
+                _write_ocr_image(image, path)
                 parts.append(_tesseract(path))
                 if len(_card_fields("\n".join(parts))) == len(CARD_FIELD_PATTERNS):
                     break
+                # If we found some fields but the name is missing, crop and retry
+                found = _card_fields("\n".join(parts))
+                if found and "member_name" not in found:
+                    parts.append(_retry_name_ocr(image))
+                    if len(_card_fields("\n".join(parts))) == len(CARD_FIELD_PATTERNS):
+                        break
         return "\n".join(parts)
     except GoldenCaseError:
         raise
@@ -205,7 +227,7 @@ def _tesseract(path: Path) -> str:
     if not executable:
         return ""
     result = subprocess.run(
-        (executable, str(path), "stdout", "--psm", "6"), capture_output=True,
+        (executable, str(path), "stdout", "--psm", "3"), capture_output=True,
         text=True, check=False,
     )
     return result.stdout if result.returncode == 0 else ""
