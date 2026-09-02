@@ -3,7 +3,15 @@ export type InsuranceSourceMode = 'golden' | 'documents'
 
 export interface InsuranceCitation { source_filename: string; sha256: string; reference: string; observed_at: string }
 export interface EvidenceFact { stage: InsuranceStage; label: string; value: string; citation: InsuranceCitation; source_mode: InsuranceSourceMode }
-export interface InsuranceSource { id: string; filename: string; sha256: string; observed_at: string }
+export interface InsuranceCoverageSuggestions {
+  plan_name?: string; coverage_status?: 'active'; network_status?: 'in_network' | 'out_of_network'
+  out_of_network_benefit_status?: 'covered' | 'not_covered'
+  coinsurance_percent?: number; deductible_remaining_cents?: number; oop_remaining_cents?: number
+}
+export interface InsuranceSource {
+  id: string; filename: string; sha256: string; observed_at: string; reference?: string
+  findings?: { pages_scanned?: number; suggested_coverage?: InsuranceCoverageSuggestions }
+}
 export interface ServiceLine {
   code: string; description: string; allowed_cents: number | null; selected: boolean; confirmed: boolean
   available?: boolean; suggested_by?: string; evidence_note?: string
@@ -29,7 +37,7 @@ export interface InsuranceCase {
   expires_at: string; ocr: { member_name: string; member_id: string; group_number: string; confirmed: boolean }
   appointment: NormalizedAppointment | null; service_lines: ServiceLine[]; stage_decisions: StageDecision[]
   facts: EvidenceFact[]; sources: InsuranceSource[]; estimate: EstimateBreakdown | null
-  clinical_context?: string; documents?: Record<string, InsuranceSource & { reference?: string }>
+  clinical_context?: string; documents?: Record<string, InsuranceSource>
 }
 
 export interface InsuranceEvidenceInput {

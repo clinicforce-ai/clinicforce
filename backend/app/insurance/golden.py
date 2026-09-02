@@ -239,13 +239,23 @@ def unlock_case(case: dict[str, Any], manifest: dict[str, Any], fields: dict[str
     if not card_matches(fields, manifest):
         raise GoldenCaseError("This beta supports only the reviewed BCBS/NMCT golden case")
     case.update({
-        "status": "in_progress", "next_stage": "eligibility", "ocr": {**fields, "confirmed": True},
-        "appointment": manifest["appointment"], "coverage": manifest["coverage"],
+        # The reviewed card identifies the demo patient only. Benefits and the
+        # provider agreement must still be uploaded and confirmed for this visit.
+        "source_mode": "documents", "status": "in_progress", "next_stage": "eligibility", "ocr": {**fields, "confirmed": True},
+        "appointment": manifest["appointment"], "coverage": None, "documents": {},
         "service_lines": [
-            {"code": "99204", "description": "New patient office visit, moderate MDM", "allowed_cents": int(manifest["rates"]["99204"]), "selected": True, "confirmed": False},
-            {"code": "99205", "description": "New patient office visit, high MDM", "allowed_cents": int(manifest["rates"]["99205"]), "selected": False, "confirmed": False},
+            {**line, "selected": line["code"] == "99204", "confirmed": False, "available": True,
+             "suggested_by": "New-patient visit"}
+            for line in manifest.get("rate_lines", []) if line["code"].startswith("9920")
+        ] or [
+            {"code": code, "description": f"New patient office visit ({code})", "allowed_cents": int(amount),
+             "selected": code == "99204", "confirmed": False, "available": True, "suggested_by": "New-patient visit"}
+            for code, amount in manifest["rates"].items()
         ],
-        "facts": _base_facts(manifest), "sources": list(manifest["sources"]),
+        "facts": [
+            _fact("intake", "Appointment", "New patient neurology office visit · neuropathy", manifest["appointment"]["source"]),
+            _fact("intake", "Member card match", "Member name, member ID, and group number confirmed", manifest["card_source"]),
+        ], "sources": [],
     })
     return case
 
@@ -276,8 +286,8 @@ def select_services(case: dict[str, Any], codes: list[str], manifest: dict[str, 
         raise GoldenCaseError("Complete the preceding stages before confirming the anticipated service")
     selected_codes = set(codes)
     selected = [line for line in case["service_lines"] if line["code"] in selected_codes]
-    if len(selected) != len(selected_codes) or any(not line.get("available", True) or line.get("allowed_cents") is None for line in selected):
-        raise GoldenCaseError("Every selected CPT must have a reviewed NMCT fee-schedule amount")
+    if len(selected) != len(selected_codes):
+        raise GoldenCaseError("Every selected CPT must be a suggested candidate")
     office_codes = [line["code"] for line in selected if line["code"].startswith("992")]
     if len(office_codes) != 1:
         raise GoldenCaseError("Choose exactly one anticipated office-visit code")
@@ -301,7 +311,7 @@ def advance(case: dict[str, Any], stage: str, manifest: dict[str, Any]) -> dict[
     decisions = {
         "eligibility": "Active medical coverage and individual accumulators confirmed",
         "network": "NMCT provider and office location confirmed in Blue Choice PPO",
-        "authorization": "Referral and prior authorization are not required for the selected visit",
+        "authorization": "Clinician confirmed referral and prior-authorization evidence for the selected services",
         "benefits": "Contracted rate and benefit arithmetic confirmed",
         "estimate": "Pre-visit estimate completed",
     }
@@ -311,25 +321,40 @@ def advance(case: dict[str, Any], stage: str, manifest: dict[str, Any]) -> dict[
     if stage == "benefits":
         case["estimate"] = calculate(case, manifest)
         estimate = case["estimate"]
-        case["facts"].extend((
-            _fact("benefits", "Contracted allowed amount", _money(estimate["allowed_cents"]), manifest["rates_source"]),
-            _fact("benefits", "Nominal 20% coinsurance", _money(estimate["nominal_coinsurance_cents"]), manifest["coverage"]["source"]),
-            _fact("benefits", "Out-of-pocket cap adjustment", "−" + _money(abs(estimate["oop_cap_adjustment_cents"])), manifest["coverage"]["source"]),
-        ))
+        if estimate.get("estimate_available", True):
+            case["facts"].extend((
+                _fact("benefits", "Contracted allowed amount", _money(estimate["allowed_cents"]), manifest["rates_source"]),
+                _fact("benefits", "Nominal 20% coinsurance", _money(estimate["nominal_coinsurance_cents"]), manifest["coverage"]["source"]),
+                _fact("benefits", "Out-of-pocket cap adjustment", "−" + _money(abs(estimate["oop_cap_adjustment_cents"])), manifest["coverage"]["source"]),
+            ))
+        else:
+            case["facts"].append(_fact("benefits", "Estimate status", estimate["unavailable_reason"], manifest["rates_source"]))
     if stage == "estimate":
         case["status"] = "complete"
         estimate = case["estimate"]
-        case["facts"].extend((
-            _fact("estimate", "Allowed amount", _money(estimate["allowed_cents"]), manifest["rates_source"]),
-            _fact("estimate", "Estimated plan responsibility", _money(estimate["plan_cents"]), manifest["rates_source"]),
-            _fact("estimate", "Cost-share result", "Nominal 20% coinsurance reduced to $0.00 because individual OOP remaining is $0.00", manifest["coverage"]["source"]),
-            _fact("estimate", "Rejected collection instruction", "$241.51 · included an unselected EMG service and is not reproducible", manifest["rejected_source"]),
-        ))
+        if estimate.get("estimate_available", True):
+            case["facts"].extend((
+                _fact("estimate", "Allowed amount", _money(estimate["allowed_cents"]), manifest["rates_source"]),
+                _fact("estimate", "Estimated plan responsibility", _money(estimate["plan_cents"]), manifest["rates_source"]),
+                _fact("estimate", "Cost-share result", "Nominal 20% coinsurance reduced to $0.00 because individual OOP remaining is $0.00", manifest["coverage"]["source"]),
+                _fact("estimate", "Rejected collection instruction", "$241.51 · included an unselected EMG service and is not reproducible", manifest["rejected_source"]),
+            ))
+        else:
+            case["facts"].append(_fact("estimate", "Collection amount", "Not estimated", manifest["rates_source"]))
     return case
 
 
 def calculate(case: dict[str, Any], manifest: dict[str, Any]) -> dict[str, Any]:
     selected = [line for line in case["service_lines"] if line["selected"] and line["confirmed"]]
+    if any(line.get("allowed_cents") is None for line in selected):
+        return {
+            "service_code": ", ".join(line["code"] for line in selected), "service_codes": [line["code"] for line in selected],
+            "estimate_available": False, "unavailable_reason": "At least one selected CPT has no reviewed NMCT rate. Add the rate before collecting an estimate.",
+            "allowed_cents": None, "nominal_coinsurance_cents": None, "individual_deductible_remaining_cents": 0,
+            "individual_oop_remaining_cents": int(manifest["coverage"]["individual_oop_remaining_cents"]), "oop_cap_adjustment_cents": None,
+            "patient_cents": None, "plan_cents": None, "source_mode": "golden", "calculated_at": datetime.now(timezone.utc).isoformat(),
+            "disclaimer": "A price requires a reviewed NMCT rate for every selected anticipated CPT.",
+        }
     allowed = sum(int(line["allowed_cents"]) for line in selected)
     percent = Decimal(str(manifest["coverage"]["coinsurance_percent"])) / Decimal(100)
     nominal = int((Decimal(allowed) * percent).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
@@ -337,7 +362,7 @@ def calculate(case: dict[str, Any], manifest: dict[str, Any]) -> dict[str, Any]:
     patient = min(nominal, oop_remaining)
     return {
         "service_code": ", ".join(line["code"] for line in selected), "service_codes": [line["code"] for line in selected], "allowed_cents": allowed,
-        "nominal_coinsurance_cents": nominal, "individual_deductible_remaining_cents": 0,
+        "estimate_available": True, "nominal_coinsurance_cents": nominal, "individual_deductible_remaining_cents": 0,
         "individual_oop_remaining_cents": oop_remaining, "oop_cap_adjustment_cents": patient - nominal,
         "patient_cents": patient, "plan_cents": allowed - patient, "source_mode": "golden",
         "calculated_at": datetime.now(timezone.utc).isoformat(),

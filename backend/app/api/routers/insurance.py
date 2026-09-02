@@ -202,13 +202,6 @@ async def suggest_services(
     try:
         manifest = await run_in_threadpool(golden.load_manifest)
         documented.set_clinical_context(case, request_body.clinical_context, manifest.get("rate_lines", []))
-        if case.get("source_mode") == "golden":
-            for line in case["service_lines"]:
-                if line["code"] not in {"99204", "99205"}:
-                    line.update(
-                        available=False,
-                        evidence_note="This reviewed Anita case has no service-specific authorization evidence for this candidate; use document-backed review before estimating it.",
-                    )
         saved = await run_in_threadpool(
             store.save_case, case, session["patient_id"], session["share_manifest_id"], "clinical-context",
         )

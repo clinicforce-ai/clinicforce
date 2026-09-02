@@ -218,19 +218,9 @@ class MainRouteTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(created.status_code, 200, created.text)
                 reviewed = await self.client.put("/api/doctor/insurance/cases/case-1/intake", json={"member_name": "Pat Example", "member_id": "MEMBER-123", "group_number": "GROUP-123"})
                 self.assertEqual(reviewed.json()["next_stage"], "eligibility")
-                for stage in ("eligibility", "network"):
-                    response = await self.client.post(f"/api/doctor/insurance/cases/case-1/stages/{stage}")
-                    self.assertEqual(response.status_code, 200, response.text)
-                selected = await self.client.put("/api/doctor/insurance/cases/case-1/service-lines", json={"codes": ["99204"]})
-                self.assertEqual(selected.json()["next_stage"], "authorization")
-                for stage in ("authorization", "benefits", "estimate"):
-                    response = await self.client.post(f"/api/doctor/insurance/cases/case-1/stages/{stage}")
-                    self.assertEqual(response.status_code, 200, response.text)
-                final = await self.client.get("/api/doctor/insurance/cases/case-1")
-        self.assertEqual(final.status_code, 200, final.text)
-        self.assertEqual(final.json()["estimate"]["patient_cents"], 0)
-        self.assertEqual(final.json()["estimate"]["plan_cents"], 15160)
-        self.assertEqual(final.json()["status"], "complete")
+                self.assertEqual(reviewed.json()["source_mode"], "documents")
+                self.assertEqual(reviewed.json()["documents"], {})
+                self.assertIsNone(reviewed.json()["coverage"])
 
     async def test_document_backed_api_scenario_requires_evidence_and_clinician_context(self) -> None:
         cases: dict[str, dict] = {}
@@ -315,54 +305,42 @@ class MainRouteTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.json()["estimate"]["allowed_cents"], 24078)
         self.assertEqual(response.json()["estimate"]["patient_cents"], 0)
 
-    def test_golden_case_enforces_order_matching_and_exact_cent_arithmetic(self) -> None:
+    def test_golden_card_unlock_requires_uploaded_benefits_and_contract(self) -> None:
         fields = {"member_name": "Pat Example", "member_id": "MEMBER-123", "group_number": "GROUP-123"}
         case = golden.pending_case(fields)
         golden.unlock_case(case, GOLDEN_MANIFEST, fields)
-        self.assertTrue(any(fact["label"] == "Medical coverage" for fact in case["facts"]))
-        self.assertFalse(any("dental" in fact["value"].casefold() or "family" in fact["label"].casefold() for fact in case["facts"]))
-        with self.assertRaisesRegex(golden.GoldenCaseError, "in order"):
-            golden.advance(case, "network", GOLDEN_MANIFEST)
-        golden.advance(case, "eligibility", GOLDEN_MANIFEST)
-        golden.advance(case, "network", GOLDEN_MANIFEST)
-        golden.select_service(case, "99204", GOLDEN_MANIFEST)
-        golden.advance(case, "authorization", GOLDEN_MANIFEST)
-        golden.advance(case, "benefits", GOLDEN_MANIFEST)
-        self.assertEqual(case["estimate"]["allowed_cents"], 15160)
-        self.assertEqual(case["estimate"]["nominal_coinsurance_cents"], 3032)
-        self.assertEqual(case["estimate"]["patient_cents"], 0)
-        self.assertEqual(case["estimate"]["plan_cents"], 15160)
-        golden.advance(case, "estimate", GOLDEN_MANIFEST)
-        self.assertIn("unselected EMG", case["facts"][-1]["value"])
-
-        alternate = golden.pending_case(fields)
-        golden.unlock_case(alternate, GOLDEN_MANIFEST, fields)
-        golden.advance(alternate, "eligibility", GOLDEN_MANIFEST)
-        golden.advance(alternate, "network", GOLDEN_MANIFEST)
-        golden.select_service(alternate, "99205", GOLDEN_MANIFEST)
-        golden.advance(alternate, "authorization", GOLDEN_MANIFEST)
-        golden.advance(alternate, "benefits", GOLDEN_MANIFEST)
-        self.assertEqual(alternate["estimate"]["allowed_cents"], 20023)
-        self.assertEqual(alternate["estimate"]["nominal_coinsurance_cents"], 4005)
-        self.assertEqual(alternate["estimate"]["patient_cents"], 0)
-        self.assertEqual(alternate["estimate"]["plan_cents"], 20023)
-
+        self.assertEqual(case["source_mode"], "documents")
+        self.assertEqual(case["documents"], {})
+        self.assertIsNone(case["coverage"])
+        self.assertFalse(any(fact["stage"] == "eligibility" for fact in case["facts"]))
         with self.assertRaisesRegex(golden.GoldenCaseError, "only the reviewed"):
             golden.unlock_case(golden.pending_case(fields), GOLDEN_MANIFEST, {**fields, "member_id": "WRONG-123"})
 
-    def test_golden_context_exposes_unreviewed_procedure_candidates_without_pricing_them(self) -> None:
+    def test_golden_context_exposes_rate_backed_neuropathy_candidates(self) -> None:
         case = golden.pending_case({"member_name": "Pat Example", "member_id": "MEMBER-123", "group_number": "GROUP-123"})
         golden.unlock_case(case, GOLDEN_MANIFEST, case["ocr"])
-        golden.advance(case, "eligibility", GOLDEN_MANIFEST)
-        golden.advance(case, "network", GOLDEN_MANIFEST)
+        self.assertEqual({line["code"] for line in case["service_lines"]}, {"99202", "99203", "99204", "99205"})
+        case["next_stage"] = "service"
         documented.set_clinical_context(case, "Numbness and tingling; EMG is planned", GOLDEN_MANIFEST["rate_lines"])
-        for line in case["service_lines"]:
-            if line["code"] == "95886":
-                line.update(available=False, evidence_note="Additional authorization evidence required")
         emg = next(line for line in case["service_lines"] if line["code"] == "95886")
-        self.assertFalse(emg["available"])
-        with self.assertRaisesRegex(golden.GoldenCaseError, "reviewed NMCT"):
-            golden.select_services(case, ["99204", "95886"], GOLDEN_MANIFEST)
+        self.assertTrue(emg["available"])
+        documented.select_services(case, ["99204", "95886"], GOLDEN_MANIFEST["rates_source"])
+
+    def test_document_parser_reads_all_contract_pages_and_prefills_explicit_benefits(self) -> None:
+        contract = fitz.open()
+        for page_number in range(60):
+            page = contract.new_page()
+            if page_number == 59:
+                page.insert_textbox(fitz.Rect(72, 72, 520, 760), "Professional Provider Agreement Blue Cross and Blue Shield Neurology and Movement Center Authorized Signature Blue Choice PPO Compensation")
+        contract_source = documented.inspect_pdf(contract.tobytes(), "agreement.pdf", "contract")
+        self.assertEqual(contract_source["findings"]["pages_scanned"], 60)
+        self.assertEqual(contract_source["findings"]["participation_pages"], [60])
+
+        eligibility = fitz.open()
+        page = eligibility.new_page()
+        page.insert_textbox(fitz.Rect(72, 72, 520, 760), "BCBSTX Active Coverage Member ID BCBS-456 In Network\nPlan / Product: Preferred Provider Option Medical\nDiagnostic Medical 100% Annual Deductible $600 / Calendar Year $0 Remaining Out Of Pocket $3,000 / Calendar Year $0 Remaining\nOut Of Network Not Covered")
+        suggestions = documented.inspect_pdf(eligibility.tobytes(), "eligibility.pdf", "eligibility", "BCBS-456")["findings"]["suggested_coverage"]
+        self.assertEqual(suggestions, {"coverage_status": "active", "network_status": "in_network", "out_of_network_benefit_status": "not_covered", "plan_name": "Preferred Provider Option Medical", "coinsurance_percent": 0, "deductible_remaining_cents": 0, "oop_remaining_cents": 0})
 
     def test_document_fallback_suggests_reviewed_codes_and_calculates_exact_cents(self) -> None:
         profile = PatientProfile(
@@ -403,6 +381,9 @@ class MainRouteTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(case["estimate"]["nominal_coinsurance_cents"], 3816)
         self.assertEqual(case["estimate"]["patient_cents"], 10000)
         self.assertEqual(case["estimate"]["plan_cents"], 14078)
+        unpriced = deepcopy(case)
+        unpriced["service_lines"].append({"code": "76881", "allowed_cents": None, "selected": True, "confirmed": True})
+        self.assertFalse(documented.calculate(unpriced)["estimate_available"])
         out_of_network = deepcopy(case)
         out_of_network["coverage"].update({
             "network_status": "out_of_network", "out_of_network_benefit_status": "not_covered",
@@ -423,6 +404,8 @@ class MainRouteTests(unittest.IsolatedAsyncioTestCase):
     def test_document_fallback_accepts_free_text_and_validates_patient_evidence(self) -> None:
         generic = documented.service_lines("A concern not present in the reviewed procedure rules", GOLDEN_MANIFEST["rate_lines"])
         self.assertEqual({line["code"] for line in generic}, {"99202", "99203", "99204", "99205"})
+        sonography = documented.service_lines("Extremity sonography", GOLDEN_MANIFEST["rate_lines"])
+        self.assertEqual({line["code"] for line in sonography if line["allowed_cents"] is None}, {"76881", "76882"})
 
         def pdf(text: str) -> bytes:
             document = fitz.open()

@@ -22,11 +22,16 @@ NEURODIAGNOSTIC_TERMS = (
     "neuropathy", "carpal tunnel", "radiculopathy", "numbness", "tingling", "paresthesia", "nerve pain",
 )
 BOTULINUM_TERMS = ("botox", "botulinum", "dystonia", "spasticity", "chronic migraine")
+SONOGRAPHY_TERMS = ("sonography", "ultrasound", "ultrasonography")
 UNPRICED_CANDIDATES = {
     "64612": "Chemodenervation of facial/trigeminal-innervated muscles",
     "64615": "Chemodenervation for chronic migraine",
     "64642": "Chemodenervation of one extremity muscle group",
     "64643": "Chemodenervation of each additional extremity muscle group",
+}
+SONOGRAPHY_CANDIDATES = {
+    "76881": "Ultrasound, extremity, nonvascular, complete",
+    "76882": "Ultrasound, extremity, nonvascular, limited",
 }
 
 
@@ -60,9 +65,15 @@ def service_lines(clinical_context: str, rate_lines: list[dict[str, Any]]) -> li
     if any(term in condition_text for term in BOTULINUM_TERMS):
         lines.extend({
             "code": code, "description": description, "allowed_cents": None, "selected": False,
-            "confirmed": False, "available": False, "suggested_by": "Clinician-entered context",
-            "evidence_note": "Procedure, units, drug code, and a reviewed NMCT rate are required before it can be estimated.",
+            "confirmed": False, "available": True, "suggested_by": "Clinician-entered context",
+            "evidence_note": "No reviewed NMCT rate yet. You can select this candidate, but ClinicForce will not produce a price.",
         } for code, description in UNPRICED_CANDIDATES.items())
+    if any(term in condition_text for term in SONOGRAPHY_TERMS):
+        lines.extend({
+            "code": code, "description": description, "allowed_cents": None, "selected": False,
+            "confirmed": False, "available": True, "suggested_by": "Clinician-entered context",
+            "evidence_note": "Sonography CPT depends on the body area and complete versus limited exam. You can select it, but add a reviewed NMCT rate before pricing.",
+        } for code, description in SONOGRAPHY_CANDIDATES.items())
     return lines
 
 
@@ -140,13 +151,15 @@ def inspect_pdf(content: bytes, filename: str, kind: str, member_id: str = "") -
         reference = f"Provider agreement · {participation}; {compensation}"
         findings = {
             "provider_network": "participating_blue_choice_ppo" if participation_pages else "participation_requires_review",
-            "participation_pages": participation_pages, "compensation_pages": compensation_pages,
+            "participation_pages": participation_pages, "compensation_pages": compensation_pages, "pages_scanned": pages,
         }
     elif kind == "eligibility":
+        normalized_member_id = _normalized(member_id)
         valid = (
             ("bcbstx" in compact or "blue cross" in compact)
             and "active coverage" in compact
-            and _normalized(member_id) in _normalized(compact)
+            and bool(normalized_member_id)
+            and normalized_member_id in _normalized(compact)
         )
         if not valid:
             raise GoldenCaseError("Upload the patient's dated BCBS eligibility and benefits response")
@@ -154,7 +167,11 @@ def inspect_pdf(content: bytes, filename: str, kind: str, member_id: str = "") -
         out_network_pages = _pages_with(page_text, "out of network") + _pages_with(page_text, "out-of-network")
         network_text = "in-network" if in_network_pages else "out-of-network" if out_network_pages else "network status requires clinician review"
         reference = f"Eligibility response · active coverage; {network_text} p. {_page_list(in_network_pages or out_network_pages) if (in_network_pages or out_network_pages) else 'not stated'}"
-        findings = {"network_pages": sorted(set(in_network_pages + out_network_pages))}
+        findings = {
+            "network_pages": sorted(set(in_network_pages + out_network_pages)),
+            "pages_scanned": pages,
+            "suggested_coverage": _suggested_coverage(text),
+        }
     else:
         raise GoldenCaseError("Unsupported insurance evidence type")
     return {
@@ -223,10 +240,8 @@ def select_services(case: dict[str, Any], codes: list[str], rate_source: dict[st
         raise GoldenCaseError("Complete the preceding stages before confirming the anticipated service")
     selected_codes = set(codes)
     selected = [line for line in case["service_lines"] if line["code"] in selected_codes]
-    if len(selected) != len(selected_codes) or any(
-        not line.get("available") or line.get("allowed_cents") is None for line in selected
-    ):
-        raise GoldenCaseError("Every selected CPT must have a reviewed NMCT contracted rate")
+    if len(selected) != len(selected_codes):
+        raise GoldenCaseError("Every selected CPT must be a suggested candidate")
     office_codes = [line["code"] for line in selected if line["code"].startswith("992")]
     if len(office_codes) != 1:
         raise GoldenCaseError("Choose exactly one anticipated new-patient office-visit code")
@@ -292,6 +307,16 @@ def advance(case: dict[str, Any], stage: str, rate_source: dict[str, Any]) -> di
 def calculate(case: dict[str, Any]) -> dict[str, Any]:
     selected = [line for line in case["service_lines"] if line["selected"] and line["confirmed"]]
     coverage = case["coverage"]
+    if any(line.get("allowed_cents") is None for line in selected):
+        return {
+            "service_code": ", ".join(line["code"] for line in selected), "service_codes": [line["code"] for line in selected],
+            "estimate_available": False, "unavailable_reason": "At least one selected CPT has no reviewed NMCT rate. Add the rate before collecting an estimate.",
+            "allowed_cents": None, "deductible_applied_cents": None, "nominal_coinsurance_cents": None,
+            "copay_cents": None, "individual_deductible_remaining_cents": int(coverage["individual_deductible_remaining_cents"]),
+            "individual_oop_remaining_cents": int(coverage["individual_oop_remaining_cents"]), "oop_cap_adjustment_cents": None,
+            "patient_cents": None, "plan_cents": None, "source_mode": "documents", "calculated_at": datetime.now(timezone.utc).isoformat(),
+            "disclaimer": "A price requires a reviewed NMCT rate for every selected anticipated CPT.",
+        }
     if coverage["network_status"] == "out_of_network" and coverage["out_of_network_benefit_status"] != "covered":
         return {
             "service_code": ", ".join(line["code"] for line in selected), "service_codes": [line["code"] for line in selected],
@@ -351,3 +376,32 @@ def _pages_with(page_text: list[tuple[int, str]], phrase: str) -> list[int]:
 
 def _page_list(pages: list[int]) -> str:
     return ", ".join(str(page) for page in sorted(set(pages))[:6])
+
+
+def _suggested_coverage(text: str) -> dict[str, Any]:
+    """Return only explicit eligibility facts; a clinician still confirms them."""
+    compact = " ".join(text.casefold().split())
+
+    def amount(pattern: str) -> int | None:
+        match = re.search(pattern, compact)
+        return int(Decimal(match.group(1).replace(",", "")) * 100) if match else None
+
+    plans = re.findall(r"plan\s*/\s*product\s*:\s*([^\n]+)", text, re.IGNORECASE)
+    plan_name = next((value.strip() for value in plans if "medical" in value.casefold()), plans[0].strip() if plans else None)
+    paid = re.search(r"diagnostic medical.*?(\d{1,3})%", compact)
+    network_status = "in_network" if "in network" in compact else "out_of_network" if "out of network" in compact else None
+    out_of_network_benefit = (
+        "not_covered" if re.search(r"out[- ]of[- ]network.*?(?:not covered|no benefits?)", compact)
+        else "covered" if re.search(r"out[- ]of[- ]network.*?(?:covered|coinsurance|deductible|copay)", compact)
+        else None
+    )
+    suggested: dict[str, Any] = {
+        "coverage_status": "active" if "active coverage" in compact else None,
+        "network_status": network_status,
+        "out_of_network_benefit_status": out_of_network_benefit,
+        "plan_name": plan_name,
+        "coinsurance_percent": 100 - int(paid.group(1)) if paid else None,
+        "deductible_remaining_cents": amount(r"annual deductible.*?\$[\d,]+\s*/.*?\$([\d,]+)\s+remaining"),
+        "oop_remaining_cents": amount(r"out of pocket.*?\$[\d,]+\s*/.*?\$([\d,]+)\s+remaining"),
+    }
+    return {key: value for key, value in suggested.items() if value is not None}

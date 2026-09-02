@@ -46,6 +46,20 @@ export default function InsuranceVerification({ onBack }: Props) {
     if (next.clinical_context) setClinicalContext(next.clinical_context)
     setInsuranceCase(next); setViewStage(next.next_stage ?? 'estimate'); setMessage(success); setError('')
   }
+  const applyEligibilitySuggestions = (next: InsuranceCase) => {
+    const suggested = next.documents?.eligibility?.findings?.suggested_coverage
+    if (!suggested) return
+    setEvidenceDraft((current) => ({
+      ...current,
+      plan_name: current.plan_name || suggested.plan_name || '',
+      coverage_status: suggested.coverage_status || current.coverage_status,
+      network_status: current.network_status || suggested.network_status || '',
+      out_of_network_benefit_status: current.out_of_network_benefit_status === 'unknown' ? suggested.out_of_network_benefit_status || current.out_of_network_benefit_status : current.out_of_network_benefit_status,
+      coinsurance_percent: current.coinsurance_percent || (suggested.coinsurance_percent?.toString() ?? ''),
+      deductible_remaining: current.deductible_remaining || (suggested.deductible_remaining_cents == null ? '' : (suggested.deductible_remaining_cents / 100).toFixed(2)),
+      oop_remaining: current.oop_remaining || (suggested.oop_remaining_cents == null ? '' : (suggested.oop_remaining_cents / 100).toFixed(2)),
+    }))
+  }
   const uploadCard = async (file?: File) => {
     if (!file) return
     setBusy(true); setError(''); setMessage('Reading the insurance card locally…')
@@ -79,7 +93,11 @@ export default function InsuranceVerification({ onBack }: Props) {
   const uploadEvidence = async (kind: 'eligibility' | 'contract', file?: File) => {
     if (!insuranceCase || !file) return
     setBusy(true); setError(''); setMessage(`Checking the ${kind} PDF…`)
-    try { replaceCase(await uploadInsuranceEvidence(insuranceCase.id, kind, file), `${kind === 'eligibility' ? 'Eligibility response' : 'Provider contract'} verified and hashed.`) }
+    try {
+      const next = await uploadInsuranceEvidence(insuranceCase.id, kind, file)
+      applyEligibilitySuggestions(next)
+      replaceCase(next, `${kind === 'eligibility' ? 'Eligibility response' : 'Provider contract'} read and hashed.`)
+    }
     catch (caught) { setError(caught instanceof Error ? caught.message : `Unable to verify the ${kind} PDF.`) }
     finally { setBusy(false) }
   }
@@ -124,7 +142,7 @@ export default function InsuranceVerification({ onBack }: Props) {
   return <section className="insurance-beta" aria-labelledby="insurance-heading">
     <button className="back-control" type="button" onClick={onBack}><ArrowLeft aria-hidden="true" className="size-4" /> Back to clinical summary</button>
     <header className="insurance-beta-hero">
-      <div><p className="eyebrow"><ShieldCheck aria-hidden="true" className="size-4" /> Evidence-backed beta · NMCT and BCBSTX</p><h1 id="insurance-heading">Verify insurance before the visit</h1><p>For patients outside the reviewed Anita case, ClinicForce requires the card, patient eligibility response, and provider agreement. No payer API or AI coding service is called.</p></div>
+      <div><p className="eyebrow"><ShieldCheck aria-hidden="true" className="size-4" /> Evidence-backed beta · NMCT and BCBSTX</p><h1 id="insurance-heading">Verify insurance before the visit</h1><p>ClinicForce requires the card, patient eligibility response, and provider agreement for every demo patient. No payer API or AI coding service is called.</p></div>
       <div className="beta-session"><span>Secure share session</span><strong>15 minutes</strong></div>
     </header>
     <div className="insurance-stepper" aria-label="Insurance verification progress">
@@ -157,7 +175,7 @@ export default function InsuranceVerification({ onBack }: Props) {
         </>}
         {viewStage === 'eligibility' && insuranceCase?.source_mode === 'documents' && insuranceCase.next_stage === 'eligibility' && <>
           <p className="section-kicker">2 · Eligibility</p><h2>Match this patient to the provider contract</h2>
-          <p>The card identifies the member. Upload the patient’s dated eligibility response for benefits and the signed NMCT agreement for provider participation. The agreement is read page by page for network and fee terms; it cannot establish this patient’s benefits, which come from eligibility evidence.</p>
+          <p>The card identifies the member. Upload the patient’s dated eligibility response for benefits and the signed NMCT agreement for provider participation. Every page is read locally; explicit eligibility values below are prefilled for clinician confirmation. A provider agreement cannot establish this patient’s benefits.</p>
           <div className="evidence-upload-grid">
             <label className={insuranceCase.documents?.eligibility ? 'evidence-upload complete' : 'evidence-upload'}><FileCheck2 aria-hidden="true" /><span><strong>Patient eligibility & benefits</strong><small>{insuranceCase.documents?.eligibility?.filename ?? 'Dated, searchable BCBS PDF'}</small></span><input type="file" accept=".pdf,application/pdf" disabled={busy} onChange={(event) => void uploadEvidence('eligibility', event.target.files?.[0])} /></label>
             <label className={insuranceCase.documents?.contract ? 'evidence-upload complete' : 'evidence-upload'}><FileCheck2 aria-hidden="true" /><span><strong>NMCT–BCBS provider contract</strong><small>{insuranceCase.documents?.contract?.filename ?? 'Signed, searchable provider agreement PDF'}</small></span><input type="file" accept=".pdf,application/pdf" disabled={busy} onChange={(event) => void uploadEvidence('contract', event.target.files?.[0])} /></label>
@@ -180,9 +198,9 @@ export default function InsuranceVerification({ onBack }: Props) {
           {insuranceCase.next_stage === 'eligibility' && <button className="button button-primary" type="button" disabled={busy || !insuranceCase.documents?.eligibility || !insuranceCase.documents?.contract || !evidenceDraft.plan_name || !evidenceDraft.network_status || !evidenceDraft.coinsurance_percent || !evidenceDraft.copay || !evidenceDraft.deductible_remaining || !evidenceDraft.oop_remaining || !evidenceDraft.referral_status || !evidenceDraft.authorization_status || (evidenceDraft.network_status === 'out_of_network' && (evidenceDraft.out_of_network_benefit_status === 'unknown' || (evidenceDraft.out_of_network_benefit_status === 'covered' && !evidenceDraft.out_of_network_allowed)))} onClick={() => void confirmEvidence()}>Confirm documents and benefits</button>}
         </>}
         {viewStage === 'service' && insuranceCase && <>
-          <p className="section-kicker">4 · Anticipated service</p><h2>Clinician confirmation required</h2><p>Enter why the patient is being seen today. ClinicForce returns deterministic, reviewable candidates from the NMCT fee list; they are never final post-encounter coding. For Anita, EMG/NCS is not in the reviewed appointment unless the clinician plans it.</p>
+          <p className="section-kicker">4 · Anticipated service</p><h2>Clinician confirmation required</h2><p>Enter why the patient is being seen today. ClinicForce returns deterministic, reviewable candidates from the NMCT fee list; they are never final post-encounter coding. Neuropathy suggests the reviewed EMG/NCS codes. Sonography suggestions require the body area and a reviewed NMCT rate before pricing.</p>
           {insuranceCase.next_stage === 'service' && <div className="clinical-context-form"><label htmlFor="clinical-context">Conditions or symptoms for this visit<textarea id="clinical-context" value={clinicalContext} onChange={(event) => setClinicalContext(event.target.value)} placeholder="e.g. burning, numbness and tingling in both feet" /></label><button className="button button-secondary" type="button" disabled={busy || clinicalContext.trim().length < 3} onClick={() => void suggestServices()}>{insuranceCase.service_lines.length ? 'Update CPT suggestions' : 'Suggest CPT codes'}</button></div>}
-          <fieldset className="service-options"><legend>Choose anticipated CPT candidates</legend>{insuranceCase.service_lines.map((line) => <label key={line.code} className={`${selectedCodes.includes(line.code) ? 'selected' : ''}${line.available === false ? ' unavailable' : ''}`}><input type={line.code.startsWith('992') ? 'radio' : 'checkbox'} name={line.code.startsWith('992') ? 'office-service' : `service-${line.code}`} value={line.code} disabled={line.available === false || insuranceCase.next_stage !== 'service'} checked={selectedCodes.includes(line.code)} onChange={() => toggleCode(line.code)} /><span><strong>{line.code}</strong>{line.description}<small>{line.allowed_cents == null ? line.evidence_note : `Reviewed Blue Choice PPO amount ${money(line.allowed_cents)}`}{line.suggested_by ? ` · Suggested by ${line.suggested_by.toLowerCase()}` : ''}</small></span></label>)}</fieldset>
+          <fieldset className="service-options"><legend>Choose anticipated CPT candidates</legend>{insuranceCase.service_lines.map((line) => <label key={line.code} className={selectedCodes.includes(line.code) ? 'selected' : ''}><input type={line.code.startsWith('992') ? 'radio' : 'checkbox'} name={line.code.startsWith('992') ? 'office-service' : `service-${line.code}`} value={line.code} disabled={insuranceCase.next_stage !== 'service'} checked={selectedCodes.includes(line.code)} onChange={() => toggleCode(line.code)} /><span><strong>{line.code}</strong>{line.description}<small>{line.allowed_cents == null ? line.evidence_note : `Reviewed Blue Choice PPO amount ${money(line.allowed_cents)}`}{line.suggested_by ? ` · Suggested by ${line.suggested_by.toLowerCase()}` : ''}</small></span></label>)}</fieldset>
           {insuranceCase.next_stage === 'service' && insuranceCase.service_lines.length > 0 && <button className="button button-primary" disabled={busy || selectedCodes.length === 0} type="button" onClick={() => void confirmService()}>Confirm {selectedCodes.join(', ')}</button>}
         </>}
         {viewStage !== 'intake' && viewStage !== 'service' && !(viewStage === 'eligibility' && insuranceCase?.source_mode === 'documents' && insuranceCase.next_stage === 'eligibility') && insuranceCase && <StagePanel stage={viewStage} insuranceCase={insuranceCase} facts={stageFacts} active={insuranceCase.next_stage === viewStage} busy={busy} onAdvance={advance} />}
