@@ -5,126 +5,71 @@ import { parseSmartHealthLink, type SmartHealthLink } from '../services/shl'
 
 interface ScannerProps { onScanned: (link: SmartHealthLink) => void; onCancel: () => void }
 
-const cameraConstraints: MediaTrackConstraints = { facingMode: { ideal: 'environment' } }
-type NativeBarcodeDetector = { detect: (video: HTMLVideoElement) => Promise<Array<{ rawValue: string }>> }
-type NativeBarcodeDetectorConstructor = new (options: { formats: string[] }) => NativeBarcodeDetector
+const scannerConfig = {
+  fps: 12,
+  qrbox: (width: number, height: number) => {
+    const edge = Math.floor(Math.min(width, height) * .9)
+    return { width: edge, height: edge }
+  },
+}
 
 const cameraMessage = (error: unknown) => {
   const name = typeof error === 'object' && error && 'name' in error ? String(error.name) : ''
-  const message = typeof error === 'object' && error && 'message' in error ? String(error.message) : ''
   if (name === 'NotFoundError') return 'No camera is available on this device.'
   if (name === 'NotReadableError') return 'The camera is being used by another app.'
   if (name === 'NotAllowedError') return 'Camera access is blocked by the browser or device.'
-  if (message) return message
   return 'Camera could not be started.'
 }
 
 export default function Scanner({ onScanned, onCancel }: ScannerProps) {
   const id = useId().replace(/:/g, '')
   const fileScannerId = useId().replace(/:/g, '')
-  const video = useRef<HTMLVideoElement | null>(null)
   const fileInput = useRef<HTMLInputElement | null>(null)
-  const stream = useRef<MediaStream | null>(null)
-  const fallbackScanner = useRef<Html5Qrcode | null>(null)
-  const fallbackRunning = useRef(false)
-  const frame = useRef(0)
   const onScannedRef = useRef(onScanned)
   const complete = useRef(false)
   const [status, setStatus] = useState('Requesting camera access…')
   const [error, setError] = useState('')
   const [readingFile, setReadingFile] = useState(false)
-  const [cameraStarted, setCameraStarted] = useState(false)
 
   useEffect(() => { onScannedRef.current = onScanned }, [onScanned])
-
-  const stopCamera = useCallback(() => {
-    window.cancelAnimationFrame(frame.current)
-    stream.current?.getTracks().forEach((track) => track.stop())
-    stream.current = null
-    if (video.current) video.current.srcObject = null
-    const reader = fallbackScanner.current
-    fallbackScanner.current = null
-    if (reader && fallbackRunning.current) {
-      fallbackRunning.current = false
-      const fallbackVideo = document.getElementById(id)?.querySelector('video')
-      if (fallbackVideo) fallbackVideo.onabort = null
-      try {
-        void reader.stop().catch(() => undefined).finally(() => { try { reader.clear() } catch { /* already cleared */ } })
-      } catch { try { reader.clear() } catch { /* reader did not finish starting */ } }
-    }
-    setCameraStarted(false)
-  }, [id])
 
   const handleDecoded = useCallback((decodedText: string) => {
     if (complete.current) return
     try {
-      const link = parseSmartHealthLink(decodedText)
       complete.current = true
       setStatus('Smart Health Link found.')
-      stopCamera()
-      onScannedRef.current(link)
+      onScannedRef.current(parseSmartHealthLink(decodedText))
     } catch (scanError) {
+      complete.current = false
       setError(scanError instanceof Error ? scanError.message : 'The QR code could not be read.')
     }
-  }, [stopCamera])
-
-  const startCamera = useCallback(async () => {
-    stopCamera(); setError(''); setStatus('Requesting camera access…')
-    try {
-      if (!window.isSecureContext || !navigator.mediaDevices?.getUserMedia) {
-        throw new Error('Camera access requires a secure browser connection.')
-      }
-      const Detector = (window as unknown as { BarcodeDetector?: NativeBarcodeDetectorConstructor }).BarcodeDetector
-      if (Detector && video.current) {
-        let liveStream: MediaStream | undefined
-        let lastError: unknown
-        for (const videoConstraint of [cameraConstraints, true] as const) {
-          try {
-            liveStream = await navigator.mediaDevices.getUserMedia({ audio: false, video: videoConstraint })
-            break
-          } catch (caught) { lastError = caught }
-        }
-        if (!liveStream) throw lastError
-        stream.current = liveStream
-        video.current.muted = true
-        video.current.srcObject = liveStream
-        await video.current.play()
-        const detector = new Detector({ formats: ['qr_code'] })
-        const scan = async () => {
-          if (complete.current || !video.current) return
-          try {
-            const [result] = await detector.detect(video.current)
-            if (result?.rawValue) handleDecoded(result.rawValue)
-          } catch { /* the camera can yield a frame before it is ready to decode */ }
-          if (!complete.current) frame.current = window.requestAnimationFrame(() => { void scan() })
-        }
-        setCameraStarted(true); setStatus('Keep the complete QR inside the frame and hold steady.')
-        void scan()
-        return
-      }
-      const reader = new Html5Qrcode(id, { formatsToSupport: [Html5QrcodeSupportedFormats.QR_CODE], verbose: false })
-      fallbackScanner.current = reader
-      await reader.start(cameraConstraints, { fps: 12, qrbox: (width, height) => {
-        const edge = Math.floor(Math.min(width, height) * .9)
-        return { width: edge, height: edge }
-      } }, handleDecoded, () => undefined)
-      fallbackRunning.current = true
-      setCameraStarted(true); setStatus('Keep the complete QR inside the frame and hold steady.')
-    } catch (cameraError) {
-      const reader = fallbackScanner.current
-      if (reader && !fallbackRunning.current) {
-        fallbackScanner.current = null
-        try { reader.clear() } catch { /* scanner did not finish starting */ }
-      }
-      stopCamera()
-      setError(`Camera unavailable: ${cameraMessage(cameraError)}`)
-    }
-  }, [handleDecoded, id, stopCamera])
+  }, [])
 
   useEffect(() => {
-    const openingFrame = window.requestAnimationFrame(() => { void startCamera() })
-    return () => { window.cancelAnimationFrame(openingFrame); stopCamera() }
-  }, [startCamera, stopCamera])
+    const reader = new Html5Qrcode(id, { formatsToSupport: [Html5QrcodeSupportedFormats.QR_CODE], verbose: false })
+    let closed = false
+    let running = false
+
+    const start = reader.start(
+      { facingMode: { ideal: 'environment' } },
+      scannerConfig,
+      handleDecoded,
+      () => undefined,
+    ).then(() => {
+      running = true
+      if (!closed) setStatus('Keep the complete QR inside the frame and hold steady.')
+    }).catch((caught) => {
+      if (!closed) setError(`Camera unavailable: ${cameraMessage(caught)}`)
+    })
+
+    return () => {
+      closed = true
+      void start.finally(async () => {
+        if (running) await reader.stop().catch(() => undefined)
+        try { reader.clear() } catch { /* scanner surface is already gone */ }
+      })
+    }
+  }, [handleDecoded, id])
 
   const scanImage = async (file?: File) => {
     if (!file || complete.current) return
@@ -134,25 +79,23 @@ export default function Scanner({ onScanned, onCancel }: ScannerProps) {
       handleDecoded(await fileReader.scanFile(file, false))
     } catch {
       setError('No readable Smart Health Link QR was found. Try the original screenshot or a sharper photo.')
-      setStatus(cameraStarted ? 'Camera scanning is still active.' : 'Camera scanning will restart automatically.')
+      setStatus('Camera scanning is still active.')
     } finally {
       try { fileReader.clear() } catch { /* file scanner was already cleared */ }
       setReadingFile(false)
     }
   }
 
-  const cancel = () => { stopCamera(); onCancel() }
-
   return <section className="narrow-panel animate-enter" aria-labelledby="scan-heading">
-    <button className="back-control" type="button" onClick={cancel}><ArrowLeft aria-hidden="true" className="size-4" /> Back to home</button>
+    <button className="back-control" type="button" onClick={onCancel}><ArrowLeft aria-hidden="true" className="size-4" /> Back to home</button>
     <div className="panel scanner-panel">
       <p className="eyebrow"><ScanLine aria-hidden="true" className="size-4" /> Clinician access · Step 1 of 2</p>
       <h1 id="scan-heading">Scan the patient’s QR code</h1>
       <p className="lead-small">Use a ClinicForce, eClinicalWorks, or other compatible Smart Health Link QR code. External links are reviewed and decrypted in this browser.</p>
-      <div className="scanner-frame"><video ref={video} muted playsInline /><div id={id} /></div>
+      <div className="scanner-frame"><div id={id} /></div>
       <p className="scanner-status" role="status" aria-live="polite"><Camera aria-hidden="true" className="size-4" /> {status}</p>
       {error && <p className="form-error" role="alert">{error}</p>}
-      <div className="scanner-actions"><span>{cameraStarted ? 'Camera is active.' : 'Opening camera…'}</span>{error && <button className="button button-primary" type="button" disabled={readingFile} onClick={() => void startCamera()}><Camera aria-hidden="true" className="size-4" /> Try camera again</button>}<button className="button button-secondary" type="button" disabled={readingFile} onClick={() => fileInput.current?.click()}><Upload aria-hidden="true" className="size-4" /> {readingFile ? 'Reading image…' : 'Upload QR image'}</button><input ref={fileInput} type="file" accept="image/*" tabIndex={-1} onChange={(event) => { const file = event.target.files?.[0]; event.target.value = ''; void scanImage(file) }} /><small>The image is decoded in this browser and is not uploaded.</small></div>
+      <div className="scanner-actions"><button className="button button-secondary" type="button" disabled={readingFile} onClick={() => fileInput.current?.click()}><Upload aria-hidden="true" className="size-4" /> {readingFile ? 'Reading image…' : 'Upload QR image'}</button><input ref={fileInput} type="file" accept="image/*" tabIndex={-1} onChange={(event) => { const file = event.target.files?.[0]; event.target.value = ''; void scanImage(file) }} /><small>The image is decoded in this browser and is not uploaded.</small></div>
       <div id={fileScannerId} className="scanner-file-surface" aria-hidden="true" />
       <p className="scanner-privacy"><ShieldCheck aria-hidden="true" /> Camera access is used only to scan the QR code.</p>
     </div>
