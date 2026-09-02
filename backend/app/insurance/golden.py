@@ -29,6 +29,7 @@ COOKIE_TTL = timedelta(minutes=15)
 MAX_PDF_PAGES = 2
 MAX_PIXELS = 20_000_000
 MAX_OCR_DIMENSION = 1600
+OCR_TIMEOUT_SECONDS = 8
 STAGES = ("eligibility", "network", "service", "authorization", "benefits", "estimate")
 CARD_FIELD_PATTERNS = {
     "member_name": r"(?im)^[ \t]*(?:member|subscriber|patient)?[ \t]*name[ \t]*[:#-]?[ \t]*(?:\r?\n[ \t]*)?([A-Z][A-Z .,'-]{3,70})[ \t]*$",
@@ -183,32 +184,21 @@ def _pdf_text(content: bytes) -> str:
         parts = [page.get_text() for page in document]
         if len(_card_fields("\n".join(parts))) == len(CARD_FIELD_PATTERNS):
             return "\n".join(parts)
-        # Try embedded card images first — faster and cleaner than rendering
+        # The largest embedded image is the card. OCR it once; the clinician can
+        # correct missing fields, but an upload must never wait on repeated OCR.
         with tempfile.TemporaryDirectory() as directory:
-            for page in document:
-                for img_meta in page.get_images(full=True):
-                    try:
-                        pix = fitz.Pixmap(document, img_meta[0])
-                        if pix.alpha:
-                            pix = fitz.Pixmap(fitz.csRGB, pix)
-                        image = Image.open(BytesIO(pix.tobytes("png")))
-                        path = Path(directory) / f"embed-{img_meta[0]}.jpg"
-                        _write_ocr_image(image, path)
-                        parts.append(_tesseract(path))
-                        if len(_card_fields("\n".join(parts))) == len(CARD_FIELD_PATTERNS):
-                            return "\n".join(parts)
-                    except Exception:
-                        continue
-            # Fall back to rendering pages at 2x if embedded images didn't work
-            for index, page in enumerate(document):
-                pixmap = page.get_pixmap(matrix=fitz.Matrix(2, 2), alpha=False)
-                if pixmap.width * pixmap.height > MAX_PIXELS:
-                    raise GoldenCaseError("The insurance card PDF pages are too large")
-                path = Path(directory) / f"page-{index}.jpg"
-                _write_ocr_image(Image.frombytes("RGB", (pixmap.width, pixmap.height), pixmap.samples), path)
-                parts.append(_tesseract(path))
-                if len(_card_fields("\n".join(parts))) == len(CARD_FIELD_PATTERNS):
-                    break
+            images = [(meta[2] * meta[3], meta[0]) for page in document for meta in page.get_images(full=True)]
+            if images:
+                pixmap = fitz.Pixmap(document, max(images)[1])
+            else:
+                pixmap = document[0].get_pixmap(matrix=fitz.Matrix(2, 2), alpha=False)
+            if pixmap.width * pixmap.height > MAX_PIXELS:
+                raise GoldenCaseError("The insurance card PDF pages are too large")
+            if pixmap.alpha:
+                pixmap = fitz.Pixmap(fitz.csRGB, pixmap)
+            path = Path(directory) / "card.jpg"
+            _write_ocr_image(Image.frombytes("RGB", (pixmap.width, pixmap.height), pixmap.samples), path)
+            parts.append(_tesseract(path))
         return "\n".join(parts)
     except GoldenCaseError:
         raise
@@ -220,10 +210,13 @@ def _tesseract(path: Path) -> str:
     executable = shutil.which("tesseract")
     if not executable:
         return ""
-    result = subprocess.run(
-        (executable, str(path), "stdout", "--psm", "3"), capture_output=True,
-        text=True, check=False,
-    )
+    try:
+        result = subprocess.run(
+            (executable, str(path), "stdout", "--psm", "3"), capture_output=True,
+            text=True, timeout=OCR_TIMEOUT_SECONDS, check=False,
+        )
+    except subprocess.TimeoutExpired:
+        return ""
     return result.stdout if result.returncode == 0 else ""
 
 

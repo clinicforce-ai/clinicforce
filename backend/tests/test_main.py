@@ -196,6 +196,11 @@ class MainRouteTests(unittest.IsolatedAsyncioTestCase):
              patch("app.insurance.golden.subprocess.run", return_value=Mock(returncode=1, stdout="")):
             self.assertEqual(golden._tesseract(Path("card.jpg")), "")
 
+    def test_timed_out_card_ocr_leaves_fields_for_clinician_review(self) -> None:
+        with patch("app.insurance.golden.shutil.which", return_value="tesseract"), \
+             patch("app.insurance.golden.subprocess.run", side_effect=golden.subprocess.TimeoutExpired("tesseract", 8)):
+            self.assertEqual(golden._tesseract(Path("card.jpg")), "")
+
     async def test_card_ocr_stays_locked_until_clinician_review(self) -> None:
         def stored(_patient: str, _share: str, _evidence: str, workflow: dict) -> dict:
             return {**workflow, "id": "case-1", "created_at": "2026-08-24T00:00:00+00:00", "expires_at": "2026-08-25T00:00:00+00:00"}
