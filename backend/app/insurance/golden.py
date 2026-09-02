@@ -28,6 +28,8 @@ from app.core.object_store import get_object_bytes
 COOKIE_TTL = timedelta(minutes=15)
 MAX_PDF_PAGES = 2
 MAX_PIXELS = 20_000_000
+MAX_OCR_DIMENSION = 1600
+OCR_TIMEOUT_SECONDS = 12
 STAGES = ("eligibility", "network", "service", "authorization", "benefits", "estimate")
 
 
@@ -145,6 +147,12 @@ def patient_matches(profile: Any, manifest: dict[str, Any]) -> bool:
     ))
 
 
+def _write_ocr_image(image: Image.Image, path: Path) -> None:
+    prepared = image.convert("RGB")
+    prepared.thumbnail((MAX_OCR_DIMENSION, MAX_OCR_DIMENSION), Image.Resampling.LANCZOS)
+    prepared.save(path, "JPEG", quality=85)
+
+
 def _image_text(content: bytes) -> str:
     try:
         image = Image.open(BytesIO(content))
@@ -154,8 +162,8 @@ def _image_text(content: bytes) -> str:
     except (UnidentifiedImageError, Image.DecompressionBombError, OSError) as exc:
         raise GoldenCaseError("The uploaded insurance card is not a readable image") from exc
     with tempfile.TemporaryDirectory() as directory:
-        path = Path(directory) / "card.png"
-        image.convert("RGB").save(path)
+        path = Path(directory) / "card.jpg"
+        _write_ocr_image(image, path)
         return _tesseract(path)
 
 
@@ -168,11 +176,11 @@ def _pdf_text(content: bytes) -> str:
         with tempfile.TemporaryDirectory() as directory:
             for index, page in enumerate(document):
                 parts.append(page.get_text())
-                pixmap = page.get_pixmap(matrix=fitz.Matrix(2, 2), alpha=False)
+                pixmap = page.get_pixmap(matrix=fitz.Matrix(1.5, 1.5), alpha=False)
                 if pixmap.width * pixmap.height > MAX_PIXELS:
                     raise GoldenCaseError("The insurance card PDF pages are too large")
-                path = Path(directory) / f"page-{index}.png"
-                pixmap.save(path)
+                path = Path(directory) / f"page-{index}.jpg"
+                _write_ocr_image(Image.frombytes("RGB", (pixmap.width, pixmap.height), pixmap.samples), path)
                 parts.append(_tesseract(path))
         return "\n".join(parts)
     except GoldenCaseError:
@@ -188,7 +196,7 @@ def _tesseract(path: Path) -> str:
     try:
         result = subprocess.run(
             (executable, str(path), "stdout", "--psm", "6"), capture_output=True,
-            text=True, timeout=20, check=False,
+            text=True, timeout=OCR_TIMEOUT_SECONDS, check=False,
         )
     except subprocess.TimeoutExpired as exc:
         raise GoldenCaseError("Insurance card OCR timed out") from exc

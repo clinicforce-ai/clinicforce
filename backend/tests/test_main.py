@@ -21,6 +21,7 @@ import httpx
 import fitz
 import psycopg
 from fastapi import HTTPException
+from PIL import Image
 
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -162,6 +163,20 @@ class MainRouteTests(unittest.IsolatedAsyncioTestCase):
              patch("app.insurance.golden.Path.read_bytes", return_value=broken.getvalue()):
             with self.assertRaisesRegex(golden.GoldenCaseError, "SHA-256"):
                 golden.load_manifest()
+
+    def test_card_image_is_downsampled_before_local_ocr(self) -> None:
+        card = BytesIO()
+        Image.new("RGB", (3200, 2400), "white").save(card, "JPEG")
+        dimensions: list[tuple[int, int]] = []
+
+        def ocr(path: Path) -> str:
+            with Image.open(path) as prepared:
+                dimensions.append(prepared.size)
+            return "card text"
+
+        with patch("app.insurance.golden._tesseract", side_effect=ocr):
+            self.assertEqual(golden._image_text(card.getvalue()), "card text")
+        self.assertEqual(dimensions, [(1600, 1200)])
 
     async def test_card_ocr_stays_locked_until_clinician_review(self) -> None:
         def stored(_patient: str, _share: str, _evidence: str, workflow: dict) -> dict:
