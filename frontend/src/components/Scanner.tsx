@@ -5,6 +5,17 @@ import { parseSmartHealthLink, type SmartHealthLink } from '../services/shl'
 
 interface ScannerProps { onScanned: (link: SmartHealthLink) => void; onCancel: () => void }
 
+const cameraConstraints: MediaTrackConstraints = { facingMode: { ideal: 'environment' } }
+
+const cameraMessage = (error: unknown) => {
+  if (error instanceof DOMException) {
+    if (error.name === 'NotFoundError') return 'No camera is available on this device.'
+    if (error.name === 'NotReadableError') return 'The camera is being used by another app.'
+    if (error.name === 'NotAllowedError') return 'Camera access is blocked by the browser or device.'
+  }
+  return 'Camera could not be started on this attempt.'
+}
+
 export default function Scanner({ onScanned, onCancel }: ScannerProps) {
   const id = useId().replace(/:/g, '')
   const fileScannerId = useId().replace(/:/g, '')
@@ -98,33 +109,10 @@ export default function Scanner({ onScanned, onCancel }: ScannerProps) {
           },
         }
         const onSuccess = (decodedText: string) => { if (active) handleDecoded(decodedText) }
-        const cameraOptions: MediaTrackConstraints[] = [
-          {
-            facingMode: { ideal: 'environment' }, width: { ideal: 1920 }, height: { ideal: 1440 },
-            advanced: [{ focusMode: 'continuous' }],
-          } as unknown as MediaTrackConstraints,
-          { facingMode: { ideal: 'environment' } },
-          {},
-        ]
-        let started = false
-        let lastError: unknown
-        for (const camera of cameraOptions) {
-          try {
-            await reader.start(camera, scanConfig, onSuccess, () => undefined)
-            started = true
-            break
-          } catch (err) {
-            lastError = err
-            /* try the next supported camera configuration */
-          }
-        }
-        if (!started) {
-          void lastError
-          throw new Error('Camera could not be started on this attempt.')
-        }
+        await reader.start(cameraConstraints, scanConfig, onSuccess, () => undefined)
         if (active) setStatus('Keep the complete QR inside the frame and hold steady.')
       } catch (cameraError) {
-        if (active) setError(cameraError instanceof Error ? `Camera unavailable: ${cameraError.message}` : 'Camera unavailable. Allow camera access in your browser, then try again.')
+        if (active) setError(`Camera unavailable: ${cameraMessage(cameraError)}`)
       } finally {
         isInitializing.current = false
       }
@@ -138,6 +126,18 @@ export default function Scanner({ onScanned, onCancel }: ScannerProps) {
       stopCamera.current = () => undefined
     }
   }, [handleDecoded, id, retry])
+
+  const retryCamera = async () => {
+    setError(''); setStatus('Requesting camera access…')
+    try {
+      if (!navigator.mediaDevices?.getUserMedia) throw new Error('Camera API unavailable')
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: false, video: cameraConstraints })
+      stream.getTracks().forEach((track) => track.stop())
+      setRetry((value) => value + 1)
+    } catch (cameraError) {
+      setError(`Camera unavailable: ${cameraMessage(cameraError)}`)
+    }
+  }
 
   const scanImage = async (file?: File) => {
     if (!file || complete.current) return
@@ -165,7 +165,7 @@ export default function Scanner({ onScanned, onCancel }: ScannerProps) {
       <div className="scanner-frame"><div id={id} /></div>
       <p className="scanner-status" role="status" aria-live="polite"><Camera aria-hidden="true" className="size-4" /> {status}</p>
       {error && <p className="form-error" role="alert">{error}</p>}
-      <div className="scanner-actions"><span>Camera having trouble?</span>{error && <button className="button button-secondary" type="button" disabled={readingFile} onClick={() => { setError(''); setStatus('Requesting camera access…'); setRetry((value) => value + 1) }}><Camera aria-hidden="true" className="size-4" /> Try camera again</button>}<button className="button button-secondary" type="button" disabled={readingFile} onClick={() => fileInput.current?.click()}><Upload aria-hidden="true" className="size-4" /> {readingFile ? 'Reading image…' : 'Upload QR image'}</button><input ref={fileInput} type="file" accept="image/*" tabIndex={-1} onChange={(event) => { const file = event.target.files?.[0]; event.target.value = ''; void scanImage(file) }} /><small>The image is decoded in this browser and is not uploaded.</small></div>
+      <div className="scanner-actions"><span>Camera having trouble?</span>{error && <button className="button button-secondary" type="button" disabled={readingFile} onClick={() => void retryCamera()}><Camera aria-hidden="true" className="size-4" /> Try camera again</button>}<button className="button button-secondary" type="button" disabled={readingFile} onClick={() => fileInput.current?.click()}><Upload aria-hidden="true" className="size-4" /> {readingFile ? 'Reading image…' : 'Upload QR image'}</button><input ref={fileInput} type="file" accept="image/*" tabIndex={-1} onChange={(event) => { const file = event.target.files?.[0]; event.target.value = ''; void scanImage(file) }} /><small>The image is decoded in this browser and is not uploaded.</small></div>
       <div id={fileScannerId} className="scanner-file-surface" aria-hidden="true" />
       <p className="scanner-privacy"><ShieldCheck aria-hidden="true" /> Camera access is used only to scan the QR code.</p>
     </div>
