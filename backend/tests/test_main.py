@@ -342,6 +342,27 @@ class MainRouteTests(unittest.IsolatedAsyncioTestCase):
         suggestions = documented.inspect_pdf(eligibility.tobytes(), "eligibility.pdf", "eligibility", "BCBS-456")["findings"]["suggested_coverage"]
         self.assertEqual(suggestions, {"coverage_status": "active", "network_status": "in_network", "out_of_network_benefit_status": "not_covered", "plan_name": "Preferred Provider Option Medical", "coinsurance_percent": 0, "deductible_remaining_cents": 0, "oop_remaining_cents": 0})
 
+    def test_anita_documents_calculate_without_staff_entering_benefits(self) -> None:
+        fields = {"member_name": "Pat Example", "member_id": "MEMBER-123", "group_number": "GROUP-123"}
+        case = golden.pending_case(fields)
+        golden.unlock_case(case, GOLDEN_MANIFEST, fields)
+        documented.add_document(case, "contract", {
+            "id": "contract", "filename": "nmct-bcbs.pdf", "sha256": "a" * 64, "observed_at": "2026-08-24", "reference": "Provider agreement",
+        })
+        documented.add_document(case, "eligibility", {
+            "id": "eligibility", "filename": "anita-benefits.pdf", "sha256": "b" * 64, "observed_at": "2026-08-24", "reference": "Eligibility response",
+            "findings": {"suggested_coverage": {"coverage_status": "active", "network_status": "in_network", "plan_name": "Preferred Provider Option Medical", "coinsurance_percent": 0, "deductible_remaining_cents": 0, "oop_remaining_cents": 0}},
+        })
+        documented.confirm_anita_evidence(case)
+        self.assertEqual(case["coverage"]["copay_cents"], 0)
+        self.assertEqual(case["coverage"]["individual_oop_remaining_cents"], 0)
+        documented.advance(case, "network", GOLDEN_MANIFEST["rates_source"])
+        documented.set_clinical_context(case, "neuropathy", GOLDEN_MANIFEST["rate_lines"])
+        documented.select_services(case, ["99204"], GOLDEN_MANIFEST["rates_source"])
+        documented.advance(case, "authorization", GOLDEN_MANIFEST["rates_source"])
+        documented.advance(case, "benefits", GOLDEN_MANIFEST["rates_source"])
+        self.assertEqual(case["estimate"]["patient_cents"], 0)
+
     def test_document_fallback_suggests_reviewed_codes_and_calculates_exact_cents(self) -> None:
         profile = PatientProfile(
             patient_id="patient-2", given_name="Jordan", family_name="Rivera",

@@ -88,10 +88,14 @@ export async function suggestInsuranceServices(caseId: string, clinicalContext: 
   })
 }
 
-export async function uploadInsuranceEvidence(caseId: string, kind: 'eligibility' | 'contract', file: File): Promise<InsuranceCase> {
+export async function uploadInsuranceEvidence(caseId: string, files: File[]): Promise<InsuranceCase> {
   const form = new FormData()
-  form.append('file', file, file.name)
-  return request<InsuranceCase>(`/api/doctor/insurance/cases/${encodeURIComponent(caseId)}/documents/${kind}`, { method: 'POST', body: form })
+  files.forEach((file) => form.append('files', file, file.name))
+  return request<InsuranceCase>(`/api/doctor/insurance/cases/${encodeURIComponent(caseId)}/documents`, { method: 'POST', body: form })
+}
+
+export async function confirmAnitaInsuranceEvidence(caseId: string): Promise<InsuranceCase> {
+  return request<InsuranceCase>(`/api/doctor/insurance/cases/${encodeURIComponent(caseId)}/evidence/automatic`, { method: 'POST' })
 }
 
 export async function confirmInsuranceEvidence(caseId: string, evidence: InsuranceEvidenceInput): Promise<InsuranceCase> {

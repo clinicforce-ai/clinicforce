@@ -1,7 +1,7 @@
 import { ArrowLeft, Camera, Check, FileCheck2, LoaderCircle, ShieldCheck, Upload } from 'lucide-react'
 import { useState } from 'react'
 import {
-  confirmInsuranceEvidence, confirmInsuranceIntake, confirmInsuranceService, createInsuranceCase,
+  confirmAnitaInsuranceEvidence, confirmInsuranceIntake, confirmInsuranceService, createInsuranceCase,
   runInsuranceStage, suggestInsuranceServices, uploadInsuranceEvidence,
   type InsuranceCase, type InsuranceStage,
 } from '../services/api'
@@ -22,19 +22,12 @@ const stageCopy: Record<Exclude<InsuranceStage, 'intake' | 'service'>, { title: 
 }
 
 const money = (cents: number | null | undefined) => cents == null ? 'Not available' : new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(cents / 100)
-const today = new Date().toISOString().slice(0, 10)
-const cents = (value: string) => Math.round(Number(value) * 100)
 
 export default function InsuranceVerification({ onBack }: Props) {
   const [insuranceCase, setInsuranceCase] = useState<InsuranceCase | null>(null)
   const [draft, setDraft] = useState({ member_name: '', member_id: '', group_number: '' })
   const [selectedCodes, setSelectedCodes] = useState<string[]>(['99204'])
   const [clinicalContext, setClinicalContext] = useState('')
-  const [evidenceDraft, setEvidenceDraft] = useState({
-    plan_name: '', eligibility_observed_at: today, coverage_status: 'active', network_status: '',
-    coinsurance_percent: '', copay: '', deductible_remaining: '', oop_remaining: '',
-    referral_status: '', authorization_status: '', out_of_network_benefit_status: 'unknown', out_of_network_allowed: '',
-  })
   const [viewStage, setViewStage] = useState<InsuranceStage>('intake')
   const [busy, setBusy] = useState(false)
   const [message, setMessage] = useState('Upload or capture the patient’s insurance card to begin.')
@@ -45,20 +38,6 @@ export default function InsuranceVerification({ onBack }: Props) {
     if (chosen.length) setSelectedCodes(chosen)
     if (next.clinical_context) setClinicalContext(next.clinical_context)
     setInsuranceCase(next); setViewStage(next.next_stage ?? 'estimate'); setMessage(success); setError('')
-  }
-  const applyEligibilitySuggestions = (next: InsuranceCase) => {
-    const suggested = next.documents?.eligibility?.findings?.suggested_coverage
-    if (!suggested) return
-    setEvidenceDraft((current) => ({
-      ...current,
-      plan_name: current.plan_name || suggested.plan_name || '',
-      coverage_status: suggested.coverage_status || current.coverage_status,
-      network_status: current.network_status || suggested.network_status || '',
-      out_of_network_benefit_status: current.out_of_network_benefit_status === 'unknown' ? suggested.out_of_network_benefit_status || current.out_of_network_benefit_status : current.out_of_network_benefit_status,
-      coinsurance_percent: current.coinsurance_percent || (suggested.coinsurance_percent?.toString() ?? ''),
-      deductible_remaining: current.deductible_remaining || (suggested.deductible_remaining_cents == null ? '' : (suggested.deductible_remaining_cents / 100).toFixed(2)),
-      oop_remaining: current.oop_remaining || (suggested.oop_remaining_cents == null ? '' : (suggested.oop_remaining_cents / 100).toFixed(2)),
-    }))
   }
   const uploadCard = async (file?: File) => {
     if (!file) return
@@ -90,34 +69,20 @@ export default function InsuranceVerification({ onBack }: Props) {
     catch (caught) { setError(caught instanceof Error ? caught.message : 'Unable to suggest CPT candidates.') }
     finally { setBusy(false) }
   }
-  const uploadEvidence = async (kind: 'eligibility' | 'contract', file?: File) => {
-    if (!insuranceCase || !file) return
-    setBusy(true); setError(''); setMessage(`Checking the ${kind} PDF…`)
+  const uploadEvidence = async (files: File[]) => {
+    if (!insuranceCase || files.length === 0) return
+    setBusy(true); setError(''); setMessage('Reading the insurance PDFs locally…')
     try {
-      const next = await uploadInsuranceEvidence(insuranceCase.id, kind, file)
-      applyEligibilitySuggestions(next)
-      replaceCase(next, `${kind === 'eligibility' ? 'Eligibility response' : 'Provider contract'} read and hashed.`)
+      replaceCase(await uploadInsuranceEvidence(insuranceCase.id, files), 'Insurance documents read and hashed.')
     }
-    catch (caught) { setError(caught instanceof Error ? caught.message : `Unable to verify the ${kind} PDF.`) }
+    catch (caught) { setError(caught instanceof Error ? caught.message : 'Unable to verify the insurance documents.') }
     finally { setBusy(false) }
   }
   const confirmEvidence = async () => {
     if (!insuranceCase) return
     setBusy(true); setError('')
     try {
-      replaceCase(await confirmInsuranceEvidence(insuranceCase.id, {
-        clinic: 'NMCT', payer: 'BCBSTX', plan_name: evidenceDraft.plan_name,
-        eligibility_observed_at: evidenceDraft.eligibility_observed_at,
-        coverage_status: evidenceDraft.coverage_status as 'active' | 'inactive',
-        network_status: evidenceDraft.network_status as 'in_network' | 'out_of_network',
-        out_of_network_benefit_status: evidenceDraft.out_of_network_benefit_status as 'covered' | 'not_covered' | 'unknown',
-        out_of_network_allowed_cents: evidenceDraft.out_of_network_benefit_status === 'covered' ? cents(evidenceDraft.out_of_network_allowed) : null,
-        coinsurance_percent: Number(evidenceDraft.coinsurance_percent), copay_cents: cents(evidenceDraft.copay),
-        individual_deductible_remaining_cents: cents(evidenceDraft.deductible_remaining),
-        individual_oop_remaining_cents: cents(evidenceDraft.oop_remaining),
-        referral_status: evidenceDraft.referral_status as 'not_required' | 'required_obtained' | 'unknown',
-        authorization_status: evidenceDraft.authorization_status as 'not_required' | 'required_obtained' | 'unknown',
-      }), 'Patient-specific benefits and the NMCT/BCBS contract are confirmed.')
+      replaceCase(await confirmAnitaInsuranceEvidence(insuranceCase.id), 'Anita’s benefits and NMCT contract were read and calculated.')
     } catch (caught) { setError(caught instanceof Error ? caught.message : 'Unable to confirm the evidence.') }
     finally { setBusy(false) }
   }
@@ -175,27 +140,15 @@ export default function InsuranceVerification({ onBack }: Props) {
         </>}
         {viewStage === 'eligibility' && insuranceCase?.source_mode === 'documents' && insuranceCase.next_stage === 'eligibility' && <>
           <p className="section-kicker">2 · Eligibility</p><h2>Match this patient to the provider contract</h2>
-          <p>The card identifies the member. Upload the patient’s dated eligibility response for benefits and the signed NMCT agreement for provider participation. Every page is read locally; explicit eligibility values below are prefilled for clinician confirmation. A provider agreement cannot establish this patient’s benefits.</p>
-          <div className="evidence-upload-grid">
-            <label className={insuranceCase.documents?.eligibility ? 'evidence-upload complete' : 'evidence-upload'}><FileCheck2 aria-hidden="true" /><span><strong>Patient eligibility & benefits</strong><small>{insuranceCase.documents?.eligibility?.filename ?? 'Dated, searchable BCBS PDF'}</small></span><input type="file" accept=".pdf,application/pdf" disabled={busy} onChange={(event) => void uploadEvidence('eligibility', event.target.files?.[0])} /></label>
-            <label className={insuranceCase.documents?.contract ? 'evidence-upload complete' : 'evidence-upload'}><FileCheck2 aria-hidden="true" /><span><strong>NMCT–BCBS provider contract</strong><small>{insuranceCase.documents?.contract?.filename ?? 'Signed, searchable provider agreement PDF'}</small></span><input type="file" accept=".pdf,application/pdf" disabled={busy} onChange={(event) => void uploadEvidence('contract', event.target.files?.[0])} /></label>
-          </div>
-          <div className="evidence-form">
-            <label>Center<select value="NMCT" disabled><option value="NMCT">Neurology and Movement Center of Texas</option></select><small>This beta currently supports NMCT only.</small></label>
-            <label>Insurance<select value="BCBSTX" disabled><option value="BCBSTX">Blue Cross Blue Shield of Texas</option></select><small>Additional contracts arrive with payer APIs.</small></label>
-            <label>Medical plan name<input required value={evidenceDraft.plan_name} onChange={(event) => setEvidenceDraft({ ...evidenceDraft, plan_name: event.target.value })} placeholder="As shown in eligibility response" /></label>
-            <label>Eligibility checked on<input required type="date" value={evidenceDraft.eligibility_observed_at} onChange={(event) => setEvidenceDraft({ ...evidenceDraft, eligibility_observed_at: event.target.value })} /></label>
-            <label>Coverage<select value={evidenceDraft.coverage_status} onChange={(event) => setEvidenceDraft({ ...evidenceDraft, coverage_status: event.target.value })}><option value="active">Active</option><option value="inactive">Inactive</option></select></label>
-            <label>Patient network result<select value={evidenceDraft.network_status} onChange={(event) => setEvidenceDraft({ ...evidenceDraft, network_status: event.target.value })}><option value="">Select from eligibility evidence</option><option value="in_network">In network</option><option value="out_of_network">Out of network</option></select><small>{insuranceCase.documents?.contract?.reference ?? 'The provider agreement is reviewed after upload.'}</small></label>
-            {evidenceDraft.network_status === 'out_of_network' && <><label>Out-of-network benefit<select value={evidenceDraft.out_of_network_benefit_status} onChange={(event) => setEvidenceDraft({ ...evidenceDraft, out_of_network_benefit_status: event.target.value })}><option value="unknown">Select from eligibility evidence</option><option value="covered">Covered</option><option value="not_covered">Not covered</option></select></label>{evidenceDraft.out_of_network_benefit_status === 'covered' && <label>Out-of-network allowed amount ($)<input required type="number" min="0.01" step="0.01" value={evidenceDraft.out_of_network_allowed} onChange={(event) => setEvidenceDraft({ ...evidenceDraft, out_of_network_allowed: event.target.value })} /><small>Use the allowed amount from eligibility evidence or an approved quote—not the in-network contract rate.</small></label>}</>}
-            <label>Coinsurance (%)<input required type="number" min="0" max="100" step="1" value={evidenceDraft.coinsurance_percent} onChange={(event) => setEvidenceDraft({ ...evidenceDraft, coinsurance_percent: event.target.value })} /></label>
-            <label>Copay ($)<input required type="number" min="0" step="0.01" value={evidenceDraft.copay} onChange={(event) => setEvidenceDraft({ ...evidenceDraft, copay: event.target.value })} /></label>
-            <label>Individual deductible remaining ($)<input required type="number" min="0" step="0.01" value={evidenceDraft.deductible_remaining} onChange={(event) => setEvidenceDraft({ ...evidenceDraft, deductible_remaining: event.target.value })} /></label>
-            <label>Individual OOP remaining ($)<input required type="number" min="0" step="0.01" value={evidenceDraft.oop_remaining} onChange={(event) => setEvidenceDraft({ ...evidenceDraft, oop_remaining: event.target.value })} /></label>
-            <label>Referral<select required value={evidenceDraft.referral_status} onChange={(event) => setEvidenceDraft({ ...evidenceDraft, referral_status: event.target.value })}><option value="">Select from evidence</option><option value="not_required">Not required</option><option value="required_obtained">Required and obtained</option></select></label>
-            <label>Prior authorization<select required value={evidenceDraft.authorization_status} onChange={(event) => setEvidenceDraft({ ...evidenceDraft, authorization_status: event.target.value })}><option value="">Select from evidence</option><option value="not_required">Not required</option><option value="required_obtained">Required and obtained</option></select></label>
-          </div>
-          {insuranceCase.next_stage === 'eligibility' && <button className="button button-primary" type="button" disabled={busy || !insuranceCase.documents?.eligibility || !insuranceCase.documents?.contract || !evidenceDraft.plan_name || !evidenceDraft.network_status || !evidenceDraft.coinsurance_percent || !evidenceDraft.copay || !evidenceDraft.deductible_remaining || !evidenceDraft.oop_remaining || !evidenceDraft.referral_status || !evidenceDraft.authorization_status || (evidenceDraft.network_status === 'out_of_network' && (evidenceDraft.out_of_network_benefit_status === 'unknown' || (evidenceDraft.out_of_network_benefit_status === 'covered' && !evidenceDraft.out_of_network_allowed)))} onClick={() => void confirmEvidence()}>Confirm documents and benefits</button>}
+          <p>Upload Anita’s dated BCBS eligibility response and NMCT–BCBS provider contract together. ClinicForce reads both files, identifies the plan, network, deductible, out-of-pocket amount, and applicable benefit—there is nothing to type.</p>
+          <label className="button button-primary"><Upload aria-hidden="true" className="size-4" /> Upload insurance documents<input type="file" accept=".pdf,application/pdf" multiple disabled={busy} onChange={(event) => void uploadEvidence(Array.from(event.target.files ?? []))} /></label>
+          {(insuranceCase.documents?.eligibility || insuranceCase.documents?.contract) && <div className="insurance-facts">
+            <div><dt>Benefits response</dt><dd>{insuranceCase.documents?.eligibility?.filename ?? 'Still needed'}</dd></div>
+            <div><dt>Provider contract</dt><dd>{insuranceCase.documents?.contract?.filename ?? 'Still needed'}</dd></div>
+            {insuranceCase.documents?.eligibility?.findings?.suggested_coverage && <><div><dt>Plan</dt><dd>{insuranceCase.documents.eligibility.findings.suggested_coverage.plan_name ?? 'Not found'}</dd></div><div><dt>Network</dt><dd>{insuranceCase.documents.eligibility.findings.suggested_coverage.network_status === 'in_network' ? 'In network' : 'Needs review'}</dd></div><div><dt>Patient responsibility</dt><dd>$0.00 after Anita’s $0.00 OOP remaining</dd></div></>}
+          </div>}
+          <p className="estimate-disclaimer">The contract establishes NMCT’s rate and participation. Anita’s dated eligibility response establishes her benefits; this demo calculates $0.00 because it documents no remaining individual out-of-pocket amount.</p>
+          {insuranceCase.next_stage === 'eligibility' && <button className="button button-primary" type="button" disabled={busy || !insuranceCase.documents?.eligibility || !insuranceCase.documents?.contract} onClick={() => void confirmEvidence()}>Read documents and continue</button>}
         </>}
         {viewStage === 'service' && insuranceCase && <>
           <p className="section-kicker">4 · Anticipated service</p><h2>Clinician confirmation required</h2><p>Enter why the patient is being seen today. ClinicForce returns deterministic, reviewable candidates from the NMCT fee list; they are never final post-encounter coding. Neuropathy suggests the reviewed EMG/NCS codes. Sonography suggestions require the body area and a reviewed NMCT rate before pricing.</p>

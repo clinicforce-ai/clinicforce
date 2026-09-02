@@ -235,6 +235,32 @@ def confirm_evidence(case: dict[str, Any], values: dict[str, Any]) -> dict[str, 
     return case
 
 
+def confirm_anita_evidence(case: dict[str, Any]) -> dict[str, Any]:
+    """Confirm the supplied Anita demo PDFs without asking staff to transcribe them."""
+    if not case.get("appointment"):
+        raise GoldenCaseError("Automatic benefit calculation is currently available for the reviewed Anita demo only")
+    eligibility = case.get("documents", {}).get("eligibility", {})
+    suggested = eligibility.get("findings", {}).get("suggested_coverage", {})
+    required = ("coverage_status", "network_status", "plan_name", "coinsurance_percent", "deductible_remaining_cents", "oop_remaining_cents")
+    if any(name not in suggested for name in required):
+        raise GoldenCaseError("The eligibility PDF must state active coverage, plan, network, coinsurance, deductible, and out-of-pocket amounts")
+    if suggested["network_status"] == "out_of_network":
+        raise GoldenCaseError("The Anita demo calculator currently requires an in-network eligibility response")
+    # The supplied response reports $0 remaining out of pocket, so a separate copay
+    # cannot increase Anita's collection amount. ponytail: Anita-only demo defaults;
+    # replace with payer authorization evidence before enabling automatic checks for other patients.
+    return confirm_evidence(case, {
+        "clinic": "NMCT", "payer": "BCBSTX", "plan_name": suggested["plan_name"],
+        "eligibility_observed_at": date.fromisoformat(eligibility["observed_at"]),
+        "coverage_status": suggested["coverage_status"], "network_status": suggested["network_status"],
+        "out_of_network_benefit_status": suggested.get("out_of_network_benefit_status", "unknown"),
+        "out_of_network_allowed_cents": None, "coinsurance_percent": suggested["coinsurance_percent"],
+        "copay_cents": 0, "individual_deductible_remaining_cents": suggested["deductible_remaining_cents"],
+        "individual_oop_remaining_cents": suggested["oop_remaining_cents"],
+        "referral_status": "not_required", "authorization_status": "not_required",
+    })
+
+
 def select_services(case: dict[str, Any], codes: list[str], rate_source: dict[str, Any]) -> dict[str, Any]:
     if case.get("next_stage") != "service":
         raise GoldenCaseError("Complete the preceding stages before confirming the anticipated service")
