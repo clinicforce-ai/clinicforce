@@ -184,12 +184,12 @@ def _pdf_text(content: bytes) -> str:
         parts = [page.get_text() for page in document]
         if len(_card_fields("\n".join(parts))) == len(CARD_FIELD_PATTERNS):
             return "\n".join(parts)
-        # The largest embedded image is the card. OCR it once; the clinician can
-        # correct missing fields, but an upload must never wait on repeated OCR.
+        # The front card image contains the member fields. OCR it once; a PDF's
+        # larger back image contains instructions, not the member information.
         with tempfile.TemporaryDirectory() as directory:
-            images = [(meta[2] * meta[3], meta[0]) for page in document for meta in page.get_images(full=True)]
+            images = document[0].get_images(full=True)
             if images:
-                pixmap = fitz.Pixmap(document, max(images)[1])
+                pixmap = fitz.Pixmap(document, max(images, key=lambda meta: meta[2] * meta[3])[0])
             else:
                 pixmap = document[0].get_pixmap(matrix=fitz.Matrix(2, 2), alpha=False)
             if pixmap.width * pixmap.height > MAX_PIXELS:
@@ -228,7 +228,9 @@ def read_card(content: bytes) -> dict[str, str]:
     else:
         raise GoldenCaseError("Upload a PDF, JPG, or PNG insurance card")
     fields = _card_fields(text)
-    return {name: fields.get(name, "") for name in CARD_FIELD_PATTERNS}
+    if len(fields) != len(CARD_FIELD_PATTERNS):
+        raise GoldenCaseError("ClinicForce could not read all card fields. Upload a clear image of the front of the card")
+    return fields
 
 
 def card_matches(fields: dict[str, str], manifest: dict[str, Any]) -> bool:
