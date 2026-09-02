@@ -22,6 +22,7 @@ class InsuranceServiceLinesRequest(RequestModel):
 
 class InsuranceClinicalContextRequest(RequestModel):
     clinical_context: str = Field(min_length=3, max_length=1000)
+    visit_type: Literal["new", "established"] = "new"
 
 
 class InsuranceEvidenceRequest(RequestModel):

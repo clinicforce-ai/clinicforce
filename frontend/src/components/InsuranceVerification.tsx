@@ -26,8 +26,9 @@ const money = (cents: number | null | undefined) => cents == null ? 'Not availab
 export default function InsuranceVerification({ onBack }: Props) {
   const [insuranceCase, setInsuranceCase] = useState<InsuranceCase | null>(null)
   const [draft, setDraft] = useState({ member_name: '', member_id: '', group_number: '' })
-  const [selectedCodes, setSelectedCodes] = useState<string[]>(['99204'])
+  const [selectedCodes, setSelectedCodes] = useState<string[]>([])
   const [clinicalContext, setClinicalContext] = useState('')
+  const [visitType, setVisitType] = useState<'new' | 'established'>('new')
   const [viewStage, setViewStage] = useState<InsuranceStage>('intake')
   const [busy, setBusy] = useState(false)
   const [message, setMessage] = useState('Upload or capture the patient’s insurance card to begin.')
@@ -65,25 +66,18 @@ export default function InsuranceVerification({ onBack }: Props) {
   const suggestServices = async () => {
     if (!insuranceCase) return
     setBusy(true); setError('')
-    try { replaceCase(await suggestInsuranceServices(insuranceCase.id, clinicalContext), 'CPT candidates refreshed for clinician review.') }
+    try { replaceCase(await suggestInsuranceServices(insuranceCase.id, clinicalContext, visitType), 'CPT candidates refreshed for clinician review.') }
     catch (caught) { setError(caught instanceof Error ? caught.message : 'Unable to suggest CPT candidates.') }
     finally { setBusy(false) }
   }
-  const uploadEvidence = async (files: File[]) => {
-    if (!insuranceCase || files.length === 0) return
-    setBusy(true); setError(''); setMessage('Reading the insurance PDFs locally…')
+  const uploadEvidence = async (file?: File) => {
+    if (!insuranceCase || !file) return
+    setBusy(true); setError(''); setMessage('Reading the NMCT–BCBS provider contract locally…')
     try {
-      replaceCase(await uploadInsuranceEvidence(insuranceCase.id, files), 'Insurance documents read and hashed.')
+      await uploadInsuranceEvidence(insuranceCase.id, file)
+      replaceCase(await confirmAnitaInsuranceEvidence(insuranceCase.id), 'Provider contract matched; Anita’s demo benefits are ready.')
     }
     catch (caught) { setError(caught instanceof Error ? caught.message : 'Unable to verify the insurance documents.') }
-    finally { setBusy(false) }
-  }
-  const confirmEvidence = async () => {
-    if (!insuranceCase) return
-    setBusy(true); setError('')
-    try {
-      replaceCase(await confirmAnitaInsuranceEvidence(insuranceCase.id), 'Anita’s benefits and NMCT contract were read and calculated.')
-    } catch (caught) { setError(caught instanceof Error ? caught.message : 'Unable to confirm the evidence.') }
     finally { setBusy(false) }
   }
   const toggleCode = (code: string) => {
@@ -107,7 +101,7 @@ export default function InsuranceVerification({ onBack }: Props) {
   return <section className="insurance-beta" aria-labelledby="insurance-heading">
     <button className="back-control" type="button" onClick={onBack}><ArrowLeft aria-hidden="true" className="size-4" /> Back to clinical summary</button>
     <header className="insurance-beta-hero">
-      <div><p className="eyebrow"><ShieldCheck aria-hidden="true" className="size-4" /> Evidence-backed beta · NMCT and BCBSTX</p><h1 id="insurance-heading">Verify insurance before the visit</h1><p>ClinicForce requires the card, patient eligibility response, and provider agreement for every demo patient. No payer API or AI coding service is called.</p></div>
+      <div><p className="eyebrow"><ShieldCheck aria-hidden="true" className="size-4" /> Evidence-backed beta · NMCT and BCBSTX</p><h1 id="insurance-heading">Verify insurance before the visit</h1><p>Upload the card and NMCT–BCBS provider contract. Anita’s reviewed demo eligibility snapshot supplies benefits until the payer API is connected.</p></div>
       <div className="beta-session"><span>Secure share session</span><strong>15 minutes</strong></div>
     </header>
     <div className="insurance-stepper" aria-label="Insurance verification progress">
@@ -140,19 +134,14 @@ export default function InsuranceVerification({ onBack }: Props) {
         </>}
         {viewStage === 'eligibility' && insuranceCase?.source_mode === 'documents' && insuranceCase.next_stage === 'eligibility' && <>
           <p className="section-kicker">2 · Eligibility</p><h2>Match this patient to the provider contract</h2>
-          <p>Upload Anita’s dated BCBS eligibility response and NMCT–BCBS provider contract together. ClinicForce reads both files, identifies the plan, network, deductible, out-of-pocket amount, and applicable benefit—there is nothing to type.</p>
-          <label className="button button-primary"><Upload aria-hidden="true" className="size-4" /> Upload insurance documents<input type="file" accept=".pdf,application/pdf" multiple disabled={busy} onChange={(event) => void uploadEvidence(Array.from(event.target.files ?? []))} /></label>
-          {(insuranceCase.documents?.eligibility || insuranceCase.documents?.contract) && <div className="insurance-facts">
-            <div><dt>Benefits response</dt><dd>{insuranceCase.documents?.eligibility?.filename ?? 'Still needed'}</dd></div>
-            <div><dt>Provider contract</dt><dd>{insuranceCase.documents?.contract?.filename ?? 'Still needed'}</dd></div>
-            {insuranceCase.documents?.eligibility?.findings?.suggested_coverage && <><div><dt>Plan</dt><dd>{insuranceCase.documents.eligibility.findings.suggested_coverage.plan_name ?? 'Not found'}</dd></div><div><dt>Network</dt><dd>{insuranceCase.documents.eligibility.findings.suggested_coverage.network_status === 'in_network' ? 'In network' : 'Needs review'}</dd></div><div><dt>Patient responsibility</dt><dd>$0.00 after Anita’s $0.00 OOP remaining</dd></div></>}
-          </div>}
-          <p className="estimate-disclaimer">The contract establishes NMCT’s rate and participation. Anita’s dated eligibility response establishes her benefits; this demo calculates $0.00 because it documents no remaining individual out-of-pocket amount.</p>
-          {insuranceCase.next_stage === 'eligibility' && <button className="button button-primary" type="button" disabled={busy || !insuranceCase.documents?.eligibility || !insuranceCase.documents?.contract} onClick={() => void confirmEvidence()}>Read documents and continue</button>}
+          <p>Upload the NMCT–BCBS provider contract. Anita’s reviewed eligibility snapshot is already part of this no-API demo, so the doctor does not need an Availity PDF or any benefit values.</p>
+          <label className={insuranceCase.documents?.contract ? 'evidence-upload complete' : 'button button-primary'}><Upload aria-hidden="true" className="size-4" /> Upload NMCT–BCBS provider contract<input type="file" accept=".pdf,application/pdf" disabled={busy || Boolean(insuranceCase.documents?.contract)} onChange={(event) => void uploadEvidence(event.target.files?.[0])} /></label>
+          {insuranceCase.documents?.contract && <div className="insurance-facts"><div><dt>Provider contract</dt><dd>{insuranceCase.documents.contract.filename}</dd></div><div><dt>Anita’s demo eligibility</dt><dd>Active · in network · deductible and OOP met</dd></div><div><dt>Patient responsibility</dt><dd>$0.00 after $0.00 OOP remaining</dd></div></div>}
+          <p className="estimate-disclaimer">For Anita only, ClinicForce uses the reviewed demo eligibility snapshot. For any other patient, live eligibility data requires the payer API.</p>
         </>}
         {viewStage === 'service' && insuranceCase && <>
           <p className="section-kicker">4 · Anticipated service</p><h2>Clinician confirmation required</h2><p>Enter why the patient is being seen today. ClinicForce returns deterministic, reviewable candidates from the NMCT fee list; they are never final post-encounter coding. Neuropathy suggests the reviewed EMG/NCS codes. Sonography suggestions require the body area and a reviewed NMCT rate before pricing.</p>
-          {insuranceCase.next_stage === 'service' && <div className="clinical-context-form"><label htmlFor="clinical-context">Conditions or symptoms for this visit<textarea id="clinical-context" value={clinicalContext} onChange={(event) => setClinicalContext(event.target.value)} placeholder="e.g. burning, numbness and tingling in both feet" /></label><button className="button button-secondary" type="button" disabled={busy || clinicalContext.trim().length < 3} onClick={() => void suggestServices()}>{insuranceCase.service_lines.length ? 'Update CPT suggestions' : 'Suggest CPT codes'}</button></div>}
+          {insuranceCase.next_stage === 'service' && <div className="clinical-context-form"><label>Visit type<select value={visitType} onChange={(event) => setVisitType(event.target.value as 'new' | 'established')}><option value="new">New patient</option><option value="established">Established patient</option></select></label><label htmlFor="clinical-context">Conditions or symptoms for this visit<textarea id="clinical-context" value={clinicalContext} onChange={(event) => setClinicalContext(event.target.value)} placeholder="e.g. neuropathy; EMG planned" /></label><button className="button button-secondary" type="button" disabled={busy || clinicalContext.trim().length < 3} onClick={() => void suggestServices()}>{insuranceCase.service_lines.length ? 'Update CPT suggestions' : 'Suggest CPT codes'}</button></div>}
           <fieldset className="service-options"><legend>Choose anticipated CPT candidates</legend>{insuranceCase.service_lines.map((line) => <label key={line.code} className={selectedCodes.includes(line.code) ? 'selected' : ''}><input type={line.code.startsWith('992') ? 'radio' : 'checkbox'} name={line.code.startsWith('992') ? 'office-service' : `service-${line.code}`} value={line.code} disabled={insuranceCase.next_stage !== 'service'} checked={selectedCodes.includes(line.code)} onChange={() => toggleCode(line.code)} /><span><strong>{line.code}</strong>{line.description}<small>{line.allowed_cents == null ? line.evidence_note : `Reviewed Blue Choice PPO amount ${money(line.allowed_cents)}`}{line.suggested_by ? ` · Suggested by ${line.suggested_by.toLowerCase()}` : ''}</small></span></label>)}</fieldset>
           {insuranceCase.next_stage === 'service' && insuranceCase.service_lines.length > 0 && <button className="button button-primary" disabled={busy || selectedCodes.length === 0} type="button" onClick={() => void confirmService()}>Confirm {selectedCodes.join(', ')}</button>}
         </>}

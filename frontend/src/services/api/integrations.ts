@@ -81,17 +81,17 @@ export async function confirmInsuranceService(caseId: string, codes: string[]): 
   })
 }
 
-export async function suggestInsuranceServices(caseId: string, clinicalContext: string): Promise<InsuranceCase> {
+export async function suggestInsuranceServices(caseId: string, clinicalContext: string, visitType: 'new' | 'established'): Promise<InsuranceCase> {
   return request<InsuranceCase>(`/api/doctor/insurance/cases/${encodeURIComponent(caseId)}/clinical-context`, {
     method: 'PUT', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ clinical_context: clinicalContext }),
+    body: JSON.stringify({ clinical_context: clinicalContext, visit_type: visitType }),
   })
 }
 
-export async function uploadInsuranceEvidence(caseId: string, files: File[]): Promise<InsuranceCase> {
+export async function uploadInsuranceEvidence(caseId: string, file: File): Promise<InsuranceCase> {
   const form = new FormData()
-  files.forEach((file) => form.append('files', file, file.name))
-  return request<InsuranceCase>(`/api/doctor/insurance/cases/${encodeURIComponent(caseId)}/documents`, { method: 'POST', body: form })
+  form.append('file', file, file.name)
+  return request<InsuranceCase>(`/api/doctor/insurance/cases/${encodeURIComponent(caseId)}/documents/contract`, { method: 'POST', body: form })
 }
 
 export async function confirmAnitaInsuranceEvidence(caseId: string): Promise<InsuranceCase> {

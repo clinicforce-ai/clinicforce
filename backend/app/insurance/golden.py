@@ -242,16 +242,7 @@ def unlock_case(case: dict[str, Any], manifest: dict[str, Any], fields: dict[str
         # The reviewed card identifies the demo patient only. Benefits and the
         # provider agreement must still be uploaded and confirmed for this visit.
         "source_mode": "documents", "status": "in_progress", "next_stage": "eligibility", "ocr": {**fields, "confirmed": True},
-        "appointment": manifest["appointment"], "coverage": None, "documents": {},
-        "service_lines": [
-            {**line, "selected": line["code"] == "99204", "confirmed": False, "available": True,
-             "suggested_by": "New-patient visit"}
-            for line in manifest.get("rate_lines", []) if line["code"].startswith("9920")
-        ] or [
-            {"code": code, "description": f"New patient office visit ({code})", "allowed_cents": int(amount),
-             "selected": code == "99204", "confirmed": False, "available": True, "suggested_by": "New-patient visit"}
-            for code, amount in manifest["rates"].items()
-        ],
+        "appointment": manifest["appointment"], "coverage": None, "documents": {}, "service_lines": [],
         "facts": [
             _fact("intake", "Appointment", "New patient neurology office visit · neuropathy", manifest["appointment"]["source"]),
             _fact("intake", "Member card match", "Member name, member ID, and group number confirmed", manifest["card_source"]),

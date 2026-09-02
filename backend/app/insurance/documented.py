@@ -46,18 +46,18 @@ def card_matches_patient(fields: dict[str, str], profile: Any) -> bool:
     return _normalized(profile.given_name) in tokens and _normalized(profile.family_name) in tokens
 
 
-def service_lines(clinical_context: str, rate_lines: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def service_lines(clinical_context: str, rate_lines: list[dict[str, Any]], visit_type: str = "new") -> list[dict[str, Any]]:
     condition_text = clinical_context.casefold()
-    codes = {"99202", "99203", "99204", "99205"}
+    codes = {"99202", "99203", "99204", "99205"} if visit_type == "new" else {"99211", "99212", "99213", "99214", "99215"}
     if any(term in condition_text for term in NEURODIAGNOSTIC_TERMS):
         codes.update(NEURODIAGNOSTIC_CODES)
     lines: list[dict[str, Any]] = [
         {
             **line,
-            "selected": line["code"] == "99204",
+            "selected": False,
             "confirmed": False,
             "available": True,
-            "suggested_by": "New-patient visit" if line["code"].startswith("992") else "Clinician-entered context",
+            "suggested_by": f"{visit_type.title()}-patient visit" if line["code"].startswith("992") else "Clinician-entered context",
         }
         for line in rate_lines
         if line["code"] in codes
@@ -107,14 +107,15 @@ def confirm_intake(case: dict[str, Any], profile: Any, fields: dict[str, str]) -
     return case
 
 
-def set_clinical_context(case: dict[str, Any], value: str, rate_lines: list[dict[str, Any]]) -> dict[str, Any]:
+def set_clinical_context(case: dict[str, Any], value: str, rate_lines: list[dict[str, Any]], visit_type: str = "new") -> dict[str, Any]:
     if case.get("next_stage") != "service":
         raise GoldenCaseError("Complete network review before requesting CPT suggestions")
     context = " ".join(value.split()).strip()
     if len(context) < 3:
         raise GoldenCaseError("Enter the conditions or symptoms for this anticipated visit")
     case["clinical_context"] = context
-    case["service_lines"] = service_lines(context, rate_lines)
+    case["visit_type"] = visit_type
+    case["service_lines"] = service_lines(context, rate_lines, visit_type)
     return case
 
 
@@ -235,30 +236,36 @@ def confirm_evidence(case: dict[str, Any], values: dict[str, Any]) -> dict[str, 
     return case
 
 
-def confirm_anita_evidence(case: dict[str, Any]) -> dict[str, Any]:
-    """Confirm the supplied Anita demo PDFs without asking staff to transcribe them."""
-    if not case.get("appointment"):
-        raise GoldenCaseError("Automatic benefit calculation is currently available for the reviewed Anita demo only")
-    eligibility = case.get("documents", {}).get("eligibility", {})
-    suggested = eligibility.get("findings", {}).get("suggested_coverage", {})
-    required = ("coverage_status", "network_status", "plan_name", "coinsurance_percent", "deductible_remaining_cents", "oop_remaining_cents")
-    if any(name not in suggested for name in required):
-        raise GoldenCaseError("The eligibility PDF must state active coverage, plan, network, coinsurance, deductible, and out-of-pocket amounts")
-    if suggested["network_status"] == "out_of_network":
-        raise GoldenCaseError("The Anita demo calculator currently requires an in-network eligibility response")
-    # The supplied response reports $0 remaining out of pocket, so a separate copay
-    # cannot increase Anita's collection amount. ponytail: Anita-only demo defaults;
-    # replace with payer authorization evidence before enabling automatic checks for other patients.
-    return confirm_evidence(case, {
-        "clinic": "NMCT", "payer": "BCBSTX", "plan_name": suggested["plan_name"],
-        "eligibility_observed_at": date.fromisoformat(eligibility["observed_at"]),
-        "coverage_status": suggested["coverage_status"], "network_status": suggested["network_status"],
-        "out_of_network_benefit_status": suggested.get("out_of_network_benefit_status", "unknown"),
-        "out_of_network_allowed_cents": None, "coinsurance_percent": suggested["coinsurance_percent"],
-        "copay_cents": 0, "individual_deductible_remaining_cents": suggested["deductible_remaining_cents"],
-        "individual_oop_remaining_cents": suggested["oop_remaining_cents"],
-        "referral_status": "not_required", "authorization_status": "not_required",
-    })
+def confirm_anita_evidence(case: dict[str, Any], manifest: dict[str, Any]) -> dict[str, Any]:
+    """Apply Anita's reviewed demo eligibility snapshot after the contract is uploaded."""
+    if not case.get("appointment") or "contract" not in case.get("documents", {}):
+        raise GoldenCaseError("Upload the NMCT–BCBS provider contract to continue")
+    contract_source, snapshot = case["documents"]["contract"], manifest["coverage"]
+    # ponytail: a fixed, reviewed Anita snapshot covers the no-API demo only; payer eligibility/API data replaces it for other patients.
+    coverage = {
+        "status": snapshot["status"], "payer": "BCBSTX", "product": "Preferred Provider Option Medical",
+        "coinsurance_percent": snapshot["coinsurance_percent"], "copay_cents": 0,
+        "individual_deductible_remaining_cents": 0,
+        "individual_oop_remaining_cents": snapshot["individual_oop_remaining_cents"],
+        "network_status": "in_network", "referral_status": "not_required", "authorization_status": "not_required",
+        "out_of_network_benefit_status": "unknown", "out_of_network_allowed_cents": None, "source": snapshot["source"],
+    }
+    case["coverage"] = coverage
+    case["facts"].extend((
+        _fact("eligibility", "Coverage", "Active · BCBSTX · Preferred Provider Option Medical", snapshot["source"]),
+        _fact("eligibility", "Individual deductible remaining", "$0.00", snapshot["source"]),
+        _fact("eligibility", "Individual out-of-pocket remaining", "$0.00", snapshot["source"]),
+        _fact("network", "Contract match", "NMCT participates in Blue Choice PPO", contract_source),
+        _fact("network", "Patient network result", "In network", snapshot["source"]),
+        _fact("authorization", "Referral", "Not required for this Anita demo", manifest["authorization"]["referral_source"]),
+        _fact("authorization", "Prior authorization", "Check after selecting the anticipated CPT", manifest["authorization"]["prior_auth_source"]),
+    ))
+    case["stage_decisions"].extend((
+        {"stage": "eligibility", "status": "passed", "decision": "Reviewed Anita eligibility snapshot applied", "source_mode": "documents"},
+        {"stage": "network", "status": "passed", "decision": "NMCT Blue Choice PPO contract matched", "source_mode": "documents"},
+    ))
+    case["next_stage"] = "service"
+    return case
 
 
 def select_services(case: dict[str, Any], codes: list[str], rate_source: dict[str, Any]) -> dict[str, Any]:

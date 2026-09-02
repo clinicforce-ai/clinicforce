@@ -319,7 +319,7 @@ class MainRouteTests(unittest.IsolatedAsyncioTestCase):
     def test_golden_context_exposes_rate_backed_neuropathy_candidates(self) -> None:
         case = golden.pending_case({"member_name": "Pat Example", "member_id": "MEMBER-123", "group_number": "GROUP-123"})
         golden.unlock_case(case, GOLDEN_MANIFEST, case["ocr"])
-        self.assertEqual({line["code"] for line in case["service_lines"]}, {"99202", "99203", "99204", "99205"})
+        self.assertEqual(case["service_lines"], [])
         case["next_stage"] = "service"
         documented.set_clinical_context(case, "Numbness and tingling; EMG is planned", GOLDEN_MANIFEST["rate_lines"])
         emg = next(line for line in case["service_lines"] if line["code"] == "95886")
@@ -342,21 +342,16 @@ class MainRouteTests(unittest.IsolatedAsyncioTestCase):
         suggestions = documented.inspect_pdf(eligibility.tobytes(), "eligibility.pdf", "eligibility", "BCBS-456")["findings"]["suggested_coverage"]
         self.assertEqual(suggestions, {"coverage_status": "active", "network_status": "in_network", "out_of_network_benefit_status": "not_covered", "plan_name": "Preferred Provider Option Medical", "coinsurance_percent": 0, "deductible_remaining_cents": 0, "oop_remaining_cents": 0})
 
-    def test_anita_documents_calculate_without_staff_entering_benefits(self) -> None:
+    def test_anita_contract_calculates_without_staff_entering_benefits(self) -> None:
         fields = {"member_name": "Pat Example", "member_id": "MEMBER-123", "group_number": "GROUP-123"}
         case = golden.pending_case(fields)
         golden.unlock_case(case, GOLDEN_MANIFEST, fields)
         documented.add_document(case, "contract", {
             "id": "contract", "filename": "nmct-bcbs.pdf", "sha256": "a" * 64, "observed_at": "2026-08-24", "reference": "Provider agreement",
         })
-        documented.add_document(case, "eligibility", {
-            "id": "eligibility", "filename": "anita-benefits.pdf", "sha256": "b" * 64, "observed_at": "2026-08-24", "reference": "Eligibility response",
-            "findings": {"suggested_coverage": {"coverage_status": "active", "network_status": "in_network", "plan_name": "Preferred Provider Option Medical", "coinsurance_percent": 0, "deductible_remaining_cents": 0, "oop_remaining_cents": 0}},
-        })
-        documented.confirm_anita_evidence(case)
+        documented.confirm_anita_evidence(case, GOLDEN_MANIFEST)
         self.assertEqual(case["coverage"]["copay_cents"], 0)
         self.assertEqual(case["coverage"]["individual_oop_remaining_cents"], 0)
-        documented.advance(case, "network", GOLDEN_MANIFEST["rates_source"])
         documented.set_clinical_context(case, "neuropathy", GOLDEN_MANIFEST["rate_lines"])
         documented.select_services(case, ["99204"], GOLDEN_MANIFEST["rates_source"])
         documented.advance(case, "authorization", GOLDEN_MANIFEST["rates_source"])
@@ -448,6 +443,16 @@ class MainRouteTests(unittest.IsolatedAsyncioTestCase):
             "of Texas. Authorized Signature. Executed provider participation terms and fee schedule agreement."
         )
         self.assertEqual(documented.inspect_pdf(contract, "agreement.pdf", "contract")["id"], "contract")
+
+    def test_context_suggestions_follow_visit_type_and_condition(self) -> None:
+        rates = GOLDEN_MANIFEST["rate_lines"] + [
+            {"code": "99214", "description": "Established patient, moderate MDM", "allowed_cents": 11156},
+            {"code": "95885", "description": "Needle EMG, limited", "allowed_cents": 5701},
+        ]
+        neuropathy = documented.service_lines("neuropathy; EMG planned", rates, "established")
+        self.assertTrue({"99214", "95885", "95907"}.issubset({line["code"] for line in neuropathy}))
+        botox = documented.service_lines("Botox for chronic migraine", rates, "established")
+        self.assertTrue({"99214", "64612", "64615"}.issubset({line["code"] for line in botox}))
 
     def test_card_ocr_accepts_the_reviewed_identification_number_label(self) -> None:
         reviewed_layout = """Member ID Card\nSubscriber Name:\nPAT EXAMPLE\nIdentification Number:\nMEMBER-123\nGroup Number:  GROUP-123\n"""

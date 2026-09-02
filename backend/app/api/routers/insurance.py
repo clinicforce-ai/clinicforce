@@ -159,53 +159,6 @@ async def upload_evidence(case_id: str, kind: str, request: Request, file: Uploa
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
-@router.post("/cases/{case_id}/documents")
-async def upload_insurance_documents(case_id: str, request: Request, files: list[UploadFile] = File(...)) -> JSONResponse:
-    """Accept Anita's two PDFs from one file-picker and classify them locally."""
-    session = _session(request)
-    case = await run_in_threadpool(_load_case, case_id, session)
-    if case.get("source_mode") != "documents" or case.get("next_stage") != "eligibility":
-        raise HTTPException(status_code=409, detail="Insurance documents are available during eligibility review")
-    if not 1 <= len(files) <= 2:
-        raise HTTPException(status_code=422, detail="Select the eligibility response and NMCT–BCBS contract PDFs")
-    object_keys: list[str] = []
-    try:
-        for file in files:
-            filename = Path(file.filename or "insurance-evidence.pdf").name
-            if Path(filename).suffix.lower() != ".pdf":
-                raise golden.GoldenCaseError("Upload PDF insurance documents")
-            content = await file.read(MAX_UPLOAD_BYTES + 1)
-            if len(content) > MAX_UPLOAD_BYTES:
-                raise golden.GoldenCaseError("Insurance PDFs must be 15 MB or smaller")
-            source = None
-            for kind in ("eligibility", "contract"):
-                try:
-                    source = await run_in_threadpool(
-                        documented.inspect_pdf, content, filename, kind,
-                        case.get("ocr", {}).get("member_id", "") if kind == "eligibility" else "",
-                    )
-                    break
-                except golden.GoldenCaseError:
-                    continue
-            if source is None:
-                raise golden.GoldenCaseError("Select Anita's dated eligibility response and NMCT–BCBS provider contract")
-            if source["id"] in case.get("documents", {}):
-                raise golden.GoldenCaseError(f"{source['id'].title()} evidence is already uploaded")
-            if object_store.enabled():
-                object_key = await run_in_threadpool(object_store.put_insurance_pdf, case_id, filename, content)
-                source["object_key"] = object_key
-                object_keys.append(object_key)
-            documented.add_document(case, source["id"], source)
-        saved = await run_in_threadpool(
-            store.save_case, case, session["patient_id"], session["share_manifest_id"], "documents-uploaded",
-        )
-        return _response(_saved(saved))
-    except golden.GoldenCaseError as exc:
-        for object_key in object_keys:
-            await run_in_threadpool(object_store.delete_object, object_key)
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-
-
 @router.put("/cases/{case_id}/evidence")
 async def confirm_evidence(
     case_id: str, evidence: InsuranceEvidenceRequest, request: Request,
@@ -231,9 +184,8 @@ async def confirm_anita_evidence(case_id: str, request: Request) -> JSONResponse
     if case.get("source_mode") != "documents" or case.get("next_stage") != "eligibility":
         raise HTTPException(status_code=409, detail="Insurance documents are not ready for calculation")
     try:
-        documented.confirm_anita_evidence(case)
         manifest = await run_in_threadpool(golden.load_manifest)
-        documented.advance(case, "network", manifest["rates_source"])
+        documented.confirm_anita_evidence(case, manifest)
         saved = await run_in_threadpool(
             store.save_case, case, session["patient_id"], session["share_manifest_id"], "automatic-benefits",
         )
@@ -266,7 +218,7 @@ async def suggest_services(
     case = await run_in_threadpool(_load_case, case_id, session)
     try:
         manifest = await run_in_threadpool(golden.load_manifest)
-        documented.set_clinical_context(case, request_body.clinical_context, manifest.get("rate_lines", []))
+        documented.set_clinical_context(case, request_body.clinical_context, manifest.get("rate_lines", []), request_body.visit_type)
         saved = await run_in_threadpool(
             store.save_case, case, session["patient_id"], session["share_manifest_id"], "clinical-context",
         )
