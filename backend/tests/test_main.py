@@ -453,6 +453,13 @@ class MainRouteTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue({"99214", "95885", "95907"}.issubset({line["code"] for line in neuropathy}))
         botox = documented.service_lines("Botox for chronic migraine", rates, "established")
         self.assertTrue({"99214", "64612", "64615"}.issubset({line["code"] for line in botox}))
+        heart = documented.service_lines("palpitations and chest pain", rates, "established")
+        self.assertTrue({"99214", "93000", "93224", "93015"}.issubset({line["code"] for line in heart}))
+        leg = documented.service_lines("leg swelling and calf pain", rates, "established")
+        self.assertTrue({"99214", "93970", "93971"}.issubset({line["code"] for line in leg}))
+        self.assertFalse({"64642", "64643"}.intersection({line["code"] for line in leg}))
+        brain = documented.service_lines("brain symptoms with seizure", rates, "established")
+        self.assertTrue({"99214", "70551", "95816"}.issubset({line["code"] for line in brain}))
 
     def test_card_ocr_accepts_the_reviewed_identification_number_label(self) -> None:
         reviewed_layout = """Member ID Card\nSubscriber Name:\nPAT EXAMPLE\nIdentification Number:\nMEMBER-123\nGroup Number:  GROUP-123\n"""

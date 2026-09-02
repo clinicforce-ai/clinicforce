@@ -15,24 +15,37 @@ from app.insurance.golden import GoldenCaseError
 
 
 MAX_EVIDENCE_PAGES = 100
-NEURODIAGNOSTIC_CODES = {
-    "95885", "95886", "95887", "95907", "95908", "95909", "95910", "95911", "95912", "95913",
-}
-NEURODIAGNOSTIC_TERMS = (
-    "neuropathy", "carpal tunnel", "radiculopathy", "numbness", "tingling", "paresthesia", "nerve pain",
+# ponytail: a compact, clinician-reviewed demo catalog; replace with a licensed,
+# versioned CPT/HCPCS terminology service before claiming universal coverage.
+LOCAL_CPT_CANDIDATES = (
+    ("95885", "Needle EMG, limited", ("emg", "neuropathy", "carpal tunnel", "radiculopathy", "numbness", "tingling", "paresthesia", "nerve pain")),
+    ("95886", "Needle EMG, complete", ("emg", "neuropathy", "carpal tunnel", "radiculopathy", "numbness", "tingling", "paresthesia", "nerve pain")),
+    ("95887", "Needle EMG, non-extremity", ("emg", "neuropathy", "radiculopathy", "nerve pain")),
+    ("95907", "Nerve conduction study, 1–2 studies", ("emg", "ncs", "neuropathy", "carpal tunnel", "radiculopathy", "numbness", "tingling", "paresthesia", "nerve pain")),
+    ("95908", "Nerve conduction study, 3–4 studies", ("emg", "ncs", "neuropathy", "carpal tunnel", "radiculopathy", "numbness", "tingling", "paresthesia", "nerve pain")),
+    ("95909", "Nerve conduction study, 5–6 studies", ("emg", "ncs", "neuropathy", "carpal tunnel", "radiculopathy", "numbness", "tingling", "paresthesia", "nerve pain")),
+    ("95910", "Nerve conduction study, 7–8 studies", ("emg", "ncs", "neuropathy", "carpal tunnel", "radiculopathy", "numbness", "tingling", "paresthesia", "nerve pain")),
+    ("95911", "Nerve conduction study, 9–10 studies", ("emg", "ncs", "neuropathy", "carpal tunnel", "radiculopathy", "numbness", "tingling", "paresthesia", "nerve pain")),
+    ("95912", "Nerve conduction study, 11–12 studies", ("emg", "ncs", "neuropathy", "carpal tunnel", "radiculopathy", "numbness", "tingling", "paresthesia", "nerve pain")),
+    ("95913", "Nerve conduction study, 13 or more studies", ("emg", "ncs", "neuropathy", "carpal tunnel", "radiculopathy", "numbness", "tingling", "paresthesia", "nerve pain")),
+    ("64612", "Chemodenervation, facial muscles", ("botox", "botulinum", "blepharospasm", "hemifacial spasm", "dystonia")),
+    ("64615", "Chemodenervation for chronic migraine", ("botox", "botulinum", "chronic migraine", "migraine")),
+    ("64642", "Chemodenervation, one extremity muscle group", ("botox", "botulinum", "spasticity", "dystonia")),
+    ("64643", "Chemodenervation, each additional extremity muscle group", ("botox", "botulinum", "spasticity", "dystonia")),
+    ("76881", "Extremity ultrasound, complete", ("sonography", "ultrasound", "ultrasonography", "musculoskeletal ultrasound")),
+    ("76882", "Extremity ultrasound, limited", ("sonography", "ultrasound", "ultrasonography", "musculoskeletal ultrasound")),
+    ("70551", "MRI of brain without contrast", ("brain", "headache", "migraine", "seizure", "stroke", "brain lesion")),
+    ("70552", "MRI of brain with contrast", ("brain", "brain tumor", "brain lesion")),
+    ("70553", "MRI of brain with and without contrast", ("brain", "brain tumor", "brain lesion")),
+    ("95816", "Routine EEG", ("brain", "seizure", "epilepsy", "blackout", "loss of consciousness")),
+    ("93000", "Twelve-lead electrocardiogram", ("heart", "cardiac", "chest pain", "palpitation", "arrhythmia", "syncope")),
+    ("93306", "Complete transthoracic echocardiogram", ("heart", "cardiac", "murmur", "heart failure", "shortness of breath")),
+    ("93224", "Holter monitor, 24 to 48 hours", ("heart", "cardiac", "palpitation", "arrhythmia", "syncope")),
+    ("93015", "Cardiovascular stress test", ("heart", "cardiac", "chest pain", "exercise intolerance")),
+    ("93970", "Duplex ultrasound of extremity veins, complete", ("leg", "calf", "leg swelling", "edema", "dvt", "deep vein thrombosis")),
+    ("93971", "Duplex ultrasound of an extremity vein, limited", ("leg", "calf", "leg swelling", "edema", "dvt", "deep vein thrombosis")),
+    ("93922", "Noninvasive arterial study of extremities", ("leg", "claudication", "peripheral artery", "poor circulation")),
 )
-BOTULINUM_TERMS = ("botox", "botulinum", "dystonia", "spasticity", "chronic migraine")
-SONOGRAPHY_TERMS = ("sonography", "ultrasound", "ultrasonography")
-UNPRICED_CANDIDATES = {
-    "64612": "Chemodenervation of facial/trigeminal-innervated muscles",
-    "64615": "Chemodenervation for chronic migraine",
-    "64642": "Chemodenervation of one extremity muscle group",
-    "64643": "Chemodenervation of each additional extremity muscle group",
-}
-SONOGRAPHY_CANDIDATES = {
-    "76881": "Ultrasound, extremity, nonvascular, complete",
-    "76882": "Ultrasound, extremity, nonvascular, limited",
-}
 
 
 def _normalized(value: str) -> str:
@@ -49,8 +62,8 @@ def card_matches_patient(fields: dict[str, str], profile: Any) -> bool:
 def service_lines(clinical_context: str, rate_lines: list[dict[str, Any]], visit_type: str = "new") -> list[dict[str, Any]]:
     condition_text = clinical_context.casefold()
     codes = {"99202", "99203", "99204", "99205"} if visit_type == "new" else {"99211", "99212", "99213", "99214", "99215"}
-    if any(term in condition_text for term in NEURODIAGNOSTIC_TERMS):
-        codes.update(NEURODIAGNOSTIC_CODES)
+    matched_candidates = [candidate for candidate in LOCAL_CPT_CANDIDATES if any(term in condition_text for term in candidate[2])]
+    codes.update(code for code, _, _ in matched_candidates)
     lines: list[dict[str, Any]] = [
         {
             **line,
@@ -62,18 +75,12 @@ def service_lines(clinical_context: str, rate_lines: list[dict[str, Any]], visit
         for line in rate_lines
         if line["code"] in codes
     ]
-    if any(term in condition_text for term in BOTULINUM_TERMS):
-        lines.extend({
-            "code": code, "description": description, "allowed_cents": None, "selected": False,
-            "confirmed": False, "available": True, "suggested_by": "Clinician-entered context",
-            "evidence_note": "No reviewed NMCT rate yet. You can select this candidate, but ClinicForce will not produce a price.",
-        } for code, description in UNPRICED_CANDIDATES.items())
-    if any(term in condition_text for term in SONOGRAPHY_TERMS):
-        lines.extend({
-            "code": code, "description": description, "allowed_cents": None, "selected": False,
-            "confirmed": False, "available": True, "suggested_by": "Clinician-entered context",
-            "evidence_note": "Sonography CPT depends on the body area and complete versus limited exam. You can select it, but add a reviewed NMCT rate before pricing.",
-        } for code, description in SONOGRAPHY_CANDIDATES.items())
+    priced_codes = {line["code"] for line in lines}
+    lines.extend({
+        "code": code, "description": description, "allowed_cents": None, "selected": False,
+        "confirmed": False, "available": True, "suggested_by": "Clinician-entered context",
+        "evidence_note": "Local CPT catalog candidate. Clinician confirmation and a reviewed NMCT rate are required before pricing.",
+    } for code, description, _ in matched_candidates if code not in priced_codes)
     return lines
 
 
