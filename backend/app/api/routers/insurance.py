@@ -14,6 +14,7 @@ from app.api.settings import (
     CLINICIAN_SHARE_COOKIE, CLINICIAN_SHARE_MAX_AGE, MAX_INSURANCE_CARD_BYTES, MAX_UPLOAD_BYTES,
     PUBLIC_BASE_URL, insurance_beta_enabled,
 )
+from app.core import object_store
 from app.core.patient_store import get_patient_profile
 from app.insurance import documented, golden, store
 
@@ -136,17 +137,25 @@ async def upload_evidence(case_id: str, kind: str, request: Request, file: Uploa
     content = await file.read(MAX_UPLOAD_BYTES + 1)
     if len(content) > MAX_UPLOAD_BYTES:
         raise HTTPException(status_code=413, detail="Evidence PDFs must be 15 MB or smaller")
+    object_key: str | None = None
     try:
         source = await run_in_threadpool(
             documented.inspect_pdf, content, filename, kind,
             case.get("ocr", {}).get("member_id", "") if kind == "eligibility" else "",
         )
+        if object_store.enabled():
+            object_key = await run_in_threadpool(object_store.put_insurance_pdf, case_id, filename, content)
+            source["object_key"] = object_key
         documented.add_document(case, kind, source)
         saved = await run_in_threadpool(
             store.save_case, case, session["patient_id"], session["share_manifest_id"], f"{kind}-uploaded",
         )
-        return _response(_saved(saved))
+        if saved is None:
+            raise golden.GoldenCaseError("The uploaded evidence could not be saved; upload it again")
+        return _response(saved)
     except golden.GoldenCaseError as exc:
+        if object_key:
+            await run_in_threadpool(object_store.delete_object, object_key)
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
@@ -175,9 +184,7 @@ async def confirm_service(case_id: str, selection: InsuranceServiceLinesRequest,
     try:
         manifest = await run_in_threadpool(golden.load_manifest)
         if case.get("source_mode") == "golden":
-            if len(selection.codes) != 1:
-                raise golden.GoldenCaseError("Choose one anticipated office-visit code for the golden case")
-            golden.select_service(case, selection.codes[0], manifest)
+            golden.select_services(case, selection.codes, manifest)
         else:
             documented.select_services(case, selection.codes, manifest["rates_source"])
         saved = await run_in_threadpool(store.save_case, case, session["patient_id"], session["share_manifest_id"], "service")
@@ -192,11 +199,16 @@ async def suggest_services(
 ) -> JSONResponse:
     session = _session(request)
     case = await run_in_threadpool(_load_case, case_id, session)
-    if case.get("source_mode") != "documents":
-        raise HTTPException(status_code=409, detail="The golden case uses its reviewed appointment evidence")
     try:
         manifest = await run_in_threadpool(golden.load_manifest)
         documented.set_clinical_context(case, request_body.clinical_context, manifest.get("rate_lines", []))
+        if case.get("source_mode") == "golden":
+            for line in case["service_lines"]:
+                if line["code"] not in {"99204", "99205"}:
+                    line.update(
+                        available=False,
+                        evidence_note="This reviewed Anita case has no service-specific authorization evidence for this candidate; use document-backed review before estimating it.",
+                    )
         saved = await run_in_threadpool(
             store.save_case, case, session["patient_id"], session["share_manifest_id"], "clinical-context",
         )

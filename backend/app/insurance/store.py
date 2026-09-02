@@ -7,6 +7,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 from uuid import uuid4
 
+from app.core.object_store import delete_object
 from app.core.patient_store import _connection
 
 
@@ -18,6 +19,18 @@ def _now() -> datetime:
 
 
 def _purge(connection: Any, now: datetime) -> None:
+    expired = connection.execute(
+        "SELECT workflow_json FROM insurance_cases WHERE expires_at <= %s", (now.isoformat(),),
+    ).fetchall()
+    for row in expired:
+        try:
+            workflow = json.loads(row["workflow_json"])
+            for source in workflow.get("documents", {}).values():
+                if isinstance(source, dict) and isinstance(source.get("object_key"), str):
+                    delete_object(source["object_key"])
+        except Exception:
+            # A lifecycle rule also removes case PDFs. Expiry must never be held by S3 cleanup.
+            pass
     connection.execute("DELETE FROM insurance_cases WHERE expires_at <= %s", (now.isoformat(),))
 
 

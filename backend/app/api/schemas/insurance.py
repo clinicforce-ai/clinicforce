@@ -31,6 +31,8 @@ class InsuranceEvidenceRequest(RequestModel):
     eligibility_observed_at: date
     coverage_status: Literal["active", "inactive"]
     network_status: Literal["in_network", "out_of_network"]
+    out_of_network_benefit_status: Literal["covered", "not_covered", "unknown"] = "unknown"
+    out_of_network_allowed_cents: int | None = Field(default=None, ge=0, le=100_000_000)
     coinsurance_percent: int = Field(ge=0, le=100)
     copay_cents: int = Field(ge=0, le=10_000_000)
     individual_deductible_remaining_cents: int = Field(ge=0, le=100_000_000)

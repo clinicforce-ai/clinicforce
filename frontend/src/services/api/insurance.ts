@@ -11,10 +11,10 @@ export interface ServiceLine {
 export interface StageDecision { stage: InsuranceStage; status: 'passed'; decision: string; source_mode: InsuranceSourceMode }
 
 export interface EstimateBreakdown {
-  service_code: string; allowed_cents: number; nominal_coinsurance_cents: number
-  service_codes?: string[]; deductible_applied_cents?: number; copay_cents?: number
+  service_code: string; allowed_cents: number | null; nominal_coinsurance_cents: number | null
+  estimate_available?: boolean; unavailable_reason?: string; service_codes?: string[]; deductible_applied_cents?: number | null; copay_cents?: number | null
   individual_deductible_remaining_cents: number; individual_oop_remaining_cents: number
-  oop_cap_adjustment_cents: number; patient_cents: number; plan_cents: number
+  oop_cap_adjustment_cents: number | null; patient_cents: number | null; plan_cents: number | null
   source_mode: InsuranceSourceMode; calculated_at: string; disclaimer: string
 }
 
@@ -35,6 +35,7 @@ export interface InsuranceCase {
 export interface InsuranceEvidenceInput {
   clinic: 'NMCT'; payer: 'BCBSTX'; plan_name: string; eligibility_observed_at: string
   coverage_status: 'active' | 'inactive'; network_status: 'in_network' | 'out_of_network'
+  out_of_network_benefit_status?: 'covered' | 'not_covered' | 'unknown'; out_of_network_allowed_cents?: number | null
   coinsurance_percent: number; copay_cents: number; individual_deductible_remaining_cents: number
   individual_oop_remaining_cents: number
   referral_status: 'not_required' | 'required_obtained' | 'unknown'

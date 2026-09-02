@@ -350,6 +350,20 @@ class MainRouteTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaisesRegex(golden.GoldenCaseError, "only the reviewed"):
             golden.unlock_case(golden.pending_case(fields), GOLDEN_MANIFEST, {**fields, "member_id": "WRONG-123"})
 
+    def test_golden_context_exposes_unreviewed_procedure_candidates_without_pricing_them(self) -> None:
+        case = golden.pending_case({"member_name": "Pat Example", "member_id": "MEMBER-123", "group_number": "GROUP-123"})
+        golden.unlock_case(case, GOLDEN_MANIFEST, case["ocr"])
+        golden.advance(case, "eligibility", GOLDEN_MANIFEST)
+        golden.advance(case, "network", GOLDEN_MANIFEST)
+        documented.set_clinical_context(case, "Numbness and tingling; EMG is planned", GOLDEN_MANIFEST["rate_lines"])
+        for line in case["service_lines"]:
+            if line["code"] == "95886":
+                line.update(available=False, evidence_note="Additional authorization evidence required")
+        emg = next(line for line in case["service_lines"] if line["code"] == "95886")
+        self.assertFalse(emg["available"])
+        with self.assertRaisesRegex(golden.GoldenCaseError, "reviewed NMCT"):
+            golden.select_services(case, ["99204", "95886"], GOLDEN_MANIFEST)
+
     def test_document_fallback_suggests_reviewed_codes_and_calculates_exact_cents(self) -> None:
         profile = PatientProfile(
             patient_id="patient-2", given_name="Jordan", family_name="Rivera",
@@ -389,6 +403,18 @@ class MainRouteTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(case["estimate"]["nominal_coinsurance_cents"], 3816)
         self.assertEqual(case["estimate"]["patient_cents"], 10000)
         self.assertEqual(case["estimate"]["plan_cents"], 14078)
+        out_of_network = deepcopy(case)
+        out_of_network["coverage"].update({
+            "network_status": "out_of_network", "out_of_network_benefit_status": "not_covered",
+            "out_of_network_allowed_cents": None,
+        })
+        unavailable = documented.calculate(out_of_network)
+        self.assertFalse(unavailable["estimate_available"])
+        self.assertIsNone(unavailable["patient_cents"])
+        out_of_network["coverage"].update({"out_of_network_benefit_status": "covered", "out_of_network_allowed_cents": 25000})
+        covered = documented.calculate(out_of_network)
+        self.assertTrue(covered["estimate_available"])
+        self.assertEqual(covered["allowed_cents"], 25000)
         with self.assertRaisesRegex(golden.GoldenCaseError, "one anticipated"):
             duplicate_office = deepcopy(case)
             duplicate_office["next_stage"] = "service"

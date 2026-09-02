@@ -18,6 +18,7 @@ export default function Scanner({ onScanned, onCancel }: ScannerProps) {
   const [status, setStatus] = useState('Requesting camera access…')
   const [error, setError] = useState('')
   const [readingFile, setReadingFile] = useState(false)
+  const [retry, setRetry] = useState(0)
 
   const handleDecoded = useCallback((decodedText: string) => {
     if (complete.current) return
@@ -85,6 +86,10 @@ export default function Scanner({ onScanned, onCancel }: ScannerProps) {
 
       isInitializing.current = true
       try {
+        // Camera APIs require a secure context (HTTPS or localhost).
+        if (!window.isSecureContext) {
+          throw new Error('Camera access requires a secure (HTTPS) connection.')
+        }
         const scanConfig = {
           fps: 15,
           qrbox: (width: number, height: number) => {
@@ -102,15 +107,20 @@ export default function Scanner({ onScanned, onCancel }: ScannerProps) {
           {},
         ]
         let started = false
+        let lastError: unknown
         for (const camera of cameraOptions) {
           try {
             await reader.start(camera, scanConfig, onSuccess, () => undefined)
             started = true
             break
-          } catch { /* try the next supported camera configuration */ }
+          } catch (err) {
+            lastError = err
+            /* try the next supported camera configuration */
+          }
         }
         if (!started) {
-          throw new Error('No available camera could be started.')
+          void lastError
+          throw new Error('Camera could not be started on this attempt.')
         }
         if (active) setStatus('Keep the complete QR inside the frame and hold steady.')
       } catch (cameraError) {
@@ -127,7 +137,7 @@ export default function Scanner({ onScanned, onCancel }: ScannerProps) {
       scanner.current = null
       stopCamera.current = () => undefined
     }
-  }, [handleDecoded, id])
+  }, [handleDecoded, id, retry])
 
   const scanImage = async (file?: File) => {
     if (!file || complete.current) return
@@ -155,7 +165,7 @@ export default function Scanner({ onScanned, onCancel }: ScannerProps) {
       <div className="scanner-frame"><div id={id} /></div>
       <p className="scanner-status" role="status" aria-live="polite"><Camera aria-hidden="true" className="size-4" /> {status}</p>
       {error && <p className="form-error" role="alert">{error}</p>}
-      <div className="scanner-actions"><span>Camera having trouble?</span><button className="button button-secondary" type="button" disabled={readingFile} onClick={() => fileInput.current?.click()}><Upload aria-hidden="true" className="size-4" /> {readingFile ? 'Reading image…' : 'Upload QR image'}</button><input ref={fileInput} type="file" accept="image/*" tabIndex={-1} onChange={(event) => { const file = event.target.files?.[0]; event.target.value = ''; void scanImage(file) }} /><small>The image is decoded in this browser and is not uploaded.</small></div>
+      <div className="scanner-actions"><span>Camera having trouble?</span>{error && <button className="button button-secondary" type="button" disabled={readingFile} onClick={() => { setError(''); setStatus('Requesting camera access…'); setRetry((value) => value + 1) }}><Camera aria-hidden="true" className="size-4" /> Try camera again</button>}<button className="button button-secondary" type="button" disabled={readingFile} onClick={() => fileInput.current?.click()}><Upload aria-hidden="true" className="size-4" /> {readingFile ? 'Reading image…' : 'Upload QR image'}</button><input ref={fileInput} type="file" accept="image/*" tabIndex={-1} onChange={(event) => { const file = event.target.files?.[0]; event.target.value = ''; void scanImage(file) }} /><small>The image is decoded in this browser and is not uploaded.</small></div>
       <div id={fileScannerId} className="scanner-file-surface" aria-hidden="true" />
       <p className="scanner-privacy"><ShieldCheck aria-hidden="true" /> Camera access is used only to scan the QR code.</p>
     </div>

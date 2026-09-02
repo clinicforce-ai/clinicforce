@@ -231,7 +231,7 @@ def pending_case(fields: dict[str, str]) -> dict[str, Any]:
     return {
         "source_mode": "golden", "status": "review", "next_stage": "intake",
         "ocr": {**fields, "confirmed": False}, "appointment": None, "coverage": None,
-        "service_lines": [], "stage_decisions": [], "facts": [], "sources": [], "estimate": None,
+        "service_lines": [], "clinical_context": "", "stage_decisions": [], "facts": [], "sources": [], "estimate": None,
     }
 
 
@@ -261,7 +261,7 @@ def _base_facts(manifest: dict[str, Any]) -> list[dict[str, Any]]:
         _fact("eligibility", "Eligibility transaction", coverage["transaction_reference"], coverage["source"]),
         _fact("network", "Network match", network["display"], network["source"]),
         _fact("network", "Participation terms", "Blue Choice PPO; lesser of billed charge or current fee schedule, less cost share", network["agreement_source"]),
-        _fact("service", "EMG/NCS", "Excluded — not scheduled for this visit", manifest["appointment"]["source"]),
+        _fact("service", "EMG/NCS", "Not scheduled in the reviewed appointment; select only if the clinician plans it for this visit", manifest["appointment"]["source"]),
         _fact("authorization", "Referral", "Not required for this in-network PPO visit", authorization["referral_source"]),
         _fact("authorization", "Prior authorization", "Not required for selected CPT 99204", authorization["prior_auth_source"]),
     ]
@@ -271,15 +271,28 @@ def _fact(stage: str, label: str, value: str, citation: dict[str, Any]) -> dict[
     return {"stage": stage, "label": label, "value": value, "citation": citation, "source_mode": "golden"}
 
 
-def select_service(case: dict[str, Any], code: str, manifest: dict[str, Any]) -> dict[str, Any]:
-    if case.get("next_stage") != "service" or code not in {"99204", "99205"}:
+def select_services(case: dict[str, Any], codes: list[str], manifest: dict[str, Any]) -> dict[str, Any]:
+    if case.get("next_stage") != "service":
         raise GoldenCaseError("Complete the preceding stages before confirming the anticipated service")
+    selected_codes = set(codes)
+    selected = [line for line in case["service_lines"] if line["code"] in selected_codes]
+    if len(selected) != len(selected_codes) or any(not line.get("available", True) or line.get("allowed_cents") is None for line in selected):
+        raise GoldenCaseError("Every selected CPT must have a reviewed NMCT fee-schedule amount")
+    office_codes = [line["code"] for line in selected if line["code"].startswith("992")]
+    if len(office_codes) != 1:
+        raise GoldenCaseError("Choose exactly one anticipated office-visit code")
     for line in case["service_lines"]:
-        line.update(selected=line["code"] == code, confirmed=line["code"] == code)
+        line.update(selected=line["code"] in selected_codes, confirmed=line["code"] in selected_codes)
     case["next_stage"] = "authorization"
-    case["stage_decisions"].append({"stage": "service", "status": "passed", "decision": f"CPT {code} confirmed as an anticipated pre-visit service", "source_mode": "golden"})
-    case["facts"].append(_fact("service", "Anticipated service", f"{code} · clinician confirmed; final coding remains post-encounter", manifest["rates_source"]))
+    display = ", ".join(line["code"] for line in selected)
+    case["stage_decisions"].append({"stage": "service", "status": "passed", "decision": f"CPT {display} confirmed as anticipated pre-visit services", "source_mode": "golden"})
+    case["facts"].append(_fact("service", "Anticipated services", f"{display} · clinician confirmed; final coding remains post-encounter", manifest["rates_source"]))
     return case
+
+
+def select_service(case: dict[str, Any], code: str, manifest: dict[str, Any]) -> dict[str, Any]:
+    """Compatibility wrapper for the original one-office-visit golden case."""
+    return select_services(case, [code], manifest)
 
 
 def advance(case: dict[str, Any], stage: str, manifest: dict[str, Any]) -> dict[str, Any]:
@@ -316,14 +329,14 @@ def advance(case: dict[str, Any], stage: str, manifest: dict[str, Any]) -> dict[
 
 
 def calculate(case: dict[str, Any], manifest: dict[str, Any]) -> dict[str, Any]:
-    selected = next(line for line in case["service_lines"] if line["selected"] and line["confirmed"])
-    allowed = int(selected["allowed_cents"])
+    selected = [line for line in case["service_lines"] if line["selected"] and line["confirmed"]]
+    allowed = sum(int(line["allowed_cents"]) for line in selected)
     percent = Decimal(str(manifest["coverage"]["coinsurance_percent"])) / Decimal(100)
     nominal = int((Decimal(allowed) * percent).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
     oop_remaining = int(manifest["coverage"]["individual_oop_remaining_cents"])
     patient = min(nominal, oop_remaining)
     return {
-        "service_code": selected["code"], "allowed_cents": allowed,
+        "service_code": ", ".join(line["code"] for line in selected), "service_codes": [line["code"] for line in selected], "allowed_cents": allowed,
         "nominal_coinsurance_cents": nominal, "individual_deductible_remaining_cents": 0,
         "individual_oop_remaining_cents": oop_remaining, "oop_cap_adjustment_cents": patient - nominal,
         "patient_cents": patient, "plan_cents": allowed - patient, "source_mode": "golden",
