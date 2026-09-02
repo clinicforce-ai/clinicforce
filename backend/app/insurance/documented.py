@@ -46,6 +46,27 @@ LOCAL_CPT_CANDIDATES = (
     ("93971", "Duplex ultrasound of an extremity vein, limited", ("leg", "calf", "leg swelling", "edema", "dvt", "deep vein thrombosis")),
     ("93922", "Noninvasive arterial study of extremities", ("leg", "claudication", "peripheral artery", "poor circulation")),
 )
+PLAIN_CPT_EXPLANATIONS = {
+    "99202": "New-patient office visit, about 15 minutes, for a straightforward problem.",
+    "99203": "New-patient office visit, about 30 minutes, for a low-complexity problem.",
+    "99204": "New-patient office visit, about 45 minutes, for a moderately complex problem.",
+    "99205": "New-patient office visit, about 60 minutes, for a highly complex problem.",
+    "99211": "Brief established-patient office visit that may not require the clinician to see the patient.",
+    "99212": "Established-patient office visit, about 10 minutes, for a straightforward problem.",
+    "99213": "Established-patient office visit, about 20 minutes, for a low-complexity problem.",
+    "99214": "Established-patient office visit, about 30 minutes, for a moderately complex problem.",
+    "99215": "Established-patient office visit, about 40 minutes, for a highly complex problem.",
+    "95885": "Needle EMG that checks electrical activity in a limited area of a limb or spine.",
+    "95886": "Needle EMG that checks electrical activity in a complete limb or spine area.",
+    "95887": "Needle EMG that checks electrical activity in non-limb muscles alongside nerve testing.",
+    "95907": "Nerve-conduction testing of 1–2 nerves to assess nerve signal problems.",
+    "95908": "Nerve-conduction testing of 3–4 nerves to assess nerve signal problems.",
+    "95909": "Nerve-conduction testing of 5–6 nerves to assess nerve signal problems.",
+    "95910": "Nerve-conduction testing of 7–8 nerves to assess nerve signal problems.",
+    "95911": "Nerve-conduction testing of 9–10 nerves to assess nerve signal problems.",
+    "95912": "Nerve-conduction testing of 11–12 nerves to assess nerve signal problems.",
+    "95913": "Nerve-conduction testing of 13 or more nerves to assess nerve signal problems.",
+}
 
 
 def _normalized(value: str) -> str:
@@ -71,6 +92,7 @@ def service_lines(clinical_context: str, rate_lines: list[dict[str, Any]], visit
             "confirmed": False,
             "available": True,
             "suggested_by": f"{visit_type.title()}-patient visit" if line["code"].startswith("992") else "Clinician-entered context",
+            "plain_description": PLAIN_CPT_EXPLANATIONS.get(line["code"], line["description"]),
         }
         for line in rate_lines
         if line["code"] in codes

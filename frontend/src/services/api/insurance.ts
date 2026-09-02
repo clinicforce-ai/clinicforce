@@ -14,7 +14,7 @@ export interface InsuranceSource {
 }
 export interface ServiceLine {
   code: string; description: string; allowed_cents: number | null; selected: boolean; confirmed: boolean
-  available?: boolean; suggested_by?: string; evidence_note?: string
+  available?: boolean; suggested_by?: string; evidence_note?: string; plain_description?: string
 }
 export interface StageDecision { stage: InsuranceStage; status: 'passed'; decision: string; source_mode: InsuranceSourceMode }
 

@@ -466,6 +466,7 @@ class MainRouteTests(unittest.IsolatedAsyncioTestCase):
         ]
         neuropathy = documented.service_lines("neuropathy; EMG planned", rates, "established")
         self.assertTrue({"99214", "95885", "95907"}.issubset({line["code"] for line in neuropathy}))
+        self.assertEqual(next(line for line in neuropathy if line["code"] == "95907")["plain_description"], "Nerve-conduction testing of 1–2 nerves to assess nerve signal problems.")
         botox = documented.service_lines("Botox for chronic migraine", rates, "established")
         self.assertTrue({"99214", "64612", "64615"}.issubset({line["code"] for line in botox}))
         heart = documented.service_lines("palpitations and chest pain", rates, "established")
