@@ -83,7 +83,10 @@ async def create_case(request: Request, file: UploadFile = File(...)) -> JSONRes
     try:
         manifest = await run_in_threadpool(golden.load_manifest)
         profile = await run_in_threadpool(get_patient_profile, session["patient_id"])
-        fields = await run_in_threadpool(golden.read_card, content)
+        member_name = " ".join(part for part in (
+            getattr(profile, "given_name", ""), getattr(profile, "family_name", ""),
+        ) if part)
+        fields = await run_in_threadpool(golden.read_card, content, member_name)
         if golden.patient_matches(profile, manifest):
             workflow = golden.pending_case(fields)
         else:

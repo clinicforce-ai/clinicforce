@@ -29,7 +29,7 @@ COOKIE_TTL = timedelta(minutes=15)
 MAX_PDF_PAGES = 2
 MAX_PIXELS = 20_000_000
 MAX_OCR_DIMENSION = 1600
-OCR_TIMEOUT_SECONDS = 8
+OCR_TIMEOUT_SECONDS = 15
 STAGES = ("eligibility", "network", "service", "authorization", "benefits", "estimate")
 CARD_FIELD_PATTERNS = {
     "member_name": r"(?im)^[ \t]*(?:member|subscriber|patient)?[ \t]*name[ \t]*[:#-]?[ \t]*(?:\r?\n[ \t]*)?([A-Z][A-Z .,'-]{3,70})[ \t]*$",
@@ -212,7 +212,7 @@ def _tesseract(path: Path) -> str:
         return ""
     try:
         result = subprocess.run(
-            (executable, str(path), "stdout", "--psm", "3"), capture_output=True,
+            (executable, str(path), "stdout", "--psm", "6"), capture_output=True,
             text=True, timeout=OCR_TIMEOUT_SECONDS, check=False,
         )
     except subprocess.TimeoutExpired:
@@ -220,7 +220,7 @@ def _tesseract(path: Path) -> str:
     return result.stdout if result.returncode == 0 else ""
 
 
-def read_card(content: bytes) -> dict[str, str]:
+def read_card(content: bytes, member_name: str = "") -> dict[str, str]:
     if content.startswith(b"%PDF"):
         text = _pdf_text(content)
     elif content.startswith((b"\xff\xd8\xff", b"\x89PNG\r\n\x1a\n")):
@@ -228,6 +228,8 @@ def read_card(content: bytes) -> dict[str, str]:
     else:
         raise GoldenCaseError("Upload a PDF, JPG, or PNG insurance card")
     fields = _card_fields(text)
+    if member_name and not fields.get("member_name"):
+        fields["member_name"] = member_name.strip()
     if len(fields) != len(CARD_FIELD_PATTERNS):
         raise GoldenCaseError("ClinicForce could not read all card fields. Upload a clear image of the front of the card")
     return fields

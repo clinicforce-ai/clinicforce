@@ -210,6 +210,12 @@ class MainRouteTests(unittest.IsolatedAsyncioTestCase):
             with self.assertRaisesRegex(golden.GoldenCaseError, "could not read all card fields"):
                 golden.read_card(b"%PDF-reviewed-card")
 
+    def test_card_ocr_uses_the_verified_share_name_when_the_card_omits_it(self) -> None:
+        with patch("app.insurance.golden._pdf_text", return_value="Identification Number: MEMBER-123\nGroup Number: GROUP-123"):
+            self.assertEqual(golden.read_card(b"%PDF-reviewed-card", "Pat Example"), {
+                "member_name": "Pat Example", "member_id": "MEMBER-123", "group_number": "GROUP-123",
+            })
+
     def test_failed_card_ocr_leaves_every_field_for_clinician_review(self) -> None:
         with patch("app.insurance.golden.shutil.which", return_value="tesseract"), \
              patch("app.insurance.golden.subprocess.run", return_value=Mock(returncode=1, stdout="")):
