@@ -6,6 +6,8 @@ import { parseSmartHealthLink, type SmartHealthLink } from '../services/shl'
 interface ScannerProps { onScanned: (link: SmartHealthLink) => void; onCancel: () => void }
 
 const cameraConstraints: MediaTrackConstraints = { facingMode: { ideal: 'environment' } }
+type NativeBarcodeDetector = { detect: (video: HTMLVideoElement) => Promise<Array<{ rawValue: string }>> }
+type NativeBarcodeDetectorConstructor = new (options: { formats: string[] }) => NativeBarcodeDetector
 
 const cameraMessage = (error: unknown) => {
   if (error instanceof DOMException) {
@@ -19,11 +21,9 @@ const cameraMessage = (error: unknown) => {
 export default function Scanner({ onScanned, onCancel }: ScannerProps) {
   const id = useId().replace(/:/g, '')
   const fileScannerId = useId().replace(/:/g, '')
-  const scanner = useRef<Html5Qrcode | null>(null)
+  const video = useRef<HTMLVideoElement | null>(null)
   const fileInput = useRef<HTMLInputElement | null>(null)
   const stopCamera = useRef<() => void>(() => undefined)
-  const cleanupSequence = useRef<Promise<void>>(Promise.resolve())
-  const isInitializing = useRef(false)
   const onScannedRef = useRef(onScanned)
   const complete = useRef(false)
   const [status, setStatus] = useState('Requesting camera access…')
@@ -49,55 +49,26 @@ export default function Scanner({ onScanned, onCancel }: ScannerProps) {
   }, [onScanned])
 
   useEffect(() => {
-    const reader = new Html5Qrcode(id, { formatsToSupport: [Html5QrcodeSupportedFormats.QR_CODE], verbose: false })
-    scanner.current = reader
     let active = true
-    let cleanupPromise: Promise<void> | undefined
-
-    const videoElements = () => document.getElementById(id)?.querySelectorAll('video') ?? []
-    const releaseMediaTracks = () => {
-      // Stop the actual MediaStream as well as the library. This guarantees the
-      // camera indicator turns off even if html5-qrcode's asynchronous stop hangs.
-      videoElements().forEach((video) => {
-        const stream = video.srcObject
-        if (stream && typeof (stream as MediaStream).getTracks === 'function') {
-          const mediaStream = stream as MediaStream
-          mediaStream.getTracks().forEach((track) => track.stop())
-          video.srcObject = null
-        }
-      })
+    let stream: MediaStream | null = null
+    let reader: Html5Qrcode | null = null
+    let animationFrame = 0
+    const stop = () => {
+      window.cancelAnimationFrame(animationFrame)
+      stream?.getTracks().forEach((track) => track.stop())
+      stream = null
+      if (video.current) video.current.srcObject = null
+      if (reader) {
+        const fallbackVideo = document.getElementById(id)?.querySelector('video')
+        if (fallbackVideo) fallbackVideo.onabort = null
+        void reader.stop().catch(() => undefined).finally(() => { try { reader?.clear() } catch { /* already cleared */ } })
+        reader = null
+      }
     }
-
-    const cleanup = (): Promise<void> => {
-      if (cleanupPromise) return cleanupPromise
-      cleanupPromise = (async () => {
-        // Let a pending start() settle before stopping and clearing the instance.
-        // This prevents React Strict Mode's effect replay from interrupting video.play().
-        await startPromise?.catch(() => undefined)
-        // html5-qrcode throws from its video onabort handler during expected cleanup.
-        // Remove only that handler, then let the library stop before forcing tracks off.
-        videoElements().forEach((video) => { video.onabort = null })
-        try {
-          await Promise.race([
-            reader.stop().catch(() => undefined),
-            new Promise<void>((resolve) => window.setTimeout(resolve, 750)),
-          ])
-        } catch { /* scanner was not running */ }
-        releaseMediaTracks()
-        try { reader.clear() } catch { /* scanner was already cleared */ }
-      })()
-      return cleanupPromise
-    }
-    stopCamera.current = () => { void cleanup() }
+    stopCamera.current = stop
 
     const start = async () => {
-      // A previous Strict Mode effect may still be releasing its scanner.
-      await cleanupSequence.current
-      if (!active || isInitializing.current) return
-
-      isInitializing.current = true
       try {
-        // Camera APIs require a secure context (HTTPS or localhost).
         if (!window.isSecureContext) {
           throw new Error('Camera access requires a secure (HTTPS) connection.')
         }
@@ -109,21 +80,37 @@ export default function Scanner({ onScanned, onCancel }: ScannerProps) {
           },
         }
         const onSuccess = (decodedText: string) => { if (active) handleDecoded(decodedText) }
-        await reader.start(cameraConstraints, scanConfig, onSuccess, () => undefined)
+        const Detector = (window as unknown as { BarcodeDetector?: NativeBarcodeDetectorConstructor }).BarcodeDetector
+        if (Detector && video.current) {
+          // Chrome's native stream and detector avoid html5-qrcode's fragile video setup.
+          stream = await navigator.mediaDevices.getUserMedia({ audio: false, video: cameraConstraints })
+          video.current.srcObject = stream
+          await video.current.play()
+          const detector = new Detector({ formats: ['qr_code'] })
+          const scan = async () => {
+            if (!active || complete.current || !video.current) return
+            try {
+              const [result] = await detector.detect(video.current)
+              if (result?.rawValue) onSuccess(result.rawValue)
+            } catch { /* a frame can be unavailable while the camera warms up */ }
+            if (active) animationFrame = window.requestAnimationFrame(() => { void scan() })
+          }
+          void scan()
+        } else {
+          reader = new Html5Qrcode(id, { formatsToSupport: [Html5QrcodeSupportedFormats.QR_CODE], verbose: false })
+          await reader.start(cameraConstraints, scanConfig, onSuccess, () => undefined)
+        }
         if (active) setStatus('Keep the complete QR inside the frame and hold steady.')
       } catch (cameraError) {
         if (active) setError(`Camera unavailable: ${cameraMessage(cameraError)}`)
-      } finally {
-        isInitializing.current = false
       }
     }
 
-    const startPromise = start()
+    void start()
     return () => {
       active = false
-      cleanupSequence.current = cleanup()
-      scanner.current = null
       stopCamera.current = () => undefined
+      stop()
     }
   }, [handleDecoded, id, retry])
 
@@ -162,7 +149,7 @@ export default function Scanner({ onScanned, onCancel }: ScannerProps) {
       <p className="eyebrow"><ScanLine aria-hidden="true" className="size-4" /> Clinician access · Step 1 of 2</p>
       <h1 id="scan-heading">Scan the patient’s QR code</h1>
       <p className="lead-small">Use a ClinicForce, eClinicalWorks, or other compatible Smart Health Link QR code. External links are reviewed and decrypted in this browser.</p>
-      <div className="scanner-frame"><div id={id} /></div>
+      <div className="scanner-frame"><video ref={video} muted playsInline /><div id={id} /></div>
       <p className="scanner-status" role="status" aria-live="polite"><Camera aria-hidden="true" className="size-4" /> {status}</p>
       {error && <p className="form-error" role="alert">{error}</p>}
       <div className="scanner-actions"><span>Camera having trouble?</span>{error && <button className="button button-secondary" type="button" disabled={readingFile} onClick={() => void retryCamera()}><Camera aria-hidden="true" className="size-4" /> Try camera again</button>}<button className="button button-secondary" type="button" disabled={readingFile} onClick={() => fileInput.current?.click()}><Upload aria-hidden="true" className="size-4" /> {readingFile ? 'Reading image…' : 'Upload QR image'}</button><input ref={fileInput} type="file" accept="image/*" tabIndex={-1} onChange={(event) => { const file = event.target.files?.[0]; event.target.value = ''; void scanImage(file) }} /><small>The image is decoded in this browser and is not uploaded.</small></div>
