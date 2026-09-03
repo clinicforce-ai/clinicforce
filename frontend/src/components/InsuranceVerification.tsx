@@ -22,6 +22,14 @@ const stageCopy: Record<Exclude<InsuranceStage, 'intake' | 'service'>, { title: 
 }
 
 const money = (cents: number | null | undefined) => cents == null ? 'Not available' : new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(cents / 100)
+const cardDetailLabels: Array<[keyof InsuranceCase['ocr'], string]> = [
+  ['plan_type', 'Plan type'], ['coverage_date', 'Coverage date'], ['coinsurance', 'Coinsurance'],
+  ['in_network_deductible', 'In-network deductible'], ['out_of_network_deductible', 'Out-of-network deductible'],
+  ['in_network_oop_maximum', 'In-network out-of-pocket maximum'], ['out_of_network_oop_maximum', 'Out-of-network out-of-pocket maximum'],
+  ['rx_bin', 'RxBIN'], ['rx_pcn', 'RxPCN'], ['rx_group', 'RxGRP'],
+  ['preauth_medical_phone', 'Preauth—medical'], ['mdlive_phone', 'MDLive'], ['nurseline_phone', '24/7 Nurseline'],
+  ['customer_service_phone', 'Customer service'], ['benefit_advocate_phone', 'Benefit advocate'],
+]
 
 export default function InsuranceVerification({ onBack }: Props) {
   const [insuranceCase, setInsuranceCase] = useState<InsuranceCase | null>(null)
@@ -130,6 +138,7 @@ export default function InsuranceVerification({ onBack }: Props) {
             <label>Member ID<input value={draft.member_id} readOnly /></label>
             <label>Group number<input value={draft.group_number} readOnly /></label>
           </div>
+          {cardDetailLabels.some(([key]) => insuranceCase.ocr[key]) && <dl className="insurance-facts card-details">{cardDetailLabels.map(([key, label]) => insuranceCase.ocr[key] && <div key={key}><dt>{label}</dt><dd>{insuranceCase.ocr[key]}</dd></div>)}</dl>}
           {insuranceCase.next_stage === 'intake' && <button className="button button-primary" type="button" disabled={busy} onClick={() => void confirmIntake()}>{busy ? <LoaderCircle className="size-4 animate-spin" aria-hidden="true" /> : <FileCheck2 className="size-4" aria-hidden="true" />} Confirm card and appointment</button>}
         </>}
         {viewStage === 'eligibility' && insuranceCase?.source_mode === 'documents' && insuranceCase.next_stage === 'eligibility' && <>

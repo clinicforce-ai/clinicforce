@@ -115,11 +115,12 @@ async def confirm_intake(case_id: str, review: InsuranceIntakeRequest, request: 
         manifest = await run_in_threadpool(golden.load_manifest)
         if case.get("evidence_manifest_id") != manifest["manifest_id"]:
             raise golden.GoldenCaseError("The reviewed evidence bundle changed; start a new case")
+        fields = {**case.get("ocr", {}), **review.model_dump()}
         if case.get("source_mode") == "golden":
-            golden.unlock_case(case, manifest, review.model_dump())
+            golden.unlock_case(case, manifest, fields)
         else:
             profile = await run_in_threadpool(get_patient_profile, session["patient_id"])
-            documented.confirm_intake(case, profile, review.model_dump())
+            documented.confirm_intake(case, profile, fields)
         saved = await run_in_threadpool(store.save_case, case, session["patient_id"], session["share_manifest_id"], "intake")
         return _response(_saved(saved))
     except golden.GoldenCaseError as exc:

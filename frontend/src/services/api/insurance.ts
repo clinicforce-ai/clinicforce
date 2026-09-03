@@ -34,10 +34,20 @@ export interface NormalizedAppointment {
 
 export interface InsuranceCase {
   id: string; source_mode: InsuranceSourceMode; status: 'review' | 'in_progress' | 'complete'; next_stage: InsuranceStage | null
-  expires_at: string; ocr: { member_name: string; member_id: string; group_number: string; confirmed: boolean }
+  expires_at: string; ocr: InsuranceCardFields
   appointment: NormalizedAppointment | null; service_lines: ServiceLine[]; stage_decisions: StageDecision[]
   facts: EvidenceFact[]; sources: InsuranceSource[]; estimate: EstimateBreakdown | null
   clinical_context?: string; documents?: Record<string, InsuranceSource>
+}
+
+export interface InsuranceCardFields {
+  member_name: string; member_id: string; group_number: string; confirmed: boolean
+  plan_type?: string; coverage_date?: string; coinsurance?: string
+  in_network_deductible?: string; out_of_network_deductible?: string
+  in_network_oop_maximum?: string; out_of_network_oop_maximum?: string
+  rx_bin?: string; rx_pcn?: string; rx_group?: string
+  preauth_medical_phone?: string; mdlive_phone?: string; nurseline_phone?: string
+  customer_service_phone?: string; benefit_advocate_phone?: string
 }
 
 export interface InsuranceEvidenceInput {

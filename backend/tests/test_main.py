@@ -186,7 +186,7 @@ class MainRouteTests(unittest.IsolatedAsyncioTestCase):
             fields = golden.read_card(document.tobytes())
         self.assertEqual(fields, {"member_name": "PAT EXAMPLE", "member_id": "MEMBER-123", "group_number": "GROUP-123"})
 
-    def test_two_sided_card_ocr_reads_the_front_image_once(self) -> None:
+    def test_two_sided_card_ocr_reads_both_image_sides(self) -> None:
         document, front, back = fitz.open(), BytesIO(), BytesIO()
         Image.new("RGB", (40, 20), "red").save(front, "PNG")
         Image.new("RGB", (80, 40), "green").save(back, "PNG")
@@ -202,8 +202,44 @@ class MainRouteTests(unittest.IsolatedAsyncioTestCase):
 
         with patch("app.insurance.golden._tesseract", side_effect=ocr):
             self.assertEqual(golden.read_card(document.tobytes())["member_id"], "MEMBER-123")
-        self.assertEqual(len(seen), 1)
-        self.assertGreater(seen[0][0], seen[0][1])
+        self.assertEqual(len(seen), 2)
+
+    def test_card_ocr_extracts_benefits_routing_and_contacts(self) -> None:
+        card = """Member Name: PAT EXAMPLE
+Member ID: MEMBER-123
+Group Number: GROUP-123
+Plan Type: Choice PPO Plan
+Coverage Date: 01/01/26
+Coinsurance: 20% after ded
+Deductibles
+In-Network: $600 Individual / $1,800 Family
+Out-of-Network: $900 Individual / $2,700 Family
+Out-of-Pocket Maximum
+In-Network: $3,000 Individual / $9,000 Family
+Out-of-Network: $4,000 Individual / $12,000 Family
+RxBIN: 004336  RxPCN: ADV  RxGRP: RX4143
+Preauth-Medical: 1-800-441-9188
+MDLive: 1-888-680-8646
+24/7 Nurseline: 1-800-581-0368
+Customer Service: 1-800-240-6430
+Benefit Advocate: 1-866-799-2731"""
+        with patch("app.insurance.golden._pdf_text", return_value=card):
+            fields = golden.read_card(b"%PDF-reviewed-card")
+        self.assertEqual({key: fields[key] for key in (
+            "plan_type", "coverage_date", "coinsurance", "in_network_deductible", "out_of_network_deductible",
+            "in_network_oop_maximum", "out_of_network_oop_maximum", "rx_bin", "rx_pcn", "rx_group",
+            "preauth_medical_phone", "mdlive_phone", "nurseline_phone", "customer_service_phone", "benefit_advocate_phone",
+        )}, {
+            "plan_type": "Choice PPO Plan", "coverage_date": "01/01/26", "coinsurance": "20% after ded",
+            "in_network_deductible": "$600 Individual / $1,800 Family", "out_of_network_deductible": "$900 Individual / $2,700 Family",
+            "in_network_oop_maximum": "$3,000 Individual / $9,000 Family", "out_of_network_oop_maximum": "$4,000 Individual / $12,000 Family",
+            "rx_bin": "004336", "rx_pcn": "ADV", "rx_group": "RX4143", "preauth_medical_phone": "1-800-441-9188",
+            "mdlive_phone": "1-888-680-8646", "nurseline_phone": "1-800-581-0368", "customer_service_phone": "1-800-240-6430",
+            "benefit_advocate_phone": "1-866-799-2731",
+        })
+        case = golden.pending_case(fields)
+        golden.unlock_case(case, GOLDEN_MANIFEST, fields)
+        self.assertEqual(case["ocr"]["rx_bin"], "004336")
 
     def test_card_ocr_requires_all_fields(self) -> None:
         with patch("app.insurance.golden._pdf_text", return_value="Identification Number: MEMBER-123\nGroup Number: GROUP-123"):

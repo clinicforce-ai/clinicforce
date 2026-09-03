@@ -31,10 +31,27 @@ MAX_PIXELS = 20_000_000
 MAX_OCR_DIMENSION = 1600
 OCR_TIMEOUT_SECONDS = 15
 STAGES = ("eligibility", "network", "service", "authorization", "benefits", "estimate")
-CARD_FIELD_PATTERNS = {
+CARD_IDENTITY_PATTERNS = {
     "member_name": r"(?im)^[ \t]*(?:member|subscriber|patient)?[ \t]*name[ \t]*[:#-]?[ \t]*(?:\r?\n[ \t]*)?([A-Z][A-Z .,'-]{3,70})[ \t]*$",
     "member_id": r"(?i)(?:member|subscriber|identification)\s*(?:id|number|no\.?|#)\s*[:#-]?\s*([A-Z0-9-]{5,30})",
     "group_number": r"(?i)group\s*(?:number|no\.?|#)?\s*[:#-]?\s*([A-Z0-9-]{3,30})",
+}
+CARD_DETAIL_PATTERNS = {
+    "plan_type": r"(?im)^\s*(?:(?:plan(?:\s*/\s*product|\s*type)?|product)\s*[:#-]\s*(.+?)|((?:blue\s*)?choice\s+ppo\s+plan.*))\s*$",
+    "coverage_date": r"(?i)(?:coverage|effective)\s*(?:date)?\s*[:#-]?\s*(\d{1,2}[/-]\d{1,2}[/-]\d{2,4})",
+    "coinsurance": r"(?i)(?:coinsurance\s*[:#-]?\s*)?(\d{1,3}%\s*after\s*(?:the\s*)?(?:ded(?:uctible)?|ded))",
+    "in_network_deductible": r"(?im)(?:in[- ]?network\s+(?:annual\s+)?deductible|(?:annual\s+)?deductible\s*[:#-]?\s*in[- ]?network)\s*[:#-]?\s*([^\n]{1,100})",
+    "out_of_network_deductible": r"(?im)(?:out[- ]?of[- ]?network\s+(?:annual\s+)?deductible|(?:annual\s+)?deductible\s*[:#-]?\s*out[- ]?of[- ]?network)\s*[:#-]?\s*([^\n]{1,100})",
+    "in_network_oop_maximum": r"(?im)(?:in[- ]?network\s+(?:out[- ]?of[- ]?pocket|oop)(?:\s+(?:max(?:imum)?|limit))?|(?:out[- ]?of[- ]?pocket|oop)(?:\s+(?:max(?:imum)?|limit))?\s*[:#-]?\s*in[- ]?network)\s*[:#-]?\s*([^\n]{1,100})",
+    "out_of_network_oop_maximum": r"(?im)(?:out[- ]?of[- ]?network\s+(?:out[- ]?of[- ]?pocket|oop)(?:\s+(?:max(?:imum)?|limit))?|(?:out[- ]?of[- ]?pocket|oop)(?:\s+(?:max(?:imum)?|limit))?\s*[:#-]?\s*out[- ]?of[- ]?network)\s*[:#-]?\s*([^\n]{1,100})",
+    "rx_bin": r"(?i)rx\s*bin\s*[:#-]?\s*([A-Z0-9-]{3,20})",
+    "rx_pcn": r"(?i)rx\s*pcn\s*[:#-]?\s*([A-Z0-9-]{2,30})",
+    "rx_group": r"(?i)rx\s*(?:grp|group)\s*[:#-]?\s*([A-Z0-9-]{2,30})",
+    "preauth_medical_phone": r"(?i)pre-?auth(?:orization)?[\s-]*(?:medical)?[^\d]{0,40}((?:1[\s.-])?\(?\d{3}\)?[\s.-]\d{3}[\s.-]\d{4})",
+    "mdlive_phone": r"(?i)md\s*live[^\d]{0,40}((?:1[\s.-])?\(?\d{3}\)?[\s.-]\d{3}[\s.-]\d{4})",
+    "nurseline_phone": r"(?i)(?:24\s*/?\s*7\s*)?nurse\s*line[^\d]{0,40}((?:1[\s.-])?\(?\d{3}\)?[\s.-]\d{3}[\s.-]\d{4})",
+    "customer_service_phone": r"(?i)customer\s*(?:service|care)[^\d]{0,40}((?:1[\s.-])?\(?\d{3}\)?[\s.-]\d{3}[\s.-]\d{4})",
+    "benefit_advocate_phone": r"(?i)benefit\s*advocate[^\d]{0,40}((?:1[\s.-])?\(?\d{3}\)?[\s.-]\d{3}[\s.-]\d{4})",
 }
 
 
@@ -159,7 +176,29 @@ def _write_ocr_image(image: Image.Image, path: Path) -> None:
 
 
 def _card_fields(text: str) -> dict[str, str]:
-    return {name: match.group(1).strip() for name, pattern in CARD_FIELD_PATTERNS.items() if (match := re.search(pattern, text))}
+    fields: dict[str, str] = {}
+    for name, pattern in {**CARD_IDENTITY_PATTERNS, **CARD_DETAIL_PATTERNS}.items():
+        if match := re.search(pattern, text):
+            fields[name] = next(value.strip() for value in match.groups() if value)
+    benefit = pending_key = ""
+    for line in text.splitlines():
+        compact = " ".join(line.split())
+        normalized = compact.casefold()
+        if "deductible" in normalized or re.search(r"\bded\b", normalized):
+            benefit = "deductible"
+        elif "out-of-pocket" in normalized or "out of pocket" in normalized or re.search(r"\boop\b", normalized):
+            benefit = "oop_maximum"
+        network = "in_network" if re.search(r"\bin[- ]?network\b", normalized) else "out_of_network" if re.search(r"\bout[- ]?of[- ]?network\b", normalized) else ""
+        if benefit and network:
+            key = f"{network}_{benefit}"
+            value = re.sub(r"^.*?(?:in[- ]?network|out[- ]?of[- ]?network)\s*[:#-]?\s*", "", compact, flags=re.I)
+            pending_key = key if not value else ""
+            if value:
+                fields.setdefault(key, value)
+        elif pending_key and re.search(r"\$\s*\d", compact):
+            fields.setdefault(pending_key, compact)
+            pending_key = ""
+    return fields
 
 
 def _image_text(content: bytes) -> str:
@@ -182,23 +221,18 @@ def _pdf_text(content: bytes) -> str:
         if document.needs_pass or not 1 <= document.page_count <= MAX_PDF_PAGES:
             raise GoldenCaseError("Insurance card PDFs must contain one or two unlocked pages")
         parts = [page.get_text() for page in document]
-        if len(_card_fields("\n".join(parts))) == len(CARD_FIELD_PATTERNS):
-            return "\n".join(parts)
-        # The front card image contains the member fields. OCR it once; a PDF's
-        # larger back image contains instructions, not the member information.
+        # OCR image-only pages too: pharmacy routing and contact details are
+        # commonly printed on the back of an otherwise searchable card PDF.
         with tempfile.TemporaryDirectory() as directory:
-            images = document[0].get_images(full=True)
-            if images:
-                pixmap = fitz.Pixmap(document, max(images, key=lambda meta: meta[2] * meta[3])[0])
-            else:
-                pixmap = document[0].get_pixmap(matrix=fitz.Matrix(2, 2), alpha=False)
-            if pixmap.width * pixmap.height > MAX_PIXELS:
-                raise GoldenCaseError("The insurance card PDF pages are too large")
-            if pixmap.alpha:
-                pixmap = fitz.Pixmap(fitz.csRGB, pixmap)
-            path = Path(directory) / "card.jpg"
-            _write_ocr_image(Image.frombytes("RGB", (pixmap.width, pixmap.height), pixmap.samples), path)
-            parts.append(_tesseract(path))
+            for number, page in enumerate(document):
+                if len("".join(parts[number].split())) >= 40:
+                    continue
+                pixmap = page.get_pixmap(matrix=fitz.Matrix(2, 2), alpha=False)
+                if pixmap.width * pixmap.height > MAX_PIXELS:
+                    raise GoldenCaseError("The insurance card PDF pages are too large")
+                path = Path(directory) / f"card-{number}.jpg"
+                _write_ocr_image(Image.frombytes("RGB", (pixmap.width, pixmap.height), pixmap.samples), path)
+                parts.append(_tesseract(path))
         return "\n".join(parts)
     except GoldenCaseError:
         raise
@@ -230,7 +264,7 @@ def read_card(content: bytes, member_name: str = "") -> dict[str, str]:
     fields = _card_fields(text)
     if member_name and not fields.get("member_name"):
         fields["member_name"] = member_name.strip()
-    if len(fields) != len(CARD_FIELD_PATTERNS):
+    if not all(name in fields for name in CARD_IDENTITY_PATTERNS):
         raise GoldenCaseError("ClinicForce could not read all card fields. Upload a clear image of the front of the card")
     return fields
 
