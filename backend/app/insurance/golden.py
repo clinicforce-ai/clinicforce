@@ -212,6 +212,28 @@ def _card_fields(text: str) -> dict[str, str]:
         elif pending_key and re.search(r"\$\s*\d", compact):
             fields.setdefault(pending_key, compact)
             pending_key = ""
+    pending_contacts: list[str] = []
+    contact_labels = {
+        "customer service": "customer_service_phone", "provider service": "provider_service_phone",
+        "preauth medical": "preauth_medical_phone", "24 7 nurseline": "nurseline_phone",
+        "mdlive": "mdlive_phone", "eap": "eap_phone", "benefit advocate": "benefit_advocate_phone",
+        "pharmacy": "pharmacy_phone",
+    }
+    for line in text.splitlines():
+        compact = " ".join(line.split())
+        normalized = re.sub(r"[^a-z0-9]+", " ", compact.casefold()).strip()
+        phone_numbers = re.findall(r"(?:1[\s.-])?\(?\d{3}\)?[\s.-]\d{3}[\s.-]\d{4}", compact)
+        contact = next((key for label, key in contact_labels.items() if normalized.startswith(label)), "")
+        if contact and phone_numbers:
+            fields.setdefault(contact, phone_numbers[0])
+        elif contact:
+            pending_contacts.append(contact)
+        elif pending_contacts and phone_numbers:
+            for phone in phone_numbers:
+                if pending_contacts:
+                    fields.setdefault(pending_contacts.pop(0), phone)
+        elif compact:
+            pending_contacts.clear()
     return fields
 
 
@@ -277,16 +299,26 @@ def _tesseract(path: Path) -> str:
     executable = shutil.which("tesseract")
     if not executable:
         raise OCRServiceError("Tesseract OCR is not installed")
-    try:
-        result = subprocess.run(
-            (executable, str(path), "stdout", "--psm", "6"), capture_output=True,
-            text=True, timeout=OCR_TIMEOUT_SECONDS, check=False,
-        )
-    except subprocess.TimeoutExpired as exc:
-        raise OCRServiceError("Insurance card OCR timed out") from exc
-    if result.returncode != 0:
-        raise OCRServiceError("Insurance card OCR failed")
-    return result.stdout
+    outputs, timeouts, succeeded = [], 0, False
+    # Cards mix compact rows with sparse contact columns. These two native
+    # Tesseract layouts complement each other without adding another OCR stack.
+    for mode in ("6", "3"):
+        try:
+            result = subprocess.run(
+                (executable, str(path), "stdout", "--psm", mode), capture_output=True,
+                text=True, timeout=OCR_TIMEOUT_SECONDS, check=False,
+            )
+        except subprocess.TimeoutExpired:
+            timeouts += 1
+            continue
+        if result.returncode == 0:
+            succeeded = True
+            outputs.append(result.stdout)
+    if succeeded:
+        return "\n".join(outputs)
+    if timeouts == 2:
+        raise OCRServiceError("Insurance card OCR timed out")
+    raise OCRServiceError("Insurance card OCR failed")
 
 
 def read_card(content: bytes, member_name: str = "") -> dict[str, str]:

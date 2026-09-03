@@ -223,20 +223,22 @@ Preauth-Medical: 1-800-441-9188
 MDLive: 1-888-680-8646
 24/7 Nurseline: 1-800-581-0368
 Customer Service: 1-800-240-6430
+EAP*
+1-866-799-2691
 Benefit Advocate: 1-866-799-2731"""
         with patch("app.insurance.golden._pdf_text", return_value=card):
             fields = golden.read_card(b"%PDF-reviewed-card")
         self.assertEqual({key: fields[key] for key in (
             "plan_type", "coverage_date", "coinsurance", "in_network_deductible", "out_of_network_deductible",
             "in_network_oop_maximum", "out_of_network_oop_maximum", "rx_bin", "rx_pcn", "rx_group",
-            "preauth_medical_phone", "mdlive_phone", "nurseline_phone", "customer_service_phone", "benefit_advocate_phone",
+            "preauth_medical_phone", "mdlive_phone", "nurseline_phone", "customer_service_phone", "eap_phone", "benefit_advocate_phone",
         )}, {
             "plan_type": "Choice PPO Plan", "coverage_date": "01/01/26", "coinsurance": "20% after ded",
             "in_network_deductible": "$600 Individual / $1,800 Family", "out_of_network_deductible": "$900 Individual / $2,700 Family",
             "in_network_oop_maximum": "$3,000 Individual / $9,000 Family", "out_of_network_oop_maximum": "$4,000 Individual / $12,000 Family",
             "rx_bin": "004336", "rx_pcn": "ADV", "rx_group": "RX4143", "preauth_medical_phone": "1-800-441-9188",
             "mdlive_phone": "1-888-680-8646", "nurseline_phone": "1-800-581-0368", "customer_service_phone": "1-800-240-6430",
-            "benefit_advocate_phone": "1-866-799-2731",
+            "eap_phone": "1-866-799-2691", "benefit_advocate_phone": "1-866-799-2731",
         })
         case = golden.pending_case(fields)
         golden.unlock_case(case, GOLDEN_MANIFEST, fields)
