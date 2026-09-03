@@ -25,7 +25,7 @@ from PIL import Image, UnidentifiedImageError
 from app.core.object_store import get_object_bytes
 
 
-COOKIE_TTL = timedelta(minutes=15)
+COOKIE_TTL = timedelta(hours=3)
 MAX_PDF_PAGES = 2
 MAX_PIXELS = 20_000_000
 MAX_OCR_DIMENSION = 1600

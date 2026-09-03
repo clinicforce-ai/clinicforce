@@ -460,7 +460,7 @@ export default function PatientPortal({ onBack }: PatientPortalProps) {
       )
       setLink(nextLink)
       setNotice(shareMode === 'ecw_compat'
-        ? 'A 15-minute, no-passcode eClinicalMobile compatibility QR is ready for a live scan test.'
+        ? 'A 3-hour, no-passcode eClinicalMobile compatibility QR is ready for a live scan test.'
         : nextLink.epic_included
         ? 'One QR code is ready with your workspace and the current MyChart record.'
         : 'One QR code is ready with the health information in your workspace.')
@@ -1031,7 +1031,7 @@ export default function PatientPortal({ onBack }: PatientPortalProps) {
           <p className="share-footnote"><ShieldCheck aria-hidden="true" /> The clinician needs both this QR code and your passcode.</p>
           <div className="ecw-test-warning" role="note">
             <ShieldAlert aria-hidden="true" />
-            <p><strong>eClinicalMobile compatibility test</strong> creates a bare SHL with no passcode. Anyone who photographs it can retrieve this snapshot until it expires in 15 minutes.</p>
+            <p><strong>eClinicalMobile compatibility test</strong> creates a bare SHL with no passcode. Anyone who photographs it can retrieve this snapshot until it expires in 3 hours.</p>
           </div>
           <button className="button button-secondary ecw-test-button w-full" type="button" onClick={() => setEcwCompatibilityConfirmOpen(true)} disabled={busy === 'share' || !canCreateShare || !demographicProfileComplete}>
             {busy === 'share' ? <LoaderCircle className="size-4 animate-spin" aria-hidden="true" /> : <QrCode aria-hidden="true" className="size-4" />} Generate eClinicalMobile test QR
@@ -1047,7 +1047,7 @@ export default function PatientPortal({ onBack }: PatientPortalProps) {
             <p className="eyebrow">Secure link created</p>
             <Dialog.Title>{link?.share_mode === 'ecw_compat' ? 'eClinicalMobile compatibility QR' : 'Show this QR code to your clinician'}</Dialog.Title>
             <Dialog.Description id="qr-description">{link?.share_mode === 'ecw_compat'
-              ? 'This is a bare SMART Health Link with no passcode, created only to test eClinicalMobile compatibility. It expires in 15 minutes.'
+              ? 'This is a bare SMART Health Link with no passcode, created only to test eClinicalMobile compatibility. It expires in 3 hours.'
               : 'This is your one combined record. Your clinician can scan it with ClinicForce, then enter the four-digit passcode you selected.'}</Dialog.Description>
             {link && <img className="qr-image" src={`data:image/png;base64,${link.qr_code_base64}`} alt="Smart Health Link QR code for the current health record" />}
             {link?.share_mode === 'ecw_compat'
@@ -1065,7 +1065,7 @@ export default function PatientPortal({ onBack }: PatientPortalProps) {
             <Dialog.Close className="dialog-close" aria-label="Close eClinicalMobile compatibility confirmation"><X aria-hidden="true" /></Dialog.Close>
             <p className="eyebrow">Compatibility test</p>
             <Dialog.Title>Generate a no-passcode health QR?</Dialog.Title>
-            <Dialog.Description id="ecw-compatibility-description">This QR uses the bare SMART Health Link format required for this eClinicalMobile scan test. It expires in 15 minutes, but anyone with a copy can retrieve the encrypted record during that time.</Dialog.Description>
+            <Dialog.Description id="ecw-compatibility-description">This QR uses the bare SMART Health Link format required for this eClinicalMobile scan test. It expires in 3 hours, but anyone with a copy can retrieve the encrypted record during that time.</Dialog.Description>
             <div className="dialog-note dialog-note-warning"><ShieldAlert aria-hidden="true" /><span>Use this only while testing with a clinician you trust.</span></div>
             <div className="dialog-actions">
               <Dialog.Close className="button button-secondary">Cancel</Dialog.Close>

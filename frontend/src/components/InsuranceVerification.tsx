@@ -111,7 +111,7 @@ export default function InsuranceVerification({ onBack }: Props) {
     <button className="back-control" type="button" onClick={onBack}><ArrowLeft aria-hidden="true" className="size-4" /> Back to clinical summary</button>
     <header className="insurance-beta-hero">
       <div><p className="eyebrow"><ShieldCheck aria-hidden="true" className="size-4" /> Evidence-backed beta · NMCT and BCBSTX</p><h1 id="insurance-heading">Verify insurance before the visit</h1><p>Upload the card and NMCT–BCBS provider contract. Anita’s reviewed demo eligibility snapshot supplies benefits until the payer API is connected.</p></div>
-      <div className="beta-session"><span>Secure share session</span><strong>15 minutes</strong></div>
+      <div className="beta-session"><span>Secure share session</span><strong>3 hours</strong></div>
     </header>
     <div className="insurance-stepper" aria-label="Insurance verification progress">
       {steps.map((step, index) => {

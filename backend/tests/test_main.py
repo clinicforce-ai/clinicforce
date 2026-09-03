@@ -122,7 +122,7 @@ class MainRouteTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status_code, 200, response.text)
         self.assertTrue(response.json()["beta_enabled"])
         self.assertIn("HttpOnly", response.headers["set-cookie"])
-        self.assertIn("Max-Age=900", response.headers["set-cookie"])
+        self.assertIn("Max-Age=10800", response.headers["set-cookie"])
 
     async def test_beta_activation_allows_another_qr_patient_to_start_document_review(self) -> None:
         different_profile = PatientProfile(

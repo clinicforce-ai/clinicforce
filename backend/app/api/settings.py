@@ -11,14 +11,14 @@ MAX_BULK_DOWNLOAD_BYTES = 150 * 1024 * 1024
 PATIENT_SESSION_COOKIE = "clinicforce_patient_session"
 PATIENT_SESSION_MAX_AGE = 30 * 24 * 60 * 60
 CLINICIAN_SHARE_COOKIE = "clinicforce_doctor_share"
-CLINICIAN_SHARE_MAX_AGE = 15 * 60
+CLINICIAN_SHARE_MAX_AGE = 3 * 60 * 60
 EPIC_OAUTH_STATE_COOKIE = "clinicforce_epic_oauth"
 EPIC_LIVE_SESSION_COOKIE = "clinicforce_epic_live"
 ECW_OAUTH_STATE_COOKIE = "clinicforce_ecw_oauth"
 ECW_LIVE_SESSION_COOKIE = "clinicforce_ecw_live"
 EPIC_ENDPOINT_SYNC_ENABLED = os.getenv("EPIC_ENDPOINT_SYNC_ENABLED", "").lower() == "true"
 EPIC_ENDPOINT_SYNC_INTERVAL_SECONDS = 7 * 24 * 60 * 60
-SHL_SHARE_TTL_SECONDS = max(1, int(os.getenv("SHL_SHARE_TTL_SECONDS", "900")))
+SHL_SHARE_TTL_SECONDS = max(1, int(os.getenv("SHL_SHARE_TTL_SECONDS", "10800")))
 FHIR_SOURCE_TAG_SYSTEM = "https://clinicforce.example/fhir/source"
 FHIR_VERIFICATION_TAG_SYSTEM = "https://clinicforce.example/fhir/verification"
 EXCHANGE_RESOURCE_TYPES = {"AllergyIntolerance", "MedicationStatement", "MedicationRequest", "Condition", "Observation", "Immunization", "Procedure", "Coverage", "DiagnosticReport", "DocumentReference"}
