@@ -13,7 +13,7 @@ from datetime import date
 from io import BytesIO
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, Mock, patch
+from unittest.mock import AsyncMock, Mock, call, patch
 from uuid import uuid4
 from zipfile import ZipFile
 
@@ -204,6 +204,20 @@ class MainRouteTests(unittest.IsolatedAsyncioTestCase):
         with patch("app.insurance.golden._tesseract", side_effect=ocr):
             self.assertEqual(golden.read_card(document.tobytes())["member_id"], "MEMBER-123")
         self.assertEqual(len(seen), 2)
+
+    def test_card_ocr_only_retries_the_back_for_a_missing_sparse_contact(self) -> None:
+        front, back = Path("front.png"), Path("back.png")
+        primary = """Customer Service 1-800-240-6430
+Provider Service 1-800-451-0287
+Preauth-Medical 1-800-441-9188
+24/7 Nurseline 1-800-581-0368
+MDLive 1-888-680-8646
+Benefit Advocate 1-866-799-2731
+Pharmacy 1-855-305-3028"""
+        with patch("app.insurance.golden._tesseract", side_effect=["card front", primary, "EAP 1-866-799-2691"]) as ocr:
+            fields = golden._card_fields(golden._ocr_images([front, back]))
+        self.assertEqual(fields["eap_phone"], "1-866-799-2691")
+        self.assertEqual(ocr.call_args_list, [call(front), call(back), call(back, "3")])
 
     def test_card_ocr_extracts_benefits_routing_and_contacts(self) -> None:
         card = """Member Name: PAT EXAMPLE

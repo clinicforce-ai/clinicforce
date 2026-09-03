@@ -30,7 +30,7 @@ MAX_PDF_PAGES = 2
 MAX_PIXELS = 20_000_000
 MAX_OCR_DIMENSION = 1600
 MIN_OCR_IMAGE_COVERAGE = 0.2
-OCR_TIMEOUT_SECONDS = 15
+OCR_TIMEOUT_SECONDS = 8
 STAGES = ("eligibility", "network", "service", "authorization", "benefits", "estimate")
 CARD_IDENTITY_PATTERNS = {
     "member_name": r"(?im)^[ \t]*(?:member|subscriber|patient)?[ \t]*name[ \t]*[:#-]?[ \t]*(?:[^\w\r\n]{0,5}[ \t]*(?:\r?\n[ \t]*)+)?([A-Z][A-Z .,'-]{3,100})[ \t]*$",
@@ -57,6 +57,7 @@ CARD_DETAIL_PATTERNS = {
     "eap_phone": r"(?im)^\s*eap\*?[^\d\n]{0,40}((?:1[\s.-])?\(?\d{3}\)?[\s.-]\d{3}[\s.-]\d{4})",
     "pharmacy_phone": r"(?i)pharmacy\*?[^\d]{0,40}((?:1[\s.-])?\(?\d{3}\)?[\s.-]\d{3}[\s.-]\d{4})",
 }
+CARD_CONTACT_FIELDS = frozenset(name for name in CARD_DETAIL_PATTERNS if name.endswith("_phone"))
 
 
 class GoldenCaseError(ValueError):
@@ -248,7 +249,7 @@ def _image_text(content: bytes) -> str:
     with tempfile.TemporaryDirectory() as directory:
         path = Path(directory) / "card.png"
         _write_ocr_image(image, path)
-        return _tesseract(path)
+        return _ocr_images([path])
 
 
 def _pdf_text(content: bytes) -> str:
@@ -260,6 +261,7 @@ def _pdf_text(content: bytes) -> str:
         # Searchable wrapper text does not make an embedded card image
         # searchable. OCR each substantial card image, including the back.
         with tempfile.TemporaryDirectory() as directory:
+            paths: list[Path] = []
             for number, page in enumerate(document):
                 images = [
                     item for item in page.get_image_info(xrefs=True)
@@ -285,8 +287,8 @@ def _pdf_text(content: bytes) -> str:
                     pixmap = fitz.Pixmap(fitz.csRGB, pixmap)
                 path = Path(directory) / f"card-{number}.png"
                 _write_ocr_image(Image.frombytes("RGB", (pixmap.width, pixmap.height), pixmap.samples), path)
-                parts.append(_tesseract(path))
-        return "\n".join(parts)
+                paths.append(path)
+            return _ocr_images(paths, parts)
     except GoldenCaseError:
         raise
     except OCRServiceError:
@@ -295,29 +297,36 @@ def _pdf_text(content: bytes) -> str:
         raise GoldenCaseError("The uploaded insurance card is not a readable PDF") from exc
 
 
-def _tesseract(path: Path) -> str:
+def _ocr_images(paths: list[Path], initial: list[str] | None = None) -> str:
+    parts = list(initial or ())
+    parts.extend(_tesseract(path) for path in paths)
+    fields = _card_fields("\n".join(parts))
+    if CARD_CONTACT_FIELDS.intersection(fields) and not CARD_CONTACT_FIELDS.issubset(fields):
+        # Sparse contact columns need a second layout, usually on the card back.
+        # Start there and stop as soon as the known contact set is complete.
+        for path in reversed(paths):
+            try:
+                parts.append(_tesseract(path, "3"))
+            except OCRServiceError:
+                continue
+            if CARD_CONTACT_FIELDS.issubset(_card_fields("\n".join(parts))):
+                break
+    return "\n".join(parts)
+
+
+def _tesseract(path: Path, mode: str = "6") -> str:
     executable = shutil.which("tesseract")
     if not executable:
         raise OCRServiceError("Tesseract OCR is not installed")
-    outputs, timeouts, succeeded = [], 0, False
-    # Cards mix compact rows with sparse contact columns. These two native
-    # Tesseract layouts complement each other without adding another OCR stack.
-    for mode in ("6", "3"):
-        try:
-            result = subprocess.run(
-                (executable, str(path), "stdout", "--psm", mode), capture_output=True,
-                text=True, timeout=OCR_TIMEOUT_SECONDS, check=False,
-            )
-        except subprocess.TimeoutExpired:
-            timeouts += 1
-            continue
-        if result.returncode == 0:
-            succeeded = True
-            outputs.append(result.stdout)
-    if succeeded:
-        return "\n".join(outputs)
-    if timeouts == 2:
+    try:
+        result = subprocess.run(
+            (executable, str(path), "stdout", "--psm", mode), capture_output=True,
+            text=True, timeout=OCR_TIMEOUT_SECONDS, check=False,
+        )
+    except subprocess.TimeoutExpired:
         raise OCRServiceError("Insurance card OCR timed out")
+    if result.returncode == 0:
+        return result.stdout
     raise OCRServiceError("Insurance card OCR failed")
 
 

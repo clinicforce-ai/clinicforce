@@ -7,10 +7,6 @@ interface ScannerProps { onScanned: (link: SmartHealthLink) => void; onCancel: (
 
 const scannerConfig = {
   fps: 12,
-  qrbox: (width: number, height: number) => {
-    const edge = Math.floor(Math.min(width, height) * .9)
-    return { width: edge, height: edge }
-  },
 }
 
 const cameraMessage = (error: unknown) => {
