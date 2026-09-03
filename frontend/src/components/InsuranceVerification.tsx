@@ -28,7 +28,8 @@ const cardDetailLabels: Array<[keyof InsuranceCase['ocr'], string]> = [
   ['in_network_oop_maximum', 'In-network out-of-pocket maximum'], ['out_of_network_oop_maximum', 'Out-of-network out-of-pocket maximum'],
   ['rx_bin', 'RxBIN'], ['rx_pcn', 'RxPCN'], ['rx_group', 'RxGRP'],
   ['preauth_medical_phone', 'Preauth—medical'], ['mdlive_phone', 'MDLive'], ['nurseline_phone', '24/7 Nurseline'],
-  ['customer_service_phone', 'Customer service'], ['benefit_advocate_phone', 'Benefit advocate'],
+  ['customer_service_phone', 'Customer service'], ['provider_service_phone', 'Provider service'],
+  ['benefit_advocate_phone', 'Benefit advocate'], ['eap_phone', 'EAP'], ['pharmacy_phone', 'Pharmacy'],
 ]
 
 export default function InsuranceVerification({ onBack }: Props) {

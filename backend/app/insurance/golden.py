@@ -29,15 +29,16 @@ COOKIE_TTL = timedelta(minutes=15)
 MAX_PDF_PAGES = 2
 MAX_PIXELS = 20_000_000
 MAX_OCR_DIMENSION = 1600
+MIN_OCR_IMAGE_COVERAGE = 0.2
 OCR_TIMEOUT_SECONDS = 15
 STAGES = ("eligibility", "network", "service", "authorization", "benefits", "estimate")
 CARD_IDENTITY_PATTERNS = {
-    "member_name": r"(?im)^[ \t]*(?:member|subscriber|patient)?[ \t]*name[ \t]*[:#-]?[ \t]*(?:\r?\n[ \t]*)?([A-Z][A-Z .,'-]{3,70})[ \t]*$",
+    "member_name": r"(?im)^[ \t]*(?:member|subscriber|patient)?[ \t]*name[ \t]*[:#-]?[ \t]*(?:[^\w\r\n]{0,5}[ \t]*(?:\r?\n[ \t]*)+)?([A-Z][A-Z .,'-]{3,100})[ \t]*$",
     "member_id": r"(?i)(?:member|subscriber|identification)\s*(?:id|number|no\.?|#)\s*[:#-]?\s*([A-Z0-9-]{5,30})",
     "group_number": r"(?i)group\s*(?:number|no\.?|#)?\s*[:#-]?\s*([A-Z0-9-]{3,30})",
 }
 CARD_DETAIL_PATTERNS = {
-    "plan_type": r"(?im)^\s*(?:(?:plan(?:\s*/\s*product|\s*type)?|product)\s*[:#-]\s*(.+?)|((?:blue\s*)?choice\s+ppo\s+plan.*))\s*$",
+    "plan_type": r"(?im)(?:^\s*(?:plan(?:\s*/\s*product|\s*type)?|product)\s*[:#-]\s*(.+?)\s*$|\b((?:blue\s*)?choice\s+ppo\s+plan(?:\s+(?:under|with)\b[^\n]*)?))",
     "coverage_date": r"(?i)(?:coverage|effective)\s*(?:date)?\s*[:#-]?\s*(\d{1,2}[/-]\d{1,2}[/-]\d{2,4})",
     "coinsurance": r"(?i)(?:coinsurance\s*[:#-]?\s*)?(\d{1,3}%\s*after\s*(?:the\s*)?(?:ded(?:uctible)?|ded))",
     "in_network_deductible": r"(?im)(?:in[- ]?network\s+(?:annual\s+)?deductible|(?:annual\s+)?deductible\s*[:#-]?\s*in[- ]?network)\s*[:#-]?\s*([^\n]{1,100})",
@@ -51,11 +52,18 @@ CARD_DETAIL_PATTERNS = {
     "mdlive_phone": r"(?i)md\s*live[^\d]{0,40}((?:1[\s.-])?\(?\d{3}\)?[\s.-]\d{3}[\s.-]\d{4})",
     "nurseline_phone": r"(?i)(?:24\s*/?\s*7\s*)?nurse\s*line[^\d]{0,40}((?:1[\s.-])?\(?\d{3}\)?[\s.-]\d{3}[\s.-]\d{4})",
     "customer_service_phone": r"(?i)customer\s*(?:service|care)[^\d]{0,40}((?:1[\s.-])?\(?\d{3}\)?[\s.-]\d{3}[\s.-]\d{4})",
+    "provider_service_phone": r"(?i)provider\s*(?:service|care)[^\d]{0,40}((?:1[\s.-])?\(?\d{3}\)?[\s.-]\d{3}[\s.-]\d{4})",
     "benefit_advocate_phone": r"(?i)benefit\s*advocate[^\d]{0,40}((?:1[\s.-])?\(?\d{3}\)?[\s.-]\d{3}[\s.-]\d{4})",
+    "eap_phone": r"(?im)^\s*eap\*?[^\d\n]{0,40}((?:1[\s.-])?\(?\d{3}\)?[\s.-]\d{3}[\s.-]\d{4})",
+    "pharmacy_phone": r"(?i)pharmacy\*?[^\d]{0,40}((?:1[\s.-])?\(?\d{3}\)?[\s.-]\d{3}[\s.-]\d{4})",
 }
 
 
 class GoldenCaseError(ValueError):
+    pass
+
+
+class OCRServiceError(RuntimeError):
     pass
 
 
@@ -172,14 +180,17 @@ def patient_matches(profile: Any, manifest: dict[str, Any]) -> bool:
 def _write_ocr_image(image: Image.Image, path: Path) -> None:
     prepared = image.convert("RGB")
     prepared.thumbnail((MAX_OCR_DIMENSION, MAX_OCR_DIMENSION), Image.Resampling.LANCZOS)
-    prepared.save(path, "JPEG", quality=85)
+    prepared.save(path, "PNG")
 
 
 def _card_fields(text: str) -> dict[str, str]:
     fields: dict[str, str] = {}
     for name, pattern in {**CARD_IDENTITY_PATTERNS, **CARD_DETAIL_PATTERNS}.items():
         if match := re.search(pattern, text):
-            fields[name] = next(value.strip() for value in match.groups() if value)
+            value = next(value.strip() for value in match.groups() if value)
+            if name == "member_name":
+                value = re.sub(r"\s+(?:blue\s*)?choice\s+ppo\s+plan.*$", "", value, flags=re.I).strip()
+            fields[name] = value
     benefit = pending_key = ""
     for line in text.splitlines():
         compact = " ".join(line.split())
@@ -192,6 +203,9 @@ def _card_fields(text: str) -> dict[str, str]:
         if benefit and network:
             key = f"{network}_{benefit}"
             value = re.sub(r"^.*?(?:in[- ]?network|out[- ]?of[- ]?network)\s*[:#-]?\s*", "", compact, flags=re.I)
+            amounts = re.findall(r"\$\s*\d[\d,]*(?:\.\d{2})?", value)
+            if re.search(r"\bind\s*/\s*fam\b", normalized) and len(amounts) >= 2:
+                value = f"{amounts[0]} individual / {amounts[1]} family"
             pending_key = key if not value else ""
             if value:
                 fields.setdefault(key, value)
@@ -210,7 +224,7 @@ def _image_text(content: bytes) -> str:
     except (UnidentifiedImageError, Image.DecompressionBombError, OSError) as exc:
         raise GoldenCaseError("The uploaded insurance card is not a readable image") from exc
     with tempfile.TemporaryDirectory() as directory:
-        path = Path(directory) / "card.jpg"
+        path = Path(directory) / "card.png"
         _write_ocr_image(image, path)
         return _tesseract(path)
 
@@ -220,21 +234,40 @@ def _pdf_text(content: bytes) -> str:
         document = fitz.open(stream=content, filetype="pdf")
         if document.needs_pass or not 1 <= document.page_count <= MAX_PDF_PAGES:
             raise GoldenCaseError("Insurance card PDFs must contain one or two unlocked pages")
-        parts = [page.get_text() for page in document]
-        # OCR image-only pages too: pharmacy routing and contact details are
-        # commonly printed on the back of an otherwise searchable card PDF.
+        parts = [page.get_text(sort=True) for page in document]
+        # Searchable wrapper text does not make an embedded card image
+        # searchable. OCR each substantial card image, including the back.
         with tempfile.TemporaryDirectory() as directory:
             for number, page in enumerate(document):
-                if len("".join(parts[number].split())) >= 40:
+                images = [
+                    item for item in page.get_image_info(xrefs=True)
+                    if fitz.Rect(item["bbox"]).get_area() >= page.rect.get_area() * MIN_OCR_IMAGE_COVERAGE
+                ]
+                if images:
+                    image = max(images, key=lambda item: fitz.Rect(item["bbox"]).get_area())
+                    if image.get("xref"):
+                        pixmap = fitz.Pixmap(document, image["xref"])
+                    else:
+                        pixmap = page.get_pixmap(
+                            matrix=fitz.Matrix(2, 2), clip=fitz.Rect(image["bbox"]), colorspace=fitz.csRGB, alpha=False,
+                        )
+                elif not "".join(parts[number].split()):
+                    pixmap = page.get_pixmap(matrix=fitz.Matrix(2, 2), colorspace=fitz.csRGB, alpha=False)
+                else:
                     continue
-                pixmap = page.get_pixmap(matrix=fitz.Matrix(2, 2), alpha=False)
                 if pixmap.width * pixmap.height > MAX_PIXELS:
                     raise GoldenCaseError("The insurance card PDF pages are too large")
-                path = Path(directory) / f"card-{number}.jpg"
+                if pixmap.alpha:
+                    pixmap = fitz.Pixmap(pixmap, 0)
+                if pixmap.colorspace.n != 3:
+                    pixmap = fitz.Pixmap(fitz.csRGB, pixmap)
+                path = Path(directory) / f"card-{number}.png"
                 _write_ocr_image(Image.frombytes("RGB", (pixmap.width, pixmap.height), pixmap.samples), path)
                 parts.append(_tesseract(path))
         return "\n".join(parts)
     except GoldenCaseError:
+        raise
+    except OCRServiceError:
         raise
     except Exception as exc:
         raise GoldenCaseError("The uploaded insurance card is not a readable PDF") from exc
@@ -243,15 +276,17 @@ def _pdf_text(content: bytes) -> str:
 def _tesseract(path: Path) -> str:
     executable = shutil.which("tesseract")
     if not executable:
-        return ""
+        raise OCRServiceError("Tesseract OCR is not installed")
     try:
         result = subprocess.run(
             (executable, str(path), "stdout", "--psm", "6"), capture_output=True,
             text=True, timeout=OCR_TIMEOUT_SECONDS, check=False,
         )
-    except subprocess.TimeoutExpired:
-        return ""
-    return result.stdout if result.returncode == 0 else ""
+    except subprocess.TimeoutExpired as exc:
+        raise OCRServiceError("Insurance card OCR timed out") from exc
+    if result.returncode != 0:
+        raise OCRServiceError("Insurance card OCR failed")
+    return result.stdout
 
 
 def read_card(content: bytes, member_name: str = "") -> dict[str, str]:

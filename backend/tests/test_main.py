@@ -193,6 +193,7 @@ class MainRouteTests(unittest.IsolatedAsyncioTestCase):
         for image in (front, back):
             page = document.new_page()
             page.insert_image(page.rect, stream=image.getvalue())
+        document[0].insert_text((20, 20), "Member ID Card transaction wrapper text that must not suppress OCR")
         seen: list[tuple[int, int, int]] = []
 
         def ocr(path: Path) -> str:
@@ -252,15 +253,17 @@ Benefit Advocate: 1-866-799-2731"""
                 "member_name": "Pat Example", "member_id": "MEMBER-123", "group_number": "GROUP-123",
             })
 
-    def test_failed_card_ocr_leaves_every_field_for_clinician_review(self) -> None:
+    def test_failed_card_ocr_reports_a_service_error(self) -> None:
         with patch("app.insurance.golden.shutil.which", return_value="tesseract"), \
              patch("app.insurance.golden.subprocess.run", return_value=Mock(returncode=1, stdout="")):
-            self.assertEqual(golden._tesseract(Path("card.jpg")), "")
+            with self.assertRaisesRegex(RuntimeError, "OCR failed"):
+                golden._tesseract(Path("card.png"))
 
-    def test_timed_out_card_ocr_leaves_fields_for_clinician_review(self) -> None:
+    def test_timed_out_card_ocr_reports_a_service_error(self) -> None:
         with patch("app.insurance.golden.shutil.which", return_value="tesseract"), \
              patch("app.insurance.golden.subprocess.run", side_effect=golden.subprocess.TimeoutExpired("tesseract", 8)):
-            self.assertEqual(golden._tesseract(Path("card.jpg")), "")
+            with self.assertRaisesRegex(RuntimeError, "OCR timed out"):
+                golden._tesseract(Path("card.png"))
 
     async def test_card_ocr_stays_locked_until_clinician_review(self) -> None:
         def stored(_patient: str, _share: str, _evidence: str, workflow: dict) -> dict:
@@ -563,17 +566,28 @@ Benefit Advocate: 1-866-799-2731"""
         self.assertTrue({"99214", "70551", "95816"}.issubset({line["code"] for line in brain}))
 
     def test_card_ocr_accepts_the_reviewed_identification_number_label(self) -> None:
-        reviewed_layout = """Member ID Card\nSubscriber Name:\nPAT EXAMPLE\nIdentification Number:\nMEMBER-123\nGroup Number:  GROUP-123\n"""
+        reviewed_layout = """Member ID Card\nSubscriber Name: ;\n\nPAT EXAMPLE Choice PPO Plan\nIdentification Number:\nMEMBER-123\nGroup Number:  GROUP-123\n"""
         with patch("app.insurance.golden._pdf_text", return_value=reviewed_layout):
             fields = golden.read_card(b"%PDF-reviewed-card")
         self.assertEqual(fields, {
             "member_name": "PAT EXAMPLE",
             "member_id": "MEMBER-123",
             "group_number": "GROUP-123",
+            "plan_type": "Choice PPO Plan",
         })
         self.assertTrue(golden.card_matches({
             **fields, "member_name": "PAT EXAMPLE Choice PPO Plan",
         }, GOLDEN_MANIFEST))
+
+    def test_pdf_ocr_runtime_failure_is_not_misreported_as_an_unreadable_pdf(self) -> None:
+        document = fitz.open()
+        page = document.new_page()
+        image = BytesIO()
+        Image.new("RGB", (800, 500), "white").save(image, "PNG")
+        page.insert_image(page.rect, stream=image.getvalue())
+        with patch("app.insurance.golden._tesseract", side_effect=golden.OCRServiceError("Insurance card OCR failed")):
+            with self.assertRaisesRegex(golden.OCRServiceError, "OCR failed"):
+                golden._pdf_text(document.tobytes())
 
     async def test_registered_ecw_jwks_url_serves_the_public_key_set(self) -> None:
         payload = {"keys": [{"kty": "RSA", "kid": "clinicforce-test-key"}]}

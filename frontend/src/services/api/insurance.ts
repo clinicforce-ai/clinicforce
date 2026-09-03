@@ -47,7 +47,8 @@ export interface InsuranceCardFields {
   in_network_oop_maximum?: string; out_of_network_oop_maximum?: string
   rx_bin?: string; rx_pcn?: string; rx_group?: string
   preauth_medical_phone?: string; mdlive_phone?: string; nurseline_phone?: string
-  customer_service_phone?: string; benefit_advocate_phone?: string
+  customer_service_phone?: string; provider_service_phone?: string; benefit_advocate_phone?: string
+  eap_phone?: string; pharmacy_phone?: string
 }
 
 export interface InsuranceEvidenceInput {
