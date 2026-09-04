@@ -297,7 +297,7 @@ def _pdf_text(content: bytes) -> str:
 
 def _ocr_images(paths: list[Path], initial: list[str] | None = None) -> str:
     parts = list(initial or ())
-    parts.extend(_tesseract(path) for path in paths)
+    parts.extend(_tesseract(path, "6" if index == 0 else "3") for index, path in enumerate(paths))
     return "\n".join(parts)
 
 

@@ -169,7 +169,7 @@ class MainRouteTests(unittest.IsolatedAsyncioTestCase):
         Image.new("RGB", (3200, 2400), "white").save(card, "JPEG")
         dimensions: list[tuple[int, int]] = []
 
-        def ocr(path: Path) -> str:
+        def ocr(path: Path, _mode: str = "6") -> str:
             with Image.open(path) as prepared:
                 dimensions.append(prepared.size)
             return "card text"
@@ -194,16 +194,16 @@ class MainRouteTests(unittest.IsolatedAsyncioTestCase):
             page = document.new_page()
             page.insert_image(page.rect, stream=image.getvalue())
         document[0].insert_text((20, 20), "Member ID Card transaction wrapper text that must not suppress OCR")
-        seen: list[tuple[int, int, int]] = []
+        seen: list[tuple[tuple[int, int, int], str]] = []
 
-        def ocr(path: Path) -> str:
+        def ocr(path: Path, mode: str = "6") -> str:
             with Image.open(path) as image:
-                seen.append(image.getpixel((0, 0)))
+                seen.append((image.getpixel((0, 0)), mode))
             return "Member Name: PAT EXAMPLE\nMember ID: MEMBER-123\nGroup Number: GROUP-123"
 
         with patch("app.insurance.golden._tesseract", side_effect=ocr):
             self.assertEqual(golden.read_card(document.tobytes())["member_id"], "MEMBER-123")
-        self.assertEqual(len(seen), 2)
+        self.assertEqual(seen, [((255, 0, 0), "6"), ((0, 128, 0), "3")])
 
     def test_card_ocr_extracts_benefits_routing_and_contacts(self) -> None:
         card = """Member Name: PAT EXAMPLE
