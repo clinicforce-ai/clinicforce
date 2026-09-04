@@ -345,6 +345,31 @@ Benefit Advocate: 1-866-799-2731"""
                 self.assertEqual(reviewed.json()["documents"], {})
                 self.assertIsNone(reviewed.json()["coverage"])
 
+    async def test_self_pay_choice_skips_card_and_insurance_stages(self) -> None:
+        def create(_patient: str, _share: str, _evidence: str, workflow: dict) -> dict:
+            return {
+                **workflow, "id": "self-pay-1", "created_at": "2026-08-24T15:30:00+00:00",
+                "expires_at": "2026-08-25T15:30:00+00:00",
+            }
+
+        with patch.dict(os.environ, {
+            "INSURANCE_BETA_ENABLED": "true", "SOURCE_LINK_SECRET": "s" * 40,
+        }, clear=False):
+            self.client.cookies.set(
+                "clinicforce_doctor_share",
+                golden.create_share_token("patient-1", "share-1", beta_enabled=True),
+                path="/api/doctor",
+            )
+            with patch("app.api.routers.insurance.golden.read_card", side_effect=AssertionError("self-pay must not read a card")), \
+                 patch("app.api.routers.insurance.store.create_case", side_effect=create):
+                response = await self.client.post("/api/doctor/insurance/cases/self-pay")
+
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()["payment_path"], "self_pay")
+        self.assertEqual(response.json()["status"], "complete")
+        self.assertIsNone(response.json()["next_stage"])
+        self.assertIsNone(response.json()["estimate"])
+
     async def test_document_backed_api_scenario_requires_evidence_and_clinician_context(self) -> None:
         cases: dict[str, dict] = {}
         profile = PatientProfile(
@@ -526,6 +551,9 @@ Benefit Advocate: 1-866-799-2731"""
             "observed_at": "2026-08-24", "reference": "NMCT provider agreement",
             "findings": {"provider_network": "participating_blue_choice_ppo", "participation_pages": [38], "compensation_pages": [40]},
         })
+        network_facts = [fact for fact in case["facts"] if fact["stage"] == "network"]
+        self.assertTrue(all(fact.get("explanation") for fact in network_facts))
+        self.assertTrue(all("page " in fact["citation"]["reference"] for fact in network_facts))
         documented.add_document(case, "fee_schedule", {
             "id": "fee_schedule", "filename": "rates.csv", "sha256": "f" * 64,
             "observed_at": "2026-08-24", "reference": "Blue Choice PPO rates",
@@ -550,6 +578,11 @@ Benefit Advocate: 1-866-799-2731"""
         self.assertEqual(case["estimate"]["nominal_coinsurance_cents"], 3816)
         self.assertEqual(case["estimate"]["patient_cents"], 8816)
         self.assertEqual(case["estimate"]["plan_cents"], 15262)
+        self.assertIn("CPT 99204, 95886", case["estimate"]["plain_explanation"])
+        self.assertIn("$88.16", case["estimate"]["plain_explanation"])
+        documented.advance(case, "estimate", GOLDEN_MANIFEST["rates_source"])
+        patient_fact = next(fact for fact in case["facts"] if fact["label"] == "Estimated patient responsibility")
+        self.assertIn("page 2", patient_fact["citation"]["reference"])
         unpriced = deepcopy(case)
         unpriced["service_lines"].append({"code": "76881", "allowed_cents": None, "selected": True, "confirmed": True})
         self.assertFalse(documented.calculate(unpriced)["estimate_available"])

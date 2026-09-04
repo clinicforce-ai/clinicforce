@@ -167,10 +167,20 @@ def case_authorizations(case: dict[str, Any]) -> dict[str, dict[str, Any]]:
 
 def pending_case(fields: dict[str, str]) -> dict[str, Any]:
     return {
-        "source_mode": "documents", "status": "review", "next_stage": "intake",
+        "source_mode": "documents", "payment_path": "insurance", "status": "review", "next_stage": "intake",
         "ocr": {**fields, "confirmed": False}, "clinical_context": "", "documents": {},
         "appointment": None, "coverage": None, "service_lines": [], "visit_type": "new",
         "stage_decisions": [], "facts": [], "sources": [], "estimate": None,
+    }
+
+
+def self_pay_case() -> dict[str, Any]:
+    return {
+        "source_mode": "documents", "payment_path": "self_pay", "status": "complete", "next_stage": None,
+        "ocr": {"member_name": "", "member_id": "", "group_number": "", "confirmed": False},
+        "clinical_context": "", "documents": {}, "appointment": None, "coverage": None,
+        "service_lines": [], "visit_type": "new", "stage_decisions": [], "facts": [],
+        "sources": [], "estimate": None,
     }
 
 
@@ -385,19 +395,20 @@ def _apply_network_evidence(case: dict[str, Any]) -> None:
     compensation_page = (contract["findings"].get("compensation_pages") or [contract_page])[0]
     benefit_page = suggested["benefit_page"]
     facts = [
-        _fact("network", "Coverage status", "Active medical coverage for this member", _with_reference(coverage_source, f"page {suggested['active_page']} · Member Status: Active Coverage")),
-        _fact("network", "Plan used for this review", suggested["plan_name"], _with_reference(coverage_source, f"page {suggested['plan_page']} · uploaded Plan / Product field")),
-        _fact("network", "Provider agreement", "NMCT signed participation terms for the Blue Choice PPO provider network", _with_reference(contract, f"page {contract_page} · signed Blue Choice PPO Provider Network participation row")),
-        _fact("network", "Contracted-price rule", "For covered services, NMCT accepts the lower of its billed charge or the current BCBSTX fee-schedule amount, minus applicable patient cost share", _with_reference(contract, f"page {compensation_page} · uploaded compensation terms")),
-        _fact("network", "Patient network result", f"{network_status.replace('_', ' ').title()} for this uploaded BCBSTX response", _with_reference(coverage_source, f"page {suggested['network_page']} · uploaded network status and place of service")),
-        _fact("network", "Individual deductible remaining", _money(suggested["deductible_remaining_cents"]), _with_reference(coverage_source, f"page {benefit_page} · Annual Deductible, Individual Remaining")),
-        _fact("network", "Individual out-of-pocket remaining", _money(suggested["oop_remaining_cents"]), _with_reference(coverage_source, f"page {benefit_page} · Out Of Pocket, Individual Remaining")),
+        _fact("network", "Coverage status", "Active medical coverage for this member", _with_reference(coverage_source, f"page {suggested['active_page']} · Member Status: Active Coverage"), "This confirms the member's medical plan was active when the uploaded eligibility response was produced."),
+        _fact("network", "Plan used for this review", suggested["plan_name"], _with_reference(coverage_source, f"page {suggested['plan_page']} · uploaded Plan / Product field"), "This identifies the patient's plan so it can be compared with the clinic's participation agreement."),
+        _fact("network", "Provider agreement", "NMCT signed participation terms for the Blue Choice PPO provider network", _with_reference(contract, f"page {contract_page} · signed Blue Choice PPO Provider Network participation row"), "This shows the clinic agreed to participate in the same Blue Choice PPO network named in the patient's response."),
+        _fact("network", "Contracted-price rule", "For covered services, NMCT accepts the lower of its billed charge or the current BCBSTX fee-schedule amount, minus applicable patient cost share", _with_reference(contract, f"page {compensation_page} · uploaded compensation terms"), "This means the reviewed fee schedule sets the starting price, and the patient's benefits determine how that price is split."),
+        _fact("network", "Patient network result", f"{network_status.replace('_', ' ').title()} for this uploaded BCBSTX response", _with_reference(coverage_source, f"page {suggested['network_page']} · uploaded network status and place of service"), f"Because the patient response and clinic agreement match, {network_status.replace('_', '-')} benefit terms apply to this estimate."),
+        _fact("network", "Individual deductible remaining", _money(suggested["deductible_remaining_cents"]), _with_reference(coverage_source, f"page {benefit_page} · Annual Deductible, Individual Remaining"), "This is the remaining individual deductible that may be paid before coinsurance for covered services."),
+        _fact("network", "Individual out-of-pocket remaining", _money(suggested["oop_remaining_cents"]), _with_reference(coverage_source, f"page {benefit_page} · Out Of Pocket, Individual Remaining"), "This is the most additional covered cost shown for the individual before the plan's out-of-pocket limit is reached."),
     ]
     if suggested.get("accumulators_met_percent") == 100:
         facts.append(_fact(
             "network", "What the 100% means",
             "The individual deductible and out-of-pocket limits shown are 100% met. It does not mean every service is automatically covered at 100%.",
             _with_reference(coverage_source, f"page {benefit_page} · individual accumulator columns show 100% and $0 Remaining"),
+            "The 100% describes progress toward the annual limits, not a promise that every medical service is paid in full.",
         ))
     case["facts"] = [fact for fact in case.get("facts", []) if fact.get("stage") != "network"] + facts
 
@@ -494,25 +505,35 @@ def advance(case: dict[str, Any], stage: str, rate_source: dict[str, Any]) -> di
     if stage == "benefits":
         case["estimate"] = calculate(case)
         estimate = case["estimate"]
+        benefit_page = coverage["source"].get("findings", {}).get("suggested_coverage", {}).get("benefit_page")
+        benefit_source = _with_reference(
+            coverage["source"],
+            f"page {benefit_page} · individual deductible, out-of-pocket, and benefit amounts" if benefit_page else coverage["source"]["reference"],
+        )
         if estimate["estimate_available"]:
             label = "Contracted allowed amount" if coverage["network_status"] == "in_network" else "Out-of-network allowed amount"
             source = rate_source if coverage["network_status"] == "in_network" else coverage["source"]
             case["facts"].extend((
                 _fact("benefits", label, _money(estimate["allowed_cents"]), source),
-                _fact("benefits", "Deductible applied", _money(estimate["deductible_applied_cents"]), coverage["source"]),
-                _fact("benefits", "Coinsurance", _money(estimate["nominal_coinsurance_cents"]) if estimate["nominal_coinsurance_cents"] is not None else "Not stated in the uploaded coverage response", coverage["source"]),
-                _fact("benefits", "Copay", _money(estimate["copay_cents"]) if estimate["copay_cents"] is not None else "Not stated in the uploaded coverage response", coverage["source"]),
-                _fact("benefits", "Out-of-pocket result", "Patient cost share is capped at $0.00 because the individual out-of-pocket remaining is $0.00" if estimate["individual_oop_remaining_cents"] == 0 else _money(estimate["oop_cap_adjustment_cents"]), coverage["source"]),
+                _fact("benefits", "Deductible applied", _money(estimate["deductible_applied_cents"]), benefit_source),
+                _fact("benefits", "Coinsurance", _money(estimate["nominal_coinsurance_cents"]) if estimate["nominal_coinsurance_cents"] is not None else "Not stated in the uploaded coverage response", benefit_source),
+                _fact("benefits", "Copay", _money(estimate["copay_cents"]) if estimate["copay_cents"] is not None else "Not stated in the uploaded coverage response", benefit_source),
+                _fact("benefits", "Out-of-pocket result", "Patient cost share is capped at $0.00 because the individual out-of-pocket remaining is $0.00" if estimate["individual_oop_remaining_cents"] == 0 else _money(estimate["oop_cap_adjustment_cents"]), benefit_source),
             ))
         else:
             case["facts"].append(_fact("benefits", "Estimate status", estimate["unavailable_reason"], coverage["source"]))
     if stage == "estimate":
         case["status"] = "complete"
         estimate = case["estimate"]
+        benefit_page = coverage["source"].get("findings", {}).get("suggested_coverage", {}).get("benefit_page")
+        benefit_source = _with_reference(
+            coverage["source"],
+            f"page {benefit_page} · individual deductible, out-of-pocket, and benefit amounts" if benefit_page else coverage["source"]["reference"],
+        )
         if estimate["estimate_available"]:
             case["facts"].extend((
-                _fact("estimate", "Estimated patient responsibility", _money(estimate["patient_cents"]), coverage["source"]),
-                _fact("estimate", "Estimated plan responsibility", _money(estimate["plan_cents"]), rate_source),
+                _fact("estimate", "Estimated patient responsibility", _money(estimate["patient_cents"]), benefit_source, "This is the patient's estimated share after applying the reviewed rates and individual benefit balances."),
+                _fact("estimate", "Estimated plan responsibility", _money(estimate["plan_cents"]), rate_source, "This is the remaining reviewed amount expected from the plan after the patient's estimated share."),
             ))
         else:
             case["facts"].append(_fact("estimate", "Collection amount", "Not estimated", coverage["source"]))
@@ -563,6 +584,14 @@ def calculate(case: dict[str, Any]) -> dict[str, Any]:
     copay = int(copay_value) if copay_value is not None else None
     nominal = min(allowed, deductible + (coinsurance or 0) + (copay or 0))
     patient = min(nominal, int(coverage["individual_oop_remaining_cents"]))
+    explanation = (
+        f"Because this visit is for {case.get('clinical_context') or 'the documented visit reason'} and the clinician selected "
+        f"CPT {', '.join(line['code'] for line in selected)}, the reviewed rates total {_money(allowed)}. "
+        f"The uploaded benefits apply {_money(deductible)} to the deductible"
+        f"{f' and {_money(coinsurance)} in coinsurance' if coinsurance is not None else ''}"
+        f"{f' plus {_money(copay)} copay' if copay is not None else ''}; after considering the individual out-of-pocket balance, "
+        f"the patient is estimated to pay {_money(patient)} and the plan {_money(allowed - patient)}."
+    )
     return {
         "service_code": ", ".join(line["code"] for line in selected),
         "service_codes": [line["code"] for line in selected], "allowed_cents": allowed,
@@ -574,6 +603,7 @@ def calculate(case: dict[str, Any]) -> dict[str, Any]:
         "oop_cap_adjustment_cents": None if coinsurance is None and copay is None else patient - nominal, "patient_cents": patient,
         "plan_cents": allowed - patient, "source_mode": "documents",
         "calculated_at": datetime.now(timezone.utc).isoformat(),
+        "plain_explanation": explanation,
         "disclaimer": "Document-backed estimate for anticipated services; not a guarantee of payment or final coding.",
     }
 
@@ -585,11 +615,14 @@ def _citation(filename: str, reference: str, sha256: str, observed_at: str | Non
     }
 
 
-def _fact(stage: str, label: str, value: str, source: dict[str, Any]) -> dict[str, Any]:
+def _fact(stage: str, label: str, value: str, source: dict[str, Any], explanation: str | None = None) -> dict[str, Any]:
     citation = source if "source_filename" in source else _citation(
         source["filename"], source["reference"], source["sha256"], source["observed_at"],
     )
-    return {"stage": stage, "label": label, "value": value, "citation": citation, "source_mode": "documents"}
+    fact = {"stage": stage, "label": label, "value": value, "citation": citation, "source_mode": "documents"}
+    if explanation:
+        fact["explanation"] = explanation
+    return fact
 
 
 def _with_reference(source: dict[str, Any], reference: str) -> dict[str, Any]:

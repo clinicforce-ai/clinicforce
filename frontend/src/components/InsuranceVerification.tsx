@@ -1,7 +1,7 @@
-import { ArrowLeft, Camera, Check, ExternalLink, FileCheck2, LoaderCircle, ShieldCheck, Upload } from 'lucide-react'
+import { ArrowLeft, Camera, Check, ExternalLink, FileCheck2, LoaderCircle, ShieldCheck, Upload, WalletCards } from 'lucide-react'
 import { useState } from 'react'
 import {
-  confirmInsuranceIntake, confirmInsuranceService, createInsuranceCase, runInsuranceStage,
+  confirmInsuranceIntake, confirmInsuranceService, createInsuranceCase, createSelfPayCase, runInsuranceStage,
   suggestInsuranceServices, uploadInsuranceEvidence, type InsuranceCase, type InsuranceStage,
 } from '../services/api'
 
@@ -21,6 +21,7 @@ const stageCopy = {
 } as const
 
 const money = (cents: number | null | undefined) => cents == null ? 'Not stated' : new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(cents / 100)
+const dateTime = (value: string) => new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(value))
 const cardDetailLabels: Array<[keyof InsuranceCase['ocr'], string]> = [
   ['plan_type', 'Plan type'], ['coverage_date', 'Coverage date'], ['coinsurance', 'Coinsurance shown on card'],
   ['in_network_deductible', 'In-network deductible'], ['out_of_network_deductible', 'Out-of-network deductible'],
@@ -63,6 +64,12 @@ export default function InsuranceVerification({ onBack }: Props) {
     catch (caught) { setError(caught instanceof Error ? caught.message : `Unable to read ${label}.`) }
     finally { setBusy(false) }
   }
+  const chooseSelfPay = async () => {
+    setBusy(true); setError(''); setMessage('Saving the patient’s self-pay choice…')
+    try { replaceCase(await createSelfPayCase(), 'Self-pay selected. Insurance will not be used for this visit.') }
+    catch (caught) { setError(caught instanceof Error ? caught.message : 'Unable to save the self-pay choice.') }
+    finally { setBusy(false) }
+  }
   const confirmIntake = async () => {
     if (!insuranceCase) return
     setBusy(true); setError('')
@@ -99,35 +106,44 @@ export default function InsuranceVerification({ onBack }: Props) {
   const completed = new Set<InsuranceStage>(insuranceCase?.stage_decisions.map((item) => item.stage) ?? [])
   if (insuranceCase?.ocr.confirmed) completed.add('intake')
   const currentIndex = steps.findIndex((step) => step.id === (insuranceCase?.next_stage ?? 'estimate'))
-  const stageFacts = insuranceCase?.facts.filter((fact) => fact.stage === viewStage) ?? []
+  const stageFacts = insuranceCase?.facts.filter((fact) => fact.stage === viewStage || (
+    viewStage === 'estimate' && fact.stage === 'network' && ['Contracted-price rule', 'Patient network result', 'Individual deductible remaining', 'Individual out-of-pocket remaining'].includes(fact.label)
+  )) ?? []
   const documents = insuranceCase?.documents ?? {}
   const selectedLines = insuranceCase?.service_lines.filter((line) => line.selected) ?? []
 
   return <section className="insurance-beta" aria-labelledby="insurance-heading">
     <button className="back-control" type="button" onClick={onBack}><ArrowLeft aria-hidden="true" className="size-4" /> Back to clinical summary</button>
     <header className="insurance-beta-hero">
-      <div><p className="eyebrow"><ShieldCheck aria-hidden="true" className="size-4" /> Evidence-backed beta · NMCT and BCBSTX</p><h1 id="insurance-heading">Verify insurance before the visit</h1><p>Today, every patient-specific answer comes from a file uploaded in this review. If a required file is missing, ClinicForce stops instead of guessing. Each upload below also names the API or connected system that can replace it later.</p></div>
-      <div className="beta-session"><span>Secure share session</span><strong>3 hours</strong></div>
+      {insuranceCase?.payment_path === 'self_pay' ? <div><p className="eyebrow"><WalletCards aria-hidden="true" className="size-4" /> Direct payment · NMCT</p><h1 id="insurance-heading">Patient payment choice</h1><p>The patient’s decision to pay directly is saved in this secure review. No insurance information is required or used.</p></div> : <div><p className="eyebrow"><ShieldCheck aria-hidden="true" className="size-4" /> Evidence-backed beta · NMCT and BCBSTX</p><h1 id="insurance-heading">Verify insurance before the visit</h1><p>Today, every patient-specific answer comes from a file uploaded in this review. If a required file is missing, ClinicForce stops instead of guessing. Each upload below also names the API or connected system that can replace it later.</p></div>}
+      <div className="beta-session">{insuranceCase ? <><span>{insuranceCase.payment_path === 'self_pay' ? 'Self-pay selected' : 'Card uploaded'}</span><strong><time dateTime={insuranceCase.created_at}>{dateTime(insuranceCase.created_at)}</time></strong></> : <><span>Secure share session</span><strong>3 hours</strong></>}</div>
     </header>
-    <div className="insurance-stepper" aria-label="Insurance verification progress">
+    {insuranceCase?.payment_path !== 'self_pay' && <div className="insurance-stepper" aria-label="Insurance verification progress">
       {steps.map((step, index) => {
         const available = completed.has(step.id) || step.id === insuranceCase?.next_stage || (!insuranceCase && step.id === 'intake')
         return <button key={step.id} type="button" disabled={!available} aria-current={viewStage === step.id ? 'step' : undefined} onClick={() => available && setViewStage(step.id)}>
           <span>{completed.has(step.id) ? <Check aria-hidden="true" /> : index + 1}</span>{step.label}
         </button>
       })}
-    </div>
+    </div>}
     <p className="sr-status" aria-live="polite">{busy ? 'Working.' : error || message}</p>
     <div className="insurance-layout">
       <main className="insurance-stage-card">
+        {insuranceCase?.payment_path === 'self_pay' && <>
+          <p className="section-kicker">Direct payment</p><h2>Self-pay selected</h2>
+          <div className="evidence-summary success"><WalletCards aria-hidden="true" /><div><strong>The patient chose not to use insurance.</strong><p>ClinicForce will not run eligibility, network, authorization, or insurance-benefit calculations for this visit.</p></div></div>
+          <p className="estimate-disclaimer">Confirm the clinic’s current cash price and any service-specific billing rules with the patient before collecting payment. No insurance claim or insurance estimate has been created.</p>
+          <button className="button button-secondary" type="button" onClick={onBack}><ArrowLeft aria-hidden="true" className="size-4" /> Back to clinical summary</button>
+        </>}
         {viewStage === 'intake' && !insuranceCase && <>
           <p className="section-kicker">1 · Intake</p><h2>Read the member card locally</h2>
           <p>Use either button for the same document: a clear image of the patient’s current insurance card. Include both sides because contact and authorization information may be on the back.</p>
           <div className="source-plan"><strong>What ClinicForce reads</strong><p>Member name, member ID, group number, plan details, benefit labels, and payer contact numbers. The file stays local and is not sent to an external AI service.</p><small><b>Future replacement:</b> EHR registration data plus the payer member-eligibility lookup.</small></div>
           <div className="card-actions">
-            <label className="button button-primary"><Upload aria-hidden="true" className="size-4" /> Choose card PDF or image<input type="file" accept=".pdf,.jpg,.jpeg,.png" onChange={(event) => { void uploadCard(event.target.files?.[0]); event.currentTarget.value = '' }} /></label>
-            <label className="button button-secondary"><Camera aria-hidden="true" className="size-4" /> Photograph the card<input type="file" accept="image/*" capture="environment" onChange={(event) => { void uploadCard(event.target.files?.[0]); event.currentTarget.value = '' }} /></label>
+            <label className="button button-primary" aria-disabled={busy}><Upload aria-hidden="true" className="size-4" /> Choose card PDF or image<input type="file" accept=".pdf,.jpg,.jpeg,.png" disabled={busy} onChange={(event) => { void uploadCard(event.target.files?.[0]); event.currentTarget.value = '' }} /></label>
+            <label className="button button-secondary" aria-disabled={busy}><Camera aria-hidden="true" className="size-4" /> Photograph the card<input type="file" accept="image/*" capture="environment" disabled={busy} onChange={(event) => { void uploadCard(event.target.files?.[0]); event.currentTarget.value = '' }} /></label>
           </div>
+          <div className="self-pay-choice"><div><strong>Not using insurance?</strong><p>Record that the patient will pay the clinic directly and skip all insurance checks.</p></div><button className="button button-secondary" type="button" disabled={busy} onClick={() => void chooseSelfPay()}><WalletCards aria-hidden="true" className="size-4" /> Continue as self-pay</button></div>
         </>}
         {viewStage === 'intake' && insuranceCase && <>
           <p className="section-kicker">1 · Intake</p><h2>Confirm the details read from the card</h2><p>Compare these values with the card. The member name must match the patient opened from the QR before these details can be used.</p>
@@ -178,7 +194,7 @@ export default function InsuranceVerification({ onBack }: Props) {
           <FactList facts={stageFacts} />
           {insuranceCase.next_stage === 'authorization' && <button className="button button-primary" type="button" disabled={busy} onClick={() => void advance('authorization')}>{stageCopy.authorization.action}</button>}
         </>}
-        {(viewStage === 'benefits' || viewStage === 'estimate') && insuranceCase && <StagePanel stage={viewStage} insuranceCase={insuranceCase} facts={stageFacts} active={insuranceCase.next_stage === viewStage} busy={busy} onAdvance={advance} />}
+        {(viewStage === 'benefits' || viewStage === 'estimate') && insuranceCase && insuranceCase.payment_path !== 'self_pay' && <StagePanel stage={viewStage} insuranceCase={insuranceCase} facts={stageFacts} active={insuranceCase.next_stage === viewStage} busy={busy} onAdvance={advance} />}
         {error && <p className="form-error" role="alert">{error}</p>}
         {!error && <p className="insurance-status" role="status">{busy ? <LoaderCircle className="size-4 animate-spin" aria-hidden="true" /> : <ShieldCheck className="size-4" aria-hidden="true" />}{message}</p>}
       </main>
@@ -194,7 +210,7 @@ function UploadTile({ title, hint, reads, future, accept, source, disabled, onFi
 
 function FactList({ facts }: { facts: InsuranceCase['facts'] }) {
   if (!facts.length) return null
-  return <section className="evidence-reasoning" aria-label="Explanation and sources"><header><FileCheck2 aria-hidden="true" /><div><h3>How ClinicForce reached this</h3><p>Each answer names the uploaded file and exact page or section that supports it.</p></div></header><dl className="insurance-facts">{facts.map((fact) => <div key={fact.label}><dt>{fact.label}</dt><dd>{fact.value}<Citation fact={fact} /></dd></div>)}</dl></section>
+  return <section className="evidence-reasoning" aria-label="Explanation and sources"><header><FileCheck2 aria-hidden="true" /><div><h3>How ClinicForce reached this</h3><p>Plain-language notes explain why the evidence matters. Each answer names the uploaded file and exact page or section that supports it.</p></div></header><dl className="insurance-facts">{facts.map((fact) => <div key={`${fact.stage}-${fact.label}`}><dt>{fact.label}</dt><dd>{fact.value}{fact.explanation && <p className="fact-explanation">{fact.explanation}</p>}<Citation fact={fact} /></dd></div>)}</dl></section>
 }
 
 function Citation({ fact }: { fact: InsuranceCase['facts'][number] }) {
@@ -210,6 +226,7 @@ function StagePanel({ stage, insuranceCase, facts, active, busy, onAdvance }: {
   const estimate = insuranceCase.estimate
   return <><p className="section-kicker">{steps.findIndex((step) => step.id === stage) + 1} · {steps.find((step) => step.id === stage)?.label}</p><h2>{copy.title}</h2><p>{copy.detail}</p>
     {stage === 'estimate' && estimate && <div className="estimate-lead"><span>Collect now</span><strong>{estimate.estimate_available === false ? 'Not estimated' : money(estimate.patient_cents)}</strong><p>{estimate.estimate_available === false ? estimate.unavailable_reason : `Estimated plan responsibility ${money(estimate.plan_cents)}`}</p><small>Calculated {new Date(estimate.calculated_at).toLocaleString()}</small></div>}
+    {stage === 'estimate' && estimate?.plain_explanation && <section className="estimate-explanation" aria-labelledby="estimate-explanation-heading"><h3 id="estimate-explanation-heading">Why the patient pays this amount</h3><p>{estimate.plain_explanation}</p><small>The exact supporting PDF pages and fee-schedule source are listed below.</small></section>}
     <FactList facts={facts} />
     {stage === 'benefits' && estimate && estimate.estimate_available !== false && <p className="calculation-line">{money(estimate.allowed_cents)} allowed − {money(estimate.patient_cents)} estimated patient responsibility = {money(estimate.plan_cents)} estimated plan responsibility. Individual deductible remaining: {money(estimate.individual_deductible_remaining_cents)}. Individual out-of-pocket remaining: {money(estimate.individual_oop_remaining_cents)}.</p>}
     {stage === 'estimate' && estimate && <p className="estimate-disclaimer">{estimate.disclaimer}</p>}

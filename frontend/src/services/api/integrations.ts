@@ -68,6 +68,10 @@ export async function createInsuranceCase(file: File): Promise<InsuranceCase> {
   return request<InsuranceCase>('/api/doctor/insurance/cases', { method: 'POST', body: form })
 }
 
+export async function createSelfPayCase(): Promise<InsuranceCase> {
+  return request<InsuranceCase>('/api/doctor/insurance/cases/self-pay', { method: 'POST' })
+}
+
 export async function confirmInsuranceIntake(caseId: string, fields: InsuranceCase['ocr']): Promise<InsuranceCase> {
   return request<InsuranceCase>(`/api/doctor/insurance/cases/${encodeURIComponent(caseId)}/intake`, {
     method: 'PUT', headers: { 'Content-Type': 'application/json' },

@@ -101,6 +101,16 @@ async def create_case(request: Request, file: UploadFile = File(...)) -> JSONRes
         raise HTTPException(status_code=503, detail="Insurance card OCR is temporarily unavailable") from exc
 
 
+@router.post("/cases/self-pay")
+async def create_self_pay_case(request: Request) -> JSONResponse:
+    session = _session(request)
+    case = await run_in_threadpool(
+        store.create_case, session["patient_id"], session["share_manifest_id"],
+        golden.evidence_binding(), documented.self_pay_case(),
+    )
+    return _response(case)
+
+
 @router.get("/cases/{case_id}")
 async def get_case(case_id: str, request: Request) -> JSONResponse:
     return _response(await run_in_threadpool(_load_case, case_id, _session(request)))

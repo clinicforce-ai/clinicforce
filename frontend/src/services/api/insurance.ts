@@ -2,7 +2,7 @@ export type InsuranceStage = 'intake' | 'eligibility' | 'network' | 'service' | 
 export type InsuranceSourceMode = 'golden' | 'documents'
 
 export interface InsuranceCitation { source_filename: string; sha256: string; reference: string; observed_at: string }
-export interface EvidenceFact { stage: InsuranceStage; label: string; value: string; citation: InsuranceCitation; source_mode: InsuranceSourceMode }
+export interface EvidenceFact { stage: InsuranceStage; label: string; value: string; explanation?: string; citation: InsuranceCitation; source_mode: InsuranceSourceMode }
 export interface InsuranceCoverageSuggestions {
   plan_name?: string; coverage_status?: 'active'; network_status?: 'in_network' | 'out_of_network'
   out_of_network_benefit_status?: 'covered' | 'not_covered'
@@ -30,6 +30,7 @@ export interface EstimateBreakdown {
   individual_deductible_remaining_cents: number; individual_oop_remaining_cents: number
   oop_cap_adjustment_cents: number | null; patient_cents: number | null; plan_cents: number | null
   source_mode: InsuranceSourceMode; calculated_at: string; disclaimer: string
+  plain_explanation?: string
 }
 
 export interface NormalizedAppointment {
@@ -40,7 +41,7 @@ export interface NormalizedAppointment {
 
 export interface InsuranceCase {
   id: string; source_mode: InsuranceSourceMode; status: 'review' | 'in_progress' | 'complete'; next_stage: InsuranceStage | null
-  expires_at: string; ocr: InsuranceCardFields
+  payment_path?: 'insurance' | 'self_pay'; created_at: string; expires_at: string; ocr: InsuranceCardFields
   appointment: NormalizedAppointment | null; service_lines: ServiceLine[]; stage_decisions: StageDecision[]
   facts: EvidenceFact[]; sources: InsuranceSource[]; estimate: EstimateBreakdown | null
   clinical_context?: string; visit_type?: 'new' | 'established'; documents?: Record<string, InsuranceSource>
