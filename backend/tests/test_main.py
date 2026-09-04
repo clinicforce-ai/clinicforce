@@ -13,7 +13,7 @@ from datetime import date
 from io import BytesIO
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, Mock, call, patch
+from unittest.mock import AsyncMock, Mock, patch
 from uuid import uuid4
 from zipfile import ZipFile
 
@@ -205,20 +205,6 @@ class MainRouteTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(golden.read_card(document.tobytes())["member_id"], "MEMBER-123")
         self.assertEqual(len(seen), 2)
 
-    def test_card_ocr_only_retries_the_back_for_a_missing_sparse_contact(self) -> None:
-        front, back = Path("front.png"), Path("back.png")
-        primary = """Customer Service 1-800-240-6430
-Provider Service 1-800-451-0287
-Preauth-Medical 1-800-441-9188
-24/7 Nurseline 1-800-581-0368
-MDLive 1-888-680-8646
-Benefit Advocate 1-866-799-2731
-Pharmacy 1-855-305-3028"""
-        with patch("app.insurance.golden._tesseract", side_effect=["card front", primary, "EAP 1-866-799-2691"]) as ocr:
-            fields = golden._card_fields(golden._ocr_images([front, back]))
-        self.assertEqual(fields["eap_phone"], "1-866-799-2691")
-        self.assertEqual(ocr.call_args_list, [call(front), call(back), call(back, "3")])
-
     def test_card_ocr_extracts_benefits_routing_and_contacts(self) -> None:
         card = """Member Name: PAT EXAMPLE
 Member ID: MEMBER-123
@@ -277,9 +263,10 @@ Benefit Advocate: 1-866-799-2731"""
 
     def test_timed_out_card_ocr_reports_a_service_error(self) -> None:
         with patch("app.insurance.golden.shutil.which", return_value="tesseract"), \
-             patch("app.insurance.golden.subprocess.run", side_effect=golden.subprocess.TimeoutExpired("tesseract", 8)):
+             patch("app.insurance.golden.subprocess.run", side_effect=golden.subprocess.TimeoutExpired("tesseract", 20)) as run:
             with self.assertRaisesRegex(RuntimeError, "OCR timed out"):
                 golden._tesseract(Path("card.png"))
+        self.assertEqual(run.call_args.kwargs["timeout"], 20)
 
     async def test_card_ocr_stays_locked_until_clinician_review(self) -> None:
         def stored(_patient: str, _share: str, _evidence: str, workflow: dict) -> dict:
@@ -302,6 +289,24 @@ Benefit Advocate: 1-866-799-2731"""
         self.assertEqual(case["facts"], [])
         self.assertIsNone(case["appointment"])
         self.assertFalse(case["ocr"]["confirmed"])
+
+    async def test_card_ocr_runtime_failure_returns_a_logged_service_error(self) -> None:
+        failure = golden.OCRServiceError("Insurance card OCR timed out")
+        with patch.dict(os.environ, {
+            "INSURANCE_BETA_ENABLED": "true", "SOURCE_LINK_SECRET": "s" * 40,
+        }, clear=False):
+            self.client.cookies.set(
+                "clinicforce_doctor_share", golden.create_share_token("patient-1", "share-1", beta_enabled=True),
+                path="/api/doctor",
+            )
+            with patch("app.api.routers.insurance.golden.read_card", side_effect=failure), \
+                 patch("app.api.routers.insurance.log_error") as log_error:
+                response = await self.client.post(
+                    "/api/doctor/insurance/cases", files={"file": ("card.png", b"png", "image/png")},
+                )
+        self.assertEqual(response.status_code, 503)
+        self.assertEqual(response.json(), {"detail": "Insurance card OCR is temporarily unavailable"})
+        log_error.assert_called_once_with("Insurance card OCR", failure)
 
     async def test_fixture_backed_api_scenario_reaches_the_zero_dollar_estimate(self) -> None:
         cases: dict[str, dict] = {}

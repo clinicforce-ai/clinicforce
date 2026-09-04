@@ -30,7 +30,7 @@ MAX_PDF_PAGES = 2
 MAX_PIXELS = 20_000_000
 MAX_OCR_DIMENSION = 1600
 MIN_OCR_IMAGE_COVERAGE = 0.2
-OCR_TIMEOUT_SECONDS = 8
+OCR_TIMEOUT_SECONDS = 20
 STAGES = ("eligibility", "network", "service", "authorization", "benefits", "estimate")
 CARD_IDENTITY_PATTERNS = {
     "member_name": r"(?im)^[ \t]*(?:member|subscriber|patient)?[ \t]*name[ \t]*[:#-]?[ \t]*(?:[^\w\r\n]{0,5}[ \t]*(?:\r?\n[ \t]*)+)?([A-Z][A-Z .,'-]{3,100})[ \t]*$",
@@ -57,7 +57,6 @@ CARD_DETAIL_PATTERNS = {
     "eap_phone": r"(?im)^\s*eap\*?[^\d\n]{0,40}((?:1[\s.-])?\(?\d{3}\)?[\s.-]\d{3}[\s.-]\d{4})",
     "pharmacy_phone": r"(?i)pharmacy\*?[^\d]{0,40}((?:1[\s.-])?\(?\d{3}\)?[\s.-]\d{3}[\s.-]\d{4})",
 }
-CARD_CONTACT_FIELDS = frozenset(name for name in CARD_DETAIL_PATTERNS if name.endswith("_phone"))
 
 
 class GoldenCaseError(ValueError):
@@ -299,17 +298,6 @@ def _pdf_text(content: bytes) -> str:
 def _ocr_images(paths: list[Path], initial: list[str] | None = None) -> str:
     parts = list(initial or ())
     parts.extend(_tesseract(path) for path in paths)
-    fields = _card_fields("\n".join(parts))
-    if CARD_CONTACT_FIELDS.intersection(fields) and not CARD_CONTACT_FIELDS.issubset(fields):
-        # Sparse contact columns need a second layout, usually on the card back.
-        # Start there and stop as soon as the known contact set is complete.
-        for path in reversed(paths):
-            try:
-                parts.append(_tesseract(path, "3"))
-            except OCRServiceError:
-                continue
-            if CARD_CONTACT_FIELDS.issubset(_card_fields("\n".join(parts))):
-                break
     return "\n".join(parts)
 
 

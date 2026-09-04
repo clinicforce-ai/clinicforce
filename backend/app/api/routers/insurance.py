@@ -18,6 +18,7 @@ from app.api.settings import (
 from app.core import object_store
 from app.core.patient_store import get_patient_profile
 from app.insurance import documented, golden, store
+from app.logs.logger import log_error
 
 
 router = APIRouter(prefix="/api/doctor/insurance", tags=["doctor-insurance"])
@@ -96,6 +97,7 @@ async def create_case(request: Request, file: UploadFile = File(...)) -> JSONRes
     except golden.GoldenCaseError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except RuntimeError as exc:
+        log_error("Insurance card OCR", exc)
         raise HTTPException(status_code=503, detail="Insurance card OCR is temporarily unavailable") from exc
 
 
