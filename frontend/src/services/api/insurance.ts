@@ -14,6 +14,7 @@ export interface InsuranceSource {
     pages_scanned?: number; suggested_coverage?: InsuranceCoverageSuggestions
     rate_count?: number; network?: string; generated_at?: string
     visit_type?: 'new' | 'established'; clinical_context?: string; use?: string
+    cash_packages?: Array<{ name: string; best_for: string; price_cents: number; page: number }>
     authorizations?: Array<{ code: string; status: 'not_required' | 'required' | 'unknown'; page: number; reference: string }>
   }
 }
@@ -27,6 +28,7 @@ export interface StageDecision { stage: InsuranceStage; status: 'passed'; decisi
 export interface EstimateBreakdown {
   service_code: string; allowed_cents: number | null; nominal_coinsurance_cents: number | null
   estimate_available?: boolean; unavailable_reason?: string; service_codes?: string[]; deductible_applied_cents?: number | null; copay_cents?: number | null
+  line_items?: Array<{ code: string; description: string; allowed_cents: number | null }>
   individual_deductible_remaining_cents: number; individual_oop_remaining_cents: number
   oop_cap_adjustment_cents: number | null; patient_cents: number | null; plan_cents: number | null
   source_mode: InsuranceSourceMode; calculated_at: string; disclaimer: string

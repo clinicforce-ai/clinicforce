@@ -289,6 +289,8 @@ Benefit Advocate: 1-866-799-2731"""
         self.assertEqual(case["facts"], [])
         self.assertIsNone(case["appointment"])
         self.assertFalse(case["ocr"]["confirmed"])
+        self.assertIn("T", case["card_source"]["observed_at"])
+        self.assertTrue(case["card_source"]["observed_at"].endswith("+00:00"))
 
     async def test_card_ocr_runtime_failure_returns_a_logged_service_error(self) -> None:
         failure = golden.OCRServiceError("Insurance card OCR timed out")
@@ -345,7 +347,7 @@ Benefit Advocate: 1-866-799-2731"""
                 self.assertEqual(reviewed.json()["documents"], {})
                 self.assertIsNone(reviewed.json()["coverage"])
 
-    async def test_self_pay_choice_skips_card_and_insurance_stages(self) -> None:
+    async def test_self_pay_choice_skips_insurance_and_requests_current_cash_prices(self) -> None:
         def create(_patient: str, _share: str, _evidence: str, workflow: dict) -> dict:
             return {
                 **workflow, "id": "self-pay-1", "created_at": "2026-08-24T15:30:00+00:00",
@@ -366,8 +368,8 @@ Benefit Advocate: 1-866-799-2731"""
 
         self.assertEqual(response.status_code, 200, response.text)
         self.assertEqual(response.json()["payment_path"], "self_pay")
-        self.assertEqual(response.json()["status"], "complete")
-        self.assertIsNone(response.json()["next_stage"])
+        self.assertEqual(response.json()["status"], "in_progress")
+        self.assertEqual(response.json()["next_stage"], "service")
         self.assertIsNone(response.json()["estimate"])
 
     async def test_document_backed_api_scenario_requires_evidence_and_clinician_context(self) -> None:
@@ -458,11 +460,14 @@ Benefit Advocate: 1-866-799-2731"""
                     "/api/doctor/insurance/cases/case-docs/service-lines", json={"codes": ["99204", "95886"]},
                 )
                 self.assertEqual(selected.status_code, 200, selected.text)
-                for stage in ("authorization", "benefits", "estimate"):
+                for stage in ("authorization", "benefits"):
                     response = await self.client.post(f"/api/doctor/insurance/cases/case-docs/stages/{stage}")
                     self.assertEqual(response.status_code, 200, response.text)
         self.assertEqual(response.json()["estimate"]["allowed_cents"], 24078)
         self.assertEqual(response.json()["estimate"]["patient_cents"], 0)
+        self.assertEqual(response.json()["status"], "complete")
+        self.assertIsNone(response.json()["next_stage"])
+        self.assertIn("estimate", {item["stage"] for item in response.json()["stage_decisions"]})
 
     def test_golden_card_unlock_requires_uploaded_benefits_and_contract(self) -> None:
         fields = {"member_name": "Pat Example", "member_id": "MEMBER-123", "group_number": "GROUP-123"}
@@ -501,6 +506,29 @@ Benefit Advocate: 1-866-799-2731"""
         page.insert_textbox(fitz.Rect(72, 72, 520, 760), "BCBSTX Active Coverage Member ID BCBS-456 In Network\nPlan / Product: Preferred Provider Option Medical\nDiagnostic Medical 100% Annual Deductible $600 / Calendar Year $0 Remaining Out Of Pocket $3,000 / Calendar Year $0 Remaining\nOut Of Network Not Covered")
         suggestions = documented.inspect_pdf(eligibility.tobytes(), "eligibility.pdf", "eligibility", "BCBS-456")["findings"]["suggested_coverage"]
         self.assertEqual(suggestions, {"coverage_status": "active", "network_status": "in_network", "out_of_network_benefit_status": "not_covered", "plan_name": "Preferred Provider Option Medical", "deductible_remaining_cents": 0, "oop_remaining_cents": 0, "active_page": 1, "plan_page": 1, "network_page": 1, "benefit_page": 1})
+
+    def test_cash_guide_prices_are_source_backed_and_complete_self_pay(self) -> None:
+        guide = fitz.open()
+        page = guide.new_page()
+        page.insert_textbox(fitz.Rect(72, 72, 520, 760), """NCS/EMG Cash-Pay Pricing Guide
+Neuropathy Evaluation examples
+Carpal Tunnel Evaluation - One Hand symptoms $500
+Carpal Tunnel Evaluation - Both Hands symptoms $700
+Neck-Related Nerve Problem - One Arm symptoms $800
+Back-Related Nerve Problem - One Leg symptoms $700
+Neuropathy Evaluation - Both Legs symptoms $800
+Comprehensive Full Study - Arms and Legs symptoms $1,300
+Single Nerve Injury Evaluation symptoms $400
+Final study type is determined by the physician.""")
+        source = documented.inspect_pdf(guide.tobytes(), "cash-guide.pdf", "pricing_guide")
+        self.assertEqual(len(source["findings"]["cash_packages"]), 7)
+        self.assertIn("T", source["observed_at"])
+        self.assertTrue(source["observed_at"].endswith("+00:00"))
+
+        case = documented.self_pay_case()
+        documented.add_document(case, "pricing_guide", source)
+        self.assertEqual(case["status"], "complete")
+        self.assertIsNone(case["next_stage"])
 
     def test_uploaded_fee_and_code_authorization_are_parsed(self) -> None:
         fee = documented.inspect_csv(
@@ -578,11 +606,18 @@ Benefit Advocate: 1-866-799-2731"""
         self.assertEqual(case["estimate"]["nominal_coinsurance_cents"], 3816)
         self.assertEqual(case["estimate"]["patient_cents"], 8816)
         self.assertEqual(case["estimate"]["plan_cents"], 15262)
-        self.assertIn("CPT 99204, 95886", case["estimate"]["plain_explanation"])
+        self.assertEqual(
+            [(line["code"], line["allowed_cents"]) for line in case["estimate"]["line_items"]],
+            [("99204", 15160), ("95886", 8918)],
+        )
+        self.assertIn("CPT 99204 at $151.60 and CPT 95886 at $89.18", case["estimate"]["plain_explanation"])
         self.assertIn("$88.16", case["estimate"]["plain_explanation"])
-        documented.advance(case, "estimate", GOLDEN_MANIFEST["rates_source"])
+        self.assertEqual(case["status"], "complete")
+        self.assertIsNone(case["next_stage"])
         patient_fact = next(fact for fact in case["facts"] if fact["label"] == "Estimated patient responsibility")
         self.assertIn("page 2", patient_fact["citation"]["reference"])
+        emg_fact = next(fact for fact in case["facts"] if fact["label"] == "CPT 95886 allowed amount")
+        self.assertEqual(emg_fact["value"], "$89.18")
         unpriced = deepcopy(case)
         unpriced["service_lines"].append({"code": "76881", "allowed_cents": None, "selected": True, "confirmed": True})
         self.assertFalse(documented.calculate(unpriced)["estimate_available"])

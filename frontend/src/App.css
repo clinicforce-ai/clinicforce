@@ -602,6 +602,7 @@ td { line-height: 1.45; }
 .evidence-upload span, .evidence-upload strong, .evidence-upload small { display: block; min-width: 0; }
 .evidence-upload small { margin-top: 7px; color: var(--muted-ink); font-size: .72rem; line-height: 1.45; }
 .evidence-upload .upload-file { overflow: hidden; color: var(--ink); font-size: .76rem; text-overflow: ellipsis; white-space: nowrap; }
+.evidence-upload .source-time { color: var(--green-deep); }
 .evidence-upload small b { color: var(--blue-deep); }
 .evidence-upload input { position: absolute; width: 1px; height: 1px; overflow: hidden; opacity: 0; }
 .evidence-summary { display: grid; grid-template-columns: 28px 1fr; gap: 12px; margin: 20px 0; border-left: 4px solid var(--blue); background: var(--blue-soft); padding: 16px; color: var(--blue-deep); }
@@ -657,6 +658,20 @@ td { line-height: 1.45; }
 .estimate-explanation h3 { margin: 0; font-size: 1rem; }
 .estimate-explanation p { margin: 7px 0; line-height: 1.6; }
 .estimate-explanation small { color: var(--muted-ink); }
+.estimate-lines, .cash-prices { margin: 22px 0; }
+.estimate-lines > h3, .cash-prices h3 { margin: 0; font-size: 1rem; }
+.estimate-lines > p, .cash-prices > div > p:not(.section-kicker) { margin: 5px 0 11px; color: var(--muted-ink); font-size: .8rem; line-height: 1.5; }
+.estimate-lines dl, .cash-prices dl { margin: 0; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+.estimate-lines dl > div, .cash-prices dl > div { display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 18px; padding: 11px 13px; }
+.estimate-lines dl > div + div, .cash-prices dl > div + div { border-top: 1px solid var(--line); }
+.estimate-lines dt strong, .estimate-lines dt span, .cash-prices dt strong, .cash-prices dt span { display: block; }
+.estimate-lines dt strong { color: var(--blue-deep); font-family: "Fira Code", monospace; }
+.estimate-lines dt span, .cash-prices dt span { margin-top: 2px; color: var(--muted-ink); font-size: .74rem; }
+.estimate-lines dd, .cash-prices dd { margin: 0; font-family: "Fira Code", monospace; font-weight: 700; }
+.cash-prices { border-left: 4px solid var(--green); background: var(--green-soft); padding: 16px 18px; }
+.cash-prices dl { background: var(--surface); }
+.cash-prices dl > .recommended { background: var(--green-soft); color: var(--green-deep); }
+.cash-prices > small { display: block; margin-top: 9px; color: var(--muted-ink); font-size: .7rem; line-height: 1.45; }
 .calculation-line { border-left: 3px solid var(--blue); background: var(--blue-soft); padding: 13px 15px; color: var(--blue-deep); font-family: "Fira Code", monospace; font-size: .82rem; line-height: 1.55; }
 .estimate-disclaimer { color: var(--muted-ink); font-size: .8rem; line-height: 1.5; }
 .insurance-appointment { display: flex; justify-content: space-between; gap: 16px; margin-top: 18px; border-top: 1px solid var(--line); padding: 15px 2px; color: var(--muted-ink); font-size: .82rem; }
@@ -674,6 +689,7 @@ td { line-height: 1.45; }
   .self-pay-choice { align-items: stretch; flex-direction: column; }
   .self-pay-choice .button { width: 100%; }
   .insurance-facts div { grid-template-columns: 1fr; gap: 4px; }
+  .estimate-lines dl > div, .cash-prices dl > div { align-items: start; grid-template-columns: 1fr; gap: 5px; }
   .insurance-appointment { align-items: flex-start; flex-direction: column; }
   .authorization-list article > div { grid-template-columns: 1fr; gap: 2px; }
 }

@@ -17,11 +17,15 @@ const stageCopy = {
   network: { title: 'Match the patient’s plan to the clinic', action: 'Continue to anticipated service' },
   authorization: { title: 'Check every selected service', action: 'Confirm requirements' },
   benefits: { title: 'Contracted rate and benefit arithmetic', detail: 'Apply the uploaded fee-schedule rates and the patient’s individual benefit balances.', action: 'Calculate estimate' },
-  estimate: { title: 'Pre-visit estimate', detail: 'Show the collection amount first, then the complete evidence-backed explanation.', action: 'Complete estimate' },
+  estimate: { title: 'Pre-visit estimate', detail: 'The result appears automatically after the rate-and-benefits calculation.' },
 } as const
 
 const money = (cents: number | null | undefined) => cents == null ? 'Not stated' : new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(cents / 100)
-const dateTime = (value: string) => new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(value))
+const dateTime = (value: string) => {
+  const parsed = new Date(value)
+  if (Number.isNaN(parsed.getTime())) return value
+  return new Intl.DateTimeFormat(undefined, /^\d{4}-\d{2}-\d{2}$/.test(value) ? { dateStyle: 'medium' } : { dateStyle: 'medium', timeStyle: 'short' }).format(parsed)
+}
 const cardDetailLabels: Array<[keyof InsuranceCase['ocr'], string]> = [
   ['plan_type', 'Plan type'], ['coverage_date', 'Coverage date'], ['coinsurance', 'Coinsurance shown on card'],
   ['in_network_deductible', 'In-network deductible'], ['out_of_network_deductible', 'Out-of-network deductible'],
@@ -132,7 +136,9 @@ export default function InsuranceVerification({ onBack }: Props) {
         {insuranceCase?.payment_path === 'self_pay' && <>
           <p className="section-kicker">Direct payment</p><h2>Self-pay selected</h2>
           <div className="evidence-summary success"><WalletCards aria-hidden="true" /><div><strong>The patient chose not to use insurance.</strong><p>ClinicForce will not run eligibility, network, authorization, or insurance-benefit calculations for this visit.</p></div></div>
-          <p className="estimate-disclaimer">Confirm the clinic’s current cash price and any service-specific billing rules with the patient before collecting payment. No insurance claim or insurance estimate has been created.</p>
+          {!documents.pricing_guide && <><p>Upload the clinic’s current NCS/EMG cash-pay guide to show the available package prices. This is a clinic price document, not insurance evidence.</p><UploadTile title="Current NCS/EMG cash-pay guide" hint="Choose the current NMCT NCS/EMG cash-pay pricing guide PDF." reads="Lists each direct-pay testing package, what it includes, and its current price." future="Clinic policy or document-management API." accept=".pdf,application/pdf" disabled={busy} onFile={(file) => uploadEvidence('pricing_guide', 'NCS/EMG cash-pay guide', file)} /></>}
+          {documents.pricing_guide && <CashPrices source={documents.pricing_guide} />}
+          <p className="estimate-disclaimer">These are clinic package prices, not insurance allowed amounts. The physician decides the final study from the patient’s symptoms and examination. No insurance claim or insurance estimate has been created.</p>
           <button className="button button-secondary" type="button" onClick={onBack}><ArrowLeft aria-hidden="true" className="size-4" /> Back to clinical summary</button>
         </>}
         {viewStage === 'intake' && !insuranceCase && <>
@@ -205,7 +211,7 @@ export default function InsuranceVerification({ onBack }: Props) {
 }
 
 function UploadTile({ title, hint, reads, future, accept, source, disabled, onFile }: { title: string; hint: string; reads: string; future: string; accept: string; source?: NonNullable<InsuranceCase['documents']>[string]; disabled: boolean; onFile: (file?: File) => Promise<void> }) {
-  return <label className={`evidence-upload${source ? ' complete' : ''}`}><span className="upload-icon">{source ? <Check aria-hidden="true" /> : <Upload aria-hidden="true" />}</span><span><strong>{source ? `${title} added` : title}</strong><small className="upload-file">{source?.filename ?? hint}</small><small><b>ClinicForce reads:</b> {reads}</small><small><b>Future replacement:</b> {future}</small></span><input type="file" accept={accept} disabled={disabled || Boolean(source)} onChange={(event) => { void onFile(event.target.files?.[0]); event.currentTarget.value = '' }} /></label>
+  return <label className={`evidence-upload${source ? ' complete' : ''}`}><span className="upload-icon">{source ? <Check aria-hidden="true" /> : <Upload aria-hidden="true" />}</span><span><strong>{source ? `${title} added` : title}</strong><small className="upload-file">{source?.filename ?? hint}</small>{source && <small className="source-time"><b>Source time:</b> <time dateTime={source.observed_at}>{dateTime(source.observed_at)}</time></small>}<small><b>ClinicForce reads:</b> {reads}</small><small><b>Future replacement:</b> {future}</small></span><input type="file" accept={accept} disabled={disabled || Boolean(source)} onChange={(event) => { void onFile(event.target.files?.[0]); event.currentTarget.value = '' }} /></label>
 }
 
 function FactList({ facts }: { facts: InsuranceCase['facts'] }) {
@@ -215,7 +221,7 @@ function FactList({ facts }: { facts: InsuranceCase['facts'] }) {
 
 function Citation({ fact }: { fact: InsuranceCase['facts'][number] }) {
   const isWebsite = fact.citation.reference.startsWith('https://')
-  return <small><b>Source:</b> {isWebsite ? <a href={fact.citation.reference} target="_blank" rel="noreferrer">{fact.citation.source_filename} <ExternalLink aria-hidden="true" /></a> : <>{fact.citation.source_filename} · {fact.citation.reference}</>}</small>
+  return <small><b>Source:</b> {isWebsite ? <a href={fact.citation.reference} target="_blank" rel="noreferrer">{fact.citation.source_filename} <ExternalLink aria-hidden="true" /></a> : <>{fact.citation.source_filename} · {fact.citation.reference}</>} · <b>Source time:</b> <time dateTime={fact.citation.observed_at}>{dateTime(fact.citation.observed_at)}</time></small>
 }
 
 function StagePanel({ stage, insuranceCase, facts, active, busy, onAdvance }: {
@@ -227,9 +233,27 @@ function StagePanel({ stage, insuranceCase, facts, active, busy, onAdvance }: {
   return <><p className="section-kicker">{steps.findIndex((step) => step.id === stage) + 1} · {steps.find((step) => step.id === stage)?.label}</p><h2>{copy.title}</h2><p>{copy.detail}</p>
     {stage === 'estimate' && estimate && <div className="estimate-lead"><span>Collect now</span><strong>{estimate.estimate_available === false ? 'Not estimated' : money(estimate.patient_cents)}</strong><p>{estimate.estimate_available === false ? estimate.unavailable_reason : `Estimated plan responsibility ${money(estimate.plan_cents)}`}</p><small>Calculated {new Date(estimate.calculated_at).toLocaleString()}</small></div>}
     {stage === 'estimate' && estimate?.plain_explanation && <section className="estimate-explanation" aria-labelledby="estimate-explanation-heading"><h3 id="estimate-explanation-heading">Why the patient pays this amount</h3><p>{estimate.plain_explanation}</p><small>The exact supporting PDF pages and fee-schedule source are listed below.</small></section>}
+    {estimate?.line_items && estimate.line_items.length > 0 && <section className="estimate-lines" aria-labelledby={`${stage}-line-items-heading`}><h3 id={`${stage}-line-items-heading`}>Insurance allowed amount by CPT</h3><p>Each amount below comes from the uploaded Blue Choice PPO fee schedule and is included in the combined estimate.</p><dl>{estimate.line_items.map((line) => <div key={line.code}><dt><strong>CPT {line.code}</strong><span>{line.description}</span></dt><dd>{money(line.allowed_cents)}</dd></div>)}</dl></section>}
     <FactList facts={facts} />
     {stage === 'benefits' && estimate && estimate.estimate_available !== false && <p className="calculation-line">{money(estimate.allowed_cents)} allowed − {money(estimate.patient_cents)} estimated patient responsibility = {money(estimate.plan_cents)} estimated plan responsibility. Individual deductible remaining: {money(estimate.individual_deductible_remaining_cents)}. Individual out-of-pocket remaining: {money(estimate.individual_oop_remaining_cents)}.</p>}
+    {stage === 'estimate' && insuranceCase.documents?.pricing_guide && <CashPrices source={insuranceCase.documents.pricing_guide} clinicalContext={insuranceCase.clinical_context} />}
     {stage === 'estimate' && estimate && <p className="estimate-disclaimer">{estimate.disclaimer}</p>}
-    {active && <button className="button button-primary" type="button" disabled={busy} onClick={() => void onAdvance(stage)}>{copy.action}</button>}
+    {active && stage === 'benefits' && <button className="button button-primary" type="button" disabled={busy} onClick={() => void onAdvance(stage)}>{stageCopy.benefits.action}</button>}
   </>
+}
+
+function CashPrices({ source, clinicalContext = '' }: { source: NonNullable<InsuranceCase['documents']>[string]; clinicalContext?: string }) {
+  const packages = source.findings?.cash_packages ?? []
+  if (!packages.length) return null
+  const context = clinicalContext.toLowerCase()
+  const match = packages.find((item) =>
+    ((context.includes('both feet') || context.includes('both legs')) && item.name.includes('Both Legs')) ||
+    (context.includes('both hands') && item.name.includes('Both Hands')) ||
+    ((context.includes('one hand') || context.includes('carpal tunnel')) && item.name.includes('One Hand')) ||
+    (context.includes('neck') && context.includes('arm') && item.name.includes('Neck-Related')) ||
+    (context.includes('back') && context.includes('leg') && item.name.includes('Back-Related')) ||
+    ((context.includes('widespread') || context.includes('generalized')) && item.name.includes('Comprehensive')) ||
+    (context.includes('single nerve') && item.name.includes('Single Nerve'))
+  )
+  return <section className="cash-prices" aria-labelledby="cash-prices-heading"><div><p className="section-kicker">Self-pay comparison</p><h3 id="cash-prices-heading">{match ? 'Closest NCS/EMG package for the described symptoms' : 'Current NCS/EMG cash-pay packages'}</h3><p>{match ? `${match.name}: ${money(match.price_cents)}.` : 'Choose the package that best matches the body area and symptoms.'} The guide says each package includes a focused evaluation, nerve-conduction studies, needle EMG when clinically indicated, interpretation, report, and results discussion.</p></div><dl>{packages.map((item) => <div key={item.name} className={item === match ? 'recommended' : undefined}><dt><strong>{item.name}</strong><span>{item.best_for}</span></dt><dd>{money(item.price_cents)}</dd></div>)}</dl><small><b>Source:</b> {source.filename} · page 1 · <b>Source time:</b> <time dateTime={source.observed_at}>{dateTime(source.observed_at)}</time></small></section>
 }

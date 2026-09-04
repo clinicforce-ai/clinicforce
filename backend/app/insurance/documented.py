@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import csv
 import re
-from datetime import date, datetime, timezone
+from datetime import datetime, timezone
 from decimal import Decimal, ROUND_HALF_UP
 from io import StringIO
 from pathlib import Path
@@ -96,6 +96,16 @@ NEUROPATHY_GUIDANCE = {
     "95887": "A non-extremity needle EMG applies only when the examined muscles are not in an arm or leg.",
 }
 
+CASH_PACKAGE_LABELS = (
+    ("Carpal Tunnel Evaluation — One Hand", "carpal tunnel evaluation - one hand", "Numbness, tingling, or hand symptoms on one side"),
+    ("Carpal Tunnel Evaluation — Both Hands", "carpal tunnel evaluation - both hands", "Symptoms involving both hands or comparison testing"),
+    ("Neck-Related Nerve Problem — One Arm", "neck-related nerve problem - one arm", "Pain, weakness, numbness, or tingling from the neck into one arm"),
+    ("Back-Related Nerve Problem — One Leg", "back-related nerve problem - one leg", "Pain, weakness, numbness, or tingling from the back into one leg"),
+    ("Neuropathy Evaluation — Both Legs", "neuropathy evaluation - both legs", "Burning, numbness, tingling, or sensory changes in both feet or legs"),
+    ("Comprehensive Full Study — Arms and Legs", "comprehensive full study - arms and legs", "Widespread or complex nerve or muscle symptoms"),
+    ("Single Nerve Injury Evaluation", "single nerve injury evaluation", "Suspected injury to one specific nerve"),
+)
+
 
 def _normalized(value: str) -> str:
     return re.sub(r"[^a-z0-9]", "", value.casefold())
@@ -176,7 +186,7 @@ def pending_case(fields: dict[str, str]) -> dict[str, Any]:
 
 def self_pay_case() -> dict[str, Any]:
     return {
-        "source_mode": "documents", "payment_path": "self_pay", "status": "complete", "next_stage": None,
+        "source_mode": "documents", "payment_path": "self_pay", "status": "in_progress", "next_stage": "service",
         "ocr": {"member_name": "", "member_id": "", "group_number": "", "confirmed": False},
         "clinical_context": "", "documents": {}, "appointment": None, "coverage": None,
         "service_lines": [], "visit_type": "new", "stage_decisions": [], "facts": [],
@@ -296,12 +306,13 @@ def inspect_pdf(content: bytes, filename: str, kind: str, member_id: str = "") -
         findings = {
             "pages_scanned": pages,
             "use": "Clinical scope and cash comparison only; insured CPT rates come from the uploaded fee schedule.",
+            "cash_packages": _cash_packages(compact),
         }
     else:
         raise GoldenCaseError("Unsupported insurance evidence type")
     return {
         "id": kind, "filename": Path(filename).name, "sha256": hashlib.sha256(content).hexdigest(),
-        "observed_at": date.today().isoformat(), "reference": f"{reference} · {pages} page{'s' if pages != 1 else ''}", "findings": findings,
+        "observed_at": _observed_now(), "reference": f"{reference} · {pages} page{'s' if pages != 1 else ''}", "findings": findings,
     }
 
 
@@ -329,13 +340,15 @@ def inspect_csv(content: bytes, filename: str) -> dict[str, Any]:
     timestamp = next(((row.get("Description") or "").strip() for row in rows if (row.get("Procedure Code") or "").strip() == "Time Stamp"), "not stated")
     return {
         "id": "fee_schedule", "filename": Path(filename).name, "sha256": hashlib.sha256(content).hexdigest(),
-        "observed_at": date.today().isoformat(),
+        "observed_at": _observed_now(),
         "reference": f"Availity fee schedule · Blue Choice PPO · {len(rate_lines)} CPT rates · generated {timestamp}",
         "findings": {"rate_lines": rate_lines, "rate_count": len(rate_lines), "network": "Blue Choice PPO", "generated_at": timestamp},
     }
 
 
 def add_document(case: dict[str, Any], kind: str, source: dict[str, Any]) -> dict[str, Any]:
+    # This fallback also covers future API adapters that produce the same source shape.
+    source.setdefault("observed_at", _observed_now())
     case.setdefault("documents", {})[kind] = source
     case["sources"] = [item for item in case.get("sources", []) if item.get("id") != kind] + [{
         key: source[key] for key in ("id", "filename", "sha256", "observed_at")
@@ -354,6 +367,8 @@ def add_document(case: dict[str, Any], kind: str, source: dict[str, Any]) -> dic
         }
     if kind in {"contract", "coverage"}:
         _apply_network_evidence(case)
+    if case.get("payment_path") == "self_pay" and kind == "pricing_guide":
+        case.update(status="complete", next_stage=None)
     return case
 
 
@@ -501,7 +516,7 @@ def advance(case: dict[str, Any], stage: str, rate_source: dict[str, Any]) -> di
     case["stage_decisions"].append({
         "stage": stage, "status": "passed", "decision": decisions[stage], "source_mode": "documents",
     })
-    case["next_stage"] = {"network": "service", "authorization": "benefits", "benefits": "estimate", "estimate": None}[stage]
+    case["next_stage"] = {"network": "service", "authorization": "benefits", "benefits": None, "estimate": None}[stage]
     if stage == "benefits":
         case["estimate"] = calculate(case)
         estimate = case["estimate"]
@@ -513,39 +528,61 @@ def advance(case: dict[str, Any], stage: str, rate_source: dict[str, Any]) -> di
         if estimate["estimate_available"]:
             label = "Contracted allowed amount" if coverage["network_status"] == "in_network" else "Out-of-network allowed amount"
             source = rate_source if coverage["network_status"] == "in_network" else coverage["source"]
-            case["facts"].extend((
+            line_facts = [
+                _fact(
+                    "benefits", f"CPT {line['code']} allowed amount", _money(line["allowed_cents"]), rate_source,
+                    f"The uploaded fee schedule lists {_money(line['allowed_cents'])} as NMCT's Blue Choice PPO allowed amount for this anticipated CPT.",
+                )
+                for line in estimate["line_items"] if line["allowed_cents"] is not None
+            ] if coverage["network_status"] == "in_network" else []
+            case["facts"].extend(line_facts + [
                 _fact("benefits", label, _money(estimate["allowed_cents"]), source),
                 _fact("benefits", "Deductible applied", _money(estimate["deductible_applied_cents"]), benefit_source),
                 _fact("benefits", "Coinsurance", _money(estimate["nominal_coinsurance_cents"]) if estimate["nominal_coinsurance_cents"] is not None else "Not stated in the uploaded coverage response", benefit_source),
                 _fact("benefits", "Copay", _money(estimate["copay_cents"]) if estimate["copay_cents"] is not None else "Not stated in the uploaded coverage response", benefit_source),
                 _fact("benefits", "Out-of-pocket result", "Patient cost share is capped at $0.00 because the individual out-of-pocket remaining is $0.00" if estimate["individual_oop_remaining_cents"] == 0 else _money(estimate["oop_cap_adjustment_cents"]), benefit_source),
-            ))
+            ])
         else:
             case["facts"].append(_fact("benefits", "Estimate status", estimate["unavailable_reason"], coverage["source"]))
-    if stage == "estimate":
-        case["status"] = "complete"
-        estimate = case["estimate"]
-        benefit_page = coverage["source"].get("findings", {}).get("suggested_coverage", {}).get("benefit_page")
-        benefit_source = _with_reference(
-            coverage["source"],
-            f"page {benefit_page} · individual deductible, out-of-pocket, and benefit amounts" if benefit_page else coverage["source"]["reference"],
-        )
-        if estimate["estimate_available"]:
-            case["facts"].extend((
-                _fact("estimate", "Estimated patient responsibility", _money(estimate["patient_cents"]), benefit_source, "This is the patient's estimated share after applying the reviewed rates and individual benefit balances."),
-                _fact("estimate", "Estimated plan responsibility", _money(estimate["plan_cents"]), rate_source, "This is the remaining reviewed amount expected from the plan after the patient's estimated share."),
-            ))
-        else:
-            case["facts"].append(_fact("estimate", "Collection amount", "Not estimated", coverage["source"]))
+        _complete_estimate(case, coverage, rate_source)
+    if stage == "estimate":  # Backward compatibility for cases saved before estimates became automatic.
+        _complete_estimate(case, coverage, rate_source)
     return case
+
+
+def _complete_estimate(case: dict[str, Any], coverage: dict[str, Any], rate_source: dict[str, Any]) -> None:
+    case.update(status="complete", next_stage=None)
+    if not any(item.get("stage") == "estimate" for item in case["stage_decisions"]):
+        case["stage_decisions"].append({
+            "stage": "estimate", "status": "passed", "decision": "Document-backed pre-visit estimate completed",
+            "source_mode": "documents",
+        })
+    case["facts"] = [fact for fact in case.get("facts", []) if fact.get("stage") != "estimate"]
+    estimate = case["estimate"]
+    benefit_page = coverage["source"].get("findings", {}).get("suggested_coverage", {}).get("benefit_page")
+    benefit_source = _with_reference(
+        coverage["source"],
+        f"page {benefit_page} · individual deductible, out-of-pocket, and benefit amounts" if benefit_page else coverage["source"]["reference"],
+    )
+    if estimate["estimate_available"]:
+        case["facts"].extend((
+            _fact("estimate", "Estimated patient responsibility", _money(estimate["patient_cents"]), benefit_source, "This is the patient's estimated share after applying the reviewed rates and individual benefit balances."),
+            _fact("estimate", "Estimated plan responsibility", _money(estimate["plan_cents"]), rate_source, "This is the remaining reviewed amount expected from the plan after the patient's estimated share."),
+        ))
+    else:
+        case["facts"].append(_fact("estimate", "Collection amount", "Not estimated", coverage["source"]))
 
 
 def calculate(case: dict[str, Any]) -> dict[str, Any]:
     selected = [line for line in case["service_lines"] if line["selected"] and line["confirmed"]]
     coverage = case["coverage"]
+    line_items = [
+        {"code": line["code"], "description": line.get("description", line["code"]), "allowed_cents": line.get("allowed_cents")}
+        for line in selected
+    ] if coverage["network_status"] == "in_network" else []
     if any(line.get("allowed_cents") is None for line in selected):
         return {
-            "service_code": ", ".join(line["code"] for line in selected), "service_codes": [line["code"] for line in selected],
+            "service_code": ", ".join(line["code"] for line in selected), "service_codes": [line["code"] for line in selected], "line_items": line_items,
             "estimate_available": False, "unavailable_reason": "At least one selected CPT has no reviewed NMCT rate. Add the rate before collecting an estimate.",
             "allowed_cents": None, "deductible_applied_cents": None, "nominal_coinsurance_cents": None,
             "copay_cents": None, "individual_deductible_remaining_cents": int(coverage["individual_deductible_remaining_cents"]),
@@ -555,7 +592,7 @@ def calculate(case: dict[str, Any]) -> dict[str, Any]:
         }
     if coverage["network_status"] == "out_of_network" and coverage["out_of_network_benefit_status"] != "covered":
         return {
-            "service_code": ", ".join(line["code"] for line in selected), "service_codes": [line["code"] for line in selected],
+            "service_code": ", ".join(line["code"] for line in selected), "service_codes": [line["code"] for line in selected], "line_items": line_items,
             "estimate_available": False, "unavailable_reason": "The eligibility evidence does not document a covered out-of-network benefit for this service.",
             "allowed_cents": None, "deductible_applied_cents": None, "nominal_coinsurance_cents": None,
             "copay_cents": None, "individual_deductible_remaining_cents": int(coverage["individual_deductible_remaining_cents"]),
@@ -570,7 +607,7 @@ def calculate(case: dict[str, Any]) -> dict[str, Any]:
     copay_value = coverage.get("copay_cents")
     if percent is None and copay_value is None and int(coverage["individual_oop_remaining_cents"]) > 0:
         return {
-            "service_code": ", ".join(line["code"] for line in selected), "service_codes": [line["code"] for line in selected],
+            "service_code": ", ".join(line["code"] for line in selected), "service_codes": [line["code"] for line in selected], "line_items": line_items,
             "estimate_available": False, "unavailable_reason": "The uploaded evidence does not state the member's coinsurance, and out-of-pocket cost remains.",
             "allowed_cents": allowed, "deductible_applied_cents": deductible, "nominal_coinsurance_cents": None,
             "copay_cents": None, "individual_deductible_remaining_cents": int(coverage["individual_deductible_remaining_cents"]),
@@ -584,9 +621,14 @@ def calculate(case: dict[str, Any]) -> dict[str, Any]:
     copay = int(copay_value) if copay_value is not None else None
     nominal = min(allowed, deductible + (coinsurance or 0) + (copay or 0))
     patient = min(nominal, int(coverage["individual_oop_remaining_cents"]))
+    line_summary = (
+        " and ".join(f"CPT {line['code']} at {_money(line['allowed_cents'])}" for line in selected)
+        if coverage["network_status"] == "in_network"
+        else f"CPT {', '.join(line['code'] for line in selected)} with a documented out-of-network allowance"
+    )
     explanation = (
         f"Because this visit is for {case.get('clinical_context') or 'the documented visit reason'} and the clinician selected "
-        f"CPT {', '.join(line['code'] for line in selected)}, the reviewed rates total {_money(allowed)}. "
+        f"{line_summary}, the reviewed rates total {_money(allowed)}. "
         f"The uploaded benefits apply {_money(deductible)} to the deductible"
         f"{f' and {_money(coinsurance)} in coinsurance' if coinsurance is not None else ''}"
         f"{f' plus {_money(copay)} copay' if copay is not None else ''}; after considering the individual out-of-pocket balance, "
@@ -594,7 +636,7 @@ def calculate(case: dict[str, Any]) -> dict[str, Any]:
     )
     return {
         "service_code": ", ".join(line["code"] for line in selected),
-        "service_codes": [line["code"] for line in selected], "allowed_cents": allowed,
+        "service_codes": [line["code"] for line in selected], "line_items": line_items, "allowed_cents": allowed,
         "estimate_available": True,
         "deductible_applied_cents": deductible, "nominal_coinsurance_cents": coinsurance,
         "copay_cents": copay,
@@ -611,7 +653,7 @@ def calculate(case: dict[str, Any]) -> dict[str, Any]:
 def _citation(filename: str, reference: str, sha256: str, observed_at: str | None = None) -> dict[str, str]:
     return {
         "source_filename": filename, "sha256": sha256, "reference": reference,
-        "observed_at": observed_at or date.today().isoformat(),
+        "observed_at": observed_at or _observed_now(),
     }
 
 
@@ -635,6 +677,26 @@ def _with_reference(source: dict[str, Any], reference: str) -> dict[str, Any]:
 def _money(cents: int) -> str:
     sign = "−" if cents < 0 else ""
     return f"{sign}${Decimal(abs(cents)) / Decimal(100):,.2f}"
+
+
+def _observed_now() -> str:
+    """Timestamp every uploaded source and future API observation in UTC."""
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _cash_packages(compact: str) -> list[dict[str, Any]]:
+    packages = []
+    for name, document_label, best_for in CASH_PACKAGE_LABELS:
+        match = re.search(rf"{re.escape(document_label)}.{{0,180}}?\$([\d,]+)", compact)
+        if match:
+            packages.append({
+                "name": name, "best_for": best_for,
+                "price_cents": int(match.group(1).replace(",", "")) * 100,
+                "page": 1,
+            })
+    if not packages:
+        raise GoldenCaseError("The uploaded cash-pay guide does not contain readable package prices")
+    return packages
 
 
 def _pages_with(page_text: list[tuple[int, str]], phrase: str) -> list[int]:

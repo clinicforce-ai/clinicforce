@@ -1,7 +1,7 @@
 """Clinician-only, upload-backed insurance beta endpoints."""
 
 import hashlib
-from datetime import date
+from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi import APIRouter, File, HTTPException, Request, Response, UploadFile, status
@@ -87,7 +87,7 @@ async def create_case(request: Request, file: UploadFile = File(...)) -> JSONRes
         workflow = documented.pending_case(fields)
         workflow["card_source"] = {
             "filename": filename, "sha256": hashlib.sha256(content).hexdigest(),
-            "observed_at": date.today().isoformat(), "reference": "Uploaded insurance card",
+            "observed_at": datetime.now(timezone.utc).isoformat(), "reference": "Uploaded insurance card",
         }
         workflow["evidence_manifest_id"] = golden.evidence_binding()
         case = await run_in_threadpool(
