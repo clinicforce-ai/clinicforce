@@ -291,7 +291,7 @@ Benefit Advocate: 1-866-799-2731"""
         }, clear=False):
             token = golden.create_share_token("patient-1", "share-1", beta_enabled=True)
             self.client.cookies.set("clinicforce_doctor_share", token, path="/api/doctor")
-            with patch("app.api.routers.insurance.golden.load_manifest", return_value=GOLDEN_MANIFEST), \
+            with patch("app.api.routers.insurance.golden.load_manifest", side_effect=AssertionError("preloaded evidence must not be read")), \
                  patch("app.api.routers.insurance.get_patient_profile", return_value=MATCHABLE_PROFILE), \
                  patch("app.api.routers.insurance.golden.read_card", return_value={"member_name": "Pat Example", "member_id": "MEMBER-123", "group_number": "GROUP-123"}), \
                  patch("app.api.routers.insurance.store.create_case", side_effect=stored):
@@ -359,11 +359,20 @@ Benefit Advocate: 1-866-799-2731"""
             cases[case["id"]] = deepcopy(case)
             return case
 
-        def inspect(_content: bytes, filename: str, kind: str, _member_id: str = "") -> dict:
+        def inspect_pdf(_content: bytes, filename: str, kind: str, _member_id: str = "") -> dict:
+            findings = {
+                "contract": {"provider_network": "participating_blue_choice_ppo", "participation_pages": [38], "compensation_pages": [40]},
+                "coverage": {"suggested_coverage": {"coverage_status": "active", "network_status": "in_network", "plan_name": "Blue Choice PPO Medical", "deductible_remaining_cents": 0, "oop_remaining_cents": 0, "active_page": 1, "plan_page": 2, "network_page": 2, "benefit_page": 2}, "authorizations": [{"code": "99204", "status": "not_required", "reference": "page 3 · No Auth Required"}]},
+                "appointment_email": {"visit_type": "new", "clinical_context": "Neuropathy; EMG planned"},
+                "pricing_guide": {"use": "scope context"},
+            }[kind]
             return {
                 "id": kind, "filename": filename, "sha256": kind[0] * 64,
-                "observed_at": "2026-08-24", "reference": f"Reviewed {kind} PDF",
+                "observed_at": "2026-08-24", "reference": f"Reviewed {kind} PDF", "findings": findings,
             }
+
+        def inspect_csv(_content: bytes, filename: str) -> dict:
+            return {"id": "fee_schedule", "filename": filename, "sha256": "f" * 64, "observed_at": "2026-08-24", "reference": "Reviewed fee CSV", "findings": {"rate_lines": GOLDEN_MANIFEST["rate_lines"]}}
 
         with patch.dict(os.environ, {
             "INSURANCE_BETA_ENABLED": "true", "SOURCE_LINK_SECRET": "s" * 40,
@@ -376,10 +385,11 @@ Benefit Advocate: 1-866-799-2731"""
                 ),
                 path="/api/doctor",
             )
-            with patch("app.api.routers.insurance.golden.load_manifest", return_value=GOLDEN_MANIFEST), \
+            with patch("app.api.routers.insurance.golden.load_manifest", side_effect=AssertionError("preloaded evidence must not be read")), \
                  patch("app.api.routers.insurance.get_patient_profile", return_value=profile), \
                  patch("app.api.routers.insurance.golden.read_card", return_value={"member_name": "JORDAN RIVERA", "member_id": "BCBS-456", "group_number": "GROUP-789"}), \
-                 patch("app.api.routers.insurance.documented.inspect_pdf", side_effect=inspect), \
+                 patch("app.api.routers.insurance.documented.inspect_pdf", side_effect=inspect_pdf), \
+                 patch("app.api.routers.insurance.documented.inspect_csv", side_effect=inspect_csv), \
                  patch("app.api.routers.insurance.store.create_case", side_effect=create), \
                  patch("app.api.routers.insurance.store.get_case", side_effect=get), \
                  patch("app.api.routers.insurance.store.save_case", side_effect=save):
@@ -392,22 +402,22 @@ Benefit Advocate: 1-866-799-2731"""
                     "member_name": "JORDAN RIVERA", "member_id": "BCBS-456", "group_number": "GROUP-789",
                 })
                 self.assertEqual(reviewed.status_code, 200, reviewed.text)
-                for kind in ("eligibility", "contract"):
+                eligibility = await self.client.post("/api/doctor/insurance/cases/case-docs/stages/eligibility")
+                self.assertEqual(eligibility.status_code, 200, eligibility.text)
+                for kind, suffix in (("contract", "pdf"), ("coverage", "pdf"), ("fee_schedule", "csv")):
+                    uploaded = await self.client.post(
+                        f"/api/doctor/insurance/cases/case-docs/documents/{kind}",
+                        files={"file": (f"{kind}.{suffix}", b"%PDF reviewed", "application/pdf")},
+                    )
+                    self.assertEqual(uploaded.status_code, 200, uploaded.text)
+                network = await self.client.post("/api/doctor/insurance/cases/case-docs/stages/network")
+                self.assertEqual(network.status_code, 200, network.text)
+                for kind in ("appointment_email", "pricing_guide"):
                     uploaded = await self.client.post(
                         f"/api/doctor/insurance/cases/case-docs/documents/{kind}",
                         files={"file": (f"{kind}.pdf", b"%PDF reviewed", "application/pdf")},
                     )
                     self.assertEqual(uploaded.status_code, 200, uploaded.text)
-                evidence = await self.client.put("/api/doctor/insurance/cases/case-docs/evidence", json={
-                    "clinic": "NMCT", "payer": "BCBSTX", "plan_name": "Blue Choice PPO Medical",
-                    "eligibility_observed_at": "2026-08-24", "coverage_status": "active",
-                    "network_status": "in_network", "coinsurance_percent": 20, "copay_cents": 0,
-                    "individual_deductible_remaining_cents": 0, "individual_oop_remaining_cents": 0,
-                    "referral_status": "not_required", "authorization_status": "not_required",
-                })
-                self.assertEqual(evidence.status_code, 200, evidence.text)
-                network = await self.client.post("/api/doctor/insurance/cases/case-docs/stages/network")
-                self.assertEqual(network.status_code, 200, network.text)
                 suggested = await self.client.put(
                     "/api/doctor/insurance/cases/case-docs/clinical-context",
                     json={"clinical_context": "Burning, numbness and tingling in both feet"},
@@ -440,6 +450,7 @@ Benefit Advocate: 1-866-799-2731"""
         golden.unlock_case(case, GOLDEN_MANIFEST, case["ocr"])
         self.assertEqual(case["service_lines"], [])
         case["next_stage"] = "service"
+        case["documents"]["pricing_guide"] = {}
         documented.set_clinical_context(case, "Numbness and tingling; EMG is planned", GOLDEN_MANIFEST["rate_lines"])
         emg = next(line for line in case["service_lines"] if line["code"] == "95886")
         self.assertTrue(emg["available"])
@@ -459,63 +470,81 @@ Benefit Advocate: 1-866-799-2731"""
         page = eligibility.new_page()
         page.insert_textbox(fitz.Rect(72, 72, 520, 760), "BCBSTX Active Coverage Member ID BCBS-456 In Network\nPlan / Product: Preferred Provider Option Medical\nDiagnostic Medical 100% Annual Deductible $600 / Calendar Year $0 Remaining Out Of Pocket $3,000 / Calendar Year $0 Remaining\nOut Of Network Not Covered")
         suggestions = documented.inspect_pdf(eligibility.tobytes(), "eligibility.pdf", "eligibility", "BCBS-456")["findings"]["suggested_coverage"]
-        self.assertEqual(suggestions, {"coverage_status": "active", "network_status": "in_network", "out_of_network_benefit_status": "not_covered", "plan_name": "Preferred Provider Option Medical", "coinsurance_percent": 0, "deductible_remaining_cents": 0, "oop_remaining_cents": 0})
+        self.assertEqual(suggestions, {"coverage_status": "active", "network_status": "in_network", "out_of_network_benefit_status": "not_covered", "plan_name": "Preferred Provider Option Medical", "deductible_remaining_cents": 0, "oop_remaining_cents": 0, "active_page": 1, "plan_page": 1, "network_page": 1, "benefit_page": 1})
 
-    def test_anita_contract_calculates_without_staff_entering_benefits(self) -> None:
+    def test_uploaded_fee_and_code_authorization_are_parsed(self) -> None:
+        fee = documented.inspect_csv(
+            b"Procedure Code,Description,Modifier,Network,Amount\n99204,New patient,,Blue Choice PPO,$151.60\nState,TX\nTime Stamp,08/24/2026 11:35 AM\n",
+            "rates.csv",
+        )
+        self.assertEqual(fee["findings"]["rate_lines"][0]["allowed_cents"], 15160)
+
+        authorizations = documented._authorization_findings([
+            (2, "95885 - Limited EMG"),
+            (3, "In Network No Auth Required\nIn Network No Auth Required\n95907 - NCS 1-2"),
+        ])
+        self.assertEqual([item["status"] for item in authorizations], ["not_required", "not_required"])
+        self.assertIn("pages 2–3", authorizations[0]["reference"])
+
+    def test_uploaded_card_cannot_skip_the_network_uploads(self) -> None:
         fields = {"member_name": "Pat Example", "member_id": "MEMBER-123", "group_number": "GROUP-123"}
-        case = golden.pending_case(fields)
-        golden.unlock_case(case, GOLDEN_MANIFEST, fields)
-        documented.add_document(case, "contract", {
-            "id": "contract", "filename": "nmct-bcbs.pdf", "sha256": "a" * 64, "observed_at": "2026-08-24", "reference": "Provider agreement",
-        })
-        documented.confirm_anita_evidence(case, GOLDEN_MANIFEST)
-        self.assertEqual(case["coverage"]["copay_cents"], 0)
-        self.assertEqual(case["coverage"]["individual_oop_remaining_cents"], 0)
-        documented.set_clinical_context(case, "neuropathy", GOLDEN_MANIFEST["rate_lines"])
-        documented.select_services(case, ["99204"], GOLDEN_MANIFEST["rates_source"])
-        documented.advance(case, "authorization", GOLDEN_MANIFEST["rates_source"])
-        documented.advance(case, "benefits", GOLDEN_MANIFEST["rates_source"])
-        self.assertEqual(case["estimate"]["patient_cents"], 0)
+        case = documented.pending_case(fields)
+        case["id"] = "anita-review"
+        case["card_source"] = {"filename": "card.pdf", "sha256": "a" * 64, "observed_at": "2026-08-24", "reference": "Uploaded insurance card"}
+        documented.confirm_intake(case, MATCHABLE_PROFILE, fields)
+        documented.advance(case, "eligibility", GOLDEN_MANIFEST["rates_source"])
+        self.assertEqual(case["next_stage"], "network")
+        self.assertIsNone(case["coverage"])
+        with self.assertRaisesRegex(golden.GoldenCaseError, "provider contract"):
+            documented.advance(case, "network", GOLDEN_MANIFEST["rates_source"])
 
     def test_document_fallback_suggests_reviewed_codes_and_calculates_exact_cents(self) -> None:
         profile = PatientProfile(
             patient_id="patient-2", given_name="Jordan", family_name="Rivera",
             birth_date="1991-02-03", administrative_gender="unknown",
         )
-        fields = {"member_name": "JORDAN RIVERA", "member_id": "BCBS-456", "group_number": "GROUP-789"}
+        fields = {"member_name": "JORDAN RIVERA", "member_id": "BCBS-456", "group_number": "GROUP-789", "coinsurance": "20% after deductible"}
         case = documented.pending_case(fields)
         case["id"] = "case-docs"
+        case["card_source"] = {"filename": "card.pdf", "sha256": "a" * 64, "observed_at": "2026-08-24", "reference": "Uploaded insurance card"}
         documented.confirm_intake(case, profile, fields)
         self.assertEqual(case["next_stage"], "eligibility")
         self.assertEqual(case["service_lines"], [])
-        documented.add_document(case, "eligibility", {
-            "id": "eligibility", "filename": "eligibility.pdf", "sha256": "b" * 64,
+        documented.advance(case, "eligibility", GOLDEN_MANIFEST["rates_source"])
+        documented.add_document(case, "coverage", {
+            "id": "coverage", "filename": "coverage.pdf", "sha256": "b" * 64,
             "observed_at": "2026-08-24", "reference": "Patient eligibility response",
+            "findings": {"suggested_coverage": {"coverage_status": "active", "network_status": "in_network", "plan_name": "Blue Choice PPO Medical", "deductible_remaining_cents": 5000, "oop_remaining_cents": 10000, "active_page": 1, "plan_page": 2, "network_page": 2, "benefit_page": 2}},
         })
         documented.add_document(case, "contract", {
             "id": "contract", "filename": "contract.pdf", "sha256": "c" * 64,
             "observed_at": "2026-08-24", "reference": "NMCT provider agreement",
+            "findings": {"provider_network": "participating_blue_choice_ppo", "participation_pages": [38], "compensation_pages": [40]},
         })
-        documented.confirm_evidence(case, {
-            "clinic": "NMCT", "payer": "BCBSTX", "plan_name": "Blue Choice PPO Medical",
-            "eligibility_observed_at": date(2026, 8, 24), "coverage_status": "active",
-            "network_status": "in_network", "coinsurance_percent": 20, "copay_cents": 2500,
-            "individual_deductible_remaining_cents": 5000, "individual_oop_remaining_cents": 10000,
-            "referral_status": "not_required", "authorization_status": "not_required",
+        documented.add_document(case, "fee_schedule", {
+            "id": "fee_schedule", "filename": "rates.csv", "sha256": "f" * 64,
+            "observed_at": "2026-08-24", "reference": "Blue Choice PPO rates",
+            "findings": {"rate_lines": GOLDEN_MANIFEST["rate_lines"]},
         })
         documented.advance(case, "network", GOLDEN_MANIFEST["rates_source"])
+        documented.add_document(case, "pricing_guide", {
+            "id": "pricing_guide", "filename": "guide.pdf", "sha256": "g" * 64,
+            "observed_at": "2026-08-24", "reference": "Uploaded NCS/EMG guide", "findings": {"use": "scope"},
+        })
         documented.set_clinical_context(
             case, "Burning, numbness and tingling in both feet", GOLDEN_MANIFEST["rate_lines"],
         )
         self.assertIn("95886", {line["code"] for line in case["service_lines"]})
         documented.select_services(case, ["99204", "95886"], GOLDEN_MANIFEST["rates_source"])
         documented.advance(case, "authorization", GOLDEN_MANIFEST["rates_source"])
+        referral_fact = next(fact for fact in case["facts"] if fact["label"] == "CPT 99204 referral")
+        self.assertEqual(referral_fact["citation"]["reference"], documented.BCBSTX_REFERRAL_URL)
         documented.advance(case, "benefits", GOLDEN_MANIFEST["rates_source"])
         self.assertEqual(case["estimate"]["allowed_cents"], 24078)
         self.assertEqual(case["estimate"]["deductible_applied_cents"], 5000)
         self.assertEqual(case["estimate"]["nominal_coinsurance_cents"], 3816)
-        self.assertEqual(case["estimate"]["patient_cents"], 10000)
-        self.assertEqual(case["estimate"]["plan_cents"], 14078)
+        self.assertEqual(case["estimate"]["patient_cents"], 8816)
+        self.assertEqual(case["estimate"]["plan_cents"], 15262)
         unpriced = deepcopy(case)
         unpriced["service_lines"].append({"code": "76881", "allowed_cents": None, "selected": True, "confirmed": True})
         self.assertFalse(documented.calculate(unpriced)["estimate_available"])

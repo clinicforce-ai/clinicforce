@@ -10,11 +10,17 @@ export interface InsuranceCoverageSuggestions {
 }
 export interface InsuranceSource {
   id: string; filename: string; sha256: string; observed_at: string; reference?: string
-  findings?: { pages_scanned?: number; suggested_coverage?: InsuranceCoverageSuggestions }
+  findings?: {
+    pages_scanned?: number; suggested_coverage?: InsuranceCoverageSuggestions
+    rate_count?: number; network?: string; generated_at?: string
+    visit_type?: 'new' | 'established'; clinical_context?: string; use?: string
+    authorizations?: Array<{ code: string; status: 'not_required' | 'required' | 'unknown'; page: number; reference: string }>
+  }
 }
 export interface ServiceLine {
   code: string; description: string; allowed_cents: number | null; selected: boolean; confirmed: boolean
   available?: boolean; suggested_by?: string; evidence_note?: string; plain_description?: string
+  recommendation_reason?: string; authorization_status?: 'not_required' | 'required' | 'unknown' | 'not_found'; authorization_reference?: string
 }
 export interface StageDecision { stage: InsuranceStage; status: 'passed'; decision: string; source_mode: InsuranceSourceMode }
 
@@ -37,7 +43,7 @@ export interface InsuranceCase {
   expires_at: string; ocr: InsuranceCardFields
   appointment: NormalizedAppointment | null; service_lines: ServiceLine[]; stage_decisions: StageDecision[]
   facts: EvidenceFact[]; sources: InsuranceSource[]; estimate: EstimateBreakdown | null
-  clinical_context?: string; documents?: Record<string, InsuranceSource>
+  clinical_context?: string; visit_type?: 'new' | 'established'; documents?: Record<string, InsuranceSource>
 }
 
 export interface InsuranceCardFields {
@@ -49,14 +55,4 @@ export interface InsuranceCardFields {
   preauth_medical_phone?: string; mdlive_phone?: string; nurseline_phone?: string
   customer_service_phone?: string; provider_service_phone?: string; benefit_advocate_phone?: string
   eap_phone?: string; pharmacy_phone?: string
-}
-
-export interface InsuranceEvidenceInput {
-  clinic: 'NMCT'; payer: 'BCBSTX'; plan_name: string; eligibility_observed_at: string
-  coverage_status: 'active' | 'inactive'; network_status: 'in_network' | 'out_of_network'
-  out_of_network_benefit_status?: 'covered' | 'not_covered' | 'unknown'; out_of_network_allowed_cents?: number | null
-  coinsurance_percent: number; copay_cents: number; individual_deductible_remaining_cents: number
-  individual_oop_remaining_cents: number
-  referral_status: 'not_required' | 'required_obtained' | 'unknown'
-  authorization_status: 'not_required' | 'required_obtained' | 'unknown'
 }

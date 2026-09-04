@@ -52,19 +52,23 @@ def put_patient_pdf(patient_id: str, filename: str, content: bytes, artifact_typ
     return key
 
 
-def put_insurance_pdf(case_id: str, filename: str, content: bytes) -> str:
-    """Store a short-lived insurance evidence PDF under the lifecycle-managed case prefix."""
+def put_insurance_evidence(case_id: str, filename: str, content: bytes, content_type: str = "application/octet-stream") -> str:
+    """Store short-lived insurance evidence under the lifecycle-managed case prefix."""
     if not S3_BUCKET:
         raise RuntimeError("S3_BUCKET must be configured for S3 storage")
     key = "/".join((S3_PREFIX, "insurance-cases", _safe_segment(case_id), str(uuid4()), _safe_segment(filename)))
     arguments = {
-        "Bucket": S3_BUCKET, "Key": key, "Body": content, "ContentType": "application/pdf",
+        "Bucket": S3_BUCKET, "Key": key, "Body": content, "ContentType": content_type,
         "ServerSideEncryption": "aws:kms",
     }
     if S3_KMS_KEY_ID:
         arguments["SSEKMSKeyId"] = S3_KMS_KEY_ID
     boto3.client("s3").put_object(**arguments)
     return key
+
+
+def put_insurance_pdf(case_id: str, filename: str, content: bytes) -> str:
+    return put_insurance_evidence(case_id, filename, content, "application/pdf")
 
 
 def get_pdf(key: str) -> bytes:

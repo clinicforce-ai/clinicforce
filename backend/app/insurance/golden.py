@@ -84,9 +84,8 @@ def _session_key() -> bytes:
 
 
 def evidence_binding() -> str:
-    key = os.getenv("INSURANCE_GOLDEN_BUNDLE_KEY", "").strip()
-    path = os.getenv("INSURANCE_GOLDEN_MANIFEST_PATH", "").strip()
-    return hashlib.sha256((key or path).encode()).hexdigest()
+    """Bind clinician cookies to the upload-backed workflow version, not fixture data."""
+    return hashlib.sha256(b"clinicforce:insurance:upload-backed:v1").hexdigest()
 
 
 def create_share_token(patient_id: str, share_manifest_id: str, beta_enabled: bool = False) -> str:
@@ -105,7 +104,7 @@ def open_share_token(token: str, require_beta: bool = False) -> dict[str, Any]:
         raw = _unb64(token)
         payload = json.loads(AESGCM(_session_key()).decrypt(raw[:12], raw[12:], b"clinicforce-insurance-share"))
         if payload.get("v") != 1 or payload.get("evidence_binding") != evidence_binding():
-            raise GoldenCaseError("The clinician share session is not valid for this evidence bundle")
+            raise GoldenCaseError("The clinician share session is not valid for this insurance workflow")
         if int(payload.get("exp", 0)) <= int(datetime.now(timezone.utc).timestamp()):
             raise GoldenCaseError("The clinician share session has expired")
         if require_beta and payload.get("beta_enabled") is not True:

@@ -1,6 +1,5 @@
 """Clinician insurance-beta request contracts."""
 
-from datetime import date
 from typing import Annotated, Literal
 
 from pydantic import Field
@@ -23,20 +22,3 @@ class InsuranceServiceLinesRequest(RequestModel):
 class InsuranceClinicalContextRequest(RequestModel):
     clinical_context: str = Field(min_length=3, max_length=1000)
     visit_type: Literal["new", "established"] = "new"
-
-
-class InsuranceEvidenceRequest(RequestModel):
-    clinic: Literal["NMCT"]
-    payer: Literal["BCBSTX"]
-    plan_name: str = Field(min_length=3, max_length=120)
-    eligibility_observed_at: date
-    coverage_status: Literal["active", "inactive"]
-    network_status: Literal["in_network", "out_of_network"]
-    out_of_network_benefit_status: Literal["covered", "not_covered", "unknown"] = "unknown"
-    out_of_network_allowed_cents: int | None = Field(default=None, ge=0, le=100_000_000)
-    coinsurance_percent: int = Field(ge=0, le=100)
-    copay_cents: int = Field(ge=0, le=10_000_000)
-    individual_deductible_remaining_cents: int = Field(ge=0, le=100_000_000)
-    individual_oop_remaining_cents: int = Field(ge=0, le=100_000_000)
-    referral_status: Literal["not_required", "required_obtained", "unknown"]
-    authorization_status: Literal["not_required", "required_obtained", "unknown"]

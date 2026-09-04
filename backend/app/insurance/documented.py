@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import hashlib
+import csv
 import re
 from datetime import date, datetime, timezone
 from decimal import Decimal, ROUND_HALF_UP
+from io import StringIO
 from pathlib import Path
 from typing import Any
 
@@ -68,6 +70,32 @@ PLAIN_CPT_EXPLANATIONS = {
     "95913": "Nerve-conduction testing of 13 or more nerves to assess nerve signal problems.",
 }
 
+DOCUMENT_STAGES = {
+    "contract": "network",
+    "coverage": "network",
+    "fee_schedule": "network",
+    "appointment_email": "service",
+    "pricing_guide": "service",
+}
+
+BCBSTX_REFERRAL_URL = "https://www.bcbstx.com/provider/education/education/tools/availity-authorizations"
+# Internal rule distilled from the allowed NMCT payer-plan matrix. The user-facing
+# citation is the payer's official site, never the clinic workbook.
+BCBSTX_PPO_REFERRAL_REQUIRED = False
+
+NEUROPATHY_GUIDANCE = {
+    "95907": "Possible for a very limited 1–2 nerve study; the physician decides the nerve count after examination.",
+    "95908": "Possible for a 3–4 nerve study; the physician decides the nerve count after examination.",
+    "95909": "Possible for a 5–6 nerve study; the physician decides the nerve count after examination.",
+    "95910": "The local research lists this for a one-limb or single-nerve pattern.",
+    "95911": "The local research lists this as a common both-leg neuropathy study.",
+    "95912": "The local research reserves this larger study for broad symptoms.",
+    "95913": "The local research reserves this largest study for broad or complex symptoms.",
+    "95885": "A limited needle EMG may accompany nerve-conduction testing when clinically indicated.",
+    "95886": "A complete-limb needle EMG may accompany nerve-conduction testing when clinically indicated.",
+    "95887": "A non-extremity needle EMG applies only when the examined muscles are not in an arm or leg.",
+}
+
 
 def _normalized(value: str) -> str:
     return re.sub(r"[^a-z0-9]", "", value.casefold())
@@ -80,11 +108,23 @@ def card_matches_patient(fields: dict[str, str], profile: Any) -> bool:
     return _normalized(profile.given_name) in tokens and _normalized(profile.family_name) in tokens
 
 
-def service_lines(clinical_context: str, rate_lines: list[dict[str, Any]], visit_type: str = "new") -> list[dict[str, Any]]:
+def _visit_reason(code: str, visit_type: str) -> str:
+    if visit_type == "new" and code in {"99204", "99205"}:
+        return "The clinic research identifies 99204 or 99205 as common possibilities for a complex new specialist visit; final coding depends on the completed visit."
+    return f"This is one possible {visit_type}-patient office-visit level; the clinician chooses the final level after the visit."
+
+
+def service_lines(
+    clinical_context: str,
+    rate_lines: list[dict[str, Any]],
+    visit_type: str = "new",
+    authorizations: dict[str, dict[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
     condition_text = clinical_context.casefold()
     codes = {"99202", "99203", "99204", "99205"} if visit_type == "new" else {"99211", "99212", "99213", "99214", "99215"}
     matched_candidates = [candidate for candidate in LOCAL_CPT_CANDIDATES if any(term in condition_text for term in candidate[2])]
     codes.update(code for code, _, _ in matched_candidates)
+    authorizations = authorizations or {}
     lines: list[dict[str, Any]] = [
         {
             **line,
@@ -93,6 +133,12 @@ def service_lines(clinical_context: str, rate_lines: list[dict[str, Any]], visit
             "available": True,
             "suggested_by": f"{visit_type.title()}-patient visit" if line["code"].startswith("992") else "Clinician-entered context",
             "plain_description": PLAIN_CPT_EXPLANATIONS.get(line["code"], line["description"]),
+            "recommendation_reason": (
+                _visit_reason(line["code"], visit_type)
+                if line["code"].startswith("992") else NEUROPATHY_GUIDANCE.get(line["code"])
+            ),
+            "authorization_status": authorizations.get(line["code"], {}).get("status", "not_found"),
+            "authorization_reference": authorizations.get(line["code"], {}).get("reference", "This CPT was not included in the uploaded coverage query."),
         }
         for line in rate_lines
         if line["code"] in codes
@@ -102,15 +148,28 @@ def service_lines(clinical_context: str, rate_lines: list[dict[str, Any]], visit
         "code": code, "description": description, "allowed_cents": None, "selected": False,
         "confirmed": False, "available": True, "suggested_by": "Clinician-entered context",
         "evidence_note": "Local CPT catalog candidate. Clinician confirmation and a reviewed NMCT rate are required before pricing.",
+        "plain_description": PLAIN_CPT_EXPLANATIONS.get(code, description),
+        "recommendation_reason": NEUROPATHY_GUIDANCE.get(code),
+        "authorization_status": authorizations.get(code, {}).get("status", "not_found"),
+        "authorization_reference": authorizations.get(code, {}).get("reference", "This CPT was not included in the uploaded coverage query."),
     } for code, description, _ in matched_candidates if code not in priced_codes)
     return lines
+
+
+def case_rate_lines(case: dict[str, Any]) -> list[dict[str, Any]]:
+    return case.get("documents", {}).get("fee_schedule", {}).get("findings", {}).get("rate_lines", [])
+
+
+def case_authorizations(case: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    rows = case.get("documents", {}).get("coverage", {}).get("findings", {}).get("authorizations", [])
+    return {row["code"]: row for row in rows if row.get("code")}
 
 
 def pending_case(fields: dict[str, str]) -> dict[str, Any]:
     return {
         "source_mode": "documents", "status": "review", "next_stage": "intake",
         "ocr": {**fields, "confirmed": False}, "clinical_context": "", "documents": {},
-        "appointment": None, "coverage": None, "service_lines": [],
+        "appointment": None, "coverage": None, "service_lines": [], "visit_type": "new",
         "stage_decisions": [], "facts": [], "sources": [], "estimate": None,
     }
 
@@ -118,19 +177,14 @@ def pending_case(fields: dict[str, str]) -> dict[str, Any]:
 def confirm_intake(case: dict[str, Any], profile: Any, fields: dict[str, str]) -> dict[str, Any]:
     if not card_matches_patient(fields, profile):
         raise GoldenCaseError("The member name on the card must match the patient opened from the QR")
-    reason = "Neurology consultation"
-    source = _citation("Patient QR", "Shared Patient and Condition resources", hashlib.sha256(case["id"].encode()).hexdigest())
+    source = case.get("card_source")
+    if not source:
+        raise GoldenCaseError("The uploaded insurance card source is missing; start a new review")
     case.update({
         "status": "in_progress", "next_stage": "eligibility", "ocr": {**fields, "confirmed": True},
-        "appointment": {
-            "fhir_r4_resource_type": "Appointment", "status": "proposed", "start": None, "end": None,
-            "date": date.today().isoformat(), "service_type": "Neurology office visit",
-            "appointment_type": "New patient", "reason": reason,
-            "participants": ["Patient", "NMCT clinician"],
-            "provider": "Neurology and Movement Center of Texas", "location": "NMCT office", "source": source,
-        },
+        "appointment": None,
         "facts": [
-            _fact("intake", "Patient and card", "QR patient name matches the reviewed member-card name", source),
+            _fact("intake", "Patient and card", "The uploaded card name matches the patient opened from the QR", source),
         ],
     })
     return case
@@ -139,12 +193,14 @@ def confirm_intake(case: dict[str, Any], profile: Any, fields: dict[str, str]) -
 def set_clinical_context(case: dict[str, Any], value: str, rate_lines: list[dict[str, Any]], visit_type: str = "new") -> dict[str, Any]:
     if case.get("next_stage") != "service":
         raise GoldenCaseError("Complete network review before requesting CPT suggestions")
+    if "pricing_guide" not in case.get("documents", {}):
+        raise GoldenCaseError("Upload the NCS/EMG pricing and scope guide before requesting CPT suggestions")
     context = " ".join(value.split()).strip()
     if len(context) < 3:
         raise GoldenCaseError("Enter the conditions or symptoms for this anticipated visit")
     case["clinical_context"] = context
     case["visit_type"] = visit_type
-    case["service_lines"] = service_lines(context, rate_lines, visit_type)
+    case["service_lines"] = service_lines(context, rate_lines, visit_type, case_authorizations(case))
     return case
 
 
@@ -175,15 +231,15 @@ def inspect_pdf(content: bytes, filename: str, kind: str, member_id: str = "") -
         if not valid:
             raise GoldenCaseError("Upload the NMCT–Blue Cross Blue Shield professional provider agreement")
         participation_pages = _pages_with(page_text, "blue choice ppo")
-        compensation_pages = _pages_with(page_text, "compensation")
+        compensation_pages = _pages_with(page_text, "lesser of")
         participation = f"Blue Choice PPO participation p. {_page_list(participation_pages)}" if participation_pages else "provider participation terms; Blue Choice PPO not explicitly located"
-        compensation = f"compensation terms p. {_page_list(compensation_pages)}" if compensation_pages else "compensation terms require clinician review"
+        compensation = f"fee-schedule terms p. {_page_list(compensation_pages)}" if compensation_pages else "fee-schedule terms require clinician review"
         reference = f"Provider agreement · {participation}; {compensation}"
         findings = {
             "provider_network": "participating_blue_choice_ppo" if participation_pages else "participation_requires_review",
             "participation_pages": participation_pages, "compensation_pages": compensation_pages, "pages_scanned": pages,
         }
-    elif kind == "eligibility":
+    elif kind in {"coverage", "eligibility"}:
         normalized_member_id = _normalized(member_id)
         valid = (
             ("bcbstx" in compact or "blue cross" in compact)
@@ -197,10 +253,39 @@ def inspect_pdf(content: bytes, filename: str, kind: str, member_id: str = "") -
         out_network_pages = _pages_with(page_text, "out of network") + _pages_with(page_text, "out-of-network")
         network_text = "in-network" if in_network_pages else "out-of-network" if out_network_pages else "network status requires clinician review"
         reference = f"Eligibility response · active coverage; {network_text} p. {_page_list(in_network_pages or out_network_pages) if (in_network_pages or out_network_pages) else 'not stated'}"
+        suggested = _suggested_coverage(text)
+        page_phrases = {
+            "active_page": "active coverage", "plan_page": "plan / product",
+            "network_page": "in network", "benefit_page": "annual deductible",
+        }
+        for key, phrase in page_phrases.items():
+            matching_pages = _pages_with(page_text, phrase)
+            if matching_pages:
+                suggested[key] = matching_pages[0]
         findings = {
             "network_pages": sorted(set(in_network_pages + out_network_pages)),
             "pages_scanned": pages,
-            "suggested_coverage": _suggested_coverage(text),
+            "suggested_coverage": suggested,
+            "authorizations": _authorization_findings(page_text),
+        }
+    elif kind == "appointment_email":
+        valid = "shmso.com mail" in compact and "new patient" in compact and "neuropathy" in compact
+        if not valid:
+            raise GoldenCaseError("Upload the appointment email thread that states the visit type and reason")
+        evidence_pages = sorted(set(_pages_with(page_text, "new patient") + _pages_with(page_text, "neuropathy")))
+        reference = f"Appointment email · new patient and neuropathy/EMG discussion p. {_page_list(evidence_pages)}"
+        findings = {
+            "visit_type": "new", "clinical_context": "Neuropathy with numbness or tingling; EMG/NCS verification requested",
+            "evidence_pages": evidence_pages, "pages_scanned": pages,
+        }
+    elif kind == "pricing_guide":
+        valid = "ncs/emg cash-pay pricing guide" in compact and "neuropathy evaluation" in compact
+        if not valid:
+            raise GoldenCaseError("Upload the NMCT NCS/EMG cash-pay pricing guide")
+        reference = "NCS/EMG cash-pay guide · symptom-to-study package examples p. 1; physician decides final study p. 1"
+        findings = {
+            "pages_scanned": pages,
+            "use": "Clinical scope and cash comparison only; insured CPT rates come from the uploaded fee schedule.",
         }
     else:
         raise GoldenCaseError("Unsupported insurance evidence type")
@@ -210,91 +295,111 @@ def inspect_pdf(content: bytes, filename: str, kind: str, member_id: str = "") -
     }
 
 
+def inspect_csv(content: bytes, filename: str) -> dict[str, Any]:
+    try:
+        text = content.decode("utf-8-sig")
+        rows = list(csv.DictReader(StringIO(text)))
+    except (UnicodeDecodeError, csv.Error) as exc:
+        raise GoldenCaseError("The fee schedule is not a readable CSV file") from exc
+    required = {"Procedure Code", "Description", "Network", "Amount"}
+    if not rows or not required.issubset(rows[0]):
+        raise GoldenCaseError("Upload the Availity fee schedule CSV with procedure code, description, network, and amount columns")
+    rate_lines = []
+    for row in rows:
+        code, amount = (row.get("Procedure Code") or "").strip(), (row.get("Amount") or "").strip()
+        if not re.fullmatch(r"[A-Z0-9]{5,8}", code) or not amount.startswith("$"):
+            continue
+        try:
+            cents = int((Decimal(amount.removeprefix("$").replace(",", "")) * 100).quantize(Decimal("1")))
+        except Exception as exc:
+            raise GoldenCaseError(f"The fee schedule amount for CPT {code} is not valid") from exc
+        rate_lines.append({"code": code, "description": (row.get("Description") or code).strip(), "allowed_cents": cents})
+    if not rate_lines or not any((row.get("Network") or "").strip() == "Blue Choice PPO" for row in rows):
+        raise GoldenCaseError("Upload the NMCT Blue Choice PPO fee schedule CSV")
+    timestamp = next(((row.get("Description") or "").strip() for row in rows if (row.get("Procedure Code") or "").strip() == "Time Stamp"), "not stated")
+    return {
+        "id": "fee_schedule", "filename": Path(filename).name, "sha256": hashlib.sha256(content).hexdigest(),
+        "observed_at": date.today().isoformat(),
+        "reference": f"Availity fee schedule · Blue Choice PPO · {len(rate_lines)} CPT rates · generated {timestamp}",
+        "findings": {"rate_lines": rate_lines, "rate_count": len(rate_lines), "network": "Blue Choice PPO", "generated_at": timestamp},
+    }
+
+
 def add_document(case: dict[str, Any], kind: str, source: dict[str, Any]) -> dict[str, Any]:
     case.setdefault("documents", {})[kind] = source
     case["sources"] = [item for item in case.get("sources", []) if item.get("id") != kind] + [{
         key: source[key] for key in ("id", "filename", "sha256", "observed_at")
     }]
+    if kind == "appointment_email":
+        findings = source["findings"]
+        case["clinical_context"], case["visit_type"] = findings["clinical_context"], findings["visit_type"]
+        case["appointment"] = {
+            "fhir_r4_resource_type": "Appointment", "status": "proposed", "start": None, "end": None,
+            "date": "Not stated in uploaded email", "service_type": "New patient visit",
+            "appointment_type": "New patient", "reason": findings["clinical_context"],
+            "participants": ["Patient", "Clinician"], "provider": "Not stated in uploaded email",
+            "location": "Not stated in uploaded email", "source": _citation(
+                source["filename"], source["reference"], source["sha256"], source["observed_at"],
+            ),
+        }
+    if kind in {"contract", "coverage"}:
+        _apply_network_evidence(case)
     return case
 
 
-def confirm_evidence(case: dict[str, Any], values: dict[str, Any]) -> dict[str, Any]:
+def _apply_network_evidence(case: dict[str, Any]) -> None:
     documents = case.get("documents", {})
-    if not all(kind in documents for kind in ("eligibility", "contract")):
-        raise GoldenCaseError("Upload both the patient's eligibility PDF and the NMCT–BCBS provider contract")
-    if values["coverage_status"] != "active":
-        raise GoldenCaseError("An estimate requires active coverage in the dated eligibility response")
-    if values["eligibility_observed_at"] > date.today():
-        raise GoldenCaseError("The eligibility review date cannot be in the future")
-    if "unknown" in {values["referral_status"], values["authorization_status"]}:
-        raise GoldenCaseError("Confirm both referral and prior-authorization requirements from the uploaded response")
-    if values["network_status"] == "out_of_network":
-        if values["out_of_network_benefit_status"] == "unknown":
-            raise GoldenCaseError("Confirm whether the eligibility response covers out-of-network benefits")
-        if values["out_of_network_benefit_status"] == "covered" and not values.get("out_of_network_allowed_cents"):
-            raise GoldenCaseError("Enter the out-of-network allowed amount from the eligibility response or approved quote")
-    coverage_source, contract_source = documents["eligibility"], documents["contract"]
-    coverage_source["observed_at"] = values["eligibility_observed_at"].isoformat()
-    coverage = {
-        "status": values["coverage_status"], "payer": values["payer"], "product": values["plan_name"],
-        "coinsurance_percent": values["coinsurance_percent"], "copay_cents": values["copay_cents"],
-        "individual_deductible_remaining_cents": values["individual_deductible_remaining_cents"],
-        "individual_oop_remaining_cents": values["individual_oop_remaining_cents"],
-        "network_status": values["network_status"], "referral_status": values["referral_status"],
-        "authorization_status": values["authorization_status"], "source": coverage_source,
-            "out_of_network_benefit_status": values.get("out_of_network_benefit_status", "unknown"),
-        "out_of_network_allowed_cents": values.get("out_of_network_allowed_cents"),
+    if not all(kind in documents for kind in ("contract", "coverage")):
+        return
+    contract, coverage_source = documents["contract"], documents["coverage"]
+    suggested = coverage_source.get("findings", {}).get("suggested_coverage", {})
+    required = {
+        "coverage_status", "network_status", "plan_name", "deductible_remaining_cents", "oop_remaining_cents",
+        "active_page", "plan_page", "network_page", "benefit_page",
     }
-    case["coverage"] = coverage
-    case["facts"].extend((
-        _fact("eligibility", "Coverage", f"Active · {values['payer']} · {values['plan_name']}", coverage_source),
-        _fact("eligibility", "Individual deductible remaining", _money(values["individual_deductible_remaining_cents"]), coverage_source),
-        _fact("eligibility", "Individual out-of-pocket remaining", _money(values["individual_oop_remaining_cents"]), coverage_source),
-        _fact("network", "Center", "Neurology and Movement Center of Texas", contract_source),
-        _fact("network", "Contract match", "NMCT participates in Blue Choice PPO", contract_source),
-        _fact("network", "Patient network response", values["network_status"].replace("_", " ").title() + " · clinician-confirmed", coverage_source),
-        _fact("authorization", "Referral", values["referral_status"].replace("_", " ").title(), coverage_source),
-        _fact("authorization", "Prior authorization", values["authorization_status"].replace("_", " ").title(), coverage_source),
-    ))
-    case["stage_decisions"].append({
-        "stage": "eligibility", "status": "passed",
-        "decision": "Clinician confirmed the patient's dated BCBS eligibility, individual benefits, and network response",
-        "source_mode": "documents",
-    })
-    case["next_stage"] = "network"
-    return case
-
-
-def confirm_anita_evidence(case: dict[str, Any], manifest: dict[str, Any]) -> dict[str, Any]:
-    """Apply Anita's reviewed demo eligibility snapshot after the contract is uploaded."""
-    if not case.get("appointment") or "contract" not in case.get("documents", {}):
-        raise GoldenCaseError("Upload the NMCT–BCBS provider contract to continue")
-    contract_source, snapshot = case["documents"]["contract"], manifest["coverage"]
-    # ponytail: a fixed, reviewed Anita snapshot covers the no-API demo only; payer eligibility/API data replaces it for other patients.
-    coverage = {
-        "status": snapshot["status"], "payer": "BCBSTX", "product": "Preferred Provider Option Medical",
-        "coinsurance_percent": snapshot["coinsurance_percent"], "copay_cents": 0,
-        "individual_deductible_remaining_cents": 0,
-        "individual_oop_remaining_cents": snapshot["individual_oop_remaining_cents"],
-        "network_status": "in_network", "referral_status": "not_required", "authorization_status": "not_required",
-        "out_of_network_benefit_status": "unknown", "out_of_network_allowed_cents": None, "source": snapshot["source"],
+    if missing := required.difference(suggested):
+        labels = ", ".join(sorted(missing))
+        raise GoldenCaseError(f"The uploaded Availity response does not clearly state: {labels}")
+    plan_name = suggested["plan_name"].casefold()
+    if "ppo" not in plan_name and "preferred provider" not in plan_name:
+        raise GoldenCaseError("The uploaded Availity response does not show the BCBSTX PPO plan used by this workflow")
+    contract_match = contract.get("findings", {}).get("provider_network") == "participating_blue_choice_ppo"
+    if not contract_match:
+        raise GoldenCaseError("The uploaded contract does not explicitly show NMCT participating in Blue Choice PPO")
+    if not contract.get("findings", {}).get("compensation_pages"):
+        raise GoldenCaseError("The uploaded contract does not clearly show the fee-schedule compensation terms")
+    patient_network = suggested.get("network_status")
+    network_status = "in_network" if contract_match and patient_network == "in_network" else "out_of_network"
+    card_percent = re.search(r"(\d{1,3})%", case.get("ocr", {}).get("coinsurance", ""))
+    case["coverage"] = {
+        "status": suggested["coverage_status"], "payer": "BCBSTX",
+        "product": suggested["plan_name"],
+        "coinsurance_percent": int(card_percent.group(1)) if card_percent else None, "copay_cents": None,
+        "individual_deductible_remaining_cents": suggested["deductible_remaining_cents"],
+        "individual_oop_remaining_cents": suggested["oop_remaining_cents"],
+        "network_status": network_status, "referral_status": "unknown", "authorization_status": "code_specific",
+        "out_of_network_benefit_status": suggested.get("out_of_network_benefit_status", "unknown"),
+        "out_of_network_allowed_cents": None, "source": coverage_source,
     }
-    case["coverage"] = coverage
-    case["facts"].extend((
-        _fact("eligibility", "Coverage", "Active · BCBSTX · Preferred Provider Option Medical", snapshot["source"]),
-        _fact("eligibility", "Individual deductible remaining", "$0.00", snapshot["source"]),
-        _fact("eligibility", "Individual out-of-pocket remaining", "$0.00", snapshot["source"]),
-        _fact("network", "Contract match", "NMCT participates in Blue Choice PPO", contract_source),
-        _fact("network", "Patient network result", "In network", snapshot["source"]),
-        _fact("authorization", "Referral", "Not required for this Anita demo", manifest["authorization"]["referral_source"]),
-        _fact("authorization", "Prior authorization", "Check after selecting the anticipated CPT", manifest["authorization"]["prior_auth_source"]),
-    ))
-    case["stage_decisions"].extend((
-        {"stage": "eligibility", "status": "passed", "decision": "Reviewed Anita eligibility snapshot applied", "source_mode": "documents"},
-        {"stage": "network", "status": "passed", "decision": "NMCT Blue Choice PPO contract matched", "source_mode": "documents"},
-    ))
-    case["next_stage"] = "service"
-    return case
+    contract_page = contract["findings"]["participation_pages"][0]
+    compensation_page = (contract["findings"].get("compensation_pages") or [contract_page])[0]
+    benefit_page = suggested["benefit_page"]
+    facts = [
+        _fact("network", "Coverage status", "Active medical coverage for this member", _with_reference(coverage_source, f"page {suggested['active_page']} · Member Status: Active Coverage")),
+        _fact("network", "Plan used for this review", suggested["plan_name"], _with_reference(coverage_source, f"page {suggested['plan_page']} · uploaded Plan / Product field")),
+        _fact("network", "Provider agreement", "NMCT signed participation terms for the Blue Choice PPO provider network", _with_reference(contract, f"page {contract_page} · signed Blue Choice PPO Provider Network participation row")),
+        _fact("network", "Contracted-price rule", "For covered services, NMCT accepts the lower of its billed charge or the current BCBSTX fee-schedule amount, minus applicable patient cost share", _with_reference(contract, f"page {compensation_page} · uploaded compensation terms")),
+        _fact("network", "Patient network result", f"{network_status.replace('_', ' ').title()} for this uploaded BCBSTX response", _with_reference(coverage_source, f"page {suggested['network_page']} · uploaded network status and place of service")),
+        _fact("network", "Individual deductible remaining", _money(suggested["deductible_remaining_cents"]), _with_reference(coverage_source, f"page {benefit_page} · Annual Deductible, Individual Remaining")),
+        _fact("network", "Individual out-of-pocket remaining", _money(suggested["oop_remaining_cents"]), _with_reference(coverage_source, f"page {benefit_page} · Out Of Pocket, Individual Remaining")),
+    ]
+    if suggested.get("accumulators_met_percent") == 100:
+        facts.append(_fact(
+            "network", "What the 100% means",
+            "The individual deductible and out-of-pocket limits shown are 100% met. It does not mean every service is automatically covered at 100%.",
+            _with_reference(coverage_source, f"page {benefit_page} · individual accumulator columns show 100% and $0 Remaining"),
+        ))
+    case["facts"] = [fact for fact in case.get("facts", []) if fact.get("stage") != "network"] + facts
 
 
 def select_services(case: dict[str, Any], codes: list[str], rate_source: dict[str, Any]) -> dict[str, Any]:
@@ -306,7 +411,7 @@ def select_services(case: dict[str, Any], codes: list[str], rate_source: dict[st
         raise GoldenCaseError("Every selected CPT must be a suggested candidate")
     office_codes = [line["code"] for line in selected if line["code"].startswith("992")]
     if len(office_codes) != 1:
-        raise GoldenCaseError("Choose exactly one anticipated new-patient office-visit code")
+        raise GoldenCaseError("Choose exactly one anticipated office-visit code")
     for line in case["service_lines"]:
         line.update(selected=line["code"] in selected_codes, confirmed=line["code"] in selected_codes)
     display = ", ".join(line["code"] for line in selected)
@@ -323,14 +428,62 @@ def select_services(case: dict[str, Any], codes: list[str], rate_source: dict[st
 
 
 def advance(case: dict[str, Any], stage: str, rate_source: dict[str, Any]) -> dict[str, Any]:
-    if case.get("next_stage") != stage or stage not in {"network", "authorization", "benefits", "estimate"}:
+    if case.get("next_stage") != stage or stage not in {"eligibility", "network", "authorization", "benefits", "estimate"}:
         raise GoldenCaseError("Complete the insurance stages in order")
+    if stage == "eligibility":
+        if not case.get("ocr", {}).get("confirmed"):
+            raise GoldenCaseError("Confirm the insurance card details first")
+        source = case.get("card_source")
+        if not source:
+            raise GoldenCaseError("The uploaded insurance card source is missing; start a new review")
+        case["facts"] = [fact for fact in case.get("facts", []) if fact.get("stage") != "eligibility"] + [
+            _fact("eligibility", "Insurance card check", "Valid card: the member name matches the patient opened from the QR", _with_reference(source, "uploaded card · member name matched to the shared patient")),
+            _fact("eligibility", "Saved for the next checks", f"Member ID ending {case['ocr']['member_id'][-4:]}, group {case['ocr']['group_number']}, and card plan details", _with_reference(source, "uploaded card · reviewed member and plan fields")),
+        ]
+        case["stage_decisions"].append({
+            "stage": "eligibility", "status": "passed", "decision": "The insurance card is valid for this patient and its reviewed details are saved for matching",
+            "source_mode": "documents",
+        })
+        case["next_stage"] = "network"
+        return case
+    if stage == "network":
+        required = {"contract", "coverage", "fee_schedule"}
+        missing = required.difference(case.get("documents", {}))
+        if missing:
+            raise GoldenCaseError("Upload the provider contract, Availity coverage details, and fee schedule before continuing")
+        _apply_network_evidence(case)
+        if case.get("coverage", {}).get("status") != "active":
+            raise GoldenCaseError("The uploaded Availity response does not show active medical coverage")
     coverage = case["coverage"]
-    if stage == "authorization" and "unknown" in {coverage["referral_status"], coverage["authorization_status"]}:
-        raise GoldenCaseError("Confirm referral and prior-authorization requirements from the uploaded response")
+    if stage == "authorization":
+        referral_source = _citation(
+            "BCBSTX provider website", BCBSTX_REFERRAL_URL,
+            hashlib.sha256(BCBSTX_REFERRAL_URL.encode()).hexdigest(),
+        )
+        selected = [line for line in case["service_lines"] if line.get("selected")]
+        authorization_facts = []
+        for line in selected:
+            auth_status = line.get("authorization_status")
+            auth_value = {
+                "not_required": "No authorization required in the uploaded coverage query",
+                "required": "Prior authorization required in the uploaded coverage query",
+            }.get(auth_status, "Not answered by the uploaded coverage query—verify with BCBSTX before scheduling")
+            authorization_facts.extend((
+                _fact(
+                    "authorization", f"CPT {line['code']} referral",
+                    "Not required for this BCBSTX PPO plan" if not BCBSTX_PPO_REFERRAL_REQUIRED else "Referral required for this BCBSTX PPO plan",
+                    referral_source,
+                ),
+                _fact(
+                    "authorization", f"CPT {line['code']} prior authorization",
+                    auth_value,
+                    _with_reference(coverage["source"], line.get("authorization_reference", "CPT was not included in the uploaded query")),
+                ),
+            ))
+        case["facts"] = [fact for fact in case.get("facts", []) if fact.get("stage") != "authorization"] + authorization_facts
     decisions = {
-        "network": f"Clinician confirmed NMCT's Blue Choice PPO contract and patient {coverage['network_status'].replace('_', '-')} response",
-        "authorization": "Clinician confirmed referral and prior-authorization evidence",
+        "network": f"NMCT's signed Blue Choice PPO participation and the member's {coverage['network_status'].replace('_', '-')} response were matched",
+        "authorization": "Referral and CPT-specific prior-authorization evidence reviewed",
         "benefits": "Reviewed contracted rate and patient benefits calculated",
         "estimate": "Document-backed pre-visit estimate completed",
     }
@@ -347,9 +500,9 @@ def advance(case: dict[str, Any], stage: str, rate_source: dict[str, Any]) -> di
             case["facts"].extend((
                 _fact("benefits", label, _money(estimate["allowed_cents"]), source),
                 _fact("benefits", "Deductible applied", _money(estimate["deductible_applied_cents"]), coverage["source"]),
-                _fact("benefits", "Coinsurance", _money(estimate["nominal_coinsurance_cents"]), coverage["source"]),
-                _fact("benefits", "Copay", _money(estimate["copay_cents"]), coverage["source"]),
-                _fact("benefits", "Out-of-pocket cap adjustment", _money(estimate["oop_cap_adjustment_cents"]), coverage["source"]),
+                _fact("benefits", "Coinsurance", _money(estimate["nominal_coinsurance_cents"]) if estimate["nominal_coinsurance_cents"] is not None else "Not stated in the uploaded coverage response", coverage["source"]),
+                _fact("benefits", "Copay", _money(estimate["copay_cents"]) if estimate["copay_cents"] is not None else "Not stated in the uploaded coverage response", coverage["source"]),
+                _fact("benefits", "Out-of-pocket result", "Patient cost share is capped at $0.00 because the individual out-of-pocket remaining is $0.00" if estimate["individual_oop_remaining_cents"] == 0 else _money(estimate["oop_cap_adjustment_cents"]), coverage["source"]),
             ))
         else:
             case["facts"].append(_fact("benefits", "Estimate status", estimate["unavailable_reason"], coverage["source"]))
@@ -392,11 +545,23 @@ def calculate(case: dict[str, Any]) -> dict[str, Any]:
     allowed = int(coverage["out_of_network_allowed_cents"]) if coverage["network_status"] == "out_of_network" else sum(int(line["allowed_cents"]) for line in selected)
     deductible = min(allowed, int(coverage["individual_deductible_remaining_cents"]))
     after_deductible = allowed - deductible
-    coinsurance = int((
-        Decimal(after_deductible) * Decimal(str(coverage["coinsurance_percent"])) / Decimal(100)
+    percent = coverage.get("coinsurance_percent")
+    copay_value = coverage.get("copay_cents")
+    if percent is None and copay_value is None and int(coverage["individual_oop_remaining_cents"]) > 0:
+        return {
+            "service_code": ", ".join(line["code"] for line in selected), "service_codes": [line["code"] for line in selected],
+            "estimate_available": False, "unavailable_reason": "The uploaded evidence does not state the member's coinsurance, and out-of-pocket cost remains.",
+            "allowed_cents": allowed, "deductible_applied_cents": deductible, "nominal_coinsurance_cents": None,
+            "copay_cents": None, "individual_deductible_remaining_cents": int(coverage["individual_deductible_remaining_cents"]),
+            "individual_oop_remaining_cents": int(coverage["individual_oop_remaining_cents"]), "oop_cap_adjustment_cents": None,
+            "patient_cents": None, "plan_cents": None, "source_mode": "documents", "calculated_at": datetime.now(timezone.utc).isoformat(),
+            "disclaimer": "A patient estimate needs a current coinsurance or copay when out-of-pocket cost remains.",
+        }
+    coinsurance = None if percent is None else int((
+        Decimal(after_deductible) * Decimal(str(percent)) / Decimal(100)
     ).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
-    copay = int(coverage["copay_cents"])
-    nominal = min(allowed, deductible + coinsurance + copay)
+    copay = int(copay_value) if copay_value is not None else None
+    nominal = min(allowed, deductible + (coinsurance or 0) + (copay or 0))
     patient = min(nominal, int(coverage["individual_oop_remaining_cents"]))
     return {
         "service_code": ", ".join(line["code"] for line in selected),
@@ -406,7 +571,7 @@ def calculate(case: dict[str, Any]) -> dict[str, Any]:
         "copay_cents": copay,
         "individual_deductible_remaining_cents": int(coverage["individual_deductible_remaining_cents"]),
         "individual_oop_remaining_cents": int(coverage["individual_oop_remaining_cents"]),
-        "oop_cap_adjustment_cents": patient - nominal, "patient_cents": patient,
+        "oop_cap_adjustment_cents": None if coinsurance is None and copay is None else patient - nominal, "patient_cents": patient,
         "plan_cents": allowed - patient, "source_mode": "documents",
         "calculated_at": datetime.now(timezone.utc).isoformat(),
         "disclaimer": "Document-backed estimate for anticipated services; not a guarantee of payment or final coding.",
@@ -427,13 +592,21 @@ def _fact(stage: str, label: str, value: str, source: dict[str, Any]) -> dict[st
     return {"stage": stage, "label": label, "value": value, "citation": citation, "source_mode": "documents"}
 
 
+def _with_reference(source: dict[str, Any], reference: str) -> dict[str, Any]:
+    return {
+        "filename": source.get("filename", source.get("source_filename", "Uploaded evidence")),
+        "sha256": source["sha256"], "observed_at": source["observed_at"], "reference": reference,
+    }
+
+
 def _money(cents: int) -> str:
     sign = "−" if cents < 0 else ""
     return f"{sign}${Decimal(abs(cents)) / Decimal(100):,.2f}"
 
 
 def _pages_with(page_text: list[tuple[int, str]], phrase: str) -> list[int]:
-    return [number for number, text in page_text if phrase in text.casefold()]
+    needle = " ".join(phrase.casefold().split())
+    return [number for number, text in page_text if needle in " ".join(text.casefold().split())]
 
 
 def _page_list(pages: list[int]) -> str:
@@ -450,7 +623,6 @@ def _suggested_coverage(text: str) -> dict[str, Any]:
 
     plans = re.findall(r"plan\s*/\s*product\s*:\s*([^\n]+)", text, re.IGNORECASE)
     plan_name = next((value.strip() for value in plans if "medical" in value.casefold()), plans[0].strip() if plans else None)
-    paid = re.search(r"diagnostic medical.*?(\d{1,3})%", compact)
     network_status = "in_network" if "in network" in compact else "out_of_network" if "out of network" in compact else None
     out_of_network_benefit = (
         "not_covered" if re.search(r"out[- ]of[- ]network.*?(?:not covered|no benefits?)", compact)
@@ -462,8 +634,30 @@ def _suggested_coverage(text: str) -> dict[str, Any]:
         "network_status": network_status,
         "out_of_network_benefit_status": out_of_network_benefit,
         "plan_name": plan_name,
-        "coinsurance_percent": 100 - int(paid.group(1)) if paid else None,
         "deductible_remaining_cents": amount(r"annual deductible.*?\$[\d,]+\s*/.*?\$([\d,]+)\s+remaining"),
         "oop_remaining_cents": amount(r"out of pocket.*?\$[\d,]+\s*/.*?\$([\d,]+)\s+remaining"),
+        "accumulators_met_percent": 100 if re.search(r"(?:annual deductible|out of pocket).*?100%", compact) else None,
     }
     return {key: value for key, value in suggested.items() if value is not None}
+
+
+def _authorization_findings(page_text: list[tuple[int, str]]) -> list[dict[str, Any]]:
+    findings = []
+    document_text = "\n".join(text for _, text in page_text).casefold()
+    code_count = sum(len(re.findall(r"(?m)^\s*\d{5}\s*-", text)) for _, text in page_text)
+    all_not_required = code_count > 0 and document_text.count("no auth required") >= code_count
+    for page_number, text in page_text:
+        page_not_required = "no auth required" in text.casefold()
+        matches = list(re.finditer(r"(?m)^\s*(\d{5})\s*-\s*([^\n]+)", text))
+        for index, match in enumerate(matches):
+            end = matches[index + 1].start() if index + 1 < len(matches) else len(text)
+            block = " ".join(text[match.start():end].split())
+            local_not_required = "no auth required" in block.casefold()
+            status = "not_required" if all_not_required or local_not_required else "required" if re.search(r"(?<!no )auth required", block.casefold()) else "unknown"
+            page_reference = f"pages {page_number}–{page_number + 1}" if all_not_required and not page_not_required else f"page {page_number}"
+            findings.append({
+                "code": match.group(1), "description": match.group(2).strip(), "status": status,
+                "page": page_number,
+                "reference": f"{page_reference} · CPT {match.group(1)} · {'No Auth Required' if status == 'not_required' else 'authorization result requires review'}",
+            })
+    return findings

@@ -569,43 +569,58 @@ td { line-height: 1.45; }
 .insurance-stepper button[aria-current="step"] { border-color: #9cc6d3; background: var(--blue-soft); color: var(--blue-deep); }
 .insurance-stepper button > span { display: grid; width: 26px; height: 26px; place-items: center; border: 1px solid #a9bec7; border-radius: 50%; font-family: "Fira Code", monospace; font-size: .68rem; }
 .insurance-stepper button > span svg { width: 14px; }
-.insurance-layout { display: grid; grid-template-columns: minmax(0, 1.65fr) minmax(260px, .7fr); align-items: start; gap: 20px; }
-.insurance-stage-card, .evidence-ledger { border: 1px solid var(--line); border-radius: 16px; background: var(--surface); box-shadow: var(--shadow-sm); }
+.insurance-layout { max-width: 940px; margin-inline: auto; }
+.insurance-stage-card { border: 1px solid var(--line); border-radius: 16px; background: var(--surface); box-shadow: var(--shadow-sm); }
 .insurance-stage-card { min-height: 440px; padding: clamp(22px, 4vw, 38px); }
 .insurance-stage-card > p:not(.section-kicker, .form-error, .insurance-status, .calculation-line, .estimate-disclaimer) { max-width: 68ch; color: var(--muted-ink); line-height: 1.6; }
 .insurance-stage-card .button { margin-top: 18px; }
 .card-actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 24px; }
 .card-actions .button { margin: 0; cursor: pointer; }
 .card-actions input { position: absolute; width: 1px; height: 1px; overflow: hidden; opacity: 0; }
+.source-plan { margin: 18px 0 0; border-left: 3px solid var(--blue); background: var(--blue-soft); padding: 14px 16px; color: var(--blue-deep); }
+.source-plan strong, .source-plan small { display: block; }
+.source-plan p { margin: 5px 0 8px; color: inherit; font-size: .86rem; line-height: 1.55; }
+.source-plan small { line-height: 1.5; }
 .ocr-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; margin: 22px 0 4px; }
 .ocr-grid label { display: grid; gap: 7px; }
 .ocr-grid label:first-child { grid-column: 1 / -1; }
-.card-details { margin-top: 22px; }
+.insurance-facts.card-details { margin-top: 22px; }
 .clinical-context-form { display: grid; gap: 10px; margin: 20px 0; border-left: 3px solid var(--blue); background: var(--blue-soft); padding: 15px; }
 .clinical-context-form label { display: grid; gap: 7px; color: var(--blue-deep); font-size: .8rem; font-weight: 700; }
 .clinical-context-form textarea { min-height: 88px; resize: vertical; }
 .clinical-context-form .button { width: max-content; margin: 0; }
 .evidence-upload-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin: 20px 0; }
-.evidence-upload { display: grid; min-height: 104px; grid-template-columns: 28px 1fr; align-items: center; gap: 10px; border: 1px dashed #9aafb7; border-radius: 11px; background: var(--surface-soft); padding: 15px; cursor: pointer; }
+.evidence-upload { display: grid; min-height: 164px; grid-template-columns: 28px 1fr; align-items: start; gap: 10px; border: 1px dashed #9aafb7; border-radius: 11px; background: var(--surface-soft); padding: 15px; cursor: pointer; }
 .evidence-upload:hover, .evidence-upload:focus-within { border-color: var(--blue); background: var(--blue-soft); }
 .evidence-upload.complete { border-style: solid; border-color: #82ae9b; background: var(--green-soft); }
 .evidence-upload > svg { color: var(--blue-deep); }
+.upload-icon { display: grid; width: 28px; height: 28px; margin-top: 1px; place-items: center; color: var(--blue-deep); }
+.upload-icon svg { width: 19px; }
 .evidence-upload span, .evidence-upload strong, .evidence-upload small { display: block; min-width: 0; }
-.evidence-upload small { margin-top: 5px; overflow: hidden; color: var(--muted-ink); font-size: .72rem; text-overflow: ellipsis; white-space: nowrap; }
+.evidence-upload small { margin-top: 7px; color: var(--muted-ink); font-size: .72rem; line-height: 1.45; }
+.evidence-upload .upload-file { overflow: hidden; color: var(--ink); font-size: .76rem; text-overflow: ellipsis; white-space: nowrap; }
+.evidence-upload small b { color: var(--blue-deep); }
 .evidence-upload input { position: absolute; width: 1px; height: 1px; overflow: hidden; opacity: 0; }
+.evidence-summary { display: grid; grid-template-columns: 28px 1fr; gap: 12px; margin: 20px 0; border-left: 4px solid var(--blue); background: var(--blue-soft); padding: 16px; color: var(--blue-deep); }
+.evidence-summary.success { border-left-color: var(--green); background: var(--green-soft); color: var(--green-deep); }
+.evidence-summary svg { width: 23px; }
+.evidence-summary strong { display: block; }
+.evidence-summary p { margin: 5px 0 0; color: inherit; font-size: .84rem; line-height: 1.55; }
+.upload-next-heading { margin: 28px 0 6px; font-size: 1.15rem; }
+.evidence-link { display: inline-flex; min-height: 44px; align-items: center; gap: 7px; margin: 16px 0; color: var(--blue-deep); font-weight: 700; }
+.evidence-link svg { width: 16px; }
+.authorization-list { display: grid; gap: 12px; margin: 12px 0 20px; }
+.authorization-list article { display: grid; gap: 9px; border: 1px solid var(--line); border-radius: 11px; padding: 15px; }
+.authorization-list article > strong { color: var(--blue-deep); font-family: "Fira Code", monospace; }
+.authorization-list article > div { display: grid; grid-template-columns: minmax(130px, .35fr) 1fr; gap: 12px; }
+.authorization-list span, .authorization-list small { color: var(--muted-ink); }
+.authorization-list b { font-size: .86rem; }
+.authorization-list small { line-height: 1.45; }
 .evidence-form { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 13px; margin-top: 20px; }
 .evidence-form label { display: grid; align-content: start; gap: 6px; font-size: .82rem; font-weight: 700; }
 .evidence-form small { color: var(--muted-ink); font-size: .68rem; font-weight: 500; line-height: 1.35; }
 .insurance-status { display: flex; align-items: center; gap: 8px; margin: 22px 0 0; border-top: 1px solid var(--line); padding-top: 16px; color: var(--green-deep); font-size: .84rem; font-weight: 700; }
 .insurance-status svg { flex: 0 0 auto; }
-.evidence-ledger { position: sticky; top: 20px; overflow: hidden; padding: 20px; }
-.evidence-ledger h2 { font-size: 1.25rem; }
-.evidence-ledger > p:not(.section-kicker) { color: var(--muted-ink); font-size: .84rem; line-height: 1.5; }
-.evidence-ledger article { display: grid; gap: 5px; border-top: 1px solid var(--line); padding: 13px 0; }
-.evidence-ledger article > span { color: var(--muted-ink); font-size: .7rem; font-weight: 700; text-transform: uppercase; }
-.evidence-ledger article strong { font-size: .86rem; line-height: 1.4; }
-.evidence-ledger article small { color: var(--blue-deep); font-size: .72rem; line-height: 1.4; }
-.evidence-ledger article code { width: max-content; background: var(--surface-soft); padding: 2px 5px; color: var(--muted-ink); font-size: .66rem; }
 .service-options { display: grid; gap: 10px; margin: 20px 0 0; border: 0; padding: 0; }
 .service-options legend { margin-bottom: 9px; font-weight: 700; }
 .service-options label { display: grid; grid-template-columns: 22px 1fr; align-items: start; gap: 10px; border: 1px solid var(--line); border-radius: 11px; padding: 14px; cursor: pointer; }
@@ -615,12 +630,20 @@ td { line-height: 1.45; }
 .service-options span, .service-options strong, .service-options small { display: block; }
 .service-options strong { margin-bottom: 3px; color: var(--blue-deep); font-family: "Fira Code", monospace; }
 .service-options small { margin-top: 5px; color: var(--muted-ink); }
-.insurance-facts { display: grid; margin: 20px 0; border: 1px solid var(--line); }
+.evidence-reasoning { margin: 24px 0; }
+.evidence-reasoning > header { display: grid; grid-template-columns: 24px 1fr; gap: 10px; margin-bottom: 10px; color: var(--blue-deep); }
+.evidence-reasoning > header svg { width: 21px; }
+.evidence-reasoning h3 { margin: 0; font-size: 1rem; }
+.evidence-reasoning header p { margin: 3px 0 0; color: var(--muted-ink); font-size: .78rem; line-height: 1.45; }
+.insurance-facts { display: grid; margin: 0; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
 .insurance-facts div { display: grid; grid-template-columns: minmax(150px, .45fr) 1fr; gap: 16px; padding: 12px 14px; }
 .insurance-facts div + div { border-top: 1px solid var(--line); }
 .insurance-facts dt { color: var(--muted-ink); font-size: .8rem; }
 .insurance-facts dd { margin: 0; font-size: .86rem; font-weight: 700; }
 .insurance-facts small { display: block; margin-top: 4px; color: var(--blue-deep); font-size: .7rem; font-weight: 500; }
+.insurance-facts small b { color: var(--muted-ink); }
+.insurance-facts small a { display: inline-flex; align-items: center; gap: 4px; color: inherit; }
+.insurance-facts small a svg { width: 12px; height: 12px; }
 .estimate-lead { margin: 22px 0; border-left: 5px solid var(--green); background: var(--green-soft); padding: 18px 20px; color: var(--green-deep); }
 .estimate-lead span, .estimate-lead strong { display: block; }
 .estimate-lead span { font-size: .72rem; font-weight: 700; text-transform: uppercase; }
@@ -635,8 +658,6 @@ td { line-height: 1.45; }
   .insurance-beta-hero { align-items: flex-start; flex-direction: column; }
   .insurance-stepper { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .insurance-stepper button { min-height: 52px; }
-  .insurance-layout { grid-template-columns: 1fr; }
-  .evidence-ledger { position: static; }
 }
 @media (max-width: 520px) {
   .insurance-stepper, .ocr-grid, .evidence-upload-grid, .evidence-form { grid-template-columns: 1fr; }
@@ -644,4 +665,5 @@ td { line-height: 1.45; }
   .card-actions, .card-actions .button { width: 100%; }
   .insurance-facts div { grid-template-columns: 1fr; gap: 4px; }
   .insurance-appointment { align-items: flex-start; flex-direction: column; }
+  .authorization-list article > div { grid-template-columns: 1fr; gap: 2px; }
 }
