@@ -34,6 +34,7 @@ LOCAL_CPT_CANDIDATES = (
     ("64615", "Chemodenervation for chronic migraine", ("botox", "botulinum", "chronic migraine", "migraine")),
     ("64642", "Chemodenervation, one extremity muscle group", ("botox", "botulinum", "spasticity", "dystonia")),
     ("64643", "Chemodenervation, each additional extremity muscle group", ("botox", "botulinum", "spasticity", "dystonia")),
+    ("J0585", "OnabotulinumtoxinA, per unit", ("botox", "onabotulinumtoxin", "chronic migraine", "migraine", "spasticity", "dystonia")),
     ("76881", "Extremity ultrasound, complete", ("sonography", "ultrasound", "ultrasonography", "musculoskeletal ultrasound")),
     ("76882", "Extremity ultrasound, limited", ("sonography", "ultrasound", "ultrasonography", "musculoskeletal ultrasound")),
     ("70551", "MRI of brain without contrast", ("brain", "headache", "migraine", "seizure", "stroke", "brain lesion")),
@@ -68,7 +69,32 @@ PLAIN_CPT_EXPLANATIONS = {
     "95911": "Nerve-conduction testing of 9–10 nerves to assess nerve signal problems.",
     "95912": "Nerve-conduction testing of 11–12 nerves to assess nerve signal problems.",
     "95913": "Nerve-conduction testing of 13 or more nerves to assess nerve signal problems.",
+    "J0585": "The Botox medicine itself; the final number of units is documented after treatment.",
 }
+
+NCS_CODES = {f"959{number:02d}" for number in range(7, 14)}
+EMG_ADD_ON_CODES = {"95885", "95886", "95887"}
+BOTULINUM_ADMIN_CODES = {"64612", "64615", "64642", "64643"}
+
+
+def _service_item(code: str, description: str = "") -> tuple[str, str, str]:
+    if code.startswith("992"):
+        return "office-visit", "Office visit", "scheduled"
+    if code in NCS_CODES | EMG_ADD_ON_CODES:
+        return "emg-ncs", "EMG / nerve-conduction study", "if_elected"
+    if code in BOTULINUM_ADMIN_CODES | {"J0585"}:
+        return "botox-treatment", "Botox treatment", "if_elected"
+    if code in {"76881", "76882"}:
+        return "extremity-ultrasound", "Extremity ultrasound", "if_elected"
+    if code in {"70551", "70552", "70553"}:
+        return "brain-mri", "Brain MRI", "if_elected"
+    if code == "95816":
+        return "eeg", "EEG", "if_elected"
+    if code in {"93000", "93306", "93224", "93015"}:
+        return "cardiac-testing", "Cardiac testing", "if_elected"
+    if code in {"93970", "93971", "93922"}:
+        return "vascular-testing", "Vascular testing", "if_elected"
+    return f"procedure-{code.casefold()}", description or f"Procedure {code}", "if_elected"
 
 DOCUMENT_STAGES = {
     "contract": "network",
@@ -79,10 +105,6 @@ DOCUMENT_STAGES = {
 }
 
 BCBSTX_REFERRAL_URL = "https://www.bcbstx.com/provider/education/education/tools/availity-authorizations"
-# Internal rule distilled from the allowed NMCT payer-plan matrix. The user-facing
-# citation is the payer's official site, never the clinic workbook.
-BCBSTX_PPO_REFERRAL_REQUIRED = False
-
 NEUROPATHY_GUIDANCE = {
     "95907": "Possible for a very limited 1–2 nerve study; the physician decides the nerve count after examination.",
     "95908": "Possible for a 3–4 nerve study; the physician decides the nerve count after examination.",
@@ -132,12 +154,16 @@ def service_lines(
 ) -> list[dict[str, Any]]:
     condition_text = clinical_context.casefold()
     codes = {"99202", "99203", "99204", "99205"} if visit_type == "new" else {"99211", "99212", "99213", "99214", "99215"}
+    explicit_codes = set(re.findall(r"\b(?:[A-Z]\d{4}|\d{5})\b", clinical_context.upper()))
     matched_candidates = [candidate for candidate in LOCAL_CPT_CANDIDATES if any(term in condition_text for term in candidate[2])]
-    codes.update(code for code, _, _ in matched_candidates)
+    codes.update(explicit_codes | {code for code, _, _ in matched_candidates})
     authorizations = authorizations or {}
     lines: list[dict[str, Any]] = [
         {
             **line,
+            "service_item_id": _service_item(line["code"], line["description"])[0],
+            "service_item_name": _service_item(line["code"], line["description"])[1],
+            "service_status": _service_item(line["code"], line["description"])[2],
             "selected": False,
             "confirmed": False,
             "available": True,
@@ -156,6 +182,8 @@ def service_lines(
     priced_codes = {line["code"] for line in lines}
     lines.extend({
         "code": code, "description": description, "allowed_cents": None, "selected": False,
+        "service_item_id": _service_item(code)[0], "service_item_name": _service_item(code)[1],
+        "service_status": _service_item(code)[2],
         "confirmed": False, "available": True, "suggested_by": "Clinician-entered context",
         "evidence_note": "Local CPT catalog candidate. Clinician confirmation and a reviewed NMCT rate are required before pricing.",
         "plain_description": PLAIN_CPT_EXPLANATIONS.get(code, description),
@@ -163,6 +191,17 @@ def service_lines(
         "authorization_status": authorizations.get(code, {}).get("status", "not_found"),
         "authorization_reference": authorizations.get(code, {}).get("reference", "This CPT was not included in the uploaded coverage query."),
     } for code, description, _ in matched_candidates if code not in priced_codes)
+    lines.extend({
+        "code": code, "description": "Clinician-entered procedure code", "allowed_cents": None,
+        "service_item_id": _service_item(code)[0], "service_item_name": _service_item(code)[1],
+        "service_status": "if_elected", "selected": False, "confirmed": False, "available": True,
+        "suggested_by": "Exact code entered by clinician",
+        "evidence_note": "This code is not in the uploaded fee schedule. Add a reviewed rate before estimating it.",
+        "plain_description": "Exact CPT/HCPCS code entered for clinician review.",
+        "recommendation_reason": "Staff entered this code explicitly; ClinicForce did not infer it from the visit reason.",
+        "authorization_status": authorizations.get(code, {}).get("status", "not_found"),
+        "authorization_reference": authorizations.get(code, {}).get("reference", "This code was not included in the uploaded coverage query."),
+    } for code in sorted(explicit_codes - priced_codes - {candidate[0] for candidate in matched_candidates}))
     return lines
 
 
@@ -213,8 +252,6 @@ def confirm_intake(case: dict[str, Any], profile: Any, fields: dict[str, str]) -
 def set_clinical_context(case: dict[str, Any], value: str, rate_lines: list[dict[str, Any]], visit_type: str = "new") -> dict[str, Any]:
     if case.get("next_stage") != "service":
         raise GoldenCaseError("Complete network review before requesting CPT suggestions")
-    if "pricing_guide" not in case.get("documents", {}):
-        raise GoldenCaseError("Upload the NCS/EMG pricing and scope guide before requesting CPT suggestions")
     context = " ".join(value.split()).strip()
     if len(context) < 3:
         raise GoldenCaseError("Enter the conditions or symptoms for this anticipated visit")
@@ -438,6 +475,21 @@ def select_services(case: dict[str, Any], codes: list[str], rate_source: dict[st
     office_codes = [line["code"] for line in selected if line["code"].startswith("992")]
     if len(office_codes) != 1:
         raise GoldenCaseError("Choose exactly one anticipated office-visit code")
+    ncs_codes = selected_codes & NCS_CODES
+    if len(ncs_codes) > 1:
+        raise GoldenCaseError(
+            "Choose one nerve-conduction range (95907–95913) based on the total studies expected; "
+            "the ranges are alternatives, not separate procedures."
+        )
+    if selected_codes & EMG_ADD_ON_CODES and not ncs_codes:
+        raise GoldenCaseError("The selected EMG add-on requires one nerve-conduction base code (95907–95913) for the same day.")
+    botox_admin = selected_codes & BOTULINUM_ADMIN_CODES
+    if len(botox_admin - {"64643"}) > 1:
+        raise GoldenCaseError("Choose one primary Botox administration code for the treated condition.")
+    if "64643" in selected_codes and "64642" not in selected_codes:
+        raise GoldenCaseError("CPT 64643 is an additional-extremity code and requires the primary 64642 service.")
+    if bool(botox_admin) != ("J0585" in selected_codes):
+        raise GoldenCaseError("A Botox service requires both an administration procedure and HCPCS J0585 for the medicine.")
     for line in case["service_lines"]:
         line.update(selected=line["code"] in selected_codes, confirmed=line["code"] in selected_codes)
     display = ", ".join(line["code"] for line in selected)
@@ -497,7 +549,7 @@ def advance(case: dict[str, Any], stage: str, rate_source: dict[str, Any]) -> di
             authorization_facts.extend((
                 _fact(
                     "authorization", f"CPT {line['code']} referral",
-                    "Not required for this BCBSTX PPO plan" if not BCBSTX_PPO_REFERRAL_REQUIRED else "Referral required for this BCBSTX PPO plan",
+                    "Not established by the uploaded files—verify the member's plan referral rule before scheduling",
                     referral_source,
                 ),
                 _fact(
@@ -573,7 +625,7 @@ def _complete_estimate(case: dict[str, Any], coverage: dict[str, Any], rate_sour
         case["facts"].append(_fact("estimate", "Collection amount", "Not estimated", coverage["source"]))
 
 
-def calculate(case: dict[str, Any]) -> dict[str, Any]:
+def calculate(case: dict[str, Any], include_service_items: bool = True) -> dict[str, Any]:
     selected = [line for line in case["service_lines"] if line["selected"] and line["confirmed"]]
     coverage = case["coverage"]
     line_items = [
@@ -626,15 +678,19 @@ def calculate(case: dict[str, Any]) -> dict[str, Any]:
         if coverage["network_status"] == "in_network"
         else f"CPT {', '.join(line['code'] for line in selected)} with a documented out-of-network allowance"
     )
-    explanation = (
-        f"Because this visit is for {case.get('clinical_context') or 'the documented visit reason'} and the clinician selected "
-        f"{line_summary}, the reviewed rates total {_money(allowed)}. "
-        f"The uploaded benefits apply {_money(deductible)} to the deductible"
-        f"{f' and {_money(coinsurance)} in coinsurance' if coinsurance is not None else ''}"
-        f"{f' plus {_money(copay)} copay' if copay is not None else ''}; after considering the individual out-of-pocket balance, "
-        f"the patient is estimated to pay {_money(patient)} and the plan {_money(allowed - patient)}."
-    )
-    return {
+    if int(coverage["individual_oop_remaining_cents"]) == 0:
+        explanation = (
+            f"Collect $0.00 because the uploaded benefits report $0.00 remaining individual out-of-pocket responsibility. "
+            f"The normal cost share for {line_summary} would be {_money(nominal)}, but the out-of-pocket limit reduces it by "
+            f"{_money(nominal)}. ClinicForce therefore estimates the plan responsibility at {_money(allowed)}."
+        )
+    else:
+        explanation = (
+            f"Collect {_money(patient)} based on {line_summary}. The reviewed rates total {_money(allowed)}; the normal patient "
+            f"share before the out-of-pocket limit is {_money(nominal)}, and the uploaded individual out-of-pocket balance caps "
+            f"the estimate at {_money(patient)}."
+        )
+    result = {
         "service_code": ", ".join(line["code"] for line in selected),
         "service_codes": [line["code"] for line in selected], "line_items": line_items, "allowed_cents": allowed,
         "estimate_available": True,
@@ -646,8 +702,54 @@ def calculate(case: dict[str, Any]) -> dict[str, Any]:
         "plan_cents": allowed - patient, "source_mode": "documents",
         "calculated_at": datetime.now(timezone.utc).isoformat(),
         "plain_explanation": explanation,
-        "disclaimer": "Document-backed estimate for anticipated services; not a guarantee of payment or final coding.",
+        "disclaimer": "Pre-visit estimate based on current eligibility, reviewed rates, and anticipated services. Final patient responsibility may change after coding and claim adjudication.",
     }
+    if include_service_items:
+        result["service_item_estimates"] = _service_item_estimates(case, selected)
+        scheduled = [item for item in result["service_item_estimates"] if item["status"] == "scheduled"]
+        result["collect_today_cents"] = sum(int(item["patient_cents"]) for item in scheduled)
+        result["collection_action"] = "do_not_collect" if result["collect_today_cents"] == 0 else "collect"
+        uncertain = any(item["status"] == "if_elected" for item in result["service_item_estimates"])
+        unknown_auth = any(line.get("authorization_status") not in {"not_required", "required"} for line in selected)
+        result["confidence"] = "medium" if uncertain or unknown_auth else "high"
+        result["confidence_reason"] = (
+            "Procedure selection or payer requirements may change after the clinician's examination."
+            if uncertain or unknown_auth else
+            "The selected services have reviewed rates, benefit balances, and payer-requirement results."
+        )
+        if result["collect_today_cents"] != result["patient_cents"]:
+            result["plain_explanation"] = (
+                f"Collect {_money(result['collect_today_cents'])} for the scheduled service. "
+                f"If every selected optional service is performed, the total patient estimate is {_money(result['patient_cents'])}; "
+                "do not collect an optional amount until the clinician elects that service."
+            )
+    return result
+
+
+def _service_item_estimates(case: dict[str, Any], selected: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for line in selected:
+        item_id = line.get("service_item_id") or _service_item(line["code"], line.get("description", ""))[0]
+        grouped.setdefault(item_id, []).append(line)
+    estimates = []
+    for item_id, lines in grouped.items():
+        _, default_name, default_status = _service_item(lines[0]["code"], lines[0].get("description", ""))
+        estimate = calculate({**case, "service_lines": lines}, include_service_items=False)
+        estimates.append({
+            "id": item_id,
+            "name": lines[0].get("service_item_name", default_name),
+            "status": lines[0].get("service_status", default_status),
+            "codes": [line["code"] for line in lines],
+            "estimate_available": estimate["estimate_available"],
+            "allowed_cents": estimate["allowed_cents"],
+            "normal_patient_share_cents": None if estimate["oop_cap_adjustment_cents"] is None else (
+                int(estimate["patient_cents"]) - int(estimate["oop_cap_adjustment_cents"])
+            ),
+            "oop_adjustment_cents": estimate["oop_cap_adjustment_cents"],
+            "patient_cents": estimate["patient_cents"],
+            "plan_cents": estimate["plan_cents"],
+        })
+    return estimates
 
 
 def _citation(filename: str, reference: str, sha256: str, observed_at: str | None = None) -> dict[str, str]:
