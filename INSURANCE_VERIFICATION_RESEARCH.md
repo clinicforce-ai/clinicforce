@@ -181,6 +181,51 @@ terminology and clinician/coder review. The matrix's listed CPT values are used
 only as plan-policy hints for an already selected service, never as automatic
 codes.
 
+### Service-item selection and “if elected” estimates
+
+The selectable unit is now a **service item**, not an isolated code. An office
+visit is scheduled; procedures suggested from the pre-visit reason are marked
+**if elected** until the clinician confirms they will be performed. ClinicForce
+may estimate both scenarios, but the front-desk instruction includes scheduled
+items only. It must never ask staff to collect a contingent procedure amount in
+advance.
+
+The first reviewed guardrails are deliberately narrow:
+
+Botox and EMG/NCS are examples, not the supported-procedure boundary. Staff may
+enter any exact CPT/HCPCS code. A code found in the uploaded fee schedule gets
+its reviewed description and rate; a code not found there remains a separate,
+unpriced service item and cannot produce a collection estimate. ClinicForce
+does not merge unfamiliar procedures merely because it lacks a family rule.
+
+- Choose only one code from 95907–95913 for a date of service. These are
+  alternatives based on the total number of nerve-conduction studies, not one
+  independently selectable code per limb or nerve. Needle EMG is not mandatory
+  for every NCS, but when same-day EMG add-on codes 95885–95887 are selected,
+  one 95907–95913 NCS code must also be present.
+- As one example, a Botox treatment item contains the condition-appropriate administration code
+  and HCPCS J0585 for onabotulinumtoxinA. J0585 is billed per unit, so a pre-visit
+  suggestion cannot finalize units, wastage modifiers, or the administration
+  code before the clinician documents the treatment.
+- Referral status remains plan/member-specific and prior authorization remains
+  code-specific. If the uploaded payer response did not query every selected
+  CPT/HCPCS code, the operational result is **verify before scheduling**, not
+  “not required.” Authorization is not a guarantee of benefits or payment.
+
+These are validation rules, not a claim that ClinicForce contains a universal
+medical-billing rules engine. Production needs a licensed, versioned CPT/HCPCS
+catalog, current NCCI/payer edits, units/modifiers, diagnosis and place of
+service, and a payer response for the exact member and planned service. A local
+LLM may help map staff language to a reviewed service family, but it must not
+invent code relationships or override the deterministic validation layer.
+
+Primary references:
+
+- [CMS billing article for NCS and EMG](https://www.cms.gov/medicare-coverage-database/view/article.aspx?articleid=57478) — study-count selection and same-day EMG/NCS code families.
+- [CMS billing article for botulinum toxin injections](https://www.cms.gov/medicare-coverage-database/view/article.aspx?articleid=59707) — administration plus drug-code reporting, J0585 units, and documentation.
+- [AANEM position statement on same-day E/M and electrodiagnostic testing](https://www.aanem.org/docs/default-source/documents/practice/billing-for-same-day-evaluation.pdf) — when separately documented E/M and EDX services may occur together.
+- [BCBSTX utilization management](https://www.bcbstx.com/provider/claims/claims-eligibility/um) — exact-member eligibility, network, and procedure-code prior-authorization checks through Availity.
+
 ### Live API and data checklist
 
 | Need | Source / API | Minimum live input or output |

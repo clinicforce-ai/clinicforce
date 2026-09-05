@@ -21,6 +21,7 @@ export interface InsuranceSource {
 export interface ServiceLine {
   code: string; description: string; allowed_cents: number | null; selected: boolean; confirmed: boolean
   available?: boolean; suggested_by?: string; evidence_note?: string; plain_description?: string
+  service_item_id?: string; service_item_name?: string; service_status?: 'scheduled' | 'if_elected'
   recommendation_reason?: string; authorization_status?: 'not_required' | 'required' | 'unknown' | 'not_found'; authorization_reference?: string
 }
 export interface StageDecision { stage: InsuranceStage; status: 'passed'; decision: string; source_mode: InsuranceSourceMode }
@@ -33,6 +34,13 @@ export interface EstimateBreakdown {
   oop_cap_adjustment_cents: number | null; patient_cents: number | null; plan_cents: number | null
   source_mode: InsuranceSourceMode; calculated_at: string; disclaimer: string
   plain_explanation?: string
+  collect_today_cents?: number; collection_action?: 'collect' | 'do_not_collect'; confidence?: 'high' | 'medium'
+  confidence_reason?: string
+  service_item_estimates?: Array<{
+    id: string; name: string; status: 'scheduled' | 'if_elected'; codes: string[]; estimate_available: boolean
+    allowed_cents: number | null; normal_patient_share_cents: number | null; oop_adjustment_cents: number | null
+    patient_cents: number | null; plan_cents: number | null
+  }>
 }
 
 export interface NormalizedAppointment {

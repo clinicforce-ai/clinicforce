@@ -457,14 +457,19 @@ Benefit Advocate: 1-866-799-2731"""
                 self.assertEqual(suggested.status_code, 200, suggested.text)
                 self.assertIn("95886", {line["code"] for line in suggested.json()["service_lines"]})
                 selected = await self.client.put(
-                    "/api/doctor/insurance/cases/case-docs/service-lines", json={"codes": ["99204", "95886"]},
+                    "/api/doctor/insurance/cases/case-docs/service-lines", json={"codes": ["99204", "95907", "95886"]},
                 )
                 self.assertEqual(selected.status_code, 200, selected.text)
                 for stage in ("authorization", "benefits"):
                     response = await self.client.post(f"/api/doctor/insurance/cases/case-docs/stages/{stage}")
                     self.assertEqual(response.status_code, 200, response.text)
-        self.assertEqual(response.json()["estimate"]["allowed_cents"], 24078)
+        self.assertEqual(response.json()["estimate"]["allowed_cents"], 32518)
         self.assertEqual(response.json()["estimate"]["patient_cents"], 0)
+        self.assertEqual(response.json()["estimate"]["collect_today_cents"], 0)
+        self.assertEqual(
+            [(item["name"], item["status"]) for item in response.json()["estimate"]["service_item_estimates"]],
+            [("Office visit", "scheduled"), ("EMG / nerve-conduction study", "if_elected")],
+        )
         self.assertEqual(response.json()["status"], "complete")
         self.assertIsNone(response.json()["next_stage"])
         self.assertIn("estimate", {item["stage"] for item in response.json()["stage_decisions"]})
@@ -489,7 +494,7 @@ Benefit Advocate: 1-866-799-2731"""
         documented.set_clinical_context(case, "Numbness and tingling; EMG is planned", GOLDEN_MANIFEST["rate_lines"])
         emg = next(line for line in case["service_lines"] if line["code"] == "95886")
         self.assertTrue(emg["available"])
-        documented.select_services(case, ["99204", "95886"], GOLDEN_MANIFEST["rates_source"])
+        documented.select_services(case, ["99204", "95907", "95886"], GOLDEN_MANIFEST["rates_source"])
 
     def test_document_parser_reads_all_contract_pages_and_prefills_explicit_benefits(self) -> None:
         contract = fitz.open()
@@ -596,22 +601,23 @@ Final study type is determined by the physician.""")
             case, "Burning, numbness and tingling in both feet", GOLDEN_MANIFEST["rate_lines"],
         )
         self.assertIn("95886", {line["code"] for line in case["service_lines"]})
-        documented.select_services(case, ["99204", "95886"], GOLDEN_MANIFEST["rates_source"])
+        documented.select_services(case, ["99204", "95907", "95886"], GOLDEN_MANIFEST["rates_source"])
         documented.advance(case, "authorization", GOLDEN_MANIFEST["rates_source"])
         referral_fact = next(fact for fact in case["facts"] if fact["label"] == "CPT 99204 referral")
         self.assertEqual(referral_fact["citation"]["reference"], documented.BCBSTX_REFERRAL_URL)
         documented.advance(case, "benefits", GOLDEN_MANIFEST["rates_source"])
-        self.assertEqual(case["estimate"]["allowed_cents"], 24078)
+        self.assertEqual(case["estimate"]["allowed_cents"], 32518)
         self.assertEqual(case["estimate"]["deductible_applied_cents"], 5000)
-        self.assertEqual(case["estimate"]["nominal_coinsurance_cents"], 3816)
-        self.assertEqual(case["estimate"]["patient_cents"], 8816)
-        self.assertEqual(case["estimate"]["plan_cents"], 15262)
+        self.assertEqual(case["estimate"]["nominal_coinsurance_cents"], 5504)
+        self.assertEqual(case["estimate"]["patient_cents"], 10000)
+        self.assertEqual(case["estimate"]["collect_today_cents"], 7032)
+        self.assertEqual(case["estimate"]["plan_cents"], 22518)
         self.assertEqual(
             [(line["code"], line["allowed_cents"]) for line in case["estimate"]["line_items"]],
-            [("99204", 15160), ("95886", 8918)],
+            [("99204", 15160), ("95886", 8918), ("95907", 8440)],
         )
-        self.assertIn("CPT 99204 at $151.60 and CPT 95886 at $89.18", case["estimate"]["plain_explanation"])
-        self.assertIn("$88.16", case["estimate"]["plain_explanation"])
+        self.assertIn("Collect $70.32 for the scheduled service", case["estimate"]["plain_explanation"])
+        self.assertIn("total patient estimate is $100.00", case["estimate"]["plain_explanation"])
         self.assertEqual(case["status"], "complete")
         self.assertIsNone(case["next_stage"])
         patient_fact = next(fact for fact in case["facts"] if fact["label"] == "Estimated patient responsibility")
@@ -637,6 +643,14 @@ Final study type is determined by the physician.""")
             duplicate_office = deepcopy(case)
             duplicate_office["next_stage"] = "service"
             documented.select_services(duplicate_office, ["99203", "99204"], GOLDEN_MANIFEST["rates_source"])
+        with self.assertRaisesRegex(golden.GoldenCaseError, "requires one nerve-conduction"):
+            missing_ncs = deepcopy(case)
+            missing_ncs["next_stage"] = "service"
+            documented.select_services(missing_ncs, ["99204", "95886"], GOLDEN_MANIFEST["rates_source"])
+        with self.assertRaisesRegex(golden.GoldenCaseError, "ranges are alternatives"):
+            duplicate_ncs = deepcopy(case)
+            duplicate_ncs["next_stage"] = "service"
+            documented.select_services(duplicate_ncs, ["99204", "95907", "95908"], GOLDEN_MANIFEST["rates_source"])
 
     def test_document_fallback_accepts_free_text_and_validates_patient_evidence(self) -> None:
         generic = documented.service_lines("A concern not present in the reviewed procedure rules", GOLDEN_MANIFEST["rate_lines"])
@@ -669,12 +683,29 @@ Final study type is determined by the physician.""")
         rates = GOLDEN_MANIFEST["rate_lines"] + [
             {"code": "99214", "description": "Established patient, moderate MDM", "allowed_cents": 11156},
             {"code": "95885", "description": "Needle EMG, limited", "allowed_cents": 5701},
+            {"code": "12345", "description": "Clinic-reviewed custom procedure", "allowed_cents": 7654},
         ]
+        custom = documented.service_lines("planned 12345 and 54321", rates, "established")
+        custom_lines = {line["code"]: line for line in custom}
+        self.assertEqual(custom_lines["12345"]["service_item_name"], "Clinic-reviewed custom procedure")
+        self.assertEqual(custom_lines["12345"]["service_item_id"], "procedure-12345")
+        self.assertIsNone(custom_lines["54321"]["allowed_cents"])
+        self.assertEqual(custom_lines["54321"]["service_item_id"], "procedure-54321")
         neuropathy = documented.service_lines("neuropathy; EMG planned", rates, "established")
         self.assertTrue({"99214", "95885", "95907"}.issubset({line["code"] for line in neuropathy}))
         self.assertEqual(next(line for line in neuropathy if line["code"] == "95907")["plain_description"], "Nerve-conduction testing of 1–2 nerves to assess nerve signal problems.")
+        self.assertEqual(next(line for line in neuropathy if line["code"] == "95907")["service_item_name"], "EMG / nerve-conduction study")
+        self.assertEqual(next(line for line in neuropathy if line["code"] == "95907")["service_status"], "if_elected")
         botox = documented.service_lines("Botox for chronic migraine", rates, "established")
-        self.assertTrue({"99214", "64612", "64615"}.issubset({line["code"] for line in botox}))
+        self.assertTrue({"99214", "64612", "64615", "J0585"}.issubset({line["code"] for line in botox}))
+        with self.assertRaisesRegex(golden.GoldenCaseError, "both an administration procedure and HCPCS J0585"):
+            documented.select_services(
+                {"next_stage": "service", "service_lines": deepcopy(botox), "facts": [], "stage_decisions": []},
+                ["99214", "64615"], GOLDEN_MANIFEST["rates_source"],
+            )
+        botox_case = {"next_stage": "service", "service_lines": deepcopy(botox), "facts": [], "stage_decisions": []}
+        documented.select_services(botox_case, ["99214", "64615", "J0585"], GOLDEN_MANIFEST["rates_source"])
+        self.assertEqual(botox_case["next_stage"], "authorization")
         heart = documented.service_lines("palpitations and chest pain", rates, "established")
         self.assertTrue({"99214", "93000", "93224", "93015"}.issubset({line["code"] for line in heart}))
         leg = documented.service_lines("leg swelling and calf pain", rates, "established")
