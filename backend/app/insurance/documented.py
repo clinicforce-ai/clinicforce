@@ -155,7 +155,14 @@ def service_lines(
     condition_text = clinical_context.casefold()
     codes = {"99202", "99203", "99204", "99205"} if visit_type == "new" else {"99211", "99212", "99213", "99214", "99215"}
     explicit_codes = set(re.findall(r"\b(?:[A-Z]\d{4}|\d{5})\b", clinical_context.upper()))
-    matched_candidates = [candidate for candidate in LOCAL_CPT_CANDIDATES if any(term in condition_text for term in candidate[2])]
+    explicit_procedure_codes = {code for code in explicit_codes if not code.startswith("992")}
+    reviewed_neuropathy_codes = {"95911", "95886"} if "neuropathy" in condition_text and not explicit_procedure_codes else set()
+    matched_candidates = [
+        candidate for candidate in LOCAL_CPT_CANDIDATES
+        if candidate[0] in reviewed_neuropathy_codes or (
+            not reviewed_neuropathy_codes and any(term in condition_text for term in candidate[2])
+        )
+    ]
     codes.update(explicit_codes | {code for code, _, _ in matched_candidates})
     authorizations = authorizations or {}
     lines: list[dict[str, Any]] = [
@@ -202,6 +209,15 @@ def service_lines(
         "authorization_status": authorizations.get(code, {}).get("status", "not_found"),
         "authorization_reference": authorizations.get(code, {}).get("reference", "This code was not included in the uploaded coverage query."),
     } for code in sorted(explicit_codes - priced_codes - {candidate[0] for candidate in matched_candidates}))
+    grouped_codes = reviewed_neuropathy_codes
+    if len(grouped_codes) > 1:
+        for line in lines:
+            if line["code"] in grouped_codes:
+                line.update(
+                    service_item_id="neuropathy-emg-ncs",
+                    service_item_name="Suggested neuropathy EMG/NCS combination",
+                    select_together=True,
+                )
     return lines
 
 
@@ -324,6 +340,7 @@ def inspect_pdf(content: bytes, filename: str, kind: str, member_id: str = "") -
             "pages_scanned": pages,
             "suggested_coverage": suggested,
             "authorizations": _authorization_findings(page_text),
+            "referral": _referral_findings(page_text, suggested.get("plan_name", "")),
         }
     elif kind == "appointment_email":
         valid = "shmso.com mail" in compact and "new patient" in compact and "neuropathy" in compact
@@ -423,15 +440,18 @@ def _apply_network_evidence(case: dict[str, Any]) -> None:
         labels = ", ".join(sorted(missing))
         raise GoldenCaseError(f"The uploaded Availity response does not clearly state: {labels}")
     plan_name = suggested["plan_name"].casefold()
-    if "ppo" not in plan_name and "preferred provider" not in plan_name:
-        raise GoldenCaseError("The uploaded Availity response does not show the BCBSTX PPO plan used by this workflow")
+    is_hmo = "hmo" in plan_name or "health maintenance organization" in plan_name
+    if not is_hmo and "ppo" not in plan_name and "preferred provider" not in plan_name:
+        raise GoldenCaseError("The uploaded Availity response does not clearly identify a supported PPO or HMO medical plan")
     contract_match = contract.get("findings", {}).get("provider_network") == "participating_blue_choice_ppo"
     if not contract_match:
         raise GoldenCaseError("The uploaded contract does not explicitly show NMCT participating in Blue Choice PPO")
     if not contract.get("findings", {}).get("compensation_pages"):
         raise GoldenCaseError("The uploaded contract does not clearly show the fee-schedule compensation terms")
     patient_network = suggested.get("network_status")
-    network_status = "in_network" if contract_match and patient_network == "in_network" else "out_of_network"
+    network_status = "unverified" if is_hmo else "in_network" if contract_match and patient_network == "in_network" else "out_of_network"
+    referral = coverage_source.get("findings", {}).get("referral", {})
+    referral_status = referral.get("status", "pending" if is_hmo else "not_stated")
     card_percent = re.search(r"(\d{1,3})%", case.get("ocr", {}).get("coinsurance", ""))
     case["coverage"] = {
         "status": suggested["coverage_status"], "payer": "BCBSTX",
@@ -439,7 +459,8 @@ def _apply_network_evidence(case: dict[str, Any]) -> None:
         "coinsurance_percent": int(card_percent.group(1)) if card_percent else None, "copay_cents": None,
         "individual_deductible_remaining_cents": suggested["deductible_remaining_cents"],
         "individual_oop_remaining_cents": suggested["oop_remaining_cents"],
-        "network_status": network_status, "referral_status": "unknown", "authorization_status": "code_specific",
+        "network_status": network_status, "plan_type": "hmo" if is_hmo else "ppo",
+        "referral_status": referral_status, "referral": referral, "authorization_status": "code_specific",
         "out_of_network_benefit_status": suggested.get("out_of_network_benefit_status", "unknown"),
         "out_of_network_allowed_cents": None, "source": coverage_source,
     }
@@ -449,9 +470,9 @@ def _apply_network_evidence(case: dict[str, Any]) -> None:
     facts = [
         _fact("network", "Coverage status", "Active medical coverage for this member", _with_reference(coverage_source, f"page {suggested['active_page']} · Member Status: Active Coverage"), "This confirms the member's medical plan was active when the uploaded eligibility response was produced."),
         _fact("network", "Plan used for this review", suggested["plan_name"], _with_reference(coverage_source, f"page {suggested['plan_page']} · uploaded Plan / Product field"), "This identifies the patient's plan so it can be compared with the clinic's participation agreement."),
-        _fact("network", "Provider agreement", "NMCT signed participation terms for the Blue Choice PPO provider network", _with_reference(contract, f"page {contract_page} · signed Blue Choice PPO Provider Network participation row"), "This shows the clinic agreed to participate in the same Blue Choice PPO network named in the patient's response."),
-        _fact("network", "Contracted-price rule", "For covered services, NMCT accepts the lower of its billed charge or the current BCBSTX fee-schedule amount, minus applicable patient cost share", _with_reference(contract, f"page {compensation_page} · uploaded compensation terms"), "This means the reviewed fee schedule sets the starting price, and the patient's benefits determine how that price is split."),
-        _fact("network", "Patient network result", f"{network_status.replace('_', ' ').title()} for this uploaded BCBSTX response", _with_reference(coverage_source, f"page {suggested['network_page']} · uploaded network status and place of service"), f"Because the patient response and clinic agreement match, {network_status.replace('_', '-')} benefit terms apply to this estimate."),
+        _fact("network", "Provider agreement", "NMCT signed participation terms for the Blue Choice PPO provider network", _with_reference(contract, f"page {contract_page} · signed Blue Choice PPO Provider Network participation row"), "This proves PPO participation only; it does not prove participation in an HMO network." if is_hmo else "This shows the clinic agreed to participate in the same Blue Choice PPO network named in the patient's response."),
+        _fact("network", "Contracted-price rule", "The uploaded compensation terms and fee schedule apply to Blue Choice PPO; an HMO contracted rate is not present" if is_hmo else "For covered services, NMCT accepts the lower of its billed charge or the current BCBSTX fee-schedule amount, minus applicable patient cost share", _with_reference(contract, f"page {compensation_page} · uploaded compensation terms"), "PPO prices cannot be substituted for this HMO plan, so ClinicForce will not calculate or collect an HMO estimate from these rates." if is_hmo else "This means the reviewed fee schedule sets the starting price, and the patient's benefits determine how that price is split."),
+        _fact("network", "Patient network result", "HMO network participation is not established by the uploaded PPO contract" if is_hmo else f"{network_status.replace('_', ' ').title()} for this uploaded BCBSTX response", _with_reference(coverage_source, f"page {suggested['network_page']} · uploaded network status and place of service"), "The patient response identifies an HMO, while the uploaded NMCT agreement and fee schedule apply to Blue Choice PPO. An HMO estimate cannot reuse PPO rates." if is_hmo else f"Because the patient response and clinic agreement match, {network_status.replace('_', '-')} benefit terms apply to this estimate."),
         _fact("network", "Individual deductible remaining", _money(suggested["deductible_remaining_cents"]), _with_reference(coverage_source, f"page {benefit_page} · Annual Deductible, Individual Remaining"), "This is the remaining individual deductible that may be paid before coinsurance for covered services."),
         _fact("network", "Individual out-of-pocket remaining", _money(suggested["oop_remaining_cents"]), _with_reference(coverage_source, f"page {benefit_page} · Out Of Pocket, Individual Remaining"), "This is the most additional covered cost shown for the individual before the plan's out-of-pocket limit is reached."),
     ]
@@ -540,6 +561,21 @@ def advance(case: dict[str, Any], stage: str, rate_source: dict[str, Any]) -> di
         )
         selected = [line for line in case["service_lines"] if line.get("selected")]
         authorization_facts = []
+        referral = coverage.get("referral", {})
+        hmo_new_patient = coverage.get("plan_type") == "hmo" and case.get("visit_type", "new") == "new"
+        if hmo_new_patient and referral.get("status") == "received":
+            referral_value = (
+                f"Received from PCP · reference {referral['reference']} · effective {referral['effective_date']} · "
+                f"expires {referral['expiration_date']}"
+            )
+        elif hmo_new_patient:
+            referral_value = "Required for this new HMO patient; PCP must obtain it. Reference and effective/expiration dates are not present in the uploaded response—do not schedule."
+        else:
+            referral_value = "The uploaded files do not state a referral requirement for this plan"
+        referral_fact_source = _with_reference(
+            coverage["source"],
+            f"page {referral['page']} · uploaded referral fields" if referral.get("page") else coverage["source"]["reference"],
+        ) if referral else referral_source
         for line in selected:
             auth_status = line.get("authorization_status")
             auth_value = {
@@ -549,8 +585,8 @@ def advance(case: dict[str, Any], stage: str, rate_source: dict[str, Any]) -> di
             authorization_facts.extend((
                 _fact(
                     "authorization", f"CPT {line['code']} referral",
-                    "Not established by the uploaded files—verify the member's plan referral rule before scheduling",
-                    referral_source,
+                    referral_value,
+                    referral_fact_source,
                 ),
                 _fact(
                     "authorization", f"CPT {line['code']} prior authorization",
@@ -560,8 +596,8 @@ def advance(case: dict[str, Any], stage: str, rate_source: dict[str, Any]) -> di
             ))
         case["facts"] = [fact for fact in case.get("facts", []) if fact.get("stage") != "authorization"] + authorization_facts
     decisions = {
-        "network": f"NMCT's signed Blue Choice PPO participation and the member's {coverage['network_status'].replace('_', '-')} response were matched",
-        "authorization": "Referral and CPT-specific prior-authorization evidence reviewed",
+        "network": "HMO detected; the uploaded PPO contract and rates do not establish HMO participation or pricing" if coverage.get("plan_type") == "hmo" else f"NMCT's signed Blue Choice PPO participation and the member's {coverage['network_status'].replace('_', '-')} response were matched",
+        "authorization": "HMO referral blocker and CPT-specific prior-authorization evidence reviewed" if coverage.get("plan_type") == "hmo" and coverage.get("referral_status") != "received" else "Referral and CPT-specific prior-authorization evidence reviewed",
         "benefits": "Reviewed contracted rate and patient benefits calculated",
         "estimate": "Document-backed pre-visit estimate completed",
     }
@@ -632,6 +668,21 @@ def calculate(case: dict[str, Any], include_service_items: bool = True) -> dict[
         {"code": line["code"], "description": line.get("description", line["code"]), "allowed_cents": line.get("allowed_cents")}
         for line in selected
     ] if coverage["network_status"] == "in_network" else []
+    if coverage["network_status"] == "unverified":
+        referral_pending = coverage.get("plan_type") == "hmo" and coverage.get("referral_status") != "received"
+        reason = "The uploaded NMCT contract and fee schedule are for Blue Choice PPO, but this patient has an HMO plan. HMO participation and contracted rates are not documented."
+        if referral_pending:
+            reason += " The PCP referral reference and effective/expiration dates are also missing; do not schedule."
+        return {
+            "service_code": ", ".join(line["code"] for line in selected), "service_codes": [line["code"] for line in selected], "line_items": [],
+            "estimate_available": False, "unavailable_reason": reason,
+            "allowed_cents": None, "deductible_applied_cents": None, "nominal_coinsurance_cents": None,
+            "copay_cents": None, "individual_deductible_remaining_cents": int(coverage["individual_deductible_remaining_cents"]),
+            "individual_oop_remaining_cents": int(coverage["individual_oop_remaining_cents"]), "oop_cap_adjustment_cents": None,
+            "patient_cents": None, "plan_cents": None, "source_mode": "documents", "calculated_at": datetime.now(timezone.utc).isoformat(),
+            "scheduling_action": "do_not_schedule",
+            "disclaimer": "Do not substitute PPO rates for this HMO plan. Obtain HMO network/rate evidence and the required referral details before scheduling or collecting.",
+        }
     if any(line.get("allowed_cents") is None for line in selected):
         return {
             "service_code": ", ".join(line["code"] for line in selected), "service_codes": [line["code"] for line in selected], "line_items": line_items,
@@ -858,3 +909,29 @@ def _authorization_findings(page_text: list[tuple[int, str]]) -> list[dict[str, 
                 "reference": f"{page_reference} · CPT {match.group(1)} · {'No Auth Required' if status == 'not_required' else 'authorization result requires review'}",
             })
     return findings
+
+
+def _referral_findings(page_text: list[tuple[int, str]], plan_name: str = "") -> dict[str, Any]:
+    """Read only explicit referral fields from the uploaded payer response."""
+    text = "\n".join(page for _, page in page_text)
+    compact = " ".join(text.split())
+    is_hmo = "hmo" in plan_name.casefold() or "health maintenance organization" in plan_name.casefold()
+    required = is_hmo or bool(re.search(r"\breferral\s+(?:is\s+)?required\b", compact, re.IGNORECASE))
+
+    def field(pattern: str) -> str | None:
+        match = re.search(pattern, compact, re.IGNORECASE)
+        return match.group(1).strip(" .,:;") if match else None
+
+    reference = field(r"(?:referral|authorization)\s*(?:number|reference|ref\.?|#)\s*[:#-]?\s*([A-Z0-9-]{4,30})")
+    effective_date = field(r"(?:referral\s+)?effective\s+date\s*[:#-]?\s*([A-Z0-9/.-]{6,20})")
+    expiration_date = field(r"(?:referral\s+)?(?:expiration|expiry|expires?)\s*(?:date)?\s*[:#-]?\s*([A-Z0-9/.-]{6,20})")
+    page = next((number for number, value in page_text if "referral" in value.casefold()), None)
+    received = bool(reference and effective_date and expiration_date)
+    return {
+        "required": required,
+        "status": "received" if received else "pending" if required else "not_stated",
+        "reference": reference,
+        "effective_date": effective_date,
+        "expiration_date": expiration_date,
+        "page": page,
+    }

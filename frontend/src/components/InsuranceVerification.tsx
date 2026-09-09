@@ -1,4 +1,4 @@
-import { AlertTriangle, ArrowLeft, Camera, Check, ExternalLink, FileCheck2, LoaderCircle, ShieldCheck, Upload, WalletCards } from 'lucide-react'
+import { AlertTriangle, ArrowLeft, Calculator, Camera, Check, CircleDollarSign, ExternalLink, FileCheck2, Files, LoaderCircle, ShieldCheck, Upload, WalletCards } from 'lucide-react'
 import { useState } from 'react'
 import {
   confirmInsuranceIntake, confirmInsuranceService, createInsuranceCase, createSelfPayCase, runInsuranceStage,
@@ -39,9 +39,10 @@ const selectionError = (codes: string[]) => {
   return ''
 }
 
-const groupServices = (lines: ServiceLine[]) => Object.values(lines.reduce<Record<string, { id: string; name: string; status: 'scheduled' | 'if_elected'; lines: ServiceLine[] }>>((groups, line) => {
+const groupServices = (lines: ServiceLine[]) => Object.values(lines.reduce<Record<string, { id: string; name: string; status: 'scheduled' | 'if_elected'; selectTogether: boolean; lines: ServiceLine[] }>>((groups, line) => {
   const id = line.service_item_id ?? (line.code.startsWith('992') ? 'office-visit' : `procedure-${line.code.toLowerCase()}`)
-  groups[id] ??= { id, name: line.service_item_name ?? (line.code.startsWith('992') ? 'Office visit' : line.description || `Procedure ${line.code}`), status: line.service_status ?? (line.code.startsWith('992') ? 'scheduled' : 'if_elected'), lines: [] }
+  groups[id] ??= { id, name: line.service_item_name ?? (line.code.startsWith('992') ? 'Office visit' : line.description || `Procedure ${line.code}`), status: line.service_status ?? (line.code.startsWith('992') ? 'scheduled' : 'if_elected'), selectTogether: false, lines: [] }
+  groups[id].selectTogether ||= Boolean(line.select_together)
   groups[id].lines.push(line)
   return groups
 }, {})).sort((left, right) => Number(left.status === 'if_elected') - Number(right.status === 'if_elected'))
@@ -49,6 +50,10 @@ const dateTime = (value: string) => {
   const parsed = new Date(value)
   if (Number.isNaN(parsed.getTime())) return value
   return new Intl.DateTimeFormat(undefined, /^\d{4}-\d{2}-\d{2}$/.test(value) ? { dateStyle: 'medium' } : { dateStyle: 'medium', timeStyle: 'short' }).format(parsed)
+}
+const isHmoCase = (insuranceCase: InsuranceCase) => {
+  const coveragePlan = insuranceCase.documents?.coverage?.findings?.suggested_coverage?.plan_name ?? ''
+  return `${insuranceCase.ocr.plan_type ?? ''} ${coveragePlan}`.toUpperCase().includes('HMO')
 }
 const cardDetailLabels: Array<[keyof InsuranceCase['ocr'], string]> = [
   ['plan_type', 'Plan type'], ['coverage_date', 'Coverage date'], ['coinsurance', 'Coinsurance shown on card'],
@@ -132,12 +137,17 @@ export default function InsuranceVerification({ onBack }: Props) {
     else if (botoxAdminCodes.has(code) && code !== '64643') setSelectedCodes((current) => [...current.filter((item) => !botoxAdminCodes.has(item) || item === '64643'), code])
     else setSelectedCodes((current) => current.includes(code) ? current.filter((item) => item !== code) : [...current, code])
   }
+  const toggleGroup = (codes: string[]) => setSelectedCodes((current) => {
+    if (codes.every((code) => current.includes(code))) return current.filter((code) => !codes.includes(code))
+    const withoutCompetingEmg = current.filter((code) => !ncsCodes.has(code) && !emgAddOnCodes.has(code))
+    return [...new Set([...withoutCompetingEmg, ...codes])]
+  })
 
   const completed = new Set<InsuranceStage>(insuranceCase?.stage_decisions.map((item) => item.stage) ?? [])
   if (insuranceCase?.ocr.confirmed) completed.add('intake')
   const currentIndex = steps.findIndex((step) => step.id === (insuranceCase?.next_stage ?? 'estimate'))
   const stageFacts = insuranceCase?.facts.filter((fact) => fact.stage === viewStage || (
-    viewStage === 'estimate' && ['network', 'benefits'].includes(fact.stage)
+    viewStage === 'estimate' && ['network', 'authorization', 'benefits'].includes(fact.stage)
   )) ?? []
   const documents = insuranceCase?.documents ?? {}
   const selectedLines = insuranceCase?.service_lines.filter((line) => line.selected) ?? []
@@ -148,20 +158,22 @@ export default function InsuranceVerification({ onBack }: Props) {
   return <section className="insurance-beta" aria-labelledby="insurance-heading">
     <button className="back-control" type="button" onClick={onBack}><ArrowLeft aria-hidden="true" className="size-4" /> Back to clinical summary</button>
     <header className="insurance-beta-hero">
-      {insuranceCase?.payment_path === 'self_pay' ? <div><p className="eyebrow"><WalletCards aria-hidden="true" className="size-4" /> Direct payment · NMCT</p><h1 id="insurance-heading">Patient payment choice</h1><p>The patient’s decision to pay directly is saved in this secure review. No insurance information is required or used.</p></div> : <div><p className="eyebrow"><ShieldCheck aria-hidden="true" className="size-4" /> Evidence-backed beta · NMCT and BCBSTX</p><h1 id="insurance-heading">Verify insurance before the visit</h1><p>Today, every patient-specific answer comes from a file uploaded in this review. If a required file is missing, ClinicForce stops instead of guessing. Each upload below also names the API or connected system that can replace it later.</p></div>}
-      <div className="beta-session">{insuranceCase ? <><span>{insuranceCase.payment_path === 'self_pay' ? 'Self-pay selected' : 'Card uploaded'}</span><strong><time dateTime={insuranceCase.created_at}>{dateTime(insuranceCase.created_at)}</time></strong></> : <><span>Secure share session</span><strong>3 hours</strong></>}</div>
+      {insuranceCase?.payment_path === 'self_pay' ? <div><p className="eyebrow"><WalletCards aria-hidden="true" className="size-4" /> Direct payment · NMCT</p><h1 id="insurance-heading">Patient payment choice</h1><p>The patient’s decision to pay directly is saved in this secure review. No insurance information is required or used.</p></div> : <div><p className="eyebrow"><ShieldCheck aria-hidden="true" className="size-4" /> Insurance estimate workspace · NMCT</p><h1 id="insurance-heading">Build a documented patient estimate</h1><p>Upload the same clinic and payer documents for each patient. ClinicForce keeps every answer tied to its source, shows every selected CPT/HCPCS code, and stops instead of inventing missing information.</p></div>}
+      <div className="beta-session">{insuranceCase ? <><span><i aria-hidden="true" /> {insuranceCase.payment_path === 'self_pay' ? 'Self-pay case' : 'Patient case in progress'}</span><strong><time dateTime={insuranceCase.created_at}>{dateTime(insuranceCase.created_at)}</time></strong><small>{completed.size} of {steps.length} checks complete</small></> : <><span><i aria-hidden="true" /> Secure review</span><strong>One patient</strong><small>Session expires in 3 hours</small></>}</div>
     </header>
-    {insuranceCase?.payment_path !== 'self_pay' && <div className="insurance-stepper" aria-label="Insurance verification progress">
+    <div className={`insurance-workspace${insuranceCase?.payment_path === 'self_pay' ? ' self-pay' : ''}`}>
+    {insuranceCase?.payment_path !== 'self_pay' && <nav className="insurance-stepper" aria-label="Insurance verification progress">
       {steps.map((step, index) => {
         const available = completed.has(step.id) || step.id === insuranceCase?.next_stage || (!insuranceCase && step.id === 'intake')
         return <button key={step.id} type="button" disabled={!available} aria-current={viewStage === step.id ? 'step' : undefined} onClick={() => available && setViewStage(step.id)}>
-          <span>{completed.has(step.id) ? <Check aria-hidden="true" /> : index + 1}</span>{step.label}
+          <span className="step-number">{completed.has(step.id) ? <Check aria-hidden="true" /> : index + 1}</span><span className="step-copy"><strong>{step.label}</strong><small>{completed.has(step.id) ? 'Complete' : step.id === insuranceCase?.next_stage || (!insuranceCase && step.id === 'intake') ? 'Current' : 'Waiting'}</small></span>
         </button>
       })}
-    </div>}
+    </nav>}
     <p className="sr-status" aria-live="polite">{busy ? 'Working.' : error || message}</p>
     <div className="insurance-layout">
       <main className="insurance-stage-card">
+        {insuranceCase?.payment_path !== 'self_pay' && <div className="insurance-stage-toolbar"><div><span>Current section</span><strong>{steps.find((step) => step.id === viewStage)?.label}</strong></div><p className={`insurance-status${error ? ' error' : ''}`} role={error ? 'alert' : 'status'}>{busy ? <LoaderCircle className="size-4 animate-spin" aria-hidden="true" /> : error ? <AlertTriangle className="size-4" aria-hidden="true" /> : <ShieldCheck className="size-4" aria-hidden="true" />}{error || message}</p></div>}
         {insuranceCase?.payment_path === 'self_pay' && <>
           <p className="section-kicker">Direct payment</p><h2>Self-pay selected</h2>
           <div className="evidence-summary success"><WalletCards aria-hidden="true" /><div><strong>The patient chose not to use insurance.</strong><p>ClinicForce will not run eligibility, network, authorization, or insurance-benefit calculations for this visit.</p></div></div>
@@ -204,7 +216,7 @@ export default function InsuranceVerification({ onBack }: Props) {
             <div className="evidence-summary"><FileCheck2 aria-hidden="true" /><div><strong>Network and benefits evidence matched</strong><p>The findings below keep the contract and patient benefit claims separate. In particular, “100%” on page 2 means the individual limits are fully met—not that the contract promises 100% coverage for every service.</p></div></div>
             <FactList facts={stageFacts} />
             <h3 className="upload-next-heading">Add the clinic’s contracted prices</h3><p>Upload the Availity fee schedule CSV. It provides the Blue Choice PPO allowed amount for each CPT code; the signed contract says the provider accepts the lesser of billed charges or the current fee schedule, less patient cost share.</p>
-            <UploadTile title="Blue Choice PPO fee schedule" hint="Choose the Availity Fee Schedule Listing export as a CSV—not a screenshot or PDF." reads="Looks up the contracted allowed amount for each suggested CPT code." future="BCBSTX or Availity fee-schedule API." accept=".csv,text/csv" source={documents.fee_schedule} disabled={busy || insuranceCase.next_stage !== 'network'} onFile={(file) => uploadEvidence('fee_schedule', 'fee schedule', file)} />
+            <UploadTile title={isHmoCase(insuranceCase) ? 'Blue Choice PPO fee schedule (reference only for this HMO)' : 'Blue Choice PPO fee schedule'} hint="Choose the Availity Fee Schedule Listing export as a CSV—not a screenshot or PDF." reads={isHmoCase(insuranceCase) ? 'Confirms that the uploaded prices are PPO rates and must not be used as HMO contracted rates.' : 'Looks up the contracted allowed amount for each suggested CPT code.'} future="BCBSTX or Availity fee-schedule API." accept=".csv,text/csv" source={documents.fee_schedule} disabled={busy || insuranceCase.next_stage !== 'network'} onFile={(file) => uploadEvidence('fee_schedule', 'fee schedule', file)} />
           </>}
           {insuranceCase.next_stage === 'network' && <button className="button button-primary" type="button" disabled={busy || !documents.contract || !documents.coverage || !documents.fee_schedule} onClick={() => void advance('network')}>{stageCopy.network.action}</button>}
           <p className="estimate-disclaimer">Until those integrations are enabled, all three files are required and remain the source of the result.</p>
@@ -213,30 +225,30 @@ export default function InsuranceVerification({ onBack }: Props) {
           <p className="section-kicker">4 · Anticipated service</p><h2>Build the anticipated service items</h2><p>Enter the visit reason, planned treatment, or exact CPT/HCPCS codes. The appointment email and NCS/EMG guide are optional supporting documents for this example; they do not limit the procedures ClinicForce can review.</p>
           {insuranceCase.next_stage === 'service' && <div className="evidence-upload-grid">
             <UploadTile title="Appointment email thread" hint="Choose a PDF export of the email thread that states new or established patient and the reason for the visit." reads="Fills the visit type, symptoms, condition, and planned test so staff do not need to retype them." future="EHR scheduling API or connected clinic mailbox." accept=".pdf,application/pdf" source={documents.appointment_email} disabled={busy} onFile={(file) => uploadEvidence('appointment_email', 'appointment email', file)} />
-            <UploadTile title="NCS/EMG pricing and scope guide" hint="Choose the current NMCT NCS/EMG cash-pay pricing guide PDF." reads="Provides clinic-reviewed study-scope guidance and a cash-price comparison; insured rates still come from the uploaded fee schedule." future="Clinic policy or document-management service—not a payer API." accept=".pdf,application/pdf" source={documents.pricing_guide} disabled={busy} onFile={(file) => uploadEvidence('pricing_guide', 'NCS/EMG guide', file)} />
           </div>}
           {insuranceCase.next_stage === 'service' && <div className="clinical-context-form"><label>Visit type<select value={visitType} onChange={(event) => setVisitType(event.target.value as 'new' | 'established')}><option value="new">New patient</option><option value="established">Established patient</option></select></label><label htmlFor="clinical-context">Condition, symptoms, body area, planned treatment, or exact CPT/HCPCS code<textarea id="clinical-context" value={clinicalContext} onChange={(event) => setClinicalContext(event.target.value)} placeholder="For example: planned procedure 12345" /></label><button className="button button-secondary" type="button" disabled={busy || clinicalContext.trim().length < 3} onClick={() => void suggestServices()}>{insuranceCase.service_lines.length ? 'Update related CPT codes' : 'Show related CPT codes'}</button></div>}
           {insuranceCase.next_stage === 'service' && <div className="source-plan"><strong>How code suggestions are built</strong><p>The visit reason comes from the uploaded appointment or what staff enter. Reviewed local rules may suggest candidates; staff can also enter any exact CPT/HCPCS code. Prices come only from the uploaded fee-schedule CSV, and prior-authorization results come only from the uploaded payer response.</p><small>Unknown procedures stay separate and require clinician review. These are pre-visit candidates, not final coding.</small></div>}
           {insuranceCase.next_stage === 'service' && insuranceCase.service_lines.length > 0 && !insuranceCase.service_lines.some((line) => !line.code.startsWith('992')) && <p className="estimate-disclaimer">No procedure matched the reviewed local rules. ClinicForce has not guessed a procedure; only office-visit candidates are shown.</p>}
-          {serviceGroups.length > 0 && <div className="service-items" aria-label="Anticipated service items">{serviceGroups.map((group) => <fieldset className="service-item" key={group.id}><legend><span>{group.name}</span><small>{group.status === 'scheduled' ? 'Scheduled' : 'If elected after examination'}</small></legend><p>{group.status === 'scheduled' ? 'Choose the most likely visit level for estimation. Final coding follows the completed encounter.' : 'Estimate now, but do not collect for this item until the clinician confirms it will be performed.'}</p><div className="service-options">{group.lines.map((line) => {
+          {serviceGroups.length > 0 && <div className="service-items" aria-label="Anticipated service items">{serviceGroups.map((group) => <fieldset className="service-item" key={group.id}><legend><span>{group.name}</span><small>{group.status === 'scheduled' ? 'Scheduled' : 'If elected after examination'}</small></legend><p>{group.status === 'scheduled' ? 'Choose the most likely visit level for estimation. Final coding follows the completed encounter.' : 'Estimate now, but do not collect for this item until the clinician confirms it will be performed.'}</p><div className="service-options">{group.selectTogether ? <label className={group.lines.every((line) => selectedCodes.includes(line.code)) ? 'selected' : ''}><input type="checkbox" disabled={insuranceCase.next_stage !== 'service'} checked={group.lines.every((line) => selectedCodes.includes(line.code))} onChange={() => toggleGroup(group.lines.map((line) => line.code))} /><span><strong>CPT / HCPCS {group.lines.map((line) => line.code).join(' + ')}</strong><span>Select this reviewed combination together.</span>{group.lines.map((line) => <small key={line.code}>{line.code}: {line.plain_description} · {isHmoCase(insuranceCase) ? 'HMO rate not uploaded; PPO rate is not used' : line.allowed_cents == null ? line.evidence_note : money(line.allowed_cents)}</small>)}</span></label> : group.lines.map((line) => {
             const isAlternative = line.code.startsWith('992') || ncsCodes.has(line.code) || (botoxAdminCodes.has(line.code) && line.code !== '64643')
-            return <label key={line.code} className={selectedCodes.includes(line.code) ? 'selected' : ''}><input type={isAlternative ? 'radio' : 'checkbox'} name={line.code.startsWith('992') ? 'office-service' : ncsCodes.has(line.code) ? 'ncs-range' : isAlternative ? 'botox-administration' : `service-${line.code}`} value={line.code} disabled={insuranceCase.next_stage !== 'service'} checked={selectedCodes.includes(line.code)} onChange={() => toggleCode(line.code)} /><span><strong>{line.code}</strong>{line.plain_description && <span>{line.plain_description}</span>}{line.recommendation_reason && <small>Why it appears: {line.recommendation_reason}</small>}<small>Uploaded Blue Choice PPO fee schedule: {line.allowed_cents == null ? line.evidence_note : `${money(line.allowed_cents)} · ${line.description}`}</small></span></label>
+            return <label key={line.code} className={selectedCodes.includes(line.code) ? 'selected' : ''}><input type={isAlternative ? 'radio' : 'checkbox'} name={line.code.startsWith('992') ? 'office-service' : ncsCodes.has(line.code) ? 'ncs-range' : isAlternative ? 'botox-administration' : `service-${line.code}`} value={line.code} disabled={insuranceCase.next_stage !== 'service'} checked={selectedCodes.includes(line.code)} onChange={() => toggleCode(line.code)} /><span><strong>{line.code}</strong>{line.plain_description && <span>{line.plain_description}</span>}{line.recommendation_reason && <small>Why it appears: {line.recommendation_reason}</small>}<small>{isHmoCase(insuranceCase) ? 'HMO contracted rate is not in the uploaded files; the PPO fee schedule is not used for this estimate.' : `Uploaded Blue Choice PPO fee schedule: ${line.allowed_cents == null ? line.evidence_note : `${money(line.allowed_cents)} · ${line.description}`}`}</small></span></label>
           })}</div></fieldset>)}</div>}
           {insuranceCase.next_stage === 'service' && currentSelectionError && <p className="service-validation" role="alert"><AlertTriangle aria-hidden="true" /> <span><strong>Fix this combination</strong>{currentSelectionError}</span></p>}
           {insuranceCase.next_stage === 'service' && insuranceCase.service_lines.length > 0 && <button className="button button-primary" disabled={busy || selectedCodes.length === 0 || Boolean(currentSelectionError)} type="button" onClick={() => void confirmService()}>Confirm service items</button>}
         </>}
         {viewStage === 'authorization' && insuranceCase && <>
-          <p className="section-kicker">5 · Referral & authorization</p><h2>{stageCopy.authorization.title}</h2><p>Referral and prior authorization are different checks. The uploaded Availity response answers prior authorization only for CPT/HCPCS codes included in that query. The supplied files do not establish this member’s referral rule, so ClinicForce keeps that result in verify status.</p>
+          <p className="section-kicker">5 · Referral & authorization</p><h2>{stageCopy.authorization.title}</h2><p>Referral and prior authorization are separate checks. ClinicForce reports exactly what the uploaded Availity response states for each selected CPT/HCPCS code. A code not listed in that response stays marked “not stated”; that does not erase or invalidate the estimate.</p>
           <a className="evidence-link" href="https://www.bcbstx.com/provider/education/education/tools/availity-authorizations" target="_blank" rel="noreferrer">BCBSTX referral and authorization information <ExternalLink aria-hidden="true" /></a>
           <p className="estimate-disclaimer">Future replacement: the Availity Authorizations integration can check requirements electronically. Until then, the uploaded coverage response and official BCBSTX guidance are used.</p>
-          <div className="authorization-list">{selectedServiceGroups.map((group) => <article key={group.id}><header><strong>{group.name}</strong><small>{group.status === 'if_elected' ? 'If elected' : 'Scheduled'} · {group.lines.map((line) => line.code).join(' + ')}</small></header><div><span>Referral</span><b>Not established by the uploaded files—verify the member’s plan rule</b></div>{group.lines.map((line) => <div className="authorization-code" key={line.code}><span>CPT/HCPCS {line.code}</span><b>{line.authorization_status === 'not_required' ? 'No prior authorization required in uploaded response' : line.authorization_status === 'required' ? 'Prior authorization required in uploaded response' : 'Not included in uploaded query—verify before scheduling'}</b><small>{line.authorization_reference}</small></div>)}</article>)}</div>
+          {isHmoCase(insuranceCase) && <ReferralWorkflow insuranceCase={insuranceCase} />}
+          <div className="authorization-list">{selectedServiceGroups.map((group) => <article key={group.id}><header><strong>{group.name}</strong><small>{group.status === 'if_elected' ? 'If performed' : 'Scheduled'} · {group.lines.map((line) => line.code).join(' + ')}</small></header><div><span>Referral</span><b>{isHmoCase(insuranceCase) ? 'HMO plan: referral must be received from the PCP before scheduling' : 'The uploaded documents do not state a referral requirement for this plan'}</b></div>{group.lines.map((line) => <div className="authorization-code" key={line.code}><span>CPT/HCPCS {line.code}</span><b>{authorizationLabel(line)}</b><small>{line.authorization_reference}</small></div>)}</article>)}</div>
           <FactList facts={stageFacts} />
           {insuranceCase.next_stage === 'authorization' && <button className="button button-primary" type="button" disabled={busy} onClick={() => void advance('authorization')}>{stageCopy.authorization.action}</button>}
         </>}
         {(viewStage === 'benefits' || viewStage === 'estimate') && insuranceCase && insuranceCase.payment_path !== 'self_pay' && <StagePanel stage={viewStage} insuranceCase={insuranceCase} facts={stageFacts} active={insuranceCase.next_stage === viewStage} busy={busy} onAdvance={advance} />}
-        {error && <p className="form-error" role="alert">{error}</p>}
-        {!error && <p className="insurance-status" role="status">{busy ? <LoaderCircle className="size-4 animate-spin" aria-hidden="true" /> : <ShieldCheck className="size-4" aria-hidden="true" />}{message}</p>}
+        {insuranceCase?.payment_path === 'self_pay' && error && <p className="form-error" role="alert">{error}</p>}
       </main>
+    </div>
     </div>
     {insuranceCase?.appointment && <footer className="insurance-appointment"><strong>{insuranceCase.appointment.appointment_type} · {insuranceCase.appointment.reason}</strong><span>{insuranceCase.appointment.date} · {insuranceCase.appointment.provider} · {insuranceCase.appointment.location}</span></footer>}
     {currentIndex > -1 && <span className="visually-hidden">Current step {currentIndex + 1} of {steps.length}</span>}
@@ -249,12 +261,46 @@ function UploadTile({ title, hint, reads, future, accept, source, disabled, onFi
 
 function FactList({ facts }: { facts: InsuranceCase['facts'] }) {
   if (!facts.length) return null
-  return <section className="evidence-reasoning" aria-label="Explanation and sources"><header><FileCheck2 aria-hidden="true" /><div><h3>How ClinicForce reached this</h3><p>Plain-language notes explain why the evidence matters. Each answer names the uploaded file and exact page or section that supports it.</p></div></header><dl className="insurance-facts">{facts.map((fact) => <div key={`${fact.stage}-${fact.label}`}><dt>{fact.label}</dt><dd>{fact.value}{fact.explanation && <p className="fact-explanation">{fact.explanation}</p>}<Citation fact={fact} /></dd></div>)}</dl></section>
+  return <section className="evidence-reasoning" aria-label="Explanation and sources"><header><Files aria-hidden="true" /><div><h3>Confirmed from the uploaded documents</h3><p>Each result includes the operational meaning and the exact file, page, section, and time used.</p></div></header><dl className="insurance-facts">{facts.map((fact) => <div key={`${fact.stage}-${fact.label}`}><dt>{fact.label}</dt><dd>{fact.value}{fact.explanation && <p className="fact-explanation">{fact.explanation}</p>}<Citation fact={fact} /></dd></div>)}</dl></section>
 }
 
 function Citation({ fact }: { fact: InsuranceCase['facts'][number] }) {
   const isWebsite = fact.citation.reference.startsWith('https://')
   return <small><b>Source:</b> {isWebsite ? <a href={fact.citation.reference} target="_blank" rel="noreferrer">{fact.citation.source_filename} <ExternalLink aria-hidden="true" /></a> : <>{fact.citation.source_filename} · {fact.citation.reference}</>} · <b>Source time:</b> <time dateTime={fact.citation.observed_at}>{dateTime(fact.citation.observed_at)}</time></small>
+}
+
+function authorizationLabel(line: ServiceLine) {
+  if (line.authorization_status === 'not_required') return 'No prior authorization required — confirmed in uploaded response'
+  if (line.authorization_status === 'required') return 'Prior authorization required — confirmed in uploaded response'
+  return 'No authorization result stated for this code in the uploaded response'
+}
+
+function ReferralWorkflow({ insuranceCase }: { insuranceCase: InsuranceCase }) {
+  const referral = insuranceCase.documents?.coverage?.findings?.referral
+  const received = referral?.status === 'received'
+  return <section className={`referral-workflow${received ? ' received' : ''}`} aria-labelledby="referral-workflow-heading">
+    <header>{received ? <Check aria-hidden="true" /> : <AlertTriangle aria-hidden="true" />}<div><p className="section-kicker">HMO scheduling rule</p><h3 id="referral-workflow-heading">{received ? 'PCP referral received' : 'Do not schedule yet'}</h3></div></header>
+    <dl><div><dt>Action taken</dt><dd>Checked the HMO plan and every selected CPT/HCPCS code against the uploaded coverage response.</dd></div><div><dt>Status</dt><dd>{received ? 'Referral received and dated' : 'Referral required for this new HMO patient'}</dd></div><div><dt>Blocker</dt><dd>{received ? 'No referral blocker shown in the upload' : 'PCP referral reference, effective date, and expiration date are not all present'}</dd></div><div><dt>Next follow-up</dt><dd>{received ? `Use reference ${referral.reference}; effective ${referral.effective_date}; expires ${referral.expiration_date}.` : 'Ask the PCP to obtain the referral, then confirm its reference and valid date range before scheduling.'}</dd></div></dl>
+  </section>
+}
+
+function EstimateCodeTable({ insuranceCase }: { insuranceCase: InsuranceCase }) {
+  const estimate = insuranceCase.estimate
+  if (!estimate) return null
+  const selected = insuranceCase.service_lines.filter((line) => line.selected)
+  return <section className="estimate-code-review" aria-labelledby="estimate-codes-heading">
+    <header><div><p className="section-kicker">Itemized services</p><h3 id="estimate-codes-heading">Every code included in this estimate</h3></div><span>{selected.length} code{selected.length === 1 ? '' : 's'}</span></header>
+    <div className="estimate-code-table" role="table" aria-label="Selected CPT and HCPCS codes">
+      <div className="estimate-code-head" role="row"><span role="columnheader">Code and service</span><span role="columnheader">When</span><span role="columnheader">Allowed</span><span role="columnheader">Authorization evidence</span></div>
+      {selected.map((line) => <div className="estimate-code-row" role="row" key={line.code}>
+        <div role="cell"><strong>{line.code}</strong><span>{line.plain_description || line.description}</span></div>
+        <span role="cell">{line.service_status === 'scheduled' ? 'Scheduled visit' : 'Only if performed'}</span>
+        <strong role="cell">{isHmoCase(insuranceCase) ? 'HMO rate not uploaded' : money(line.allowed_cents)}</strong>
+        <span role="cell" className={`authorization-result ${line.authorization_status === 'required' ? 'required' : line.authorization_status === 'not_required' ? 'confirmed' : 'unstated'}`}>{authorizationLabel(line)}</span>
+      </div>)}
+    </div>
+    <p>The patient and insurance amounts are calculated for the complete selected scenario below; “collect today” includes scheduled items only.</p>
+  </section>
 }
 
 function StagePanel({ stage, insuranceCase, facts, active, busy, onAdvance }: {
@@ -268,22 +314,23 @@ function StagePanel({ stage, insuranceCase, facts, active, busy, onAdvance }: {
     ? (estimate.deductible_applied_cents ?? 0) + (estimate.nominal_coinsurance_cents ?? 0) + (estimate.copay_cents ?? 0)
     : null
   const optionalItems = estimate?.service_item_estimates?.filter((item) => item.status === 'if_elected') ?? []
-  const action = estimate?.estimate_available === false ? 'VERIFY BEFORE COLLECTING'
+  const action = estimate?.scheduling_action === 'do_not_schedule' ? 'DO NOT SCHEDULE — HMO EVIDENCE INCOMPLETE'
+    : estimate?.estimate_available === false ? 'VERIFY BEFORE COLLECTING'
     : collectToday === 0 ? 'DO NOT COLLECT TODAY'
       : `COLLECT ${money(collectToday)} TODAY`
   const network = facts.find((fact) => fact.label === 'Patient network result')?.value ?? 'Network result documented in the evidence below'
   return <><p className="section-kicker">{steps.findIndex((step) => step.id === stage) + 1} · {steps.find((step) => step.id === stage)?.label}</p><h2>{copy.title}</h2><p>{copy.detail}</p>
     {stage === 'estimate' && estimate && <>
-      <section className={`collection-decision${estimate.estimate_available === false ? ' verify' : ''}`} aria-labelledby="collection-decision-heading"><div><span id="collection-decision-heading">Collect today</span><strong>{estimate.estimate_available === false ? 'Not estimated' : money(collectToday)}</strong><p>{estimate.estimate_available === false ? <AlertTriangle aria-hidden="true" /> : <Check aria-hidden="true" />} {action}</p></div><dl><div><dt>Why</dt><dd>{estimate.estimate_available === false ? estimate.unavailable_reason : estimate.individual_oop_remaining_cents === 0 ? 'Patient has $0.00 remaining individual out-of-pocket responsibility.' : `Current benefits estimate the patient responsibility at ${money(collectToday)}.`}</dd></div><div><dt>Expected insurance if all performed</dt><dd>{estimate.estimate_available === false ? 'Not estimated' : money(estimate.plan_cents)}</dd></div><div><dt>Anticipated services</dt><dd>{estimate.service_codes?.join(' + ')}</dd></div><div><dt>Estimate confidence</dt><dd className="confidence-value">{estimate.confidence?.toUpperCase() ?? 'MEDIUM'}<small>{estimate.confidence_reason}</small></dd></div></dl><small>Calculated <time dateTime={estimate.calculated_at}>{dateTime(estimate.calculated_at)}</time></small></section>
+      <section className={`collection-decision${estimate.estimate_available === false ? ' verify' : ''}`} aria-labelledby="collection-decision-heading"><div className="decision-amounts"><div><span id="collection-decision-heading">Patient pays today</span><strong>{estimate.estimate_available === false ? 'Not estimated' : money(collectToday)}</strong><p>{estimate.estimate_available === false ? <AlertTriangle aria-hidden="true" /> : <Check aria-hidden="true" />} {action}</p></div><div><span>Insurance covers if all selected services are performed</span><strong>{estimate.estimate_available === false ? 'Not estimated' : money(estimate.plan_cents)}</strong><p><CircleDollarSign aria-hidden="true" /> Estimated plan responsibility</p></div></div><dl><div><dt>Why this is the patient amount</dt><dd>{estimate.estimate_available === false ? estimate.unavailable_reason : estimate.individual_oop_remaining_cents === 0 ? 'The uploaded benefits response shows $0.00 remaining individual out-of-pocket responsibility.' : `Current benefits estimate the patient responsibility at ${money(collectToday)}.`}</dd></div><div><dt>Selected codes</dt><dd>{estimate.service_codes?.join(' + ')}</dd></div><div><dt>Confidence</dt><dd className="confidence-value">{estimate.confidence?.toUpperCase() ?? 'MEDIUM'}<small>{estimate.confidence_reason}</small></dd></div></dl><small>Calculated <time dateTime={estimate.calculated_at}>{dateTime(estimate.calculated_at)}</time></small></section>
       {optionalItems.map((item) => <section className="elected-estimate" key={item.id}><div><span>If elected</span><strong>{item.name}</strong><small>{item.codes.join(' + ')} · Confirm after the clinician’s examination</small></div><div><span>Collect only if performed</span><strong>{item.estimate_available ? money(item.patient_cents) : 'Verify amount'}</strong><small>{item.estimate_available ? `Separate scenario using current benefits · plan ${money(item.plan_cents)}` : 'Amount not available'}</small></div></section>)}
-      {estimate.estimate_available !== false && <details className="estimate-details"><summary>See calculation</summary><div className="estimate-calculation"><p>Combined scenario if every selected service is performed; “Collect today” includes scheduled items only.</p><dl><div><dt>Contracted / allowed amount</dt><dd>{money(estimate.allowed_cents)}</dd></div><div><dt>Deductible applied</dt><dd>{money(estimate.deductible_applied_cents)}</dd></div><div><dt>Normal patient share before OOP limit</dt><dd>{money(normalShare)}</dd></div><div><dt>Normal coinsurance</dt><dd>{money(estimate.nominal_coinsurance_cents)}</dd></div><div><dt>OOP adjustment</dt><dd>{estimate.oop_cap_adjustment_cents == null ? 'Not applied' : money(estimate.oop_cap_adjustment_cents)}</dd></div><div><dt>Patient estimate if all are performed</dt><dd>{money(estimate.patient_cents)}</dd></div><div className="calculation-total"><dt>Collect from patient now</dt><dd>{money(collectToday)}</dd></div><div><dt>Estimated plan responsibility if all are performed</dt><dd>{money(estimate.plan_cents)}</dd></div></dl>{estimate.line_items && estimate.line_items.length > 0 && <div className="estimate-lines"><h3>Allowed amount by CPT / HCPCS</h3><dl>{estimate.line_items.map((line) => <div key={line.code}><dt><strong>{line.code}</strong><span>{line.description}</span></dt><dd>{money(line.allowed_cents)}</dd></div>)}</dl></div>}</div></details>}
-      {estimate.plain_explanation && <details className="estimate-details"><summary>Why ClinicForce recommends {money(collectToday)}</summary><ol className="decision-reasons"><li><strong>Network:</strong> {network}.</li><li><strong>Reviewed price:</strong> The anticipated services total {money(estimate.allowed_cents)}.</li><li><strong>Normal cost share:</strong> Before the out-of-pocket limit, the calculated patient share is {money(normalShare)}.</li><li><strong>Benefit-limit adjustment:</strong> The uploaded response shows {money(estimate.individual_oop_remaining_cents)} individual out-of-pocket remaining.</li><li><strong>Recommendation:</strong> {estimate.plain_explanation}</li></ol></details>}
+      <EstimateCodeTable insuranceCase={insuranceCase} />
+      {estimate.estimate_available !== false && <details className="estimate-details" open><summary><span><Calculator aria-hidden="true" /> Full calculation</span></summary><div className="estimate-calculation"><p>Combined scenario if every selected service is performed; “patient pays today” includes scheduled items only.</p><dl><div><dt>Contracted / allowed amount for all selected codes</dt><dd>{money(estimate.allowed_cents)}</dd></div><div><dt>Deductible applied</dt><dd>{money(estimate.deductible_applied_cents)}</dd></div><div><dt>Normal coinsurance</dt><dd>{money(estimate.nominal_coinsurance_cents)}</dd></div><div><dt>Copay</dt><dd>{money(estimate.copay_cents)}</dd></div><div><dt>Normal patient share before OOP limit</dt><dd>{money(normalShare)}</dd></div><div><dt>Out-of-pocket limit adjustment</dt><dd>{estimate.oop_cap_adjustment_cents == null ? 'Not applied' : money(estimate.oop_cap_adjustment_cents)}</dd></div><div><dt>Patient estimate if all selected services are performed</dt><dd>{money(estimate.patient_cents)}</dd></div><div className="calculation-total"><dt>Collect from patient today</dt><dd>{money(collectToday)}</dd></div><div className="calculation-plan"><dt>Insurance estimate if all selected services are performed</dt><dd>{money(estimate.plan_cents)}</dd></div></dl></div></details>}
+      {estimate.plain_explanation && <details className="estimate-details" open><summary>Why ClinicForce calculated {money(collectToday)}</summary><ol className="decision-reasons"><li><strong>Network:</strong> {network}.</li><li><strong>Codes and prices:</strong> The selected CPT/HCPCS codes total {money(estimate.allowed_cents)} at the uploaded contracted rates.</li><li><strong>Normal patient share:</strong> Deductible, coinsurance, and copay would total {money(normalShare)} before the out-of-pocket limit.</li><li><strong>Benefit adjustment:</strong> The uploaded response shows {money(estimate.individual_oop_remaining_cents)} individual out-of-pocket remaining.</li><li><strong>Final staff action:</strong> {estimate.plain_explanation}</li></ol></details>}
       <section className="estimate-certainty" aria-labelledby="estimate-certainty-heading"><h3 id="estimate-certainty-heading">What we know—and what could change</h3><div><div><strong>Known before the visit</strong><ul><li>{network}</li><li>{money(estimate.individual_deductible_remaining_cents)} individual deductible remaining</li><li>{money(estimate.individual_oop_remaining_cents)} individual OOP remaining</li><li>{estimate.service_codes?.join(' + ')} anticipated</li></ul></div><div><strong>Could change after the visit</strong><ul><li>Final CPT / HCPCS codes and units</li><li>Whether “if elected” procedures are performed</li><li>Medical-necessity and authorization review</li><li>Claim adjudication and coordination of benefits</li></ul></div></div></section>
-      <details className="estimate-details evidence-details"><summary>View source evidence</summary><FactList facts={facts} /></details>
+      <details className="estimate-details evidence-details" open><summary>Source evidence and citations</summary><FactList facts={facts} /></details>
     </>}
     {stage === 'benefits' && <FactList facts={facts} />}
     {stage === 'benefits' && estimate && estimate.estimate_available !== false && <p className="calculation-line">{money(estimate.allowed_cents)} allowed − {money(estimate.patient_cents)} estimated patient responsibility = {money(estimate.plan_cents)} estimated plan responsibility. Individual deductible remaining: {money(estimate.individual_deductible_remaining_cents)}. Individual out-of-pocket remaining: {money(estimate.individual_oop_remaining_cents)}.</p>}
-    {stage === 'estimate' && insuranceCase.documents?.pricing_guide && <CashPrices source={insuranceCase.documents.pricing_guide} clinicalContext={insuranceCase.clinical_context} />}
     {stage === 'estimate' && estimate && <p className="estimate-disclaimer">{estimate.disclaimer}</p>}
     {active && stage === 'benefits' && <button className="button button-primary" type="button" disabled={busy} onClick={() => void onAdvance(stage)}>{stageCopy.benefits.action}</button>}
   </>

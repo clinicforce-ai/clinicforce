@@ -16,12 +16,14 @@ export interface InsuranceSource {
     visit_type?: 'new' | 'established'; clinical_context?: string; use?: string
     cash_packages?: Array<{ name: string; best_for: string; price_cents: number; page: number }>
     authorizations?: Array<{ code: string; status: 'not_required' | 'required' | 'unknown'; page: number; reference: string }>
+    referral?: { required: boolean; status: 'received' | 'pending' | 'not_stated'; reference?: string; effective_date?: string; expiration_date?: string; page?: number }
   }
 }
 export interface ServiceLine {
   code: string; description: string; allowed_cents: number | null; selected: boolean; confirmed: boolean
   available?: boolean; suggested_by?: string; evidence_note?: string; plain_description?: string
   service_item_id?: string; service_item_name?: string; service_status?: 'scheduled' | 'if_elected'
+  select_together?: boolean
   recommendation_reason?: string; authorization_status?: 'not_required' | 'required' | 'unknown' | 'not_found'; authorization_reference?: string
 }
 export interface StageDecision { stage: InsuranceStage; status: 'passed'; decision: string; source_mode: InsuranceSourceMode }
@@ -36,6 +38,7 @@ export interface EstimateBreakdown {
   plain_explanation?: string
   collect_today_cents?: number; collection_action?: 'collect' | 'do_not_collect'; confidence?: 'high' | 'medium'
   confidence_reason?: string
+  scheduling_action?: 'do_not_schedule' | 'verify_network_and_rates'
   service_item_estimates?: Array<{
     id: string; name: string; status: 'scheduled' | 'if_elected'; codes: string[]; estimate_available: boolean
     allowed_cents: number | null; normal_patient_share_cents: number | null; oop_adjustment_cents: number | null

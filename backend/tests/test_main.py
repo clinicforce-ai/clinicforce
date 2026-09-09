@@ -549,6 +549,53 @@ Final study type is determined by the physician.""")
         self.assertEqual([item["status"] for item in authorizations], ["not_required", "not_required"])
         self.assertIn("pages 2–3", authorizations[0]["reference"])
 
+        referral = documented._referral_findings([
+            (4, "HMO Referral Required\nReferral Reference: REF-2048\nEffective Date: 09/01/2026\nExpiration Date: 12/01/2026"),
+        ], "Blue Essentials HMO Medical")
+        self.assertEqual(referral["status"], "received")
+        self.assertEqual(referral["reference"], "REF-2048")
+        self.assertEqual(referral["effective_date"], "09/01/2026")
+        self.assertEqual(referral["expiration_date"], "12/01/2026")
+
+    def test_hmo_case_keeps_evidence_and_blocks_scheduling_without_referral_or_hmo_rates(self) -> None:
+        case = documented.pending_case({
+            "member_name": "JORDAN RIVERA", "member_id": "BCBS-456", "group_number": "GROUP-789",
+            "plan_type": "HMO", "coinsurance": "20% after deductible",
+        })
+        case["id"] = "hmo-case"
+        case["ocr"]["confirmed"] = True
+        case["card_source"] = {"filename": "card.pdf", "sha256": "a" * 64, "observed_at": "2026-09-08", "reference": "Uploaded card"}
+        case["next_stage"] = "network"
+        documented.add_document(case, "contract", {
+            "id": "contract", "filename": "ppo-contract.pdf", "sha256": "c" * 64, "observed_at": "2026-09-08", "reference": "PPO contract",
+            "findings": {"provider_network": "participating_blue_choice_ppo", "participation_pages": [38], "compensation_pages": [40]},
+        })
+        documented.add_document(case, "coverage", {
+            "id": "coverage", "filename": "hmo-coverage.pdf", "sha256": "b" * 64, "observed_at": "2026-09-08", "reference": "HMO eligibility response",
+            "findings": {
+                "suggested_coverage": {"coverage_status": "active", "network_status": "in_network", "plan_name": "Blue Essentials HMO Medical", "deductible_remaining_cents": 0, "oop_remaining_cents": 0, "active_page": 1, "plan_page": 1, "network_page": 2, "benefit_page": 2},
+                "authorizations": [{"code": "99204", "status": "not_required", "reference": "page 3 · No Auth Required"}],
+                "referral": {"required": True, "status": "pending", "reference": None, "effective_date": None, "expiration_date": None, "page": None},
+            },
+        })
+        documented.add_document(case, "fee_schedule", {
+            "id": "fee_schedule", "filename": "ppo-rates.csv", "sha256": "f" * 64, "observed_at": "2026-09-08", "reference": "PPO rates",
+            "findings": {"rate_lines": GOLDEN_MANIFEST["rate_lines"]},
+        })
+        self.assertEqual(case["coverage"]["network_status"], "unverified")
+        self.assertEqual(case["coverage"]["referral_status"], "pending")
+        documented.advance(case, "network", GOLDEN_MANIFEST["rates_source"])
+        documented.set_clinical_context(case, "New patient visit CPT 99204", GOLDEN_MANIFEST["rate_lines"], "new")
+        documented.select_services(case, ["99204"], GOLDEN_MANIFEST["rates_source"])
+        documented.advance(case, "authorization", GOLDEN_MANIFEST["rates_source"])
+        referral_fact = next(fact for fact in case["facts"] if fact["label"] == "CPT 99204 referral")
+        self.assertIn("PCP must obtain", referral_fact["value"])
+        self.assertIn("do not schedule", referral_fact["value"])
+        documented.advance(case, "benefits", GOLDEN_MANIFEST["rates_source"])
+        self.assertFalse(case["estimate"]["estimate_available"])
+        self.assertEqual(case["estimate"]["scheduling_action"], "do_not_schedule")
+        self.assertIn("do not schedule", case["estimate"]["unavailable_reason"])
+
     def test_uploaded_card_cannot_skip_the_network_uploads(self) -> None:
         fields = {"member_name": "Pat Example", "member_id": "MEMBER-123", "group_number": "GROUP-123"}
         case = documented.pending_case(fields)
@@ -692,10 +739,11 @@ Final study type is determined by the physician.""")
         self.assertIsNone(custom_lines["54321"]["allowed_cents"])
         self.assertEqual(custom_lines["54321"]["service_item_id"], "procedure-54321")
         neuropathy = documented.service_lines("neuropathy; EMG planned", rates, "established")
-        self.assertTrue({"99214", "95885", "95907"}.issubset({line["code"] for line in neuropathy}))
-        self.assertEqual(next(line for line in neuropathy if line["code"] == "95907")["plain_description"], "Nerve-conduction testing of 1–2 nerves to assess nerve signal problems.")
-        self.assertEqual(next(line for line in neuropathy if line["code"] == "95907")["service_item_name"], "EMG / nerve-conduction study")
-        self.assertEqual(next(line for line in neuropathy if line["code"] == "95907")["service_status"], "if_elected")
+        self.assertEqual({line["code"] for line in neuropathy}, {"99214", "95911", "95886"})
+        procedure_lines = [line for line in neuropathy if not line["code"].startswith("992")]
+        self.assertTrue(all(line["select_together"] for line in procedure_lines))
+        self.assertEqual({line["service_item_id"] for line in procedure_lines}, {"neuropathy-emg-ncs"})
+        self.assertEqual({line["service_item_name"] for line in procedure_lines}, {"Suggested neuropathy EMG/NCS combination"})
         botox = documented.service_lines("Botox for chronic migraine", rates, "established")
         self.assertTrue({"99214", "64612", "64615", "J0585"}.issubset({line["code"] for line in botox}))
         with self.assertRaisesRegex(golden.GoldenCaseError, "both an administration procedure and HCPCS J0585"):
