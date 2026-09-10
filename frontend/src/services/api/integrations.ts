@@ -1,5 +1,5 @@
 import type { EcwRecord, EpicEndpoint, EpicRecord, PatientSession } from './patient-models'
-import type { AvailityCoverageResult, AvailityDemoScenario, InsuranceCase, InsuranceStage } from './insurance'
+import type { InsuranceCase, InsuranceStage } from './insurance'
 import { ApiError, assertWorkspace, detailFrom, json, request } from './client'
 import { credentialsPayload } from './patient'
 
@@ -62,18 +62,10 @@ export async function enableInsuranceBeta(): Promise<void> {
   await request('/api/doctor/insurance/beta', { method: 'POST' })
 }
 
-export function runAvailityCoverageDemo(scenario: AvailityDemoScenario): Promise<AvailityCoverageResult> {
-  return request('/api/doctor/insurance/v2/coverage', json({ scenario }))
-}
-
 export async function createInsuranceCase(file: File): Promise<InsuranceCase> {
   const form = new FormData()
   form.append('file', file, file.name)
   return request<InsuranceCase>('/api/doctor/insurance/cases', { method: 'POST', body: form })
-}
-
-export async function createSelfPayCase(): Promise<InsuranceCase> {
-  return request<InsuranceCase>('/api/doctor/insurance/cases/self-pay', { method: 'POST' })
 }
 
 export async function confirmInsuranceIntake(caseId: string, fields: InsuranceCase['ocr']): Promise<InsuranceCase> {
@@ -89,10 +81,10 @@ export async function confirmInsuranceService(caseId: string, codes: string[]): 
   })
 }
 
-export async function suggestInsuranceServices(caseId: string, clinicalContext: string, visitType: 'new' | 'established'): Promise<InsuranceCase> {
+export async function suggestInsuranceServices(caseId: string, clinicalContext: string): Promise<InsuranceCase> {
   return request<InsuranceCase>(`/api/doctor/insurance/cases/${encodeURIComponent(caseId)}/clinical-context`, {
     method: 'PUT', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ clinical_context: clinicalContext, visit_type: visitType }),
+    body: JSON.stringify({ clinical_context: clinicalContext, visit_type: 'new' }),
   })
 }
 

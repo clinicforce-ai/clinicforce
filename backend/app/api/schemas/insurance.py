@@ -20,15 +20,5 @@ class InsuranceServiceLinesRequest(RequestModel):
 
 
 class InsuranceClinicalContextRequest(RequestModel):
-    clinical_context: str = Field(min_length=3, max_length=1000)
+    clinical_context: str = Field(default="", max_length=8_000)
     visit_type: Literal["new", "established"] = "new"
-
-
-class AvailityCoverageDemoRequest(RequestModel):
-    scenario: Literal[
-        "Coverages-Complete-i",
-        "Coverages-InProgress-i",
-        "Coverages-Retrying-i",
-        "Coverages-PayerError1-i",
-        "Coverages-RequestError1-i",
-    ] = "Coverages-Complete-i"

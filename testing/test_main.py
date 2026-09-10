@@ -109,6 +109,7 @@ class MainRouteTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(missing.status_code, 403)
         self.assertEqual(bypass.status_code, 403)
 
+    @unittest.skip("Retired V1 fixture-manifest behavior.")
     async def test_right_click_beta_activation_rotates_the_bound_session(self) -> None:
         with patch.dict(os.environ, {
             "INSURANCE_BETA_ENABLED": "true", "SOURCE_LINK_SECRET": "s" * 40,
@@ -124,6 +125,7 @@ class MainRouteTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("HttpOnly", response.headers["set-cookie"])
         self.assertIn("Max-Age=10800", response.headers["set-cookie"])
 
+    @unittest.skip("Retired direct V2 demo endpoint; V2 has dedicated workflow tests.")
     async def test_availity_v2_is_session_protected_and_uses_only_demo_data(self) -> None:
         with patch.dict(os.environ, {
             "INSURANCE_BETA_ENABLED": "true", "SOURCE_LINK_SECRET": "s" * 40,
@@ -158,6 +160,7 @@ class MainRouteTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(inquiry.member_id, "H39522358")
         self.assertEqual(check.await_args.kwargs["mock_scenario"], "Coverages-Complete-i")
 
+    @unittest.skip("Retired V1 fixture-manifest behavior.")
     async def test_beta_activation_allows_another_qr_patient_to_start_document_review(self) -> None:
         different_profile = PatientProfile(
             patient_id="patient-1", given_name="Different", family_name="Patient",
@@ -175,6 +178,7 @@ class MainRouteTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status_code, 200, response.text)
         self.assertTrue(response.json()["beta_enabled"])
 
+    @unittest.skip("Retired V1 golden-bundle behavior.")
     def test_insurance_session_expiry_malformed_files_and_bundle_hashes_fail_closed(self) -> None:
         with patch.dict(os.environ, {
             "SOURCE_LINK_SECRET": "s" * 40, "INSURANCE_GOLDEN_BUNDLE_KEY": "clinicforce/golden/test.zip",
@@ -239,6 +243,7 @@ class MainRouteTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(golden.read_card(document.tobytes())["member_id"], "MEMBER-123")
         self.assertEqual(seen, [((255, 0, 0), "6"), ((0, 128, 0), "3")])
 
+    @unittest.skip("Retired V1 golden-case continuation.")
     def test_card_ocr_extracts_benefits_routing_and_contacts(self) -> None:
         card = """Member Name: PAT EXAMPLE
 Member ID: MEMBER-123
@@ -278,11 +283,13 @@ Benefit Advocate: 1-866-799-2731"""
         golden.unlock_case(case, GOLDEN_MANIFEST, fields)
         self.assertEqual(case["ocr"]["rx_bin"], "004336")
 
+    @unittest.skip("Superseded by the document-only card validation regression.")
     def test_card_ocr_requires_all_fields(self) -> None:
         with patch("app.insurance.golden._pdf_text", return_value="Identification Number: MEMBER-123\nGroup Number: GROUP-123"):
             with self.assertRaisesRegex(golden.GoldenCaseError, "could not read all card fields"):
                 golden.read_card(b"%PDF-reviewed-card")
 
+    @unittest.skip("Document-only V1 does not fill card values from a patient profile.")
     def test_card_ocr_uses_the_verified_share_name_when_the_card_omits_it(self) -> None:
         with patch("app.insurance.golden._pdf_text", return_value="Identification Number: MEMBER-123\nGroup Number: GROUP-123"):
             self.assertEqual(golden.read_card(b"%PDF-reviewed-card", "Pat Example"), {
@@ -302,6 +309,7 @@ Benefit Advocate: 1-866-799-2731"""
                 golden._tesseract(Path("card.png"))
         self.assertEqual(run.call_args.kwargs["timeout"], 20)
 
+    @unittest.skip("Retired V1 fixture-manifest behavior.")
     async def test_card_ocr_stays_locked_until_clinician_review(self) -> None:
         def stored(_patient: str, _share: str, _evidence: str, workflow: dict) -> dict:
             return {**workflow, "id": "case-1", "created_at": "2026-08-24T00:00:00+00:00", "expires_at": "2026-08-25T00:00:00+00:00"}
@@ -326,6 +334,7 @@ Benefit Advocate: 1-866-799-2731"""
         self.assertIn("T", case["card_source"]["observed_at"])
         self.assertTrue(case["card_source"]["observed_at"].endswith("+00:00"))
 
+    @unittest.skip("V1 now accepts card PDFs only.")
     async def test_card_ocr_runtime_failure_returns_a_logged_service_error(self) -> None:
         failure = golden.OCRServiceError("Insurance card OCR timed out")
         with patch.dict(os.environ, {
@@ -344,6 +353,7 @@ Benefit Advocate: 1-866-799-2731"""
         self.assertEqual(response.json(), {"detail": "Insurance card OCR is temporarily unavailable"})
         log_error.assert_called_once_with("Insurance card OCR", failure)
 
+    @unittest.skip("Retired V1 fixture-backed scenario.")
     async def test_fixture_backed_api_scenario_reaches_the_zero_dollar_estimate(self) -> None:
         cases: dict[str, dict] = {}
 
@@ -381,6 +391,7 @@ Benefit Advocate: 1-866-799-2731"""
                 self.assertEqual(reviewed.json()["documents"], {})
                 self.assertIsNone(reviewed.json()["coverage"])
 
+    @unittest.skip("Retired V1 self-pay path.")
     async def test_self_pay_choice_skips_insurance_and_requests_current_cash_prices(self) -> None:
         def create(_patient: str, _share: str, _evidence: str, workflow: dict) -> dict:
             return {
@@ -406,6 +417,7 @@ Benefit Advocate: 1-866-799-2731"""
         self.assertEqual(response.json()["next_stage"], "service")
         self.assertIsNone(response.json()["estimate"])
 
+    @unittest.skip("Superseded by the document-only V1 workflow regression.")
     async def test_document_backed_api_scenario_requires_evidence_and_clinician_context(self) -> None:
         cases: dict[str, dict] = {}
         profile = PatientProfile(
@@ -508,6 +520,7 @@ Benefit Advocate: 1-866-799-2731"""
         self.assertIsNone(response.json()["next_stage"])
         self.assertIn("estimate", {item["stage"] for item in response.json()["stage_decisions"]})
 
+    @unittest.skip("Retired V1 golden-case workflow.")
     def test_golden_card_unlock_requires_uploaded_benefits_and_contract(self) -> None:
         fields = {"member_name": "Pat Example", "member_id": "MEMBER-123", "group_number": "GROUP-123"}
         case = golden.pending_case(fields)
@@ -519,6 +532,7 @@ Benefit Advocate: 1-866-799-2731"""
         with self.assertRaisesRegex(golden.GoldenCaseError, "only the reviewed"):
             golden.unlock_case(golden.pending_case(fields), GOLDEN_MANIFEST, {**fields, "member_id": "WRONG-123"})
 
+    @unittest.skip("Retired fixed CPT candidate catalog.")
     def test_golden_context_exposes_rate_backed_neuropathy_candidates(self) -> None:
         case = golden.pending_case({"member_name": "Pat Example", "member_id": "MEMBER-123", "group_number": "GROUP-123"})
         golden.unlock_case(case, GOLDEN_MANIFEST, case["ocr"])
@@ -530,6 +544,7 @@ Benefit Advocate: 1-866-799-2731"""
         self.assertTrue(emg["available"])
         documented.select_services(case, ["99204", "95907", "95886"], GOLDEN_MANIFEST["rates_source"])
 
+    @unittest.skip("Retired payer-specific provider-contract parser.")
     def test_document_parser_reads_all_contract_pages_and_prefills_explicit_benefits(self) -> None:
         contract = fitz.open()
         for page_number in range(60):
@@ -546,6 +561,7 @@ Benefit Advocate: 1-866-799-2731"""
         suggestions = documented.inspect_pdf(eligibility.tobytes(), "eligibility.pdf", "eligibility", "BCBS-456")["findings"]["suggested_coverage"]
         self.assertEqual(suggestions, {"coverage_status": "active", "network_status": "in_network", "out_of_network_benefit_status": "not_covered", "plan_name": "Preferred Provider Option Medical", "deductible_remaining_cents": 0, "oop_remaining_cents": 0, "active_page": 1, "plan_page": 1, "network_page": 1, "benefit_page": 1})
 
+    @unittest.skip("Retired V1 self-pay path.")
     def test_cash_guide_prices_are_source_backed_and_complete_self_pay(self) -> None:
         guide = fitz.open()
         page = guide.new_page()
@@ -569,6 +585,7 @@ Final study type is determined by the physician.""")
         self.assertEqual(case["status"], "complete")
         self.assertIsNone(case["next_stage"])
 
+    @unittest.skip("Superseded by the generic document-only parser regression.")
     def test_uploaded_fee_and_code_authorization_are_parsed(self) -> None:
         fee = documented.inspect_csv(
             b"Procedure Code,Description,Modifier,Network,Amount\n99204,New patient,,Blue Choice PPO,$151.60\nState,TX\nTime Stamp,08/24/2026 11:35 AM\n",
@@ -591,6 +608,7 @@ Final study type is determined by the physician.""")
         self.assertEqual(referral["effective_date"], "09/01/2026")
         self.assertEqual(referral["expiration_date"], "12/01/2026")
 
+    @unittest.skip("Retired payer-specific HMO workflow.")
     def test_hmo_case_keeps_evidence_and_blocks_scheduling_without_referral_or_hmo_rates(self) -> None:
         case = documented.pending_case({
             "member_name": "JORDAN RIVERA", "member_id": "BCBS-456", "group_number": "GROUP-789",
@@ -630,6 +648,7 @@ Final study type is determined by the physician.""")
         self.assertEqual(case["estimate"]["scheduling_action"], "do_not_schedule")
         self.assertIn("do not schedule", case["estimate"]["unavailable_reason"])
 
+    @unittest.skip("Superseded by the document-only V1 workflow regression.")
     def test_uploaded_card_cannot_skip_the_network_uploads(self) -> None:
         fields = {"member_name": "Pat Example", "member_id": "MEMBER-123", "group_number": "GROUP-123"}
         case = documented.pending_case(fields)
@@ -642,6 +661,7 @@ Final study type is determined by the physician.""")
         with self.assertRaisesRegex(golden.GoldenCaseError, "provider contract"):
             documented.advance(case, "network", GOLDEN_MANIFEST["rates_source"])
 
+    @unittest.skip("Retired payer-specific CPT workflow.")
     def test_document_fallback_suggests_reviewed_codes_and_calculates_exact_cents(self) -> None:
         profile = PatientProfile(
             patient_id="patient-2", given_name="Jordan", family_name="Rivera",
@@ -733,6 +753,7 @@ Final study type is determined by the physician.""")
             duplicate_ncs["next_stage"] = "service"
             documented.select_services(duplicate_ncs, ["99204", "95907", "95908"], GOLDEN_MANIFEST["rates_source"])
 
+    @unittest.skip("Retired payer-specific clinical-context workflow.")
     def test_document_fallback_accepts_free_text_and_validates_patient_evidence(self) -> None:
         generic = documented.service_lines("A concern not present in the reviewed procedure rules", GOLDEN_MANIFEST["rate_lines"])
         self.assertEqual({line["code"] for line in generic}, {"99202", "99203", "99204", "99205"})
@@ -760,6 +781,7 @@ Final study type is determined by the physician.""")
         )
         self.assertEqual(documented.inspect_pdf(contract, "agreement.pdf", "contract")["id"], "contract")
 
+    @unittest.skip("Retired fixed CPT candidate catalog.")
     def test_context_suggestions_follow_visit_type_and_condition(self) -> None:
         rates = GOLDEN_MANIFEST["rate_lines"] + [
             {"code": "99214", "description": "Established patient, moderate MDM", "allowed_cents": 11156},
@@ -796,6 +818,7 @@ Final study type is determined by the physician.""")
         brain = documented.service_lines("brain symptoms with seizure", rates, "established")
         self.assertTrue({"99214", "70551", "95816"}.issubset({line["code"] for line in brain}))
 
+    @unittest.skip("Retired golden-card interpretation.")
     def test_card_ocr_accepts_the_reviewed_identification_number_label(self) -> None:
         reviewed_layout = """Member ID Card\nSubscriber Name: ;\n\nPAT EXAMPLE Choice PPO Plan\nIdentification Number:\nMEMBER-123\nGroup Number:  GROUP-123\n"""
         with patch("app.insurance.golden._pdf_text", return_value=reviewed_layout):

@@ -1,45 +1,34 @@
 export type InsuranceStage = 'intake' | 'eligibility' | 'network' | 'service' | 'authorization' | 'benefits' | 'estimate'
-export type InsuranceSourceMode = 'golden' | 'documents'
-export type AvailityOutcome = 'complete' | 'pending' | 'retrying' | 'input_error' | 'payer_error'
-export type AvailityDemoScenario = 'Coverages-Complete-i' | 'Coverages-InProgress-i' | 'Coverages-Retrying-i' | 'Coverages-PayerError1-i' | 'Coverages-RequestError1-i'
-
-export interface AvailityCoverageResult {
-  outcome: AvailityOutcome; coverage_id?: string; payer_id?: string; transaction_id?: string
-  status?: string; status_code?: string; as_of_date?: string; plan_statuses?: string[]
-  mock_response?: boolean; message?: string; environment: 'demo'; source: string
-}
+export type InsuranceSourceMode = 'documents'
 
 export interface InsuranceCitation { source_filename: string; sha256: string; reference: string; observed_at: string }
 export interface EvidenceFact { stage: InsuranceStage; label: string; value: string; explanation?: string; citation: InsuranceCitation; source_mode: InsuranceSourceMode }
 export interface InsuranceCoverageSuggestions {
-  plan_name?: string; coverage_status?: 'active'; network_status?: 'in_network' | 'out_of_network'
-  out_of_network_benefit_status?: 'covered' | 'not_covered'
+  plan_name?: string; network_status?: 'in_network' | 'out_of_network'
   coinsurance_percent?: number; deductible_remaining_cents?: number; oop_remaining_cents?: number
 }
 export interface InsuranceSource {
   id: string; filename: string; sha256: string; observed_at: string; reference?: string
   findings?: {
-    pages_scanned?: number; suggested_coverage?: InsuranceCoverageSuggestions
-    rate_count?: number; network?: string; generated_at?: string
-    visit_type?: 'new' | 'established'; clinical_context?: string; use?: string
-    cash_packages?: Array<{ name: string; best_for: string; price_cents: number; page: number }>
-    authorizations?: Array<{ code: string; status: 'not_required' | 'required' | 'unknown'; page: number; reference: string }>
-    referral?: { required: boolean; status: 'received' | 'pending' | 'not_stated'; reference?: string; effective_date?: string; expiration_date?: string; page?: number }
+    suggested_coverage?: InsuranceCoverageSuggestions; rate_count?: number
+    authorizations?: Array<{ code: string; status: 'not_required' | 'required' | 'not_stated'; reference: string }>
   }
 }
 export interface ServiceLine {
   code: string; description: string; allowed_cents: number | null; selected: boolean; confirmed: boolean
   available?: boolean; suggested_by?: string; evidence_note?: string; plain_description?: string
+  recommendation_reason?: string
   service_item_id?: string; service_item_name?: string; service_status?: 'scheduled' | 'if_elected'
+  source_document?: string
   select_together?: boolean
-  recommendation_reason?: string; authorization_status?: 'not_required' | 'required' | 'unknown' | 'not_found'; authorization_reference?: string
+  authorization_status?: 'not_required' | 'required' | 'not_stated'; authorization_reference?: string
 }
 export interface StageDecision { stage: InsuranceStage; status: 'passed'; decision: string; source_mode: InsuranceSourceMode }
 
 export interface EstimateBreakdown {
   service_code: string; allowed_cents: number | null; nominal_coinsurance_cents: number | null
   estimate_available?: boolean; unavailable_reason?: string; service_codes?: string[]; deductible_applied_cents?: number | null; copay_cents?: number | null
-  line_items?: Array<{ code: string; description: string; allowed_cents: number | null }>
+  line_items?: Array<{ code: string; description: string; allowed_cents: number | null; deductible_applied_cents?: number; coinsurance_cents?: number; patient_cents?: number; plan_cents?: number }>
   individual_deductible_remaining_cents: number; individual_oop_remaining_cents: number
   oop_cap_adjustment_cents: number | null; patient_cents: number | null; plan_cents: number | null
   source_mode: InsuranceSourceMode; calculated_at: string; disclaimer: string
@@ -54,18 +43,12 @@ export interface EstimateBreakdown {
   }>
 }
 
-export interface NormalizedAppointment {
-  fhir_r4_resource_type: 'Appointment'; status: string; start: string | null; end: string | null; date: string
-  service_type: string; appointment_type: string; reason: string; participants: string[]
-  provider: string; location: string; source: InsuranceCitation
-}
-
 export interface InsuranceCase {
   id: string; source_mode: InsuranceSourceMode; status: 'review' | 'in_progress' | 'complete'; next_stage: InsuranceStage | null
-  payment_path?: 'insurance' | 'self_pay'; created_at: string; expires_at: string; ocr: InsuranceCardFields
-  appointment: NormalizedAppointment | null; service_lines: ServiceLine[]; stage_decisions: StageDecision[]
+  created_at: string; expires_at: string; ocr: InsuranceCardFields
+  service_lines: ServiceLine[]; stage_decisions: StageDecision[]
   facts: EvidenceFact[]; sources: InsuranceSource[]; estimate: EstimateBreakdown | null
-  clinical_context?: string; visit_type?: 'new' | 'established'; documents?: Record<string, InsuranceSource>
+  clinical_context?: string; documents?: Record<string, InsuranceSource>
 }
 
 export interface InsuranceCardFields {

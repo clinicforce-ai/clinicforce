@@ -1,7 +1,6 @@
 """Clinician-only insurance beta endpoints."""
 
 import hashlib
-import os
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -9,10 +8,7 @@ from fastapi import APIRouter, File, HTTPException, Request, Response, UploadFil
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import JSONResponse
 
-from app.api.schemas import (
-    AvailityCoverageDemoRequest, InsuranceClinicalContextRequest, InsuranceIntakeRequest,
-    InsuranceServiceLinesRequest,
-)
+from app.api.schemas import InsuranceClinicalContextRequest, InsuranceIntakeRequest, InsuranceServiceLinesRequest
 from app.api.settings import (
     CLINICIAN_SHARE_COOKIE, CLINICIAN_SHARE_MAX_AGE, MAX_INSURANCE_CARD_BYTES, MAX_UPLOAD_BYTES,
     PUBLIC_BASE_URL, insurance_beta_enabled,
@@ -20,23 +16,11 @@ from app.api.settings import (
 from app.core import object_store
 from app.core.patient_store import get_patient_profile
 from app.insurance import documented, golden, store
-from app.insurance.availity import AvailityClient, CoverageInquiry, DEMO_SCOPE
 from app.logs.logger import log_error
 
 
 router = APIRouter(prefix="/api/doctor/insurance", tags=["doctor-insurance"])
 _NO_STORE = {"Cache-Control": "no-store", "Pragma": "no-cache"}
-_DEMO_INQUIRY = CoverageInquiry(
-    payer_id="BCBSF",
-    provider_npi="1234567893",
-    submitter_id="G2509",
-    member_id="H39522358",
-    patient_first_name="GEORGE",
-    patient_last_name="KOVAL",
-    patient_birth_date="1999-01-01",
-)
-
-
 def _enabled() -> None:
     if not insurance_beta_enabled():
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Insurance beta is not enabled")
@@ -87,24 +71,12 @@ async def enable_beta(request: Request, response: Response) -> dict:
     return {"beta_enabled": True, "expires_in_seconds": CLINICIAN_SHARE_MAX_AGE}
 
 
-@router.post("/v2/coverage")
-async def run_availity_demo(
-    demo: AvailityCoverageDemoRequest, request: Request,
-) -> JSONResponse:
-    """Run a synthetic Availity Coverage scenario without accepting patient PHI."""
-    _session(request)
-    if os.getenv("AVAILITY_ENVIRONMENT", "demo") != "demo" or os.getenv("AVAILITY_SCOPE", DEMO_SCOPE) != DEMO_SCOPE:
-        raise HTTPException(status_code=409, detail="The demo-only Beta V2 route is disabled for this Availity plan")
-    result = await AvailityClient().check_coverage(_DEMO_INQUIRY, mock_scenario=demo.scenario)
-    return _response({**result, "environment": "demo", "source": "Availity Coverages 270/271"})
-
-
 @router.post("/cases")
 async def create_case(request: Request, file: UploadFile = File(...)) -> JSONResponse:
     session = _session(request)
     filename = Path(file.filename or "insurance-card").name
-    if Path(filename).suffix.lower() not in {".pdf", ".jpg", ".jpeg", ".png"}:
-        raise HTTPException(status_code=415, detail="Upload a PDF, JPG, or PNG insurance card")
+    if Path(filename).suffix.lower() != ".pdf":
+        raise HTTPException(status_code=415, detail="Upload the insurance card as a PDF")
     content = await file.read(MAX_INSURANCE_CARD_BYTES + 1)
     if len(content) > MAX_INSURANCE_CARD_BYTES:
         raise HTTPException(status_code=413, detail="Insurance card files must be 10 MB or smaller")
@@ -127,16 +99,6 @@ async def create_case(request: Request, file: UploadFile = File(...)) -> JSONRes
         raise HTTPException(status_code=503, detail="Insurance card OCR is temporarily unavailable") from exc
 
 
-@router.post("/cases/self-pay")
-async def create_self_pay_case(request: Request) -> JSONResponse:
-    session = _session(request)
-    case = await run_in_threadpool(
-        store.create_case, session["patient_id"], session["share_manifest_id"],
-        golden.evidence_binding(), documented.self_pay_case(),
-    )
-    return _response(case)
-
-
 @router.get("/cases/{case_id}")
 async def get_case(case_id: str, request: Request) -> JSONResponse:
     return _response(await run_in_threadpool(_load_case, case_id, _session(request)))
@@ -150,8 +112,7 @@ async def confirm_intake(case_id: str, review: InsuranceIntakeRequest, request: 
         if case.get("evidence_manifest_id") != golden.evidence_binding():
             raise golden.GoldenCaseError("The insurance review configuration changed; start a new case")
         fields = {**case.get("ocr", {}), **review.model_dump()}
-        profile = await run_in_threadpool(get_patient_profile, session["patient_id"])
-        documented.confirm_intake(case, profile, fields)
+        documented.confirm_intake(case, fields)
         saved = await run_in_threadpool(store.save_case, case, session["patient_id"], session["share_manifest_id"], "intake")
         return _response(_saved(saved))
     except golden.GoldenCaseError as exc:
@@ -199,37 +160,29 @@ async def upload_evidence(case_id: str, kind: str, request: Request, file: Uploa
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
-@router.put("/cases/{case_id}/service-lines")
-async def confirm_service(case_id: str, selection: InsuranceServiceLinesRequest, request: Request) -> JSONResponse:
+@router.put("/cases/{case_id}/clinical-context")
+async def request_cpt_suggestions(
+    case_id: str, review: InsuranceClinicalContextRequest, request: Request,
+) -> JSONResponse:
     session = _session(request)
     case = await run_in_threadpool(_load_case, case_id, session)
     try:
-        rate_source = case.get("documents", {}).get("fee_schedule")
-        if not rate_source:
-            raise golden.GoldenCaseError("Upload the fee schedule before confirming anticipated services")
-        documented.select_services(case, selection.codes, rate_source)
-        saved = await run_in_threadpool(store.save_case, case, session["patient_id"], session["share_manifest_id"], "service")
+        documented.set_clinical_context(case, review.clinical_context, review.visit_type)
+        saved = await run_in_threadpool(store.save_case, case, session["patient_id"], session["share_manifest_id"], "clinical-context")
         return _response(_saved(saved))
     except golden.GoldenCaseError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
-@router.put("/cases/{case_id}/clinical-context")
-async def suggest_services(
-    case_id: str, request_body: InsuranceClinicalContextRequest, request: Request,
-) -> JSONResponse:
+@router.put("/cases/{case_id}/service-lines")
+async def confirm_service(case_id: str, selection: InsuranceServiceLinesRequest, request: Request) -> JSONResponse:
     session = _session(request)
     case = await run_in_threadpool(_load_case, case_id, session)
     try:
-        rate_lines = documented.case_rate_lines(case)
-        if not rate_lines:
-            raise golden.GoldenCaseError("Upload the fee schedule before requesting CPT suggestions")
-        documented.set_clinical_context(
-            case, request_body.clinical_context, rate_lines, request_body.visit_type,
-        )
-        saved = await run_in_threadpool(
-            store.save_case, case, session["patient_id"], session["share_manifest_id"], "clinical-context",
-        )
+        if not case.get("documents", {}).get("fee_schedule"):
+            raise golden.GoldenCaseError("Upload the fee schedule before confirming anticipated services")
+        documented.select_services(case, selection.codes)
+        saved = await run_in_threadpool(store.save_case, case, session["patient_id"], session["share_manifest_id"], "service")
         return _response(_saved(saved))
     except golden.GoldenCaseError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
@@ -240,8 +193,7 @@ async def run_stage(case_id: str, stage: str, request: Request) -> JSONResponse:
     session = _session(request)
     case = await run_in_threadpool(_load_case, case_id, session)
     try:
-        rate_source = case.get("documents", {}).get("fee_schedule") or case.get("card_source")
-        documented.advance(case, stage, rate_source)
+        documented.advance(case, stage)
         saved = await run_in_threadpool(store.save_case, case, session["patient_id"], session["share_manifest_id"], stage)
         return _response(_saved(saved))
     except golden.GoldenCaseError as exc:
