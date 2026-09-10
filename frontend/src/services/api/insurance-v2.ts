@@ -4,7 +4,7 @@ export type V2Resource = 'coverage' | 'estimate' | 'authorization' | 'referral'
 export type V2Document = 'card' | 'provider' | 'appointment' | 'order' | 'charges'
 export interface V2Configuration {
   environment: 'demo' | 'production'; credentials_configured: boolean; practice_configured: boolean
-  production_enabled: boolean; message: string
+  ecw_configured: boolean; production_enabled: boolean; message: string
 }
 export interface V2Benefit {
   category: string; network: string; service?: string; level?: string; description?: string
@@ -32,7 +32,7 @@ export interface V2Transaction {
   mock_response?: boolean; next_poll_at?: number
   http_status?: number
   result?: {
-    payer?: string; status?: string; as_of_date?: string; plans?: V2Plan[]; pce_available?: boolean
+    payer?: string; status?: string; active?: boolean | null; as_of_date?: string; plans?: V2Plan[]; pce_available?: boolean
     provider_network?: string; notes?: string[]; message?: string; disclaimer?: string
     estimate_available?: boolean; lines?: V2PriceLine[]; patient_cents?: number | null; allowed_cents?: number | null
     status_code?: string; certificationNumber?: string; certificationEffectiveDate?: string; certificationExpirationDate?: string
@@ -41,7 +41,7 @@ export interface V2Transaction {
 }
 export interface V2Case {
   id: string; revision: number; created_at: string; expires_at: string; environment: 'demo' | 'production'
-  sources: Partial<Record<V2Document, { filename: string; sha256: string; observed_at: string; notes: string[] }>>
+  sources: Partial<Record<V2Document | 'ecw', { filename?: string; sha256?: string; observed_at?: string; retrieved_at?: string; system?: string; appointment_date?: string; appointment_status?: string; payer?: string; location?: string; notes?: string[] }>>
   missing: string[]
   inputs: {
     patient: { patient_first_name?: string; patient_last_name?: string; patient_birth_date?: string }

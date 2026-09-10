@@ -7,7 +7,7 @@ import os
 from pathlib import Path
 import sys
 import unittest
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 from zoneinfo import ZoneInfo
 
 import fitz
@@ -221,7 +221,7 @@ class WorkflowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.posts, 1)
         self.assertEqual(len(self.saved['case-v2'][2]['previous_attempts']), 1)
 
-    async def test_production_document_to_payer_workflow(self):
+    async def test_production_ecw_to_payer_workflow(self):
         provider = {'lastName': 'TEST CLINIC', 'ein': '111222333', 'addressLine1': '123 TEST ST', 'city': 'TEST', 'stateCode': 'TX', 'zipCode': '77001'}
         practice = {'production_enabled': True, 'timezone': 'America/Chicago', 'submitter_id': 'TESTSUBMITTER', 'providers': {'1234567893': provider}}
         sent = []
@@ -238,7 +238,7 @@ class WorkflowTests(unittest.IsolatedAsyncioTestCase):
             sent.append(request)
             if '/coverages' in request.url.path:
                 self.assertIn(b'patientFirstName=Pat', request.content)
-                return httpx.Response(200, json={'id': 'real-coverage-id', 'statusCode': '4', 'subscriber': {'memberId': 'MEMBER123'}, 'payer': {'payerId': 'TESTPAYER'}, 'patient': {'firstName': 'Pat', 'lastName': 'Example', 'birthDate': '1980-01-01'}, 'supplementalInformation': {'professionalPatientCostEstimator': True}})
+                return httpx.Response(200, json={'id': 'real-coverage-id', 'statusCode': '4', 'subscriber': {'memberId': 'MEMBER123'}, 'payer': {'payerId': 'TESTPAYER'}, 'patient': {'firstName': 'Pat', 'lastName': 'Example', 'birthDate': '1980-01-01'}, 'plans': [{'status': 'Active', 'benefits': []}], 'supplementalInformation': {'professionalPatientCostEstimator': True}})
             if '/patient-cost-estimates' in request.url.path:
                 body = json.loads(request.content)
                 self.assertEqual(body['coverageId'], 'real-coverage-id')
@@ -250,20 +250,25 @@ class WorkflowTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(body['procedures'][0]['code'], '99204')
             return httpx.Response(200, json={'id': 'review-live', 'statusCode': 'A2', 'certificationNumber': 'PARTIAL-123', 'procedures': [{'code': '99204', 'statusCode': 'A1', 'quantity': '1'}]})
         day = datetime.now(ZoneInfo('America/Chicago')).date().isoformat()
-        csv_data = ('Patient First Name,Patient Last Name,Patient DOB,Member ID,Availity Payer ID,Subscriber Relationship Code,Patient Phone,Service Date,Place of Service Code,ICD-10,CPT,Units,Billed Charge,Billing Provider NPI,Rendering Provider NPI,Service Type Code\n'
-                    f'Pat,Example,1980-01-01,MEMBER123,TESTPAYER,18,5552347700,{day},11,G62.9,99204,1,300.00,1234567893,1234567893,1\n').encode()
-        with fitz.open() as doc:
-            doc.new_page().insert_text((40, 40), 'Member Name: Pat Example\nMember ID: MEMBER123\nGroup Number: GROUP123')
-            card = doc.tobytes()
-        with patch.dict(os.environ, {'AVAILITY_ENVIRONMENT': 'production', 'AVAILITY_SCOPE': LIVE_SCOPE, 'AVAILITY_PRACTICE_CONFIG': json.dumps(practice)}), patch.object(v2, 'gateway', return_value=Gateway(settings(False), transport=httpx.MockTransport(handler))):
+        inputs = {"patient": {"patient_first_name": "Pat", "patient_last_name": "Example", "patient_birth_date": "1980-01-01", "gender": "U"},
+                  "subscriber": {"firstName": "Pat", "lastName": "Example", "birthDate": "1980-01-01", "memberId": "MEMBER123"},
+                  "relationship": "18", "member_id": "MEMBER123", "payer_id": "TESTPAYER", "group_number": "GROUP123",
+                  "provider": {**provider, "npi": "1234567893"}, "submitter_id": "TESTSUBMITTER",
+                  "rendering_provider": {**provider, "npi": "1234567893"}, "service_type": "1", "service_date": day,
+                  "place_of_service": "11", "diagnoses": ["G629"], "patient_phone": "5552347700", "reason": "Neuropathy",
+                  "coverage_missing": [], "review_missing": [],
+                  "lines": [{"code": "99204", "units": "1", "charge": "300.00", "modifiers": [], "diagnosis": "G629"}]}
+        ecw_result = (inputs, [], {"system": "eClinicalWorks", "retrieved_at": "2026-09-10T10:00:00Z", "appointment_date": day})
+        with patch.dict(os.environ, {'AVAILITY_ENVIRONMENT': 'production', 'AVAILITY_SCOPE': LIVE_SCOPE, 'AVAILITY_PRACTICE_CONFIG': json.dumps(practice)}), \
+             patch.object(v2, 'gateway', return_value=Gateway(settings(False), transport=httpx.MockTransport(handler))), \
+             patch.object(v2.ecw_backend, 'configured', return_value=True), \
+             patch.object(v2.ecw_backend, 'fetch_inputs', new=AsyncMock(return_value=ecw_result)):
             base = '/api/doctor/insurance/v2/cases'
             response = await self.client.post(base, json={})
             self.assertEqual(response.status_code, 200, response.text)
             path = base + '/case-v2'
-            for kind, name, data in [('card', 'card.pdf', card), ('order', 'encounter.csv', csv_data)]:
-                response = await self.client.post(path + '/documents/' + kind, files={'file': (name, data)})
-                self.assertEqual(response.status_code, 200, response.text)
             self.assertEqual(response.json()['missing'], [])
+            self.assertEqual(response.json()['sources']['ecw']['system'], 'eClinicalWorks')
             response = await self.client.post(path + '/requirements')
             self.assertEqual(response.status_code, 200, response.text)
             for resource in ('coverage', 'estimate', 'authorization', 'referral'):

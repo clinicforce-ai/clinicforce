@@ -8,6 +8,10 @@ from typing import Any
 
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
+# HTTPX includes query parameters in its INFO message. FHIR patient searches
+# contain demographics, so only warnings/errors may reach application logs.
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
 logger = logging.getLogger("clinicforce")
 
 
