@@ -81,3 +81,35 @@ def save_case(case: dict[str, Any], patient_id: str, share_manifest_id: str, eve
             (case["id"], event[:80], now.isoformat()),
         )
     return case
+
+
+def save_v2(case: dict[str, Any], patient_id: str, share_manifest_id: str, event: str, revision: int) -> dict[str, Any] | None:
+    """Claim a revision before network I/O; duplicate clicks cannot submit twice."""
+    now = _now()
+    value = {**case, "revision": revision + 1}
+    with _connection() as connection:
+        updated = connection.execute(
+            """UPDATE insurance_cases SET workflow_json = %s
+               WHERE id = %s AND patient_id = %s AND share_manifest_id = %s AND expires_at > %s
+               AND workflow_json::jsonb ->> 'revision' = %s
+               AND workflow_json::jsonb ->> 'source_mode' = 'availity'""",
+            (json.dumps(value, separators=(",", ":")), value["id"], patient_id, share_manifest_id,
+             now.isoformat(), str(revision)),
+        )
+        if updated.rowcount != 1:
+            return None
+        connection.execute("INSERT INTO insurance_case_events (case_id, stage, created_at) VALUES (%s, %s, %s)",
+                           (value["id"], event[:80], now.isoformat()))
+    return value
+
+
+def latest_v2(patient_id: str, share_manifest_id: str, binding: str) -> dict[str, Any] | None:
+    with _connection() as connection:
+        row = connection.execute(
+            """SELECT workflow_json FROM insurance_cases
+               WHERE patient_id = %s AND share_manifest_id = %s AND evidence_manifest_id = %s
+               AND expires_at > %s AND workflow_json::jsonb ->> 'source_mode' = 'availity'
+               ORDER BY created_at DESC LIMIT 1""",
+            (patient_id, share_manifest_id, binding, _now().isoformat()),
+        ).fetchone()
+    return json.loads(row["workflow_json"]) if row else None

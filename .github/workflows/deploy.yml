@@ -92,23 +92,20 @@ jobs:
           IMAGE_TAG: ${{ github.sha }}
         run: |
           set -euo pipefail
+          # Preserve every existing integration parameter, including newly added secrets.
+          aws cloudformation describe-stacks --stack-name "$STACK_NAME" \
+            --query 'Stacks[0].Parameters[].ParameterKey' --output json > /tmp/clinicforce-parameter-keys.json
+          jq --arg backend "$REGISTRY/clinicforce-backend:$IMAGE_TAG" \
+             --arg hapi "$REGISTRY/clinicforce-hapi:$IMAGE_TAG" \
+             'map(if . == "BackendImageUri" then {ParameterKey: ., ParameterValue: $backend}
+                  elif . == "HapiImageUri" then {ParameterKey: ., ParameterValue: $hapi}
+                  else {ParameterKey: ., UsePreviousValue: true} end)' \
+             /tmp/clinicforce-parameter-keys.json > /tmp/clinicforce-release-parameters.json
           aws cloudformation update-stack \
             --stack-name "$STACK_NAME" \
             --use-previous-template \
             --capabilities CAPABILITY_NAMED_IAM \
-            --parameters \
-              "ParameterKey=BackendImageUri,ParameterValue=$REGISTRY/clinicforce-backend:$IMAGE_TAG" \
-              "ParameterKey=HapiImageUri,ParameterValue=$REGISTRY/clinicforce-hapi:$IMAGE_TAG" \
-              ParameterKey=HostedZoneId,UsePreviousValue=true \
-              ParameterKey=AppDomainName,UsePreviousValue=true \
-              ParameterKey=CloudFrontOriginPrefixListId,UsePreviousValue=true \
-              ParameterKey=BedrockModelId,UsePreviousValue=true \
-              ParameterKey=GoogleOAuthClientId,UsePreviousValue=true \
-              ParameterKey=GoogleOAuthClientSecretArn,UsePreviousValue=true \
-              ParameterKey=EpicClientId,UsePreviousValue=true \
-              ParameterKey=EcwClientId,UsePreviousValue=true \
-              ParameterKey=InsuranceBetaEnabled,UsePreviousValue=true \
-              ParameterKey=InsuranceGoldenBundleKey,UsePreviousValue=true
+            --parameters file:///tmp/clinicforce-release-parameters.json
           aws cloudformation wait stack-update-complete --stack-name "$STACK_NAME"
           aws ecs wait services-stable --cluster clinicforce-production --services backend hapi
 

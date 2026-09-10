@@ -7,3 +7,4 @@ export type View =
   | 'loading'
   | 'dashboard'
   | 'insurance'
+  | 'insurance-v2'

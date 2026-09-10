@@ -1,5 +1,5 @@
 import type { EcwRecord, EpicEndpoint, EpicRecord, PatientSession } from './patient-models'
-import type { InsuranceCase, InsuranceStage } from './insurance'
+import type { AvailityCoverageResult, AvailityDemoScenario, InsuranceCase, InsuranceStage } from './insurance'
 import { ApiError, assertWorkspace, detailFrom, json, request } from './client'
 import { credentialsPayload } from './patient'
 
@@ -60,6 +60,10 @@ export async function disconnectEcw(): Promise<void> {
 
 export async function enableInsuranceBeta(): Promise<void> {
   await request('/api/doctor/insurance/beta', { method: 'POST' })
+}
+
+export function runAvailityCoverageDemo(scenario: AvailityDemoScenario): Promise<AvailityCoverageResult> {
+  return request('/api/doctor/insurance/v2/coverage', json({ scenario }))
 }
 
 export async function createInsuranceCase(file: File): Promise<InsuranceCase> {

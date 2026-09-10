@@ -1,6 +1,7 @@
-"""Clinician-only, upload-backed insurance beta endpoints."""
+"""Clinician-only insurance beta endpoints."""
 
 import hashlib
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -9,7 +10,8 @@ from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import JSONResponse
 
 from app.api.schemas import (
-    InsuranceClinicalContextRequest, InsuranceIntakeRequest, InsuranceServiceLinesRequest,
+    AvailityCoverageDemoRequest, InsuranceClinicalContextRequest, InsuranceIntakeRequest,
+    InsuranceServiceLinesRequest,
 )
 from app.api.settings import (
     CLINICIAN_SHARE_COOKIE, CLINICIAN_SHARE_MAX_AGE, MAX_INSURANCE_CARD_BYTES, MAX_UPLOAD_BYTES,
@@ -18,11 +20,21 @@ from app.api.settings import (
 from app.core import object_store
 from app.core.patient_store import get_patient_profile
 from app.insurance import documented, golden, store
+from app.insurance.availity import AvailityClient, CoverageInquiry, DEMO_SCOPE
 from app.logs.logger import log_error
 
 
 router = APIRouter(prefix="/api/doctor/insurance", tags=["doctor-insurance"])
 _NO_STORE = {"Cache-Control": "no-store", "Pragma": "no-cache"}
+_DEMO_INQUIRY = CoverageInquiry(
+    payer_id="BCBSF",
+    provider_npi="1234567893",
+    submitter_id="G2509",
+    member_id="H39522358",
+    patient_first_name="GEORGE",
+    patient_last_name="KOVAL",
+    patient_birth_date="1999-01-01",
+)
 
 
 def _enabled() -> None:
@@ -47,6 +59,8 @@ def _load_case(case_id: str, session: dict) -> dict:
     case = store.get_case(case_id, session["patient_id"], session["share_manifest_id"])
     if case is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Insurance case not found or expired")
+    if case.get("source_mode") == "availity":
+        raise HTTPException(status_code=409, detail="Use the Beta V2 workflow for this Availity case")
     return case
 
 
@@ -71,6 +85,18 @@ async def enable_beta(request: Request, response: Response) -> dict:
     )
     response.headers.update(_NO_STORE)
     return {"beta_enabled": True, "expires_in_seconds": CLINICIAN_SHARE_MAX_AGE}
+
+
+@router.post("/v2/coverage")
+async def run_availity_demo(
+    demo: AvailityCoverageDemoRequest, request: Request,
+) -> JSONResponse:
+    """Run a synthetic Availity Coverage scenario without accepting patient PHI."""
+    _session(request)
+    if os.getenv("AVAILITY_ENVIRONMENT", "demo") != "demo" or os.getenv("AVAILITY_SCOPE", DEMO_SCOPE) != DEMO_SCOPE:
+        raise HTTPException(status_code=409, detail="The demo-only Beta V2 route is disabled for this Availity plan")
+    result = await AvailityClient().check_coverage(_DEMO_INQUIRY, mock_scenario=demo.scenario)
+    return _response({**result, "environment": "demo", "source": "Availity Coverages 270/271"})
 
 
 @router.post("/cases")

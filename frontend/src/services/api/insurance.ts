@@ -1,5 +1,13 @@
 export type InsuranceStage = 'intake' | 'eligibility' | 'network' | 'service' | 'authorization' | 'benefits' | 'estimate'
 export type InsuranceSourceMode = 'golden' | 'documents'
+export type AvailityOutcome = 'complete' | 'pending' | 'retrying' | 'input_error' | 'payer_error'
+export type AvailityDemoScenario = 'Coverages-Complete-i' | 'Coverages-InProgress-i' | 'Coverages-Retrying-i' | 'Coverages-PayerError1-i' | 'Coverages-RequestError1-i'
+
+export interface AvailityCoverageResult {
+  outcome: AvailityOutcome; coverage_id?: string; payer_id?: string; transaction_id?: string
+  status?: string; status_code?: string; as_of_date?: string; plan_statuses?: string[]
+  mock_response?: boolean; message?: string; environment: 'demo'; source: string
+}
 
 export interface InsuranceCitation { source_filename: string; sha256: string; reference: string; observed_at: string }
 export interface EvidenceFact { stage: InsuranceStage; label: string; value: string; explanation?: string; citation: InsuranceCitation; source_mode: InsuranceSourceMode }

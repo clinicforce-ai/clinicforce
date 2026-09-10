@@ -124,6 +124,40 @@ class MainRouteTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("HttpOnly", response.headers["set-cookie"])
         self.assertIn("Max-Age=10800", response.headers["set-cookie"])
 
+    async def test_availity_v2_is_session_protected_and_uses_only_demo_data(self) -> None:
+        with patch.dict(os.environ, {
+            "INSURANCE_BETA_ENABLED": "true", "SOURCE_LINK_SECRET": "s" * 40,
+            "AVAILITY_SCOPE": "healthcare-hipaa-transactions-demo",
+        }, clear=False):
+            missing = await self.client.post(
+                "/api/doctor/insurance/v2/coverage", json={"scenario": "Coverages-Complete-i"},
+            )
+            self.client.cookies.set(
+                "clinicforce_doctor_share",
+                golden.create_share_token("patient-1", "share-1", beta_enabled=True),
+                path="/api/doctor",
+            )
+            result = {
+                "outcome": "complete", "coverage_id": "123", "payer_id": "123",
+                "transaction_id": "transaction-123", "status": "Complete", "status_code": "4",
+                "as_of_date": "2014-10-15", "plan_statuses": ["Active"], "mock_response": True,
+            }
+            with patch(
+                "app.api.routers.insurance.AvailityClient.check_coverage",
+                new=AsyncMock(return_value=result),
+            ) as check:
+                response = await self.client.post(
+                    "/api/doctor/insurance/v2/coverage", json={"scenario": "Coverages-Complete-i"},
+                )
+
+        self.assertEqual(missing.status_code, 403)
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()["outcome"], "complete")
+        self.assertEqual(response.json()["environment"], "demo")
+        inquiry = check.await_args.args[0]
+        self.assertEqual(inquiry.member_id, "H39522358")
+        self.assertEqual(check.await_args.kwargs["mock_scenario"], "Coverages-Complete-i")
+
     async def test_beta_activation_allows_another_qr_patient_to_start_document_review(self) -> None:
         different_profile = PatientProfile(
             patient_id="patient-1", given_name="Different", family_name="Patient",

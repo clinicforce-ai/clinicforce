@@ -10,6 +10,7 @@ pymupdf
 jinja2
 weasyprint
 python-multipart
+python-dotenv
 boto3
 lxml
 psycopg[binary]

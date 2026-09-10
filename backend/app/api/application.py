@@ -150,6 +150,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 app.include_router(insurance_router)
+from app.api.routers.insurance_v2 import router as insurance_v2_router
+app.include_router(insurance_v2_router)
 app.include_router(system_router)
 
 
