@@ -12,6 +12,7 @@ venv/
 env/
 .venv/
 .pytest_cache/
+testing/artifacts/
 
 # Docker & OS
 .DS_Store

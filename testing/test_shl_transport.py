@@ -10,7 +10,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "backend"))
 
 from app.core import patient_store  # noqa: E402
 from app.core.shl import create_shl_uri, encrypt_bundle, generate_symmetric_key, hash_pin  # noqa: E402

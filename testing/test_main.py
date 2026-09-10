@@ -24,7 +24,7 @@ from fastapi import HTTPException
 from PIL import Image
 
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "backend"))
 
 from app.core.patient_store import InvalidManifestPin, PatientProfile  # noqa: E402
 from app.core.shl import encrypt_bundle, generate_symmetric_key, hash_pin  # noqa: E402

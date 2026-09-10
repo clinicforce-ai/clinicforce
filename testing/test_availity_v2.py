@@ -13,7 +13,7 @@ from zoneinfo import ZoneInfo
 import fitz
 import httpx
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "backend"))
 
 from app.insurance.availity import Gateway, Settings, DEMO_SCOPE, LIVE_SCOPE, PATHS, DEMO_IDS
 from app.insurance import availity_intake as intake, availity_results as results

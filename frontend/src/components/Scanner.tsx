@@ -2,6 +2,7 @@ import { Html5Qrcode, Html5QrcodeSupportedFormats } from 'html5-qrcode'
 import { useCallback, useEffect, useId, useRef, useState } from 'react'
 import { ArrowLeft, Camera, ScanLine, ShieldCheck, Upload } from 'lucide-react'
 import { parseSmartHealthLink, type SmartHealthLink } from '../services/shl'
+import { scanQrImage } from '../services/qr-image'
 
 interface ScannerProps { onScanned: (link: SmartHealthLink) => void; onCancel: () => void }
 
@@ -72,7 +73,7 @@ export default function Scanner({ onScanned, onCancel }: ScannerProps) {
     setReadingFile(true); setError(''); setStatus('Reading the QR image locally…')
     const fileReader = new Html5Qrcode(fileScannerId, { formatsToSupport: [Html5QrcodeSupportedFormats.QR_CODE], verbose: false })
     try {
-      handleDecoded(await fileReader.scanFile(file, false))
+      handleDecoded(await scanQrImage(fileReader, file))
     } catch {
       setError('No readable Smart Health Link QR was found. Try the original screenshot or a sharper photo.')
       setStatus('Camera scanning is still active.')

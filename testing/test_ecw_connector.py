@@ -13,7 +13,7 @@ from jwcrypto import jwk
 from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "backend"))
 
 from app.ingestion import ecw  # noqa: E402
 
