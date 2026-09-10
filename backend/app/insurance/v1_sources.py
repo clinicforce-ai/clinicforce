@@ -8,7 +8,7 @@ import fitz
 from app.insurance import golden
 
 
-EXTRACTION_VERSION = "v1-upload-evidence-2"
+EXTRACTION_VERSION = "v1-upload-evidence-3"
 MONEY = r"(?<![-\w])\$\s*(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d{2})?(?![\d,.])"
 
 
@@ -42,6 +42,16 @@ def read_pages(content: bytes, max_pages: int = 100) -> list[tuple[int, str]]:
     if not any(text.strip() for _, text in pages):
         raise golden.GoldenCaseError("No readable text was found. Upload a clearer scan or a searchable PDF.")
     return pages
+
+
+def document_dates(pages: list[tuple[int, str]]) -> list[dict]:
+    dates = []
+    for page, text in pages:
+        for line in text.splitlines():
+            match = re.fullmatch(r"\s*(Date|Time Stamp|Transaction Date|Access Date|Effective Date|Contract Date|Coverage Start Date|Coverage End Date|Plan Start Date|Date of Service)\s*[:,-]\s*(.+)", line, re.I)
+            if match and re.search(r"\d", match[2]) and len(match[2]) <= 100:
+                dates.append({"label": match[1], "value": match[2].strip(), "page": page})
+    return dates
 
 
 def card_fields(pages: list[tuple[int, str]]) -> tuple[dict, dict]:

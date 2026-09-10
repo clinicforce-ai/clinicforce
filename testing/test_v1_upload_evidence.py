@@ -19,6 +19,11 @@ def pdf(text):
 
 
 class SourceTests(unittest.TestCase):
+    def setUp(self):
+        mock = patch("app.insurance.documented.clinical_context_from_pages", side_effect=lambda pages: {"clinical_context": pages[0][1], "clinical_excerpts": [{"page": pages[0][0], "quote": pages[0][1], "category": "symptoms"}], "visit_type": None})
+        mock.start()
+        self.addCleanup(mock.stop)
+
     def test_card_without_benefits_does_not_get_defaults(self):
         fields, evidence = v1_sources.card_fields([(1, "Member Name: PAT EXAMPLE\nMember ID: ABC123")])
         self.assertEqual(set(fields), {"member_name", "member_id"})
@@ -132,7 +137,7 @@ class SourceTests(unittest.TestCase):
         case = documented.pending_case({})
         case["next_stage"] = "service"
         documented.add_document(case, "fee_schedule", documented.inspect_csv(b"CPT,Amount\n99204,100\n93000,50", "rates.csv"))
-        with patch("app.insurance.documented.suggest_cpt_codes", return_value={"99204": "Visit context"}) as suggest:
+        with patch("app.insurance.documented.suggest_cpt_codes", return_value={"groups": [{"id": "visit", "label": "Visit", "selection_mode": "single", "codes": [{"code": "99204", "reason": "Visit context"}]}]}) as suggest:
             documented.set_clinical_context(case, "Entered condition", "established")
         self.assertEqual([line["code"] for line in case["service_lines"]], ["99204"])
         self.assertIn("established", suggest.call_args.args[0])

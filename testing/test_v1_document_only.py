@@ -36,14 +36,15 @@ Individual Out Of Pocket $2,000 / Calendar Year $900 Remaining
         documented.add_document(case, "coverage", coverage)
         documented.add_document(case, "fee_schedule", rates)
         documented.advance(case, "network")
-        with patch("app.insurance.documented.suggest_cpt_codes", return_value={"99204": "Matches the patient-provided condition", "87635": "Matches the patient-provided condition", "93000": "Matches the patient-provided condition"}):
+        with patch("app.insurance.documented.suggest_cpt_codes", return_value={"groups": [{"id": "visit", "label": "Visit", "category": "visit", "selection_mode": "single", "codes": [{"code": "99204", "reason": "Review anticipated visit level"}]}, {"id": "tests", "label": "Tests", "selection_mode": "multiple", "codes": [{"code": code, "reason": "Review planned test"} for code in ("87635", "93000", "99999")]}]}):
             documented.set_clinical_context(case, "Patient-provided condition")
 
         self.assertEqual([line["code"] for line in case["service_lines"]], ["99204", "87635", "93000"])
         self.assertEqual(case["service_lines"][0]["suggested_by"], "ClinicForce")
         documented.select_services(case, ["99204", "87635", "93000"])
         documented.advance(case, "authorization")
-        documented.advance(case, "benefits")
+        self.assertEqual(case["status"], "complete")
+        self.assertIsNone(case["next_stage"])
 
         self.assertEqual(case["estimate"]["allowed_cents"], 19250)
         self.assertEqual(case["estimate"]["patient_cents"], 13850)

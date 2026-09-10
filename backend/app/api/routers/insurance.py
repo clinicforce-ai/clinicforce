@@ -88,8 +88,10 @@ async def create_case(request: Request, file: UploadFile = File(...)) -> JSONRes
         workflow = documented.pending_case(fields)
         workflow.update(ocr_evidence=evidence, extraction_version=v1_sources.EXTRACTION_VERSION)
         workflow["card_source"] = {
+            "id": "card",
             "filename": filename, "sha256": hashlib.sha256(content).hexdigest(),
             "observed_at": datetime.now(timezone.utc).isoformat(), "reference": "Uploaded insurance card",
+            "document_dates": v1_sources.document_dates(pages),
         }
         workflow["evidence_manifest_id"] = golden.evidence_binding()
         case = await run_in_threadpool(
@@ -133,7 +135,7 @@ async def upload_evidence(case_id: str, kind: str, request: Request, file: Uploa
     if case.get("source_mode") != "documents" or expected_stage is None or case.get("next_stage") != expected_stage:
         raise HTTPException(status_code=409, detail="This evidence upload is not available at the current insurance step")
     filename = Path(file.filename or f"{kind}.pdf").name
-    suffixes = {".csv"} if kind == "fee_schedule" else {".pdf", ".jpg", ".jpeg", ".png"}
+    suffixes = {".csv"} if kind == "fee_schedule" else {".csv", ".pdf", ".jpg", ".jpeg", ".png"} if kind == "self_pay" else {".pdf", ".jpg", ".jpeg", ".png"}
     if Path(filename).suffix.lower() not in suffixes:
         raise HTTPException(status_code=415, detail="Upload a rate CSV" if kind == "fee_schedule" else "Upload a PDF, JPG or PNG")
     content = await file.read(MAX_UPLOAD_BYTES + 1)
@@ -141,8 +143,9 @@ async def upload_evidence(case_id: str, kind: str, request: Request, file: Uploa
         raise HTTPException(status_code=413, detail="Insurance evidence files must be 15 MB or smaller")
     object_key: str | None = None
     try:
-        if kind == "fee_schedule":
+        if kind == "fee_schedule" or (kind == "self_pay" and Path(filename).suffix.lower() == ".csv"):
             source = await run_in_threadpool(documented.inspect_csv, content, filename)
+            source["id"] = kind
         else:
             source = await run_in_threadpool(
                 documented.inspect_pdf, content, filename, kind,
@@ -189,7 +192,7 @@ async def confirm_service(case_id: str, selection: InsuranceServiceLinesRequest,
     try:
         if not case.get("documents", {}).get("fee_schedule"):
             raise golden.GoldenCaseError("Upload the fee schedule before confirming anticipated services")
-        documented.select_services(case, selection.codes)
+        documented.select_services(case, selection.codes, selection.quantities)
         saved = await run_in_threadpool(store.save_case, case, session["patient_id"], session["share_manifest_id"], "service")
         return _response(_saved(saved))
     except golden.GoldenCaseError as exc:

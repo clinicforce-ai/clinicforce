@@ -75,9 +75,9 @@ export async function confirmInsuranceIntake(caseId: string, fields: InsuranceCa
   })
 }
 
-export async function confirmInsuranceService(caseId: string, codes: string[]): Promise<InsuranceCase> {
+export async function confirmInsuranceService(caseId: string, codes: string[], quantities: Record<string, number> = {}): Promise<InsuranceCase> {
   return request<InsuranceCase>(`/api/doctor/insurance/cases/${encodeURIComponent(caseId)}/service-lines`, {
-    method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ codes }),
+    method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ codes, quantities }),
   })
 }
 

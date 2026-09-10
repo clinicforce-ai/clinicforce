@@ -664,6 +664,21 @@ td { line-height: 1.45; }
 .insurance-v1 .v1-estimate-items h3 { margin: 8px 0; font-size: 1.15rem; }
 .insurance-v1 .v1-estimate-total { border-top: 3px solid var(--blue); background: #f3f7fc; padding: 20px; }
 .insurance-v1 .insurance-facts dd { min-width: 0; overflow-wrap: anywhere; }
+.insurance-v1 .v1-code-group { min-width: 0; margin: 28px 0; border: 1px solid var(--line); border-radius: 12px; padding: 20px; }
+.insurance-v1 .v1-code-group legend { max-width: 100%; padding: 0 8px; color: var(--blue-deep); font-size: 1.15rem; font-weight: 700; }
+.insurance-v1 .v1-code-group > small { display: block; margin-bottom: 16px; color: var(--muted-ink); }
+.insurance-v1 .v1-code-group > .button { margin-top: 16px; }
+.insurance-v1 .service-options .v1-quantity { display: flex; flex-wrap: wrap; align-items: center; padding-left: 46px; font-size: .85rem; }
+.insurance-v1 .v1-quantity input { width: 100px; height: 44px; margin: 0; padding: 8px; border: 1px solid var(--line); border-radius: 6px; }
+.insurance-v1 .v1-collection { margin: 20px 0; border-left: 4px solid var(--green-deep); border-radius: 8px; background: #f3f7fc; padding: 24px; }
+.insurance-v1 .v1-collection > span { font-size: .8rem; color: var(--blue-deep); font-weight: 700; }
+.insurance-v1 .v1-collection h2 { margin: 8px 0 16px; }
+.insurance-v1 .v1-collection ul { padding-left: 20px; color: var(--muted-ink); }
+.insurance-v1 .v1-collection li { margin: 8px 0; }
+.insurance-v1 .v1-calculation { border-bottom: 1px solid var(--line); padding-bottom: 16px; }
+.insurance-v1 .v1-source-dates { display: block; overflow-wrap: anywhere; }
+.insurance-v1 .v1-source-dates small { display: block; margin-top: 4px; color: var(--muted-ink); font-weight: 400; }
+.insurance-v1 .v1-estimate-total + .v1-estimate-total { margin-top: 24px; }
 @media (max-width: 600px) {
   .insurance-v1 .evidence-upload-grid { grid-template-columns: 1fr; }
   .insurance-v1 .evidence-upload-grid .evidence-upload + .evidence-upload { border-left: 0; border-top: 1px solid var(--line); }

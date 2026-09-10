@@ -17,12 +17,13 @@ from pathlib import Path
 from typing import Any
 
 from app.insurance.golden import GoldenCaseError
-from app.insurance.cpt_suggester import suggest_cpt_codes
-from app.insurance.v1_sources import MONEY, read_pages, individual_balance_cells
+from app.insurance.cpt_suggester import suggest_cpt_codes, clinical_context_from_pages
+from app.insurance import cpt_rules, v1_requirements
+from app.insurance.v1_sources import MONEY, read_pages, individual_balance_cells, document_dates
 
 
 MAX_EVIDENCE_PAGES = 100
-DOCUMENT_STAGES = {"coverage": "network", "fee_schedule": "network", "contract": "network", "clinical": "service", "authorization": "authorization"}
+DOCUMENT_STAGES = {"coverage": "network", "fee_schedule": "network", "contract": "network", "self_pay": "network", "clinical": "service"}
 
 
 def _now() -> str:
@@ -112,13 +113,7 @@ def _coverage_fields(pages: list[tuple[int, str]], table_cells: list | None = No
 
 
 def _authorization_rows(pages: list[tuple[int, str]]) -> list[dict[str, str]]:
-    rows = []
-    for page, text in pages:
-        for match in re.finditer(r"(?im)^\s*(\d{5}|[A-Z]\d{4})\s*[-:]\s*([^\n]+)", text):
-            block = match.group(0)
-            status = "not_required" if re.search(r"no\s+(?:prior\s+)?auth(?:orization)?\s+required", block, re.I) else "required" if re.search(r"auth(?:orization)?\s+required", block, re.I) else "not_stated"
-            rows.append({"code": match.group(1), "status": status, "quote": block.strip(), "reference": f"page {page} · uploaded authorization entry"})
-    return rows
+    return [row for row in v1_requirements.code_requirements(pages) if row["kind"] == "authorization"]
 
 
 def _procedure_rows(pages: list[tuple[int, str]]) -> list[dict[str, Any]]:
@@ -139,15 +134,25 @@ def _procedure_rows(pages: list[tuple[int, str]]) -> list[dict[str, Any]]:
 
 
 def inspect_pdf(content: bytes, filename: str, kind: str, member_id: str = "") -> dict[str, Any]:
-    if kind not in {"coverage", "clinical", "contract", "authorization"}:
+    if kind not in {"coverage", "clinical", "contract", "authorization", "self_pay"}:
         raise GoldenCaseError("Unsupported insurance evidence type")
     pages = _pdf_pages(content)
     text = "\n".join(value for _, value in pages)
+    if kind == "clinical":
+        try:
+            findings = clinical_context_from_pages(pages)
+        except Exception as exc:
+            raise GoldenCaseError("Clinical text extraction is unavailable. Retry the upload or enter the visit details yourself.") from exc
+        return {"id": kind, "filename": Path(filename).name, "sha256": hashlib.sha256(content).hexdigest(),
+                "observed_at": _now(), "document_dates": document_dates(pages), "reference": f"Uploaded clinical document · {len(pages)} pages", "findings": findings}
     if kind != "coverage":
         return {
             "id": kind, "filename": Path(filename).name, "sha256": hashlib.sha256(content).hexdigest(), "observed_at": _now(),
+            "document_dates": document_dates(pages),
             "reference": f"Uploaded {kind} document · {len(pages)} page{'s' if len(pages) != 1 else ''}",
-            "findings": {"pages": [{"page": number, "text": value} for number, value in pages], **({"clinical_context": text, "procedure_lines": _procedure_rows(pages)} if kind == "clinical" else {"authorizations": _authorization_rows(pages)} if kind == "authorization" else {})},
+            "findings": {"pages": [{"page": number, "text": value} for number, value in pages],
+                         "requirements": v1_requirements.code_requirements(pages),
+                         "policy_terms": v1_requirements.contract_terms(pages) if kind == "contract" else []},
         }
     member_token = re.sub(r"[^A-Z0-9]", "", member_id.upper())
     document_tokens = {re.sub(r"[^A-Z0-9]", "", token.upper()) for token in re.findall(r"[A-Za-z0-9-]+", text)}
@@ -156,8 +161,9 @@ def inspect_pdf(content: bytes, filename: str, kind: str, member_id: str = "") -
     fields, evidence = _coverage_fields(pages, individual_balance_cells(content))
     return {
         "id": kind, "filename": Path(filename).name, "sha256": hashlib.sha256(content).hexdigest(), "observed_at": _now(),
+        "document_dates": document_dates(pages),
         "reference": f"Uploaded coverage PDF · {len(pages)} page{'s' if len(pages) != 1 else ''}",
-        "findings": {"suggested_coverage": fields, "field_evidence": evidence, "pages": [{"page": number, "text": value} for number, value in pages], "authorizations": _authorization_rows(pages), "procedure_lines": _procedure_rows(pages)},
+        "findings": {"suggested_coverage": fields, "field_evidence": evidence, "pages": [{"page": number, "text": value} for number, value in pages], "requirements": v1_requirements.code_requirements(pages), "authorizations": _authorization_rows(pages), "procedure_lines": _procedure_rows(pages)},
     }
 
 
@@ -190,7 +196,7 @@ def inspect_csv(content: bytes, filename: str) -> dict[str, Any]:
     if not rates:
         raise GoldenCaseError("The rate CSV does not contain a procedure code and amount")
     return {"id": "fee_schedule", "filename": Path(filename).name, "sha256": hashlib.sha256(content).hexdigest(), "observed_at": _now(),
-            "reference": f"Uploaded rate CSV · {len(rates)} procedure rates", "findings": {"rate_lines": rates, "rate_count": len(rates)}}
+            "reference": f"Uploaded rate CSV · {len(rates)} procedure rates", "document_dates": document_dates([(1, content.decode("utf-8-sig"))]), "findings": {"rate_lines": rates, "rate_count": len(rates)}}
 
 
 def add_document(case: dict[str, Any], kind: str, source: dict[str, Any]) -> dict[str, Any]:
@@ -199,7 +205,12 @@ def add_document(case: dict[str, Any], kind: str, source: dict[str, Any]) -> dic
         _apply_coverage(case)
     if kind == "clinical":
         case["service_lines"] = []
-    if kind == "authorization":
+        case["service_groups"] = []
+        case["suggestions_reviewed"] = False
+        case["suggestion_notes"] = []
+        case["clinical_context"] = source["findings"]["clinical_context"]
+        case["visit_type"] = source["findings"].get("visit_type")
+    if kind in {"coverage", "contract", "authorization"}:
         _apply_authorizations(case)
     return case
 
@@ -246,41 +257,38 @@ def set_clinical_context(case: dict[str, Any], value: str, visit_type: str | Non
         raise GoldenCaseError("Complete coverage and rate-document review before requesting CPT suggestions")
     manual_context = " ".join(value.split()).strip()
     clinical_pdf = case.get("documents", {}).get("clinical", {}).get("findings", {}).get("clinical_context", "")
-    context = "\n".join(part for part in (manual_context, clinical_pdf) if part).strip()
+    context = manual_context or clinical_pdf
     if len(context) < 3:
         raise GoldenCaseError("Enter the patient's condition or upload a searchable clinical PDF")
     try:
         suggestions = suggest_cpt_codes(context + (f"\nPatient visit type: {visit_type}" if visit_type else ""), case_rate_lines(case))
     except Exception as exc:
         raise GoldenCaseError("CPT suggestions are temporarily unavailable; try again later") from exc
-    rate_by_code = {line["code"]: line for line in case_rate_lines(case)}
-    lines = {}
-    for code, reason in suggestions.items():
-        rate = rate_by_code[code]
-        lines[code] = {
-            **lines.get(code, {}), **rate, "source_document": "ClinicForce suggestion using patient-provided context and uploaded rate CSV",
-            "suggested_by": "ClinicForce", "recommendation_reason": reason,
-        }
-    case["clinical_context"] = manual_context
+    lines, groups = cpt_rules.grouped_candidates(suggestions, case_rate_lines(case))
+    case["clinical_context"] = context
     case["visit_type"] = visit_type
-    case["service_lines"] = [
-        {**line, "selected": False, "confirmed": False, "available": True, "plain_description": line["description"]}
-        for line in lines.values()
-    ]
+    case["service_lines"], case["service_groups"] = lines, groups
+    case["suggestions_reviewed"] = True
+    case["suggestion_notes"] = [note[:2000] for note in suggestions.get("notes", []) if isinstance(note, str)][:10]
     return case
 
 
-def select_services(case: dict[str, Any], codes: list[str]) -> dict[str, Any]:
+def select_services(case: dict[str, Any], codes: list[str], quantities: dict[str, int] | None = None) -> dict[str, Any]:
     if case.get("next_stage") != "service":
         raise GoldenCaseError("Complete the coverage and rate-document review before selecting procedures")
     selected = set(codes)
     lines = case.get("service_lines", [])
     if not selected or selected.difference({line["code"] for line in lines}):
         raise GoldenCaseError("Select one or more CPT/HCPCS codes read from the uploaded documents")
+    cpt_rules.validate_selection(codes, case.get("service_groups", []), lines, quantities or {})
     for line in lines:
         line.update(selected=line["code"] in selected, confirmed=line["code"] in selected)
+        line["units"] = (quantities or {}).get(line["code"], 1)
+        line["unit_allowed_cents"] = line.get("unit_allowed_cents", line.get("allowed_cents"))
+        line["allowed_cents"] = line["unit_allowed_cents"] * line["units"] if line["unit_allowed_cents"] is not None else None
     position = {code: index for index, code in enumerate(codes)}
-    lines.sort(key=lambda line: position.get(line["code"], len(position)))
+    visit_groups = {group["id"] for group in case.get("service_groups", []) if group.get("category") == "visit"}
+    lines.sort(key=lambda line: (line.get("group_id") not in visit_groups, position.get(line["code"], len(position))))
     case["next_stage"] = "authorization"
     _apply_authorizations(case)
     case["stage_decisions"].append({"stage": "service", "status": "passed", "decision": "Uploaded CPT/HCPCS codes selected", "source_mode": "documents"})
@@ -289,16 +297,23 @@ def select_services(case: dict[str, Any], codes: list[str]) -> dict[str, Any]:
 
 def _apply_authorizations(case: dict[str, Any]) -> None:
     entries = {}
-    for kind in ("coverage", "authorization"):
+    for kind in ("coverage", "contract", "authorization"):
         source = case.get("documents", {}).get(kind, {})
-        for row in source.get("findings", {}).get("authorizations", []):
-            entries.setdefault(row["code"], []).append((row, source.get("filename", "")))
+        findings = source.get("findings", {})
+        rows = findings.get("requirements")
+        if rows is None:
+            rows = v1_requirements.code_requirements([(page["page"], page["text"]) for page in findings.get("pages", [])])
+        for row in rows:
+            entries.setdefault(row["code"], []).append({**row, "source_filename": source["filename"], "observed_at": source["observed_at"]})
     for line in case.get("service_lines", []):
         rows = entries.get(line["code"], [])
-        line.update(authorization_status="not_stated", authorization_reference="")
-        if rows and len({row["status"] for row, _ in rows}) == 1:
-            row, filename = rows[0]
-            line.update(authorization_status=row["status"], authorization_reference=f"{filename} · {row['reference']} · {row['quote']}")
+        line["requirement_evidence"] = rows
+        for kind in ("authorization", "referral"):
+            network = {"in_network": "In network", "out_of_network": "Out of network"}.get((case.get("coverage") or {}).get("network_status"))
+            matches = [row for row in rows if row["kind"] == kind and row["network"] in {"Not specified", network}]
+            statuses = {row["status"] for row in matches}
+            line[f"{kind}_status"] = next(iter(statuses)) if len(statuses) == 1 else "not_stated"
+            line[f"{kind}_reference"] = " · ".join(f"{row['source_filename']} · {row['reference']} · {row['quote']}" for row in matches)
 
 
 def advance(case: dict[str, Any], stage: str) -> dict[str, Any]:
@@ -311,12 +326,13 @@ def advance(case: dict[str, Any], stage: str) -> dict[str, Any]:
         case["service_lines"] = []
     if stage == "authorization":
         _apply_authorizations(case)
-    if stage == "benefits":
+    if stage in {"authorization", "benefits"}:
         case["estimate"] = calculate(case)
+        _collection_decision(case)
         _add_estimate_facts(case)
     case["stage_decisions"].append({"stage": stage, "status": "passed", "decision": "Uploaded-document review completed", "source_mode": "documents"})
-    case["next_stage"] = {"eligibility": "network", "network": "service", "authorization": "benefits", "benefits": None}[stage]
-    if stage == "benefits":
+    case["next_stage"] = {"eligibility": "network", "network": "service", "authorization": None, "benefits": None}[stage]
+    if stage in {"authorization", "benefits"}:
         case["status"] = "complete"
     return case
 
@@ -324,7 +340,7 @@ def advance(case: dict[str, Any], stage: str) -> dict[str, Any]:
 def calculate(case: dict[str, Any]) -> dict[str, Any]:
     selected = [line for line in case.get("service_lines", []) if line.get("selected") and line.get("confirmed")]
     coverage = case.get("coverage") or {}
-    common = {"service_code": ", ".join(line["code"] for line in selected), "service_codes": [line["code"] for line in selected], "line_items": [{"code": line["code"], "description": line["description"], "allowed_cents": line["allowed_cents"]} for line in selected], "source_mode": "documents", "calculated_at": _now()}
+    common = {"service_code": ", ".join(line["code"] for line in selected), "service_codes": [line["code"] for line in selected], "line_items": [{"code": line["code"], "description": line["description"], "allowed_cents": line["allowed_cents"], "unit_allowed_cents": line.get("unit_allowed_cents", line["allowed_cents"]), "units": line.get("units", 1)} for line in selected], "source_mode": "documents", "calculated_at": _now()}
     required = ("deductible_remaining_cents", "oop_remaining_cents")
     if not selected or any(key not in coverage for key in required):
         return {**common, "estimate_available": False, "unavailable_reason": "The uploaded coverage PDF must explicitly state individual deductible and out-of-pocket remaining amounts.", "allowed_cents": None, "deductible_applied_cents": None, "nominal_coinsurance_cents": None, "copay_cents": None, "individual_deductible_remaining_cents": coverage.get("deductible_remaining_cents"), "individual_oop_remaining_cents": coverage.get("oop_remaining_cents"), "oop_cap_adjustment_cents": None, "patient_cents": None, "plan_cents": None, "disclaimer": "No estimate is shown when an uploaded source does not state a required value."}
@@ -340,17 +356,54 @@ def calculate(case: dict[str, Any]) -> dict[str, Any]:
     for line in selected:
         line_allowed = int(line["allowed_cents"])
         line_deductible = min(line_allowed, deductible_remaining)
-        line_coinsurance = int((Decimal(line_allowed - line_deductible) * Decimal(percent or 0) / 100).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
-        line_nominal = min(line_allowed, line_deductible + line_coinsurance)
+        line_coinsurance = int((Decimal(line_allowed - line_deductible) * Decimal(percent) / 100).quantize(Decimal("1"), rounding=ROUND_HALF_UP)) if percent is not None else None
+        line_nominal = min(line_allowed, line_deductible + (line_coinsurance or 0))
         line_patient = min(line_nominal, oop_remaining)
-        line_items.append({"code": line["code"], "description": line["description"], "allowed_cents": line_allowed, "deductible_applied_cents": line_deductible, "coinsurance_cents": line_coinsurance, "patient_cents": line_patient, "plan_cents": line_allowed - line_patient})
+        line_items.append({"code": line["code"], "description": line["description"], "allowed_cents": line_allowed, "unit_allowed_cents": line.get("unit_allowed_cents", line_allowed), "units": line.get("units", 1), "deductible_applied_cents": line_deductible, "coinsurance_cents": line_coinsurance, "patient_cents": line_patient, "plan_cents": line_allowed - line_patient})
         deductible_remaining -= line_deductible
         oop_remaining -= line_patient
     deductible = sum(line["deductible_applied_cents"] for line in line_items)
-    coinsurance = sum(line["coinsurance_cents"] for line in line_items)
-    nominal = deductible + coinsurance
+    coinsurance = sum(line["coinsurance_cents"] for line in line_items) if percent is not None else None
+    nominal = deductible + coinsurance if coinsurance is not None else None
     patient = sum(line["patient_cents"] for line in line_items)
-    return {**common, "line_items": line_items, "estimate_available": True, "allowed_cents": allowed, "deductible_applied_cents": deductible, "nominal_coinsurance_cents": coinsurance, "copay_cents": None, "individual_deductible_remaining_cents": coverage["deductible_remaining_cents"], "individual_oop_remaining_cents": coverage["oop_remaining_cents"], "oop_cap_adjustment_cents": patient - nominal, "patient_cents": patient, "plan_cents": allowed - patient, "collect_today_cents": patient, "confidence": "source-backed", "confidence_reason": "Patient and plan shares are calculated from the benefit values and rates extracted from this review's uploads.", "plain_explanation": "Estimated from the uploaded benefit document and selected uploaded rate-CSV entries.", "disclaimer": "Pre-visit estimate only; final responsibility depends on claim adjudication."}
+    return {**common, "line_items": line_items, "estimate_available": True, "allowed_cents": allowed, "deductible_applied_cents": deductible, "nominal_coinsurance_cents": coinsurance, "copay_cents": None, "individual_deductible_remaining_cents": coverage["deductible_remaining_cents"], "individual_oop_remaining_cents": coverage["oop_remaining_cents"], "oop_cap_adjustment_cents": patient - nominal if nominal is not None else None, "patient_cents": patient, "plan_cents": allowed - patient, "plain_explanation": "Estimated from the uploaded benefit document and selected uploaded rate-CSV entries.", "disclaimer": "Pre-visit estimate only; final responsibility depends on claim adjudication."}
+
+
+def _collection_decision(case: dict[str, Any]) -> None:
+    estimate, coverage = case["estimate"], case.get("coverage") or {}
+    selected = [line for line in case["service_lines"] if line.get("selected")]
+    checks = []
+    if not estimate["estimate_available"]:
+        checks.append(estimate["unavailable_reason"])
+    if coverage.get("network_status") != "in_network":
+        checks.append("Provider network participation for this member and visit needs review.")
+    if any(line.get("authorization_status") != "not_required" for line in selected):
+        checks.append("Review authorization requirements or approvals for the selected codes.")
+    if any(line.get("referral_status") != "not_required" for line in selected):
+        checks.append("Review the uploaded contract's referral conditions and their applicability to this member.")
+    estimate.update(collection_action="verify_before_collecting" if checks else "do_not_collect" if estimate["patient_cents"] == 0 else "collect",
+                    collect_today_cents=None if checks else estimate["patient_cents"], verification_reasons=checks,
+                    confidence="low" if checks else "medium",
+                    confidence_reason="Required evidence still needs review." if checks else "Source-backed pre-visit estimate; final coding, benefits applicability and adjudication can change.")
+    if coverage.get("network_status") == "out_of_network":
+        estimate["collection_action"] = "out_of_network"
+    nominal = estimate.get("nominal_coinsurance_cents")
+    estimate["normal_patient_share_cents"] = estimate["deductible_applied_cents"] + nominal if nominal is not None and estimate.get("deductible_applied_cents") is not None else None
+    estimate["collection_reason"] = (
+        "The uploaded benefits report $0 individual out-of-pocket remaining. The calculation caps the patient share at $0 for applicable covered services."
+        if estimate["estimate_available"] and coverage.get("oop_remaining_cents") == 0 else
+        "The patient estimate applies the uploaded deductible and cost-sharing values, then the remaining individual out-of-pocket limit."
+        if estimate["estimate_available"] else estimate["unavailable_reason"]
+    )
+    cash_source = case.get("documents", {}).get("self_pay")
+    cash_rates = {line["code"]: line for line in (cash_source or {}).get("findings", {}).get("rate_lines", [])}
+    estimate["self_pay"] = {"available": bool(selected) and all(line["code"] in cash_rates for line in selected), "line_items": [], "total_cents": None}
+    if cash_source:
+        for line in selected:
+            rate = cash_rates.get(line["code"])
+            estimate["self_pay"]["line_items"].append({"code": line["code"], "amount_cents": rate["allowed_cents"] * line.get("units", 1) if rate else None})
+        if estimate["self_pay"]["available"]:
+            estimate["self_pay"]["total_cents"] = sum(line["amount_cents"] for line in estimate["self_pay"]["line_items"])
 
 
 def _add_estimate_facts(case: dict[str, Any]) -> None:
@@ -363,5 +416,8 @@ def _add_estimate_facts(case: dict[str, Any]) -> None:
         return
     rate_source = case["documents"]["fee_schedule"]
     for line in estimate["line_items"]:
-        case["facts"].append(_fact("benefits", f"CPT/HCPCS {line['code']} rate", _money(line["allowed_cents"]), rate_source))
+        rate = next((rate for rate in case_rate_lines(case) if rate["code"] == line["code"]), {})
+        fact = _fact("benefits", f"CPT/HCPCS {line['code']} allowed total", _money(line["allowed_cents"]), rate_source, rate.get("reference"))
+        fact["citation"]["quote"] = rate.get("quote", "")
+        case["facts"].append(fact)
     case["facts"].extend((_fact("benefits", "Deductible applied", _money(estimate["deductible_applied_cents"]), source), _fact("benefits", "Coinsurance", _money(estimate["nominal_coinsurance_cents"]), source), _fact("estimate", "Estimated patient responsibility", _money(estimate["patient_cents"]), source), _fact("estimate", "Estimated plan responsibility", _money(estimate["plan_cents"]), rate_source)))
