@@ -72,6 +72,13 @@ class GatewayTests(unittest.IsolatedAsyncioTestCase):
 
 
 class ResultsAndIntakeTests(unittest.TestCase):
+    def test_demo_does_not_require_a_practice_configuration(self):
+        with patch.dict(os.environ, {'AVAILITY_ENVIRONMENT': 'demo', 'AVAILITY_SCOPE': DEMO_SCOPE,
+                                     'AVAILITY_PRACTICE_CONFIG': 'not-json'}):
+            configured, practice, _ = v2.configuration()
+        self.assertEqual(configured.environment, 'demo')
+        self.assertEqual(practice, {})
+
     def test_only_complete_matching_payer_estimates_become_a_total(self):
         expected = [{'code': '99204', 'charge': '300.00', 'units': '1', 'modifiers': []}]
         payload = {'result': {'claimInformation': {'serviceLines': [{'procedureCode': '99204', 'quantity': '1', 'amount': '300.00', 'estimatedPatientResponsibility': '0.00', 'allowed': {'amount': '150.00'}}]}}}

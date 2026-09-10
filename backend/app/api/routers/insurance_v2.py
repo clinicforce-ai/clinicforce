@@ -35,7 +35,7 @@ class Start(BaseModel):
 def configuration() -> tuple[Settings, dict, str]:
     try:
         settings = Settings.read()
-        practice = json.loads(os.getenv("AVAILITY_PRACTICE_CONFIG", "{}"))
+        practice = {} if settings.environment == "demo" else json.loads(os.getenv("AVAILITY_PRACTICE_CONFIG", "{}"))
         if not isinstance(practice, dict):
             raise ValueError
         providers = practice.get("providers", {})
