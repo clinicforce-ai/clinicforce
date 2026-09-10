@@ -91,6 +91,17 @@ export default function InsuranceVerificationV2({ onBack }: Props) {
   const locked = !!insuranceCase && Object.keys(insuranceCase.transactions).length > 0
   const downstreamSubmitted = !!insuranceCase && Object.keys(insuranceCase.transactions).some(key => key !== 'coverage')
 
+  if (config && (!config.credentials_configured || (!demo && !config.production_enabled))) {
+    return <section className="insurance-beta insurance-v2" aria-labelledby="insurance-v2-unavailable">
+      <button className="back-control" type="button" onClick={onBack}><ArrowLeft aria-hidden="true" className="size-4" /> Back to clinical summary</button>
+      <div className="panel">
+        <p className="eyebrow"><ShieldCheck aria-hidden="true" size={17} /> Insurance verification</p>
+        <h1 id="insurance-v2-unavailable">Insurance verification is currently unavailable</h1>
+        <p>You can continue reviewing the patient’s shared record.</p>
+      </div>
+    </section>
+  }
+
   return <section className="insurance-beta insurance-v2" aria-labelledby="insurance-v2-heading">
     <button className="back-control" type="button" onClick={onBack}><ArrowLeft aria-hidden="true" className="size-4" /> Back to clinical summary</button>
     <header className="insurance-beta-hero">
@@ -106,8 +117,6 @@ export default function InsuranceVerificationV2({ onBack }: Props) {
       <main className="v2-main">
         <div className="v2-live-status" role="status" aria-live="polite">{busy ? <><LoaderCircle size={16} className="animate-spin" aria-hidden="true" /> {busy}</> : 'Case changes are saved on the server.'}</div>
         {error && <div className="form-error" role="alert"><AlertTriangle size={18} aria-hidden="true" /><span>{error}</span></div>}
-        {config && !config.credentials_configured && <div className="v2-callout"><strong>Connect the backend credentials</strong><p>The server needs your Availity client ID and secret. The repository .env is supported for local development; the hosted app uses AWS Secrets Manager.</p></div>}
-        {config && !demo && !config.production_enabled && <div className="v2-callout"><strong>Production setup is incomplete</strong><p>The administrator must configure the clinic’s approved billing provider, submitter ID and completed payer enrollments, then enable production.</p></div>}
         <section id="v2-intake" className="v2-section">
           <p className="section-kicker">01 · Request inputs</p><h2>{demo ? 'Use Availity’s synthetic patient' : 'Upload sources. Review the extracted request.'}</h2><p>{config?.message}</p>
           {!insuranceCase && <button className="button button-primary" type="button" disabled={!!busy || !config?.credentials_configured || (!demo && !config?.production_enabled)} onClick={start}>{demo ? 'Start demo case' : 'Start document intake'}<ArrowRight size={17} aria-hidden="true" /></button>}
