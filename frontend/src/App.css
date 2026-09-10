@@ -648,6 +648,31 @@ td { line-height: 1.45; }
 .insurance-stepper .step-copy small { margin-top: 3px; font-size: .65rem; font-weight: 500; }
 .insurance-layout { min-width: 0; border-left: 1px solid var(--line); background: var(--surface); }
 .insurance-stage-card { --stage-pad: clamp(24px, 4vw, 48px); min-height: 680px; background: var(--surface); padding: var(--stage-pad); }
+.insurance-v1 .v1-upload-action { display: inline-flex; width: fit-content; min-height: 44px; align-items: center; margin-top: 16px; border-radius: 8px; background: var(--green-deep); padding: 10px 18px; color: white; font-size: .8rem; font-weight: 700; box-shadow: 0 3px 8px #008b7826; }
+.insurance-v1 .button-primary { background: var(--green-deep); }
+.insurance-v1 .evidence-upload small { font-weight: 400; }
+.insurance-v1 .evidence-upload:focus-within { outline: 2px solid var(--blue); outline-offset: -2px; }
+.insurance-v1 .evidence-upload:has(input:disabled) { cursor: default; }
+.insurance-v1 .source-excerpt { min-width: 0; margin: 12px 0; font-size: .8rem; font-weight: 400; }
+.insurance-v1 .source-excerpt summary { min-height: 44px; align-content: center; color: var(--blue-deep); cursor: pointer; }
+.insurance-v1 .source-excerpt blockquote, .insurance-v1 .source-excerpt pre { margin: 0; border-left: 3px solid var(--line); background: #f8fafd; padding: 12px; white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; line-height: 1.6; }
+.insurance-v1 .missing-source { color: var(--muted-ink); font-size: .82rem; line-height: 1.6; }
+.insurance-v1 .v1-estimate-items { display: grid; gap: 24px; margin: 24px 0; }
+.insurance-v1 .v1-estimate-items article { min-width: 0; border: 1px solid var(--line); padding: 20px; }
+.insurance-v1 .v1-estimate-items header { margin-bottom: 14px; }
+.insurance-v1 .v1-estimate-items header span { color: var(--blue-deep); font-size: .8rem; font-weight: 700; }
+.insurance-v1 .v1-estimate-items h3 { margin: 8px 0; font-size: 1.15rem; }
+.insurance-v1 .v1-estimate-total { border-top: 3px solid var(--blue); background: #f3f7fc; padding: 20px; }
+.insurance-v1 .insurance-facts dd { min-width: 0; overflow-wrap: anywhere; }
+@media (max-width: 600px) {
+  .insurance-v1 .evidence-upload-grid { grid-template-columns: 1fr; }
+  .insurance-v1 .evidence-upload-grid .evidence-upload + .evidence-upload { border-left: 0; border-top: 1px solid var(--line); }
+  .insurance-v1 .insurance-facts div { grid-template-columns: 1fr; gap: 6px; }
+  .insurance-v1 .insurance-stage-toolbar { align-items: flex-start; flex-direction: column; gap: 8px; }
+  .insurance-v1 .insurance-status { text-align: left; }
+  .insurance-v1 .clinical-context-form { padding: 14px; }
+  .insurance-v1 .clinical-context-form .button { width: 100%; }
+}
 .insurance-stage-card > h2 { max-width: 27ch; margin-top: 5px; font-size: clamp(1.65rem, 2.5vw, 2.15rem); }
 .insurance-stage-card > p:not(.section-kicker, .form-error, .insurance-status, .calculation-line, .estimate-disclaimer) { max-width: 72ch; color: var(--muted-ink); line-height: 1.65; }
 .insurance-stage-card .button { margin-top: 20px; }

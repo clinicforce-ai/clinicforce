@@ -81,10 +81,10 @@ export async function confirmInsuranceService(caseId: string, codes: string[]): 
   })
 }
 
-export async function suggestInsuranceServices(caseId: string, clinicalContext: string): Promise<InsuranceCase> {
+export async function suggestInsuranceServices(caseId: string, clinicalContext: string, visitType?: 'new' | 'established'): Promise<InsuranceCase> {
   return request<InsuranceCase>(`/api/doctor/insurance/cases/${encodeURIComponent(caseId)}/clinical-context`, {
     method: 'PUT', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ clinical_context: clinicalContext, visit_type: 'new' }),
+    body: JSON.stringify({ clinical_context: clinicalContext, visit_type: visitType }),
   })
 }
 

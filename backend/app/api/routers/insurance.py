@@ -15,7 +15,7 @@ from app.api.settings import (
 )
 from app.core import object_store
 from app.core.patient_store import get_patient_profile
-from app.insurance import documented, golden, store
+from app.insurance import documented, golden, store, v1_sources
 from app.logs.logger import log_error
 
 
@@ -45,6 +45,8 @@ def _load_case(case_id: str, session: dict) -> dict:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Insurance case not found or expired")
     if case.get("source_mode") == "availity":
         raise HTTPException(status_code=409, detail="Use the Beta V2 workflow for this Availity case")
+    if case.get("extraction_version") != v1_sources.EXTRACTION_VERSION:
+        raise HTTPException(status_code=409, detail="Start a new V1 review and upload your files again so every value has source evidence.")
     return case
 
 
@@ -75,14 +77,16 @@ async def enable_beta(request: Request, response: Response) -> dict:
 async def create_case(request: Request, file: UploadFile = File(...)) -> JSONResponse:
     session = _session(request)
     filename = Path(file.filename or "insurance-card").name
-    if Path(filename).suffix.lower() != ".pdf":
-        raise HTTPException(status_code=415, detail="Upload the insurance card as a PDF")
+    if Path(filename).suffix.lower() not in {".pdf", ".jpg", ".jpeg", ".png"}:
+        raise HTTPException(status_code=415, detail="Upload the insurance card as a PDF, JPG or PNG")
     content = await file.read(MAX_INSURANCE_CARD_BYTES + 1)
     if len(content) > MAX_INSURANCE_CARD_BYTES:
         raise HTTPException(status_code=413, detail="Insurance card files must be 10 MB or smaller")
     try:
-        fields = await run_in_threadpool(golden.read_card, content)
+        pages = await run_in_threadpool(v1_sources.read_pages, content, 2)
+        fields, evidence = v1_sources.card_fields(pages)
         workflow = documented.pending_case(fields)
+        workflow.update(ocr_evidence=evidence, extraction_version=v1_sources.EXTRACTION_VERSION)
         workflow["card_source"] = {
             "filename": filename, "sha256": hashlib.sha256(content).hexdigest(),
             "observed_at": datetime.now(timezone.utc).isoformat(), "reference": "Uploaded insurance card",
@@ -111,7 +115,9 @@ async def confirm_intake(case_id: str, review: InsuranceIntakeRequest, request: 
     try:
         if case.get("evidence_manifest_id") != golden.evidence_binding():
             raise golden.GoldenCaseError("The insurance review configuration changed; start a new case")
-        fields = {**case.get("ocr", {}), **review.model_dump()}
+        fields = case.get("ocr", {})
+        if case.get("next_stage") != "intake" or any(value != fields.get(key, "") for key, value in review.model_dump().items()):
+            raise golden.GoldenCaseError("Confirm the fields extracted from the uploaded card without changing them.")
         documented.confirm_intake(case, fields)
         saved = await run_in_threadpool(store.save_case, case, session["patient_id"], session["share_manifest_id"], "intake")
         return _response(_saved(saved))
@@ -127,9 +133,9 @@ async def upload_evidence(case_id: str, kind: str, request: Request, file: Uploa
     if case.get("source_mode") != "documents" or expected_stage is None or case.get("next_stage") != expected_stage:
         raise HTTPException(status_code=409, detail="This evidence upload is not available at the current insurance step")
     filename = Path(file.filename or f"{kind}.pdf").name
-    expected_suffix = ".csv" if kind == "fee_schedule" else ".pdf"
-    if Path(filename).suffix.lower() != expected_suffix:
-        raise HTTPException(status_code=415, detail=f"Upload a {expected_suffix.removeprefix('.').upper()} file for this evidence")
+    suffixes = {".csv"} if kind == "fee_schedule" else {".pdf", ".jpg", ".jpeg", ".png"}
+    if Path(filename).suffix.lower() not in suffixes:
+        raise HTTPException(status_code=415, detail="Upload a rate CSV" if kind == "fee_schedule" else "Upload a PDF, JPG or PNG")
     content = await file.read(MAX_UPLOAD_BYTES + 1)
     if len(content) > MAX_UPLOAD_BYTES:
         raise HTTPException(status_code=413, detail="Insurance evidence files must be 15 MB or smaller")
@@ -158,6 +164,8 @@ async def upload_evidence(case_id: str, kind: str, request: Request, file: Uploa
         if object_key:
             await run_in_threadpool(object_store.delete_object, object_key)
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except golden.OCRServiceError as exc:
+        raise HTTPException(status_code=503, detail="Document OCR is temporarily unavailable; try again.") from exc
 
 
 @router.put("/cases/{case_id}/clinical-context")
@@ -167,7 +175,7 @@ async def request_cpt_suggestions(
     session = _session(request)
     case = await run_in_threadpool(_load_case, case_id, session)
     try:
-        documented.set_clinical_context(case, review.clinical_context, review.visit_type)
+        await run_in_threadpool(documented.set_clinical_context, case, review.clinical_context, review.visit_type)
         saved = await run_in_threadpool(store.save_case, case, session["patient_id"], session["share_manifest_id"], "clinical-context")
         return _response(_saved(saved))
     except golden.GoldenCaseError as exc:

@@ -1,7 +1,7 @@
 export type InsuranceStage = 'intake' | 'eligibility' | 'network' | 'service' | 'authorization' | 'benefits' | 'estimate'
 export type InsuranceSourceMode = 'documents'
 
-export interface InsuranceCitation { source_filename: string; sha256: string; reference: string; observed_at: string }
+export interface InsuranceCitation { source_filename: string; sha256: string; reference: string; observed_at: string; quote?: string }
 export interface EvidenceFact { stage: InsuranceStage; label: string; value: string; explanation?: string; citation: InsuranceCitation; source_mode: InsuranceSourceMode }
 export interface InsuranceCoverageSuggestions {
   plan_name?: string; network_status?: 'in_network' | 'out_of_network'
@@ -11,6 +11,7 @@ export interface InsuranceSource {
   id: string; filename: string; sha256: string; observed_at: string; reference?: string
   findings?: {
     suggested_coverage?: InsuranceCoverageSuggestions; rate_count?: number
+    pages?: Array<{ page: number; text: string }>
     authorizations?: Array<{ code: string; status: 'not_required' | 'required' | 'not_stated'; reference: string }>
   }
 }
@@ -20,6 +21,7 @@ export interface ServiceLine {
   recommendation_reason?: string
   service_item_id?: string; service_item_name?: string; service_status?: 'scheduled' | 'if_elected'
   source_document?: string
+  reference?: string
   select_together?: boolean
   authorization_status?: 'not_required' | 'required' | 'not_stated'; authorization_reference?: string
 }
@@ -49,6 +51,7 @@ export interface InsuranceCase {
   service_lines: ServiceLine[]; stage_decisions: StageDecision[]
   facts: EvidenceFact[]; sources: InsuranceSource[]; estimate: EstimateBreakdown | null
   clinical_context?: string; documents?: Record<string, InsuranceSource>
+  card_source?: InsuranceSource; ocr_evidence?: Record<string, { page: number; quote: string; value: string }>
 }
 
 export interface InsuranceCardFields {

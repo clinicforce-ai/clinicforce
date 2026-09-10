@@ -8,9 +8,9 @@ from app.api.schemas.base import RequestModel
 
 
 class InsuranceIntakeRequest(RequestModel):
-    member_name: str = Field(min_length=3, max_length=80)
-    member_id: str = Field(min_length=5, max_length=40)
-    group_number: str = Field(min_length=3, max_length=40)
+    member_name: str = Field(default="", max_length=100)
+    member_id: str = Field(default="", max_length=40)
+    group_number: str = Field(default="", max_length=40)
 
 
 class InsuranceServiceLinesRequest(RequestModel):
@@ -21,4 +21,4 @@ class InsuranceServiceLinesRequest(RequestModel):
 
 class InsuranceClinicalContextRequest(RequestModel):
     clinical_context: str = Field(default="", max_length=8_000)
-    visit_type: Literal["new", "established"] = "new"
+    visit_type: Literal["new", "established"] | None = None
