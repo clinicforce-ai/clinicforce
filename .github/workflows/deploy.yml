@@ -92,6 +92,13 @@ jobs:
           IMAGE_TAG: ${{ github.sha }}
         run: |
           set -euo pipefail
+          # Infrastructure releases run in a separate repository. Let an active
+          # stack update finish before reading and preserving its parameters.
+          stack_status=$(aws cloudformation describe-stacks --stack-name "$STACK_NAME" \
+            --query 'Stacks[0].StackStatus' --output text)
+          if [[ "$stack_status" == *_IN_PROGRESS ]]; then
+            aws cloudformation wait stack-update-complete --stack-name "$STACK_NAME"
+          fi
           # Preserve every existing integration parameter, including newly added secrets.
           aws cloudformation describe-stacks --stack-name "$STACK_NAME" \
             --query 'Stacks[0].Parameters[].ParameterKey' --output json > /tmp/clinicforce-parameter-keys.json
