@@ -1,6 +1,12 @@
 # Availity Beta V2 — setup and remaining actions
 
-Updated 9 September 2026. This describes the implementation in this working tree; it does **not** mean it has been deployed to the live site.
+Deployed 9 September 2026 to **https://app.clinicforce.ai**. Application release `36dee40` and infrastructure release `182bce1` completed successfully. The live browser check passed: synthetic patient QR → passcode → **Verify insurance → Use Availity beta V2**, with no JavaScript errors. Backend tests: 118 passed, plus 9 subtests; frontend lint/build and CloudFormation validation passed.
+
+**Current hosted status: V2 is deployed in Demo mode, but its Availity credentials are not connected yet.** The authenticated live configuration confirms `credentials_configured=false`. AWS denied `secretsmanager:CreateSecret` for the available local AWS identity; an authorized administrator must create the secret described in section 6 and provide its ARN. This is the outstanding AWS connection step. The working local `.env` remains where it was; it is not copied into the deployed image.
+
+The successful Availity coverage check below used the local Demo credentials directly. A hosted Availity transaction cannot be verified until the AWS secret is connected. PCE, Service Reviews and Configurations still require resolution of the observed HTTP 403 responses. **Real-patient Availity access and pricing are not activated.**
+
+Release records: [application deployment](https://github.com/clinicforce-ai/clinicforce/actions/runs/34429339708), [infrastructure deployment](https://github.com/clinicforce-ai/clinicforce-aws/actions/runs/34429080511). The first infrastructure attempt rolled back because the existing workflow tried to recreate an already-existing ID.me secret. The corrected workflow preserves existing integration parameters unless explicitly overridden. Application releases also wait for an active infrastructure update to finish.
 
 ## What V2 now does
 
@@ -149,7 +155,7 @@ For local development this JSON may be a single-quoted `.env` value. For AWS use
 
 The current deployment template is `clinicforce-aws/stacks/clinicforce-production.yaml`. Updating the older `ecs-backend.yaml` alone does not configure this stack.
 
-1. In AWS Secrets Manager in the app's region, create a secret of type **Other type of secret**. Use the AWS-managed Secrets Manager encryption key (`aws/secretsmanager`). Add keys `client_id` and `client_secret`, with your Demo app values. Record its ARN. Do not commit the values or paste them into GitHub workflow inputs.
+1. Using an authorized AWS console account, open **Secrets Manager** and select **US East (N. Virginia), us-east-1**. Choose **Store a new secret → Other type of secret**. Add `client_id` with the value of `AVAILITY_API_KEY` from your local `.env`, and `client_secret` with the value of `AVAILITY_SECRET_KEY`. Use the AWS-managed encryption key (`aws/secretsmanager`). Choose **Next**, name it `clinicforce-production/availity-demo`, leave automatic rotation disabled, and store it. Open the resulting secret and copy its **ARN**. Send only the ARN to the developer; never the values. If the console denies creation too, ask your AWS administrator to create this secret. No application IAM escalation or plaintext ECS credential workaround is needed.
 2. Deploy the updated infrastructure template/workflow with `availity_environment=demo`, `availity_credentials_secret_arn=<that ARN>`, and `insurance_beta_enabled=true`. Leave the gateway at its default unless Availity confirms another URL. This adds ECS secret injection and the execution-role permission to retrieve that secret.
 3. Release the app backend and frontend changes together using the app deployment workflow. New backend dependencies require rebuilding its image. The release workflow now preserves **all** existing stack parameters rather than a fixed list, so unrelated integration settings and new Availity settings survive app releases.
 4. Verify the hosted Demo through the real clinician QR flow. Local `.env` values are not automatically copied into ECS.
