@@ -8,28 +8,41 @@ import os
 import re
 import time
 from datetime import datetime, timezone
+from decimal import Decimal, InvalidOperation
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from pathlib import Path
 from typing import Literal
 
 from fastapi import APIRouter, File, HTTPException, Request, UploadFile
 from fastapi.concurrency import run_in_threadpool
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from app.api.routers.insurance import _response, _session
 from app.api.settings import MAX_UPLOAD_BYTES
 from app.core.patient_store import get_patient_profile
-from app.insurance import availity_intake as intake, availity_results as results, ecw_backend, golden, store
+from app.insurance import availity_intake as intake, availity_results as results, cpt_rules, cpt_suggester, ecw_backend, golden, store
 from app.insurance.availity import Settings, gateway, PATHS, DEMO_SCENARIOS, unwrap
 
 
 router = APIRouter(prefix="/api/doctor/insurance/v2", tags=["doctor-insurance-v2"])
-Resource = Literal["coverage", "estimate", "authorization", "referral"]
+Resource = Literal["coverage", "estimate", "procedure_estimate", "authorization", "referral"]
 
 
 class Start(BaseModel):
     model_config = ConfigDict(extra="forbid")
     scenario: Literal["Coverages-Complete-i", "Coverages-InProgress-i", "Coverages-Retrying-i", "Coverages-PayerError1-i", "Coverages-RequestError1-i"] = "Coverages-Complete-i"
+
+
+class ServiceChoice(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    code: str
+    quantity: int = Field(ge=1, le=10_000)
+    service_status: Literal["scheduled", "possible"]
+
+
+class ConfirmServices(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    lines: list[ServiceChoice] = Field(min_length=1, max_length=20)
 
 
 def configuration() -> tuple[Settings, dict, str]:
@@ -54,13 +67,15 @@ def configuration() -> tuple[Settings, dict, str]:
 
 def public(case: dict) -> dict:
     # Raw payer responses and account configuration never leave the backend.
-    visible = {k: case[k] for k in ("id", "created_at", "expires_at", "environment", "revision", "sources", "missing", "inputs", "discovery", "events") if k in case}
+    visible = {k: case[k] for k in ("id", "created_at", "expires_at", "environment", "revision", "sources", "missing", "inputs", "discovery", "suggestions", "events") if k in case}
     if "inputs" in visible:
         visible["inputs"] = {k: v for k, v in visible["inputs"].items() if k not in {"submitter_id", "provider", "rendering_provider"}}
         provider = case["inputs"].get("provider", {})
         visible["inputs"]["provider"] = {k: provider.get(k) for k in ("npi", "lastName", "addressLine1", "city", "stateCode", "zipCode")}
     visible["sources"] = {k: {n: v for n, v in s.items() if n not in {"fields", "lines"}} for k, s in case.get("sources", {}).items()}
     visible["transactions"] = {k: {n: v for n, v in t.items() if n not in {"payload", "request_body"}} for k, t in case.get("transactions", {}).items()}
+    visible["missing_by_resource"] = {resource: request_missing(case, resource) for resource in ("coverage", "estimate", "procedure_estimate", "authorization", "referral")}
+    visible["summary"] = front_desk_summary(case)
     return visible
 
 
@@ -94,7 +109,157 @@ def demo_inputs() -> dict:
             "rendering_provider": {"lastName": "Synthetic service provider", "npi": "1234567893"}, "service_type": "1",
             "service_date": datetime.now(timezone.utc).date().isoformat(), "place_of_service": "11", "diagnoses": ["J3089"],
             "patient_phone": "5552347700", "reason": "Availity's published synthetic transaction",
-            "coverage_missing": [], "review_missing": [], "lines": [{"code": "92523", "units": "100", "charge": "250.00", "modifiers": [], "diagnosis": "J3089"}]}
+            "coverage_missing": [], "review_missing": [], "lines": [{"code": "92523", "description": "Availity synthetic service",
+                                                                        "units": "100", "charge": "250.00", "cash_cents": None,
+                                                                        "service_status": "scheduled", "modifiers": [], "diagnosis": "J3089"},
+                                                                       {"code": "95913", "description": "Possible synthetic follow-up procedure",
+                                                                        "units": "1", "charge": "900.00", "cash_cents": None,
+                                                                        "service_status": "possible", "modifiers": [], "diagnosis": "J3089"}]}
+
+
+def canonical(resource: str) -> str:
+    return "estimate" if resource == "procedure_estimate" else resource
+
+
+def service_lines(case: dict, resource: str) -> list[dict]:
+    status = "possible" if resource == "procedure_estimate" else "scheduled"
+    return [line for line in case["inputs"].get("lines", []) if line.get("service_status", "scheduled") == status]
+
+
+def refresh_missing(case: dict) -> None:
+    """Recalculate service gaps after eCW, fee CSV, or a confirmed suggestion changes lines."""
+    inputs = case["inputs"]
+    line_gaps = ("eClinicalWorks did not return clinician-coded", "eClinicalWorks did not associate every coded service",
+                 "eClinicalWorks did not return the intended units", "eClinicalWorks FHIR did not return each billed line amount",
+                 "Upload the clinic fee CSV")
+    review = [item for item in inputs.get("review_missing", []) if not item.startswith(line_gaps)]
+    lines = inputs.get("lines", [])
+    diagnoses = inputs.get("diagnoses", [])
+    if not lines:
+        review.append("No CPT/HCPCS service has been confirmed for this appointment.")
+    if not diagnoses:
+        review.append("eClinicalWorks did not return clinician-coded ICD-10 diagnoses for these services.")
+    if lines and any(not line.get("diagnosis") or line["diagnosis"] not in diagnoses for line in lines):
+        review.append("eClinicalWorks did not associate every coded service with one of the returned ICD-10 diagnoses.")
+    if any(not line.get("units") for line in lines):
+        review.append("Confirm the intended units for every coded service.")
+    inputs["review_missing"] = list(dict.fromkeys(review))
+    estimate = list(inputs["review_missing"])
+    if not inputs.get("patient_phone"):
+        estimate.append("eClinicalWorks did not return the patient's phone number required by Availity PCE.")
+    if any(line.get("charge") is None for line in lines):
+        estimate.append("Upload the clinic fee CSV with a Billed Charge for every selected CPT/HCPCS service.")
+    case["missing"] = list(dict.fromkeys(estimate))
+
+
+def request_missing(case: dict, resource: str) -> list[str]:
+    inputs = case["inputs"]
+    if resource == "coverage":
+        return inputs.get("coverage_missing", [])
+    line_gaps = ("eClinicalWorks did not return clinician-coded", "eClinicalWorks did not associate every coded service",
+                 "eClinicalWorks did not return the intended units", "Confirm the intended units",
+                 "No CPT/HCPCS service", "eClinicalWorks FHIR did not return each billed line amount", "Upload the clinic fee CSV")
+    if canonical(resource) == "estimate":
+        missing = list(inputs.get("coverage_missing", []))
+        if not inputs.get("place_of_service"):
+            missing.append("Administrator: map this eClinicalWorks location to its two-digit place-of-service code.")
+    else:
+        missing = [item for item in inputs.get("review_missing", []) if not item.startswith(line_gaps)]
+    lines = service_lines(case, resource)
+    label = "possible procedure" if resource == "procedure_estimate" else "scheduled"
+    if not lines:
+        missing.append(f"No {label} service is confirmed for this request.")
+    diagnoses = inputs.get("diagnoses", [])
+    if not diagnoses:
+        missing.append("eClinicalWorks did not return clinician-coded ICD-10 diagnoses for these services.")
+    if lines and any(not line.get("diagnosis") or line["diagnosis"] not in diagnoses for line in lines):
+        missing.append("eClinicalWorks did not associate every requested service with a returned ICD-10 diagnosis.")
+    if any(not line.get("units") for line in lines):
+        missing.append("Confirm the intended units for every requested service.")
+    if canonical(resource) == "estimate":
+        if not inputs.get("patient_phone"):
+            missing.append("eClinicalWorks did not return the patient's phone number required by Availity PCE.")
+        if any(line.get("charge") is None for line in lines):
+            missing.append("Upload the clinic fee CSV with a Billed Charge for every requested CPT/HCPCS service.")
+    return list(dict.fromkeys(missing))
+
+
+def apply_fee_schedule(case: dict, source: dict) -> None:
+    rates = {line["code"]: line for line in source["lines"]}
+    for line in case["inputs"].get("lines", []):
+        rate = rates.get(line["code"])
+        if not rate:
+            continue
+        line["description"] = rate.get("description") or line.get("description")
+        line["cash_cents"] = rate.get("cash_cents")
+        line["charge"] = line.get("charge") or rate.get("charge")
+        line["service_status"] = line.get("service_status") or rate.get("service_status") or "scheduled"
+    case["sources"]["fees"] = source
+    refresh_missing(case)
+
+
+def front_desk_summary(case: dict) -> dict:
+    coverage = case.get("transactions", {}).get("coverage", {}).get("result", {})
+    plans = coverage.get("plans") or []
+    plan_text = " ".join(str(plan.get(key) or "") for plan in plans for key in ("name", "planName", "insuranceType"))
+    hmo = bool(re.search(r"\bHMO\b", plan_text, re.I))
+    benefits = [benefit for plan in plans for benefit in plan.get("benefits", [])]
+    referral_required = hmo or any(benefit.get("referralNumber") or "referral required" in str(benefit.get("description", "")).lower() for benefit in benefits)
+    authorization_required = any(benefit.get("authorizationRequired") is True for benefit in benefits)
+    authorization_unknown = any(benefit.get("authorizationRequiredUnknown") is True for benefit in benefits)
+    service_date = case.get("inputs", {}).get("service_date") or ""
+
+    def review(kind: str) -> dict:
+        result = case.get("transactions", {}).get(kind, {}).get("result", {})
+        procedures = result.get("procedures") or []
+        procedure = procedures[0] if len(procedures) == 1 else {}
+        start = result.get("certificationEffectiveDate") or result.get("fromDate") or procedure.get("certificationEffectiveDate") or procedure.get("fromDate")
+        end = result.get("certificationExpirationDate") or result.get("toDate") or procedure.get("certificationExpirationDate") or procedure.get("toDate")
+        reference = result.get("certificationNumber") or procedure.get("certificationNumber")
+        approved = result.get("status_code") in {"A1", "NA"} and all(item.get("statusCode") in {None, "A1", "NA"} for item in procedures)
+        if kind == "referral" and referral_required and result.get("status_code") == "A1":
+            approved = bool(reference and start and end and start[:10] <= service_date <= end[:10])
+        return {"required": referral_required if kind == "referral" else authorization_required,
+                "unknown": False if kind == "referral" else authorization_unknown,
+                "approved": approved, "status": result.get("status"), "reference": reference,
+                "effective": start, "expiration": end}
+
+    referral, authorization = review("referral"), review("authorization")
+    scheduled = case.get("transactions", {}).get("estimate", {}).get("result", {})
+    possible = case.get("transactions", {}).get("procedure_estimate", {}).get("result", {})
+
+    def price(kind: str, result: dict) -> dict:
+        lines = service_lines(case, kind)
+        cash = None
+        if lines and all(line.get("cash_cents") is not None for line in lines):
+            try:
+                total = sum(Decimal(line["cash_cents"]) * Decimal(str(line.get("units") or 1)) for line in lines)
+                cash = int(total) if total == total.to_integral_value() else None
+            except (InvalidOperation, ValueError):
+                pass
+        return {"codes": [line["code"] for line in lines], "insurance_cents": result.get("patient_cents") if result.get("estimate_available") else None,
+                "allowed_cents": result.get("allowed_cents") if result.get("estimate_available") else None,
+                "cash_cents": cash, "network": result.get("provider_network")}
+
+    scheduled_price, possible_price = price("estimate", scheduled), price("procedure_estimate", possible)
+    active = coverage.get("active")
+    if active is False:
+        action, heading = "self_pay", "Coverage inactive — use the clinic cash price"
+    elif active is not True:
+        action, heading = "verify", "Verify eligibility before scheduling"
+    elif referral["required"] and not referral["approved"]:
+        action, heading = "do_not_schedule", "Do not schedule — referral required"
+    elif authorization["required"] and not authorization["approved"]:
+        action, heading = "do_not_schedule", "Do not schedule — authorization required"
+    elif authorization["unknown"] and not authorization["approved"]:
+        action, heading = "verify", "Review the authorization requirement before scheduling"
+    elif scheduled_price["insurance_cents"] is not None:
+        action, heading = "collect", f"Collect ${scheduled_price['insurance_cents'] / 100:,.2f} for the scheduled visit"
+    else:
+        action, heading = "verify", "Complete the scheduled visit estimate"
+    return {"action": action, "heading": heading, "coverage": "active" if active is True else "inactive" if active is False else "unconfirmed",
+            "hmo": hmo, "referral": referral, "authorization": authorization,
+            "scheduled": scheduled_price, "possible": possible_price}
 
 
 @router.get("/configuration")
@@ -157,9 +322,9 @@ async def upload(case_id: str, kind: str, request: Request, file: UploadFile = F
     session = _session(request)
     settings, practice, binding = configuration()
     case = await load(case_id, session, binding)
-    if settings.environment == "demo":
+    if settings.environment == "demo" and kind != "fees":
         raise HTTPException(409, "Demo uses Availity's synthetic inputs and does not accept patient documents.")
-    if case.get("input_mode") == "ecw":
+    if case.get("input_mode") == "ecw" and kind != "fees":
         raise HTTPException(409, "This case reads its inputs directly from eClinicalWorks. Start another case to refresh the appointment.")
     idle(case)
     if any(r != "coverage" for r in case["transactions"]) or (kind in {"card", "provider"} and case["transactions"]):
@@ -168,7 +333,13 @@ async def upload(case_id: str, kind: str, request: Request, file: UploadFile = F
     if len(content) > MAX_UPLOAD_BYTES:
         raise HTTPException(413, "V2 input documents must be 15 MB or smaller")
     try:
-        source = await run_in_threadpool(intake.read_source, kind, content, Path(file.filename or "document").name, practice.get("payer_aliases", {}))
+        filename = Path(file.filename or "document").name
+        if kind == "fees":
+            source = await run_in_threadpool(intake.read_fee_schedule, content, filename)
+            apply_fee_schedule(case, source)
+            case.pop("suggestions", None)
+            return _response(public(await save(case, session, "fee-schedule-imported")))
+        source = await run_in_threadpool(intake.read_source, kind, content, filename, practice.get("payer_aliases", {}))
     except golden.GoldenCaseError as exc:
         raise HTTPException(422, str(exc)) from exc
     except golden.OCRServiceError:
@@ -182,6 +353,63 @@ async def upload(case_id: str, kind: str, request: Request, file: UploadFile = F
     if not case["transactions"]:
         case["discovery"] = {}
     return _response(public(await save(case, session, f"{kind}-imported")))
+
+
+@router.post("/cases/{case_id}/suggestions")
+async def suggest_services(case_id: str, request: Request):
+    session = _session(request)
+    _, _, binding = configuration()
+    case = await load(case_id, session, binding)
+    idle(case)
+    if any(key in case["transactions"] for key in ("estimate", "procedure_estimate", "authorization", "referral")):
+        raise HTTPException(409, "Start a new case before changing services that have already been submitted.")
+    rates = case.get("sources", {}).get("fees", {}).get("lines", [])
+    reason = str(case.get("inputs", {}).get("reason") or "").strip()
+    if not rates:
+        raise HTTPException(422, "Upload the clinic fee CSV before suggesting CPT/HCPCS services.")
+    if not reason:
+        raise HTTPException(422, "eClinicalWorks must provide a reason for visit before ClinicForce can suggest services.")
+    try:
+        raw = await run_in_threadpool(cpt_suggester.suggest_cpt_codes, reason, rates)
+        lines, groups = cpt_rules.grouped_candidates(raw, rates)
+    except (ValueError, golden.GoldenCaseError) as exc:
+        raise HTTPException(422, str(exc)) from exc
+    except Exception:
+        raise HTTPException(503, "Service suggestions are temporarily unavailable. Staff can use clinician-coded services from eClinicalWorks.") from None
+    case["suggestions"] = {"groups": groups, "lines": lines,
+                           "notes": [str(note)[:1000] for note in raw.get("notes", []) if isinstance(note, str)][:20]}
+    return _response(public(await save(case, session, "service-suggestions-generated")))
+
+
+@router.post("/cases/{case_id}/services")
+async def confirm_services(case_id: str, body: ConfirmServices, request: Request):
+    session = _session(request)
+    _, _, binding = configuration()
+    case = await load(case_id, session, binding)
+    idle(case)
+    if any(key in case["transactions"] for key in ("estimate", "procedure_estimate", "authorization", "referral")):
+        raise HTTPException(409, "Start a new case before changing services that have already been submitted.")
+    suggestions = case.get("suggestions") or {}
+    choices = body.lines
+    codes = [choice.code.upper() for choice in choices]
+    quantities = {choice.code.upper(): choice.quantity for choice in choices}
+    try:
+        cpt_rules.validate_selection(codes, suggestions.get("groups", []), suggestions.get("lines", []), quantities)
+    except golden.GoldenCaseError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    candidates = {line["code"]: line for line in suggestions.get("lines", [])}
+    unknown = set(codes) - set(candidates)
+    if unknown:
+        raise HTTPException(422, "Choose only services returned for this visit and clinic fee CSV.")
+    diagnosis = case["inputs"].get("diagnoses", [])
+    case["inputs"]["lines"] = [{"code": code, "description": candidates[code].get("description"),
+                                  "units": str(quantities[code]), "charge": candidates[code].get("charge"),
+                                  "cash_cents": candidates[code].get("cash_cents"),
+                                  "service_status": next(choice.service_status for choice in choices if choice.code.upper() == code),
+                                  "modifiers": [], "diagnosis": diagnosis[0] if len(diagnosis) == 1 else None}
+                                 for code in codes]
+    refresh_missing(case)
+    return _response(public(await save(case, session, "services-confirmed-by-staff")))
 
 
 @router.post("/cases/{case_id}/requirements")
@@ -211,7 +439,9 @@ async def requirements(case_id: str, request: Request):
     routes = await client.request("GET", "/v1/availity-payer-list", params={"payerId": payer, "submissionMode": "API"})
     payer_payload = routes.get("payload", [])
     payers = payer_payload.get("payers", []) if isinstance(payer_payload, dict) else payer_payload
-    case["discovery"] = {"checked_at": datetime.now(timezone.utc).isoformat(), "requirements": dict(found),
+    requirements_by_kind = dict(found)
+    requirements_by_kind["procedure_estimate"] = requirements_by_kind["estimate"]
+    case["discovery"] = {"checked_at": datetime.now(timezone.utc).isoformat(), "requirements": requirements_by_kind,
                          "payers": payers if routes["outcome"] == "complete" else [],
                          "message": routes.get("message"), "outcome": routes["outcome"]}
     return _response(public(await save(case, session, "payer-requirements-checked")))
@@ -229,7 +459,8 @@ def request_body(case: dict, resource: str) -> dict:
                 "asOfDate": i["service_date"], "serviceType": "30"}
         return {k: v for k, v in body.items() if v}
     diagnoses = [{"qualifierCode": "ABK" if n == 0 else "ABF", "code": code} for n, code in enumerate(i["diagnoses"])]
-    if resource == "estimate":
+    lines = service_lines(case, resource)
+    if canonical(resource) == "estimate":
         return {"coverageId": case["transactions"]["coverage"]["resource_id"], "payerId": i["payer_id"],
                 "billingProvider": {k: provider[k] for k in ("lastName", "npi", "ein", "addressLine1", "city", "stateCode", "zipCode") if k in provider},
                 "patient": {"phone": i["patient_phone"]},
@@ -237,7 +468,7 @@ def request_body(case: dict, resource: str) -> dict:
                                      **({"renderingProvider": {k: v for k, v in i["rendering_provider"].items() if k != "ein"}} if i.get("rendering_provider", {}).get("lastName") else {}),
                                      "serviceLines": [{"procedureCode": r["code"], "quantity": r["units"], "amount": r["charge"],
                                                        "diagnosisCodePointer1": str(i["diagnoses"].index(r["diagnosis"]) + 1),
-                                                       **{f"modifierCode{n}": value for n, value in enumerate(r["modifiers"], 1)}} for r in i["lines"]]}}
+                                                       **{f"modifierCode{n}": value for n, value in enumerate(r["modifiers"], 1)}} for r in lines]}}
     return {"payer": {"id": i["payer_id"]},
             "requestingProvider": {**{k: v for k, v in provider.items() if k != "ein"}, "submitterId": i["submitter_id"]},
             "subscriber": sub,
@@ -248,12 +479,12 @@ def request_body(case: dict, resource: str) -> dict:
             "renderingProviders": [{**{k: v for k, v in i["rendering_provider"].items() if k != "ein"}, "roleCode": "SJ"}],
             "procedures": [{"qualifierCode": "HC", "code": r["code"], "quantity": r["units"], "quantityTypeCode": "UN",
                             "fromDate": i["service_date"], "toDate": i["service_date"],
-                            **{f"modifier{n}Code": v for n, v in enumerate(r["modifiers"], 1)}} for r in i["lines"]]}
+                            **{f"modifier{n}Code": v for n, v in enumerate(r["modifiers"], 1)}} for r in lines]}
 
 
 def validate_request(case: dict, resource: str, body: dict, practice: dict) -> dict:
     """Apply published payer requirements; leave complex rules to payer validation."""
-    requirements = case.get("discovery", {}).get("requirements", {}).get(resource, {})
+    requirements = case.get("discovery", {}).get("requirements", {}).get(canonical(resource), {})
     if not requirements.get("available"):
         raise HTTPException(409, "Fetch payer requirements first. If this product is unavailable, ask Availity to activate it for this payer and clinic.")
     if resource == "coverage":
@@ -295,16 +526,18 @@ async def submit(case_id: str, resource: Resource, request: Request):
         # A repeated POST is always a read, including after a timeout or process crash.
         return _response(public(case))
     idle(case)
-    missing = case["inputs"]["coverage_missing"] if resource == "coverage" else case["inputs"]["review_missing"] if resource in {"authorization", "referral"} else case["missing"]
+    missing = request_missing(case, resource)
     if settings.environment == "production" and missing:
         raise HTTPException(422, "Missing API or practice data: " + " ".join(missing))
+    if resource != "coverage" and not service_lines(case, resource):
+        raise HTTPException(422, missing[-1])
     if resource != "coverage":
         coverage = case["transactions"].get("coverage", {})
         if coverage.get("outcome") != "complete" or not coverage.get("resource_id"):
             raise HTTPException(409, "Complete an Availity coverage inquiry first.")
         if settings.environment == "production" and coverage.get("result", {}).get("active") is not True:
             raise HTTPException(409, "Availity did not confirm active coverage for this appointment. Stop the insured-price path and review the payer response.")
-        if resource == "estimate" and coverage.get("result", {}).get("pce_available") is False and settings.environment == "production":
+        if canonical(resource) == "estimate" and coverage.get("result", {}).get("pce_available") is False and settings.environment == "production":
             raise HTTPException(409, "Availity says Professional Patient Cost Estimator is unavailable for this coverage. Ask about payer/product support; no local price will be substituted.")
     if settings.environment == "production" and resource in {"authorization", "referral"}:
         rendering = case["inputs"].get("rendering_provider", {})
@@ -313,7 +546,7 @@ async def submit(case_id: str, resource: Resource, request: Request):
     body = request_body(case, resource)
     if settings.environment == "production":
         # PCE 2 currently requires a current-day coverage. Do not silently estimate a different date.
-        if resource == "estimate" and case["inputs"]["service_date"] != datetime.now(ZoneInfo(practice.get("timezone", "America/New_York"))).date().isoformat():
+        if canonical(resource) == "estimate" and case["inputs"]["service_date"] != datetime.now(ZoneInfo(practice.get("timezone", "America/New_York"))).date().isoformat():
             raise HTTPException(409, "This PCE integration supports current-day estimates. Obtain a current-day encounter export or ask Availity about support for the intended service date.")
         body = validate_request(case, resource, body, practice)
     elif resource != "coverage":
@@ -323,9 +556,10 @@ async def submit(case_id: str, resource: Resource, request: Request):
                                       "message": "Submission started. If interrupted, refresh this case; do not create a duplicate transaction."}
     case["operation_until"] = time.time() + 60
     case = await save(case, session, f"{resource}-submission-started")
-    scenario = (case["scenario"] if resource == "coverage" else DEMO_SCENARIOS[resource][0]) if settings.environment == "demo" else None
-    response = await gateway(settings).request("POST", PATHS[resource], data=body if resource == "coverage" else None,
-                                                body=body if resource != "coverage" else None, scenario=scenario, resource=resource)
+    api_resource = canonical(resource)
+    scenario = (case["scenario"] if resource == "coverage" else DEMO_SCENARIOS[api_resource][0]) if settings.environment == "demo" else None
+    response = await gateway(settings).request("POST", PATHS[api_resource], data=body if resource == "coverage" else None,
+                                                body=body if resource != "coverage" else None, scenario=scenario, resource=api_resource)
     return await finish(case, session, resource, response)
 
 
@@ -345,8 +579,9 @@ async def refresh(case_id: str, resource: Resource, request: Request):
     transaction["next_poll_at"] = time.time() + 25
     case["operation_until"] = time.time() + 60
     case = await save(case, session, f"{resource}-poll-started")
-    scenario = (case["scenario"] if resource == "coverage" else DEMO_SCENARIOS[resource][1]) if settings.environment == "demo" else None
-    response = await gateway(settings).request("GET", PATHS[resource] + "/" + transaction["resource_id"], scenario=scenario, resource=resource)
+    api_resource = canonical(resource)
+    scenario = (case["scenario"] if resource == "coverage" else DEMO_SCENARIOS[api_resource][1]) if settings.environment == "demo" else None
+    response = await gateway(settings).request("GET", PATHS[api_resource] + "/" + transaction["resource_id"], scenario=scenario, resource=api_resource)
     return await finish(case, session, resource, response)
 
 
@@ -376,9 +611,9 @@ async def finish(case: dict, session: dict, resource: str, response: dict):
         value["resource_id"] = previous["resource_id"]
     payload = results.obj(response.get("payload"))
     value["result"] = (results.coverage(payload) if resource == "coverage" else
-                        results.estimate(payload, case["inputs"]["lines"], case["environment"] == "demo") if resource == "estimate" else results.review(payload))
+                        results.estimate(payload, service_lines(case, resource), case["environment"] == "demo") if canonical(resource) == "estimate" else results.review(payload))
     if response.get("outcome") == "complete" and case["environment"] == "production":
-        data = unwrap(payload, resource) if resource != "estimate" else results.obj(payload.get("result"))
+        data = unwrap(payload, canonical(resource)) if canonical(resource) != "estimate" else results.obj(payload.get("result"))
         member = results.obj(data.get("subscriber")).get("memberId")
         payer = results.obj(data.get("payer"))
         payer_id = payer.get("payerId") or payer.get("id")
