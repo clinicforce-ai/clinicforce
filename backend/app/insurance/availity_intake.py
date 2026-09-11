@@ -43,7 +43,7 @@ ALIASES = {
 FEE_ALIASES = {
     "procedurecode": "code", "cpt": "code", "hcpcs": "code", "code": "code",
     "description": "description", "servicedescription": "description",
-    "cashprice": "cash", "selfpayprice": "cash", "amount": "cash", "rate": "cash",
+    "cashprice": "cash", "selfpayprice": "cash",
     "billedcharge": "charge", "linecharge": "charge", "standardcharge": "charge",
     "servicestatus": "status", "estimatetype": "status", "servicecategory": "status",
 }

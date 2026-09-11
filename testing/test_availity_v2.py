@@ -135,6 +135,13 @@ class ResultsAndIntakeTests(unittest.TestCase):
                                                        'certificationEffectiveDate': '2026-09-01', 'certificationExpirationDate': '2026-10-01'}}
         self.assertEqual(v2.front_desk_summary(case)['heading'], 'Collect $0.00 for the scheduled visit')
 
+    def test_fee_csv_rejects_ambiguous_amount_column(self):
+        with self.assertRaisesRegex(golden.GoldenCaseError, 'Cash Price and/or Billed Charge'):
+            intake.read_fee_schedule(
+                b'Procedure Code,Description,Network,Amount\n99204,New visit,Blue Choice PPO,151.60\n',
+                'payer-rates.csv',
+            )
+
 
 class WorkflowTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
