@@ -1,9 +1,9 @@
-import { AlertTriangle, ArrowLeft, ArrowRight, Check, FileText, LoaderCircle, RefreshCw, ShieldCheck, Upload } from 'lucide-react'
+import { AlertTriangle, ArrowLeft, ArrowRight, Check, LoaderCircle, RefreshCw, ShieldCheck } from 'lucide-react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   createV2Case, getV2Case, getV2Configuration, getV2Requirements, latestV2Case, refreshV2Transaction,
-  submitV2Transaction, retryV2Transaction, uploadV2Document,
-  type V2Case, type V2Configuration, type V2Document, type V2Resource, type V2Transaction,
+  submitV2Transaction, retryV2Transaction,
+  type V2Case, type V2Configuration, type V2Resource, type V2Transaction,
 } from '../services/api'
 
 interface Props { onBack: () => void }
@@ -16,14 +16,6 @@ const resources: Array<{ id: V2Resource; label: string; action: string }> = [
   { id: 'authorization', label: 'Prior authorization', action: 'Submit outpatient authorization request' },
   { id: 'referral', label: 'Referral', action: 'Submit referral request' },
 ]
-const documents: Array<{ id: V2Document; title: string; help: string; example: string; accept: string }> = [
-  { id: 'card', title: 'Patient insurance card', help: 'Member and group identifiers only. Benefits on the card are ignored.', example: 'Example: Availity Essentials.pdf', accept: '.pdf,.png,.jpg,.jpeg' },
-  { id: 'provider', title: 'Clinic / billing provider', help: 'Provider agreement or billing-provider export identifying the clinic NPI and Tax ID.', example: 'Example: Medical Group – NEUROLOGY AND MOVEMENT CENTER…pdf', accept: '.pdf,.csv' },
-  { id: 'appointment', title: 'Visit correspondence · optional', help: 'Visit reason only. This does not establish procedure codes, diagnoses or a service date.', example: 'Example: shmso.com Mail - (no subject).pdf', accept: '.pdf' },
-  { id: 'order', title: 'Patient-specific coded encounter', help: 'Registration and order export: patient/subscriber, payer ID, provider, service date, POS, ICD-10, CPT/HCPCS and units.', example: 'Needed from your clinic: searchable encounter/order PDF or CSV. The example email is insufficient.', accept: '.pdf,.csv' },
-  { id: 'charges', title: 'Billed line charges · if missing from order', help: 'Clinic charge export matched by procedure and modifiers. Each amount is the total billed line charge.', example: 'Do not use fee-schedule-results.csv: those are negotiated payer rates.', accept: '.csv' },
-]
-
 function TransactionStatus({ transaction }: { transaction: V2Transaction }) {
   return <div className={`v2-response ${transaction.outcome === 'complete' ? 'is-complete' : ''}`}>
     <div className="v2-response-heading">{transaction.outcome === 'complete' ? <Check aria-hidden="true" size={18} /> : <AlertTriangle aria-hidden="true" size={18} />}<strong>{readable(transaction.outcome)}</strong>{transaction.mock_response && <span className="v2-tag">Synthetic response</span>}</div>
@@ -83,15 +75,12 @@ export default function InsuranceVerificationV2({ onBack }: Props) {
     setNewCasePrompt(false)
     void perform('Starting a saved Availity case…', () => createV2Case())
   }
-  const upload = (kind: V2Document, file?: File) => {
-    if (insuranceCase && file) void perform('Reading the source document locally…', () => uploadV2Document(insuranceCase.id, kind, file))
-  }
   const demo = config?.environment === 'demo'
   const coverageDone = insuranceCase?.transactions.coverage?.outcome === 'complete'
-  const locked = !!insuranceCase && Object.keys(insuranceCase.transactions).length > 0
-  const downstreamSubmitted = !!insuranceCase && Object.keys(insuranceCase.transactions).some(key => key !== 'coverage')
+  const coverageActive = demo || insuranceCase?.transactions.coverage?.result?.active === true
+  const ecw = insuranceCase?.sources.ecw
 
-  if (config && (!config.credentials_configured || (!demo && !config.production_enabled))) {
+  if (config && (!config.credentials_configured || (!demo && (!config.production_enabled || !config.ecw_configured)))) {
     return <section className="insurance-beta insurance-v2" aria-labelledby="insurance-v2-unavailable">
       <button className="back-control" type="button" onClick={onBack}><ArrowLeft aria-hidden="true" className="size-4" /> Back to clinical summary</button>
       <div className="panel">
@@ -105,35 +94,28 @@ export default function InsuranceVerificationV2({ onBack }: Props) {
   return <section className="insurance-beta insurance-v2" aria-labelledby="insurance-v2-heading">
     <button className="back-control" type="button" onClick={onBack}><ArrowLeft aria-hidden="true" className="size-4" /> Back to clinical summary</button>
     <header className="insurance-beta-hero">
-      <div><p className="eyebrow"><ShieldCheck aria-hidden="true" size={17} /> Insurance beta V2 · Availity</p><h1 id="insurance-v2-heading">From patient to payer response.</h1><p>Upload the information the clinic already has. Availity supplies eligibility, benefits, cost estimates and service-review responses.</p></div>
+      <div><p className="eyebrow"><ShieldCheck aria-hidden="true" size={17} /> Insurance beta V2 · eCW + Availity</p><h1 id="insurance-v2-heading">From appointment to payer response.</h1><p>eClinicalWorks supplies the scheduled patient and coded visit. Availity supplies eligibility, benefits, cost estimates and service-review responses.</p></div>
       <div className="beta-session"><span><i aria-hidden="true" /> {config ? `${demo ? 'Demo' : 'Production'} environment` : 'Connecting'}</span><strong>{demo ? 'Synthetic patient only' : 'Patient-specific API inquiries'}</strong><small>{demo ? 'Not live coverage or patient pricing' : 'Review extracted details before submission'}</small></div>
     </header>
     <div className="v2-layout">
       <aside className="v2-rail" aria-label="Workflow stages">
         <p className="section-kicker">Patient → Availity</p>
-        <ol><li><a href="#v2-intake">Source documents</a></li><li><a href="#v2-payer">Payer requirements</a></li>{resources.map(r => <li key={r.id}><a href={`#v2-${r.id}`}>{r.label}</a><small>{readable(insuranceCase?.transactions[r.id]?.outcome ?? 'not_started')}</small></li>)}</ol>
+        <ol><li><a href="#v2-intake">eCW appointment</a></li><li><a href="#v2-payer">Payer requirements</a></li>{resources.map(r => <li key={r.id}><a href={`#v2-${r.id}`}>{r.label}</a><small>{readable(insuranceCase?.transactions[r.id]?.outcome ?? 'not_started')}</small></li>)}</ol>
         {insuranceCase && <><p className="section-kicker">Saved case</p><p className="v2-case-id">{insuranceCase.id}</p><small>Expires {dateTime(insuranceCase.expires_at)}. Reopening this QR session resumes its saved case.</small><button className="button button-secondary" type="button" disabled={!!busy} onClick={() => void perform('Refreshing saved case…', () => getV2Case(insuranceCase.id))}><RefreshCw size={15} aria-hidden="true" /> Refresh case</button></>}
       </aside>
       <main className="v2-main">
         <div className="v2-live-status" role="status" aria-live="polite">{busy ? <><LoaderCircle size={16} className="animate-spin" aria-hidden="true" /> {busy}</> : 'Case changes are saved on the server.'}</div>
         {error && <div className="form-error" role="alert"><AlertTriangle size={18} aria-hidden="true" /><span>{error}</span></div>}
         <section id="v2-intake" className="v2-section">
-          <p className="section-kicker">01 · Request inputs</p><h2>{demo ? 'Use Availity’s synthetic patient' : 'Upload sources. Review the extracted request.'}</h2><p>{config?.message}</p>
-          {!insuranceCase && <button className="button button-primary" type="button" disabled={!!busy || !config?.credentials_configured || (!demo && !config?.production_enabled)} onClick={start}>{demo ? 'Start demo case' : 'Start document intake'}<ArrowRight size={17} aria-hidden="true" /></button>}
+          <p className="section-kicker">01 · Request inputs</p><h2>{demo ? 'Use Availity’s synthetic patient' : 'Load the scheduled visit from eClinicalWorks'}</h2><p>{config?.message}</p>
+          {!insuranceCase && <button className="button button-primary" type="button" disabled={!!busy || !config?.credentials_configured || (!demo && (!config?.production_enabled || !config?.ecw_configured))} onClick={start}>{demo ? 'Start demo case' : 'Load eCW appointment'}<ArrowRight size={17} aria-hidden="true" /></button>}
           {insuranceCase && <>
-            {!demo && <div className="v2-documents">{documents.map(doc => <div className="v2-document" key={doc.id}>
-              <FileText size={21} aria-hidden="true" /><h3>{doc.title}</h3><p>{doc.help}</p><small>{doc.example}</small>
-              {insuranceCase.sources[doc.id] && <p className="v2-source-file"><Check size={15} aria-hidden="true" /> {insuranceCase.sources[doc.id]!.filename}</p>}
-              <label className={`v2-upload ${busy || downstreamSubmitted || (locked && ['card', 'provider'].includes(doc.id)) ? 'is-disabled' : ''}`}><Upload size={16} aria-hidden="true" /> {insuranceCase.sources[doc.id] ? 'Replace source' : 'Choose file'}<input type="file" accept={doc.accept} disabled={!!busy || downstreamSubmitted || (locked && ['card', 'provider'].includes(doc.id))} aria-label={`Upload ${doc.title}`} onChange={event => { upload(doc.id, event.target.files?.[0]); event.target.value = '' }} /></label>
-              {insuranceCase.sources[doc.id]?.notes.map((note, n) => <small key={n}>{note}</small>)}
-            </div>)}</div>}
-            {!demo && <p className="v2-exclusion">You do not need <strong>Availity Essentials - Cov.pdf</strong>, the payer fee schedule, or a cash-pricing guide. V2 does not use them to calculate insurance benefits or patient responsibility.</p>}
-            {insuranceCase.missing.length > 0 && <details className="v2-callout" open><summary>Documents or setup still needed ({insuranceCase.missing.length})</summary><ul>{insuranceCase.missing.map((item, n) => <li key={n}>{item}</li>)}</ul></details>}
-            <h3>{demo ? 'Synthetic request preview' : 'Extracted request · read only'}</h3>
+            {!demo && ecw && <p className="v2-source-file"><Check size={15} aria-hidden="true" /> eClinicalWorks · appointment {ecw.appointment_date || 'date not returned'} · retrieved {dateTime(ecw.retrieved_at)}</p>}
+            {insuranceCase.missing.length > 0 && <details className="v2-callout" open><summary>API or practice data still needed ({insuranceCase.missing.length})</summary><ul>{insuranceCase.missing.map((item, n) => <li key={n}>{item}</li>)}</ul></details>}
+            <h3>{demo ? 'Synthetic request preview' : 'eCW request preview · read only'}</h3>
             <dl className="v2-facts"><div><dt>{demo ? 'Demo patient' : 'QR patient'}</dt><dd>{[insuranceCase.inputs.patient.patient_first_name, insuranceCase.inputs.patient.patient_last_name].filter(Boolean).join(' ') || 'Missing profile'}</dd></div><div><dt>Birth date</dt><dd>{insuranceCase.inputs.patient.patient_birth_date || 'Missing'}</dd></div><div><dt>Member / payer ID</dt><dd>{insuranceCase.inputs.member_id || 'Missing'} / {insuranceCase.inputs.payer_id || 'Missing'}</dd></div><div><dt>Billing provider</dt><dd>{insuranceCase.inputs.provider.lastName || 'Not configured'}<br />NPI {insuranceCase.inputs.provider.npi || 'Missing'}</dd></div><div><dt>Service date</dt><dd>{insuranceCase.inputs.service_date || 'Missing from encounter'}</dd></div><div><dt>Diagnosis codes from order</dt><dd>{insuranceCase.inputs.diagnoses.join(', ') || 'Missing from encounter'}</dd></div></dl>
             {insuranceCase.inputs.reason && <p><strong>Visit context:</strong> {insuranceCase.inputs.reason}</p>}
-            {!!insuranceCase.inputs.lines.length && <div className="v2-table-wrap"><table><caption>Services supplied by {demo ? 'the synthetic example' : 'the clinic order'}</caption><thead><tr><th>Code / modifiers</th><th>Units</th><th>Billed line charge</th></tr></thead><tbody>{insuranceCase.inputs.lines.map((line, n) => <tr key={n}><td>{line.code} {line.modifiers.join(', ')}</td><td>{line.units || 'Missing'}</td><td>{line.charge == null ? 'Missing' : `$${line.charge}`}</td></tr>)}</tbody></table></div>}
-            {locked && <p className="v2-exclusion">Patient, payer, provider and coverage date are locked after eligibility submission. You can add coded services or charges for that same encounter until an estimate or service review is submitted.</p>}
+            {!!insuranceCase.inputs.lines.length && <div className="v2-table-wrap"><table><caption>Services supplied by {demo ? 'the synthetic example' : 'eClinicalWorks'}</caption><thead><tr><th>Code / modifiers</th><th>Units</th><th>Billed line charge</th></tr></thead><tbody>{insuranceCase.inputs.lines.map((line, n) => <tr key={n}><td>{line.code} {line.modifiers.join(', ')}</td><td>{line.units || 'Missing'}</td><td>{line.charge == null ? 'Missing' : `$${line.charge}`}</td></tr>)}</tbody></table></div>}
           </>}
         </section>
         <section id="v2-payer" className="v2-section">
@@ -149,14 +131,15 @@ export default function InsuranceVerificationV2({ onBack }: Props) {
           const transaction = insuranceCase?.transactions[resource.id]
           const result = transaction?.result
           const stageMissing = insuranceCase ? (resource.id === 'coverage' ? insuranceCase.inputs.coverage_missing : resource.id === 'estimate' ? insuranceCase.missing : insuranceCase.inputs.review_missing) : []
-          const canSubmit = insuranceCase && (demo || stageMissing.length === 0) && (resource.id === 'coverage' || coverageDone)
+          const canSubmit = insuranceCase && (demo || stageMissing.length === 0) && (resource.id === 'coverage' || (coverageDone && coverageActive))
           return <section id={`v2-${resource.id}`} className="v2-section" key={resource.id}>
             <p className="section-kicker">0{index + 3} · Availity response</p><h2>{resource.label}</h2>
             <p>{resource.id === 'coverage' ? 'Eligibility is returned for the requested patient and date. In-network benefit tables alone do not prove this clinic is in network.' : resource.id === 'estimate' ? 'Professional outpatient estimate for the coded services. Patient responsibility and allowed amounts must come from Availity; missing values remain unavailable.' : 'Submit only when staff intend to request this review. Certification may apply to specific procedures, units and dates; additional clinical information may be required by the payer.'}</p>
             {!transaction && <button className="button button-primary" type="button" disabled={!!busy || !canSubmit} onClick={() => insuranceCase && void perform(`Submitting ${resource.label.toLowerCase()} to Availity…`, () => submitV2Transaction(insuranceCase.id, resource.id))}>{demo ? `Run demo ${resource.label.toLowerCase()}` : resource.action}</button>}
-            {!transaction && !canSubmit && <p className="v2-next-step">{!insuranceCase ? 'Start a case above.' : resource.id !== 'coverage' && !coverageDone ? 'Complete eligibility first.' : 'Upload the missing source documents listed above.'}</p>}
+            {!transaction && !canSubmit && <p className="v2-next-step">{!insuranceCase ? 'Start a case above.' : resource.id !== 'coverage' && !coverageDone ? 'Complete eligibility first.' : resource.id !== 'coverage' && !coverageActive ? 'Availity did not confirm active coverage. Review the payer response before continuing.' : 'Resolve the missing eClinicalWorks or practice data listed above.'}</p>}
             {!demo && !transaction && ['authorization', 'referral'].includes(resource.id) && stageMissing.length > 0 && <details className="v2-callout"><summary>Source information needed for this review</summary><ul>{stageMissing.map((item, n) => <li key={n}>{item}</li>)}</ul></details>}
             {transaction && <TransactionStatus transaction={transaction} />}
+            {resource.id === 'coverage' && transaction?.outcome === 'complete' && <p className="v2-exclusion">Coverage decision: {result?.active === true ? 'Active coverage confirmed' : result?.active === false ? 'Inactive coverage returned' : 'Active coverage was not confirmed'}</p>}
             {transaction && !transaction.resource_id && [401, 403, 429].includes(transaction.http_status ?? 0) && <button className="button button-secondary" type="button" disabled={!!busy} onClick={() => insuranceCase && void perform('Retrying the rejected transaction…', () => retryV2Transaction(insuranceCase.id, resource.id))}>Retry after access / rate-limit issue is resolved</button>}
             {transaction && ['pending', 'unavailable'].includes(transaction.outcome) && transaction.resource_id && <><p>The saved result is checked automatically for up to one minute. You can continue checking it here; this does not submit another request.</p><button className="button button-secondary" type="button" disabled={!!busy} onClick={() => insuranceCase && void perform('Checking the existing Availity result…', () => refreshV2Transaction(insuranceCase.id, resource.id))}><RefreshCw size={16} aria-hidden="true" /> Check existing result</button></>}
             {resource.id === 'coverage' && result?.plans?.map((plan, n) => <details className="v2-plan" key={n} open={n === 0}><summary>{plan.name || plan.planName || `Plan ${n + 1}`} · {plan.status || 'Status not returned'}</summary><p>{plan.insuranceType} · Group {plan.groupNumber || 'not returned'} · Effective {plan.effectiveDate || 'not returned'} · Ends {plan.expirationDate || 'not returned'}</p><div className="v2-table-wrap"><table><caption>Benefit dimensions exactly as returned by Availity</caption><thead><tr><th>Benefit / service</th><th>Network / level</th><th>Payer amount</th><th>Remaining / total</th><th>Conditions</th></tr></thead><tbody>{plan.benefits.map((b, j) => <tr key={j}><td>{readable(b.category)}<small>{b.service}</small></td><td>{readable(b.network)}<small>{b.level}</small></td><td>{b.amount ?? 'Not returned'}<small>{b.amountTimePeriod}</small></td><td>{b.remaining ?? 'Not returned'} / {b.total ?? 'Not returned'}<small>{b.remainingTimePeriod} / {b.totalTimePeriod}</small></td><td>{b.description}{b.authorizationRequired === true && <small>Authorization required</small>}{b.authorizationRequiredUnknown && <small>Authorization requirement unknown</small>}{b.referralNumber && <small>Referral: {b.referralNumber}</small>}</td></tr>)}</tbody></table></div></details>)}
@@ -164,7 +147,7 @@ export default function InsuranceVerificationV2({ onBack }: Props) {
             {['authorization', 'referral'].includes(resource.id) && result && <><h3>{result.status}</h3><dl className="v2-facts"><div><dt>Certification / referral reference</dt><dd>{result.certificationNumber || 'Not returned'}</dd></div><div><dt>Effective → expiration</dt><dd>{result.certificationEffectiveDate || 'Not returned'} → {result.certificationExpirationDate || 'Not returned'}</dd></div></dl>{result.procedures?.map((line, n) => <div className="v2-review-line" key={n}><strong>{line.code || 'Procedure not returned'} · {line.status || line.statusCode || 'No decision'}</strong><p>Units: {line.quantity || 'not returned'} {line.quantityType} · Reference: {line.certificationNumber || 'not returned'}</p><p>{line.certificationEffectiveDate || line.fromDate || 'No start date'} → {line.certificationExpirationDate || line.toDate || 'No end date'}</p>{line.notes.map((note, j) => <p key={j}>{note}</p>)}</div>)}<p className="estimate-disclaimer">{result.disclaimer}</p></>}
           </section>
         })}
-        {insuranceCase && <section className="v2-section"><h2>Response history</h2><ol className="v2-history">{insuranceCase.events.map((event, n) => <li key={n}><span>{readable(event.stage.replaceAll('-', ' '))}</span><time dateTime={event.at}>{dateTime(event.at)}</time></li>)}</ol><p>Only Availity-returned amounts are shown as insurance estimates. A failed or unsupported API response never falls back to the old PDF calculation.</p>{newCasePrompt ? <div className="v2-callout"><p>Start a separate case only after resolving existing pending or uncertain submissions. You will upload fresh source documents; the current case remains saved until expiry.</p><button className="button button-secondary" type="button" disabled={!!busy} onClick={() => setNewCasePrompt(false)}>Keep this case</button><button className="button button-primary" type="button" disabled={!!busy} onClick={start}>Start separate case</button></div> : <button className="button button-secondary" type="button" disabled={!!busy} onClick={() => setNewCasePrompt(true)}>Start another case</button>}</section>}
+        {insuranceCase && <section className="v2-section"><h2>Response history</h2><ol className="v2-history">{insuranceCase.events.map((event, n) => <li key={n}><span>{readable(event.stage.replaceAll('-', ' '))}</span><time dateTime={event.at}>{dateTime(event.at)}</time></li>)}</ol><p>Only Availity-returned amounts are shown as insurance estimates. A failed or unsupported API response never falls back to the old PDF calculation.</p>{newCasePrompt ? <div className="v2-callout"><p>Start a separate case only after resolving existing pending or uncertain submissions. ClinicForce will reload the current eCW appointment; the existing case remains saved until expiry.</p><button className="button button-secondary" type="button" disabled={!!busy} onClick={() => setNewCasePrompt(false)}>Keep this case</button><button className="button button-primary" type="button" disabled={!!busy} onClick={start}>Reload eCW appointment</button></div> : <button className="button button-secondary" type="button" disabled={!!busy} onClick={() => setNewCasePrompt(true)}>Start another case</button>}</section>}
       </main>
     </div>
   </section>

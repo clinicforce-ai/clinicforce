@@ -48,7 +48,9 @@ def notes(value: Any) -> list[str]:
 def coverage(payload: dict) -> dict:
     data = unwrap(payload, "coverage")
     plans = []
+    plan_statuses = []
     for plan in rows(data.get("plans")):
+        plan_statuses.extend(str(plan.get(key, "")) for key in ("status", "statusCode") if plan.get(key) is not None)
         benefits = []
         for benefit in rows(plan.get("benefits")):
             for category, networks in {**obj(benefit.get("amounts")), **{k: benefit[k] for k in ("statusDetails", "nonCovered", "limitations", "exclusions", "benefitDescriptions") if k in benefit}}.items():
@@ -61,7 +63,10 @@ def coverage(payload: dict) -> dict:
                                          **{k: detail.get(k) for k in ("amount", "remaining", "total", "amountTimePeriod", "remainingTimePeriod", "totalTimePeriod", "level", "levelCode", "description", "authorizationRequired", "authorizationRequiredUnknown", "referralNumber", "placeOfServiceCode")}})
         plans.append({**{k: plan.get(k) for k in ("name", "planName", "planNumber", "groupNumber", "status", "statusCode", "insuranceType", "effectiveDate", "expirationDate")},
                       "benefits": benefits, "notes": notes(plan)})
-    return {"payer": obj(data.get("payer")).get("name"), "status": data.get("status"),
+    status_text = " ".join(plan_statuses).casefold()
+    inactive = any(word in status_text for word in ("inactive", "ineligible", "terminated", "cancelled", "canceled", "expired"))
+    active = True if not inactive and any(word in status_text for word in ("active", "eligible")) else False if inactive else None
+    return {"payer": obj(data.get("payer")).get("name"), "status": data.get("status"), "active": active,
             "as_of_date": data.get("asOfDate"), "plans": plans,
             "pce_available": obj(data.get("supplementalInformation")).get("professionalPatientCostEstimator"),
             "provider_network": "Not established by eligibility benefit categories",

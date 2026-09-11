@@ -241,11 +241,12 @@ def _open_state(value: str) -> dict[str, Any]:
     return payload
 
 
-def _client_assertion(token_endpoint: str) -> str:
+def _client_assertion(token_endpoint: str, client_id: str | None = None) -> str:
+    client_id = client_id or ECW_CLIENT_ID
     now = int(time.time())
     claims = {
-        "iss": ECW_CLIENT_ID,
-        "sub": ECW_CLIENT_ID,
+        "iss": client_id,
+        "sub": client_id,
         "aud": token_endpoint,
         "iat": now,
         "exp": now + 300,

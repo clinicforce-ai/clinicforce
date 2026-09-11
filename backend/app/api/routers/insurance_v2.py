@@ -1,4 +1,4 @@
-"""Patient-share-scoped Availity workflow with document-only request intake."""
+"""Patient-share-scoped eCW-to-Availity workflow."""
 from __future__ import annotations
 
 import asyncio
@@ -19,7 +19,7 @@ from pydantic import BaseModel, ConfigDict
 from app.api.routers.insurance import _response, _session
 from app.api.settings import MAX_UPLOAD_BYTES
 from app.core.patient_store import get_patient_profile
-from app.insurance import availity_intake as intake, availity_results as results, golden, store
+from app.insurance import availity_intake as intake, availity_results as results, ecw_backend, golden, store
 from app.insurance.availity import Settings, gateway, PATHS, DEMO_SCENARIOS, unwrap
 
 
@@ -41,10 +41,12 @@ def configuration() -> tuple[Settings, dict, str]:
         providers = practice.get("providers", {})
         if not isinstance(providers, dict) or any(not re.fullmatch(r"[1-4]\d{9}", k) or not isinstance(v, dict) for k, v in providers.items()):
             raise ValueError
-        if not isinstance(practice.get("payer_aliases", {}), dict) or any(not isinstance(k, str) or not k or not isinstance(v, str) for k, v in practice.get("payer_aliases", {}).items()):
+        if not isinstance(practice.get("payer_aliases", {}), dict) or any(not isinstance(k, str) or not k or not isinstance(v, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,40}", v) for k, v in practice.get("payer_aliases", {}).items()):
+            raise ValueError
+        if not isinstance(practice.get("locations", {}), dict) or any(not isinstance(k, str) or not k or not isinstance(v, dict) for k, v in practice.get("locations", {}).items()):
             raise ValueError
         ZoneInfo(practice.get("timezone", "America/New_York"))
-        binding = hashlib.sha256((settings.binding + json.dumps(practice, sort_keys=True)).encode()).hexdigest()
+        binding = hashlib.sha256((settings.binding + json.dumps(practice, sort_keys=True) + ecw_backend.binding()).encode()).hexdigest()
         return settings, practice, binding
     except (ValueError, TypeError, ZoneInfoNotFoundError):
         raise HTTPException(503, "The Availity server configuration is invalid. Check environment, scope, URLs and practice settings.") from None
@@ -101,8 +103,9 @@ async def get_configuration(request: Request):
     settings, practice, _ = configuration()
     return _response({"environment": settings.environment, "credentials_configured": bool(settings.client_id and settings.client_secret),
                       "practice_configured": bool(practice.get("providers") and practice.get("submitter_id")),
+                      "ecw_configured": settings.environment == "demo" or ecw_backend.configured(),
                       "production_enabled": settings.environment == "production" and practice.get("production_enabled") is True,
-                      "message": "Synthetic transactions only; demo results do not describe the QR patient." if settings.environment == "demo" else "Live inquiries for the opened QR patient and configured clinic. Upload source documents and review the extracted request."})
+                      "message": "Synthetic transactions only; demo results do not describe the QR patient." if settings.environment == "demo" else "ClinicForce loads the scheduled patient, coverage, providers and coded services from eClinicalWorks, then sends the reviewed request to Availity."})
 
 
 @router.get("/cases/latest")
@@ -124,10 +127,20 @@ async def create(body: Start, request: Request):
         raise HTTPException(422, "The QR patient profile is missing")
     identity = {"patient_first_name": profile.given_name, "patient_last_name": profile.family_name,
                 "patient_birth_date": profile.birth_date, "gender": {"male": "M", "female": "F"}.get(profile.administrative_gender, "U")}
-    inputs, missing = (demo_inputs(), []) if settings.environment == "demo" else intake.assemble({}, identity, practice)
+    if settings.environment == "demo":
+        inputs, missing, sources = demo_inputs(), [], {}
+    else:
+        if not ecw_backend.configured():
+            raise HTTPException(503, "The eClinicalWorks practice connection is temporarily unavailable.")
+        try:
+            inputs, missing, source = await ecw_backend.fetch_inputs(identity, practice)
+        except ecw_backend.EcwBackendError as exc:
+            raise HTTPException(502, str(exc)) from exc
+        sources = {"ecw": source}
     case = await run_in_threadpool(store.create_case, session["patient_id"], session["share_manifest_id"], binding,
                                    {"source_mode": "availity", "binding": binding, "environment": settings.environment,
-                                    "revision": 0, "profile": identity, "sources": {}, "inputs": inputs, "missing": missing,
+                                    "input_mode": "synthetic" if settings.environment == "demo" else "ecw",
+                                    "revision": 0, "profile": identity, "sources": sources, "inputs": inputs, "missing": missing,
                                     "transactions": {}, "discovery": {}, "events": [], "scenario": body.scenario})
     return _response(public(case))
 
@@ -146,6 +159,8 @@ async def upload(case_id: str, kind: str, request: Request, file: UploadFile = F
     case = await load(case_id, session, binding)
     if settings.environment == "demo":
         raise HTTPException(409, "Demo uses Availity's synthetic inputs and does not accept patient documents.")
+    if case.get("input_mode") == "ecw":
+        raise HTTPException(409, "This case reads its inputs directly from eClinicalWorks. Start another case to refresh the appointment.")
     idle(case)
     if any(r != "coverage" for r in case["transactions"]) or (kind in {"card", "provider"} and case["transactions"]):
         raise HTTPException(409, "These inputs belong to a submitted transaction. Start a new case to replace them.")
@@ -177,7 +192,7 @@ async def requirements(case_id: str, request: Request):
     idle(case)
     payer = case["inputs"].get("payer_id")
     if not payer:
-        raise HTTPException(422, "Upload the registration export containing Availity Payer ID first.")
+        raise HTTPException(422, "The eClinicalWorks payer must be mapped to its verified Availity payer ID first.")
     client = gateway(settings)
     # No member information is sent during payer discovery. Independent metadata calls.
     queries = [("coverage", "270", None), ("estimate", "professional-claims", "PRE_DETERMINATION"),
@@ -266,7 +281,7 @@ def validate_request(case: dict, resource: str, body: dict, practice: dict) -> d
         return value
     absent = [rule.get("label") or key for key, rule in elements.items() if isinstance(rule, dict) and rule.get("required") is True and get_value(key) in (None, "", [])]
     if absent:
-        raise HTTPException(422, "The payer requires additional source data: " + ", ".join(absent) + ". Obtain the corresponding registration/order/provider export; its mapping must be added if this format is not supported. No inquiry was submitted.")
+        raise HTTPException(422, "The payer requires additional eClinicalWorks or practice data: " + ", ".join(absent) + ". No inquiry was submitted.")
     return body
 
 
@@ -282,17 +297,19 @@ async def submit(case_id: str, resource: Resource, request: Request):
     idle(case)
     missing = case["inputs"]["coverage_missing"] if resource == "coverage" else case["inputs"]["review_missing"] if resource in {"authorization", "referral"} else case["missing"]
     if settings.environment == "production" and missing:
-        raise HTTPException(422, "Missing source documents: " + " ".join(missing))
+        raise HTTPException(422, "Missing API or practice data: " + " ".join(missing))
     if resource != "coverage":
         coverage = case["transactions"].get("coverage", {})
         if coverage.get("outcome") != "complete" or not coverage.get("resource_id"):
             raise HTTPException(409, "Complete an Availity coverage inquiry first.")
+        if settings.environment == "production" and coverage.get("result", {}).get("active") is not True:
+            raise HTTPException(409, "Availity did not confirm active coverage for this appointment. Stop the insured-price path and review the payer response.")
         if resource == "estimate" and coverage.get("result", {}).get("pce_available") is False and settings.environment == "production":
             raise HTTPException(409, "Availity says Professional Patient Cost Estimator is unavailable for this coverage. Ask about payer/product support; no local price will be substituted.")
     if settings.environment == "production" and resource in {"authorization", "referral"}:
         rendering = case["inputs"].get("rendering_provider", {})
         if not rendering.get("npi") or not rendering.get("lastName") or not re.fullmatch(r"[A-Z0-9]{1,3}", case["inputs"].get("service_type") or ""):
-            raise HTTPException(422, "The order export must identify an approved Rendering Provider NPI and Service Type Code before an authorization/referral can be submitted. Ask the clinic for that export.")
+            raise HTTPException(422, "eClinicalWorks and the practice configuration must identify an approved Rendering Provider NPI and Service Type Code before a service review can be submitted.")
     body = request_body(case, resource)
     if settings.environment == "production":
         # PCE 2 currently requires a current-day coverage. Do not silently estimate a different date.
@@ -302,7 +319,7 @@ async def submit(case_id: str, resource: Resource, request: Request):
     elif resource != "coverage":
         body = {}  # Required by Availity's Demo protocol; never send uploaded patient data.
     case["transactions"][resource] = {"outcome": "submitting", "submitted_at": datetime.now(timezone.utc).isoformat(), "request_body": body,
-                                      "source_refs": {k: {n: source[n] for n in ("filename", "sha256", "observed_at")} for k, source in case["sources"].items()},
+                                      "source_refs": {k: {n: source[n] for n in ("filename", "sha256", "observed_at", "retrieved_at") if n in source} for k, source in case["sources"].items()},
                                       "message": "Submission started. If interrupted, refresh this case; do not create a duplicate transaction."}
     case["operation_until"] = time.time() + 60
     case = await save(case, session, f"{resource}-submission-started")
