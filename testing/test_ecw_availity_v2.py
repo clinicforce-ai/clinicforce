@@ -25,9 +25,8 @@ class EcwBackendSourceTests(unittest.IsolatedAsyncioTestCase):
         resources = {
             "Patient": [{"resourceType": "Patient", "id": "patient-1", "name": [{"use": "official", "given": ["Pat"], "family": "Example"}], "birthDate": "1980-01-01", "gender": "female", "telecom": [{"system": "phone", "value": "555-234-7700"}]}],
             "Coverage": [{"resourceType": "Coverage", "id": "coverage-1", "status": "active", "subscriberId": "MEMBER123", "beneficiary": {"reference": "Patient/patient-1"}, "subscriber": {"reference": "Patient/patient-1"}, "relationship": {"coding": [{"code": "self"}]}, "payor": [{"reference": "Organization/payer-1"}], "period": {"start": "2026-01-01"}, "class": [{"type": {"coding": [{"code": "group"}]}, "value": "GROUP123"}]}],
-            "Appointment": [{"resourceType": "Appointment", "id": "appointment-1", "status": "booked", "start": f"{today}T14:00:00Z", "reasonCode": [{"text": "Neuropathy consultation"}], "basedOn": [{"reference": "ServiceRequest/order-1"}], "participant": [{"actor": {"reference": "Practitioner/provider-1"}}, {"actor": {"reference": "Location/location-1"}}]}],
-            "Encounter": [],
-            "ServiceRequest": [{"resourceType": "ServiceRequest", "id": "order-1", "occurrenceDateTime": f"{today}T14:00:00Z", "code": {"coding": [{"system": "http://www.ama-assn.org/go/cpt", "code": "99204"}]}, "quantityQuantity": {"value": 1}, "reasonCode": [{"coding": [{"system": "http://hl7.org/fhir/sid/icd-10-cm", "code": "G62.9"}]}]}],
+            "Encounter": [{"resourceType": "Encounter", "id": "encounter-1", "status": "planned", "period": {"start": f"{today}T14:00:00Z"}, "reasonCode": [{"text": "Neuropathy consultation"}], "participant": [{"individual": {"reference": "Practitioner/provider-1"}}], "location": [{"location": {"reference": "Location/location-1"}}]}],
+            "ServiceRequest": [{"resourceType": "ServiceRequest", "id": "order-1", "encounter": {"reference": "Encounter/encounter-1"}, "occurrenceDateTime": f"{today}T14:00:00Z", "code": {"coding": [{"system": "http://www.ama-assn.org/go/cpt", "code": "99204"}]}, "quantityQuantity": {"value": 1}, "reasonCode": [{"coding": [{"system": "http://hl7.org/fhir/sid/icd-10-cm", "code": "G62.9"}]}]}],
             "ChargeItem": [],
             "Condition": [],
         }
@@ -66,10 +65,16 @@ class EcwBackendSourceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(inputs["lines"], [{"code": "99204", "units": "1", "charge": None, "modifiers": [], "diagnosis": "G629", "service_status": "scheduled"}])
         self.assertEqual(inputs["provider"]["npi"], "1234567893")
         self.assertEqual(source["appointment_date"], today)
+        self.assertNotIn("system/Appointment.read", ecw_backend.SCOPES)
         token_request = next(request for request in requests if request.url.path == "/token")
         self.assertIn("grant_type=client_credentials", token_request.content.decode())
         self.assertNotIn("private-token", str(source))
         self.assertTrue(all("_count" not in request.url.params for request in requests))
+        encounter_request = next(request for request in requests if request.url.path == "/fhir/Encounter")
+        self.assertEqual(encounter_request.url.params["date"], f"ge{today}")
+        charge_request = next(request for request in requests if request.url.path == "/fhir/ChargeItem")
+        self.assertEqual(charge_request.url.params["context"], "Encounter/encounter-1")
+        self.assertEqual(charge_request.url.params["subject"], "Patient/patient-1")
 
 
 if __name__ == "__main__":

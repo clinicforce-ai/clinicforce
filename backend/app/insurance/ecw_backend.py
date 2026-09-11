@@ -17,8 +17,8 @@ from app.ingestion import ecw
 
 
 SCOPES = (
-    "system/Patient.read", "system/Appointment.read", "system/Coverage.read",
-    "system/Encounter.read", "system/ServiceRequest.read", "system/ChargeItem.read",
+    "system/Patient.read", "system/Coverage.read", "system/Encounter.read",
+    "system/ServiceRequest.read", "system/ChargeItem.read",
     "system/Condition.read", "system/RelatedPerson.read", "system/Organization.read",
     "system/Practitioner.read", "system/Location.read",
 )
@@ -160,8 +160,6 @@ def _period_contains(resource: dict[str, Any], service_date: str) -> bool:
 
 
 def _appointment_date(resource: dict[str, Any]) -> str:
-    if resource.get("resourceType") == "Appointment":
-        return str(resource.get("start") or "")[:10]
     return str((resource.get("period") or {}).get("start") or "")[:10]
 
 
@@ -287,20 +285,15 @@ async def fetch_inputs(profile: dict[str, Any], practice: dict[str, Any], *, tra
             if not re.fullmatch(r"[A-Za-z0-9.\-]{1,200}", patient_id):
                 raise EcwBackendError("eClinicalWorks returned an invalid patient identifier.")
             query = {"patient": patient_id}
-            coverage_rows, appointments, encounters, orders, charges, conditions = await asyncio.gather(
+            today = datetime.now(ZoneInfo(practice.get("timezone", "America/New_York"))).date().isoformat()
+            coverage_rows, encounters, orders, conditions = await asyncio.gather(
                 _search(client, issuer, token, "Coverage", query),
-                _search(client, issuer, token, "Appointment", query),
-                _search(client, issuer, token, "Encounter", query),
+                _search(client, issuer, token, "Encounter", {**query, "date": f"ge{today}"}),
                 _search(client, issuer, token, "ServiceRequest", query),
-                _search(client, issuer, token, "ChargeItem", {"subject": f"Patient/{patient_id}"}),
                 _search(client, issuer, token, "Condition", query),
             )
-            today = datetime.now(ZoneInfo(practice.get("timezone", "America/New_York"))).date().isoformat()
-            scheduled = [row for row in appointments
-                         if _appointment_date(row) >= today and row.get("status") not in {"cancelled", "noshow", "entered-in-error"}]
-            if not scheduled:
-                scheduled = [row for row in encounters
-                             if _appointment_date(row) >= today and row.get("status") not in {"cancelled", "entered-in-error"}]
+            scheduled = [row for row in encounters
+                         if _appointment_date(row) >= today and row.get("status") not in {"cancelled", "entered-in-error"}]
             next_date = min((_appointment_date(row) for row in scheduled), default="")
             next_visits = [row for row in scheduled if _appointment_date(row) == next_date]
             visit = next_visits[0] if len(next_visits) == 1 else {}
@@ -338,16 +331,22 @@ async def fetch_inputs(profile: dict[str, Any], practice: dict[str, Any], *, tra
             rendering = providers.get(rendering_npi, {}) if rendering_npi else {}
 
             visit_refs = set(_source_references(visit))
+            encounter_id = str(visit.get("id", ""))
+            encounter_ref = f"Encounter/{encounter_id}" if encounter_id else ""
+            charges = await _search(client, issuer, token, "ChargeItem", {
+                "subject": f"Patient/{patient_id}", "context": encounter_ref,
+            }) if encounter_ref else []
             relevant_orders = [row for row in orders if f"ServiceRequest/{row.get('id')}" in visit_refs or
+                               _reference(row.get("encounter")) == encounter_ref or
                                str(row.get("occurrenceDateTime") or (row.get("occurrencePeriod") or {}).get("start") or "")[:10] == service_date]
-            encounter_id = str(visit.get("id", "")) if visit.get("resourceType") == "Encounter" else ""
-            relevant_charges = [row for row in charges if encounter_id and _reference(row.get("context")) == f"Encounter/{encounter_id}"]
+            relevant_charges = [row for row in charges if _reference(row.get("context")) == encounter_ref]
             clinical_refs = set(ref for row in [visit, *relevant_orders, *relevant_charges] for ref in _source_references(row))
             relevant_conditions = [row for row in conditions if f"Condition/{row.get('id')}" in clinical_refs]
             diagnoses = list(dict.fromkeys(code for row in [visit, *relevant_orders, *relevant_charges, *relevant_conditions] for code in _coding(row, "diagnosis")))[:12]
             lines: dict[str, dict[str, Any]] = {}
             classified = ([(row, "scheduled") for row in relevant_charges] +
-                          [(row, "scheduled" if f"ServiceRequest/{row.get('id')}" in visit_refs else "possible") for row in relevant_orders] +
+                          [(row, "scheduled" if f"ServiceRequest/{row.get('id')}" in visit_refs or
+                            _reference(row.get("encounter")) == encounter_ref else "possible") for row in relevant_orders] +
                           [(visit, "scheduled")])
             for row, service_status in classified:
                 row_diagnoses = _coding(row, "diagnosis")
@@ -427,6 +426,6 @@ async def fetch_inputs(profile: dict[str, Any], practice: dict[str, Any], *, tra
     source = {"system": "eClinicalWorks", "retrieved_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
               "appointment_date": service_date, "appointment_status": visit.get("status"),
               "payer": _display(payer), "location": location.get("name"),
-              "resources": {"Coverage": len(coverage_rows), "Appointment": len(appointments), "Encounter": len(encounters),
+              "resources": {"Coverage": len(coverage_rows), "Encounter": len(encounters),
                             "ServiceRequest": len(orders), "ChargeItem": len(charges)}}
     return inputs, list(dict.fromkeys(missing)), source
