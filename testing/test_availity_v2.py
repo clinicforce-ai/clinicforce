@@ -118,6 +118,23 @@ class ResultsAndIntakeTests(unittest.TestCase):
         with self.assertRaises(golden.GoldenCaseError):
             intake.read_source('order', b'Patient First Name,CPT\nPat,99204\nOther,99205\n', 'mixed.csv', {})
 
+    def test_fee_csv_and_front_desk_gate_use_explicit_prices_and_payer_evidence(self):
+        source = intake.read_fee_schedule(
+            b'CPT,Description,Cash Price,Billed Charge,Service Status\n99204,New visit,225.00,300.00,Scheduled\n95913,Possible test,500.00,900.00,Possible\n',
+            'clinic-fees.csv',
+        )
+        self.assertEqual((source['rate_count'], source['lines'][0]['cash_cents']), (2, 22500))
+        case = {'inputs': {'service_date': '2026-09-11', 'lines': [
+                    {'code': '99204', 'units': '1', 'cash_cents': 22500, 'service_status': 'scheduled'},
+                    {'code': '95913', 'units': '1', 'cash_cents': 50000, 'service_status': 'possible'},
+                ]}, 'transactions': {'coverage': {'result': {'active': True, 'plans': [{'insuranceType': 'HMO', 'benefits': []}]}},
+                'estimate': {'result': {'estimate_available': True, 'patient_cents': 0, 'allowed_cents': 15000}}}}
+        summary = v2.front_desk_summary(case)
+        self.assertEqual((summary['action'], summary['scheduled']['cash_cents']), ('do_not_schedule', 22500))
+        case['transactions']['referral'] = {'result': {'status_code': 'A1', 'status': 'Certified in total', 'certificationNumber': 'REF-1',
+                                                       'certificationEffectiveDate': '2026-09-01', 'certificationExpirationDate': '2026-10-01'}}
+        self.assertEqual(v2.front_desk_summary(case)['heading'], 'Collect $0.00 for the scheduled visit')
+
 
 class WorkflowTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
@@ -199,6 +216,17 @@ class WorkflowTests(unittest.IsolatedAsyncioTestCase):
         await self.client.post(base, json={})
         blocked = await self.client.post(base + '/case-v2/documents/card', files={'file': ('card.pdf', b'patient-data')})
         self.assertEqual(blocked.status_code, 409)
+        fees = await self.client.post(base + '/case-v2/documents/fees', files={'file': ('fees.csv', b'CPT,Cash Price,Billed Charge\n92523,125.00,250.00\n95913,600.00,900.00\n')})
+        self.assertEqual(fees.status_code, 200, fees.text)
+        self.assertEqual(fees.json()['summary']['scheduled']['cash_cents'], 1250000)
+        suggestion = {'groups': [{'id': 'service', 'label': 'Speech service', 'category': 'procedure', 'selection_mode': 'multiple',
+                                  'requires_groups': [], 'codes': [{'code': '92523', 'reason': 'Matches the stated synthetic service'}]}], 'notes': []}
+        with patch.object(v2.cpt_suggester, 'suggest_cpt_codes', return_value=suggestion):
+            suggested = await self.client.post(base + '/case-v2/suggestions')
+        self.assertEqual(suggested.status_code, 200, suggested.text)
+        confirmed = await self.client.post(base + '/case-v2/services', json={'lines': [{'code': '92523', 'quantity': 2, 'service_status': 'scheduled'}]})
+        self.assertEqual(confirmed.status_code, 200, confirmed.text)
+        self.assertEqual(confirmed.json()['inputs']['lines'][0]['cash_cents'], 12500)
         responses = await asyncio.gather(*(self.client.post(base + '/case-v2/transactions/coverage') for _ in range(2)))
         self.assertTrue(all(r.status_code in {200, 409} for r in responses))
         self.assertEqual(self.posts, 1)
@@ -243,8 +271,10 @@ class WorkflowTests(unittest.IsolatedAsyncioTestCase):
                 body = json.loads(request.content)
                 self.assertEqual(body['coverageId'], 'real-coverage-id')
                 self.assertEqual(body['billingProvider']['ein'], '111222333')
-                self.assertEqual(body['claimInformation']['serviceLines'][0]['amount'], '300.00')
-                return httpx.Response(200, json={'id': 'estimate-live', 'result': {'claimInformation': {'serviceLines': [{'procedureCode': '99204', 'amount': '300.00', 'quantity': '1', 'estimatedPatientResponsibility': '75.00', 'allowed': {'amount': '150.00'}}]}}})
+                line = body['claimInformation']['serviceLines'][0]
+                expected = {'99204': ('300.00', '75.00', '150.00'), '95913': ('900.00', '250.00', '600.00')}[line['procedureCode']]
+                self.assertEqual(line['amount'], expected[0])
+                return httpx.Response(200, json={'id': 'estimate-live', 'result': {'claimInformation': {'serviceLines': [{'procedureCode': line['procedureCode'], 'amount': expected[0], 'quantity': '1', 'estimatedPatientResponsibility': expected[1], 'allowed': {'amount': expected[2]}}]}}})
             body = json.loads(request.content)
             self.assertEqual(body['renderingProviders'][0]['npi'], '1234567893')
             self.assertEqual(body['procedures'][0]['code'], '99204')
@@ -257,7 +287,8 @@ class WorkflowTests(unittest.IsolatedAsyncioTestCase):
                   "rendering_provider": {**provider, "npi": "1234567893"}, "service_type": "1", "service_date": day,
                   "place_of_service": "11", "diagnoses": ["G629"], "patient_phone": "5552347700", "reason": "Neuropathy",
                   "coverage_missing": [], "review_missing": [],
-                  "lines": [{"code": "99204", "units": "1", "charge": "300.00", "modifiers": [], "diagnosis": "G629"}]}
+                  "lines": [{"code": "99204", "units": "1", "charge": "300.00", "cash_cents": 22500, "service_status": "scheduled", "modifiers": [], "diagnosis": "G629"},
+                            {"code": "95913", "units": "1", "charge": "900.00", "cash_cents": 50000, "service_status": "possible", "modifiers": [], "diagnosis": "G629"}]}
         ecw_result = (inputs, [], {"system": "eClinicalWorks", "retrieved_at": "2026-09-10T10:00:00Z", "appointment_date": day})
         with patch.dict(os.environ, {'AVAILITY_ENVIRONMENT': 'production', 'AVAILITY_SCOPE': LIVE_SCOPE, 'AVAILITY_PRACTICE_CONFIG': json.dumps(practice)}), \
              patch.object(v2, 'gateway', return_value=Gateway(settings(False), transport=httpx.MockTransport(handler))), \
@@ -271,14 +302,15 @@ class WorkflowTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(response.json()['sources']['ecw']['system'], 'eClinicalWorks')
             response = await self.client.post(path + '/requirements')
             self.assertEqual(response.status_code, 200, response.text)
-            for resource in ('coverage', 'estimate', 'authorization', 'referral'):
+            for resource in ('coverage', 'estimate', 'procedure_estimate', 'authorization', 'referral'):
                 response = await self.client.post(path + '/transactions/' + resource)
                 self.assertEqual(response.status_code, 200, response.text)
             result = response.json()
             self.assertEqual(result['transactions']['estimate']['result']['patient_cents'], 7500)
+            self.assertEqual(result['transactions']['procedure_estimate']['result']['patient_cents'], 25000)
             self.assertIn('Partially', result['transactions']['authorization']['result']['status'])
             self.assertNotIn('111222333', response.text)
-            self.assertEqual(len(sent), 4)
+            self.assertEqual(len(sent), 5)
 
 
 if __name__ == '__main__':

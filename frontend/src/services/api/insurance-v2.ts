@@ -1,7 +1,7 @@
 import { json, request } from './client'
 
-export type V2Resource = 'coverage' | 'estimate' | 'authorization' | 'referral'
-export type V2Document = 'card' | 'provider' | 'appointment' | 'order' | 'charges'
+export type V2Resource = 'coverage' | 'estimate' | 'procedure_estimate' | 'authorization' | 'referral'
+export type V2Document = 'card' | 'provider' | 'appointment' | 'order' | 'charges' | 'fees'
 export interface V2Configuration {
   environment: 'demo' | 'production'; credentials_configured: boolean; practice_configured: boolean
   ecw_configured: boolean; production_enabled: boolean; message: string
@@ -41,19 +41,33 @@ export interface V2Transaction {
 }
 export interface V2Case {
   id: string; revision: number; created_at: string; expires_at: string; environment: 'demo' | 'production'
-  sources: Partial<Record<V2Document | 'ecw', { filename?: string; sha256?: string; observed_at?: string; retrieved_at?: string; system?: string; appointment_date?: string; appointment_status?: string; payer?: string; location?: string; notes?: string[] }>>
+  sources: Partial<Record<V2Document | 'ecw', { filename?: string; sha256?: string; observed_at?: string; retrieved_at?: string; system?: string; appointment_date?: string; appointment_status?: string; payer?: string; location?: string; rate_count?: number; notes?: string[] }>>
   missing: string[]
+  missing_by_resource: Record<V2Resource, string[]>
   inputs: {
     patient: { patient_first_name?: string; patient_last_name?: string; patient_birth_date?: string }
     provider: { npi?: string; lastName?: string; addressLine1?: string; city?: string; stateCode?: string; zipCode?: string }
     member_id?: string; payer_id?: string; relationship?: string; service_date?: string; reason?: string
     diagnoses: string[]; coverage_missing: string[]; review_missing: string[]
-    lines: Array<{ code: string; units?: string; charge?: string; modifiers: string[] }>
+    lines: Array<{ code: string; description?: string; units?: string; charge?: string; cash_cents?: number | null; service_status?: 'scheduled' | 'possible'; modifiers: string[] }>
   }
   transactions: Partial<Record<V2Resource, V2Transaction>>
   discovery: {
     checked_at?: string; message?: string; outcome?: string
     requirements?: Partial<Record<V2Resource, { available: boolean; message?: string; configuration?: { elements?: Record<string, { label?: string; required?: boolean }> } }>>
+  }
+  suggestions?: {
+    groups: Array<{ id: string; label: string; category: string; selection_mode: 'single' | 'multiple'; description?: string; requires_groups: string[]; codes: string[] }>
+    lines: Array<{ code: string; description?: string; charge?: string; cash_cents?: number | null; group_id: string; recommendation_reason: string; requires_quantity: boolean; unit_label: string }>
+    notes: string[]
+  }
+  summary: {
+    action: 'collect' | 'verify' | 'do_not_schedule' | 'self_pay'; heading: string
+    coverage: 'active' | 'inactive' | 'unconfirmed'; hmo: boolean
+    referral: { required: boolean; unknown: boolean; approved: boolean; status?: string; reference?: string; effective?: string; expiration?: string }
+    authorization: { required: boolean; unknown: boolean; approved: boolean; status?: string; reference?: string; effective?: string; expiration?: string }
+    scheduled: { codes: string[]; insurance_cents?: number | null; allowed_cents?: number | null; cash_cents?: number | null; network?: string }
+    possible: { codes: string[]; insurance_cents?: number | null; allowed_cents?: number | null; cash_cents?: number | null; network?: string }
   }
   events: Array<{ stage: string; at: string }>
 }
@@ -63,6 +77,8 @@ export const latestV2Case = () => request<{ case: V2Case | null }>(`${base}/case
 export const createV2Case = (scenario = 'Coverages-Complete-i') => request<V2Case>(`${base}/cases`, json({ scenario }))
 export const getV2Case = (id: string) => request<V2Case>(`${base}/cases/${encodeURIComponent(id)}`)
 export const getV2Requirements = (id: string) => request<V2Case>(`${base}/cases/${encodeURIComponent(id)}/requirements`, json({}))
+export const suggestV2Services = (id: string) => request<V2Case>(`${base}/cases/${encodeURIComponent(id)}/suggestions`, json({}))
+export const confirmV2Services = (id: string, lines: Array<{ code: string; quantity: number; service_status: 'scheduled' | 'possible' }>) => request<V2Case>(`${base}/cases/${encodeURIComponent(id)}/services`, json({ lines }))
 export const submitV2Transaction = (id: string, resource: V2Resource) => request<V2Case>(`${base}/cases/${encodeURIComponent(id)}/transactions/${resource}`, json({}))
 export const refreshV2Transaction = (id: string, resource: V2Resource) => request<V2Case>(`${base}/cases/${encodeURIComponent(id)}/transactions/${resource}/refresh`, json({}))
 export const retryV2Transaction = (id: string, resource: V2Resource) => request<V2Case>(`${base}/cases/${encodeURIComponent(id)}/transactions/${resource}/retry`, json({}))

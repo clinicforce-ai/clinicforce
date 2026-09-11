@@ -347,10 +347,16 @@ async def fetch_inputs(profile: dict[str, Any], practice: dict[str, Any], *, tra
             relevant_conditions = [row for row in conditions if f"Condition/{row.get('id')}" in clinical_refs]
             diagnoses = list(dict.fromkeys(code for row in [visit, *relevant_orders, *relevant_charges, *relevant_conditions] for code in _coding(row, "diagnosis")))[:12]
             lines: dict[str, dict[str, Any]] = {}
-            for row in [*relevant_charges, *relevant_orders, visit]:
+            classified = ([(row, "scheduled") for row in relevant_charges] +
+                          [(row, "scheduled" if f"ServiceRequest/{row.get('id')}" in visit_refs else "possible") for row in relevant_orders] +
+                          [(visit, "scheduled")])
+            for row, service_status in classified:
                 row_diagnoses = _coding(row, "diagnosis")
                 for code in _coding(row, "procedure"):
-                    item = lines.setdefault(code, {"code": code, "units": None, "charge": None, "modifiers": [], "diagnosis": None})
+                    item = lines.setdefault(code, {"code": code, "units": None, "charge": None, "modifiers": [],
+                                                  "diagnosis": None, "service_status": service_status})
+                    if service_status == "scheduled":
+                        item["service_status"] = "scheduled"
                     if len(row_diagnoses) == 1:
                         item["diagnosis"] = row_diagnoses[0]
                     quantity = row.get("quantity") or row.get("quantityQuantity") or {}

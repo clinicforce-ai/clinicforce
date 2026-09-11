@@ -40,6 +40,14 @@ ALIASES = {
     "state": ("Billing State",), "zip_code": ("Billing ZIP",),
 }
 
+FEE_ALIASES = {
+    "procedurecode": "code", "cpt": "code", "hcpcs": "code", "code": "code",
+    "description": "description", "servicedescription": "description",
+    "cashprice": "cash", "selfpayprice": "cash", "amount": "cash", "rate": "cash",
+    "billedcharge": "charge", "linecharge": "charge", "standardcharge": "charge",
+    "servicestatus": "status", "estimatetype": "status", "servicecategory": "status",
+}
+
 
 def normalize(value: str) -> str:
     return re.sub(r"[^a-z0-9]", "", value.casefold())
@@ -166,6 +174,51 @@ def read_source(kind: str, content: bytes, filename: str, payer_aliases: dict[st
     if kind == "charges":
         source["fields"] = {}
     return source
+
+
+def read_fee_schedule(content: bytes, filename: str) -> dict:
+    """Read one clinic CSV used only for billed-charge and cash-price lookup."""
+    if Path(filename).suffix.lower() != ".csv":
+        raise golden.GoldenCaseError("Upload the clinic fee schedule as a CSV file.")
+    try:
+        reader = csv.DictReader(StringIO(content.decode("utf-8-sig")), strict=True)
+        rows = list(reader)
+    except (UnicodeError, csv.Error):
+        raise golden.GoldenCaseError("Upload a readable UTF-8 clinic fee CSV.") from None
+    if not rows or len(rows) > 1000:
+        raise golden.GoldenCaseError("The clinic fee CSV must contain 1–1,000 rows.")
+    headers = {normalize(str(name or "")): FEE_ALIASES.get(normalize(str(name or ""))) for name in (reader.fieldnames or [])}
+    if "code" not in headers.values() or not {"cash", "charge"}.intersection(v for v in headers.values() if v):
+        raise golden.GoldenCaseError("The fee CSV needs CPT/HCPCS and Cash Price and/or Billed Charge columns.")
+    lines, seen = [], set()
+    for number, row in enumerate(rows, 2):
+        values = {FEE_ALIASES[normalize(str(name))]: str(value or "").strip()
+                  for name, value in row.items() if name and normalize(str(name)) in FEE_ALIASES}
+        code = values.get("code", "").replace(".", "").upper()
+        if not code:
+            continue
+        if not re.fullmatch(r"(?:\d{5}|[A-Z]\d{4}|\d{4}[A-Z])", code):
+            raise golden.GoldenCaseError(f"The procedure code on fee CSV row {number} is invalid.")
+        if code in seen:
+            raise golden.GoldenCaseError(f"CPT/HCPCS {code} appears more than once in the fee CSV.")
+        cash = decimal_text(values["cash"], money=True) if values.get("cash") else None
+        charge = decimal_text(values["charge"], money=True) if values.get("charge") else None
+        if cash is None and charge is None:
+            raise golden.GoldenCaseError(f"CPT/HCPCS {code} has no cash price or billed charge.")
+        raw_status = normalize(values.get("status", ""))
+        status = ("scheduled" if raw_status in {"scheduled", "visit", "officevisit"} else
+                  "possible" if raw_status in {"possible", "procedure", "future", "ifelected", "optional"} else None)
+        if raw_status and status is None:
+            raise golden.GoldenCaseError(f"CPT/HCPCS {code} has an invalid Service Status; use Scheduled or Possible.")
+        lines.append({"code": code, "description": values.get("description", code)[:200],
+                      "cash_cents": int(Decimal(cash) * 100) if cash is not None else None,
+                      "charge": charge, "service_status": status})
+        seen.add(code)
+    if not lines:
+        raise golden.GoldenCaseError("The fee CSV does not contain a CPT/HCPCS price row.")
+    return {"filename": Path(filename).name, "sha256": hashlib.sha256(content).hexdigest(),
+            "observed_at": datetime.now(timezone.utc).isoformat(), "lines": lines,
+            "rate_count": len(lines), "notes": ["Clinic prices only; insurance benefits and allowed amounts come from Availity."]}
 
 
 def line(row: dict, *, charges_only: bool = False) -> dict:
