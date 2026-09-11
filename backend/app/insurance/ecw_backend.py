@@ -22,7 +22,6 @@ SCOPES = (
     "system/Condition.read", "system/RelatedPerson.read", "system/Organization.read",
     "system/Practitioner.read", "system/Location.read",
 )
-MAX_RESULTS = 100
 
 
 class EcwBackendError(RuntimeError):
@@ -116,7 +115,7 @@ def _entries(bundle: dict[str, Any]) -> list[dict[str, Any]]:
 
 async def _search(client: httpx.AsyncClient, issuer: str, token: str, resource: str,
                   params: dict[str, str]) -> list[dict[str, Any]]:
-    response = await client.get(f"{issuer}/{resource}", params={**params, "_count": str(MAX_RESULTS)},
+    response = await client.get(f"{issuer}/{resource}", params=params,
                                 headers={"Authorization": f"Bearer {token}", "Accept": "application/fhir+json"})
     if response.status_code in {403, 404}:
         return []

@@ -69,6 +69,7 @@ class EcwBackendSourceTests(unittest.IsolatedAsyncioTestCase):
         token_request = next(request for request in requests if request.url.path == "/token")
         self.assertIn("grant_type=client_credentials", token_request.content.decode())
         self.assertNotIn("private-token", str(source))
+        self.assertTrue(all("_count" not in request.url.params for request in requests))
 
 
 if __name__ == "__main__":
