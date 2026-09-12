@@ -4,6 +4,7 @@ from copy import deepcopy
 from unittest.mock import patch
 
 import pytest
+from botocore.exceptions import ClientError
 
 from app.insurance import cpt_rules, cpt_suggester, documented, v1_requirements, v1_sources
 from app.insurance.golden import GoldenCaseError
@@ -41,6 +42,28 @@ def test_cpt_suggestions_fall_back_to_uploaded_description_matches():
         suggestions = cpt_suggester.suggest_cpt_codes("Head is aching; CT scan is needed", rates)
     assert [candidate["code"] for candidate in suggestions["groups"][0]["codes"]] == ["70450"]
     assert "Bedrock coding review was unavailable" in suggestions["notes"][0]
+
+
+def test_cpt_fallback_ignores_generic_words_in_other_schedule_descriptions():
+    rates = [
+        {"code": "70450", "description": "Computed tomography, head or brain; without contrast material", "allowed_cents": 1234},
+        {"code": "95816", "description": "Electroencephalogram, routine, awake and drowsy", "allowed_cents": 1234},
+        {"code": "97110", "description": "Therapeutic exercises to develop strength and endurance, each 15 minutes", "allowed_cents": 1234},
+    ]
+    with patch.object(cpt_suggester.boto3, "client") as client:
+        client.return_value.converse.side_effect = RuntimeError("Bedrock down")
+        suggestions = cpt_suggester.suggest_cpt_codes("Headache with nausea; CT head without contrast is planned", rates)
+    assert [candidate["code"] for candidate in suggestions["groups"][0]["codes"]] == ["70450"]
+
+
+def test_cpt_suggestions_retry_a_transient_bedrock_error():
+    rates = [{"code": "70450", "description": "CT head or brain without contrast", "allowed_cents": 1234}]
+    payload = {"groups": [group("head-imaging", ["70450"], category="diagnostic")], "notes": []}
+    unavailable = ClientError({"Error": {"Code": "ServiceUnavailableException", "Message": "busy"}}, "Converse")
+    with patch.object(cpt_suggester.boto3, "client") as client, patch.object(cpt_suggester.time, "sleep"):
+        client.return_value.converse.side_effect = [unavailable, tool_response(payload)]
+        assert cpt_suggester.suggest_cpt_codes("CT head is planned", rates) == payload
+    assert client.return_value.converse.call_count == 2
 
 
 def test_clinical_excerpts_are_literal_private_and_do_not_invent_diagnoses():
