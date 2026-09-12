@@ -1,11 +1,12 @@
 """One end-to-end mapping check for the eCW backend insurance source."""
 
-from datetime import date
+from datetime import datetime
 from pathlib import Path
 import os
 import sys
 import unittest
 from unittest.mock import patch
+from zoneinfo import ZoneInfo
 
 import httpx
 
@@ -17,7 +18,7 @@ from app.ingestion import ecw
 
 class EcwBackendSourceTests(unittest.IsolatedAsyncioTestCase):
     async def test_backend_token_and_fhir_resources_become_availity_inputs(self):
-        today = date.today().isoformat()
+        today = datetime.now(ZoneInfo("America/New_York")).date().isoformat()
         metadata = {"resourceType": "CapabilityStatement", "rest": [{"security": {"extension": [{
             "url": "http://fhir-registry.smarthealthit.org/StructureDefinition/oauth-uris",
             "extension": [{"url": "token", "valueUri": "https://auth.example.test/token"}],
