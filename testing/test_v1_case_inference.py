@@ -13,8 +13,34 @@ def response(payload):
     return {"output": {"message": {"content": [{"text": json.dumps(payload)}]}}}
 
 
+def tool_response(payload):
+    return {"output": {"message": {"content": [{"toolUse": {"name": "submit_code_suggestions", "input": payload}}]}}}
+
+
 def group(key, codes, mode="multiple", **extra):
     return {"id": key, "label": key, "selection_mode": mode, "codes": [{"code": code, "reason": "Candidate for the uploaded planned care"} for code in codes], **extra}
+
+
+def test_cpt_suggestions_use_bedrock_tool_output_and_only_schedule_codes():
+    rates = [{"code": "70450", "description": "CT head or brain without contrast", "allowed_cents": 1234}, {"code": "76856", "description": "Pelvic ultrasound", "allowed_cents": 1234}]
+    payload = {"groups": [group("head-imaging", ["70450"], category="diagnostic")], "notes": []}
+    with patch.object(cpt_suggester.boto3, "client") as client:
+        client.return_value.converse.return_value = tool_response(payload)
+        suggestions = cpt_suggester.suggest_cpt_codes("Head is aching; CT scan is needed", rates)
+    assert suggestions == payload
+    call = client.return_value.converse.call_args.kwargs
+    assert call["toolConfig"]["toolChoice"] == {"tool": {"name": "submit_code_suggestions"}}
+    candidates = json.loads(call["messages"][0]["content"][0]["text"])["available_codes"]
+    assert candidates == [{"code": "70450", "description": "CT head or brain without contrast"}]
+
+
+def test_cpt_suggestions_fall_back_to_uploaded_description_matches():
+    rates = [{"code": "70450", "description": "CT head or brain without contrast", "allowed_cents": 1234}, {"code": "76856", "description": "Pelvic ultrasound", "allowed_cents": 1234}]
+    with patch.object(cpt_suggester.boto3, "client") as client:
+        client.return_value.converse.side_effect = RuntimeError("Bedrock down")
+        suggestions = cpt_suggester.suggest_cpt_codes("Head is aching; CT scan is needed", rates)
+    assert [candidate["code"] for candidate in suggestions["groups"][0]["codes"]] == ["70450"]
+    assert "Bedrock coding review was unavailable" in suggestions["notes"][0]
 
 
 def test_clinical_excerpts_are_literal_private_and_do_not_invent_diagnoses():

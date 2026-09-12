@@ -9,6 +9,7 @@ from typing import Any
 import boto3
 
 from app.ingestion.bedrock_extractor import BEDROCK_MODEL_ID
+from app.logs.logger import log_warning
 
 
 _SYSTEM = """You provide clinical coding decision support for a clinician. Given patient-supplied
@@ -29,37 +30,130 @@ requires_quantity true and name the billing unit. Explain site-specific alternat
 description; a quantity alone does not confirm an anatomical site or medical necessity.
 Group labels, relationships and reasons are coding suggestions requiring clinician review,
 not verified billing rules. Never infer benefits, coverage, authorization, referrals or prices.
-Return JSON only with this shape:
-{"groups":[{"id":"short-id","label":"Case-specific heading","category":"visit|diagnostic|procedure|treatment|other",
-"selection_mode":"single|multiple","description":"Relationships and missing details",
-"requires_groups":[],"codes":[{"code":"...","reason":"Tied to the supplied clinical context",
-"requires_quantity":false,"unit_label":"service"}]}],"notes":[]}.
-Return an empty groups list when the context does not support a candidate."""
+Call the submit_code_suggestions tool. Return an empty groups list when the context does not
+support a candidate."""
+
+_TOOL_NAME = "submit_code_suggestions"
+_MAX_MODEL_CANDIDATES = 200
+_TERM_ALIASES = (
+    {"ct", "computed", "tomography", "tomographic"},
+    {"mri", "magnetic", "resonance"},
+    {"ultrasound", "ultrasonic", "sonogram", "sonography", "sonographic"},
+    {"xray", "radiograph", "radiography", "radiologic"},
+    {"ekg", "ecg", "electrocardiogram"},
+    {"emg", "electromyography"},
+    {"ncs", "nerve", "conduction"},
+    {"head", "brain", "cranial", "skull"},
+)
+_TOOL_SCHEMA = {
+    "type": "object", "additionalProperties": False, "required": ["groups", "notes"],
+    "properties": {
+        "groups": {"type": "array", "items": {"type": "object", "additionalProperties": False,
+            "required": ["id", "label", "category", "selection_mode", "description", "requires_groups", "codes"],
+            "properties": {
+                "id": {"type": "string"}, "label": {"type": "string"},
+                "category": {"type": "string", "enum": ["visit", "diagnostic", "procedure", "treatment", "other"]},
+                "selection_mode": {"type": "string", "enum": ["single", "multiple"]},
+                "description": {"type": "string"}, "requires_groups": {"type": "array", "items": {"type": "string"}},
+                "codes": {"type": "array", "items": {"type": "object", "additionalProperties": False,
+                    "required": ["code", "reason", "requires_quantity", "unit_label"],
+                    "properties": {"code": {"type": "string"}, "reason": {"type": "string"},
+                                   "requires_quantity": {"type": "boolean"}, "unit_label": {"type": "string"}}}},
+            }}},
+        "notes": {"type": "array", "items": {"type": "string"}},
+    },
+}
+
+
+def _terms(value: str) -> set[str]:
+    terms = set(re.findall(r"[a-z0-9]+", value.casefold()))
+    for aliases in _TERM_ALIASES:
+        if terms.intersection(aliases):
+            terms.update(aliases)
+    return terms
+
+
+def _matching_candidate_rates(context: str, rate_lines: list[dict[str, Any]]) -> list[dict[str, str]]:
+    """Keep an oversized schedule within Bedrock limits without inventing a catalog."""
+    context_terms = _terms(context)
+    ranked = []
+    for line in rate_lines:
+        code = str(line["code"]).upper()
+        description = str(line.get("description") or code)
+        score = len(context_terms.intersection(_terms(description)))
+        if score:
+            ranked.append((-score, code, {"code": code, "description": description}))
+    ranked.sort(key=lambda item: (item[0], item[1]))
+    return [item[2] for item in ranked[:_MAX_MODEL_CANDIDATES]]
+
+
+def _candidate_rates(context: str, rate_lines: list[dict[str, Any]]) -> list[dict[str, str]]:
+    matched = _matching_candidate_rates(context, rate_lines)
+    if matched:
+        return matched
+    # Let the model reason over a bounded schedule when the clinician's wording
+    # and the local description use no common terms.
+    return sorted(
+        ({"code": str(line["code"]).upper(), "description": str(line.get("description") or line["code"])} for line in rate_lines),
+        key=lambda item: item["code"],
+    )[:_MAX_MODEL_CANDIDATES]
+
+
+def _tool_payload(response: dict[str, Any]) -> dict[str, Any]:
+    for block in response.get("output", {}).get("message", {}).get("content", []):
+        tool = block.get("toolUse") if isinstance(block, dict) else None
+        if isinstance(tool, dict) and tool.get("name") == _TOOL_NAME and isinstance(tool.get("input"), dict):
+            return tool["input"]
+    # Supports a provider/model that returns the prior JSON-only shape rather than tool use.
+    text = "".join(block.get("text", "") for block in response.get("output", {}).get("message", {}).get("content", []) if isinstance(block, dict)).strip()
+    decoder = json.JSONDecoder()
+    start = text.find("{")
+    if start >= 0:
+        payload, _ = decoder.raw_decode(text[start:])
+        if isinstance(payload, dict):
+            return payload
+    raise ValueError("Bedrock returned no CPT suggestion tool result")
+
+
+def _fallback_suggestions(context: str, rate_lines: list[dict[str, Any]]) -> dict[str, Any]:
+    candidates = _matching_candidate_rates(context, rate_lines)
+    if not candidates:
+        return {"groups": [], "notes": ["No uploaded fee-schedule descriptions matched these visit details. Review the visit details and fee schedule."]}
+    return {"groups": [{
+        "id": "schedule-description-matches", "label": "Potential fee-schedule matches", "category": "other",
+        "selection_mode": "multiple", "description": "Matched from the wording in the visit details and uploaded fee-schedule descriptions; confirm the planned service, anatomy, contrast, laterality, units and coding rules.",
+        "requires_groups": [],
+        "codes": [{"code": candidate["code"], "reason": "The uploaded description matches the entered visit details.",
+                   "requires_quantity": False, "unit_label": "service"} for candidate in candidates],
+    }], "notes": ["Bedrock coding review was unavailable, so ClinicForce listed conservative wording matches from the uploaded fee schedule only."]}
 
 
 def suggest_cpt_codes(context: str, rate_lines: list[dict[str, Any]]) -> dict[str, Any]:
     """Return model suggestions, accepting only codes supplied in the uploaded CSV."""
-    candidates = [
-        {"code": str(line["code"]), "description": str(line.get("description") or line["code"])}
-        for line in rate_lines
-    ]
+    candidates = _candidate_rates(context, rate_lines)
     if not candidates:
-        return {"groups": [], "notes": []}
-    response = boto3.client("bedrock-runtime").converse(
-        modelId=BEDROCK_MODEL_ID,
-        system=[{"text": _SYSTEM}],
-        messages=[{"role": "user", "content": [{"text": json.dumps({"clinical_context": context, "available_codes": candidates})}]}],
-        inferenceConfig={"maxTokens": 4000, "temperature": 0},
-    )
-    blocks = response.get("output", {}).get("message", {}).get("content", [])
-    text = "".join(block.get("text", "") for block in blocks if isinstance(block, dict)).strip()
-    match = re.search(r"\{.*\}", text, re.DOTALL)
-    if not match:
-        raise ValueError("CPT suggestion service returned an invalid response")
-    payload = json.loads(match.group(0))
-    if not isinstance(payload, dict) or not isinstance(payload.get("groups"), list):
-        raise ValueError("CPT suggestion service returned invalid groups")
-    return payload
+        return _fallback_suggestions(context, rate_lines)
+    try:
+        response = boto3.client("bedrock-runtime").converse(
+            modelId=BEDROCK_MODEL_ID,
+            system=[{"text": _SYSTEM}],
+            messages=[{"role": "user", "content": [{"text": json.dumps({"clinical_context": context, "available_codes": candidates})}]}],
+            toolConfig={"tools": [{"toolSpec": {"name": _TOOL_NAME, "description": "Submit coding candidates for clinician review.", "inputSchema": {"json": _TOOL_SCHEMA}}}], "toolChoice": {"tool": {"name": _TOOL_NAME}}},
+            inferenceConfig={"maxTokens": 4000, "temperature": 0},
+        )
+        payload = _tool_payload(response)
+        if not isinstance(payload.get("groups"), list) or not isinstance(payload.get("notes"), list):
+            raise ValueError("Bedrock returned invalid CPT suggestion groups")
+        # Validate relationships before returning to the endpoint. A malformed
+        # model answer should degrade to schedule matches, not fail the workflow.
+        from app.insurance import cpt_rules
+        cpt_rules.grouped_candidates(payload, rate_lines)
+        return payload
+    except Exception as exc:
+        # Keep V1 usable during a transient Bedrock, profile, or tool-output failure.
+        # No exception text or patient context is written to logs.
+        log_warning("CPT suggestions", "Bedrock review failed (%s); using rate-schedule wording matches.", type(exc).__name__)
+        return _fallback_suggestions(context, rate_lines)
 
 
 def clinical_context_from_pages(pages: list[tuple[int, str]]) -> dict[str, Any]:
