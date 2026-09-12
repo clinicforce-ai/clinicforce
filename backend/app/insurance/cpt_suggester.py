@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import json
 import re
+import time
 from typing import Any
 
 import boto3
+from botocore.exceptions import ClientError
 
 from app.ingestion.bedrock_extractor import BEDROCK_MODEL_ID
 from app.logs.logger import log_warning
@@ -24,6 +26,10 @@ Group candidates for THIS case, not a fixed specialty template. Separate visit l
 diagnostics, procedures and treatments only when relevant. Include relevant alternatives from
 the supplied list; do not silently choose a complexity or count tier. Use selection_mode single
 only for mutually exclusive alternatives for the whole encounter; otherwise use multiple.
+When the context explicitly identifies the planned modality, technique, anatomical service or
+treatment, return only candidates consistent with that stated service. Do not add an unmentioned
+alternative (for example CT versus MRI) or a commonly paired treatment merely because it could
+also be clinically plausible; include it only when the clinician explicitly says it is planned.
 For add-ons, identify required companion groups. If the required base service is not in the
 uploaded schedule, omit the add-on and explain it in notes. If units need confirmation, set
 requires_quantity true and name the billing unit. Explain site-specific alternatives in the
@@ -45,6 +51,8 @@ _TERM_ALIASES = (
     {"ncs", "nerve", "conduction"},
     {"head", "brain", "cranial", "skull"},
 )
+_COMMON_TERMS = {"a", "an", "and", "are", "at", "by", "each", "for", "from", "in", "is", "of", "on", "or", "planned", "the", "this", "to", "with", "without"}
+_RETRYABLE_BEDROCK_ERRORS = {"InternalServerException", "ModelNotReadyException", "ModelTimeoutException", "ServiceUnavailableException", "ThrottlingException"}
 _TOOL_SCHEMA = {
     "type": "object", "additionalProperties": False, "required": ["groups", "notes"],
     "properties": {
@@ -66,7 +74,7 @@ _TOOL_SCHEMA = {
 
 
 def _terms(value: str) -> set[str]:
-    terms = set(re.findall(r"[a-z0-9]+", value.casefold()))
+    terms = {term for term in re.findall(r"[a-z0-9]+", value.casefold()) if term not in _COMMON_TERMS}
     for aliases in _TERM_ALIASES:
         if terms.intersection(aliases):
             terms.update(aliases)
@@ -128,19 +136,31 @@ def _fallback_suggestions(context: str, rate_lines: list[dict[str, Any]]) -> dic
     }], "notes": ["Bedrock coding review was unavailable, so ClinicForce listed conservative wording matches from the uploaded fee schedule only."]}
 
 
+def _retryable(error: Exception) -> bool:
+    return isinstance(error, ClientError) and error.response.get("Error", {}).get("Code") in _RETRYABLE_BEDROCK_ERRORS
+
+
 def suggest_cpt_codes(context: str, rate_lines: list[dict[str, Any]]) -> dict[str, Any]:
     """Return model suggestions, accepting only codes supplied in the uploaded CSV."""
     candidates = _candidate_rates(context, rate_lines)
     if not candidates:
         return _fallback_suggestions(context, rate_lines)
     try:
-        response = boto3.client("bedrock-runtime").converse(
-            modelId=BEDROCK_MODEL_ID,
-            system=[{"text": _SYSTEM}],
-            messages=[{"role": "user", "content": [{"text": json.dumps({"clinical_context": context, "available_codes": candidates})}]}],
-            toolConfig={"tools": [{"toolSpec": {"name": _TOOL_NAME, "description": "Submit coding candidates for clinician review.", "inputSchema": {"json": _TOOL_SCHEMA}}}], "toolChoice": {"tool": {"name": _TOOL_NAME}}},
-            inferenceConfig={"maxTokens": 4000, "temperature": 0},
-        )
+        client = boto3.client("bedrock-runtime")
+        for attempt in range(3):
+            try:
+                response = client.converse(
+                    modelId=BEDROCK_MODEL_ID,
+                    system=[{"text": _SYSTEM}],
+                    messages=[{"role": "user", "content": [{"text": json.dumps({"clinical_context": context, "available_codes": candidates})}]}],
+                    toolConfig={"tools": [{"toolSpec": {"name": _TOOL_NAME, "description": "Submit coding candidates for clinician review.", "inputSchema": {"json": _TOOL_SCHEMA}}}], "toolChoice": {"tool": {"name": _TOOL_NAME}}},
+                    inferenceConfig={"maxTokens": 4000, "temperature": 0},
+                )
+                break
+            except Exception as exc:
+                if attempt == 2 or not _retryable(exc):
+                    raise
+                time.sleep(0.25 * (2 ** attempt))
         payload = _tool_payload(response)
         if not isinstance(payload.get("groups"), list) or not isinstance(payload.get("notes"), list):
             raise ValueError("Bedrock returned invalid CPT suggestion groups")
