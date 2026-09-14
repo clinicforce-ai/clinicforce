@@ -40,7 +40,7 @@ export interface V2Transaction {
   }
 }
 export interface V2Case {
-  id: string; revision: number; created_at: string; expires_at: string; environment: 'demo' | 'production'
+  id: string; revision: number; created_at: string; expires_at: string | null; environment: 'demo' | 'production'
   sources: Partial<Record<V2Document | 'ecw', { filename?: string; sha256?: string; observed_at?: string; retrieved_at?: string; system?: string; appointment_date?: string; appointment_status?: string; payer?: string; location?: string; rate_count?: number; notes?: string[] }>>
   missing: string[]
   missing_by_resource: Record<V2Resource, string[]>

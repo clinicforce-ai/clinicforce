@@ -60,12 +60,12 @@ export interface EstimateBreakdown {
 
 export interface InsuranceCase {
   id: string; source_mode: InsuranceSourceMode; status: 'review' | 'in_progress' | 'complete'; next_stage: InsuranceStage | null
-  created_at: string; expires_at: string; ocr: InsuranceCardFields
+  created_at: string; expires_at: string | null; ocr: InsuranceCardFields
   service_lines: ServiceLine[]; stage_decisions: StageDecision[]
   facts: EvidenceFact[]; sources: InsuranceSource[]; estimate: EstimateBreakdown | null
   clinical_context?: string; documents?: Record<string, InsuranceSource>
   visit_type?: 'new' | 'established' | null; service_groups?: ServiceGroup[]; suggestions_reviewed?: boolean; suggestion_notes?: string[]
-  card_source?: InsuranceSource; ocr_evidence?: Record<string, { page: number; quote: string; value: string }>
+  card_source?: InsuranceSource; ocr_evidence?: Record<string, { page: number; quote: string; value: string; document_id?: string; source_filename?: string; source_page?: number }>
 }
 
 export interface InsuranceCardFields {

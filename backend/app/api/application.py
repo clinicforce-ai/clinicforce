@@ -152,6 +152,9 @@ app.add_middleware(
 app.include_router(insurance_router)
 from app.api.routers.insurance_v2 import router as insurance_v2_router
 app.include_router(insurance_v2_router)
+from app.api.routers.staff import router as staff_router, from_share as staff_intake_from_share
+app.include_router(staff_router)
+app.add_api_route("/api/doctor/insurance/staff-intake", staff_intake_from_share, methods=["POST"])
 app.include_router(system_router)
 
 

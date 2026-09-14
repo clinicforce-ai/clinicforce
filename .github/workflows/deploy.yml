@@ -1,6 +1,12 @@
 name: Deploy ClinicForce application
 
 on:
+  pull_request:
+    paths:
+      - 'backend/**'
+      - 'frontend/**'
+      - 'testing/**'
+      - '.github/workflows/deploy.yml'
   push:
     branches: [main]
     paths:
@@ -27,6 +33,19 @@ env:
 jobs:
   verify:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:14
+        env:
+          POSTGRES_USER: clinicforce_test
+          POSTGRES_PASSWORD: synthetic-ci-password
+          POSTGRES_DB: stafftest
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U clinicforce_test -d stafftest"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      STAFF_TEST_DATABASE_URL: postgresql://clinicforce_test:synthetic-ci-password@localhost:5432/stafftest
     steps:
       - uses: actions/checkout@v4
 
@@ -48,10 +67,12 @@ jobs:
         working-directory: frontend
         run: |
           npm ci
+          node ../testing/test-card-capture.mjs
           npm run lint
           npm run build
 
   deploy:
+    if: github.event_name != 'pull_request'
     needs: verify
     runs-on: ubuntu-latest
     environment: production

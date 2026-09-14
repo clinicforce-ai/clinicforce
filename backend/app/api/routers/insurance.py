@@ -26,8 +26,21 @@ def _enabled() -> None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Insurance beta is not enabled")
 
 
-def _session(request: Request, require_beta: bool = True) -> dict:
+async def _session(request: Request, require_beta: bool = True) -> dict:
     _enabled()
+    intake_id = request.headers.get("X-ClinicForce-Intake", "")
+    if intake_id:
+        from app.api.routers.staff import require_staff
+        from app.core import staff_store
+        staff = await require_staff(request)
+        intake = await run_in_threadpool(staff_store.get_intake, intake_id, staff["practice_id"])
+        if not intake:
+            raise HTTPException(404, "Insurance intake not found")
+        patient = intake.get("patient")
+        if not patient:
+            raise HTTPException(409, "Confirm the patient before opening insurance review")
+        return {"practice_id": staff["practice_id"], "intake_id": intake_id,
+                "patient_id": patient["id"], "share_manifest_id": "", "staff": staff, "intake": intake}
     try:
         return golden.open_share_token(request.cookies.get(CLINICIAN_SHARE_COOKIE, ""), require_beta)
     except golden.GoldenCaseError as exc:
@@ -35,12 +48,17 @@ def _session(request: Request, require_beta: bool = True) -> dict:
         raise HTTPException(status_code=code, detail=str(exc)) from exc
 
 
+def _scope(session: dict) -> dict:
+    return {"practice_id": session["practice_id"], "intake_id": session["intake_id"],
+            "staff_actor": {key: session["staff"][key] for key in ("id", "display_name")}} if session.get("practice_id") else {}
+
+
 def _response(payload: dict) -> JSONResponse:
     return JSONResponse(payload, headers=_NO_STORE)
 
 
 def _load_case(case_id: str, session: dict) -> dict:
-    case = store.get_case(case_id, session["patient_id"], session["share_manifest_id"])
+    case = store.get_case(case_id, session["patient_id"], session["share_manifest_id"], **_scope(session))
     if case is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Insurance case not found or expired")
     if case.get("source_mode") == "availity":
@@ -58,7 +76,9 @@ def _saved(case: dict | None) -> dict:
 
 @router.post("/beta")
 async def enable_beta(request: Request, response: Response) -> dict:
-    session = _session(request, require_beta=False)
+    session = await _session(request, require_beta=False)
+    if session.get("practice_id"):
+        return {"beta_enabled": True, "expires_in_seconds": CLINICIAN_SHARE_MAX_AGE}
     profile = await run_in_threadpool(get_patient_profile, session["patient_id"])
     if profile is None:
         raise HTTPException(status_code=422, detail="The opened QR patient no longer has a matching ClinicForce profile")
@@ -75,7 +95,9 @@ async def enable_beta(request: Request, response: Response) -> dict:
 
 @router.post("/cases")
 async def create_case(request: Request, file: UploadFile = File(...)) -> JSONResponse:
-    session = _session(request)
+    session = await _session(request)
+    if session.get("practice_id"):
+        raise HTTPException(409, "Add card files through the saved staff intake")
     filename = Path(file.filename or "insurance-card").name
     if Path(filename).suffix.lower() not in {".pdf", ".jpg", ".jpeg", ".png"}:
         raise HTTPException(status_code=415, detail="Upload the insurance card as a PDF, JPG or PNG")
@@ -95,7 +117,7 @@ async def create_case(request: Request, file: UploadFile = File(...)) -> JSONRes
         }
         workflow["evidence_manifest_id"] = golden.evidence_binding()
         case = await run_in_threadpool(
-            store.create_case, session["patient_id"], session["share_manifest_id"], golden.evidence_binding(), workflow,
+            store.create_case, session["patient_id"], session["share_manifest_id"], golden.evidence_binding(), workflow, **_scope(session),
         )
         return _response(case)
     except golden.GoldenCaseError as exc:
@@ -105,14 +127,49 @@ async def create_case(request: Request, file: UploadFile = File(...)) -> JSONRes
         raise HTTPException(status_code=503, detail="Insurance card OCR is temporarily unavailable") from exc
 
 
+@router.post("/staff-case")
+async def open_staff_case(request: Request) -> JSONResponse:
+    """Resume a document review from the already saved, confirmed card intake."""
+    session = await _session(request)
+    if not session.get("practice_id"):
+        raise HTTPException(403, "Open an intake from the staff workspace")
+    intake = session["intake"]
+    case_id = intake.get("workflows", {}).get("v1")
+    if case_id:
+        return _response(await run_in_threadpool(_load_case, case_id, session))
+    reviewed = intake["fields"]
+    fields = {**intake.get("ocr_fields", {}),
+              "member_name": reviewed.get("subscriber_name") or reviewed.get("member_name", ""),
+              "member_id": reviewed.get("member_id", ""), "group_number": reviewed.get("group_number", "")}
+    if reviewed.get("relationship") in {"self", "18"} and not fields["member_name"]:
+        fields["member_name"] = " ".join((intake["patient"]["given_name"], intake["patient"]["family_name"]))
+    workflow = documented.pending_case(fields)
+    card = next(iter(intake.get("documents", [])), {})
+    workflow.update(extraction_version=v1_sources.EXTRACTION_VERSION,
+                    ocr_evidence=intake.get("ocr_evidence", {}),
+                    staff_confirmed_fields=reviewed,
+                    evidence_manifest_id=golden.evidence_binding(),
+                    card_source={"id": "card", "filename": card.get("filename", "Staff-confirmed insurance details"),
+                                 "sha256": card.get("sha256", ""), "observed_at": card.get("created_at", intake["created_at"]),
+                                 "reference": "Staff-confirmed intake; original card retained in patient documents"})
+    documented.confirm_intake(workflow, fields)
+    workflow["facts"][0]["value"] = "Patient and insurance details confirmed by clinic staff"
+    try:
+        case = await run_in_threadpool(store.create_case, session["patient_id"], "", golden.evidence_binding(), workflow,
+                                      expected_intake_updated_at=intake["updated_at"], **_scope(session))
+    except store.StaffCaseConflict as exc:
+        raise HTTPException(409, str(exc)) from exc
+    return _response(case)
+
+
 @router.get("/cases/{case_id}")
 async def get_case(case_id: str, request: Request) -> JSONResponse:
-    return _response(await run_in_threadpool(_load_case, case_id, _session(request)))
+    return _response(await run_in_threadpool(_load_case, case_id, await _session(request)))
 
 
 @router.put("/cases/{case_id}/intake")
 async def confirm_intake(case_id: str, review: InsuranceIntakeRequest, request: Request) -> JSONResponse:
-    session = _session(request)
+    session = await _session(request)
     case = await run_in_threadpool(_load_case, case_id, session)
     try:
         if case.get("evidence_manifest_id") != golden.evidence_binding():
@@ -121,7 +178,7 @@ async def confirm_intake(case_id: str, review: InsuranceIntakeRequest, request: 
         if case.get("next_stage") != "intake" or any(value != fields.get(key, "") for key, value in review.model_dump().items()):
             raise golden.GoldenCaseError("Confirm the fields extracted from the uploaded card without changing them.")
         documented.confirm_intake(case, fields)
-        saved = await run_in_threadpool(store.save_case, case, session["patient_id"], session["share_manifest_id"], "intake")
+        saved = await run_in_threadpool(store.save_case, case, session["patient_id"], session["share_manifest_id"], "intake", **_scope(session))
         return _response(_saved(saved))
     except golden.GoldenCaseError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
@@ -129,8 +186,10 @@ async def confirm_intake(case_id: str, review: InsuranceIntakeRequest, request: 
 
 @router.post("/cases/{case_id}/documents/{kind}")
 async def upload_evidence(case_id: str, kind: str, request: Request, file: UploadFile = File(...)) -> JSONResponse:
-    session = _session(request)
+    session = await _session(request)
     case = await run_in_threadpool(_load_case, case_id, session)
+    if session.get("practice_id") and not object_store.enabled():
+        raise HTTPException(503, "Document storage is unavailable. The evidence has not been saved; try again later.")
     expected_stage = documented.DOCUMENT_STAGES.get(kind)
     if case.get("source_mode") != "documents" or expected_stage is None or case.get("next_stage") != expected_stage:
         raise HTTPException(status_code=409, detail="This evidence upload is not available at the current insurance step")
@@ -153,16 +212,22 @@ async def upload_evidence(case_id: str, kind: str, request: Request, file: Uploa
             )
         if object_store.enabled():
             object_key = await run_in_threadpool(
-                object_store.put_insurance_evidence, case_id, filename, content, file.content_type or "application/octet-stream",
+                object_store.put_staff_document if session.get("practice_id") else object_store.put_insurance_evidence,
+                *([session["practice_id"], case_id] if session.get("practice_id") else [case_id]),
+                filename, content, file.content_type or "application/octet-stream",
             )
             source["object_key"] = object_key
         documented.add_document(case, kind, source)
         saved = await run_in_threadpool(
-            store.save_case, case, session["patient_id"], session["share_manifest_id"], f"{kind}-uploaded",
+            store.save_case, case, session["patient_id"], session["share_manifest_id"], f"{kind}-uploaded", **_scope(session),
         )
         if saved is None:
             raise golden.GoldenCaseError("The uploaded evidence could not be saved; upload it again")
         return _response(saved)
+    except store.StaffCaseConflict as exc:
+        if object_key:
+            await run_in_threadpool(object_store.delete_object, object_key)
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except golden.GoldenCaseError as exc:
         if object_key:
             await run_in_threadpool(object_store.delete_object, object_key)
@@ -175,11 +240,11 @@ async def upload_evidence(case_id: str, kind: str, request: Request, file: Uploa
 async def request_cpt_suggestions(
     case_id: str, review: InsuranceClinicalContextRequest, request: Request,
 ) -> JSONResponse:
-    session = _session(request)
+    session = await _session(request)
     case = await run_in_threadpool(_load_case, case_id, session)
     try:
         await run_in_threadpool(documented.set_clinical_context, case, review.clinical_context, review.visit_type)
-        saved = await run_in_threadpool(store.save_case, case, session["patient_id"], session["share_manifest_id"], "clinical-context")
+        saved = await run_in_threadpool(store.save_case, case, session["patient_id"], session["share_manifest_id"], "clinical-context", **_scope(session))
         return _response(_saved(saved))
     except golden.GoldenCaseError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
@@ -187,13 +252,13 @@ async def request_cpt_suggestions(
 
 @router.put("/cases/{case_id}/service-lines")
 async def confirm_service(case_id: str, selection: InsuranceServiceLinesRequest, request: Request) -> JSONResponse:
-    session = _session(request)
+    session = await _session(request)
     case = await run_in_threadpool(_load_case, case_id, session)
     try:
         if not case.get("documents", {}).get("fee_schedule"):
             raise golden.GoldenCaseError("Upload the fee schedule before confirming anticipated services")
         documented.select_services(case, selection.codes, selection.quantities)
-        saved = await run_in_threadpool(store.save_case, case, session["patient_id"], session["share_manifest_id"], "service")
+        saved = await run_in_threadpool(store.save_case, case, session["patient_id"], session["share_manifest_id"], "service", **_scope(session))
         return _response(_saved(saved))
     except golden.GoldenCaseError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
@@ -201,11 +266,11 @@ async def confirm_service(case_id: str, selection: InsuranceServiceLinesRequest,
 
 @router.post("/cases/{case_id}/stages/{stage}")
 async def run_stage(case_id: str, stage: str, request: Request) -> JSONResponse:
-    session = _session(request)
+    session = await _session(request)
     case = await run_in_threadpool(_load_case, case_id, session)
     try:
         documented.advance(case, stage)
-        saved = await run_in_threadpool(store.save_case, case, session["patient_id"], session["share_manifest_id"], stage)
+        saved = await run_in_threadpool(store.save_case, case, session["patient_id"], session["share_manifest_id"], stage, **_scope(session))
         return _response(_saved(saved))
     except golden.GoldenCaseError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc

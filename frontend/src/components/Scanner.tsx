@@ -1,10 +1,10 @@
 import { Html5Qrcode, Html5QrcodeSupportedFormats } from 'html5-qrcode'
 import { useCallback, useEffect, useId, useRef, useState } from 'react'
 import { ArrowLeft, Camera, ScanLine, ShieldCheck, Upload } from 'lucide-react'
-import { parseSmartHealthLink, type SmartHealthLink } from '../services/shl'
+import { isClinicforceIssuedLink, parseSmartHealthLink, type SmartHealthLink } from '../services/shl'
 import { scanQrImage } from '../services/qr-image'
 
-interface ScannerProps { onScanned: (link: SmartHealthLink) => void; onCancel: () => void }
+interface ScannerProps { onScanned: (link: SmartHealthLink) => void; onCancel: () => void; clinicforceOnly?: boolean }
 
 const scannerConfig = {
   fps: 12,
@@ -20,7 +20,7 @@ const cameraMessage = (error: unknown) => {
   return 'Camera could not be started.'
 }
 
-export default function Scanner({ onScanned, onCancel }: ScannerProps) {
+export default function Scanner({ onScanned, onCancel, clinicforceOnly = false }: ScannerProps) {
   const id = useId().replace(/:/g, '')
   const fileScannerId = useId().replace(/:/g, '')
   const fileInput = useRef<HTMLInputElement | null>(null)
@@ -37,12 +37,14 @@ export default function Scanner({ onScanned, onCancel }: ScannerProps) {
     try {
       complete.current = true
       setStatus('Smart Health Link found.')
-      onScannedRef.current(parseSmartHealthLink(decodedText))
+      const link = parseSmartHealthLink(decodedText)
+      if (clinicforceOnly && !isClinicforceIssuedLink(link)) throw new Error('This is not a ClinicForce QR code. Use Insurance card to add a card.')
+      onScannedRef.current(link)
     } catch (scanError) {
       complete.current = false
       setError(scanError instanceof Error ? scanError.message : 'The QR code could not be read.')
     }
-  }, [])
+  }, [clinicforceOnly])
 
   useEffect(() => {
     const reader = new Html5Qrcode(id, { formatsToSupport: [Html5QrcodeSupportedFormats.QR_CODE], verbose: false })

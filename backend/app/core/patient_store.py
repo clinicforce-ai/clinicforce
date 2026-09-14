@@ -189,6 +189,13 @@ def _initialize_schema(connection: psycopg.Connection[Any]) -> None:
             share_manifest_id TEXT NOT NULL, evidence_manifest_id TEXT NOT NULL,
             workflow_json TEXT NOT NULL, created_at TEXT NOT NULL, expires_at TEXT NOT NULL
         )""")
+        # Staff-owned reviews are durable and independent of patient login/share credentials.
+        cursor.execute("ALTER TABLE insurance_cases ALTER COLUMN patient_id DROP NOT NULL")
+        cursor.execute("ALTER TABLE insurance_cases ALTER COLUMN expires_at DROP NOT NULL")
+        cursor.execute("ALTER TABLE insurance_cases ADD COLUMN IF NOT EXISTS practice_id TEXT")
+        cursor.execute("ALTER TABLE insurance_cases ADD COLUMN IF NOT EXISTS practice_patient_id TEXT")
+        cursor.execute("ALTER TABLE insurance_cases ADD COLUMN IF NOT EXISTS intake_id TEXT")
+        cursor.execute("CREATE INDEX IF NOT EXISTS insurance_cases_practice_idx ON insurance_cases (practice_id, intake_id)")
         cursor.execute("CREATE INDEX IF NOT EXISTS insurance_cases_expiry_idx ON insurance_cases (expires_at)")
         cursor.execute("""CREATE TABLE IF NOT EXISTS insurance_case_events (
             id BIGSERIAL PRIMARY KEY, case_id TEXT NOT NULL, stage TEXT NOT NULL, created_at TEXT NOT NULL

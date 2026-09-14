@@ -17,15 +17,50 @@ from fastapi import APIRouter, File, HTTPException, Request, UploadFile
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.api.routers.insurance import _response, _session
+from app.api.routers.insurance import _response, _session as _insurance_session, _scope
 from app.api.settings import MAX_UPLOAD_BYTES
 from app.core.patient_store import get_patient_profile
+from app.core import object_store
 from app.insurance import availity_intake as intake, availity_results as results, cpt_rules, cpt_suggester, ecw_backend, golden, store
 from app.insurance.availity import Settings, gateway, PATHS, DEMO_SCENARIOS, unwrap
 
 
 router = APIRouter(prefix="/api/doctor/insurance/v2", tags=["doctor-insurance-v2"])
 Resource = Literal["coverage", "estimate", "procedure_estimate", "authorization", "referral"]
+
+
+async def _session(request: Request) -> dict:
+    session = await _insurance_session(request)
+    if session.get("practice_id"):
+        configured_practice = os.getenv("STAFF_INTEGRATION_PRACTICE_ID", "").strip()
+        if not configured_practice or configured_practice != session["practice_id"]:
+            raise HTTPException(403, "Connected insurance is not configured for this clinic. Your intake is saved; use document review.")
+    return session
+
+
+def validate_staff_coverage(fields: dict, inputs: dict, source: dict, practice: dict) -> None:
+    """Compare stated card details; missing EHR values remain normal input gaps."""
+    subscriber = inputs.get("subscriber") or {}
+    relationships = {"self": "18", "spouse": "01", "child": "19", "other": "G8"}
+    relationship = relationships.get(fields.get("relationship"), fields.get("relationship"))
+    pairs = (("member ID", fields.get("member_id"), inputs.get("member_id")),
+             ("group number", fields.get("group_number"), inputs.get("group_number")),
+             ("subscriber relationship", relationship, inputs.get("relationship")),
+             ("subscriber name", fields.get("subscriber_name"), " ".join(str(subscriber.get(key) or "") for key in ("firstName", "lastName")).strip()),
+             ("subscriber birth date", fields.get("subscriber_birth_date"), subscriber.get("birthDate")))
+    for label, confirmed, connected in pairs:
+        if confirmed and connected and intake.normalize(str(confirmed)) != intake.normalize(str(connected)):
+            raise HTTPException(409, f"The eCW {label} differs from the confirmed card. Review the coverage in eCW before checking benefits; your card is saved.")
+    payer = intake.normalize(str(fields.get("payer") or ""))
+    if not payer:
+        return
+    connected_id = intake.normalize(str(inputs.get("payer_id") or ""))
+    if payer in {connected_id, intake.normalize(str(source.get("payer") or ""))}:
+        return
+    mapped = {intake.normalize(value) for key, value in practice.get("payer_aliases", {}).items() if intake.normalize(key) == payer}
+    if len(mapped) == 1 and connected_id in mapped:
+        return
+    raise HTTPException(409, "The confirmed payer could not be matched to the eCW coverage. Ask the administrator to check the payer name and approved payer mapping, or use document review. Your card is saved.")
 
 
 class Start(BaseModel):
@@ -72,7 +107,7 @@ def public(case: dict) -> dict:
         visible["inputs"] = {k: v for k, v in visible["inputs"].items() if k not in {"submitter_id", "provider", "rendering_provider"}}
         provider = case["inputs"].get("provider", {})
         visible["inputs"]["provider"] = {k: provider.get(k) for k in ("npi", "lastName", "addressLine1", "city", "stateCode", "zipCode")}
-    visible["sources"] = {k: {n: v for n, v in s.items() if n not in {"fields", "lines"}} for k, s in case.get("sources", {}).items()}
+    visible["sources"] = {k: {n: v for n, v in s.items() if n not in {"fields", "lines", "object_key"}} for k, s in case.get("sources", {}).items()}
     visible["transactions"] = {k: {n: v for n, v in t.items() if n not in {"payload", "request_body"}} for k, t in case.get("transactions", {}).items()}
     visible["missing_by_resource"] = {resource: request_missing(case, resource) for resource in ("coverage", "estimate", "procedure_estimate", "authorization", "referral")}
     visible["summary"] = front_desk_summary(case)
@@ -80,7 +115,7 @@ def public(case: dict) -> dict:
 
 
 async def load(case_id: str, session: dict, binding: str) -> dict:
-    case = await run_in_threadpool(store.get_case, case_id, session["patient_id"], session["share_manifest_id"])
+    case = await run_in_threadpool(store.get_case, case_id, session["patient_id"], session["share_manifest_id"], **_scope(session))
     if not case or case.get("source_mode") != "availity":
         raise HTTPException(404, "Availity case not found or expired")
     if case.get("binding") != binding:
@@ -90,7 +125,7 @@ async def load(case_id: str, session: dict, binding: str) -> dict:
 
 async def save(case: dict, session: dict, event: str) -> dict:
     case["events"] = [*case.get("events", []), {"stage": event, "at": datetime.now(timezone.utc).isoformat()}][-100:]
-    saved = await run_in_threadpool(store.save_v2, case, session["patient_id"], session["share_manifest_id"], event, case["revision"])
+    saved = await run_in_threadpool(store.save_v2, case, session["patient_id"], session["share_manifest_id"], event, case["revision"], **_scope(session))
     if not saved:
         raise HTTPException(409, "This case changed in another request. Refresh the case before continuing.")
     return saved
@@ -185,14 +220,19 @@ def request_missing(case: dict, resource: str) -> list[str]:
 
 
 def apply_fee_schedule(case: dict, source: dict) -> None:
+    lines = case["inputs"].get("lines", [])
+    if case.get("sources", {}).get("fees") and any(line.get("charge") is not None and not line.get("charge_source") for line in lines):
+        # Older reviews did not distinguish imported charges from visit charges.
+        # A matching amount is not sufficient evidence that the CSV supplied it.
+        raise HTTPException(409, "This older review does not record the source of each billed charge. The existing fee file is unchanged. Start a new review before replacing it.")
     rates = {line["code"]: line for line in source["lines"]}
-    for line in case["inputs"].get("lines", []):
-        rate = rates.get(line["code"])
-        if not rate:
-            continue
+    for line in lines:
+        rate = rates.get(line["code"], {})
+        line.setdefault("charge_source", "visit" if line.get("charge") is not None else "fee_schedule")
+        if line["charge_source"] == "fee_schedule":
+            line["charge"] = rate.get("charge")
         line["description"] = rate.get("description") or line.get("description")
         line["cash_cents"] = rate.get("cash_cents")
-        line["charge"] = line.get("charge") or rate.get("charge")
         line["service_status"] = line.get("service_status") or rate.get("service_status") or "scheduled"
     case["sources"]["fees"] = source
     refresh_missing(case)
@@ -264,7 +304,7 @@ def front_desk_summary(case: dict) -> dict:
 
 @router.get("/configuration")
 async def get_configuration(request: Request):
-    _session(request)
+    await _session(request)
     settings, practice, _ = configuration()
     return _response({"environment": settings.environment, "credentials_configured": bool(settings.client_id and settings.client_secret),
                       "practice_configured": bool(practice.get("providers") and practice.get("submitter_id")),
@@ -275,23 +315,30 @@ async def get_configuration(request: Request):
 
 @router.get("/cases/latest")
 async def latest(request: Request):
-    session = _session(request)
+    session = await _session(request)
     _, _, binding = configuration()
-    case = await run_in_threadpool(store.latest_v2, session["patient_id"], session["share_manifest_id"], binding)
+    case = await run_in_threadpool(store.latest_v2, session["patient_id"], session["share_manifest_id"], binding, **_scope(session))
     return _response({"case": public(case) if case else None})
 
 
 @router.post("/cases")
 async def create(body: Start, request: Request):
-    session = _session(request)
+    session = await _session(request)
     settings, practice, binding = configuration()
+    if session.get("practice_id") and settings.environment != "production":
+        raise HTTPException(409, "Live Availity verification is not activated. Your intake is saved; use document review. Synthetic demo results cannot verify this patient.")
     if settings.environment == "production" and practice.get("production_enabled") is not True:
         raise HTTPException(409, "An administrator must finish Availity contracting, enrollment and practice setup, then enable production in AVAILITY_PRACTICE_CONFIG.")
-    profile = await run_in_threadpool(get_patient_profile, session["patient_id"])
-    if not profile:
-        raise HTTPException(422, "The QR patient profile is missing")
-    identity = {"patient_first_name": profile.given_name, "patient_last_name": profile.family_name,
-                "patient_birth_date": profile.birth_date, "gender": {"male": "M", "female": "F"}.get(profile.administrative_gender, "U")}
+    if session.get("practice_id"):
+        patient = session["intake"]["patient"]
+        identity = {"patient_first_name": patient["given_name"], "patient_last_name": patient["family_name"],
+                    "patient_birth_date": patient["birth_date"], "gender": "U"}
+    else:
+        profile = await run_in_threadpool(get_patient_profile, session["patient_id"])
+        if not profile:
+            raise HTTPException(422, "The QR patient profile is missing")
+        identity = {"patient_first_name": profile.given_name, "patient_last_name": profile.family_name,
+                    "patient_birth_date": profile.birth_date, "gender": {"male": "M", "female": "F"}.get(profile.administrative_gender, "U")}
     if settings.environment == "demo":
         inputs, missing, sources = demo_inputs(), [], {}
     else:
@@ -302,24 +349,31 @@ async def create(body: Start, request: Request):
         except ecw_backend.EcwBackendError as exc:
             raise HTTPException(502, str(exc)) from exc
         sources = {"ecw": source}
-    case = await run_in_threadpool(store.create_case, session["patient_id"], session["share_manifest_id"], binding,
-                                   {"source_mode": "availity", "binding": binding, "environment": settings.environment,
-                                    "input_mode": "synthetic" if settings.environment == "demo" else "ecw",
-                                    "revision": 0, "profile": identity, "sources": sources, "inputs": inputs, "missing": missing,
-                                    "transactions": {}, "discovery": {}, "events": [], "scenario": body.scenario})
+        if session.get("practice_id"):
+            validate_staff_coverage(session["intake"]["fields"], inputs, source, practice)
+    try:
+        case = await run_in_threadpool(store.create_case, session["patient_id"], session["share_manifest_id"], binding,
+                                       {"source_mode": "availity", "binding": binding, "environment": settings.environment,
+                                        "input_mode": "synthetic" if settings.environment == "demo" else "ecw",
+                                        "revision": 0, "profile": identity, "sources": sources, "inputs": inputs, "missing": missing,
+                                        "transactions": {}, "discovery": {}, "events": [], "scenario": body.scenario},
+                                       **({"expected_intake_updated_at": session["intake"]["updated_at"]} if session.get("practice_id") else {}),
+                                       **_scope(session))
+    except store.StaffCaseConflict as exc:
+        raise HTTPException(409, str(exc)) from exc
     return _response(public(case))
 
 
 @router.get("/cases/{case_id}")
 async def get_case(case_id: str, request: Request):
-    session = _session(request)
+    session = await _session(request)
     _, _, binding = configuration()
     return _response(public(await load(case_id, session, binding)))
 
 
 @router.post("/cases/{case_id}/documents/{kind}")
 async def upload(case_id: str, kind: str, request: Request, file: UploadFile = File(...)):
-    session = _session(request)
+    session = await _session(request)
     settings, practice, binding = configuration()
     case = await load(case_id, session, binding)
     if settings.environment == "demo" and kind != "fees":
@@ -336,9 +390,28 @@ async def upload(case_id: str, kind: str, request: Request, file: UploadFile = F
         filename = Path(file.filename or "document").name
         if kind == "fees":
             source = await run_in_threadpool(intake.read_fee_schedule, content, filename)
-            apply_fee_schedule(case, source)
-            case.pop("suggestions", None)
-            return _response(public(await save(case, session, "fee-schedule-imported")))
+            object_key = None
+            if session.get("practice_id"):
+                if not object_store.enabled():
+                    raise HTTPException(503, "Document storage is unavailable. The fee file has not been saved.")
+                try:
+                    object_key = await run_in_threadpool(object_store.put_staff_document, session["practice_id"], case_id,
+                                                        filename, content, "text/csv")
+                except Exception:
+                    raise HTTPException(503, "The fee file could not be saved. Please try again.") from None
+                source.update(object_key=object_key, content_type="text/csv")
+            try:
+                apply_fee_schedule(case, source)
+                case.pop("suggestions", None)
+                saved = await save(case, session, "fee-schedule-imported")
+            except Exception:
+                if object_key:
+                    try:
+                        await run_in_threadpool(object_store.delete_object, object_key)
+                    except Exception:
+                        pass
+                raise
+            return _response(public(saved))
         source = await run_in_threadpool(intake.read_source, kind, content, filename, practice.get("payer_aliases", {}))
     except golden.GoldenCaseError as exc:
         raise HTTPException(422, str(exc)) from exc
@@ -357,7 +430,7 @@ async def upload(case_id: str, kind: str, request: Request, file: UploadFile = F
 
 @router.post("/cases/{case_id}/suggestions")
 async def suggest_services(case_id: str, request: Request):
-    session = _session(request)
+    session = await _session(request)
     _, _, binding = configuration()
     case = await load(case_id, session, binding)
     idle(case)
@@ -383,7 +456,7 @@ async def suggest_services(case_id: str, request: Request):
 
 @router.post("/cases/{case_id}/services")
 async def confirm_services(case_id: str, body: ConfirmServices, request: Request):
-    session = _session(request)
+    session = await _session(request)
     _, _, binding = configuration()
     case = await load(case_id, session, binding)
     idle(case)
@@ -404,6 +477,7 @@ async def confirm_services(case_id: str, body: ConfirmServices, request: Request
     diagnosis = case["inputs"].get("diagnoses", [])
     case["inputs"]["lines"] = [{"code": code, "description": candidates[code].get("description"),
                                   "units": str(quantities[code]), "charge": candidates[code].get("charge"),
+                                  "charge_source": "fee_schedule",
                                   "cash_cents": candidates[code].get("cash_cents"),
                                   "service_status": next(choice.service_status for choice in choices if choice.code.upper() == code),
                                   "modifiers": [], "diagnosis": diagnosis[0] if len(diagnosis) == 1 else None}
@@ -414,7 +488,7 @@ async def confirm_services(case_id: str, body: ConfirmServices, request: Request
 
 @router.post("/cases/{case_id}/requirements")
 async def requirements(case_id: str, request: Request):
-    session = _session(request)
+    session = await _session(request)
     settings, _, binding = configuration()
     case = await load(case_id, session, binding)
     idle(case)
@@ -518,7 +592,7 @@ def validate_request(case: dict, resource: str, body: dict, practice: dict) -> d
 
 @router.post("/cases/{case_id}/transactions/{resource}")
 async def submit(case_id: str, resource: Resource, request: Request):
-    session = _session(request)
+    session = await _session(request)
     settings, practice, binding = configuration()
     case = await load(case_id, session, binding)
     existing = case["transactions"].get(resource)
@@ -565,7 +639,7 @@ async def submit(case_id: str, resource: Resource, request: Request):
 
 @router.post("/cases/{case_id}/transactions/{resource}/refresh")
 async def refresh(case_id: str, resource: Resource, request: Request):
-    session = _session(request)
+    session = await _session(request)
     settings, _, binding = configuration()
     case = await load(case_id, session, binding)
     transaction = case["transactions"].get(resource, {})
@@ -588,7 +662,7 @@ async def refresh(case_id: str, resource: Resource, request: Request):
 @router.post("/cases/{case_id}/transactions/{resource}/retry")
 async def retry_rejected(case_id: str, resource: Resource, request: Request):
     """Explicit retry after access/rate-limit rejection; uncertain submissions cannot retry."""
-    session = _session(request)
+    session = await _session(request)
     _, _, binding = configuration()
     case = await load(case_id, session, binding)
     idle(case)

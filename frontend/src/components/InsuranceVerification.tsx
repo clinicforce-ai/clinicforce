@@ -1,11 +1,13 @@
 import { AlertTriangle, ArrowLeft, Check, Files, ShieldCheck, Upload } from 'lucide-react'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
+import { request } from '../services/api/client'
+import StaffLibraryPicker from './StaffLibraryPicker'
 import {
   confirmInsuranceIntake, confirmInsuranceService, createInsuranceCase, runInsuranceStage,
   suggestInsuranceServices, uploadInsuranceEvidence, type InsuranceCase, type InsuranceStage,
 } from '../services/api'
 
-interface Props { onBack: () => void }
+interface Props { onBack: () => void; staffMode?: boolean }
 
 const steps: Array<{ id: InsuranceStage; label: string }> = [
   { id: 'intake', label: 'Insurance card' }, { id: 'eligibility', label: 'Card review' },
@@ -19,7 +21,7 @@ const label = (key: string) => key.replace(/_/g, ' ').replace(/\b\w/g, letter =>
 const authorizationLabel = (status: string | undefined) => status === 'not_required' ? 'Not required' : status === 'required' ? 'Required' : status === 'conditional' ? 'Conditional · review source terms' : 'Not established by the uploaded documents'
 const timestamp = (value: string) => Number.isNaN(Date.parse(value)) ? value : new Date(value).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short', timeZoneName: undefined })
 
-export default function InsuranceVerification({ onBack }: Props) {
+export default function InsuranceVerification({ onBack, staffMode = false }: Props) {
   const [insuranceCase, setInsuranceCase] = useState<InsuranceCase | null>(null)
   const [viewStage, setViewStage] = useState<InsuranceStage | null>(null)
   const [selectedCodes, setSelectedCodes] = useState<string[]>([])
@@ -46,6 +48,18 @@ export default function InsuranceVerification({ onBack }: Props) {
       setError(caught instanceof Error ? caught.message : 'The uploaded document could not be processed.')
     } finally { setBusy(false) }
   }
+  useEffect(() => {
+    if (!staffMode) return
+    let canceled = false
+    request<InsuranceCase>('/api/doctor/insurance/staff-case', { method: 'POST' }).then(next => {
+      if (canceled) return
+      setInsuranceCase(next); setSelectedCodes(next.service_lines.filter(line => line.selected).map(line => line.code))
+      setClinicalContext(next.clinical_context ?? ''); setVisitType(next.visit_type ?? '')
+      setQuantities(Object.fromEntries(next.service_lines.filter(line => line.units).map(line => [line.code, line.units!])))
+      setMessage('Saved insurance review opened. Patient details were confirmed by clinic staff.')
+    }).catch((caught: unknown) => { if (!canceled) setError(caught instanceof Error ? caught.message : 'Unable to open the saved review.') })
+    return () => { canceled = true }
+  }, [staffMode])
   const uploadCard = (file?: File) => {
     if (!file) return
     if (file.size > 10 * 1024 * 1024) { setError('Choose a card file of 10 MB or less.'); return }
@@ -87,8 +101,9 @@ export default function InsuranceVerification({ onBack }: Props) {
     evidence.value === insuranceCase?.ocr[key as keyof InsuranceCase['ocr']] && evidence.quote.includes(evidence.value))
 
   const cardReview = insuranceCase && <>
+    {staffMode && <p className="feedback feedback-success">Patient and insurance identity were confirmed by clinic staff. Original cards and corrections are saved in the patient insurance workspace.</p>}
     <dl className="insurance-facts card-details">{cardValues.map(([key, evidence]) => <div key={key}>
-      <dt>{label(key)}</dt><dd>{evidence.value}<small>Source: {insuranceCase.card_source?.filename} · page {evidence.page}</small>
+      <dt>{label(key)}</dt><dd>{evidence.value}<small>Source: {evidence.source_filename || insuranceCase.card_source?.filename} · page {evidence.source_page ?? evidence.page}</small>
         <details className="source-excerpt"><summary>View extracted text</summary><blockquote>{evidence.quote}</blockquote></details>
       </dd>
     </div>)}</dl>
@@ -98,9 +113,9 @@ export default function InsuranceVerification({ onBack }: Props) {
   </>
 
   return <section className="insurance-beta insurance-v1" aria-labelledby="insurance-heading">
-    <button className="back-control" type="button" disabled={busy} onClick={onBack}><ArrowLeft aria-hidden="true" className="size-4" /> Back to clinical summary</button>
+    <button className="back-control" type="button" disabled={busy} onClick={onBack}><ArrowLeft aria-hidden="true" className="size-4" /> {staffMode ? 'Back to patient insurance' : 'Back to clinical summary'}</button>
     <header className="insurance-beta-hero">
-      <div><p className="eyebrow"><ShieldCheck aria-hidden="true" className="size-4" /> Beta V1 · Uploaded documents</p>
+      <div><p className="eyebrow"><ShieldCheck aria-hidden="true" className="size-4" /> {staffMode ? 'Uploaded document review' : 'Beta V1 · Uploaded documents'}</p>
         <h1 id="insurance-heading">From your documents to a pay estimate</h1>
         <p>Upload the patient’s card, benefit details and fee schedule. Review the extracted information, choose CPT codes and see an itemized estimate.</p>
       </div>
@@ -120,7 +135,9 @@ export default function InsuranceVerification({ onBack }: Props) {
         {error && <p className="form-error" role="alert"><AlertTriangle aria-hidden="true" className="size-4" /> {error}</p>}
         {reviewing && <button className="button button-secondary" type="button" onClick={() => setViewStage(null)}>Return to current step</button>}
 
-        {stage === 'intake' && <>
+        {staffMode && !insuranceCase && <p role="status">{error ? 'Return to the patient record and reopen document review to retry.' : 'Opening the saved card review…'}</p>}
+        {staffMode && insuranceCase && stage === 'network' && <StaffLibraryPicker kinds={['contract', 'fee_schedule', 'self_pay']} disabled={disabled} onFile={(kind, file) => uploadEvidence(kind, file)} />}
+        {stage === 'intake' && !staffMode && <>
           <p className="section-kicker">1 · Insurance card</p><h2>{insuranceCase ? 'Check what was read from the card' : 'Upload the patient’s insurance card'}</h2>
           <p>Use a clear image of the card or a PDF containing its front and back. Keep the member name, member ID and group number readable. We show only information extracted from this file.</p>
           {!reviewing && <UploadTile title={insuranceCase ? 'Replace insurance card' : 'Insurance card'} hint="PDF (up to 2 pages), JPG or PNG · maximum 10 MB. Include both sides in one PDF when possible. A benefits statement and fee schedule come in the next steps." accept={imageOrPdf} busy={busy} source={insuranceCase?.card_source} onFile={uploadCard} />}
