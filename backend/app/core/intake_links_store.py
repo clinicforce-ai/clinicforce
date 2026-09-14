@@ -80,6 +80,8 @@ def check_rate(address: str, practice_id: str, action: str) -> None:
 
 
 def create_link(clinic: dict, actor: dict | None = None, patient_id: str | None = None) -> tuple[dict, str]:
+    if not clinic.get("npi"):
+        raise UploadLinkError("A clinic administrator must set the clinic's NPI before creating patient upload links.")
     stamp = datetime.now(timezone.utc)
     code = secrets.token_urlsafe(32)
     with _connection() as connection:
@@ -90,7 +92,7 @@ def create_link(clinic: dict, actor: dict | None = None, patient_id: str | None 
         row = connection.execute("""INSERT INTO insurance_upload_links
             (id,token_hash,clinic_code,practice_id,clinic_name,created_by,expected_patient_id,status,created_at,expires_at,events)
             VALUES (%s,%s,%s,%s,%s,%s,%s,'pending',%s,%s,%s::jsonb) RETURNING *""",
-            (str(uuid4()), _hash(code), clinic["code"], clinic["id"], clinic["name"], actor["id"] if actor else None,
+            (str(uuid4()), _hash(code), clinic["npi"], clinic["id"], clinic["name"], actor["id"] if actor else None,
              patient_id, stamp.isoformat(), (stamp + timedelta(hours=72 if actor else 1)).isoformat(),
              json.dumps([staff_store._event("Patient upload link created", actor or "Patient upload")]))).fetchone()
     return dict(row), code

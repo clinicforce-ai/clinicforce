@@ -44,7 +44,11 @@ class PatientUploadTests(unittest.IsolatedAsyncioTestCase):
         staff_store.ensure_bootstrap()
         self.actor, self.token = staff_store.authenticate("upload-admin", "synthetic-upload-password", "synthetic-address")
         self.clinic = clinic_store.get_for_practice(self.actor["practice_id"], self.actor["practice_name"])
-        self.other = clinic_store.register_clinic(clinic_name="Other Synthetic Clinic", clinic_code="other-clinic", display_name="Other Tester", email="other@example.test", password="synthetic-other-password")
+        with self.assertRaises(links.UploadLinkError):
+            links.create_link(self.clinic, self.actor)
+        clinic_store.set_npi(self.actor["practice_id"], "1234567893")
+        self.clinic = clinic_store.get_for_practice(self.actor["practice_id"], self.actor["practice_name"])
+        self.other = clinic_store.register_clinic(clinic_name="Other Synthetic Clinic", npi="2345678900", display_name="Other Tester", email="other@example.test", password="synthetic-other-password")
         _, self.other_token = staff_store.authenticate("other@example.test", "synthetic-other-password", "other-address")
         app = FastAPI(); app.include_router(staff.router); app.include_router(patient_uploads.router)
         self.client = httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test", headers={"Origin": "http://test"})
@@ -74,7 +78,7 @@ class PatientUploadTests(unittest.IsolatedAsyncioTestCase):
         return response.json()
 
     def route(self, link):
-        return f"/api/insurance-upload/{link['clinic']['code']}/{link['upload_code']}"
+        return f"/api/insurance-upload/{link['clinic']['npi']}/{link['upload_code']}"
 
     async def upload(self, link, *, data=None, content=None):
         return await self.public.post(self.route(link), data={"given_name": "Pat", "family_name": "Example", "birth_date": "1990-01-01", "consent": "true", "submission_id": "synthetic-submission", **(data or {})},
@@ -84,7 +88,7 @@ class PatientUploadTests(unittest.IsolatedAsyncioTestCase):
         with staff_store._connection() as connection:
             connection.execute("INSERT INTO staff_patients(id,practice_id,given_name,family_name,birth_date,created_at) VALUES ('expected-patient',%s,'Other','Person','1980-01-01',%s)", (self.actor["practice_id"], staff_store.now()))
         link = await self.new_link("expected-patient")
-        self.assertEqual(link["url"], f"http://test/{self.clinic['code']}/{link['upload_code']}")
+        self.assertEqual(link["url"], f"http://test/{self.clinic['npi']}/{link['upload_code']}")
         self.assertEqual(set((await self.public.get(self.route(link))).json()), {"clinic_name", "expires_at", "status"})
         content = card_pdf()
         with patch.object(patient_uploads.v1_sources, "read_pages", side_effect=AssertionError("Public upload must not call OCR")):
@@ -119,7 +123,7 @@ class PatientUploadTests(unittest.IsolatedAsyncioTestCase):
         fields = {"given_name": "Pat", "family_name": "Example", "birth_date": "1990-01-01"}
         prepared = [("card.pdf", content, "application/pdf")]
         with ThreadPoolExecutor(max_workers=2) as pool:
-            futures = [pool.submit(links.submit, self.clinic["code"], next_link["upload_code"], {**fields, "given_name": name}, prepared) for name in ("One", "Two")]
+            futures = [pool.submit(links.submit, self.clinic["npi"], next_link["upload_code"], {**fields, "given_name": name}, prepared) for name in ("One", "Two")]
             outcomes = []
             for future in futures:
                 try: outcomes.append(future.result())
@@ -134,7 +138,7 @@ class PatientUploadTests(unittest.IsolatedAsyncioTestCase):
         response = await self.upload(link, content=content)
         self.assertEqual(response.status_code, 503, response.text)
         self.assertEqual(self.objects, {})
-        self.assertEqual(links.metadata(self.clinic["code"], link["upload_code"])["status"], "pending")
+        self.assertEqual(links.metadata(self.clinic["npi"], link["upload_code"])["status"], "pending")
         with links._connection() as connection:
             connection.execute("ALTER TABLE staff_intakes DROP CONSTRAINT synthetic_failure")
         self.assertEqual((await self.upload(link, content=content)).status_code, 201)
@@ -146,7 +150,7 @@ class PatientUploadTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(links.validate_owned_url(link["id"], self.other["practice_id"], link["url"]))
         self.assertIsNone(links.validate_owned_url(link["id"], self.actor["practice_id"], link["url"].replace("http://test", "https://evil.example")))
         self.assertIsNone(links.validate_owned_url(link["id"], self.actor["practice_id"], link["url"] + "?extra=1"))
-        wrong = {**link, "clinic": {"code": "other-clinic"}}
+        wrong = {**link, "clinic": {"npi": "2345678900"}}
         self.assertEqual((await self.upload(wrong)).status_code, 404)
         self.assertEqual((await self.public.post(f"/api/staff/upload-links/{link['id']}/revoke")).status_code, 401)
         self.assertEqual((await self.client.post(f"/api/staff/upload-links/{link['id']}/revoke")).status_code, 200)
@@ -177,21 +181,21 @@ class PatientUploadTests(unittest.IsolatedAsyncioTestCase):
             return LostCommit() if calls == 1 else real_connection()
         content = card_pdf()
         with patch.object(links, "_connection", side_effect=connect):
-            result, is_new = links.submit(self.clinic["code"], link["upload_code"], {"given_name": "Pat", "family_name": "Example", "birth_date": "1990-01-01"}, [("card.pdf", content, "application/pdf")])
+            result, is_new = links.submit(self.clinic["npi"], link["upload_code"], {"given_name": "Pat", "family_name": "Example", "birth_date": "1990-01-01"}, [("card.pdf", content, "application/pdf")])
         self.assertTrue(is_new); self.assertEqual(result["status"], "received")
         self.assertEqual(len(self.objects), 1)
         self.assertEqual(next(iter(self.objects.values())), content)
         self.assertEqual(links.owned_request(link["id"], self.actor["practice_id"])["receipt_id"], result["receipt_id"])
 
     async def test_direct_clinic_start_and_upload_limits_persist_across_store_restart(self):
-        metadata = await self.public.get(f"/api/insurance-upload/clinics/{self.clinic['code']}")
-        self.assertEqual(metadata.json(), {"clinic": {"code": self.clinic["code"], "name": self.clinic["name"]}})
-        self.assertEqual((await self.public.get("/api/insurance-upload/clinics/not-a-clinic")).status_code, 404)
+        metadata = await self.public.get(f"/api/insurance-upload/clinics/{self.clinic['npi']}")
+        self.assertEqual(metadata.json(), {"clinic": {"npi": self.clinic["npi"], "name": self.clinic["name"]}})
+        self.assertEqual((await self.public.get("/api/insurance-upload/clinics/3456789015")).status_code, 404)
         for _ in range(10):
-            response = await self.public.post("/api/insurance-upload/start", json={"clinic_code": self.clinic["code"]})
+            response = await self.public.post("/api/insurance-upload/start", json={"npi": self.clinic["npi"]})
             self.assertEqual(response.status_code, 201, response.text)
         links._schema_initialized = False
-        self.assertEqual((await self.public.post("/api/insurance-upload/start", json={"clinic_code": self.clinic["code"]})).status_code, 429)
+        self.assertEqual((await self.public.post("/api/insurance-upload/start", json={"npi": self.clinic["npi"]})).status_code, 429)
         link = response.json()
         for _ in range(10):
             self.assertEqual((await self.upload(link, content=b"not-a-card")).status_code, 422)
@@ -298,7 +302,7 @@ class PatientUploadTests(unittest.IsolatedAsyncioTestCase):
         link = await self.new_link()
         self.assertEqual((await self.upload(link, data={"email": fields["email"]})).status_code, 201)
         associated = await self.new_link()
-        links.submit(self.clinic["code"], associated["upload_code"], fields, [("card.pdf", card_pdf(), "application/pdf")], source_portal_patient_id="private-portal-with-card")
+        links.submit(self.clinic["npi"], associated["upload_code"], fields, [("card.pdf", card_pdf(), "application/pdf")], source_portal_patient_id="private-portal-with-card")
         self.assertEqual((await self.public.get("/api/staff/patients/dashboard")).status_code, 401)
         result = (await self.client.get("/api/staff/patients/dashboard")).json()
         self.assertEqual(result["counts"], {"all": 4, "accounts_with_cards": 1, "accounts_without_cards": 1, "card_only": 1, "other": 1})
@@ -347,7 +351,7 @@ class PatientUploadTests(unittest.IsolatedAsyncioTestCase):
         link = await self.new_link("intended-patient")
         fields = {"given_name": "Different", "family_name": "Patient", "birth_date": "1990-01-01"}
         prepared = [("card.pdf", card_pdf(), "application/pdf")]
-        receipt, _ = links.submit(self.clinic["code"], link["upload_code"], fields, prepared, source_portal_patient_id="private-different-account")
+        receipt, _ = links.submit(self.clinic["npi"], link["upload_code"], fields, prepared, source_portal_patient_id="private-different-account")
         row = links.owned_request(link["id"], self.actor["practice_id"])
         record = staff_store.get_intake(row["intake_id"], self.actor["practice_id"])
         self.assertNotEqual(record["auto_patient_id"], "intended-patient")
@@ -356,7 +360,7 @@ class PatientUploadTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(target["card_status"], "missing")
         self.assertEqual(dashboard["counts"]["accounts_with_cards"], 1)
         with self.assertRaises(links.UploadLinkError):
-            links.submit(self.clinic["code"], link["upload_code"], fields, prepared, source_portal_patient_id="another-account")
+            links.submit(self.clinic["npi"], link["upload_code"], fields, prepared, source_portal_patient_id="another-account")
         self.assertEqual(links.owned_request(link["id"], self.actor["practice_id"])["receipt_id"], receipt["receipt_id"])
         data = {"given_name": "Intended", "family_name": "Patient", "birth_date": "1980-01-01", "member_id": "CARD123", "relationship": "self", "identity_confirmed": True}
         result = await self.client.put(f"/api/staff/intakes/{row['intake_id']}/patient", json=data)

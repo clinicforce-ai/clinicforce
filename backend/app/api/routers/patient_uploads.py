@@ -17,14 +17,15 @@ from app.insurance import v1_sources
 
 
 router = APIRouter(tags=["patient insurance upload"])
-ClinicCode = Annotated[str, ApiPath(min_length=2, max_length=80, pattern=r"^[a-z0-9][a-z0-9-]*$")]
+ClinicNpi = Annotated[str, ApiPath(min_length=10, max_length=10, pattern=r"^\d{10}$")]
+LegacyClinicCode = Annotated[str, ApiPath(min_length=2, max_length=80, pattern=r"^[a-z0-9][a-z0-9-]*$")]
 UploadCode = Annotated[str, ApiPath(min_length=43, max_length=43, pattern=r"^[A-Za-z0-9_-]{43}$")]
 HEADERS = {**staff.NO_STORE, "Referrer-Policy": "no-referrer"}
 
 
 class Start(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
-    clinic_code: str = Field(min_length=2, max_length=80, pattern=r"^[a-z0-9][a-z0-9-]*$")
+    npi: str = Field(min_length=10, max_length=10, pattern=r"^\d{10}$")
 
 
 class Create(BaseModel):
@@ -46,15 +47,15 @@ async def call(function, *args, **kwargs):
         raise HTTPException(exc.status, str(exc), headers=HEADERS) from None
 
 
-async def clinic(code: str) -> dict:
-    value = await run_in_threadpool(clinic_store.get_clinic, code)
+async def clinic(npi: str) -> dict:
+    value = await run_in_threadpool(clinic_store.get_public_clinic, npi)
     if not value:
-        raise HTTPException(404, "Clinic not found. Check the clinic code or contact your clinic.", headers=HEADERS)
+        raise HTTPException(404, "Clinic not found. Check the 10-digit NPI or contact the clinic.", headers=HEADERS)
     return value
 
 
 def public_link(row: dict) -> dict:
-    return {"id": row["id"], "clinic_code": row["clinic_code"], "patient_id": row["expected_patient_id"],
+    return {"id": row["id"], "npi": row["clinic_code"], "patient_id": row["expected_patient_id"],
             "status": "expired" if row["status"] == "pending" and row["expires_at"] <= staff_store.now() else row["status"],
             "created_at": row["created_at"], "expires_at": row["expires_at"], "submitted_at": row["submitted_at"], "intake_id": row["intake_id"]}
 
@@ -62,19 +63,19 @@ def public_link(row: dict) -> dict:
 def created(row: dict, code: str, *, for_staff: bool = False) -> dict:
     return {**({"id": row["id"]} if for_staff else {}), "upload_code": code,
             "url": f"{PUBLIC_BASE_URL.rstrip('/')}/{row['clinic_code']}/{code}",
-            "clinic": {"code": row["clinic_code"], "name": row["clinic_name"]}, "expires_at": row["expires_at"]}
+            "clinic": {"npi": row["clinic_code"], "name": row["clinic_name"]}, "expires_at": row["expires_at"]}
 
 
-@router.get("/api/insurance-upload/clinics/{clinic_code}")
-async def get_clinic(clinic_code: ClinicCode):
-    value = await clinic(clinic_code)
-    return JSONResponse({"clinic": {"code": value["code"], "name": value["name"]}}, headers=HEADERS)
+@router.get("/api/insurance-upload/clinics/{npi}")
+async def get_clinic(npi: ClinicNpi):
+    value = await clinic(npi)
+    return JSONResponse({"clinic": {"npi": value["npi"], "name": value["name"]}}, headers=HEADERS)
 
 
 @router.post("/api/insurance-upload/start")
 async def start(body: Start, request: Request):
     staff.check_origin(request)
-    value = await clinic(body.clinic_code)
+    value = await clinic(body.npi)
     await call(links.check_rate, request_address(request), value["id"], "start")
     row, code = await call(links.create_link, value)
     return JSONResponse(created(row, code), status_code=201, headers=HEADERS)
@@ -116,13 +117,15 @@ async def revoke(link_id: str, request: Request):
 
 
 @router.get("/api/insurance-upload/{clinic_code}/{upload_code}")
-async def get_metadata(clinic_code: ClinicCode, upload_code: UploadCode):
+async def get_metadata(clinic_code: LegacyClinicCode, upload_code: UploadCode):
+    # Retain active pre-NPI private links until they expire. Public discovery
+    # accepts NPIs only, and every new link stores the clinic NPI.
     row = await call(links.metadata, clinic_code, upload_code)
     return JSONResponse({"clinic_name": row["clinic_name"], "expires_at": row["expires_at"], "status": row["status"]}, headers=HEADERS)
 
 
 @router.post("/api/insurance-upload/{clinic_code}/{upload_code}")
-async def submit(clinic_code: ClinicCode, upload_code: UploadCode, request: Request,
+async def submit(clinic_code: LegacyClinicCode, upload_code: UploadCode, request: Request,
                  files: list[UploadFile] = File(...), given_name: str = Form(..., min_length=1, max_length=100),
                  family_name: str = Form(..., min_length=1, max_length=100), birth_date: date = Form(...),
                  consent: bool = Form(...), member_id: str = Form(default="", max_length=80),
