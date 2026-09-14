@@ -50,7 +50,7 @@ class ClinicRegistrationTests(unittest.IsolatedAsyncioTestCase):
             connection.execute(sql.SQL("DROP SCHEMA {} CASCADE").format(sql.Identifier(self.schema)))
 
     def account(self, **changes):
-        return {"clinic_name": "Synthetic Clinic", "clinic_code": "synthetic-clinic", "display_name": "Synthetic Admin",
+        return {"clinic_name": "Synthetic Clinic", "npi": "1234567893", "display_name": "Synthetic Admin",
                 "email": "admin@example.test", "password": " synthetic-admin-password ", **changes}
 
     async def register(self):
@@ -64,13 +64,13 @@ class ClinicRegistrationTests(unittest.IsolatedAsyncioTestCase):
         body = response.json()
         return body, urlsplit(body["url"]).path.split("/")[-1]
 
-    async def test_registration_creates_only_new_clinic_preserves_password_and_reserves_existing_code(self):
+    async def test_registration_creates_only_new_clinic_with_npi_and_preserves_password(self):
         member = await self.register()
         self.assertNotEqual(member["practice_id"], "primary")
         self.assertEqual(member["role"], "admin")
         clinic = (await self.client.get("/api/staff/clinic")).json()
-        self.assertEqual(clinic["code"], "synthetic-clinic")
-        self.assertEqual(clinic["upload_url"], "http://localhost/synthetic-clinic")
+        self.assertEqual(clinic["npi"], "1234567893")
+        self.assertEqual(clinic["upload_url"], "http://localhost/1234567893")
         self.assertEqual(clinic_store.get_clinic("primary")["id"], "primary")
         with staff_store._connection() as connection:
             row = connection.execute("SELECT password_hash FROM staff_members WHERE id=%s", (member["id"],)).fetchone()
@@ -80,13 +80,15 @@ class ClinicRegistrationTests(unittest.IsolatedAsyncioTestCase):
         response = await self.client.post("/api/staff/login", json={"username": self.account()["email"], "password": self.account()["password"]})
         self.assertEqual(response.status_code, 200)
         self.assertIn("HttpOnly", response.headers["set-cookie"])
-        collision = await self.client.post("/api/staff/register", json=self.account(email="new@example.test", clinic_code="primary"))
+        collision = await self.client.post("/api/staff/register", json=self.account(email="new@example.test", npi="1234567893"))
         self.assertEqual(collision.status_code, 409)
         with staff_store._connection() as connection:
             self.assertEqual(connection.execute("SELECT COUNT(*) AS count FROM staff_members WHERE username='new@example.test'").fetchone()["count"], 0)
 
-    async def test_registration_rejects_forged_membership_reserved_code_and_cross_origin(self):
-        for changes in ({"practice_id": "primary"}, {"role": "admin"}, {"clinic_code": "api"}, {"clinic_code": "../primary"}, {"email": "invalid"}, {"clinic_name": "\n\n"}):
+    async def test_registration_rejects_forged_membership_invalid_npi_and_cross_origin(self):
+        self.assertTrue(clinic_store.valid_npi("1234567893"))
+        self.assertFalse(clinic_store.valid_npi("1234567890"))
+        for changes in ({"practice_id": "primary"}, {"role": "admin"}, {"npi": "1234567890"}, {"npi": "1234"}, {"npi": "123456789a"}, {"email": "invalid"}, {"clinic_name": "\n\n"}):
             self.assertEqual((await self.client.post("/api/staff/register", json=self.account(**changes))).status_code, 422)
         self.assertEqual((await self.client.post("/api/staff/register", json=self.account(), headers={"Origin": "https://unrelated.invalid"})).status_code, 403)
         with patch.object(clinic_store, "allow_action", return_value=False):
@@ -111,7 +113,7 @@ class ClinicRegistrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(rows[0]["status"], "accepted")
         self.assertNotIn(token, json.dumps(rows))
         async with self.new_client() as other:
-            self.assertEqual((await other.post("/api/staff/register", json=self.account(email="other@example.test", clinic_code="other-clinic"))).status_code, 201)
+            self.assertEqual((await other.post("/api/staff/register", json=self.account(email="other@example.test", npi="2345678900"))).status_code, 201)
             self.assertEqual((await other.get("/api/staff/invitations")).json(), {"invitations": []})
             self.assertEqual((await other.post(f"/api/staff/invitations/{invite['id']}/revoke")).status_code, 404)
 
@@ -142,6 +144,19 @@ class ClinicRegistrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse((await self.client.get("/api/staff/email/configuration")).json()["available"])
         response = await self.client.post(f"/api/staff/invitations/{invitation['id']}/email", json={"email": "staff@example.test", "url": invitation["url"]})
         self.assertEqual(response.json()["status"], "unavailable")
+
+    async def test_only_administrator_can_assign_or_replace_clinic_npi(self):
+        await self.register()
+        changed = await self.client.put("/api/staff/clinic/npi", json={"npi": "2345678900"})
+        self.assertEqual(changed.status_code, 200, changed.text)
+        self.assertEqual(changed.json()["npi"], "2345678900")
+        self.assertEqual(changed.json()["upload_url"], "http://localhost/2345678900")
+        invitation, token = await self.invite("staff")
+        async with self.new_client() as staff_client:
+            accepted = await staff_client.post(f"/api/staff/invitations/{token}", json={"display_name": "Staff", "email": "staff@example.test", "password": "synthetic-staff-password"})
+            self.assertEqual(accepted.status_code, 201)
+            self.assertEqual((await staff_client.put("/api/staff/clinic/npi", json={"npi": "3456789015"})).status_code, 403)
+        self.assertEqual((await self.client.put("/api/staff/clinic/npi", json={"npi": "1234567890"})).status_code, 422)
 
 
 if __name__ == "__main__":

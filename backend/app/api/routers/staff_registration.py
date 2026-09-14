@@ -38,14 +38,14 @@ class Account(Model):
 
 class Register(Account):
     clinic_name: str = Field(min_length=2, max_length=100)
-    clinic_code: str = Field(min_length=3, max_length=40)
+    npi: str = Field(min_length=10, max_length=10, pattern=r"^\d{10}$")
 
-    @field_validator("clinic_code")
+    @field_validator("npi")
     @classmethod
-    def code(cls, value):
-        value = value.strip().lower()
-        if not clinic_store.valid_code(value):
-            raise ValueError("Choose 3–40 lowercase letters, numbers or hyphens, starting with a letter. This code must be unique.")
+    def valid_npi(cls, value):
+        value = value.strip()
+        if not clinic_store.valid_npi(value):
+            raise ValueError("Enter a valid 10-digit NPI.")
         return value
 
     @field_validator("clinic_name")
@@ -56,6 +56,18 @@ class Register(Account):
 
 class Invitation(Model):
     role: Literal["staff", "admin"] = "staff"
+
+
+class ClinicNpi(Model):
+    npi: str = Field(min_length=10, max_length=10, pattern=r"^\d{10}$")
+
+    @field_validator("npi")
+    @classmethod
+    def valid_npi(cls, value):
+        value = value.strip()
+        if not clinic_store.valid_npi(value):
+            raise ValueError("Enter a valid 10-digit NPI.")
+        return value
 
 
 class SendEmail(Model):
@@ -103,7 +115,20 @@ async def register(body: Register, request: Request):
 async def current_clinic(request: Request):
     member = await require_staff(request)
     clinic = await run_in_threadpool(clinic_store.get_for_practice, member["practice_id"], member["practice_name"])
-    return JSONResponse({**clinic, "upload_url": f"{PUBLIC_BASE_URL}/{clinic['code']}"}, headers=NO_STORE)
+    return JSONResponse({"id": clinic["id"], "name": clinic["name"], "npi": clinic["npi"],
+                         "upload_url": f"{PUBLIC_BASE_URL}/{clinic['npi']}" if clinic["npi"] else None,
+                         "can_manage_npi": member["role"] == "admin"}, headers=NO_STORE)
+
+
+@router.put("/clinic/npi")
+async def update_clinic_npi(body: ClinicNpi, request: Request):
+    member = await admin(request)
+    try:
+        clinic = await run_in_threadpool(clinic_store.set_npi, member["practice_id"], body.npi)
+    except ValueError as exc:
+        raise HTTPException(409, str(exc), headers=NO_STORE) from None
+    return JSONResponse({"id": clinic["id"], "name": clinic["name"], "npi": clinic["npi"],
+                         "upload_url": f"{PUBLIC_BASE_URL}/{clinic['npi']}", "can_manage_npi": True}, headers=NO_STORE)
 
 
 @router.post("/invitations")

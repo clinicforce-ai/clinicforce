@@ -11,6 +11,7 @@ from app.api.routers import public_entry
 
 
 TOKEN = "s" * 43
+NPI = "1234567893"
 
 
 class PublicEntryTests(unittest.TestCase):
@@ -20,42 +21,42 @@ class PublicEntryTests(unittest.TestCase):
         self.client = TestClient(app, follow_redirects=False)
 
     def test_existing_clinic_redirects_without_cache_or_referrer(self):
-        with patch.object(public_entry.clinic_store, "get_clinic", return_value={"name": "Clinic"}):
-            result = self.client.get("/example-clinic")
+        with patch.object(public_entry.clinic_store, "get_public_clinic", return_value={"name": "Clinic"}):
+            result = self.client.get("/" + NPI)
         self.assertEqual(result.status_code, 303)
-        self.assertEqual(result.headers["location"], "/?clinic=example-clinic")
+        self.assertEqual(result.headers["location"], "/?clinic=" + NPI)
         self.assertEqual(result.headers["cache-control"], "no-store")
         self.assertEqual(result.headers["referrer-policy"], "no-referrer")
 
     def test_upload_and_invitation_redirects_are_read_only(self):
         with patch.object(public_entry.intake_links_store, "metadata", return_value={"status": "pending"}) as metadata:
-            result = self.client.get("/example-clinic/" + TOKEN)
-            metadata.assert_called_once_with("example-clinic", TOKEN)
+            result = self.client.get("/" + NPI + "/" + TOKEN)
+            metadata.assert_called_once_with(NPI, TOKEN)
         self.assertEqual(result.status_code, 303)
-        self.assertEqual(result.headers["location"], "/?clinic=example-clinic&upload=" + TOKEN)
+        self.assertEqual(result.headers["location"], "/?clinic=" + NPI + "&upload=" + TOKEN)
         with patch.object(public_entry.clinic_store, "get_invitation", return_value={"accepted_at": "earlier"}):
             result = self.client.get("/join/" + TOKEN)
         self.assertEqual(result.headers["location"], "/?join=" + TOKEN)
 
     def test_unknown_reserved_and_malformed_links_remain_404(self):
-        with patch.object(public_entry.clinic_store, "get_clinic", return_value=None):
-            self.assertEqual(self.client.get("/unknown-clinic").status_code, 404)
-        with patch.object(public_entry.clinic_store, "get_clinic") as clinic:
-            for path in ("/api", "/assets/file.js", "/manifest/" + TOKEN, "/join/short", "/example-clinic/short"):
+        with patch.object(public_entry.clinic_store, "get_public_clinic", return_value=None):
+            self.assertEqual(self.client.get("/" + NPI).status_code, 404)
+        with patch.object(public_entry.clinic_store, "get_public_clinic") as clinic:
+            for path in ("/api", "/assets/file.js", "/manifest/" + TOKEN, "/join/short", "/" + NPI + "/short"):
                 self.assertEqual(self.client.get(path).status_code, 404)
             clinic.assert_not_called()
         with patch.object(public_entry.intake_links_store, "metadata", side_effect=public_entry.intake_links_store.UploadLinkError("missing", 404)):
-            self.assertEqual(self.client.get("/example-clinic/" + TOKEN).status_code, 404)
+            self.assertEqual(self.client.get("/" + NPI + "/" + TOKEN).status_code, 404)
 
     def test_expired_upload_redirects_to_form_error(self):
         with patch.object(public_entry.intake_links_store, "metadata", side_effect=public_entry.intake_links_store.UploadLinkError("expired", 410)):
-            result = self.client.get("/example-clinic/" + TOKEN)
+            result = self.client.get("/" + NPI + "/" + TOKEN)
         self.assertEqual(result.status_code, 303)
 
     def test_access_filter_redacts_only_private_link_paths_and_query_values(self):
         filter_ = public_entry.PrivateLinkAccessFilter()
-        for target in ("/join/" + TOKEN, "/example-clinic/" + TOKEN, "/?clinic=example&upload=" + TOKEN, "/?join=" + TOKEN,
-                       "/api/insurance-upload/example-clinic/" + TOKEN, "/api/staff/invitations/" + TOKEN):
+        for target in ("/join/" + TOKEN, "/" + NPI + "/" + TOKEN, "/?clinic=" + NPI + "&upload=" + TOKEN, "/?join=" + TOKEN,
+                       "/api/insurance-upload/" + NPI + "/" + TOKEN, "/api/staff/invitations/" + TOKEN):
             record = logging.LogRecord("uvicorn.access", logging.INFO, "", 0, '%s - "%s %s HTTP/%s" %d', ("client", "GET", target, "1.1", 303), None)
             self.assertTrue(filter_.filter(record))
             self.assertNotIn(TOKEN, record.getMessage())

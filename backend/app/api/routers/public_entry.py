@@ -36,7 +36,7 @@ async def staff_invitation_entry(token: str):
 
 @router.api_route("/{clinic_code}/{token}", methods=["GET", "HEAD"])
 async def patient_upload_entry(clinic_code: str, token: str):
-    if not clinic_store.valid_code(clinic_code) or not TOKEN_PATTERN.fullmatch(token):
+    if not (clinic_store.valid_npi(clinic_code) or clinic_store.valid_legacy_code(clinic_code)) or not TOKEN_PATTERN.fullmatch(token):
         raise _not_found()
     try:
         await run_in_threadpool(intake_links_store.metadata, clinic_code, token)
@@ -49,7 +49,7 @@ async def patient_upload_entry(clinic_code: str, token: str):
 
 @router.api_route("/{clinic_code}", methods=["GET", "HEAD"])
 async def clinic_entry(clinic_code: str):
-    if not clinic_store.valid_code(clinic_code) or not await run_in_threadpool(clinic_store.get_clinic, clinic_code):
+    if not clinic_store.valid_npi(clinic_code) or not await run_in_threadpool(clinic_store.get_public_clinic, clinic_code):
         raise _not_found()
     return _redirect(clinic=clinic_code)
 
@@ -58,10 +58,10 @@ def _redacted_target(target: str) -> str:
     parsed = urlsplit(target)
     path = parsed.path
     parts = path.strip("/").split("/")
-    if (len(parts) == 2 and (parts[0] == "join" or clinic_store.valid_code(parts[0]))
+    if (len(parts) == 2 and (parts[0] == "join" or clinic_store.valid_npi(parts[0]) or clinic_store.valid_legacy_code(parts[0]))
             and re.fullmatch(r"[A-Za-z0-9_-]{32,128}", parts[1])):
         path = "/" + parts[0] + "/[redacted]" + ("/" if path.endswith("/") else "")
-    elif ((len(parts) == 4 and parts[:2] == ["api", "insurance-upload"] and clinic_store.valid_code(parts[2]))
+    elif ((len(parts) == 4 and parts[:2] == ["api", "insurance-upload"] and (clinic_store.valid_npi(parts[2]) or clinic_store.valid_legacy_code(parts[2])))
           or (len(parts) == 4 and parts[:3] == ["api", "staff", "invitations"])):
         if re.fullmatch(r"[A-Za-z0-9_-]{32,128}", parts[3]):
             path = "/" + "/".join(parts[:3]) + "/[redacted]" + ("/" if path.endswith("/") else "")

@@ -18,7 +18,8 @@ from app.core import staff_store
 
 _schema_initialized = False
 _schema_lock = Lock()
-RESERVED_CODES = {"api", "assets", "join", "patient", "staff", "manifest", "upload", "insurance", "healthz", "login", "register", "admin", "favicon", "index"}
+LEGACY_CODE_PATTERN = re.compile(r"[a-z][a-z0-9-]{2,39}")
+RESERVED_LEGACY_CODES = {"api", "assets", "join", "patient", "staff", "manifest", "upload", "insurance", "healthz", "login", "register", "admin", "favicon", "index"}
 
 
 def _connection():
@@ -33,6 +34,10 @@ def _connection():
                         id TEXT PRIMARY KEY, name TEXT NOT NULL, code TEXT NOT NULL UNIQUE,
                         created_at TEXT NOT NULL
                     )""")
+                    # ``code`` predates NPI-based public addresses. Keep it only
+                    # for active legacy upload capabilities; new addresses use npi.
+                    connection.execute("ALTER TABLE clinics ADD COLUMN IF NOT EXISTS npi TEXT")
+                    connection.execute("CREATE UNIQUE INDEX IF NOT EXISTS clinics_npi_unique_idx ON clinics(npi) WHERE npi IS NOT NULL")
                     connection.execute("""CREATE TABLE IF NOT EXISTS staff_invitations (
                         id TEXT PRIMARY KEY, practice_id TEXT NOT NULL REFERENCES clinics(id),
                         created_by TEXT NOT NULL REFERENCES staff_members(id), token_hash TEXT NOT NULL UNIQUE,
@@ -52,8 +57,23 @@ def _connection():
     return connection
 
 
-def valid_code(code: str) -> bool:
-    return bool(re.fullmatch(r"[a-z][a-z0-9-]{2,39}", code)) and code not in RESERVED_CODES and not code.endswith("-")
+def valid_legacy_code(value: str) -> bool:
+    return bool(LEGACY_CODE_PATTERN.fullmatch(value)) and value not in RESERVED_LEGACY_CODES and not value.endswith("-")
+
+
+def valid_npi(value: str) -> bool:
+    """Accept a 10-digit NPI only when its published Luhn check digit matches."""
+    if not re.fullmatch(r"\d{10}", value):
+        return False
+    total = 0
+    for index, digit in enumerate(reversed("80840" + value[:9])):
+        number = int(digit)
+        if index % 2 == 0:
+            number *= 2
+            if number > 9:
+                number -= 9
+        total += number
+    return int(value[-1]) == (10 - total % 10) % 10
 
 
 def _legacy_clinic() -> None:
@@ -67,7 +87,7 @@ def _legacy_clinic() -> None:
 
 
 def get_for_practice(practice_id: str, practice_name: str) -> dict:
-    code = practice_id.lower() if valid_code(practice_id.lower()) else "clinic-" + hashlib.sha256(practice_id.encode()).hexdigest()[:12]
+    code = practice_id.lower() if valid_legacy_code(practice_id.lower()) else "clinic-" + hashlib.sha256(practice_id.encode()).hexdigest()[:12]
     with _connection() as connection:
         row = connection.execute("SELECT * FROM clinics WHERE id = %s", (practice_id,)).fetchone()
         if not row:
@@ -77,14 +97,37 @@ def get_for_practice(practice_id: str, practice_name: str) -> dict:
                 code = "clinic-" + hashlib.sha256(practice_id.encode()).hexdigest()[:20]
                 connection.execute("INSERT INTO clinics(id,name,code,created_at) VALUES (%s,%s,%s,%s) ON CONFLICT(id) DO NOTHING", (practice_id, practice_name, code, staff_store.now()))
                 row = connection.execute("SELECT * FROM clinics WHERE id = %s", (practice_id,)).fetchone()
-    return {key: row[key] for key in ("id", "name", "code")}
+    return {key: row[key] for key in ("id", "name", "code", "npi")}
 
 
 def get_clinic(code: str) -> dict | None:
+    """Return a clinic by its retained internal/legacy code for trusted operations."""
     _legacy_clinic()
     with _connection() as connection:
-        row = connection.execute("SELECT id,name,code FROM clinics WHERE code = %s", (code,)).fetchone()
+        row = connection.execute("SELECT id,name,code,npi FROM clinics WHERE code = %s", (code,)).fetchone()
     return dict(row) if row else None
+
+
+def get_public_clinic(npi: str) -> dict | None:
+    if not valid_npi(npi):
+        return None
+    _legacy_clinic()
+    with _connection() as connection:
+        row = connection.execute("SELECT id,name,code,npi FROM clinics WHERE npi = %s", (npi,)).fetchone()
+    return dict(row) if row else None
+
+
+def set_npi(practice_id: str, npi: str) -> dict:
+    if not valid_npi(npi):
+        raise ValueError("Enter a valid 10-digit NPI.")
+    try:
+        with _connection() as connection:
+            row = connection.execute("UPDATE clinics SET npi=%s WHERE id=%s RETURNING id,name,code,npi", (npi, practice_id)).fetchone()
+    except UniqueViolation:
+        raise ValueError("That NPI is already assigned to another clinic workspace.") from None
+    if not row:
+        raise LookupError("Clinic workspace not found")
+    return dict(row)
 
 
 def allow_action(action: str, identifier: str, limit: int, seconds: int) -> bool:
@@ -98,19 +141,19 @@ def allow_action(action: str, identifier: str, limit: int, seconds: int) -> bool
     return row["attempts"] <= limit
 
 
-def register_clinic(*, clinic_name: str, clinic_code: str, display_name: str, email: str, password: str) -> dict:
-    if not valid_code(clinic_code):
-        raise ValueError("Choose a clinic code of 3–40 lowercase letters, numbers or hyphens, starting with a letter.")
+def register_clinic(*, clinic_name: str, npi: str, display_name: str, email: str, password: str) -> dict:
+    if not valid_npi(npi):
+        raise ValueError("Enter a valid 10-digit NPI.")
     _legacy_clinic()
     practice_id, staff_id, stamp = str(uuid4()), str(uuid4()), staff_store.now()
     password_hash = staff_store.hash_password(password)
     try:
         with _connection() as connection:
-            connection.execute("INSERT INTO clinics(id,name,code,created_at) VALUES (%s,%s,%s,%s)", (practice_id, clinic_name, clinic_code, stamp))
+            connection.execute("INSERT INTO clinics(id,name,code,npi,created_at) VALUES (%s,%s,%s,%s,%s)", (practice_id, clinic_name, npi, npi, stamp))
             row = connection.execute(f"""INSERT INTO staff_members(id,username,display_name,practice_id,practice_name,role,password_hash,created_at)
                 VALUES (%s,%s,%s,%s,%s,'admin',%s,%s) RETURNING {staff_store.STAFF_FIELDS}""", (staff_id, email, display_name, practice_id, clinic_name, password_hash, stamp)).fetchone()
     except UniqueViolation:
-        raise ValueError("This email or clinic code is already in use. Sign in, use your clinic invitation, or choose a different code.") from None
+        raise ValueError("This email or NPI is already in use. Sign in, use your clinic invitation, or enter the correct NPI.") from None
     return dict(row)
 
 
