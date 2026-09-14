@@ -10,6 +10,8 @@ from datetime import datetime, timedelta, timezone
 from threading import Lock
 from uuid import uuid4
 
+from passlib.hash import pbkdf2_sha256
+
 from app.core.patient_store import _connection as patient_connection
 from app.core.shl import hash_password, verify_password
 
@@ -94,12 +96,25 @@ def ensure_bootstrap() -> None:
         try:
             config = json.loads(value)
             username = str(config["username"]).strip().lower()
-            password = config["password"]
+            password = config.get("password")
+            password_hash = config.get("password_hash")
             practice_id = str(config["practice_id"]).strip()
             practice_name = str(config["practice_name"]).strip()
             display_name = str(config["display_name"]).strip()
-            if not username or len(username) > 200 or not isinstance(password, str) or not 12 <= len(password) <= 256 or not all((practice_id, practice_name, display_name)):
+            if not username or len(username) > 200 or not all((practice_id, practice_name, display_name)):
                 raise ValueError
+            if password_hash is not None:
+                # Deployment can provision a one-way hash without putting a password
+                # in the task definition. Only accept the application's strong scheme.
+                if password is not None or not isinstance(password_hash, str) or len(password_hash) > 300:
+                    raise ValueError
+                parsed = pbkdf2_sha256.from_string(password_hash)
+                if not 29_000 <= parsed.rounds <= 2_000_000 or not parsed.checksum or len(parsed.salt) < 16:
+                    raise ValueError
+            else:
+                if not isinstance(password, str) or not 12 <= len(password) <= 256:
+                    raise ValueError
+                password_hash = hash_password(password)
         except (ValueError, KeyError, TypeError):
             raise RuntimeError("Staff administrator setup is invalid") from None
         with _connection() as connection:
@@ -108,7 +123,7 @@ def ensure_bootstrap() -> None:
                 connection.execute(
                     """INSERT INTO staff_members (id, username, display_name, practice_id, practice_name, role, password_hash, created_at)
                        VALUES (%s,%s,%s,%s,%s,'admin',%s,%s) ON CONFLICT (username) DO NOTHING""",
-                    (str(uuid4()), username, display_name, practice_id, practice_name, hash_password(password), now()),
+                    (str(uuid4()), username, display_name, practice_id, practice_name, password_hash, now()),
                 )
         _bootstrap_initialized = True
 

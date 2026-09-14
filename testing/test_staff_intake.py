@@ -105,6 +105,23 @@ class StaffDatabaseTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status_code, 200, response.text)
         return response.json()
 
+    async def test_hash_only_bootstrap_authenticates_without_resetting_existing_staff(self):
+        config = json.loads(os.environ["STAFF_BOOTSTRAP_CREDENTIALS"])
+        config["password_hash"] = staff_store.hash_password(config.pop("password"))
+        with patch.dict(os.environ, {"STAFF_BOOTSTRAP_CREDENTIALS": json.dumps(config)}):
+            await self.sign_in()
+            with staff_store._connection() as connection:
+                stored = connection.execute("SELECT password_hash FROM staff_members WHERE username = 'clinic-admin'").fetchone()
+            self.assertEqual(stored["password_hash"], config["password_hash"])
+            staff_store._bootstrap_initialized = False
+            replacement = {**config, "password_hash": staff_store.hash_password("unused-replacement-password")}
+            with patch.dict(os.environ, {"STAFF_BOOTSTRAP_CREDENTIALS": json.dumps(replacement)}):
+                await self.sign_in()
+        staff_store._bootstrap_initialized = False
+        with patch.dict(os.environ, {"STAFF_BOOTSTRAP_CREDENTIALS": json.dumps({**config, "password_hash": "invalid"})}):
+            with self.assertRaises(RuntimeError):
+                staff_store.ensure_bootstrap()
+
     async def test_bootstrap_hashed_sessions_origin_and_persisted_throttle(self):
         self.assertEqual((await self.client.get("/api/staff/session")).status_code, 401)
         response = await self.client.post("/api/staff/login", json={"username": "clinic-admin", "password": ADMIN_PASSWORD}, headers={"Origin": "https://unrelated.invalid"})

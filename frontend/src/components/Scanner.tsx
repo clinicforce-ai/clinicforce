@@ -90,7 +90,7 @@ export default function Scanner({ onScanned, onCancel, clinicforceOnly = false }
     <div className="panel scanner-panel">
       <p className="eyebrow"><ScanLine aria-hidden="true" className="size-4" /> Clinician access · Step 1 of 2</p>
       <h1 id="scan-heading">Scan the patient’s QR code</h1>
-      <p className="lead-small">Use a ClinicForce, eClinicalWorks, or other compatible Smart Health Link QR code. External links are reviewed and decrypted in this browser.</p>
+      <p className="lead-small">{clinicforceOnly ? 'Scan the patient’s ClinicForce QR code, then enter their passcode to add their details to this clinic.' : 'Use a ClinicForce, eClinicalWorks, or other compatible Smart Health Link QR code. External links are reviewed and decrypted in this browser.'}</p>
       <div className="scanner-frame"><div id={id} /></div>
       <p className="scanner-status" role="status" aria-live="polite"><Camera aria-hidden="true" className="size-4" /> {status}</p>
       {error && <p className="form-error" role="alert">{error}</p>}

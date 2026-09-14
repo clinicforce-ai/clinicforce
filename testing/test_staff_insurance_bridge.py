@@ -61,7 +61,7 @@ class StaffInsuranceBridgeTests(unittest.IsolatedAsyncioTestCase):
             patch.object(patient_store, "_schema_initialized", False), patch.object(staff_store, "_schema_initialized", False),
             patch.object(staff_store, "_bootstrap_initialized", False), patch.object(staff, "PUBLIC_BASE_URL", "http://test"),
             patch.object(staff, "ALLOWED_ORIGINS", ["http://test"]), patch.object(insurance, "_enabled"),
-            patch.dict(os.environ, {"INSURANCE_SESSION_SECRET": "synthetic-insurance-test-secret-123456789", "STAFF_BOOTSTRAP_CREDENTIALS": json.dumps({
+            patch.dict(os.environ, {"INSURANCE_SESSION_SECRET": "x" * 40, "STAFF_BOOTSTRAP_CREDENTIALS": json.dumps({
                 "username": "bridge-admin", "password": "synthetic-bridge-password", "practice_id": "bridge-practice",
                 "practice_name": "Synthetic clinic", "display_name": "Bridge administrator",
             })}),
