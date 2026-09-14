@@ -12,6 +12,10 @@ export class ApiError extends Error {
 
 export const REQUEST_TIMEOUT_MS = 45_000
 
+let staffIntakeId: string | null = null
+export function setStaffIntakeContext(id: string | null) { staffIntakeId = id }
+
+
 export function detailFrom(body: unknown, fallback: string): string {
   if (!body || typeof body !== 'object' || !('detail' in body)) return fallback
   if (typeof body.detail === 'string') return body.detail
@@ -32,7 +36,9 @@ export async function request<T>(path: string, init: RequestInit = {}): Promise<
   const controller = new AbortController()
   const timeout = window.setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS)
   try {
-    const response = await fetch(path, { ...init, credentials: 'same-origin', signal: controller.signal })
+    const headers = new Headers(init.headers)
+    if (staffIntakeId && path.startsWith('/api/doctor/insurance')) headers.set('X-ClinicForce-Intake', staffIntakeId)
+    const response = await fetch(path, { ...init, headers, credentials: 'same-origin', signal: controller.signal })
     const body: unknown = await response.json().catch(() => null)
     if (!response.ok) {
       throw new ApiError(response.status, detailFrom(body, `Request failed (${response.status}).`))

@@ -71,6 +71,22 @@ def put_insurance_pdf(case_id: str, filename: str, content: bytes) -> str:
     return put_insurance_evidence(case_id, filename, content, "application/pdf")
 
 
+def put_staff_document(practice_id: str, record_id: str, filename: str, content: bytes, content_type: str = "application/octet-stream") -> str:
+    """Durable practice files live outside the short-lived insurance-case lifecycle."""
+    if not S3_BUCKET:
+        raise RuntimeError("S3_BUCKET must be configured for S3 storage")
+    suffix = PurePath(filename).suffix.lower()
+    suffix = suffix if suffix in {".pdf", ".png", ".jpg", ".jpeg", ".csv"} else ".bin"
+    key = "/".join((S3_PREFIX, "staff-insurance", sha256(practice_id.encode()).hexdigest(),
+                    _safe_segment(record_id), str(uuid4()), "source" + suffix))
+    arguments = {"Bucket": S3_BUCKET, "Key": key, "Body": content, "ContentType": content_type,
+                 "ServerSideEncryption": "aws:kms"}
+    if S3_KMS_KEY_ID:
+        arguments["SSEKMSKeyId"] = S3_KMS_KEY_ID
+    boto3.client("s3").put_object(**arguments)
+    return key
+
+
 def get_pdf(key: str) -> bytes:
     if not S3_BUCKET:
         raise RuntimeError("S3_BUCKET must be configured for S3 storage")

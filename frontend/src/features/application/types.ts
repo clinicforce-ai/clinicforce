@@ -1,6 +1,7 @@
 export type View =
   | 'landing'
   | 'patient'
+  | 'staff'
   | 'scan'
   | 'pin'
   | 'external'
