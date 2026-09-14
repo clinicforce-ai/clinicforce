@@ -21,14 +21,15 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.api.settings import ALLOWED_ORIGINS, CLINICIAN_SHARE_COOKIE, MAX_INSURANCE_CARD_BYTES, MAX_UPLOAD_BYTES, PUBLIC_BASE_URL
-from app.core import object_store, staff_store
+from app.core import clinic_email, object_store, staff_store
 from app.core.patient_store import get_patient_profile
+from app.core.request_address import request_address
 from app.insurance import golden, v1_sources
 
 
 router = APIRouter(prefix="/api/staff", tags=["staff"])
 STAFF_COOKIE = "clinicforce_staff_session"
-NO_STORE = {"Cache-Control": "no-store", "Pragma": "no-cache"}
+NO_STORE = {"Cache-Control": "no-store", "Pragma": "no-cache", "Referrer-Policy": "no-referrer"}
 
 
 class Model(BaseModel):
@@ -36,7 +37,7 @@ class Model(BaseModel):
 
 
 class Login(Model):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=False)
     username: str = Field(min_length=3, max_length=200, pattern=r"^[A-Za-z0-9][A-Za-z0-9@._+\-]*$")
     password: str = Field(min_length=1, max_length=256)
 
@@ -51,12 +52,21 @@ class Member(Login):
     password: str = Field(min_length=12, max_length=256)
     role: Literal["staff", "admin"] = "staff"
 
+    @field_validator("display_name")
+    @classmethod
+    def valid_display_name(cls, value):
+        value = value.strip()
+        if not value or any(ord(char) < 32 for char in value):
+            raise ValueError("Enter a staff name without control characters")
+        return value
+
 
 class Patient(Model):
     given_name: str = Field(min_length=1, max_length=100)
     family_name: str = Field(min_length=1, max_length=100)
     birth_date: date
     member_id: str = Field(default="", max_length=80)
+    email: str = Field(default="", max_length=254)
     payer: str = Field(default="", max_length=200)
     group_number: str = Field(default="", max_length=80)
     relationship: Literal["self", "spouse", "child", "other", "18", "01", "19", "G8"]
@@ -64,6 +74,11 @@ class Patient(Model):
     subscriber_birth_date: date | None = None
     patient_id: str | None = Field(default=None, max_length=100)
     identity_confirmed: Literal[True]
+
+    @field_validator("email")
+    @classmethod
+    def valid_email(cls, value):
+        return clinic_email._address(value) if value else ""
 
     @model_validator(mode="after")
     def subscriber_identified(self):
@@ -160,7 +175,7 @@ async def owned_intake(intake_id: str, staff: dict) -> dict:
 async def login(body: Login, request: Request):
     check_origin(request)
     try:
-        result = await run_in_threadpool(staff_store.authenticate, body.username, body.password, request.client.host if request.client else "unknown")
+        result = await run_in_threadpool(staff_store.authenticate, body.username, body.password, request_address(request))
     except RuntimeError:
         raise HTTPException(503, "Staff sign-in is not available. Contact your clinic administrator.") from None
     if not result:
