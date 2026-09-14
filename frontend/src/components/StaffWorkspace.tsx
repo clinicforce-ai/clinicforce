@@ -103,6 +103,8 @@ export default function StaffWorkspace({ onBack, onOpenInsurance, onScanQr, init
       if (session && caught instanceof ApiError && caught.status === 401) {
         setSession(null); setIntakes([]); setIntake(null); setFiles([]); setFields(emptyFields); setCandidates([]); setCamera(false); setLibrary(null); setInboxLoaded(false); setNextOffset(null)
         setError('Your staff session has ended. Sign in again to continue.')
+      } else if (name === 'upload' && caught instanceof ApiError && [0, 408, 502, 504].includes(caught.status)) {
+        setError('Upload confirmation was interrupted. The card may already be saved. Open the insurance inbox and refresh before uploading it again.')
       } else setError(caught instanceof Error ? caught.message : 'This action could not be completed. Please try again.')
     } finally { setBusy('') }
   }
