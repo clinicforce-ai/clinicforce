@@ -31,7 +31,11 @@ export interface StaffPatientFields {
 export interface StaffIntake {
   id: string
   status: string
-  source?: 'insurance_card' | 'clinicforce_qr'
+  source?: 'insurance_card' | 'clinicforce_qr' | 'patient_upload'
+  auto_patient_id?: string | null
+  auto_patient?: (StaffPatient & { identity_status?: 'unverified' | 'confirmed' }) | null
+  expected_patient_id?: string | null
+  expected_patient?: StaffPatient | null
   created_at: string
   updated_at: string
   patient?: StaffPatient | null
@@ -103,3 +107,36 @@ async function downloadStaffFile(path: string, filename: string) {
   link.click()
   window.setTimeout(() => URL.revokeObjectURL(url), 60_000)
 }
+
+export interface StaffClinic { id: string; name: string; code: string; upload_url: string }
+export interface StaffInvitation { id: string; url: string; expires_at: string }
+export const getStaffClinic = () => request<StaffClinic>('/api/staff/clinic')
+export const registerStaffClinic = (body: { clinic_name: string; clinic_code: string; display_name: string; email: string; password: string }) => request<{ staff: StaffSession }>('/api/staff/register', json(body))
+export const getStaffInvitation = (token: string) => request<{ clinic_name: string; expires_at: string }>(`/api/staff/invitations/${encodeURIComponent(token)}`)
+export const acceptStaffInvitation = (token: string, body: { display_name: string; email: string; password: string }) => request<{ staff: StaffSession }>(`/api/staff/invitations/${encodeURIComponent(token)}`, json(body))
+export const createStaffInvitation = (role: 'staff' | 'admin') => request<StaffInvitation>('/api/staff/invitations', json({ role }))
+export const readStaffInsuranceCard = (intakeId: string) => request<StaffIntake>(`/api/staff/intakes/${encodeURIComponent(intakeId)}/read-card`, json({}))
+export const getStaffEmailConfiguration = () => request<{ available: boolean; provider: 'ses' | null; reason?: string }>('/api/staff/email/configuration')
+export const emailStaffLink = (kind: 'upload-links' | 'invitations', id: string, email: string, url: string) => request<{ status: 'sent' | 'unavailable' | 'failed'; detail: string }>(`/api/staff/${kind}/${encodeURIComponent(id)}/email`, json({ email, url }))
+export interface SavedStaffInvitation { id: string; role: 'staff' | 'admin'; status: string; created_at: string; expires_at: string }
+export const getStaffInvitations = () => request<{ invitations: SavedStaffInvitation[] }>('/api/staff/invitations')
+export const revokeStaffInvitation = (id: string) => request<void>(`/api/staff/invitations/${encodeURIComponent(id)}/revoke`, json({}))
+
+export interface ClinicalPatient {
+  id: string
+  clinic_patient_id: string | null
+  identity_status: 'unverified' | 'confirmed'
+  given_name: string
+  family_name: string
+  birth_date: string
+  email: string | null
+  account_status: 'portal' | 'automatic' | 'clinic'
+  card_status: 'received' | 'missing'
+  latest_intake_id: string | null
+  intake_ids: string[]
+  intake_count: number
+  updated_at: string
+  intakes: Array<{ id: string; status: string; created_at: string; updated_at: string; source: string }>
+}
+export interface ClinicalDashboard { patients: ClinicalPatient[]; counts: { all: number; accounts_with_cards: number; accounts_without_cards: number; card_only: number; other: number } }
+export const getClinicalPatients = () => request<ClinicalDashboard>('/api/staff/patients/dashboard')

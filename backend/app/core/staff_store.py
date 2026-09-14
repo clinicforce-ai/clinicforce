@@ -56,6 +56,8 @@ def _connection():
                         administrative_gender TEXT NOT NULL DEFAULT 'unknown', created_at TEXT NOT NULL
                     )""")
                     connection.execute("CREATE INDEX IF NOT EXISTS staff_patients_practice_idx ON staff_patients (practice_id, family_name, given_name, birth_date)")
+                    connection.execute("ALTER TABLE staff_patients ADD COLUMN IF NOT EXISTS email TEXT")
+                    connection.execute("ALTER TABLE staff_patients ADD COLUMN IF NOT EXISTS identity_status TEXT NOT NULL DEFAULT 'confirmed'")
                     connection.execute("""CREATE TABLE IF NOT EXISTS staff_intakes (
                         id TEXT PRIMARY KEY, practice_id TEXT NOT NULL, created_by TEXT NOT NULL REFERENCES staff_members(id),
                         patient_id TEXT REFERENCES staff_patients(id), status TEXT NOT NULL,
@@ -68,6 +70,10 @@ def _connection():
                     connection.execute("CREATE INDEX IF NOT EXISTS staff_intakes_practice_idx ON staff_intakes (practice_id, updated_at DESC)")
                     connection.execute("ALTER TABLE staff_intakes ADD COLUMN IF NOT EXISTS source TEXT NOT NULL DEFAULT 'insurance_card'")
                     connection.execute("ALTER TABLE staff_intakes ADD COLUMN IF NOT EXISTS source_portal_patient_id TEXT")
+                    connection.execute("ALTER TABLE staff_intakes ALTER COLUMN created_by DROP NOT NULL")
+                    connection.execute("ALTER TABLE staff_intakes ADD COLUMN IF NOT EXISTS upload_link_id TEXT")
+                    connection.execute("ALTER TABLE staff_intakes ADD COLUMN IF NOT EXISTS expected_patient_id TEXT REFERENCES staff_patients(id)")
+                    connection.execute("ALTER TABLE staff_intakes ADD COLUMN IF NOT EXISTS auto_patient_id TEXT REFERENCES staff_patients(id)")
                     connection.execute("""CREATE TABLE IF NOT EXISTS staff_library (
                         id TEXT PRIMARY KEY, practice_id TEXT NOT NULL, kind TEXT NOT NULL,
                         label TEXT NOT NULL, payer TEXT NOT NULL, filename TEXT NOT NULL,
@@ -153,13 +159,20 @@ def authenticate(username: str, password: str, address: str) -> tuple[dict, str]
     if not row or not password_matches:
         return None
     staff = {key: value for key, value in row.items() if key != "password_hash"}
-    token = secrets.token_urlsafe(32)
     with _connection() as connection:
         connection.execute("DELETE FROM staff_login_attempts WHERE key_hash = %s", (user_key,))
+    return staff, create_session(staff)
+
+
+def create_session(staff: dict) -> str:
+    """Issue a session after password verification or successful account creation."""
+    moment = datetime.now(timezone.utc)
+    token = secrets.token_urlsafe(32)
+    with _connection() as connection:
         connection.execute("DELETE FROM staff_sessions WHERE expires_at < %s", (moment.isoformat(),))
         connection.execute("INSERT INTO staff_sessions (session_hash, staff_id, created_at, expires_at) VALUES (%s,%s,%s,%s)",
                            (_hash(token), staff["id"], moment.isoformat(), (moment + timedelta(seconds=SESSION_SECONDS)).isoformat()))
-    return staff, token
+    return token
 
 
 def get_session(token: str) -> dict | None:
@@ -215,10 +228,86 @@ def get_patient(patient_id: str, practice_id: str) -> dict | None:
 
 def get_intake(intake_id: str, practice_id: str) -> dict | None:
     with _connection() as connection:
-        row = connection.execute("""SELECT i.*, to_jsonb(p) AS patient FROM staff_intakes i
+        row = connection.execute("""SELECT i.*, to_jsonb(p) AS patient, to_jsonb(e) AS expected_patient, to_jsonb(a) AS auto_patient FROM staff_intakes i
             LEFT JOIN staff_patients p ON p.id = i.patient_id AND p.practice_id = i.practice_id
+            LEFT JOIN staff_patients e ON e.id = i.expected_patient_id AND e.practice_id = i.practice_id
+            LEFT JOIN staff_patients a ON a.id = i.auto_patient_id AND a.practice_id = i.practice_id
             WHERE i.id = %s AND i.practice_id = %s""", (intake_id, practice_id)).fetchone()
     return dict(row) if row else None
+
+
+def patient_for_intake_request(intake_id: str, practice_id: str) -> str:
+    """A staff request may target an already shared, unconfirmed clinic identity."""
+    with _connection() as connection:
+        row = connection.execute("SELECT * FROM staff_intakes WHERE id=%s AND practice_id=%s FOR UPDATE", (intake_id, practice_id)).fetchone()
+        if not row:
+            raise LookupError("Insurance intake not found")
+        for key in ("patient_id", "auto_patient_id"):
+            candidate = connection.execute("SELECT * FROM staff_patients WHERE id=%s AND practice_id=%s", (row[key], practice_id)).fetchone() if row.get(key) else None
+            if candidate and (key == "patient_id" or all(str(candidate[name]).strip().casefold() == str(row["fields"].get(name, "")).strip().casefold() for name in ("given_name", "family_name", "birth_date"))):
+                return candidate["id"]
+        fields = row["fields"]
+        if not all(fields.get(key) for key in ("given_name", "family_name", "birth_date")):
+            raise ValueError("Confirm the patient's name and date of birth before creating a patient-specific request.")
+        patient_id = str(uuid4())
+        connection.execute("""INSERT INTO staff_patients (id,practice_id,given_name,family_name,birth_date,email,identity_status,created_at)
+            VALUES (%s,%s,%s,%s,%s,%s,'unverified',%s)""",
+            (patient_id, practice_id, fields["given_name"], fields["family_name"], fields["birth_date"], fields.get("email"), now()))
+        connection.execute("UPDATE staff_intakes SET auto_patient_id=%s WHERE id=%s AND practice_id=%s", (patient_id, intake_id, practice_id))
+    return patient_id
+
+
+def patient_dashboard(practice_id: str) -> dict:
+    """Only explicit practice records/shares; never enumerate the portal patient table."""
+    with _connection() as connection:
+        patients = connection.execute("SELECT * FROM staff_patients WHERE practice_id=%s", (practice_id,)).fetchall()
+        intakes = connection.execute("""SELECT id,patient_id,auto_patient_id,source_portal_patient_id,fields,status,source,created_at,updated_at,
+            jsonb_array_length(documents)>0 AS has_card FROM staff_intakes WHERE practice_id=%s ORDER BY updated_at DESC,id DESC""", (practice_id,)).fetchall()
+    patient_map = {row["id"]: row for row in patients}
+    def matches_snapshot(row, patient_id):
+        return all(str(patient_map[patient_id][name]).strip().casefold() == str(row["fields"].get(name, "")).strip().casefold() for name in ("given_name", "family_name", "birth_date"))
+    # Explicit shared portal IDs connect a patient's intake history; names/email never do.
+    portal_for_patient = {}
+    for row in intakes:
+        if row["source_portal_patient_id"]:
+            for key in ("patient_id", "auto_patient_id"):
+                if row[key] in patient_map and matches_snapshot(row, row[key]):
+                    portal_for_patient.setdefault(row[key], row["source_portal_patient_id"])
+    groups = {}
+    def group(key):
+        return groups.setdefault(key, {"records": {}, "intakes": []})
+    for patient in patients:
+        portal = portal_for_patient.get(patient["id"])
+        group("portal:" + portal if portal else patient["id"])["records"][patient["id"]] = patient
+    for intake in intakes:
+        patient_id = intake["patient_id"] if intake["patient_id"] in patient_map else None
+        if not patient_id and intake["auto_patient_id"] in patient_map and matches_snapshot(intake, intake["auto_patient_id"]):
+            patient_id = intake["auto_patient_id"]
+        portal = portal_for_patient.get(patient_id) or (intake["source_portal_patient_id"] if not patient_id or matches_snapshot(intake, patient_id) else None)
+        key = "portal:" + portal if portal else patient_id or "intake:" + intake["id"]
+        group(key)["intakes"].append(intake)
+    rows, counts = [], {"all": 0, "accounts_with_cards": 0, "accounts_without_cards": 0, "card_only": 0, "other": 0}
+    for key, value in groups.items():
+        history = value["intakes"]
+        records = list(value["records"].values())
+        records.sort(key=lambda item: (item["identity_status"] != "confirmed", item["created_at"]))
+        patient = records[0] if records else {}
+        latest = history[0] if history else {}
+        fields = latest.get("fields", {})
+        has_card = any(item["has_card"] for item in history)
+        account = "portal" if key.startswith("portal:") else "automatic" if any(item["source"] == "patient_upload" for item in history) or patient.get("identity_status") == "unverified" or not patient else "clinic"
+        bucket = "accounts_with_cards" if account == "portal" and has_card else "accounts_without_cards" if account == "portal" else "card_only" if has_card else "other"
+        counts["all"] += 1; counts[bucket] += 1
+        public_id = "portal:" + _hash(practice_id + ":" + key)[:24] if key.startswith("portal:") else key
+        rows.append({"id": public_id, "clinic_patient_id": patient.get("id"), "identity_status": patient.get("identity_status", "unverified"),
+            **{name: patient.get(name) or fields.get(name) or "" for name in ("given_name", "family_name", "birth_date")},
+            "email": patient.get("email") or next((item["fields"].get("email") for item in history if item["fields"].get("email")), None),
+            "account_status": account, "card_status": "received" if has_card else "missing", "latest_intake_id": latest.get("id"),
+            "intake_ids": [item["id"] for item in history], "intake_count": len(history),
+            "updated_at": latest.get("updated_at") or patient["created_at"],
+            "intakes": [{name: item[name] for name in ("id", "status", "created_at", "updated_at", "source")} for item in history]})
+    rows.sort(key=lambda item: (item["updated_at"], item["id"]), reverse=True)
+    return {"patients": rows, "counts": counts}
 
 
 def list_intakes(practice_id: str, query: str = "", status: str = "", offset: int = 0) -> list[dict]:
@@ -262,11 +351,28 @@ def confirm_patient(intake_id: str, staff: dict, data: dict) -> dict | None:
             raise ValueError("Start a new intake before changing details used by an insurance workflow.")
         if intake["source"] != "clinicforce_qr" and not data.get("member_id"):
             raise ValueError("Confirm the insurance member ID before starting verification.")
+        identity_changed = any(str(intake["fields"].get(key, "")).strip().casefold() != str(data[key]).strip().casefold() for key in ("given_name", "family_name", "birth_date"))
+        portal_patient_id = None if identity_changed else intake["source_portal_patient_id"]
         patient_id = data.get("patient_id")
+        if intake.get("expected_patient_id"):
+            expected = connection.execute("SELECT * FROM staff_patients WHERE id=%s AND practice_id=%s", (intake["expected_patient_id"], staff["practice_id"])).fetchone()
+            if (not expected or (patient_id and patient_id != expected["id"])
+                    or any(str(expected[key]).casefold() != str(data[key]).casefold() for key in ("given_name", "family_name", "birth_date"))):
+                raise ValueError("These details differ from the patient this upload link was created for. Review the requested patient and uploaded card before confirming.")
+            patient_id = expected["id"]
         if not patient_id and intake["patient_id"]:
             previous = connection.execute("SELECT * FROM staff_patients WHERE id = %s AND practice_id = %s", (intake["patient_id"], staff["practice_id"])).fetchone()
             if previous and all(str(previous[key]).casefold() == str(data[key]).casefold() for key in ("given_name", "family_name", "birth_date")):
                 patient_id = previous["id"]
+        automatic = None
+        if intake.get("auto_patient_id"):
+            automatic = connection.execute("SELECT * FROM staff_patients WHERE id=%s AND practice_id=%s FOR UPDATE", (intake["auto_patient_id"], staff["practice_id"])).fetchone()
+        if not patient_id and automatic and automatic["identity_status"] == "unverified":
+            patient_id = automatic["id"]
+            connection.execute("UPDATE staff_patients SET given_name=%s,family_name=%s,birth_date=%s WHERE id=%s AND practice_id=%s",
+                               (data["given_name"], data["family_name"], data["birth_date"], patient_id, staff["practice_id"]))
+            if identity_changed:
+                connection.execute("UPDATE staff_intakes SET source_portal_patient_id=NULL WHERE auto_patient_id=%s AND practice_id=%s", (patient_id, staff["practice_id"]))
         if patient_id:
             patient = connection.execute("SELECT * FROM staff_patients WHERE id = %s AND practice_id = %s", (patient_id, staff["practice_id"])).fetchone()
             if not patient or any(str(patient[key]).casefold() != str(data[key]).casefold() for key in ("given_name", "family_name", "birth_date")):
@@ -275,11 +381,29 @@ def confirm_patient(intake_id: str, staff: dict, data: dict) -> dict | None:
             patient_id = str(uuid4())
             connection.execute("INSERT INTO staff_patients (id,practice_id,given_name,family_name,birth_date,created_at) VALUES (%s,%s,%s,%s,%s,%s)",
                                (patient_id, staff["practice_id"], data["given_name"], data["family_name"], data["birth_date"], now()))
+        connection.execute("UPDATE staff_patients SET identity_status='confirmed',email=COALESCE(NULLIF(%s,''),email) WHERE id=%s AND practice_id=%s",
+                           (data.get("email") or intake["fields"].get("email"), patient_id, staff["practice_id"]))
+        if automatic and automatic["identity_status"] == "unverified" and automatic["id"] != patient_id:
+            # A staff-selected existing record replaces this provisional identity only
+            # within the same clinic, including any pending requests targeting it.
+            connection.execute("UPDATE staff_intakes SET auto_patient_id=%s WHERE id=%s AND practice_id=%s", (patient_id, intake_id, staff["practice_id"]))
+            links_exist = connection.execute("SELECT to_regclass('insurance_upload_links') AS name").fetchone()["name"]
+            same_identity = all(str(automatic[key]).strip().casefold() == str(data[key]).strip().casefold() for key in ("given_name", "family_name", "birth_date"))
+            if same_identity:
+                connection.execute("UPDATE staff_intakes SET auto_patient_id=%s WHERE auto_patient_id=%s AND practice_id=%s", (patient_id, automatic["id"], staff["practice_id"]))
+                connection.execute("UPDATE staff_intakes SET expected_patient_id=%s WHERE expected_patient_id=%s AND practice_id=%s", (patient_id, automatic["id"], staff["practice_id"]))
+                if links_exist:
+                    connection.execute("UPDATE insurance_upload_links SET expected_patient_id=%s WHERE expected_patient_id=%s AND practice_id=%s", (patient_id, automatic["id"], staff["practice_id"]))
+            referenced = connection.execute("SELECT 1 FROM staff_intakes WHERE %s IN (patient_id,auto_patient_id,expected_patient_id) LIMIT 1", (automatic["id"],)).fetchone()
+            if links_exist:
+                referenced = referenced or connection.execute("SELECT 1 FROM insurance_upload_links WHERE expected_patient_id=%s LIMIT 1", (automatic["id"],)).fetchone()
+            if not referenced:
+                connection.execute("DELETE FROM staff_patients WHERE id=%s AND practice_id=%s", (automatic["id"], staff["practice_id"]))
         fields = {**intake["fields"], **{k: v for k, v in data.items() if k not in {"patient_id", "identity_confirmed"}}}
         sources = {**intake["field_sources"], **{key: "staff_confirmed" for key in data if key not in {"patient_id", "identity_confirmed"}}}
-        connection.execute("""UPDATE staff_intakes SET patient_id = %s, fields = %s::jsonb,
+        connection.execute("""UPDATE staff_intakes SET patient_id = %s, source_portal_patient_id=%s, fields = %s::jsonb,
             field_sources = %s::jsonb, status = 'ready', events = events || %s::jsonb, updated_at = %s
-            WHERE id = %s AND practice_id = %s""", (patient_id, json.dumps(fields), json.dumps(sources), json.dumps([_event("Patient details confirmed", staff)]), now(), intake_id, staff["practice_id"]))
+            WHERE id = %s AND practice_id = %s""", (patient_id, portal_patient_id, json.dumps(fields), json.dumps(sources), json.dumps([_event("Patient details confirmed", staff)]), now(), intake_id, staff["practice_id"]))
     return get_intake(intake_id, staff["practice_id"])
 
 

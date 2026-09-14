@@ -154,6 +154,13 @@ from app.api.routers.insurance_v2 import router as insurance_v2_router
 app.include_router(insurance_v2_router)
 from app.api.routers.staff import router as staff_router, from_share as staff_intake_from_share
 app.include_router(staff_router)
+from app.api.routers.staff_registration import router as staff_registration_router
+from app.api.routers.patient_uploads import router as patient_uploads_router
+from app.api.routers.patient_clinic_account import router as patient_clinic_account_router
+from app.api.routers.public_entry import install_access_log_filter, router as public_entry_router
+app.include_router(staff_registration_router)
+app.include_router(patient_uploads_router)
+app.include_router(patient_clinic_account_router)
 app.add_api_route("/api/doctor/insurance/staff-intake", staff_intake_from_share, methods=["POST"])
 app.include_router(system_router)
 
@@ -173,6 +180,7 @@ async def _epic_endpoint_sync_loop() -> None:
 @app.on_event("startup")
 async def start_epic_endpoint_sync() -> None:
     global _epic_endpoint_sync_task
+    install_access_log_filter()
     if EPIC_ENDPOINT_SYNC_ENABLED:
         _epic_endpoint_sync_task = asyncio.create_task(_epic_endpoint_sync_loop())
 
@@ -1381,3 +1389,7 @@ async def decrypt_and_summarize(request: DoctorSummaryRequest, response: Respons
         failure = IntegrationFailure("Clinical Summary", exc)
         log_error(failure.component, failure.cause)
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(failure)) from exc
+
+
+# Pretty public links must follow the concrete API and health routes.
+app.include_router(public_entry_router)
