@@ -131,7 +131,7 @@ from app.api.settings import (
     EPIC_ENDPOINT_SYNC_INTERVAL_SECONDS, EPIC_LIVE_SESSION_COOKIE, EPIC_OAUTH_STATE_COOKIE,
     EXCHANGE_RESOURCE_TYPES as _EXCHANGE_RESOURCE_TYPES, FHIR_SOURCE_TAG_SYSTEM,
     FHIR_VERIFICATION_TAG_SYSTEM, MAX_BULK_DOWNLOAD_BYTES, MAX_BULK_DOWNLOAD_DOCUMENTS,
-    CLINICIAN_SHARE_COOKIE, CLINICIAN_SHARE_MAX_AGE, MAX_UPLOAD_BYTES, PATIENT_SESSION_COOKIE,
+    CLINICIAN_SHARE_COOKIE, CLINICIAN_SHARE_MAX_AGE, IDME_OAUTH_STATE_COOKIE, IDME_OAUTH_STATE_COOKIE_PATH, MAX_UPLOAD_BYTES, PATIENT_SESSION_COOKIE,
     PATIENT_SESSION_MAX_AGE, PUBLIC_BASE_URL, SHL_SHARE_TTL_SECONDS,
     SOURCE_TAGS as _SOURCE_TAGS, insurance_beta_enabled,
 )
@@ -157,10 +157,12 @@ app.include_router(staff_router)
 from app.api.routers.staff_registration import router as staff_registration_router
 from app.api.routers.patient_uploads import router as patient_uploads_router
 from app.api.routers.patient_clinic_account import router as patient_clinic_account_router
+from app.api.routers.idme import router as idme_router
 from app.api.routers.public_entry import install_access_log_filter, router as public_entry_router
 app.include_router(staff_registration_router)
 app.include_router(patient_uploads_router)
 app.include_router(patient_clinic_account_router)
+app.include_router(idme_router)
 app.add_api_route("/api/doctor/insurance/staff-intake", staff_intake_from_share, methods=["POST"])
 app.include_router(system_router)
 
@@ -586,6 +588,13 @@ async def logout_patient(request: Request) -> Response:
     ecw.clear_live_session(request.cookies.get(ECW_LIVE_SESSION_COOKIE, ""))
     response = Response(status_code=status.HTTP_204_NO_CONTENT)
     response.delete_cookie(PATIENT_SESSION_COOKIE, path="/")
+    response.delete_cookie(
+        IDME_OAUTH_STATE_COOKIE,
+        path=IDME_OAUTH_STATE_COOKIE_PATH,
+        secure=True,
+        httponly=True,
+        samesite="lax",
+    )
     _clear_epic_cookies(response)
     _clear_ecw_cookies(response)
     return response

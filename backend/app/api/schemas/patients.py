@@ -45,6 +45,10 @@ class StoragePreferenceRequest(PatientCredentials):
     storage_provider: Literal["s3", "google_drive"]
 
 
+class IdmeStartRequest(RequestModel):
+    intent: Literal["login", "link", "tefca_ias"] = "login"
+
+
 class DocumentBatchRequest(PatientCredentials):
     """Authenticated, bounded selection from the patient workspace."""
 

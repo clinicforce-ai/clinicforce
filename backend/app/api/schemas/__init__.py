@@ -4,6 +4,7 @@ from .insurance import InsuranceClinicalContextRequest, InsuranceIntakeRequest, 
 from .integrations import EcwAuthorizeRequest, EpicAuthorizeRequest, IntegrationTestRequest
 from .patients import (
     DocumentBatchRequest,
+    IdmeStartRequest,
     ManualRecordRequest,
     PatientCredentials,
     PatientProfileRequest,
@@ -20,6 +21,6 @@ __all__ = [
     "DoctorSummaryRequest", "DocumentBatchRequest", "EcwAuthorizeRequest", "EpicAuthorizeRequest",
     "ExternalShlImportRequest", "GeneratePatientLinkRequest", "InsuranceClinicalContextRequest", "InsuranceIntakeRequest",
     "InsuranceServiceLinesRequest",
-    "IntegrationTestRequest", "ManifestRequest", "ManualRecordRequest", "PatientCredentials",
+    "IdmeStartRequest", "IntegrationTestRequest", "ManifestRequest", "ManualRecordRequest", "PatientCredentials",
     "PatientProfileRequest", "StoragePreferenceRequest",
 ]
