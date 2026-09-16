@@ -33,11 +33,13 @@ import {
   beginGoogleDriveConnection,
   beginEpicAuthorization,
   beginGoogleSignIn,
+  beginIdmeAuthorization,
   chooseStorageProvider,
   deletePatientDocument,
   deletePatientDocuments,
   disconnectEcw,
   disconnectEpic,
+  disconnectIdme,
   downloadEpicDocument,
   getEpicRecord,
   getEcwRecord,
@@ -45,6 +47,7 @@ import {
   downloadPatientDocumentsArchive,
   generatePatientLink,
   getCurrentPatientSession,
+  getIdmeStatus,
   getPatientProfile,
   loginPatient,
   importGoogleDriveChanges,
@@ -55,6 +58,7 @@ import {
   savePatientRecord,
   savePatientProfile,
   type LinkResponse,
+  type IdmeStatus,
   type EpicEndpoint,
   type EpicRecord,
   type EcwRecord,
@@ -90,12 +94,24 @@ import {
   type WorkspaceTab,
 } from '../features/patient-workspace'
 
+function idmeResultFromLocation(): string | null {
+  return new URLSearchParams(window.location.search).get('idme')
+}
+
+function idmeCallbackError(result: string | null): string {
+  if (result === 'not-linked') return 'This ID.me account is not linked to ClinicForce yet. Sign in with your patient ID or Google, then open Care connections and link ID.me.'
+  if (result === 'error') return 'ID.me could not complete sign-in or linking. No ID.me account was linked.'
+  return ''
+}
+
 export default function PatientPortal({ onBack }: PatientPortalProps) {
   const [mode, setMode] = useState<AuthMode>('login')
   const [patientId, setPatientId] = useState('')
   const [password, setPassword] = useState('')
   const [showPassword, setShowPassword] = useState(false)
   const [session, setSession] = useState<PatientSession | null>(null)
+  const [idmeStatus, setIdmeStatus] = useState<IdmeStatus | null>(null)
+  const [idmeStatusLoading, setIdmeStatusLoading] = useState(true)
   const [profile, setProfile] = useState<PatientProfile | null>(null)
   const [profileForm, setProfileForm] = useState<ProfileFormState>(emptyProfileForm)
   const [files, setFiles] = useState<File[]>([])
@@ -115,9 +131,9 @@ export default function PatientPortal({ onBack }: PatientPortalProps) {
   const [ecwRecord, setEcwRecord] = useState<EcwRecord | null>(null)
   const [workspaceTab, setWorkspaceTab] = useState<WorkspaceTab>('overview')
   const [selectedDocumentIds, setSelectedDocumentIds] = useState<Set<number>>(new Set())
-  const [busy, setBusy] = useState<'auth' | 'profile' | 'upload' | 'record' | 'share' | 'download' | 'delete' | 'bulk-download' | 'bulk-delete' | 'import' | 'drive' | 'google' | 'epic-connect' | 'epic-load' | 'epic-document' | 'ecw-connect' | 'ecw-load' | 'ecw-import' | 'ecw-disconnect' | null>(null)
+  const [busy, setBusy] = useState<'auth' | 'profile' | 'upload' | 'record' | 'share' | 'download' | 'delete' | 'bulk-download' | 'bulk-delete' | 'import' | 'drive' | 'google' | 'idme' | 'idme-unlink' | 'epic-connect' | 'epic-load' | 'epic-document' | 'ecw-connect' | 'ecw-load' | 'ecw-import' | 'ecw-disconnect' | null>(null)
   const [restoringSession, setRestoringSession] = useState(true)
-  const [error, setError] = useState('')
+  const [error, setError] = useState(() => idmeCallbackError(idmeResultFromLocation()))
   const [notice, setNotice] = useState('')
   const fileInput = useRef<HTMLInputElement>(null)
   const workspacePanel = useRef<HTMLDivElement>(null)
@@ -135,6 +151,17 @@ export default function PatientPortal({ onBack }: PatientPortalProps) {
 
   useEffect(() => {
     let active = true
+    const query = new URLSearchParams(window.location.search)
+    const idmeResult = idmeResultFromLocation()
+    if (idmeResult) {
+      query.delete('idme')
+      if (!query.has('patient')) query.set('patient', '')
+      window.history.replaceState({}, '', `${window.location.pathname}?${query.toString()}`)
+    }
+    void getIdmeStatus()
+      .then((status) => { if (active) setIdmeStatus(status) })
+      .catch(() => { if (active) setIdmeStatus(null) })
+      .finally(() => { if (active) setIdmeStatusLoading(false) })
     void getCurrentPatientSession()
       .then((workspace) => {
         if (active) {
@@ -142,7 +169,11 @@ export default function PatientPortal({ onBack }: PatientPortalProps) {
           void getPatientProfile()
             .then((currentProfile) => { if (active) applyProfile(currentProfile) })
             .catch((caught) => { if (active) setError(messageFrom(caught, 'Unable to load your demographic profile.')) })
-          setNotice(workspace.drive_sync_message ?? 'Your Google Drive workspace is ready.')
+          setNotice(idmeResult === 'connected'
+            ? 'Signed in to ClinicForce with ID.me.'
+            : idmeResult === 'linked'
+              ? 'ID.me is now linked to your ClinicForce account.'
+              : workspace.drive_sync_message ?? 'Your Google Drive workspace is ready.')
           if (new URLSearchParams(window.location.search).get('epic') === 'connected') {
             void getEpicRecord().then((record) => {
               if (!active) return
@@ -154,9 +185,12 @@ export default function PatientPortal({ onBack }: PatientPortalProps) {
         }
       })
       .catch((caught) => {
-        if (active && !(caught instanceof ApiError && caught.status === 401)) {
-          setError(messageFrom(caught, 'Unable to restore your workspace.'))
+        if (!active) return
+        if (caught instanceof ApiError && caught.status === 401) {
+          if (idmeResult === 'connected' || idmeResult === 'linked') setError('ID.me completed, but ClinicForce could not open your session. Please try again.')
+          return
         }
+        setError(messageFrom(caught, 'Unable to restore your workspace.'))
       })
       .finally(() => { if (active) setRestoringSession(false) })
     return () => { active = false }
@@ -288,6 +322,7 @@ export default function PatientPortal({ onBack }: PatientPortalProps) {
       const workspace = mode === 'login' ? await loginPatient(normalizedId, password) : await registerPatient(normalizedId, password)
       setSession(workspace)
       applyProfile(await getPatientProfile())
+      void getIdmeStatus().then(setIdmeStatus).catch(() => setIdmeStatus(null))
       setNotice(mode === 'login' ? 'Your workspace is ready.' : 'Your account is ready. Add a report or health detail to get started.')
     } catch (caught) {
       setError(messageFrom(caught, 'Unable to open your workspace.'))
@@ -354,6 +389,32 @@ export default function PatientPortal({ onBack }: PatientPortalProps) {
     } catch (caught) {
       setBusy(null)
       setError(messageFrom(caught, 'Unable to start Google sign-in.'))
+    }
+  }
+
+  const continueWithIdme = async (intent: 'login' | 'link') => {
+    clearFeedback()
+    setBusy('idme')
+    try {
+      window.location.assign(await beginIdmeAuthorization(intent))
+    } catch (caught) {
+      setBusy(null)
+      setError(messageFrom(caught, `Unable to start ID.me ${intent === 'login' ? 'sign-in' : 'linking'}.`))
+    }
+  }
+
+  const unlinkIdme = async () => {
+    if (!window.confirm('Disconnect ID.me and sign out of ClinicForce on every device?')) return
+    clearFeedback()
+    setBusy('idme-unlink')
+    try {
+      await disconnectIdme()
+      signOut(false)
+      setNotice('ID.me was disconnected and all ClinicForce sessions were signed out. Sign in with your remaining method to continue.')
+    } catch (caught) {
+      setError(messageFrom(caught, 'Unable to disconnect ID.me.'))
+    } finally {
+      setBusy(null)
     }
   }
 
@@ -772,8 +833,8 @@ export default function PatientPortal({ onBack }: PatientPortalProps) {
     }
   }
 
-  const signOut = () => {
-    void logoutPatient()
+  const signOut = (notifyServer = true) => {
+    if (notifyServer) void logoutPatient()
     setSession(null)
     setPassword('')
     setFiles([])
@@ -782,10 +843,14 @@ export default function PatientPortal({ onBack }: PatientPortalProps) {
     setProfileForm(emptyProfileForm)
     setEpicRecord(null)
     setEcwRecord(null)
+    setIdmeStatus((current) => current ? { ...current, linked: false } : current)
     setSelectedDocumentIds(new Set())
     setSharePasscode('')
     clearFeedback()
   }
+
+  const idmeReady = Boolean(idmeStatus?.enabled && idmeStatus.configured)
+  const idmeCanLink = Boolean(idmeReady && idmeStatus?.auth_recent)
 
   if (!session) {
     return (
@@ -804,6 +869,7 @@ export default function PatientPortal({ onBack }: PatientPortalProps) {
           </div>
           <h2>{mode === 'login' ? 'Welcome back' : 'Create your workspace'}</h2>
           <p className="text-sm leading-6 text-[var(--muted-ink)]">{mode === 'login' ? 'Enter your account details to open your health record.' : 'Use a memorable patient ID and a strong password.'}</p>
+          {notice && <div className="feedback feedback-success" role="status"><CheckCircle2 aria-hidden="true" /><span>{notice}</span><button type="button" onClick={clearFeedback} aria-label="Dismiss message"><X aria-hidden="true" className="size-4" /></button></div>}
           {restoringSession ? <div className="status-panel"><LoaderCircle className="size-5 animate-spin" aria-hidden="true" /><p>Opening your secure workspace…</p></div> : <form className="stack-form" onSubmit={authenticate} noValidate>
             <label htmlFor="patient-id">Patient ID</label>
             <input id="patient-id" autoComplete="username" value={patientId} onChange={(event) => setPatientId(event.target.value)} placeholder="e.g. alex-morgan" />
@@ -816,7 +882,15 @@ export default function PatientPortal({ onBack }: PatientPortalProps) {
             {error && <p className="form-error" role="alert">{error}</p>}
             <button className="button button-primary w-full" type="submit" disabled={busy === 'auth'}>{busy === 'auth' ? <><LoaderCircle className="size-4 animate-spin" aria-hidden="true" /> Opening workspace</> : <>{mode === 'login' ? 'Open my workspace' : 'Create my workspace'} <ChevronRight aria-hidden="true" className="size-4" /></>}</button>
           </form>}
-          {!restoringSession && <><div className="divider"><span>or</span></div><button className="button google-signin-button w-full" type="button" disabled={busy === 'google'} onClick={() => void signInWithGoogle()}>{busy === 'google' ? <LoaderCircle className="size-4 animate-spin" aria-hidden="true" /> : <ProviderLogo provider="google" />} Continue with Google</button><p className="field-help">Google sign-in opens your patient workspace and stores new PDFs in your ClinicForce Drive folder.</p></>}
+          {!restoringSession && <>
+            <div className="divider"><span>or</span></div>
+            <button className="button google-signin-button w-full" type="button" disabled={busy === 'google' || busy === 'idme'} onClick={() => void signInWithGoogle()}>{busy === 'google' ? <LoaderCircle className="size-4 animate-spin" aria-hidden="true" /> : <ProviderLogo provider="google" />} Continue with Google</button>
+            <p className="field-help">Google sign-in opens your patient workspace and stores new PDFs in your ClinicForce Drive folder.</p>
+            {mode === 'login' ? <>
+              <button className="button button-secondary w-full mt-3" type="button" aria-describedby="idme-login-help" disabled={idmeStatusLoading || !idmeReady || busy === 'google' || busy === 'idme'} onClick={() => void continueWithIdme('login')}>{busy === 'idme' ? <><LoaderCircle className="size-4 animate-spin" aria-hidden="true" /> Opening ID.me…</> : idmeStatusLoading ? <><LoaderCircle className="size-4 animate-spin" aria-hidden="true" /> Checking ID.me…</> : <><ShieldCheck className="size-4" aria-hidden="true" /> Continue with ID.me</>}</button>
+              <p id="idme-login-help" className="field-help">{idmeReady ? 'ID.me is a secure ClinicForce sign-in for accounts that linked it first. Epic, MyChart, and healow authorization remains separate.' : 'ID.me sign-in is not available right now. Use your patient ID or Google instead.'}</p>
+            </> : <p className="field-help mt-3">To use ID.me, first create or sign in to your ClinicForce account, then link ID.me under Care connections.</p>}
+          </>}
         </div>
       </section>
     )
@@ -855,7 +929,7 @@ export default function PatientPortal({ onBack }: PatientPortalProps) {
       <div className="workspace-banner">
         <div className="avatar" aria-hidden="true">{patientInitials(session.patient_id)}</div>
         <div><p className="eyebrow">Patient workspace</p><h1 id="workspace-heading">Your health record</h1><p>Signed in as <strong>{session.patient_id}</strong></p></div>
-        <button className="button button-ghost signout-button" type="button" onClick={signOut}><LogOut aria-hidden="true" className="size-4" /> Sign out</button>
+        <button className="button button-ghost signout-button" type="button" onClick={() => signOut()}><LogOut aria-hidden="true" className="size-4" /> Sign out</button>
       </div>
 
       {(error || notice) && <div className={error ? 'feedback feedback-error' : 'feedback feedback-success'} role={error ? 'alert' : 'status'}>{error ? <X aria-hidden="true" /> : <CheckCircle2 aria-hidden="true" />}<span>{error || notice}</span><button type="button" onClick={clearFeedback} aria-label="Dismiss message"><X aria-hidden="true" className="size-4" /></button></div>}
@@ -890,6 +964,12 @@ export default function PatientPortal({ onBack }: PatientPortalProps) {
               </div>
               <div className="demographics-actions"><button className="button button-secondary" type="submit" disabled={busy === 'profile'}>{busy === 'profile' ? <LoaderCircle className="size-4 animate-spin" aria-hidden="true" /> : <ShieldCheck className="size-4" aria-hidden="true" />}{demographicProfileComplete ? 'Update demographic profile' : 'Save demographic profile'}</button>{demographicProfileComplete && <span className="demographics-complete"><CheckCircle2 aria-hidden="true" /> Ready for EHR QR sharing</span>}</div>
             </form>
+          </section>
+
+          <section className="section-card" data-workspace-panel aria-labelledby="idme-heading" hidden={workspaceTab !== 'connections'}>
+            <div className="section-heading"><div><p className="section-kicker">ClinicForce sign-in</p><h2 id="idme-heading">ID.me</h2></div><ShieldCheck aria-hidden="true" className="section-icon" /></div>
+            <p className="text-sm leading-6 text-[var(--muted-ink)]">ID.me is an optional secure sign-in method for this ClinicForce account. Epic, MyChart, and healow authorization remains separate; use the care connections below when required.</p>
+            {idmeStatusLoading ? <div className="status-panel" role="status"><LoaderCircle className="size-5 animate-spin" aria-hidden="true" /><p>Checking ID.me connection…</p></div> : idmeStatus?.linked ? <div className="storage-choice mt-4"><div><strong>ID.me is linked</strong><p id="idme-unlink-help">{idmeStatus.auth_recent ? 'You can use ID.me to sign in to this ClinicForce account. Disconnecting signs out every device.' : 'For your security, sign out and sign back in before disconnecting ID.me.'}</p></div><button className="button button-secondary" type="button" aria-describedby="idme-unlink-help" disabled={!idmeStatus.auth_recent || busy === 'idme-unlink' || busy === 'idme'} onClick={() => void unlinkIdme()}>{busy === 'idme-unlink' ? <><LoaderCircle className="size-4 animate-spin" aria-hidden="true" /> Disconnecting…</> : 'Disconnect ID.me'}</button></div> : idmeReady ? <div className="storage-choice mt-4"><div><strong>{idmeCanLink ? 'ID.me is not linked' : 'Sign in again before linking ID.me'}</strong><p id="idme-link-help">{idmeCanLink ? 'Link ID.me to this account as another secure sign-in method.' : 'For your security, sign out and sign back in with your patient ID or Google, then return to Care connections.'}</p></div><button className="button button-primary" type="button" aria-describedby="idme-link-help" disabled={!idmeCanLink || busy === 'idme'} onClick={() => void continueWithIdme('link')}>{busy === 'idme' ? <><LoaderCircle className="size-4 animate-spin" aria-hidden="true" /> Opening ID.me…</> : <><ShieldCheck className="size-4" aria-hidden="true" /> Link ID.me</>}</button></div> : <div className="empty-block compact mt-4" role="status"><ShieldCheck aria-hidden="true" /><p><strong>ID.me is not available in this environment.</strong><br />Your ClinicForce account and the Epic/healow connection options below still work.</p></div>}
           </section>
 
           <section className="section-card" data-workspace-panel aria-labelledby="epic-heading" hidden={workspaceTab !== 'connections'}>

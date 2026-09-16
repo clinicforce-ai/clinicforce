@@ -25,8 +25,10 @@ from app.core.patient_models import (
     StoredDriveConnection,
     StoredDriveCrypto,
     StoredEpicManifest,
+    StoredIdmeTransaction,
     StoredPatientDocument,
     StoredRecord,
+    IDME_OIDC_TRANSACTION_MAX_AGE_SECONDS,
 )
 
 
@@ -50,6 +52,14 @@ def _database_url() -> str:
 
 
 MANIFEST_PIN_MAX_ATTEMPTS = 5
+
+
+def _google_patient_id(google_subject: str) -> str:
+    return "google-" + hashlib.sha256(google_subject.encode("utf-8")).hexdigest()[:20]
+
+
+def _is_google_generated_patient(patient_id: str, google_subject: str | None) -> bool:
+    return bool(google_subject) and patient_id == _google_patient_id(str(google_subject))
 
 
 def _initialize_schema(connection: psycopg.Connection[Any]) -> None:
@@ -76,6 +86,7 @@ def _initialize_schema(connection: psycopg.Connection[Any]) -> None:
         cursor.execute("ALTER TABLE patients ADD COLUMN IF NOT EXISTS administrative_gender TEXT")
         cursor.execute("ALTER TABLE patients ADD COLUMN IF NOT EXISTS google_given_name TEXT")
         cursor.execute("ALTER TABLE patients ADD COLUMN IF NOT EXISTS google_family_name TEXT")
+        cursor.execute("ALTER TABLE patients ADD COLUMN IF NOT EXISTS password_login_enabled BOOLEAN NOT NULL DEFAULT TRUE")
         cursor.execute("""DO $$ BEGIN
             ALTER TABLE patients ADD CONSTRAINT patients_administrative_gender_check
                 CHECK (administrative_gender IS NULL OR administrative_gender IN ('male', 'female', 'other', 'unknown'));
@@ -154,6 +165,23 @@ def _initialize_schema(connection: psycopg.Connection[Any]) -> None:
         )""")
         cursor.execute("ALTER TABLE patient_drive_connections ADD COLUMN IF NOT EXISTS summary_fingerprint TEXT")
         cursor.execute("CREATE UNIQUE INDEX IF NOT EXISTS patient_drive_connections_google_subject_idx ON patient_drive_connections (google_subject)")
+        # Old images can still create a Google-only row during a rolling deploy
+        # after the new column exists, letting its TRUE default leak through.
+        # Repair the exact deterministic Google identity invariant on every
+        # schema initialization; prefix lookalikes remain ordinary local users.
+        google_only_ids = [
+            str(row["patient_id"])
+            for row in cursor.execute(
+                """SELECT patients.patient_id, patient_drive_connections.google_subject
+                   FROM patients JOIN patient_drive_connections USING (patient_id)"""
+            ).fetchall()
+            if _is_google_generated_patient(str(row["patient_id"]), str(row["google_subject"]))
+        ]
+        if google_only_ids:
+            cursor.executemany(
+                "UPDATE patients SET password_login_enabled = FALSE WHERE patient_id = %s",
+                [(patient_id,) for patient_id in google_only_ids],
+            )
         cursor.execute("""CREATE TABLE IF NOT EXISTS drive_file_crypto (
             file_id TEXT PRIMARY KEY,
             patient_id TEXT NOT NULL REFERENCES patients(patient_id),
@@ -179,6 +207,39 @@ def _initialize_schema(connection: psycopg.Connection[Any]) -> None:
         cursor.execute("""CREATE TABLE IF NOT EXISTS google_login_states (
             state TEXT PRIMARY KEY, expires_at TEXT NOT NULL
         )""")
+        cursor.execute("""CREATE TABLE IF NOT EXISTS idme_oidc_transactions (
+            state_hash TEXT PRIMARY KEY,
+            browser_hash TEXT NOT NULL,
+            intent TEXT NOT NULL CHECK (intent IN ('login', 'link')),
+            patient_id TEXT REFERENCES patients(patient_id),
+            nonce TEXT NOT NULL,
+            pkce_verifier TEXT NOT NULL,
+            expires_at TEXT NOT NULL
+        )""")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idme_oidc_transactions_expiry_idx ON idme_oidc_transactions (expires_at)")
+        cursor.execute("""CREATE TABLE IF NOT EXISTS patient_external_identities (
+            provider TEXT NOT NULL,
+            issuer TEXT NOT NULL,
+            subject TEXT NOT NULL,
+            patient_id TEXT NOT NULL REFERENCES patients(patient_id),
+            created_at TEXT NOT NULL,
+            last_authenticated_at TEXT NOT NULL,
+            PRIMARY KEY (issuer, subject),
+            UNIQUE (provider, patient_id)
+        )""")
+        cursor.execute("""CREATE TABLE IF NOT EXISTS identity_verification_events (
+            id BIGSERIAL PRIMARY KEY,
+            provider TEXT NOT NULL,
+            patient_id TEXT REFERENCES patients(patient_id),
+            intent TEXT NOT NULL CHECK (intent IN ('login', 'link', 'unlink')),
+            outcome TEXT NOT NULL CHECK (outcome IN ('success', 'failure')),
+            reason_code TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        )""")
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS identity_verification_events_patient_idx "
+            "ON identity_verification_events (patient_id, id DESC)"
+        )
         cursor.execute("""CREATE TABLE IF NOT EXISTS patient_sessions (
             session_hash TEXT PRIMARY KEY, patient_id TEXT NOT NULL REFERENCES patients(patient_id),
             expires_at TEXT NOT NULL, created_at TEXT NOT NULL
@@ -245,7 +306,7 @@ def create_patient(patient_id: str, password_hash: str) -> bool:
 def get_password_hash(patient_id: str) -> str | None:
     with _connection() as connection:
         row = connection.execute(
-            "SELECT password_hash FROM patients WHERE patient_id = %s", (patient_id,)
+            "SELECT password_hash FROM patients WHERE patient_id = %s AND password_login_enabled", (patient_id,)
         ).fetchone()
     return row["password_hash"] if row else None
 
@@ -878,6 +939,240 @@ def consume_google_login_state(state: str) -> bool:
     return row is not None
 
 
+def save_idme_oidc_transaction(
+    intent: str,
+    patient_id: str | None,
+    state: str,
+    browser_token: str,
+    nonce: str,
+    pkce_verifier: str,
+) -> None:
+    """Persist only hashed browser/state handles for one short-lived OIDC callback."""
+    if intent not in {"login", "link"} or (intent == "link") != (patient_id is not None):
+        raise ValueError("Invalid ID.me transaction intent")
+    now = datetime.now(timezone.utc)
+    with _connection() as connection:
+        connection.execute("DELETE FROM idme_oidc_transactions WHERE expires_at < %s", (now.isoformat(),))
+        connection.execute(
+            """INSERT INTO idme_oidc_transactions
+               (state_hash, browser_hash, intent, patient_id, nonce, pkce_verifier, expires_at)
+               VALUES (%s, %s, %s, %s, %s, %s, %s)""",
+            (
+                _hash_session_token(state),
+                _hash_session_token(browser_token),
+                intent,
+                patient_id,
+                nonce,
+                pkce_verifier,
+                (now + timedelta(seconds=IDME_OIDC_TRANSACTION_MAX_AGE_SECONDS)).isoformat(),
+            ),
+        )
+
+
+def consume_idme_oidc_transaction(state: str, browser_token: str) -> StoredIdmeTransaction | None:
+    """Atomically consume a valid transaction bound to the initiating browser."""
+    if not state or not browser_token:
+        return None
+    with _connection() as connection:
+        row = connection.execute(
+            """DELETE FROM idme_oidc_transactions
+               WHERE state_hash = %s AND browser_hash = %s AND expires_at >= %s
+               RETURNING intent, patient_id, nonce, pkce_verifier""",
+            (
+                _hash_session_token(state),
+                _hash_session_token(browser_token),
+                datetime.now(timezone.utc).isoformat(),
+            ),
+        ).fetchone()
+    return StoredIdmeTransaction(**dict(row)) if row else None
+
+
+def _lock_idme_identity(connection: psycopg.Connection[Any], issuer: str, subject: str) -> None:
+    # A transaction-scoped lock keeps first-login creation deterministic without
+    # exposing the identity or relying on a process-local lock across ECS tasks.
+    connection.execute("SELECT pg_advisory_xact_lock(hashtext(%s))", (f"{issuer}\n{subject}",))
+
+
+def _add_identity_event(
+    connection: psycopg.Connection[Any],
+    patient_id: str | None,
+    intent: str,
+    outcome: str,
+    reason_code: str,
+) -> None:
+    connection.execute(
+        """INSERT INTO identity_verification_events
+           (provider, patient_id, intent, outcome, reason_code, created_at)
+           VALUES ('idme', %s, %s, %s, %s, %s)""",
+        (patient_id, intent, outcome, reason_code, datetime.now(timezone.utc).isoformat()),
+    )
+
+
+def record_idme_verification_event(
+    patient_id: str | None, intent: str, outcome: str, reason_code: str,
+) -> None:
+    """Record bounded reason codes only; never persist tokens, claims, or subjects."""
+    if intent not in {"login", "link"} or outcome not in {"success", "failure"}:
+        raise ValueError("Invalid ID.me audit event")
+    allowed_reasons = {
+        "provider_denied",
+        "session_changed",
+        "verification_failed",
+        "identity_not_linked",
+    }
+    if reason_code not in allowed_reasons:
+        raise ValueError("Invalid ID.me audit reason")
+    with _connection() as connection:
+        _add_identity_event(connection, patient_id, intent, outcome, reason_code)
+
+
+def create_idme_patient_session(issuer: str, subject: str) -> tuple[str, str] | None:
+    """Authenticate one linked identity and issue its session atomically."""
+    token = secrets.token_urlsafe(32)
+    now = datetime.now(timezone.utc)
+    with _connection() as connection:
+        # Unlink takes the same advisory lock and deletes every session in its
+        # transaction. This prevents an in-flight callback from recreating a
+        # session immediately after the user disconnects the identity.
+        _lock_idme_identity(connection, issuer, subject)
+        existing = connection.execute(
+            """SELECT patient_id FROM patient_external_identities
+               WHERE provider = 'idme' AND issuer = %s AND subject = %s""",
+            (issuer, subject),
+        ).fetchone()
+        if existing is None:
+            return None
+        patient_id = str(existing["patient_id"])
+        connection.execute(
+            """UPDATE patient_external_identities SET last_authenticated_at = %s
+               WHERE provider = 'idme' AND issuer = %s AND subject = %s""",
+            (now.isoformat(), issuer, subject),
+        )
+        connection.execute("DELETE FROM patient_sessions WHERE expires_at < %s", (now.isoformat(),))
+        connection.execute(
+            """INSERT INTO patient_sessions (session_hash, patient_id, expires_at, created_at)
+               VALUES (%s, %s, %s, %s)""",
+            (
+                _hash_session_token(token),
+                patient_id,
+                (now + timedelta(days=30)).isoformat(),
+                now.isoformat(),
+            ),
+        )
+        _add_identity_event(connection, patient_id, "login", "success", "authenticated")
+    return patient_id, token
+
+
+def link_idme_identity(patient_id: str, session_token: str, issuer: str, subject: str) -> bool:
+    """Link an unused identity only while the initiating patient session is valid."""
+    now = datetime.now(timezone.utc).isoformat()
+    with _connection() as connection:
+        # Identity first, patient second is the shared lock order with login and
+        # unlink. This avoids a patient-row/advisory-lock deadlock under races.
+        _lock_idme_identity(connection, issuer, subject)
+        patient = connection.execute(
+            "SELECT patient_id FROM patients WHERE patient_id = %s FOR UPDATE", (patient_id,)
+        ).fetchone()
+        if patient is None:
+            return False
+        session = connection.execute(
+            """SELECT 1 FROM patient_sessions
+               WHERE session_hash = %s AND patient_id = %s AND expires_at >= %s""",
+            (_hash_session_token(session_token), patient_id, now),
+        ).fetchone()
+        if session is None:
+            _add_identity_event(connection, patient_id, "link", "failure", "session_changed")
+            return False
+        identity = connection.execute(
+            """SELECT patient_id FROM patient_external_identities
+               WHERE provider = 'idme' AND issuer = %s AND subject = %s""",
+            (issuer, subject),
+        ).fetchone()
+        if identity is not None:
+            if str(identity["patient_id"]) != patient_id:
+                _add_identity_event(connection, patient_id, "link", "failure", "identity_conflict")
+                return False
+            connection.execute(
+                """UPDATE patient_external_identities SET last_authenticated_at = %s
+                   WHERE provider = 'idme' AND issuer = %s AND subject = %s""",
+                (now, issuer, subject),
+            )
+            _add_identity_event(connection, patient_id, "link", "success", "already_linked")
+            return True
+        already_linked = connection.execute(
+            """SELECT 1 FROM patient_external_identities
+               WHERE provider = 'idme' AND patient_id = %s""",
+            (patient_id,),
+        ).fetchone()
+        if already_linked is not None:
+            _add_identity_event(connection, patient_id, "link", "failure", "different_identity_already_linked")
+            return False
+        connection.execute(
+            """INSERT INTO patient_external_identities
+               (provider, issuer, subject, patient_id, created_at, last_authenticated_at)
+               VALUES ('idme', %s, %s, %s, %s, %s)""",
+            (issuer, subject, patient_id, now, now),
+        )
+        _add_identity_event(connection, patient_id, "link", "success", "linked")
+    return True
+
+
+def patient_has_idme_identity(patient_id: str) -> bool:
+    with _connection() as connection:
+        row = connection.execute(
+            "SELECT 1 FROM patient_external_identities WHERE provider = 'idme' AND patient_id = %s",
+            (patient_id,),
+        ).fetchone()
+    return row is not None
+
+
+def unlink_idme_identity(patient_id: str, google_login_available: bool = False) -> str:
+    """Remove ID.me only when another usable local/Google sign-in remains."""
+    with _connection() as connection:
+        identity = connection.execute(
+            """SELECT issuer, subject FROM patient_external_identities
+               WHERE provider = 'idme' AND patient_id = %s""",
+            (patient_id,),
+        ).fetchone()
+        if identity is None:
+            return "missing"
+        _lock_idme_identity(connection, str(identity["issuer"]), str(identity["subject"]))
+        patient = connection.execute(
+            """SELECT patients.password_login_enabled, patient_drive_connections.google_subject
+               FROM patients LEFT JOIN patient_drive_connections USING (patient_id)
+               WHERE patients.patient_id = %s FOR UPDATE OF patients""",
+            (patient_id,),
+        ).fetchone()
+        if patient is None:
+            return "missing"
+        # Recheck after both locks in case a preceding transaction removed it.
+        identity_still_linked = connection.execute(
+            "SELECT 1 FROM patient_external_identities WHERE provider = 'idme' AND patient_id = %s",
+            (patient_id,),
+        ).fetchone()
+        if identity_still_linked is None:
+            return "missing"
+        google_subject = patient["google_subject"]
+        password_login_usable = bool(patient["password_login_enabled"]) and not (
+            _is_google_generated_patient(patient_id, google_subject)
+        )
+        if not password_login_usable and not (
+            google_subject is not None and google_login_available
+        ):
+            _add_identity_event(connection, patient_id, "unlink", "failure", "last_login")
+            return "last_login"
+        connection.execute(
+            "DELETE FROM patient_external_identities WHERE provider = 'idme' AND patient_id = %s",
+            (patient_id,),
+        )
+        # An ID.me-originated session is intentionally indistinguishable from
+        # other patient sessions. Revoke all of them so disconnecting a
+        # compromised identity actually ends access on every device.
+        connection.execute("DELETE FROM patient_sessions WHERE patient_id = %s", (patient_id,))
+        _add_identity_event(connection, patient_id, "unlink", "success", "unlinked")
+    return "unlinked"
+
+
 def upsert_drive_connection(
     patient_id: str, google_subject: str, refresh_token_ciphertext: str, folder_id: str,
 ) -> None:
@@ -895,6 +1190,13 @@ def upsert_drive_connection(
               updated_at = EXCLUDED.updated_at""",
             (patient_id, google_subject, refresh_token_ciphertext, folder_id, now, now),
         )
+        if _is_google_generated_patient(patient_id, google_subject):
+            # Idempotently repair rows written by an older task during a rolling
+            # deployment after the new column/default already exists.
+            connection.execute(
+                "UPDATE patients SET password_login_enabled = FALSE WHERE patient_id = %s",
+                (patient_id,),
+            )
 
 
 def get_patient_by_google_subject(google_subject: str) -> str | None:
@@ -910,12 +1212,12 @@ def create_google_patient(
     google_subject: str, password_hash: str, google_given_name: str | None = None, google_family_name: str | None = None,
 ) -> str:
     """Create a stable, non-guessable local workspace for a Google identity."""
-    digest = hashlib.sha256(google_subject.encode("utf-8")).hexdigest()[:20]
-    patient_id = f"google-{digest}"
+    patient_id = _google_patient_id(google_subject)
     with _connection() as connection:
         connection.execute(
-            """INSERT INTO patients (patient_id, password_hash, google_given_name, google_family_name, created_at)
-               VALUES (%s, %s, %s, %s, %s) ON CONFLICT (patient_id) DO NOTHING""",
+            """INSERT INTO patients
+               (patient_id, password_hash, password_login_enabled, google_given_name, google_family_name, created_at)
+               VALUES (%s, %s, FALSE, %s, %s, %s) ON CONFLICT (patient_id) DO NOTHING""",
             (patient_id, password_hash, _google_name_hint(google_given_name), _google_name_hint(google_family_name), datetime.now(timezone.utc).isoformat()),
         )
     return patient_id
@@ -945,6 +1247,24 @@ def get_patient_session(token: str) -> str | None:
         row = connection.execute(
             "SELECT patient_id FROM patient_sessions WHERE session_hash = %s AND expires_at >= %s",
             (_hash_session_token(token), datetime.now(timezone.utc).isoformat()),
+        ).fetchone()
+    return str(row["patient_id"]) if row else None
+
+
+def get_recent_patient_session(token: str, max_age_seconds: int = 10 * 60) -> str | None:
+    """Resolve a still-valid session only when it was freshly authenticated."""
+    if not token:
+        return None
+    cutoff = datetime.now(timezone.utc) - timedelta(seconds=max(1, max_age_seconds))
+    with _connection() as connection:
+        row = connection.execute(
+            """SELECT patient_id FROM patient_sessions
+               WHERE session_hash = %s AND expires_at >= %s AND created_at >= %s""",
+            (
+                _hash_session_token(token),
+                datetime.now(timezone.utc).isoformat(),
+                cutoff.isoformat(),
+            ),
         ).fetchone()
     return str(row["patient_id"]) if row else None
 

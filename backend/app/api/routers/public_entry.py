@@ -66,6 +66,8 @@ def _redacted_target(target: str) -> str:
         if re.fullmatch(r"[A-Za-z0-9_-]{32,128}", parts[3]):
             path = "/" + "/".join(parts[:3]) + "/[redacted]" + ("/" if path.endswith("/") else "")
     query = parsed.query
+    if path.rstrip("/") == "/api/patient/idme/callback":
+        query = ""
     values = parse_qsl(query, keep_blank_values=True)
     if any(key.lower() in {"clinic", "upload", "join"} for key, _ in values):
         query = urlencode([(key, "[redacted]" if key.lower() in {"clinic", "upload", "join"} else value) for key, value in values])

@@ -16,6 +16,8 @@ EPIC_OAUTH_STATE_COOKIE = "clinicforce_epic_oauth"
 EPIC_LIVE_SESSION_COOKIE = "clinicforce_epic_live"
 ECW_OAUTH_STATE_COOKIE = "clinicforce_ecw_oauth"
 ECW_LIVE_SESSION_COOKIE = "clinicforce_ecw_live"
+IDME_OAUTH_STATE_COOKIE = "clinicforce_idme_oauth"
+IDME_OAUTH_STATE_COOKIE_PATH = "/api/patient/idme/callback"
 EPIC_ENDPOINT_SYNC_ENABLED = os.getenv("EPIC_ENDPOINT_SYNC_ENABLED", "").lower() == "true"
 EPIC_ENDPOINT_SYNC_INTERVAL_SECONDS = 7 * 24 * 60 * 60
 SHL_SHARE_TTL_SECONDS = max(1, int(os.getenv("SHL_SHARE_TTL_SECONDS", "10800")))
