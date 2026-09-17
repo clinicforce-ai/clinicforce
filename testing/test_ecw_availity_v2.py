@@ -73,6 +73,8 @@ class EcwBackendSourceTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("grant_type=client_credentials", token_request.content.decode())
         self.assertNotIn("private-token", str(source))
         self.assertTrue(all("_count" not in request.url.params for request in requests))
+        patient_request = next(request for request in requests if request.url.path == "/fhir/Patient" and request.method == "GET")
+        self.assertEqual(dict(patient_request.url.params), {"family": "Example", "birthdate": "1980-01-01"})
         encounter_request = next(request for request in requests if request.url.path == "/fhir/Encounter")
         self.assertEqual(encounter_request.url.params["date"], f"ge{today}")
         charge_request = next(request for request in requests if request.url.path == "/fhir/ChargeItem")

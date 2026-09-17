@@ -290,7 +290,6 @@ async def fetch_inputs(profile: dict[str, Any], practice: dict[str, Any], *, tra
         async with httpx.AsyncClient(timeout=30, follow_redirects=False, transport=transport) as client:
             token = await _access_token(client, client_id, issuer)
             patient_rows = await _search(client, issuer, token, "Patient", {
-                "given": str(profile.get("patient_first_name") or ""),
                 "family": str(profile.get("patient_last_name") or ""),
                 "birthdate": str(profile.get("patient_birth_date") or ""),
             })
