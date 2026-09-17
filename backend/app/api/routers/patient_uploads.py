@@ -54,6 +54,32 @@ async def clinic(npi: str) -> dict:
     return value
 
 
+async def prepared_cards(files: list[UploadFile]) -> list[tuple[str, bytes, str]]:
+    if not 1 <= len(files) <= 2:
+        raise HTTPException(422, "Upload one or two card files, with at most two pages in total.", headers=HEADERS)
+    prepared, pages = [], 0
+    for file in files:
+        content = await file.read(MAX_INSURANCE_CARD_BYTES + 1)
+        if len(content) > MAX_INSURANCE_CARD_BYTES:
+            raise HTTPException(413, "Each insurance card file must be 10 MB or smaller.", headers=HEADERS)
+        content_type, count = await run_in_threadpool(staff.inspect_file, content)
+        pages += count
+        if pages > 2:
+            raise HTTPException(422, "Upload at most two insurance card pages in total.", headers=HEADERS)
+        prepared.append((Path(file.filename or "insurance-card").name[:200], content, content_type))
+    return prepared
+
+
+def card_fields(prepared: list[tuple[str, bytes, str]]) -> dict:
+    pages, offset = [], 0
+    for _, content, _ in prepared:
+        extracted = v1_sources.read_pages(content, 2)
+        pages.extend((number + offset, text) for number, text in extracted)
+        offset += len(extracted)
+    fields, _ = v1_sources.card_fields(pages)
+    return {key: fields[key] for key in ("member_name", "birth_date", "member_id") if fields.get(key)}
+
+
 def public_link(row: dict) -> dict:
     return {"id": row["id"], "npi": row["clinic_code"], "patient_id": row["expected_patient_id"],
             "status": "expired" if row["status"] == "pending" and row["expires_at"] <= staff_store.now() else row["status"],
@@ -124,6 +150,20 @@ async def get_metadata(clinic_code: LegacyClinicCode, upload_code: UploadCode):
     return JSONResponse({"clinic_name": row["clinic_name"], "expires_at": row["expires_at"], "status": row["status"]}, headers=HEADERS)
 
 
+@router.post("/api/insurance-upload/{clinic_code}/{upload_code}/read-card")
+async def read_patient_card(clinic_code: LegacyClinicCode, upload_code: UploadCode, request: Request,
+                            files: list[UploadFile] = File(...)):
+    staff.check_origin(request)
+    row = await call(links.metadata, clinic_code, upload_code)
+    await call(links.check_rate, request_address(request), row["practice_id"], "read-card")
+    prepared = await prepared_cards(files)
+    try:
+        fields = await run_in_threadpool(card_fields, prepared)
+    except Exception:
+        raise HTTPException(422, "We could not read details from this card. Enter them manually or try a clearer image.", headers=HEADERS) from None
+    return JSONResponse({"fields": fields}, headers=HEADERS)
+
+
 @router.post("/api/insurance-upload/{clinic_code}/{upload_code}")
 async def submit(clinic_code: LegacyClinicCode, upload_code: UploadCode, request: Request,
                  files: list[UploadFile] = File(...), given_name: str = Form(..., min_length=1, max_length=100),
@@ -138,18 +178,7 @@ async def submit(clinic_code: LegacyClinicCode, upload_code: UploadCode, request
         raise HTTPException(422, "Confirm that you agree to send this information to the clinic.", headers=HEADERS)
     if not given_name.strip() or not family_name.strip() or not date(1850, 1, 1) <= birth_date <= date.today():
         raise HTTPException(422, "Enter the patient's name and a valid date of birth.", headers=HEADERS)
-    if not 1 <= len(files) <= 2:
-        raise HTTPException(422, "Upload one or two card files, with at most two pages in total.", headers=HEADERS)
-    prepared, pages = [], 0
-    for file in files:
-        content = await file.read(MAX_INSURANCE_CARD_BYTES + 1)
-        if len(content) > MAX_INSURANCE_CARD_BYTES:
-            raise HTTPException(413, "Each insurance card file must be 10 MB or smaller.", headers=HEADERS)
-        content_type, count = await run_in_threadpool(staff.inspect_file, content)
-        pages += count
-        if pages > 2:
-            raise HTTPException(422, "Upload at most two insurance card pages in total.", headers=HEADERS)
-        prepared.append((Path(file.filename or "insurance-card").name[:200], content, content_type))
+    prepared = await prepared_cards(files)
     fields = {"given_name": given_name.strip(), "family_name": family_name.strip(), "birth_date": birth_date.isoformat()}
     if member_id.strip():
         fields["member_id"] = member_id.strip()

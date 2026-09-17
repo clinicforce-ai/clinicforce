@@ -1,6 +1,7 @@
 """Read V1 uploads and retain the exact page text behind every extracted field."""
 
 import re
+from datetime import date, datetime
 from decimal import Decimal
 
 import fitz
@@ -71,6 +72,7 @@ def card_fields(pages: list[tuple[int, str]]) -> tuple[dict, dict]:
 
     labels = {
         "member_name": r"(?:member|subscriber|patient)\s+name|name",
+        "birth_date": r"(?:(?:member|subscriber|patient)\s+)?(?:date\s+of\s+birth|birth\s+date|dob)",
         "member_id": r"(?:member|subscriber)\s*(?:id|number)|identification\s+number",
         "group_number": r"group(?:\s*(?:number|no\.?))?",
         "plan_type": r"plan(?:\s*(?:type|/\s*product))?|product",
@@ -96,13 +98,26 @@ def card_fields(pages: list[tuple[int, str]]) -> tuple[dict, dict]:
                     continue
                 if key == "member_name" and not re.fullmatch(r"[A-Z][A-Z .,'-]{2,100}", value, re.I):
                     continue
+                if key == "birth_date":
+                    candidate = re.match(r"(?:\d{4}-\d{1,2}-\d{1,2}|\d{1,2}[/-]\d{1,2}[/-]\d{4})\b", value)
+                    if not candidate:
+                        continue
+                    for date_format in ("%Y-%m-%d", "%m/%d/%Y", "%m-%d-%Y"):
+                        try:
+                            parsed = datetime.strptime(candidate[0], date_format).date()
+                            break
+                        except ValueError:
+                            parsed = None
+                    if not parsed or not date(1850, 1, 1) <= parsed <= date.today():
+                        continue
+                    value = parsed.isoformat()
                 if key == "coinsurance" and not re.search(r"\d+\s*%", value):
                     continue
                 if key == "coverage_date":
-                    date = re.match(r"\d{1,2}[/-]\d{1,2}[/-]\d{2,4}\b", value)
-                    if not date:
+                    date_match = re.match(r"\d{1,2}[/-]\d{1,2}[/-]\d{2,4}\b", value)
+                    if not date_match:
                         continue
-                    value = date[0]
+                    value = date_match[0]
                 add(key, value, page, quote)
             heading = re.search(r"\b(deductibles?|out[- ]of[- ]pocket(?: maximum| limit)?|oop(?: maximum| limit)?)(?: information)?\s*:?$", line, re.I)
             if heading:

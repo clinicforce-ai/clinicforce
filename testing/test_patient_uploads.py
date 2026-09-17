@@ -212,6 +212,10 @@ class PatientUploadTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_validation_and_staff_card_reading_preserve_patient_identity_and_provenance(self):
         link = await self.new_link()
+        preview = await self.public.post(f"{self.route(link)}/read-card", files=[("files", ("original-card.pdf", card_pdf("Member Name: PAT EXAMPLE\nDOB: 01/02/1990\nMember ID: CARD123"), "application/pdf"))])
+        self.assertEqual(preview.status_code, 200, preview.text)
+        self.assertEqual(preview.json(), {"fields": {"member_name": "PAT EXAMPLE", "birth_date": "1990-01-02", "member_id": "CARD123"}})
+        self.assertEqual(self.objects, {}, "Reading a card for autofill must not save it")
         self.assertEqual((await self.upload(link, data={"consent": "false"})).status_code, 422)
         self.assertEqual((await self.upload(link, data={"birth_date": "2999-01-01"})).status_code, 422)
         response = await self.upload(link, data={"member_id": "PATIENT-ENTERED"})

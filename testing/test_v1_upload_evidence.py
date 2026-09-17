@@ -30,8 +30,9 @@ class SourceTests(unittest.TestCase):
         self.assertEqual(set(fields), set(evidence))
 
     def test_split_card_identity_labels(self):
-        fields, evidence = v1_sources.card_fields([(1, "Member Name\nPAT EXAMPLE\nIdentification Number ABC123\nGroup Number: XYZ123")])
+        fields, evidence = v1_sources.card_fields([(1, "Member Name\nPAT EXAMPLE\nDate of Birth: 01/02/1980\nIdentification Number ABC123\nGroup Number: XYZ123")])
         self.assertEqual(fields["member_name"], "PAT EXAMPLE")
+        self.assertEqual(fields["birth_date"], "1980-01-02")
         self.assertEqual(fields["member_id"], "ABC123")
         self.assertEqual(evidence["member_name"]["quote"], "Member Name\nPAT EXAMPLE")
 
