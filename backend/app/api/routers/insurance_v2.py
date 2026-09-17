@@ -61,7 +61,9 @@ def validate_staff_coverage(fields: dict, inputs: dict, source: dict, practice: 
         return
     connected_id = intake.normalize(str(inputs.get("payer_id") or ""))
     connected_name = intake.normalize(str(source.get("payer") or ""))
-    if not connected_id and not connected_name:
+    # An eCW payer name without a configured Availity ID is an explicit input gap,
+    # not evidence that the confirmed card conflicts with the connected coverage.
+    if not connected_id:
         return
     if payer in {connected_id, connected_name}:
         return
