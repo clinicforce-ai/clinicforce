@@ -12,6 +12,7 @@ from zoneinfo import ZoneInfo
 
 import fitz
 import httpx
+from fastapi import HTTPException
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "backend"))
 
@@ -83,6 +84,17 @@ class ResultsAndIntakeTests(unittest.TestCase):
                                      'AVAILITY_PRACTICE_CONFIG': json.dumps(expected)}):
             _, practice, _ = v2.configuration()
         self.assertEqual(practice, expected)
+
+        placeholder = {**expected, 'providers': {'BILLING OR RENDERING NPI': {'lastName': 'placeholder'},
+                                                  '1234567893': {'lastName': 'valid'}}}
+        with patch.dict(os.environ, {'AVAILITY_ENVIRONMENT': 'demo', 'AVAILITY_SCOPE': DEMO_SCOPE,
+                                     'AVAILITY_PRACTICE_CONFIG': json.dumps(placeholder)}):
+            _, practice, _ = v2.configuration()
+        self.assertEqual(practice['providers'], {'1234567893': {'lastName': 'valid'}})
+        with patch.dict(os.environ, {'AVAILITY_ENVIRONMENT': 'production', 'AVAILITY_SCOPE': LIVE_SCOPE,
+                                     'AVAILITY_PRACTICE_CONFIG': json.dumps(placeholder)}):
+            with self.assertRaises(HTTPException):
+                v2.configuration()
 
     def test_only_complete_matching_payer_estimates_become_a_total(self):
         expected = [{'code': '99204', 'charge': '300.00', 'units': '1', 'modifiers': []}]

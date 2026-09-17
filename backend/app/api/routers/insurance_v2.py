@@ -96,8 +96,14 @@ def configuration() -> tuple[Settings, dict, str]:
         if not isinstance(practice, dict):
             raise ValueError
         providers = practice.get("providers", {})
-        if not isinstance(providers, dict) or any(not re.fullmatch(r"[1-4]\d{9}", k) or not isinstance(v, dict) for k, v in providers.items()):
+        if not isinstance(providers, dict):
             raise ValueError
+        invalid_providers = {k: v for k, v in providers.items()
+                             if not re.fullmatch(r"[1-4]\d{9}", k) or not isinstance(v, dict)}
+        if invalid_providers:
+            if settings.environment != "demo":
+                raise ValueError
+            practice = {**practice, "providers": {k: v for k, v in providers.items() if k not in invalid_providers}}
         if not isinstance(practice.get("payer_aliases", {}), dict) or any(not isinstance(k, str) or not k or not isinstance(v, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,40}", v) for k, v in practice.get("payer_aliases", {}).items()):
             raise ValueError
         if not isinstance(practice.get("locations", {}), dict) or any(not isinstance(k, str) or not k or not isinstance(v, dict) for k, v in practice.get("locations", {}).items()):
