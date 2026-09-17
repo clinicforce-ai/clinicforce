@@ -72,7 +72,9 @@ jobs:
           npm run build
 
   deploy:
-    if: github.event_name != 'pull_request'
+    # GitHub environment branch protection is unavailable on the current plan,
+    # so enforce the production main-only boundary in the workflow itself.
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
     needs: verify
     runs-on: ubuntu-latest
     environment: production
