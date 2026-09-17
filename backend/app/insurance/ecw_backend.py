@@ -140,6 +140,24 @@ async def _bounded_read(client: httpx.AsyncClient, issuer: str, token: str,
         return {}, reference.split("/", 1)[0]
 
 
+async def _cached_patient(client: httpx.AsyncClient, issuer: str, token: str,
+                          patient_id: str, profile: dict[str, Any]) -> tuple[dict[str, Any], str | None]:
+    fallback = {
+        "resourceType": "Patient", "id": patient_id,
+        "name": [{"use": "official", "given": [str(profile.get("patient_first_name") or "")],
+                  "family": str(profile.get("patient_last_name") or "")}],
+        "birthDate": str(profile.get("patient_birth_date") or ""),
+        "gender": {"M": "male", "F": "female"}.get(profile.get("gender"), "unknown"),
+    }
+    try:
+        patient = await asyncio.wait_for(_read(client, issuer, token, f"Patient/{patient_id}"), timeout=5)
+    except asyncio.TimeoutError:
+        return fallback, "Patient"
+    if not patient:
+        raise EcwBackendError("The saved eClinicalWorks patient link no longer exists.")
+    return patient, None
+
+
 def _norm(value: Any) -> str:
     return re.sub(r"[^a-z0-9]", "", str(value or "").casefold())
 
@@ -301,8 +319,10 @@ async def fetch_inputs(profile: dict[str, Any], practice: dict[str, Any], *, tra
             if cached_patient_id:
                 if not re.fullmatch(r"[A-Za-z0-9.\-]{1,200}", cached_patient_id):
                     raise EcwBackendError("The saved eClinicalWorks patient link is invalid.")
-                patient_rows = [await _read(client, issuer, token, f"Patient/{cached_patient_id}")]
+                patient, patient_timeout = await _cached_patient(client, issuer, token, cached_patient_id, profile)
+                patient_rows = [patient]
             else:
+                patient_timeout = None
                 patient_rows = await _search(client, issuer, token, "Patient", {
                     "given": str(profile.get("patient_first_name") or ""),
                     "family": str(profile.get("patient_last_name") or ""),
@@ -342,7 +362,7 @@ async def fetch_inputs(profile: dict[str, Any], practice: dict[str, Any], *, tra
                     if ref != f"Patient/{patient_id}"]
             resolved_results = await asyncio.gather(*(_bounded_read(client, issuer, token, ref) for ref in refs))
             resolved_list = [row for row, _ in resolved_results]
-            reference_timeouts = sorted({resource for _, resource in resolved_results if resource})
+            reference_timeouts = sorted({resource for _, resource in resolved_results if resource} | ({patient_timeout} if patient_timeout else set()))
             resolved = {f"{row.get('resourceType')}/{row.get('id')}": row for row in resolved_list if row.get("resourceType") and row.get("id")}
 
             subscriber_ref = _reference(coverage.get("subscriber"))
