@@ -20,7 +20,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from app.api.routers.insurance import _response, _session as _insurance_session, _scope
 from app.api.settings import MAX_UPLOAD_BYTES
 from app.core.patient_store import get_patient_profile
-from app.core import object_store
+from app.core import object_store, staff_store
 from app.insurance import availity_intake as intake, availity_results as results, cpt_rules, cpt_suggester, ecw_backend, golden, store
 from app.insurance.availity import Settings, gateway, PATHS, DEMO_SCENARIOS, unwrap
 
@@ -354,7 +354,8 @@ async def create(body: Start, request: Request):
     if session.get("practice_id"):
         patient = session["intake"]["patient"]
         identity = {"patient_first_name": patient["given_name"], "patient_last_name": patient["family_name"],
-                    "patient_birth_date": patient["birth_date"], "gender": "U"}
+                    "patient_birth_date": patient["birth_date"], "gender": "U",
+                    "ecw_patient_id": patient.get("ecw_patient_id")}
     else:
         profile = await run_in_threadpool(get_patient_profile, session["patient_id"])
         if not profile:
@@ -375,8 +376,11 @@ async def create(body: Start, request: Request):
             raise HTTPException(502, "eClinicalWorks did not respond in time. Try again; if this continues, confirm that this practice activated the backend app.") from None
         except ecw_backend.EcwBackendError as exc:
             raise HTTPException(502, str(exc)) from exc
+        ecw_patient_id = source.pop("_patient_id", None)
         sources = {"ecw": source}
         if session.get("practice_id"):
+            if ecw_patient_id:
+                await run_in_threadpool(staff_store.set_ecw_patient_id, session["patient_id"], session["practice_id"], ecw_patient_id)
             validate_staff_coverage(session["intake"]["fields"], inputs, source, practice)
     try:
         case = await run_in_threadpool(store.create_case, session["patient_id"], session["share_manifest_id"], binding,

@@ -58,6 +58,7 @@ def _connection():
                     connection.execute("CREATE INDEX IF NOT EXISTS staff_patients_practice_idx ON staff_patients (practice_id, family_name, given_name, birth_date)")
                     connection.execute("ALTER TABLE staff_patients ADD COLUMN IF NOT EXISTS email TEXT")
                     connection.execute("ALTER TABLE staff_patients ADD COLUMN IF NOT EXISTS identity_status TEXT NOT NULL DEFAULT 'confirmed'")
+                    connection.execute("ALTER TABLE staff_patients ADD COLUMN IF NOT EXISTS ecw_patient_id TEXT")
                     connection.execute("""CREATE TABLE IF NOT EXISTS staff_intakes (
                         id TEXT PRIMARY KEY, practice_id TEXT NOT NULL, created_by TEXT NOT NULL REFERENCES staff_members(id),
                         patient_id TEXT REFERENCES staff_patients(id), status TEXT NOT NULL,
@@ -224,6 +225,14 @@ def get_patient(patient_id: str, practice_id: str) -> dict | None:
     with _connection() as connection:
         row = connection.execute("SELECT * FROM staff_patients WHERE id = %s AND practice_id = %s", (patient_id, practice_id)).fetchone()
     return dict(row) if row else None
+
+
+def set_ecw_patient_id(patient_id: str, practice_id: str, ecw_patient_id: str) -> None:
+    with _connection() as connection:
+        connection.execute(
+            "UPDATE staff_patients SET ecw_patient_id=%s WHERE id=%s AND practice_id=%s",
+            (ecw_patient_id, patient_id, practice_id),
+        )
 
 
 def get_intake(intake_id: str, practice_id: str) -> dict | None:
