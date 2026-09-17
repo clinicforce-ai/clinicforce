@@ -16,10 +16,11 @@ import httpx
 from app.ingestion import ecw
 
 
+# This clinic's eCW backend registration does not grant ChargeItem. The query
+# remains optional below and degrades to missing charge data on a 403.
 SCOPES = (
     "system/Patient.read", "system/Coverage.read", "system/Encounter.read",
-    "system/ServiceRequest.read", "system/ChargeItem.read",
-    "system/Condition.read", "system/RelatedPerson.read", "system/Organization.read",
+    "system/ServiceRequest.read", "system/Condition.read", "system/RelatedPerson.read", "system/Organization.read",
     "system/Practitioner.read", "system/Location.read",
 )
 
