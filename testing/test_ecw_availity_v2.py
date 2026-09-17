@@ -1,11 +1,12 @@
 """One end-to-end mapping check for the eCW backend insurance source."""
 
+import asyncio
 from datetime import datetime, timedelta
 from pathlib import Path
 import os
 import sys
 import unittest
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 from zoneinfo import ZoneInfo
 
 import httpx
@@ -17,6 +18,12 @@ from app.ingestion import ecw
 
 
 class EcwBackendSourceTests(unittest.IsolatedAsyncioTestCase):
+    async def test_slow_supporting_reference_becomes_an_explicit_gap(self):
+        with patch.object(ecw_backend, "_read", new=AsyncMock(side_effect=asyncio.TimeoutError)):
+            resource, timed_out = await ecw_backend._bounded_read(None, "", "", "Organization/payer-1")
+        self.assertEqual(resource, {})
+        self.assertEqual(timed_out, "Organization")
+
     async def test_backend_token_and_fhir_resources_become_availity_inputs(self):
         today_date = datetime.now(ZoneInfo("America/New_York")).date()
         today = today_date.isoformat()
@@ -69,6 +76,7 @@ class EcwBackendSourceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(inputs["provider"]["npi"], "1234567893")
         self.assertEqual(source["appointment_date"], today)
         self.assertEqual(source["_patient_id"], "patient-1")
+        self.assertEqual(source["timed_out_resources"], [])
         self.assertNotIn("system/Appointment.read", ecw_backend.SCOPES)
         self.assertNotIn("system/ChargeItem.read", ecw_backend.SCOPES)
         token_request = next(request for request in requests if request.url.path == "/token")
