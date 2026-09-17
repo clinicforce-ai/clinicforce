@@ -200,6 +200,13 @@ class StaffInsuranceBridgeTests(unittest.IsolatedAsyncioTestCase):
             blocked = await self.client.post(f"/api/doctor/insurance/v2/cases/{response.json()['id']}/transactions/coverage", headers=headers)
             self.assertEqual(blocked.status_code, 409, "Real eCW data must never be sent to Availity demo")
             self.assertIn("No patient data was submitted", blocked.text)
+            async def slow_fetch(*_args):
+                await asyncio.sleep(1)
+            with patch.object(insurance_v2, "ECW_FETCH_TIMEOUT_SECONDS", 0.01), \
+                    patch.object(insurance_v2.ecw_backend, "fetch_inputs", side_effect=slow_fetch):
+                timed_out = await self.client.post("/api/doctor/insurance/v2/cases", headers=headers, json={})
+            self.assertEqual(timed_out.status_code, 502, timed_out.text)
+            self.assertIn("did not respond in time", timed_out.text)
 
     async def test_v2_fee_original_persists_and_conflict_cleans_only_new_object(self):
         intake = self.intake()
