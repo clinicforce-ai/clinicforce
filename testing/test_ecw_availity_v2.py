@@ -1,6 +1,6 @@
 """One end-to-end mapping check for the eCW backend insurance source."""
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 import os
 import sys
@@ -18,7 +18,8 @@ from app.ingestion import ecw
 
 class EcwBackendSourceTests(unittest.IsolatedAsyncioTestCase):
     async def test_backend_token_and_fhir_resources_become_availity_inputs(self):
-        today = datetime.now(ZoneInfo("America/New_York")).date().isoformat()
+        today_date = datetime.now(ZoneInfo("America/New_York")).date()
+        today = today_date.isoformat()
         metadata = {"resourceType": "CapabilityStatement", "rest": [{"security": {"extension": [{
             "url": "http://fhir-registry.smarthealthit.org/StructureDefinition/oauth-uris",
             "extension": [{"url": "token", "valueUri": "https://auth.example.test/token"}],
@@ -76,7 +77,8 @@ class EcwBackendSourceTests(unittest.IsolatedAsyncioTestCase):
         patient_request = next(request for request in requests if request.url.path == "/fhir/Patient" and request.method == "GET")
         self.assertEqual(dict(patient_request.url.params), {"family": "Example", "birthdate": "1980-01-01"})
         encounter_request = next(request for request in requests if request.url.path == "/fhir/Encounter")
-        self.assertEqual(encounter_request.url.params["date"], f"ge{today}")
+        self.assertEqual(encounter_request.url.params.get_list("date"),
+                         [f"ge{today}", f"le{today_date + timedelta(days=365)}"])
         charge_request = next(request for request in requests if request.url.path == "/fhir/ChargeItem")
         self.assertEqual(charge_request.url.params["context"], "Encounter/encounter-1")
         self.assertEqual(charge_request.url.params["subject"], "Patient/patient-1")

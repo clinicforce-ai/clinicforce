@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import os
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 from typing import Any
 from urllib.parse import urlparse
@@ -115,7 +115,7 @@ def _entries(bundle: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 async def _search(client: httpx.AsyncClient, issuer: str, token: str, resource: str,
-                  params: dict[str, str]) -> list[dict[str, Any]]:
+                  params: dict[str, str] | list[tuple[str, str]]) -> list[dict[str, Any]]:
     response = await client.get(f"{issuer}/{resource}", params=params,
                                 headers={"Authorization": f"Bearer {token}", "Accept": "application/fhir+json"})
     if response.status_code in {403, 404}:
@@ -303,10 +303,13 @@ async def fetch_inputs(profile: dict[str, Any], practice: dict[str, Any], *, tra
             if not re.fullmatch(r"[A-Za-z0-9.\-]{1,200}", patient_id):
                 raise EcwBackendError("eClinicalWorks returned an invalid patient identifier.")
             query = {"patient": patient_id}
-            today = datetime.now(ZoneInfo(practice.get("timezone", "America/New_York"))).date().isoformat()
+            today_date = datetime.now(ZoneInfo(practice.get("timezone", "America/New_York"))).date()
+            today = today_date.isoformat()
+            # ponytail: Bound eCW's slow open-ended search; widen if clinics schedule over a year ahead.
+            encounter_dates = [("date", f"ge{today}"), ("date", f"le{today_date + timedelta(days=365)}")]
             coverage_rows, encounters, orders, conditions = await asyncio.gather(
                 _search(client, issuer, token, "Coverage", query),
-                _search(client, issuer, token, "Encounter", {**query, "date": f"ge{today}"}),
+                _search(client, issuer, token, "Encounter", [("patient", patient_id), *encounter_dates]),
                 _search(client, issuer, token, "ServiceRequest", query),
                 _search(client, issuer, token, "Condition", query),
             )
