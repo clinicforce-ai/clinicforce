@@ -253,6 +253,7 @@ class StaffInsuranceBridgeTests(unittest.IsolatedAsyncioTestCase):
                 insurance_v2.validate_staff_coverage(confirmed, inputs, {"payer": "Synthetic payer"}, practice)
         for confirmed in ({"payer": "SYNTHETIC"}, {"payer": "Synthetic payer"}, {"payer": "Approved alias"}):
             insurance_v2.validate_staff_coverage(confirmed, inputs, {"payer": "Synthetic payer"}, {"payer_aliases": {"Approved alias": "SYNTHETIC"}})
+        insurance_v2.validate_staff_coverage({"payer": "Card payer"}, {**inputs, "payer_id": None}, {"payer": None}, practice)
 
 
 if __name__ == "__main__":
