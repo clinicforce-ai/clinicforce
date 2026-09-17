@@ -27,6 +27,7 @@ from app.insurance.availity import Settings, gateway, PATHS, DEMO_SCENARIOS, unw
 
 router = APIRouter(prefix="/api/doctor/insurance/v2", tags=["doctor-insurance-v2"])
 Resource = Literal["coverage", "estimate", "procedure_estimate", "authorization", "referral"]
+ECW_FETCH_TIMEOUT_SECONDS = 25
 
 
 async def _session(request: Request) -> dict:
@@ -367,7 +368,11 @@ async def create(body: Start, request: Request):
         if not ecw_backend.configured():
             raise HTTPException(503, "The eClinicalWorks practice connection is temporarily unavailable.")
         try:
-            inputs, missing, source = await ecw_backend.fetch_inputs(identity, practice)
+            inputs, missing, source = await asyncio.wait_for(
+                ecw_backend.fetch_inputs(identity, practice), timeout=ECW_FETCH_TIMEOUT_SECONDS,
+            )
+        except asyncio.TimeoutError:
+            raise HTTPException(502, "eClinicalWorks did not respond in time. Try again; if this continues, confirm that this practice activated the backend app.") from None
         except ecw_backend.EcwBackendError as exc:
             raise HTTPException(502, str(exc)) from exc
         sources = {"ecw": source}
