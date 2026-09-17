@@ -64,6 +64,7 @@ class EcwBackendSourceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(missing, ["eClinicalWorks FHIR did not return each billed line amount required by Availity PCE. Enable the practice-management/billing API field for this app; Availity does not supply this request input."])
         self.assertEqual((inputs["member_id"], inputs["payer_id"], inputs["relationship"]), ("MEMBER123", "TESTPAYER", "18"))
         self.assertEqual(inputs["lines"], [{"code": "99204", "units": "1", "charge": None, "modifiers": [], "diagnosis": "G629", "service_status": "scheduled"}])
+        self.assertEqual(inputs["reason"], "Reason: Neuropathy consultation; Planned service: 99204; Order reason: G62.9")
         self.assertEqual(inputs["provider"]["npi"], "1234567893")
         self.assertEqual(source["appointment_date"], today)
         self.assertNotIn("system/Appointment.read", ecw_backend.SCOPES)

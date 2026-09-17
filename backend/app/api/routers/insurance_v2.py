@@ -83,7 +83,12 @@ class ConfirmServices(BaseModel):
 def configuration() -> tuple[Settings, dict, str]:
     try:
         settings = Settings.read()
-        practice = {} if settings.environment == "demo" else json.loads(os.getenv("AVAILITY_PRACTICE_CONFIG", "{}"))
+        try:
+            practice = json.loads(os.getenv("AVAILITY_PRACTICE_CONFIG", "{}"))
+        except json.JSONDecodeError:
+            if settings.environment != "demo":
+                raise
+            practice = {}
         if not isinstance(practice, dict):
             raise ValueError
         providers = practice.get("providers", {})
@@ -134,6 +139,11 @@ async def save(case: dict, session: dict, event: str) -> dict:
 def idle(case: dict) -> None:
     if case.get("operation_until", 0) > time.time() or any(t.get("outcome") == "submitting" for t in case["transactions"].values()):
         raise HTTPException(409, "An Availity operation is in progress. Refresh the saved case; do not submit a duplicate.")
+
+
+def require_payer_requests(case: dict) -> None:
+    if case.get("input_mode") == "ecw" and case.get("environment") != "production":
+        raise HTTPException(409, "The live eClinicalWorks appointment is loaded, but Availity is still in demo. No patient data was submitted; activate the production Availity connection to run payer checks.")
 
 
 def demo_inputs() -> dict:
@@ -304,13 +314,16 @@ def front_desk_summary(case: dict) -> dict:
 
 @router.get("/configuration")
 async def get_configuration(request: Request):
-    await _session(request)
+    session = await _session(request)
     settings, practice, _ = configuration()
+    staff_ecw = bool(session.get("practice_id")) and settings.environment == "demo"
     return _response({"environment": settings.environment, "credentials_configured": bool(settings.client_id and settings.client_secret),
                       "practice_configured": bool(practice.get("providers") and practice.get("submitter_id")),
-                      "ecw_configured": settings.environment == "demo" or ecw_backend.configured(),
+                      "ecw_configured": ecw_backend.configured() if session.get("practice_id") or settings.environment == "production" else True,
                       "production_enabled": settings.environment == "production" and practice.get("production_enabled") is True,
-                      "message": "Synthetic transactions only; demo results do not describe the QR patient." if settings.environment == "demo" else "ClinicForce loads the scheduled patient, coverage, providers and coded services from eClinicalWorks, then sends the reviewed request to Availity."})
+                      "message": ("ClinicForce will load the live eClinicalWorks appointment. Availity payer checks remain disabled while its connection is in demo."
+                                  if staff_ecw else "Synthetic transactions only; demo results do not describe the QR patient."
+                                  if settings.environment == "demo" else "ClinicForce loads the scheduled patient, coverage, providers and coded services from eClinicalWorks, then sends the reviewed request to Availity.")})
 
 
 @router.get("/cases/latest")
@@ -325,8 +338,6 @@ async def latest(request: Request):
 async def create(body: Start, request: Request):
     session = await _session(request)
     settings, practice, binding = configuration()
-    if session.get("practice_id") and settings.environment != "production":
-        raise HTTPException(409, "Live Availity verification is not activated. Your intake is saved; use document review. Synthetic demo results cannot verify this patient.")
     if settings.environment == "production" and practice.get("production_enabled") is not True:
         raise HTTPException(409, "An administrator must finish Availity contracting, enrollment and practice setup, then enable production in AVAILITY_PRACTICE_CONFIG.")
     if session.get("practice_id"):
@@ -339,7 +350,8 @@ async def create(body: Start, request: Request):
             raise HTTPException(422, "The QR patient profile is missing")
         identity = {"patient_first_name": profile.given_name, "patient_last_name": profile.family_name,
                     "patient_birth_date": profile.birth_date, "gender": {"male": "M", "female": "F"}.get(profile.administrative_gender, "U")}
-    if settings.environment == "demo":
+    use_ecw = bool(session.get("practice_id")) or settings.environment == "production"
+    if not use_ecw:
         inputs, missing, sources = demo_inputs(), [], {}
     else:
         if not ecw_backend.configured():
@@ -354,7 +366,7 @@ async def create(body: Start, request: Request):
     try:
         case = await run_in_threadpool(store.create_case, session["patient_id"], session["share_manifest_id"], binding,
                                        {"source_mode": "availity", "binding": binding, "environment": settings.environment,
-                                        "input_mode": "synthetic" if settings.environment == "demo" else "ecw",
+                                        "input_mode": "ecw" if use_ecw else "synthetic",
                                         "revision": 0, "profile": identity, "sources": sources, "inputs": inputs, "missing": missing,
                                         "transactions": {}, "discovery": {}, "events": [], "scenario": body.scenario},
                                        **({"expected_intake_updated_at": session["intake"]["updated_at"]} if session.get("practice_id") else {}),
@@ -491,6 +503,7 @@ async def requirements(case_id: str, request: Request):
     session = await _session(request)
     settings, _, binding = configuration()
     case = await load(case_id, session, binding)
+    require_payer_requests(case)
     idle(case)
     payer = case["inputs"].get("payer_id")
     if not payer:
@@ -595,6 +608,7 @@ async def submit(case_id: str, resource: Resource, request: Request):
     session = await _session(request)
     settings, practice, binding = configuration()
     case = await load(case_id, session, binding)
+    require_payer_requests(case)
     existing = case["transactions"].get(resource)
     if existing:
         # A repeated POST is always a read, including after a timeout or process crash.
@@ -642,6 +656,7 @@ async def refresh(case_id: str, resource: Resource, request: Request):
     session = await _session(request)
     settings, _, binding = configuration()
     case = await load(case_id, session, binding)
+    require_payer_requests(case)
     transaction = case["transactions"].get(resource, {})
     if not transaction.get("resource_id") or transaction.get("outcome") not in {"pending", "unavailable"}:
         return _response(public(case))
@@ -665,6 +680,7 @@ async def retry_rejected(case_id: str, resource: Resource, request: Request):
     session = await _session(request)
     _, _, binding = configuration()
     case = await load(case_id, session, binding)
+    require_payer_requests(case)
     idle(case)
     previous = case["transactions"].get(resource, {})
     if previous.get("http_status") not in {401, 403, 429} or previous.get("resource_id"):

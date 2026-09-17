@@ -78,6 +78,11 @@ class ResultsAndIntakeTests(unittest.TestCase):
             configured, practice, _ = v2.configuration()
         self.assertEqual(configured.environment, 'demo')
         self.assertEqual(practice, {})
+        expected = {'timezone': 'America/Chicago', 'payer_aliases': {'Test plan': 'TEST'}}
+        with patch.dict(os.environ, {'AVAILITY_ENVIRONMENT': 'demo', 'AVAILITY_SCOPE': DEMO_SCOPE,
+                                     'AVAILITY_PRACTICE_CONFIG': json.dumps(expected)}):
+            _, practice, _ = v2.configuration()
+        self.assertEqual(practice, expected)
 
     def test_only_complete_matching_payer_estimates_become_a_total(self):
         expected = [{'code': '99204', 'charge': '300.00', 'units': '1', 'modifiers': []}]
