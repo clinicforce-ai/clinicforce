@@ -196,7 +196,9 @@ class StaffInsuranceBridgeTests(unittest.IsolatedAsyncioTestCase):
             response = await self.client.post("/api/doctor/insurance/v2/cases", headers=headers, json={})
             self.assertEqual(response.status_code, 200, response.text)
             self.assertEqual(response.json()["inputs"]["patient"]["patient_first_name"], "Pat")
-            fetch.assert_awaited_once_with({"patient_first_name": "Pat", "patient_last_name": "Example", "patient_birth_date": "1990-01-01", "gender": "U"}, practice)
+            fetch.assert_awaited_once_with({"patient_first_name": "Pat", "patient_last_name": "Example",
+                                            "patient_birth_date": "1990-01-01", "gender": "U",
+                                            "ecw_patient_id": None}, practice)
             blocked = await self.client.post(f"/api/doctor/insurance/v2/cases/{response.json()['id']}/transactions/coverage", headers=headers)
             self.assertEqual(blocked.status_code, 409, "Real eCW data must never be sent to Availity demo")
             self.assertIn("No patient data was submitted", blocked.text)

@@ -289,11 +289,17 @@ async def fetch_inputs(profile: dict[str, Any], practice: dict[str, Any], *, tra
     try:
         async with httpx.AsyncClient(timeout=30, follow_redirects=False, transport=transport) as client:
             token = await _access_token(client, client_id, issuer)
-            patient_rows = await _search(client, issuer, token, "Patient", {
-                "given": str(profile.get("patient_first_name") or ""),
-                "family": str(profile.get("patient_last_name") or ""),
-                "birthdate": str(profile.get("patient_birth_date") or ""),
-            })
+            cached_patient_id = str(profile.get("ecw_patient_id") or "")
+            if cached_patient_id:
+                if not re.fullmatch(r"[A-Za-z0-9.\-]{1,200}", cached_patient_id):
+                    raise EcwBackendError("The saved eClinicalWorks patient link is invalid.")
+                patient_rows = [await _read(client, issuer, token, f"Patient/{cached_patient_id}")]
+            else:
+                patient_rows = await _search(client, issuer, token, "Patient", {
+                    "given": str(profile.get("patient_first_name") or ""),
+                    "family": str(profile.get("patient_last_name") or ""),
+                    "birthdate": str(profile.get("patient_birth_date") or ""),
+                })
             matches = [row for row in patient_rows if _norm(_name(row)[0]) == _norm(profile.get("patient_first_name"))
                        and _norm(_name(row)[1]) == _norm(profile.get("patient_last_name"))
                        and row.get("birthDate") == profile.get("patient_birth_date")]
@@ -446,6 +452,7 @@ async def fetch_inputs(profile: dict[str, Any], practice: dict[str, Any], *, tra
     inputs["coverage_missing"] = list(dict.fromkeys(coverage_missing))
     inputs["review_missing"] = list(dict.fromkeys(review_missing))
     source = {"system": "eClinicalWorks", "retrieved_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+              "_patient_id": patient_id,
               "appointment_date": service_date, "appointment_status": visit.get("status"),
               "payer": _display(payer), "location": location.get("name"),
               "resources": {"Coverage": len(coverage_rows), "Encounter": len(encounters),

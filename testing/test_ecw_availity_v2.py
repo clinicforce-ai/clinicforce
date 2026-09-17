@@ -68,6 +68,7 @@ class EcwBackendSourceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(inputs["reason"], "Reason: Neuropathy consultation; Planned service: 99204; Order reason: G62.9")
         self.assertEqual(inputs["provider"]["npi"], "1234567893")
         self.assertEqual(source["appointment_date"], today)
+        self.assertEqual(source["_patient_id"], "patient-1")
         self.assertNotIn("system/Appointment.read", ecw_backend.SCOPES)
         self.assertNotIn("system/ChargeItem.read", ecw_backend.SCOPES)
         token_request = next(request for request in requests if request.url.path == "/token")
@@ -83,6 +84,16 @@ class EcwBackendSourceTests(unittest.IsolatedAsyncioTestCase):
         charge_request = next(request for request in requests if request.url.path == "/fhir/ChargeItem")
         self.assertEqual(charge_request.url.params["context"], "Encounter/encounter-1")
         self.assertEqual(charge_request.url.params["subject"], "Patient/patient-1")
+
+        requests.clear()
+        with patch.dict(os.environ, environment), patch.object(ecw, "ECW_KMS_KEY_ID", "kms-key"), patch.object(ecw, "_client_assertion", return_value="signed-assertion"):
+            await ecw_backend.fetch_inputs(
+                {"patient_first_name": "Pat", "patient_last_name": "Example",
+                 "patient_birth_date": "1980-01-01", "ecw_patient_id": "patient-1"},
+                practice, transport=httpx.MockTransport(handler),
+            )
+        self.assertTrue(any(request.url.path == "/fhir/Patient/patient-1" for request in requests))
+        self.assertFalse(any(request.url.path == "/fhir/Patient" for request in requests))
 
 
 if __name__ == "__main__":
