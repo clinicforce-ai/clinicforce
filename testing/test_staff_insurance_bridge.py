@@ -187,7 +187,7 @@ class StaffInsuranceBridgeTests(unittest.IsolatedAsyncioTestCase):
         inputs["subscriber"] = {"firstName": "Pat", "lastName": "Example", "birthDate": "1990-01-01", "memberId": "MEM123"}
         practice = {"payer_aliases": {"Synthetic payer": "SYNTHETIC"}}
         ecw_result = (inputs, [], {"system": "eClinicalWorks", "payer": "Synthetic payer", "appointment_date": "2026-09-17"})
-        with patch.dict(os.environ, {"STAFF_INTEGRATION_PRACTICE_ID": intake["practice_id"]}), \
+        with patch.dict(os.environ, {"STAFF_INTEGRATION_PRACTICE_ID": "", "STAFF_INTEGRATION_PRACTICE_IDS": f"primary, {intake['practice_id']}"}), \
                 patch.object(insurance_v2, "configuration", return_value=(SimpleNamespace(environment="demo", client_id="", client_secret=""), practice, "synthetic")), \
                 patch.object(insurance_v2.ecw_backend, "configured", return_value=True), \
                 patch.object(insurance_v2.ecw_backend, "fetch_inputs", new=AsyncMock(return_value=ecw_result)) as fetch:

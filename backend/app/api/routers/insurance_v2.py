@@ -32,8 +32,12 @@ Resource = Literal["coverage", "estimate", "procedure_estimate", "authorization"
 async def _session(request: Request) -> dict:
     session = await _insurance_session(request)
     if session.get("practice_id"):
-        configured_practice = os.getenv("STAFF_INTEGRATION_PRACTICE_ID", "").strip()
-        if not configured_practice or configured_practice != session["practice_id"]:
+        configured = os.getenv("STAFF_INTEGRATION_PRACTICE_IDS", "").strip()
+        if configured:
+            configured_practices = {value.strip() for value in configured.split(",") if value.strip()}
+        else:
+            configured_practices = {os.getenv("STAFF_INTEGRATION_PRACTICE_ID", "").strip()}
+        if session["practice_id"] not in configured_practices:
             raise HTTPException(403, "Connected insurance is not configured for this clinic. Your intake is saved; use document review.")
     return session
 
