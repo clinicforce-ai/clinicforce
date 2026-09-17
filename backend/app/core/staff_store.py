@@ -378,8 +378,11 @@ def confirm_patient(intake_id: str, staff: dict, data: dict) -> dict | None:
             automatic = connection.execute("SELECT * FROM staff_patients WHERE id=%s AND practice_id=%s FOR UPDATE", (intake["auto_patient_id"], staff["practice_id"])).fetchone()
         if not patient_id and automatic and automatic["identity_status"] == "unverified":
             patient_id = automatic["id"]
-            connection.execute("UPDATE staff_patients SET given_name=%s,family_name=%s,birth_date=%s WHERE id=%s AND practice_id=%s",
-                               (data["given_name"], data["family_name"], data["birth_date"], patient_id, staff["practice_id"]))
+            connection.execute("""UPDATE staff_patients SET given_name=%s,family_name=%s,birth_date=%s,
+                               ecw_patient_id=CASE WHEN %s THEN NULL ELSE ecw_patient_id END
+                               WHERE id=%s AND practice_id=%s""",
+                               (data["given_name"], data["family_name"], data["birth_date"], identity_changed,
+                                patient_id, staff["practice_id"]))
             if identity_changed:
                 connection.execute("UPDATE staff_intakes SET source_portal_patient_id=NULL WHERE auto_patient_id=%s AND practice_id=%s", (patient_id, staff["practice_id"]))
         if patient_id:

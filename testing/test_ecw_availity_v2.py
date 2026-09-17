@@ -18,6 +18,15 @@ from app.ingestion import ecw
 
 
 class EcwBackendSourceTests(unittest.IsolatedAsyncioTestCase):
+    async def test_slow_cached_patient_read_uses_the_verified_link(self):
+        profile = {"patient_first_name": "Pat", "patient_last_name": "Example",
+                   "patient_birth_date": "1980-01-01", "gender": "F"}
+        with patch.object(ecw_backend, "_read", new=AsyncMock(side_effect=asyncio.TimeoutError)):
+            patient, timed_out = await ecw_backend._cached_patient(None, "", "", "patient-1", profile)
+        self.assertEqual((patient["id"], patient["birthDate"], patient["gender"]),
+                         ("patient-1", "1980-01-01", "female"))
+        self.assertEqual(timed_out, "Patient")
+
     async def test_slow_supporting_reference_becomes_an_explicit_gap(self):
         with patch.object(ecw_backend, "_read", new=AsyncMock(side_effect=asyncio.TimeoutError)):
             resource, timed_out = await ecw_backend._bounded_read(None, "", "", "Organization/payer-1")
