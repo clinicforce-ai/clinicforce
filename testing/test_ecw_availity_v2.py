@@ -68,6 +68,7 @@ class EcwBackendSourceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(inputs["provider"]["npi"], "1234567893")
         self.assertEqual(source["appointment_date"], today)
         self.assertNotIn("system/Appointment.read", ecw_backend.SCOPES)
+        self.assertNotIn("system/ChargeItem.read", ecw_backend.SCOPES)
         token_request = next(request for request in requests if request.url.path == "/token")
         self.assertIn("grant_type=client_credentials", token_request.content.decode())
         self.assertNotIn("private-token", str(source))
