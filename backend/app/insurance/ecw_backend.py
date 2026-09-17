@@ -200,16 +200,34 @@ def _display(resource: dict[str, Any]) -> str | None:
     return " ".join(x for x in (given, family) if x) or None
 
 
-def _reason(resource: dict[str, Any]) -> str | None:
-    for reason in resource.get("reasonCode", []):
-        if not isinstance(reason, dict):
+def _concept_labels(value: Any) -> list[str]:
+    concepts = value if isinstance(value, list) else [value]
+    labels: list[str] = []
+    for concept in concepts:
+        if not isinstance(concept, dict):
             continue
-        if reason.get("text"):
-            return str(reason["text"])
-        for coding in reason.get("coding", []):
-            if isinstance(coding, dict) and coding.get("display"):
-                return str(coding["display"])
-    return None
+        if concept.get("text"):
+            labels.append(str(concept["text"]))
+        for coding in concept.get("coding") or []:
+            if isinstance(coding, dict) and (coding.get("display") or coding.get("code")):
+                labels.append(str(coding.get("display") or coding["code"]))
+    return labels
+
+
+def _visit_context(visit: dict[str, Any], orders: list[dict[str, Any]], conditions: list[dict[str, Any]]) -> str | None:
+    """Keep exact eCW visit details together for clinician-reviewed CPT suggestions."""
+    details: list[str] = []
+    fields = (("Reason", visit.get("reasonCode")), ("Visit type", visit.get("type")),
+              ("Service", visit.get("serviceType")))
+    for label, value in fields:
+        details.extend(f"{label}: {text}" for text in _concept_labels(value))
+    for order in orders:
+        details.extend(f"Planned service: {text}" for text in _concept_labels(order.get("code")))
+        details.extend(f"Order reason: {text}" for text in _concept_labels(order.get("reasonCode")))
+    for condition in conditions:
+        details.extend(f"Linked condition: {text}" for text in _concept_labels(condition.get("code")))
+    unique = list(dict.fromkeys(" ".join(detail.split()) for detail in details if detail.strip()))
+    return "; ".join(unique)[:2000] or None
 
 
 def _payer_id(payer: dict[str, Any], aliases: Any) -> str | None:
@@ -279,7 +297,7 @@ async def fetch_inputs(profile: dict[str, Any], practice: dict[str, Any], *, tra
                        and _norm(_name(row)[1]) == _norm(profile.get("patient_last_name"))
                        and row.get("birthDate") == profile.get("patient_birth_date")]
             if len(matches) != 1:
-                raise EcwBackendError("eClinicalWorks did not return exactly one patient matching the QR name and birth date.")
+                raise EcwBackendError("eClinicalWorks did not return exactly one patient matching the confirmed patient name and birth date.")
             patient = matches[0]
             patient_id = str(patient.get("id", ""))
             if not re.fullmatch(r"[A-Za-z0-9.\-]{1,200}", patient_id):
@@ -380,7 +398,7 @@ async def fetch_inputs(profile: dict[str, Any], practice: dict[str, Any], *, tra
                 "rendering_provider": {**rendering, "npi": rendering_npi},
                 "service_type": location_config.get("service_type"), "service_date": service_date,
                 "place_of_service": location_config.get("place_of_service"), "diagnoses": diagnoses,
-                "patient_phone": _phone(patient), "reason": _reason(visit),
+                "patient_phone": _phone(patient), "reason": _visit_context(visit, relevant_orders, relevant_conditions),
                 "lines": list(lines.values()),
             }
     except httpx.HTTPError as exc:

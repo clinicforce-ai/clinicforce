@@ -171,7 +171,7 @@ class StaffInsuranceBridgeTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(store.get_case(legacy["id"], "legacy", "legacy-share"))
         self.assertEqual(staff_store.get_intake(intake["id"], intake["practice_id"])["documents"][0]["object_key"], "staff-insurance/synthetic-original")
 
-    async def test_v2_practice_binding_blocks_every_entry_before_connector_access(self):
+    async def test_v2_practice_binding_and_demo_ecw_preview(self):
         intake = self.intake()
         headers = {"X-ClinicForce-Intake": intake["id"]}
         paths = [("GET", "/configuration"), ("GET", "/cases/latest"), ("POST", "/cases"), ("GET", "/cases/unknown"), ("POST", "/cases/unknown/transactions/coverage")]
@@ -181,10 +181,25 @@ class StaffInsuranceBridgeTests(unittest.IsolatedAsyncioTestCase):
                     response = await self.client.request(method, "/api/doctor/insurance/v2" + path, headers=headers, **({"json": {}} if path == "/cases" else {}))
                     self.assertEqual(response.status_code, 403, response.text)
                 config.assert_not_called()
-        with patch.dict(os.environ, {"STAFF_INTEGRATION_PRACTICE_ID": intake["practice_id"]}), patch.object(insurance_v2, "configuration", return_value=(SimpleNamespace(environment="demo", client_id="", client_secret=""), {}, "synthetic")):
-            self.assertEqual((await self.client.get("/api/doctor/insurance/v2/configuration", headers=headers)).status_code, 200)
+        inputs = insurance_v2.demo_inputs()
+        inputs.update(member_id="MEM123", group_number="GROUP", payer_id="SYNTHETIC", relationship="18")
+        inputs["patient"] = {"patient_first_name": "Pat", "patient_last_name": "Example", "patient_birth_date": "1990-01-01", "gender": "U"}
+        inputs["subscriber"] = {"firstName": "Pat", "lastName": "Example", "birthDate": "1990-01-01", "memberId": "MEM123"}
+        practice = {"payer_aliases": {"Synthetic payer": "SYNTHETIC"}}
+        ecw_result = (inputs, [], {"system": "eClinicalWorks", "payer": "Synthetic payer", "appointment_date": "2026-09-17"})
+        with patch.dict(os.environ, {"STAFF_INTEGRATION_PRACTICE_ID": intake["practice_id"]}), \
+                patch.object(insurance_v2, "configuration", return_value=(SimpleNamespace(environment="demo", client_id="", client_secret=""), practice, "synthetic")), \
+                patch.object(insurance_v2.ecw_backend, "configured", return_value=True), \
+                patch.object(insurance_v2.ecw_backend, "fetch_inputs", new=AsyncMock(return_value=ecw_result)) as fetch:
+            configuration = await self.client.get("/api/doctor/insurance/v2/configuration", headers=headers)
+            self.assertTrue(configuration.json()["ecw_configured"])
             response = await self.client.post("/api/doctor/insurance/v2/cases", headers=headers, json={})
-            self.assertEqual(response.status_code, 409, "Demo output must never verify a saved real-patient intake")
+            self.assertEqual(response.status_code, 200, response.text)
+            self.assertEqual(response.json()["inputs"]["patient"]["patient_first_name"], "Pat")
+            fetch.assert_awaited_once_with({"patient_first_name": "Pat", "patient_last_name": "Example", "patient_birth_date": "1990-01-01", "gender": "U"}, practice)
+            blocked = await self.client.post(f"/api/doctor/insurance/v2/cases/{response.json()['id']}/transactions/coverage", headers=headers)
+            self.assertEqual(blocked.status_code, 409, "Real eCW data must never be sent to Availity demo")
+            self.assertIn("No patient data was submitted", blocked.text)
 
     async def test_v2_fee_original_persists_and_conflict_cleans_only_new_object(self):
         intake = self.intake()

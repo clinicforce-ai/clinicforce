@@ -103,14 +103,15 @@ export default function InsuranceVerificationV2({ onBack, staffMode = false, onU
   }, [insuranceCase, busy, error, perform])
 
   const demo = config?.environment === 'demo'
+  const ecwPreview = staffMode && demo
   const coverage = insuranceCase?.transactions.coverage
   const coverageDone = coverage?.outcome === 'complete'
-  const coverageActive = demo || coverage?.result?.active === true
+  const coverageActive = !ecwPreview && (demo || coverage?.result?.active === true)
   const servicesLocked = !!insuranceCase && (['estimate', 'procedure_estimate', 'authorization', 'referral'] as V2Resource[]).some(resource => !!insuranceCase.transactions[resource])
   const hasPending = !!insuranceCase && resources.some(resource => ['submitting', 'pending'].includes(insuranceCase.transactions[resource.id]?.outcome || ''))
 
   const run = (resource: V2Resource) => {
-    if (!insuranceCase) return
+    if (!insuranceCase || ecwPreview) return
     void perform(`Sending ${resources.find(item => item.id === resource)?.label.toLowerCase()} to Availity…`, async () => {
       let current = insuranceCase
       if (!demo && !current.discovery.checked_at) current = await getV2Requirements(current.id)
@@ -120,7 +121,10 @@ export default function InsuranceVerificationV2({ onBack, staffMode = false, onU
 
   const uploadFees = (file: File) => {
     if (!insuranceCase) return
-    void perform('Reading clinic prices…', () => uploadV2Document(insuranceCase.id, 'fees', file))
+    void perform('Reading clinic prices and suggesting services…', async () => {
+      const updated = await uploadV2Document(insuranceCase.id, 'fees', file)
+      return updated.inputs.reason ? suggestV2Services(updated.id) : updated
+    })
   }
 
   const toggle = (code: string, groupCodes: string[], single: boolean) => {
@@ -153,7 +157,7 @@ export default function InsuranceVerificationV2({ onBack, staffMode = false, onU
     catch { setError('The browser could not copy the summary. Select the result and copy it manually.') }
   }
 
-  if (config && ((staffMode && demo) || !config.credentials_configured || (!demo && (!config.production_enabled || !config.ecw_configured)))) {
+  if (config && (staffMode && demo ? !config.ecw_configured : !config.credentials_configured || (!demo && (!config.production_enabled || !config.ecw_configured)))) {
     return <section className="insurance-beta insurance-v2" aria-labelledby="insurance-v2-unavailable">
       <button className="back-control" type="button" onClick={onBack}><ArrowLeft aria-hidden="true" className="size-4" /> {staffMode ? 'Back to patient insurance' : 'Back to clinical summary'}</button>
       <div className="panel"><p className="eyebrow"><ShieldCheck aria-hidden="true" size={17} /> Insurance verification</p><h1 id="insurance-v2-unavailable">Live insurance verification is unavailable</h1><p>{staffMode ? 'Your patient intake and card are saved. Use uploaded documents while the clinic completes its live connection setup.' : 'You can continue reviewing the patient’s shared record.'}</p>{onUseDocuments && <button className="button button-primary" type="button" onClick={onUseDocuments}>Use uploaded documents</button>}</div>
@@ -163,8 +167,8 @@ export default function InsuranceVerificationV2({ onBack, staffMode = false, onU
   return <section className="insurance-beta insurance-v2" aria-labelledby="insurance-v2-heading">
     <button className="back-control" type="button" onClick={onBack}><ArrowLeft aria-hidden="true" className="size-4" /> {staffMode ? 'Back to patient insurance' : 'Back to clinical summary'}</button>
     <header className="insurance-beta-hero v2-hero">
-      <div><p className="eyebrow"><ShieldCheck aria-hidden="true" size={17} /> Front-desk insurance decision</p><h1 id="insurance-v2-heading">Know what to do before the patient is scheduled.</h1><p>ClinicForce reads the visit from eClinicalWorks and gets coverage, review decisions, and insured pricing from Availity.</p></div>
-      <div className="beta-session"><span><i aria-hidden="true" /> {config ? `${demo ? 'Demo' : 'Production'} environment` : 'Connecting'}</span><strong>{demo ? 'Synthetic Availity patient' : 'Live patient inquiry'}</strong><small>{demo ? 'Training data only' : staffMode ? 'Saved to the clinic patient record' : 'Saved for this QR session'}</small></div>
+      <div><p className="eyebrow"><ShieldCheck aria-hidden="true" size={17} /> Front-desk insurance decision</p><h1 id="insurance-v2-heading">Know what to do before the patient is scheduled.</h1><p>{ecwPreview ? 'ClinicForce reads the live appointment and reason for visit from eClinicalWorks. Payer checks stay off until Availity production is activated.' : 'ClinicForce reads the visit from eClinicalWorks and gets coverage, review decisions, and insured pricing from Availity.'}</p></div>
+      <div className="beta-session"><span><i aria-hidden="true" /> {config ? ecwPreview ? 'eCW live · Availity demo' : `${demo ? 'Demo' : 'Production'} environment` : 'Connecting'}</span><strong>{ecwPreview ? 'Live eCW appointment' : demo ? 'Synthetic Availity patient' : 'Live patient inquiry'}</strong><small>{ecwPreview ? 'No payer submission' : demo ? 'Training data only' : staffMode ? 'Saved to the clinic patient record' : 'Saved for this QR session'}</small></div>
     </header>
 
     <main className="v2-decision-sheet">
@@ -173,13 +177,20 @@ export default function InsuranceVerificationV2({ onBack, staffMode = false, onU
 
       {!insuranceCase && <section className="v2-start">
         <p className="section-kicker">Start here</p>
-        <h2>{demo ? 'Run the Availity synthetic workflow' : 'Load the patient’s next scheduled visit'}</h2>
+        <h2>{ecwPreview ? 'Load the patient’s eCW appointment' : demo ? 'Run the Availity synthetic workflow' : 'Load the patient’s next scheduled visit'}</h2>
         <p>{config?.message}</p>
-        <button className="button button-primary" type="button" disabled={!!busy} onClick={() => void perform('Starting a saved insurance case…', () => createV2Case())}>{demo ? 'Start demo case' : 'Load eCW appointment'} <ArrowRight size={17} aria-hidden="true" /></button>
+        <button className="button button-primary" type="button" disabled={!!busy} onClick={() => void perform('Starting a saved insurance case…', () => createV2Case())}>{ecwPreview ? 'Load eCW appointment' : demo ? 'Start demo case' : 'Load eCW appointment'} <ArrowRight size={17} aria-hidden="true" /></button>
       </section>}
 
       {insuranceCase && <>
-        <section className={`v2-decision v2-decision-${insuranceCase.summary.action}`} aria-labelledby="front-desk-answer">
+        {ecwPreview ? <section className="v2-decision v2-decision-verify" aria-labelledby="front-desk-answer">
+          <p>eClinicalWorks appointment</p>
+          <h2 id="front-desk-answer">Review the live visit and suggested services</h2>
+          <div className="v2-decision-grid">
+            <div><span>Service date</span><strong>{insuranceCase.inputs.service_date || 'Not returned'}</strong><small>{insuranceCase.sources.ecw?.appointment_status || 'Appointment status not returned'}</small></div>
+            <div><span>Reason for visit</span><strong>{insuranceCase.inputs.reason || 'Not returned'}</strong><small>Exact context returned by eClinicalWorks</small></div>
+          </div>
+        </section> : <><section className={`v2-decision v2-decision-${insuranceCase.summary.action}`} aria-labelledby="front-desk-answer">
           <p>Front-desk answer</p>
           <h2 id="front-desk-answer">{insuranceCase.summary.heading}</h2>
           <div className="v2-decision-grid">
@@ -197,7 +208,7 @@ export default function InsuranceVerificationV2({ onBack, staffMode = false, onU
         <section className="v2-prices" aria-label="Visit price comparison">
           <article><p>Scheduled visit</p><h3>{money(insuranceCase.summary.scheduled.insurance_cents)}</h3><span>Availity patient estimate</span><dl><div><dt>Clinic cash price</dt><dd>{money(insuranceCase.summary.scheduled.cash_cents)}</dd></div><div><dt>Allowed amount</dt><dd>{money(insuranceCase.summary.scheduled.allowed_cents)}</dd></div></dl><small>{insuranceCase.summary.scheduled.codes.join(', ') || 'No scheduled code confirmed'}</small><PriceExplanation transaction={insuranceCase.transactions.estimate} /></article>
           <article><p>Possible procedure</p><h3>{money(insuranceCase.summary.possible.insurance_cents)}</h3><span>Separate Availity patient estimate</span><dl><div><dt>Clinic cash price</dt><dd>{money(insuranceCase.summary.possible.cash_cents)}</dd></div><div><dt>Allowed amount</dt><dd>{money(insuranceCase.summary.possible.allowed_cents)}</dd></div></dl><small>{insuranceCase.summary.possible.codes.join(', ') || 'No possible procedure confirmed'}</small><PriceExplanation transaction={insuranceCase.transactions.procedure_estimate} /></article>
-        </section>
+        </section></>}
 
         <section className="v2-services" aria-labelledby="services-heading">
           <div><p className="section-kicker">Services and clinic prices</p><h2 id="services-heading">Confirm what is being estimated</h2><p>eClinicalWorks coded services are used first. The fee CSV supplies the clinic’s billed charge and cash price. It never supplies insurance benefits.</p></div>
@@ -209,7 +220,7 @@ export default function InsuranceVerificationV2({ onBack, staffMode = false, onU
           </label>
           {!!insuranceCase.inputs.lines.length && <div className="v2-service-list">{insuranceCase.inputs.lines.map(line => <div key={`${line.code}-${line.service_status}`}><strong>{line.code}</strong><span>{line.description || 'Description not returned'}</span><small>{readable(line.service_status || 'scheduled')} · {line.units || 'missing'} unit(s) · billed {line.charge ? `$${line.charge}` : 'charge missing'} · cash {money(line.cash_cents)}</small></div>)}</div>}
           {servicesLocked && <p className="v2-next-step">Services and prices are locked because a payer request already uses them. Start a new case to make a change.</p>}
-          {insuranceCase.sources.fees && insuranceCase.inputs.reason && !servicesLocked && <button className="button button-secondary" type="button" disabled={!!busy} onClick={() => void perform('Finding possible services in the clinic fee list…', () => suggestV2Services(insuranceCase.id))}><Sparkles size={16} aria-hidden="true" /> Suggest services from visit reason</button>}
+          {insuranceCase.sources.fees && insuranceCase.inputs.reason && !servicesLocked && <button className="button button-secondary" type="button" disabled={!!busy} onClick={() => void perform('Finding possible services in the clinic fee list…', () => suggestV2Services(insuranceCase.id))}><Sparkles size={16} aria-hidden="true" /> {insuranceCase.suggestions ? 'Regenerate suggestions from visit reason' : 'Suggest services from visit reason'}</button>}
           {insuranceCase.suggestions && <div className="v2-suggestions">
             <div className="v2-suggestion-warning"><AlertTriangle size={18} aria-hidden="true" /><span><strong>Clinician review required.</strong> Bedrock can narrow the clinic’s own fee list. It cannot choose an E/M level, diagnose the patient, or establish medical necessity.</span></div>
             {!insuranceCase.suggestions.groups.length && <p>No service in this clinic fee CSV can be suggested safely from the eClinicalWorks visit reason.</p>}
@@ -225,7 +236,10 @@ export default function InsuranceVerificationV2({ onBack, staffMode = false, onU
           </div>}
         </section>
 
-        <section className="v2-workflow" aria-labelledby="workflow-heading">
+        {ecwPreview ? <section className="v2-workflow" aria-labelledby="workflow-heading">
+          <p className="section-kicker">Payer workflow</p><h2 id="workflow-heading">Availity production activation required</h2>
+          <p>The live eCW appointment is available for service review, but eligibility, authorization, referral, and estimate requests are disabled. No patient data is sent to Availity’s demo API.</p>
+        </section> : <section className="v2-workflow" aria-labelledby="workflow-heading">
           <p className="section-kicker">Payer workflow</p><h2 id="workflow-heading">Complete each needed payer check</h2>
           <div className="v2-action-list">{resources.map((resource, index) => {
             const transaction = insuranceCase.transactions[resource.id]
@@ -243,7 +257,7 @@ export default function InsuranceVerificationV2({ onBack, staffMode = false, onU
               </div>
             </article>
           })}</div>
-        </section>
+        </section>}
 
         <details className="v2-technical">
           <summary>Patient, payer, benefits, and response details</summary>
@@ -253,7 +267,7 @@ export default function InsuranceVerificationV2({ onBack, staffMode = false, onU
             {insuranceCase.missing.length > 0 && <details className="v2-callout"><summary>Data still needed ({insuranceCase.missing.length})</summary><ul>{insuranceCase.missing.map((item, index) => <li key={index}>{item}</li>)}</ul></details>}
             {coverage?.result?.plans?.map((plan, index) => <details className="v2-plan" key={index}><summary>{plan.name || plan.planName || `Plan ${index + 1}`} · {plan.status || 'Status not returned'}</summary><p>{plan.insuranceType} · Group {plan.groupNumber || 'not returned'} · Effective {plan.effectiveDate || 'not returned'} · Ends {plan.expirationDate || 'not returned'}</p><div className="v2-table-wrap"><table><thead><tr><th>Benefit</th><th>Network</th><th>Amount</th><th>Remaining / total</th><th>Conditions</th></tr></thead><tbody>{plan.benefits.map((benefit, row) => <tr key={row}><td>{readable(benefit.category)}<small>{benefit.service}</small></td><td>{readable(benefit.network)}<small>{benefit.level}</small></td><td>{benefit.amount ?? 'Not returned'}</td><td>{benefit.remaining ?? 'Not returned'} / {benefit.total ?? 'Not returned'}</td><td>{benefit.description}{benefit.authorizationRequired && <small>Authorization required</small>}{benefit.referralNumber && <small>Referral {benefit.referralNumber}</small>}</td></tr>)}</tbody></table></div></details>)}
             <h3>Response history</h3><ol className="v2-history">{insuranceCase.events.map((event, index) => <li key={index}><span>{readable(event.stage.replaceAll('-', ' '))}</span><time dateTime={event.at}>{dateTime(event.at)}</time></li>)}</ol>
-            <div className="v2-technical-actions"><button className="button button-secondary" type="button" disabled={!!busy} onClick={() => void perform('Refreshing saved case…', () => getV2Case(insuranceCase.id))}><RefreshCw size={15} aria-hidden="true" /> Refresh saved case</button><button className="button button-secondary" type="button" disabled={!!busy || hasPending} onClick={() => void perform('Loading a new appointment…', () => createV2Case())}>{hasPending ? 'Finish pending response first' : demo ? 'Start new demo case' : 'Reload eCW appointment'}</button></div>
+            <div className="v2-technical-actions"><button className="button button-secondary" type="button" disabled={!!busy} onClick={() => void perform('Refreshing saved case…', () => getV2Case(insuranceCase.id))}><RefreshCw size={15} aria-hidden="true" /> Refresh saved case</button><button className="button button-secondary" type="button" disabled={!!busy || hasPending} onClick={() => void perform('Loading a new appointment…', () => createV2Case())}>{hasPending ? 'Finish pending response first' : ecwPreview ? 'Reload eCW appointment' : demo ? 'Start new demo case' : 'Reload eCW appointment'}</button></div>
             <small>Only Availity-returned amounts appear as insured estimates. Clinic cash prices come from the uploaded fee CSV. Case {insuranceCase.id} {insuranceCase.expires_at ? `expires ${dateTime(insuranceCase.expires_at)}` : 'is saved to the clinic record'}.</small>
           </div>
         </details>
