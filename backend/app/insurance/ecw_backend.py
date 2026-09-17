@@ -132,6 +132,14 @@ async def _read(client: httpx.AsyncClient, issuer: str, token: str, reference: A
     return await _response_json(response, "eClinicalWorks could not resolve the appointment's provider, payer or subscriber.")
 
 
+async def _bounded_read(client: httpx.AsyncClient, issuer: str, token: str,
+                        reference: str) -> tuple[dict[str, Any], str | None]:
+    try:
+        return await asyncio.wait_for(_read(client, issuer, token, reference), timeout=5), None
+    except asyncio.TimeoutError:
+        return {}, reference.split("/", 1)[0]
+
+
 def _norm(value: Any) -> str:
     return re.sub(r"[^a-z0-9]", "", str(value or "").casefold())
 
@@ -330,8 +338,11 @@ async def fetch_inputs(profile: dict[str, Any], practice: dict[str, Any], *, tra
             ordered = sorted(eligible, key=lambda row: row.get("order", 999999))
             coverage = ordered[0] if ordered and (len(ordered) == 1 or ordered[0].get("order") != ordered[1].get("order")) else {}
 
-            refs = _source_references(visit) + _source_references(coverage)
-            resolved_list = await asyncio.gather(*(_read(client, issuer, token, ref) for ref in refs))
+            refs = [ref for ref in dict.fromkeys(_source_references(visit) + _source_references(coverage))
+                    if ref != f"Patient/{patient_id}"]
+            resolved_results = await asyncio.gather(*(_bounded_read(client, issuer, token, ref) for ref in refs))
+            resolved_list = [row for row, _ in resolved_results]
+            reference_timeouts = sorted({resource for _, resource in resolved_results if resource})
             resolved = {f"{row.get('resourceType')}/{row.get('id')}": row for row in resolved_list if row.get("resourceType") and row.get("id")}
 
             subscriber_ref = _reference(coverage.get("subscriber"))
@@ -444,6 +455,8 @@ async def fetch_inputs(profile: dict[str, Any], practice: dict[str, Any], *, tra
         review_missing.append("Administrator: map this eClinicalWorks location to its two-digit place-of-service code.")
     if not inputs["service_type"]:
         review_missing.append("Administrator: map this appointment to the Availity service type used for service reviews.")
+    if reference_timeouts:
+        review_missing.append("eClinicalWorks did not respond in time while resolving " + ", ".join(reference_timeouts) + "; retry to complete those details.")
     missing = list(review_missing)
     if not inputs["patient_phone"]:
         missing.append("eClinicalWorks did not return the patient's phone number required by Availity PCE.")
@@ -455,6 +468,7 @@ async def fetch_inputs(profile: dict[str, Any], practice: dict[str, Any], *, tra
               "_patient_id": patient_id,
               "appointment_date": service_date, "appointment_status": visit.get("status"),
               "payer": _display(payer), "location": location.get("name"),
+              "timed_out_resources": reference_timeouts,
               "resources": {"Coverage": len(coverage_rows), "Encounter": len(encounters),
                             "ServiceRequest": len(orders), "ChargeItem": len(charges)}}
     return inputs, list(dict.fromkeys(missing)), source
