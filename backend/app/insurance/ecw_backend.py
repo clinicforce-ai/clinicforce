@@ -16,13 +16,11 @@ import httpx
 from app.ingestion import ecw
 
 
-# ChargeItem is intentionally omitted until it is granted in the eCW app.
-# Procedure and PractitionerRole are already granted by the registered app.
 SCOPES = (
     "system/Patient.read", "system/Coverage.read", "system/Encounter.read",
     "system/ServiceRequest.read", "system/Procedure.read", "system/Condition.read",
     "system/RelatedPerson.read", "system/Organization.read", "system/Practitioner.read",
-    "system/PractitionerRole.read", "system/Location.read",
+    "system/PractitionerRole.read", "system/Location.read", "system/ChargeItem.read",
 )
 REFERENCE_TIMEOUT_SECONDS = 4
 SEARCH_TIMEOUT_SECONDS = 6
@@ -32,6 +30,10 @@ HISTORY_DAYS = 365
 
 class EcwBackendError(RuntimeError):
     pass
+
+
+class EcwResourceUnavailable(EcwBackendError):
+    """A resource is not available to this activated eCW app."""
 
 
 def settings() -> tuple[str, str]:
@@ -124,7 +126,7 @@ async def _search(client: httpx.AsyncClient, issuer: str, token: str, resource: 
     response = await client.get(f"{issuer}/{resource}", params=params,
                                 headers={"Authorization": f"Bearer {token}", "Accept": "application/fhir+json"})
     if response.status_code in {403, 404}:
-        return []
+        raise EcwResourceUnavailable(resource)
     return _entries(await _response_json(response, f"eClinicalWorks could not return {resource} data for this patient."))
 
 
@@ -147,6 +149,8 @@ async def _optional_search(client: httpx.AsyncClient, issuer: str, token: str, r
     try:
         rows, timed_out = await _bounded_search(client, issuer, token, resource, params, timeout_seconds=timeout_seconds)
         return rows, timed_out, None
+    except EcwResourceUnavailable:
+        return [], None, resource
     except EcwBackendError:
         return [], None, resource
 
@@ -175,6 +179,8 @@ async def _bounded_read(client: httpx.AsyncClient, issuer: str, token: str,
             )
         except (asyncio.TimeoutError, httpx.TimeoutException):
             return {}, resource
+        except EcwResourceUnavailable:
+            return {}, None
         return (rows[0] if len(rows) == 1 else {}), None
 
 
@@ -596,6 +602,8 @@ async def fetch_inputs(profile: dict[str, Any], practice: dict[str, Any], *, tra
                 "visit_type": _visit_type(visit),
                 "lines": list(lines.values()),
             }
+    except EcwResourceUnavailable as exc:
+        raise EcwBackendError(f"eClinicalWorks did not authorize ClinicForce to read {exc} data. Confirm the activated app scope and practice activation.") from exc
     except httpx.HTTPError as exc:
         raise EcwBackendError("eClinicalWorks is temporarily unavailable.") from exc
 
@@ -668,8 +676,11 @@ async def fetch_inputs(profile: dict[str, Any], practice: dict[str, Any], *, tra
         ecw_missing.append("eClinicalWorks did not respond in time while loading recent completed appointment history; reload the appointment to retry.")
     elif history_unavailable:
         ecw_missing.append("eClinicalWorks rejected or could not return recent completed appointment history for this app.")
-    if query_unavailable:
-        ecw_missing.append("eClinicalWorks rejected or could not return " + ", ".join(sorted(query_unavailable)) + " for this appointment.")
+    if "ChargeItem" in query_unavailable:
+        ecw_missing.append("ClinicForce cannot read eClinicalWorks charge items for this appointment. Confirm system/ChargeItem.read is active for this practice.")
+    remaining_unavailable = sorted(query_unavailable - {"ChargeItem"})
+    if remaining_unavailable:
+        ecw_missing.append("eClinicalWorks rejected or could not return " + ", ".join(remaining_unavailable) + " for this appointment.")
 
     role_labels = list(dict.fromkeys(
         label for role in role_resources for field in (role.get("code"), role.get("specialty"))

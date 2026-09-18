@@ -672,6 +672,10 @@ td { line-height: 1.45; }
 .v2-suggestion-warning svg { margin-top: 2px; }
 .v2-suggestion-warning strong { display: block; }
 .v2-fee-required { margin: -4px 0 18px; border-left: 3px solid var(--blue); background: #e9f2fb; padding: 12px 14px; color: var(--blue-deep); font-size: .8rem; line-height: 1.5; }
+.v2-coding-empty { margin-top: 4px; border-left: 4px solid var(--blue); background: #e9f2fb; padding: 18px; color: var(--blue-deep); }
+.v2-coding-empty strong { display: block; font-size: 1rem; }
+.v2-coding-empty p { max-width: 62ch; margin: 6px 0 14px; color: var(--ink); font-size: .84rem; line-height: 1.5; }
+.v2-coding-empty .button { margin: 0; }
 .v2-coding-context { display: grid; grid-template-columns: 1.1fr .8fr 1.5fr; gap: 1px; margin: 24px 0 4px; border: 1px solid #b8cadd; background: #b8cadd; }
 .v2-coding-context > div { min-width: 0; background: #f5f9fd; padding: 16px; }
 .v2-coding-context span, .v2-coding-context strong, .v2-coding-context small { display: block; }

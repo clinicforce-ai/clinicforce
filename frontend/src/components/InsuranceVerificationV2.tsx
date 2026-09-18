@@ -107,6 +107,7 @@ export default function InsuranceVerificationV2({ onBack, staffMode = false, onU
   const ecwPreview = staffMode && demo
   const ecwSource = insuranceCase?.sources.ecw
   const visibleMissing = ecwPreview ? ecwSource?.missing || [] : insuranceCase?.missing || []
+  const chargeAccessUnavailable = ecwSource?.unavailable_resources?.includes('ChargeItem') || false
   const coverage = insuranceCase?.transactions.coverage
   const coverageDone = coverage?.outcome === 'complete'
   const coverageActive = !ecwPreview && (demo || coverage?.result?.active === true)
@@ -238,11 +239,10 @@ export default function InsuranceVerificationV2({ onBack, staffMode = false, onU
           </label>
           {!!insuranceCase.inputs.lines.length && <div className="v2-service-list">{insuranceCase.inputs.lines.map(line => <div key={`${line.code}-${line.service_status}`}><strong>{line.code}</strong><span>{line.description || 'Description not returned'}</span><small>{readable(line.service_status || 'scheduled')} · {line.units || 'missing'} unit(s) · billed {line.charge ? `$${line.charge}` : 'charge missing'} · cash {money(line.cash_cents)}</small></div>)}</div>}
           {servicesLocked && <p className="v2-next-step">Services and prices are locked because a payer request already uses them. Start a new case to make a change.</p>}
-          {(insuranceCase.inputs.reason || insuranceCase.inputs.lines.length > 0) && !servicesLocked && <button className="button button-secondary" type="button" disabled={!!busy} onClick={() => void perform('Finding clinician-reviewable services from the eCW appointment…', () => suggestV2Services(insuranceCase.id))}><Sparkles size={16} aria-hidden="true" /> {insuranceCase.suggestions ? 'Regenerate eCW service choices' : 'Prepare eCW service choices'}</button>}
+          {(insuranceCase.inputs.reason || insuranceCase.inputs.lines.length > 0) && !servicesLocked && (!insuranceCase.suggestions || insuranceCase.suggestions.groups.length > 0) && <button className="button button-secondary" type="button" disabled={!!busy} onClick={() => void perform('Finding clinician-reviewable services from the eCW appointment…', () => suggestV2Services(insuranceCase.id))}><Sparkles size={16} aria-hidden="true" /> {insuranceCase.suggestions ? 'Regenerate eCW service choices' : 'Prepare eCW service choices'}</button>}
           {insuranceCase.suggestions && <div className="v2-suggestions">
-            <div className="v2-suggestion-warning"><AlertTriangle size={18} aria-hidden="true" /><span><strong>Clinician review required.</strong> eCW-coded services are shown first. When eCW has no code, ClinicForce uses only the returned appointment context to prepare candidates. It cannot choose an E/M level, diagnose the patient, or establish medical necessity.</span></div>
+            {!insuranceCase.suggestions.groups.length ? <div className="v2-coding-empty" role="status"><strong>No CPT/HCPCS choice yet</strong><p>{chargeAccessUnavailable ? 'ClinicForce could not read eCW charge items. Confirm the new ChargeItem permission is active for this practice, then reload.' : 'eCW returned the appointment type but no linked planned service, diagnosis, or coding details for this future visit.'}</p><button className="button button-primary" type="button" disabled={!!busy} onClick={() => void perform('Reloading the eCW appointment…', () => createV2Case())}><RefreshCw size={16} aria-hidden="true" /> Reload eCW appointment</button></div> : <><div className="v2-suggestion-warning"><AlertTriangle size={18} aria-hidden="true" /><span><strong>Clinician review required.</strong> eCW-coded services are shown first. When eCW has no code, ClinicForce uses only the returned appointment context to prepare candidates. It cannot choose an E/M level, diagnose the patient, or establish medical necessity.</span></div>
             {insuranceCase.suggestions.requires_fee_schedule && <div className="v2-fee-required"><strong>Before payer review:</strong> upload the clinic fee CSV to attach billed charges and cash prices to the selected codes.</div>}
-            {!insuranceCase.suggestions.groups.length && <p>No CPT/HCPCS choice can be supported from the eCW details returned for this appointment. Ask the clinician to document the planned service and, for an E/M visit, the new/established status plus MDM or qualifying time in eCW, then reload.</p>}
             {insuranceCase.suggestions.groups.map(group => <fieldset key={group.id}>
               <legend>{group.label}</legend>{group.description && <p>{group.description}</p>}
               {group.codes.map(code => { const line = insuranceCase.suggestions!.lines.find(item => item.code === code)!; const choice = choices[code] || { selected: false, quantity: 1, service_status: 'scheduled' as const }; return <div className={`v2-suggestion ${choice.selected ? 'selected' : ''}`} key={code}>
@@ -251,13 +251,13 @@ export default function InsuranceVerificationV2({ onBack, staffMode = false, onU
               </div> })}
             </fieldset>)}
             {!!insuranceCase.suggestions.notes.length && <ul>{insuranceCase.suggestions.notes.map((note, index) => <li key={index}>{note}</li>)}</ul>}
-            {!!insuranceCase.suggestions.groups.length && <button className="button button-primary" type="button" disabled={!!busy} onClick={confirmServices}><Check size={16} aria-hidden="true" /> Save clinician-reviewed services</button>}
+            <button className="button button-primary" type="button" disabled={!!busy} onClick={confirmServices}><Check size={16} aria-hidden="true" /> Save clinician-reviewed services</button></>}
           </div>}
         </section>
 
         {ecwPreview ? <section className="v2-workflow" aria-labelledby="workflow-heading">
-          <p className="section-kicker">eClinicalWorks source</p><h2 id="workflow-heading">{visibleMissing.length ? 'Some eCW details are not attached or did not respond' : 'Available eCW appointment details loaded'}</h2>
-          <p>{visibleMissing.length ? 'Reload to retry timed-out resources. Information not entered or linked to this appointment must be completed in eClinicalWorks.' : 'ClinicForce received the available appointment, coverage, provider, diagnosis, and service details.'}</p>
+          <p className="section-kicker">eClinicalWorks source</p><h2 id="workflow-heading">{chargeAccessUnavailable ? 'eCW charge access is not active yet' : !insuranceCase.inputs.lines.length ? 'eCW did not attach a service to this appointment' : visibleMissing.length ? 'Some eCW details are still missing' : 'Available eCW appointment details loaded'}</h2>
+          <p>{chargeAccessUnavailable ? 'Confirm ChargeItem permission is active for the registered app, then reload the appointment.' : !insuranceCase.inputs.lines.length ? 'ClinicForce received the scheduled visit, but eCW has no linked CPT/HCPCS service or diagnosis for it yet.' : visibleMissing.length ? 'Reload to retry a timed-out resource. Complete unlinked appointment data in eCW.' : 'ClinicForce received the available appointment, coverage, provider, diagnosis, and service details.'}</p>
         </section> : <section className="v2-workflow" aria-labelledby="workflow-heading">
           <p className="section-kicker">Payer workflow</p><h2 id="workflow-heading">Complete each needed payer check</h2>
           <div className="v2-action-list">{resources.map((resource, index) => {
