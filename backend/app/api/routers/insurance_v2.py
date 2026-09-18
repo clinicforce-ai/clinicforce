@@ -304,7 +304,8 @@ def apply_fee_schedule(case: dict, source: dict) -> None:
     for line in lines:
         rate = rates.get(line["code"], {})
         line.setdefault("charge_source", "visit" if line.get("charge") is not None else "fee_schedule")
-        if line["charge_source"] == "fee_schedule":
+        if line["charge_source"] != "visit":
+            line["charge_source"] = "fee_schedule"
             line["charge"] = rate.get("charge")
         line["description"] = rate.get("description") or line.get("description")
         line["cash_cents"] = rate.get("cash_cents")
@@ -325,19 +326,17 @@ def _suggestion_context(inputs: dict) -> str:
 
 
 def _ecw_coded_groups(inputs: dict, rates: list[dict]) -> tuple[list[dict], list[str]]:
-    """Present actual eCW coded services first, constrained to this clinic's fee file."""
+    """Present actual eCW coded services first; a fee file only adds pricing."""
     available = {str(rate.get("code") or "").upper() for rate in rates}
     coded, unavailable = [], []
     for line in inputs.get("lines", []):
         code = str(line.get("code") or "").upper()
         if not code:
             continue
-        if code in available:
-            coded.append({"code": code,
-                          "reason": "Clinician-coded service returned by eClinicalWorks for this appointment.",
-                          "requires_quantity": not bool(line.get("units")),
-                          "unit_label": "unit"})
-        else:
+        coded.append({"code": code, "description": str(line.get("description") or code),
+                      "reason": "Clinician-coded service returned by eClinicalWorks for this appointment.",
+                      "requires_quantity": not bool(line.get("units")), "unit_label": "unit"})
+        if code not in available:
             unavailable.append(code)
     if not coded:
         return [], list(dict.fromkeys(unavailable))
@@ -366,14 +365,17 @@ def build_service_suggestions(case: dict) -> tuple[list[dict], list[dict], list[
     inputs = case.get("inputs", {})
     source_groups, missing_fee_codes = _ecw_coded_groups(inputs, rates)
     source_codes = {candidate["code"] for group in source_groups for candidate in group["codes"]}
-    suggested = cpt_suggester.suggest_cpt_codes(_suggestion_context(inputs), rates)
+    suggested = (cpt_suggester.suggest_cpt_codes(_suggestion_context(inputs), rates) if rates
+                 else cpt_suggester.suggest_preliminary_cpt_codes(_suggestion_context(inputs)))
     raw = _without_codes(suggested, source_codes)
     raw["groups"] = [*source_groups, *raw.get("groups", [])]
-    lines, groups = cpt_rules.grouped_candidates(raw, rates)
+    lines, groups = cpt_rules.grouped_candidates(raw, rates, allow_unpriced=not rates)
     groups.sort(key=lambda group: group["id"] != "ecw-clinician-coded-services")
     notes = [str(note)[:1000] for note in raw.get("notes", []) if isinstance(note, str)][:20]
     if missing_fee_codes:
         notes.append("eClinicalWorks returned coded service(s) absent from this clinic fee CSV: " + ", ".join(missing_fee_codes) + ". Add those fee rows before estimating them.")
+    if not rates:
+        notes.append("These are unpriced clinical review candidates. Upload the clinic fee CSV before creating a payer request or an estimate.")
     if inputs.get("visit_type") not in {"new", "established"}:
         notes.append("eClinicalWorks did not explicitly return new-versus-established status. Confirm it with the clinician; do not infer it from this appointment.")
     notes.append("CPT choices require clinician review. eCW did not provide medical decision making or qualifying time, so ClinicForce cannot establish an E/M complexity level.")
@@ -609,17 +611,16 @@ async def suggest_services(case_id: str, request: Request):
         raise HTTPException(409, "Start a new case before changing services that have already been submitted.")
     rates = case.get("sources", {}).get("fees", {}).get("lines", [])
     reason = str(case.get("inputs", {}).get("reason") or "").strip()
-    if not rates:
-        raise HTTPException(422, "Upload the clinic fee CSV before suggesting CPT/HCPCS services.")
-    if not reason:
-        raise HTTPException(422, "eClinicalWorks must provide a reason for visit before ClinicForce can suggest services.")
+    if not reason and not case.get("inputs", {}).get("lines"):
+        raise HTTPException(422, "eClinicalWorks must provide a reason for visit or a clinician-coded service before ClinicForce can show CPT/HCPCS choices.")
     try:
         lines, groups, notes = await run_in_threadpool(build_service_suggestions, case)
     except (ValueError, golden.GoldenCaseError) as exc:
         raise HTTPException(422, str(exc)) from exc
     except Exception:
         raise HTTPException(503, "Service suggestions are temporarily unavailable. Staff can use clinician-coded services from eClinicalWorks.") from None
-    case["suggestions"] = {"groups": groups, "lines": lines, "notes": notes}
+    case["suggestions"] = {"groups": groups, "lines": lines, "notes": notes,
+                           "requires_fee_schedule": not bool(rates)}
     return _response(public(await save(case, session, "service-suggestions-generated")))
 
 
@@ -646,7 +647,7 @@ async def confirm_services(case_id: str, body: ConfirmServices, request: Request
     diagnosis = case["inputs"].get("diagnoses", [])
     case["inputs"]["lines"] = [{"code": code, "description": candidates[code].get("description"),
                                   "units": str(quantities[code]), "charge": candidates[code].get("charge"),
-                                  "charge_source": "fee_schedule",
+                                  "charge_source": "fee_schedule" if candidates[code].get("charge") is not None else "unpriced_suggestion",
                                   "cash_cents": candidates[code].get("cash_cents"),
                                   "service_status": next(choice.service_status for choice in choices if choice.code.upper() == code),
                                   "modifiers": [], "diagnosis": diagnosis[0] if len(diagnosis) == 1 else None}
