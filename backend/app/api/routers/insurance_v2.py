@@ -363,10 +363,11 @@ def build_service_suggestions(case: dict) -> tuple[list[dict], list[dict], list[
     """Build clinician-reviewable choices from source codes plus appointment context."""
     rates = case.get("sources", {}).get("fees", {}).get("lines", [])
     inputs = case.get("inputs", {})
+    history = case.get("sources", {}).get("ecw", {}).get("recent_completed_appointments", [])
     source_groups, missing_fee_codes = _ecw_coded_groups(inputs, rates)
     source_codes = {candidate["code"] for group in source_groups for candidate in group["codes"]}
-    suggested = (cpt_suggester.suggest_cpt_codes(_suggestion_context(inputs), rates) if rates
-                 else cpt_suggester.suggest_preliminary_cpt_codes(_suggestion_context(inputs)))
+    suggested = (cpt_suggester.suggest_cpt_codes(_suggestion_context(inputs), rates, history) if rates
+                 else cpt_suggester.suggest_preliminary_cpt_codes(_suggestion_context(inputs), history))
     raw = _without_codes(suggested, source_codes)
     raw["groups"] = [*source_groups, *raw.get("groups", [])]
     lines, groups = cpt_rules.grouped_candidates(raw, rates, allow_unpriced=not rates)

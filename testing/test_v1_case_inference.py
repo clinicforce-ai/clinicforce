@@ -35,6 +35,18 @@ def test_cpt_suggestions_use_bedrock_tool_output_and_only_schedule_codes():
     assert candidates == [{"code": "70450", "description": "CT head or brain without contrast"}]
 
 
+def test_cpt_suggestions_passes_the_last_completed_visit_to_bedrock():
+    rates = [{"code": "95913", "description": "Nerve conduction studies", "allowed_cents": 1234}, {"code": "70450", "description": "CT head", "allowed_cents": 1234}]
+    payload = {"groups": [group("nerve-study", ["95913"], category="diagnostic")], "notes": []}
+    history = [{"date": "2026-08-19", "reason": "Neuropathy study", "coded_services": ["95913"]}]
+    with patch.object(cpt_suggester.boto3, "client") as client:
+        client.return_value.converse.return_value = tool_response(payload)
+        cpt_suggester.suggest_cpt_codes("New neuropathy follow-up", rates, history)
+    request = json.loads(client.return_value.converse.call_args.kwargs["messages"][0]["content"][0]["text"])
+    assert request["prior_completed_appointments"] == history
+    assert request["available_codes"][0]["code"] == "95913"
+
+
 def test_cpt_suggestions_fall_back_to_uploaded_description_matches():
     rates = [{"code": "70450", "description": "CT head or brain without contrast", "allowed_cents": 1234}, {"code": "76856", "description": "Pelvic ultrasound", "allowed_cents": 1234}]
     with patch.object(cpt_suggester.boto3, "client") as client:

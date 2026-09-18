@@ -74,15 +74,17 @@ class GatewayTests(unittest.IsolatedAsyncioTestCase):
 
 class ResultsAndIntakeTests(unittest.TestCase):
     def test_ecw_context_can_show_unpriced_clinician_candidates_before_fee_upload(self):
+        history = [{"date": "2026-08-19", "reason": "Prior neuropathy visit", "coded_services": ["95913"]}]
         case = {"inputs": {"reason": "Reason: planned nerve conduction study", "visit_type": None, "lines": []},
-                "sources": {}}
+                "sources": {"ecw": {"recent_completed_appointments": history}}}
         model = {"groups": [{"id": "diagnostic", "label": "Planned diagnostic service", "category": "diagnostic",
                               "selection_mode": "multiple", "description": "Clinician review required", "requires_groups": [],
                               "codes": [{"code": "95913", "description": "Nerve conduction studies",
                                          "reason": "The planned study is stated in the eCW appointment context.",
                                          "requires_quantity": True, "unit_label": "study"}]}], "notes": []}
-        with patch.object(v2.cpt_suggester, "suggest_preliminary_cpt_codes", return_value=model):
+        with patch.object(v2.cpt_suggester, "suggest_preliminary_cpt_codes", return_value=model) as suggest:
             lines, groups, notes = v2.build_service_suggestions(case)
+        self.assertEqual(suggest.call_args.args[1], history)
         self.assertEqual(groups[0]["codes"], ["95913"])
         self.assertEqual(lines[0]["description"], "Nerve conduction studies")
         self.assertIsNone(lines[0]["charge"])
