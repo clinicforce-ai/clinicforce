@@ -368,14 +368,22 @@ async def create(body: Start, request: Request):
         identity = {"patient_first_name": profile.given_name, "patient_last_name": profile.family_name,
                     "patient_birth_date": profile.birth_date, "gender": {"male": "M", "female": "F"}.get(profile.administrative_gender, "U")}
     use_ecw = bool(session.get("practice_id")) or settings.environment == "production"
+    existing = None
     if not use_ecw:
         inputs, missing, sources = demo_inputs(), [], {}
     else:
         if not ecw_backend.configured():
             raise HTTPException(503, "The eClinicalWorks practice connection is temporarily unavailable.")
+        existing = await run_in_threadpool(
+            store.latest_v2, session["patient_id"], session["share_manifest_id"], binding, **_scope(session),
+        )
+        fetch_identity = dict(identity)
+        previous_date = str(((existing or {}).get("sources", {}).get("ecw", {}) or {}).get("appointment_date") or "")
+        if re.fullmatch(r"\d{4}-\d{2}-\d{2}", previous_date):
+            fetch_identity["ecw_appointment_date"] = previous_date
         try:
             inputs, missing, source = await asyncio.wait_for(
-                ecw_backend.fetch_inputs(identity, practice), timeout=ECW_FETCH_TIMEOUT_SECONDS,
+                ecw_backend.fetch_inputs(fetch_identity, practice), timeout=ECW_FETCH_TIMEOUT_SECONDS,
             )
         except asyncio.TimeoutError:
             raise HTTPException(502, "eClinicalWorks did not respond in time. Try again; if this continues, confirm that this practice activated the backend app.") from None
@@ -389,9 +397,6 @@ async def create(body: Start, request: Request):
             if ecw_patient_id:
                 await run_in_threadpool(staff_store.set_ecw_patient_id, session["patient_id"], session["practice_id"], ecw_patient_id)
             validate_staff_coverage(session["intake"]["fields"], inputs, source, practice)
-        existing = await run_in_threadpool(
-            store.latest_v2, session["patient_id"], session["share_manifest_id"], binding, **_scope(session),
-        )
         if existing and not existing.get("transactions"):
             fee_source = existing.get("sources", {}).get("fees")
             existing.update(profile=identity, sources={**existing.get("sources", {}), **sources},

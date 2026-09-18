@@ -43,6 +43,19 @@ class EcwBackendSourceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((resource, timed_out), (practitioner, None))
         search.assert_awaited_once_with(None, "issuer", "token", "Practitioner", {"_id": "provider-1"})
 
+    async def test_optional_resource_timeout_does_not_discard_the_appointment(self):
+        with patch.object(ecw_backend, "_search", new=AsyncMock(side_effect=asyncio.TimeoutError)):
+            rows, timed_out, unavailable = await ecw_backend._optional_search(
+                None, "issuer", "token", "Procedure", {"patient": "patient-1"},
+            )
+        self.assertEqual((rows, timed_out, unavailable), ([], "Procedure", None))
+
+        with patch.object(ecw_backend, "_search", new=AsyncMock(side_effect=ecw_backend.EcwBackendError("rejected"))):
+            rows, timed_out, unavailable = await ecw_backend._optional_search(
+                None, "issuer", "token", "ServiceRequest", {"patient": "patient-1"},
+            )
+        self.assertEqual((rows, timed_out, unavailable), ([], None, "ServiceRequest"))
+
     async def test_backend_token_and_fhir_resources_become_availity_inputs(self):
         today_date = datetime.now(ZoneInfo("America/New_York")).date()
         today = today_date.isoformat()
@@ -107,8 +120,8 @@ class EcwBackendSourceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(source["_patient_id"], "patient-1")
         self.assertEqual(source["timed_out_resources"], [])
         self.assertEqual(source["missing"], [])
-        self.assertEqual(source["resources"]["Procedure"], 2)
-        self.assertEqual(source["resources"]["Condition"], 1)
+        self.assertEqual(source["resources"]["Procedure"], 1)
+        self.assertEqual(source["resources"]["Condition"], 0)
         self.assertIn("system/Procedure.read", ecw_backend.SCOPES)
         self.assertIn("system/PractitionerRole.read", ecw_backend.SCOPES)
         self.assertNotIn("system/Appointment.read", ecw_backend.SCOPES)
@@ -127,21 +140,23 @@ class EcwBackendSourceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(charge_request.url.params["context"], "Encounter/encounter-1")
         self.assertEqual(charge_request.url.params["subject"], "Patient/patient-1")
         procedure_request = next(request for request in requests if request.url.path == "/fhir/Procedure")
-        self.assertEqual(dict(procedure_request.url.params), {"patient": "patient-1", "encounter": "encounter-1"})
+        self.assertEqual(dict(procedure_request.url.params), {"patient": "patient-1"})
         service_request = next(request for request in requests if request.url.path == "/fhir/ServiceRequest")
-        self.assertEqual(dict(service_request.url.params), {"patient": "patient-1", "encounter": "encounter-1"})
-        condition_request = next(request for request in requests if request.url.path == "/fhir/Condition")
-        self.assertEqual(dict(condition_request.url.params), {"patient": "patient-1", "encounter": "encounter-1"})
+        self.assertEqual(dict(service_request.url.params), {"patient": "patient-1"})
+        self.assertFalse(any(request.url.path == "/fhir/Condition" for request in requests))
 
         requests.clear()
         with patch.dict(os.environ, environment), patch.object(ecw, "ECW_KMS_KEY_ID", "kms-key"), patch.object(ecw, "_client_assertion", return_value="signed-assertion"):
             await ecw_backend.fetch_inputs(
                 {"patient_first_name": "Pat", "patient_last_name": "Example",
-                 "patient_birth_date": "1980-01-01", "ecw_patient_id": "patient-1"},
+                 "patient_birth_date": "1980-01-01", "ecw_patient_id": "patient-1",
+                 "ecw_appointment_date": today},
                 practice, transport=httpx.MockTransport(handler),
             )
         self.assertTrue(any(request.url.path == "/fhir/Patient/patient-1" for request in requests))
         self.assertFalse(any(request.url.path == "/fhir/Patient" for request in requests))
+        encounter_request = next(request for request in requests if request.url.path == "/fhir/Encounter")
+        self.assertEqual(dict(encounter_request.url.params), {"patient": "patient-1", "date": today})
 
 
 if __name__ == "__main__":

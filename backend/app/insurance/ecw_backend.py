@@ -25,6 +25,7 @@ SCOPES = (
     "system/PractitionerRole.read", "system/Location.read",
 )
 REFERENCE_TIMEOUT_SECONDS = 4
+SEARCH_TIMEOUT_SECONDS = 6
 
 
 class EcwBackendError(RuntimeError):
@@ -123,6 +124,29 @@ async def _search(client: httpx.AsyncClient, issuer: str, token: str, resource: 
     if response.status_code in {403, 404}:
         return []
     return _entries(await _response_json(response, f"eClinicalWorks could not return {resource} data for this patient."))
+
+
+async def _bounded_search(client: httpx.AsyncClient, issuer: str, token: str, resource: str,
+                          params: dict[str, str] | list[tuple[str, str]], *, attempts: int = 1
+                          ) -> tuple[list[dict[str, Any]], str | None]:
+    for _ in range(attempts):
+        try:
+            return await asyncio.wait_for(
+                _search(client, issuer, token, resource, params), timeout=SEARCH_TIMEOUT_SECONDS,
+            ), None
+        except (asyncio.TimeoutError, httpx.TimeoutException):
+            pass
+    return [], resource
+
+
+async def _optional_search(client: httpx.AsyncClient, issuer: str, token: str, resource: str,
+                           params: dict[str, str] | list[tuple[str, str]]
+                           ) -> tuple[list[dict[str, Any]], str | None, str | None]:
+    try:
+        rows, timed_out = await _bounded_search(client, issuer, token, resource, params)
+        return rows, timed_out, None
+    except EcwBackendError:
+        return [], None, resource
 
 
 async def _read(client: httpx.AsyncClient, issuer: str, token: str, reference: Any) -> dict[str, Any]:
@@ -355,9 +379,23 @@ async def fetch_inputs(profile: dict[str, Any], practice: dict[str, Any], *, tra
             query = {"patient": patient_id}
             today_date = datetime.now(ZoneInfo(practice.get("timezone", "America/New_York"))).date()
             today = today_date.isoformat()
-            # ponytail: Bound eCW's slow open-ended search; widen if clinics schedule over a year ahead.
-            encounter_dates = [("date", f"ge{today}"), ("date", f"le{today_date + timedelta(days=365)}")]
-            encounters = await _search(client, issuer, token, "Encounter", [("patient", patient_id), *encounter_dates])
+            preferred_date = str(profile.get("ecw_appointment_date") or "")
+            if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", preferred_date) or preferred_date < today:
+                preferred_date = ""
+            # eCW serves an exact date quickly but its date-range search can stall.
+            # Reuse the last verified appointment date when refreshing an existing case.
+            if preferred_date:
+                encounters, encounter_timeout = await _bounded_search(
+                    client, issuer, token, "Encounter", {"patient": patient_id, "date": preferred_date}, attempts=2,
+                )
+            else:
+                # ponytail: Bound eCW's slow open-ended search; widen if clinics schedule over a year ahead.
+                encounter_dates = [("date", f"ge{today}"), ("date", f"le{today_date + timedelta(days=365)}")]
+                encounters, encounter_timeout = await _bounded_search(
+                    client, issuer, token, "Encounter", [("patient", patient_id), *encounter_dates],
+                )
+            if encounter_timeout:
+                raise EcwBackendError("eClinicalWorks timed out while loading the patient's scheduled encounters. Reload the appointment to retry.")
             scheduled = [row for row in encounters
                          if _appointment_date(row) >= today and row.get("status") not in {"cancelled", "entered-in-error"}]
             next_date = min((_appointment_date(row) for row in scheduled), default="")
@@ -366,28 +404,38 @@ async def fetch_inputs(profile: dict[str, Any], practice: dict[str, Any], *, tra
             service_date = _appointment_date(visit) or today
             encounter_id = str(visit.get("id", ""))
             encounter_ref = f"Encounter/{encounter_id}" if encounter_id else ""
-            encounter_query = {"patient": patient_id, **({"encounter": encounter_id} if encounter_id else {})}
-            coverage_rows, orders, conditions, procedures, charges = await asyncio.gather(
-                _search(client, issuer, token, "Coverage", query),
-                _search(client, issuer, token, "ServiceRequest", encounter_query),
-                _search(client, issuer, token, "Condition", encounter_query),
-                _search(client, issuer, token, "Procedure", encounter_query),
-                _search(client, issuer, token, "ChargeItem", {
+            coverage_result, order_result, procedure_result, charge_result = await asyncio.gather(
+                _optional_search(client, issuer, token, "Coverage", query),
+                _optional_search(client, issuer, token, "ServiceRequest", query),
+                _optional_search(client, issuer, token, "Procedure", query),
+                _optional_search(client, issuer, token, "ChargeItem", {
                     "subject": f"Patient/{patient_id}", "context": encounter_ref,
-                }) if encounter_ref else asyncio.sleep(0, result=[]),
+                }) if encounter_ref else asyncio.sleep(0, result=([], None, None)),
             )
+            coverage_rows, orders, procedures, charges = (result[0] for result in
+                                                          (coverage_result, order_result, procedure_result, charge_result))
+            query_timeouts = {result[1] for result in (coverage_result, order_result, procedure_result, charge_result)
+                              if result[1]}
+            query_unavailable = {result[2] for result in (coverage_result, order_result, procedure_result, charge_result)
+                                 if result[2]}
             eligible = [row for row in coverage_rows if row.get("status") == "active" and _period_contains(row, service_date)]
             ordered = sorted(eligible, key=lambda row: row.get("order", 999999))
             coverage = ordered[0] if ordered and (len(ordered) == 1 or ordered[0].get("order") != ordered[1].get("order")) else {}
 
+            visit_refs = set(_source_references(visit))
+            relevant_orders = [row for row in orders if f"ServiceRequest/{row.get('id')}" in visit_refs or
+                               _reference(row.get("encounter")) == encounter_ref]
+            relevant_procedures = [row for row in procedures if f"Procedure/{row.get('id')}" in visit_refs or
+                                   _reference(row.get("encounter")) == encounter_ref]
             resolvable = ("Patient/", "RelatedPerson/", "Organization/", "Practitioner/", "PractitionerRole/",
                           "Location/", "Condition/")
             refs = [ref for ref in dict.fromkeys(
-                ref for row in [visit, coverage, *orders, *procedures] for ref in _source_references(row)
+                ref for row in [visit, coverage, *relevant_orders, *relevant_procedures] for ref in _source_references(row)
             ) if ref != f"Patient/{patient_id}" and ref.startswith(resolvable)]
             resolved_results = await asyncio.gather(*(_bounded_read(client, issuer, token, ref) for ref in refs))
             resolved_list = [row for row, _ in resolved_results]
-            timeout_resources = {resource for _, resource in resolved_results if resource} | ({patient_timeout} if patient_timeout else set())
+            timeout_resources = ({resource for _, resource in resolved_results if resource} | query_timeouts |
+                                 ({patient_timeout} if patient_timeout else set()))
             resolved = {f"{row.get('resourceType')}/{row.get('id')}": row for row in resolved_list if row.get("resourceType") and row.get("id")}
 
             provider_refs = [ref for ref in refs if ref.startswith("Practitioner/")]
@@ -413,7 +461,7 @@ async def fetch_inputs(profile: dict[str, Any], practice: dict[str, Any], *, tra
                     resolved[f"{row['resourceType']}/{row['id']}"] = row
             reference_timeouts = sorted(timeout_resources)
             conditions = list({
-                f"Condition/{row.get('id')}": row for row in [*conditions, *resolved.values()]
+                f"Condition/{row.get('id')}": row for row in resolved.values()
                 if row.get("resourceType") == "Condition" and row.get("id")
             }.values())
 
@@ -446,12 +494,7 @@ async def fetch_inputs(profile: dict[str, Any], practice: dict[str, Any], *, tra
             billing = providers.get(billing_npi, {}) if billing_npi else {}
             rendering = providers.get(rendering_npi, {}) if rendering_npi else {}
 
-            visit_refs = set(_source_references(visit))
-            relevant_orders = [row for row in orders if f"ServiceRequest/{row.get('id')}" in visit_refs or
-                               _reference(row.get("encounter")) == encounter_ref]
             relevant_charges = [row for row in charges if _reference(row.get("context")) == encounter_ref]
-            relevant_procedures = [row for row in procedures if f"Procedure/{row.get('id')}" in visit_refs or
-                                   _reference(row.get("encounter")) == encounter_ref]
             clinical_refs = set(ref for row in [visit, *relevant_orders, *relevant_procedures, *relevant_charges] for ref in _source_references(row))
             relevant_conditions = [row for row in conditions if _reference(row.get("encounter")) == encounter_ref
                                    or f"Condition/{row.get('id')}" in clinical_refs]
@@ -573,7 +616,9 @@ async def fetch_inputs(profile: dict[str, Any], practice: dict[str, Any], *, tra
     if visit and "Location" not in reference_timeouts and not location:
         ecw_missing.append("The eClinicalWorks appointment did not return its location details.")
     if reference_timeouts:
-        ecw_missing.append("eClinicalWorks timed out while resolving " + ", ".join(reference_timeouts) + "; reload the appointment to retry.")
+        ecw_missing.append("eClinicalWorks timed out while retrieving or resolving " + ", ".join(reference_timeouts) + "; reload the appointment to retry.")
+    if query_unavailable:
+        ecw_missing.append("eClinicalWorks rejected or could not return " + ", ".join(sorted(query_unavailable)) + " for this appointment.")
 
     role_labels = list(dict.fromkeys(
         label for role in role_resources for field in (role.get("code"), role.get("specialty"))
@@ -588,8 +633,9 @@ async def fetch_inputs(profile: dict[str, Any], practice: dict[str, Any], *, tra
                                      "roles": role_labels[:10]},
               "missing": list(dict.fromkeys(ecw_missing)),
               "timed_out_resources": reference_timeouts,
+              "unavailable_resources": sorted(query_unavailable),
               "resources": {"Coverage": len(coverage_rows), "Encounter": len(encounters),
-                            "ServiceRequest": len(orders), "Procedure": len(procedures),
+                            "ServiceRequest": len(relevant_orders), "Procedure": len(relevant_procedures),
                             "Condition": len(conditions), "PractitionerRole": len(role_resources),
                             "ChargeItem": len(charges)}}
     return inputs, list(dict.fromkeys(missing)), source
