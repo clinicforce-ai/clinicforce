@@ -73,6 +73,28 @@ class GatewayTests(unittest.IsolatedAsyncioTestCase):
 
 
 class ResultsAndIntakeTests(unittest.TestCase):
+    def test_ecw_coded_services_are_primary_choices_and_context_does_not_infer_complexity(self):
+        case = {"inputs": {"reason": "Reason: neuropathy consultation", "visit_type": "new",
+                           "lines": [{"code": "99204", "units": "1"}]},
+                "sources": {"fees": {"lines": [
+                    {"code": "99204", "description": "New patient office visit", "charge": "200.00", "cash_cents": 10000},
+                    {"code": "95913", "description": "Nerve conduction studies", "charge": "400.00", "cash_cents": 20000},
+                ]}}}
+        model = {"groups": [{"id": "visit", "label": "Visit", "category": "visit", "selection_mode": "single",
+                              "description": "Model alternative", "requires_groups": [],
+                              "codes": [{"code": "99204", "reason": "duplicate", "requires_quantity": False, "unit_label": "service"},
+                                        {"code": "95913", "reason": "planned test", "requires_quantity": True, "unit_label": "study"}]}], "notes": []}
+        with patch.object(v2.cpt_suggester, "suggest_cpt_codes", return_value=model) as suggest:
+            lines, groups, notes = v2.build_service_suggestions(case)
+        context = suggest.call_args.args[0]
+        self.assertIn("new patient", context)
+        self.assertIn("did not return documented medical decision making", context)
+        self.assertEqual(groups[0]["id"], "ecw-clinician-coded-services")
+        self.assertEqual(groups[0]["codes"], ["99204"])
+        self.assertEqual(groups[1]["codes"], ["95913"])
+        self.assertEqual([line["code"] for line in lines], ["99204", "95913"])
+        self.assertTrue(any("complexity level" in note for note in notes))
+
     def test_ecw_timeout_refresh_preserves_last_same_appointment_values(self):
         old_inputs = {"subscriber": {"firstName": "Pat"}, "member_id": "MEMBER123",
                       "group_number": "GROUP123", "lines": [{"code": "99204"}], "diagnoses": ["G629"]}

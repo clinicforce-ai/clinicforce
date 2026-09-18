@@ -115,10 +115,12 @@ class EcwBackendSourceTests(unittest.IsolatedAsyncioTestCase):
                                             "diagnosis": "G629", "service_status": "scheduled",
                                             "description": "New patient consultation"}])
         self.assertEqual(inputs["reason"], "Reason: Neuropathy consultation; Planned service: 99204; Order reason: G62.9; Procedure: New patient consultation; Procedure reason: G62.9")
+        self.assertIsNone(inputs["visit_type"])
         self.assertEqual(inputs["provider"]["npi"], "1234567893")
         self.assertEqual(source["appointment_date"], today)
         self.assertEqual(source["_patient_id"], "patient-1")
         self.assertEqual(source["timed_out_resources"], [])
+        self.assertEqual(source["visit_type"], "not_returned")
         self.assertEqual(source["missing"], [])
         self.assertEqual(source["resources"]["Procedure"], 1)
         self.assertEqual(source["resources"]["Condition"], 0)
@@ -160,6 +162,11 @@ class EcwBackendSourceTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(any(request.url.path == "/fhir/Patient" for request in requests))
         encounter_request = next(request for request in requests if request.url.path == "/fhir/Encounter")
         self.assertEqual(dict(encounter_request.url.params), {"patient": "patient-1", "date": today})
+
+    def test_uses_only_explicit_ecw_visit_status(self):
+        self.assertEqual(ecw_backend._visit_type({"type": [{"text": "New patient visit"}]}), "new")
+        self.assertEqual(ecw_backend._visit_type({"serviceType": [{"text": "Established patient visit"}]}), "established")
+        self.assertIsNone(ecw_backend._visit_type({"reasonCode": [{"text": "Initial consultation"}]}))
 
 
 if __name__ == "__main__":

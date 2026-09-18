@@ -296,6 +296,17 @@ def _visit_context(visit: dict[str, Any], orders: list[dict[str, Any]], procedur
     return "; ".join(unique)[:2000] or None
 
 
+def _visit_type(visit: dict[str, Any]) -> str | None:
+    """Use only an explicit eCW appointment label; history is not a safe proxy."""
+    labels = _concept_labels(visit.get("type")) + _concept_labels(visit.get("serviceType"))
+    text = " ".join(labels).casefold()
+    if re.search(r"\bnew\s+(?:patient|visit)\b", text):
+        return "new"
+    if re.search(r"\bestablished\s+(?:patient|visit)\b", text):
+        return "established"
+    return None
+
+
 def _payer_id(payer: dict[str, Any], aliases: Any) -> str | None:
     if not isinstance(aliases, dict):
         return None
@@ -549,6 +560,9 @@ async def fetch_inputs(profile: dict[str, Any], practice: dict[str, Any], *, tra
                 "place_of_service": location_config.get("place_of_service"), "diagnoses": diagnoses,
                 "patient_phone": _phone(patient),
                 "reason": _visit_context(visit, relevant_orders, relevant_procedures, relevant_conditions),
+                # Do not infer new-versus-established from an incomplete FHIR
+                # history search. eCW must label the appointment explicitly.
+                "visit_type": _visit_type(visit),
                 "lines": list(lines.values()),
             }
     except httpx.HTTPError as exc:
@@ -629,6 +643,7 @@ async def fetch_inputs(profile: dict[str, Any], practice: dict[str, Any], *, tra
     source = {"system": "eClinicalWorks", "retrieved_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
               "_patient_id": patient_id,
               "appointment_date": service_date, "appointment_status": visit.get("status"),
+              "visit_type": inputs.get("visit_type") or "not_returned",
               "payer": _display(payer), "location": location.get("name"),
               "billing_provider": {"name": _display(billing_resource), "npi": ecw_billing_npi},
               "rendering_provider": {"name": _display(rendering_resource), "npi": ecw_rendering_npi,
