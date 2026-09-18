@@ -18,6 +18,10 @@ def tool_response(payload):
     return {"output": {"message": {"content": [{"toolUse": {"name": "submit_code_suggestions", "input": payload}}]}}}
 
 
+def preliminary_tool_response(payload):
+    return {"output": {"message": {"content": [{"toolUse": {"name": "submit_preliminary_code_suggestions", "input": payload}}]}}}
+
+
 def group(key, codes, mode="multiple", **extra):
     return {"id": key, "label": key, "selection_mode": mode, "codes": [{"code": code, "reason": "Candidate for the uploaded planned care"} for code in codes], **extra}
 
@@ -45,6 +49,15 @@ def test_cpt_suggestions_passes_the_last_completed_visit_to_bedrock():
     request = json.loads(client.return_value.converse.call_args.kwargs["messages"][0]["content"][0]["text"])
     assert request["prior_completed_appointments"] == history
     assert request["available_codes"][0]["code"] == "95913"
+
+
+def test_generic_televisit_gets_a_conditional_history_baseline_when_model_has_no_choice():
+    history = [{"date": "2026-08-19", "reason": "Poss Neuropath; New Patient; Office Visit, New Pt., Level 4", "coded_services": []}]
+    with patch.object(cpt_suggester.boto3, "client") as client:
+        client.return_value.converse.return_value = preliminary_tool_response({"groups": [], "notes": ["Current reason is generic."]})
+        suggestions = cpt_suggester.suggest_preliminary_cpt_codes("Visit type: Televisit\nPatient visit status: eClinicalWorks did not explicitly label this appointment new or established; do not infer it.", history)
+    assert [candidate["code"] for candidate in suggestions["groups"][0]["codes"]] == ["99204", "99214"]
+    assert "Confirm today's patient status" in suggestions["groups"][0]["codes"][0]["reason"]
 
 
 def test_cpt_suggestions_fall_back_to_uploaded_description_matches():
