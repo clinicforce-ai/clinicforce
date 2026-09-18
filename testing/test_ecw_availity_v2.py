@@ -59,6 +59,7 @@ class EcwBackendSourceTests(unittest.IsolatedAsyncioTestCase):
     async def test_backend_token_and_fhir_resources_become_availity_inputs(self):
         today_date = datetime.now(ZoneInfo("America/New_York")).date()
         today = today_date.isoformat()
+        yesterday = (today_date - timedelta(days=1)).isoformat()
         metadata = {"resourceType": "CapabilityStatement", "rest": [{"security": {"extension": [{
             "url": "http://fhir-registry.smarthealthit.org/StructureDefinition/oauth-uris",
             "extension": [{"url": "token", "valueUri": "https://auth.example.test/token"}],
@@ -73,8 +74,9 @@ class EcwBackendSourceTests(unittest.IsolatedAsyncioTestCase):
                            "code": {"coding": [{"system": "http://www.ama-assn.org/go/cpt", "code": "99204", "display": "New patient consultation"}]},
                            "quantity": {"value": 1},
                            "reasonCode": [{"coding": [{"system": "http://hl7.org/fhir/sid/icd-10-cm", "code": "G62.9"}]}]},
-                          {"resourceType": "Procedure", "id": "unrelated-history", "status": "completed",
+                          {"resourceType": "Procedure", "id": "unrelated-history", "status": "completed", "encounter": {"reference": "Encounter/history-1"},
                            "code": {"coding": [{"system": "http://www.ama-assn.org/go/cpt", "code": "93000"}]}}],
+            "PastEncounter": [{"resourceType": "Encounter", "id": "history-1", "status": "finished", "period": {"start": f"{yesterday}T14:00:00Z"}, "reasonCode": [{"text": "Prior follow-up"}]}],
             "ChargeItem": [],
             "Condition": [{"resourceType": "Condition", "id": "unrelated-condition",
                            "code": {"coding": [{"system": "http://hl7.org/fhir/sid/icd-10-cm", "code": "E11.9"}]}}],
@@ -95,6 +97,8 @@ class EcwBackendSourceTests(unittest.IsolatedAsyncioTestCase):
             if request.url.path in reads:
                 return httpx.Response(200, json=reads[request.url.path])
             resource = request.url.path.rsplit("/", 1)[-1]
+            if resource == "Encounter" and f"le{yesterday}" in request.url.params.get_list("date"):
+                resource = "PastEncounter"
             return httpx.Response(200, json={"resourceType": "Bundle", "entry": [{"resource": row} for row in resources[resource]]})
 
         practice = {
@@ -123,6 +127,9 @@ class EcwBackendSourceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(source["visit_type"], "not_returned")
         self.assertEqual(source["missing"], [])
         self.assertEqual(source["resources"]["Procedure"], 1)
+        self.assertEqual(source["resources"]["PastEncounter"], 1)
+        self.assertEqual(source["history_status"], "loaded")
+        self.assertEqual(source["recent_completed_appointments"], [{"date": yesterday, "status": "finished", "visit_type": "not_returned", "reason": "Prior follow-up", "coded_services": ["93000"]}])
         self.assertEqual(source["resources"]["Condition"], 0)
         self.assertIn("system/Procedure.read", ecw_backend.SCOPES)
         self.assertIn("system/PractitionerRole.read", ecw_backend.SCOPES)
@@ -138,6 +145,9 @@ class EcwBackendSourceTests(unittest.IsolatedAsyncioTestCase):
         encounter_request = next(request for request in requests if request.url.path == "/fhir/Encounter")
         self.assertEqual(encounter_request.url.params.get_list("date"),
                          [f"ge{today}", f"le{today_date + timedelta(days=365)}"])
+        history_request = next(request for request in requests if request.url.path == "/fhir/Encounter" and f"le{yesterday}" in request.url.params.get_list("date"))
+        self.assertEqual(history_request.url.params.get_list("date"),
+                         [f"ge{today_date - timedelta(days=365)}", f"le{yesterday}"])
         charge_request = next(request for request in requests if request.url.path == "/fhir/ChargeItem")
         self.assertEqual(charge_request.url.params["context"], "Encounter/encounter-1")
         self.assertEqual(charge_request.url.params["subject"], "Patient/patient-1")

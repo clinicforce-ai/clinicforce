@@ -271,6 +271,12 @@ export default function InsuranceVerificationV2({ onBack, staffMode = false, onU
           })}</div>
         </section>}
 
+        {ecwPreview && <section className="v2-workflow" aria-labelledby="recent-ecw-visits">
+          <p className="section-kicker">eClinicalWorks history</p><h2 id="recent-ecw-visits">Recent completed appointments</h2>
+          <p>These prior visits are context only. Their services are never copied into the appointment being estimated.</p>
+          {ecwSource?.recent_completed_appointments?.length ? <div className="v2-service-list">{ecwSource.recent_completed_appointments.map((appointment, index) => <div key={`${appointment.date}-${index}`}><strong>{appointment.date}</strong><span>{readable(appointment.status)} · {appointment.visit_type === 'new' ? 'New patient' : appointment.visit_type === 'established' ? 'Established patient' : 'Visit status not returned'}</span><small>{appointment.reason || 'Reason not returned'}{appointment.coded_services.length ? ` · CPT/HCPCS: ${appointment.coded_services.join(', ')}` : ''}</small></div>)}</div> : <p className="v2-next-step">{ecwSource?.history_status === 'timed_out' ? 'eClinicalWorks did not respond in time for history. Reload to retry.' : ecwSource?.history_status === 'unavailable' ? 'eClinicalWorks did not make appointment history available to this app.' : 'No completed appointments were returned from the last 12 months.'}</p>}
+        </section>}
+
         <details className="v2-technical">
           <summary>Patient, payer, benefits, and response details</summary>
           <div className="v2-technical-body">
