@@ -41,13 +41,21 @@ export interface V2Transaction {
 }
 export interface V2Case {
   id: string; revision: number; created_at: string; expires_at: string | null; environment: 'demo' | 'production'
-  sources: Partial<Record<V2Document | 'ecw', { filename?: string; sha256?: string; observed_at?: string; retrieved_at?: string; system?: string; appointment_date?: string; appointment_status?: string; payer?: string; location?: string; rate_count?: number; notes?: string[] }>>
+  sources: Partial<Record<V2Document | 'ecw', {
+    filename?: string; sha256?: string; observed_at?: string; retrieved_at?: string; system?: string
+    appointment_date?: string; appointment_status?: string; payer?: string; location?: string
+    billing_provider?: { name?: string; npi?: string }; rendering_provider?: { name?: string; npi?: string; roles?: string[] }
+    missing?: string[]; timed_out_resources?: string[]; resources?: Record<string, number>
+    rate_count?: number; notes?: string[]
+  }>>
   missing: string[]
   missing_by_resource: Record<V2Resource, string[]>
   inputs: {
     patient: { patient_first_name?: string; patient_last_name?: string; patient_birth_date?: string }
+    subscriber?: { firstName?: string; lastName?: string; birthDate?: string; memberId?: string }
     provider: { npi?: string; lastName?: string; addressLine1?: string; city?: string; stateCode?: string; zipCode?: string }
-    member_id?: string; payer_id?: string; relationship?: string; service_date?: string; reason?: string
+    member_id?: string; payer_id?: string; group_number?: string; relationship?: string; patient_phone?: string
+    service_date?: string; reason?: string
     diagnoses: string[]; coverage_missing: string[]; review_missing: string[]
     lines: Array<{ code: string; description?: string; units?: string; charge?: string; cash_cents?: number | null; service_status?: 'scheduled' | 'possible'; modifiers: string[] }>
   }

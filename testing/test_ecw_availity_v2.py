@@ -21,17 +21,27 @@ class EcwBackendSourceTests(unittest.IsolatedAsyncioTestCase):
     async def test_slow_cached_patient_read_uses_the_verified_link(self):
         profile = {"patient_first_name": "Pat", "patient_last_name": "Example",
                    "patient_birth_date": "1980-01-01", "gender": "F"}
-        with patch.object(ecw_backend, "_read", new=AsyncMock(side_effect=asyncio.TimeoutError)):
+        with patch.object(ecw_backend, "_read", new=AsyncMock(side_effect=asyncio.TimeoutError)), \
+                patch.object(ecw_backend, "_search", new=AsyncMock(side_effect=asyncio.TimeoutError)):
             patient, timed_out = await ecw_backend._cached_patient(None, "", "", "patient-1", profile)
         self.assertEqual((patient["id"], patient["birthDate"], patient["gender"]),
                          ("patient-1", "1980-01-01", "female"))
         self.assertEqual(timed_out, "Patient")
 
     async def test_slow_supporting_reference_becomes_an_explicit_gap(self):
-        with patch.object(ecw_backend, "_read", new=AsyncMock(side_effect=asyncio.TimeoutError)):
+        with patch.object(ecw_backend, "_read", new=AsyncMock(side_effect=asyncio.TimeoutError)), \
+                patch.object(ecw_backend, "_search", new=AsyncMock(side_effect=asyncio.TimeoutError)):
             resource, timed_out = await ecw_backend._bounded_read(None, "", "", "Organization/payer-1")
         self.assertEqual(resource, {})
         self.assertEqual(timed_out, "Organization")
+
+    async def test_slow_direct_read_retries_with_supported_id_search(self):
+        practitioner = {"resourceType": "Practitioner", "id": "provider-1"}
+        with patch.object(ecw_backend, "_read", new=AsyncMock(side_effect=asyncio.TimeoutError)), \
+                patch.object(ecw_backend, "_search", new=AsyncMock(return_value=[practitioner])) as search:
+            resource, timed_out = await ecw_backend._bounded_read(None, "issuer", "token", "Practitioner/provider-1")
+        self.assertEqual((resource, timed_out), (practitioner, None))
+        search.assert_awaited_once_with(None, "issuer", "token", "Practitioner", {"_id": "provider-1"})
 
     async def test_backend_token_and_fhir_resources_become_availity_inputs(self):
         today_date = datetime.now(ZoneInfo("America/New_York")).date()
@@ -45,8 +55,16 @@ class EcwBackendSourceTests(unittest.IsolatedAsyncioTestCase):
             "Coverage": [{"resourceType": "Coverage", "id": "coverage-1", "status": "active", "subscriberId": "MEMBER123", "beneficiary": {"reference": "Patient/patient-1"}, "subscriber": {"reference": "Patient/patient-1"}, "relationship": {"coding": [{"code": "self"}]}, "payor": [{"reference": "Organization/payer-1"}], "period": {"start": "2026-01-01"}, "class": [{"type": {"coding": [{"code": "group"}]}, "value": "GROUP123"}]}],
             "Encounter": [{"resourceType": "Encounter", "id": "encounter-1", "status": "planned", "period": {"start": f"{today}T14:00:00Z"}, "reasonCode": [{"text": "Neuropathy consultation"}], "participant": [{"individual": {"reference": "Practitioner/provider-1"}}], "location": [{"location": {"reference": "Location/location-1"}}]}],
             "ServiceRequest": [{"resourceType": "ServiceRequest", "id": "order-1", "encounter": {"reference": "Encounter/encounter-1"}, "occurrenceDateTime": f"{today}T14:00:00Z", "code": {"coding": [{"system": "http://www.ama-assn.org/go/cpt", "code": "99204"}]}, "quantityQuantity": {"value": 1}, "reasonCode": [{"coding": [{"system": "http://hl7.org/fhir/sid/icd-10-cm", "code": "G62.9"}]}]}],
+            "Procedure": [{"resourceType": "Procedure", "id": "procedure-1", "status": "preparation",
+                           "encounter": {"reference": "Encounter/encounter-1"},
+                           "code": {"coding": [{"system": "http://www.ama-assn.org/go/cpt", "code": "99204", "display": "New patient consultation"}]},
+                           "quantity": {"value": 1},
+                           "reasonCode": [{"coding": [{"system": "http://hl7.org/fhir/sid/icd-10-cm", "code": "G62.9"}]}]},
+                          {"resourceType": "Procedure", "id": "unrelated-history", "status": "completed",
+                           "code": {"coding": [{"system": "http://www.ama-assn.org/go/cpt", "code": "93000"}]}}],
             "ChargeItem": [],
-            "Condition": [],
+            "Condition": [{"resourceType": "Condition", "id": "unrelated-condition",
+                           "code": {"coding": [{"system": "http://hl7.org/fhir/sid/icd-10-cm", "code": "E11.9"}]}}],
         }
         reads = {
             "/fhir/Organization/payer-1": {"resourceType": "Organization", "id": "payer-1", "name": "Test Health Plan"},
@@ -80,12 +98,19 @@ class EcwBackendSourceTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(missing, ["eClinicalWorks FHIR did not return each billed line amount required by Availity PCE. Enable the practice-management/billing API field for this app; Availity does not supply this request input."])
         self.assertEqual((inputs["member_id"], inputs["payer_id"], inputs["relationship"]), ("MEMBER123", "TESTPAYER", "18"))
-        self.assertEqual(inputs["lines"], [{"code": "99204", "units": "1", "charge": None, "modifiers": [], "diagnosis": "G629", "service_status": "scheduled"}])
-        self.assertEqual(inputs["reason"], "Reason: Neuropathy consultation; Planned service: 99204; Order reason: G62.9")
+        self.assertEqual(inputs["lines"], [{"code": "99204", "units": "1", "charge": None, "modifiers": [],
+                                            "diagnosis": "G629", "service_status": "scheduled",
+                                            "description": "New patient consultation"}])
+        self.assertEqual(inputs["reason"], "Reason: Neuropathy consultation; Planned service: 99204; Order reason: G62.9; Procedure: New patient consultation; Procedure reason: G62.9")
         self.assertEqual(inputs["provider"]["npi"], "1234567893")
         self.assertEqual(source["appointment_date"], today)
         self.assertEqual(source["_patient_id"], "patient-1")
         self.assertEqual(source["timed_out_resources"], [])
+        self.assertEqual(source["missing"], [])
+        self.assertEqual(source["resources"]["Procedure"], 2)
+        self.assertEqual(source["resources"]["Condition"], 1)
+        self.assertIn("system/Procedure.read", ecw_backend.SCOPES)
+        self.assertIn("system/PractitionerRole.read", ecw_backend.SCOPES)
         self.assertNotIn("system/Appointment.read", ecw_backend.SCOPES)
         self.assertNotIn("system/ChargeItem.read", ecw_backend.SCOPES)
         token_request = next(request for request in requests if request.url.path == "/token")
@@ -101,6 +126,12 @@ class EcwBackendSourceTests(unittest.IsolatedAsyncioTestCase):
         charge_request = next(request for request in requests if request.url.path == "/fhir/ChargeItem")
         self.assertEqual(charge_request.url.params["context"], "Encounter/encounter-1")
         self.assertEqual(charge_request.url.params["subject"], "Patient/patient-1")
+        procedure_request = next(request for request in requests if request.url.path == "/fhir/Procedure")
+        self.assertEqual(dict(procedure_request.url.params), {"patient": "patient-1", "encounter": "encounter-1"})
+        service_request = next(request for request in requests if request.url.path == "/fhir/ServiceRequest")
+        self.assertEqual(dict(service_request.url.params), {"patient": "patient-1", "encounter": "encounter-1"})
+        condition_request = next(request for request in requests if request.url.path == "/fhir/Condition")
+        self.assertEqual(dict(condition_request.url.params), {"patient": "patient-1", "encounter": "encounter-1"})
 
         requests.clear()
         with patch.dict(os.environ, environment), patch.object(ecw, "ECW_KMS_KEY_ID", "kms-key"), patch.object(ecw, "_client_assertion", return_value="signed-assertion"):

@@ -187,10 +187,14 @@ class StaffInsuranceBridgeTests(unittest.IsolatedAsyncioTestCase):
         inputs["subscriber"] = {"firstName": "Pat", "lastName": "Example", "birthDate": "1990-01-01", "memberId": "MEM123"}
         practice = {"payer_aliases": {"Synthetic payer": "SYNTHETIC"}}
         ecw_result = (inputs, [], {"system": "eClinicalWorks", "payer": "Synthetic payer", "appointment_date": "2026-09-17"})
+        refreshed_inputs = copy.deepcopy(inputs)
+        refreshed_inputs["reason"] = "Updated eCW visit reason"
+        refreshed_result = (refreshed_inputs, [], {"system": "eClinicalWorks", "payer": "Synthetic payer",
+                                                    "appointment_date": "2026-09-18"})
         with patch.dict(os.environ, {"STAFF_INTEGRATION_PRACTICE_ID": "", "STAFF_INTEGRATION_PRACTICE_IDS": f"primary, {intake['practice_id']}"}), \
                 patch.object(insurance_v2, "configuration", return_value=(SimpleNamespace(environment="demo", client_id="", client_secret=""), practice, "synthetic")), \
                 patch.object(insurance_v2.ecw_backend, "configured", return_value=True), \
-                patch.object(insurance_v2.ecw_backend, "fetch_inputs", new=AsyncMock(return_value=ecw_result)) as fetch:
+                patch.object(insurance_v2.ecw_backend, "fetch_inputs", new=AsyncMock(side_effect=[ecw_result, refreshed_result])) as fetch:
             configuration = await self.client.get("/api/doctor/insurance/v2/configuration", headers=headers)
             self.assertTrue(configuration.json()["ecw_configured"])
             response = await self.client.post("/api/doctor/insurance/v2/cases", headers=headers, json={})
@@ -199,6 +203,13 @@ class StaffInsuranceBridgeTests(unittest.IsolatedAsyncioTestCase):
             fetch.assert_awaited_once_with({"patient_first_name": "Pat", "patient_last_name": "Example",
                                             "patient_birth_date": "1990-01-01", "gender": "U",
                                             "ecw_patient_id": None}, practice)
+            refreshed = await self.client.post("/api/doctor/insurance/v2/cases", headers=headers, json={})
+            self.assertEqual(refreshed.status_code, 200, refreshed.text)
+            self.assertEqual(refreshed.json()["id"], response.json()["id"])
+            self.assertEqual(refreshed.json()["revision"], 1)
+            self.assertEqual(refreshed.json()["inputs"]["reason"], "Updated eCW visit reason")
+            self.assertEqual(refreshed.json()["sources"]["ecw"]["appointment_date"], "2026-09-18")
+            self.assertEqual(fetch.await_count, 2)
             blocked = await self.client.post(f"/api/doctor/insurance/v2/cases/{response.json()['id']}/transactions/coverage", headers=headers)
             self.assertEqual(blocked.status_code, 409, "Real eCW data must never be sent to Availity demo")
             self.assertIn("No patient data was submitted", blocked.text)

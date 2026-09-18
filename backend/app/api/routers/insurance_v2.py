@@ -337,7 +337,7 @@ async def get_configuration(request: Request):
                       "practice_configured": bool(practice.get("providers") and practice.get("submitter_id")),
                       "ecw_configured": ecw_backend.configured() if session.get("practice_id") or settings.environment == "production" else True,
                       "production_enabled": settings.environment == "production" and practice.get("production_enabled") is True,
-                      "message": ("ClinicForce will load the live eClinicalWorks appointment. Availity payer checks remain disabled while its connection is in demo."
+                      "message": ("ClinicForce will load the live appointment and available insurance details from eClinicalWorks."
                                   if staff_ecw else "Synthetic transactions only; demo results do not describe the QR patient."
                                   if settings.environment == "demo" else "ClinicForce loads the scheduled patient, coverage, providers and coded services from eClinicalWorks, then sends the reviewed request to Availity.")})
 
@@ -382,11 +382,24 @@ async def create(body: Start, request: Request):
         except ecw_backend.EcwBackendError as exc:
             raise HTTPException(502, str(exc)) from exc
         ecw_patient_id = source.pop("_patient_id", None)
+        if ecw_patient_id:
+            identity["ecw_patient_id"] = ecw_patient_id
         sources = {"ecw": source}
         if session.get("practice_id"):
             if ecw_patient_id:
                 await run_in_threadpool(staff_store.set_ecw_patient_id, session["patient_id"], session["practice_id"], ecw_patient_id)
             validate_staff_coverage(session["intake"]["fields"], inputs, source, practice)
+        existing = await run_in_threadpool(
+            store.latest_v2, session["patient_id"], session["share_manifest_id"], binding, **_scope(session),
+        )
+        if existing and not existing.get("transactions"):
+            fee_source = existing.get("sources", {}).get("fees")
+            existing.update(profile=identity, sources={**existing.get("sources", {}), **sources},
+                            inputs=inputs, missing=missing, discovery={})
+            existing.pop("suggestions", None)
+            if fee_source:
+                apply_fee_schedule(existing, fee_source)
+            return _response(public(await save(existing, session, "ecw-refreshed")))
     try:
         case = await run_in_threadpool(store.create_case, session["patient_id"], session["share_manifest_id"], binding,
                                        {"source_mode": "availity", "binding": binding, "environment": settings.environment,
