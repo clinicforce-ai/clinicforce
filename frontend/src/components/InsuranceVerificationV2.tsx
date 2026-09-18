@@ -114,7 +114,7 @@ export default function InsuranceVerificationV2({ onBack, staffMode = false, onU
   const hasPending = !!insuranceCase && resources.some(resource => ['submitting', 'pending'].includes(insuranceCase.transactions[resource.id]?.outcome || ''))
 
   useEffect(() => {
-    if (!insuranceCase || busy || error || !insuranceCase.sources.fees || !insuranceCase.inputs.reason || insuranceCase.suggestions || servicesLocked) return
+    if (!insuranceCase || busy || error || (!insuranceCase.inputs.reason && !insuranceCase.inputs.lines.length) || insuranceCase.suggestions || servicesLocked) return
     const key = `${insuranceCase.id}:${insuranceCase.revision}:${insuranceCase.inputs.reason}`
     if (autoSuggested.current === key) return
     autoSuggested.current = key
@@ -195,12 +195,13 @@ export default function InsuranceVerificationV2({ onBack, staffMode = false, onU
 
       {insuranceCase && <>
         {ecwPreview ? <section className="v2-decision v2-decision-verify" aria-labelledby="front-desk-answer">
-          <p>eClinicalWorks appointment</p>
-          <h2 id="front-desk-answer">Review the live visit and suggested services</h2>
+          <p>Appointment to estimate</p>
+          <h2 id="front-desk-answer">Review this scheduled visit, then choose the clinician-reviewed services.</h2>
           <div className="v2-decision-grid">
             <div><span>Service date</span><strong>{insuranceCase.inputs.service_date || 'Not returned'}</strong><small>{insuranceCase.sources.ecw?.appointment_status || 'Appointment status not returned'}</small></div>
             <div><span>Reason for visit</span><strong>{insuranceCase.inputs.reason || 'Not returned'}</strong><small>Exact context returned by eClinicalWorks</small></div>
             <div><span>Patient visit status</span><strong>{insuranceCase.inputs.visit_type === 'new' ? 'New patient' : insuranceCase.inputs.visit_type === 'established' ? 'Established patient' : 'Not returned'}</strong><small>Only an explicit eCW appointment label is used; history is not inferred.</small></div>
+            <div><span>CPT/HCPCS from eCW</span><strong>{insuranceCase.inputs.lines.length ? `${insuranceCase.inputs.lines.length} coded service${insuranceCase.inputs.lines.length === 1 ? '' : 's'}` : 'Not returned'}</strong><small>{insuranceCase.inputs.lines.length ? 'Use these source-coded services first.' : 'ClinicForce will prepare review-only choices from the available context.'}</small></div>
           </div>
         </section> : <><section className={`v2-decision v2-decision-${insuranceCase.summary.action}`} aria-labelledby="front-desk-answer">
           <p>Front-desk answer</p>
@@ -223,7 +224,12 @@ export default function InsuranceVerificationV2({ onBack, staffMode = false, onU
         </section></>}
 
         <section className="v2-services" aria-labelledby="services-heading">
-          <div><p className="section-kicker">Services and clinic prices</p><h2 id="services-heading">Confirm what is being estimated</h2><p>eClinicalWorks coded services are used first. The fee CSV supplies the clinic’s billed charge and cash price. It never supplies insurance benefits.</p></div>
+          <div><p className="section-kicker">{ecwPreview ? 'Step 1 · clinical coding review' : 'Services and clinic prices'}</p><h2 id="services-heading">{ecwPreview ? 'Choose the services for this appointment' : 'Confirm what is being estimated'}</h2><p>{ecwPreview ? 'Start with codes attached to this eCW appointment. If eCW has not returned a code, ClinicForce can show review-only candidates from the appointment context. A clinician must confirm every selection.' : 'eClinicalWorks coded services are used first. The fee CSV supplies the clinic’s billed charge and cash price. It never supplies insurance benefits.'}</p></div>
+          {ecwPreview && <div className="v2-coding-context" aria-label="eClinicalWorks coding context">
+            <div><span>Reason returned by eCW</span><strong>{insuranceCase.inputs.reason || 'No reason returned'}</strong></div>
+            <div><span>Visit status</span><strong>{insuranceCase.inputs.visit_type ? `${insuranceCase.inputs.visit_type === 'new' ? 'New' : 'Established'} patient` : 'Not returned'}</strong></div>
+            <div><span>Complexity evidence</span><strong>Not returned</strong><small>Documented medical decision making or qualifying time is required before selecting an E/M level.</small></div>
+          </div>}
           {staffMode && <StaffLibraryPicker kinds={['fees']} disabled={servicesLocked || !!busy} onFile={(_kind, file) => uploadFees(file)} />}
           <label className={`v2-fee-upload ${servicesLocked ? 'is-disabled' : ''}`}>
             <FileSpreadsheet size={22} aria-hidden="true" />
@@ -232,10 +238,11 @@ export default function InsuranceVerificationV2({ onBack, staffMode = false, onU
           </label>
           {!!insuranceCase.inputs.lines.length && <div className="v2-service-list">{insuranceCase.inputs.lines.map(line => <div key={`${line.code}-${line.service_status}`}><strong>{line.code}</strong><span>{line.description || 'Description not returned'}</span><small>{readable(line.service_status || 'scheduled')} · {line.units || 'missing'} unit(s) · billed {line.charge ? `$${line.charge}` : 'charge missing'} · cash {money(line.cash_cents)}</small></div>)}</div>}
           {servicesLocked && <p className="v2-next-step">Services and prices are locked because a payer request already uses them. Start a new case to make a change.</p>}
-          {insuranceCase.sources.fees && insuranceCase.inputs.reason && !servicesLocked && <button className="button button-secondary" type="button" disabled={!!busy} onClick={() => void perform('Finding possible services in the clinic fee list…', () => suggestV2Services(insuranceCase.id))}><Sparkles size={16} aria-hidden="true" /> {insuranceCase.suggestions ? 'Regenerate eCW service choices' : 'Suggest services from eCW appointment'}</button>}
+          {(insuranceCase.inputs.reason || insuranceCase.inputs.lines.length > 0) && !servicesLocked && <button className="button button-secondary" type="button" disabled={!!busy} onClick={() => void perform('Finding clinician-reviewable services from the eCW appointment…', () => suggestV2Services(insuranceCase.id))}><Sparkles size={16} aria-hidden="true" /> {insuranceCase.suggestions ? 'Regenerate eCW service choices' : 'Prepare eCW service choices'}</button>}
           {insuranceCase.suggestions && <div className="v2-suggestions">
-            <div className="v2-suggestion-warning"><AlertTriangle size={18} aria-hidden="true" /><span><strong>Clinician review required.</strong> eCW-coded services are shown first. ClinicForce then narrows the clinic’s own fee list from the appointment reason. It cannot choose an E/M level, diagnose the patient, or establish medical necessity.</span></div>
-            {!insuranceCase.suggestions.groups.length && <p>No service in this clinic fee CSV can be suggested safely from the eClinicalWorks visit reason.</p>}
+            <div className="v2-suggestion-warning"><AlertTriangle size={18} aria-hidden="true" /><span><strong>Clinician review required.</strong> eCW-coded services are shown first. When eCW has no code, ClinicForce uses only the returned appointment context to prepare candidates. It cannot choose an E/M level, diagnose the patient, or establish medical necessity.</span></div>
+            {insuranceCase.suggestions.requires_fee_schedule && <div className="v2-fee-required"><strong>Before payer review:</strong> upload the clinic fee CSV to attach billed charges and cash prices to the selected codes.</div>}
+            {!insuranceCase.suggestions.groups.length && <p>No CPT/HCPCS choice can be supported from the eCW details returned for this appointment. Ask the clinician to document the planned service and, for an E/M visit, the new/established status plus MDM or qualifying time in eCW, then reload.</p>}
             {insuranceCase.suggestions.groups.map(group => <fieldset key={group.id}>
               <legend>{group.label}</legend>{group.description && <p>{group.description}</p>}
               {group.codes.map(code => { const line = insuranceCase.suggestions!.lines.find(item => item.code === code)!; const choice = choices[code] || { selected: false, quantity: 1, service_status: 'scheduled' as const }; return <div className={`v2-suggestion ${choice.selected ? 'selected' : ''}`} key={code}>
@@ -244,7 +251,7 @@ export default function InsuranceVerificationV2({ onBack, staffMode = false, onU
               </div> })}
             </fieldset>)}
             {!!insuranceCase.suggestions.notes.length && <ul>{insuranceCase.suggestions.notes.map((note, index) => <li key={index}>{note}</li>)}</ul>}
-            {!!insuranceCase.suggestions.groups.length && <button className="button button-primary" type="button" disabled={!!busy} onClick={confirmServices}><Check size={16} aria-hidden="true" /> Confirm reviewed services</button>}
+            {!!insuranceCase.suggestions.groups.length && <button className="button button-primary" type="button" disabled={!!busy} onClick={confirmServices}><Check size={16} aria-hidden="true" /> Save clinician-reviewed services</button>}
           </div>}
         </section>
 

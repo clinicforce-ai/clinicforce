@@ -71,6 +71,7 @@ export interface V2Case {
     groups: Array<{ id: string; label: string; category: string; selection_mode: 'single' | 'multiple'; description?: string; requires_groups: string[]; codes: string[] }>
     lines: Array<{ code: string; description?: string; charge?: string; cash_cents?: number | null; group_id: string; recommendation_reason: string; requires_quantity: boolean; unit_label: string }>
     notes: string[]
+    requires_fee_schedule?: boolean
   }
   summary: {
     action: 'collect' | 'verify' | 'do_not_schedule' | 'self_pay'; heading: string

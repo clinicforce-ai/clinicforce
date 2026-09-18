@@ -1,8 +1,10 @@
-"""Validate case-specific suggested groups against uploaded rates, never a CPT catalog."""
+"""Validate case-specific suggested groups, with optional unpriced clinician review."""
+import re
+
 from app.insurance.golden import GoldenCaseError
 
 
-def grouped_candidates(suggestions: dict, rates: list[dict]) -> tuple[list, list]:
+def grouped_candidates(suggestions: dict, rates: list[dict], *, allow_unpriced: bool = False) -> tuple[list, list]:
     if not isinstance(suggestions, dict) or not isinstance(suggestions.get("groups"), list):
         raise GoldenCaseError("The suggested code grouping could not be read. Generate suggestions again.")
     allowed = {line["code"]: line for line in rates}
@@ -21,6 +23,9 @@ def grouped_candidates(suggestions: dict, rates: list[dict]) -> tuple[list, list
                 continue
             code = str(candidate.get("code", "")).upper()
             reason = str(candidate.get("reason", "")).strip()
+            if code not in allowed and allow_unpriced and re.fullmatch(r"(?:\d{5}|[A-Z]\d{4}|\d{4}[A-Z])", code):
+                allowed[code] = {"code": code, "description": str(candidate.get("description") or code)[:240],
+                                 "charge": None, "cash_cents": None, "service_status": "scheduled"}
             if code not in allowed or code in seen or not reason:
                 continue
             seen.add(code)
