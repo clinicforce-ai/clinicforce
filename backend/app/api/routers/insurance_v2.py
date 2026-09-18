@@ -313,6 +313,73 @@ def apply_fee_schedule(case: dict, source: dict) -> None:
     refresh_missing(case)
 
 
+def _suggestion_context(inputs: dict) -> str:
+    """Make the limits of eCW appointment data explicit to coding decision support."""
+    reason = str(inputs.get("reason") or "").strip()
+    visit_type = inputs.get("visit_type")
+    status = (f"Patient visit status from eClinicalWorks: {visit_type} patient."
+              if visit_type in {"new", "established"}
+              else "Patient visit status: eClinicalWorks did not explicitly label this appointment new or established; do not infer it.")
+    return "\n".join((reason, status,
+                       "E/M complexity: eClinicalWorks did not return documented medical decision making or qualifying time. Do not choose an E/M level without clinician confirmation."))
+
+
+def _ecw_coded_groups(inputs: dict, rates: list[dict]) -> tuple[list[dict], list[str]]:
+    """Present actual eCW coded services first, constrained to this clinic's fee file."""
+    available = {str(rate.get("code") or "").upper() for rate in rates}
+    coded, unavailable = [], []
+    for line in inputs.get("lines", []):
+        code = str(line.get("code") or "").upper()
+        if not code:
+            continue
+        if code in available:
+            coded.append({"code": code,
+                          "reason": "Clinician-coded service returned by eClinicalWorks for this appointment.",
+                          "requires_quantity": not bool(line.get("units")),
+                          "unit_label": "unit"})
+        else:
+            unavailable.append(code)
+    if not coded:
+        return [], list(dict.fromkeys(unavailable))
+    return [{"id": "ecw-clinician-coded-services", "label": "Services coded in eClinicalWorks",
+             "category": "other", "selection_mode": "multiple",
+             "description": "These codes came from the eClinicalWorks appointment. Confirm the intended services and units before sending any payer request.",
+             "requires_groups": [], "codes": coded}], list(dict.fromkeys(unavailable))
+
+
+def _without_codes(suggestions: dict, excluded: set[str]) -> dict:
+    """Never show the same source code again as a model-generated alternative."""
+    groups = []
+    for group in suggestions.get("groups", []):
+        if not isinstance(group, dict):
+            continue
+        codes = [candidate for candidate in group.get("codes", [])
+                 if isinstance(candidate, dict) and str(candidate.get("code") or "").upper() not in excluded]
+        if codes:
+            groups.append({**group, "codes": codes})
+    return {**suggestions, "groups": groups}
+
+
+def build_service_suggestions(case: dict) -> tuple[list[dict], list[dict], list[str]]:
+    """Build clinician-reviewable choices from source codes plus appointment context."""
+    rates = case.get("sources", {}).get("fees", {}).get("lines", [])
+    inputs = case.get("inputs", {})
+    source_groups, missing_fee_codes = _ecw_coded_groups(inputs, rates)
+    source_codes = {candidate["code"] for group in source_groups for candidate in group["codes"]}
+    suggested = cpt_suggester.suggest_cpt_codes(_suggestion_context(inputs), rates)
+    raw = _without_codes(suggested, source_codes)
+    raw["groups"] = [*source_groups, *raw.get("groups", [])]
+    lines, groups = cpt_rules.grouped_candidates(raw, rates)
+    groups.sort(key=lambda group: group["id"] != "ecw-clinician-coded-services")
+    notes = [str(note)[:1000] for note in raw.get("notes", []) if isinstance(note, str)][:20]
+    if missing_fee_codes:
+        notes.append("eClinicalWorks returned coded service(s) absent from this clinic fee CSV: " + ", ".join(missing_fee_codes) + ". Add those fee rows before estimating them.")
+    if inputs.get("visit_type") not in {"new", "established"}:
+        notes.append("eClinicalWorks did not explicitly return new-versus-established status. Confirm it with the clinician; do not infer it from this appointment.")
+    notes.append("CPT choices require clinician review. eCW did not provide medical decision making or qualifying time, so ClinicForce cannot establish an E/M complexity level.")
+    return lines, groups, notes
+
+
 def front_desk_summary(case: dict) -> dict:
     coverage = case.get("transactions", {}).get("coverage", {}).get("result", {})
     plans = coverage.get("plans") or []
@@ -547,14 +614,12 @@ async def suggest_services(case_id: str, request: Request):
     if not reason:
         raise HTTPException(422, "eClinicalWorks must provide a reason for visit before ClinicForce can suggest services.")
     try:
-        raw = await run_in_threadpool(cpt_suggester.suggest_cpt_codes, reason, rates)
-        lines, groups = cpt_rules.grouped_candidates(raw, rates)
+        lines, groups, notes = await run_in_threadpool(build_service_suggestions, case)
     except (ValueError, golden.GoldenCaseError) as exc:
         raise HTTPException(422, str(exc)) from exc
     except Exception:
         raise HTTPException(503, "Service suggestions are temporarily unavailable. Staff can use clinician-coded services from eClinicalWorks.") from None
-    case["suggestions"] = {"groups": groups, "lines": lines,
-                           "notes": [str(note)[:1000] for note in raw.get("notes", []) if isinstance(note, str)][:20]}
+    case["suggestions"] = {"groups": groups, "lines": lines, "notes": notes}
     return _response(public(await save(case, session, "service-suggestions-generated")))
 
 

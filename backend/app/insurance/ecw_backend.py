@@ -26,6 +26,8 @@ SCOPES = (
 )
 REFERENCE_TIMEOUT_SECONDS = 4
 SEARCH_TIMEOUT_SECONDS = 6
+HISTORY_TIMEOUT_SECONDS = 3
+HISTORY_DAYS = 365
 
 
 class EcwBackendError(RuntimeError):
@@ -127,12 +129,12 @@ async def _search(client: httpx.AsyncClient, issuer: str, token: str, resource: 
 
 
 async def _bounded_search(client: httpx.AsyncClient, issuer: str, token: str, resource: str,
-                          params: dict[str, str] | list[tuple[str, str]], *, attempts: int = 1
-                          ) -> tuple[list[dict[str, Any]], str | None]:
+                          params: dict[str, str] | list[tuple[str, str]], *, attempts: int = 1,
+                          timeout_seconds: int = SEARCH_TIMEOUT_SECONDS) -> tuple[list[dict[str, Any]], str | None]:
     for _ in range(attempts):
         try:
             return await asyncio.wait_for(
-                _search(client, issuer, token, resource, params), timeout=SEARCH_TIMEOUT_SECONDS,
+                _search(client, issuer, token, resource, params), timeout=timeout_seconds,
             ), None
         except (asyncio.TimeoutError, httpx.TimeoutException):
             pass
@@ -140,10 +142,10 @@ async def _bounded_search(client: httpx.AsyncClient, issuer: str, token: str, re
 
 
 async def _optional_search(client: httpx.AsyncClient, issuer: str, token: str, resource: str,
-                           params: dict[str, str] | list[tuple[str, str]]
+                           params: dict[str, str] | list[tuple[str, str]], *, timeout_seconds: int = SEARCH_TIMEOUT_SECONDS
                            ) -> tuple[list[dict[str, Any]], str | None, str | None]:
     try:
-        rows, timed_out = await _bounded_search(client, issuer, token, resource, params)
+        rows, timed_out = await _bounded_search(client, issuer, token, resource, params, timeout_seconds=timeout_seconds)
         return rows, timed_out, None
     except EcwBackendError:
         return [], None, resource
@@ -296,6 +298,32 @@ def _visit_context(visit: dict[str, Any], orders: list[dict[str, Any]], procedur
     return "; ".join(unique)[:2000] or None
 
 
+def _visit_type(visit: dict[str, Any]) -> str | None:
+    """Use only an explicit eCW appointment label; history is not a safe proxy."""
+    labels = _concept_labels(visit.get("type")) + _concept_labels(visit.get("serviceType"))
+    text = " ".join(labels).casefold()
+    if re.search(r"\bnew\s+(?:patient|visit)\b", text):
+        return "new"
+    if re.search(r"\bestablished\s+(?:patient|visit)\b", text):
+        return "established"
+    return None
+
+
+def _history_summary(visit: dict[str, Any], procedures: list[dict[str, Any]], orders: list[dict[str, Any]]) -> dict[str, Any]:
+    """Return a compact history card; never make a past service part of the new request."""
+    encounter_ref = f"Encounter/{visit.get('id')}"
+    related = [*([row for row in procedures if _reference(row.get("encounter")) == encounter_ref]),
+               *([row for row in orders if _reference(row.get("encounter")) == encounter_ref])]
+    labels = []
+    for field in (visit.get("reasonCode"), visit.get("type"), visit.get("serviceType")):
+        labels.extend(_concept_labels(field))
+    codes = list(dict.fromkeys(code for row in related for code in _coding(row, "procedure")))[:12]
+    return {"date": _appointment_date(visit), "status": str(visit.get("status") or "not_returned"),
+            "visit_type": _visit_type(visit) or "not_returned",
+            "reason": "; ".join(dict.fromkeys(" ".join(label.split()) for label in labels if label.strip()))[:500] or None,
+            "coded_services": codes}
+
+
 def _payer_id(payer: dict[str, Any], aliases: Any) -> str | None:
     if not isinstance(aliases, dict):
         return None
@@ -404,6 +432,19 @@ async def fetch_inputs(profile: dict[str, Any], practice: dict[str, Any], *, tra
             service_date = _appointment_date(visit) or today
             encounter_id = str(visit.get("id", ""))
             encounter_ref = f"Encounter/{encounter_id}" if encounter_id else ""
+            # History is context only. A short independent query avoids letting
+            # an eCW history stall block the appointment insurance workflow.
+            history_start = (today_date - timedelta(days=HISTORY_DAYS)).isoformat()
+            history_rows, history_timeout, history_unavailable = await _optional_search(
+                client, issuer, token, "Encounter",
+                [("patient", patient_id), ("date", f"ge{history_start}"), ("date", f"le{today_date - timedelta(days=1)}")],
+                timeout_seconds=HISTORY_TIMEOUT_SECONDS,
+            )
+            completed_history = sorted(
+                (row for row in history_rows if _appointment_date(row) < today
+                 and str(row.get("status") or "").casefold() in {"finished", "completed"}),
+                key=_appointment_date, reverse=True,
+            )[:5]
             # eCW can stall unrelated patient searches when Procedure is requested
             # concurrently; collect it first so it can still enrich the visit.
             procedure_result = await _optional_search(client, issuer, token, "Procedure", query)
@@ -497,6 +538,7 @@ async def fetch_inputs(profile: dict[str, Any], practice: dict[str, Any], *, tra
             rendering = providers.get(rendering_npi, {}) if rendering_npi else {}
 
             relevant_charges = [row for row in charges if _reference(row.get("context")) == encounter_ref]
+            recent_completed_appointments = [_history_summary(row, procedures, orders) for row in completed_history]
             clinical_refs = set(ref for row in [visit, *relevant_orders, *relevant_procedures, *relevant_charges] for ref in _source_references(row))
             relevant_conditions = [row for row in conditions if _reference(row.get("encounter")) == encounter_ref
                                    or f"Condition/{row.get('id')}" in clinical_refs]
@@ -549,6 +591,9 @@ async def fetch_inputs(profile: dict[str, Any], practice: dict[str, Any], *, tra
                 "place_of_service": location_config.get("place_of_service"), "diagnoses": diagnoses,
                 "patient_phone": _phone(patient),
                 "reason": _visit_context(visit, relevant_orders, relevant_procedures, relevant_conditions),
+                # Do not infer new-versus-established from an incomplete FHIR
+                # history search. eCW must label the appointment explicitly.
+                "visit_type": _visit_type(visit),
                 "lines": list(lines.values()),
             }
     except httpx.HTTPError as exc:
@@ -619,6 +664,10 @@ async def fetch_inputs(profile: dict[str, Any], practice: dict[str, Any], *, tra
         ecw_missing.append("The eClinicalWorks appointment did not return its location details.")
     if reference_timeouts:
         ecw_missing.append("eClinicalWorks timed out while retrieving or resolving " + ", ".join(reference_timeouts) + "; reload the appointment to retry.")
+    if history_timeout:
+        ecw_missing.append("eClinicalWorks did not respond in time while loading recent completed appointment history; reload the appointment to retry.")
+    elif history_unavailable:
+        ecw_missing.append("eClinicalWorks rejected or could not return recent completed appointment history for this app.")
     if query_unavailable:
         ecw_missing.append("eClinicalWorks rejected or could not return " + ", ".join(sorted(query_unavailable)) + " for this appointment.")
 
@@ -629,6 +678,9 @@ async def fetch_inputs(profile: dict[str, Any], practice: dict[str, Any], *, tra
     source = {"system": "eClinicalWorks", "retrieved_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
               "_patient_id": patient_id,
               "appointment_date": service_date, "appointment_status": visit.get("status"),
+              "visit_type": inputs.get("visit_type") or "not_returned",
+              "recent_completed_appointments": recent_completed_appointments,
+              "history_status": "timed_out" if history_timeout else "unavailable" if history_unavailable else "loaded",
               "payer": _display(payer), "location": location.get("name"),
               "billing_provider": {"name": _display(billing_resource), "npi": ecw_billing_npi},
               "rendering_provider": {"name": _display(rendering_resource), "npi": ecw_rendering_npi,
@@ -637,6 +689,7 @@ async def fetch_inputs(profile: dict[str, Any], practice: dict[str, Any], *, tra
               "timed_out_resources": reference_timeouts,
               "unavailable_resources": sorted(query_unavailable),
               "resources": {"Coverage": len(coverage_rows), "Encounter": len(encounters),
+                            "PastEncounter": len(completed_history),
                             "ServiceRequest": len(relevant_orders), "Procedure": len(relevant_procedures),
                             "Condition": len(conditions), "PractitionerRole": len(role_resources),
                             "ChargeItem": len(charges)}}

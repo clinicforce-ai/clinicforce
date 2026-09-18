@@ -65,6 +65,7 @@ export default function InsuranceVerificationV2({ onBack, staffMode = false, onU
   const [copied, setCopied] = useState(false)
   const active = useRef(false)
   const pollStarted = useRef<Record<string, number>>({})
+  const autoSuggested = useRef<string>('')
 
   useEffect(() => {
     let canceled = false
@@ -111,6 +112,14 @@ export default function InsuranceVerificationV2({ onBack, staffMode = false, onU
   const coverageActive = !ecwPreview && (demo || coverage?.result?.active === true)
   const servicesLocked = !!insuranceCase && (['estimate', 'procedure_estimate', 'authorization', 'referral'] as V2Resource[]).some(resource => !!insuranceCase.transactions[resource])
   const hasPending = !!insuranceCase && resources.some(resource => ['submitting', 'pending'].includes(insuranceCase.transactions[resource.id]?.outcome || ''))
+
+  useEffect(() => {
+    if (!insuranceCase || busy || error || !insuranceCase.sources.fees || !insuranceCase.inputs.reason || insuranceCase.suggestions || servicesLocked) return
+    const key = `${insuranceCase.id}:${insuranceCase.revision}:${insuranceCase.inputs.reason}`
+    if (autoSuggested.current === key) return
+    autoSuggested.current = key
+    void perform('Finding clinician-reviewable services from the eCW appointment…', () => suggestV2Services(insuranceCase.id))
+  }, [insuranceCase, busy, error, perform, servicesLocked])
 
   const run = (resource: V2Resource) => {
     if (!insuranceCase || ecwPreview) return
@@ -191,6 +200,7 @@ export default function InsuranceVerificationV2({ onBack, staffMode = false, onU
           <div className="v2-decision-grid">
             <div><span>Service date</span><strong>{insuranceCase.inputs.service_date || 'Not returned'}</strong><small>{insuranceCase.sources.ecw?.appointment_status || 'Appointment status not returned'}</small></div>
             <div><span>Reason for visit</span><strong>{insuranceCase.inputs.reason || 'Not returned'}</strong><small>Exact context returned by eClinicalWorks</small></div>
+            <div><span>Patient visit status</span><strong>{insuranceCase.inputs.visit_type === 'new' ? 'New patient' : insuranceCase.inputs.visit_type === 'established' ? 'Established patient' : 'Not returned'}</strong><small>Only an explicit eCW appointment label is used; history is not inferred.</small></div>
           </div>
         </section> : <><section className={`v2-decision v2-decision-${insuranceCase.summary.action}`} aria-labelledby="front-desk-answer">
           <p>Front-desk answer</p>
@@ -222,9 +232,9 @@ export default function InsuranceVerificationV2({ onBack, staffMode = false, onU
           </label>
           {!!insuranceCase.inputs.lines.length && <div className="v2-service-list">{insuranceCase.inputs.lines.map(line => <div key={`${line.code}-${line.service_status}`}><strong>{line.code}</strong><span>{line.description || 'Description not returned'}</span><small>{readable(line.service_status || 'scheduled')} · {line.units || 'missing'} unit(s) · billed {line.charge ? `$${line.charge}` : 'charge missing'} · cash {money(line.cash_cents)}</small></div>)}</div>}
           {servicesLocked && <p className="v2-next-step">Services and prices are locked because a payer request already uses them. Start a new case to make a change.</p>}
-          {insuranceCase.sources.fees && insuranceCase.inputs.reason && !servicesLocked && <button className="button button-secondary" type="button" disabled={!!busy} onClick={() => void perform('Finding possible services in the clinic fee list…', () => suggestV2Services(insuranceCase.id))}><Sparkles size={16} aria-hidden="true" /> {insuranceCase.suggestions ? 'Regenerate suggestions from visit reason' : 'Suggest services from visit reason'}</button>}
+          {insuranceCase.sources.fees && insuranceCase.inputs.reason && !servicesLocked && <button className="button button-secondary" type="button" disabled={!!busy} onClick={() => void perform('Finding possible services in the clinic fee list…', () => suggestV2Services(insuranceCase.id))}><Sparkles size={16} aria-hidden="true" /> {insuranceCase.suggestions ? 'Regenerate eCW service choices' : 'Suggest services from eCW appointment'}</button>}
           {insuranceCase.suggestions && <div className="v2-suggestions">
-            <div className="v2-suggestion-warning"><AlertTriangle size={18} aria-hidden="true" /><span><strong>Clinician review required.</strong> Bedrock can narrow the clinic’s own fee list. It cannot choose an E/M level, diagnose the patient, or establish medical necessity.</span></div>
+            <div className="v2-suggestion-warning"><AlertTriangle size={18} aria-hidden="true" /><span><strong>Clinician review required.</strong> eCW-coded services are shown first. ClinicForce then narrows the clinic’s own fee list from the appointment reason. It cannot choose an E/M level, diagnose the patient, or establish medical necessity.</span></div>
             {!insuranceCase.suggestions.groups.length && <p>No service in this clinic fee CSV can be suggested safely from the eClinicalWorks visit reason.</p>}
             {insuranceCase.suggestions.groups.map(group => <fieldset key={group.id}>
               <legend>{group.label}</legend>{group.description && <p>{group.description}</p>}
@@ -259,6 +269,12 @@ export default function InsuranceVerificationV2({ onBack, staffMode = false, onU
               </div>
             </article>
           })}</div>
+        </section>}
+
+        {ecwPreview && <section className="v2-workflow" aria-labelledby="recent-ecw-visits">
+          <p className="section-kicker">eClinicalWorks history</p><h2 id="recent-ecw-visits">Recent completed appointments</h2>
+          <p>These prior visits are context only. Their services are never copied into the appointment being estimated.</p>
+          {ecwSource?.recent_completed_appointments?.length ? <div className="v2-service-list">{ecwSource.recent_completed_appointments.map((appointment, index) => <div key={`${appointment.date}-${index}`}><strong>{appointment.date}</strong><span>{readable(appointment.status)} · {appointment.visit_type === 'new' ? 'New patient' : appointment.visit_type === 'established' ? 'Established patient' : 'Visit status not returned'}</span><small>{appointment.reason || 'Reason not returned'}{appointment.coded_services.length ? ` · CPT/HCPCS: ${appointment.coded_services.join(', ')}` : ''}</small></div>)}</div> : <p className="v2-next-step">{ecwSource?.history_status === 'timed_out' ? 'eClinicalWorks did not respond in time for history. Reload to retry.' : ecwSource?.history_status === 'unavailable' ? 'eClinicalWorks did not make appointment history available to this app.' : 'No completed appointments were returned from the last 12 months.'}</p>}
         </section>}
 
         <details className="v2-technical">

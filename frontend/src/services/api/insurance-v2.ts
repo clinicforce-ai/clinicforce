@@ -44,6 +44,8 @@ export interface V2Case {
   sources: Partial<Record<V2Document | 'ecw', {
     filename?: string; sha256?: string; observed_at?: string; retrieved_at?: string; system?: string
     appointment_date?: string; appointment_status?: string; payer?: string; location?: string
+    visit_type?: 'new' | 'established' | 'not_returned'; history_status?: 'loaded' | 'timed_out' | 'unavailable'
+    recent_completed_appointments?: Array<{ date: string; status: string; visit_type: string; reason?: string | null; coded_services: string[] }>
     billing_provider?: { name?: string; npi?: string }; rendering_provider?: { name?: string; npi?: string; roles?: string[] }
     missing?: string[]; timed_out_resources?: string[]; unavailable_resources?: string[]; preserved_resources?: string[]
     resources?: Record<string, number>
@@ -56,7 +58,7 @@ export interface V2Case {
     subscriber?: { firstName?: string; lastName?: string; birthDate?: string; memberId?: string }
     provider: { npi?: string; lastName?: string; addressLine1?: string; city?: string; stateCode?: string; zipCode?: string }
     member_id?: string; payer_id?: string; group_number?: string; relationship?: string; patient_phone?: string
-    service_date?: string; reason?: string
+    service_date?: string; reason?: string; visit_type?: 'new' | 'established' | null
     diagnoses: string[]; coverage_missing: string[]; review_missing: string[]
     lines: Array<{ code: string; description?: string; units?: string; charge?: string; cash_cents?: number | null; service_status?: 'scheduled' | 'possible'; modifiers: string[] }>
   }
