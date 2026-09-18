@@ -183,7 +183,11 @@ class WorkflowTests(unittest.IsolatedAsyncioTestCase):
             value = {**deepcopy(case), 'revision': revision + 1}
             self.saved[case['id']] = (patient, share, value)
             return deepcopy(value)
-        for name, replacement in [('create_case', create), ('get_case', get), ('save_v2', save)]:
+        def latest(patient, share, binding):
+            candidates = [deepcopy(value) for owner, shared, value in self.saved.values()
+                          if (owner, shared, value.get('binding')) == (patient, share, binding)]
+            return candidates[-1] if candidates else None
+        for name, replacement in [('create_case', create), ('get_case', get), ('save_v2', save), ('latest_v2', latest)]:
             p = patch.object(v2.store, name, side_effect=replacement); p.start(); self.patches.append(p)
         p = patch.object(v2, 'get_patient_profile', return_value=PatientProfile('patient-1', 'Pat', 'Example', '1980-01-01', 'unknown'))
         p.start(); self.patches.append(p)
