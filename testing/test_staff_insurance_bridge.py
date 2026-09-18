@@ -210,6 +210,7 @@ class StaffInsuranceBridgeTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(refreshed.json()["inputs"]["reason"], "Updated eCW visit reason")
             self.assertEqual(refreshed.json()["sources"]["ecw"]["appointment_date"], "2026-09-18")
             self.assertEqual(fetch.await_count, 2)
+            self.assertEqual(fetch.await_args_list[1].args[0]["ecw_appointment_date"], "2026-09-17")
             blocked = await self.client.post(f"/api/doctor/insurance/v2/cases/{response.json()['id']}/transactions/coverage", headers=headers)
             self.assertEqual(blocked.status_code, 409, "Real eCW data must never be sent to Availity demo")
             self.assertIn("No patient data was submitted", blocked.text)
