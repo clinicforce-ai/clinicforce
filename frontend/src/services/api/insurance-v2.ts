@@ -45,7 +45,8 @@ export interface V2Case {
     filename?: string; sha256?: string; observed_at?: string; retrieved_at?: string; system?: string
     appointment_date?: string; appointment_status?: string; payer?: string; location?: string
     billing_provider?: { name?: string; npi?: string }; rendering_provider?: { name?: string; npi?: string; roles?: string[] }
-    missing?: string[]; timed_out_resources?: string[]; unavailable_resources?: string[]; resources?: Record<string, number>
+    missing?: string[]; timed_out_resources?: string[]; unavailable_resources?: string[]; preserved_resources?: string[]
+    resources?: Record<string, number>
     rate_count?: number; notes?: string[]
   }>>
   missing: string[]

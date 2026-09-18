@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import hashlib
 import json
 import os
@@ -213,6 +214,54 @@ def refresh_missing(case: dict) -> None:
     case["missing"] = list(dict.fromkeys(estimate))
 
 
+def preserve_ecw_snapshot(existing: dict | None, inputs: dict, source: dict) -> None:
+    """Do not replace known eCW facts with blanks when an optional refresh query stalls."""
+    def absent(value) -> bool:
+        return not any(value.values()) if isinstance(value, dict) else not value
+
+    if not existing:
+        return
+    old_source = (existing.get("sources", {}).get("ecw", {}) or {})
+    if old_source.get("appointment_date") != source.get("appointment_date"):
+        return
+    old_inputs = existing.get("inputs", {})
+    timed_out = set(source.get("timed_out_resources", []))
+    preserved: set[str] = set()
+    if "Coverage" in timed_out:
+        for key in ("subscriber", "relationship", "member_id", "payer_id", "group_number"):
+            if absent(inputs.get(key)) and not absent(old_inputs.get(key)):
+                inputs[key] = copy.deepcopy(old_inputs[key])
+                preserved.add("Coverage")
+        if not source.get("payer") and old_source.get("payer"):
+            source["payer"] = old_source["payer"]
+            preserved.add("Coverage")
+    if timed_out & {"ServiceRequest", "Procedure", "Condition"}:
+        for key in ("lines", "diagnoses"):
+            if absent(inputs.get(key)) and not absent(old_inputs.get(key)):
+                inputs[key] = copy.deepcopy(old_inputs[key])
+                preserved.add("coded services")
+    if "Patient" in timed_out and not inputs.get("patient_phone") and old_inputs.get("patient_phone"):
+        inputs["patient_phone"] = old_inputs["patient_phone"]
+        preserved.add("Patient")
+    if "Practitioner" in timed_out:
+        for key in ("provider", "rendering_provider"):
+            if absent(inputs.get(key)) and not absent(old_inputs.get(key)):
+                inputs[key] = copy.deepcopy(old_inputs[key])
+                preserved.add("Practitioner")
+    if "Location" in timed_out:
+        for key in ("place_of_service", "service_type"):
+            if not inputs.get(key) and old_inputs.get(key):
+                inputs[key] = old_inputs[key]
+                preserved.add("Location")
+        if not source.get("location") and old_source.get("location"):
+            source["location"] = old_source["location"]
+            preserved.add("Location")
+    if preserved:
+        source["preserved_resources"] = sorted(preserved)
+        source["missing"] = [*source.get("missing", []),
+                             "Using the last saved eClinicalWorks values for: " + ", ".join(sorted(preserved)) + "."]
+
+
 def request_missing(case: dict, resource: str) -> list[str]:
     inputs = case["inputs"]
     if resource == "coverage":
@@ -392,6 +441,7 @@ async def create(body: Start, request: Request):
         ecw_patient_id = source.pop("_patient_id", None)
         if ecw_patient_id:
             identity["ecw_patient_id"] = ecw_patient_id
+        preserve_ecw_snapshot(existing, inputs, source)
         sources = {"ecw": source}
         if session.get("practice_id"):
             if ecw_patient_id:

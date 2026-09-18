@@ -73,6 +73,21 @@ class GatewayTests(unittest.IsolatedAsyncioTestCase):
 
 
 class ResultsAndIntakeTests(unittest.TestCase):
+    def test_ecw_timeout_refresh_preserves_last_same_appointment_values(self):
+        old_inputs = {"subscriber": {"firstName": "Pat"}, "member_id": "MEMBER123",
+                      "group_number": "GROUP123", "lines": [{"code": "99204"}], "diagnoses": ["G629"]}
+        existing = {"inputs": old_inputs, "sources": {"ecw": {"appointment_date": "2026-09-22",
+                                                                  "payer": "Test payer"}}}
+        inputs = {"subscriber": {"firstName": None}, "member_id": None, "group_number": None,
+                  "lines": [], "diagnoses": []}
+        source = {"appointment_date": "2026-09-22", "payer": None,
+                  "timed_out_resources": ["Coverage", "ServiceRequest"], "missing": []}
+        v2.preserve_ecw_snapshot(existing, inputs, source)
+        self.assertEqual((inputs["member_id"], inputs["group_number"]), ("MEMBER123", "GROUP123"))
+        self.assertEqual((inputs["lines"], inputs["diagnoses"]), ([{"code": "99204"}], ["G629"]))
+        self.assertEqual(source["payer"], "Test payer")
+        self.assertEqual(source["preserved_resources"], ["Coverage", "coded services"])
+
     def test_demo_does_not_require_a_practice_configuration(self):
         with patch.dict(os.environ, {'AVAILITY_ENVIRONMENT': 'demo', 'AVAILITY_SCOPE': DEMO_SCOPE,
                                      'AVAILITY_PRACTICE_CONFIG': 'not-json'}):

@@ -404,10 +404,12 @@ async def fetch_inputs(profile: dict[str, Any], practice: dict[str, Any], *, tra
             service_date = _appointment_date(visit) or today
             encounter_id = str(visit.get("id", ""))
             encounter_ref = f"Encounter/{encounter_id}" if encounter_id else ""
-            coverage_result, order_result, procedure_result, charge_result = await asyncio.gather(
+            # eCW can stall unrelated patient searches when Procedure is requested
+            # concurrently; collect it first so it can still enrich the visit.
+            procedure_result = await _optional_search(client, issuer, token, "Procedure", query)
+            coverage_result, order_result, charge_result = await asyncio.gather(
                 _optional_search(client, issuer, token, "Coverage", query),
                 _optional_search(client, issuer, token, "ServiceRequest", query),
-                _optional_search(client, issuer, token, "Procedure", query),
                 _optional_search(client, issuer, token, "ChargeItem", {
                     "subject": f"Patient/{patient_id}", "context": encounter_ref,
                 }) if encounter_ref else asyncio.sleep(0, result=([], None, None)),
