@@ -141,6 +141,9 @@ class EcwBackendSourceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(charge_request.url.params["subject"], "Patient/patient-1")
         procedure_request = next(request for request in requests if request.url.path == "/fhir/Procedure")
         self.assertEqual(dict(procedure_request.url.params), {"patient": "patient-1"})
+        self.assertLess(requests.index(procedure_request), next(
+            index for index, request in enumerate(requests) if request.url.path == "/fhir/Coverage"
+        ))
         service_request = next(request for request in requests if request.url.path == "/fhir/ServiceRequest")
         self.assertEqual(dict(service_request.url.params), {"patient": "patient-1"})
         self.assertFalse(any(request.url.path == "/fhir/Condition" for request in requests))
