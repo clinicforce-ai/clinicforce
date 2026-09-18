@@ -56,6 +56,21 @@ class EcwBackendSourceTests(unittest.IsolatedAsyncioTestCase):
             )
         self.assertEqual((rows, timed_out, unavailable), ([], None, "ServiceRequest"))
 
+        with patch.object(ecw_backend, "_search", new=AsyncMock(side_effect=ecw_backend.EcwResourceUnavailable("ChargeItem"))):
+            rows, timed_out, unavailable = await ecw_backend._optional_search(
+                None, "issuer", "token", "ChargeItem", {"subject": "Patient/patient-1"},
+            )
+        self.assertEqual((rows, timed_out, unavailable), ([], None, "ChargeItem"))
+
+    async def test_rejected_charge_scope_is_not_reported_as_an_empty_result(self):
+        def handler(_: httpx.Request) -> httpx.Response:
+            return httpx.Response(403, json={"resourceType": "OperationOutcome"})
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            rows, timed_out, unavailable = await ecw_backend._optional_search(
+                client, "https://ehr.example.test/fhir", "token", "ChargeItem", {"subject": "Patient/patient-1"},
+            )
+        self.assertEqual((rows, timed_out, unavailable), ([], None, "ChargeItem"))
+
     async def test_backend_token_and_fhir_resources_become_availity_inputs(self):
         today_date = datetime.now(ZoneInfo("America/New_York")).date()
         today = today_date.isoformat()
@@ -134,7 +149,7 @@ class EcwBackendSourceTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("system/Procedure.read", ecw_backend.SCOPES)
         self.assertIn("system/PractitionerRole.read", ecw_backend.SCOPES)
         self.assertNotIn("system/Appointment.read", ecw_backend.SCOPES)
-        self.assertNotIn("system/ChargeItem.read", ecw_backend.SCOPES)
+        self.assertIn("system/ChargeItem.read", ecw_backend.SCOPES)
         token_request = next(request for request in requests if request.url.path == "/token")
         self.assertIn("grant_type=client_credentials", token_request.content.decode())
         self.assertNotIn("private-token", str(source))
