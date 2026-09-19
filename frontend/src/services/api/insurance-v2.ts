@@ -4,7 +4,7 @@ export type V2Resource = 'coverage' | 'estimate' | 'procedure_estimate' | 'autho
 export type V2Document = 'card' | 'provider' | 'appointment' | 'order' | 'charges' | 'fees'
 export interface V2Configuration {
   environment: 'demo' | 'production'; credentials_configured: boolean; practice_configured: boolean
-  ecw_configured: boolean; production_enabled: boolean; message: string
+  ecw_configured: boolean; production_enabled: boolean; stedi_temporary_enabled: boolean; message: string
 }
 export interface V2Benefit {
   category: string; network: string; service?: string; level?: string; description?: string
@@ -29,10 +29,11 @@ export interface V2ReviewLine {
 export interface V2Transaction {
   outcome: 'submitting' | 'pending' | 'complete' | 'input_error' | 'payer_error' | 'unavailable' | 'indeterminate'
   message?: string; resource_id?: string; transaction_id?: string; submitted_at?: string; checked_at?: string
+  source?: 'availity' | 'stedi' | 'stedi_local'
   mock_response?: boolean; next_poll_at?: number
   http_status?: number
   result?: {
-    payer?: string; status?: string; active?: boolean | null; as_of_date?: string; plans?: V2Plan[]; pce_available?: boolean
+    source?: 'availity' | 'stedi' | 'stedi_local'; payer?: string; status?: string; active?: boolean | null; as_of_date?: string; plans?: V2Plan[]; pce_available?: boolean
     provider_network?: string; provider_network_status?: 'in_network' | 'out_of_network' | 'unconfirmed'; notes?: string[]; message?: string; disclaimer?: string
     estimate_available?: boolean; lines?: V2PriceLine[]; patient_cents?: number | null; allowed_cents?: number | null
     status_code?: string; certificationNumber?: string; certificationEffectiveDate?: string; certificationExpirationDate?: string
@@ -60,7 +61,7 @@ export interface V2Case {
     member_id?: string; payer_id?: string; group_number?: string; relationship?: string; patient_phone?: string
     service_date?: string; reason?: string; visit_type?: 'new' | 'established' | null
     diagnoses: string[]; coverage_missing: string[]; review_missing: string[]
-    lines: Array<{ code: string; description?: string; units?: string; charge?: string; cash_cents?: number | null; service_status?: 'scheduled' | 'possible'; modifiers: string[] }>
+    lines: Array<{ code: string; description?: string; units?: string; charge?: string; cash_cents?: number | null; allowed_cents?: number | null; service_status?: 'scheduled' | 'possible'; modifiers: string[] }>
   }
   transactions: Partial<Record<V2Resource, V2Transaction>>
   discovery: {

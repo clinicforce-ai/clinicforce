@@ -22,7 +22,7 @@ from app.api.routers.insurance import _response, _session as _insurance_session,
 from app.api.settings import MAX_UPLOAD_BYTES
 from app.core.patient_store import get_patient_profile
 from app.core import object_store, staff_store
-from app.insurance import availity_intake as intake, availity_results as results, cpt_rules, cpt_suggester, ecw_backend, golden, store
+from app.insurance import availity_intake as intake, availity_results as results, cpt_rules, cpt_suggester, ecw_backend, golden, stedi, stedi_estimate, stedi_results, store
 from app.insurance.availity import Settings, gateway, PATHS, DEMO_SCENARIOS, unwrap
 
 
@@ -155,6 +155,14 @@ def configuration() -> tuple[Settings, dict, str]:
             practice = {**practice, "providers": {k: v for k, v in providers.items() if k not in invalid_providers}}
         if not isinstance(practice.get("payer_aliases", {}), dict) or any(not isinstance(k, str) or not k or not isinstance(v, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,40}", v) for k, v in practice.get("payer_aliases", {}).items()):
             raise ValueError
+        if not isinstance(practice.get("stedi_payer_ids", {}), dict) or any(not isinstance(k, str) or not k or not isinstance(v, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,80}", v) for k, v in practice.get("stedi_payer_ids", {}).items()):
+            raise ValueError
+        networks = practice.get("stedi_provider_networks", [])
+        if not isinstance(networks, list) or any(not isinstance(entry, dict) or set(("payer_id", "provider_npi", "place_of_service", "plan_name", "status")) - set(entry) or
+                                                 entry.get("status") not in {"in_network", "out_of_network"} or
+                                                 not all(isinstance(entry.get(key), str) and entry[key].strip() for key in ("payer_id", "provider_npi", "place_of_service", "plan_name"))
+                                                 for entry in networks):
+            raise ValueError
         if not isinstance(practice.get("locations", {}), dict) or any(not isinstance(k, str) or not k or not isinstance(v, dict) for k, v in practice.get("locations", {}).items()):
             raise ValueError
         ZoneInfo(practice.get("timezone", "America/New_York"))
@@ -162,6 +170,33 @@ def configuration() -> tuple[Settings, dict, str]:
         return settings, practice, binding
     except (ValueError, TypeError, ZoneInfoNotFoundError):
         raise HTTPException(503, "The Availity server configuration is invalid. Check environment, scope, URLs and practice settings.") from None
+
+
+def stedi_temporary_enabled(settings: Settings, practice: dict) -> bool:
+    """Stedi is an explicit bridge only; Availity production always wins."""
+    return settings.environment == "demo" and practice.get("stedi_temporary_enabled") is True and stedi.Settings.read().mode == "production"
+
+
+def _normalized(value: object) -> str:
+    return re.sub(r"\s+", " ", str(value or "").strip()).casefold()
+
+
+def stedi_network(case: dict, practice: dict, coverage: dict) -> dict:
+    inputs = case["inputs"]
+    plans = {_normalized(plan.get("name") or plan.get("planName")) for plan in coverage.get("plans", [])}
+    service_date = str(inputs.get("service_date") or "")
+    for entry in practice.get("stedi_provider_networks", []):
+        if (entry.get("payer_id") != inputs.get("payer_id") or entry.get("provider_npi") != (inputs.get("provider") or {}).get("npi") or
+                entry.get("place_of_service") != inputs.get("place_of_service") or _normalized(entry.get("plan_name")) not in plans):
+            continue
+        if entry.get("effective_from") and str(entry["effective_from"]) > service_date:
+            continue
+        if entry.get("effective_to") and str(entry["effective_to"]) < service_date:
+            continue
+        status = entry["status"]
+        return {"provider_network_status": status,
+                "provider_network": "Confirmed by clinic contract matrix" if status == "in_network" else "Confirmed out-of-network by clinic contract matrix"}
+    return {"provider_network_status": "unconfirmed", "provider_network": "Unverified — add a matching clinic provider-network contract before quoting."}
 
 
 def public(case: dict) -> dict:
@@ -180,8 +215,8 @@ def public(case: dict) -> dict:
 
 async def load(case_id: str, session: dict, binding: str) -> dict:
     case = await run_in_threadpool(store.get_case, case_id, session["patient_id"], session["share_manifest_id"], **_scope(session))
-    if not case or case.get("source_mode") != "availity":
-        raise HTTPException(404, "Availity case not found or expired")
+    if not case or case.get("source_mode") not in {"availity", "stedi"}:
+        raise HTTPException(404, "Insurance case not found or expired")
     if case.get("binding") != binding:
         raise HTTPException(409, "The Availity account, environment or practice settings changed. Start a new V2 case.")
     return case
@@ -197,10 +232,12 @@ async def save(case: dict, session: dict, event: str) -> dict:
 
 def idle(case: dict) -> None:
     if case.get("operation_until", 0) > time.time() or any(t.get("outcome") == "submitting" for t in case["transactions"].values()):
-        raise HTTPException(409, "An Availity operation is in progress. Refresh the saved case; do not submit a duplicate.")
+        raise HTTPException(409, "A payer operation is in progress. Refresh the saved case; do not submit a duplicate.")
 
 
 def require_payer_requests(case: dict) -> None:
+    if case.get("source_mode") == "stedi":
+        return
     if case.get("input_mode") == "ecw" and case.get("environment") != "production":
         raise HTTPException(409, "The live eClinicalWorks appointment is loaded, but Availity is still in demo. No patient data was submitted; activate the production Availity connection to run payer checks.")
 
@@ -241,18 +278,22 @@ def refresh_missing(case: dict) -> None:
     diagnoses = inputs.get("diagnoses", [])
     if not lines:
         review.append("No CPT/HCPCS service has been confirmed for this appointment.")
-    if not diagnoses:
+    if not diagnoses and case.get("source_mode") != "stedi":
         review.append("eClinicalWorks did not return clinician-coded ICD-10 diagnoses for these services.")
-    if lines and any(not line.get("diagnosis") or line["diagnosis"] not in diagnoses for line in lines):
+    if case.get("source_mode") != "stedi" and lines and any(not line.get("diagnosis") or line["diagnosis"] not in diagnoses for line in lines):
         review.append("eClinicalWorks did not associate every coded service with one of the returned ICD-10 diagnoses.")
     if any(not line.get("units") for line in lines):
         review.append("Confirm the intended units for every coded service.")
     inputs["review_missing"] = list(dict.fromkeys(review))
     estimate = list(inputs["review_missing"])
-    if not inputs.get("patient_phone"):
-        estimate.append("eClinicalWorks did not return the patient's phone number required by Availity PCE.")
-    if any(line.get("charge") is None for line in lines):
-        estimate.append("Upload the clinic fee CSV with a Billed Charge for every selected CPT/HCPCS service.")
+    if case.get("source_mode") == "stedi":
+        if any(line.get("allowed_cents") is None for line in lines):
+            estimate.append("Upload the clinic contract-rate CSV with a Contracted Allowed Amount for every selected CPT/HCPCS service.")
+    else:
+        if not inputs.get("patient_phone"):
+            estimate.append("eClinicalWorks did not return the patient's phone number required by Availity PCE.")
+        if any(line.get("charge") is None for line in lines):
+            estimate.append("Upload the clinic fee CSV with a Billed Charge for every selected CPT/HCPCS service.")
     case["missing"] = list(dict.fromkeys(estimate))
 
 
@@ -308,6 +349,21 @@ def request_missing(case: dict, resource: str) -> list[str]:
     inputs = case["inputs"]
     if resource == "coverage":
         return inputs.get("coverage_missing", [])
+    if case.get("source_mode") == "stedi":
+        if resource not in {"estimate", "procedure_estimate"}:
+            return ["Stedi temporary mode supports eligibility and local estimates only; review authorization and referral manually."]
+        lines = service_lines(case, resource)
+        label = "possible procedure" if resource == "procedure_estimate" else "scheduled"
+        missing = list(inputs.get("coverage_missing", []))
+        if not inputs.get("place_of_service"):
+            missing.append("Administrator: map this eClinicalWorks location to its two-digit place-of-service code.")
+        if not lines:
+            missing.append(f"No {label} service is confirmed for this request.")
+        if any(not line.get("units") for line in lines):
+            missing.append("Confirm the intended units for every requested service.")
+        if any(line.get("allowed_cents") is None for line in lines):
+            missing.append("Upload the clinic contract-rate CSV with a Contracted Allowed Amount for every requested CPT/HCPCS service.")
+        return list(dict.fromkeys(missing))
     line_gaps = ("eClinicalWorks did not return clinician-coded", "eClinicalWorks did not associate every coded service",
                  "eClinicalWorks did not return the intended units", "Confirm the intended units",
                  "No CPT/HCPCS service", "eClinicalWorks FHIR did not return each billed line amount", "Upload the clinic fee CSV")
@@ -351,6 +407,7 @@ def apply_fee_schedule(case: dict, source: dict) -> None:
             line["charge"] = rate.get("charge")
         line["description"] = rate.get("description") or line.get("description")
         line["cash_cents"] = rate.get("cash_cents")
+        line["allowed_cents"] = rate.get("allowed_cents")
         line["service_status"] = line.get("service_status") or rate.get("service_status") or "scheduled"
     case["sources"]["fees"] = source
     refresh_missing(case)
@@ -495,12 +552,15 @@ def front_desk_summary(case: dict) -> dict:
 async def get_configuration(request: Request):
     session = await _session(request)
     settings, practice, _ = configuration()
-    staff_ecw = bool(session.get("practice_id")) and settings.environment == "demo"
-    return _response({"environment": settings.environment, "credentials_configured": bool(settings.client_id and settings.client_secret),
-                      "practice_configured": bool(practice.get("providers") and practice.get("submitter_id")),
-                      "ecw_configured": ecw_backend.configured() if session.get("practice_id") or settings.environment == "production" else True,
+    temporary_stedi = stedi_temporary_enabled(settings, practice)
+    staff_ecw = bool(session.get("practice_id")) and settings.environment == "demo" and not temporary_stedi
+    return _response({"environment": settings.environment, "credentials_configured": bool(settings.client_id and settings.client_secret) or temporary_stedi,
+                      "practice_configured": bool(practice.get("providers") and (practice.get("submitter_id") or temporary_stedi)),
+                      "ecw_configured": ecw_backend.configured() if session.get("practice_id") or settings.environment == "production" or temporary_stedi else True,
                       "production_enabled": settings.environment == "production" and practice.get("production_enabled") is True,
-                      "message": ("ClinicForce will load the live appointment and available insurance details from eClinicalWorks."
+                      "stedi_temporary_enabled": temporary_stedi,
+                      "message": ("ClinicForce will load the live appointment, use Stedi eligibility, and calculate only a clinic-contract-rate estimate. Switching Availity to production disables this temporary path."
+                                  if temporary_stedi else "ClinicForce will load the live appointment and available insurance details from eClinicalWorks."
                                   if staff_ecw else "Synthetic transactions only; demo results do not describe the QR patient."
                                   if settings.environment == "demo" else "ClinicForce loads the scheduled patient, coverage, providers and coded services from eClinicalWorks, then sends the reviewed request to Availity.")})
 
@@ -530,7 +590,7 @@ async def create(body: Start, request: Request):
             raise HTTPException(422, "The QR patient profile is missing")
         identity = {"patient_first_name": profile.given_name, "patient_last_name": profile.family_name,
                     "patient_birth_date": profile.birth_date, "gender": {"male": "M", "female": "F"}.get(profile.administrative_gender, "U")}
-    use_ecw = bool(session.get("practice_id")) or settings.environment == "production"
+    use_ecw = bool(session.get("practice_id")) or settings.environment == "production" or stedi_temporary_enabled(settings, practice)
     existing = None
     if not use_ecw:
         inputs, missing, sources = demo_inputs(), [], {}
@@ -574,7 +634,7 @@ async def create(body: Start, request: Request):
             return _response(public(await save(existing, session, "ecw-refreshed")))
     try:
         case = await run_in_threadpool(store.create_case, session["patient_id"], session["share_manifest_id"], binding,
-                                       {"source_mode": "availity", "binding": binding, "environment": settings.environment,
+                                       {"source_mode": "stedi" if stedi_temporary_enabled(settings, practice) else "availity", "binding": binding, "environment": settings.environment,
                                         "input_mode": "ecw" if use_ecw else "synthetic",
                                         "revision": 0, "profile": identity, "sources": sources, "inputs": inputs, "missing": missing,
                                         "transactions": {}, "discovery": {}, "events": [], "scenario": body.scenario},
@@ -696,7 +756,7 @@ async def confirm_services(case_id: str, body: ConfirmServices, request: Request
     case["inputs"]["lines"] = [{"code": code, "description": candidates[code].get("description"),
                                   "units": str(quantities[code]), "charge": candidates[code].get("charge"),
                                   "charge_source": "fee_schedule" if candidates[code].get("charge") is not None else "unpriced_suggestion",
-                                  "cash_cents": candidates[code].get("cash_cents"),
+                                  "cash_cents": candidates[code].get("cash_cents"), "allowed_cents": candidates[code].get("allowed_cents"),
                                   "service_status": next(choice.service_status for choice in choices if choice.code.upper() == code),
                                   "modifiers": [], "diagnosis": diagnosis[0] if len(diagnosis) == 1 else None}
                                  for code in codes]
@@ -707,10 +767,16 @@ async def confirm_services(case_id: str, body: ConfirmServices, request: Request
 @router.post("/cases/{case_id}/requirements")
 async def requirements(case_id: str, request: Request):
     session = await _session(request)
-    settings, _, binding = configuration()
+    settings, practice, binding = configuration()
     case = await load(case_id, session, binding)
     require_payer_requests(case)
     idle(case)
+    if case.get("source_mode") == "stedi":
+        case["discovery"] = {"checked_at": datetime.now(timezone.utc).isoformat(), "outcome": "complete",
+                             "message": "Stedi temporary mode uses the configured payer map and clinic contract matrix; it does not query Availity metadata.",
+                             "requirements": {resource: {"available": resource in {"coverage", "estimate", "procedure_estimate"}}
+                                              for resource in ("coverage", "estimate", "procedure_estimate", "authorization", "referral")}}
+        return _response(public(await save(case, session, "stedi-configuration-checked")))
     payer = case["inputs"].get("payer_id")
     if not payer:
         raise HTTPException(422, "The eClinicalWorks payer must be mapped to its verified Availity payer ID first.")
@@ -809,6 +875,43 @@ def validate_request(case: dict, resource: str, body: dict, practice: dict) -> d
     return body
 
 
+async def submit_stedi(case: dict, session: dict, resource: str, practice: dict) -> dict:
+    """Run Stedi eligibility or the isolated local calculator; never call Availity."""
+    missing = request_missing(case, resource)
+    if missing:
+        raise HTTPException(422, "Missing Stedi or clinic-contract data: " + " ".join(missing))
+    if resource in {"authorization", "referral"}:
+        raise HTTPException(409, "Stedi temporary mode supports eligibility and local estimates only. Review authorization and referral manually.")
+    source_refs = {key: {name: source[name] for name in ("filename", "sha256", "observed_at", "retrieved_at") if name in source}
+                   for key, source in case["sources"].items()}
+    if resource == "coverage":
+        body, error = stedi.request_body(case["inputs"], practice)
+        if error:
+            raise HTTPException(422, error)
+        case["transactions"][resource] = {"outcome": "submitting", "source": "stedi", "submitted_at": datetime.now(timezone.utc).isoformat(),
+                                           "request_body": body, "source_refs": source_refs, "message": "Submitting Stedi eligibility check."}
+        case["operation_until"] = time.time() + 60
+        case = await save(case, session, "coverage-stedi-submission-started")
+        response = await stedi.Client(stedi.Settings.read()).check(body)
+        value = {**case["transactions"][resource], **response, "source": "stedi", "resource_id": response.get("check_id"),
+                 "checked_at": datetime.now(timezone.utc).isoformat(), "next_poll_at": time.time()}
+        result = stedi_results.coverage(results.obj(response.get("payload"))) if response.get("outcome") == "complete" else {}
+        if result:
+            result.update(stedi_network(case, practice, result))
+        value["result"] = result
+        value["message"] = "Stedi returned eligibility and benefits." if response.get("outcome") == "complete" else response.get("message")
+        case["transactions"][resource], case["operation_until"] = value, 0
+        return _response(public(await save(case, session, f"coverage-stedi-{value['outcome']}")))
+    coverage = case["transactions"].get("coverage", {})
+    if coverage.get("outcome") != "complete" or coverage.get("result", {}).get("active") is not True:
+        raise HTTPException(409, "Complete an active Stedi eligibility check before calculating an estimate.")
+    result = stedi_estimate.calculate(coverage["result"], service_lines(case, resource))
+    case["transactions"][resource] = {"outcome": "complete", "source": "stedi_local", "submitted_at": datetime.now(timezone.utc).isoformat(),
+                                       "checked_at": datetime.now(timezone.utc).isoformat(), "source_refs": source_refs, "result": result,
+                                       "message": result["message"]}
+    return _response(public(await save(case, session, f"{resource}-stedi-local-estimate")))
+
+
 @router.post("/cases/{case_id}/transactions/{resource}")
 async def submit(case_id: str, resource: Resource, request: Request):
     session = await _session(request)
@@ -820,6 +923,8 @@ async def submit(case_id: str, resource: Resource, request: Request):
         # A repeated POST is always a read, including after a timeout or process crash.
         return _response(public(case))
     idle(case)
+    if case.get("source_mode") == "stedi":
+        return await submit_stedi(case, session, resource, practice)
     missing = request_missing(case, resource)
     if settings.environment == "production" and missing:
         raise HTTPException(422, "Missing API or practice data: " + " ".join(missing))

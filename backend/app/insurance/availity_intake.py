@@ -45,6 +45,7 @@ FEE_ALIASES = {
     "description": "description", "servicedescription": "description",
     "cashprice": "cash", "selfpayprice": "cash",
     "billedcharge": "charge", "linecharge": "charge", "standardcharge": "charge",
+    "contractedallowedamount": "allowed", "allowedamount": "allowed", "contractrate": "allowed",
     "servicestatus": "status", "estimatetype": "status", "servicecategory": "status",
 }
 
@@ -177,7 +178,7 @@ def read_source(kind: str, content: bytes, filename: str, payer_aliases: dict[st
 
 
 def read_fee_schedule(content: bytes, filename: str) -> dict:
-    """Read one clinic CSV used only for billed-charge and cash-price lookup."""
+    """Read clinic cash/billed prices and optional clinic-owned allowed rates."""
     if Path(filename).suffix.lower() != ".csv":
         raise golden.GoldenCaseError("Upload the clinic fee schedule as a CSV file.")
     try:
@@ -188,8 +189,8 @@ def read_fee_schedule(content: bytes, filename: str) -> dict:
     if not rows or len(rows) > 1000:
         raise golden.GoldenCaseError("The clinic fee CSV must contain 1–1,000 rows.")
     headers = {normalize(str(name or "")): FEE_ALIASES.get(normalize(str(name or ""))) for name in (reader.fieldnames or [])}
-    if "code" not in headers.values() or not {"cash", "charge"}.intersection(v for v in headers.values() if v):
-        raise golden.GoldenCaseError("The fee CSV needs CPT/HCPCS and Cash Price and/or Billed Charge columns.")
+    if "code" not in headers.values() or not {"cash", "charge", "allowed"}.intersection(v for v in headers.values() if v):
+        raise golden.GoldenCaseError("The fee CSV needs CPT/HCPCS and Cash Price and/or Billed Charge columns, or a Contracted Allowed Amount column.")
     lines, seen = [], set()
     for number, row in enumerate(rows, 2):
         values = {FEE_ALIASES[normalize(str(name))]: str(value or "").strip()
@@ -203,8 +204,9 @@ def read_fee_schedule(content: bytes, filename: str) -> dict:
             raise golden.GoldenCaseError(f"CPT/HCPCS {code} appears more than once in the fee CSV.")
         cash = decimal_text(values["cash"], money=True) if values.get("cash") else None
         charge = decimal_text(values["charge"], money=True) if values.get("charge") else None
-        if cash is None and charge is None:
-            raise golden.GoldenCaseError(f"CPT/HCPCS {code} has no cash price or billed charge.")
+        allowed = decimal_text(values["allowed"], money=True) if values.get("allowed") else None
+        if cash is None and charge is None and allowed is None:
+            raise golden.GoldenCaseError(f"CPT/HCPCS {code} has no cash price, billed charge, or contracted allowed amount.")
         raw_status = normalize(values.get("status", ""))
         status = ("scheduled" if raw_status in {"scheduled", "visit", "officevisit"} else
                   "possible" if raw_status in {"possible", "procedure", "future", "ifelected", "optional"} else None)
@@ -212,13 +214,14 @@ def read_fee_schedule(content: bytes, filename: str) -> dict:
             raise golden.GoldenCaseError(f"CPT/HCPCS {code} has an invalid Service Status; use Scheduled or Possible.")
         lines.append({"code": code, "description": values.get("description", code)[:200],
                       "cash_cents": int(Decimal(cash) * 100) if cash is not None else None,
-                      "charge": charge, "service_status": status})
+                      "charge": charge, "allowed_cents": int(Decimal(allowed) * 100) if allowed is not None else None,
+                      "service_status": status})
         seen.add(code)
     if not lines:
         raise golden.GoldenCaseError("The fee CSV does not contain a CPT/HCPCS price row.")
     return {"filename": Path(filename).name, "sha256": hashlib.sha256(content).hexdigest(),
             "observed_at": datetime.now(timezone.utc).isoformat(), "lines": lines,
-            "rate_count": len(lines), "notes": ["Clinic prices only; insurance benefits and allowed amounts come from Availity."]}
+            "rate_count": len(lines), "notes": ["Clinic prices are used for Availity PCE. Contracted Allowed Amount is clinic-owned and used only by the temporary Stedi local-estimate path."]}
 
 
 def line(row: dict, *, charges_only: bool = False) -> dict:
