@@ -54,7 +54,7 @@ class EcwBackendSourceTests(unittest.IsolatedAsyncioTestCase):
             rows, timed_out, unavailable = await ecw_backend._optional_search(
                 None, "issuer", "token", "ServiceRequest", {"patient": "patient-1"},
             )
-        self.assertEqual((rows, timed_out, unavailable), ([], None, "ServiceRequest"))
+        self.assertEqual((rows, timed_out, unavailable), ([], None, None))
 
         with patch.object(ecw_backend, "_search", new=AsyncMock(side_effect=ecw_backend.EcwResourceUnavailable("ChargeItem"))):
             rows, timed_out, unavailable = await ecw_backend._optional_search(

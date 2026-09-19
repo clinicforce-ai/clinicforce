@@ -152,7 +152,10 @@ async def _optional_search(client: httpx.AsyncClient, issuer: str, token: str, r
     except EcwResourceUnavailable:
         return [], None, resource
     except EcwBackendError:
-        return [], None, resource
+        # A transient FHIR response problem is not evidence that this app lacks
+        # the resource permission. Keep the appointment usable and avoid
+        # reporting a misleading access failure to clinical staff.
+        return [], None, None
 
 
 async def _read(client: httpx.AsyncClient, issuer: str, token: str, reference: Any) -> dict[str, Any]:

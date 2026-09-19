@@ -29,8 +29,8 @@ export default function StaffLibraryPicker({ kinds, disabled, onFile }: { kinds:
     finally { setBusy(false) }
   }
   return <details className="source-excerpt" style={{ marginBottom: 20 }}>
-    <summary>Use a saved clinic agreement or fee file</summary>
-    <p>Choose the version that applies to this payer, provider and visit date. Billed charges, cash prices and contracted rates have different meanings.</p>
+    <summary>{kinds.includes('fees') && !kinds.includes('contract') ? 'Use a saved clinic fee schedule' : 'Use a saved clinic agreement or fee file'}</summary>
+    <p>These are clinic-level files, saved once and reused across appointments. Choose the version that applies to this payer, provider and visit date. Availity returns payer benefits; it does not provide the clinic’s fee schedule or payer contract.</p>
     <label htmlFor={id}>Clinic file</label>
     <select id={id} value={selected} onChange={event => setSelected(event.target.value)} disabled={disabled || busy}>
       <option value="">{applicable.length ? 'Choose an applicable file' : 'No matching clinic files saved'}</option>
