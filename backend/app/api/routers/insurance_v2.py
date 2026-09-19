@@ -64,6 +64,10 @@ def validate_staff_coverage(fields: dict, inputs: dict, source: dict, practice: 
     connected_name = intake.normalize(str(source.get("payer") or ""))
     if payer in {connected_id, connected_name}:
         return
+    # eCW did not identify a payer ID: retain the staff-confirmed card as the
+    # source for the scanner fallback. A name alone is not a safe mismatch.
+    if not connected_id:
+        return
     mapped = {intake.normalize(value) for key, value in practice.get("payer_aliases", {}).items() if intake.normalize(key) == payer}
     if len(mapped) == 1 and (not connected_id or connected_id in mapped):
         return
