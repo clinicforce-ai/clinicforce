@@ -30,7 +30,7 @@ try {
     await page.getByRole('button', { name: /^Clinician access/ }).click();
     for (const [kind, buffer] of [['full screenshot', screenshot], ['QR crop', crop]]) {
       await page.locator('input[type=file]').setInputFiles({ name: 'synthetic.png', mimeType: 'image/png', buffer });
-      await page.waitForFunction(() => document.querySelector('#pin') || document.querySelector('[role=alert]'), { timeout: 15000 });
+      await page.waitForFunction(() => document.querySelector('#pin') || [...document.querySelectorAll('[role=alert]')].some(el => !el.textContent.startsWith('Camera unavailable:')), undefined, { timeout: 15000 });
       const passed = await page.getByLabel('Four-digit passcode').isVisible();
       console.log(JSON.stringify({ width, kind, passed, failures, alerts: await page.getByRole('alert').allTextContents() }));
       assert.ok(passed, `The ${width}px ${kind} must reach the passcode screen`);

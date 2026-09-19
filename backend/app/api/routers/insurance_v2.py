@@ -62,16 +62,54 @@ def validate_staff_coverage(fields: dict, inputs: dict, source: dict, practice: 
         return
     connected_id = intake.normalize(str(inputs.get("payer_id") or ""))
     connected_name = intake.normalize(str(source.get("payer") or ""))
-    # An eCW payer name without a configured Availity ID is an explicit input gap,
-    # not evidence that the confirmed card conflicts with the connected coverage.
-    if not connected_id:
-        return
     if payer in {connected_id, connected_name}:
         return
     mapped = {intake.normalize(value) for key, value in practice.get("payer_aliases", {}).items() if intake.normalize(key) == payer}
-    if len(mapped) == 1 and connected_id in mapped:
+    if len(mapped) == 1 and (not connected_id or connected_id in mapped):
         return
     raise HTTPException(409, "The confirmed payer could not be matched to the eCW coverage. Ask the administrator to check the payer name and approved payer mapping, or use document review. Your card is saved.")
+
+
+def apply_staff_card_coverage(fields: dict, inputs: dict, missing: list[str], practice: dict) -> bool:
+    """Fill only coverage values eCW did not return from a staff-confirmed card."""
+    relationship = {"self": "18", "spouse": "01", "child": "19", "other": "G8"}.get(fields.get("relationship"), fields.get("relationship"))
+    subscriber = inputs.setdefault("subscriber", {})
+    if not inputs.get("relationship") and relationship in {"18", "01", "19", "G8"}:
+        inputs["relationship"] = relationship
+    if not inputs.get("member_id") and fields.get("member_id"):
+        inputs["member_id"] = fields["member_id"]
+    if not subscriber.get("memberId") and inputs.get("member_id"):
+        subscriber["memberId"] = inputs["member_id"]
+    if not inputs.get("group_number") and fields.get("group_number"):
+        inputs["group_number"] = fields["group_number"]
+    if not inputs.get("payer_id"):
+        payer = intake.normalize(str(fields.get("payer") or ""))
+        inputs["payer_id"] = next((value for name, value in practice.get("payer_aliases", {}).items()
+                                    if payer and intake.normalize(name) == payer), None)
+    if inputs.get("relationship") == "18":
+        patient = inputs.get("patient") or {}
+        for target, source in (("firstName", "patient_first_name"), ("lastName", "patient_last_name"), ("birthDate", "patient_birth_date")):
+            if not subscriber.get(target) and patient.get(source):
+                subscriber[target] = patient[source]
+    elif fields.get("subscriber_name"):
+        first, _, last = " ".join(str(fields["subscriber_name"]).split()).partition(" ")
+        if not subscriber.get("firstName"):
+            subscriber["firstName"] = first
+        if not subscriber.get("lastName") and last:
+            subscriber["lastName"] = last
+        if not subscriber.get("birthDate") and fields.get("subscriber_birth_date"):
+            subscriber["birthDate"] = fields["subscriber_birth_date"]
+    complete = bool(inputs.get("member_id") and inputs.get("payer_id") and inputs.get("relationship") and
+                    all(subscriber.get(key) for key in ("firstName", "lastName", "birthDate", "memberId")))
+    if not complete:
+        return False
+    resolved = ("eClinicalWorks did not identify one active primary coverage for this appointment.",
+                "The eClinicalWorks coverage is missing the subscriber identity, relationship or member ID required by Availity.",
+                "Administrator: map the exact eClinicalWorks payer name or identifier")
+    inputs["coverage_missing"] = [item for item in inputs.get("coverage_missing", []) if not item.startswith(resolved)]
+    inputs["review_missing"] = [item for item in inputs.get("review_missing", []) if not item.startswith(resolved)]
+    missing[:] = [item for item in missing if not item.startswith(resolved)]
+    return True
 
 
 class Start(BaseModel):
@@ -424,7 +462,7 @@ def front_desk_summary(case: dict) -> dict:
                 pass
         return {"codes": [line["code"] for line in lines], "insurance_cents": result.get("patient_cents") if result.get("estimate_available") else None,
                 "allowed_cents": result.get("allowed_cents") if result.get("estimate_available") else None,
-                "cash_cents": cash, "network": result.get("provider_network")}
+                "cash_cents": cash, "network": result.get("provider_network"), "network_status": result.get("provider_network_status", "unconfirmed")}
 
     scheduled_price, possible_price = price("estimate", scheduled), price("procedure_estimate", possible)
     active = coverage.get("active")
@@ -438,6 +476,8 @@ def front_desk_summary(case: dict) -> dict:
         action, heading = "do_not_schedule", "Do not schedule — authorization required"
     elif authorization["unknown"] and not authorization["approved"]:
         action, heading = "verify", "Review the authorization requirement before scheduling"
+    elif scheduled_price["network_status"] == "out_of_network":
+        action, heading = "review_oon", "Out-of-network — review OON benefits before collecting"
     elif scheduled_price["insurance_cents"] is not None:
         action, heading = "collect", f"Collect ${scheduled_price['insurance_cents'] / 100:,.2f} for the scheduled visit"
     else:
@@ -517,6 +557,9 @@ async def create(body: Start, request: Request):
             if ecw_patient_id:
                 await run_in_threadpool(staff_store.set_ecw_patient_id, session["patient_id"], session["practice_id"], ecw_patient_id)
             validate_staff_coverage(session["intake"]["fields"], inputs, source, practice)
+            if apply_staff_card_coverage(session["intake"]["fields"], inputs, missing, practice):
+                sources["card"] = {"system": "ClinicForce insurance-card scanner", "observed_at": session["intake"]["updated_at"],
+                                   "notes": ["Staff-confirmed card fields filled coverage values not returned by eClinicalWorks."]}
         if existing and not existing.get("transactions"):
             fee_source = existing.get("sources", {}).get("fees")
             existing.update(profile=identity, sources={**existing.get("sources", {}), **sources},
@@ -792,9 +835,6 @@ async def submit(case_id: str, resource: Resource, request: Request):
             raise HTTPException(422, "eClinicalWorks and the practice configuration must identify an approved Rendering Provider NPI and Service Type Code before a service review can be submitted.")
     body = request_body(case, resource)
     if settings.environment == "production":
-        # PCE 2 currently requires a current-day coverage. Do not silently estimate a different date.
-        if canonical(resource) == "estimate" and case["inputs"]["service_date"] != datetime.now(ZoneInfo(practice.get("timezone", "America/New_York"))).date().isoformat():
-            raise HTTPException(409, "This PCE integration supports current-day estimates. Obtain a current-day encounter export or ask Availity about support for the intended service date.")
         body = validate_request(case, resource, body, practice)
     elif resource != "coverage":
         body = {}  # Required by Availity's Demo protocol; never send uploaded patient data.

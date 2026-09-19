@@ -28,6 +28,12 @@ export interface StaffPatientFields {
   subscriber_birth_date: string
 }
 
+export interface StaffCardDetails {
+  full_name: string
+  member_id: string
+  birth_date: string
+}
+
 export interface StaffIntake {
   id: string
   status: string
@@ -65,9 +71,10 @@ export const getStaffIntakes = (query = '', status = '', offset = 0) => request<
 export const getStaffIntake = (id: string) => request<StaffIntake>(`/api/staff/intakes/${encodeURIComponent(id)}`)
 export const findStaffPatients = (fields: Pick<StaffPatientFields, 'given_name' | 'family_name' | 'birth_date'>) => request<{ patients: StaffPatient[] }>('/api/staff/patients/search', json(fields))
 
-export function createStaffIntake(files: File[]) {
+export function createStaffIntake(files: File[], details: StaffCardDetails) {
   const body = new FormData()
   files.forEach(file => body.append('files', file))
+  Object.entries(details).forEach(([key, value]) => { if (value.trim()) body.append(key, value.trim()) })
   return request<StaffIntake>('/api/staff/intakes', { method: 'POST', body })
 }
 
@@ -77,7 +84,7 @@ export const addStaffMember = (member: { username: string; display_name: string;
 export interface StaffLibraryDocument {
   id: string
   practice_id: string
-  kind: 'contract' | 'fee_schedule' | 'self_pay'
+  kind: 'contract' | 'fee_schedule' | 'self_pay' | 'era_835'
   label: string
   payer: string
   filename: string
@@ -87,8 +94,18 @@ export interface StaffLibraryDocument {
   effective_to: string | null
 }
 
+export interface Era835Summary {
+  payment_cents: number
+  payment_date: string
+  payer: string
+  payer_id: string
+  claim_count: number
+  claims: Array<{ patient_control_number: string; payer_claim_control_number: string; status_code: string; billed_cents: number; insurer_paid_cents: number; patient_responsibility_cents: number }>
+}
+
 export const getStaffLibrary = () => request<{ documents: StaffLibraryDocument[] }>('/api/staff/library')
 export const uploadStaffLibrary = (body: FormData) => request<StaffLibraryDocument>('/api/staff/library', { method: 'POST', body })
+export const getStaffEra835 = (documentId: string) => request<Era835Summary>(`/api/staff/library/${encodeURIComponent(documentId)}/era`)
 export const createStaffIntakeFromShare = () => request<StaffIntake>('/api/doctor/insurance/staff-intake', json({}))
 export const downloadStaffDocument = (intakeId: string, documentId: string, filename: string) => downloadStaffFile(`/api/staff/intakes/${encodeURIComponent(intakeId)}/documents/${encodeURIComponent(documentId)}`, filename)
 export const downloadStaffLibraryDocument = (documentId: string, filename: string) => downloadStaffFile(`/api/staff/library/${encodeURIComponent(documentId)}/document`, filename)

@@ -1,6 +1,6 @@
 """Synthetic API contract, patient isolation, duplicate-submission and money checks."""
 import asyncio
-from datetime import datetime
+from datetime import datetime, timedelta
 from copy import deepcopy
 import json
 import os
@@ -172,6 +172,24 @@ class ResultsAndIntakeTests(unittest.TestCase):
         self.assertIsNone(value['pce_available'])
         self.assertIn('Partially', results.review({'statusCode': 'A2'})['status'])
         self.assertIn('check again', results.review({'statusCode': 'A6'})['status'])
+
+    def test_scanned_card_fills_only_missing_ecw_coverage_and_oon_stops_collection(self):
+        inputs = {"patient": {"patient_first_name": "Pat", "patient_last_name": "Example", "patient_birth_date": "1980-01-01"},
+                  "subscriber": {}, "relationship": None, "member_id": None, "payer_id": None, "group_number": None,
+                  "coverage_missing": ["eClinicalWorks did not identify one active primary coverage for this appointment.",
+                                       "The eClinicalWorks coverage is missing the subscriber identity, relationship or member ID required by Availity."],
+                  "review_missing": ["eClinicalWorks did not identify one active primary coverage for this appointment."]}
+        missing = list(inputs["coverage_missing"])
+        self.assertTrue(v2.apply_staff_card_coverage({"relationship": "self", "member_id": "MEM123", "group_number": "GROUP123", "payer": "Test Health"}, inputs, missing, {"payer_aliases": {"Test Health": "TESTPAYER"}}))
+        self.assertEqual((inputs["member_id"], inputs["payer_id"], inputs["relationship"], inputs["subscriber"]["memberId"]), ("MEM123", "TESTPAYER", "18", "MEM123"))
+        self.assertEqual(missing, [])
+        estimate = results.estimate({"result": {"billingProvider": {"networkStatus": "OUT_OF_NETWORK"}, "claimInformation": {"serviceLines": [
+            {"procedureCode": "99204", "quantity": "1", "amount": "300.00", "estimatedPatientResponsibility": "75.00", "allowed": {"amount": "150.00"}}]}}},
+            [{"code": "99204", "units": "1", "charge": "300.00", "modifiers": []}], False)
+        self.assertEqual(estimate["provider_network_status"], "out_of_network")
+        summary = v2.front_desk_summary({"inputs": {"lines": [{"code": "99204", "units": "1", "service_status": "scheduled"}]},
+                                         "transactions": {"coverage": {"result": {"active": True, "plans": []}}, "estimate": {"result": estimate}}})
+        self.assertEqual(summary["action"], "review_oon")
 
     def test_document_inputs_do_not_import_old_benefits_or_credentials(self):
         with fitz.open() as doc:
@@ -361,7 +379,7 @@ class WorkflowTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(body['renderingProviders'][0]['npi'], '1234567893')
             self.assertEqual(body['procedures'][0]['code'], '99204')
             return httpx.Response(200, json={'id': 'review-live', 'statusCode': 'A2', 'certificationNumber': 'PARTIAL-123', 'procedures': [{'code': '99204', 'statusCode': 'A1', 'quantity': '1'}]})
-        day = datetime.now(ZoneInfo('America/Chicago')).date().isoformat()
+        day = (datetime.now(ZoneInfo('America/Chicago')).date() + timedelta(days=21)).isoformat()
         inputs = {"patient": {"patient_first_name": "Pat", "patient_last_name": "Example", "patient_birth_date": "1980-01-01", "gender": "U"},
                   "subscriber": {"firstName": "Pat", "lastName": "Example", "birthDate": "1980-01-01", "memberId": "MEMBER123"},
                   "relationship": "18", "member_id": "MEMBER123", "payer_id": "TESTPAYER", "group_number": "GROUP123",

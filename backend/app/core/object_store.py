@@ -76,7 +76,7 @@ def put_staff_document(practice_id: str, record_id: str, filename: str, content:
     if not S3_BUCKET:
         raise RuntimeError("S3_BUCKET must be configured for S3 storage")
     suffix = PurePath(filename).suffix.lower()
-    suffix = suffix if suffix in {".pdf", ".png", ".jpg", ".jpeg", ".csv"} else ".bin"
+    suffix = suffix if suffix in {".pdf", ".png", ".jpg", ".jpeg", ".csv", ".835", ".edi", ".x12", ".txt"} else ".bin"
     key = "/".join((S3_PREFIX, "staff-insurance", sha256(practice_id.encode()).hexdigest(),
                     _safe_segment(record_id), str(uuid4()), "source" + suffix))
     arguments = {"Bucket": S3_BUCKET, "Key": key, "Body": content, "ContentType": content_type,

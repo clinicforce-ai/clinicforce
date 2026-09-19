@@ -33,7 +33,7 @@ export interface V2Transaction {
   http_status?: number
   result?: {
     payer?: string; status?: string; active?: boolean | null; as_of_date?: string; plans?: V2Plan[]; pce_available?: boolean
-    provider_network?: string; notes?: string[]; message?: string; disclaimer?: string
+    provider_network?: string; provider_network_status?: 'in_network' | 'out_of_network' | 'unconfirmed'; notes?: string[]; message?: string; disclaimer?: string
     estimate_available?: boolean; lines?: V2PriceLine[]; patient_cents?: number | null; allowed_cents?: number | null
     status_code?: string; certificationNumber?: string; certificationEffectiveDate?: string; certificationExpirationDate?: string
     fromDate?: string; toDate?: string; procedures?: V2ReviewLine[]
@@ -74,12 +74,12 @@ export interface V2Case {
     requires_fee_schedule?: boolean
   }
   summary: {
-    action: 'collect' | 'verify' | 'do_not_schedule' | 'self_pay'; heading: string
+    action: 'collect' | 'verify' | 'do_not_schedule' | 'self_pay' | 'review_oon'; heading: string
     coverage: 'active' | 'inactive' | 'unconfirmed'; hmo: boolean
     referral: { required: boolean; unknown: boolean; approved: boolean; status?: string; reference?: string; effective?: string; expiration?: string }
     authorization: { required: boolean; unknown: boolean; approved: boolean; status?: string; reference?: string; effective?: string; expiration?: string }
-    scheduled: { codes: string[]; insurance_cents?: number | null; allowed_cents?: number | null; cash_cents?: number | null; network?: string }
-    possible: { codes: string[]; insurance_cents?: number | null; allowed_cents?: number | null; cash_cents?: number | null; network?: string }
+    scheduled: { codes: string[]; insurance_cents?: number | null; allowed_cents?: number | null; cash_cents?: number | null; network?: string; network_status?: string }
+    possible: { codes: string[]; insurance_cents?: number | null; allowed_cents?: number | null; cash_cents?: number | null; network?: string; network_status?: string }
   }
   events: Array<{ stage: string; at: string }>
 }

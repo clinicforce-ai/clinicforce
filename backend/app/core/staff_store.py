@@ -341,13 +341,17 @@ def find_patients(practice_id: str, query: str = "", given_name: str = "", famil
     return [dict(row) for row in rows]
 
 
-def save_extraction(intake_id: str, practice_id: str, fields: dict, evidence: dict, warning: str | None) -> dict:
+def save_extraction(intake_id: str, practice_id: str, fields: dict, evidence: dict, warning: str | None, manual_fields: dict | None = None) -> dict:
+    manual_fields = manual_fields or {}
+    merged_fields = {**manual_fields, **fields}
+    field_sources = {key: "staff_entered" for key in manual_fields}
+    field_sources.update({key: "card_ocr" for key in fields})
     with _connection() as connection:
         connection.execute("""UPDATE staff_intakes SET ocr_fields = %s::jsonb, ocr_evidence = %s::jsonb,
             fields = CASE WHEN patient_id IS NULL THEN %s::jsonb ELSE fields END,
             field_sources = CASE WHEN patient_id IS NULL THEN %s::jsonb ELSE field_sources END,
             warning = %s, updated_at = %s WHERE id = %s AND practice_id = %s""",
-            (json.dumps(fields), json.dumps(evidence), json.dumps(fields), json.dumps({key: "card_ocr" for key in fields}), warning, now(), intake_id, practice_id))
+            (json.dumps(fields), json.dumps(evidence), json.dumps(merged_fields), json.dumps(field_sources), warning, now(), intake_id, practice_id))
     return get_intake(intake_id, practice_id)
 
 

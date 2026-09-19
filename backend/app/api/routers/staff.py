@@ -24,7 +24,7 @@ from app.api.settings import ALLOWED_ORIGINS, CLINICIAN_SHARE_COOKIE, MAX_INSURA
 from app.core import clinic_email, object_store, staff_store
 from app.core.patient_store import get_patient_profile
 from app.core.request_address import request_address
-from app.insurance import golden, v1_sources
+from app.insurance import era835, golden, v1_sources
 
 
 router = APIRouter(prefix="/api/staff", tags=["staff"])
@@ -261,9 +261,33 @@ async def search_intakes(body: IntakeSearch, request: Request):
     return intake_page(intakes, body.offset)
 
 
+def manual_card_fields(full_name: str, member_id: str, birth_date: str) -> dict:
+    full_name = " ".join(full_name.split())
+    member_id = member_id.strip()
+    if any(ord(character) < 32 for character in full_name + member_id) or len(full_name) > 200 or len(member_id) > 80:
+        raise HTTPException(422, "Enter a valid patient name and insurance ID")
+    fields = {"member_id": member_id} if member_id else {}
+    if full_name:
+        parts = full_name.split(" ", 1)
+        fields["given_name"] = parts[0]
+        if len(parts) > 1:
+            fields["family_name"] = parts[1]
+    if birth_date:
+        try:
+            parsed = date.fromisoformat(birth_date)
+        except ValueError:
+            raise HTTPException(422, "Enter a valid date of birth") from None
+        if not date(1850, 1, 1) <= parsed <= date.today():
+            raise HTTPException(422, "Enter a valid date of birth")
+        fields["birth_date"] = parsed.isoformat()
+    return fields
+
+
 @router.post("/intakes")
-async def upload_cards(request: Request, files: list[UploadFile] = File(...)):
+async def upload_cards(request: Request, files: list[UploadFile] = File(...), full_name: str = Form(default="", max_length=200),
+                       member_id: str = Form(default="", max_length=80), birth_date: str = Form(default="", max_length=10)):
     staff = await require_staff(request)
+    manual_fields = manual_card_fields(full_name, member_id, birth_date)
     if not 1 <= len(files) <= 2:
         raise HTTPException(422, "Upload one insurance card PDF or up to two card images")
     if not object_store.enabled():
@@ -285,7 +309,7 @@ async def upload_cards(request: Request, files: list[UploadFile] = File(...)):
             key = await run_in_threadpool(object_store.put_staff_document, staff["practice_id"], intake_id, "source" + suffix, content, content_type)
             documents.append({"id": str(uuid4()), "filename": filename, "content_type": content_type,
                               "size_bytes": len(content), "sha256": hashlib.sha256(content).hexdigest(), "created_at": staff_store.now(), "object_key": key})
-        intake = await run_in_threadpool(staff_store.create_intake, intake_id, staff, documents)
+        intake = await run_in_threadpool(staff_store.create_intake, intake_id, staff, documents, "insurance_card", None, manual_fields)
     except Exception:
         for document in documents:
             try:
@@ -304,14 +328,14 @@ async def upload_cards(request: Request, files: list[UploadFile] = File(...)):
         fields, evidence = v1_sources.card_fields(extracted_pages)
         for item in evidence.values():
             item.update(source_pages.get(item.get("page"), {}))
-        warning = None if fields.get("member_id") else "Card saved. Enter the missing details below before starting verification."
+        warning = None if fields.get("member_id") or manual_fields.get("member_id") else "Card saved. Enter the missing details below before starting verification."
         if fields.get("member_name"):
             fields["subscriber_name"] = fields["member_name"]
-        intake = await run_in_threadpool(staff_store.save_extraction, intake_id, staff["practice_id"], fields, evidence, warning)
+        intake = await run_in_threadpool(staff_store.save_extraction, intake_id, staff["practice_id"], fields, evidence, warning, manual_fields)
     except Exception:
         warning = "Card saved. Automatic reading is unavailable; review the original and enter the details below."
         try:
-            intake = await run_in_threadpool(staff_store.save_extraction, intake_id, staff["practice_id"], {}, {}, warning)
+            intake = await run_in_threadpool(staff_store.save_extraction, intake_id, staff["practice_id"], {}, {}, warning, manual_fields)
         except Exception:
             intake["warning"] = warning
     return JSONResponse(public(intake), status_code=201, headers=NO_STORE)
@@ -396,7 +420,7 @@ async def library(request: Request):
 
 
 @router.post("/library")
-async def upload_library(request: Request, file: UploadFile = File(...), kind: Literal["contract", "fee_schedule", "self_pay"] = Form(...),
+async def upload_library(request: Request, file: UploadFile = File(...), kind: Literal["contract", "fee_schedule", "self_pay", "era_835"] = Form(...),
                          label: str = Form(default="", max_length=200), payer: str = Form(default="", max_length=200),
                          effective_from: str = Form(default="", max_length=10), effective_to: str = Form(default="", max_length=10)):
     staff = await require_staff(request)
@@ -415,7 +439,16 @@ async def upload_library(request: Request, file: UploadFile = File(...), kind: L
     if len(content) > MAX_UPLOAD_BYTES:
         raise HTTPException(413, "Clinic documents must be 15 MB or smaller")
     filename = Path(file.filename or "clinic-document").name[:200]
-    if filename.lower().endswith(".csv") and kind in {"fee_schedule", "self_pay"}:
+    era = None
+    if kind == "era_835":
+        if Path(filename).suffix.lower() not in {".835", ".edi", ".txt", ".x12"}:
+            raise HTTPException(422, "Upload the original 835 ERA as a .835, .edi, .x12, or .txt file.")
+        try:
+            era = era835.parse(content)
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
+        content_type, suffix = "application/edi-x12", ".x12"
+    elif filename.lower().endswith(".csv") and kind in {"fee_schedule", "self_pay"}:
         try:
             rows = list(csv.reader(StringIO(content.decode("utf-8-sig")), strict=True))
             if not 2 <= len(rows) <= 1001 or any(len(row) > 100 for row in rows):
@@ -444,7 +477,7 @@ async def upload_library(request: Request, file: UploadFile = File(...), kind: L
             except Exception:
                 pass
         raise HTTPException(503, "The clinic document could not be saved. Please try again.") from None
-    return JSONResponse(public_library(document), status_code=201, headers=NO_STORE)
+    return JSONResponse({**public_library(document), **({"era": era} if era else {})}, status_code=201, headers=NO_STORE)
 
 
 @router.get("/library/{document_id}/document")
@@ -455,3 +488,15 @@ async def library_document(document_id: str, request: Request):
         raise HTTPException(404, "Clinic document not found")
     content = await run_in_threadpool(object_store.get_object_bytes, document["object_key"])
     return Response(content, media_type=document["content_type"], headers={**NO_STORE, "X-Content-Type-Options": "nosniff", "Content-Disposition": "attachment", "Content-Security-Policy": "sandbox"})
+
+
+@router.get("/library/{document_id}/era")
+async def library_era(document_id: str, request: Request):
+    staff = await require_staff(request)
+    document = await run_in_threadpool(staff_store.get_library, document_id, staff["practice_id"])
+    if not document or document["kind"] != "era_835":
+        raise HTTPException(404, "835 ERA not found")
+    try:
+        return JSONResponse(await run_in_threadpool(era835.parse, await run_in_threadpool(object_store.get_object_bytes, document["object_key"])), headers=NO_STORE)
+    except ValueError:
+        raise HTTPException(422, "The saved ERA cannot be parsed.") from None

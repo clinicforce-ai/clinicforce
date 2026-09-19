@@ -619,6 +619,8 @@ td { line-height: 1.45; }
 .v2-start { min-height: 340px; padding: clamp(36px, 7vw, 76px) 0; }
 .v2-start > p:not(.section-kicker) { max-width: 62ch; color: var(--muted-ink); line-height: 1.65; }
 .v2-start .button { margin-top: 18px; }
+.v2-appointment-choice { display: grid; gap: 7px; max-width: 620px; margin-top: 22px; color: var(--ink); font-size: .82rem; font-weight: 700; }
+.v2-appointment-choice select { min-height: 44px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 6px; background: #fff; color: var(--ink); font: inherit; font-weight: 500; }
 .v2-decision { margin: 28px 0 0; border-top: 7px solid #d69b36; background: #102e54; padding: clamp(24px, 4vw, 40px); color: #fff; box-shadow: 0 16px 35px rgba(16, 46, 84, .16); }
 .v2-decision-collect { border-top-color: #59ceb0; }
 .v2-decision-do_not_schedule, .v2-decision-self_pay { border-top-color: #f3a66a; background: #48291d; }
