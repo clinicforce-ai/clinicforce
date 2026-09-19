@@ -26,8 +26,8 @@ class EcwBackendSourceTests(unittest.IsolatedAsyncioTestCase):
         resources = {
             "Patient": [{"resourceType": "Patient", "id": "patient-1", "name": [{"use": "official", "given": ["Pat"], "family": "Example"}], "birthDate": "1980-01-01", "gender": "female", "telecom": [{"system": "phone", "value": "555-234-7700"}]}],
             "Coverage": [{"resourceType": "Coverage", "id": "coverage-1", "status": "active", "subscriberId": "MEMBER123", "beneficiary": {"reference": "Patient/patient-1"}, "subscriber": {"reference": "Patient/patient-1"}, "relationship": {"coding": [{"code": "self"}]}, "payor": [{"reference": "Organization/payer-1"}], "period": {"start": "2026-01-01"}, "class": [{"type": {"coding": [{"code": "group"}]}, "value": "GROUP123"}]}],
-            "Encounter": [{"resourceType": "Encounter", "id": "encounter-1", "status": "planned", "period": {"start": f"{today}T14:00:00Z"}, "reasonCode": [{"text": "Neuropathy consultation"}], "participant": [{"individual": {"reference": "Practitioner/provider-1"}}], "location": [{"location": {"reference": "Location/location-1"}}]}],
-            "ServiceRequest": [{"resourceType": "ServiceRequest", "id": "order-1", "encounter": {"reference": "Encounter/encounter-1"}, "occurrenceDateTime": f"{today}T14:00:00Z", "code": {"coding": [{"system": "http://www.ama-assn.org/go/cpt", "code": "99204"}]}, "quantityQuantity": {"value": 1}, "reasonCode": [{"coding": [{"system": "http://hl7.org/fhir/sid/icd-10-cm", "code": "G62.9"}]}]}],
+            "Encounter": [{"resourceType": "Encounter", "id": "encounter-1", "status": "planned", "period": {"start": f"{today}T14:00:00Z"}, "reasonCode": [{"text": "Neuropathy consultation"}], "participant": [{"individual": {"reference": "Practitioner/provider-1"}}], "location": [{"location": {"reference": "Location/location-1"}}]}, {"resourceType": "Encounter", "id": "encounter-old", "status": "finished", "period": {"start": "2026-01-01T14:00:00Z"}, "reasonCode": [{"text": "Prior neuropathy visit"}]}],
+            "ServiceRequest": [{"resourceType": "ServiceRequest", "id": "order-1", "encounter": {"reference": "Encounter/encounter-1"}, "occurrenceDateTime": f"{today}T14:00:00Z", "code": {"coding": [{"system": "http://www.ama-assn.org/go/cpt", "code": "99204"}]}, "quantityQuantity": {"value": 1}, "reasonCode": [{"coding": [{"system": "http://hl7.org/fhir/sid/icd-10-cm", "code": "G62.9"}]}]}, {"resourceType": "ServiceRequest", "id": "order-old", "encounter": {"reference": "Encounter/encounter-old"}, "code": {"coding": [{"system": "http://www.ama-assn.org/go/cpt", "code": "95913"}]}}],
             "ChargeItem": [],
             "Condition": [],
         }
@@ -58,6 +58,10 @@ class EcwBackendSourceTests(unittest.IsolatedAsyncioTestCase):
         with patch.dict(os.environ, environment), patch.object(ecw, "ECW_KMS_KEY_ID", "kms-key"), patch.object(ecw, "_client_assertion", return_value="signed-assertion"):
             inputs, missing, source = await ecw_backend.fetch_inputs(
                 {"patient_first_name": "Pat", "patient_last_name": "Example", "patient_birth_date": "1980-01-01"},
+                practice, "encounter-1", transport=httpx.MockTransport(handler),
+            )
+            appointments = await ecw_backend.list_appointments(
+                {"patient_first_name": "Pat", "patient_last_name": "Example", "patient_birth_date": "1980-01-01"},
                 practice, transport=httpx.MockTransport(handler),
             )
 
@@ -65,10 +69,13 @@ class EcwBackendSourceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((inputs["member_id"], inputs["payer_id"], inputs["relationship"]), ("MEMBER123", "TESTPAYER", "18"))
         self.assertEqual(inputs["lines"], [{"code": "99204", "units": "1", "charge": None, "modifiers": [], "diagnosis": "G629", "service_status": "scheduled"}])
         self.assertEqual(inputs["reason"], "Reason: Neuropathy consultation; Planned service: 99204; Order reason: G62.9")
+        self.assertEqual(inputs["prior_visit"], {"date": "2026-01-01", "reason": "Reason: Prior neuropathy visit; Planned service: 95913", "procedure_codes": ["95913"]})
         self.assertEqual(inputs["provider"]["npi"], "1234567893")
         self.assertEqual(source["appointment_date"], today)
+        self.assertEqual(source["appointment_id"], "encounter-1")
+        self.assertEqual(appointments, [{"id": "encounter-1", "start": f"{today}T14:00:00Z", "status": "planned", "reason": "Neuropathy consultation"}])
         self.assertNotIn("system/Appointment.read", ecw_backend.SCOPES)
-        self.assertNotIn("system/ChargeItem.read", ecw_backend.SCOPES)
+        self.assertIn("system/ChargeItem.read", ecw_backend.SCOPES)
         token_request = next(request for request in requests if request.url.path == "/token")
         self.assertIn("grant_type=client_credentials", token_request.content.decode())
         self.assertNotIn("private-token", str(source))

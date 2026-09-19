@@ -6,6 +6,7 @@ export interface V2Configuration {
   environment: 'demo' | 'production'; credentials_configured: boolean; practice_configured: boolean
   ecw_configured: boolean; production_enabled: boolean; message: string
 }
+export interface V2Appointment { id: string; start: string; status: string; reason: string }
 export interface V2Benefit {
   category: string; network: string; service?: string; level?: string; description?: string
   amount?: string; remaining?: string; total?: string
@@ -33,7 +34,7 @@ export interface V2Transaction {
   http_status?: number
   result?: {
     payer?: string; status?: string; active?: boolean | null; as_of_date?: string; plans?: V2Plan[]; pce_available?: boolean
-    provider_network?: string; notes?: string[]; message?: string; disclaimer?: string
+    provider_network?: string; provider_network_status?: 'in_network' | 'out_of_network' | 'unconfirmed'; notes?: string[]; message?: string; disclaimer?: string
     estimate_available?: boolean; lines?: V2PriceLine[]; patient_cents?: number | null; allowed_cents?: number | null
     status_code?: string; certificationNumber?: string; certificationEffectiveDate?: string; certificationExpirationDate?: string
     fromDate?: string; toDate?: string; procedures?: V2ReviewLine[]
@@ -41,13 +42,14 @@ export interface V2Transaction {
 }
 export interface V2Case {
   id: string; revision: number; created_at: string; expires_at: string | null; environment: 'demo' | 'production'
-  sources: Partial<Record<V2Document | 'ecw', { filename?: string; sha256?: string; observed_at?: string; retrieved_at?: string; system?: string; appointment_date?: string; appointment_status?: string; payer?: string; location?: string; rate_count?: number; notes?: string[] }>>
+  sources: Partial<Record<V2Document | 'ecw', { filename?: string; sha256?: string; observed_at?: string; retrieved_at?: string; system?: string; appointment_id?: string; appointment_date?: string; appointment_status?: string; payer?: string; location?: string; rate_count?: number; notes?: string[] }>>
   missing: string[]
   missing_by_resource: Record<V2Resource, string[]>
   inputs: {
     patient: { patient_first_name?: string; patient_last_name?: string; patient_birth_date?: string }
     provider: { npi?: string; lastName?: string; addressLine1?: string; city?: string; stateCode?: string; zipCode?: string }
     member_id?: string; payer_id?: string; relationship?: string; service_date?: string; reason?: string
+    prior_visit?: { date?: string; reason?: string; procedure_codes?: string[] } | null
     diagnoses: string[]; coverage_missing: string[]; review_missing: string[]
     lines: Array<{ code: string; description?: string; units?: string; charge?: string; cash_cents?: number | null; service_status?: 'scheduled' | 'possible'; modifiers: string[] }>
   }
@@ -62,19 +64,20 @@ export interface V2Case {
     notes: string[]
   }
   summary: {
-    action: 'collect' | 'verify' | 'do_not_schedule' | 'self_pay'; heading: string
+    action: 'collect' | 'verify' | 'do_not_schedule' | 'self_pay' | 'review_oon'; heading: string
     coverage: 'active' | 'inactive' | 'unconfirmed'; hmo: boolean
     referral: { required: boolean; unknown: boolean; approved: boolean; status?: string; reference?: string; effective?: string; expiration?: string }
     authorization: { required: boolean; unknown: boolean; approved: boolean; status?: string; reference?: string; effective?: string; expiration?: string }
-    scheduled: { codes: string[]; insurance_cents?: number | null; allowed_cents?: number | null; cash_cents?: number | null; network?: string }
-    possible: { codes: string[]; insurance_cents?: number | null; allowed_cents?: number | null; cash_cents?: number | null; network?: string }
+    scheduled: { codes: string[]; insurance_cents?: number | null; allowed_cents?: number | null; cash_cents?: number | null; network?: string; network_status?: string }
+    possible: { codes: string[]; insurance_cents?: number | null; allowed_cents?: number | null; cash_cents?: number | null; network?: string; network_status?: string }
   }
   events: Array<{ stage: string; at: string }>
 }
 const base = '/api/doctor/insurance/v2'
 export const getV2Configuration = () => request<V2Configuration>(`${base}/configuration`)
 export const latestV2Case = () => request<{ case: V2Case | null }>(`${base}/cases/latest`)
-export const createV2Case = (scenario = 'Coverages-Complete-i') => request<V2Case>(`${base}/cases`, json({ scenario }))
+export const getV2Appointments = () => request<{ appointments: V2Appointment[] }>(`${base}/appointments`)
+export const createV2Case = (appointment_id?: string, scenario = 'Coverages-Complete-i') => request<V2Case>(`${base}/cases`, json({ scenario, ...(appointment_id ? { appointment_id } : {}) }))
 export const getV2Case = (id: string) => request<V2Case>(`${base}/cases/${encodeURIComponent(id)}`)
 export const getV2Requirements = (id: string) => request<V2Case>(`${base}/cases/${encodeURIComponent(id)}/requirements`, json({}))
 export const suggestV2Services = (id: string) => request<V2Case>(`${base}/cases/${encodeURIComponent(id)}/suggestions`, json({}))

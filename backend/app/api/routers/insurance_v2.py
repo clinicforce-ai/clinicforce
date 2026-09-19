@@ -62,14 +62,57 @@ def validate_staff_coverage(fields: dict, inputs: dict, source: dict, practice: 
     if payer in {connected_id, intake.normalize(str(source.get("payer") or ""))}:
         return
     mapped = {intake.normalize(value) for key, value in practice.get("payer_aliases", {}).items() if intake.normalize(key) == payer}
-    if len(mapped) == 1 and connected_id in mapped:
+    if len(mapped) == 1 and (not connected_id or connected_id in mapped):
         return
     raise HTTPException(409, "The confirmed payer could not be matched to the eCW coverage. Ask the administrator to check the payer name and approved payer mapping, or use document review. Your card is saved.")
+
+
+def apply_staff_card_coverage(fields: dict, inputs: dict, missing: list[str], practice: dict) -> bool:
+    """Fill only eCW coverage fields absent from a staff-confirmed scanned card."""
+    relationship = {"self": "18", "spouse": "01", "child": "19", "other": "G8"}.get(fields.get("relationship"), fields.get("relationship"))
+    subscriber = inputs.setdefault("subscriber", {})
+    if not inputs.get("relationship") and relationship in {"18", "01", "19", "G8"}:
+        inputs["relationship"] = relationship
+    if not inputs.get("member_id") and fields.get("member_id"):
+        inputs["member_id"] = fields["member_id"]
+    if not subscriber.get("memberId") and inputs.get("member_id"):
+        subscriber["memberId"] = inputs["member_id"]
+    if not inputs.get("group_number") and fields.get("group_number"):
+        inputs["group_number"] = fields["group_number"]
+    if not inputs.get("payer_id"):
+        payer = intake.normalize(str(fields.get("payer") or ""))
+        inputs["payer_id"] = next((value for name, value in practice.get("payer_aliases", {}).items()
+                                    if payer and intake.normalize(name) == payer), None)
+    if inputs.get("relationship") == "18":
+        patient = inputs.get("patient") or {}
+        for target, source in (("firstName", "patient_first_name"), ("lastName", "patient_last_name"), ("birthDate", "patient_birth_date")):
+            if not subscriber.get(target) and patient.get(source):
+                subscriber[target] = patient[source]
+    elif fields.get("subscriber_name"):
+        first, _, last = " ".join(str(fields["subscriber_name"]).split()).partition(" ")
+        if not subscriber.get("firstName"):
+            subscriber["firstName"] = first
+        if not subscriber.get("lastName") and last:
+            subscriber["lastName"] = last
+        if not subscriber.get("birthDate") and fields.get("subscriber_birth_date"):
+            subscriber["birthDate"] = fields["subscriber_birth_date"]
+    complete = bool(inputs.get("member_id") and inputs.get("payer_id") and inputs.get("relationship") and
+                    all(subscriber.get(key) for key in ("firstName", "lastName", "birthDate", "memberId")))
+    if not complete:
+        return False
+    resolved = ("eClinicalWorks did not identify one active primary coverage for this appointment.",
+                "The eClinicalWorks coverage is missing the subscriber identity, relationship or member ID required by Availity.",
+                "Administrator: map the exact eClinicalWorks payer name or identifier")
+    inputs["coverage_missing"] = [item for item in inputs.get("coverage_missing", []) if not item.startswith(resolved)]
+    inputs["review_missing"] = [item for item in inputs.get("review_missing", []) if not item.startswith(resolved)]
+    missing[:] = [item for item in missing if not item.startswith(resolved)]
+    return True
 
 
 class Start(BaseModel):
     model_config = ConfigDict(extra="forbid")
     scenario: Literal["Coverages-Complete-i", "Coverages-InProgress-i", "Coverages-Retrying-i", "Coverages-PayerError1-i", "Coverages-RequestError1-i"] = "Coverages-Complete-i"
+    appointment_id: str | None = Field(default=None, max_length=200, pattern=r"^[A-Za-z0-9.\-]+$")
 
 
 class ServiceChoice(BaseModel):
@@ -130,6 +173,18 @@ async def load(case_id: str, session: dict, binding: str) -> dict:
     if case.get("binding") != binding:
         raise HTTPException(409, "The Availity account, environment or practice settings changed. Start a new V2 case.")
     return case
+
+
+async def patient_identity(session: dict) -> dict:
+    if session.get("practice_id"):
+        patient = session["intake"]["patient"]
+        return {"patient_first_name": patient["given_name"], "patient_last_name": patient["family_name"],
+                "patient_birth_date": patient["birth_date"], "gender": "U"}
+    profile = await run_in_threadpool(get_patient_profile, session["patient_id"])
+    if not profile:
+        raise HTTPException(422, "The QR patient profile is missing")
+    return {"patient_first_name": profile.given_name, "patient_last_name": profile.family_name,
+            "patient_birth_date": profile.birth_date, "gender": {"male": "M", "female": "F"}.get(profile.administrative_gender, "U")}
 
 
 async def save(case: dict, session: dict, event: str) -> dict:
@@ -293,7 +348,7 @@ def front_desk_summary(case: dict) -> dict:
                 pass
         return {"codes": [line["code"] for line in lines], "insurance_cents": result.get("patient_cents") if result.get("estimate_available") else None,
                 "allowed_cents": result.get("allowed_cents") if result.get("estimate_available") else None,
-                "cash_cents": cash, "network": result.get("provider_network")}
+                "cash_cents": cash, "network": result.get("provider_network"), "network_status": result.get("provider_network_status", "unconfirmed")}
 
     scheduled_price, possible_price = price("estimate", scheduled), price("procedure_estimate", possible)
     active = coverage.get("active")
@@ -307,6 +362,8 @@ def front_desk_summary(case: dict) -> dict:
         action, heading = "do_not_schedule", "Do not schedule — authorization required"
     elif authorization["unknown"] and not authorization["approved"]:
         action, heading = "verify", "Review the authorization requirement before scheduling"
+    elif scheduled_price["network_status"] == "out_of_network":
+        action, heading = "review_oon", "Out-of-network — review OON benefits before collecting"
     elif scheduled_price["insurance_cents"] is not None:
         action, heading = "collect", f"Collect ${scheduled_price['insurance_cents'] / 100:,.2f} for the scheduled visit"
     else:
@@ -338,22 +395,28 @@ async def latest(request: Request):
     return _response({"case": public(case) if case else None})
 
 
+@router.get("/appointments")
+async def appointments(request: Request):
+    session = await _session(request)
+    settings, practice, _ = configuration()
+    if not session.get("practice_id") and settings.environment != "production":
+        return _response({"appointments": []})
+    if not ecw_backend.configured():
+        raise HTTPException(503, "The eClinicalWorks practice connection is temporarily unavailable.")
+    try:
+        values = await ecw_backend.list_appointments(await patient_identity(session), practice)
+    except ecw_backend.EcwBackendError as exc:
+        raise HTTPException(502, str(exc)) from exc
+    return _response({"appointments": values})
+
+
 @router.post("/cases")
 async def create(body: Start, request: Request):
     session = await _session(request)
     settings, practice, binding = configuration()
     if settings.environment == "production" and practice.get("production_enabled") is not True:
         raise HTTPException(409, "An administrator must finish Availity contracting, enrollment and practice setup, then enable production in AVAILITY_PRACTICE_CONFIG.")
-    if session.get("practice_id"):
-        patient = session["intake"]["patient"]
-        identity = {"patient_first_name": patient["given_name"], "patient_last_name": patient["family_name"],
-                    "patient_birth_date": patient["birth_date"], "gender": "U"}
-    else:
-        profile = await run_in_threadpool(get_patient_profile, session["patient_id"])
-        if not profile:
-            raise HTTPException(422, "The QR patient profile is missing")
-        identity = {"patient_first_name": profile.given_name, "patient_last_name": profile.family_name,
-                    "patient_birth_date": profile.birth_date, "gender": {"male": "M", "female": "F"}.get(profile.administrative_gender, "U")}
+    identity = await patient_identity(session)
     use_ecw = bool(session.get("practice_id")) or settings.environment == "production"
     if not use_ecw:
         inputs, missing, sources = demo_inputs(), [], {}
@@ -361,12 +424,19 @@ async def create(body: Start, request: Request):
         if not ecw_backend.configured():
             raise HTTPException(503, "The eClinicalWorks practice connection is temporarily unavailable.")
         try:
-            inputs, missing, source = await ecw_backend.fetch_inputs(identity, practice)
+            inputs, missing, source = await (
+                ecw_backend.fetch_inputs(identity, practice, body.appointment_id)
+                if body.appointment_id else ecw_backend.fetch_inputs(identity, practice)
+            )
         except ecw_backend.EcwBackendError as exc:
             raise HTTPException(502, str(exc)) from exc
         sources = {"ecw": source}
         if session.get("practice_id"):
-            validate_staff_coverage(session["intake"]["fields"], inputs, source, practice)
+            fields = session["intake"]["fields"]
+            validate_staff_coverage(fields, inputs, source, practice)
+            if apply_staff_card_coverage(fields, inputs, missing, practice):
+                sources["card"] = {"system": "ClinicForce insurance-card scanner", "observed_at": session["intake"]["updated_at"],
+                                   "notes": ["Staff-confirmed card fields filled coverage values not returned by eClinicalWorks."]}
     try:
         case = await run_in_threadpool(store.create_case, session["patient_id"], session["share_manifest_id"], binding,
                                        {"source_mode": "availity", "binding": binding, "environment": settings.environment,
@@ -459,7 +529,7 @@ async def suggest_services(case_id: str, request: Request):
     if not reason:
         raise HTTPException(422, "eClinicalWorks must provide a reason for visit before ClinicForce can suggest services.")
     try:
-        raw = await run_in_threadpool(cpt_suggester.suggest_cpt_codes, reason, rates)
+        raw = await run_in_threadpool(cpt_suggester.suggest_cpt_codes, reason, rates, case["inputs"].get("prior_visit"))
         lines, groups = cpt_rules.grouped_candidates(raw, rates)
     except (ValueError, golden.GoldenCaseError) as exc:
         raise HTTPException(422, str(exc)) from exc
@@ -637,9 +707,6 @@ async def submit(case_id: str, resource: Resource, request: Request):
             raise HTTPException(422, "eClinicalWorks and the practice configuration must identify an approved Rendering Provider NPI and Service Type Code before a service review can be submitted.")
     body = request_body(case, resource)
     if settings.environment == "production":
-        # PCE 2 currently requires a current-day coverage. Do not silently estimate a different date.
-        if canonical(resource) == "estimate" and case["inputs"]["service_date"] != datetime.now(ZoneInfo(practice.get("timezone", "America/New_York"))).date().isoformat():
-            raise HTTPException(409, "This PCE integration supports current-day estimates. Obtain a current-day encounter export or ask Availity about support for the intended service date.")
         body = validate_request(case, resource, body, practice)
     elif resource != "coverage":
         body = {}  # Required by Availity's Demo protocol; never send uploaded patient data.

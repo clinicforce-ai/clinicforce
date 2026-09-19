@@ -16,12 +16,12 @@ import httpx
 from app.ingestion import ecw
 
 
-# This clinic's eCW backend registration does not grant ChargeItem. The query
-# remains optional below and degrades to missing charge data on a 403.
+# ChargeItem remains optional: planned visits commonly have no posted charges,
+# and eCW can deny the resource for a practice without blocking eligibility.
 SCOPES = (
     "system/Patient.read", "system/Coverage.read", "system/Encounter.read",
     "system/ServiceRequest.read", "system/Condition.read", "system/RelatedPerson.read", "system/Organization.read",
-    "system/Practitioner.read", "system/Location.read",
+    "system/Practitioner.read", "system/Location.read", "system/ChargeItem.read",
 )
 
 
@@ -283,7 +283,40 @@ def _source_references(resource: dict[str, Any]) -> list[str]:
     return list(dict.fromkeys(values))
 
 
-async def fetch_inputs(profile: dict[str, Any], practice: dict[str, Any], *, transport: httpx.AsyncBaseTransport | None = None) -> tuple[dict, list[str], dict]:
+async def list_appointments(profile: dict[str, Any], practice: dict[str, Any], *, transport: httpx.AsyncBaseTransport | None = None) -> list[dict[str, str]]:
+    """Return the visits a staff member may deliberately choose for this patient."""
+    client_id, issuer = settings()
+    try:
+        async with httpx.AsyncClient(timeout=30, follow_redirects=False, transport=transport) as client:
+            token = await _access_token(client, client_id, issuer)
+            patients = await _search(client, issuer, token, "Patient", {
+                "given": str(profile.get("patient_first_name") or ""),
+                "family": str(profile.get("patient_last_name") or ""),
+                "birthdate": str(profile.get("patient_birth_date") or ""),
+            })
+            matches = [row for row in patients if _norm(_name(row)[0]) == _norm(profile.get("patient_first_name"))
+                       and _norm(_name(row)[1]) == _norm(profile.get("patient_last_name"))
+                       and row.get("birthDate") == profile.get("patient_birth_date")]
+            if len(matches) != 1:
+                raise EcwBackendError("eClinicalWorks did not return exactly one patient matching the confirmed patient name and birth date.")
+            patient_id = str(matches[0].get("id", ""))
+            if not re.fullmatch(r"[A-Za-z0-9.\-]{1,200}", patient_id):
+                raise EcwBackendError("eClinicalWorks returned an invalid patient identifier.")
+            today = datetime.now(ZoneInfo(practice.get("timezone", "America/New_York"))).date().isoformat()
+            encounters = await _search(client, issuer, token, "Encounter", {"patient": patient_id, "date": f"ge{today}"})
+    except httpx.HTTPError as exc:
+        raise EcwBackendError("eClinicalWorks is temporarily unavailable.") from exc
+    return sorted(
+        [{"id": str(row["id"]), "start": str((row.get("period") or {}).get("start") or "")[:25],
+          "status": str(row.get("status") or "unknown"),
+          "reason": "; ".join(_concept_labels(row.get("reasonCode")) or _concept_labels(row.get("type")))[:300]}
+         for row in encounters if re.fullmatch(r"[A-Za-z0-9.\-]{1,200}", str(row.get("id", "")))
+         and _appointment_date(row) >= today and row.get("status") not in {"cancelled", "entered-in-error"}],
+        key=lambda visit: visit["start"],
+    )
+
+
+async def fetch_inputs(profile: dict[str, Any], practice: dict[str, Any], appointment_id: str | None = None, *, transport: httpx.AsyncBaseTransport | None = None) -> tuple[dict, list[str], dict]:
     """Fetch and reduce eCW data; never infer codes, payer IDs, prices or provider roles."""
     client_id, issuer = settings()
     try:
@@ -315,8 +348,20 @@ async def fetch_inputs(profile: dict[str, Any], practice: dict[str, Any], *, tra
                          if _appointment_date(row) >= today and row.get("status") not in {"cancelled", "entered-in-error"}]
             next_date = min((_appointment_date(row) for row in scheduled), default="")
             next_visits = [row for row in scheduled if _appointment_date(row) == next_date]
-            visit = next_visits[0] if len(next_visits) == 1 else {}
+            if appointment_id:
+                if not re.fullmatch(r"[A-Za-z0-9.\-]{1,200}", appointment_id):
+                    raise EcwBackendError("The selected eClinicalWorks appointment is invalid.")
+                visit = next((row for row in scheduled if row.get("id") == appointment_id), None)
+                if visit is None:
+                    raise EcwBackendError("The selected eClinicalWorks appointment is no longer available. Refresh the appointment list.")
+            else:
+                visit = next_visits[0] if len(next_visits) == 1 else {}
             service_date = _appointment_date(visit) or today
+            prior_encounters = await _search(client, issuer, token, "Encounter", {
+                "patient": patient_id, "date": f"lt{service_date}",
+            })
+            completed = [row for row in prior_encounters if row.get("status") == "finished" and _appointment_date(row) < service_date]
+            prior_visit = max(completed, key=lambda row: str((row.get("period") or {}).get("start") or ""), default={})
             eligible = [row for row in coverage_rows if row.get("status") == "active" and _period_contains(row, service_date)]
             ordered = sorted(eligible, key=lambda row: row.get("order", 999999))
             coverage = ordered[0] if ordered and (len(ordered) == 1 or ordered[0].get("order") != ordered[1].get("order")) else {}
@@ -355,10 +400,19 @@ async def fetch_inputs(profile: dict[str, Any], practice: dict[str, Any], *, tra
             charges = await _search(client, issuer, token, "ChargeItem", {
                 "subject": f"Patient/{patient_id}", "context": encounter_ref,
             }) if encounter_ref else []
+            prior_encounter_id = str(prior_visit.get("id", ""))
+            prior_encounter_ref = f"Encounter/{prior_encounter_id}" if re.fullmatch(r"[A-Za-z0-9.\-]{1,200}", prior_encounter_id) else ""
+            prior_charges = await _search(client, issuer, token, "ChargeItem", {
+                "subject": f"Patient/{patient_id}", "context": prior_encounter_ref,
+            }) if prior_encounter_ref else []
             relevant_orders = [row for row in orders if f"ServiceRequest/{row.get('id')}" in visit_refs or
                                _reference(row.get("encounter")) == encounter_ref or
                                str(row.get("occurrenceDateTime") or (row.get("occurrencePeriod") or {}).get("start") or "")[:10] == service_date]
             relevant_charges = [row for row in charges if _reference(row.get("context")) == encounter_ref]
+            prior_refs = set(_source_references(prior_visit))
+            prior_orders = [row for row in orders if f"ServiceRequest/{row.get('id')}" in prior_refs or
+                            _reference(row.get("encounter")) == prior_encounter_ref]
+            prior_charges = [row for row in prior_charges if _reference(row.get("context")) == prior_encounter_ref]
             clinical_refs = set(ref for row in [visit, *relevant_orders, *relevant_charges] for ref in _source_references(row))
             relevant_conditions = [row for row in conditions if f"Condition/{row.get('id')}" in clinical_refs]
             diagnoses = list(dict.fromkeys(code for row in [visit, *relevant_orders, *relevant_charges, *relevant_conditions] for code in _coding(row, "diagnosis")))[:12]
@@ -400,13 +454,18 @@ async def fetch_inputs(profile: dict[str, Any], practice: dict[str, Any], *, tra
                 "service_type": location_config.get("service_type"), "service_date": service_date,
                 "place_of_service": location_config.get("place_of_service"), "diagnoses": diagnoses,
                 "patient_phone": _phone(patient), "reason": _visit_context(visit, relevant_orders, relevant_conditions),
+                "prior_visit": ({"date": _appointment_date(prior_visit),
+                                 "reason": _visit_context(prior_visit, prior_orders, []),
+                                 "procedure_codes": list(dict.fromkeys(code for row in [prior_visit, *prior_orders, *prior_charges]
+                                                                       for code in _coding(row, "procedure")))[:20]}
+                                if prior_visit else None),
                 "lines": list(lines.values()),
             }
     except httpx.HTTPError as exc:
         raise EcwBackendError("eClinicalWorks is temporarily unavailable.") from exc
 
     coverage_missing: list[str] = []
-    if len(next_visits) > 1:
+    if not appointment_id and len(next_visits) > 1:
         coverage_missing.append("eClinicalWorks returned more than one appointment on the next service date; an appointment-specific identifier is required to choose safely.")
     elif not visit:
         coverage_missing.append("eClinicalWorks did not return a scheduled appointment or encounter for this patient.")
@@ -443,8 +502,9 @@ async def fetch_inputs(profile: dict[str, Any], practice: dict[str, Any], *, tra
     inputs["coverage_missing"] = list(dict.fromkeys(coverage_missing))
     inputs["review_missing"] = list(dict.fromkeys(review_missing))
     source = {"system": "eClinicalWorks", "retrieved_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-              "appointment_date": service_date, "appointment_status": visit.get("status"),
+              "appointment_id": visit.get("id"), "appointment_date": service_date, "appointment_status": visit.get("status"),
               "payer": _display(payer), "location": location.get("name"),
               "resources": {"Coverage": len(coverage_rows), "Encounter": len(encounters),
-                            "ServiceRequest": len(orders), "ChargeItem": len(charges)}}
+                            "ServiceRequest": len(orders), "ChargeItem": len(charges),
+                            "Prior Encounter": len(prior_encounters), "Prior ChargeItem": len(prior_charges)}}
     return inputs, list(dict.fromkeys(missing)), source

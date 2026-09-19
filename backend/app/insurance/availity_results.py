@@ -1,4 +1,5 @@
 """Display payer evidence without recreating adjudication from benefit tables."""
+import re
 from collections import Counter
 from decimal import Decimal, InvalidOperation
 from typing import Any
@@ -43,6 +44,15 @@ def notes(value: Any) -> list[str]:
     if isinstance(value, dict):
         return notes([value[k] for k in ("message", "description", "text", "errors", "validationMessages", "payerNotes", "statusReasons", "code") if k in value])
     return []
+
+
+def provider_network_status(value: Any) -> str:
+    text = re.sub(r"[^a-z]", "", str(value or "").casefold())
+    if text in {"oon", "outofnetwork", "outnetwork", "nonparticipating"}:
+        return "out_of_network"
+    if text in {"innetwork", "participating", "preferred"}:
+        return "in_network"
+    return "unconfirmed"
 
 
 def coverage(payload: dict) -> dict:
@@ -101,6 +111,7 @@ def estimate(payload: dict, expected_lines: list[dict], demo: bool) -> dict:
             "patient_cents": sum(x["patient_cents"] for x in lines) if available else None,
             "allowed_cents": sum(x["allowed_cents"] for x in lines) if available and all(x["allowed_cents"] is not None for x in lines) else None,
             "provider_network": obj(data.get("billingProvider")).get("networkStatus"),
+            "provider_network_status": provider_network_status(obj(data.get("billingProvider")).get("networkStatus")),
             "message": "Synthetic Availity example; returned codes may differ from the example request." if demo else
                        "Patient total is the sum of Availity's returned line estimates." if available else
                        "Availity did not return a complete estimate matching the requested services. No patient total is available.",

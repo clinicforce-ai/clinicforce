@@ -47,6 +47,11 @@ class FileBoundaryTests(unittest.TestCase):
         self.assertNotIn("insurance-cases", key)
         self.assertEqual(client.return_value.put_object.call_args.kwargs["ServerSideEncryption"], "aws:kms")
 
+    def test_manual_card_fields_accept_optional_fallback_details(self):
+        self.assertEqual(staff.manual_card_fields("Pat Example", "MEM-MANUAL", "1990-01-01"), {"given_name": "Pat", "family_name": "Example", "member_id": "MEM-MANUAL", "birth_date": "1990-01-01"})
+        with self.assertRaises(Exception):
+            staff.manual_card_fields("Pat Example", "MEM-MANUAL", "2999-01-01")
+
 
 @unittest.skipUnless(os.getenv("STAFF_TEST_DATABASE_URL"), "Set STAFF_TEST_DATABASE_URL to a disposable PostgreSQL database")
 class StaffDatabaseTests(unittest.IsolatedAsyncioTestCase):
@@ -205,6 +210,22 @@ class StaffDatabaseTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("object_key", response.json())
         self.assertEqual(len((await self.client.get("/api/staff/library")).json()["documents"]), 1)
         self.assertEqual((await self.client.get(f"/api/staff/library/{response.json()['id']}/document")).status_code, 200)
+
+    async def test_manual_fallback_survives_ocr_failure_and_ocr_replaces_card_values(self):
+        await self.sign_in()
+        response = await self.client.post("/api/staff/intakes", data={"full_name": "Pat Example", "member_id": "MEM-MANUAL", "birth_date": "1990-01-01"}, files=[("files", ("card.pdf", card_pdf("Member ID: MEM-CARD\nDOB: 02/03/1991"), "application/pdf"))])
+        self.assertEqual(response.status_code, 201, response.text)
+        intake = response.json()
+        self.assertEqual(intake["fields"]["given_name"], "Pat")
+        self.assertEqual(intake["fields"]["family_name"], "Example")
+        self.assertEqual(intake["fields"]["member_id"], "MEM-CARD")
+        self.assertEqual(intake["fields"]["birth_date"], "1991-02-03")
+        self.assertEqual(intake["field_sources"]["given_name"], "staff_entered")
+        self.assertEqual(intake["field_sources"]["member_id"], "card_ocr")
+        with patch.object(staff.v1_sources, "read_pages", side_effect=golden.OCRServiceError("synthetic failure")):
+            response = await self.client.post("/api/staff/intakes", data={"full_name": "Pat Example", "member_id": "MEM-MANUAL", "birth_date": "1990-01-01"}, files=[("files", ("fallback.pdf", card_pdf(), "application/pdf"))])
+        self.assertEqual(response.status_code, 201, response.text)
+        self.assertEqual(response.json()["fields"], {"given_name": "Pat", "family_name": "Example", "member_id": "MEM-MANUAL", "birth_date": "1990-01-01"})
 
     async def test_qr_intake_requires_both_staff_and_valid_share_without_clinical_copy(self):
         path = "/api/doctor/insurance/staff-intake"

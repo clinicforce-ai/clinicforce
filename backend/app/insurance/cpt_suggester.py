@@ -18,6 +18,12 @@ _SYSTEM = """You provide clinical coding decision support for a clinician. Given
 clinical context and the exact CPT/HCPCS codes in that clinic's uploaded rate CSV, recommend only
 plausible candidate codes from that list. Do not invent a code, diagnosis, service, unit, or fact.
 These are suggestions only; the clinician must choose the final code after the encounter.
+When a prior completed appointment is supplied, use its reason and procedures only as context for
+the new appointment. Compare it with the current visit reason before considering a prior procedure.
+Never copy a historical code merely because it was previously used. If the new reason is materially
+different, suggest a prior code only when the current visit details independently support it; otherwise
+return no candidate and explain what planned-service details are needed. A historical E/M code does not
+establish the current visit level.
 Do not choose an office visit complexity level from a diagnosis alone. The E/M level depends
 on documented medical decision making or qualifying time. Do not infer procedure extent,
 anatomical sites, study counts, drug doses or units from a diagnosis alone. Explain missing details.
@@ -95,10 +101,12 @@ def _matching_candidate_rates(context: str, rate_lines: list[dict[str, Any]]) ->
     return [item[2] for item in ranked[:_MAX_MODEL_CANDIDATES]]
 
 
-def _candidate_rates(context: str, rate_lines: list[dict[str, Any]]) -> list[dict[str, str]]:
+def _candidate_rates(context: str, rate_lines: list[dict[str, Any]], prior_codes: list[str]) -> list[dict[str, str]]:
+    by_code = {str(line["code"]).upper(): {"code": str(line["code"]).upper(), "description": str(line.get("description") or line["code"])} for line in rate_lines}
+    historical = [by_code[code] for code in prior_codes if code in by_code]
     matched = _matching_candidate_rates(context, rate_lines)
-    if matched:
-        return matched
+    if matched or historical:
+        return list({item["code"]: item for item in [*historical, *matched]}.values())[:_MAX_MODEL_CANDIDATES]
     # Let the model reason over a bounded schedule when the clinician's wording
     # and the local description use no common terms.
     return sorted(
@@ -140,9 +148,11 @@ def _retryable(error: Exception) -> bool:
     return isinstance(error, ClientError) and error.response.get("Error", {}).get("Code") in _RETRYABLE_BEDROCK_ERRORS
 
 
-def suggest_cpt_codes(context: str, rate_lines: list[dict[str, Any]]) -> dict[str, Any]:
+def suggest_cpt_codes(context: str, rate_lines: list[dict[str, Any]], prior_visit: dict[str, Any] | None = None) -> dict[str, Any]:
     """Return model suggestions, accepting only codes supplied in the uploaded CSV."""
-    candidates = _candidate_rates(context, rate_lines)
+    prior = prior_visit if isinstance(prior_visit, dict) else {}
+    prior_codes = [str(code).upper() for code in prior.get("procedure_codes", []) if isinstance(code, str)]
+    candidates = _candidate_rates(context, rate_lines, prior_codes)
     if not candidates:
         return _fallback_suggestions(context, rate_lines)
     try:
@@ -152,7 +162,9 @@ def suggest_cpt_codes(context: str, rate_lines: list[dict[str, Any]]) -> dict[st
                 response = client.converse(
                     modelId=BEDROCK_MODEL_ID,
                     system=[{"text": _SYSTEM}],
-                    messages=[{"role": "user", "content": [{"text": json.dumps({"clinical_context": context, "available_codes": candidates})}]}],
+                    messages=[{"role": "user", "content": [{"text": json.dumps({"clinical_context": context,
+                        "prior_completed_appointment": {"date": str(prior.get("date") or ""), "reason": str(prior.get("reason") or ""),
+                                                        "procedure_codes": prior_codes}, "available_codes": candidates})}]}],
                     toolConfig={"tools": [{"toolSpec": {"name": _TOOL_NAME, "description": "Submit coding candidates for clinician review.", "inputSchema": {"json": _TOOL_SCHEMA}}}], "toolChoice": {"tool": {"name": _TOOL_NAME}}},
                     inferenceConfig={"maxTokens": 4000, "temperature": 0},
                 )
