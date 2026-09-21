@@ -1322,7 +1322,7 @@ async def retrieve_manifest(manifest_id: str, request: ManifestRequest) -> dict[
         log_warning("Secure Sharing", "SHL manifest fetch rejected: unavailable")
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Shared record is no longer available")
 
-    file: dict[str, str] = {"contentType": "application/fhir+json"}
+    file: dict[str, str] = {"contentType": "application/fhir+json;fhirVersion=4.0.1"}
     max_embedded = request.embeddedLengthMax
     if max_embedded is None or len(manifest["encrypted_jwe"]) <= max_embedded:
         file["embedded"] = manifest["encrypted_jwe"]

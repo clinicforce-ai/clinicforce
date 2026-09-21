@@ -87,12 +87,13 @@ export async function fetchManifest(
   return files.map((file) => {
     if (!file || typeof file !== 'object') throw new ApiError(502, 'The external issuer returned an invalid SHL file.')
     const item = file as Record<string, unknown>
-    if (item.contentType !== 'application/fhir+json' && item.contentType !== 'application/smart-health-card' && item.contentType !== 'application/smart-api-access') {
+    const contentType = typeof item.contentType === 'string' ? item.contentType.split(';', 1)[0].trim().toLowerCase() : ''
+    if (contentType !== 'application/fhir+json' && contentType !== 'application/smart-health-card' && contentType !== 'application/smart-api-access') {
       throw new ApiError(415, 'This Smart Health Link contains an unsupported file type.')
     }
     if (typeof item.embedded !== 'string' && typeof item.location !== 'string') throw new ApiError(502, 'The external issuer returned a file without encrypted content.')
     if (typeof item.location === 'string') externalHttpsUrl(item.location, 'file location')
-    return { contentType: item.contentType, ...(typeof item.embedded === 'string' ? { embedded: item.embedded } : {}), ...(typeof item.location === 'string' ? { location: item.location } : {}) }
+    return { contentType: contentType as ShlManifestFile['contentType'], ...(typeof item.embedded === 'string' ? { embedded: item.embedded } : {}), ...(typeof item.location === 'string' ? { location: item.location } : {}) }
   })
 }
 
