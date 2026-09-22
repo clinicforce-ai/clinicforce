@@ -51,7 +51,7 @@ def _staff_progress(connection: Any, case: dict, event: str, scope: dict, stamp:
     if not scope.get("practice_id"):
         return
     actor = scope.get("staff_actor") or {}
-    version = "Connected review" if case.get("source_mode") == "availity" else "Document review"
+    version = {"availity": "Connected review", "commercial": "Commercial estimate"}.get(case.get("source_mode"), "Document review")
     activity = {"id": str(uuid4()), "action": f"{version}: {event.replace('-', ' ')}"[:100], "created_at": stamp,
                 "actor": actor.get("display_name", "Clinic staff"), "actor_id": actor.get("id")}
     status = "reviewed" if case.get("source_mode") == "documents" and case.get("status") == "complete" else "in_progress"
@@ -77,7 +77,7 @@ def create_case(patient_id: str, share_manifest_id: str, evidence_manifest_id: s
             ).fetchone()
             if not intake or not intake["patient_id"] or intake["patient_id"] != patient_id:
                 raise StaffCaseConflict("The intake patient changed. Reopen the intake and confirm the correct patient.")
-            version = {"documents": "v1", "availity": "v2"}.get(workflow.get("source_mode"))
+            version = {"documents": "v1", "availity": "v2", "commercial": "commercial"}.get(workflow.get("source_mode"))
             if not version:
                 raise StaffCaseConflict("Unknown staff insurance workflow")
             existing_id = intake["workflows"].get(version)
