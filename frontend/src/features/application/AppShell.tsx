@@ -15,6 +15,7 @@ const Scanner = lazy(() => import('../../components/Scanner'))
 const ExternalShlReceiver = lazy(() => import('../../components/ExternalShlReceiver'))
 const InsuranceVerification = lazy(() => import('../../components/InsuranceVerification'))
 const InsuranceVerificationV2 = lazy(() => import('../../components/InsuranceVerificationV2'))
+const CommercialEstimator = lazy(() => import('../../components/CommercialEstimator'))
 const StaffWorkspace = lazy(() => import('../../components/StaffWorkspace'))
 const PatientInsuranceUpload = lazy(() => import('../../components/PatientInsuranceUpload'))
 const StaffOnboarding = lazy(() => import('../../components/StaffOnboarding'))
@@ -59,8 +60,8 @@ export function AppShell() {
       } else setView('dashboard')
     } catch (caught) { setError(caught instanceof Error ? caught.message : 'Unable to retrieve the patient file.'); setView('pin') }
   }
-  const openStaffInsurance = (id: string, version: 'v1' | 'v2') => {
-    setStaffIntakeId(id); setStaffIntakeContext(id); setView(version === 'v2' ? 'insurance-v2' : 'insurance')
+  const openStaffInsurance = (id: string, version: 'v1' | 'v2' | 'commercial') => {
+    setStaffIntakeId(id); setStaffIntakeContext(id); setView(version === 'v2' ? 'insurance-v2' : version === 'commercial' ? 'commercial-estimator' : 'insurance')
   }
   return <div className="min-h-dvh bg-[var(--canvas)] text-[var(--ink)]">
     <a className="skip-link" href="#main-content">Skip to content</a><SiteHeader onHome={returnHome} insuranceUploadMode={view === 'patient-upload'} staffMode={view === 'staff' || view === 'staff-create' || view === 'staff-join' || !!staffIntakeId || staffQr} />
@@ -78,6 +79,7 @@ export function AppShell() {
         {view === 'dashboard' && summary && <Dashboard data={summary} onScanAnother={restart} onHome={returnHome} onVerifyInsurance={(version) => { setStaffIntakeContext(null); setStaffIntakeId(undefined); setView(version === 'v2' ? 'insurance-v2' : 'insurance') }} />}
         {view === 'insurance' && <InsuranceVerification staffMode={!!staffIntakeId} onBack={staffIntakeId ? returnStaff : () => setView(summary ? 'dashboard' : 'landing')} />}
         {view === 'insurance-v2' && <InsuranceVerificationV2 staffMode={!!staffIntakeId} onUseDocuments={staffIntakeId ? () => openStaffInsurance(staffIntakeId, 'v1') : undefined} onBack={staffIntakeId ? returnStaff : () => setView(summary ? 'dashboard' : 'landing')} />}
+        {view === 'commercial-estimator' && <CommercialEstimator onBack={returnStaff} />}
       </Suspense>
     </main><footer className="shell border-t border-[var(--line)] py-6 text-sm text-[var(--muted-ink)]">ClinicForce · Patient records and clinic insurance workspace</footer>
   </div>

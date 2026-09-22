@@ -152,6 +152,8 @@ app.add_middleware(
 app.include_router(insurance_router)
 from app.api.routers.insurance_v2 import router as insurance_v2_router
 app.include_router(insurance_v2_router)
+from app.api.routers.commercial_estimator import router as commercial_estimator_router
+app.include_router(commercial_estimator_router)
 from app.api.routers.staff import router as staff_router, from_share as staff_intake_from_share
 app.include_router(staff_router)
 from app.api.routers.staff_registration import router as staff_registration_router

@@ -12,3 +12,4 @@ export type View =
   | 'dashboard'
   | 'insurance'
   | 'insurance-v2'
+  | 'commercial-estimator'
