@@ -17,7 +17,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from app.api.routers.insurance import _response, _scope, _session as insurance_session
 from app.core import object_store
-from app.insurance import commercial, commercial_store, golden, store
+from app.insurance import commercial, commercial_store, ecw_backend, golden, store
 
 
 router = APIRouter(prefix="/api/doctor/insurance/commercial", tags=["doctor-commercial-estimator"])
@@ -143,6 +143,55 @@ def _config(practice_id: str) -> dict:
             "live_eligibility_enabled": os.getenv("STEDI_LIVE_ELIGIBILITY_ENABLED", "false").lower() == "true"}
 
 
+def _ecw_practice(practice_id: str, payer_connection_id: str, provider_network_id: str) -> dict[str, Any]:
+    """Build only the eCW mappings needed by this commercial case.
+
+    It intentionally does not use AVAILITY_PRACTICE_CONFIG: both integrations
+    remain independently configurable.
+    """
+    payer = commercial_store.connection(practice_id, payer_connection_id)
+    network = _network(practice_id, provider_network_id)
+    if not payer:
+        raise HTTPException(422, "The commercial payer configuration no longer exists.")
+    aliases = {payer["display_name"]: payer["id"]}
+    aliases.update({value: payer["id"] for value in payer.get("aliases", []) if isinstance(value, str) and value.strip()})
+    return {
+        "timezone": os.getenv("COMMERCIAL_PRACTICE_TIMEZONE", "America/New_York"),
+        "payer_aliases": aliases,
+        "providers": {network["billing_npi"]: {}, network["rendering_npi"]: {}},
+        "locations": {network["location_id"]: {"place_of_service": network["place_of_service"],
+                                               "billing_provider_npi": network["billing_npi"]}},
+    }
+
+
+def _ecw_identity(session: dict, service_date: str) -> dict[str, str]:
+    patient = session["intake"]["patient"]
+    values = {"patient_first_name": patient.get("given_name"), "patient_last_name": patient.get("family_name"),
+              "patient_birth_date": str(patient.get("birth_date") or ""), "ecw_appointment_date": service_date}
+    if not all(values[key] for key in ("patient_first_name", "patient_last_name", "patient_birth_date")):
+        raise HTTPException(422, "Confirm patient name and birth date before reading eClinicalWorks.")
+    return {key: str(value) for key, value in values.items()}
+
+
+def _ecw_conflicts(case: dict, session: dict, inputs: dict, source: dict) -> list[str]:
+    data, fields = case["commercial"], session["intake"]["fields"]
+    network = _network(session["practice_id"], data["provider_network_id"])
+    relationship = {"self": "18", "spouse": "01", "child": "19", "other": "G8"}.get(str(fields.get("relationship") or ""), fields.get("relationship"))
+    checks = (("service date", inputs.get("service_date"), data["service_date"]),
+              ("payer", inputs.get("payer_id"), data["payer_connection_id"]),
+              ("billing provider NPI", source.get("billing_provider", {}).get("npi"), network["billing_npi"]),
+              ("rendering provider NPI", inputs.get("rendering_provider", {}).get("npi"), network["rendering_npi"]),
+              ("place of service", inputs.get("place_of_service"), network["place_of_service"]),
+              ("member ID", inputs.get("member_id"), fields.get("member_id")),
+              ("subscriber relationship", inputs.get("relationship"), relationship))
+    conflicts = [f"eClinicalWorks {label} does not match the confirmed intake." for label, observed, expected
+                 in checks if not observed or not expected or str(observed).strip().casefold() != str(expected).strip().casefold()]
+    # eCW may omit charge items, phone, or historical visits. Those inputs are
+    # needed by other integrations, but are not prerequisites for this Stedi
+    # estimate.  Only the explicit appointment/coverage comparison can block it.
+    return list(dict.fromkeys(conflicts))
+
+
 def _record_evidence(case: dict, session: dict, data: dict[str, Any], raw_object_key: str | None = None) -> dict:
     commercial_case = case["commercial"]
     if data["requested_dos"] != commercial_case["service_date"]:
@@ -161,6 +210,48 @@ def _record_evidence(case: dict, session: dict, data: dict[str, Any], raw_object
 async def configuration(request: Request) -> dict:
     session = await _session(request)
     return _config(session["practice_id"])
+
+
+@router.post("/cases/{case_id}/ecw-intake")
+async def read_ecw_appointment(case_id: str, request: Request) -> Any:
+    """Read the scheduled appointment and fail closed on any card/eCW mismatch."""
+    session = await _session(request)
+    case = await run_in_threadpool(_load, case_id, session)
+    data = case["commercial"]
+    if not ecw_backend.configured():
+        raise HTTPException(503, "The eClinicalWorks backend connection is not configured for this deployment.")
+    try:
+        inputs, _, source = await ecw_backend.fetch_inputs(
+            _ecw_identity(session, data["service_date"]),
+            _ecw_practice(session["practice_id"], data["payer_connection_id"], data["provider_network_id"]),
+        )
+    except ecw_backend.EcwBackendError as exc:
+        raise HTTPException(502, str(exc)) from exc
+    conflicts = _ecw_conflicts(case, session, inputs, source)
+    data["ecw"] = {"appointment_date": source.get("appointment_date"), "retrieved_at": source.get("retrieved_at"),
+                   "appointment_status": source.get("appointment_status"), "suggested_lines": [
+                       {"code": row.get("code"), "units": row.get("units"), "description": row.get("description")}
+                       for row in inputs.get("lines", []) if row.get("code")
+                   ], "reason": inputs.get("reason"), "conflicts": conflicts}
+    case["review_tasks"] = (conflicts or [
+        "Confirm eClinicalWorks-suggested CPT/HCPCS codes and units; they are not automatically selected.",
+        "Run Stedi eligibility or record a staff-reviewed saved payer response.",
+    ])
+    return _response(_public(await run_in_threadpool(_save, case, session, "ecw-appointment-read")))
+
+
+@router.post("/ecw/saved-eligibility-probe")
+async def saved_eligibility_probe(request: Request) -> dict:
+    """Administrator-only, read-only proof of saved TriZetto/eCW evidence access."""
+    session = await _session(request)
+    _admin(session)
+    if not ecw_backend.configured():
+        raise HTTPException(503, "The eClinicalWorks backend connection is not configured for this deployment.")
+    try:
+        # This only searches saved resources. It cannot create an eligibility transaction.
+        return await ecw_backend.probe_saved_eligibility(_ecw_identity(session, date.today().isoformat()))
+    except ecw_backend.EcwBackendError as exc:
+        raise HTTPException(502, str(exc)) from exc
 
 
 @router.post("/connections")

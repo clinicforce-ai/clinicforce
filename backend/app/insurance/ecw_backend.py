@@ -22,6 +22,11 @@ SCOPES = (
     "system/RelatedPerson.read", "system/Organization.read", "system/Practitioner.read",
     "system/PractitionerRole.read", "system/Location.read", "system/ChargeItem.read",
 )
+# These are intentionally separate from normal appointment reads. A tenant must
+# approve them explicitly; a missing optional entitlement must not break intake.
+EVIDENCE_SCOPES = (
+    "system/CoverageEligibilityResponse.read", "system/DocumentReference.read", "system/Binary.read",
+)
 REFERENCE_TIMEOUT_SECONDS = 4
 SEARCH_TIMEOUT_SECONDS = 6
 HISTORY_TIMEOUT_SECONDS = 3
@@ -94,7 +99,8 @@ async def _response_json(response: httpx.Response, message: str) -> dict[str, An
     return payload
 
 
-async def _access_token(client: httpx.AsyncClient, client_id: str, issuer: str) -> str:
+async def _access_token(client: httpx.AsyncClient, client_id: str, issuer: str,
+                        scopes: tuple[str, ...] = SCOPES) -> str:
     metadata = await _response_json(
         await client.get(f"{issuer}/metadata", params={"_format": "json"}, headers={"Accept": "application/fhir+json"}),
         "The activated eClinicalWorks practice metadata is unavailable.",
@@ -103,7 +109,7 @@ async def _access_token(client: httpx.AsyncClient, client_id: str, issuer: str) 
     token = await _response_json(
         await client.post(endpoint, data={
             "grant_type": "client_credentials",
-            "scope": " ".join(SCOPES),
+            "scope": " ".join(scopes),
             "client_assertion_type": "urn:ietf:params:oauth:client-assertion-type:jwt-bearer",
             "client_assertion": ecw._client_assertion(endpoint, client_id),
         }, headers={"Accept": "application/json"}),
@@ -708,3 +714,50 @@ async def fetch_inputs(profile: dict[str, Any], practice: dict[str, Any], *, tra
                             "Condition": len(conditions), "PractitionerRole": len(role_resources),
                             "ChargeItem": len(charges)}}
     return inputs, list(dict.fromkeys(missing)), source
+
+
+async def probe_saved_eligibility(profile: dict[str, Any], *, transport: httpx.AsyncBaseTransport | None = None) -> dict[str, Any]:
+    """Read-only proof that eCW exposes saved eligibility evidence.
+
+    It never submits a 270 or fetches document Binary content.  Access denial is
+    a meaningful capability result, never silently treated as no evidence.
+    """
+    client_id, issuer = settings()
+    try:
+        async with httpx.AsyncClient(timeout=30, follow_redirects=False, transport=transport) as client:
+            token = await _access_token(client, client_id, issuer, SCOPES + EVIDENCE_SCOPES)
+            metadata = await _response_json(
+                await client.get(f"{issuer}/metadata", params={"_format": "json"}, headers={"Accept": "application/fhir+json"}),
+                "The eClinicalWorks capability statement is unavailable.",
+            )
+            resources = {str(row.get("type")) for rest in metadata.get("rest", []) if isinstance(rest, dict)
+                         for row in rest.get("resource", []) if isinstance(row, dict) and row.get("type")}
+            patients = await _search(client, issuer, token, "Patient", {
+                "given": str(profile.get("patient_first_name") or ""),
+                "family": str(profile.get("patient_last_name") or ""),
+                "birthdate": str(profile.get("patient_birth_date") or ""),
+            })
+            matches = [row for row in patients if _norm(_name(row)[0]) == _norm(profile.get("patient_first_name"))
+                       and _norm(_name(row)[1]) == _norm(profile.get("patient_last_name"))
+                       and row.get("birthDate") == profile.get("patient_birth_date")]
+            if len(matches) != 1 or not re.fullmatch(r"[A-Za-z0-9.\-]{1,200}", str(matches[0].get("id", ""))):
+                raise EcwBackendError("eClinicalWorks did not return exactly one confirmed patient for the saved-evidence probe.")
+            patient_id = str(matches[0]["id"])
+            result: dict[str, Any] = {
+                "checked_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                "capability_resources": sorted(resources & {"CoverageEligibilityResponse", "DocumentReference", "Binary"}),
+                "resources": {},
+            }
+            for resource in ("CoverageEligibilityResponse", "DocumentReference"):
+                response = await client.get(f"{issuer}/{resource}", params={"patient": patient_id},
+                                            headers={"Authorization": f"Bearer {token}", "Accept": "application/fhir+json"})
+                if response.status_code == 403:
+                    result["resources"][resource] = {"status": "forbidden", "count": None}
+                elif response.status_code == 404:
+                    result["resources"][resource] = {"status": "not_supported_or_not_found", "count": None}
+                else:
+                    bundle = await _response_json(response, f"eClinicalWorks could not return {resource} evidence.")
+                    result["resources"][resource] = {"status": "available", "count": len(_entries(bundle))}
+    except httpx.HTTPError as exc:
+        raise EcwBackendError("eClinicalWorks is temporarily unavailable.") from exc
+    return result

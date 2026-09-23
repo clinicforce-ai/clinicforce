@@ -71,6 +71,37 @@ class EcwBackendSourceTests(unittest.IsolatedAsyncioTestCase):
             )
         self.assertEqual((rows, timed_out, unavailable), ([], None, "ChargeItem"))
 
+    async def test_saved_eligibility_probe_preserves_forbidden_status(self):
+        def handler(request: httpx.Request) -> httpx.Response:
+            if request.url.path == "/fhir/metadata":
+                return httpx.Response(200, json={"resourceType": "CapabilityStatement", "rest": [{"resource": [
+                    {"type": "CoverageEligibilityResponse"}, {"type": "DocumentReference"},
+                ]}]})
+            if request.url.path == "/fhir/Patient":
+                return httpx.Response(200, json={"resourceType": "Bundle", "entry": [{"resource": {
+                    "resourceType": "Patient", "id": "patient-1", "name": [{"given": ["Pat"], "family": "Example"}],
+                    "birthDate": "1980-01-01",
+                }}]})
+            if request.url.path == "/fhir/CoverageEligibilityResponse":
+                return httpx.Response(403, json={"resourceType": "OperationOutcome"})
+            if request.url.path == "/fhir/DocumentReference":
+                return httpx.Response(200, json={"resourceType": "Bundle", "entry": [{"resource": {
+                    "resourceType": "DocumentReference", "id": "document-1",
+                }}]})
+            return httpx.Response(404)
+
+        with patch.object(ecw_backend, "settings", return_value=("client", "https://ehr.example.test/fhir")), \
+                patch.object(ecw_backend, "_access_token", new=AsyncMock(return_value="token")) as access_token:
+            result = await ecw_backend.probe_saved_eligibility(
+                {"patient_first_name": "Pat", "patient_last_name": "Example", "patient_birth_date": "1980-01-01"},
+                transport=httpx.MockTransport(handler),
+            )
+        self.assertEqual(result["resources"], {
+            "CoverageEligibilityResponse": {"status": "forbidden", "count": None},
+            "DocumentReference": {"status": "available", "count": 1},
+        })
+        self.assertEqual(access_token.await_args.args[3], ecw_backend.SCOPES + ecw_backend.EVIDENCE_SCOPES)
+
     async def test_backend_token_and_fhir_resources_become_availity_inputs(self):
         today_date = datetime.now(ZoneInfo("America/New_York")).date()
         today = today_date.isoformat()
