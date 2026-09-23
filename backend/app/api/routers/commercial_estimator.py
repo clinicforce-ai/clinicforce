@@ -372,12 +372,19 @@ async def start_from_ecw(value: EcwStartInput, request: Request) -> Any:
                        "evidence_id": None, "request_state": "not_requested"}
     conflicts = _ecw_conflicts({"commercial": commercial_data}, session, inputs, source)
     workflow = {"source_mode": "commercial", "commercial": {**commercial_data, "ecw": _ecw_case_data(inputs, source, conflicts)},
-                "review_tasks": conflicts or line_tasks or ["Ready to check Stedi eligibility using the eClinicalWorks-coded services."]}
+                # An empty list means the automatic eCW → Stedi path may continue.
+                # It is not a clinician confirmation step.
+                "review_tasks": conflicts or line_tasks}
     binding = hashlib.sha256(f"commercial-v1|{payer['id']}|{network['id']}|{profile['id']}|{inputs['service_date']}|{value.appointment_id}".encode()).hexdigest()
     try:
         case = await run_in_threadpool(store.create_case, session["patient_id"], "", binding, workflow, expected_intake_updated_at=session["intake"]["updated_at"], workflow_slot=_commercial_slot(value.appointment_id), **_scope(session))
     except store.StaffCaseConflict as exc:
         raise HTTPException(409, str(exc)) from exc
+    # Upgrade a case opened by the pre-autopilot screen.  This was a display-only
+    # prompt, not a real condition requiring staff action.
+    if case.get("review_tasks") == ["Ready to check Stedi eligibility using the eClinicalWorks-coded services."]:
+        case["review_tasks"] = []
+        case = await run_in_threadpool(_save, case, session, "automatic-path-ready")
     return _response(_public(case))
 
 
