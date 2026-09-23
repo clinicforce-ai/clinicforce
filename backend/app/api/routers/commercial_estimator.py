@@ -69,6 +69,11 @@ class StartInput(BaseModel):
     service_date: str = Field(pattern=r"^\d{4}-\d{2}-\d{2}$")
 
 
+class EcwStartInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    appointment_id: str = Field(pattern=r"^[A-Za-z0-9.\-]{1,200}$")
+
+
 class ServiceLine(BaseModel):
     model_config = ConfigDict(extra="forbid")
     code: str = Field(pattern=r"^(?:\d{5}|[A-Za-z]\d{4}|\d{4}[A-Za-z])$")
@@ -164,6 +169,55 @@ def _ecw_practice(practice_id: str, payer_connection_id: str, provider_network_i
     }
 
 
+def _ecw_practice_for_nmct(practice_id: str) -> dict[str, Any]:
+    """Expose all approved NMCT mappings to the eCW reader, not to clinic staff."""
+    aliases: dict[str, str] = {}
+    for payer in commercial_store.list_connections(practice_id):
+        if payer["category"] != "commercial_medical" or payer["status"] != "staff_guidance_enabled":
+            continue
+        for value in [payer["display_name"], *payer.get("aliases", [])]:
+            if isinstance(value, str) and value.strip():
+                aliases[value] = payer["id"]
+    providers: dict[str, dict] = {}
+    locations: dict[str, dict] = {}
+    for network in commercial_store.list_networks(practice_id):
+        if network["status"] != "verified":
+            continue
+        providers[network["billing_npi"]] = {}
+        providers[network["rendering_npi"]] = {}
+        locations[network["location_id"]] = {"place_of_service": network["place_of_service"], "billing_provider_npi": network["billing_npi"]}
+    return {"timezone": os.getenv("COMMERCIAL_PRACTICE_TIMEZONE", "America/New_York"), "payer_aliases": aliases, "providers": providers, "locations": locations}
+
+
+def _nmct_path(practice_id: str, inputs: dict, source: dict) -> tuple[dict, dict, dict]:
+    payer = commercial_store.connection(practice_id, str(inputs.get("payer_id") or ""))
+    if not payer or payer["category"] != "commercial_medical" or payer["status"] != "staff_guidance_enabled":
+        raise HTTPException(409, "NMCT has no approved Stedi payer mapping for this appointment's eCW coverage.")
+    service_date = str(inputs.get("service_date") or "")
+    rendering_npi = str((inputs.get("rendering_provider") or {}).get("npi") or "")
+    networks = [row for row in commercial_store.list_networks(practice_id)
+                if row["payer_connection_id"] == payer["id"] and row["status"] == "verified"
+                and row["rendering_npi"] == rendering_npi and row["location_id"] == str(source.get("location_id") or "")
+                and row["place_of_service"] == str(inputs.get("place_of_service") or "")
+                and row["effective_from"] <= service_date and (not row.get("effective_to") or row["effective_to"] >= service_date)]
+    if len(networks) != 1:
+        raise HTTPException(409, "NMCT has no single verified provider-network record for this eCW provider and location.")
+    profiles = [row for row in commercial_store.list_profiles(practice_id)
+                if row["payer_connection_id"] == payer["id"] and row["provider_network_id"] == networks[0]["id"]
+                and row["status"] == "staff_guidance_enabled"]
+    if len(profiles) != 1:
+        raise HTTPException(409, "NMCT has no single enabled estimate profile for this provider and payer.")
+    return payer, networks[0], profiles[0]
+
+
+def _ecw_case_data(inputs: dict, source: dict, conflicts: list[str]) -> dict[str, Any]:
+    return {"appointment_id": source.get("appointment_id"), "appointment_date": source.get("appointment_date"),
+            "retrieved_at": source.get("retrieved_at"), "appointment_status": source.get("appointment_status"),
+            "suggested_lines": [{"code": row.get("code"), "units": row.get("units"), "description": row.get("description")}
+                                for row in inputs.get("lines", []) if row.get("code")],
+            "reason": inputs.get("reason"), "conflicts": conflicts}
+
+
 def _ecw_identity(session: dict, service_date: str) -> dict[str, str]:
     patient = session["intake"]["patient"]
     values = {"patient_first_name": patient.get("given_name"), "patient_last_name": patient.get("family_name"),
@@ -212,6 +266,44 @@ async def configuration(request: Request) -> dict:
     return _config(session["practice_id"])
 
 
+@router.get("/appointments")
+async def ecw_appointments(request: Request) -> dict:
+    """List the confirmed patient's scheduled visits without creating an eligibility check."""
+    session = await _session(request)
+    if not ecw_backend.configured():
+        raise HTTPException(503, "The eClinicalWorks backend connection is not configured for this deployment.")
+    try:
+        values = await ecw_backend.list_appointments(_ecw_identity(session, date.today().isoformat()), _ecw_practice_for_nmct(session["practice_id"]))
+    except ecw_backend.EcwBackendError as exc:
+        raise HTTPException(502, str(exc)) from exc
+    return {"appointments": values}
+
+
+@router.post("/cases/from-ecw")
+async def start_from_ecw(value: EcwStartInput, request: Request) -> Any:
+    """Create an NMCT estimate case from the selected eCW appointment only."""
+    session = await _session(request)
+    if not ecw_backend.configured():
+        raise HTTPException(503, "The eClinicalWorks backend connection is not configured for this deployment.")
+    try:
+        inputs, _, source = await ecw_backend.fetch_inputs(_ecw_identity(session, date.today().isoformat()), _ecw_practice_for_nmct(session["practice_id"]), value.appointment_id)
+    except ecw_backend.EcwBackendError as exc:
+        raise HTTPException(502, str(exc)) from exc
+    payer, network, profile = _nmct_path(session["practice_id"], inputs, source)
+    commercial_data = {"payer_connection_id": payer["id"], "provider_network_id": network["id"], "profile_id": profile["id"],
+                       "service_date": inputs["service_date"], "service_category": profile["service_category"], "lines": [],
+                       "evidence_id": None, "request_state": "not_requested"}
+    conflicts = _ecw_conflicts({"commercial": commercial_data}, session, inputs, source)
+    workflow = {"source_mode": "commercial", "commercial": {**commercial_data, "ecw": _ecw_case_data(inputs, source, conflicts)},
+                "review_tasks": conflicts or ["Confirm the eClinicalWorks-suggested CPT/HCPCS codes and units before checking eligibility."]}
+    binding = hashlib.sha256(f"commercial-v1|{payer['id']}|{network['id']}|{profile['id']}|{inputs['service_date']}|{value.appointment_id}".encode()).hexdigest()
+    try:
+        case = await run_in_threadpool(store.create_case, session["patient_id"], "", binding, workflow, expected_intake_updated_at=session["intake"]["updated_at"], **_scope(session))
+    except store.StaffCaseConflict as exc:
+        raise HTTPException(409, str(exc)) from exc
+    return _response(_public(case))
+
+
 @router.post("/cases/{case_id}/ecw-intake")
 async def read_ecw_appointment(case_id: str, request: Request) -> Any:
     """Read the scheduled appointment and fail closed on any card/eCW mismatch."""
@@ -228,11 +320,7 @@ async def read_ecw_appointment(case_id: str, request: Request) -> Any:
     except ecw_backend.EcwBackendError as exc:
         raise HTTPException(502, str(exc)) from exc
     conflicts = _ecw_conflicts(case, session, inputs, source)
-    data["ecw"] = {"appointment_date": source.get("appointment_date"), "retrieved_at": source.get("retrieved_at"),
-                   "appointment_status": source.get("appointment_status"), "suggested_lines": [
-                       {"code": row.get("code"), "units": row.get("units"), "description": row.get("description")}
-                       for row in inputs.get("lines", []) if row.get("code")
-                   ], "reason": inputs.get("reason"), "conflicts": conflicts}
+    data["ecw"] = _ecw_case_data(inputs, source, conflicts)
     case["review_tasks"] = (conflicts or [
         "Confirm eClinicalWorks-suggested CPT/HCPCS codes and units; they are not automatically selected.",
         "Run Stedi eligibility or record a staff-reviewed saved payer response.",
@@ -346,6 +434,8 @@ async def stedi_eligibility(case_id: str, request: Request) -> Any:
     session = await _session(request); case = await run_in_threadpool(_load, case_id, session); data = case["commercial"]
     if data.get("request_state") == "pending":
         raise HTTPException(409, "A Stedi eligibility request is already pending. Check the saved case before retrying.")
+    if not data.get("lines") or any(line.get("allowed_cents") is None for line in data["lines"]):
+        raise HTTPException(409, "Confirm the expected CPT/HCPCS codes, units, and matching clinic rates before a paid Stedi check.")
     if os.getenv("STEDI_EXECUTION_MODE", "off") != "commercial_pilot" or os.getenv("STEDI_LIVE_ELIGIBILITY_ENABLED", "false").lower() != "true":
         raise HTTPException(409, "Stedi eligibility is disabled. Set STEDI_EXECUTION_MODE=commercial_pilot and STEDI_LIVE_ELIGIBILITY_ENABLED=true only when this clinic is ready for paid production checks.")
     if not object_store.enabled():
