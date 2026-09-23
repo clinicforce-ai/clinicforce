@@ -37,7 +37,7 @@ export interface StaffCardDetails {
 export interface StaffIntake {
   id: string
   status: string
-  source?: 'insurance_card' | 'clinicforce_qr' | 'patient_upload'
+  source?: 'insurance_card' | 'manual_entry' | 'clinicforce_qr' | 'patient_upload'
   auto_patient_id?: string | null
   auto_patient?: (StaffPatient & { identity_status?: 'unverified' | 'confirmed' }) | null
   expected_patient_id?: string | null

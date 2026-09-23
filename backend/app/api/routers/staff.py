@@ -284,13 +284,15 @@ def manual_card_fields(full_name: str, member_id: str, birth_date: str) -> dict:
 
 
 @router.post("/intakes")
-async def upload_cards(request: Request, files: list[UploadFile] = File(...), full_name: str = Form(default="", max_length=200),
+async def upload_cards(request: Request, files: list[UploadFile] = File(default=[]), full_name: str = Form(default="", max_length=200),
                        member_id: str = Form(default="", max_length=80), birth_date: str = Form(default="", max_length=10)):
     staff = await require_staff(request)
     manual_fields = manual_card_fields(full_name, member_id, birth_date)
-    if not 1 <= len(files) <= 2:
+    if len(files) > 2:
         raise HTTPException(422, "Upload one insurance card PDF or up to two card images")
-    if not object_store.enabled():
+    if not files and not all(manual_fields.get(key) for key in ("given_name", "family_name", "member_id", "birth_date")):
+        raise HTTPException(422, "Upload an insurance card or enter the patient name, insurance ID, and date of birth")
+    if files and not object_store.enabled():
         raise HTTPException(503, "Card storage is unavailable. Your card has not been saved.")
     prepared, pages = [], 0
     for file in files:
@@ -309,7 +311,8 @@ async def upload_cards(request: Request, files: list[UploadFile] = File(...), fu
             key = await run_in_threadpool(object_store.put_staff_document, staff["practice_id"], intake_id, "source" + suffix, content, content_type)
             documents.append({"id": str(uuid4()), "filename": filename, "content_type": content_type,
                               "size_bytes": len(content), "sha256": hashlib.sha256(content).hexdigest(), "created_at": staff_store.now(), "object_key": key})
-        intake = await run_in_threadpool(staff_store.create_intake, intake_id, staff, documents, "insurance_card", None, manual_fields)
+        intake = await run_in_threadpool(staff_store.create_intake, intake_id, staff, documents,
+                                         "insurance_card" if files else "manual_entry", None, manual_fields)
     except Exception:
         for document in documents:
             try:
@@ -317,6 +320,8 @@ async def upload_cards(request: Request, files: list[UploadFile] = File(...), fu
             except Exception:
                 pass
         raise HTTPException(503, "The card could not be saved. Please try again.") from None
+    if not files:
+        return JSONResponse(public(intake), status_code=201, headers=NO_STORE)
     try:
         extracted_pages, offset, source_pages = [], 0, {}
         for index, (_, content, _) in enumerate(prepared):

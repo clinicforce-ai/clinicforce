@@ -211,11 +211,12 @@ def _event(action: str, actor: dict | str | None = None) -> dict:
 
 def create_intake(intake_id: str, staff: dict, documents: list[dict], source: str = "insurance_card", source_portal_patient_id: str | None = None, fields: dict | None = None) -> dict:
     stamp = now()
+    event = "QR patient details received" if source == "clinicforce_qr" else "Manual insurance details received" if source == "manual_entry" else "Insurance card received"
     with _connection() as connection:
         row = connection.execute(
             """INSERT INTO staff_intakes (id,practice_id,created_by,status,documents,events,created_at,updated_at,source,source_portal_patient_id,fields,field_sources)
                VALUES (%s,%s,%s,'needs_confirmation',%s::jsonb,%s::jsonb,%s,%s,%s,%s,%s::jsonb,%s::jsonb) RETURNING *""",
-            (intake_id, staff["practice_id"], staff["id"], json.dumps(documents), json.dumps([_event("QR patient details received" if source == "clinicforce_qr" else "Insurance card received", staff)]), stamp, stamp,
+            (intake_id, staff["practice_id"], staff["id"], json.dumps(documents), json.dumps([_event(event, staff)]), stamp, stamp,
              source, source_portal_patient_id, json.dumps(fields or {}), json.dumps({key: source for key in fields or {}})),
         ).fetchone()
     return {**dict(row), "patient": None}
