@@ -165,7 +165,7 @@ async def _optional_search(client: httpx.AsyncClient, issuer: str, token: str, r
 
 
 async def _read(client: httpx.AsyncClient, issuer: str, token: str, reference: Any) -> dict[str, Any]:
-    if not isinstance(reference, str) or not re.fullmatch(r"(?:Patient|RelatedPerson|Organization|Practitioner|PractitionerRole|Location|Condition)/[A-Za-z0-9.\-]{1,200}", reference):
+    if not isinstance(reference, str) or not re.fullmatch(r"(?:Patient|RelatedPerson|Organization|Practitioner|PractitionerRole|Location|Condition|Encounter)/[A-Za-z0-9.\-]{1,200}", reference):
         return {}
     response = await client.get(f"{issuer}/{reference}", headers={"Authorization": f"Bearer {token}", "Accept": "application/fhir+json"})
     if response.status_code in {403, 404}:
@@ -391,34 +391,71 @@ def _source_references(resource: dict[str, Any]) -> list[str]:
     return list(dict.fromkeys(values))
 
 
-async def fetch_inputs(profile: dict[str, Any], practice: dict[str, Any], *, transport: httpx.AsyncBaseTransport | None = None) -> tuple[dict, list[str], dict]:
+async def _patient_for_profile(client: httpx.AsyncClient, issuer: str, token: str, profile: dict[str, Any]) -> tuple[dict, str, str | None]:
+    """Resolve exactly one confirmed patient without exposing a broad patient search."""
+    cached_patient_id = str(profile.get("ecw_patient_id") or "")
+    if cached_patient_id:
+        if not re.fullmatch(r"[A-Za-z0-9.\-]{1,200}", cached_patient_id):
+            raise EcwBackendError("The saved eClinicalWorks patient link is invalid.")
+        patient, patient_timeout = await _cached_patient(client, issuer, token, cached_patient_id, profile)
+        patient_rows = [patient]
+    else:
+        patient_timeout = None
+        patient_rows = await _search(client, issuer, token, "Patient", {
+            "given": str(profile.get("patient_first_name") or ""),
+            "family": str(profile.get("patient_last_name") or ""),
+            "birthdate": str(profile.get("patient_birth_date") or ""),
+        })
+    matches = [row for row in patient_rows if _norm(_name(row)[0]) == _norm(profile.get("patient_first_name"))
+               and _norm(_name(row)[1]) == _norm(profile.get("patient_last_name"))
+               and row.get("birthDate") == profile.get("patient_birth_date")]
+    if len(matches) != 1:
+        raise EcwBackendError("eClinicalWorks did not return exactly one patient matching the confirmed patient name and birth date.")
+    patient = matches[0]
+    patient_id = str(patient.get("id", ""))
+    if not re.fullmatch(r"[A-Za-z0-9.\-]{1,200}", patient_id):
+        raise EcwBackendError("eClinicalWorks returned an invalid patient identifier.")
+    return patient, patient_id, patient_timeout
+
+
+async def list_appointments(profile: dict[str, Any], practice: dict[str, Any], *, transport: httpx.AsyncBaseTransport | None = None) -> list[dict[str, str]]:
+    """Return only selectable current/future appointments; this never sends eligibility."""
+    client_id, issuer = settings()
+    try:
+        async with httpx.AsyncClient(timeout=30, follow_redirects=False, transport=transport) as client:
+            token = await _access_token(client, client_id, issuer)
+            _, patient_id, _ = await _patient_for_profile(client, issuer, token, profile)
+            today = datetime.now(ZoneInfo(practice.get("timezone", "America/New_York"))).date()
+            encounters, timed_out = await _bounded_search(
+                client, issuer, token, "Encounter",
+                [("patient", patient_id), ("date", f"ge{today}"), ("date", f"le{today + timedelta(days=365)}")],
+            )
+            if timed_out:
+                raise EcwBackendError("eClinicalWorks timed out while loading the patient's scheduled encounters. Reload the appointment to retry.")
+    except EcwResourceUnavailable as exc:
+        raise EcwBackendError(f"eClinicalWorks did not authorize ClinicForce to read {exc} data. Confirm the activated app scope and practice activation.") from exc
+    except httpx.HTTPError as exc:
+        raise EcwBackendError("eClinicalWorks is temporarily unavailable.") from exc
+    appointments = []
+    for visit in encounters:
+        appointment_id, start = str(visit.get("id") or ""), str((visit.get("period") or {}).get("start") or "")
+        if not re.fullmatch(r"[A-Za-z0-9.\-]{1,200}", appointment_id) or _appointment_date(visit) < today.isoformat():
+            continue
+        if str(visit.get("status") or "").casefold() in {"cancelled", "entered-in-error", "finished", "completed"}:
+            continue
+        appointments.append({"id": appointment_id, "start": start, "status": str(visit.get("status") or "scheduled"),
+                             "reason": _visit_context(visit, [], [], []) or ""})
+    return sorted(appointments, key=lambda row: (row["start"], row["id"]))
+
+
+async def fetch_inputs(profile: dict[str, Any], practice: dict[str, Any], appointment_id: str | None = None,
+                       *, transport: httpx.AsyncBaseTransport | None = None) -> tuple[dict, list[str], dict]:
     """Fetch and reduce eCW data; never infer codes, payer IDs, prices or provider roles."""
     client_id, issuer = settings()
     try:
         async with httpx.AsyncClient(timeout=30, follow_redirects=False, transport=transport) as client:
             token = await _access_token(client, client_id, issuer)
-            cached_patient_id = str(profile.get("ecw_patient_id") or "")
-            if cached_patient_id:
-                if not re.fullmatch(r"[A-Za-z0-9.\-]{1,200}", cached_patient_id):
-                    raise EcwBackendError("The saved eClinicalWorks patient link is invalid.")
-                patient, patient_timeout = await _cached_patient(client, issuer, token, cached_patient_id, profile)
-                patient_rows = [patient]
-            else:
-                patient_timeout = None
-                patient_rows = await _search(client, issuer, token, "Patient", {
-                    "given": str(profile.get("patient_first_name") or ""),
-                    "family": str(profile.get("patient_last_name") or ""),
-                    "birthdate": str(profile.get("patient_birth_date") or ""),
-                })
-            matches = [row for row in patient_rows if _norm(_name(row)[0]) == _norm(profile.get("patient_first_name"))
-                       and _norm(_name(row)[1]) == _norm(profile.get("patient_last_name"))
-                       and row.get("birthDate") == profile.get("patient_birth_date")]
-            if len(matches) != 1:
-                raise EcwBackendError("eClinicalWorks did not return exactly one patient matching the confirmed patient name and birth date.")
-            patient = matches[0]
-            patient_id = str(patient.get("id", ""))
-            if not re.fullmatch(r"[A-Za-z0-9.\-]{1,200}", patient_id):
-                raise EcwBackendError("eClinicalWorks returned an invalid patient identifier.")
+            patient, patient_id, patient_timeout = await _patient_for_profile(client, issuer, token, profile)
             query = {"patient": patient_id}
             today_date = datetime.now(ZoneInfo(practice.get("timezone", "America/New_York"))).date()
             today = today_date.isoformat()
@@ -427,7 +464,14 @@ async def fetch_inputs(profile: dict[str, Any], practice: dict[str, Any], *, tra
                 preferred_date = ""
             # eCW serves an exact date quickly but its date-range search can stall.
             # Reuse the last verified appointment date when refreshing an existing case.
-            if preferred_date:
+            if appointment_id:
+                if not re.fullmatch(r"[A-Za-z0-9.\-]{1,200}", appointment_id):
+                    raise EcwBackendError("The selected eClinicalWorks appointment identifier is invalid.")
+                selected, encounter_timeout = await _bounded_read(client, issuer, token, f"Encounter/{appointment_id}")
+                if not selected or _reference(selected.get("subject")) != f"Patient/{patient_id}":
+                    raise EcwBackendError("The selected eClinicalWorks appointment does not belong to the confirmed patient.")
+                encounters = [selected]
+            elif preferred_date:
                 encounters, encounter_timeout = await _bounded_search(
                     client, issuer, token, "Encounter", {"patient": patient_id, "date": preferred_date}, attempts=2,
                 )

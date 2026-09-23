@@ -13,7 +13,7 @@ from typing import Any, Literal
 import httpx
 from fastapi import APIRouter, File, HTTPException, Request, UploadFile
 from fastapi.concurrency import run_in_threadpool
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from app.api.routers.insurance import _response, _scope, _session as insurance_session
 from app.core import object_store
@@ -218,6 +218,29 @@ def _ecw_case_data(inputs: dict, source: dict, conflicts: list[str]) -> dict[str
             "reason": inputs.get("reason"), "conflicts": conflicts}
 
 
+def _ecw_coded_lines(practice_id: str, profile: dict, network: dict, service_date: str,
+                     inputs: dict) -> tuple[list[dict[str, Any]], list[str]]:
+    """Use only explicit eCW codes and units; never turn visit text into a charge."""
+    try:
+        selected = [ServiceLine(code=str(row.get("code") or "").upper(), units=int(str(row.get("units") or "")))
+                    for row in inputs.get("lines", [])]
+    except (TypeError, ValueError, ValidationError):
+        return [], ["eClinicalWorks returned a coded service without a whole-number unit. Update the appointment coding before estimating."]
+    if not selected:
+        return [], ["eClinicalWorks did not return a CPT/HCPCS-coded service for this appointment. Add the planned service in eClinicalWorks before estimating."]
+    try:
+        matched = commercial_store.matching_rates(practice_id, profile, network, service_date,
+                                                  [line.model_dump() for line in selected])
+    except commercial.CommercialError as exc:
+        return [], [str(exc)]
+    by_code = {row["code"]: row for row in matched}
+    lines = [{"code": line.code, "units": line.units, "rate_id": by_code.get(line.code, {}).get("id"),
+              "allowed_cents": by_code.get(line.code, {}).get("allowed_cents"),
+              "cash_cents": by_code.get(line.code, {}).get("cash_cents")} for line in selected]
+    missing = [line["code"] for line in lines if line["allowed_cents"] is None]
+    return lines, ([f"No active contracted rate matches: {', '.join(missing)}."] if missing else [])
+
+
 def _ecw_identity(session: dict, service_date: str) -> dict[str, str]:
     patient = session["intake"]["patient"]
     values = {"patient_first_name": patient.get("given_name"), "patient_last_name": patient.get("family_name"),
@@ -290,12 +313,13 @@ async def start_from_ecw(value: EcwStartInput, request: Request) -> Any:
     except ecw_backend.EcwBackendError as exc:
         raise HTTPException(502, str(exc)) from exc
     payer, network, profile = _nmct_path(session["practice_id"], inputs, source)
+    lines, line_tasks = _ecw_coded_lines(session["practice_id"], profile, network, inputs["service_date"], inputs)
     commercial_data = {"payer_connection_id": payer["id"], "provider_network_id": network["id"], "profile_id": profile["id"],
-                       "service_date": inputs["service_date"], "service_category": profile["service_category"], "lines": [],
+                       "service_date": inputs["service_date"], "service_category": profile["service_category"], "lines": lines,
                        "evidence_id": None, "request_state": "not_requested"}
     conflicts = _ecw_conflicts({"commercial": commercial_data}, session, inputs, source)
     workflow = {"source_mode": "commercial", "commercial": {**commercial_data, "ecw": _ecw_case_data(inputs, source, conflicts)},
-                "review_tasks": conflicts or ["Confirm the eClinicalWorks-suggested CPT/HCPCS codes and units before checking eligibility."]}
+                "review_tasks": conflicts or line_tasks or ["Ready to check Stedi eligibility using the eClinicalWorks-coded services."]}
     binding = hashlib.sha256(f"commercial-v1|{payer['id']}|{network['id']}|{profile['id']}|{inputs['service_date']}|{value.appointment_id}".encode()).hexdigest()
     try:
         case = await run_in_threadpool(store.create_case, session["patient_id"], "", binding, workflow, expected_intake_updated_at=session["intake"]["updated_at"], **_scope(session))

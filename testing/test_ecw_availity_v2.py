@@ -113,7 +113,7 @@ class EcwBackendSourceTests(unittest.IsolatedAsyncioTestCase):
         resources = {
             "Patient": [{"resourceType": "Patient", "id": "patient-1", "name": [{"use": "official", "given": ["Pat"], "family": "Example"}], "birthDate": "1980-01-01", "gender": "female", "telecom": [{"system": "phone", "value": "555-234-7700"}]}],
             "Coverage": [{"resourceType": "Coverage", "id": "coverage-1", "status": "active", "subscriberId": "MEMBER123", "beneficiary": {"reference": "Patient/patient-1"}, "subscriber": {"reference": "Patient/patient-1"}, "relationship": {"coding": [{"code": "self"}]}, "payor": [{"reference": "Organization/payer-1"}], "period": {"start": "2026-01-01"}, "class": [{"type": {"coding": [{"code": "group"}]}, "value": "GROUP123"}]}],
-            "Encounter": [{"resourceType": "Encounter", "id": "encounter-1", "status": "planned", "period": {"start": f"{today}T14:00:00Z"}, "reasonCode": [{"text": "Neuropathy consultation"}], "participant": [{"individual": {"reference": "Practitioner/provider-1"}}], "location": [{"location": {"reference": "Location/location-1"}}]}],
+            "Encounter": [{"resourceType": "Encounter", "id": "encounter-1", "status": "planned", "subject": {"reference": "Patient/patient-1"}, "period": {"start": f"{today}T14:00:00Z"}, "reasonCode": [{"text": "Neuropathy consultation"}], "participant": [{"individual": {"reference": "Practitioner/provider-1"}}], "location": [{"location": {"reference": "Location/location-1"}}]}],
             "ServiceRequest": [{"resourceType": "ServiceRequest", "id": "order-1", "encounter": {"reference": "Encounter/encounter-1"}, "occurrenceDateTime": f"{today}T14:00:00Z", "code": {"coding": [{"system": "http://www.ama-assn.org/go/cpt", "code": "99204"}]}, "quantityQuantity": {"value": 1}, "reasonCode": [{"coding": [{"system": "http://hl7.org/fhir/sid/icd-10-cm", "code": "G62.9"}]}]}],
             "Procedure": [{"resourceType": "Procedure", "id": "procedure-1", "status": "preparation",
                            "encounter": {"reference": "Encounter/encounter-1"},
@@ -142,6 +142,8 @@ class EcwBackendSourceTests(unittest.IsolatedAsyncioTestCase):
                 return httpx.Response(200, json={"access_token": "private-token"})
             if request.url.path in reads:
                 return httpx.Response(200, json=reads[request.url.path])
+            if request.url.path == "/fhir/Encounter/encounter-1":
+                return httpx.Response(200, json=resources["Encounter"][0])
             resource = request.url.path.rsplit("/", 1)[-1]
             if resource == "Encounter" and f"le{yesterday}" in request.url.params.get_list("date"):
                 resource = "PastEncounter"
@@ -218,6 +220,44 @@ class EcwBackendSourceTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(any(request.url.path == "/fhir/Patient" for request in requests))
         encounter_request = next(request for request in requests if request.url.path == "/fhir/Encounter")
         self.assertEqual(dict(encounter_request.url.params), {"patient": "patient-1", "date": today})
+
+        requests.clear()
+        with patch.dict(os.environ, environment), patch.object(ecw, "ECW_KMS_KEY_ID", "kms-key"), patch.object(ecw, "_client_assertion", return_value="signed-assertion"):
+            selected_inputs, _, _ = await ecw_backend.fetch_inputs(
+                {"patient_first_name": "Pat", "patient_last_name": "Example", "patient_birth_date": "1980-01-01"},
+                practice, "encounter-1", transport=httpx.MockTransport(handler),
+            )
+        self.assertEqual(selected_inputs["service_date"], today)
+        self.assertTrue(any(request.url.path == "/fhir/Encounter/encounter-1" for request in requests))
+
+    async def test_lists_only_current_selectable_appointments(self):
+        today = datetime.now(ZoneInfo("America/New_York")).date()
+        tomorrow = (today + timedelta(days=1)).isoformat()
+        metadata = {"resourceType": "CapabilityStatement", "rest": [{"security": {"extension": [{
+            "url": "http://fhir-registry.smarthealthit.org/StructureDefinition/oauth-uris",
+            "extension": [{"url": "token", "valueUri": "https://auth.example.test/token"}],
+        }]}}]}
+        patient = {"resourceType": "Patient", "id": "patient-1", "name": [{"given": ["Pat"], "family": "Example"}], "birthDate": "1980-01-01"}
+        encounters = [
+            {"resourceType": "Encounter", "id": "scheduled", "status": "planned", "period": {"start": f"{tomorrow}T09:00:00Z"}, "reasonCode": [{"text": "Follow-up"}]},
+            {"resourceType": "Encounter", "id": "cancelled", "status": "cancelled", "period": {"start": f"{tomorrow}T10:00:00Z"}},
+        ]
+        def handler(request: httpx.Request) -> httpx.Response:
+            if request.url.path == "/fhir/metadata":
+                return httpx.Response(200, json=metadata)
+            if request.url.path == "/token":
+                return httpx.Response(200, json={"access_token": "token"})
+            if request.url.path == "/fhir/Patient":
+                return httpx.Response(200, json={"resourceType": "Bundle", "entry": [{"resource": patient}]})
+            if request.url.path == "/fhir/Encounter":
+                return httpx.Response(200, json={"resourceType": "Bundle", "entry": [{"resource": row} for row in encounters]})
+            return httpx.Response(404)
+        with patch.dict(os.environ, {"ECW_BACKEND_CLIENT_ID": "backend-client", "ECW_BACKEND_ISSUER": "https://ehr.example.test/fhir"}), patch.object(ecw, "ECW_KMS_KEY_ID", "kms-key"), patch.object(ecw, "_client_assertion", return_value="signed-assertion"):
+            result = await ecw_backend.list_appointments(
+                {"patient_first_name": "Pat", "patient_last_name": "Example", "patient_birth_date": "1980-01-01"},
+                {"timezone": "America/New_York"}, transport=httpx.MockTransport(handler),
+            )
+        self.assertEqual(result, [{"id": "scheduled", "start": f"{tomorrow}T09:00:00Z", "status": "planned", "reason": "Reason: Follow-up"}])
 
     def test_uses_only_explicit_ecw_visit_status(self):
         self.assertEqual(ecw_backend._visit_type({"type": [{"text": "New patient visit"}]}), "new")
