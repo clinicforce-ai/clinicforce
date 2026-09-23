@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from datetime import datetime, timedelta, timezone
 from typing import Any
 from uuid import uuid4
@@ -62,7 +63,7 @@ def _staff_progress(connection: Any, case: dict, event: str, scope: dict, stamp:
     )
 
 
-def create_case(patient_id: str, share_manifest_id: str, evidence_manifest_id: str, workflow: dict[str, Any], *, practice_id: str | None = None, intake_id: str | None = None, expected_intake_updated_at: str | None = None, staff_actor: dict | None = None) -> dict[str, Any]:
+def create_case(patient_id: str, share_manifest_id: str, evidence_manifest_id: str, workflow: dict[str, Any], *, practice_id: str | None = None, intake_id: str | None = None, expected_intake_updated_at: str | None = None, staff_actor: dict | None = None, workflow_slot: str | None = None) -> dict[str, Any]:
     now, case_id = _now(), str(uuid4())
     _owner(patient_id, share_manifest_id, practice_id, intake_id)
     workflow = {**workflow, "revision": workflow.get("revision", 0), "id": case_id, "created_at": now.isoformat(), "expires_at": None if practice_id else (now + CASE_TTL).isoformat()}
@@ -77,9 +78,11 @@ def create_case(patient_id: str, share_manifest_id: str, evidence_manifest_id: s
             ).fetchone()
             if not intake or not intake["patient_id"] or intake["patient_id"] != patient_id:
                 raise StaffCaseConflict("The intake patient changed. Reopen the intake and confirm the correct patient.")
-            version = {"documents": "v1", "availity": "v2", "commercial": "commercial"}.get(workflow.get("source_mode"))
+            version = workflow_slot or {"documents": "v1", "availity": "v2", "commercial": "commercial"}.get(workflow.get("source_mode"))
             if not version:
                 raise StaffCaseConflict("Unknown staff insurance workflow")
+            if not re.fullmatch(r"[a-z][a-z0-9:.-]{0,240}", version):
+                raise StaffCaseConflict("Invalid staff insurance workflow slot")
             existing_id = intake["workflows"].get(version)
             if existing_id:
                 existing = connection.execute(
@@ -125,6 +128,23 @@ def get_case(case_id: str, patient_id: str, share_manifest_id: str, **scope) -> 
             (case_id, *values),
         ).fetchone()
     return json.loads(row["workflow_json"]) if row else None
+
+
+def get_cases(case_ids: list[str], patient_id: str, share_manifest_id: str, **scope) -> list[dict[str, Any]]:
+    """Read known workflow cases for one staff intake in one scoped query."""
+    ids = list(dict.fromkeys(case_id for case_id in case_ids if isinstance(case_id, str) and case_id))
+    if not ids:
+        return []
+    now = _now()
+    owner, values = _owner(patient_id, share_manifest_id, **scope)
+    placeholders = ", ".join("%s" for _ in ids)
+    with _connection() as connection:
+        _purge(connection, now)
+        rows = connection.execute(
+            f"SELECT workflow_json FROM insurance_cases WHERE id IN ({placeholders}) AND {owner}",
+            (*ids, *values),
+        ).fetchall()
+    return [json.loads(row["workflow_json"]) for row in rows]
 
 
 def save_case(case: dict[str, Any], patient_id: str, share_manifest_id: str, event: str, **scope) -> dict[str, Any] | None:

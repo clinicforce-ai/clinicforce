@@ -259,6 +259,39 @@ class EcwBackendSourceTests(unittest.IsolatedAsyncioTestCase):
             )
         self.assertEqual(result, [{"id": "scheduled", "start": f"{tomorrow}T09:00:00Z", "status": "planned", "reason": "Reason: Follow-up"}])
 
+    async def test_lists_completed_history_without_an_eligibility_request(self):
+        today = datetime.now(ZoneInfo("America/New_York")).date()
+        yesterday = (today - timedelta(days=1)).isoformat()
+        metadata = {"resourceType": "CapabilityStatement", "rest": [{"security": {"extension": [{
+            "url": "http://fhir-registry.smarthealthit.org/StructureDefinition/oauth-uris",
+            "extension": [{"url": "token", "valueUri": "https://auth.example.test/token"}],
+        }]}}]}
+        patient = {"resourceType": "Patient", "id": "patient-1", "name": [{"given": ["Pat"], "family": "Example"}], "birthDate": "1980-01-01"}
+        encounters = [
+            {"resourceType": "Encounter", "id": "completed", "status": "finished", "period": {"start": f"{yesterday}T09:00:00Z"}, "reasonCode": [{"text": "Follow-up"}]},
+            {"resourceType": "Encounter", "id": "cancelled", "status": "cancelled", "period": {"start": f"{yesterday}T10:00:00Z"}},
+        ]
+        procedures = [{"resourceType": "Procedure", "id": "procedure-1", "encounter": {"reference": "Encounter/completed"},
+                       "code": {"coding": [{"system": "http://www.ama-assn.org/go/cpt", "code": "99214"}]}}]
+        requests = []
+        def handler(request: httpx.Request) -> httpx.Response:
+            requests.append(request)
+            if request.url.path == "/fhir/metadata": return httpx.Response(200, json=metadata)
+            if request.url.path == "/token": return httpx.Response(200, json={"access_token": "token"})
+            if request.url.path == "/fhir/Patient": return httpx.Response(200, json={"resourceType": "Bundle", "entry": [{"resource": patient}]})
+            if request.url.path == "/fhir/Encounter": return httpx.Response(200, json={"resourceType": "Bundle", "entry": [{"resource": row} for row in encounters]})
+            if request.url.path == "/fhir/Procedure": return httpx.Response(200, json={"resourceType": "Bundle", "entry": [{"resource": row} for row in procedures]})
+            if request.url.path == "/fhir/ServiceRequest": return httpx.Response(200, json={"resourceType": "Bundle", "entry": []})
+            return httpx.Response(404)
+        with patch.dict(os.environ, {"ECW_BACKEND_CLIENT_ID": "backend-client", "ECW_BACKEND_ISSUER": "https://ehr.example.test/fhir"}), patch.object(ecw, "ECW_KMS_KEY_ID", "kms-key"), patch.object(ecw, "_client_assertion", return_value="signed-assertion"):
+            result = await ecw_backend.list_completed_appointments(
+                {"patient_first_name": "Pat", "patient_last_name": "Example", "patient_birth_date": "1980-01-01"},
+                {"timezone": "America/New_York"}, transport=httpx.MockTransport(handler),
+            )
+        self.assertEqual(result, [{"id": "completed", "start": f"{yesterday}T09:00:00Z", "date": yesterday,
+                                   "status": "finished", "visit_type": "not_returned", "reason": "Follow-up", "coded_services": ["99214"]}])
+        self.assertTrue(all(request.url.host != "healthcare.us.stedi.com" for request in requests))
+
     def test_uses_only_explicit_ecw_visit_status(self):
         self.assertEqual(ecw_backend._visit_type({"type": [{"text": "New patient visit"}]}), "new")
         self.assertEqual(ecw_backend._visit_type({"serviceType": [{"text": "Established patient visit"}]}), "established")

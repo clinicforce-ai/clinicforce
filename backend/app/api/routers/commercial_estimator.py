@@ -218,6 +218,25 @@ def _ecw_case_data(inputs: dict, source: dict, conflicts: list[str]) -> dict[str
             "reason": inputs.get("reason"), "conflicts": conflicts}
 
 
+def _past_visit_with_saved_estimate(visit: dict[str, Any], case: dict | None) -> dict[str, Any]:
+    """Attach only an estimate already saved for this exact eCW encounter."""
+    ecw = ((case or {}).get("commercial") or {}).get("ecw") or {}
+    estimate = (case or {}).get("estimate")
+    if (case or {}).get("source_mode") != "commercial" or ecw.get("appointment_id") != visit.get("id") or not isinstance(estimate, dict):
+        return {**visit, "saved_estimate": None}
+    return {**visit, "saved_estimate": {
+        "created_at": case.get("created_at"),
+        "allowed_cents": estimate.get("allowed_cents"),
+        "patient_cents": estimate.get("patient_cents"),
+        "plan_cents": estimate.get("plan_cents"),
+        "disclaimer": estimate.get("disclaimer"),
+    }}
+
+
+def _commercial_slot(appointment_id: str) -> str:
+    return "commercial:" + hashlib.sha256(appointment_id.encode()).hexdigest()
+
+
 def _ecw_coded_lines(practice_id: str, profile: dict, network: dict, service_date: str,
                      inputs: dict) -> tuple[list[dict[str, Any]], list[str]]:
     """Use only explicit eCW codes and units; never turn visit text into a charge."""
@@ -302,6 +321,26 @@ async def ecw_appointments(request: Request) -> dict:
     return {"appointments": values}
 
 
+@router.get("/history")
+async def ecw_completed_appointments(request: Request) -> dict:
+    """List prior eCW visits and a matching saved estimate without recalculating."""
+    session = await _session(request)
+    if not ecw_backend.configured():
+        raise HTTPException(503, "The eClinicalWorks backend connection is not configured for this deployment.")
+    try:
+        visits = await ecw_backend.list_completed_appointments(
+            _ecw_identity(session, date.today().isoformat()), _ecw_practice_for_nmct(session["practice_id"]),
+        )
+    except ecw_backend.EcwBackendError as exc:
+        raise HTTPException(502, str(exc)) from exc
+    workflows = session["intake"].get("workflows", {})
+    case_ids = [workflows.get("commercial"), *(workflows.get(_commercial_slot(visit["id"])) for visit in visits)]
+    saved_cases = await run_in_threadpool(store.get_cases, case_ids, session["patient_id"], session["share_manifest_id"], **_scope(session))
+    by_appointment = {str(((case.get("commercial") or {}).get("ecw") or {}).get("appointment_id") or ""): case
+                      for case in saved_cases if case.get("source_mode") == "commercial"}
+    return {"visits": [_past_visit_with_saved_estimate(visit, by_appointment.get(visit["id"])) for visit in visits]}
+
+
 @router.post("/cases/from-ecw")
 async def start_from_ecw(value: EcwStartInput, request: Request) -> Any:
     """Create an NMCT estimate case from the selected eCW appointment only."""
@@ -322,7 +361,7 @@ async def start_from_ecw(value: EcwStartInput, request: Request) -> Any:
                 "review_tasks": conflicts or line_tasks or ["Ready to check Stedi eligibility using the eClinicalWorks-coded services."]}
     binding = hashlib.sha256(f"commercial-v1|{payer['id']}|{network['id']}|{profile['id']}|{inputs['service_date']}|{value.appointment_id}".encode()).hexdigest()
     try:
-        case = await run_in_threadpool(store.create_case, session["patient_id"], "", binding, workflow, expected_intake_updated_at=session["intake"]["updated_at"], **_scope(session))
+        case = await run_in_threadpool(store.create_case, session["patient_id"], "", binding, workflow, expected_intake_updated_at=session["intake"]["updated_at"], workflow_slot=_commercial_slot(value.appointment_id), **_scope(session))
     except store.StaffCaseConflict as exc:
         raise HTTPException(409, str(exc)) from exc
     return _response(_public(case))

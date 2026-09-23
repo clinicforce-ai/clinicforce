@@ -1,7 +1,7 @@
 import unittest
 from unittest.mock import patch
 
-from app.api.routers.commercial_estimator import _nmct_path
+from app.api.routers.commercial_estimator import _nmct_path, _past_visit_with_saved_estimate
 from app.insurance.commercial import CommercialError, estimate, normalize_stedi_271, parse_rate_csv
 
 
@@ -46,6 +46,15 @@ class CommercialRulesTest(unittest.TestCase):
              patch("app.api.routers.commercial_estimator.commercial_store.list_profiles", return_value=[profile]):
             selected = _nmct_path("nmct", {"payer_id": "bcbs", "service_date": "2026-09-23", "rendering_provider": {"npi": "1234567893"}, "place_of_service": "11"}, {"location_id": "north"})
         self.assertEqual(selected, (payer, network, profile))
+
+    def test_history_only_shows_an_estimate_saved_for_the_same_ecw_visit(self):
+        visit = {"id": "encounter-1", "date": "2026-09-22", "status": "finished", "coded_services": ["99204"]}
+        case = {"source_mode": "commercial", "created_at": "2026-09-22T12:00:00+00:00",
+                "commercial": {"ecw": {"appointment_id": "encounter-1"}},
+                "estimate": {"allowed_cents": 25000, "patient_cents": 5000, "plan_cents": 20000,
+                             "disclaimer": "Estimate only."}}
+        self.assertEqual(_past_visit_with_saved_estimate(visit, case)["saved_estimate"]["patient_cents"], 5000)
+        self.assertIsNone(_past_visit_with_saved_estimate({**visit, "id": "encounter-2"}, case)["saved_estimate"])
 
 
 if __name__ == "__main__":
