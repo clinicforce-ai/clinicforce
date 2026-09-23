@@ -31,6 +31,7 @@ REFERENCE_TIMEOUT_SECONDS = 4
 SEARCH_TIMEOUT_SECONDS = 6
 HISTORY_TIMEOUT_SECONDS = 3
 HISTORY_DAYS = 365
+HISTORY_VISIT_LIMIT = 12
 
 
 class EcwBackendError(RuntimeError):
@@ -332,7 +333,10 @@ def _history_summary(visit: dict[str, Any], procedures: list[dict[str, Any]], or
     labels = []
     for field in (visit.get("reasonCode"), visit.get("type"), visit.get("serviceType")):
         labels.extend(_concept_labels(field))
-    codes = list(dict.fromkeys(code for row in related for code in _coding(row, "procedure")))[:12]
+    # Some eCW builds keep a completed visit's code on the Encounter rather
+    # than on a linked Procedure or ServiceRequest.
+    codes = list(dict.fromkeys([*_coding(visit, "procedure"),
+                                *(code for row in related for code in _coding(row, "procedure"))]))[:12]
     return {"date": _appointment_date(visit), "status": str(visit.get("status") or "not_returned"),
             "visit_type": _visit_type(visit) or "not_returned",
             "reason": "; ".join(dict.fromkeys(" ".join(label.split()) for label in labels if label.strip()))[:500] or None,
@@ -446,6 +450,42 @@ async def list_appointments(profile: dict[str, Any], practice: dict[str, Any], *
         appointments.append({"id": appointment_id, "start": start, "status": str(visit.get("status") or "scheduled"),
                              "reason": _visit_context(visit, [], [], []) or ""})
     return sorted(appointments, key=lambda row: (row["start"], row["id"]))
+
+
+async def list_completed_appointments(profile: dict[str, Any], practice: dict[str, Any], *,
+                                      transport: httpx.AsyncBaseTransport | None = None) -> list[dict[str, Any]]:
+    """Return recent completed visits for display only; never send eligibility."""
+    client_id, issuer = settings()
+    try:
+        async with httpx.AsyncClient(timeout=30, follow_redirects=False, transport=transport) as client:
+            token = await _access_token(client, client_id, issuer)
+            _, patient_id, _ = await _patient_for_profile(client, issuer, token, profile)
+            today = datetime.now(ZoneInfo(practice.get("timezone", "America/New_York"))).date()
+            encounters, timed_out = await _bounded_search(
+                client, issuer, token, "Encounter",
+                [("patient", patient_id), ("date", f"ge{today - timedelta(days=HISTORY_DAYS)}"),
+                 ("date", f"le{today - timedelta(days=1)}")],
+                timeout_seconds=HISTORY_TIMEOUT_SECONDS,
+            )
+            if timed_out:
+                raise EcwBackendError("eClinicalWorks timed out while loading the patient's completed visit history. Reload to retry.")
+            procedure_result, order_result = await asyncio.gather(
+                _optional_search(client, issuer, token, "Procedure", {"patient": patient_id}),
+                _optional_search(client, issuer, token, "ServiceRequest", {"patient": patient_id}),
+            )
+    except EcwResourceUnavailable as exc:
+        raise EcwBackendError(f"eClinicalWorks did not authorize ClinicForce to read {exc} data. Confirm the activated app scope and practice activation.") from exc
+    except httpx.HTTPError as exc:
+        raise EcwBackendError("eClinicalWorks is temporarily unavailable.") from exc
+    procedures, orders = procedure_result[0], order_result[0]
+    completed = sorted(
+        (visit for visit in encounters if _appointment_date(visit) < today.isoformat()
+         and str(visit.get("status") or "").casefold() in {"finished", "completed"}),
+        key=lambda visit: (_appointment_date(visit), str(visit.get("id") or "")), reverse=True,
+    )[:HISTORY_VISIT_LIMIT]
+    return [{"id": str(visit.get("id") or ""), "start": str((visit.get("period") or {}).get("start") or ""),
+             **_history_summary(visit, procedures, orders)} for visit in completed
+            if re.fullmatch(r"[A-Za-z0-9.\-]{1,200}", str(visit.get("id") or ""))]
 
 
 async def fetch_inputs(profile: dict[str, Any], practice: dict[str, Any], appointment_id: str | None = None,

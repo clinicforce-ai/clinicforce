@@ -5,6 +5,8 @@ export type CommercialConfiguration = { connections: Array<Record<string, unknow
 export const commercialConfiguration = () => request<CommercialConfiguration>(`${root}/configuration`)
 export type CommercialAppointment = { id: string; start: string; status: string; reason: string }
 export const commercialAppointments = () => request<{ appointments: CommercialAppointment[] }>(`${root}/appointments`)
+export type CommercialPastVisit = CommercialAppointment & { date: string; visit_type: string; coded_services: string[]; saved_estimate: { created_at?: string; allowed_cents?: number | null; patient_cents?: number | null; plan_cents?: number | null; disclaimer?: string | null } | null }
+export const commercialHistory = () => request<{ visits: CommercialPastVisit[] }>(`${root}/history`)
 export const commercialCreate = (path: 'connections' | 'networks' | 'profiles', body: object) => request<Record<string, unknown>>(`${root}/${path}`, json(body))
 export const commercialStart = (body: object) => request<CommercialCase>(`${root}/cases`, json(body))
 export const commercialStartFromEcw = (appointment_id: string) => request<CommercialCase>(`${root}/cases/from-ecw`, json({ appointment_id }))
