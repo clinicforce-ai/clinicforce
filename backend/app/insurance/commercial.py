@@ -201,12 +201,25 @@ def normalize_stedi_271(payload: dict[str, Any], service_type_code: str, provide
         return selected[0] if len(selected) == 1 else None
     deductible, oop = pick("C", True), pick("G", True)
     copay, coinsurance = pick("B"), pick("A")
-    prior_auth = any(str(row.get("priorAuthIndicator") or "").upper() == "REQUIRED" for _, row in wanted)
+    authorization_values = {str(row.get("authOrCertIndicator") or row.get("priorAuthIndicator") or "").upper()
+                            for _, row in wanted}
+    authorization_signal = ("required" if authorization_values & {"Y", "REQUIRED"}
+                            else "unknown" if authorization_values & {"U", "UNKNOWN"}
+                            else "not_required")
+    descriptions = " ".join(
+        str(item.get("description") or "")
+        for _, row in wanted for item in row.get("additionalInformation", []) if isinstance(item, dict)
+    ).casefold()
+    referral_signal = "required" if "referral" in descriptions and "required" in descriptions else "not_returned"
     deductible_cents = _stedi_cents(deductible.get("benefitAmount")) if deductible else None
     oop_cents = _stedi_cents(oop.get("benefitAmount")) if oop else None
     copay_cents = _stedi_cents(copay.get("benefitAmount")) if copay else None
     try:
-        coinsurance_percent = Decimal(str(coinsurance.get("percent"))) if coinsurance else None
+        coinsurance_percent = Decimal(str(coinsurance.get("percent") or coinsurance.get("benefitPercent"))) if coinsurance else None
+        # X12 percentage values are commonly serialized as fractions (for
+        # example, .20 means 20%), while some payer JSON layouts use 20.
+        if coinsurance_percent is not None and Decimal("0") <= coinsurance_percent <= Decimal("1"):
+            coinsurance_percent *= 100
         if coinsurance_percent is not None and not Decimal("0") <= coinsurance_percent <= Decimal("100"):
             coinsurance_percent = None
     except Exception:
@@ -216,8 +229,8 @@ def normalize_stedi_271(payload: dict[str, Any], service_type_code: str, provide
             "network_status": "in_network" if provider_network_verified else "unknown",
             "deductible_remaining_cents": deductible_cents, "oop_remaining_cents": oop_cents,
             "copay_cents": copay_cents, "coinsurance_percent": str(coinsurance_percent) if coinsurance_percent is not None else None,
-            "has_secondary": False, "requires_review": bool(missing or prior_auth),
-            "authorization_signal": "required" if prior_auth else "not_returned",
+            "has_secondary": False, "requires_review": bool(missing or authorization_signal in {"required", "unknown"} or referral_signal == "required"),
+            "authorization_signal": authorization_signal, "referral_signal": referral_signal,
             "normalization_notes": ["Stedi 271 benefit schedule does not prove provider participation."]}
 
 

@@ -298,8 +298,22 @@ def _record_evidence(case: dict, session: dict, data: dict[str, Any], raw_object
         data["raw_object_key"] = raw_object_key
     evidence = commercial_store.save_evidence(session["practice_id"], case["id"], commercial.context_fingerprint(os.getenv("COMMERCIAL_EVIDENCE_HMAC_KEY", ""), context), data)
     commercial_case["evidence_id"] = evidence["id"]; commercial_case["request_state"] = "complete"
-    case["review_tasks"] = ["Confirm referral and authorization status, if the payer requires either."]
+    benefits = data["benefits"]
+    case["review_tasks"] = (["Prior authorization is required for the returned benefit. Confirm approval before estimating."] if benefits.get("authorization_signal") == "required" else
+                            ["The payer could not determine prior-authorization requirements. Verify before estimating."] if benefits.get("authorization_signal") == "unknown" else
+                            ["A referral requirement was returned for the selected benefit. Confirm it before estimating."] if benefits.get("referral_signal") == "required" else [])
     return evidence
+
+
+def _subscriber_identity(fields: dict[str, Any], patient: dict[str, Any]) -> tuple[str, str, str, bool]:
+    relationship = str(fields.get("relationship") or "self")
+    is_self = relationship in {"self", "18"}
+    name = str(fields.get("subscriber_name") or "").strip() or f"{patient.get('given_name') or ''} {patient.get('family_name') or ''}".strip()
+    parts = name.split()
+    birth_date = str(patient.get("birth_date") if is_self else fields.get("subscriber_birth_date") or "")
+    if len(parts) < 2 or not birth_date:
+        raise HTTPException(422, "Confirm the card member ID, policyholder first and last name, and policyholder birth date before sending Stedi eligibility.")
+    return parts[0], " ".join(parts[1:]), birth_date, is_self
 
 
 @router.get("/configuration")
@@ -507,19 +521,18 @@ async def stedi_eligibility(case_id: str, request: Request) -> Any:
     if not api_key: raise HTTPException(503, "Stedi production credentials are not configured on the backend.")
     payer, network = commercial_store.connection(session["practice_id"], data["payer_connection_id"]), _network(session["practice_id"], data["provider_network_id"])
     fields, patient = session["intake"]["fields"], session["intake"]["patient"]
-    member_id, relationship = str(fields.get("member_id") or "").strip(), str(fields.get("relationship") or "self")
-    subscriber_name = str(fields.get("subscriber_name") or "").strip() or f"{patient['given_name']} {patient['family_name']}"
-    first, _, last = subscriber_name.partition(" ")
-    if not member_id or not first or not last or not patient.get("birth_date"):
-        raise HTTPException(422, "Confirm the card member ID, subscriber name, and birth date before sending Stedi eligibility.")
+    member_id = str(fields.get("member_id") or "").strip()
+    first, last, subscriber_birth_date, is_self = _subscriber_identity(fields, patient)
+    if not member_id:
+        raise HTTPException(422, "Confirm the card member ID before sending Stedi eligibility.")
     rules = payer["rules"]
     service_day = date.fromisoformat(data["service_date"])
     if rules.get("future_dos_current_month") and service_day > date.today() and (service_day.year, service_day.month) != (date.today().year, date.today().month):
         raise HTTPException(422, "This payer permits future eligibility dates only through the end of the current month.")
     stc = rules.get("service_type_code")
     if not isinstance(stc, str) or not stc: raise HTTPException(422, "Configure exactly one Stedi service-type code for this payer/profile before eligibility.")
-    body: dict[str, Any] = {"payerId": payer["stedi_payer_id"], "provider": {"npi": network["rendering_npi"], "name": {"organization": network["organization_name"]}}, "subscriber": {"memberId": member_id, "dateOfBirth": patient["birth_date"], "name": {"person": {"firstName": first, "lastName": last}}}, "encounter": {"dates": {"service": data["service_date"]}, "services": [{"system": "STC", "value": stc}]}}
-    if relationship != "self": body["dependent"] = {"dateOfBirth": patient["birth_date"], "name": {"person": {"firstName": patient["given_name"], "lastName": patient["family_name"]}}}
+    body: dict[str, Any] = {"payerId": payer["stedi_payer_id"], "provider": {"npi": network["rendering_npi"], "name": {"organization": network["organization_name"]}}, "subscriber": {"memberId": member_id, "dateOfBirth": subscriber_birth_date, "name": {"person": {"firstName": first, "lastName": last}}}, "encounter": {"dates": {"service": data["service_date"]}, "services": [{"system": "STC", "value": stc}]}}
+    if not is_self: body["dependent"] = {"dateOfBirth": patient["birth_date"], "name": {"person": {"firstName": patient["given_name"], "lastName": patient["family_name"]}}}
     data["request_state"] = "pending"; case = await run_in_threadpool(_save, case, session, "stedi-request-pending")
     try:
         async with httpx.AsyncClient(timeout=httpx.Timeout(30, connect=5)) as client:
@@ -545,6 +558,8 @@ async def stedi_eligibility(case_id: str, request: Request) -> Any:
 async def calculate(case_id: str, request: Request) -> Any:
     session = await _session(request); case = await run_in_threadpool(_load, case_id, session); data = case["commercial"]
     if not data.get("evidence_id"): raise HTTPException(409, "Record usable eligibility evidence before calculating.")
+    if case.get("review_tasks"):
+        raise HTTPException(409, "Resolve the returned authorization or referral requirement before calculating.")
     evidence, profile = commercial_store.evidence(session["practice_id"], data["evidence_id"]), commercial_store.profile(session["practice_id"], data["profile_id"])
     if not evidence or not profile: raise HTTPException(409, "The selected evidence or profile is no longer available.")
     try:

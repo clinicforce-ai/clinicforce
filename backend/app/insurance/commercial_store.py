@@ -147,16 +147,23 @@ def activate_rates(practice_id: str, version_id: str) -> dict:
 def matching_rates(practice_id: str, profile: dict, network: dict, service_date: str, lines: list[dict]) -> list[dict]:
     codes = [str(line.get("code") or "").upper() for line in lines]
     with _connection() as db:
-        rows = db.execute("""SELECT l.* FROM commercial_rate_lines l JOIN commercial_rate_versions v ON v.id=l.version_id
+        rows = db.execute("""SELECT l.*,
+          (CASE WHEN l.provider_npi=%s THEN 1 ELSE 0 END + CASE WHEN l.tin=%s THEN 1 ELSE 0 END + CASE WHEN l.plan_matcher=%s THEN 1 ELSE 0 END) AS match_rank
+          FROM commercial_rate_lines l JOIN commercial_rate_versions v ON v.id=l.version_id
           WHERE v.practice_id=%s AND v.payer_connection_id=%s AND v.status='active' AND l.code = ANY(%s)
           AND l.network_name=%s AND l.place_of_service=%s AND l.effective_from<=%s AND (l.effective_to IS NULL OR l.effective_to>=%s)
-          ORDER BY l.id DESC""", (practice_id, profile["payer_connection_id"], codes, network["network_name"], network["place_of_service"], service_date, service_date)).fetchall()
+          AND l.modifier='' AND (l.provider_npi='' OR l.provider_npi=%s) AND (l.tin='' OR l.tin=%s)
+          AND (l.plan_matcher='' OR l.plan_matcher=%s)
+          ORDER BY l.code, match_rank DESC, l.id DESC""", (network["rendering_npi"], network["tin"], profile.get("plan_matcher", ""),
+                                                               practice_id, profile["payer_connection_id"], codes, network["network_name"], network["place_of_service"], service_date, service_date,
+                                                               network["rendering_npi"], network["tin"], profile.get("plan_matcher", ""))).fetchall()
     selected: dict[str, dict] = {}
     for row in rows:
         value = dict(row)
-        if value["code"] in selected:
+        if value["code"] in selected and value["match_rank"] == selected[value["code"]]["match_rank"]:
             raise CommercialError(f"More than one active rate matches {value['code']}; resolve the rate version first.")
-        selected[value["code"]] = value
+        if value["code"] not in selected:
+            selected[value["code"]] = value
     return [selected[code] for code in codes if code in selected]
 
 

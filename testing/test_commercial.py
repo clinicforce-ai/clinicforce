@@ -1,7 +1,7 @@
 import unittest
 from unittest.mock import patch
 
-from app.api.routers.commercial_estimator import _nmct_path, _past_visit_with_saved_estimate
+from app.api.routers.commercial_estimator import _nmct_path, _past_visit_with_saved_estimate, _subscriber_identity
 from app.insurance.commercial import CommercialError, estimate, normalize_stedi_271, parse_rate_csv
 
 
@@ -36,6 +36,25 @@ class CommercialRulesTest(unittest.TestCase):
     def test_stedi_family_or_missing_accumulator_requires_review(self):
         benefits = normalize_stedi_271({"benefitsInformation": [{"code": "1"}]}, "98", True)
         self.assertTrue(benefits["requires_review"])
+
+    def test_stedi_fractional_coinsurance_and_authorization_are_not_mispriced(self):
+        payload = {"plans": [{"benefits": {"statuses": [{"status": "Active"}]}}], "benefitsInformation": [
+            {"code": "C", "coverageLevel": "Individual", "serviceTypeCodes": ["98"], "timeQualifierCode": "29", "benefitAmount": "500", "inPlanNetworkIndicatorCode": "Y"},
+            {"code": "G", "coverageLevel": "Individual", "serviceTypeCodes": ["98"], "timeQualifierCode": "29", "benefitAmount": "2500", "inPlanNetworkIndicatorCode": "Y"},
+            {"code": "A", "coverageLevel": "Individual", "serviceTypeCodes": ["98"], "benefitPercent": ".20", "authOrCertIndicator": "Y", "inPlanNetworkIndicatorCode": "Y"},
+        ]}
+        benefits = normalize_stedi_271(payload, "98", True)
+        self.assertEqual(benefits["coinsurance_percent"], "20.00")
+        self.assertEqual(benefits["authorization_signal"], "required")
+        self.assertTrue(benefits["requires_review"])
+
+    def test_dependent_uses_policyholder_birth_date_and_self_does_not_create_dependent(self):
+        first, last, birth_date, is_self = _subscriber_identity(
+            {"relationship": "child", "subscriber_name": "Parent Example", "subscriber_birth_date": "1970-01-01"},
+            {"given_name": "Child", "family_name": "Example", "birth_date": "2010-01-01"},
+        )
+        self.assertEqual((first, last, birth_date, is_self), ("Parent", "Example", "1970-01-01", False))
+        self.assertEqual(_subscriber_identity({}, {"given_name": "Pat", "family_name": "Example", "birth_date": "1980-01-01"})[3], True)
 
     def test_nmct_path_uses_ecw_payer_provider_location_and_pos(self):
         payer = {"id": "bcbs", "category": "commercial_medical", "status": "staff_guidance_enabled"}
