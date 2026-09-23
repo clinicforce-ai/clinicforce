@@ -227,6 +227,18 @@ class StaffDatabaseTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status_code, 201, response.text)
         self.assertEqual(response.json()["fields"], {"given_name": "Pat", "family_name": "Example", "member_id": "MEM-MANUAL", "birth_date": "1990-01-01"})
 
+    async def test_complete_manual_details_create_an_intake_without_a_card_file(self):
+        await self.sign_in()
+        with patch.object(object_store, "enabled", return_value=False):
+            response = await self.client.post("/api/staff/intakes", data={"full_name": "Pat Example", "member_id": "MEM-MANUAL", "birth_date": "1990-01-01"})
+        self.assertEqual(response.status_code, 201, response.text)
+        intake = response.json()
+        self.assertEqual(intake["source"], "manual_entry")
+        self.assertEqual(intake["documents"], [])
+        self.assertEqual(intake["fields"], {"given_name": "Pat", "family_name": "Example", "member_id": "MEM-MANUAL", "birth_date": "1990-01-01"})
+        response = await self.client.post("/api/staff/intakes", data={"full_name": "Pat Example", "birth_date": "1990-01-01"})
+        self.assertEqual(response.status_code, 422)
+
     async def test_qr_intake_requires_both_staff_and_valid_share_without_clinical_copy(self):
         path = "/api/doctor/insurance/staff-intake"
         self.assertEqual((await self.client.post(path)).status_code, 401)
