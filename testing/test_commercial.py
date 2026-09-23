@@ -1,5 +1,7 @@
 import unittest
+from unittest.mock import patch
 
+from app.api.routers.commercial_estimator import _nmct_path
 from app.insurance.commercial import CommercialError, estimate, normalize_stedi_271, parse_rate_csv
 
 
@@ -34,6 +36,16 @@ class CommercialRulesTest(unittest.TestCase):
     def test_stedi_family_or_missing_accumulator_requires_review(self):
         benefits = normalize_stedi_271({"benefitsInformation": [{"code": "1"}]}, "98", True)
         self.assertTrue(benefits["requires_review"])
+
+    def test_nmct_path_uses_ecw_payer_provider_location_and_pos(self):
+        payer = {"id": "bcbs", "category": "commercial_medical", "status": "staff_guidance_enabled"}
+        network = {"id": "network", "payer_connection_id": "bcbs", "status": "verified", "rendering_npi": "1234567893", "location_id": "north", "place_of_service": "11", "effective_from": "2026-01-01", "effective_to": None}
+        profile = {"id": "office", "payer_connection_id": "bcbs", "provider_network_id": "network", "status": "staff_guidance_enabled"}
+        with patch("app.api.routers.commercial_estimator.commercial_store.connection", return_value=payer), \
+             patch("app.api.routers.commercial_estimator.commercial_store.list_networks", return_value=[network]), \
+             patch("app.api.routers.commercial_estimator.commercial_store.list_profiles", return_value=[profile]):
+            selected = _nmct_path("nmct", {"payer_id": "bcbs", "service_date": "2026-09-23", "rendering_provider": {"npi": "1234567893"}, "place_of_service": "11"}, {"location_id": "north"})
+        self.assertEqual(selected, (payer, network, profile))
 
 
 if __name__ == "__main__":
