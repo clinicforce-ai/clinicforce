@@ -524,7 +524,8 @@ async def fetch_inputs(profile: dict[str, Any], practice: dict[str, Any], appoin
             if encounter_timeout:
                 raise EcwBackendError("eClinicalWorks timed out while loading the patient's scheduled encounters. Reload the appointment to retry.")
             scheduled = [row for row in encounters
-                         if _appointment_date(row) >= today and row.get("status") not in {"cancelled", "entered-in-error"}]
+                         if _appointment_date(row) >= today
+                         and str(row.get("status") or "").casefold() not in {"cancelled", "entered-in-error", "finished", "completed"}]
             next_date = min((_appointment_date(row) for row in scheduled), default="")
             next_visits = [row for row in scheduled if _appointment_date(row) == next_date]
             visit = next_visits[0] if len(next_visits) == 1 else {}
