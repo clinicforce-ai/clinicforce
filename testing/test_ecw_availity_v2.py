@@ -18,15 +18,13 @@ from app.ingestion import ecw
 
 
 class EcwBackendSourceTests(unittest.IsolatedAsyncioTestCase):
-    async def test_slow_cached_patient_read_uses_the_verified_link(self):
+    async def test_slow_cached_patient_read_does_not_invent_a_patient(self):
         profile = {"patient_first_name": "Pat", "patient_last_name": "Example",
                    "patient_birth_date": "1980-01-01", "gender": "F"}
         with patch.object(ecw_backend, "_read", new=AsyncMock(side_effect=asyncio.TimeoutError)), \
                 patch.object(ecw_backend, "_search", new=AsyncMock(side_effect=asyncio.TimeoutError)):
-            patient, timed_out = await ecw_backend._cached_patient(None, "", "", "patient-1", profile)
-        self.assertEqual((patient["id"], patient["birthDate"], patient["gender"]),
-                         ("patient-1", "1980-01-01", "female"))
-        self.assertEqual(timed_out, "Patient")
+            with self.assertRaisesRegex(ecw_backend.EcwBackendError, "timed out"):
+                await ecw_backend._cached_patient(None, "", "", "patient-1", profile)
 
     async def test_slow_supporting_reference_becomes_an_explicit_gap(self):
         with patch.object(ecw_backend, "_read", new=AsyncMock(side_effect=asyncio.TimeoutError)), \
@@ -239,8 +237,9 @@ class EcwBackendSourceTests(unittest.IsolatedAsyncioTestCase):
         }]}}]}
         patient = {"resourceType": "Patient", "id": "patient-1", "name": [{"given": ["Pat"], "family": "Example"}], "birthDate": "1980-01-01"}
         encounters = [
-            {"resourceType": "Encounter", "id": "scheduled", "status": "planned", "period": {"start": f"{tomorrow}T09:00:00Z"}, "reasonCode": [{"text": "Follow-up"}]},
-            {"resourceType": "Encounter", "id": "cancelled", "status": "cancelled", "period": {"start": f"{tomorrow}T10:00:00Z"}},
+            {"resourceType": "Encounter", "id": "scheduled", "status": "planned", "subject": {"reference": "Patient/patient-1"}, "period": {"start": f"{tomorrow}T09:00:00Z"}, "reasonCode": [{"text": "Follow-up"}]},
+            {"resourceType": "Encounter", "id": "cancelled", "status": "cancelled", "subject": {"reference": "Patient/patient-1"}, "period": {"start": f"{tomorrow}T10:00:00Z"}},
+            {"resourceType": "Encounter", "id": "other-patient", "status": "planned", "subject": {"reference": "Patient/patient-2"}, "period": {"start": f"{tomorrow}T11:00:00Z"}},
         ]
         def handler(request: httpx.Request) -> httpx.Response:
             if request.url.path == "/fhir/metadata":
@@ -258,6 +257,20 @@ class EcwBackendSourceTests(unittest.IsolatedAsyncioTestCase):
                 {"timezone": "America/New_York"}, transport=httpx.MockTransport(handler),
             )
         self.assertEqual(result, [{"id": "scheduled", "start": f"{tomorrow}T09:00:00Z", "status": "planned", "reason": "Reason: Follow-up"}])
+
+    async def test_patient_lookup_retries_family_and_birthdate_then_requires_unique_match(self):
+        profile = {"patient_first_name": "Pat", "patient_last_name": "Example", "patient_birth_date": "1980-01-01"}
+        patient = {"resourceType": "Patient", "id": "patient-1", "name": [{"given": ["Pat"], "family": "Example"}], "birthDate": "1980-01-01"}
+        async def search(_, __, ___, resource, params):
+            self.assertEqual(resource, "Patient")
+            return [] if "given" in params else [patient]
+        with patch.object(ecw_backend, "_search", new=AsyncMock(side_effect=search)) as query:
+            matched, patient_id, _ = await ecw_backend._patient_for_profile(None, "", "", profile)
+        self.assertEqual((matched, patient_id), (patient, "patient-1"))
+        self.assertEqual(query.await_count, 2)
+        with patch.object(ecw_backend, "_search", new=AsyncMock(return_value=[])):
+            with self.assertRaisesRegex(ecw_backend.EcwBackendError, "No eClinicalWorks patient matched"):
+                await ecw_backend._patient_for_profile(None, "", "", profile)
 
     async def test_lists_completed_history_without_an_eligibility_request(self):
         today = datetime.now(ZoneInfo("America/New_York")).date()

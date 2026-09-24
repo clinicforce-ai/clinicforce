@@ -366,6 +366,11 @@ def confirm_patient(intake_id: str, staff: dict, data: dict) -> dict | None:
         if intake["source"] not in {"clinicforce_qr", "ecw_lookup"} and not data.get("member_id"):
             raise ValueError("Confirm the insurance member ID before starting verification.")
         identity_changed = any(str(intake["fields"].get(key, "")).strip().casefold() != str(data[key]).strip().casefold() for key in ("given_name", "family_name", "birth_date"))
+        ecw_patient_id = intake["fields"].get("ecw_patient_id") if intake["source"] == "ecw_lookup" else None
+        if intake["source"] == "ecw_lookup" and not ecw_patient_id:
+            raise ValueError("This intake was not verified in eCW. Start a new eCW lookup before continuing.")
+        if ecw_patient_id and identity_changed:
+            raise ValueError("The patient details changed after the eCW match. Start a new eCW lookup.")
         portal_patient_id = None if identity_changed else intake["source_portal_patient_id"]
         patient_id = data.get("patient_id")
         if intake.get("expected_patient_id"):
@@ -398,6 +403,17 @@ def confirm_patient(intake_id: str, staff: dict, data: dict) -> dict | None:
             patient_id = str(uuid4())
             connection.execute("INSERT INTO staff_patients (id,practice_id,given_name,family_name,birth_date,created_at) VALUES (%s,%s,%s,%s,%s,%s)",
                                (patient_id, staff["practice_id"], data["given_name"], data["family_name"], data["birth_date"], now()))
+        if ecw_patient_id:
+            linked = connection.execute("SELECT id FROM staff_patients WHERE practice_id=%s AND ecw_patient_id=%s AND id<>%s",
+                                        (staff["practice_id"], ecw_patient_id, patient_id)).fetchone()
+            if linked:
+                raise ValueError("This eCW patient is already linked to another clinic record. Select that record instead.")
+            existing_link = connection.execute("SELECT ecw_patient_id FROM staff_patients WHERE id=%s AND practice_id=%s",
+                                               (patient_id, staff["practice_id"])).fetchone()
+            if existing_link and existing_link["ecw_patient_id"] not in {None, ecw_patient_id}:
+                raise ValueError("The selected clinic record is linked to a different eCW patient.")
+            connection.execute("UPDATE staff_patients SET ecw_patient_id=%s WHERE id=%s AND practice_id=%s",
+                               (ecw_patient_id, patient_id, staff["practice_id"]))
         connection.execute("UPDATE staff_patients SET identity_status='confirmed',email=COALESCE(NULLIF(%s,''),email) WHERE id=%s AND practice_id=%s",
                            (data.get("email") or intake["fields"].get("email"), patient_id, staff["practice_id"]))
         if automatic and automatic["identity_status"] == "unverified" and automatic["id"] != patient_id:
