@@ -87,6 +87,21 @@ class CommercialRulesTest(unittest.TestCase):
         self.assertEqual(benefits["copay_cents"], 4000)
         self.assertFalse(benefits["requires_review"])
 
+    def test_current_stedi_plan_benefit_shape_normalizes_office_visit(self):
+        common = {"coverageLevel": "INDIVIDUAL", "network": {"indicator": "IN_NETWORK"},
+                  "service": {"system": "STC", "value": "98"}}
+        payload = {"plans": [{"benefits": {"statuses": [{"status": "Active Coverage"}],
+            "deductible": [{**common, "amount": "0", "timePeriod": "REMAINING"}],
+            "outOfPocket": [{**common, "amount": "1200", "timePeriod": "REMAINING"}],
+            "coPayment": [{**common, "amount": "30", "authOrCertIndicator": "N",
+                           "messages": [{"message": "Referral not required"}]}]}}]}
+        benefits = normalize_stedi_271(payload, "98", True)
+        self.assertEqual((benefits["deductible_remaining_cents"], benefits["oop_remaining_cents"],
+                          benefits["copay_cents"]), (0, 120000, 3000))
+        self.assertEqual((benefits["authorization_signal"], benefits["referral_signal"]),
+                         ("not_required", "not_required"))
+        self.assertEqual(benefits["coverage_level"], "individual")
+
     def test_stedi_family_or_missing_accumulator_requires_review(self):
         benefits = normalize_stedi_271({"benefitsInformation": [{"code": "1"}]}, "98", True)
         self.assertTrue(benefits["requires_review"])
