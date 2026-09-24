@@ -18,7 +18,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from app.api.routers.insurance import _response, _scope, _session as insurance_session
 from app.core import object_store
-from app.insurance import commercial, commercial_store, ecw_backend, golden, store
+from app.insurance import commercial, commercial_store, cpt_suggester, ecw_backend, golden, stedi_payers, store
 
 
 router = APIRouter(prefix="/api/doctor/insurance/commercial", tags=["doctor-commercial-estimator"])
@@ -330,6 +330,74 @@ def _commercial_slot(appointment_id: str) -> str:
     return "commercial:" + hashlib.sha256(appointment_id.encode()).hexdigest()
 
 
+def _previsit_codes(inputs: dict) -> list[dict[str, Any]]:
+    """Office E/M alternatives are coding standards, not a selected service."""
+    scheduled = [row for row in inputs.get("lines", []) if row.get("service_status") == "scheduled" and row.get("code")]
+    if scheduled:
+        return [{"code": row["code"], "source": "eCW scheduled service", "units": row.get("units")}
+                for row in scheduled]
+    # The appointment's explicit new/established label supports a code family;
+    # it cannot establish the eventual MDM/time level or that an office visit occurs.
+    family = {"new": range(99202, 99206), "established": range(99212, 99216)}.get(inputs.get("visit_type"))
+    return [{"code": str(code), "source": "conditional office E/M alternative", "units": 1}
+            for code in family] if family else []
+
+
+def _previsit_range(practice_id: str, inputs: dict, source: dict, payer_id: str,
+                    codes: list[dict], benefits: dict) -> tuple[dict | None, list[str]]:
+    """Price only distinct alternatives with a verified exact plan and rate scope."""
+    if not codes or any(row.get("source") != "conditional office E/M alternative" for row in codes):
+        return None, ["Clinic pricing: final scheduled services need a separate coded-service estimate."]
+    try:
+        payer, network, profile = _nmct_path(practice_id, {**inputs, "payer_id": payer_id}, source)
+    except HTTPException:
+        return None, ["Clinic pricing: verify this plan and rendering provider's network participation."]
+    if not network.get("plan_matcher") or not source.get("plan"):
+        return None, ["Clinic pricing: verify the eCW plan against the contracted rate schedule."]
+    if not inputs.get("place_of_service"):
+        return None, ["Clinic pricing: map the eCW appointment location to its actual place of service."]
+    if profile.get("service_category") != "office":
+        return None, ["Clinic pricing: no supported office visit code alternatives are available."]
+    selected = [{"code": row["code"], "units": 1} for row in codes]
+    try:
+        rates = commercial_store.matching_rates(practice_id, profile, network, inputs["service_date"], selected)
+    except commercial.CommercialError as exc:
+        return None, [str(exc)]
+    by_code = {row["code"]: row for row in rates}
+    if len(by_code) != len(selected):
+        return None, ["Clinic pricing: an active contracted rate is missing for one or more CPT alternatives."]
+    allowed = [{"code": row["code"], "allowed_cents": by_code[row["code"]]["allowed_cents"]}
+               for row in selected]
+    result: dict[str, Any] = {"scenarios": allowed, "allowed_min_cents": min(row["allowed_cents"] for row in allowed),
+                              "allowed_max_cents": max(row["allowed_cents"] for row in allowed)}
+    try:
+        priced = [commercial.estimate([{"code": row["code"], "units": 1, "allowed_cents": row["allowed_cents"],
+                                        "rate_id": by_code[row["code"]]["id"]}], benefits, profile["rules"])
+                  for row in allowed]
+        result["patient_min_cents"] = min(row["patient_cents"] for row in priced)
+        result["patient_max_cents"] = max(row["patient_cents"] for row in priced)
+    except (commercial.CommercialError, KeyError) as exc:
+        return result, [f"Patient share cannot yet be calculated from returned benefits: {exc}"]
+    return result, []
+
+
+def _attach_previsit_pricing(result: dict, practice_id: str, inputs: dict, source: dict,
+                             payer_id: str, benefits: dict) -> None:
+    connections = [row for row in commercial_store.list_connections(practice_id)
+                   if row.get("stedi_payer_id") == payer_id and row.get("status") == "staff_guidance_enabled"]
+    if len(connections) != 1:
+        result["issues"].append("Clinic pricing: no single approved plan and provider contract is linked to this Stedi payer.")
+        return
+    connection = connections[0]
+    try:
+        _nmct_path(practice_id, {**inputs, "payer_id": connection["id"]}, source)
+        benefits["network_status"] = "in_network"
+    except HTTPException:
+        benefits["network_status"] = "unknown"
+    result["price_range"], issues = _previsit_range(practice_id, inputs, source, connection["id"], result["codes"], benefits)
+    result["issues"].extend(issues)
+
+
 def _ecw_coded_lines(practice_id: str, profile: dict, network: dict, service_date: str,
                      inputs: dict) -> tuple[list[dict[str, Any]], list[str]]:
     """Use only explicit eCW codes and units; never turn visit text into a charge."""
@@ -522,6 +590,138 @@ async def ecw_appointment_readiness(value: EcwStartInput, request: Request) -> d
     except ecw_backend.EcwBackendError as exc:
         raise HTTPException(502, str(exc)) from exc
     return _appointment_readiness(session["practice_id"], session, inputs, source)
+
+
+@router.post("/appointments/previsit")
+async def previsit_estimate(value: EcwStartInput, request: Request) -> dict:
+    """Check a future office visit before a final CPT level exists."""
+    session = await _session(request)
+    if not ecw_backend.configured():
+        raise HTTPException(503, "The eClinicalWorks backend connection is not configured.")
+    try:
+        inputs, _, source = await ecw_backend.fetch_inputs(
+            _ecw_identity(session, date.today().isoformat()),
+            _ecw_practice_for_nmct(session["practice_id"]), value.appointment_id)
+    except ecw_backend.EcwBackendError as exc:
+        raise HTTPException(502, str(exc)) from exc
+    if source.get("appointment_id") != value.appointment_id:
+        raise HTTPException(409, "The selected upcoming eClinicalWorks appointment could not be verified.")
+
+    codes = _previsit_codes(inputs)
+    result: dict[str, Any] = {"appointment_id": value.appointment_id, "service_date": inputs["service_date"],
+        "payer": source.get("payer"), "plan": source.get("plan"), "visit_type": inputs.get("visit_type"),
+        "reason": inputs.get("reason"), "codes": codes, "benefits": None, "price_range": None,
+        "suggestions": None, "issues": [], "checked_at": None}
+    if not codes:
+        result["issues"].append("eCW did not identify a planned service or new/established office visit. Coding remains undetermined.")
+    elif all(row["source"] == "conditional office E/M alternative" for row in codes):
+        result["issues"].append("Office E/M alternatives are conditional. The final CPT level depends on documented MDM or qualifying time and services actually performed.")
+    if inputs.get("reason"):
+        result["suggestions"] = await run_in_threadpool(
+            cpt_suggester.suggest_preliminary_cpt_codes,
+            str(inputs["reason"])[:8000] + f"\nPatient visit status from eCW: {inputs.get('visit_type') or 'unknown'}.",
+            source.get("recent_completed_appointments"))
+    coverage = _coverage_snapshot(inputs, source)
+    if coverage["active_coverages"] != 1 or not coverage["coverage_id"] or not coverage["member_id"]:
+        result["issues"].append("eCW did not identify one active primary policy with a member ID for this visit.")
+        return result
+    if not source.get("payer"):
+        result["issues"].append("eCW did not return an insurer name for the selected policy.")
+        return result
+    rendering_npi = str((source.get("rendering_provider") or {}).get("npi") or
+                        (inputs.get("rendering_provider") or {}).get("npi") or "")
+    organization_name = str((source.get("billing_provider") or {}).get("name") or
+                            session.get("staff", {}).get("practice_name") or "")
+    if not re.fullmatch(r"\d{10}", rendering_npi) or not organization_name:
+        result["issues"].append("eCW did not return the rendering NPI and billing organization needed for the payer check.")
+        return result
+    api_key = os.getenv("STEDI_API_KEY", "").strip()
+    if (os.getenv("STEDI_EXECUTION_MODE", "off") != "commercial_pilot" or
+        os.getenv("STEDI_LIVE_ELIGIBILITY_ENABLED", "false").lower() != "true" or
+        not api_key or not object_store.enabled()):
+        result["issues"].append("Live Stedi eligibility or protected response storage is not configured.")
+        return result
+    service_day = date.fromisoformat(inputs["service_date"])
+    month_end = (date.today().replace(day=28) + timedelta(days=4)).replace(day=1) - timedelta(days=1)
+    if service_day > month_end:
+        result["issues"].append("This appointment is beyond Stedi's generally supported future eligibility window. Recheck closer to the visit.")
+        return result
+    try:
+        payer = await stedi_payers.search_payer(str(source["payer"]), source.get("payer_identifiers") or [], api_key)
+    except (httpx.HTTPError, ValueError):
+        result["issues"].append("The Stedi payer directory is temporarily unavailable. Retry later.")
+        return result
+    if not payer:
+        result["issues"].append("The eCW insurer did not resolve to one supported Stedi payer. Clinic staff must verify the payer ID.")
+        return result
+    payer_id = payer["stediId"]
+    result["stedi_payer"] = {"name": payer.get("displayName"), "id": payer_id}
+    provider = {"rendering_npi": rendering_npi, "organization_name": organization_name}
+    try:
+        body = stedi_request_body({"stedi_payer_id": payer_id}, provider, coverage, inputs["service_date"], "98")
+    except commercial.CommercialError as exc:
+        result["issues"].append(str(exc))
+        return result
+    if service_day == date.today():
+        body["encounter"].pop("dates", None)
+    binding = hashlib.sha256(json.dumps({"coverage": coverage, "payer": payer_id,
+        "provider": provider, "service_date": inputs["service_date"]}, sort_keys=True).encode()).hexdigest()
+    slot = "commercial-previsit:" + hashlib.sha256(f"{value.appointment_id}:{binding}".encode()).hexdigest()
+    try:
+        case = await run_in_threadpool(store.create_case, session["patient_id"], "", binding,
+            {"source_mode": "commercial_previsit", "previsit": {"request_state": "not_requested"}},
+            expected_intake_updated_at=session["intake"]["updated_at"], workflow_slot=slot, **_scope(session))
+    except store.StaffCaseConflict as exc:
+        raise HTTPException(409, str(exc)) from exc
+    saved = case.get("previsit") or {}
+    if saved.get("request_state") == "complete":
+        try:
+            fresh = datetime.fromisoformat(saved["checked_at"]) + timedelta(hours=24) > datetime.now(timezone.utc)
+        except (TypeError, ValueError, KeyError):
+            fresh = False
+        if fresh:
+            result["checked_at"] = saved.get("checked_at")
+            result["benefits"] = dict(saved.get("benefits") or {})
+            _attach_previsit_pricing(result, session["practice_id"], inputs, source, payer_id, result["benefits"])
+            return result
+    if saved.get("request_state") in {"pending", "indeterminate"}:
+        result["issues"].append("The payer request is pending or its outcome is unknown. Check Stedi activity before retrying.")
+        return result
+    case["previsit"] = {"request_state": "pending"}
+    case = await run_in_threadpool(_save, case, session, "previsit-stedi-pending")
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(30, connect=5)) as client:
+            response = await client.post(STEDI_URL, headers={"Authorization": api_key, "Content-Type": "application/json"}, json=body)
+        payload = response.json() if response.content else {}
+    except (httpx.HTTPError, ValueError):
+        case["previsit"] = {"request_state": "indeterminate"}
+        await run_in_threadpool(_save, case, session, "previsit-stedi-indeterminate")
+        result["issues"].append("The Stedi request outcome is unknown. Clinic staff must check payer activity before retrying.")
+        return result
+    if response.is_error or not isinstance(payload, dict):
+        case["previsit"] = {"request_state": "rejected"}
+        if isinstance(payload, dict):
+            case["previsit_raw_object_key"] = await run_in_threadpool(
+                object_store.put_staff_document, session["practice_id"], case["id"],
+                "previsit-stedi-error.json", json.dumps(payload).encode(), "application/json")
+        await run_in_threadpool(_save, case, session, "previsit-stedi-rejected")
+        result["issues"].append("The payer rejected the eligibility request. Clinic staff must check the protected Stedi response.")
+        return result
+    raw_key = await run_in_threadpool(object_store.put_staff_document, session["practice_id"], case["id"],
+                                      "previsit-stedi-271.json", json.dumps(payload).encode(), "application/json")
+    benefits = commercial.normalize_stedi_271(payload, "98", False, coverage["active_coverages"] > 1)
+    returned_member = (payload.get("subscriber") or {}).get("memberId") if isinstance(payload.get("subscriber"), dict) else None
+    if returned_member and re.sub(r"\W", "", str(returned_member)).casefold() != re.sub(r"\W", "", str(coverage["member_id"])).casefold():
+        benefits["requires_review"] = True
+        benefits["normalization_notes"].append("Payer response member ID differs from eCW.")
+    result["benefits"] = benefits
+    result["checked_at"] = _now()
+    _attach_previsit_pricing(result, session["practice_id"], inputs, source, payer_id, benefits)
+    case["previsit"] = {"request_state": "complete", "benefits": benefits,
+                        "checked_at": result["checked_at"]}
+    case["previsit_raw_object_key"] = raw_key
+    await run_in_threadpool(_save, case, session, "previsit-stedi-complete")
+    return result
 
 
 @router.get("/history")

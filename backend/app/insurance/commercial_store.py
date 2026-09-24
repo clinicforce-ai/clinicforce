@@ -104,8 +104,8 @@ def create_profile(practice_id: str, data: dict[str, Any]) -> dict:
     if not network:
         raise CommercialError("The provider network does not match the selected payer.")
     rules = data.get("rules") or {}
-    if rules.get("cost_share") not in {"coinsurance", "copay", "cumulative"}:
-        raise CommercialError("Profile rules must explicitly select coinsurance, copay, or cumulative cost share.")
+    if rules.get("cost_share") not in {"coinsurance", "copay", "cumulative", "payer_returned"}:
+        raise CommercialError("Profile rules must select a cost-share method or payer_returned when only one applies.")
     now, record_id = _now(), str(uuid4())
     with _connection() as db:
         db.execute("""INSERT INTO commercial_estimation_profiles (id,practice_id,payer_connection_id,provider_network_id,service_category,plan_matcher,status,rules_json,created_at,updated_at)

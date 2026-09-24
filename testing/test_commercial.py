@@ -1,12 +1,53 @@
 import unittest
 from unittest.mock import patch
 
-from app.api.routers.commercial_estimator import _appointment_readiness, _coverage_snapshot, _ecw_conflicts, _nmct_path, _past_visit_with_saved_estimate, _subscriber_identity, stedi_request_body
+from app.api.routers.commercial_estimator import _appointment_readiness, _coverage_snapshot, _ecw_conflicts, _nmct_path, _past_visit_with_saved_estimate, _previsit_codes, _previsit_range, _subscriber_identity, stedi_request_body
 from app.insurance.commercial import CommercialError, estimate, normalize_stedi_271, parse_rate_csv
 from app.insurance.ecw_backend import _patient_matches
+from app.insurance.stedi_payers import select_payer
 
 
 class CommercialRulesTest(unittest.TestCase):
+    def test_previsit_new_patient_has_alternative_levels_without_a_final_code(self):
+        rows = _previsit_codes({"visit_type": "new", "lines": []})
+        self.assertEqual([row["code"] for row in rows], ["99202", "99203", "99204", "99205"])
+        self.assertTrue(all(row["source"] == "conditional office E/M alternative" for row in rows))
+        self.assertEqual(_previsit_codes({"visit_type": None, "lines": []}), [])
+
+    def test_stedi_directory_accepts_unique_state_abbreviation_not_fuzzy_first_hit(self):
+        payer = {"stediId": "QDTRP", "primaryPayerId": "84980", "displayName": "Blue Cross and Blue Shield of Texas",
+                 "names": [], "aliases": [], "operatingStates": ["TX"], "coverageTypes": ["medical"],
+                 "transactionSupport": {"eligibilityCheck": "SUPPORTED"}}
+        self.assertEqual(select_payer([{"payer": payer}], "Blue Cross Blue Shield Tx", []), payer)
+        self.assertIsNone(select_payer([{"payer": payer}, {"payer": {**payer, "stediId": "OTHER"}}],
+                                       "Blue Cross Blue Shield Tx", []))
+        self.assertIsNone(select_payer([{"payer": payer}], "Blue Cross Blue Shield Ca", []))
+        michigan = {**payer, "stediId": "KRPCH", "displayName": "Blue Cross Blue Shield of Michigan",
+                    "operatingStates": ["MI", "TX"]}
+        self.assertEqual(select_payer([{"payer": payer}, {"payer": michigan}],
+                                      "Blue Cross Blue Shield Tx", []), payer)
+
+    def test_previsit_range_uses_only_exact_verified_plan_rates(self):
+        inputs = {"payer_id": None, "service_date": "2026-09-24", "visit_type": "new", "lines": [],
+                  "rendering_provider": {"npi": "1234567890"}, "place_of_service": "11"}
+        source = {"plan": "CI", "location_id": "office"}
+        codes = _previsit_codes(inputs)
+        payer = {"id": "payer", "status": "staff_guidance_enabled", "category": "commercial_medical"}
+        network = {"id": "network", "plan_matcher": "CI", "place_of_service": "11", "rendering_npi": "1234567890", "tin": "123456789"}
+        profile = {"id": "profile", "payer_connection_id": "payer", "service_category": "office", "plan_matcher": "CI", "rules": {"cost_share": "copay"}}
+        rates = [{"id": index, "code": row["code"], "allowed_cents": amount} for index, (row, amount) in
+                 enumerate(zip(codes, (6400, 10100, 15100, 20000)), 1)]
+        benefits = {"active": True, "coverage_level": "individual", "network_status": "in_network",
+                    "deductible_remaining_cents": 0, "oop_remaining_cents": 100000,
+                    "copay_cents": 3000, "has_secondary": False, "requires_review": False}
+        with patch("app.api.routers.commercial_estimator._nmct_path", return_value=(payer, network, profile)), \
+             patch("app.api.routers.commercial_estimator.commercial_store.matching_rates", return_value=rates):
+            priced, issues = _previsit_range("clinic", inputs, source, "payer", codes, benefits)
+            self.assertEqual((priced["allowed_min_cents"], priced["allowed_max_cents"]), (6400, 20000))
+            self.assertEqual((priced["patient_min_cents"], priced["patient_max_cents"]), (3000, 3000))
+            self.assertEqual(issues, [])
+            self.assertIsNone(_previsit_range("clinic", inputs, {**source, "plan": None}, "payer", codes, benefits)[0])
+
     def test_rate_csv_and_cumulative_estimate(self):
         rows = parse_rate_csv(b"CPT,Allowed Amount,Network,POS,Effective From,Cash Price\n99204,250.00,PPO,11,2026-01-01,300.00\n", "rates.csv")
         self.assertEqual(rows[0]["allowed_cents"], 25000)
@@ -17,6 +58,18 @@ class CommercialRulesTest(unittest.TestCase):
     def test_unknown_benefit_never_becomes_zero(self):
         with self.assertRaisesRegex(CommercialError, "deductible"):
             estimate([{"code": "99204", "units": 1, "allowed_cents": 25000}], {"active": True, "coverage_level": "individual", "network_status": "in_network", "oop_remaining_cents": 20000, "has_secondary": False, "requires_review": False}, {"cost_share": "copay"})
+
+    def test_payer_returned_cost_share_needs_one_clear_method(self):
+        benefits = {"active": True, "coverage_level": "individual", "network_status": "in_network",
+                    "deductible_remaining_cents": 0, "oop_remaining_cents": 100000,
+                    "copay_cents": 3000, "coinsurance_percent": None,
+                    "has_secondary": False, "requires_review": False}
+        line = [{"code": "99204", "units": 1, "allowed_cents": 15160}]
+        self.assertEqual(estimate(line, benefits, {"cost_share": "payer_returned"})["patient_cents"], 3000)
+        with self.assertRaisesRegex(CommercialError, "unambiguous"):
+            estimate(line, {**benefits, "coinsurance_percent": "20"}, {"cost_share": "payer_returned"})
+        with self.assertRaisesRegex(CommercialError, "subject to the remaining deductible"):
+            estimate(line, {**benefits, "deductible_remaining_cents": 5000}, {"cost_share": "payer_returned"})
 
     def test_rate_headers_are_required(self):
         with self.assertRaises(CommercialError):
@@ -33,6 +86,21 @@ class CommercialRulesTest(unittest.TestCase):
         self.assertEqual(benefits["oop_remaining_cents"], 250000)
         self.assertEqual(benefits["copay_cents"], 4000)
         self.assertFalse(benefits["requires_review"])
+
+    def test_current_stedi_plan_benefit_shape_normalizes_office_visit(self):
+        common = {"coverageLevel": "INDIVIDUAL", "network": {"indicator": "IN_NETWORK"},
+                  "service": {"system": "STC", "value": "98"}}
+        payload = {"plans": [{"benefits": {"statuses": [{"status": "Active Coverage"}],
+            "deductible": [{**common, "amount": "0", "timePeriod": "REMAINING"}],
+            "outOfPocket": [{**common, "amount": "1200", "timePeriod": "REMAINING"}],
+            "coPayment": [{**common, "amount": "30", "authOrCertIndicator": "N",
+                           "messages": [{"message": "Referral not required"}]}]}}]}
+        benefits = normalize_stedi_271(payload, "98", True)
+        self.assertEqual((benefits["deductible_remaining_cents"], benefits["oop_remaining_cents"],
+                          benefits["copay_cents"]), (0, 120000, 3000))
+        self.assertEqual((benefits["authorization_signal"], benefits["referral_signal"]),
+                         ("not_required", "not_required"))
+        self.assertEqual(benefits["coverage_level"], "individual")
 
     def test_stedi_family_or_missing_accumulator_requires_review(self):
         benefits = normalize_stedi_271({"benefitsInformation": [{"code": "1"}]}, "98", True)
