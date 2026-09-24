@@ -45,18 +45,15 @@ async def _session(request: Request) -> dict:
 
 
 def validate_staff_coverage(fields: dict, inputs: dict, source: dict, practice: dict) -> None:
-    """Compare stated card details; missing EHR values remain normal input gaps."""
+    """Compare card details that can actually be confirmed independently of eCW."""
     subscriber = inputs.get("subscriber") or {}
-    relationships = {"self": "18", "spouse": "01", "child": "19", "other": "G8"}
-    relationship = relationships.get(fields.get("relationship"), fields.get("relationship"))
     pairs = (("member ID", fields.get("member_id"), inputs.get("member_id")),
              ("group number", fields.get("group_number"), inputs.get("group_number")),
-             ("subscriber relationship", relationship, inputs.get("relationship")),
              ("subscriber name", fields.get("subscriber_name"), " ".join(str(subscriber.get(key) or "") for key in ("firstName", "lastName")).strip()),
              ("subscriber birth date", fields.get("subscriber_birth_date"), subscriber.get("birthDate")))
     for label, confirmed, connected in pairs:
         if confirmed and connected and intake.normalize(str(confirmed)) != intake.normalize(str(connected)):
-            raise HTTPException(409, f"The eCW {label} differs from the confirmed card. Review the coverage in eCW before checking benefits; your card is saved.")
+            raise HTTPException(409, f"The eCW {label} differs from the confirmed intake. Review the coverage in eCW before checking benefits; your patient information is saved.")
     payer = intake.normalize(str(fields.get("payer") or ""))
     if not payer:
         return
@@ -76,10 +73,7 @@ def validate_staff_coverage(fields: dict, inputs: dict, source: dict, practice: 
 
 def apply_staff_card_coverage(fields: dict, inputs: dict, missing: list[str], practice: dict) -> bool:
     """Fill only coverage values eCW did not return from a staff-confirmed card."""
-    relationship = {"self": "18", "spouse": "01", "child": "19", "other": "G8"}.get(fields.get("relationship"), fields.get("relationship"))
     subscriber = inputs.setdefault("subscriber", {})
-    if not inputs.get("relationship") and relationship in {"18", "01", "19", "G8"}:
-        inputs["relationship"] = relationship
     if not inputs.get("member_id") and fields.get("member_id"):
         inputs["member_id"] = fields["member_id"]
     if not subscriber.get("memberId") and inputs.get("member_id"):

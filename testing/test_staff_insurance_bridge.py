@@ -252,7 +252,7 @@ class StaffInsuranceBridgeTests(unittest.IsolatedAsyncioTestCase):
         inputs["patient"] = {"patient_first_name": "Pat", "patient_last_name": "Example", "patient_birth_date": "1990-01-01", "gender": "U"}
         practice = {"production_enabled": True, "payer_aliases": {"Synthetic payer": "SYNTHETIC"}}
         with patch.dict(os.environ, {"STAFF_INTEGRATION_PRACTICE_ID": intake["practice_id"]}), patch.object(insurance_v2, "configuration", return_value=(SimpleNamespace(environment="production"), practice, "synthetic-binding")), patch.object(insurance_v2.ecw_backend, "configured", return_value=True):
-            for changes, source in (({"group_number": "OTHER-GROUP"}, {"payer": "Synthetic payer"}), ({"relationship": "19"}, {"payer": "Synthetic payer"}), ({"member_id": "OTHER-MEMBER"}, {"payer": "Synthetic payer"}), ({"payer_id": "OTHER"}, {"payer": "Other payer"})):
+            for changes, source in (({"group_number": "OTHER-GROUP"}, {"payer": "Synthetic payer"}), ({"member_id": "OTHER-MEMBER"}, {"payer": "Synthetic payer"}), ({"payer_id": "OTHER"}, {"payer": "Other payer"})):
                 with patch.object(insurance_v2.ecw_backend, "fetch_inputs", new=AsyncMock(return_value=({**inputs, **changes}, [], source))):
                     response = await self.client.post("/api/doctor/insurance/v2/cases", headers={"X-ClinicForce-Intake": intake["id"]}, json={})
                     self.assertEqual(response.status_code, 409, response.text)
@@ -265,6 +265,7 @@ class StaffInsuranceBridgeTests(unittest.IsolatedAsyncioTestCase):
                 insurance_v2.validate_staff_coverage(confirmed, inputs, {"payer": "Synthetic payer"}, practice)
         for confirmed in ({"payer": "SYNTHETIC"}, {"payer": "Synthetic payer"}, {"payer": "Approved alias"}):
             insurance_v2.validate_staff_coverage(confirmed, inputs, {"payer": "Synthetic payer"}, {"payer_aliases": {"Approved alias": "SYNTHETIC"}})
+        insurance_v2.validate_staff_coverage({"relationship": "self"}, {**inputs, "relationship": "19"}, {"payer": "Synthetic payer"}, practice)
         insurance_v2.validate_staff_coverage({"payer": "Card payer"}, {**inputs, "payer_id": None}, {"payer": None}, practice)
         insurance_v2.validate_staff_coverage({"payer": "Card payer"}, {**inputs, "payer_id": None}, {"payer": "Unmapped eCW payer"}, practice)
 
