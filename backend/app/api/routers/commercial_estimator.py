@@ -695,6 +695,12 @@ async def previsit_estimate(value: EcwStartInput, request: Request) -> dict:
         if fresh:
             result["checked_at"] = saved.get("checked_at")
             result["benefits"] = dict(saved.get("benefits") or {})
+            if "reported_options" not in result["benefits"] and case.get("previsit_raw_object_key"):
+                try:
+                    raw = await run_in_threadpool(object_store.get_object_bytes, case["previsit_raw_object_key"])
+                    result["benefits"]["reported_options"] = commercial.reported_stedi_options(json.loads(raw), "98")
+                except Exception:
+                    result["issues"].append("Detailed payer benefit terms could not be loaded from the protected Stedi response.")
             _attach_previsit_pricing(result, session["practice_id"], inputs, source, payer_id, result["benefits"])
             return result
     if saved.get("request_state") in {"pending", "indeterminate"}:

@@ -66,13 +66,17 @@ export default function CommercialEstimator({ onBack }: { onBack: () => void }) 
       {result.benefits && <><h3>Stedi office-visit benefits</h3><dl className="staff-facts">
         <div><dt>Coverage</dt><dd>{result.benefits.active === true ? 'Active' : result.benefits.active === false ? 'Inactive' : 'Unconfirmed'}</dd></div>
         <div><dt>Provider network</dt><dd>{result.benefits.network_status === 'in_network' ? 'Verified by clinic record' : 'Unverified'}</dd></div>
-        <div><dt>Remaining deductible</dt><dd>{shown(result.benefits.deductible_remaining_cents)}</dd></div>
+        <div><dt>Remaining deductible</dt><dd>{result.benefits.deductible_remaining_cents == null ? 'Not established for this visit' : shown(result.benefits.deductible_remaining_cents)}</dd></div>
         <div><dt>Remaining out of pocket</dt><dd>{shown(result.benefits.oop_remaining_cents)}</dd></div>
-        <div><dt>Office-visit copay</dt><dd>{shown(result.benefits.copay_cents)}</dd></div>
-        <div><dt>Coinsurance</dt><dd>{result.benefits.coinsurance_percent == null ? 'Not returned' : result.benefits.coinsurance_percent + '%'}</dd></div>
-        <div><dt>Prior authorization</dt><dd>{result.benefits.authorization_signal || 'Unknown'}</dd></div>
-        <div><dt>Referral</dt><dd>{result.benefits.referral_signal || 'Unknown'}</dd></div>
-      </dl></>}
+        <div><dt>Office-visit copay</dt><dd>{result.benefits.copay_cents == null && result.benefits.reported_options?.some(row => row.kind === 'copay') ? 'Several payer terms below' : shown(result.benefits.copay_cents)}</dd></div>
+        <div><dt>Coinsurance</dt><dd>{result.benefits.coinsurance_percent == null && result.benefits.reported_options?.some(row => row.kind === 'coinsurance') ? 'Several payer terms below' : result.benefits.coinsurance_percent == null ? 'Not returned' : result.benefits.coinsurance_percent + '%'}</dd></div>
+        <div><dt>Prior authorization</dt><dd>{result.benefits.authorization_signal === 'required' ? 'Required on at least one payer benefit; verify applicability' : result.benefits.authorization_signal || 'Unknown'}</dd></div>
+        <div><dt>Referral</dt><dd>{result.benefits.referral_signal === 'unknown' ? 'Not confirmed by payer' : result.benefits.referral_signal || 'Unknown'}</dd></div>
+      </dl>{result.benefits.reported_options?.length ? <><h3>Payer-reported benefit terms</h3>
+        <p className="staff-small staff-muted">These are separate terms from Stedi. The payer did not identify one term as the patient’s final cost share for this visit.</p>
+        <ul>{result.benefits.reported_options.map((row, index) => <li key={index} className="staff-small">
+          <strong>{row.kind.replaceAll('_', ' ')}</strong> · {row.service_type_code === '98' ? 'Office visit' : 'General medical'} · {row.network.replaceAll('_', ' ').toLowerCase()}{row.time_period ? ' · ' + row.time_period.replaceAll('_', ' ').toLowerCase() : ''}: {row.amount_cents == null ? row.percent == null ? 'Amount not stated' : row.percent + '%' : money(row.amount_cents)}{row.payer_note ? ' — ' + row.payer_note : ''}
+        </li>)}</ul></> : null}</>}
       {result.price_range && <><h3>Office-visit pricing scenarios</h3><dl className="staff-facts">
         <div><dt>Contracted allowed range</dt><dd>{money(result.price_range.allowed_min_cents)} – {money(result.price_range.allowed_max_cents)}</dd></div>
         <div><dt>Estimated patient range</dt><dd>{result.price_range.patient_min_cents == null || result.price_range.patient_max_cents == null ? 'Awaiting complete benefits and referral / authorization review' : money(result.price_range.patient_min_cents) + ' – ' + money(result.price_range.patient_max_cents)}</dd></div>
