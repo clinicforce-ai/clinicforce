@@ -1,5 +1,4 @@
 """Pre-service answers: synthetic payer terms and two independent clinic catalogs."""
-from copy import deepcopy
 from unittest.mock import patch
 
 from app.api.routers import commercial_estimator as api
@@ -85,3 +84,23 @@ def test_contract_options_come_from_scoped_clinic_configuration():
         assert result['price_range']['mode'] == 'options'
         assert result['price_range']['lines'][0]['allowed_cents'] == amount
         assert result['price_range']['collection']['action'] == 'choose_services'
+
+
+def test_modern_out_of_network_noncoverage_and_named_pa_do_not_override_visit():
+    raw = {'plans': [{'name': 'Example Focus', 'benefits': {
+        'statuses': [{'status': 'ACTIVE_COVERAGE', 'service': {'system': 'STC', 'value': '30'},
+                      'dates': {'plan': {'start': '2021-01-01', 'end': '2028-01-01'}}}],
+        'nonCovered': [{'network': {'indicator': 'OUT_OF_NETWORK'}, 'service': {'system': 'STC', 'value': '98'}}],
+        'limitations': [{'network': {'indicator': 'IN_NETWORK'}, 'priorAuthIndicator': 'REQUIRED',
+            'service': {'system': 'STC', 'value': '98'}, 'messages': ['APPLIED BEHAVIOR ANALYSIS'],
+            'timePeriod': 'REMAINING', 'quantity': {'value': '200', 'qualifier': 'HOURS'}}],
+    }}]}
+    benefits = commercial.normalize_stedi_271(raw, '98', True, procedure_code='95886', service_date='2026-09-28')
+    assert benefits['active'] is True
+    assert benefits['authorization_signal'] == 'unknown'
+    assert 'named benefit' in benefits['authorization_basis']
+    assert benefits['reported_options'][0]['quantity'] == {'value': '200', 'qualifier': 'HOURS'}
+    expired = commercial.normalize_stedi_271(raw, '98', True, procedure_code='95886', service_date='2029-01-01')
+    assert expired['active'] is None
+    raw['plans'][0]['benefits']['limitations'][0]['service'] = {'system': 'CPT', 'value': '95886'}
+    assert commercial.normalize_stedi_271(raw, '98', True, procedure_code='95886')['authorization_signal'] == 'required'

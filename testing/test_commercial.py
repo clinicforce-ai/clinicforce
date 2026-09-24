@@ -60,7 +60,7 @@ class CommercialRulesTest(unittest.TestCase):
                 {"message": "No referral required for primary care. Referral required for specialist care."}]}]}}]}
         benefits = normalize_stedi_271(payload, "98", True)
         self.assertEqual(benefits["deductible_remaining_cents"], 75000)
-        self.assertEqual(benefits["authorization_signal"], "required")
+        self.assertEqual(benefits["authorization_signal"], "unknown")  # category-level conditional note is not a CPT-specific requirement
         self.assertEqual(benefits["referral_signal"], "required")
         self.assertIsNone(benefits["copay_cents"])
         self.assertTrue(any("visit-count" in reason for reason in benefits["review_reasons"]))

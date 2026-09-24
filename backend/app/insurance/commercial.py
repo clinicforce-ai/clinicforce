@@ -199,7 +199,7 @@ def plan_details(payload: dict) -> dict:
 
 def reported_stedi_options(payload: dict[str, Any], service_type_code: str) -> list[dict[str, Any]]:
     """Preserve distinct payer terms without selecting one for a price calculation."""
-    kinds = {"A": "coinsurance", "B": "copay", "C": "deductible", "G": "out_of_pocket"}
+    kinds = {"A": "coinsurance", "B": "copay", "C": "deductible", "G": "out_of_pocket", "F": "limit"}
     result = []
     for row in _stedi_entries(payload):
         code = str(row.get("code") or "").upper()
@@ -229,6 +229,7 @@ def reported_stedi_options(payload: dict[str, Any], service_type_code: str) -> l
                        "plan_index": row.get("plan_index"), "plan_name": row.get("planCoverage") or row.get("planCoverageDescription"),
                        "network": indicator, "time_period": str(row.get("timeQualifierCode") or row.get("timeQualifier") or ""),
                        "amount_cents": _stedi_cents(row.get("benefitAmount")),
+                       "quantity": row.get('quantity') if isinstance(row.get('quantity'), dict) else None,
                        "percent": str(percent) if percent is not None else None,
                        "payer_note": note_text([row.get("messages"), row.get("additionalInformation")])})
     return result
@@ -240,6 +241,13 @@ def _dates_apply(dates: dict, service_date: str) -> bool:
     visit = date.fromisoformat(service_date)
     for key, value in dates.items():
         if key not in {'planBegin', 'planEnd', 'eligibilityBegin', 'eligibilityEnd', 'benefitBegin', 'benefitEnd', 'plan', 'eligibility', 'benefit', 'policyEffective', 'policyExpiration'} or not value:
+            continue
+        if isinstance(value, dict):
+            start, end = value.get('start'), value.get('end')
+            if start and visit < date.fromisoformat(str(start)):
+                return False
+            if end and visit > date.fromisoformat(str(end)):
+                return False
             continue
         parts = str(value).split('-') if re.fullmatch(r'\d{8}-\d{8}', str(value)) else [str(value)]
         parsed = [date.fromisoformat(f'{part[:4]}-{part[4:6]}-{part[6:]}' if re.fullmatch(r'\d{8}', part) else part) for part in parts]
@@ -268,13 +276,17 @@ def normalize_stedi_271(payload: dict[str, Any], service_type_code: str, provide
             return procedure == procedure_code
         stcs = {str(value) for value in row.get("serviceTypeCodes") or []}
         return not stcs or bool(stcs & {service_type_code, "30"})
-    entries = [row for row in entries if relevant_service(row)]
+    # Out-of-network noncoverage and restrictions must not cancel in-network
+    # coverage. Raw reported options retain both network schedules below.
+    entries = [row for row in entries if relevant_service(row)
+               and _network_indicator(row) not in {'N', 'NO', 'OUT_OF_NETWORK'}]
     invalid_dates = False
     if service_date:
         applicable = []
         for row in entries:
             plan = (payload.get('plans') or [])[row['plan_index']] if 'plan_index' in row else payload
-            bounds = {**(payload.get('planDateInformation') or {}), **(plan.get('planDateInformation') or {}), **(row.get('benefitsDateInformation') or {})}
+            bounds = {**(payload.get('planDateInformation') or {}), **(plan.get('planDateInformation') or {}),
+                      **(plan.get('dates') or {}), **(row.get('benefitsDateInformation') or {}), **(row.get('dates') or {})}
             try:
                 if _dates_apply(bounds, service_date):
                     applicable.append(row)
@@ -324,8 +336,14 @@ def normalize_stedi_271(payload: dict[str, Any], service_type_code: str, provide
     relevant = [row for row in entries if not row.get("serviceTypeCodes") or
                 service_type_code in {str(value) for value in row.get("serviceTypeCodes", [])} or
                 "30" in {str(value) for value in row.get("serviceTypeCodes", [])}]
-    authorization_values = {str(row.get("authOrCertIndicator") or row.get("priorAuthIndicator") or "").upper()
-                            for row in relevant}
+    def scoped_auth(row: dict) -> str:
+        indicator = str(row.get('authOrCertIndicator') or row.get('priorAuthIndicator') or '').upper()
+        # A category contains many procedures. A requirement tied to a named
+        # benefit (for example ABA) is not a requirement for every CPT in it.
+        if indicator in {'Y', 'REQUIRED'} and row.get('messages') and not _procedure(row):
+            return 'UNKNOWN'
+        return indicator
+    authorization_values = {scoped_auth(row) for row in relevant}
     authorization_signal = ("required" if authorization_values & {"Y", "REQUIRED"}
                             else "unknown" if not authorization_values & {"N", "NOT_REQUIRED"} or authorization_values & {"U", "UNKNOWN"}
                             else "not_required")
@@ -340,6 +358,8 @@ def normalize_stedi_271(payload: dict[str, Any], service_type_code: str, provide
     descriptions = [note.casefold() for row in relevant for field in ("additionalInformation", "messages")
                     for note in notes(row.get(field))]
     authorization_basis = 'Payer indicator' if authorization_values - {''} else 'Not confirmed'
+    if any(scoped_auth(row) == 'UNKNOWN' and row.get('messages') for row in relevant):
+        authorization_basis = 'Payer requirement is attached to a named benefit; applicability to this service is not established'
     auth_notes = [note for note in descriptions if re.search(r'authoriz|precert|pre-cert', note)]
     if auth_notes:
         # Free text is evidence to review, not a standardized approval signal.
