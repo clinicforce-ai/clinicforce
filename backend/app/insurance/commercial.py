@@ -170,6 +170,47 @@ def _stedi_entries(payload: dict[str, Any]) -> list[dict[str, Any]]:
     return entries
 
 
+def reported_stedi_options(payload: dict[str, Any], service_type_code: str) -> list[dict[str, Any]]:
+    """Preserve distinct payer terms without selecting one for a price calculation."""
+    kinds = {"A": "coinsurance", "B": "copay", "C": "deductible", "G": "out_of_pocket"}
+    result = []
+    for row in _stedi_entries(payload):
+        code = str(row.get("code") or "").upper()
+        service_types = [str(value) for value in row.get("serviceTypeCodes") or []]
+        if code not in kinds or not any(value in {service_type_code, "30"} for value in service_types):
+            continue
+        if str(row.get("coverageLevel") or row.get("coverageLevelCode") or "").upper() not in {"INDIVIDUAL", "IND"}:
+            continue
+        network = row.get("network")
+        indicator = str((network.get("indicator") or network.get("code")) if isinstance(network, dict)
+                        else row.get("inPlanNetworkIndicator") or row.get("inPlanNetworkIndicatorCode") or "").upper()
+        if indicator not in {"Y", "YES", "IN_NETWORK", "IN_AND_OUT_OF_NETWORK"}:
+            continue
+        raw_percent = row.get("benefitPercent") if row.get("benefitPercent") is not None else row.get("percent")
+        try:
+            percent = Decimal(str(raw_percent)) if raw_percent is not None else None
+            if percent is not None and Decimal("0") <= percent <= Decimal("1"):
+                percent *= 100
+            if percent is not None and not Decimal("0") <= percent <= Decimal("100"):
+                percent = None
+        except (ArithmeticError, TypeError, ValueError):
+            percent = None
+        def note_text(value: Any) -> str:
+            if isinstance(value, str):
+                return value
+            if isinstance(value, list):
+                return " ".join(filter(None, (note_text(item) for item in value)))
+            if isinstance(value, dict):
+                return " ".join(filter(None, (note_text(value.get(key)) for key in ("description", "message", "text", "messages"))))
+            return ""
+        result.append({"kind": kinds[code], "service_type_code": service_type_code if service_type_code in service_types else "30",
+                       "network": indicator, "time_period": str(row.get("timeQualifierCode") or row.get("timeQualifier") or ""),
+                       "amount_cents": _stedi_cents(row.get("benefitAmount")),
+                       "percent": str(percent) if percent is not None else None,
+                       "payer_note": note_text(row.get("messages") or row.get("additionalInformation"))[:240]})
+    return result
+
+
 def normalize_stedi_271(payload: dict[str, Any], service_type_code: str, provider_network_verified: bool,
                         other_active_coverage: bool = False) -> dict[str, Any]:
     """Normalize only unambiguous individual in-network schedule benefits.
@@ -253,7 +294,8 @@ def normalize_stedi_271(payload: dict[str, Any], service_type_code: str, provide
             "copay_cents": copay_cents, "coinsurance_percent": str(coinsurance_percent) if coinsurance_percent is not None else None,
             "has_secondary": other_active_coverage, "requires_review": bool(missing or authorization_signal in {"required", "unknown"} or referral_signal in {"required", "unknown"} or limitations or multiple_plans or other_active_coverage),
             "authorization_signal": authorization_signal, "referral_signal": referral_signal,
-            "normalization_notes": ["Stedi 271 benefit schedule does not prove provider participation."]}
+            "normalization_notes": ["Stedi 271 benefit schedule does not prove provider participation."],
+            "reported_options": reported_stedi_options(payload, service_type_code)}
 
 
 def estimate(lines: list[dict[str, Any]], benefits: dict[str, Any], rules: dict[str, Any]) -> dict[str, Any]:

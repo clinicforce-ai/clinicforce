@@ -102,6 +102,21 @@ class CommercialRulesTest(unittest.TestCase):
                          ("not_required", "not_required"))
         self.assertEqual(benefits["coverage_level"], "individual")
 
+    def test_multiple_real_payer_terms_are_visible_without_chosen_cost_share(self):
+        common = {"coverageLevel": "INDIVIDUAL", "network": {"indicator": "IN_NETWORK"},
+                  "service": {"system": "STC", "value": "98"}}
+        payload = {"plans": [{"benefits": {"statuses": [{"status": "Active Coverage"}],
+            "coPayment": [{**common, "amount": "25", "timePeriod": "VISIT", "messages": [{"message": "Primary care"}]},
+                          {**common, "amount": "50", "timePeriod": "EPISODE", "messages": [{"message": "Specialist"}]}],
+            "coInsurance": [{**common, "percent": ".2"}, {**common, "percent": ".3"}]}}]}
+        benefits = normalize_stedi_271(payload, "98", False)
+        self.assertIsNone(benefits["copay_cents"])
+        self.assertIsNone(benefits["coinsurance_percent"])
+        self.assertEqual([(item["kind"], item["amount_cents"], item["percent"], item["time_period"])
+                          for item in benefits["reported_options"]],
+                         [("coinsurance", None, "20.0", ""), ("coinsurance", None, "30.0", ""),
+                          ("copay", 2500, None, "VISIT"), ("copay", 5000, None, "EPISODE")])
+
     def test_stedi_family_or_missing_accumulator_requires_review(self):
         benefits = normalize_stedi_271({"benefitsInformation": [{"code": "1"}]}, "98", True)
         self.assertTrue(benefits["requires_review"])

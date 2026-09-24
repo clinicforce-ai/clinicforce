@@ -14,7 +14,9 @@ export type PrevisitEstimate = {
   codes: Array<{ code: string; source: string; units?: number | string | null }>;
   benefits: null | { active?: boolean | null; network_status?: string; deductible_remaining_cents?: number | null;
     oop_remaining_cents?: number | null; copay_cents?: number | null; coinsurance_percent?: string | null;
-    authorization_signal?: string; referral_signal?: string; normalization_notes?: string[] };
+    authorization_signal?: string; referral_signal?: string; normalization_notes?: string[];
+    reported_options?: Array<{ kind: string; service_type_code: string; network: string; time_period: string;
+      amount_cents?: number | null; percent?: string | null; payer_note?: string }> };
   price_range: null | { allowed_min_cents: number; allowed_max_cents: number;
     patient_min_cents?: number; patient_max_cents?: number;
     scenarios: Array<{ code: string; allowed_cents: number }> };
