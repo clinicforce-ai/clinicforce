@@ -821,7 +821,10 @@ async def fetch_inputs(profile: dict[str, Any], practice: dict[str, Any], appoin
               "visit_type": inputs.get("visit_type") or "not_returned",
               "recent_completed_appointments": recent_completed_appointments,
               "history_status": "timed_out" if history_timeout else "unavailable" if history_unavailable else "loaded",
-              "payer": _display(payer), "location": location.get("name"), "location_id": str(location.get("id") or location_ref or ""),
+              "payer": _display(payer),
+              "payer_identifiers": [str(item.get("value")) for item in payer.get("identifier", [])
+                                    if isinstance(item, dict) and item.get("value")],
+              "location": location.get("name"), "location_id": str(location.get("id") or location_ref or ""),
               "billing_provider": {"npi": billing_npi},
               "billing_provider": {"name": _display(billing_resource), "npi": ecw_billing_npi},
               "rendering_provider": {"name": _display(rendering_resource), "npi": ecw_rendering_npi,

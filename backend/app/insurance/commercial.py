@@ -257,6 +257,14 @@ def estimate(lines: list[dict[str, Any]], benefits: dict[str, Any], rules: dict[
     if benefits.get("requires_review"):
         raise CommercialError("The selected benefits contain an unresolved limit, authorization, referral, or payer review.")
     cost_share = rules.get("cost_share")
+    if cost_share == "payer_returned":
+        has_copay = benefits.get("copay_cents") is not None
+        has_coinsurance = benefits.get("coinsurance_percent") is not None
+        if has_copay == has_coinsurance:
+            raise CommercialError("Payer benefits did not identify one unambiguous office-visit cost-share method.")
+        if has_copay and _benefit_cents(benefits, "deductible_remaining_cents"):
+            raise CommercialError("Payer did not confirm whether the office-visit copay is subject to the remaining deductible.")
+        cost_share = "copay" if has_copay else "coinsurance"
     if cost_share not in {"coinsurance", "copay", "cumulative"}:
         raise CommercialError("The estimation profile does not define its copay/coinsurance rule.")
     deductible_remaining = _benefit_cents(benefits, "deductible_remaining_cents")
