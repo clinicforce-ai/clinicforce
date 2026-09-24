@@ -637,7 +637,26 @@ async def _assert_ecw_current(case: dict, session: dict) -> dict:
     return source
 
 
-def stedi_request_body(payer: dict, network: dict, coverage: dict, service_date: str, stc: str) -> dict:
+def _stedi_address(value: object) -> dict[str, str] | None:
+    """Translate eCW's FHIR-ish address names to Stedi's JSON names."""
+    if not isinstance(value, dict):
+        return None
+    address = {
+        "addressLine1": str(value.get("addressLine1") or value.get("address1") or "").strip(),
+        "city": str(value.get("city") or "").strip(),
+        "state": str(value.get("state") or "").strip(),
+        "postalCode": str(value.get("postalCode") or value.get("postal_code") or "").strip(),
+    }
+    if not all(address.values()):
+        return None
+    line2 = str(value.get("addressLine2") or value.get("address2") or "").strip()
+    if line2:
+        address["addressLine2"] = line2
+    return address
+
+
+def stedi_request_body(payer: dict, network: dict, coverage: dict, service_date: str, stc: str,
+                       *, include_identity_hints: bool = True) -> dict:
     needed = ("member_id", "relationship", "subscriber_first", "subscriber_last", "subscriber_birth_date",
               "patient_first", "patient_last", "patient_birth_date")
     if any(not coverage.get(key) for key in needed) or coverage.get("active_coverages") != 1:
@@ -656,17 +675,41 @@ def stedi_request_body(payer: dict, network: dict, coverage: dict, service_date:
     if coverage["relationship"] not in {"18", "self"}:
         body["dependent"] = {"dateOfBirth": coverage["patient_birth_date"],
                              "name": {"person": {"firstName": coverage["patient_first"], "lastName": coverage["patient_last"]}}}
-    subscriber = body['subscriber']
-    if coverage.get('group_number'):
-        subscriber['groupNumber'] = coverage['group_number']
-    if coverage.get('plan_number'):
-        subscriber['planNumber'] = coverage['plan_number']
-    patient_identity = body.get('dependent') or subscriber
-    if coverage.get('patient_address'):
-        patient_identity['address'] = coverage['patient_address']
-    if coverage.get('patient_gender') in {'M', 'F'}:
-        patient_identity['gender'] = coverage['patient_gender']
+    # Stedi recommends beginning with its small, documented eligibility request.
+    # eCW's group/plan/address/gender can improve a few payer matches, but must
+    # never make a valid core check fail validation.  The caller retries once
+    # without these optional hints when Stedi rejects their request shape.
+    if include_identity_hints:
+        subscriber = body['subscriber']
+        if coverage.get('group_number'):
+            subscriber['groupNumber'] = coverage['group_number']
+        if coverage.get('plan_number'):
+            subscriber['planNumber'] = coverage['plan_number']
+        patient_identity = body.get('dependent') or subscriber
+        address = _stedi_address(coverage.get('patient_address'))
+        if address:
+            patient_identity['address'] = address
+        gender = {"M": "MALE", "MALE": "MALE", "F": "FEMALE", "FEMALE": "FEMALE"}.get(
+            str(coverage.get('patient_gender') or '').upper())
+        if gender:
+            patient_identity['gender'] = gender
     return body
+
+
+def _request_validation(payload: object) -> bool:
+    return isinstance(payload, dict) and commercial.eligibility_failure(payload)['kind'] == 'request_validation'
+
+
+async def _post_stedi_eligibility(client: httpx.AsyncClient, headers: dict[str, str], body: dict,
+                                  basic_body: dict | None = None) -> tuple[httpx.Response, dict, bool]:
+    """Send one eligibility request, falling back once from optional eCW hints."""
+    response = await client.post(STEDI_URL, headers=headers, json=body)
+    payload = response.json() if response.content else {}
+    if basic_body != body and _request_validation(payload):
+        response = await client.post(STEDI_URL, headers=headers, json=basic_body)
+        payload = response.json() if response.content else {}
+        return response, payload, True
+    return response, payload, False
 
 
 def _record_evidence(case: dict, session: dict, data: dict[str, Any], raw_object_key: str | None = None) -> dict:
@@ -864,11 +907,14 @@ async def _recheck_discovery_candidate(case: dict, session: dict, provider: dict
         if not payer:
             raise ValueError('Stedi could not map the selected payer.')
         body = stedi_request_body({'stedi_payer_id': payer['stediId']}, provider, coverage, inputs['service_date'], '98')
+        basic_body = stedi_request_body({'stedi_payer_id': payer['stediId']}, provider, coverage, inputs['service_date'], '98',
+                                        include_identity_hints=False)
         if inputs['service_date'] == date.today().isoformat():
             body['encounter'].pop('dates', None)
+            basic_body['encounter'].pop('dates', None)
         async with httpx.AsyncClient(timeout=httpx.Timeout(35, connect=5)) as client:
-            response = await client.post(STEDI_URL, headers={'Authorization': api_key, 'Content-Type': 'application/json'}, json=body)
-        verified = response.json() if response.content else {}
+            response, verified, _ = await _post_stedi_eligibility(
+                client, {'Authorization': api_key, 'Content-Type': 'application/json'}, body, basic_body)
         if not isinstance(verified, dict):
             raise ValueError('Invalid eligibility response')
         discovery['eligibility_object_key'] = await run_in_threadpool(object_store.put_staff_document,
@@ -1056,11 +1102,14 @@ async def previsit_estimate(value: EcwStartInput, request: Request, background_t
                 "organization_name": organization_name}
     try:
         body = stedi_request_body({"stedi_payer_id": payer_id}, provider, coverage, inputs["service_date"], "98")
+        basic_body = stedi_request_body({"stedi_payer_id": payer_id}, provider, coverage, inputs["service_date"], "98",
+                                        include_identity_hints=False)
     except commercial.CommercialError as exc:
         result["issues"].append(str(exc))
         return result
     if service_day == date.today():
         body["encounter"].pop("dates", None)
+        basic_body["encounter"].pop("dates", None)
     binding = hashlib.sha256(json.dumps({"coverage": coverage, "payer": payer_id,
         "provider": provider, "service_date": inputs["service_date"]}, sort_keys=True).encode()).hexdigest()
     slot = "commercial-previsit:" + hashlib.sha256(f"{value.appointment_id}:{binding}".encode()).hexdigest()
@@ -1123,8 +1172,8 @@ async def previsit_estimate(value: EcwStartInput, request: Request, background_t
     case = await run_in_threadpool(_save, case, session, "previsit-stedi-pending")
     try:
         async with httpx.AsyncClient(timeout=httpx.Timeout(30, connect=5)) as client:
-            response = await client.post(STEDI_URL, headers={"Authorization": api_key, "Content-Type": "application/json"}, json=body)
-        payload = response.json() if response.content else {}
+            response, payload, _ = await _post_stedi_eligibility(
+                client, {"Authorization": api_key, "Content-Type": "application/json"}, body, basic_body)
     except (httpx.HTTPError, ValueError):
         case["previsit"] = {"request_state": "indeterminate"}
         await run_in_threadpool(_save, case, session, "previsit-stedi-indeterminate")
@@ -1481,16 +1530,18 @@ async def stedi_eligibility(case_id: str, request: Request) -> Any:
     if not isinstance(stc, str) or not stc: raise HTTPException(422, "Configure exactly one Stedi service-type code for this payer/profile before eligibility.")
     try:
         rendering = current_source.get("rendering_provider") or {}
-        body = stedi_request_body(payer, {**network, "rendering_first": rendering.get("first_name"),
-                                          "rendering_last": rendering.get("last_name")},
-                                  case["ecw_coverage"], data["service_date"], stc)
+        stedi_network = {**network, "rendering_first": rendering.get("first_name"),
+                         "rendering_last": rendering.get("last_name")}
+        body = stedi_request_body(payer, stedi_network, case["ecw_coverage"], data["service_date"], stc)
+        basic_body = stedi_request_body(payer, stedi_network, case["ecw_coverage"], data["service_date"], stc,
+                                        include_identity_hints=False)
     except commercial.CommercialError as exc:
         raise HTTPException(409, str(exc)) from exc
     data["request_state"] = "pending"; case = await run_in_threadpool(_save, case, session, "stedi-request-pending")
     try:
         async with httpx.AsyncClient(timeout=httpx.Timeout(30, connect=5)) as client:
-            response = await client.post(STEDI_URL, headers={"Authorization": api_key, "Content-Type": "application/json"}, json=body)
-        payload = response.json() if response.content else {}
+            response, payload, _ = await _post_stedi_eligibility(
+                client, {"Authorization": api_key, "Content-Type": "application/json"}, body, basic_body)
     except (httpx.HTTPError, ValueError):
         case = await run_in_threadpool(_load, case_id, session); case["commercial"]["request_state"] = "review"; case["review_tasks"] = ["Stedi request outcome is indeterminate; check Stedi activity before retrying."]
         return _response(_public(await run_in_threadpool(_save, case, session, "stedi-indeterminate")))

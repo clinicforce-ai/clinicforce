@@ -18,6 +18,9 @@ class PrevisitFlowTest(unittest.IsolatedAsyncioTestCase):
     async def test_request_validation_failure_preserves_partial_facts(self):
         await self._flow((date.today() + timedelta(days=2)).isoformat(), reject=True)
 
+    async def test_request_validation_retries_the_documented_basic_request(self):
+        await self._flow((date.today() + timedelta(days=2)).isoformat(), retry_basic=True)
+
     async def test_member_id_rejection_is_actionable_and_does_not_return_a_price(self):
         await self._flow(date.today().isoformat(), reject={'errors': [{'code': '72', 'description': 'private response text'}]})
 
@@ -25,7 +28,7 @@ class PrevisitFlowTest(unittest.IsolatedAsyncioTestCase):
         await self._flow(date.today().isoformat(), reject={'subscriber': {'aaaErrors': [{'code': '72'}]},
             'benefitsInformation': [{'code': '1'}]})
 
-    async def _flow(self, service_date, reject=False):
+    async def _flow(self, service_date, reject=False, retry_basic=False):
         session = {"practice_id": "clinic", "intake_id": "intake", "patient_id": "patient",
                    "share_manifest_id": "", "staff": {"id": "staff", "display_name": "Staff", "practice_name": "Clinic"},
                    "intake": {"updated_at": "version", "patient": {"given_name": "Pat", "family_name": "Example",
@@ -38,16 +41,22 @@ class PrevisitFlowTest(unittest.IsolatedAsyncioTestCase):
         source = {"appointment_id": "visit-1", "coverage_id": "coverage-1", "active_coverages": 1,
                   "payer": "Blue Cross Blue Shield Tx", "plan": "CI", "rendering_provider": {"npi": "1234567890", "first_name": "Ada", "last_name": "Clinician"},
                   "billing_provider": {"name": "Clinic", "npi": "1811853260"}, "location_id": "office"}
+        if retry_basic:
+            inputs.update(group_number='GROUP-9', plan_number='PLAN-2')
+            inputs['patient'].update(gender='F', address={'address1': '1 Main St', 'city': 'Austin', 'state': 'TX', 'postalCode': '78701'})
         case = {"id": "case-1", "source_mode": "commercial_previsit", "previsit": {"request_state": "not_requested"}}
         client = MagicMock()
         client.__aenter__ = AsyncMock(return_value=client)
         client.__aexit__ = AsyncMock(return_value=None)
-        client.post = AsyncMock(return_value=httpx.Response(200, json={
+        success_response = httpx.Response(200, json={
             "id": "eligibility-1", "plans": [{"benefits": {"statuses": [{"status": "Active"}]}}],
-            "benefitsInformation": [{"code": "1"}]}))
+            "benefitsInformation": [{"code": "1"}]})
+        client.post = AsyncMock(return_value=success_response)
         if reject:
             client.post.return_value = httpx.Response(200 if isinstance(reject, dict) else 400,
                 json=reject if isinstance(reject, dict) else {'errors': [{'path': '/encounter/dates/service', 'message': 'Must be an object'}]})
+        elif retry_basic:
+            client.post.side_effect = [httpx.Response(400, json={'errors': [{'path': '/subscriber/address', 'message': 'Invalid'}]}), success_response]
         with patch("app.api.routers.commercial_estimator._session", new=AsyncMock(return_value=session)), \
              patch("app.api.routers.commercial_estimator.ecw_backend.configured", return_value=True), \
              patch("app.api.routers.commercial_estimator.ecw_backend.fetch_inputs", new=AsyncMock(return_value=(inputs, [], source))), \
@@ -86,7 +95,7 @@ class PrevisitFlowTest(unittest.IsolatedAsyncioTestCase):
                 return
             case["previsit"]["benefits"] = {"requires_review": False, "network_status": "in_network"}
             with patch("app.api.routers.commercial_estimator.object_store.get_object_bytes",
-                       return_value=json.dumps(client.post.return_value.json()).encode()):
+                       return_value=json.dumps(success_response.json()).encode()):
                 cached = await previsit_estimate(EcwStartInput(appointment_id="visit-1"), MagicMock())
             self.assertTrue(cached["benefits"]["review_reasons"])
             self.assertTrue(cached["benefits"]["requires_review"])
@@ -95,7 +104,7 @@ class PrevisitFlowTest(unittest.IsolatedAsyncioTestCase):
                 unavailable = await previsit_estimate(EcwStartInput(appointment_id="visit-1"), MagicMock())
             self.assertTrue(unavailable["benefits"]["requires_review"])
             self.assertTrue(any("Saved benefit evidence" in item for item in unavailable["issues"]))
-            self.assertEqual(client.post.await_count, 1)
+            self.assertEqual(client.post.await_count, 2 if retry_basic else 1)
         self.assertEqual([row["code"] for row in result["codes"]], ["99202", "99203", "99204", "99205"])
         self.assertTrue(result["benefits"]["active"])
         self.assertNotIn("patient_min_cents", result["price_range"])
@@ -107,6 +116,14 @@ class PrevisitFlowTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(sent["encounter"]["dates"], {"service": {"start": service_date}})
         self.assertNotIn("procedure", str(sent["encounter"]).lower())
         self.assertEqual(case["previsit"]["request_state"], "complete")
+        if retry_basic:
+            self.assertEqual(client.post.await_count, 2)
+            enriched, basic = [call.kwargs['json'] for call in client.post.await_args_list]
+            self.assertEqual(enriched['subscriber']['address']['addressLine1'], '1 Main St')
+            self.assertEqual(enriched['subscriber']['gender'], 'FEMALE')
+            self.assertNotIn('groupNumber', basic['subscriber'])
+            self.assertNotIn('planNumber', basic['subscriber'])
+            self.assertNotIn('address', basic['subscriber'])
 
     def test_member_identity_check_is_shared_by_fresh_and_cached_responses(self):
         benefits = _previsit_benefits({"subscriber": {"memberId": "different"}},
