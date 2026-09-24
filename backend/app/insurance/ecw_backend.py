@@ -883,7 +883,7 @@ async def probe_saved_eligibility(profile: dict[str, Any], *, transport: httpx.A
     client_id, issuer = settings()
     try:
         async with httpx.AsyncClient(timeout=30, follow_redirects=False, transport=transport) as client:
-            token = await _access_token(client, client_id, issuer, SCOPES + EVIDENCE_SCOPES)
+            token = await _access_token(client, client_id, issuer)
             metadata = await _response_json(
                 await client.get(f"{issuer}/metadata", params={"_format": "json"}, headers={"Accept": "application/fhir+json"}),
                 "The eClinicalWorks capability statement is unavailable.",
@@ -907,15 +907,24 @@ async def probe_saved_eligibility(profile: dict[str, Any], *, transport: httpx.A
                 "resources": {},
             }
             for resource in ("CoverageEligibilityResponse", "DocumentReference"):
+                # One unsupported optional scope must not hide other authorized
+                # evidence resources or report that the working app is rejected.
+                try:
+                    evidence_token = await _access_token(client, client_id, issuer, SCOPES + (f"system/{resource}.read",))
+                except EcwBackendError:
+                    result['resources'][resource] = {'status': 'scope_denied_or_unavailable', 'count': None}
+                    continue
                 response = await client.get(f"{issuer}/{resource}", params={"patient": patient_id},
-                                            headers={"Authorization": f"Bearer {token}", "Accept": "application/fhir+json"})
-                if response.status_code == 403:
+                                            headers={"Authorization": f"Bearer {evidence_token}", "Accept": "application/fhir+json"})
+                if response.status_code in {401, 403}:
                     result["resources"][resource] = {"status": "forbidden", "count": None}
                 elif response.status_code == 404:
                     result["resources"][resource] = {"status": "not_supported_or_not_found", "count": None}
+                elif response.is_error:
+                    result['resources'][resource] = {'status': 'search_unavailable', 'count': None}
                 else:
                     bundle = await _response_json(response, f"eClinicalWorks could not return {resource} evidence.")
-                    result["resources"][resource] = {"status": "available", "count": len(_entries(bundle))}
+                    result["resources"][resource] = {"status": "available", "count": sum(row.get('resourceType') == resource for row in _entries(bundle))}
     except httpx.HTTPError as exc:
         raise EcwBackendError("eClinicalWorks is temporarily unavailable.") from exc
     return result

@@ -85,7 +85,7 @@ class EcwBackendSourceTests(unittest.IsolatedAsyncioTestCase):
             if request.url.path == "/fhir/DocumentReference":
                 return httpx.Response(200, json={"resourceType": "Bundle", "entry": [{"resource": {
                     "resourceType": "DocumentReference", "id": "document-1",
-                }}]})
+                }}, {"resource": {"resourceType": "OperationOutcome"}}]})
             return httpx.Response(404)
 
         with patch.object(ecw_backend, "settings", return_value=("client", "https://ehr.example.test/fhir")), \
@@ -98,7 +98,22 @@ class EcwBackendSourceTests(unittest.IsolatedAsyncioTestCase):
             "CoverageEligibilityResponse": {"status": "forbidden", "count": None},
             "DocumentReference": {"status": "available", "count": 1},
         })
-        self.assertEqual(access_token.await_args.args[3], ecw_backend.SCOPES + ecw_backend.EVIDENCE_SCOPES)
+        self.assertEqual(access_token.await_args.args[3], ecw_backend.SCOPES + ('system/DocumentReference.read',))
+        self.assertEqual(access_token.await_count, 3)
+
+        async def scoped_token(client, client_id, issuer, scopes=ecw_backend.SCOPES):
+            if 'system/CoverageEligibilityResponse.read' in scopes:
+                raise ecw_backend.EcwBackendError('Optional scope denied')
+            return 'document-token'
+
+        with patch.object(ecw_backend, 'settings', return_value=('client', 'https://ehr.example.test/fhir')), \
+                patch.object(ecw_backend, '_access_token', side_effect=scoped_token):
+            result = await ecw_backend.probe_saved_eligibility(
+                {'patient_first_name': 'Pat', 'patient_last_name': 'Example', 'patient_birth_date': '1980-01-01'},
+                transport=httpx.MockTransport(handler),
+            )
+        self.assertEqual(result['resources']['CoverageEligibilityResponse']['status'], 'scope_denied_or_unavailable')
+        self.assertEqual(result['resources']['DocumentReference'], {'status': 'available', 'count': 1})
 
     async def test_backend_token_and_fhir_resources_become_availity_inputs(self):
         today_date = datetime.now(ZoneInfo("America/New_York")).date()
