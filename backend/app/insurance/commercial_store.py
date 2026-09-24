@@ -127,7 +127,7 @@ def import_rates(practice_id: str, payer_connection_id: str, source_type: str, s
     with _connection() as db:
         db.execute("""INSERT INTO commercial_rate_versions (id,practice_id,payer_connection_id,source_type,status,source_reference,sha256,effective_from,effective_to,change_ceiling_bps,created_at)
            VALUES (%s,%s,%s,%s,'draft',%s,%s,%s,%s,%s,%s)""", (version_id, practice_id, payer_connection_id, source_type, source_reference.strip(), digest, effective_from, effective_to, change_ceiling_bps, now))
-        db.executemany("""INSERT INTO commercial_rate_lines (version_id,row_number,code,description,modifier,unit_rule,allowed_cents,cash_cents,network_name,plan_matcher,place_of_service,provider_npi,tin,effective_from,effective_to)
+        db.cursor().executemany("""INSERT INTO commercial_rate_lines (version_id,row_number,code,description,modifier,unit_rule,allowed_cents,cash_cents,network_name,plan_matcher,place_of_service,provider_npi,tin,effective_from,effective_to)
           VALUES (%(version_id)s,%(row_number)s,%(code)s,%(description)s,%(modifier)s,%(unit_rule)s,%(allowed_cents)s,%(cash_cents)s,%(network)s,%(plan_matcher)s,%(pos)s,%(provider_npi)s,%(tin)s,%(effective_from)s,%(effective_to)s)""", [{**row, "version_id": version_id} for row in rows])
         row = db.execute("SELECT * FROM commercial_rate_versions WHERE id=%s AND practice_id=%s", (version_id, practice_id)).fetchone()
     return dict(row)
