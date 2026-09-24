@@ -44,8 +44,20 @@ def test_discovery_identity_and_address_are_verified_before_adoption():
     wrong = deepcopy(item); wrong['subscriber']['address']['address1'] = '200 Other St'
     assert not discovery.patient_matches(wrong, inputs)
     assert not discovery.patient_matches({**item, 'dependent': {'firstName': 'Pat'}}, inputs)
-    assert discovery.request_body({**inputs, 'relationship': '19'}, provider) is None
+    assert discovery.request_body({**inputs, 'relationship': '19'}, provider)
     assert not discovery.patient_address({'address': [{'state': 'TX', 'postalCode': '78701'}, {'state': 'NY', 'postalCode': '10001'}]})
+
+
+def test_discovery_returns_safe_dependent_candidate_for_staff_selection():
+    case, _, _, item = setup(); inputs = case['previsit_context']['inputs']
+    dependent = deepcopy(item)
+    dependent['subscriber'] = {'firstName': 'Parent', 'lastName': 'Example', 'dateOfBirth': '19500101', 'memberId': 'family-id'}
+    dependent['dependent'] = {'firstName': 'Pat', 'lastName': 'Example', 'dateOfBirth': '19800101', 'address': inputs['patient']['address']}
+    rows = discovery.candidates({'items': [dependent]}, inputs)
+    assert len(rows) == 1
+    assert rows[0]['relationship'] == 'dependent'
+    assert rows[0]['address_matches'] is True
+    assert 'family-id' not in json.dumps(rows)
 
 
 class RecoveryTest(IsolatedAsyncioTestCase):
@@ -98,6 +110,28 @@ class RecoveryTest(IsolatedAsyncioTestCase):
             assert client.post.await_count == 1
             assert case['previsit']['request_state'] == 'rejected'
             assert case['previsit_context']['result']['benefits'] is None
+
+    async def test_other_payer_is_selectable_without_exposing_member_id(self):
+        _, _, _, item = setup()
+        case, _, _ = await self.exercise({'status': 'COMPLETE', 'coveragesFound': 1, 'items': [item]}, directory='other')
+        public = api._previsit_result(case)['recovery']
+        assert public['outcome'] == 'review_needed'
+        assert public['candidates'][0]['payer'] == 'Example Payer'
+        assert 'new-id' not in json.dumps(public)
+
+    async def test_staff_selection_is_bound_to_saved_case_and_candidate(self):
+        case, session, _, item = setup()
+        candidate = discovery.candidates({'items': [item]}, case['previsit_context']['inputs'])[0]
+        case['previsit_discovery'].update(request_state='complete', outcome='review_needed', candidates=[candidate], raw_object_key='protected')
+        tasks = BackgroundTasks()
+        with patch.object(api, '_session', AsyncMock(return_value=session)), \
+             patch.object(api.store, 'get_case', return_value=case), \
+             patch.object(api, '_save', side_effect=lambda value, *_: value):
+            result = await api.select_coverage_candidate('case', api.CoverageCandidateInput(
+                context_token=case['previsit_context']['context_token'], revision=1, candidate_id=candidate['id']), MagicMock(), tasks)
+        assert result['recovery']['state'] == 'pending'
+        assert case['previsit_discovery']['selected_candidate_id'] == candidate['id']
+        assert len(tasks.tasks) == 1
 
     async def test_pending_result_is_polled_without_a_second_discovery_post(self):
         case, client, _ = await self.exercise({'status': 'COMPLETE', 'coveragesFound': 0, 'items': []}, saved=True)

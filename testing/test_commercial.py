@@ -238,6 +238,15 @@ class CommercialRulesTest(unittest.TestCase):
         self.assertEqual(body["provider"], {"npi": "1234567890", "name": {"person": {"firstName": "Ada", "lastName": "Clinician"}}})
         self.assertEqual(body["subscriber"]["dateOfBirth"], "1950-01-01")
         self.assertEqual(body["dependent"]["dateOfBirth"], "1980-01-01")
+        enriched = _coverage_snapshot({**inputs, 'group_number': 'GROUP-9', 'plan_number': 'PLAN-2',
+                                       'patient': {**inputs['patient'], 'gender': 'F',
+                                                   'address': {'address1': '1 Main St', 'city': 'Austin', 'state': 'TX', 'postalCode': '78701'}}}, source)
+        enriched_body = stedi_request_body({'stedi_payer_id': 'payer'}, {'rendering_npi': '1234567890', 'rendering_first': 'Ada',
+                                            'rendering_last': 'Clinician'}, enriched, '2026-10-01', '98')
+        assert enriched_body['subscriber']['groupNumber'] == 'GROUP-9'
+        assert enriched_body['subscriber']['planNumber'] == 'PLAN-2'
+        assert enriched_body['dependent']['gender'] == 'F'
+        assert enriched_body['dependent']['address']['postalCode'] == '78701'
 
     def test_stedi_provider_fallback_keeps_organization_name_with_organization_npi(self):
         coverage = {"member_id": "M123", "relationship": "18", "subscriber_first": "Ada", "subscriber_last": "Lovelace",
