@@ -9,7 +9,8 @@ export type CommercialReadiness = { ready: boolean; blockers: string[]; ecw: { p
 export const commercialReadiness = (appointment_id: string) => request<CommercialReadiness>(`${root}/appointments/readiness`, json({ appointment_id }))
 export type PrevisitEstimate = {
   ecw_coverage_active?: boolean;
-  recovery?: { state: string; outcome?: string; message: string; started_at?: string; checked_at?: string; reference?: string; coverage_count?: number };
+  recovery?: { state: string; outcome?: string; message: string; started_at?: string; checked_at?: string; reference?: string; coverage_count?: number;
+    candidates?: Array<{ id: string; payer: string; payer_identifier?: string; plans: string[]; relationship: string; address_matches: boolean }> };
   eligibility_failure?: { kind: string; codes: string[]; title: string; detail: string; action: string; attempted_at: string };
   eligibility_error?: string; context_token?: string; revision?: number; selected_ids?: string[]; available_codes?: VisitCode[];
   plan_details?: { ecw: Record<string, string[]>; stedi: { names?: string[]; plan_number?: string; group_number?: string } };
@@ -31,6 +32,7 @@ export type PrevisitEstimate = {
 }
 export const commercialPrevisit = (appointment_id: string) => request<PrevisitEstimate>(`${root}/appointments/previsit`, json({ appointment_id }))
 export const commercialSavedPrevisit = (id: string) => request<PrevisitEstimate>(`${root}/cases/${encodeURIComponent(id)}/previsit`)
+export const commercialSelectCoverageCandidate = (result: PrevisitEstimate, candidate_id: string) => request<PrevisitEstimate>(`${root}/cases/${encodeURIComponent(result.check_id!)}/coverage-candidate`, json({ candidate_id, revision: result.revision, context_token: result.context_token }))
 export type CommercialPastVisit = CommercialAppointment & { date: string; visit_type: string; coded_services: string[]; saved_estimate: { created_at?: string; allowed_cents?: number | null; patient_cents?: number | null; plan_cents?: number | null; disclaimer?: string | null } | null }
 export const commercialHistory = () => request<{ visits: CommercialPastVisit[] }>(`${root}/history`)
 export const commercialCreate = (path: 'connections' | 'networks' | 'profiles', body: object) => request<Record<string, unknown>>(`${root}/${path}`, json(body))

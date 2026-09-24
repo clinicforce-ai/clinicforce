@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { ArrowLeft, ArrowRight, CalendarDays, Check, ChevronDown, CircleHelp, Clock3, RefreshCw, ShieldCheck, Trash2 } from 'lucide-react'
 import { deleteStaffInsuranceCheck, getStaffIntake, getStaffSession, type StaffPatient, type StaffSession } from '../services/api/staff'
-import { commercialAppointments, commercialHistory, commercialPrevisit, commercialSavedPrevisit, commercialVisitReview, type VisitReview, type CommercialAppointment, type CommercialPastVisit, type PrevisitEstimate } from '../services/api/commercial-estimator'
+import { commercialAppointments, commercialHistory, commercialPrevisit, commercialSavedPrevisit, commercialSelectCoverageCandidate, commercialVisitReview, type VisitReview, type CommercialAppointment, type CommercialPastVisit, type PrevisitEstimate } from '../services/api/commercial-estimator'
 import VisitServices from './VisitServices'
 import './CommercialEstimator.css'
 
@@ -35,7 +35,7 @@ export default function CommercialEstimator({ onBack, intakeId }: { onBack: () =
   const [historyBusy, setHistoryBusy] = useState(false)
   const [selectedVisit, setSelectedVisit] = useState('')
   const [loaded, setLoaded] = useState(false)
-  const [busy, setBusy] = useState<'visits' | 'estimate' | 'delete' | 'review' | null>('visits')
+  const [busy, setBusy] = useState<'visits' | 'estimate' | 'delete' | 'review' | 'coverage' | null>('visits')
   const [deleteError, setDeleteError] = useState('')
   const [cleanupPending, setCleanupPending] = useState(false)
   const [notice, setNotice] = useState('')
@@ -111,6 +111,17 @@ export default function CommercialEstimator({ onBack, intakeId }: { onBack: () =
       if (current === requestId.current) { setResult(updated); setNotice(updated.eligibility_error ? 'Planned services saved. Clinic rates updated; the insurance split still needs usable benefits.' : `${review.verification ? 'Verification saved.' : 'Estimate updated.'} Recalculated from the saved payer response.`) }
     } catch (caught) {
       if (current === requestId.current) setError(caught instanceof Error ? caught.message : 'Verification could not be saved.')
+    } finally { if (current === requestId.current) setBusy(null) }
+  }
+  const selectCoverage = async (candidateId: string) => {
+    if (!result || busy) return
+    const current = ++requestId.current
+    setBusy('coverage'); setError(''); setNotice('')
+    try {
+      const updated = await commercialSelectCoverageCandidate(result, candidateId)
+      if (current === requestId.current) { setResult(updated); setNotice('Checking the selected policy with Stedi…') }
+    } catch (caught) {
+      if (current === requestId.current) setError(caught instanceof Error ? caught.message : 'The selected policy could not be checked.')
     } finally { if (current === requestId.current) setBusy(null) }
   }
   const deleteCheck = async () => {
@@ -189,7 +200,7 @@ export default function CommercialEstimator({ onBack, intakeId }: { onBack: () =
         {busy === 'estimate' ? <div className="visit-empty" role="status"><RefreshCw className="visit-spin" size={26} aria-hidden="true" /><h2>Checking this visit</h2><p>Reading the appointment, insurance benefits, and available clinic rates.</p></div> : result ? <>
           <section className="visit-answer" aria-live="polite">
             <p className="visit-label">{failed ? 'Insurance check needs attention' : serviceOptions ? 'Plan the visit' : price?.conditional ? 'Conditional previsit estimate' : 'Previsit estimate'}</p>
-            {failed ? <><h2 className="visit-pending">{recovering ? 'Finding coverage with Stedi…' : result.recovery?.outcome === 'no_match' ? 'The payer could not locate this policy' : failure?.title || 'The payer could not complete the check'}</h2><p className="visit-answer-description">{failure?.detail || 'No usable benefits were returned. This does not establish inactive coverage.'}</p><p className="visit-assumption" role={recovering ? 'status' : undefined}>{result.recovery ? result.recovery.message : <><strong>Next step:</strong> {failure?.action || result.issues.join(' ')}</>}</p>{failure && <p className="visit-muted">Stedi{failure.codes.length ? ` · Payer error ${failure.codes.join(', ')}` : ''} · Attempted {visitDate(failure.attempted_at)}, {visitTime(failure.attempted_at)}</p>}<p className="visit-answer-description">Build the anticipated visit below to see its contracted total. The patient / insurance split will be calculated when usable benefits are returned.</p>{price?.mode === 'services' && price.allowed_min_cents != null && <p className="visit-assumption"><strong>Planned contracted total: {money(price.allowed_min_cents)}</strong>{!!price.service_issues?.length && <span> · {price.service_issues[0]}</span>}</p>}</> : serviceOptions ? <><h2 className="visit-pending">Choose the anticipated services</h2><p className="visit-answer-description">Your clinic’s contracted prices are ready below. Build a visit estimate with the expected services and units; final coding can happen after care.</p></> : <>
+            {failed ? <><h2 className="visit-pending">{recovering ? 'Finding coverage with Stedi…' : result.recovery?.outcome === 'no_match' ? 'No matching policy returned' : result.recovery?.candidates?.length ? 'Choose the policy for this estimate' : failure?.title || 'The payer could not complete the check'}</h2><p className="visit-answer-description">{failure?.detail || 'No usable benefits were returned. This does not establish inactive coverage.'}</p><p className="visit-assumption" role={recovering ? 'status' : undefined}>{result.recovery ? result.recovery.message : <><strong>Next step:</strong> {failure?.action || result.issues.join(' ')}</>}</p>{result.recovery?.candidates?.length ? <div className="visit-coverage-candidates" aria-label="Coverage options returned by Stedi">{result.recovery.candidates.map(candidate => <article key={candidate.id}><div><strong>{candidate.payer}</strong><span>{candidate.plans.join(' · ') || 'Plan name not returned'} · {candidate.relationship === 'self' ? 'Patient is subscriber' : 'Patient is dependent'}</span><small>{candidate.address_matches ? 'Name, date of birth, and address match eCW' : 'Name and date of birth match eCW; compare the current card before use'}</small></div><button className="visit-primary" disabled={!!busy || recovering} onClick={() => void selectCoverage(candidate.id)}>{busy === 'coverage' ? 'Checking…' : 'Use this policy'}</button></article>)}</div> : null}{failure && <p className="visit-muted">Stedi{failure.codes.length ? ` · Payer error ${failure.codes.join(', ')}` : ''} · Attempted {visitDate(failure.attempted_at)}, {visitTime(failure.attempted_at)}</p>}<p className="visit-answer-description">Build the anticipated visit below to see its contracted total. The patient / insurance split will be calculated when usable benefits are returned.</p>{price?.mode === 'services' && price.allowed_min_cents != null && <p className="visit-assumption"><strong>Planned contracted total: {money(price.allowed_min_cents)}</strong>{!!price.service_issues?.length && <span> · {price.service_issues[0]}</span>}</p>}</> : serviceOptions ? <><h2 className="visit-pending">Choose the anticipated services</h2><p className="visit-answer-description">Your clinic’s contracted prices are ready below. Build a visit estimate with the expected services and units; final coding can happen after care.</p></> : <>
               <div className="visit-payment-split"><div><span>Estimated patient share</span><h2 className={patientPrice ? 'visit-amount' : 'visit-pending'}>{patientPrice || (price?.service_issues?.length ? 'Complete the planned services' : benefits?.active === true ? 'Benefit details needed' : 'Check incomplete')}</h2></div>{insurancePrice && <div><span>Estimated insurance share</span><strong className="visit-insurance-amount">{insurancePrice}</strong></div>}</div>
               <p className="visit-answer-description">{patientPrice ? price?.conditional ? 'Planning amount, subject to the conditions below. Final payment depends on covered services and the payer’s claim decision.' : 'Calculated from the payer’s benefits and your clinic’s contracted rates. Final cost depends on the care provided.' : benefits?.active === false ? 'The payer reported inactive coverage. Confirm coverage or review self-pay pricing.' : 'Available coverage and contract information remains below. The check details explain what is still needed for the split.'}</p>
               {conditions.some(item => item.startsWith('Assumes this covered')) && <p className="visit-assumption"><strong>Why this split:</strong> The estimate applies the remaining deductible ({shown(benefits?.deductible_remaining_cents)}) to these covered services first. In this scenario, insurance starts paying after the deductible. A deductible waiver or special copay would change the split.</p>}

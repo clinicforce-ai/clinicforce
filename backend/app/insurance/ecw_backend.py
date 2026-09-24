@@ -391,6 +391,16 @@ def _group(coverage: dict[str, Any]) -> str | None:
     return None
 
 
+def _plan_number(coverage: dict[str, Any]) -> str | None:
+    for item in coverage.get("class", []):
+        if not isinstance(item, dict):
+            continue
+        codes = [str(c.get("code", "")).casefold() for c in (item.get("type") or {}).get("coding", []) if isinstance(c, dict)]
+        if any(code in {"plan-number", "plannumber", "planid"} for code in codes):
+            return str(item.get("value")) if item.get("value") else None
+    return None
+
+
 def _plan_details(coverage: dict[str, Any]) -> dict[str, list[str]]:
     result: dict[str, list[str]] = {}
     for item in coverage.get("class", []):
@@ -749,7 +759,7 @@ async def fetch_inputs(profile: dict[str, Any], practice: dict[str, Any], appoin
                 "subscriber": {"firstName": sub_given, "lastName": sub_family,
                                "birthDate": subscriber_resource.get("birthDate"), "memberId": coverage.get("subscriberId")},
                 "relationship": relationship, "member_id": coverage.get("subscriberId"),
-                "payer_id": _payer_id(payer, practice.get("payer_aliases")), "group_number": _group(coverage),
+                "payer_id": _payer_id(payer, practice.get("payer_aliases")), "group_number": _group(coverage), "plan_number": _plan_number(coverage),
                 "provider": {**billing, "npi": billing_npi}, "submitter_id": practice.get("submitter_id"),
                 "rendering_provider": {**rendering, "npi": rendering_npi},
                 "service_type": location_config.get("service_type"), "service_date": service_date,
