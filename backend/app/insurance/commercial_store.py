@@ -151,11 +151,12 @@ def matching_rates(practice_id: str, profile: dict, network: dict, service_date:
           (CASE WHEN l.provider_npi=%s THEN 1 ELSE 0 END + CASE WHEN l.tin=%s THEN 1 ELSE 0 END + CASE WHEN l.plan_matcher=%s THEN 1 ELSE 0 END) AS match_rank
           FROM commercial_rate_lines l JOIN commercial_rate_versions v ON v.id=l.version_id
           WHERE v.practice_id=%s AND v.payer_connection_id=%s AND v.status='active' AND l.code = ANY(%s)
+          AND v.effective_from<=%s AND (v.effective_to IS NULL OR v.effective_to>=%s)
           AND l.network_name=%s AND l.place_of_service=%s AND l.effective_from<=%s AND (l.effective_to IS NULL OR l.effective_to>=%s)
-          AND l.modifier='' AND (l.provider_npi='' OR l.provider_npi=%s) AND (l.tin='' OR l.tin=%s)
+          AND l.modifier='' AND l.unit_rule='per_unit' AND (l.provider_npi='' OR l.provider_npi=%s) AND (l.tin='' OR l.tin=%s)
           AND (l.plan_matcher='' OR l.plan_matcher=%s)
           ORDER BY l.code, match_rank DESC, l.id DESC""", (network["rendering_npi"], network["tin"], profile.get("plan_matcher", ""),
-                                                               practice_id, profile["payer_connection_id"], codes, network["network_name"], network["place_of_service"], service_date, service_date,
+                                                               practice_id, profile["payer_connection_id"], codes, service_date, service_date, network["network_name"], network["place_of_service"], service_date, service_date,
                                                                network["rendering_npi"], network["tin"], profile.get("plan_matcher", ""))).fetchall()
     selected: dict[str, dict] = {}
     for row in rows:

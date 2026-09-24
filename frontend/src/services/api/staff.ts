@@ -37,7 +37,7 @@ export interface StaffCardDetails {
 export interface StaffIntake {
   id: string
   status: string
-  source?: 'insurance_card' | 'manual_entry' | 'clinicforce_qr' | 'patient_upload'
+  source?: 'insurance_card' | 'manual_entry' | 'ecw_lookup' | 'clinicforce_qr' | 'patient_upload'
   auto_patient_id?: string | null
   auto_patient?: (StaffPatient & { identity_status?: 'unverified' | 'confirmed' }) | null
   expected_patient_id?: string | null
@@ -45,7 +45,7 @@ export interface StaffIntake {
   created_at: string
   updated_at: string
   patient?: StaffPatient | null
-  fields: Partial<StaffPatientFields> & { member_name?: string }
+  fields: Partial<StaffPatientFields> & { member_name?: string; middle_initial?: string }
   documents: Array<{ id: string; filename: string; content_type: string; size_bytes: number; created_at: string }>
   workflow_documents?: StaffWorkflowDocument[]
   workflows?: { v1?: string; v2?: string }
@@ -77,6 +77,8 @@ export function createStaffIntake(files: File[], details: StaffCardDetails) {
   Object.entries(details).forEach(([key, value]) => { if (value.trim()) body.append(key, value.trim()) })
   return request<StaffIntake>('/api/staff/intakes', { method: 'POST', body })
 }
+
+export const createStaffEcwLookup = (details: { given_name: string; middle_initial: string; family_name: string; birth_date: string }) => request<StaffIntake>('/api/staff/intakes/ecw-lookup', json(details))
 
 export const confirmStaffPatient = (id: string, fields: StaffPatientFields & { identity_confirmed: true; patient_id?: string }) => request<StaffIntake>(`/api/staff/intakes/${encodeURIComponent(id)}/patient`, { ...json(fields), method: 'PUT' })
 export const addStaffMember = (member: { username: string; display_name: string; password: string; role: 'staff' | 'admin' }) => request<unknown>('/api/staff/members', json(member))

@@ -69,7 +69,7 @@ class Patient(Model):
     email: str = Field(default="", max_length=254)
     payer: str = Field(default="", max_length=200)
     group_number: str = Field(default="", max_length=80)
-    relationship: Literal["self", "spouse", "child", "other", "18", "01", "19", "G8"]
+    relationship: Literal["self", "spouse", "child", "other", "unknown", "18", "01", "19", "G8"]
     subscriber_name: str = Field(default="", max_length=200)
     subscriber_birth_date: date | None = None
     patient_id: str | None = Field(default=None, max_length=100)
@@ -82,7 +82,7 @@ class Patient(Model):
 
     @model_validator(mode="after")
     def subscriber_identified(self):
-        if self.relationship not in {"self", "18"} and not self.subscriber_name:
+        if self.relationship not in {"self", "18", "unknown"} and not self.subscriber_name:
             raise ValueError("Enter the policyholder name when the patient is not the policyholder")
         return self
 
@@ -110,6 +110,20 @@ class PatientSearch(Model):
     given_name: str = Field(default="", max_length=100)
     family_name: str = Field(default="", max_length=100)
     birth_date: str = Field(default="", max_length=10)
+
+
+class EcwLookup(Model):
+    given_name: str = Field(min_length=1, max_length=100)
+    middle_initial: str = Field(default="", max_length=10)
+    family_name: str = Field(min_length=1, max_length=100)
+    birth_date: date
+
+    @field_validator("birth_date")
+    @classmethod
+    def plausible_birth_date(cls, value):
+        if not date(1850, 1, 1) <= value <= date.today():
+            raise ValueError("Enter a valid date of birth that is not in the future")
+        return value
 
 
 def check_origin(request: Request) -> None:
@@ -281,6 +295,15 @@ def manual_card_fields(full_name: str, member_id: str, birth_date: str) -> dict:
             raise HTTPException(422, "Enter a valid date of birth")
         fields["birth_date"] = parsed.isoformat()
     return fields
+
+
+@router.post("/intakes/ecw-lookup")
+async def create_ecw_lookup(value: EcwLookup, request: Request):
+    staff = await require_staff(request)
+    fields = {"given_name": value.given_name, "middle_initial": value.middle_initial,
+              "family_name": value.family_name, "birth_date": value.birth_date.isoformat()}
+    intake = await run_in_threadpool(staff_store.create_intake, str(uuid4()), staff, [], "ecw_lookup", None, fields)
+    return JSONResponse(public(intake), status_code=201, headers=NO_STORE)
 
 
 @router.post("/intakes")

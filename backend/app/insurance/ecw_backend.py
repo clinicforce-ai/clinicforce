@@ -223,6 +223,19 @@ def _name(resource: dict[str, Any]) -> tuple[str | None, str | None]:
             str(selected.get("family")) if selected.get("family") else None)
 
 
+def _patient_matches(resource: dict[str, Any], profile: dict[str, Any]) -> bool:
+    first, family = _name(resource)
+    words = str(first or "").split()
+    if not words or _norm(words[0]) != _norm(profile.get("patient_first_name")) or _norm(family) != _norm(profile.get("patient_last_name")):
+        return False
+    names = [item for item in resource.get("name", []) if isinstance(item, dict)]
+    selected = next((item for item in names if item.get("use") in {"official", "usual"}), names[0] if names else {})
+    given = selected.get("given", [])
+    middle = str(given[1]) if isinstance(given, list) and len(given) > 1 else words[1] if len(words) > 1 else ""
+    expected = str(profile.get("patient_middle_initial") or "").strip()
+    return (not expected or not middle or _norm(middle[0]) == _norm(expected[0])) and resource.get("birthDate") == profile.get("patient_birth_date")
+
+
 def _phone(resource: dict[str, Any]) -> str | None:
     value = next((item.get("value") for item in resource.get("telecom", [])
                   if isinstance(item, dict) and item.get("system") == "phone" and item.get("value")), None)
@@ -367,6 +380,18 @@ def _group(coverage: dict[str, Any]) -> str | None:
     return None
 
 
+def _plan(coverage: dict[str, Any]) -> str | None:
+    values = []
+    for item in coverage.get("class", []):
+        if not isinstance(item, dict):
+            continue
+        codes = {str(c.get("code", "")).casefold() for c in (item.get("type") or {}).get("coding", []) if isinstance(c, dict)}
+        if codes & {"plan", "subplan", "network"}:
+            values.append(str(item.get("value") or item.get("name") or "").strip())
+    values = list(dict.fromkeys(value for value in values if value))
+    return values[0] if len(values) == 1 else None
+
+
 def _number(value: Any, *, money: bool = False) -> str | None:
     try:
         number = Decimal(str(value))
@@ -410,9 +435,7 @@ async def _patient_for_profile(client: httpx.AsyncClient, issuer: str, token: st
             "family": str(profile.get("patient_last_name") or ""),
             "birthdate": str(profile.get("patient_birth_date") or ""),
         })
-    matches = [row for row in patient_rows if _norm(_name(row)[0]) == _norm(profile.get("patient_first_name"))
-               and _norm(_name(row)[1]) == _norm(profile.get("patient_last_name"))
-               and row.get("birthDate") == profile.get("patient_birth_date")]
+    matches = [row for row in patient_rows if _patient_matches(row, profile)]
     if len(matches) != 1:
         raise EcwBackendError("eClinicalWorks did not return exactly one patient matching the confirmed patient name and birth date.")
     patient = matches[0]
@@ -781,7 +804,9 @@ async def fetch_inputs(profile: dict[str, Any], practice: dict[str, Any], appoin
         for label in _concept_labels(field)
     ))
     source = {"system": "eClinicalWorks", "retrieved_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-              "_patient_id": patient_id,
+            "_patient_id": patient_id,
+              "appointment_id": encounter_id, "coverage_id": str(coverage.get("id") or ""),
+              "active_coverages": len(eligible), "plan": _plan(coverage),
               "appointment_date": service_date, "appointment_status": visit.get("status"),
               "visit_type": inputs.get("visit_type") or "not_returned",
               "recent_completed_appointments": recent_completed_appointments,

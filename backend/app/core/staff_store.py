@@ -211,7 +211,7 @@ def _event(action: str, actor: dict | str | None = None) -> dict:
 
 def create_intake(intake_id: str, staff: dict, documents: list[dict], source: str = "insurance_card", source_portal_patient_id: str | None = None, fields: dict | None = None) -> dict:
     stamp = now()
-    event = "QR patient details received" if source == "clinicforce_qr" else "Manual insurance details received" if source == "manual_entry" else "Insurance card received"
+    event = "eCW patient lookup started" if source == "ecw_lookup" else "QR patient details received" if source == "clinicforce_qr" else "Manual insurance details received" if source == "manual_entry" else "Insurance card received"
     with _connection() as connection:
         row = connection.execute(
             """INSERT INTO staff_intakes (id,practice_id,created_by,status,documents,events,created_at,updated_at,source,source_portal_patient_id,fields,field_sources)
@@ -363,7 +363,7 @@ def confirm_patient(intake_id: str, staff: dict, data: dict) -> dict | None:
             return None
         if intake["workflows"]:
             raise ValueError("Start a new intake before changing details used by an insurance workflow.")
-        if intake["source"] != "clinicforce_qr" and not data.get("member_id"):
+        if intake["source"] not in {"clinicforce_qr", "ecw_lookup"} and not data.get("member_id"):
             raise ValueError("Confirm the insurance member ID before starting verification.")
         identity_changed = any(str(intake["fields"].get(key, "")).strip().casefold() != str(data[key]).strip().casefold() for key in ("given_name", "family_name", "birth_date"))
         portal_patient_id = None if identity_changed else intake["source_portal_patient_id"]
