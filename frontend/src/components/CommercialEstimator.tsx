@@ -230,6 +230,11 @@ export default function CommercialEstimator({ onBack, intakeId }: { onBack: () =
               <CoverageCheck label="PA obtained?" value={requirementValue('authorization', 'status')} confirmed={!!price?.lines?.length && price.lines.every(line => line.benefits.requirements.authorization.cleared)} /></>}
             </dl>
           </section>
+          <section className="visit-provenance" aria-labelledby="visit-provenance-title"><h3 id="visit-provenance-title">Source & timestamp</h3><dl>
+            <div><dt>Patient, appointment & policy</dt><dd>eClinicalWorks{result.ecw_retrieved_at && ` · ${visitDate(result.ecw_retrieved_at)}, ${visitTime(result.ecw_retrieved_at)}`}</dd></div>
+            <div><dt>Coverage, benefits, referral & PA terms</dt><dd>Stedi{result.checked_at && ` · ${visitDate(result.checked_at)}, ${visitTime(result.checked_at)}`}</dd></div>
+            <div><dt>Allowed amount, network & collection recommendation</dt><dd>Clinic contract configuration{result.calculated_at && ` · Calculated ${visitDate(result.calculated_at)}, ${visitTime(result.calculated_at)}`}</dd></div>
+          </dl></section>
           {price?.lines && <VisitServices key={`${result.check_id}:${result.revision}`} result={result} busy={!!busy || recovering} save={saveReview} />}
           <div className="visit-details">
             {!price?.lines && <details><summary><span>Visit pricing & CPT codes <small>{result.codes.length ? `${result.codes.length} ${conditionalCodes ? 'possible visit levels' : 'scheduled services'}` : 'Coding not yet available'}</small></span><ChevronDown size={18} aria-hidden="true" /></summary><div className="visit-detail-body">
