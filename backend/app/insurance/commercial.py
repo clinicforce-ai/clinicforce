@@ -196,7 +196,7 @@ def normalize_stedi_271(payload: dict[str, Any], service_type_code: str, provide
         # Specific requested STC wins; general medical (30) is an allowed
         # fallback only when no specific counterpart exists.
         specificity = 2 if service_type_code in service_types else 1 if "30" in service_types else 0
-        if level not in {"INDIVIDUAL", "IND", ""} or indicator not in {"Y", "YES", "IN_NETWORK"} or not specificity:
+        if level not in {"INDIVIDUAL", "IND"} or indicator not in {"Y", "YES", "IN_NETWORK"} or not specificity:
             continue
         wanted.append((specificity, row))
     def pick(code: str, remaining: bool = False) -> dict[str, Any] | None:
