@@ -90,14 +90,18 @@ def test_procedure_scope_missing_level_family_and_unrelated_dental_are_preserved
 
 def test_approval_is_separate_from_requirement_and_must_be_valid_for_visit():
     raw = payload(); raw['benefitsInformation'][3]['authOrCertIndicator'] = 'Y'
-    assert not priced(raw)['complete']
+    pending = priced(raw)
+    assert pending['complete'] and pending['conditional']
+    assert pending['collection']['amount_cents'] is None
     reviews = {row['id']: {'authorization': evidence()} for row in lines()}
     result = priced(raw, reviews=reviews)
     assert result['complete']
     assert result['lines'][0]['benefits']['requirements']['authorization']['required'] == 'required'
     for change in ({'status': 'pending'}, {'status': 'denied'}, {'status': 'not_required'}, {'valid_to': '2000-01-01'}, {'units': 0}):
         reviews['a']['authorization'] = evidence(**change)
-        assert not priced(raw, reviews=reviews)['complete']
+        pending = priced(raw, reviews=reviews)
+        assert pending['complete'] and pending['conditional']
+        assert pending['collection']['action'] == 'verify_before_collecting'
 
 
 def test_conditional_benefits_need_evidence_and_waiver_is_explicit():

@@ -8,7 +8,7 @@ export const commercialAppointments = () => request<{ appointments: CommercialAp
 export type CommercialReadiness = { ready: boolean; blockers: string[]; ecw: { payer?: string | null; plan?: string | null; scheduled_codes: Array<{ code?: string | null; units?: number | string | null }>; visit_type?: string | null; reason?: string | null } }
 export const commercialReadiness = (appointment_id: string) => request<CommercialReadiness>(`${root}/appointments/readiness`, json({ appointment_id }))
 export type PrevisitEstimate = {
-  context_token?: string; revision?: number; selected_ids?: string[]; available_codes?: VisitCode[];
+  eligibility_error?: string; context_token?: string; revision?: number; selected_ids?: string[]; available_codes?: VisitCode[];
   plan_details?: { ecw: Record<string, string[]>; stedi: { names?: string[]; plan_number?: string; group_number?: string } };
   calculated_at?: string; ecw_retrieved_at?: string; response_reference?: string; network_evidence?: { network_name?: string; evidence_reference?: string; effective_from?: string; effective_to?: string };
   check_id?: string; appointment_id: string; service_date: string; payer?: string | null; plan?: string | null;
@@ -19,9 +19,9 @@ export type PrevisitEstimate = {
     oop_remaining_cents?: number | null; copay_cents?: number | null; coinsurance_percent?: string | null;
     authorization_basis?: string; authorization_signal?: string; referral_signal?: string; normalization_notes?: string[]; review_reasons?: string[]; requires_review?: boolean;
     reported_options?: Array<{ id?: string; procedure_code?: string; coverage_level?: string; plan_name?: string; kind: string; service_type_code: string; network: string; time_period: string;
-      amount_cents?: number | null; percent?: string | null; payer_note?: string }> };
-  price_range: null | { complete?: boolean; mode?: string; lines?: VisitPricedLine[]; collection?: { action: string; amount_cents?: number | null; reason: string; payment_reference?: string; verified_at?: string }; allowed_min_cents?: number; allowed_max_cents?: number;
-    patient_min_cents?: number; patient_max_cents?: number;
+      amount_cents?: number | null; percent?: string | null; quantity?: { value?: string; qualifier?: string } | null; payer_note?: string }> };
+  price_range: null | { complete?: boolean; conditional?: boolean; mode?: string; lines?: VisitPricedLine[]; collection?: { action: string; amount_cents?: number | null; reason: string; payment_reference?: string; verified_at?: string }; allowed_min_cents?: number; allowed_max_cents?: number;
+    patient_min_cents?: number; patient_max_cents?: number; plan_min_cents?: number; plan_max_cents?: number;
     scenarios: Array<{ code: string; allowed_cents: number }> };
   suggestions: null | { groups: Array<{ label: string; codes: Array<{ code: string; reason?: string }> }>; notes: string[] };
   issues: string[];
@@ -44,7 +44,7 @@ export type VisitRequirement = { required: string; status: string; cleared: bool
 export type VisitPricedLine = VisitCode & {
   id: string; allowed_cents?: number | null; unit_allowed_cents?: number | null;
   benefit_verification?: { reference: string; notes: string; verified_by: string; verified_at: string; valid_from: string; valid_to: string } | null;
-  rate_source: string; rate_version?: string; rate_effective_from?: string; benefit_basis: string; issues: string[];
+  rate_source: string; rate_version?: string; rate_effective_from?: string; benefit_basis: string; issues: string[]; conditions?: string[];
   benefits: NonNullable<PrevisitEstimate['benefits']> & { copay_period?: string; requirements: { referral: VisitRequirement; authorization: VisitRequirement } };
   calculation: null | { cost_share?: string; allowed_cents: number; patient_cents: number; plan_cents: number; deductible_cents: number; copay_cents: number; coinsurance_cents: number; oop_adjustment_cents: number }
 }

@@ -60,7 +60,7 @@ class CommercialRulesTest(unittest.TestCase):
                 {"message": "No referral required for primary care. Referral required for specialist care."}]}]}}]}
         benefits = normalize_stedi_271(payload, "98", True)
         self.assertEqual(benefits["deductible_remaining_cents"], 75000)
-        self.assertEqual(benefits["authorization_signal"], "required")
+        self.assertEqual(benefits["authorization_signal"], "unknown")  # category-level conditional note is not a CPT-specific requirement
         self.assertEqual(benefits["referral_signal"], "required")
         self.assertIsNone(benefits["copay_cents"])
         self.assertTrue(any("visit-count" in reason for reason in benefits["review_reasons"]))
@@ -234,6 +234,7 @@ class CommercialRulesTest(unittest.TestCase):
             self.assertEqual(_ecw_conflicts(case, session, inputs, source), [])
             self.assertTrue(_ecw_conflicts(case, session, inputs, {**source, "active_coverages": 2}))
         body = stedi_request_body({"stedi_payer_id": "payer"}, {"rendering_npi": "1234567890", "rendering_first": "Ada", "rendering_last": "Clinician", "billing_npi": "1811853260", "organization_name": "Clinic"}, coverage, "2026-10-01", "98")
+        self.assertEqual(body["encounter"]["dates"], {"service": {"start": "2026-10-01"}})
         self.assertEqual(body["provider"], {"npi": "1234567890", "name": {"person": {"firstName": "Ada", "lastName": "Clinician"}}})
         self.assertEqual(body["subscriber"]["dateOfBirth"], "1950-01-01")
         self.assertEqual(body["dependent"]["dateOfBirth"], "1980-01-01")
