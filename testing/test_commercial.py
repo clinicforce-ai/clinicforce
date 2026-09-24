@@ -63,6 +63,8 @@ class CommercialRulesTest(unittest.TestCase):
         case = {"commercial": {"payer_connection_id": "bcbs", "provider_network_id": "network", "service_date": "2026-10-01"}}
         with patch("app.api.routers.commercial_estimator._network", return_value={"billing_npi": "1234567890", "rendering_npi": "1234567890", "place_of_service": "11"}):
             self.assertEqual(_ecw_conflicts(case, session, inputs, source), [])
+            session["intake"]["fields"]["relationship"] = "self"
+            self.assertEqual(_ecw_conflicts(case, session, inputs, source), [])
             self.assertTrue(_ecw_conflicts(case, session, inputs, {**source, "active_coverages": 2}))
         body = stedi_request_body({"stedi_payer_id": "payer"}, {"rendering_npi": "1234567890", "organization_name": "Clinic"}, coverage, "2026-10-01", "98")
         self.assertEqual(body["subscriber"]["dateOfBirth"], "1950-01-01")

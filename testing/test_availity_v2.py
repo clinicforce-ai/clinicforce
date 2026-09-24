@@ -180,7 +180,11 @@ class ResultsAndIntakeTests(unittest.TestCase):
                                        "The eClinicalWorks coverage is missing the subscriber identity, relationship or member ID required by Availity."],
                   "review_missing": ["eClinicalWorks did not identify one active primary coverage for this appointment."]}
         missing = list(inputs["coverage_missing"])
-        self.assertTrue(v2.apply_staff_card_coverage({"relationship": "self", "member_id": "MEM123", "group_number": "GROUP123", "payer": "Test Health"}, inputs, missing, {"payer_aliases": {"Test Health": "TESTPAYER"}}))
+        self.assertFalse(v2.apply_staff_card_coverage({"relationship": "self", "member_id": "MEM123", "group_number": "GROUP123", "payer": "Test Health"}, inputs, missing, {"payer_aliases": {"Test Health": "TESTPAYER"}}))
+        self.assertIsNone(inputs["relationship"])
+        self.assertTrue(missing)
+        inputs["relationship"] = "18"
+        self.assertTrue(v2.apply_staff_card_coverage({}, inputs, missing, {"payer_aliases": {"Test Health": "TESTPAYER"}}))
         self.assertEqual((inputs["member_id"], inputs["payer_id"], inputs["relationship"], inputs["subscriber"]["memberId"]), ("MEM123", "TESTPAYER", "18", "MEM123"))
         self.assertEqual(missing, [])
         estimate = results.estimate({"result": {"billingProvider": {"networkStatus": "OUT_OF_NETWORK"}, "claimInformation": {"serviceLines": [

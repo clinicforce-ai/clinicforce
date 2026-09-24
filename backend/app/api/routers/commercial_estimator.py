@@ -296,16 +296,14 @@ def _coverage_snapshot(inputs: dict, source: dict) -> dict:
 def _ecw_conflicts(case: dict, session: dict, inputs: dict, source: dict) -> list[str]:
     data, fields = case["commercial"], session["intake"]["fields"]
     network = _network(session["practice_id"], data["provider_network_id"])
-    relationship = {"self": "18", "spouse": "01", "child": "19", "other": "G8"}.get(str(fields.get("relationship") or ""), fields.get("relationship"))
     checks = (("service date", inputs.get("service_date"), data["service_date"]),
               ("payer", inputs.get("payer_id"), data["payer_connection_id"]),
               ("billing provider NPI", source.get("billing_provider", {}).get("npi"), network["billing_npi"]),
               ("rendering provider NPI", inputs.get("rendering_provider", {}).get("npi"), network["rendering_npi"]),
               ("place of service", inputs.get("place_of_service"), network["place_of_service"]),
-              ("member ID", inputs.get("member_id"), fields.get("member_id")),
-              ("subscriber relationship", inputs.get("relationship"), relationship))
+              ("member ID", inputs.get("member_id"), fields.get("member_id")))
     conflicts = [f"eClinicalWorks {label} does not match the confirmed intake." for label, observed, expected
-                 in checks if (label not in {"member ID", "subscriber relationship"} or expected not in {None, "", "unknown"})
+                 in checks if (label != "member ID" or expected not in {None, "", "unknown"})
                  and (not observed or not expected or str(observed).strip().casefold() != str(expected).strip().casefold())]
     coverage = _coverage_snapshot(inputs, source)
     if not coverage["coverage_id"] or not coverage["member_id"] or not coverage["relationship"]:
