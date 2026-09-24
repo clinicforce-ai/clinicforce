@@ -20,6 +20,42 @@ class CommercialError(ValueError):
     pass
 
 
+def eligibility_errors(payload: dict) -> list[dict]:
+    """Both Stedi layouts can put AAA errors on the subscriber or dependent."""
+    rows = list(payload.get('errors') or [])
+    parties = [payload.get('subscriber'), payload.get('dependent'), *(payload.get('dependents') or [])]
+    for party in parties:
+        if isinstance(party, dict):
+            rows.extend(party.get('aaaErrors') or [])
+    return [row for row in rows if isinstance(row, dict)]
+
+
+def eligibility_failure(payload: dict) -> dict:
+    """Safe, actionable explanations; arbitrary response text stays protected."""
+    errors = eligibility_errors(payload)
+    codes = sorted({str(row.get('code')) for row in errors if re.fullmatch(r'\d{2}', str(row.get('code') or ''))})
+    validation = any(row.get('path') for row in errors)
+    title, action = 'The payer could not complete the check', 'Review the saved payer response before checking again.'
+    if '72' in codes:
+        title = 'The payer rejected the member ID'
+        action = 'Compare the member ID and insurer in eCW with the insurance card. Correct the policy in eCW, then check again.'
+    elif set(codes) & {'65', '67', '71', '73', '75', '76'}:
+        title = 'The payer could not match the patient'
+        action = 'Compare the policyholder name, date of birth and member ID in eCW with the insurance card, then check again after correction.'
+    elif set(codes) & {'42', '80'}:
+        title = 'The payer is temporarily unavailable'
+        action = 'Check again after the payer service recovers.'
+    elif set(codes) & {'41', '43', '79'}:
+        title = 'Payer or provider access needs attention'
+        action = 'The clinic administrator should review the payer connection and provider enrollment before checking again.'
+    elif validation:
+        title = 'ClinicForce could not submit a valid request'
+        action = 'The integration needs correction; this is not an inactive-coverage result.'
+    return {'kind': 'request_validation' if validation else 'eligibility_rejected',
+            'codes': codes, 'title': title, 'action': action,
+            'detail': 'No usable eligibility benefits were returned. This does not establish inactive coverage.'}
+
+
 SERVICE_CATEGORIES = {"office", "emg_ncs"}
 RATE_SOURCE_TYPES = {"payer_feed", "contract_export", "transparency_file", "manual"}
 
@@ -302,7 +338,7 @@ def normalize_stedi_271(payload: dict[str, Any], service_type_code: str, provide
     inactive = any(token in status_text for token in ("inactive", "ineligible", "terminated", "cancelled", "canceled", "expired")) or any(row.get("code") in {"6", "7", "8", "I"} for row in statuses)
     has_active = "active" in status_text.replace("inactive", "") or "eligible" in status_text.replace("ineligible", "") or any(row.get("code") in {"1", "2", "3", "4", "5"} for row in statuses)
     active = None if inactive and has_active else False if inactive else True if has_active else None
-    response_failed = str(payload.get("status") or "").upper() in {"ERROR", "FAILED", "REJECTED"} or bool(payload.get("errors"))
+    response_failed = str(payload.get("status") or "").upper() in {"ERROR", "FAILED", "REJECTED"} or bool(eligibility_errors(payload))
     if response_failed or any(row.get("code") == "V" for row in entries):
         active = None
     wanted = []

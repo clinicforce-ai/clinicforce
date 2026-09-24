@@ -170,3 +170,14 @@
 @media(max-width:600px){.visit-service-choice{grid-template-columns:1fr 52px 58px;gap:8px}}
 
 .visit-table-scroll tbody th{text-transform:none;letter-spacing:normal;font-size:13px;font-weight:500}.visit-check-icon{color:var(--ve-muted)}
+
+@media print{
+  .visit-estimator{max-width:none;padding:0;color:#172b36;background:white}
+  .visit-layout{display:block}.visit-rail,.visit-back,.visit-result-actions,.visit-review-form{display:none!important}
+  .visit-content{padding:12px 0;border:0;min-width:0}.visit-table-scroll{overflow:visible}
+  .visit-table-scroll table{min-width:0;width:100%;table-layout:fixed;font-size:10px}
+  .visit-table-scroll th,.visit-table-scroll td{padding:8px 4px;overflow-wrap:anywhere}
+  .visit-table-scroll th:first-child{min-width:0;max-width:none;width:26%}
+  .visit-table-scroll small{font-size:9px}.visit-table-scroll tr,.visit-check{break-inside:avoid}
+  .visit-payment-split{break-inside:avoid}.visit-evidence{overflow-wrap:anywhere}
+}

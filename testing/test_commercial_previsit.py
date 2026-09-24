@@ -18,6 +18,13 @@ class PrevisitFlowTest(unittest.IsolatedAsyncioTestCase):
     async def test_request_validation_failure_preserves_partial_facts(self):
         await self._flow((date.today() + timedelta(days=2)).isoformat(), reject=True)
 
+    async def test_member_id_rejection_is_actionable_and_does_not_return_a_price(self):
+        await self._flow(date.today().isoformat(), reject={'errors': [{'code': '72', 'description': 'private response text'}]})
+
+    async def test_subscriber_aaa_error_on_http_200_is_not_saved_as_success(self):
+        await self._flow(date.today().isoformat(), reject={'subscriber': {'aaaErrors': [{'code': '72'}]},
+            'benefitsInformation': [{'code': '1'}]})
+
     async def _flow(self, service_date, reject=False):
         session = {"practice_id": "clinic", "intake_id": "intake", "patient_id": "patient",
                    "share_manifest_id": "", "staff": {"id": "staff", "display_name": "Staff", "practice_name": "Clinic"},
@@ -39,7 +46,8 @@ class PrevisitFlowTest(unittest.IsolatedAsyncioTestCase):
             "id": "eligibility-1", "plans": [{"benefits": {"statuses": [{"status": "Active"}]}}],
             "benefitsInformation": [{"code": "1"}]}))
         if reject:
-            client.post.return_value = httpx.Response(400, json={'errors': [{'path': '/encounter/dates/service', 'message': 'Must be an object'}]})
+            client.post.return_value = httpx.Response(200 if isinstance(reject, dict) else 400,
+                json=reject if isinstance(reject, dict) else {'errors': [{'path': '/encounter/dates/service', 'message': 'Must be an object'}]})
         with patch("app.api.routers.commercial_estimator._session", new=AsyncMock(return_value=session)), \
              patch("app.api.routers.commercial_estimator.ecw_backend.configured", return_value=True), \
              patch("app.api.routers.commercial_estimator.ecw_backend.fetch_inputs", new=AsyncMock(return_value=(inputs, [], source))), \
@@ -57,13 +65,21 @@ class PrevisitFlowTest(unittest.IsolatedAsyncioTestCase):
                  "STEDI_LIVE_ELIGIBILITY_ENABLED": "true"}):
             result = await previsit_estimate(EcwStartInput(appointment_id="visit-1"), MagicMock())
             if reject:
-                self.assertEqual(result['eligibility_error'], 'request_validation')
+                self.assertEqual(result['eligibility_error'], 'eligibility_rejected' if isinstance(reject, dict) else 'request_validation')
                 self.assertIsNone(result['benefits']['active'])
                 self.assertEqual(result['plan'], 'CI')
                 self.assertEqual(len(result['price_range']['lines']), 4)
                 self.assertNotIn('context_token', result)
                 self.assertEqual(case['previsit']['request_state'], 'rejected')
-                self.assertIn('not an inactive-coverage result', ' '.join(result['issues']))
+                self.assertEqual(client.post.await_count, 1)
+                self.assertNotIn('patient_max_cents', result['price_range'])
+                self.assertNotIn('private response text', json.dumps(result))
+                if isinstance(reject, dict):
+                    self.assertEqual(result['eligibility_failure']['codes'], ['72'])
+                    self.assertIn('Correct the policy in eCW', result['eligibility_failure']['action'])
+                    self.assertTrue(result['eligibility_failure']['attempted_at'])
+                else:
+                    self.assertIn('not an inactive-coverage result', ' '.join(result['issues']))
                 return
             case["previsit"]["benefits"] = {"requires_review": False, "network_status": "in_network"}
             with patch("app.api.routers.commercial_estimator.object_store.get_object_bytes",

@@ -488,6 +488,8 @@ def _finish_previsit(result: dict, case: dict, inputs: dict, source: dict, paylo
         known.add(rate['code'])
     if not codes and catalog_codes:
         matches = {row['code'] for row in cpt_suggester._matching_candidate_rates(str(inputs.get('reason') or ''), catalog)}
+        if matches & cpt_rules.EMG_ADD_ONS:
+            matches |= cpt_rules.NCS_CODES
         codes = [row for row in catalog_codes if row['code'] in matches] or catalog_codes
     for group in (result.get('suggestions') or {}).get('groups', []):
         for candidate in group.get('codes', []):
@@ -835,18 +837,20 @@ async def previsit_estimate(value: EcwStartInput, request: Request) -> dict:
         await run_in_threadpool(_save, case, session, "previsit-stedi-indeterminate")
         result["issues"].append("The Stedi request outcome is unknown. Clinic staff must check payer activity before retrying.")
         return result
-    if response.is_error or not isinstance(payload, dict) or str(payload.get("status", "")).upper() in {"ERROR", "FAILED", "REJECTED"} or payload.get("errors"):
+    if response.is_error or not isinstance(payload, dict) or str(payload.get("status", "")).upper() in {"ERROR", "FAILED", "REJECTED"} or commercial.eligibility_errors(payload):
         case["previsit"] = {"request_state": "rejected"}
         if isinstance(payload, dict):
             case["previsit_raw_object_key"] = await run_in_threadpool(
                 object_store.put_staff_document, session["practice_id"], case["id"],
                 "previsit-stedi-error.json", json.dumps(payload).encode(), "application/json")
-        validation = isinstance(payload, dict) and any(isinstance(error, dict) and error.get('path') for error in payload.get('errors', []))
-        result['eligibility_error'] = 'request_validation' if validation else 'eligibility_rejected'
-        result["issues"].append('ClinicForce could not submit a valid eligibility request. The integration needs correction; this is not an inactive-coverage result.' if validation else
-                                'The eligibility check was rejected. Review the protected response for the payer or request correction; this does not establish inactive coverage.')
+        failure = commercial.eligibility_failure(payload if isinstance(payload, dict) else {})
+        failure['attempted_at'] = _now()
+        result['eligibility_failure'] = failure
+        result['eligibility_error'] = failure['kind']
+        result['issues'].append(f"{failure['title']}. {failure['action']}")
         result['benefits'] = _previsit_benefits({}, coverage, inputs['service_date'])
         _finish_previsit(result, case, inputs, source, None, session, payer_id)
+        result['response_reference'] = payload.get('id') if isinstance(payload, dict) else None
         # Failed checks preserve source facts and contract prices but cannot accept
         # a benefit/approval review as though a valid payer response existed.
         result.pop('context_token', None)

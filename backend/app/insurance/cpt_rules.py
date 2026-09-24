@@ -4,6 +4,22 @@ import re
 from app.insurance.golden import GoldenCaseError
 
 
+EMG_ADD_ONS = {'95885', '95886', '95887'}
+NCS_CODES = {str(code) for code in range(95907, 95914)}
+
+
+def service_selection_issues(codes: list[str]) -> list[str]:
+    # CPT add-on definitions, independent of the clinic or payer. These checks
+    # validate the planned bundle, not whether the payer covers the procedure.
+    selected = set(codes)
+    issues = []
+    if selected & EMG_ADD_ONS and not selected & NCS_CODES:
+        issues.append('Add the anticipated nerve-conduction service (95907–95913) for these EMG add-ons. Choose its level from the planned study count; the add-ons alone are not a complete visit estimate.')
+    if len(selected & NCS_CODES) > 1:
+        issues.append('Choose one nerve-conduction level (95907–95913) for the total planned study count, rather than adding alternative levels together.')
+    return issues
+
+
 def grouped_candidates(suggestions: dict, rates: list[dict], *, allow_unpriced: bool = False) -> tuple[list, list]:
     if not isinstance(suggestions, dict) or not isinstance(suggestions.get("groups"), list):
         raise GoldenCaseError("The suggested code grouping could not be read. Generate suggestions again.")
