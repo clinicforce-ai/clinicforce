@@ -19,8 +19,8 @@ class PrevisitFlowTest(unittest.IsolatedAsyncioTestCase):
                   "patient": {"patient_first_name": "Pat", "patient_last_name": "Example", "patient_birth_date": "1980-01-01"},
                   "rendering_provider": {"npi": "1234567890"}}
         source = {"appointment_id": "visit-1", "coverage_id": "coverage-1", "active_coverages": 1,
-                  "payer": "Blue Cross Blue Shield Tx", "plan": "CI", "rendering_provider": {"npi": "1234567890"},
-                  "billing_provider": {"name": "Clinic"}, "location_id": "office"}
+                  "payer": "Blue Cross Blue Shield Tx", "plan": "CI", "rendering_provider": {"npi": "1234567890", "first_name": "Ada", "last_name": "Clinician"},
+                  "billing_provider": {"name": "Clinic", "npi": "1811853260"}, "location_id": "office"}
         case = {"id": "case-1", "source_mode": "commercial_previsit", "previsit": {"request_state": "not_requested"}}
         client = MagicMock()
         client.__aenter__ = AsyncMock(return_value=client)

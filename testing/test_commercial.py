@@ -134,9 +134,17 @@ class CommercialRulesTest(unittest.TestCase):
             session["intake"]["fields"]["relationship"] = "self"
             self.assertEqual(_ecw_conflicts(case, session, inputs, source), [])
             self.assertTrue(_ecw_conflicts(case, session, inputs, {**source, "active_coverages": 2}))
-        body = stedi_request_body({"stedi_payer_id": "payer"}, {"rendering_npi": "1234567890", "organization_name": "Clinic"}, coverage, "2026-10-01", "98")
+        body = stedi_request_body({"stedi_payer_id": "payer"}, {"rendering_npi": "1234567890", "rendering_first": "Ada", "rendering_last": "Clinician", "billing_npi": "1811853260", "organization_name": "Clinic"}, coverage, "2026-10-01", "98")
+        self.assertEqual(body["provider"], {"npi": "1234567890", "name": {"person": {"firstName": "Ada", "lastName": "Clinician"}}})
         self.assertEqual(body["subscriber"]["dateOfBirth"], "1950-01-01")
         self.assertEqual(body["dependent"]["dateOfBirth"], "1980-01-01")
+
+    def test_stedi_provider_fallback_keeps_organization_name_with_organization_npi(self):
+        coverage = {"member_id": "M123", "relationship": "18", "subscriber_first": "Ada", "subscriber_last": "Lovelace",
+                    "subscriber_birth_date": "1980-01-01", "patient_first": "Ada", "patient_last": "Lovelace",
+                    "patient_birth_date": "1980-01-01", "active_coverages": 1}
+        body = stedi_request_body({"stedi_payer_id": "payer"}, {"rendering_npi": "1720615453", "billing_npi": "1811853260", "organization_name": "Clinic"}, coverage, "2026-10-01", "98")
+        self.assertEqual(body["provider"], {"npi": "1811853260", "name": {"organization": "Clinic"}})
 
     def test_stedi_fractional_coinsurance_and_authorization_are_not_mispriced(self):
         payload = {"plans": [{"benefits": {"statuses": [{"status": "Active"}]}}], "benefitsInformation": [
