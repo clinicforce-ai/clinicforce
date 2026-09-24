@@ -4,7 +4,7 @@ from __future__ import annotations
 from copy import deepcopy
 from datetime import date
 
-from app.insurance import commercial
+from app.insurance import commercial, cpt_rules
 
 
 def service_type(code: str, rules: dict) -> str | None:
@@ -182,9 +182,11 @@ def price_lines(codes: list[dict], rates: list[dict], benefits: dict, rules: dic
                 line['issues'].append(str(exc))
         lines.append(line)
         prior_unresolved = prior_unresolved or line['calculation'] is None
-    complete = bool(lines) and all(line['calculation'] is not None for line in lines)
+    service_issues = [] if alternatives else cpt_rules.service_selection_issues([line['code'] for line in lines])
+    complete = bool(lines) and not service_issues and all(line['calculation'] is not None for line in lines)
     all_rates = bool(lines) and all(line['allowed_cents'] is not None for line in lines)
     result = {'mode': 'alternatives' if alternatives else 'services', 'lines': lines, 'complete': complete,
+              'service_issues': service_issues,
               'conditional': any(line['conditions'] for line in lines),
               'collection': {'action': 'verify_before_collecting', 'amount_cents': None,
                              'reason': 'Resolve the listed items and verify payments already received before collecting.'}}
@@ -208,4 +210,6 @@ def price_lines(codes: list[dict], rates: list[dict], benefits: dict, rules: dic
             result['collection'] = {'action': 'verify_before_collecting', 'amount_cents': None,
                                     'reason': 'Use this conditional estimate for planning. Resolve the benefit and approval conditions before collecting.'}
     result['scenarios'] = [{'code': line['code'], 'allowed_cents': line['allowed_cents'], **(line['calculation'] or {})} for line in lines]
+    if service_issues:
+        result['collection'] = {'action': 'complete_services', 'amount_cents': None, 'reason': service_issues[0]}
     return result

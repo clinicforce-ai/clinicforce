@@ -57,6 +57,34 @@ def test_shared_balances_are_allocated_once_and_totals_reconcile():
     assert alternative['allowed_max_cents'] == 10000
 
 
+def test_emg_addons_keep_line_prices_but_require_companion_for_visit_total():
+    raw = payload()
+    codes = [{'id': code, 'code': code, 'units': 1} for code in ('95885', '95886', '95907')]
+    rates = [{'code': row['code'], 'allowed_cents': 10000} for row in codes]
+    def calculate(selected, **kwargs):
+        return visit_estimate.price_lines(selected, rates, commercial.normalize_stedi_271(raw, '98', True),
+            {'cost_share': 'payer_returned'}, payload=raw, service_date=DAY, **kwargs)
+    partial = calculate(codes[:2])
+    assert not partial['complete'] and 'patient_max_cents' not in partial
+    assert all(line['calculation'] for line in partial['lines'])
+    assert partial['allowed_max_cents'] == 20000
+    assert '95907–95913' in partial['service_issues'][0]
+    assert partial['collection']['amount_cents'] is None
+    full = calculate(codes)
+    assert full['complete'] and not full['service_issues']
+    assert full['patient_max_cents'] + full['plan_max_cents'] == 30000
+    assert not calculate([codes[-1], {'id': 'ncs2', 'code': '95908', 'units': 1}])['complete']
+    examples = calculate(codes[:2], alternatives=True)
+    assert examples['complete'] and not examples['service_issues']  # independent examples
+
+
+def test_nested_payer_errors_never_establish_active_coverage():
+    raw = payload()
+    raw['subscriber']['aaaErrors'] = [{'code': '72'}]
+    assert commercial.normalize_stedi_271(raw, '98', True)['active'] is None
+    assert not priced(raw)['complete']
+
+
 def test_per_visit_copay_is_charged_once_and_unknown_units_block_total():
     raw = payload()
     raw['benefitsInformation'][1]['benefitAmount'] = '0'

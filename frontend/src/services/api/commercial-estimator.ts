@@ -8,6 +8,7 @@ export const commercialAppointments = () => request<{ appointments: CommercialAp
 export type CommercialReadiness = { ready: boolean; blockers: string[]; ecw: { payer?: string | null; plan?: string | null; scheduled_codes: Array<{ code?: string | null; units?: number | string | null }>; visit_type?: string | null; reason?: string | null } }
 export const commercialReadiness = (appointment_id: string) => request<CommercialReadiness>(`${root}/appointments/readiness`, json({ appointment_id }))
 export type PrevisitEstimate = {
+  eligibility_failure?: { kind: string; codes: string[]; title: string; detail: string; action: string; attempted_at: string };
   eligibility_error?: string; context_token?: string; revision?: number; selected_ids?: string[]; available_codes?: VisitCode[];
   plan_details?: { ecw: Record<string, string[]>; stedi: { names?: string[]; plan_number?: string; group_number?: string } };
   calculated_at?: string; ecw_retrieved_at?: string; response_reference?: string; network_evidence?: { network_name?: string; evidence_reference?: string; effective_from?: string; effective_to?: string };
@@ -20,7 +21,7 @@ export type PrevisitEstimate = {
     authorization_basis?: string; authorization_signal?: string; referral_signal?: string; normalization_notes?: string[]; review_reasons?: string[]; requires_review?: boolean;
     reported_options?: Array<{ id?: string; procedure_code?: string; coverage_level?: string; plan_name?: string; kind: string; service_type_code: string; network: string; time_period: string;
       amount_cents?: number | null; percent?: string | null; quantity?: { value?: string; qualifier?: string } | null; payer_note?: string }> };
-  price_range: null | { complete?: boolean; conditional?: boolean; mode?: string; lines?: VisitPricedLine[]; collection?: { action: string; amount_cents?: number | null; reason: string; payment_reference?: string; verified_at?: string }; allowed_min_cents?: number; allowed_max_cents?: number;
+  price_range: null | { complete?: boolean; conditional?: boolean; mode?: string; service_issues?: string[]; lines?: VisitPricedLine[]; collection?: { action: string; amount_cents?: number | null; reason: string; payment_reference?: string; verified_at?: string }; allowed_min_cents?: number; allowed_max_cents?: number;
     patient_min_cents?: number; patient_max_cents?: number; plan_min_cents?: number; plan_max_cents?: number;
     scenarios: Array<{ code: string; allowed_cents: number }> };
   suggestions: null | { groups: Array<{ label: string; codes: Array<{ code: string; reason?: string }> }>; notes: string[] };
