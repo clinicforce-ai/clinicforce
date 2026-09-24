@@ -234,6 +234,7 @@ class CommercialRulesTest(unittest.TestCase):
             self.assertEqual(_ecw_conflicts(case, session, inputs, source), [])
             self.assertTrue(_ecw_conflicts(case, session, inputs, {**source, "active_coverages": 2}))
         body = stedi_request_body({"stedi_payer_id": "payer"}, {"rendering_npi": "1234567890", "rendering_first": "Ada", "rendering_last": "Clinician", "billing_npi": "1811853260", "organization_name": "Clinic"}, coverage, "2026-10-01", "98")
+        self.assertEqual(body["encounter"]["dates"], {"service": {"start": "2026-10-01"}})
         self.assertEqual(body["provider"], {"npi": "1234567890", "name": {"person": {"firstName": "Ada", "lastName": "Clinician"}}})
         self.assertEqual(body["subscriber"]["dateOfBirth"], "1950-01-01")
         self.assertEqual(body["dependent"]["dateOfBirth"], "1980-01-01")

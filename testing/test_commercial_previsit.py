@@ -1,6 +1,6 @@
 import json
 import unittest
-from datetime import date
+from datetime import date, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -10,11 +10,20 @@ from app.api.routers.commercial_estimator import EcwStartInput, _previsit_benefi
 
 class PrevisitFlowTest(unittest.IsolatedAsyncioTestCase):
     async def test_uncoded_new_visit_requests_real_office_benefits_before_pricing(self):
+        await self._flow(date.today().isoformat())
+
+    async def test_future_visit_uses_documented_service_date_object(self):
+        await self._flow((date.today() + timedelta(days=2)).isoformat())
+
+    async def test_request_validation_failure_preserves_partial_facts(self):
+        await self._flow((date.today() + timedelta(days=2)).isoformat(), reject=True)
+
+    async def _flow(self, service_date, reject=False):
         session = {"practice_id": "clinic", "intake_id": "intake", "patient_id": "patient",
                    "share_manifest_id": "", "staff": {"id": "staff", "display_name": "Staff", "practice_name": "Clinic"},
                    "intake": {"updated_at": "version", "patient": {"given_name": "Pat", "family_name": "Example",
                                                                    "birth_date": "1980-01-01"}, "fields": {}}}
-        inputs = {"service_date": date.today().isoformat(), "visit_type": "new", "reason": "New patient consultation",
+        inputs = {"service_date": service_date, "visit_type": "new", "reason": "New patient consultation",
                   "lines": [], "member_id": "M123", "relationship": "18",
                   "subscriber": {"firstName": "Pat", "lastName": "Example", "birthDate": "1980-01-01"},
                   "patient": {"patient_first_name": "Pat", "patient_last_name": "Example", "patient_birth_date": "1980-01-01"},
@@ -29,6 +38,8 @@ class PrevisitFlowTest(unittest.IsolatedAsyncioTestCase):
         client.post = AsyncMock(return_value=httpx.Response(200, json={
             "id": "eligibility-1", "plans": [{"benefits": {"statuses": [{"status": "Active"}]}}],
             "benefitsInformation": [{"code": "1"}]}))
+        if reject:
+            client.post.return_value = httpx.Response(400, json={'errors': [{'path': '/encounter/dates/service', 'message': 'Must be an object'}]})
         with patch("app.api.routers.commercial_estimator._session", new=AsyncMock(return_value=session)), \
              patch("app.api.routers.commercial_estimator.ecw_backend.configured", return_value=True), \
              patch("app.api.routers.commercial_estimator.ecw_backend.fetch_inputs", new=AsyncMock(return_value=(inputs, [], source))), \
@@ -45,6 +56,15 @@ class PrevisitFlowTest(unittest.IsolatedAsyncioTestCase):
                  "STEDI_API_KEY": "production-key", "STEDI_EXECUTION_MODE": "commercial_pilot",
                  "STEDI_LIVE_ELIGIBILITY_ENABLED": "true"}):
             result = await previsit_estimate(EcwStartInput(appointment_id="visit-1"), MagicMock())
+            if reject:
+                self.assertEqual(result['eligibility_error'], 'request_validation')
+                self.assertIsNone(result['benefits']['active'])
+                self.assertEqual(result['plan'], 'CI')
+                self.assertEqual(len(result['price_range']['lines']), 4)
+                self.assertNotIn('context_token', result)
+                self.assertEqual(case['previsit']['request_state'], 'rejected')
+                self.assertIn('not an inactive-coverage result', ' '.join(result['issues']))
+                return
             case["previsit"]["benefits"] = {"requires_review": False, "network_status": "in_network"}
             with patch("app.api.routers.commercial_estimator.object_store.get_object_bytes",
                        return_value=json.dumps(client.post.return_value.json()).encode()):
@@ -62,7 +82,10 @@ class PrevisitFlowTest(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("patient_min_cents", result["price_range"])
         sent = client.post.await_args.kwargs["json"]
         self.assertEqual(sent["encounter"]["services"], [{"system": "STC", "value": "98"}])
-        self.assertNotIn("dates", sent["encounter"])
+        if service_date == date.today().isoformat():
+            self.assertNotIn("dates", sent["encounter"])
+        else:
+            self.assertEqual(sent["encounter"]["dates"], {"service": {"start": service_date}})
         self.assertNotIn("procedure", str(sent["encounter"]).lower())
         self.assertEqual(case["previsit"]["request_state"], "complete")
 

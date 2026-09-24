@@ -384,7 +384,8 @@ def _previsit_range(practice_id: str, inputs: dict, source: dict, payer_id: str,
                     codes: list[dict], benefits: dict, *, payload: dict | None = None,
                     review: dict | None = None) -> tuple[dict | None, list[str]]:
     review = review or {}
-    alternatives = bool(codes) and all(row.get("source") == "conditional office E/M alternative" for row in codes) and not review.get("selected_ids")
+    options = bool(codes) and all(row.get('source') == 'Contract service option' for row in codes) and not review.get('selected_ids')
+    alternatives = options or (bool(codes) and all(row.get("source") == "conditional office E/M alternative" for row in codes) and not review.get("selected_ids"))
     selected = [row for row in codes if not review.get("selected_ids") or row.get("id") in review['selected_ids']]
     rates, rules, issues = [], {}, []
     try:
@@ -399,10 +400,14 @@ def _previsit_range(practice_id: str, inputs: dict, source: dict, payer_id: str,
         issues.append(str(exc.detail) if isinstance(exc, HTTPException) else str(exc))
     priced = visit_estimate.price_lines(selected, rates, benefits, rules, payload=payload,
         service_date=inputs.get('service_date', ''), reviews=review.get('lines'), alternatives=alternatives)
+    if options:
+        priced['mode'] = 'options'
+        priced['collection'] = {'action': 'choose_services', 'amount_cents': None,
+            'reason': 'These are separate one-unit service examples, not a visit total. Choose anticipated services and units to build the visit estimate.'}
     if not selected:
         issues.append('Confirm the planned services before calculating the visit total.')
     payments = review.get('payments') or {}
-    if priced.get('complete') and not alternatives and payments.get('reference'):
+    if priced.get('complete') and not priced.get('conditional') and not alternatives and payments.get('reference'):
         amount = max(0, priced['patient_max_cents'] - payments['amount_cents'])
         priced['collection'] = {'action': 'collect_estimate' if amount else 'no_collection', 'amount_cents': amount,
             'reason': 'Estimated responsibility less verified payments received for this visit.',
@@ -460,6 +465,30 @@ def _finish_previsit(result: dict, case: dict, inputs: dict, source: dict, paylo
     codes = _previsit_codes(inputs)
     available = list(codes)
     known = {row['code'] for row in codes}
+    # A clinic-scoped catalog is useful before final coding exists. Prices and
+    # descriptions come from its active contract, never from AI or example defaults.
+    connections = [row for row in commercial_store.list_connections(session['practice_id'])
+                   if row.get('stedi_payer_id') == payer_id and row.get('status') == 'staff_guidance_enabled']
+    catalog = []
+    if len(connections) == 1:
+        try:
+            _, network, profile = _practice_path(session['practice_id'], {**inputs, 'payer_id': connections[0]['id']}, source)
+            if network.get('plan_matcher') and source.get('plan'):
+                catalog = commercial_store.matching_rates(session['practice_id'], profile, network, inputs['service_date'], None)
+        except (HTTPException, commercial.CommercialError):
+            pass
+    catalog_codes = []
+    for rate in catalog:
+        if rate.get('modifier') or rate['code'] in known:
+            continue
+        row = {'id': 'contract:' + rate['code'], 'code': rate['code'], 'source': 'Contract service option',
+               'description': rate.get('description') or rate['code'], 'units': 1, 'modifiers': []}
+        available.append(row)
+        catalog_codes.append(row)
+        known.add(rate['code'])
+    if not codes and catalog_codes:
+        matches = {row['code'] for row in cpt_suggester._matching_candidate_rates(str(inputs.get('reason') or ''), catalog)}
+        codes = [row for row in catalog_codes if row['code'] in matches] or catalog_codes
     for group in (result.get('suggestions') or {}).get('groups', []):
         for candidate in group.get('codes', []):
             code = str(candidate.get('code') or '').upper()
@@ -610,7 +639,7 @@ def stedi_request_body(payer: dict, network: dict, coverage: dict, service_date:
     body = {"payerId": payer["stedi_payer_id"], "provider": provider,
             "subscriber": {"memberId": coverage["member_id"], "dateOfBirth": coverage["subscriber_birth_date"],
                            "name": {"person": {"firstName": coverage["subscriber_first"], "lastName": coverage["subscriber_last"]}}},
-            "encounter": {"dates": {"service": service_date}, "services": [{"system": "STC", "value": stc}]}}
+            "encounter": {"dates": {"service": {"start": service_date}}, "services": [{"system": "STC", "value": stc}]}}
     if coverage["relationship"] not in {"18", "self"}:
         body["dependent"] = {"dateOfBirth": coverage["patient_birth_date"],
                              "name": {"person": {"firstName": coverage["patient_first"], "lastName": coverage["patient_last"]}}}
@@ -703,8 +732,6 @@ async def previsit_estimate(value: EcwStartInput, request: Request) -> dict:
         "payer": source.get("payer"), "plan": source.get("plan"), "visit_type": inputs.get("visit_type"),
         "reason": inputs.get("reason"), "codes": codes, "benefits": None, "price_range": None,
         "suggestions": None, "issues": [], "checked_at": None}
-    if not codes:
-        result["issues"].append("eCW did not identify a planned service or new/established office visit. Coding remains undetermined.")
     if inputs.get("reason"):
         result["suggestions"] = await run_in_threadpool(
             cpt_suggester.suggest_preliminary_cpt_codes,
@@ -814,8 +841,16 @@ async def previsit_estimate(value: EcwStartInput, request: Request) -> dict:
             case["previsit_raw_object_key"] = await run_in_threadpool(
                 object_store.put_staff_document, session["practice_id"], case["id"],
                 "previsit-stedi-error.json", json.dumps(payload).encode(), "application/json")
+        validation = isinstance(payload, dict) and any(isinstance(error, dict) and error.get('path') for error in payload.get('errors', []))
+        result['eligibility_error'] = 'request_validation' if validation else 'eligibility_rejected'
+        result["issues"].append('ClinicForce could not submit a valid eligibility request. The integration needs correction; this is not an inactive-coverage result.' if validation else
+                                'The eligibility check was rejected. Review the protected response for the payer or request correction; this does not establish inactive coverage.')
+        result['benefits'] = _previsit_benefits({}, coverage, inputs['service_date'])
+        _finish_previsit(result, case, inputs, source, None, session, payer_id)
+        # Failed checks preserve source facts and contract prices but cannot accept
+        # a benefit/approval review as though a valid payer response existed.
+        result.pop('context_token', None)
         await run_in_threadpool(_save, case, session, "previsit-stedi-rejected")
-        result["issues"].append("The payer rejected the eligibility request. Clinic staff must check the protected Stedi response.")
         return result
     raw_key = await run_in_threadpool(object_store.put_staff_document, session["practice_id"], case["id"],
                                       "previsit-stedi-271.json", json.dumps(payload).encode(), "application/json")

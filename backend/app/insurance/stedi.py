@@ -57,7 +57,7 @@ def request_body(inputs: dict, practice: dict, *, service_type: str = "98") -> t
     }
     service_date = inputs.get("service_date")
     if isinstance(service_date, str) and len(service_date) == 10:
-        body["encounter"]["dates"] = {"service": service_date}
+        body["encounter"]["dates"] = {"service": {"start": service_date}}
     if inputs.get("relationship") != "18":
         patient = inputs.get("patient") or {}
         dependent_name = _person(patient.get("patient_first_name"), patient.get("patient_last_name"))

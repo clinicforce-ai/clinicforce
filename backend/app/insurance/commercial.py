@@ -156,7 +156,7 @@ def _stedi_entries(payload: dict[str, Any]) -> list[dict[str, Any]]:
             continue
         for category, code in (("statuses", "status"), ("coInsurance", "A"), ("coPayment", "B"),
                                ("deductible", "C"), ("outOfPocket", "G"), ("limitations", "F"),
-                               ("exclusions", "I"), ("benefitDescription", "D")):
+                               ("exclusions", "I"), ("nonCovered", "I"), ("benefitDescription", "D")):
             for i, row in enumerate(benefits.get(category) or []):
                 if not isinstance(row, dict):
                     continue
@@ -165,7 +165,8 @@ def _stedi_entries(payload: dict[str, Any]) -> list[dict[str, Any]]:
                         str(service.get("system") or "").upper() == "STC" and service.get("value") else row.get("serviceTypeCodes") or [])
                 entries.append({**row, "code": code, "benefitAmount": row.get("amount"),
                                 "timeQualifier": row.get("timePeriod"), "serviceTypeCodes": stcs,
-                                "plan_index": index, "evidence_path": f"plans[{index}].benefits.{category}[{i}]"})
+                                "plan_index": index, "planCoverage": plan.get("name"),
+                                "evidence_path": f"plans[{index}].benefits.{category}[{i}]"})
     return entries
 
 
@@ -186,7 +187,8 @@ def plan_details(payload: dict) -> dict:
     rows = _stedi_entries(payload)
     names = list(dict.fromkeys(str(row.get("planCoverage") or row.get("planCoverageDescription") or "").strip()
                               for row in rows if not row.get("serviceTypeCodes") or "30" in row["serviceTypeCodes"]))
-    names = [name for name in names if name]
+    names = list(dict.fromkeys([str(plan['name']).strip() for plan in payload.get('plans', [])
+                               if isinstance(plan, dict) and plan.get('name')] + [name for name in names if name]))
     subscriber = payload.get("subscriber") or {}
     info = payload.get("planInformation") or {}
     additional = subscriber.get("additionalInformation") or {}
@@ -422,6 +424,11 @@ def estimate(lines: list[dict[str, Any]], benefits: dict[str, Any], rules: dict[
     if benefits.get("requires_review"):
         raise CommercialError(" ".join(benefits.get("review_reasons") or
                                       ["The selected benefits contain an unresolved limit, authorization, referral, or payer review."]))
+    if _benefit_cents(benefits, 'oop_remaining_cents') == 0:
+        # Covered in-network services cannot exceed an exhausted patient cap.
+        # These calculation inputs do not overwrite the returned benefit facts.
+        benefits = {**benefits, 'deductible_remaining_cents': 0, 'coinsurance_percent': '0', 'copay_cents': 0}
+        rules = {**rules, 'cost_share': 'coinsurance'}
     cost_share = rules.get("cost_share")
     if cost_share == "payer_returned":
         has_copay = benefits.get("copay_cents") is not None
