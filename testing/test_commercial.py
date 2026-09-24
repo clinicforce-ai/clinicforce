@@ -1,8 +1,9 @@
 import unittest
 from unittest.mock import patch
 
-from app.api.routers.commercial_estimator import _nmct_path, _past_visit_with_saved_estimate, _subscriber_identity
+from app.api.routers.commercial_estimator import _coverage_snapshot, _ecw_conflicts, _nmct_path, _past_visit_with_saved_estimate, _subscriber_identity, stedi_request_body
 from app.insurance.commercial import CommercialError, estimate, normalize_stedi_271, parse_rate_csv
+from app.insurance.ecw_backend import _patient_matches
 
 
 class CommercialRulesTest(unittest.TestCase):
@@ -25,7 +26,7 @@ class CommercialRulesTest(unittest.TestCase):
         payload = {"plans": [{"benefits": {"statuses": [{"status": "Active"}]} }], "benefitsInformation": [
             {"code": "C", "coverageLevel": "Individual", "serviceTypeCodes": ["98"], "timeQualifierCode": "29", "benefitAmount": "500", "inPlanNetworkIndicatorCode": "Y"},
             {"code": "G", "coverageLevel": "Individual", "serviceTypeCodes": ["98"], "timeQualifierCode": "29", "benefitAmount": "2500", "inPlanNetworkIndicatorCode": "Y"},
-            {"code": "B", "coverageLevel": "Individual", "serviceTypeCodes": ["98"], "benefitAmount": "40", "inPlanNetworkIndicatorCode": "Y"},
+            {"code": "B", "coverageLevel": "Individual", "serviceTypeCodes": ["98"], "benefitAmount": "40", "inPlanNetworkIndicatorCode": "Y", "authOrCertIndicator": "N", "additionalInformation": [{"description": "Referral not required"}]},
         ]}
         benefits = normalize_stedi_271(payload, "98", True)
         self.assertEqual(benefits["deductible_remaining_cents"], 50000)
@@ -36,6 +37,36 @@ class CommercialRulesTest(unittest.TestCase):
     def test_stedi_family_or_missing_accumulator_requires_review(self):
         benefits = normalize_stedi_271({"benefitsInformation": [{"code": "1"}]}, "98", True)
         self.assertTrue(benefits["requires_review"])
+
+    def test_stedi_does_not_assume_missing_referral_or_authorization_is_clear(self):
+        payload = {"plans": [{"benefits": {"statuses": [{"status": "Active"}]}}], "benefitsInformation": [
+            {"code": code, "coverageLevel": "Individual", "serviceTypeCodes": ["98"],
+             "inPlanNetworkIndicatorCode": "Y", "timeQualifierCode": "29", "benefitAmount": amount}
+            for code, amount in (("C", "0"), ("G", "1000"), ("B", "25"))]}
+        benefits = normalize_stedi_271(payload, "98", True)
+        self.assertEqual((benefits["authorization_signal"], benefits["referral_signal"]), ("unknown", "unknown"))
+        self.assertTrue(benefits["requires_review"])
+
+    def test_cardless_identity_and_ecw_coverage_feed_dependent_stedi_request(self):
+        patient = {"name": [{"use": "official", "given": ["Ada", "B"], "family": "Lovelace"}], "birthDate": "1980-01-01"}
+        profile = {"patient_first_name": "Ada", "patient_middle_initial": "B", "patient_last_name": "Lovelace", "patient_birth_date": "1980-01-01"}
+        self.assertTrue(_patient_matches(patient, profile))
+        self.assertFalse(_patient_matches(patient, {**profile, "patient_middle_initial": "C"}))
+        inputs = {"patient": {"patient_first_name": "Ada", "patient_last_name": "Lovelace", "patient_birth_date": "1980-01-01"},
+                  "subscriber": {"firstName": "Parent", "lastName": "Lovelace", "birthDate": "1950-01-01"},
+                  "member_id": "M123", "relationship": "19", "payer_id": "bcbs", "service_date": "2026-10-01",
+                  "rendering_provider": {"npi": "1234567890"}, "place_of_service": "11"}
+        source = {"_patient_id": "patient-1", "coverage_id": "coverage-1", "appointment_id": "visit-1", "active_coverages": 1,
+                  "location_id": "north", "billing_provider": {"npi": "1234567890"}}
+        coverage = _coverage_snapshot(inputs, source)
+        session = {"practice_id": "clinic", "intake": {"fields": {"relationship": "unknown"}}}
+        case = {"commercial": {"payer_connection_id": "bcbs", "provider_network_id": "network", "service_date": "2026-10-01"}}
+        with patch("app.api.routers.commercial_estimator._network", return_value={"billing_npi": "1234567890", "rendering_npi": "1234567890", "place_of_service": "11"}):
+            self.assertEqual(_ecw_conflicts(case, session, inputs, source), [])
+            self.assertTrue(_ecw_conflicts(case, session, inputs, {**source, "active_coverages": 2}))
+        body = stedi_request_body({"stedi_payer_id": "payer"}, {"rendering_npi": "1234567890", "organization_name": "Clinic"}, coverage, "2026-10-01", "98")
+        self.assertEqual(body["subscriber"]["dateOfBirth"], "1950-01-01")
+        self.assertEqual(body["dependent"]["dateOfBirth"], "1980-01-01")
 
     def test_stedi_fractional_coinsurance_and_authorization_are_not_mispriced(self):
         payload = {"plans": [{"benefits": {"statuses": [{"status": "Active"}]}}], "benefitsInformation": [

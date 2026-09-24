@@ -7,7 +7,8 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-from datetime import date, datetime, timezone
+import re
+from datetime import date, datetime, timedelta, timezone
 from typing import Any, Literal
 
 import httpx
@@ -195,16 +196,18 @@ def _nmct_path(practice_id: str, inputs: dict, source: dict) -> tuple[dict, dict
         raise HTTPException(409, "NMCT has no approved Stedi payer mapping for this appointment's eCW coverage.")
     service_date = str(inputs.get("service_date") or "")
     rendering_npi = str((inputs.get("rendering_provider") or {}).get("npi") or "")
+    plan = re.sub(r"[^a-z0-9]", "", str(source.get("plan") or "").casefold())
     networks = [row for row in commercial_store.list_networks(practice_id)
                 if row["payer_connection_id"] == payer["id"] and row["status"] == "verified"
                 and row["rendering_npi"] == rendering_npi and row["location_id"] == str(source.get("location_id") or "")
                 and row["place_of_service"] == str(inputs.get("place_of_service") or "")
+                and (not row.get("plan_matcher") or (plan and re.sub(r"[^a-z0-9]", "", row["plan_matcher"].casefold()) == plan))
                 and row["effective_from"] <= service_date and (not row.get("effective_to") or row["effective_to"] >= service_date)]
     if len(networks) != 1:
         raise HTTPException(409, "NMCT has no single verified provider-network record for this eCW provider and location.")
     profiles = [row for row in commercial_store.list_profiles(practice_id)
                 if row["payer_connection_id"] == payer["id"] and row["provider_network_id"] == networks[0]["id"]
-                and row["status"] == "staff_guidance_enabled"]
+                and row["status"] == "staff_guidance_enabled" and row.get("plan_matcher", "") == networks[0].get("plan_matcher", "")]
     if len(profiles) != 1:
         raise HTTPException(409, "NMCT has no single enabled estimate profile for this provider and payer.")
     return payer, networks[0], profiles[0]
@@ -241,8 +244,11 @@ def _ecw_coded_lines(practice_id: str, profile: dict, network: dict, service_dat
                      inputs: dict) -> tuple[list[dict[str, Any]], list[str]]:
     """Use only explicit eCW codes and units; never turn visit text into a charge."""
     try:
+        planned = [row for row in inputs.get("lines", []) if row.get("service_status") == "scheduled"]
+        if any(row.get("modifiers") for row in planned):
+            return [], ["The eClinicalWorks service has a modifier that needs a matching contract rate. Review before estimating."]
         selected = [ServiceLine(code=str(row.get("code") or "").upper(), units=int(str(row.get("units") or "")))
-                    for row in inputs.get("lines", [])]
+                    for row in planned]
     except (TypeError, ValueError, ValidationError):
         return [], ["eClinicalWorks returned a coded service without a whole-number unit. Update the appointment coding before estimating."]
     if not selected:
@@ -262,11 +268,29 @@ def _ecw_coded_lines(practice_id: str, profile: dict, network: dict, service_dat
 
 def _ecw_identity(session: dict, service_date: str) -> dict[str, str]:
     patient = session["intake"]["patient"]
-    values = {"patient_first_name": patient.get("given_name"), "patient_last_name": patient.get("family_name"),
+    values = {"patient_first_name": patient.get("given_name"), "patient_middle_initial": session["intake"]["fields"].get("middle_initial", ""), "patient_last_name": patient.get("family_name"),
               "patient_birth_date": str(patient.get("birth_date") or ""), "ecw_appointment_date": service_date}
     if not all(values[key] for key in ("patient_first_name", "patient_last_name", "patient_birth_date")):
         raise HTTPException(422, "Confirm patient name and birth date before reading eClinicalWorks.")
     return {key: str(value) for key, value in values.items()}
+
+
+def _coverage_snapshot(inputs: dict, source: dict) -> dict:
+    subscriber, patient = inputs.get("subscriber") or {}, inputs.get("patient") or {}
+    relationship = inputs.get("relationship")
+    snapshot = {"patient_id": source.get("_patient_id"), "coverage_id": source.get("coverage_id"),
+                "appointment_id": source.get("appointment_id"), "active_coverages": source.get("active_coverages", 0),
+                "plan": source.get("plan"), "payer_id": inputs.get("payer_id"),
+                "member_id": inputs.get("member_id"), "relationship": relationship,
+                "subscriber_first": subscriber.get("firstName"), "subscriber_last": subscriber.get("lastName"),
+                "subscriber_birth_date": subscriber.get("birthDate"),
+                "patient_first": patient.get("patient_first_name"), "patient_last": patient.get("patient_last_name"),
+                "patient_birth_date": patient.get("patient_birth_date")}
+    if relationship == "18":
+        snapshot["subscriber_first"] = snapshot["subscriber_first"] or snapshot["patient_first"]
+        snapshot["subscriber_last"] = snapshot["subscriber_last"] or snapshot["patient_last"]
+        snapshot["subscriber_birth_date"] = snapshot["subscriber_birth_date"] or snapshot["patient_birth_date"]
+    return snapshot
 
 
 def _ecw_conflicts(case: dict, session: dict, inputs: dict, source: dict) -> list[str]:
@@ -281,11 +305,67 @@ def _ecw_conflicts(case: dict, session: dict, inputs: dict, source: dict) -> lis
               ("member ID", inputs.get("member_id"), fields.get("member_id")),
               ("subscriber relationship", inputs.get("relationship"), relationship))
     conflicts = [f"eClinicalWorks {label} does not match the confirmed intake." for label, observed, expected
-                 in checks if not observed or not expected or str(observed).strip().casefold() != str(expected).strip().casefold()]
+                 in checks if (label not in {"member ID", "subscriber relationship"} or expected not in {None, "", "unknown"})
+                 and (not observed or not expected or str(observed).strip().casefold() != str(expected).strip().casefold())]
+    coverage = _coverage_snapshot(inputs, source)
+    if not coverage["coverage_id"] or not coverage["member_id"] or not coverage["relationship"]:
+        conflicts.append("eClinicalWorks did not return one identifiable coverage with member and relationship details.")
+    if coverage["active_coverages"] != 1:
+        conflicts.append("Multiple or no active eClinicalWorks coverages require coordination-of-benefits review.")
+    if not all(coverage.get(key) for key in ("subscriber_first", "subscriber_last", "subscriber_birth_date")):
+        conflicts.append("eClinicalWorks did not return the policyholder identity needed for Stedi.")
+    if fields.get("subscriber_birth_date") and str(fields["subscriber_birth_date"]) != str(coverage["subscriber_birth_date"]):
+        conflicts.append("The card policyholder birth date differs from eClinicalWorks coverage.")
+    if fields.get("subscriber_name") and re.sub(r"\W", "", fields["subscriber_name"]).casefold() != re.sub(r"\W", "", f"{coverage['subscriber_first']} {coverage['subscriber_last']}").casefold():
+        conflicts.append("The card policyholder name differs from eClinicalWorks coverage.")
     # eCW may omit charge items, phone, or historical visits. Those inputs are
     # needed by other integrations, but are not prerequisites for this Stedi
     # estimate.  Only the explicit appointment/coverage comparison can block it.
     return list(dict.fromkeys(conflicts))
+
+
+def _evidence_context(case: dict, session: dict, network: dict) -> dict:
+    data, coverage = case["commercial"], case["ecw_coverage"]
+    return {"practice_id": session["practice_id"], "patient_id": session["patient_id"],
+            "coverage_id": session["intake"]["id"], "subscriber_relationship": coverage["relationship"],
+            "payer_connection_id": data["payer_connection_id"], "service_date": data["service_date"],
+            "rendering_npi": network["rendering_npi"], "place_of_service": network["place_of_service"],
+            "service_category": data["service_category"], "appointment_id": coverage["appointment_id"],
+            "member_id": coverage["member_id"], "ecw_coverage_id": coverage["coverage_id"]}
+
+
+async def _assert_ecw_current(case: dict, session: dict) -> None:
+    data, saved = case["commercial"], case.get("ecw_coverage")
+    if not saved or not saved.get("appointment_id"):
+        raise commercial.CommercialError("Start a new estimate from a confirmed eClinicalWorks appointment.")
+    try:
+        inputs, _, source = await ecw_backend.fetch_inputs(
+            _ecw_identity(session, data["service_date"]), _ecw_practice_for_nmct(session["practice_id"]), saved["appointment_id"])
+        payer, network, profile = _nmct_path(session["practice_id"], inputs, source)
+    except (ecw_backend.EcwBackendError, HTTPException) as exc:
+        raise commercial.CommercialError("The eClinicalWorks appointment or coverage could not be reverified. Refresh this visit before estimating.") from exc
+    if (_coverage_snapshot(inputs, source) != saved or _ecw_conflicts(case, session, inputs, source)
+            or payer["id"] != data["payer_connection_id"] or network["id"] != data["provider_network_id"]
+            or profile["id"] != data["profile_id"] or inputs["service_date"] != data["service_date"]):
+        raise commercial.CommercialError("The eClinicalWorks appointment, coverage, or contract changed. Start a new review.")
+    lines, tasks = _ecw_coded_lines(session["practice_id"], profile, network, data["service_date"], inputs)
+    if tasks or lines != data["lines"]:
+        raise commercial.CommercialError("The scheduled services or contracted rates changed. Start a new review.")
+
+
+def stedi_request_body(payer: dict, network: dict, coverage: dict, service_date: str, stc: str) -> dict:
+    needed = ("member_id", "relationship", "subscriber_first", "subscriber_last", "subscriber_birth_date",
+              "patient_first", "patient_last", "patient_birth_date")
+    if any(not coverage.get(key) for key in needed) or coverage.get("active_coverages") != 1:
+        raise commercial.CommercialError("eClinicalWorks did not return one usable primary coverage with member and policyholder details.")
+    body = {"payerId": payer["stedi_payer_id"], "provider": {"npi": network["rendering_npi"], "name": {"organization": network["organization_name"]}},
+            "subscriber": {"memberId": coverage["member_id"], "dateOfBirth": coverage["subscriber_birth_date"],
+                           "name": {"person": {"firstName": coverage["subscriber_first"], "lastName": coverage["subscriber_last"]}}},
+            "encounter": {"dates": {"service": service_date}, "services": [{"system": "STC", "value": stc}]}}
+    if coverage["relationship"] not in {"18", "self"}:
+        body["dependent"] = {"dateOfBirth": coverage["patient_birth_date"],
+                             "name": {"person": {"firstName": coverage["patient_first"], "lastName": coverage["patient_last"]}}}
+    return body
 
 
 def _record_evidence(case: dict, session: dict, data: dict[str, Any], raw_object_key: str | None = None) -> dict:
@@ -293,15 +373,19 @@ def _record_evidence(case: dict, session: dict, data: dict[str, Any], raw_object
     if data["requested_dos"] != commercial_case["service_date"]:
         raise commercial.CommercialError("Eligibility evidence must use the case service date.")
     network = _network(session["practice_id"], commercial_case["provider_network_id"])
-    context = {"practice_id": session["practice_id"], "patient_id": session["patient_id"], "coverage_id": session["intake"]["id"], "subscriber_relationship": session["intake"]["fields"].get("relationship", ""), "payer_connection_id": commercial_case["payer_connection_id"], "service_date": commercial_case["service_date"], "rendering_npi": network["rendering_npi"], "place_of_service": network["place_of_service"], "service_category": commercial_case["service_category"]}
+    context = _evidence_context(case, session, network)
     if raw_object_key:
         data["raw_object_key"] = raw_object_key
     evidence = commercial_store.save_evidence(session["practice_id"], case["id"], commercial.context_fingerprint(os.getenv("COMMERCIAL_EVIDENCE_HMAC_KEY", ""), context), data)
     commercial_case["evidence_id"] = evidence["id"]; commercial_case["request_state"] = "complete"
     benefits = data["benefits"]
+    commercial_case["benefits_summary"] = {key: benefits.get(key) for key in (
+        "active", "network_status", "deductible_remaining_cents", "oop_remaining_cents", "copay_cents",
+        "coinsurance_percent", "authorization_signal", "referral_signal", "requires_review")}
     case["review_tasks"] = (["Prior authorization is required for the returned benefit. Confirm approval before estimating."] if benefits.get("authorization_signal") == "required" else
                             ["The payer could not determine prior-authorization requirements. Verify before estimating."] if benefits.get("authorization_signal") == "unknown" else
-                            ["A referral requirement was returned for the selected benefit. Confirm it before estimating."] if benefits.get("referral_signal") == "required" else [])
+                            ["A referral requirement was returned for the selected benefit. Confirm it before estimating."] if benefits.get("referral_signal") == "required" else
+                            ["The payer did not confirm that a referral is unnecessary. Verify the plan requirement before estimating."] if benefits.get("referral_signal") == "unknown" else [])
     return evidence
 
 
@@ -371,15 +455,31 @@ async def start_from_ecw(value: EcwStartInput, request: Request) -> Any:
                        "service_date": inputs["service_date"], "service_category": profile["service_category"], "lines": lines,
                        "evidence_id": None, "request_state": "not_requested"}
     conflicts = _ecw_conflicts({"commercial": commercial_data}, session, inputs, source)
+    snapshot = _coverage_snapshot(inputs, source)
     workflow = {"source_mode": "commercial", "commercial": {**commercial_data, "ecw": _ecw_case_data(inputs, source, conflicts)},
+                "ecw_coverage": snapshot,
                 # An empty list means the automatic eCW → Stedi path may continue.
                 # It is not a clinician confirmation step.
                 "review_tasks": conflicts or line_tasks}
-    binding = hashlib.sha256(f"commercial-v1|{payer['id']}|{network['id']}|{profile['id']}|{inputs['service_date']}|{value.appointment_id}".encode()).hexdigest()
+    binding = hashlib.sha256(json.dumps({"payer": payer["id"], "network": network["id"], "profile": profile["id"],
+                                          "date": inputs["service_date"], "appointment": value.appointment_id,
+                                          "coverage": snapshot, "lines": lines}, sort_keys=True).encode()).hexdigest()
     try:
         case = await run_in_threadpool(store.create_case, session["patient_id"], "", binding, workflow, expected_intake_updated_at=session["intake"]["updated_at"], workflow_slot=_commercial_slot(value.appointment_id), **_scope(session))
     except store.StaffCaseConflict as exc:
         raise HTTPException(409, str(exc)) from exc
+    if case.get("estimate"):
+        evidence_id = case.get("commercial", {}).get("evidence_id")
+        evidence = commercial_store.evidence(practice_id, evidence_id) if evidence_id else None
+        try:
+            current = bool(evidence and evidence.get("source") == "stedi" and evidence.get("expires_at")
+                           and datetime.fromisoformat(evidence["expires_at"]) > datetime.now(timezone.utc))
+        except ValueError:
+            current = False
+        if not current:
+            case["estimate"] = None
+            case["review_tasks"] = ["The saved Stedi response is stale. Start a new visit intake before estimating again."]
+            case = await run_in_threadpool(_save, case, session, "stedi-evidence-expired")
     # Upgrade a case opened by the pre-autopilot screen.  This was a display-only
     # prompt, not a real condition requiring staff action.
     if case.get("review_tasks") == ["Ready to check Stedi eligibility using the eClinicalWorks-coded services."]:
@@ -492,54 +592,51 @@ async def get_case(case_id: str, request: Request) -> Any:
 
 @router.post("/cases/{case_id}/services")
 async def set_services(case_id: str, value: ServicesInput, request: Request) -> Any:
-    session = await _session(request); case = await run_in_threadpool(_load, case_id, session); data = case["commercial"]
-    profile, network = commercial_store.profile(session["practice_id"], data["profile_id"]), _network(session["practice_id"], data["provider_network_id"])
-    try:
-        matched = commercial_store.matching_rates(session["practice_id"], profile or {}, network, data["service_date"], [line.model_dump() for line in value.lines])
-        by_code = {row["code"]: row for row in matched}
-        data["lines"] = [{"code": line.code.upper(), "units": line.units, "rate_id": by_code.get(line.code.upper(), {}).get("id"), "allowed_cents": by_code.get(line.code.upper(), {}).get("allowed_cents"), "cash_cents": by_code.get(line.code.upper(), {}).get("cash_cents")} for line in value.lines]
-        missing = [line["code"] for line in data["lines"] if line["allowed_cents"] is None]
-        case["review_tasks"] = ([f"No active contracted rate matches: {', '.join(missing)}."] if missing else ["Run Stedi eligibility or record verified payer evidence."])
-        return _response(_public(await run_in_threadpool(_save, case, session, "services-confirmed")))
-    except commercial.CommercialError as exc: raise HTTPException(422, str(exc)) from exc
+    await _session(request)
+    raise HTTPException(409, "This automatic estimate uses only services coded on the selected eClinicalWorks appointment.")
 
 
 @router.post("/cases/{case_id}/evidence")
 async def record_evidence(case_id: str, value: EvidenceInput, request: Request) -> Any:
-    session = await _session(request); case = await run_in_threadpool(_load, case_id, session); data = case["commercial"]
-    try:
-        _record_evidence(case, session, value.model_dump())
-    except commercial.CommercialError as exc: raise HTTPException(422, str(exc)) from exc
-    return _response(_public(await run_in_threadpool(_save, case, session, "eligibility-evidence-recorded")))
+    await _session(request)
+    raise HTTPException(409, "Automatic insured estimates require a direct Stedi response for the selected eClinicalWorks visit.")
 
 
 @router.post("/cases/{case_id}/eligibility")
 async def stedi_eligibility(case_id: str, request: Request) -> Any:
     session = await _session(request); case = await run_in_threadpool(_load, case_id, session); data = case["commercial"]
-    if data.get("request_state") == "pending":
-        raise HTTPException(409, "A Stedi eligibility request is already pending. Check the saved case before retrying.")
+    if data.get("request_state") != "not_requested":
+        raise HTTPException(409, "A Stedi eligibility request already exists for this case. Check its saved result before retrying.")
+    if case.get("review_tasks"):
+        raise HTTPException(409, "Resolve the eClinicalWorks coverage, coding, or contract review before a paid Stedi check.")
     if not data.get("lines") or any(line.get("allowed_cents") is None for line in data["lines"]):
         raise HTTPException(409, "Confirm the expected CPT/HCPCS codes, units, and matching clinic rates before a paid Stedi check.")
     if os.getenv("STEDI_EXECUTION_MODE", "off") != "commercial_pilot" or os.getenv("STEDI_LIVE_ELIGIBILITY_ENABLED", "false").lower() != "true":
         raise HTTPException(409, "Stedi eligibility is disabled. Set STEDI_EXECUTION_MODE=commercial_pilot and STEDI_LIVE_ELIGIBILITY_ENABLED=true only when this clinic is ready for paid production checks.")
     if not object_store.enabled():
         raise HTTPException(503, "Protected evidence storage must be configured before a live Stedi request.")
+    try:
+        await _assert_ecw_current(case, session)
+    except commercial.CommercialError as exc:
+        raise HTTPException(409, str(exc)) from exc
     api_key = os.getenv("STEDI_API_KEY", "").strip()
     if not api_key: raise HTTPException(503, "Stedi production credentials are not configured on the backend.")
     payer, network = commercial_store.connection(session["practice_id"], data["payer_connection_id"]), _network(session["practice_id"], data["provider_network_id"])
-    fields, patient = session["intake"]["fields"], session["intake"]["patient"]
-    member_id = str(fields.get("member_id") or "").strip()
-    first, last, subscriber_birth_date, is_self = _subscriber_identity(fields, patient)
-    if not member_id:
-        raise HTTPException(422, "Confirm the card member ID before sending Stedi eligibility.")
+    profile = commercial_store.profile(session["practice_id"], data["profile_id"])
+    if not payer or not profile or payer["status"] != "staff_guidance_enabled" or network["status"] != "verified" or profile["status"] != "staff_guidance_enabled":
+        raise HTTPException(409, "Payer, provider network, and estimation profile must be approved before Stedi eligibility.")
+    if not network["effective_from"] <= data["service_date"] <= (network.get("effective_to") or "9999-12-31"):
+        raise HTTPException(409, "Provider-network evidence is not effective for this appointment.")
     rules = payer["rules"]
     service_day = date.fromisoformat(data["service_date"])
     if rules.get("future_dos_current_month") and service_day > date.today() and (service_day.year, service_day.month) != (date.today().year, date.today().month):
         raise HTTPException(422, "This payer permits future eligibility dates only through the end of the current month.")
     stc = rules.get("service_type_code")
     if not isinstance(stc, str) or not stc: raise HTTPException(422, "Configure exactly one Stedi service-type code for this payer/profile before eligibility.")
-    body: dict[str, Any] = {"payerId": payer["stedi_payer_id"], "provider": {"npi": network["rendering_npi"], "name": {"organization": network["organization_name"]}}, "subscriber": {"memberId": member_id, "dateOfBirth": subscriber_birth_date, "name": {"person": {"firstName": first, "lastName": last}}}, "encounter": {"dates": {"service": data["service_date"]}, "services": [{"system": "STC", "value": stc}]}}
-    if not is_self: body["dependent"] = {"dateOfBirth": patient["birth_date"], "name": {"person": {"firstName": patient["given_name"], "lastName": patient["family_name"]}}}
+    try:
+        body = stedi_request_body(payer, network, case["ecw_coverage"], data["service_date"], stc)
+    except commercial.CommercialError as exc:
+        raise HTTPException(409, str(exc)) from exc
     data["request_state"] = "pending"; case = await run_in_threadpool(_save, case, session, "stedi-request-pending")
     try:
         async with httpx.AsyncClient(timeout=httpx.Timeout(30, connect=5)) as client:
@@ -555,8 +652,12 @@ async def stedi_eligibility(case_id: str, request: Request) -> Any:
     if object_store.enabled(): raw_key = await run_in_threadpool(object_store.put_staff_document, session["practice_id"], case_id, "stedi-eligibility.json", json.dumps(payload).encode(), "application/json")
     # The normalizer only accepts Stedi's documented individual, remaining,
     # in-network benefit rows. Missing/ambiguous values stay review-required.
-    benefits = commercial.normalize_stedi_271(payload, stc, network["status"] == "verified")
-    evidence = EvidenceInput(source="stedi", response_reference=str(payload.get("id") or "Stedi eligibility response"), requested_dos=data["service_date"], payer_checked_at=_now(), benefits=benefits)
+    benefits = commercial.normalize_stedi_271(payload, stc, True, case["ecw_coverage"].get("active_coverages", 0) > 1)
+    returned_member = (payload.get("subscriber") or {}).get("memberId") if isinstance(payload.get("subscriber"), dict) else None
+    if returned_member and re.sub(r"\W", "", str(returned_member)).casefold() != re.sub(r"\W", "", str(case["ecw_coverage"]["member_id"])).casefold():
+        benefits["requires_review"] = True
+        benefits["normalization_notes"].append("Stedi returned a different member ID.")
+    evidence = EvidenceInput(source="stedi", response_reference=str(payload.get("id") or "Stedi eligibility response"), requested_dos=data["service_date"], payer_checked_at=_now(), expires_at=(datetime.now(timezone.utc) + timedelta(hours=24)).isoformat(), benefits=benefits)
     _record_evidence(case, session, evidence.model_dump(), raw_key)
     return _response(_public(await run_in_threadpool(_save, case, session, "stedi-evidence-recorded")))
 
@@ -567,9 +668,23 @@ async def calculate(case_id: str, request: Request) -> Any:
     if not data.get("evidence_id"): raise HTTPException(409, "Record usable eligibility evidence before calculating.")
     if case.get("review_tasks"):
         raise HTTPException(409, "Resolve the returned authorization or referral requirement before calculating.")
-    evidence, profile = commercial_store.evidence(session["practice_id"], data["evidence_id"]), commercial_store.profile(session["practice_id"], data["profile_id"])
-    if not evidence or not profile: raise HTTPException(409, "The selected evidence or profile is no longer available.")
     try:
+        await _assert_ecw_current(case, session)
+        practice_id = session["practice_id"]
+        evidence = commercial_store.evidence(practice_id, data["evidence_id"])
+        profile = commercial_store.profile(practice_id, data["profile_id"])
+        payer = commercial_store.connection(practice_id, data["payer_connection_id"])
+        network = _network(practice_id, data["provider_network_id"])
+        if not evidence or not profile or not payer or evidence["source"] != "stedi":
+            raise commercial.CommercialError("A direct, protected Stedi response is required for an automatic insured estimate.")
+        if payer["status"] != "staff_guidance_enabled" or network["status"] != "verified" or profile["status"] != "staff_guidance_enabled":
+            raise commercial.CommercialError("Payer, network, or estimation profile is no longer approved.")
+        expiry = evidence.get("expires_at")
+        if not expiry or datetime.fromisoformat(expiry) <= datetime.now(timezone.utc):
+            raise commercial.CommercialError("Stedi benefits are stale. Start a new visit review.")
+        expected = commercial.context_fingerprint(os.getenv("COMMERCIAL_EVIDENCE_HMAC_KEY", ""), _evidence_context(case, session, network))
+        if evidence["case_id"] != case_id or evidence["context_hash"] != expected or evidence["requested_dos"] != data["service_date"]:
+            raise commercial.CommercialError("Stedi evidence does not match this patient, policy, provider, and appointment.")
         case["estimate"] = commercial.estimate(data["lines"], evidence["normalized"], profile["rules"]); case["review_tasks"] = []
         return _response(_public(await run_in_threadpool(_save, case, session, "estimate-calculated")))
     except commercial.CommercialError as exc:
