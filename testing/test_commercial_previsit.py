@@ -1,10 +1,11 @@
+import json
 import unittest
 from datetime import date
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 
-from app.api.routers.commercial_estimator import EcwStartInput, previsit_estimate
+from app.api.routers.commercial_estimator import EcwStartInput, _previsit_benefits, previsit_estimate
 
 
 class PrevisitFlowTest(unittest.IsolatedAsyncioTestCase):
@@ -31,7 +32,7 @@ class PrevisitFlowTest(unittest.IsolatedAsyncioTestCase):
         with patch("app.api.routers.commercial_estimator._session", new=AsyncMock(return_value=session)), \
              patch("app.api.routers.commercial_estimator.ecw_backend.configured", return_value=True), \
              patch("app.api.routers.commercial_estimator.ecw_backend.fetch_inputs", new=AsyncMock(return_value=(inputs, [], source))), \
-             patch("app.api.routers.commercial_estimator._ecw_practice_for_nmct", return_value={}), \
+             patch("app.api.routers.commercial_estimator._ecw_practice_config", return_value={}), \
              patch("app.api.routers.commercial_estimator.cpt_suggester.suggest_preliminary_cpt_codes", return_value={"groups": [], "notes": []}), \
              patch("app.api.routers.commercial_estimator.stedi_payers.search_payer", new=AsyncMock(return_value={"stediId": "QDTRP", "displayName": "Blue Cross and Blue Shield of Texas"})), \
              patch("app.api.routers.commercial_estimator.store.create_case", return_value=case), \
@@ -44,11 +45,29 @@ class PrevisitFlowTest(unittest.IsolatedAsyncioTestCase):
                  "STEDI_API_KEY": "production-key", "STEDI_EXECUTION_MODE": "commercial_pilot",
                  "STEDI_LIVE_ELIGIBILITY_ENABLED": "true"}):
             result = await previsit_estimate(EcwStartInput(appointment_id="visit-1"), MagicMock())
+            case["previsit"]["benefits"] = {"requires_review": False, "network_status": "in_network"}
+            with patch("app.api.routers.commercial_estimator.object_store.get_object_bytes",
+                       return_value=json.dumps(client.post.return_value.json()).encode()):
+                cached = await previsit_estimate(EcwStartInput(appointment_id="visit-1"), MagicMock())
+            self.assertTrue(cached["benefits"]["review_reasons"])
+            self.assertTrue(cached["benefits"]["requires_review"])
+            self.assertEqual(cached["benefits"]["network_status"], "unknown")
+            with patch("app.api.routers.commercial_estimator.object_store.get_object_bytes", side_effect=RuntimeError("unavailable")):
+                unavailable = await previsit_estimate(EcwStartInput(appointment_id="visit-1"), MagicMock())
+            self.assertTrue(unavailable["benefits"]["requires_review"])
+            self.assertTrue(any("Saved benefit evidence" in item for item in unavailable["issues"]))
+            self.assertEqual(client.post.await_count, 1)
         self.assertEqual([row["code"] for row in result["codes"]], ["99202", "99203", "99204", "99205"])
         self.assertTrue(result["benefits"]["active"])
-        self.assertIsNone(result["price_range"])
+        self.assertNotIn("patient_min_cents", result["price_range"])
         sent = client.post.await_args.kwargs["json"]
         self.assertEqual(sent["encounter"]["services"], [{"system": "STC", "value": "98"}])
         self.assertNotIn("dates", sent["encounter"])
         self.assertNotIn("procedure", str(sent["encounter"]).lower())
         self.assertEqual(case["previsit"]["request_state"], "complete")
+
+    def test_member_identity_check_is_shared_by_fresh_and_cached_responses(self):
+        benefits = _previsit_benefits({"subscriber": {"memberId": "different"}},
+                                     {"member_id": "expected", "active_coverages": 1})
+        self.assertTrue(benefits["requires_review"])
+        self.assertIn("Confirm the member identity: the payer response differs from eCW.", benefits["review_reasons"])

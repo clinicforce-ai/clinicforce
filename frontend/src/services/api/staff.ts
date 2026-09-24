@@ -159,5 +159,15 @@ export interface ClinicalPatient {
   updated_at: string
   intakes: Array<{ id: string; status: string; created_at: string; updated_at: string; source: string }>
 }
-export interface ClinicalDashboard { patients: ClinicalPatient[]; counts: { all: number; accounts_with_cards: number; accounts_without_cards: number; card_only: number; other: number } }
+export interface ClinicalDashboard { pending_file_cleanup?: number; patients: ClinicalPatient[]; counts: { all: number; accounts_with_cards: number; accounts_without_cards: number; card_only: number; other: number } }
 export const getClinicalPatients = () => request<ClinicalDashboard>('/api/staff/patients/dashboard')
+
+
+export type DeletionResult = { deleted: boolean; cleanup_pending: boolean }
+export const deleteStaffPatient = (id: string) => request<DeletionResult>(`/api/staff/patients/${encodeURIComponent(id)}`, { method: 'DELETE' })
+export const deleteStaffInsuranceCheck = (intakeId: string, caseId: string) => request<DeletionResult>(`/api/staff/intakes/${encodeURIComponent(intakeId)}/checks/${encodeURIComponent(caseId)}`, { method: 'DELETE' })
+
+export type SavedInsuranceCheck = { id: string; created_at: string; label: string; pending: boolean }
+export const getStaffInsuranceChecks = (intakeId: string) => request<{ checks: SavedInsuranceCheck[] }>(`/api/staff/intakes/${encodeURIComponent(intakeId)}/checks`)
+
+export const retryStaffDeletionCleanup = () => request<{ pending_file_cleanup: number }>('/api/staff/deletions/retry-cleanup', { method: 'POST' })

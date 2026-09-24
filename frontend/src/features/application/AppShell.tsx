@@ -65,7 +65,7 @@ export function AppShell() {
   }
   return <div className="min-h-dvh bg-[var(--canvas)] text-[var(--ink)]">
     <a className="skip-link" href="#main-content">Skip to content</a><SiteHeader onHome={returnHome} insuranceUploadMode={view === 'patient-upload'} staffMode={view === 'staff' || view === 'staff-create' || view === 'staff-join' || !!staffIntakeId || staffQr} />
-    <main id="main-content" className="shell py-8 sm:py-12">
+    <main id="main-content" className={`shell ${view === 'commercial-estimator' ? 'py-4 sm:py-5' : 'py-8 sm:py-12'}`}>
       {view === 'landing' && <Landing onChoosePatient={() => openEntry('patient', '/?patient')} onChooseUpload={() => openEntry('patient-upload', '/?upload')} onChooseStaff={() => { setStaffIntakeId(undefined); openEntry('staff', '/?staff') }} />}
       <Suspense fallback={<FeatureFallback />}>
         {view === 'patient' && <PatientPortal onBack={returnHome} />}
@@ -79,7 +79,7 @@ export function AppShell() {
         {view === 'dashboard' && summary && <Dashboard data={summary} onScanAnother={restart} onHome={returnHome} onVerifyInsurance={(version) => { setStaffIntakeContext(null); setStaffIntakeId(undefined); setView(version === 'v2' ? 'insurance-v2' : 'insurance') }} />}
         {view === 'insurance' && <InsuranceVerification staffMode={!!staffIntakeId} onBack={staffIntakeId ? returnStaff : () => setView(summary ? 'dashboard' : 'landing')} />}
         {view === 'insurance-v2' && <InsuranceVerificationV2 staffMode={!!staffIntakeId} onUseDocuments={staffIntakeId ? () => openStaffInsurance(staffIntakeId, 'v1') : undefined} onBack={staffIntakeId ? returnStaff : () => setView(summary ? 'dashboard' : 'landing')} />}
-        {view === 'commercial-estimator' && <CommercialEstimator onBack={returnStaff} />}
+        {view === 'commercial-estimator' && <CommercialEstimator key={staffIntakeId} onBack={returnStaff} intakeId={staffIntakeId} />}
       </Suspense>
     </main><footer className="shell border-t border-[var(--line)] py-6 text-sm text-[var(--muted-ink)]">ClinicForce · Patient records and clinic insurance workspace</footer>
   </div>

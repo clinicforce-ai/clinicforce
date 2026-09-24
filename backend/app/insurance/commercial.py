@@ -142,32 +142,57 @@ def _stedi_cents(value: object) -> int | None:
 
 
 def _stedi_entries(payload: dict[str, Any]) -> list[dict[str, Any]]:
-    """Read both documented 271 response layouts without guessing meanings."""
-    entries: list[dict[str, Any]] = [row for row in payload.get("benefitsInformation", []) if isinstance(row, dict)]
-    for plan in payload.get("plans") or []:
+    """Keep source scope and paths while adapting both Stedi response layouts."""
+    entries = [{**row, "evidence_path": f"benefitsInformation[{i}]"}
+               for i, row in enumerate(payload.get("benefitsInformation") or []) if isinstance(row, dict)]
+    for index, plan in enumerate(payload.get("plans") or []):
         if not isinstance(plan, dict):
             continue
-        direct = plan.get("benefitsInformation")
-        if isinstance(direct, list):
-            entries.extend(row for row in direct if isinstance(row, dict))
-        benefits = plan.get("benefits")
+        for i, row in enumerate(plan.get("benefitsInformation") or []):
+            if isinstance(row, dict):
+                entries.append({**row, "plan_index": index, "evidence_path": f"plans[{index}].benefitsInformation[{i}]"})
+        benefits = plan.get("benefits") or {}
         if not isinstance(benefits, dict):
             continue
-        for category, code in (("coInsurance", "A"), ("coPayment", "B"), ("deductible", "C"),
-                               ("outOfPocket", "G"), ("limitations", "F"), ("exclusions", "I")):
-            for row in benefits.get(category) or []:
-                if isinstance(row, dict):
-                    service = row.get("service")
-                    stcs = ([str(service["value"])] if isinstance(service, dict) and
-                            str(service.get("system") or "").upper() == "STC" and service.get("value") else
-                            row.get("serviceTypeCodes") or [])
-                    entries.append({"code": code, "benefitAmount": row.get("amount"), "percent": row.get("percent"),
-                                    "coverageLevel": row.get("coverageLevel"), "network": row.get("network"),
-                                    "timeQualifier": row.get("timePeriod"), "priorAuthIndicator": row.get("priorAuthIndicator"),
-                                    "authOrCertIndicator": row.get("authOrCertIndicator"),
-                                    "additionalInformation": row.get("additionalInformation"), "messages": row.get("messages"),
-                                    "serviceTypeCodes": stcs})
+        for category, code in (("statuses", "status"), ("coInsurance", "A"), ("coPayment", "B"),
+                               ("deductible", "C"), ("outOfPocket", "G"), ("limitations", "F"),
+                               ("exclusions", "I"), ("benefitDescription", "D")):
+            for i, row in enumerate(benefits.get(category) or []):
+                if not isinstance(row, dict):
+                    continue
+                service = row.get("service") or {}
+                stcs = ([str(service["value"])] if isinstance(service, dict) and
+                        str(service.get("system") or "").upper() == "STC" and service.get("value") else row.get("serviceTypeCodes") or [])
+                entries.append({**row, "code": code, "benefitAmount": row.get("amount"),
+                                "timeQualifier": row.get("timePeriod"), "serviceTypeCodes": stcs,
+                                "plan_index": index, "evidence_path": f"plans[{index}].benefits.{category}[{i}]"})
     return entries
+
+
+def _procedure(row: dict) -> str:
+    service = row.get("service") or {}
+    if isinstance(service, dict) and str(service.get("system", "")).upper() in {"CPT", "HCPCS", "CDT"}:
+        return str(service.get("value") or "")
+    return str((row.get("compositeMedicalProcedureIdentifier") or {}).get("procedureCode") or "")
+
+
+def _network_indicator(row: dict) -> str:
+    network = row.get("network")
+    return str((network.get("indicator") or network.get("code") or "") if isinstance(network, dict)
+               else row.get("inPlanNetworkIndicatorCode") or row.get("inPlanNetworkIndicator") or "").upper()
+
+
+def plan_details(payload: dict) -> dict:
+    rows = _stedi_entries(payload)
+    names = list(dict.fromkeys(str(row.get("planCoverage") or row.get("planCoverageDescription") or "").strip()
+                              for row in rows if not row.get("serviceTypeCodes") or "30" in row["serviceTypeCodes"]))
+    names = [name for name in names if name]
+    subscriber = payload.get("subscriber") or {}
+    info = payload.get("planInformation") or {}
+    additional = subscriber.get("additionalInformation") or {}
+    return {"names": names, "plan_number": subscriber.get("planNumber") or info.get("planNumber"),
+            "group_number": subscriber.get("groupNumber") or info.get("groupNumber") or (additional.get("group") or {}).get("number"),
+            "source": "Stedi"}
 
 
 def reported_stedi_options(payload: dict[str, Any], service_type_code: str) -> list[dict[str, Any]]:
@@ -177,15 +202,9 @@ def reported_stedi_options(payload: dict[str, Any], service_type_code: str) -> l
     for row in _stedi_entries(payload):
         code = str(row.get("code") or "").upper()
         service_types = [str(value) for value in row.get("serviceTypeCodes") or []]
-        if code not in kinds or not any(value in {service_type_code, "30"} for value in service_types):
+        if code not in kinds:
             continue
-        if str(row.get("coverageLevel") or row.get("coverageLevelCode") or "").upper() not in {"INDIVIDUAL", "IND"}:
-            continue
-        network = row.get("network")
-        indicator = str((network.get("indicator") or network.get("code")) if isinstance(network, dict)
-                        else row.get("inPlanNetworkIndicator") or row.get("inPlanNetworkIndicatorCode") or "").upper()
-        if indicator not in {"Y", "YES", "IN_NETWORK", "IN_AND_OUT_OF_NETWORK"}:
-            continue
+        indicator = _network_indicator(row)
         raw_percent = row.get("benefitPercent") if row.get("benefitPercent") is not None else row.get("percent")
         try:
             percent = Decimal(str(raw_percent)) if raw_percent is not None else None
@@ -203,47 +222,96 @@ def reported_stedi_options(payload: dict[str, Any], service_type_code: str) -> l
             if isinstance(value, dict):
                 return " ".join(filter(None, (note_text(value.get(key)) for key in ("description", "message", "text", "messages"))))
             return ""
-        result.append({"kind": kinds[code], "service_type_code": service_type_code if service_type_code in service_types else "30",
+        result.append({"id": row["evidence_path"], "kind": kinds[code], "service_type_code": ", ".join(service_types),
+                       "procedure_code": _procedure(row), "coverage_level": row.get("coverageLevel") or row.get("coverageLevelCode"),
+                       "plan_index": row.get("plan_index"), "plan_name": row.get("planCoverage") or row.get("planCoverageDescription"),
                        "network": indicator, "time_period": str(row.get("timeQualifierCode") or row.get("timeQualifier") or ""),
                        "amount_cents": _stedi_cents(row.get("benefitAmount")),
                        "percent": str(percent) if percent is not None else None,
-                       "payer_note": note_text(row.get("messages") or row.get("additionalInformation"))[:240]})
+                       "payer_note": note_text([row.get("messages"), row.get("additionalInformation")])})
     return result
 
 
+def _dates_apply(dates: dict, service_date: str) -> bool:
+    """Check documented eligibility/plan bounds without treating an annual total as remaining."""
+    from datetime import date
+    visit = date.fromisoformat(service_date)
+    for key, value in dates.items():
+        if key not in {'planBegin', 'planEnd', 'eligibilityBegin', 'eligibilityEnd', 'benefitBegin', 'benefitEnd', 'plan', 'eligibility', 'benefit', 'policyEffective', 'policyExpiration'} or not value:
+            continue
+        parts = str(value).split('-') if re.fullmatch(r'\d{8}-\d{8}', str(value)) else [str(value)]
+        parsed = [date.fromisoformat(f'{part[:4]}-{part[4:6]}-{part[6:]}' if re.fullmatch(r'\d{8}', part) else part) for part in parts]
+        if len(parsed) == 2:
+            if not parsed[0] <= visit <= parsed[1]:
+                return False
+        elif key.endswith(('Begin', 'Effective')) and visit < parsed[0]:
+            return False
+        elif key.endswith(('End', 'Expiration')) and visit > parsed[0]:
+            return False
+    return True
+
+
 def normalize_stedi_271(payload: dict[str, Any], service_type_code: str, provider_network_verified: bool,
-                        other_active_coverage: bool = False) -> dict[str, Any]:
+                        other_active_coverage: bool = False, *, procedure_code: str | None = None,
+                        service_date: str | None = None, selected_ids: list[str] | None = None) -> dict[str, Any]:
     """Normalize only unambiguous individual in-network schedule benefits.
 
     A 271 benefit network is not provider participation.  That is supplied by
     the separately verified provider-network record.
     """
     entries = _stedi_entries(payload)
-    statuses = []
-    for plan in payload.get("plans") or []:
-        if isinstance(plan, dict):
-            benefits = plan.get("benefits") if isinstance(plan.get("benefits"), dict) else {}
-            statuses.extend(row for row in benefits.get("statuses", []) if isinstance(row, dict))
+    def relevant_service(row: dict) -> bool:
+        procedure = _procedure(row)
+        if procedure:
+            return procedure == procedure_code
+        stcs = {str(value) for value in row.get("serviceTypeCodes") or []}
+        return not stcs or bool(stcs & {service_type_code, "30"})
+    entries = [row for row in entries if relevant_service(row)]
+    invalid_dates = False
+    if service_date:
+        applicable = []
+        for row in entries:
+            plan = (payload.get('plans') or [])[row['plan_index']] if 'plan_index' in row else payload
+            bounds = {**(payload.get('planDateInformation') or {}), **(plan.get('planDateInformation') or {}), **(row.get('benefitsDateInformation') or {})}
+            try:
+                if _dates_apply(bounds, service_date):
+                    applicable.append(row)
+            except (ValueError, TypeError):
+                invalid_dates = True
+        entries = applicable
+    statuses = [row for row in entries if row.get("code") in {"status", "1", "2", "3", "4", "5", "6", "7", "8", "I"}]
+    if statuses:
+        specificity = lambda row: 3 if _procedure(row) else 2 if service_type_code in (row.get("serviceTypeCodes") or []) else 1
+        best = max(map(specificity, statuses))
+        statuses = [row for row in statuses if specificity(row) == best]
     status_text = " ".join(str(row.get("status") or "") for row in statuses).casefold()
-    inactive = any(token in status_text for token in ("inactive", "ineligible", "terminated", "cancelled", "canceled", "expired"))
-    active = False if inactive else True if ("active" in status_text or "eligible" in status_text or any(str(row.get("code") or "") == "1" for row in entries)) else None
+    inactive = any(token in status_text for token in ("inactive", "ineligible", "terminated", "cancelled", "canceled", "expired")) or any(row.get("code") in {"6", "7", "8", "I"} for row in statuses)
+    has_active = "active" in status_text.replace("inactive", "") or "eligible" in status_text.replace("ineligible", "") or any(row.get("code") in {"1", "2", "3", "4", "5"} for row in statuses)
+    active = None if inactive and has_active else False if inactive else True if has_active else None
+    response_failed = str(payload.get("status") or "").upper() in {"ERROR", "FAILED", "REJECTED"} or bool(payload.get("errors"))
+    if response_failed or any(row.get("code") == "V" for row in entries):
+        active = None
     wanted = []
     for row in entries:
         level = str(row.get("coverageLevel") or row.get("coverageLevelCode") or "").upper()
         network = row.get("network")
         indicator = str((network.get("indicator") or network.get("code")) if isinstance(network, dict)
-                        else row.get("inPlanNetworkIndicator") or row.get("inPlanNetworkIndicatorCode") or "").upper()
+                        else row.get("inPlanNetworkIndicatorCode") or row.get("inPlanNetworkIndicator") or "").upper()
         service_types = {str(value) for value in row.get("serviceTypeCodes", []) if value is not None}
         # Specific requested STC wins; general medical (30) is an allowed
         # fallback only when no specific counterpart exists.
-        specificity = 2 if service_type_code in service_types else 1 if "30" in service_types else 0
-        if level not in {"INDIVIDUAL", "IND"} or indicator not in {"Y", "YES", "IN_NETWORK"} or not specificity:
+        specificity = 3 if _procedure(row) and _procedure(row) == procedure_code else 2 if service_type_code in service_types else 1 if "30" in service_types else 0
+        if (level not in {"INDIVIDUAL", "IND"} and not (not level and row.get("code") in {"A", "B"})) or indicator not in {"Y", "YES", "IN_NETWORK", "IN_AND_OUT_OF_NETWORK", "W"} or not specificity:
             continue
         wanted.append((specificity, row))
     def pick(code: str, remaining: bool = False) -> dict[str, Any] | None:
         matches = [(specificity, row) for specificity, row in wanted if str(row.get("code") or "").upper() == code and (not remaining or str(row.get("timeQualifierCode") or row.get("timeQualifier") or "").upper() in {"29", "REMAINING"})]
         if not matches:
             return None
+        if selected_ids is not None and code in {"A", "B"}:
+            matches = [(score, row) for score, row in matches if row["evidence_path"] in selected_ids]
+            if not matches:
+                return None
         best = max(score for score, _ in matches)
         selected = [row for score, row in matches if score == best]
         # Exact duplicate benefit rows can differ by unmodelled modifiers.
@@ -267,10 +335,22 @@ def normalize_stedi_271(payload: dict[str, Any], service_type_code: str, provide
         if isinstance(value, dict):
             return [note for key in ("description", "message", "text", "messages") for note in notes(value.get(key))]
         return []
-    descriptions = " ".join(note for row in relevant for field in ("additionalInformation", "messages")
-                            for note in notes(row.get(field))).casefold()
-    referral_signal = ("not_required" if "referral not required" in descriptions or "no referral required" in descriptions
-                       else "required" if "referral" in descriptions and "required" in descriptions else "unknown")
+    descriptions = [note.casefold() for row in relevant for field in ("additionalInformation", "messages")
+                    for note in notes(row.get(field))]
+    authorization_basis = 'Payer indicator' if authorization_values - {''} else 'Not confirmed'
+    auth_notes = [note for note in descriptions if re.search(r'authoriz|precert|pre-cert', note)]
+    if auth_notes:
+        # Free text is evidence to review, not a standardized approval signal.
+        if authorization_signal != 'required':
+            authorization_signal = 'unknown'
+        authorization_basis = 'Payer notes require review'
+    elif authorization_values <= {''} and active is True and wanted and not response_failed:
+        authorization_signal = 'not_required'
+        authorization_basis = 'Derived from absent indicator in applicable response (Stedi guidance)'
+    # Contradictory terms must not be cleared by one "not required" message.
+    no_referral = any("referral not required" in note or "no referral required" in note for note in descriptions)
+    referral_required = any(re.search(r"referral(?:s)? (?:is |are )?required", re.sub(r"no referral required|referral not required", "", note)) for note in descriptions)
+    referral_signal = "required" if referral_required else "not_required" if no_referral else "unknown"
     deductible_cents = _stedi_cents(deductible.get("benefitAmount")) if deductible else None
     oop_cents = _stedi_cents(oop.get("benefitAmount")) if oop else None
     copay_cents = _stedi_cents(copay.get("benefitAmount")) if copay else None
@@ -285,15 +365,44 @@ def normalize_stedi_271(payload: dict[str, Any], service_type_code: str, provide
             coinsurance_percent = None
     except Exception:
         coinsurance_percent = None
-    missing = active is not True or deductible_cents is None or oop_cents is None or (copay_cents is None and coinsurance_percent is None)
-    multiple_plans = len([plan for plan in payload.get("plans", []) if isinstance(plan, dict)]) > 1
+    multiple_plans = len({row["plan_index"] for row in entries if "plan_index" in row and row.get("code") in {"status", "A", "B", "C", "G"}}) > 1
     limitations = any(str(row.get("code") or "").upper() in {"F", "Y"} for row in relevant)
+    conditional_terms = selected_ids is None and any(re.search(r"\b(first|after|before|beginning|visits?|waived|unless|only|limit|specialist|primary care)\b", note, re.IGNORECASE) for row in (copay, coinsurance) if row for note in notes([row.get("messages"), row.get("additionalInformation")]))
+    review_reasons = []
+    if invalid_dates:
+        review_reasons.append("Verify the payer eligibility dates; an applicable date value could not be interpreted.")
+    if active is not True:
+        review_reasons.append("Confirm active coverage for the visit date with the payer.")
+    if deductible_cents is None:
+        review_reasons.append("Confirm the remaining individual deductible that applies to this visit.")
+    if oop_cents is None:
+        review_reasons.append("Confirm the remaining individual out-of-pocket maximum.")
+    if copay_cents is None and coinsurance_percent is None:
+        review_reasons.append("Confirm which copay or coinsurance term applies, including any visit-count conditions.")
+    if authorization_signal != "not_required":
+        review_reasons.append("Confirm whether authorization applies to this service and, if required, that it is approved.")
+    if referral_signal != "not_required":
+        review_reasons.append("Confirm the plan's referral requirement and, if required, that a referral is on file.")
+    if conditional_terms:
+        review_reasons.append("Confirm which conditional benefit applies to the selected service.")
+    if limitations:
+        review_reasons.append("Review the payer's benefit limits before estimating patient cost.")
+    if multiple_plans or other_active_coverage:
+        review_reasons.append("Confirm which plan pays first and how additional coverage applies.")
     return {"active": active, "coverage_level": "individual" if wanted else "unknown",
             "network_status": "in_network" if provider_network_verified else "unknown",
             "deductible_remaining_cents": deductible_cents, "oop_remaining_cents": oop_cents,
             "copay_cents": copay_cents, "coinsurance_percent": str(coinsurance_percent) if coinsurance_percent is not None else None,
-            "has_secondary": other_active_coverage, "requires_review": bool(missing or authorization_signal in {"required", "unknown"} or referral_signal in {"required", "unknown"} or limitations or multiple_plans or other_active_coverage),
+            "has_secondary": other_active_coverage or multiple_plans, "requires_review": bool(review_reasons),
+            "selected_benefit_ids": [row["evidence_path"] for row in (copay, coinsurance) if row],
+            "deductible_id": deductible.get("evidence_path") if deductible else None,
+            "oop_id": oop.get("evidence_path") if oop else None,
+            "copay_id": copay.get("evidence_path") if copay else None,
+            "authorization_basis": authorization_basis,
+            "copay_period": str((copay or {}).get("timeQualifierCode") or (copay or {}).get("timeQualifier") or ""),
+            "plan_details": plan_details(payload),
             "authorization_signal": authorization_signal, "referral_signal": referral_signal,
+            "review_reasons": review_reasons,
             "normalization_notes": ["Stedi 271 benefit schedule does not prove provider participation."],
             "reported_options": reported_stedi_options(payload, service_type_code)}
 
@@ -311,7 +420,8 @@ def estimate(lines: list[dict[str, Any]], benefits: dict[str, Any], rules: dict[
     if benefits.get("has_secondary"):
         raise CommercialError("Multiple active coverages require staff review.")
     if benefits.get("requires_review"):
-        raise CommercialError("The selected benefits contain an unresolved limit, authorization, referral, or payer review.")
+        raise CommercialError(" ".join(benefits.get("review_reasons") or
+                                      ["The selected benefits contain an unresolved limit, authorization, referral, or payer review."]))
     cost_share = rules.get("cost_share")
     if cost_share == "payer_returned":
         has_copay = benefits.get("copay_cents") is not None
@@ -328,7 +438,10 @@ def estimate(lines: list[dict[str, Any]], benefits: dict[str, Any], rules: dict[
     if deductible_remaining is None or oop_remaining is None:
         raise CommercialError("Remaining individual deductible and out-of-pocket values are required.")
     coinsurance_percent = benefits.get("coinsurance_percent")
-    copay_cents = _benefit_cents(benefits, "copay_cents") or 0
+    copay_cents = _benefit_cents(benefits, "copay_cents")
+    if cost_share in {"copay", "cumulative"} and copay_cents is None:
+        raise CommercialError("A copay amount or verified not-applicable benefit is required by this profile.")
+    copay_cents = copay_cents or 0
     if cost_share in {"coinsurance", "cumulative"}:
         try:
             coinsurance = Decimal(str(coinsurance_percent))
@@ -358,5 +471,5 @@ def estimate(lines: list[dict[str, Any]], benefits: dict[str, Any], rules: dict[
         "allowed_cents": allowed, "deductible_cents": deductible, "coinsurance_cents": coinsurance_cents,
         "copay_cents": copay, "oop_adjustment_cents": raw_patient - patient,
         "patient_cents": patient, "plan_cents": allowed - patient, "lines": explanation,
-        "calculation_version": "commercial-v1", "disclaimer": "Pre-service estimate only; final responsibility depends on services performed and payer adjudication.",
+        "cost_share": cost_share, "calculation_version": "commercial-v1", "disclaimer": "Pre-service estimate only; final responsibility depends on services performed and payer adjudication.",
     }

@@ -21,7 +21,7 @@ def _words(value: str) -> list[str]:
 
 def _same_name(observed: str, candidate: str, operating_states: list[str]) -> bool:
     left, right = _words(observed), _words(candidate)
-    if left == right and len(left) >= 2:
+    if left == right and left:
         return True
     # A payer that operates in Texas may still be named for another state.
     # Match the state in the payer's actual name, then check its listed scope.

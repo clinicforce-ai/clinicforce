@@ -8,7 +8,7 @@ import re
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urljoin
 from zoneinfo import ZoneInfo
 
 import httpx
@@ -130,11 +130,26 @@ def _entries(bundle: dict[str, Any]) -> list[dict[str, Any]]:
 
 async def _search(client: httpx.AsyncClient, issuer: str, token: str, resource: str,
                   params: dict[str, str] | list[tuple[str, str]]) -> list[dict[str, Any]]:
-    response = await client.get(f"{issuer}/{resource}", params=params,
-                                headers={"Authorization": f"Bearer {token}", "Accept": "application/fhir+json"})
-    if response.status_code in {403, 404}:
-        raise EcwResourceUnavailable(resource)
-    return _entries(await _response_json(response, f"eClinicalWorks could not return {resource} data for this patient."))
+    url, rows, seen = f"{issuer}/{resource}", [], set()
+    origin = urlparse(issuer)
+    for _ in range(10):
+        parsed = urlparse(url)
+        if (parsed.scheme, parsed.netloc) != (origin.scheme, origin.netloc) or not parsed.path.startswith(origin.path.rstrip('/') + '/') or url in seen:
+            raise EcwBackendError(f"eClinicalWorks returned an invalid pagination link for {resource}.")
+        seen.add(url)
+        response = await client.get(url, params=params,
+                                    headers={"Authorization": f"Bearer {token}", "Accept": "application/fhir+json"})
+        if response.status_code in {403, 404}:
+            raise EcwResourceUnavailable(resource)
+        bundle = await _response_json(response, f"eClinicalWorks could not return {resource} data for this patient.")
+        rows.extend(_entries(bundle))
+        next_links = [link.get('url') for link in bundle.get('link', []) if link.get('relation') == 'next']
+        if not next_links:
+            return rows
+        if len(next_links) != 1 or not isinstance(next_links[0], str):
+            raise EcwBackendError(f"eClinicalWorks returned ambiguous pagination for {resource}.")
+        url, params = urljoin(str(response.url), next_links[0]), None
+    raise EcwBackendError(f"eClinicalWorks {resource} results exceeded the supported page limit; the result is incomplete.")
 
 
 async def _bounded_search(client: httpx.AsyncClient, issuer: str, token: str, resource: str,
@@ -162,7 +177,7 @@ async def _optional_search(client: httpx.AsyncClient, issuer: str, token: str, r
         # A transient FHIR response problem is not evidence that this app lacks
         # the resource permission. Keep the appointment usable and avoid
         # reporting a misleading access failure to clinical staff.
-        return [], None, None
+        return [], None, resource + " (read failed)"
 
 
 async def _read(client: httpx.AsyncClient, issuer: str, token: str, reference: Any) -> dict[str, Any]:
@@ -353,8 +368,10 @@ def _payer_id(payer: dict[str, Any], aliases: Any) -> str | None:
     if not isinstance(aliases, dict):
         return None
     candidates = [_display(payer), *(item.get("value") for item in payer.get("identifier", []) if isinstance(item, dict))]
-    normalized = {_norm(key): value for key, value in aliases.items() if isinstance(key, str) and isinstance(value, str)}
-    return next((normalized[_norm(candidate)] for candidate in candidates if _norm(candidate) in normalized), None)
+    observed = {_norm(candidate) for candidate in candidates if candidate}
+    matches = {value for key, value in aliases.items()
+               if isinstance(key, str) and isinstance(value, str) and _norm(key) in observed}
+    return next(iter(matches)) if len(matches) == 1 else None
 
 
 def _relationship(coverage: dict[str, Any]) -> str | None:
@@ -373,16 +390,26 @@ def _group(coverage: dict[str, Any]) -> str | None:
     return None
 
 
-def _plan(coverage: dict[str, Any]) -> str | None:
-    values = []
+def _plan_details(coverage: dict[str, Any]) -> dict[str, list[str]]:
+    result: dict[str, list[str]] = {}
     for item in coverage.get("class", []):
         if not isinstance(item, dict):
             continue
-        codes = {str(c.get("code", "")).casefold() for c in (item.get("type") or {}).get("coding", []) if isinstance(c, dict)}
-        if codes & {"plan", "subplan", "network"}:
-            values.append(str(item.get("value") or item.get("name") or "").strip())
-    values = list(dict.fromkeys(value for value in values if value))
-    return values[0] if len(values) == 1 else None
+        for coding in (item.get("type") or {}).get("coding", []):
+            key = str(coding.get("code") or "").casefold()
+            value = str(item.get("value") or item.get("name") or "").strip()
+            if key and value and value not in result.setdefault(key, []):
+                result[key].append(value)
+    return result
+
+
+def _plan(coverage: dict[str, Any]) -> str | None:
+    details = _plan_details(coverage)
+    for kind in ("plan", "subplan", "network"):
+        values = details.get(kind, [])
+        if values:
+            return values[0] if len(values) == 1 else None
+    return None
 
 
 def _number(value: Any, *, money: bool = False) -> str | None:
@@ -687,7 +714,8 @@ async def fetch_inputs(profile: dict[str, Any], practice: dict[str, Any], appoin
             for row, service_status in classified:
                 row_diagnoses = _coding(row, "diagnosis")
                 for code in _coding(row, "procedure"):
-                    item = lines.setdefault(code, {"code": code, "units": None, "charge": None, "modifiers": [],
+                    line_id = f"{row.get('resourceType', 'service')}:{row.get('id', 'visit')}:{code}"
+                    item = lines.setdefault(line_id, {"id": line_id, "code": code, "units": None, "charge": None, "modifiers": [],
                                                   "diagnosis": None, "service_status": service_status})
                     description = next((label for label in _concept_labels(row.get("code"))
                                         if _norm(label) != _norm(code)), None)
@@ -705,6 +733,9 @@ async def fetch_inputs(profile: dict[str, Any], practice: dict[str, Any], appoin
                         item["charge"] = _number(price["value"], money=True)
                         if item["charge"] is not None:
                             item["charge_source"] = "visit"
+            counts = {code: sum(item["code"] == code for item in lines.values()) for code in {item["code"] for item in lines.values()}}
+            for item in lines.values():
+                item["needs_confirmation"] = counts[item["code"]] > 1
             if len(diagnoses) == 1:
                 for item in lines.values():
                     item["diagnosis"] = item["diagnosis"] or diagnoses[0]
@@ -816,7 +847,7 @@ async def fetch_inputs(profile: dict[str, Any], practice: dict[str, Any], appoin
     source = {"system": "eClinicalWorks", "retrieved_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
             "_patient_id": patient_id,
               "appointment_id": encounter_id, "coverage_id": str(coverage.get("id") or ""),
-              "active_coverages": len(eligible), "plan": _plan(coverage),
+              "active_coverages": len(eligible), "plan": _plan(coverage), "plan_details": _plan_details(coverage),
               "appointment_date": service_date, "appointment_status": visit.get("status"),
               "visit_type": inputs.get("visit_type") or "not_returned",
               "recent_completed_appointments": recent_completed_appointments,
