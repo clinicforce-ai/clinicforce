@@ -90,7 +90,7 @@ export default function CommercialEstimator({ onBack, intakeId }: { onBack: () =
     return () => { stopped = true; window.clearTimeout(timer) }
   }, [recovering, result?.check_id])
 
-  const estimate = async () => {
+  const estimate = useCallback(async () => {
     if (!selectedVisit || busy) return
     const current = ++requestId.current
     setResult(null); setError(''); setNotice(''); setDeleteError(''); setBusy('estimate')
@@ -101,7 +101,14 @@ export default function CommercialEstimator({ onBack, intakeId }: { onBack: () =
     } catch (caught) {
       if (current === requestId.current) setError(caught instanceof Error ? caught.message : 'This visit could not be checked.')
     } finally { if (current === requestId.current) setBusy(null) }
-  }
+  }, [selectedVisit, busy])
+  const automaticEstimate = useRef('')
+  useEffect(() => {
+    if (!loaded || !selectedVisit || result || error || busy) return
+    if (automaticEstimate.current === selectedVisit) return
+    automaticEstimate.current = selectedVisit
+    void estimate()
+  }, [loaded, selectedVisit, result, error, busy, estimate])
   const saveReview = async (review: VisitReview) => {
     if (!result || busy) return
     const current = ++requestId.current
@@ -237,7 +244,7 @@ export default function CommercialEstimator({ onBack, intakeId }: { onBack: () =
             <details><summary><span>Check details <small>Sources & items needing review</small></span><ChevronDown size={18} aria-hidden="true" /></summary><div className="visit-detail-body">{result.recovery && <p>Coverage recovery: Stedi · {result.recovery.message}{result.recovery.reference && ` · Reference ${result.recovery.reference}`}{result.recovery.checked_at && ` · Checked ${visitDate(result.recovery.checked_at)} at ${visitTime(result.recovery.checked_at)}`}</p>}<p>Appointment and coverage: eClinicalWorks. Benefit response: Stedi. Contracted rates and network participation: clinic configuration.</p>{result.calculated_at && <p>Calculated {visitDate(result.calculated_at)} at {visitTime(result.calculated_at)}.</p>}{result.ecw_retrieved_at && <p>eCW retrieved {visitDate(result.ecw_retrieved_at)} at {visitTime(result.ecw_retrieved_at)}.</p>}{result.response_reference && <p>Payer response reference: {result.response_reference}</p>}{result.network_evidence?.evidence_reference && <p>Network participation: {result.network_evidence.network_name} · {result.network_evidence.evidence_reference} · Effective {result.network_evidence.effective_from}</p>}{result.plan_details && <dl className="visit-benefit-values">{Object.entries(result.plan_details.ecw).map(([key, values]) => <div key={key}><dt>eCW {humanize(key)}</dt><dd>{values.join(' · ') || 'Not returned'}</dd></div>)}{result.plan_details.stedi.group_number && <div><dt>Payer group</dt><dd>{result.plan_details.stedi.group_number}</dd></div>}{result.plan_details.stedi.plan_number && <div><dt>Payer plan number</dt><dd>{result.plan_details.stedi.plan_number}</dd></div>}</dl>}{result.checked_at && <p>Benefits checked {visitDate(result.checked_at)} at {visitTime(result.checked_at)}.</p>}{benefits?.normalization_notes?.length ? <ul>{benefits.normalization_notes.map(note => <li key={note}>{note}</li>)}</ul> : null}{!!reviewItems.length && <p>Review items are listed with the estimate above.</p>}</div></details>
           </div>
           <div className="visit-result-footer"><span>Estimate only · Final charges depend on services provided.</span><div className="visit-result-actions">{intakeId && result.check_id && <button className="visit-text-button visit-delete-button" disabled={!!busy || recovering} onClick={() => void deleteCheck()}><Trash2 size={15} aria-hidden="true" />{busy === 'delete' ? 'Deleting…' : cleanupPending ? 'Retry file cleanup' : 'Delete check'}</button>}<button className="visit-text-button" disabled={!!busy || cleanupPending || recovering} onClick={() => void estimate()}><RefreshCw size={15} /> Check again</button></div></div>
-        </> : !error && !busy && <div className="visit-empty"><CalendarDays size={28} aria-hidden="true" /><h2>{selected ? 'Ready to check this visit' : 'No upcoming visit to estimate'}</h2><p>{selected ? 'ClinicForce brings together the appointment, coverage, and clinic rates. No insurance details need to be entered here.' : 'Refresh visits after the appointment is scheduled in eClinicalWorks.'}</p>{selected && <button className="visit-primary" onClick={() => void estimate()}>Check estimate <ArrowRight size={17} /></button>}</div>}
+        </> : !error && !busy && <div className="visit-empty"><CalendarDays size={28} aria-hidden="true" /><h2>{selected ? 'Preparing this visit' : 'No upcoming visit to estimate'}</h2><p>{selected ? 'ClinicForce is reading the appointment, payer benefits, and clinic rates.' : 'Refresh visits after the appointment is scheduled in eClinicalWorks.'}</p></div>}
         {busy === 'visits' && <div className="visit-empty" role="status"><RefreshCw className="visit-spin" size={26} aria-hidden="true" /><p>Loading the patient’s upcoming visits…</p></div>}
       </div>
     </div>

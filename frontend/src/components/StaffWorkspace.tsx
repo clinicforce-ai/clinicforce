@@ -182,8 +182,21 @@ export default function StaffWorkspace({ onBack, onOpenInsurance, onScanQr, onCr
       const { ecw_match, ...record } = await createStaffEcwLookup(lookupDetails)
       setIntake(record); setIntakes(current => [record, ...current.filter(row => row.id !== record.id)])
       setEcwMatch(ecw_match); setFields(patientFieldsFrom(record))
-      navigate('review')
       const result = await findStaffPatients({ given_name: record.fields.given_name || '', family_name: record.fields.family_name || '', birth_date: record.fields.birth_date || '' })
+      // eCW already matched this exact name and date of birth. When one clinic
+      // record (or none) has the same identity, open the estimate directly.
+      // Ambiguous records still require an explicit staff choice.
+      if (result.patients.length <= 1) {
+        try {
+          const confirmed = await confirmStaffPatient(record.id, { ...patientFieldsFrom(record), ...(result.patients[0] ? { patient_id: result.patients[0].id } : {}), identity_confirmed: true })
+          setIntake(confirmed); setIntakes(current => current.map(row => row.id === confirmed.id ? confirmed : row))
+          onOpenInsurance(confirmed.id, 'commercial')
+          return
+        } catch {
+          // A concurrent eCW link or changed clinic record is handled by the
+          // existing explicit match screen below.
+        }
+      }
       setCandidates(result.patients); setMatch(result.patients.length ? '' : 'new'); setIdentityConfirmed(false)
       setLookupDetails({ given_name: '', middle_initial: '', family_name: '', birth_date: '' })
       navigate('match')
