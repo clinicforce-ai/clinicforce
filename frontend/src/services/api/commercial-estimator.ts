@@ -46,7 +46,7 @@ export type VisitPricedLine = VisitCode & {
   benefit_verification?: { reference: string; notes: string; verified_by: string; verified_at: string; valid_from: string; valid_to: string } | null;
   rate_source: string; rate_version?: string; rate_effective_from?: string; benefit_basis: string; issues: string[];
   benefits: NonNullable<PrevisitEstimate['benefits']> & { copay_period?: string; requirements: { referral: VisitRequirement; authorization: VisitRequirement } };
-  calculation: null | { allowed_cents: number; patient_cents: number; plan_cents: number; deductible_cents: number; copay_cents: number; coinsurance_cents: number; oop_adjustment_cents: number }
+  calculation: null | { cost_share?: string; allowed_cents: number; patient_cents: number; plan_cents: number; deductible_cents: number; copay_cents: number; coinsurance_cents: number; oop_adjustment_cents: number }
 }
 export type VisitReview = { selected_ids?: string[]; confirmed_units?: Record<string, number>; payments_received_cents?: number; payment_reference?: string; verification?: {
   line_id: string; kind: 'referral' | 'authorization' | 'benefits'; status: string; reference: string; notes: string;

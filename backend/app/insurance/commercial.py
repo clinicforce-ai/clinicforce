@@ -471,5 +471,5 @@ def estimate(lines: list[dict[str, Any]], benefits: dict[str, Any], rules: dict[
         "allowed_cents": allowed, "deductible_cents": deductible, "coinsurance_cents": coinsurance_cents,
         "copay_cents": copay, "oop_adjustment_cents": raw_patient - patient,
         "patient_cents": patient, "plan_cents": allowed - patient, "lines": explanation,
-        "calculation_version": "commercial-v1", "disclaimer": "Pre-service estimate only; final responsibility depends on services performed and payer adjudication.",
+        "cost_share": cost_share, "calculation_version": "commercial-v1", "disclaimer": "Pre-service estimate only; final responsibility depends on services performed and payer adjudication.",
     }
