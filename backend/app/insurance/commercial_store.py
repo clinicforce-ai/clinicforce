@@ -147,25 +147,29 @@ def activate_rates(practice_id: str, version_id: str) -> dict:
 def matching_rates(practice_id: str, profile: dict, network: dict, service_date: str, lines: list[dict]) -> list[dict]:
     codes = [str(line.get("code") or "").upper() for line in lines]
     with _connection() as db:
-        rows = db.execute("""SELECT l.*,
+        rows = db.execute("""SELECT l.*, v.source_reference, v.activated_at,
           (CASE WHEN l.provider_npi=%s THEN 1 ELSE 0 END + CASE WHEN l.tin=%s THEN 1 ELSE 0 END + CASE WHEN l.plan_matcher=%s THEN 1 ELSE 0 END) AS match_rank
           FROM commercial_rate_lines l JOIN commercial_rate_versions v ON v.id=l.version_id
           WHERE v.practice_id=%s AND v.payer_connection_id=%s AND v.status='active' AND l.code = ANY(%s)
           AND v.effective_from<=%s AND (v.effective_to IS NULL OR v.effective_to>=%s)
           AND l.network_name=%s AND l.place_of_service=%s AND l.effective_from<=%s AND (l.effective_to IS NULL OR l.effective_to>=%s)
-          AND l.modifier='' AND l.unit_rule='per_unit' AND (l.provider_npi='' OR l.provider_npi=%s) AND (l.tin='' OR l.tin=%s)
+          AND l.unit_rule='per_unit' AND (l.provider_npi='' OR l.provider_npi=%s) AND (l.tin='' OR l.tin=%s)
           AND (l.plan_matcher='' OR l.plan_matcher=%s)
           ORDER BY l.code, match_rank DESC, l.id DESC""", (network["rendering_npi"], network["tin"], profile.get("plan_matcher", ""),
                                                                practice_id, profile["payer_connection_id"], codes, service_date, service_date, network["network_name"], network["place_of_service"], service_date, service_date,
                                                                network["rendering_npi"], network["tin"], profile.get("plan_matcher", ""))).fetchall()
-    selected: dict[str, dict] = {}
+    requested = {(str(line.get("code") or "").upper(), ",".join(line.get("modifiers") or [])) for line in lines}
+    selected: dict[tuple[str, str], dict] = {}
     for row in rows:
         value = dict(row)
-        if value["code"] in selected and value["match_rank"] == selected[value["code"]]["match_rank"]:
+        key = (value['code'], value.get('modifier') or '')
+        if key not in requested:
+            continue
+        if key in selected and value['match_rank'] == selected[key]['match_rank']:
             raise CommercialError(f"More than one active rate matches {value['code']}; resolve the rate version first.")
-        if value["code"] not in selected:
-            selected[value["code"]] = value
-    return [selected[code] for code in codes if code in selected]
+        if key not in selected:
+            selected[key] = value
+    return list(selected.values())
 
 
 def save_evidence(practice_id: str, case_id: str, context_hash: str, data: dict[str, Any]) -> dict:

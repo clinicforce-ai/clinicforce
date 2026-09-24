@@ -23,7 +23,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.api.settings import ALLOWED_ORIGINS, CLINICIAN_SHARE_COOKIE, MAX_INSURANCE_CARD_BYTES, MAX_UPLOAD_BYTES, PUBLIC_BASE_URL
-from app.core import clinic_email, object_store, staff_store
+from app.core import clinic_email, object_store, staff_store, staff_deletions
 from app.core.patient_store import get_patient_profile
 from app.core.request_address import request_address
 from app.insurance import ecw_backend, era835, golden, v1_sources
@@ -545,3 +545,44 @@ async def library_era(document_id: str, request: Request):
         return JSONResponse(await run_in_threadpool(era835.parse, await run_in_threadpool(object_store.get_object_bytes, document["object_key"])), headers=NO_STORE)
     except ValueError:
         raise HTTPException(422, "The saved ERA cannot be parsed.") from None
+
+
+async def delete_clinic_record(kind: str, record_id: str, request: Request, intake_id: str | None = None):
+    actor = await require_staff(request)
+    try:
+        result = await run_in_threadpool(staff_deletions.delete_record, kind, record_id, actor, intake_id)
+    except LookupError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    return JSONResponse(result, status_code=202 if result["cleanup_pending"] else 200, headers=NO_STORE)
+
+
+@router.delete("/patients/{patient_id}")
+async def delete_clinic_patient(patient_id: str, request: Request):
+    return await delete_clinic_record("patient", patient_id, request)
+
+
+@router.post("/deletions/retry-cleanup")
+async def retry_deleted_files(request: Request):
+    actor = await require_staff(request)
+    return JSONResponse(await run_in_threadpool(staff_deletions.retry_cleanup, actor), headers=NO_STORE)
+
+
+@router.delete("/intakes/{intake_id}/checks/{case_id}")
+async def delete_insurance_check(intake_id: str, case_id: str, request: Request):
+    return await delete_clinic_record("check", case_id, request, intake_id)
+
+
+@router.get("/intakes/{intake_id}/checks")
+async def saved_insurance_checks(intake_id: str, request: Request):
+    from app.insurance import store
+    actor = await require_staff(request)
+    intake = await owned_intake(intake_id, actor)
+    cases = await run_in_threadpool(store.get_cases, list(intake.get("workflows", {}).values()),
+        intake["patient"]["id"], "", practice_id=actor["practice_id"], intake_id=intake_id) if intake.get("patient") else []
+    labels = {"commercial_previsit": "Visit estimate", "commercial": "Coded-service estimate",
+              "documents": "Document review", "availity": "Connected insurance review"}
+    return JSONResponse({"checks": [{"id": case["id"], "created_at": case["created_at"],
+        "label": labels.get(case.get("source_mode"), "Insurance check"),
+        "pending": staff_deletions._pending(case)} for case in cases]}, headers=NO_STORE)

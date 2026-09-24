@@ -154,6 +154,10 @@ def save_case(case: dict[str, Any], patient_id: str, share_manifest_id: str, eve
     value = {**case, "revision": revision + 1}
     with _connection() as connection:
         _purge(connection, now)
+        if scope.get("practice_id"):
+            if not connection.execute("SELECT 1 FROM staff_intakes WHERE id=%s AND practice_id=%s FOR UPDATE",
+                                      (scope["intake_id"], scope["practice_id"])).fetchone():
+                return None
         updated = connection.execute(
             f"""UPDATE insurance_cases SET workflow_json = %s WHERE id = %s AND {owner}
                 AND COALESCE(workflow_json::jsonb ->> 'revision', '0') = %s""",
@@ -177,6 +181,10 @@ def save_v2(case: dict[str, Any], patient_id: str, share_manifest_id: str, event
     value = {**case, "revision": revision + 1}
     owner, values = _owner(patient_id, share_manifest_id, **scope)
     with _connection() as connection:
+        if scope.get("practice_id"):
+            if not connection.execute("SELECT 1 FROM staff_intakes WHERE id=%s AND practice_id=%s FOR UPDATE",
+                                      (scope["intake_id"], scope["practice_id"])).fetchone():
+                return None
         updated = connection.execute(
             f"""UPDATE insurance_cases SET workflow_json = %s
                WHERE id = %s AND {owner}

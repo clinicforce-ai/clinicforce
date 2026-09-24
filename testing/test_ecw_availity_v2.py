@@ -52,7 +52,7 @@ class EcwBackendSourceTests(unittest.IsolatedAsyncioTestCase):
             rows, timed_out, unavailable = await ecw_backend._optional_search(
                 None, "issuer", "token", "ServiceRequest", {"patient": "patient-1"},
             )
-        self.assertEqual((rows, timed_out, unavailable), ([], None, None))
+        self.assertEqual((rows, timed_out, unavailable), ([], None, "ServiceRequest (read failed)"))
 
         with patch.object(ecw_backend, "_search", new=AsyncMock(side_effect=ecw_backend.EcwResourceUnavailable("ChargeItem"))):
             rows, timed_out, unavailable = await ecw_backend._optional_search(
@@ -161,9 +161,10 @@ class EcwBackendSourceTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(missing, ["eClinicalWorks FHIR did not return each billed line amount required by Availity PCE. Enable the practice-management/billing API field for this app; Availity does not supply this request input."])
         self.assertEqual((inputs["member_id"], inputs["payer_id"], inputs["relationship"]), ("MEMBER123", "TESTPAYER", "18"))
-        self.assertEqual(inputs["lines"], [{"code": "99204", "units": "1", "charge": None, "modifiers": [],
-                                            "diagnosis": "G629", "service_status": "scheduled",
-                                            "description": "New patient consultation"}])
+        self.assertEqual([row['id'] for row in inputs['lines']], ['Procedure:procedure-1:99204', 'ServiceRequest:order-1:99204'])
+        self.assertTrue(all(row['needs_confirmation'] for row in inputs['lines']))
+        self.assertTrue(all(row['code'] == '99204' and row['units'] == '1' and row['diagnosis'] == 'G629' for row in inputs['lines']))
+        self.assertEqual(inputs['lines'][0]['description'], 'New patient consultation')
         self.assertEqual(inputs["reason"], "Reason: Neuropathy consultation; Planned service: 99204; Order reason: G62.9; Procedure: New patient consultation; Procedure reason: G62.9")
         self.assertIsNone(inputs["visit_type"])
         self.assertEqual(inputs["provider"]["npi"], "1234567893")

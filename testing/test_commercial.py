@@ -1,14 +1,73 @@
 import unittest
 from unittest.mock import MagicMock, patch
 
-from app.api.routers.commercial_estimator import _appointment_readiness, _coverage_snapshot, _ecw_conflicts, _nmct_path, _past_visit_with_saved_estimate, _previsit_codes, _previsit_range, _subscriber_identity, stedi_request_body
+from app.api.routers.commercial_estimator import _attach_previsit_pricing, _ecw_practice_config, _appointment_readiness, _coverage_snapshot, _ecw_conflicts, _practice_path, _past_visit_with_saved_estimate, _previsit_codes, _previsit_range, _subscriber_identity, stedi_request_body
 from app.insurance.commercial import CommercialError, estimate, normalize_stedi_271, parse_rate_csv
 from app.insurance import commercial_store
-from app.insurance.ecw_backend import _patient_matches
+from app.insurance.ecw_backend import _patient_matches, _payer_id
 from app.insurance.stedi_payers import select_payer
 
 
 class CommercialRulesTest(unittest.TestCase):
+    def test_practice_mappings_reject_conflicts_independent_of_row_order(self):
+        payers = [{"id": key, "display_name": name, "aliases": ["Shared insurance"],
+                   "category": "commercial_medical", "status": "staff_guidance_enabled"}
+                  for key, name in (("payer-a", "Example Health"), ("payer-b", "Other Health"))]
+        networks = [{"status": "verified", "billing_npi": billing, "rendering_npi": "1234567890",
+                     "location_id": "office", "place_of_service": pos}
+                    for billing, pos in (("1111111111", "11"), ("2222222222", "22"))]
+        for rows in (networks, list(reversed(networks)), networks + networks[:1]):
+            with patch.object(commercial_store, "list_connections", return_value=payers) as connections, \
+                 patch.object(commercial_store, "list_networks", return_value=rows):
+                config = _ecw_practice_config("unrelated-practice")
+            connections.assert_called_once_with("unrelated-practice")
+            self.assertEqual(config["locations"]["office"], {})
+            self.assertEqual(config["payer_aliases"], {"examplehealth": "payer-a", "otherhealth": "payer-b"})
+        self.assertIsNone(_payer_id({"name": "Example Health", "identifier": [{"value": "other-id"}]},
+                                   {"Example Health": "payer-a", "other-id": "payer-b"}))
+        self.assertIsNone(_payer_id({"name": "Example Health"}, {"Example Health": "payer-a", "example-health": "payer-b"}))
+
+    def test_cached_network_evidence_is_rechecked_after_configuration_changes(self):
+        benefits = {"network_status": "in_network"}
+        result = {"issues": [], "codes": []}
+        with patch.object(commercial_store, "list_connections", return_value=[]):
+            _attach_previsit_pricing(result, "other-practice", {}, {}, "payer", benefits)
+        self.assertEqual(benefits["network_status"], "unknown")
+        self.assertTrue(result["issues"])
+
+    def test_shared_network_accumulator_uses_code_and_preserves_full_payer_notes(self):
+        note = "Benefit detail. " * 30 + "Specialist referral required."
+        payload = {"benefitsInformation": [{"code": "C", "serviceTypeCodes": ["30"],
+            "coverageLevelCode": "IND", "timeQualifierCode": "29", "benefitAmount": "750",
+            "inPlanNetworkIndicatorCode": "W", "inPlanNetworkIndicator": "Not Applicable",
+            "messages": ["Primary note"], "additionalInformation": [{"description": note}]}]}
+        benefits = normalize_stedi_271(payload, "98", False)
+        self.assertEqual(benefits["deductible_remaining_cents"], 75000)
+        self.assertEqual(benefits["network_status"], "unknown")
+        self.assertEqual(benefits["reported_options"][0]["payer_note"], "Primary note " + note)
+        self.assertEqual(benefits["referral_signal"], "required")
+
+    def test_review_reasons_keep_conditional_terms_and_conflicting_referrals_blocking(self):
+        common = {"coverageLevel": "INDIVIDUAL", "network": {"indicator": "IN_NETWORK"},
+                  "service": {"system": "STC", "value": "98"}}
+        payload = {"plans": [{"benefits": {"statuses": [{"status": "Active Coverage"}],
+            "deductible": [{**common, "amount": "750", "timePeriod": "REMAINING",
+                            "network": {"indicator": "IN_AND_OUT_OF_NETWORK"}}],
+            "outOfPocket": [{**common, "amount": "9995", "timePeriod": "REMAINING"}],
+            "coPayment": [{**common, "amount": "10", "messages": [{"message": "First ten visits"}]},
+                          {**common, "amount": "25", "messages": [{"message": "Acupuncture"}]}],
+            "benefitDescription": [{**common, "priorAuthIndicator": "Y", "messages": [
+                {"message": "No referral required for primary care. Referral required for specialist care."}]}]}}]}
+        benefits = normalize_stedi_271(payload, "98", True)
+        self.assertEqual(benefits["deductible_remaining_cents"], 75000)
+        self.assertEqual(benefits["authorization_signal"], "required")
+        self.assertEqual(benefits["referral_signal"], "required")
+        self.assertIsNone(benefits["copay_cents"])
+        self.assertTrue(any("visit-count" in reason for reason in benefits["review_reasons"]))
+        self.assertTrue(any("referral" in reason for reason in benefits["review_reasons"]))
+        with self.assertRaisesRegex(CommercialError, "visit-count"):
+            estimate([{"code": "99203", "units": 1, "allowed_cents": 10000}], benefits, {"cost_share": "copay"})
+
     def test_rate_import_uses_psycopg_cursor_for_batch_rows(self):
         db = MagicMock(spec=["execute", "cursor", "__enter__", "__exit__"])
         db.__enter__.return_value = db
@@ -28,6 +87,16 @@ class CommercialRulesTest(unittest.TestCase):
         self.assertEqual([row["code"] for row in rows], ["99202", "99203", "99204", "99205"])
         self.assertTrue(all(row["source"] == "conditional office E/M alternative" for row in rows))
         self.assertEqual(_previsit_codes({"visit_type": None, "lines": []}), [])
+
+    def test_stedi_directory_supports_single_word_payer_names(self):
+        for name in ("Aetna", "Cigna", "Humana"):
+            with self.subTest(name=name):
+                payer = {"stediId": name.lower(), "displayName": name,
+                         "transactionSupport": {"eligibilityCheck": "SUPPORTED"}}
+                self.assertEqual(select_payer([{"payer": payer}], name, []), payer)
+                self.assertIsNone(select_payer([{"payer": payer}, {"payer": {**payer, "stediId": "other"}}], name, []))
+        self.assertIsNone(select_payer([{"payer": {"stediId": "empty", "displayName": "Insurance Company",
+                              "transactionSupport": {"eligibilityCheck": "SUPPORTED"}}}], "Insurance Company", []))
 
     def test_stedi_directory_accepts_unique_state_abbreviation_not_fuzzy_first_hit(self):
         payer = {"stediId": "QDTRP", "primaryPayerId": "84980", "displayName": "Blue Cross and Blue Shield of Texas",
@@ -55,13 +124,13 @@ class CommercialRulesTest(unittest.TestCase):
         benefits = {"active": True, "coverage_level": "individual", "network_status": "in_network",
                     "deductible_remaining_cents": 0, "oop_remaining_cents": 100000,
                     "copay_cents": 3000, "has_secondary": False, "requires_review": False}
-        with patch("app.api.routers.commercial_estimator._nmct_path", return_value=(payer, network, profile)), \
+        with patch("app.api.routers.commercial_estimator._practice_path", return_value=(payer, network, profile)), \
              patch("app.api.routers.commercial_estimator.commercial_store.matching_rates", return_value=rates):
             priced, issues = _previsit_range("clinic", inputs, source, "payer", codes, benefits)
             self.assertEqual((priced["allowed_min_cents"], priced["allowed_max_cents"]), (6400, 20000))
             self.assertEqual((priced["patient_min_cents"], priced["patient_max_cents"]), (3000, 3000))
             self.assertEqual(issues, [])
-            self.assertIsNone(_previsit_range("clinic", inputs, {**source, "plan": None}, "payer", codes, benefits)[0])
+            self.assertFalse(_previsit_range("clinic", inputs, {**source, "plan": None}, "payer", codes, benefits)[0]["complete"])
 
     def test_rate_csv_and_cumulative_estimate(self):
         rows = parse_rate_csv(b"CPT,Allowed Amount,Network,POS,Effective From,Cash Price\n99204,250.00,PPO,11,2026-01-01,300.00\n", "rates.csv")
@@ -136,13 +205,13 @@ class CommercialRulesTest(unittest.TestCase):
         benefits = normalize_stedi_271({"benefitsInformation": [{"code": "1"}]}, "98", True)
         self.assertTrue(benefits["requires_review"])
 
-    def test_stedi_does_not_assume_missing_referral_or_authorization_is_clear(self):
+    def test_stedi_absent_authorization_interpretation_keeps_referral_unknown(self):
         payload = {"plans": [{"benefits": {"statuses": [{"status": "Active"}]}}], "benefitsInformation": [
             {"code": code, "coverageLevel": "Individual", "serviceTypeCodes": ["98"],
              "inPlanNetworkIndicatorCode": "Y", "timeQualifierCode": "29", "benefitAmount": amount}
             for code, amount in (("C", "0"), ("G", "1000"), ("B", "25"))]}
         benefits = normalize_stedi_271(payload, "98", True)
-        self.assertEqual((benefits["authorization_signal"], benefits["referral_signal"]), ("unknown", "unknown"))
+        self.assertEqual((benefits["authorization_signal"], benefits["referral_signal"]), ("not_required", "unknown"))
         self.assertTrue(benefits["requires_review"])
 
     def test_cardless_identity_and_ecw_coverage_feed_dependent_stedi_request(self):
@@ -195,17 +264,17 @@ class CommercialRulesTest(unittest.TestCase):
         self.assertEqual((first, last, birth_date, is_self), ("Parent", "Example", "1970-01-01", False))
         self.assertEqual(_subscriber_identity({}, {"given_name": "Pat", "family_name": "Example", "birth_date": "1980-01-01"})[3], True)
 
-    def test_nmct_path_uses_ecw_payer_provider_location_and_pos(self):
-        payer = {"id": "bcbs", "category": "commercial_medical", "status": "staff_guidance_enabled"}
-        network = {"id": "network", "payer_connection_id": "bcbs", "status": "verified", "billing_npi": "1811853260", "rendering_npi": "1234567893", "location_id": "north", "place_of_service": "11", "effective_from": "2026-01-01", "effective_to": None}
-        profile = {"id": "office", "payer_connection_id": "bcbs", "provider_network_id": "network", "status": "staff_guidance_enabled"}
+    def test_practice_path_uses_ecw_payer_provider_location_and_pos(self):
+        payer = {"id": "example-health", "category": "commercial_medical", "status": "staff_guidance_enabled"}
+        network = {"id": "network", "payer_connection_id": "example-health", "status": "verified", "billing_npi": "1111111111", "rendering_npi": "1234567893", "location_id": "north", "place_of_service": "11", "effective_from": "2026-01-01", "effective_to": None}
+        profile = {"id": "office", "payer_connection_id": "example-health", "provider_network_id": "network", "status": "staff_guidance_enabled"}
         with patch("app.api.routers.commercial_estimator.commercial_store.connection", return_value=payer), \
              patch("app.api.routers.commercial_estimator.commercial_store.list_networks", return_value=[network]), \
              patch("app.api.routers.commercial_estimator.commercial_store.list_profiles", return_value=[profile]):
-            inputs = {"payer_id": "bcbs", "service_date": "2026-09-23", "rendering_provider": {"npi": "1234567893"}, "place_of_service": "11"}
-            selected = _nmct_path("nmct", inputs, {"location_id": "north", "billing_provider": {"npi": "1811853260"}})
+            inputs = {"payer_id": "example-health", "service_date": "2026-09-23", "rendering_provider": {"npi": "1234567893"}, "place_of_service": "11"}
+            selected = _practice_path("lakeside", inputs, {"location_id": "north", "billing_provider": {"npi": "1111111111"}})
             with self.assertRaisesRegex(Exception, "verified provider-network"):
-                _nmct_path("nmct", inputs, {"location_id": "north", "billing_provider": {"npi": "1720615453"}})
+                _practice_path("lakeside", inputs, {"location_id": "north", "billing_provider": {"npi": "2222222222"}})
         self.assertEqual(selected, (payer, network, profile))
 
     def test_readiness_reports_independent_real_data_gaps_without_stedi(self):

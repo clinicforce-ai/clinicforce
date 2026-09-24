@@ -81,6 +81,12 @@ def _connection():
                         content_type TEXT NOT NULL, object_key TEXT NOT NULL, created_at TEXT NOT NULL,
                         effective_from TEXT, effective_to TEXT, created_by TEXT NOT NULL REFERENCES staff_members(id)
                     )""")
+                    connection.execute("""CREATE TABLE IF NOT EXISTS staff_deletions (
+                        practice_id TEXT NOT NULL, kind TEXT NOT NULL, record_id TEXT NOT NULL,
+                        intake_id TEXT, actor_id TEXT NOT NULL, created_at TEXT NOT NULL,
+                        object_keys JSONB NOT NULL DEFAULT '[]',
+                        PRIMARY KEY (practice_id,kind,record_id)
+                    )""")
                     connection.commit()
                     _schema_initialized = True
     except Exception:
@@ -271,6 +277,7 @@ def patient_dashboard(practice_id: str) -> dict:
     """Only explicit practice records/shares; never enumerate the portal patient table."""
     with _connection() as connection:
         patients = connection.execute("SELECT * FROM staff_patients WHERE practice_id=%s", (practice_id,)).fetchall()
+        pending_cleanup = connection.execute("SELECT count(*) AS count FROM staff_deletions WHERE practice_id=%s AND object_keys <> '[]'::jsonb", (practice_id,)).fetchone()["count"]
         intakes = connection.execute("""SELECT id,patient_id,auto_patient_id,source_portal_patient_id,fields,status,source,created_at,updated_at,
             jsonb_array_length(documents)>0 AS has_card FROM staff_intakes WHERE practice_id=%s ORDER BY updated_at DESC,id DESC""", (practice_id,)).fetchall()
     patient_map = {row["id"]: row for row in patients}
@@ -317,7 +324,7 @@ def patient_dashboard(practice_id: str) -> dict:
             "updated_at": latest.get("updated_at") or patient["created_at"],
             "intakes": [{name: item[name] for name in ("id", "status", "created_at", "updated_at", "source")} for item in history]})
     rows.sort(key=lambda item: (item["updated_at"], item["id"]), reverse=True)
-    return {"patients": rows, "counts": counts}
+    return {"patients": rows, "counts": counts, "pending_file_cleanup": pending_cleanup}
 
 
 def list_intakes(practice_id: str, query: str = "", status: str = "", offset: int = 0) -> list[dict]:
