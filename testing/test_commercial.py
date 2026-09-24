@@ -1,7 +1,7 @@
 import unittest
 from unittest.mock import patch
 
-from app.api.routers.commercial_estimator import _coverage_snapshot, _ecw_conflicts, _nmct_path, _past_visit_with_saved_estimate, _subscriber_identity, stedi_request_body
+from app.api.routers.commercial_estimator import _appointment_readiness, _coverage_snapshot, _ecw_conflicts, _nmct_path, _past_visit_with_saved_estimate, _subscriber_identity, stedi_request_body
 from app.insurance.commercial import CommercialError, estimate, normalize_stedi_271, parse_rate_csv
 from app.insurance.ecw_backend import _patient_matches
 
@@ -98,6 +98,52 @@ class CommercialRulesTest(unittest.TestCase):
              patch("app.api.routers.commercial_estimator.commercial_store.list_profiles", return_value=[profile]):
             selected = _nmct_path("nmct", {"payer_id": "bcbs", "service_date": "2026-09-23", "rendering_provider": {"npi": "1234567893"}, "place_of_service": "11"}, {"location_id": "north"})
         self.assertEqual(selected, (payer, network, profile))
+
+    def test_readiness_reports_independent_real_data_gaps_without_stedi(self):
+        inputs = {"payer_id": None, "service_date": "2026-09-24", "lines": [],
+                  "rendering_provider": {"npi": None}, "place_of_service": None,
+                  "patient": {"patient_first_name": "Pat", "patient_last_name": "Example", "patient_birth_date": "1980-01-01"},
+                  "subscriber": {}, "member_id": None, "relationship": None}
+        source = {"payer": "Real eCW payer", "location_id": "office", "rendering_provider": {"npi": "1234567893"},
+                  "active_coverages": 0, "coverage_id": None}
+        with patch("app.api.routers.commercial_estimator.commercial_store.list_connections", return_value=[]), \
+             patch("app.api.routers.commercial_estimator.commercial_store.list_networks", return_value=[]), \
+             patch("app.api.routers.commercial_estimator.commercial_store.list_profiles", return_value=[]), \
+             patch("app.api.routers.commercial_estimator.commercial_store.list_rate_versions", return_value=[]), \
+             patch("app.api.routers.commercial_estimator.object_store.enabled", return_value=False), \
+             patch.dict("app.api.routers.commercial_estimator.os.environ", {}, clear=True):
+            result = _appointment_readiness("nmct", {"practice_id": "nmct", "intake": {"fields": {}}}, inputs, source)
+        self.assertFalse(result["ready"])
+        self.assertEqual(result["ecw"]["payer"], "Real eCW payer")
+        self.assertTrue(any("Stedi payer ID" in item for item in result["blockers"]))
+        self.assertTrue(any("provider-network" in item for item in result["blockers"]))
+        self.assertTrue(any("contracted CPT" in item for item in result["blockers"]))
+        self.assertTrue(any("CPT/HCPCS-coded" in item for item in result["blockers"]))
+        self.assertFalse(any("rendering provider NPI" in item for item in result["blockers"]))
+
+    def test_readiness_allows_real_configured_appointment_to_continue(self):
+        payer = {"id": "bcbs", "category": "commercial_medical", "status": "staff_guidance_enabled", "rules": {"service_type_code": "98"}}
+        network = {"id": "network", "payer_connection_id": "bcbs", "status": "verified", "billing_npi": "1234567893",
+                   "rendering_npi": "1234567893", "location_id": "north", "place_of_service": "11",
+                   "effective_from": "2026-01-01", "effective_to": None}
+        profile = {"id": "office", "payer_connection_id": "bcbs", "provider_network_id": "network",
+                   "status": "staff_guidance_enabled", "plan_matcher": ""}
+        inputs = {"payer_id": "bcbs", "service_date": "2026-09-24", "lines": [{"code": "99204", "units": 1, "service_status": "scheduled"}],
+                  "rendering_provider": {"npi": "1234567893"}, "place_of_service": "11",
+                  "patient": {"patient_first_name": "Pat", "patient_last_name": "Example", "patient_birth_date": "1980-01-01"},
+                  "subscriber": {"firstName": "Pat", "lastName": "Example", "birthDate": "1980-01-01"},
+                  "member_id": "real-member", "relationship": "18"}
+        source = {"payer": "BCBS", "location_id": "north", "billing_provider": {"npi": "1234567893"},
+                  "active_coverages": 1, "coverage_id": "real-coverage"}
+        with patch("app.api.routers.commercial_estimator.commercial_store.list_connections", return_value=[payer]), \
+             patch("app.api.routers.commercial_estimator.commercial_store.list_networks", return_value=[network]), \
+             patch("app.api.routers.commercial_estimator.commercial_store.list_profiles", return_value=[profile]), \
+             patch("app.api.routers.commercial_estimator.commercial_store.list_rate_versions", return_value=[{"status": "active"}]), \
+             patch("app.api.routers.commercial_estimator._ecw_coded_lines", return_value=([{"code": "99204", "units": 1, "allowed_cents": 25000}], [])), \
+             patch("app.api.routers.commercial_estimator.object_store.enabled", return_value=True), \
+             patch.dict("app.api.routers.commercial_estimator.os.environ", {"STEDI_EXECUTION_MODE": "commercial_pilot", "STEDI_LIVE_ELIGIBILITY_ENABLED": "true", "STEDI_API_KEY": "test-only-key"}):
+            result = _appointment_readiness("nmct", {"practice_id": "nmct", "intake": {"fields": {}}}, inputs, source)
+        self.assertTrue(result["ready"], result["blockers"])
 
     def test_history_only_shows_an_estimate_saved_for_the_same_ecw_visit(self):
         visit = {"id": "encounter-1", "date": "2026-09-22", "status": "finished", "coded_services": ["99204"]}

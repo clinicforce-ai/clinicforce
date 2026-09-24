@@ -213,6 +213,96 @@ def _nmct_path(practice_id: str, inputs: dict, source: dict) -> tuple[dict, dict
     return payer, networks[0], profiles[0]
 
 
+def _appointment_readiness(practice_id: str, session: dict, inputs: dict, source: dict) -> dict:
+    """Report real eCW and clinic prerequisites before creating a case or calling Stedi."""
+    blockers: list[str] = []
+    payer = network = profile = None
+    connections = commercial_store.list_connections(practice_id)
+    all_networks = commercial_store.list_networks(practice_id)
+    all_profiles = commercial_store.list_profiles(practice_id)
+    rate_versions = commercial_store.list_rate_versions(practice_id)
+    payer = next((row for row in connections if row["id"] == inputs.get("payer_id")
+                  and row["category"] == "commercial_medical" and row["status"] == "staff_guidance_enabled"), None)
+    if not payer:
+        payer_name = str(source.get("payer") or "payer not returned by eClinicalWorks")
+        blockers.append(f"Clinic setup: approve the Stedi payer ID for eClinicalWorks coverage '{payer_name}' and map its exact eCW name or identifier.")
+    if not any(row["status"] == "verified" for row in all_networks):
+        blockers.append("Clinic setup: no verified provider-network participation record is available for this practice.")
+    if not any(row["status"] == "staff_guidance_enabled" for row in all_profiles):
+        blockers.append("Clinic setup: no enabled estimate profile is available for this practice.")
+    if not any(row["status"] == "active" for row in rate_versions):
+        blockers.append("Clinic setup: no actual contracted CPT rate version is active for this practice.")
+
+    service_date = str(inputs.get("service_date") or "")
+    rendering_npi = str((inputs.get("rendering_provider") or {}).get("npi") or "")
+    location_id = str(source.get("location_id") or "")
+    pos = str(inputs.get("place_of_service") or "")
+    if not rendering_npi and not (source.get("rendering_provider") or {}).get("npi"):
+        blockers.append("eClinicalWorks did not return a rendering provider NPI for this appointment.")
+    if not location_id:
+        blockers.append("eClinicalWorks did not return the appointment location needed to verify the provider network.")
+    if not pos:
+        blockers.append("Clinic setup: map the eClinicalWorks appointment location to a place-of-service code.")
+
+    if payer:
+        plan = re.sub(r"[^a-z0-9]", "", str(source.get("plan") or "").casefold())
+        networks = [row for row in all_networks
+                    if row["payer_connection_id"] == payer["id"] and row["status"] == "verified"
+                    and row["rendering_npi"] == rendering_npi and row["location_id"] == location_id
+                    and row["place_of_service"] == pos
+                    and (not row.get("plan_matcher") or (plan and re.sub(r"[^a-z0-9]", "", row["plan_matcher"].casefold()) == plan))
+                    and row["effective_from"] <= service_date and (not row.get("effective_to") or row["effective_to"] >= service_date)]
+        if len(networks) == 1:
+            network = networks[0]
+        else:
+            blockers.append("Clinic setup: verify exactly one provider-network record for this payer, plan, rendering NPI, location, place of service, and visit date.")
+    if network:
+        profiles = [row for row in all_profiles
+                    if row["payer_connection_id"] == payer["id"] and row["provider_network_id"] == network["id"]
+                    and row["status"] == "staff_guidance_enabled" and row.get("plan_matcher", "") == network.get("plan_matcher", "")]
+        if len(profiles) == 1:
+            profile = profiles[0]
+        else:
+            blockers.append("Clinic setup: enable exactly one estimate profile for this payer and provider network.")
+
+    planned = [row for row in inputs.get("lines", []) if row.get("service_status") == "scheduled"]
+    if not planned:
+        blockers.append("eClinicalWorks did not return a CPT/HCPCS-coded service linked to this scheduled visit. The planned service must be coded in eCW before a dollar estimate is possible.")
+    elif any(row.get("modifiers") for row in planned):
+        blockers.append("A scheduled eClinicalWorks service has a modifier; a matching contracted rate is required.")
+    elif any(not row.get("units") for row in planned):
+        blockers.append("eClinicalWorks did not return units for every scheduled coded service.")
+    if profile and planned:
+        _, rate_tasks = _ecw_coded_lines(practice_id, profile, network, service_date, inputs)
+        blockers.extend(rate_tasks)
+    elif payer and not any(row["payer_connection_id"] == payer["id"] and row["status"] == "active"
+                           and row["effective_from"] <= service_date and (not row.get("effective_to") or row["effective_to"] >= service_date)
+                           for row in rate_versions):
+        blockers.append("Clinic setup: import and activate the actual contracted CPT rates effective on this visit date.")
+
+    coverage = _coverage_snapshot(inputs, source)
+    if coverage["active_coverages"] != 1 or not coverage["coverage_id"]:
+        blockers.append("eClinicalWorks did not identify exactly one active primary coverage for this visit.")
+    if not coverage["member_id"] or not coverage["relationship"] or not all(coverage.get(key) for key in
+            ("subscriber_first", "subscriber_last", "subscriber_birth_date")):
+        blockers.append("eClinicalWorks coverage is missing the member ID, relationship, or policyholder identity needed for Stedi.")
+    if payer and network and profile:
+        data = {"payer_connection_id": payer["id"], "provider_network_id": network["id"], "service_date": service_date}
+        blockers.extend(_ecw_conflicts({"commercial": data}, session, inputs, source))
+        if not payer.get("rules", {}).get("service_type_code"):
+            blockers.append("Clinic setup: configure the Stedi service-type code for this payer and visit category.")
+        if payer.get("rules", {}).get("future_dos_current_month") and service_date > date.today().isoformat() and service_date[:7] != date.today().isoformat()[:7]:
+            blockers.append("This payer does not accept an eligibility check for a future visit outside the current month.")
+    if os.getenv("STEDI_EXECUTION_MODE", "off") != "commercial_pilot" or os.getenv("STEDI_LIVE_ELIGIBILITY_ENABLED", "false").lower() != "true":
+        blockers.append("Clinic setup: live Stedi eligibility is not enabled for this practice deployment.")
+    if not os.getenv("STEDI_API_KEY", "").strip() or not object_store.enabled():
+        blockers.append("Clinic setup: Stedi credentials or protected eligibility evidence storage are unavailable.")
+    return {"ready": not blockers, "blockers": list(dict.fromkeys(blockers)),
+            "ecw": {"payer": source.get("payer"), "plan": source.get("plan"),
+                    "scheduled_codes": [{"code": row.get("code"), "units": row.get("units")} for row in planned],
+                    "visit_type": inputs.get("visit_type"), "reason": inputs.get("reason")}}
+
+
 def _ecw_case_data(inputs: dict, source: dict, conflicts: list[str]) -> dict[str, Any]:
     return {"appointment_id": source.get("appointment_id"), "appointment_date": source.get("appointment_date"),
             "retrieved_at": source.get("retrieved_at"), "appointment_status": source.get("appointment_status"),
@@ -419,6 +509,21 @@ async def ecw_appointments(request: Request) -> dict:
     return {"appointments": values}
 
 
+@router.post("/appointments/readiness")
+async def ecw_appointment_readiness(value: EcwStartInput, request: Request) -> dict:
+    """Read one selected visit and explain all known prerequisites without a Stedi transaction."""
+    session = await _session(request)
+    if not ecw_backend.configured():
+        raise HTTPException(503, "The eClinicalWorks backend connection is not configured for this deployment.")
+    try:
+        inputs, _, source = await ecw_backend.fetch_inputs(
+            _ecw_identity(session, date.today().isoformat()),
+            _ecw_practice_for_nmct(session["practice_id"]), value.appointment_id)
+    except ecw_backend.EcwBackendError as exc:
+        raise HTTPException(502, str(exc)) from exc
+    return _appointment_readiness(session["practice_id"], session, inputs, source)
+
+
 @router.get("/history")
 async def ecw_completed_appointments(request: Request) -> dict:
     """List prior eCW visits and a matching saved estimate without recalculating."""
@@ -470,7 +575,7 @@ async def start_from_ecw(value: EcwStartInput, request: Request) -> Any:
         raise HTTPException(409, str(exc)) from exc
     if case.get("estimate"):
         evidence_id = case.get("commercial", {}).get("evidence_id")
-        evidence = commercial_store.evidence(practice_id, evidence_id) if evidence_id else None
+        evidence = commercial_store.evidence(session["practice_id"], evidence_id) if evidence_id else None
         try:
             current = bool(evidence and evidence.get("source") == "stedi" and evidence.get("expires_at")
                            and datetime.fromisoformat(evidence["expires_at"]) > datetime.now(timezone.utc))
