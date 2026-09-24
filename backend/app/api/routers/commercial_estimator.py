@@ -196,10 +196,12 @@ def _nmct_path(practice_id: str, inputs: dict, source: dict) -> tuple[dict, dict
         raise HTTPException(409, "NMCT has no approved Stedi payer mapping for this appointment's eCW coverage.")
     service_date = str(inputs.get("service_date") or "")
     rendering_npi = str((inputs.get("rendering_provider") or {}).get("npi") or "")
+    billing_npi = str((source.get("billing_provider") or {}).get("npi") or "")
     plan = re.sub(r"[^a-z0-9]", "", str(source.get("plan") or "").casefold())
     networks = [row for row in commercial_store.list_networks(practice_id)
                 if row["payer_connection_id"] == payer["id"] and row["status"] == "verified"
-                and row["rendering_npi"] == rendering_npi and row["location_id"] == str(source.get("location_id") or "")
+                and row["billing_npi"] == billing_npi and row["rendering_npi"] == rendering_npi
+                and row["location_id"] == str(source.get("location_id") or "")
                 and row["place_of_service"] == str(inputs.get("place_of_service") or "")
                 and (not row.get("plan_matcher") or (plan and re.sub(r"[^a-z0-9]", "", row["plan_matcher"].casefold()) == plan))
                 and row["effective_from"] <= service_date and (not row.get("effective_to") or row["effective_to"] >= service_date)]
@@ -235,6 +237,7 @@ def _appointment_readiness(practice_id: str, session: dict, inputs: dict, source
 
     service_date = str(inputs.get("service_date") or "")
     rendering_npi = str((inputs.get("rendering_provider") or {}).get("npi") or "")
+    billing_npi = str((source.get("billing_provider") or {}).get("npi") or "")
     location_id = str(source.get("location_id") or "")
     pos = str(inputs.get("place_of_service") or "")
     if not rendering_npi and not (source.get("rendering_provider") or {}).get("npi"):
@@ -248,14 +251,15 @@ def _appointment_readiness(practice_id: str, session: dict, inputs: dict, source
         plan = re.sub(r"[^a-z0-9]", "", str(source.get("plan") or "").casefold())
         networks = [row for row in all_networks
                     if row["payer_connection_id"] == payer["id"] and row["status"] == "verified"
-                    and row["rendering_npi"] == rendering_npi and row["location_id"] == location_id
+                    and row["billing_npi"] == billing_npi and row["rendering_npi"] == rendering_npi
+                    and row["location_id"] == location_id
                     and row["place_of_service"] == pos
                     and (not row.get("plan_matcher") or (plan and re.sub(r"[^a-z0-9]", "", row["plan_matcher"].casefold()) == plan))
                     and row["effective_from"] <= service_date and (not row.get("effective_to") or row["effective_to"] >= service_date)]
         if len(networks) == 1:
             network = networks[0]
         else:
-            blockers.append("Clinic setup: verify exactly one provider-network record for this payer, plan, rendering NPI, location, place of service, and visit date.")
+            blockers.append("Clinic setup: verify exactly one provider-network record for this payer, plan, billing and rendering NPIs, location, place of service, and visit date.")
     if network:
         profiles = [row for row in all_profiles
                     if row["payer_connection_id"] == payer["id"] and row["provider_network_id"] == network["id"]
