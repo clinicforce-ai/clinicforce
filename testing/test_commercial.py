@@ -197,12 +197,15 @@ class CommercialRulesTest(unittest.TestCase):
 
     def test_nmct_path_uses_ecw_payer_provider_location_and_pos(self):
         payer = {"id": "bcbs", "category": "commercial_medical", "status": "staff_guidance_enabled"}
-        network = {"id": "network", "payer_connection_id": "bcbs", "status": "verified", "rendering_npi": "1234567893", "location_id": "north", "place_of_service": "11", "effective_from": "2026-01-01", "effective_to": None}
+        network = {"id": "network", "payer_connection_id": "bcbs", "status": "verified", "billing_npi": "1811853260", "rendering_npi": "1234567893", "location_id": "north", "place_of_service": "11", "effective_from": "2026-01-01", "effective_to": None}
         profile = {"id": "office", "payer_connection_id": "bcbs", "provider_network_id": "network", "status": "staff_guidance_enabled"}
         with patch("app.api.routers.commercial_estimator.commercial_store.connection", return_value=payer), \
              patch("app.api.routers.commercial_estimator.commercial_store.list_networks", return_value=[network]), \
              patch("app.api.routers.commercial_estimator.commercial_store.list_profiles", return_value=[profile]):
-            selected = _nmct_path("nmct", {"payer_id": "bcbs", "service_date": "2026-09-23", "rendering_provider": {"npi": "1234567893"}, "place_of_service": "11"}, {"location_id": "north"})
+            inputs = {"payer_id": "bcbs", "service_date": "2026-09-23", "rendering_provider": {"npi": "1234567893"}, "place_of_service": "11"}
+            selected = _nmct_path("nmct", inputs, {"location_id": "north", "billing_provider": {"npi": "1811853260"}})
+            with self.assertRaisesRegex(Exception, "verified provider-network"):
+                _nmct_path("nmct", inputs, {"location_id": "north", "billing_provider": {"npi": "1720615453"}})
         self.assertEqual(selected, (payer, network, profile))
 
     def test_readiness_reports_independent_real_data_gaps_without_stedi(self):
