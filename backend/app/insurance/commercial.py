@@ -208,8 +208,6 @@ def reported_stedi_options(payload: dict[str, Any], service_type_code: str) -> l
                        "amount_cents": _stedi_cents(row.get("benefitAmount")),
                        "percent": str(percent) if percent is not None else None,
                        "payer_note": note_text(row.get("messages") or row.get("additionalInformation"))[:240]})
-        if len(result) >= 60:
-            break
     return result
 
 
