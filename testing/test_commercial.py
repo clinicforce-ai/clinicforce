@@ -245,8 +245,16 @@ class CommercialRulesTest(unittest.TestCase):
                                             'rendering_last': 'Clinician'}, enriched, '2026-10-01', '98')
         assert enriched_body['subscriber']['groupNumber'] == 'GROUP-9'
         assert enriched_body['subscriber']['planNumber'] == 'PLAN-2'
-        assert enriched_body['dependent']['gender'] == 'F'
+        assert enriched_body['dependent']['gender'] == 'FEMALE'
+        assert enriched_body['dependent']['address']['addressLine1'] == '1 Main St'
         assert enriched_body['dependent']['address']['postalCode'] == '78701'
+        basic_body = stedi_request_body({'stedi_payer_id': 'payer'}, {'rendering_npi': '1234567890', 'rendering_first': 'Ada',
+                                         'rendering_last': 'Clinician'}, enriched, '2026-10-01', '98',
+                                        include_identity_hints=False)
+        assert 'groupNumber' not in basic_body['subscriber']
+        assert 'planNumber' not in basic_body['subscriber']
+        assert 'address' not in basic_body['dependent']
+        assert 'gender' not in basic_body['dependent']
 
     def test_stedi_provider_fallback_keeps_organization_name_with_organization_npi(self):
         coverage = {"member_id": "M123", "relationship": "18", "subscriber_first": "Ada", "subscriber_last": "Lovelace",
