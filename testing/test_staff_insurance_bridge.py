@@ -95,6 +95,41 @@ class StaffInsuranceBridgeTests(unittest.IsolatedAsyncioTestCase):
         return {**documented.pending_case({"member_name": "PAT EXAMPLE", "member_id": "MEM123", "group_number": "GROUP"}),
                 "extraction_version": v1_sources.EXTRACTION_VERSION, "evidence_manifest_id": golden.evidence_binding()}
 
+    async def test_ecw_lookup_verifies_before_intake_and_links_verified_patient(self):
+        details = {"given_name": "Pat", "middle_initial": "Q", "family_name": "Example", "birth_date": "1990-01-01"}
+        path = "/api/staff/intakes/ecw-lookup"
+        with patch.object(staff.ecw_backend, "configured", return_value=True), patch.object(
+                staff.ecw_backend, "lookup_patient_and_appointments", new=AsyncMock(
+                    side_effect=staff.ecw_backend.EcwBackendError("No eClinicalWorks patient matched the entered name and date of birth."))):
+            failed = await self.client.post(path, json=details)
+        self.assertEqual(failed.status_code, 502, failed.text)
+        self.assertEqual(staff_store.list_intakes(self.actor["practice_id"]), [])
+        match = {"patient": {"id": "ecw-patient-1", "given_name": "Pat", "family_name": "Example", "birth_date": "1990-01-01"},
+                 "appointments": [{"id": "visit-1", "start": "2026-10-01T09:00:00Z", "status": "planned", "reason": "Follow-up"}]}
+        with patch.object(staff.ecw_backend, "configured", return_value=True), patch.object(
+                staff.ecw_backend, "lookup_patient_and_appointments", new=AsyncMock(return_value=match)) as lookup:
+            found = await self.client.post(path, json=details)
+        self.assertEqual(found.status_code, 201, found.text)
+        self.assertEqual(found.json()["ecw_match"]["appointments"][0]["id"], "visit-1")
+        self.assertEqual(found.json()["fields"]["ecw_patient_id"], "ecw-patient-1")
+        self.assertEqual(lookup.await_args.args[0]["patient_middle_initial"], "Q")
+        intake_id = found.json()["id"]
+        confirmation = {"given_name": "Pat", "family_name": "Example", "birth_date": "1990-01-01", "relationship": "unknown", "identity_confirmed": True}
+        changed = await self.client.put(f"/api/staff/intakes/{intake_id}/patient", json={**confirmation, "family_name": "Changed"})
+        self.assertEqual(changed.status_code, 409, changed.text)
+        saved = await self.client.put(f"/api/staff/intakes/{intake_id}/patient", json=confirmation)
+        self.assertEqual(saved.status_code, 200, saved.text)
+        self.assertEqual(saved.json()["patient"]["ecw_patient_id"], "ecw-patient-1")
+        legacy = staff_store.create_intake(str(uuid4()), self.actor, [], "ecw_lookup", None, details)
+        with self.assertRaisesRegex(ValueError, "not verified in eCW"):
+            staff_store.confirm_patient(legacy["id"], self.actor, confirmation)
+        with patch.object(staff.ecw_backend, "configured", return_value=True), patch.object(
+                staff.ecw_backend, "lookup_patient_and_appointments", new=AsyncMock(return_value=match)):
+            duplicate = await self.client.post(path, json=details)
+        conflicting = await self.client.put(f"/api/staff/intakes/{duplicate.json()['id']}/patient", json=confirmation)
+        self.assertEqual(conflicting.status_code, 409, conflicting.text)
+        self.assertIn("already linked", conflicting.text)
+
     async def test_real_header_scope_never_falls_back_to_qr_or_another_patient(self):
         own, other_intake = self.intake(), self.intake(member_id="OTHER")
         response = await self.client.post("/api/doctor/insurance/staff-case", headers={"X-ClinicForce-Intake": own["id"]})

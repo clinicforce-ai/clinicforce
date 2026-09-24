@@ -45,7 +45,7 @@ export interface StaffIntake {
   created_at: string
   updated_at: string
   patient?: StaffPatient | null
-  fields: Partial<StaffPatientFields> & { member_name?: string; middle_initial?: string }
+  fields: Partial<StaffPatientFields> & { member_name?: string; middle_initial?: string; ecw_patient_id?: string }
   documents: Array<{ id: string; filename: string; content_type: string; size_bytes: number; created_at: string }>
   workflow_documents?: StaffWorkflowDocument[]
   workflows?: { v1?: string; v2?: string }
@@ -78,7 +78,8 @@ export function createStaffIntake(files: File[], details: StaffCardDetails) {
   return request<StaffIntake>('/api/staff/intakes', { method: 'POST', body })
 }
 
-export const createStaffEcwLookup = (details: { given_name: string; middle_initial: string; family_name: string; birth_date: string }) => request<StaffIntake>('/api/staff/intakes/ecw-lookup', json(details))
+export type EcwPatientMatch = { patient: { given_name: string; family_name: string; birth_date: string }; appointments: Array<{ id: string; start: string; status: string; reason: string }> }
+export const createStaffEcwLookup = (details: { given_name: string; middle_initial: string; family_name: string; birth_date: string }) => request<StaffIntake & { ecw_match: EcwPatientMatch }>('/api/staff/intakes/ecw-lookup', json(details))
 
 export const confirmStaffPatient = (id: string, fields: StaffPatientFields & { identity_confirmed: true; patient_id?: string }) => request<StaffIntake>(`/api/staff/intakes/${encodeURIComponent(id)}/patient`, { ...json(fields), method: 'PUT' })
 export const addStaffMember = (member: { username: string; display_name: string; password: string; role: 'staff' | 'admin' }) => request<unknown>('/api/staff/members', json(member))

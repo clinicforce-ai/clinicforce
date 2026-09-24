@@ -196,16 +196,9 @@ async def _bounded_read(client: httpx.AsyncClient, issuer: str, token: str,
 
 async def _cached_patient(client: httpx.AsyncClient, issuer: str, token: str,
                           patient_id: str, profile: dict[str, Any]) -> tuple[dict[str, Any], str | None]:
-    fallback = {
-        "resourceType": "Patient", "id": patient_id,
-        "name": [{"use": "official", "given": [str(profile.get("patient_first_name") or "")],
-                  "family": str(profile.get("patient_last_name") or "")}],
-        "birthDate": str(profile.get("patient_birth_date") or ""),
-        "gender": {"M": "male", "F": "female"}.get(profile.get("gender"), "unknown"),
-    }
     patient, timed_out = await _bounded_read(client, issuer, token, f"Patient/{patient_id}")
     if timed_out:
-        return fallback, "Patient"
+        raise EcwBackendError("eClinicalWorks timed out while verifying the saved patient. Retry the lookup.")
     if not patient:
         raise EcwBackendError("The saved eClinicalWorks patient link no longer exists.")
     return patient, None
@@ -435,23 +428,31 @@ async def _patient_for_profile(client: httpx.AsyncClient, issuer: str, token: st
             "family": str(profile.get("patient_last_name") or ""),
             "birthdate": str(profile.get("patient_birth_date") or ""),
         })
-    matches = [row for row in patient_rows if _patient_matches(row, profile)]
+        if not any(_patient_matches(row, profile) for row in patient_rows):
+            patient_rows = await _search(client, issuer, token, "Patient", {
+                "family": str(profile.get("patient_last_name") or ""),
+                "birthdate": str(profile.get("patient_birth_date") or ""),
+            })
+    matches = {str(row.get("id") or ""): row for row in patient_rows if _patient_matches(row, profile)}
+    if not matches:
+        raise EcwBackendError("No eClinicalWorks patient matched the entered name and date of birth. Check the patient's eCW record before continuing.")
     if len(matches) != 1:
-        raise EcwBackendError("eClinicalWorks did not return exactly one patient matching the confirmed patient name and birth date.")
-    patient = matches[0]
+        raise EcwBackendError("Multiple eClinicalWorks patients matched the entered name and date of birth. Resolve the identity in eCW before continuing.")
+    patient = next(iter(matches.values()))
     patient_id = str(patient.get("id", ""))
     if not re.fullmatch(r"[A-Za-z0-9.\-]{1,200}", patient_id):
         raise EcwBackendError("eClinicalWorks returned an invalid patient identifier.")
     return patient, patient_id, patient_timeout
 
 
-async def list_appointments(profile: dict[str, Any], practice: dict[str, Any], *, transport: httpx.AsyncBaseTransport | None = None) -> list[dict[str, str]]:
-    """Return only selectable current/future appointments; this never sends eligibility."""
+async def lookup_patient_and_appointments(profile: dict[str, Any], practice: dict[str, Any], *,
+                                          transport: httpx.AsyncBaseTransport | None = None) -> dict[str, Any]:
+    """Verify one eCW patient and return only current/future appointments; no eligibility request."""
     client_id, issuer = settings()
     try:
         async with httpx.AsyncClient(timeout=30, follow_redirects=False, transport=transport) as client:
             token = await _access_token(client, client_id, issuer)
-            _, patient_id, _ = await _patient_for_profile(client, issuer, token, profile)
+            patient, patient_id, _ = await _patient_for_profile(client, issuer, token, profile)
             today = datetime.now(ZoneInfo(practice.get("timezone", "America/New_York"))).date()
             encounters, timed_out = await _bounded_search(
                 client, issuer, token, "Encounter",
@@ -466,13 +467,22 @@ async def list_appointments(profile: dict[str, Any], practice: dict[str, Any], *
     appointments = []
     for visit in encounters:
         appointment_id, start = str(visit.get("id") or ""), str((visit.get("period") or {}).get("start") or "")
-        if not re.fullmatch(r"[A-Za-z0-9.\-]{1,200}", appointment_id) or _appointment_date(visit) < today.isoformat():
+        if (_reference(visit.get("subject")) != f"Patient/{patient_id}"
+                or not re.fullmatch(r"[A-Za-z0-9.\-]{1,200}", appointment_id)
+                or not start or _appointment_date(visit) < today.isoformat()):
             continue
         if str(visit.get("status") or "").casefold() in {"cancelled", "entered-in-error", "finished", "completed"}:
             continue
         appointments.append({"id": appointment_id, "start": start, "status": str(visit.get("status") or "scheduled"),
                              "reason": _visit_context(visit, [], [], []) or ""})
-    return sorted(appointments, key=lambda row: (row["start"], row["id"]))
+    first, family = _name(patient)
+    return {"patient": {"id": patient_id, "given_name": first, "family_name": family,
+                        "birth_date": patient.get("birthDate")},
+            "appointments": sorted(appointments, key=lambda row: (row["start"], row["id"]))}
+
+
+async def list_appointments(profile: dict[str, Any], practice: dict[str, Any], *, transport: httpx.AsyncBaseTransport | None = None) -> list[dict[str, str]]:
+    return (await lookup_patient_and_appointments(profile, practice, transport=transport))["appointments"]
 
 
 async def list_completed_appointments(profile: dict[str, Any], practice: dict[str, Any], *,

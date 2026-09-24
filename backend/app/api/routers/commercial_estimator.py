@@ -270,6 +270,8 @@ def _ecw_identity(session: dict, service_date: str) -> dict[str, str]:
     patient = session["intake"]["patient"]
     values = {"patient_first_name": patient.get("given_name"), "patient_middle_initial": session["intake"]["fields"].get("middle_initial", ""), "patient_last_name": patient.get("family_name"),
               "patient_birth_date": str(patient.get("birth_date") or ""), "ecw_appointment_date": service_date}
+    if patient.get("ecw_patient_id"):
+        values["ecw_patient_id"] = str(patient["ecw_patient_id"])
     if not all(values[key] for key in ("patient_first_name", "patient_last_name", "patient_birth_date")):
         raise HTTPException(422, "Confirm patient name and birth date before reading eClinicalWorks.")
     return {key: str(value) for key, value in values.items()}

@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import asyncio
 import csv
 import hashlib
 import mimetypes
+import os
 from datetime import date
 from io import BytesIO
 from io import StringIO
@@ -24,7 +26,7 @@ from app.api.settings import ALLOWED_ORIGINS, CLINICIAN_SHARE_COOKIE, MAX_INSURA
 from app.core import clinic_email, object_store, staff_store
 from app.core.patient_store import get_patient_profile
 from app.core.request_address import request_address
-from app.insurance import era835, golden, v1_sources
+from app.insurance import ecw_backend, era835, golden, v1_sources
 
 
 router = APIRouter(prefix="/api/staff", tags=["staff"])
@@ -300,10 +302,25 @@ def manual_card_fields(full_name: str, member_id: str, birth_date: str) -> dict:
 @router.post("/intakes/ecw-lookup")
 async def create_ecw_lookup(value: EcwLookup, request: Request):
     staff = await require_staff(request)
+    if not ecw_backend.configured():
+        raise HTTPException(503, "The eClinicalWorks practice connection is not configured.")
+    try:
+        matched = await asyncio.wait_for(ecw_backend.lookup_patient_and_appointments(
+            {"patient_first_name": value.given_name, "patient_middle_initial": value.middle_initial,
+             "patient_last_name": value.family_name, "patient_birth_date": value.birth_date.isoformat()},
+            {"timezone": os.getenv("COMMERCIAL_PRACTICE_TIMEZONE", "America/New_York")},
+        ), timeout=38)
+    except asyncio.TimeoutError:
+        raise HTTPException(504, "eClinicalWorks did not respond to the patient search in time. Retry the lookup.") from None
+    except ecw_backend.EcwBackendError as exc:
+        raise HTTPException(502, str(exc)) from exc
     fields = {"given_name": value.given_name, "middle_initial": value.middle_initial,
-              "family_name": value.family_name, "birth_date": value.birth_date.isoformat()}
+              "family_name": value.family_name, "birth_date": value.birth_date.isoformat(),
+              "ecw_patient_id": matched["patient"]["id"]}
     intake = await run_in_threadpool(staff_store.create_intake, str(uuid4()), staff, [], "ecw_lookup", None, fields)
-    return JSONResponse(public(intake), status_code=201, headers=NO_STORE)
+    return JSONResponse({**public(intake), "ecw_match": {"patient": {key: matched["patient"][key]
+                         for key in ("given_name", "family_name", "birth_date")},
+                         "appointments": matched["appointments"]}}, status_code=201, headers=NO_STORE)
 
 
 @router.post("/intakes")
