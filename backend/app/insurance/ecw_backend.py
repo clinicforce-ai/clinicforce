@@ -14,6 +14,7 @@ from zoneinfo import ZoneInfo
 import httpx
 
 from app.ingestion import ecw
+from app.insurance.stedi_discovery import patient_address
 
 
 SCOPES = (
@@ -744,7 +745,7 @@ async def fetch_inputs(profile: dict[str, Any], practice: dict[str, Any], appoin
             gender = {"male": "M", "female": "F"}.get(str(patient.get("gender", "")).lower(), "U")
             inputs = {
                 "patient": {"patient_first_name": first, "patient_last_name": family,
-                            "patient_birth_date": patient.get("birthDate"), "gender": gender},
+                            "patient_birth_date": patient.get("birthDate"), "gender": gender, "address": patient_address(patient)},
                 "subscriber": {"firstName": sub_given, "lastName": sub_family,
                                "birthDate": subscriber_resource.get("birthDate"), "memberId": coverage.get("subscriberId")},
                 "relationship": relationship, "member_id": coverage.get("subscriberId"),

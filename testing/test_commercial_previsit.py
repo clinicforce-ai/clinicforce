@@ -69,7 +69,7 @@ class PrevisitFlowTest(unittest.IsolatedAsyncioTestCase):
                 self.assertIsNone(result['benefits']['active'])
                 self.assertEqual(result['plan'], 'CI')
                 self.assertEqual(len(result['price_range']['lines']), 4)
-                self.assertNotIn('context_token', result)
+                self.assertIn('context_token', result)  # anticipated services remain editable
                 self.assertEqual(case['previsit']['request_state'], 'rejected')
                 self.assertEqual(client.post.await_count, 1)
                 self.assertNotIn('patient_max_cents', result['price_range'])
@@ -78,6 +78,9 @@ class PrevisitFlowTest(unittest.IsolatedAsyncioTestCase):
                     self.assertEqual(result['eligibility_failure']['codes'], ['72'])
                     self.assertIn('Correct the policy in eCW', result['eligibility_failure']['action'])
                     self.assertTrue(result['eligibility_failure']['attempted_at'])
+                    cached = await previsit_estimate(EcwStartInput(appointment_id='visit-1'), MagicMock())
+                    self.assertEqual(client.post.await_count, 1)
+                    self.assertEqual(cached['eligibility_failure'], result['eligibility_failure'])
                 else:
                     self.assertIn('not an inactive-coverage result', ' '.join(result['issues']))
                 return
