@@ -1,13 +1,28 @@
 import unittest
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from app.api.routers.commercial_estimator import _appointment_readiness, _coverage_snapshot, _ecw_conflicts, _nmct_path, _past_visit_with_saved_estimate, _previsit_codes, _previsit_range, _subscriber_identity, stedi_request_body
 from app.insurance.commercial import CommercialError, estimate, normalize_stedi_271, parse_rate_csv
+from app.insurance import commercial_store
 from app.insurance.ecw_backend import _patient_matches
 from app.insurance.stedi_payers import select_payer
 
 
 class CommercialRulesTest(unittest.TestCase):
+    def test_rate_import_uses_psycopg_cursor_for_batch_rows(self):
+        db = MagicMock(spec=["execute", "cursor", "__enter__", "__exit__"])
+        db.__enter__.return_value = db
+        db.execute.return_value.fetchone.return_value = {"id": "version"}
+        rows = [{"code": "99202", "row_number": 1}, {"code": "99203", "row_number": 2}]
+        with patch.object(commercial_store, "_connection", return_value=db), \
+             patch.object(commercial_store, "connection", return_value={"id": "payer"}):
+            result = commercial_store.import_rates("clinic", "payer", "contract_export", "s3://approved/rates.csv",
+                                                   "digest", "2026-08-24", None, 0, rows)
+        self.assertEqual(result["id"], "version")
+        inserted = db.cursor.return_value.executemany.call_args.args[1]
+        self.assertEqual([row["code"] for row in inserted], ["99202", "99203"])
+        self.assertEqual(len({row["version_id"] for row in inserted}), 1)
+
     def test_previsit_new_patient_has_alternative_levels_without_a_final_code(self):
         rows = _previsit_codes({"visit_type": "new", "lines": []})
         self.assertEqual([row["code"] for row in rows], ["99202", "99203", "99204", "99205"])
