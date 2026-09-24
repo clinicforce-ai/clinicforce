@@ -492,7 +492,7 @@ def _evidence_context(case: dict, session: dict, network: dict) -> dict:
             "member_id": coverage["member_id"], "ecw_coverage_id": coverage["coverage_id"]}
 
 
-async def _assert_ecw_current(case: dict, session: dict) -> None:
+async def _assert_ecw_current(case: dict, session: dict) -> dict:
     data, saved = case["commercial"], case.get("ecw_coverage")
     if not saved or not saved.get("appointment_id"):
         raise commercial.CommercialError("Start a new estimate from a confirmed eClinicalWorks appointment.")
@@ -509,6 +509,7 @@ async def _assert_ecw_current(case: dict, session: dict) -> None:
     lines, tasks = _ecw_coded_lines(session["practice_id"], profile, network, data["service_date"], inputs)
     if tasks or lines != data["lines"]:
         raise commercial.CommercialError("The scheduled services or contracted rates changed. Start a new review.")
+    return source
 
 
 def stedi_request_body(payer: dict, network: dict, coverage: dict, service_date: str, stc: str) -> dict:
@@ -516,7 +517,14 @@ def stedi_request_body(payer: dict, network: dict, coverage: dict, service_date:
               "patient_first", "patient_last", "patient_birth_date")
     if any(not coverage.get(key) for key in needed) or coverage.get("active_coverages") != 1:
         raise commercial.CommercialError("eClinicalWorks did not return one usable primary coverage with member and policyholder details.")
-    body = {"payerId": payer["stedi_payer_id"], "provider": {"npi": network["rendering_npi"], "name": {"organization": network["organization_name"]}},
+    if network.get("rendering_first") and network.get("rendering_last") and network.get("rendering_npi"):
+        provider = {"npi": network["rendering_npi"], "name": {"person": {
+            "firstName": network["rendering_first"], "lastName": network["rendering_last"]}}}
+    elif network.get("billing_npi") and network.get("organization_name"):
+        provider = {"npi": network["billing_npi"], "name": {"organization": network["organization_name"]}}
+    else:
+        raise commercial.CommercialError("eClinicalWorks did not return one matching provider name and NPI for the Stedi inquiry.")
+    body = {"payerId": payer["stedi_payer_id"], "provider": provider,
             "subscriber": {"memberId": coverage["member_id"], "dateOfBirth": coverage["subscriber_birth_date"],
                            "name": {"person": {"firstName": coverage["subscriber_first"], "lastName": coverage["subscriber_last"]}}},
             "encounter": {"dates": {"service": service_date}, "services": [{"system": "STC", "value": stc}]}}
@@ -628,12 +636,15 @@ async def previsit_estimate(value: EcwStartInput, request: Request) -> dict:
     if not source.get("payer"):
         result["issues"].append("eCW did not return an insurer name for the selected policy.")
         return result
-    rendering_npi = str((source.get("rendering_provider") or {}).get("npi") or
-                        (inputs.get("rendering_provider") or {}).get("npi") or "")
-    organization_name = str((source.get("billing_provider") or {}).get("name") or
-                            session.get("staff", {}).get("practice_name") or "")
-    if not re.fullmatch(r"\d{10}", rendering_npi) or not organization_name:
-        result["issues"].append("eCW did not return the rendering NPI and billing organization needed for the payer check.")
+    rendering = source.get("rendering_provider") or {}
+    billing = source.get("billing_provider") or {}
+    rendering_npi = str(rendering.get("npi") or (inputs.get("rendering_provider") or {}).get("npi") or "")
+    billing_npi = str(billing.get("npi") or "")
+    organization_name = str(billing.get("name") or session.get("staff", {}).get("practice_name") or "")
+    rendering_first, rendering_last = str(rendering.get("first_name") or ""), str(rendering.get("last_name") or "")
+    if not ((re.fullmatch(r"\d{10}", rendering_npi) and rendering_first and rendering_last) or
+            (re.fullmatch(r"\d{10}", billing_npi) and organization_name)):
+        result["issues"].append("eCW did not return a matched provider name and NPI needed for the payer check.")
         return result
     api_key = os.getenv("STEDI_API_KEY", "").strip()
     if (os.getenv("STEDI_EXECUTION_MODE", "off") != "commercial_pilot" or
@@ -656,7 +667,9 @@ async def previsit_estimate(value: EcwStartInput, request: Request) -> dict:
         return result
     payer_id = payer["stediId"]
     result["stedi_payer"] = {"name": payer.get("displayName"), "id": payer_id}
-    provider = {"rendering_npi": rendering_npi, "organization_name": organization_name}
+    provider = {"rendering_npi": rendering_npi, "rendering_first": rendering_first,
+                "rendering_last": rendering_last, "billing_npi": billing_npi,
+                "organization_name": organization_name}
     try:
         body = stedi_request_body({"stedi_payer_id": payer_id}, provider, coverage, inputs["service_date"], "98")
     except commercial.CommercialError as exc:
@@ -921,7 +934,7 @@ async def stedi_eligibility(case_id: str, request: Request) -> Any:
     if not object_store.enabled():
         raise HTTPException(503, "Protected evidence storage must be configured before a live Stedi request.")
     try:
-        await _assert_ecw_current(case, session)
+        current_source = await _assert_ecw_current(case, session)
     except commercial.CommercialError as exc:
         raise HTTPException(409, str(exc)) from exc
     api_key = os.getenv("STEDI_API_KEY", "").strip()
@@ -939,7 +952,10 @@ async def stedi_eligibility(case_id: str, request: Request) -> Any:
     stc = rules.get("service_type_code")
     if not isinstance(stc, str) or not stc: raise HTTPException(422, "Configure exactly one Stedi service-type code for this payer/profile before eligibility.")
     try:
-        body = stedi_request_body(payer, network, case["ecw_coverage"], data["service_date"], stc)
+        rendering = current_source.get("rendering_provider") or {}
+        body = stedi_request_body(payer, {**network, "rendering_first": rendering.get("first_name"),
+                                          "rendering_last": rendering.get("last_name")},
+                                  case["ecw_coverage"], data["service_date"], stc)
     except commercial.CommercialError as exc:
         raise HTTPException(409, str(exc)) from exc
     data["request_state"] = "pending"; case = await run_in_threadpool(_save, case, session, "stedi-request-pending")

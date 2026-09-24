@@ -827,9 +827,10 @@ async def fetch_inputs(profile: dict[str, Any], practice: dict[str, Any], appoin
                                     ("payer" in str(item.get("system") or "").casefold() or
                                      "x12" in str(item.get("system") or "").casefold())],
               "location": location.get("name"), "location_id": str(location.get("id") or location_ref or ""),
-              "billing_provider": {"npi": billing_npi},
               "billing_provider": {"name": _display(billing_resource), "npi": ecw_billing_npi},
               "rendering_provider": {"name": _display(rendering_resource), "npi": ecw_rendering_npi,
+                                     "first_name": _name(rendering_resource)[0],
+                                     "last_name": _name(rendering_resource)[1],
                                      "roles": role_labels[:10]},
               "missing": list(dict.fromkeys(ecw_missing)),
               "timed_out_resources": reference_timeouts,
