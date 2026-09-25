@@ -47,7 +47,7 @@ export function ServicePlanner({ result, busy, save, viewEstimate }: { result: P
   const openEstimate = () => {
     // Viewing the evidence is always available, including during coverage recovery.
     viewEstimate(changed && !selected.length ? 'Showing the saved estimate. Add a service to price a different plan.' : changed && busy ? 'Showing the saved estimate while the current check finishes.' : undefined)
-    if (changed && chosen.some(row => !Number.isInteger(quantities[row.id!]) || quantities[row.id!] < 1 || quantities[row.id!] > 10000)) { setEditError('The edited plan needs a valid quantity. The previous estimate remains available.'); return }
+    if (changed && chosen.some(row => !Number.isInteger(quantities[row.id!]) || quantities[row.id!] < 1 || quantities[row.id!] > 10000)) { const message = 'The edited plan needs a valid quantity. Showing the saved estimate.'; setEditError(message); viewEstimate(message); return }
     setEditError('')
     if (!busy && changed && selected.length && result.check_id && result.context_token) {
       void save({ selected_ids: selected, confirmed_units: Object.fromEntries(selected.map(id => [id, quantities[id]])), ...(result.cash_schedule ? { cash_selection: cashSelection } : {}) })
