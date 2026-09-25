@@ -934,6 +934,23 @@ def saved_eligibility_summary(rows: list[dict], patient_id: str, coverage_id: st
             'message': 'Saved eCW payer verification matches this policy and visit date. Benefit amounts and service approvals are checked separately.'}
 
 
+async def fetch_claim_identifiers(source: dict, *, transport: httpx.AsyncBaseTransport | None = None) -> list[str]:
+    """Correlate remittances to this eCW patient, including same-name dependents."""
+    if not source.get('_patient_id'):
+        return []
+    try:
+        client_id, issuer = settings()
+        async with httpx.AsyncClient(timeout=8, follow_redirects=False, transport=transport) as client:
+            token = await _access_token(client, client_id, issuer, SCOPES + ('system/Claim.read',))
+            rows, _, _ = await _optional_search(client, issuer, token, 'Claim', {'patient': source['_patient_id']}, timeout_seconds=8)
+        return list({str(item['value']) for row in rows
+                     if _reference(row.get('patient')) == 'Patient/' + source['_patient_id']
+                     and row.get('status') not in {'cancelled', 'entered-in-error'}
+                     for item in row.get('identifier', []) if item.get('value')})
+    except (EcwBackendError, httpx.HTTPError):
+        return []
+
+
 async def fetch_saved_eligibility(source: dict, service_date: str, *, transport: httpx.AsyncBaseTransport | None = None) -> dict:
     """Read optional saved evidence without letting missing scopes block a visit."""
     fallback = {'status': 'check_with_stedi', 'message': 'The saved eCW check could not be read through this connection. Use Stedi verification; ask the eCW administrator to review saved eligibility access if this persists.'}

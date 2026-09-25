@@ -21,6 +21,7 @@ from pydantic import StrictInt, BaseModel, ConfigDict, Field, ValidationError
 from app.api.routers.insurance import _response, _scope, _session as insurance_session
 from app.core import object_store
 from app.insurance import commercial, commercial_store, cpt_rules, cpt_suggester, ecw_backend, golden, stedi_discovery, stedi_payers, store, visit_estimate, nmct_cash, practice_prices, plan_benefits
+from app.insurance import stedi_financial
 
 
 router = APIRouter(prefix="/api/doctor/insurance/commercial", tags=["doctor-commercial-estimator"])
@@ -348,7 +349,7 @@ def _appointment_readiness(practice_id: str, session: dict, inputs: dict, source
             blockers.append("This payer does not accept an eligibility check for a future visit outside the current month.")
     if os.getenv("STEDI_EXECUTION_MODE", "off") != "commercial_pilot" or os.getenv("STEDI_LIVE_ELIGIBILITY_ENABLED", "false").lower() != "true":
         blockers.append("Clinic setup: live Stedi eligibility is not enabled for this practice deployment.")
-    if not os.getenv("STEDI_API_KEY", "").strip() or not object_store.enabled():
+    if not stedi_financial.credentials(session["practice_id"]) or not object_store.enabled():
         blockers.append("Clinic setup: Stedi credentials or protected eligibility evidence storage are unavailable.")
     return {"ready": not blockers, "blockers": list(dict.fromkeys(blockers)),
             "ecw": {"payer": source.get("payer"), "plan": source.get("plan"),
@@ -454,7 +455,7 @@ def _attach_previsit_pricing(result: dict, practice_id: str, inputs: dict, sourc
         result["issues"].append("Clinic pricing: no single approved plan and provider contract is linked to this Stedi payer.")
         result['price_range'] = visit_estimate.price_lines(result['codes'], [], benefits, {}, payload=payload,
             service_date=inputs.get('service_date', ''), reviews=(review or {}).get('lines'),
-            alternatives=bool(result['codes']) and all(row.get('source') == 'conditional office E/M alternative' for row in result['codes']))
+            alternatives=not (review or {}).get('selected_ids') and bool(result['codes']) and all(row.get('source') == 'conditional office E/M alternative' for row in result['codes']))
         return
     connection = connections[0]
     try:
@@ -527,29 +528,51 @@ def _finish_previsit(result: dict, case: dict, inputs: dict, source: dict, paylo
     if uploaded_cash:
         known_codes = {row['code'] for row in available}
         available.extend({'id': 'cash:' + row['code'], 'code': row['code'], 'description': row['description'], 'source': 'Practice cash schedule', 'units': 1, 'modifiers': []} for row in uploaded_cash['rows'] if row['code'] not in known_codes)
+    if visit_estimate.is_emg_visit(inputs):
+        # Clinical options work for every practice, even before its prices arrive.
+        # This catalog supplies no prices or coverage assumptions.
+        known_codes = {row['code'] for row in available}
+        descriptions = {**{str(n): 'Nerve conduction studies' for n in range(95907, 95914)},
+                        '95885': 'Limited needle EMG', '95886': 'Complete needle EMG'}
+        available.extend({'id': 'planning:' + code, 'code': code, 'description': description,
+                          'source': 'CPT planning catalog', 'units': 1, 'modifiers': []}
+                         for code, description in descriptions.items() if code not in known_codes)
     for row in available:
         matches = [rate for rate in catalog if rate['code'] == row['code'] and (rate.get('modifier') or '') == ','.join(row.get('modifiers') or [])]
         if len(matches) == 1:
             row.update(unit_allowed_cents=matches[0]['allowed_cents'], unit_cash_cents=matches[0].get('cash_cents'),
                        description=row.get('description') or matches[0].get('description'), rate_source=matches[0].get('source_reference'))
-    result['available_codes'] = [{**row, 'units': (review.get('confirmed_units') or {}).get(row['id'], row.get('units'))} for row in available]
-    result['service_plan'] = visit_estimate.service_plan(result['available_codes'], inputs, source)
+    plan_key = hashlib.sha256(json.dumps([token, source.get('recent_completed_appointments', []),
+        [(row['id'], row.get('units')) for row in available]], sort_keys=True).encode()).hexdigest()
+    prior_plan = case.get('previsit_plan') or {}
+    if prior_plan.get('key') != plan_key or prior_plan.get('plan', {}).get('version') != 1:
+        cash_schedule = nmct_cash.schedule(session['practice_id'], inputs['service_date'])
+        planning_source = {**source, 'planning_cash_packages': cash_schedule['packages'] if cash_schedule else []}
+        prior_plan = {'key': plan_key, 'plan': cpt_suggester.recommend_visit_plan(inputs, planning_source, available)}
+        case['previsit_plan'] = prior_plan
+    result['service_plan'] = {**prior_plan['plan'], 'selection_source': 'clinician' if review.get('selected_ids') else 'suggested'}
+    auto_units = result['service_plan'].get('recommended_units') or {}
+    units = {**auto_units, **(review.get('confirmed_units') or {})}
+    result['available_codes'] = [{**row, 'units': units.get(row['id'], row.get('units'))} for row in available]
     result['payment_mode'] = review.get('payment_mode', 'insurance')
     result['ecw_saved_eligibility'] = source.get('saved_eligibility')
     result['referral_evidence'] = source.get('referral_evidence', [])
     result['appointment_context'] = {key: source.get(key) for key in ('location', 'rendering_provider', 'appointment_status')}
-    if review.get('selected_ids'):
+    selected_ids = review.get('selected_ids') or result['service_plan']['recommended_ids']
+    if selected_ids:
         by_id = {row['id']: row for row in available}
-        codes = [by_id[key] for key in review['selected_ids'] if key in by_id]
-    result['codes'] = [{**row, 'confirmed': bool(review.get('selected_ids')), 'units': (review.get('confirmed_units') or {}).get(row['id'], row.get('units'))} for row in codes]
+        codes = [by_id[key] for key in selected_ids if key in by_id]
+    result['codes'] = [{**row, 'confirmed': bool(review.get('selected_ids')), 'units': units.get(row['id'], row.get('units'))} for row in codes]
     result.update(ecw_coverage_active=source.get('active_coverages', 0) > 0, calculated_at=_now(), context_token=token, revision=case.get('revision', 0), plan_details={
         'ecw': source.get('plan_details') or {'plan': [source['plan']] if source.get('plan') else []},
         'stedi': commercial.plan_details(payload) if payload else {}}, ecw_retrieved_at=source.get('retrieved_at'),
-        response_reference=(payload or {}).get('id'), selected_ids=review.get('selected_ids', []))
+        response_reference=(payload or {}).get('id'), selected_ids=selected_ids)
     exact_source = {**(pricing_source or source), 'payer_plan_names': commercial.plan_details(payload or {})['names']}
     result.pop('network_evidence', None)
-    _attach_previsit_pricing(result, session['practice_id'], inputs, exact_source, payer_id, result['benefits'], payload=payload, review=review)
-    nmct_cash.apply(result, session['practice_id'], inputs['service_date'], review)
+    _attach_previsit_pricing(result, session['practice_id'], inputs, exact_source, payer_id, result['benefits'], payload=payload,
+                            review={**review, 'selected_ids': selected_ids})
+    cash_review = {'cash_selection': result['service_plan'].get('cash_selection', ''), **review}
+    nmct_cash.apply(result, session['practice_id'], inputs['service_date'], cash_review)
     if uploaded_cash:
         practice_prices.apply(result, uploaded_cash)
     case['previsit_context'] = {'inputs': inputs, 'source': source, 'payer_id': payer_id,
@@ -844,7 +867,7 @@ async def _recover_previsit(case: dict, session: dict, provider: dict) -> None:
     context = case['previsit_context']
     inputs, source, payer_id = context['inputs'], context['source'], context.get('payer_id')
     discovery = case['previsit_discovery']
-    api_key = os.getenv('STEDI_API_KEY', '').strip()
+    api_key = stedi_financial.credentials(session['practice_id'])
     try:
         async with httpx.AsyncClient(timeout=httpx.Timeout(140, connect=5)) as client:
             headers = {'Authorization': api_key}
@@ -935,7 +958,7 @@ async def _recheck_discovery_candidate(case: dict, session: dict, provider: dict
         candidate = next(row for row in discovery.get('candidates', []) if row['id'] == discovery.get('selected_candidate_id'))
         item = (payload.get('items') or [])[candidate['index']]
         coverage = _discovered_coverage(inputs, source, item)
-        api_key = os.getenv('STEDI_API_KEY', '').strip()
+        api_key = stedi_financial.credentials(session['practice_id'])
         payer_data = item.get('payer') or {}
         payer = await stedi_payers.search_payer(payer_data.get('name') or payer_data.get('lastName') or '',
             [str(payer_data.get('payorIdentification') or '')], api_key)
@@ -966,7 +989,7 @@ async def _recheck_discovery_candidate(case: dict, session: dict, provider: dict
         result.pop('eligibility_failure', None); result.pop('eligibility_error', None)
         result.update(payer=pricing_source.get('payer'), plan=pricing_source.get('plan'), issues=[], checked_at=_now(),
                       benefits=_case_benefits(verified, inputs, source, case))
-        _finish_previsit(result, case, inputs, source, verified, session, payer['stediId'], pricing_source=pricing_source)
+        await run_in_threadpool(_finish_previsit, result, case, inputs, source, verified, session, payer['stediId'], pricing_source=pricing_source)
         case['previsit'].update(request_state='complete', checked_at=result['checked_at'], benefits=result['benefits'])
         case['previsit_original_error_object_key'] = case.get('previsit_raw_object_key')
         case['previsit_raw_object_key'] = discovery['eligibility_object_key']
@@ -1066,7 +1089,7 @@ async def _begin_coverage_discovery(result: dict, session: dict, inputs: dict, s
         'kind': 'coverage_identity_missing', 'title': 'eCW coverage needs recovery', 'detail': detail,
         'action': 'ClinicForce is searching Stedi using the patient details from eCW. Select a returned policy before it is used for this estimate.',
         'codes': [], 'attempted_at': _now()}, benefits=_previsit_benefits({}, coverage, inputs['service_date']))
-    _finish_previsit(result, case, inputs, source, None, session, '')
+    await run_in_threadpool(_finish_previsit, result, case, inputs, source, None, session, '')
     case['previsit'] = {'request_state': 'rejected'}
     case['previsit_discovery'] = {'recovery_requested': True, 'request_state': 'not_requested',
                                   'identity_binding': _recovery_binding(inputs, source)}
@@ -1115,7 +1138,7 @@ async def previsit_estimate(value: EcwStartInput, request: Request, background_t
             (re.fullmatch(r"\d{10}", billing_npi) and organization_name)):
         result["issues"].append("eCW did not return a matched provider name and NPI needed for the payer check.")
         return result
-    api_key = os.getenv("STEDI_API_KEY", "").strip()
+    api_key = stedi_financial.credentials(session["practice_id"])
     if (os.getenv("STEDI_EXECUTION_MODE", "off") != "commercial_pilot" or
         os.getenv("STEDI_LIVE_ELIGIBILITY_ENABLED", "false").lower() != "true" or
         not api_key or not object_store.enabled()):
@@ -1164,7 +1187,7 @@ async def previsit_estimate(value: EcwStartInput, request: Request, background_t
     result["check_id"] = case["id"]
     if (case.get('previsit_context') or {}).get('context_token') == _visit_context_token(inputs, source):
         result['suggestions'] = case['previsit_context']['result'].get('suggestions')
-    elif inputs.get("reason"):
+    elif inputs.get("reason") and not (inputs.get("visit_type") or visit_estimate.is_emg_visit(inputs)):
         result["suggestions"] = await run_in_threadpool(
             cpt_suggester.suggest_preliminary_cpt_codes,
             str(inputs["reason"])[:8000] + f"\nPatient visit status from eCW: {inputs.get('visit_type') or 'unknown'}.",
@@ -1179,7 +1202,7 @@ async def previsit_estimate(value: EcwStartInput, request: Request, background_t
             result.update(eligibility_failure=failure, eligibility_error=old.get('eligibility_error'),
                           issues=[f"{failure['title']}. {failure['action']}"],
                           benefits=_previsit_benefits({}, coverage, inputs['service_date']))
-            _finish_previsit(result, case, inputs, source, None, session, payer_id)
+            await run_in_threadpool(_finish_previsit, result, case, inputs, source, None, session, payer_id)
             result['response_reference'] = old.get('response_reference')
             case = await run_in_threadpool(_save, case, session, 'previsit-rejection-reused')
             return await _start_previsit_recovery(case, session, provider, background_tasks)
@@ -1204,7 +1227,7 @@ async def previsit_estimate(value: EcwStartInput, request: Request, background_t
             if payload is None:
                 result['benefits']['requires_review'] = True
                 result['benefits'].setdefault('review_reasons', []).append('Saved benefit evidence is unavailable for recalculation.')
-            _finish_previsit(result, case, inputs, source, payload, session, payer_id)
+            await run_in_threadpool(_finish_previsit, result, case, inputs, source, payload, session, payer_id)
             saved_case = await run_in_threadpool(_save, case, session, "previsit-recalculated")
             return _previsit_result(saved_case)
     if saved.get("request_state") in {"pending", "indeterminate"}:
@@ -1233,7 +1256,7 @@ async def previsit_estimate(value: EcwStartInput, request: Request, background_t
         result['eligibility_error'] = failure['kind']
         result['issues'].append(f"{failure['title']}. {failure['action']}")
         result['benefits'] = _previsit_benefits({}, coverage, inputs['service_date'])
-        _finish_previsit(result, case, inputs, source, None, session, payer_id)
+        await run_in_threadpool(_finish_previsit, result, case, inputs, source, None, session, payer_id)
         result['response_reference'] = payload.get('id') if isinstance(payload, dict) else None
         # Planned services remain editable; failed benefits cannot be verified away.
         case = await run_in_threadpool(_save, case, session, "previsit-stedi-rejected")
@@ -1243,7 +1266,7 @@ async def previsit_estimate(value: EcwStartInput, request: Request, background_t
     benefits = _previsit_benefits(payload, coverage, inputs["service_date"])
     result["benefits"] = benefits
     result["checked_at"] = _now()
-    _finish_previsit(result, case, inputs, source, payload, session, payer_id)
+    await run_in_threadpool(_finish_previsit, result, case, inputs, source, payload, session, payer_id)
     case["previsit"] = {"request_state": "complete", "benefits": benefits,
                         "checked_at": result["checked_at"]}
     case["previsit_raw_object_key"] = raw_key
@@ -1301,15 +1324,6 @@ async def update_visit_review(case_id: str, value: VisitReviewInput, request: Re
         selection_issues = cpt_rules.service_selection_issues([available[key]['code'] for key in value.selected_ids])
         if selection_issues:
             raise HTTPException(422, selection_issues[0])
-        suggestions = result.get('suggestions') or {}
-        if suggestions.get('groups'):
-            try:
-                candidates, groups = cpt_rules.grouped_candidates(suggestions, [], allow_unpriced=True)
-                selected_codes = [available[key]['code'] for key in value.selected_ids]
-                quantities = {available[key]['code']: units for key, units in (value.confirmed_units or {}).items() if key in value.selected_ids}
-                cpt_rules.validate_selection(list(dict.fromkeys(selected_codes)), groups, candidates, quantities)
-            except golden.GoldenCaseError as exc:
-                raise HTTPException(422, str(exc)) from exc
         # Pricing follows the clinical procedure sequence, never a user-entered
         # billing order. Preserve source order within each procedure group.
         group_order = [group['id'] for group in visit_estimate.service_plan(list(available.values()), inputs, source)['groups']]
@@ -1368,11 +1382,28 @@ async def update_visit_review(case_id: str, value: VisitReviewInput, request: Re
     result['benefits'] = _case_benefits({} if failed else payload, inputs, source, case)
     recovery = case.get('previsit_discovery') or {}
     pricing_source = recovery.get('pricing_source') if recovery.get('outcome') == 'recovered' else None
-    _finish_previsit(result, case, inputs, source, None if failed else payload, session, context['payer_id'], pricing_source=pricing_source)
+    await run_in_threadpool(_finish_previsit, result, case, inputs, source, None if failed else payload, session, context['payer_id'], pricing_source=pricing_source)
     if failed:
         result['response_reference'] = context['result'].get('response_reference')
     saved = await run_in_threadpool(_save, case, session, 'visit-evidence-verified')
     return _previsit_result(saved)
+
+
+@router.get('/cases/{case_id}/financials')
+async def previsit_financials(case_id: str, request: Request) -> dict:
+    session = await _session(request)
+    case = await run_in_threadpool(store.get_case, case_id, session['patient_id'], session['share_manifest_id'], **_scope(session))
+    if not case or case.get('source_mode') != 'commercial_previsit' or not case.get('previsit_context'):
+        raise HTTPException(404, 'Saved visit estimate not found.')
+    context = case['previsit_context']
+    inputs, source = context['inputs'], context['source']
+    billing_npi = (source.get('billing_provider') or {}).get('npi')
+    networks = await run_in_threadpool(commercial_store.list_networks, session['practice_id'])
+    tins = {row['tin'] for row in networks if row.get('status') == 'verified' and row.get('billing_npi') == billing_npi}
+    identity = {**_coverage_snapshot(inputs, source), 'billing_npi': billing_npi,
+                'tin': next(iter(tins)) if len(tins) == 1 else None}
+    identity['claim_identifiers'] = await ecw_backend.fetch_claim_identifiers(source)
+    return _response(await stedi_financial.fetch_patient_financials(session['practice_id'], identity))
 
 
 @router.get("/history")
@@ -1575,7 +1606,7 @@ async def stedi_eligibility(case_id: str, request: Request) -> Any:
         current_source = await _assert_ecw_current(case, session)
     except commercial.CommercialError as exc:
         raise HTTPException(409, str(exc)) from exc
-    api_key = os.getenv("STEDI_API_KEY", "").strip()
+    api_key = stedi_financial.credentials(session["practice_id"])
     if not api_key: raise HTTPException(503, "Stedi production credentials are not configured on the backend.")
     payer, network = commercial_store.connection(session["practice_id"], data["payer_connection_id"]), _network(session["practice_id"], data["provider_network_id"])
     profile = commercial_store.profile(session["practice_id"], data["profile_id"])

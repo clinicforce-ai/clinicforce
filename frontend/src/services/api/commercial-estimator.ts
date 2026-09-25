@@ -13,7 +13,7 @@ export type PrevisitEstimate = {
   referral_evidence?: Array<{ reference: string; status: string; authored_on?: string; source: string }>;
   cash_schedule?: { source: string; sha256: string; effective_from: string; packages: Array<{ id: string; label: string; amount_cents: number; max_limbs: number; ncs_example: string; emg_example: string; limbs_example: number }>; package_includes: string; proposed: string };
   cash_quote?: { complete: boolean; selection: string; source: string; effective_from: string; message: string; min_cents?: number; max_cents?: number };
-  service_plan?: { kind: string; groups: Array<{ id: string; label: string; description: string; selection_mode: string; role: string; ids: string[] }>; recommended_ids: string[]; recommendation_basis: string; history_count: number };
+  service_plan?: { kind: string; groups: Array<{ id: string; label: string; description: string; selection_mode: string; role: string; ids: string[] }>; recommended_ids: string[]; recommendation_basis: string; history_count: number; selection_source?: string; method?: string; assumptions?: string[]; recommended_units?: Record<string, number> };
   ecw_saved_eligibility?: { status: string; active?: boolean; message: string; checked_at?: string; reference?: string };
   appointment_context?: { location?: string; rendering_provider?: { name?: string; npi?: string }; appointment_status?: string };
   ecw_coverage_active?: boolean;
@@ -75,3 +75,6 @@ export function commercialUploadCashSchedule(file: File, effective: string) {
   return request<CashScheduleDraft>(`${root}/cash-schedules?effective_from=${encodeURIComponent(effective)}`, { method: 'POST', body })
 }
 export const commercialActivateCashSchedule = (id: string) => request<{ id: string }>(`${root}/cash-schedules/${encodeURIComponent(id)}/activate`, json({}))
+
+export type VisitFinancials = { source: string; checked_at: string; status: string; partial: boolean; message: string; transactions_checked: number; lines: Array<{ transaction_id: string; claim_reference?: string; line_index: number; claim_status?: string; code: string; modifiers: string[]; service_date?: string; payer?: string; allowed_cents: number | null; insurer_paid_cents: number | null; patient_responsibility_cents: number | null; source: string; received_at: string }> }
+export const commercialFinancials = (id: string) => request<VisitFinancials>(`${root}/cases/${encodeURIComponent(id)}/financials`)

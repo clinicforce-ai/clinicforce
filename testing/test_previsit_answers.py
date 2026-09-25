@@ -74,7 +74,7 @@ def test_contract_options_come_from_scoped_clinic_configuration():
         source = {'plan': 'Choice', 'active_coverages': 1}
         result = {'codes': [], 'benefits': commercial.normalize_stedi_271(payload(), '98', True), 'issues': []}
         rates = [{'code': code, 'allowed_cents': amount, 'description': 'Clinic procedure'}]
-        with patch.object(api.practice_prices, 'current', return_value=None), patch.object(api.commercial_store, 'list_connections', return_value=[{'id': payer, 'stedi_payer_id': payer, 'status': 'staff_guidance_enabled'}]), \
+        with patch.object(api.cpt_suggester.boto3, 'client', side_effect=RuntimeError('offline test')), patch.object(api.practice_prices, 'current', return_value=None), patch.object(api.commercial_store, 'list_connections', return_value=[{'id': payer, 'stedi_payer_id': payer, 'status': 'staff_guidance_enabled'}]), \
              patch.object(api, '_practice_path', return_value=({}, {'plan_matcher': 'Choice'}, {'rules': {'cost_share': 'payer_returned', 'service_type_by_code': {code: '30'}}})), \
              patch.object(api.commercial_store, 'matching_rates', return_value=rates) as matched:
             api._finish_previsit(result, {}, inputs, source, payload(), {'practice_id': clinic}, payer)

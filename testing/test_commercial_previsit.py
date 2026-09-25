@@ -10,6 +10,9 @@ from app.api.routers.commercial_estimator import EcwStartInput, _previsit_benefi
 
 class PrevisitFlowTest(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
+        self.model_patch = patch('app.insurance.cpt_suggester.boto3.client', side_effect=RuntimeError('offline synthetic test'))
+        self.model_patch.start()
+        self.addCleanup(self.model_patch.stop)
         self.cash_patch = patch('app.api.routers.commercial_estimator.practice_prices.current', return_value=None)
         self.cash_patch.start()
         self.addCleanup(self.cash_patch.stop)
@@ -82,7 +85,7 @@ class PrevisitFlowTest(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(result['eligibility_error'], 'eligibility_rejected' if isinstance(reject, dict) else 'request_validation')
                 self.assertIsNone(result['benefits']['active'])
                 self.assertEqual(result['plan'], 'CI')
-                self.assertEqual(len(result['price_range']['lines']), 4)
+                self.assertEqual(len(result['price_range']['lines']), 1)
                 self.assertIn('context_token', result)  # anticipated services remain editable
                 self.assertEqual(case['previsit']['request_state'], 'rejected')
                 self.assertEqual(client.post.await_count, 1)
@@ -110,7 +113,7 @@ class PrevisitFlowTest(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(unavailable["benefits"]["requires_review"])
             self.assertTrue(any("Saved benefit evidence" in item for item in unavailable["issues"]))
             self.assertEqual(client.post.await_count, 2 if retry_basic else 1)
-        self.assertEqual([row["code"] for row in result["codes"]], ["99202", "99203", "99204", "99205"])
+        self.assertEqual([row["code"] for row in result["codes"]], ["99203"])
         self.assertTrue(result["benefits"]["active"])
         self.assertNotIn("patient_min_cents", result["price_range"])
         sent = client.post.await_args.kwargs["json"]
