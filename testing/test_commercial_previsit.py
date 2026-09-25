@@ -130,3 +130,19 @@ class PrevisitFlowTest(unittest.IsolatedAsyncioTestCase):
                                      {"member_id": "expected", "active_coverages": 1})
         self.assertTrue(benefits["requires_review"])
         self.assertIn("Confirm the member identity: the payer response differs from eCW.", benefits["review_reasons"])
+
+    async def test_missing_policy_enters_discovery_with_the_ecw_provider(self):
+        session = {'practice_id': 'clinic', 'staff': {'practice_name': 'Clinic'}, 'intake': {'patient': {'given_name': 'Pat', 'family_name': 'Example', 'birth_date': '1980-01-01'}, 'fields': {}}}
+        inputs = {'service_date': date.today().isoformat(), 'lines': [], 'patient': {}, 'subscriber': {}, 'rendering_provider': {'npi': '1234567890'}}
+        source = {'appointment_id': 'visit', 'active_coverages': 0, 'rendering_provider': {'npi': '1234567890', 'first_name': 'Ada', 'last_name': 'Clinician'}}
+        with patch('app.api.routers.commercial_estimator._session', AsyncMock(return_value=session)), \
+             patch('app.api.routers.commercial_estimator.ecw_backend.configured', return_value=True), \
+             patch('app.api.routers.commercial_estimator.ecw_backend.fetch_inputs', AsyncMock(return_value=(inputs, [], source))), \
+             patch('app.api.routers.commercial_estimator._ecw_practice_config', return_value={}), \
+             patch('app.api.routers.commercial_estimator.object_store.enabled', return_value=True), \
+             patch('app.api.routers.commercial_estimator._begin_coverage_discovery', AsyncMock(return_value={'recovery': 'started'})) as discovery, \
+             patch.dict('app.api.routers.commercial_estimator.os.environ', {'STEDI_API_KEY': 'test', 'STEDI_EXECUTION_MODE': 'commercial_pilot', 'STEDI_LIVE_ELIGIBILITY_ENABLED': 'true'}):
+            result = await previsit_estimate(EcwStartInput(appointment_id='visit'), MagicMock())
+        self.assertEqual(result, {'recovery': 'started'})
+        self.assertEqual(discovery.await_args.args[4]['rendering_npi'], '1234567890')
+        self.assertEqual(discovery.await_args.args[4]['rendering_first'], 'Ada')
