@@ -289,6 +289,12 @@ def _initialize_schema(connection: psycopg.Connection[Any]) -> None:
         )""")
         # Commercial-estimator configuration is practice-scoped.  No member IDs,
         # card images, or raw payer responses belong in these relational records.
+        cursor.execute("""CREATE TABLE IF NOT EXISTS practice_cash_schedules (
+            id TEXT PRIMARY KEY, practice_id TEXT NOT NULL, actor_id TEXT NOT NULL,
+            filename TEXT NOT NULL, sha256 TEXT NOT NULL, effective_from TEXT NOT NULL,
+            rows_json TEXT NOT NULL, status TEXT NOT NULL, created_at TEXT NOT NULL
+        )""")
+        cursor.execute("CREATE INDEX IF NOT EXISTS practice_cash_schedules_scope_idx ON practice_cash_schedules (practice_id,status,effective_from)")
         cursor.execute("""CREATE TABLE IF NOT EXISTS commercial_payer_connections (
             id TEXT PRIMARY KEY, practice_id TEXT NOT NULL, display_name TEXT NOT NULL,
             stedi_payer_id TEXT NOT NULL, category TEXT NOT NULL, status TEXT NOT NULL,

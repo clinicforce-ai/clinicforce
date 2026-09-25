@@ -6,7 +6,7 @@ from collections import Counter
 import re
 from datetime import date
 
-from app.insurance import commercial, cpt_rules
+from app.insurance import commercial, cpt_rules, plan_benefits
 
 
 def clinical_group(code: str) -> str:
@@ -141,8 +141,11 @@ def price_lines(codes: list[dict], rates: list[dict], benefits: dict, rules: dic
         integrity = [reason for reason in benefits.get('review_reasons', []) if 'identity' in reason or 'evidence' in reason]
         raw_benefits['review_reasons'] = list(dict.fromkeys([*raw_benefits.get('review_reasons', []), *integrity]))
         raw_benefits['requires_review'] = bool(raw_benefits['review_reasons'])
+        raw_benefits = plan_benefits.apply(raw_benefits, payload or {}, code['code'], service_date)
         applied = resolve_requirements(raw_benefits, review, service_date, units)
         line_rules = dict(rules)
+        if applied.get('cost_share'):
+            line_rules['cost_share'] = applied['cost_share']
         if selection_valid:
             line_rules['cost_share'] = selection['cost_share']
             if not selection['deductible_applies']:
@@ -160,7 +163,7 @@ def price_lines(codes: list[dict], rates: list[dict], benefits: dict, rules: dic
                 'allowed_cents': rate['allowed_cents'] * units if rate.get('allowed_cents') is not None and units else None,
                 'rate_source': rate.get('source_reference') or 'Clinic contract', 'rate_version': rate.get('version_id'),
                 'rate_effective_from': rate.get('effective_from'), 'benefit_source': 'Stedi', 'benefit_verification': selection if selection_valid else None,
-                'benefit_basis': f'Service category {stc}' if stc else 'Service category needs mapping',
+                'benefit_basis': applied.get('benefit_label') or f'Service category {stc}' if stc else 'Service category needs mapping',
                 'conditions': [reason for reason in applied.get('review_reasons', []) if _workflow_condition(reason)],
                 'issues': [reason for reason in applied.get('review_reasons', []) if not _workflow_condition(reason)], 'calculation': None}
         direct = any(commercial._procedure(row) == code['code'] and row.get('code') in {'A', 'B'} for row in commercial._stedi_entries(payload or {}))
@@ -197,33 +200,10 @@ def price_lines(codes: list[dict], rates: list[dict], benefits: dict, rules: dic
                 'Confirm the remaining individual deductible that applies to this visit.',
                 'Confirm which copay or coinsurance term applies, including any visit-count conditions.',
             }]
-        # Show a clearly conditional previsit scenario when the entire charge fits
-        # inside the remaining deductible. This does NOT assert deductible applicability,
-        # select one of several payer terms, or make the amount collectible.
-        scenario_reasons = {
-            'Confirm which copay or coinsurance term applies, including any visit-count conditions.',
-            'Confirm which conditional benefit applies to the selected service.',
-            "Review the payer's benefit limits before estimating patient cost.",
-        }
-        remaining = applied.get('deductible_remaining_cents')
-        remaining = max(0, remaining - (0 if alternatives else deductible_used.get(deductible_key, 0))) if remaining is not None else None
-        deductible_scenario = (bool(line['issues']) and set(line['issues']) <= scenario_reasons
-            and benefits.get('active') is True and not benefits.get('has_secondary')
-            and line['allowed_cents'] is not None and remaining is not None and remaining >= line['allowed_cents']
-            and applied.get('oop_remaining_cents') is not None)
-        if deductible_scenario:
-            line['conditions'].extend(line['issues'])
-            line['conditions'].append('Assumes this covered service is subject to the remaining deductible; a deductible waiver or special copay would change this estimate.')
-            line['issues'] = []
         if not line['issues']:
             calculation_benefits = deepcopy(applied)
             calculation_benefits['review_reasons'] = []
             calculation_benefits['requires_review'] = False
-            if deductible_scenario:
-                # The percentage cannot affect this scenario: deductible consumes
-                # the full allowed amount. Preserve the actual unselected terms above.
-                calculation_benefits['coinsurance_percent'] = '0'
-                line_rules['cost_share'] = 'coinsurance'
             if not alternatives:
                 if calculation_benefits.get('deductible_remaining_cents') is not None:
                     calculation_benefits['deductible_remaining_cents'] = max(0, calculation_benefits['deductible_remaining_cents'] - deductible_used.get(deductible_key, 0))
@@ -236,8 +216,6 @@ def price_lines(codes: list[dict], rates: list[dict], benefits: dict, rules: dic
                 calc = commercial.estimate([{'code': code['code'], 'units': units,
                     'allowed_cents': rate['allowed_cents'], 'rate_id': rate.get('id')}], calculation_benefits, line_rules)
                 line['calculation'] = calc
-                if deductible_scenario:
-                    calc['cost_share'] = 'deductible_scenario'
                 if not alternatives:
                     deductible_used[deductible_key] = deductible_used.get(deductible_key, 0) + min(calc['deductible_cents'], calc['patient_cents'])
                     oop_used[oop_key] = oop_used.get(oop_key, 0) + calc['patient_cents']
@@ -248,6 +226,8 @@ def price_lines(codes: list[dict], rates: list[dict], benefits: dict, rules: dic
         lines.append(line)
         prior_unresolved = prior_unresolved or line['calculation'] is None
     service_issues = [] if alternatives else cpt_rules.service_selection_issues([line['code'] for line in lines])
+    if not alternatives and sum(line.get('units') or 0 for line in lines if line['code'] in {'95885', '95886'}) > 4:
+        service_issues.append('Limited and complete needle examinations must cover at most four distinct limbs.')
     complete = bool(lines) and not service_issues and all(line['calculation'] is not None for line in lines)
     all_rates = bool(lines) and all(line['allowed_cents'] is not None for line in lines)
     result = {'mode': 'alternatives' if alternatives else 'services', 'lines': lines, 'complete': complete,

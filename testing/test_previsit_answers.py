@@ -25,7 +25,7 @@ def test_modern_plan_name_and_noncovered_service_are_not_lost():
     assert commercial.normalize_stedi_271(raw, '98', True, procedure_code='99203')['active'] is True
 
 
-def test_deductible_scenario_is_explicit_and_never_collectible():
+def test_missing_service_terms_never_invent_a_deductible_only_price():
     raw = payload()
     raw['benefitsInformation'][1]['benefitAmount'] = '750'
     raw['benefitsInformation'][2]['benefitAmount'] = '9995'
@@ -35,12 +35,12 @@ def test_deductible_scenario_is_explicit_and_never_collectible():
     code = {'id': 'option-a', 'code': '95907', 'units': 1}
     result = visit_estimate.price_lines([code], [{'code': '95907', 'allowed_cents': 8440}], benefits,
         {'cost_share': 'payer_returned'}, payload=raw, service_date=DAY)
-    assert result['complete'] and result['conditional']
-    assert result['patient_max_cents'] == 8440 and result['plan_max_cents'] == 0
+    assert not result['complete']
+    assert 'patient_max_cents' not in result and 'plan_max_cents' not in result
     assert result['collection']['amount_cents'] is None
     line = result['lines'][0]
-    assert line['calculation']['cost_share'] == 'deductible_scenario'
-    assert any('Assumes this covered service' in condition for condition in line['conditions'])
+    assert line['calculation'] is None
+    assert not any('Assumes this covered service' in condition for condition in line['conditions'])
     assert line['benefits']['coinsurance_percent'] is None  # no invented payer fact
     for changes in ({'network_status': 'unknown'}, {'has_secondary': True}, {'active': False},
                     {'review_reasons': ['Confirm the member identity: the payer response differs from eCW.']},
@@ -74,7 +74,7 @@ def test_contract_options_come_from_scoped_clinic_configuration():
         source = {'plan': 'Choice', 'active_coverages': 1}
         result = {'codes': [], 'benefits': commercial.normalize_stedi_271(payload(), '98', True), 'issues': []}
         rates = [{'code': code, 'allowed_cents': amount, 'description': 'Clinic procedure'}]
-        with patch.object(api.commercial_store, 'list_connections', return_value=[{'id': payer, 'stedi_payer_id': payer, 'status': 'staff_guidance_enabled'}]), \
+        with patch.object(api.practice_prices, 'current', return_value=None), patch.object(api.commercial_store, 'list_connections', return_value=[{'id': payer, 'stedi_payer_id': payer, 'status': 'staff_guidance_enabled'}]), \
              patch.object(api, '_practice_path', return_value=({}, {'plan_matcher': 'Choice'}, {'rules': {'cost_share': 'payer_returned', 'service_type_by_code': {code: '30'}}})), \
              patch.object(api.commercial_store, 'matching_rates', return_value=rates) as matched:
             api._finish_previsit(result, {}, inputs, source, payload(), {'practice_id': clinic}, payer)

@@ -158,6 +158,11 @@ def test_eligibility_period_excludes_expired_rows_without_hiding_returned_facts(
 
 
 class VisitReviewTests(IsolatedAsyncioTestCase):
+    def setUp(self):
+        self.cash_patch = patch.object(api.practice_prices, 'current', return_value=None)
+        self.cash_patch.start()
+        self.addCleanup(self.cash_patch.stop)
+
     async def test_scoped_review_recalculates_without_stedi_and_rejects_stale_changes(self):
         session = {'practice_id': 'clinic-b', 'intake_id': 'intake-b', 'patient_id': 'patient-b', 'share_manifest_id': '',
                    'staff': {'id': 'staff-b', 'display_name': 'Staff B'}, 'intake': {'updated_at': 'v', 'patient': {'given_name': 'Pat', 'family_name': 'Example', 'birth_date': '1980-01-01'}, 'fields': {}}}

@@ -21,6 +21,10 @@ PACKAGES = [
     {'id': 'full_study', 'label': 'Comprehensive study · arms and legs', 'amount_cents': 130000, 'max_limbs': 4},
     {'id': 'single_nerve', 'label': 'Single nerve injury', 'amount_cents': 40000, 'max_limbs': 1},
 ]
+# Planning examples from the document; never final coding or a study-count mandate.
+for package, code, limbs in zip(PACKAGES, ['95910', '95911', '95910', '95910', '95911', '95912', '95907'], [1, 2, 1, 1, 2, 4, 1]):
+    package.update(ncs_example=code, emg_example='95886', limbs_example=limbs)
+
 INCLUDES = 'Includes focused evaluation, nerve studies, needle EMG when indicated, interpretation, written report and same-day results discussion. No extra office-visit charge.'
 
 
