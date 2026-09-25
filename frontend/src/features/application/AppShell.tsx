@@ -61,7 +61,7 @@ export function AppShell() {
     } catch (caught) { setError(caught instanceof Error ? caught.message : 'Unable to retrieve the patient file.'); setView('pin') }
   }
   const openStaffInsurance = (id: string, version: 'v1' | 'v2' | 'commercial') => {
-    setStaffIntakeId(id); setStaffIntakeContext(id); setView(version === 'v2' ? 'insurance-v2' : version === 'commercial' ? 'commercial-estimator' : 'insurance')
+    setStaffIntakeId(id); setStaffIntakeContext(id); setView(version === 'v1' ? 'insurance' : 'commercial-estimator')
   }
   return <div className="min-h-dvh bg-[var(--canvas)] text-[var(--ink)]">
     <a className="skip-link" href="#main-content">Skip to content</a><SiteHeader onHome={returnHome} insuranceUploadMode={view === 'patient-upload'} staffMode={view === 'staff' || view === 'staff-create' || view === 'staff-join' || !!staffIntakeId || staffQr} />

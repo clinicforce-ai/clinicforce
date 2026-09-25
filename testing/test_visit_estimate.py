@@ -201,3 +201,73 @@ class VisitReviewTests(IsolatedAsyncioTestCase):
         async with httpx.AsyncClient(transport=httpx.MockTransport(lambda request: httpx.Response(200, json={'link': [{'relation': 'next', 'url': 'https://other.example/leak'}]}))) as client:
             with self.assertRaises(ecw_backend.EcwBackendError):
                 await ecw_backend._search(client, 'https://ecw.example/fhir', 'secret', 'Coverage', {})
+
+
+def test_cash_prices_are_separate_and_available_even_when_insurance_fails():
+    cash_rates = [{**row, 'cash_cents': 7500} for row in rates()]
+    codes = lines(); codes[1]['units'] = 2
+    result = visit_estimate.price_lines(codes, cash_rates, {'active': False, 'network_status': 'unknown'}, {})
+    assert result['cash_complete'] and result['cash_max_cents'] == 22500
+    assert not result['complete'] and 'patient_max_cents' not in result
+    assert result['lines'][1]['cash_cents'] == 15000
+    cash_rates[1]['cash_cents'] = None
+    partial = visit_estimate.price_lines(codes, cash_rates, {}, {})
+    assert not partial['cash_complete'] and 'cash_max_cents' not in partial
+    assert partial['lines'][0]['cash_source'] == 'Contract 2026'
+    assert partial['lines'][1]['cash_cents'] is None  # never fall back to allowed amount
+    cash_rates[1]['cash_cents'] = 0
+    zero = visit_estimate.price_lines(codes, cash_rates, {}, {}, alternatives=True)
+    assert zero['cash_min_cents'] == 0 and zero['cash_max_cents'] == 7500
+
+
+def test_procedure_groups_and_recommendations_are_grounded_in_comparable_ecw_visits():
+    codes = [{'id': code, 'code': code, 'source': 'Contract service option', 'units': 1}
+             for code in ['99203', '95907', '95909', '95886']]
+    history = [{'visit_type': 'new', 'coded_services': ['99203']},
+               {'visit_type': 'not_returned', 'coded_services': ['95909', '95886']},
+               {'visit_type': 'not_returned', 'coded_services': ['95909', '95886']}]
+    result = visit_estimate.service_plan(codes, {'reason': 'EMG for arm numbness', 'visit_type': 'new'}, {'recent_completed_appointments': history})
+    assert result['kind'] == 'emg_ncs'
+    assert [group['id'] for group in result['groups']] == ['nerve', 'muscle', 'visit']
+    assert result['recommended_ids'] == ['95909', '95886']
+    assert result['groups'][0]['selection_mode'] == 'single'
+    assert result['groups'][1]['role'] == 'Additional services'
+    assert visit_estimate.service_plan(codes, {'reason': 'EMG'}, {})['recommended_ids'] == []
+    history.append({'coded_services': ['95907']}); history.append({'coded_services': ['95907']})
+    assert '95909' not in visit_estimate.service_plan(codes, {'reason': 'EMG'}, {'recent_completed_appointments': history})['recommended_ids']
+    codes[1]['source'] = 'eCW scheduled service'
+    assert visit_estimate.service_plan(codes, {'reason': 'EMG'}, {})['recommended_ids'] == ['95907']
+    assert api._previsit_codes({'reason': 'New patient EMG', 'visit_type': 'new', 'lines': []}) == []
+
+
+def test_saved_ecw_verification_requires_matching_policy_date_and_fresh_success():
+    row = {'resourceType': 'CoverageEligibilityResponse', 'id': 'verified', 'status': 'active', 'outcome': 'complete',
+           'patient': {'reference': 'Patient/p'}, 'servicedDate': DAY,
+           'created': datetime.now(timezone.utc).isoformat(), 'insurance': [{'coverage': {'reference': 'Coverage/c'}, 'inforce': True}]}
+    def check(value):
+        return ecw_backend.saved_eligibility_summary([value], 'p', 'c', DAY)
+    assert check(row)['status'] == 'verified_active'
+    assert check({**row, 'insurance': [{'coverage': {'reference': 'Coverage/c'}, 'inforce': False}]})['status'] == 'verified_inactive'
+    for change in ({'status': 'cancelled'}, {'outcome': 'partial'}, {'patient': {'reference': 'Patient/other'}},
+                   {'servicedDate': '2000-01-01'}, {'created': (datetime.now(timezone.utc) - timedelta(days=2)).isoformat()},
+                   {'created': (datetime.now(timezone.utc) + timedelta(days=1)).isoformat()},
+                   {'insurance': [{'coverage': {'reference': 'Coverage/other'}, 'inforce': True}]},
+                   {'insurance': [{'coverage': {'reference': 'Coverage/c'}, 'inforce': 'true'}]}, {'insurance': 42},
+                   {'servicedDate': None, 'servicedPeriod': {'start': 'invalid', 'end': 'invalid'}}):
+        assert check({**row, **change})['status'] == 'check_with_stedi'
+    opposite = {**row, 'insurance': [{'coverage': {'reference': 'Coverage/c'}, 'inforce': False}]}
+    assert ecw_backend.saved_eligibility_summary([row, opposite], 'p', 'c', DAY)['status'] == 'review'
+    assert ecw_backend.saved_eligibility_summary([{'resourceType': 'Coverage', 'status': 'active'}], 'p', 'c', DAY)['status'] == 'check_with_stedi'
+
+
+def test_coded_emg_wins_over_generic_visit_text_and_duplicate_ncs_cannot_double_price():
+    inputs = {'reason': 'Scheduled follow-up', 'visit_type': 'established',
+              'lines': [{'code': '95909', 'service_status': 'scheduled'}]}
+    available = [{'id': 'order', 'code': '95909', 'source': 'eCW scheduled service'},
+                 {'id': 'charge', 'code': '95909', 'source': 'eCW scheduled service'}]
+    plan = visit_estimate.service_plan(available, inputs, {})
+    assert plan['kind'] == 'emg_ncs'
+    assert plan['groups'][0]['role'] == 'Main service'
+    assert plan['recommended_ids'] == []
+    from app.insurance import cpt_rules
+    assert cpt_rules.service_selection_issues(['95909', '95909'])

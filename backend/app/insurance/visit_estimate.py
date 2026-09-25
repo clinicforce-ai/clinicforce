@@ -2,9 +2,71 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from collections import Counter
+import re
 from datetime import date
 
 from app.insurance import commercial, cpt_rules
+
+
+def clinical_group(code: str) -> str:
+    if code.isdigit() and 99202 <= int(code) <= 99215:
+        return 'visit'
+    if code in cpt_rules.NCS_CODES:
+        return 'nerve'
+    if code in cpt_rules.EMG_ADD_ONS:
+        return 'muscle'
+    return 'other'
+
+
+def is_emg_visit(inputs: dict) -> bool:
+    return (any(row.get('service_status') == 'scheduled' and row.get('code') in cpt_rules.NCS_CODES | cpt_rules.EMG_ADD_ONS
+                for row in inputs.get('lines', []))
+            or bool(re.search(r'\b(emg|ncs|electromyograph\w*|nerve conduction)\b', str(inputs.get('reason') or ''), re.I)))
+
+
+def service_plan(available: list[dict], inputs: dict, source: dict) -> dict:
+    """Describe planning choices; past care is a suggestion, never a new order."""
+    emg = is_emg_visit(inputs)
+    order = ['nerve', 'muscle', 'visit', 'other'] if emg else ['visit', 'nerve', 'muscle', 'other']
+    labels = {'visit': 'Office consultation', 'nerve': 'Nerve conduction study', 'muscle': 'Needle EMG', 'other': 'Other planned services'}
+    descriptions = {'visit': 'Choose one anticipated visit level. Final coding follows the documented care.',
+                    'nerve': 'Choose the range for the total planned nerve studies. These levels are alternatives.',
+                    'muscle': 'Add muscle testing to the nerve study. Specify the limbs being examined.',
+                    'other': 'Include only services expected at this appointment.'}
+    groups = [{'id': key, 'label': labels[key], 'description': descriptions[key],
+               'selection_mode': 'single' if key in {'visit', 'nerve'} else 'multiple',
+               'role': 'Main service' if key == ('nerve' if emg else 'visit') else 'Additional services',
+               'ids': [row['id'] for row in available if clinical_group(row['code']) == key]}
+              for key in order if any(clinical_group(row['code']) == key for row in available)]
+    scheduled = [row['id'] for row in available if row['source'] == 'eCW scheduled service']
+    recommended = list(scheduled)
+    basis = 'Planned services on this eCW appointment' if scheduled else ''
+    for group in groups:
+        if group['selection_mode'] == 'single' and len(set(scheduled) & set(group['ids'])) > 1:
+            recommended = [key for key in recommended if key not in group['ids']]
+            basis = 'eCW contains multiple records for alternative services. Choose the intended procedure for this visit.'
+    if not scheduled:
+        # Only use this patient's comparable completed visits. An empty or tied
+        # history cannot establish a "most common" code or a clinical quantity.
+        history = [row for row in source.get('recent_completed_appointments', [])
+                   if (emg and any(code in cpt_rules.NCS_CODES for code in row.get('coded_services', [])))
+                   or (not emg and inputs.get('visit_type') and row.get('visit_type') == inputs['visit_type'])]
+        for group in groups:
+            if group['id'] not in ({'nerve', 'muscle'} if emg else {'visit'}):
+                continue
+            counts = Counter(code for visit in history for code in set(visit.get('coded_services', [])))
+            rows = [row for row in available if row['id'] in group['ids'] and counts[row['code']] > 0]
+            if rows:
+                highest = max(counts[row['code']] for row in rows)
+                winners = [row for row in rows if counts[row['code']] == highest]
+                if len(winners) == 1:
+                    recommended.append(winners[0]['id'])
+        if recommended:
+            basis = f'Most frequent matching services in {len(history)} recent eCW visit(s) for this patient. Review for today’s plan.'
+    return {'kind': 'emg_ncs' if emg else 'office' if inputs.get('visit_type') else 'other',
+            'groups': groups, 'recommended_ids': recommended, 'recommendation_basis': basis,
+            'history_count': len(source.get('recent_completed_appointments', []))}
 
 
 def service_type(code: str, rules: dict) -> str | None:
@@ -91,6 +153,9 @@ def price_lines(codes: list[dict], rates: list[dict], benefits: dict, rules: dic
                    and (rate.get('modifier') or '') == ','.join(code.get('modifiers') or [])]
         rate = matches[0] if len(matches) == 1 else {}
         line = {**code, 'id': line_id, 'units': units, 'benefits': applied,
+                'unit_cash_cents': rate.get('cash_cents'),
+                'cash_cents': rate['cash_cents'] * units if rate.get('cash_cents') is not None and units else None,
+                'cash_source': rate.get('source_reference') if rate.get('cash_cents') is not None else None,
                 'unit_allowed_cents': rate.get('allowed_cents'),
                 'allowed_cents': rate['allowed_cents'] * units if rate.get('allowed_cents') is not None and units else None,
                 'rate_source': rate.get('source_reference') or 'Clinic contract', 'rate_version': rate.get('version_id'),
@@ -190,6 +255,11 @@ def price_lines(codes: list[dict], rates: list[dict], benefits: dict, rules: dic
               'conditional': any(line['conditions'] for line in lines),
               'collection': {'action': 'verify_before_collecting', 'amount_cents': None,
                              'reason': 'Resolve the listed items and verify payments already received before collecting.'}}
+    cash = [line['cash_cents'] for line in lines]
+    result['cash_complete'] = bool(cash) and all(value is not None for value in cash) and not service_issues
+    if result['cash_complete']:
+        result.update(cash_min_cents=min(cash) if alternatives else sum(cash),
+                      cash_max_cents=max(cash) if alternatives else sum(cash))
     if all_rates:
         allowed = [line['allowed_cents'] for line in lines]
         result.update(allowed_min_cents=min(allowed) if alternatives else sum(allowed),

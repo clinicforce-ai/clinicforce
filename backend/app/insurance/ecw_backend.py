@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import os
 import re
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 from typing import Any
 from urllib.parse import urlparse, urljoin
@@ -883,6 +883,63 @@ async def fetch_inputs(profile: dict[str, Any], practice: dict[str, Any], appoin
                             "Condition": len(conditions), "PractitionerRole": len(role_resources),
                             "ChargeItem": len(charges)}}
     return inputs, list(dict.fromkeys(missing)), source
+
+
+def saved_eligibility_summary(rows: list[dict], patient_id: str, coverage_id: str, service_date: str) -> dict:
+    """A Coverage record alone is not a saved payer verification."""
+    matching = []
+    now = datetime.now(timezone.utc)
+    for row in rows:
+        if (row.get('resourceType') != 'CoverageEligibilityResponse' or row.get('status') != 'active'
+                or row.get('outcome') != 'complete' or row.get('error')
+                or _reference(row.get('patient')) != f'Patient/{patient_id}'):
+            continue
+        serviced = row.get('servicedDate')
+        if serviced != service_date:
+            period = row.get('servicedPeriod')
+            try:
+                if not isinstance(period, dict) or not (date.fromisoformat(period['start'][:10])
+                        <= date.fromisoformat(service_date) <= date.fromisoformat(period['end'][:10])):
+                    continue
+            except (KeyError, ValueError, TypeError):
+                continue
+        try:
+            created = datetime.fromisoformat(str(row['created']).replace('Z', '+00:00'))
+            if created.tzinfo is None or not timedelta(0) <= now - created <= timedelta(hours=24):
+                continue
+        except (KeyError, ValueError, TypeError):
+            continue
+        if not isinstance(row.get('insurance'), list):
+            continue
+        policies = [item for item in row['insurance'] if isinstance(item, dict)
+                    and _reference(item.get('coverage')) == f'Coverage/{coverage_id}']
+        if len(policies) == 1 and type(policies[0].get('inforce')) is bool:
+            matching.append((created, row, policies[0]['inforce']))
+    if not matching:
+        return {'status': 'check_with_stedi', 'message': 'No current eCW verification matches this policy and service date. Use the Stedi result below.'}
+    newest = max(item[0] for item in matching)
+    latest = [item for item in matching if item[0] == newest]
+    if len({item[2] for item in latest}) != 1:
+        return {'status': 'review', 'message': 'eCW contains conflicting eligibility results. Resolve them against the current Stedi check.'}
+    created, row, active = latest[0]
+    return {'status': 'verified_active' if active else 'verified_inactive', 'active': active,
+            'checked_at': created.isoformat(), 'reference': 'CoverageEligibilityResponse/' + str(row.get('id', '')),
+            'message': 'Saved eCW payer verification matches this policy and visit date. Benefit amounts and service approvals are checked separately.'}
+
+
+async def fetch_saved_eligibility(source: dict, service_date: str, *, transport: httpx.AsyncBaseTransport | None = None) -> dict:
+    """Read optional saved evidence without letting missing scopes block a visit."""
+    fallback = {'status': 'check_with_stedi', 'message': 'The saved eCW check could not be read through this connection. Use Stedi verification; ask the eCW administrator to review saved eligibility access if this persists.'}
+    if not source.get('_patient_id') or not source.get('coverage_id'):
+        return {**fallback, 'message': 'Match an eCW patient and policy before reading saved eligibility. Continue with Stedi coverage recovery.'}
+    try:
+        client_id, issuer = settings()
+        async with httpx.AsyncClient(timeout=SEARCH_TIMEOUT_SECONDS, follow_redirects=False, transport=transport) as client:
+            token = await _access_token(client, client_id, issuer, SCOPES + ('system/CoverageEligibilityResponse.read',))
+            rows = await _search(client, issuer, token, 'CoverageEligibilityResponse', {'patient': source['_patient_id']})
+        return saved_eligibility_summary(rows, source['_patient_id'], source['coverage_id'], service_date)
+    except (EcwBackendError, httpx.HTTPError):
+        return fallback
 
 
 async def probe_saved_eligibility(profile: dict[str, Any], *, transport: httpx.AsyncBaseTransport | None = None) -> dict[str, Any]:

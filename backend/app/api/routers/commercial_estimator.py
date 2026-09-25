@@ -5,6 +5,7 @@ This route is deliberately separate from the existing Availity workflow.
 from __future__ import annotations
 
 import hashlib
+import asyncio
 import json
 import os
 import re
@@ -19,7 +20,7 @@ from pydantic import StrictInt, BaseModel, ConfigDict, Field, ValidationError
 
 from app.api.routers.insurance import _response, _scope, _session as insurance_session
 from app.core import object_store
-from app.insurance import commercial, commercial_store, cpt_rules, cpt_suggester, ecw_backend, golden, stedi_discovery, stedi_payers, store, visit_estimate
+from app.insurance import commercial, commercial_store, cpt_rules, cpt_suggester, ecw_backend, golden, stedi_discovery, stedi_payers, store, visit_estimate, nmct_cash
 
 
 router = APIRouter(prefix="/api/doctor/insurance/commercial", tags=["doctor-commercial-estimator"])
@@ -107,6 +108,7 @@ class VisitReviewInput(BaseModel):
     context_token: str = Field(min_length=64, max_length=64)
     revision: int = Field(ge=0)
     selected_ids: list[str] | None = Field(default=None, max_length=20)
+    cash_selection: str | None = Field(default=None, max_length=40)
     confirmed_units: dict[str, StrictInt] | None = Field(default=None, max_length=20)
     verification: VisitVerification | None = None
     payments_received_cents: int | None = Field(default=None, ge=0, le=100_000_000)
@@ -381,6 +383,8 @@ def _previsit_codes(inputs: dict) -> list[dict[str, Any]]:
         return [{"id": row.get("id") or f"{row['code']}:{index}", "code": row["code"], "source": "eCW scheduled service",
                  "needs_confirmation": row.get("needs_confirmation", False), "description": row.get("description"), "modifiers": row.get("modifiers") or [], "units": row.get("units")}
                 for index, row in enumerate(scheduled)]
+    if visit_estimate.is_emg_visit(inputs):
+        return []  # An EMG appointment is not an office E/M just because the patient is new.
     # The appointment's explicit new/established label supports a code family;
     # it cannot establish the eventual MDM/time level or that an office visit occurs.
     family = {"new": range(99202, 99206), "established": range(99212, 99216)}.get(inputs.get("visit_type"))
@@ -507,7 +511,17 @@ def _finish_previsit(result: dict, case: dict, inputs: dict, source: dict, paylo
                 available.append({'id': 'suggested:' + code, 'code': code, 'source': 'Clinician-confirmed candidate',
                                   'description': candidate.get('reason'), 'units': None, 'modifiers': []})
                 known.add(code)
+    if nmct_cash.schedule(session['practice_id'], inputs['service_date']):
+        available.extend(row for row in nmct_cash.catalog() if row['code'] not in {item['code'] for item in available})
+    for row in available:
+        matches = [rate for rate in catalog if rate['code'] == row['code'] and (rate.get('modifier') or '') == ','.join(row.get('modifiers') or [])]
+        if len(matches) == 1:
+            row.update(unit_allowed_cents=matches[0]['allowed_cents'], unit_cash_cents=matches[0].get('cash_cents'),
+                       description=row.get('description') or matches[0].get('description'), rate_source=matches[0].get('source_reference'))
     result['available_codes'] = [{**row, 'units': (review.get('confirmed_units') or {}).get(row['id'], row.get('units'))} for row in available]
+    result['service_plan'] = visit_estimate.service_plan(result['available_codes'], inputs, source)
+    result['ecw_saved_eligibility'] = source.get('saved_eligibility')
+    result['appointment_context'] = {key: source.get(key) for key in ('location', 'rendering_provider', 'appointment_status')}
     if review.get('selected_ids'):
         by_id = {row['id']: row for row in available}
         codes = [by_id[key] for key in review['selected_ids'] if key in by_id]
@@ -517,6 +531,7 @@ def _finish_previsit(result: dict, case: dict, inputs: dict, source: dict, paylo
         'stedi': commercial.plan_details(payload) if payload else {}}, ecw_retrieved_at=source.get('retrieved_at'),
         response_reference=(payload or {}).get('id'), selected_ids=review.get('selected_ids', []))
     _attach_previsit_pricing(result, session['practice_id'], inputs, pricing_source or source, payer_id, result['benefits'], payload=payload, review=review)
+    nmct_cash.apply(result, session['practice_id'], inputs['service_date'], review)
     case['previsit_context'] = {'inputs': inputs, 'source': source, 'payer_id': payer_id,
                               'result': result, 'context_token': token}
 
@@ -1054,11 +1069,18 @@ async def previsit_estimate(value: EcwStartInput, request: Request, background_t
     if source.get("appointment_id") != value.appointment_id:
         raise HTTPException(409, "The selected upcoming eClinicalWorks appointment could not be verified.")
 
+    try:
+        source['saved_eligibility'] = await asyncio.wait_for(
+            ecw_backend.fetch_saved_eligibility(source, inputs['service_date']), timeout=6)
+    except asyncio.TimeoutError:
+        source['saved_eligibility'] = {'status': 'check_with_stedi', 'message': 'The saved eCW check took too long to load. Continue with Stedi verification and retry eCW later.'}
+
     codes = _previsit_codes(inputs)
     result: dict[str, Any] = {"appointment_id": value.appointment_id, "service_date": inputs["service_date"],
         "payer": source.get("payer"), "plan": source.get("plan"), "visit_type": inputs.get("visit_type"),
         "reason": inputs.get("reason"), "codes": codes, "benefits": None, "price_range": None,
-        "suggestions": None, "issues": [], "checked_at": None}
+        "suggestions": None, "issues": [], "checked_at": None,
+        "ecw_saved_eligibility": source['saved_eligibility'], "ecw_coverage_active": source.get('active_coverages', 0) > 0}
     coverage = _coverage_snapshot(inputs, source)
     rendering = source.get("rendering_provider") or {}
     billing = source.get("billing_provider") or {}
@@ -1066,6 +1088,9 @@ async def previsit_estimate(value: EcwStartInput, request: Request, background_t
     billing_npi = str(billing.get("npi") or "")
     organization_name = str(billing.get("name") or session.get("staff", {}).get("practice_name") or "")
     rendering_first, rendering_last = str(rendering.get("first_name") or ""), str(rendering.get("last_name") or "")
+    provider = {"rendering_npi": rendering_npi, "rendering_first": rendering_first,
+                "rendering_last": rendering_last, "billing_npi": billing_npi,
+                "organization_name": organization_name}
     if not ((re.fullmatch(r"\d{10}", rendering_npi) and rendering_first and rendering_last) or
             (re.fullmatch(r"\d{10}", billing_npi) and organization_name)):
         result["issues"].append("eCW did not return a matched provider name and NPI needed for the payer check.")
@@ -1097,9 +1122,6 @@ async def previsit_estimate(value: EcwStartInput, request: Request, background_t
         return result
     payer_id = payer["stediId"]
     result["stedi_payer"] = {"name": payer.get("displayName"), "id": payer_id}
-    provider = {"rendering_npi": rendering_npi, "rendering_first": rendering_first,
-                "rendering_last": rendering_last, "billing_npi": billing_npi,
-                "organization_name": organization_name}
     try:
         body = stedi_request_body({"stedi_payer_id": payer_id}, provider, coverage, inputs["service_date"], "98")
         basic_body = stedi_request_body({"stedi_payer_id": payer_id}, provider, coverage, inputs["service_date"], "98",
@@ -1237,6 +1259,11 @@ async def update_visit_review(case_id: str, value: VisitReviewInput, request: Re
         raise HTTPException(502, str(exc)) from exc
     if value.context_token != context['context_token'] or _visit_context_token(inputs, source) != value.context_token:
         raise HTTPException(409, 'The appointment, coverage or services changed in eCW. Check the visit again.')
+    saved_eligibility = (context.get('source') or {}).get('saved_eligibility')
+    if saved_eligibility:
+        source['saved_eligibility'] = saved_eligibility
+        if saved_eligibility.get('checked_at') and datetime.fromisoformat(saved_eligibility['checked_at']) + timedelta(hours=24) <= datetime.now(timezone.utc):
+            source['saved_eligibility'] = {'status': 'check_with_stedi', 'message': 'The saved eCW verification is older than 24 hours. Use the current Stedi check.'}
     try:
         payload = json.loads(await run_in_threadpool(object_store.get_object_bytes, case['previsit_raw_object_key']))
     except Exception:
@@ -1251,6 +1278,9 @@ async def update_visit_review(case_id: str, value: VisitReviewInput, request: Re
         visit_levels = [available[key] for key in value.selected_ids if available[key]['code'].isdigit() and 99202 <= int(available[key]['code']) <= 99215]
         if len(visit_levels) > 1:
             raise HTTPException(422, 'Select one office visit level; alternatives cannot be added together.')
+        selection_issues = cpt_rules.service_selection_issues([available[key]['code'] for key in value.selected_ids])
+        if selection_issues:
+            raise HTTPException(422, selection_issues[0])
         suggestions = result.get('suggestions') or {}
         if suggestions.get('groups'):
             try:
@@ -1260,7 +1290,16 @@ async def update_visit_review(case_id: str, value: VisitReviewInput, request: Re
                 cpt_rules.validate_selection(list(dict.fromkeys(selected_codes)), groups, candidates, quantities)
             except golden.GoldenCaseError as exc:
                 raise HTTPException(422, str(exc)) from exc
-        review['selected_ids'] = value.selected_ids
+        # Pricing follows the clinical procedure sequence, never a user-entered
+        # billing order. Preserve source order within each procedure group.
+        group_order = [group['id'] for group in visit_estimate.service_plan(list(available.values()), inputs, source)['groups']]
+        review['selected_ids'] = sorted(value.selected_ids, key=lambda key: (group_order.index(visit_estimate.clinical_group(available[key]['code'])), list(available).index(key)))
+        review.pop('payments', None)
+    if value.cash_selection is not None:
+        config = nmct_cash.schedule(session['practice_id'], inputs['service_date'])
+        if not config or value.cash_selection not in {'', 'friends_family', *(row['id'] for row in config['packages'])}:
+            raise HTTPException(422, 'Select a cash option from this clinic’s current schedule.')
+        review['cash_selection'] = value.cash_selection
         review.pop('payments', None)
     if value.confirmed_units is not None:
         if set(value.confirmed_units) - available.keys() or any(type(units) is not int or not 1 <= units <= 10000 for units in value.confirmed_units.values()):

@@ -15,7 +15,7 @@ def service_selection_issues(codes: list[str]) -> list[str]:
     issues = []
     if selected & EMG_ADD_ONS and not selected & NCS_CODES:
         issues.append('Add the anticipated nerve-conduction service (95907–95913) for these EMG add-ons. Choose its level from the planned study count; the add-ons alone are not a complete visit estimate.')
-    if len(selected & NCS_CODES) > 1:
+    if sum(code in NCS_CODES for code in codes) > 1:
         issues.append('Choose one nerve-conduction level (95907–95913) for the total planned study count, rather than adding alternative levels together.')
     return issues
 
