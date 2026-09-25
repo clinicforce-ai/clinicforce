@@ -20,7 +20,7 @@ from pydantic import StrictInt, BaseModel, ConfigDict, Field, ValidationError
 
 from app.api.routers.insurance import _response, _scope, _session as insurance_session
 from app.core import object_store
-from app.insurance import commercial, commercial_store, cpt_rules, cpt_suggester, ecw_backend, golden, stedi_discovery, stedi_payers, store, visit_estimate
+from app.insurance import commercial, commercial_store, cpt_rules, cpt_suggester, ecw_backend, golden, stedi_discovery, stedi_payers, store, visit_estimate, nmct_cash
 
 
 router = APIRouter(prefix="/api/doctor/insurance/commercial", tags=["doctor-commercial-estimator"])
@@ -108,6 +108,7 @@ class VisitReviewInput(BaseModel):
     context_token: str = Field(min_length=64, max_length=64)
     revision: int = Field(ge=0)
     selected_ids: list[str] | None = Field(default=None, max_length=20)
+    cash_selection: str | None = Field(default=None, max_length=40)
     confirmed_units: dict[str, StrictInt] | None = Field(default=None, max_length=20)
     verification: VisitVerification | None = None
     payments_received_cents: int | None = Field(default=None, ge=0, le=100_000_000)
@@ -510,6 +511,8 @@ def _finish_previsit(result: dict, case: dict, inputs: dict, source: dict, paylo
                 available.append({'id': 'suggested:' + code, 'code': code, 'source': 'Clinician-confirmed candidate',
                                   'description': candidate.get('reason'), 'units': None, 'modifiers': []})
                 known.add(code)
+    if nmct_cash.schedule(session['practice_id'], inputs['service_date']):
+        available.extend(row for row in nmct_cash.catalog() if row['code'] not in {item['code'] for item in available})
     for row in available:
         matches = [rate for rate in catalog if rate['code'] == row['code'] and (rate.get('modifier') or '') == ','.join(row.get('modifiers') or [])]
         if len(matches) == 1:
@@ -528,6 +531,7 @@ def _finish_previsit(result: dict, case: dict, inputs: dict, source: dict, paylo
         'stedi': commercial.plan_details(payload) if payload else {}}, ecw_retrieved_at=source.get('retrieved_at'),
         response_reference=(payload or {}).get('id'), selected_ids=review.get('selected_ids', []))
     _attach_previsit_pricing(result, session['practice_id'], inputs, pricing_source or source, payer_id, result['benefits'], payload=payload, review=review)
+    nmct_cash.apply(result, session['practice_id'], inputs['service_date'], review)
     case['previsit_context'] = {'inputs': inputs, 'source': source, 'payer_id': payer_id,
                               'result': result, 'context_token': token}
 
@@ -1290,6 +1294,12 @@ async def update_visit_review(case_id: str, value: VisitReviewInput, request: Re
         # billing order. Preserve source order within each procedure group.
         group_order = [group['id'] for group in visit_estimate.service_plan(list(available.values()), inputs, source)['groups']]
         review['selected_ids'] = sorted(value.selected_ids, key=lambda key: (group_order.index(visit_estimate.clinical_group(available[key]['code'])), list(available).index(key)))
+        review.pop('payments', None)
+    if value.cash_selection is not None:
+        config = nmct_cash.schedule(session['practice_id'], inputs['service_date'])
+        if not config or value.cash_selection not in {'', 'friends_family', *(row['id'] for row in config['packages'])}:
+            raise HTTPException(422, 'Select a cash option from this clinic’s current schedule.')
+        review['cash_selection'] = value.cash_selection
         review.pop('payments', None)
     if value.confirmed_units is not None:
         if set(value.confirmed_units) - available.keys() or any(type(units) is not int or not 1 <= units <= 10000 for units in value.confirmed_units.values()):

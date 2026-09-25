@@ -8,6 +8,8 @@ export const commercialAppointments = () => request<{ appointments: CommercialAp
 export type CommercialReadiness = { ready: boolean; blockers: string[]; ecw: { payer?: string | null; plan?: string | null; scheduled_codes: Array<{ code?: string | null; units?: number | string | null }>; visit_type?: string | null; reason?: string | null } }
 export const commercialReadiness = (appointment_id: string) => request<CommercialReadiness>(`${root}/appointments/readiness`, json({ appointment_id }))
 export type PrevisitEstimate = {
+  cash_schedule?: { source: string; sha256: string; effective_from: string; packages: Array<{ id: string; label: string; amount_cents: number }>; package_includes: string; proposed: string };
+  cash_quote?: { complete: boolean; selection: string; source: string; effective_from: string; message: string; min_cents?: number; max_cents?: number };
   service_plan?: { kind: string; groups: Array<{ id: string; label: string; description: string; selection_mode: string; role: string; ids: string[] }>; recommended_ids: string[]; recommendation_basis: string; history_count: number };
   ecw_saved_eligibility?: { status: string; active?: boolean; message: string; checked_at?: string; reference?: string };
   appointment_context?: { location?: string; rendering_provider?: { name?: string; npi?: string }; appointment_status?: string };
@@ -52,13 +54,13 @@ export type VisitCode = { id?: string; code: string; source: string; description
 export type VisitRequirement = { required: string; status: string; cleared: boolean; reference?: string; verified_at?: string; verified_by?: string; valid_to?: string }
 export type VisitPricedLine = VisitCode & {
   id: string; allowed_cents?: number | null; unit_allowed_cents?: number | null;
-  cash_cents?: number | null; cash_source?: string;
+  cash_cents?: number | null; cash_source?: string; cash_included?: boolean;
   benefit_verification?: { reference: string; notes: string; verified_by: string; verified_at: string; valid_from: string; valid_to: string } | null;
   rate_source: string; rate_version?: string; rate_effective_from?: string; benefit_basis: string; issues: string[]; conditions?: string[];
   benefits: NonNullable<PrevisitEstimate['benefits']> & { copay_period?: string; requirements: { referral: VisitRequirement; authorization: VisitRequirement } };
   calculation: null | { cost_share?: string; allowed_cents: number; patient_cents: number; plan_cents: number; deductible_cents: number; copay_cents: number; coinsurance_cents: number; oop_adjustment_cents: number }
 }
-export type VisitReview = { selected_ids?: string[]; confirmed_units?: Record<string, number>; payments_received_cents?: number; payment_reference?: string; verification?: {
+export type VisitReview = { cash_selection?: string; selected_ids?: string[]; confirmed_units?: Record<string, number>; payments_received_cents?: number; payment_reference?: string; verification?: {
   line_id: string; kind: 'referral' | 'authorization' | 'benefits'; status: string; reference: string; notes: string;
   valid_from: string; valid_to: string; units: number; selected_ids?: string[]; cost_share?: string; deductible_applies?: boolean
 } }
