@@ -861,6 +861,13 @@ async def fetch_inputs(profile: dict[str, Any], practice: dict[str, Any], appoin
               "active_coverages": len(eligible), "plan": _plan(coverage), "plan_details": _plan_details(coverage),
               "appointment_date": service_date, "appointment_status": visit.get("status"),
               "visit_type": inputs.get("visit_type") or "not_returned",
+              "referral_evidence": [
+                  {"reference": "ServiceRequest/" + str(row.get("id", "")), "status": row.get("status"),
+                   "authored_on": row.get("authoredOn"), "source": "eClinicalWorks"}
+                  for row in relevant_orders
+                  if row.get("resourceType") == "ServiceRequest" and row.get("status") in {"active", "completed"}
+                  and _reference(row.get("subject")) == f"Patient/{patient_id}"
+                  and any("referral" in text.lower() for text in _concept_labels(row.get("category")))],
               "recent_completed_appointments": recent_completed_appointments,
               "history_status": "timed_out" if history_timeout else "unavailable" if history_unavailable else "loaded",
               "payer": _display(payer),

@@ -9,6 +9,11 @@ from app.api.routers.commercial_estimator import EcwStartInput, _previsit_benefi
 
 
 class PrevisitFlowTest(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        self.cash_patch = patch('app.api.routers.commercial_estimator.practice_prices.current', return_value=None)
+        self.cash_patch.start()
+        self.addCleanup(self.cash_patch.stop)
+
     async def test_uncoded_new_visit_requests_real_office_benefits_before_pricing(self):
         await self._flow(date.today().isoformat())
 

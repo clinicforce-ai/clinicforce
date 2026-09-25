@@ -61,6 +61,11 @@ def test_discovery_returns_safe_dependent_candidate_for_staff_selection():
 
 
 class RecoveryTest(IsolatedAsyncioTestCase):
+    def setUp(self):
+        self.cash_patch = patch.object(api.practice_prices, 'current', return_value=None)
+        self.cash_patch.start()
+        self.addCleanup(self.cash_patch.stop)
+
     async def exercise(self, response, *, directory='payer', timeout=False, saved=False):
         case, session, provider, _ = setup()
         client = MagicMock(); client.__aenter__ = AsyncMock(return_value=client); client.__aexit__ = AsyncMock(return_value=None)

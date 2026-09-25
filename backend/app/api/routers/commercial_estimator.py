@@ -20,7 +20,7 @@ from pydantic import StrictInt, BaseModel, ConfigDict, Field, ValidationError
 
 from app.api.routers.insurance import _response, _scope, _session as insurance_session
 from app.core import object_store
-from app.insurance import commercial, commercial_store, cpt_rules, cpt_suggester, ecw_backend, golden, stedi_discovery, stedi_payers, store, visit_estimate, nmct_cash
+from app.insurance import commercial, commercial_store, cpt_rules, cpt_suggester, ecw_backend, golden, stedi_discovery, stedi_payers, store, visit_estimate, nmct_cash, practice_prices, plan_benefits
 
 
 router = APIRouter(prefix="/api/doctor/insurance/commercial", tags=["doctor-commercial-estimator"])
@@ -108,6 +108,7 @@ class VisitReviewInput(BaseModel):
     context_token: str = Field(min_length=64, max_length=64)
     revision: int = Field(ge=0)
     selected_ids: list[str] | None = Field(default=None, max_length=20)
+    payment_mode: Literal["insurance", "cash"] | None = None
     cash_selection: str | None = Field(default=None, max_length=40)
     confirmed_units: dict[str, StrictInt] | None = Field(default=None, max_length=20)
     verification: VisitVerification | None = None
@@ -254,6 +255,12 @@ def _practice_path(practice_id: str, inputs: dict, source: dict) -> tuple[dict, 
                 and row["status"] == "staff_guidance_enabled" and row.get("plan_matcher", "") == networks[0].get("plan_matcher", "")]
     if len(profiles) != 1:
         raise HTTPException(409, "This practice has no single enabled estimate profile for this provider and payer.")
+    product_names = {re.sub(r'[^a-z0-9]', '', name.casefold()) for name in source.get('payer_plan_names', [])}
+    if product_names:
+        aliases = {re.sub(r'[^a-z0-9]', '', str(name).casefold()) for name in
+                   [networks[0].get('plan_matcher', ''), *(profiles[0].get('rules', {}).get('plan_product_names') or [])]} - {'', 'ci', 'commercial', 'ppo', 'hmo'}
+        if not product_names <= aliases and not plan_benefits.network_match(payer.get('stedi_payer_id', ''), product_names, networks[0].get('network_name', '')):
+            raise HTTPException(409, 'The clinic fee schedule is not matched to the exact payer product.')
     return payer, networks[0], profiles[0]
 
 
@@ -454,6 +461,9 @@ def _attach_previsit_pricing(result: dict, practice_id: str, inputs: dict, sourc
         _, network, _ = _practice_path(practice_id, {**inputs, "payer_id": connection["id"]}, source)
         benefits["network_status"] = "in_network"
         result['network_evidence'] = {key: network.get(key) for key in ('network_name', 'evidence_reference', 'effective_from', 'effective_to')}
+        products = {re.sub(r'[^a-z0-9]', '', name.casefold()) for name in source.get('payer_plan_names', [])}
+        if plan_benefits.network_match(payer_id, products, network.get('network_name', '')):
+            result['network_evidence']['product_source'] = plan_benefits.FEP_NETWORK
     except HTTPException:
         pass
     result["price_range"], issues = _previsit_range(practice_id, inputs, source, connection["id"], result["codes"], benefits,
@@ -513,6 +523,10 @@ def _finish_previsit(result: dict, case: dict, inputs: dict, source: dict, paylo
                 known.add(code)
     if nmct_cash.schedule(session['practice_id'], inputs['service_date']):
         available.extend(row for row in nmct_cash.catalog() if row['code'] not in {item['code'] for item in available})
+    uploaded_cash = practice_prices.current(session['practice_id'], inputs['service_date']) if session['practice_id'] != nmct_cash.PRACTICE_ID else None
+    if uploaded_cash:
+        known_codes = {row['code'] for row in available}
+        available.extend({'id': 'cash:' + row['code'], 'code': row['code'], 'description': row['description'], 'source': 'Practice cash schedule', 'units': 1, 'modifiers': []} for row in uploaded_cash['rows'] if row['code'] not in known_codes)
     for row in available:
         matches = [rate for rate in catalog if rate['code'] == row['code'] and (rate.get('modifier') or '') == ','.join(row.get('modifiers') or [])]
         if len(matches) == 1:
@@ -520,7 +534,9 @@ def _finish_previsit(result: dict, case: dict, inputs: dict, source: dict, paylo
                        description=row.get('description') or matches[0].get('description'), rate_source=matches[0].get('source_reference'))
     result['available_codes'] = [{**row, 'units': (review.get('confirmed_units') or {}).get(row['id'], row.get('units'))} for row in available]
     result['service_plan'] = visit_estimate.service_plan(result['available_codes'], inputs, source)
+    result['payment_mode'] = review.get('payment_mode', 'insurance')
     result['ecw_saved_eligibility'] = source.get('saved_eligibility')
+    result['referral_evidence'] = source.get('referral_evidence', [])
     result['appointment_context'] = {key: source.get(key) for key in ('location', 'rendering_provider', 'appointment_status')}
     if review.get('selected_ids'):
         by_id = {row['id']: row for row in available}
@@ -530,8 +546,12 @@ def _finish_previsit(result: dict, case: dict, inputs: dict, source: dict, paylo
         'ecw': source.get('plan_details') or {'plan': [source['plan']] if source.get('plan') else []},
         'stedi': commercial.plan_details(payload) if payload else {}}, ecw_retrieved_at=source.get('retrieved_at'),
         response_reference=(payload or {}).get('id'), selected_ids=review.get('selected_ids', []))
-    _attach_previsit_pricing(result, session['practice_id'], inputs, pricing_source or source, payer_id, result['benefits'], payload=payload, review=review)
+    exact_source = {**(pricing_source or source), 'payer_plan_names': commercial.plan_details(payload or {})['names']}
+    result.pop('network_evidence', None)
+    _attach_previsit_pricing(result, session['practice_id'], inputs, exact_source, payer_id, result['benefits'], payload=payload, review=review)
     nmct_cash.apply(result, session['practice_id'], inputs['service_date'], review)
+    if uploaded_cash:
+        practice_prices.apply(result, uploaded_cash)
     case['previsit_context'] = {'inputs': inputs, 'source': source, 'payer_id': payer_id,
                               'result': result, 'context_token': token}
 
@@ -1295,6 +1315,8 @@ async def update_visit_review(case_id: str, value: VisitReviewInput, request: Re
         group_order = [group['id'] for group in visit_estimate.service_plan(list(available.values()), inputs, source)['groups']]
         review['selected_ids'] = sorted(value.selected_ids, key=lambda key: (group_order.index(visit_estimate.clinical_group(available[key]['code'])), list(available).index(key)))
         review.pop('payments', None)
+    if value.payment_mode is not None:
+        review['payment_mode'] = value.payment_mode
     if value.cash_selection is not None:
         config = nmct_cash.schedule(session['practice_id'], inputs['service_date'])
         if not config or value.cash_selection not in {'', 'friends_family', *(row['id'] for row in config['packages'])}:
@@ -1629,3 +1651,28 @@ async def calculate(case_id: str, request: Request) -> Any:
     except commercial.CommercialError as exc:
         case["estimate"] = None; case["review_tasks"] = [str(exc)]
         return _response(_public(await run_in_threadpool(_save, case, session, "estimate-review-required")))
+
+
+@router.post('/cash-schedules')
+async def upload_cash_schedule(request: Request, effective_from: date, file: UploadFile = File(...)) -> dict:
+    session = await _session(request); _admin(session)
+    if session['practice_id'] == nmct_cash.PRACTICE_ID:
+        raise HTTPException(409, 'NMCT uses its supplied, versioned Word schedule including clinical packages.')
+    content = await file.read(20 * 1024 * 1024 + 1)
+    if len(content) > 20 * 1024 * 1024:
+        raise HTTPException(413, 'Price schedules must be 20 MB or smaller.')
+    try:
+        return await run_in_threadpool(practice_prices.create, session['practice_id'], session['staff']['id'], content, file.filename or '', effective_from.isoformat())
+    except commercial.CommercialError as exc:
+        raise HTTPException(422, str(exc)) from exc
+
+
+@router.post('/cash-schedules/{version_id}/activate')
+async def activate_cash_schedule(version_id: str, request: Request) -> dict:
+    session = await _session(request); _admin(session)
+    if session['practice_id'] == nmct_cash.PRACTICE_ID:
+        raise HTTPException(409, 'NMCT uses its supplied Word schedule.')
+    try:
+        return await run_in_threadpool(practice_prices.activate, session['practice_id'], version_id)
+    except commercial.CommercialError as exc:
+        raise HTTPException(404, str(exc)) from exc

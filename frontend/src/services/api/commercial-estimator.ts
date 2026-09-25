@@ -8,7 +8,10 @@ export const commercialAppointments = () => request<{ appointments: CommercialAp
 export type CommercialReadiness = { ready: boolean; blockers: string[]; ecw: { payer?: string | null; plan?: string | null; scheduled_codes: Array<{ code?: string | null; units?: number | string | null }>; visit_type?: string | null; reason?: string | null } }
 export const commercialReadiness = (appointment_id: string) => request<CommercialReadiness>(`${root}/appointments/readiness`, json({ appointment_id }))
 export type PrevisitEstimate = {
-  cash_schedule?: { source: string; sha256: string; effective_from: string; packages: Array<{ id: string; label: string; amount_cents: number }>; package_includes: string; proposed: string };
+  practice_cash_source?: { filename: string; effective_from: string; version: string };
+  payment_mode?: 'cash' | 'insurance';
+  referral_evidence?: Array<{ reference: string; status: string; authored_on?: string; source: string }>;
+  cash_schedule?: { source: string; sha256: string; effective_from: string; packages: Array<{ id: string; label: string; amount_cents: number; max_limbs: number; ncs_example: string; emg_example: string; limbs_example: number }>; package_includes: string; proposed: string };
   cash_quote?: { complete: boolean; selection: string; source: string; effective_from: string; message: string; min_cents?: number; max_cents?: number };
   service_plan?: { kind: string; groups: Array<{ id: string; label: string; description: string; selection_mode: string; role: string; ids: string[] }>; recommended_ids: string[]; recommendation_basis: string; history_count: number };
   ecw_saved_eligibility?: { status: string; active?: boolean; message: string; checked_at?: string; reference?: string };
@@ -19,7 +22,7 @@ export type PrevisitEstimate = {
   eligibility_failure?: { kind: string; codes: string[]; title: string; detail: string; action: string; attempted_at: string };
   eligibility_error?: string; context_token?: string; revision?: number; selected_ids?: string[]; available_codes?: VisitCode[];
   plan_details?: { ecw: Record<string, string[]>; stedi: { names?: string[]; plan_number?: string; group_number?: string } };
-  calculated_at?: string; ecw_retrieved_at?: string; response_reference?: string; network_evidence?: { network_name?: string; evidence_reference?: string; effective_from?: string; effective_to?: string };
+  calculated_at?: string; ecw_retrieved_at?: string; response_reference?: string; network_evidence?: { network_name?: string; product_source?: string; evidence_reference?: string; effective_from?: string; effective_to?: string };
   check_id?: string; appointment_id: string; service_date: string; payer?: string | null; plan?: string | null;
   visit_type?: string | null; reason?: string | null; checked_at?: string | null;
   stedi_payer?: { name?: string; id: string };
@@ -57,11 +60,18 @@ export type VisitPricedLine = VisitCode & {
   cash_cents?: number | null; cash_source?: string; cash_included?: boolean;
   benefit_verification?: { reference: string; notes: string; verified_by: string; verified_at: string; valid_from: string; valid_to: string } | null;
   rate_source: string; rate_version?: string; rate_effective_from?: string; benefit_basis: string; issues: string[]; conditions?: string[];
-  benefits: NonNullable<PrevisitEstimate['benefits']> & { copay_period?: string; requirements: { referral: VisitRequirement; authorization: VisitRequirement } };
+  benefits: NonNullable<PrevisitEstimate['benefits']> & { copay_period?: string; benefit_label?: string; benefit_summary?: string; visits_remaining?: number; deductible_applies?: boolean; policy_evidence?: { title: string; url: string; section: string }; requirements: { referral: VisitRequirement; authorization: VisitRequirement } };
   calculation: null | { cost_share?: string; allowed_cents: number; patient_cents: number; plan_cents: number; deductible_cents: number; copay_cents: number; coinsurance_cents: number; oop_adjustment_cents: number }
 }
-export type VisitReview = { cash_selection?: string; selected_ids?: string[]; confirmed_units?: Record<string, number>; payments_received_cents?: number; payment_reference?: string; verification?: {
+export type VisitReview = { payment_mode?: 'cash' | 'insurance'; cash_selection?: string; selected_ids?: string[]; confirmed_units?: Record<string, number>; payments_received_cents?: number; payment_reference?: string; verification?: {
   line_id: string; kind: 'referral' | 'authorization' | 'benefits'; status: string; reference: string; notes: string;
   valid_from: string; valid_to: string; units: number; selected_ids?: string[]; cost_share?: string; deductible_applies?: boolean
 } }
 export const commercialVisitReview = (result: PrevisitEstimate, review: VisitReview) => request<PrevisitEstimate>(`${root}/cases/${encodeURIComponent(result.check_id!)}/visit-review`, json({ ...review, revision: result.revision, context_token: result.context_token }))
+
+export type CashScheduleDraft = { id: string; filename: string; effective_from: string; rows: Array<{ code: string; description: string; cash_cents: number }> }
+export function commercialUploadCashSchedule(file: File, effective: string) {
+  const body = new FormData(); body.append('file', file)
+  return request<CashScheduleDraft>(`${root}/cash-schedules?effective_from=${encodeURIComponent(effective)}`, { method: 'POST', body })
+}
+export const commercialActivateCashSchedule = (id: string) => request<{ id: string }>(`${root}/cash-schedules/${encodeURIComponent(id)}/activate`, json({}))
