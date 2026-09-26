@@ -269,6 +269,27 @@ class StaffDatabaseTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(ValueError):
             staff_store.confirm_patient(second["id"], actor, {"given_name": "Different", "family_name": "Patient", "birth_date": "1990-01-01", "member_id": "MEM123", "patient_id": confirmed["patient"]["id"]})
 
+    async def test_card_preview_reuses_only_confirmed_intakes_for_same_clinic_patient(self):
+        actor = await self.sign_in()
+        original = await self.confirm(await self.upload())
+        linked = staff_store.create_intake(str(uuid4()), actor, [], source='manual_entry')
+        linked = await self.confirm(linked, patient_id=original['patient']['id'])
+        other = await self.confirm(await self.upload(), given_name='Different')
+        draft = await self.upload()
+        foreign = staff_store.create_intake(str(uuid4()), {**actor, 'practice_id': 'foreign', 'id': None}, original['documents'])
+        self.assertEqual(staff_store.patient_card_intakes('foreign', original['patient']['id']), [])
+        response = await self.client.get(f"/api/staff/intakes/{linked['id']}/cards")
+        self.assertEqual(response.status_code, 200)
+        cards = response.json()['cards']
+        self.assertEqual(len(cards), 1)
+        self.assertIn(original['id'], cards[0]['url'])
+        self.assertNotIn(other['id'], cards[0]['url'])
+        self.assertEqual((await self.client.get(cards[0]['url'])).status_code, 200)
+        own_draft = (await self.client.get(f"/api/staff/intakes/{draft['id']}/cards")).json()['cards']
+        self.assertEqual(len(own_draft), 1)
+        self.assertIn(draft['id'], own_draft[0]['url'])
+        self.assertEqual((await self.client.get(f"/api/staff/intakes/{foreign['id']}/cards")).status_code, 404)
+
     async def test_two_files_keep_original_page_and_filename_in_evidence(self):
         await self.sign_in()
         response = await self.client.post("/api/staff/intakes", files=[

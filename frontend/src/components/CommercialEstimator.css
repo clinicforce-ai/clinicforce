@@ -82,6 +82,81 @@
 .insurance-card-preview img { display: block; max-width: 100%; height: auto; }
 .insurance-card-preview figure { margin: 1rem 0; }
 
-.collection-components { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 1rem; }
-.collection-components dt { font-size: .875rem; }
-.collection-components dd { margin: .3rem 0 0; font-weight: 600; }
+/* Coverage owns policy facts; collection owns the visit calculation. */
+.patient-policy > dl { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px 24px; margin: 18px 0; }
+.patient-policy dt { color: var(--ve-muted); font-size: 13px; }
+.patient-policy dd { margin: 4px 0 0; font-weight: 500; overflow-wrap: anywhere; }
+.patient-policy small { font-size: 12px; font-weight: 400; }
+.patient-policy .insurance-card-preview { margin: 0; border-top: 1px solid var(--ve-line); }
+.front-desk-coverage { margin-top: 16px; padding-top: 20px; }
+.front-desk-coverage .visit-check { padding: 12px; }
+.front-desk-coverage .visit-check dd { font-size: 15px; }
+.payer-copays { margin-top: 20px; }
+.payer-copays > p { margin: 6px 0 12px; font-size: 13px; }
+.benefit-conditions summary { min-height: 28px; font-size: 12px; color: var(--ve-teal); justify-content: flex-start; }
+.benefit-conditions summary::after { content: '+'; }
+.benefit-conditions[open] summary::after { content: '−'; }
+.benefit-conditions p { font-size: 13px; font-weight: 400; max-width: 48ch; margin: 4px 0; }
+.payer-copays .clinical-service-table :is(th, td) { padding: 8px 10px; }
+.insured-collection .payment-choice { display: flex; gap: 8px; margin-bottom: 20px; }
+.insured-collection .payment-choice > button { flex-direction: row; align-items: center; flex-wrap: wrap; gap: 6px 12px; padding: 10px 16px; border-width: 1px; }
+.insured-collection .payment-choice strong { margin: 0; font-size: 17px; }
+.insured-collection .payment-choice small { font-size: 12px; }
+.arrival-layout { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr); gap: 32px; border: 1px solid var(--ve-line); border-radius: 12px; background: white; padding: 24px; }
+.arrival-total > span { color: var(--ve-muted); font-size: 14px; }
+.arrival-total > strong { display: block; font-size: clamp(28px, 3vw, 40px); line-height: 1.2; margin: 8px 0 12px; font-variant-numeric: tabular-nums; }
+.arrival-total > p { font-size: 14px; color: var(--ve-muted); }
+.arrival-total > button { padding-left: 0; }
+.collection-reason { margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--ve-line); }
+.collection-reason h3, .arrival-breakdown h3 { font-size: 16px; }
+.collection-reason p, .collection-reason ul { font-size: 14px; margin: 8px 0 0; }
+.collection-reason li + li { margin-top: 6px; }
+.collection-reason p strong { font-size: inherit; }
+.collection-components { margin: 12px 0; font-size: 14px; }
+.collection-components > div { display: flex; justify-content: space-between; align-items: baseline; gap: 16px; padding: 10px 0; }
+.collection-components dt { color: var(--ve-muted); }
+.collection-components dd { margin: 0; font-weight: 600; text-align: right; font-variant-numeric: tabular-nums; }
+.collection-components .collection-subtotal { border-top: 1px solid var(--ve-line); }
+.arrival-breakdown > p { font-size: 12px; margin-bottom: 0; }
+.insured-collection .financial-history { border: 0; padding: 12px 0; margin: 0; }
+.financial-history h3 { display: flex; gap: 8px; align-items: center; }
+.insured-collection .visit-services { margin-top: 12px; }
+@media (max-width: 800px) {
+  .patient-policy > dl { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .arrival-layout { gap: 20px; padding: 20px; }
+}
+@media (max-width: 600px) {
+  .arrival-layout { grid-template-columns: minmax(0, 1fr); padding: 16px; }
+  .arrival-breakdown { border-top: 1px solid var(--ve-line); padding-top: 16px; }
+  .insured-collection .payment-choice > button { flex: 1; padding: 10px; }
+  .insured-collection .payment-choice small { flex-basis: 100%; }
+  .patient-policy > dl { gap: 12px 16px; }
+  .patient-policy dd { font-size: 14px; }
+}
+
+.procedure-group { border: 0; padding: 0; margin: 20px 0; min-width: 0; }
+.procedure-group legend { font-size: 18px; font-weight: 600; padding: 0; }
+.procedure-group-tools { display: flex; align-items: center; justify-content: space-between; color: var(--ve-muted); font-size: 13px; }
+.procedure-options { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin: 10px 0; }
+.procedure-choice { min-width: 0; background: var(--ve-white); border: 1px solid var(--ve-line); border-radius: 10px; padding: 16px; }
+.procedure-choice.is-selected { border-color: var(--ve-teal); box-shadow: inset 0 0 0 1px var(--ve-teal); }
+.procedure-choice-label { display: flex; align-items: flex-start; gap: 12px; cursor: pointer; }
+.procedure-choice-label strong { font-size: 16px; font-weight: 600; }
+.procedure-choice-label small { font-size: 12px; margin-top: 2px; }
+.procedure-facts { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 16px; margin: 12px 0 0 33px; }
+.procedure-facts dt { color: var(--ve-muted); font-size: 12px; }
+.procedure-facts dd { margin: 0; font-size: 13px; font-weight: 500; }
+.procedure-patient-amount { display: flex; justify-content: space-between; gap: 12px; margin: 12px 0 0 33px; padding-top: 10px; border-top: 1px solid var(--ve-line); font-size: 13px; }
+.procedure-quantity { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 12px 0 0 33px; font-size: 14px; }
+.procedure-quantity input { width: 90px; }
+.emg-request { display: flex; align-items: center; gap: 12px; padding: 16px 0; font-weight: 500; }
+.emg-options { border-left: 3px solid var(--ve-line); padding-left: 20px; }
+.procedure-catalog { margin-top: 20px; }
+.procedure-catalog summary small { margin-left: auto; }
+.plan-scenario-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+@media(max-width:600px) {
+  .procedure-options { grid-template-columns: minmax(0, 1fr); }
+  .procedure-choice { padding: 14px; }
+  .emg-options { padding-left: 12px; }
+  .plan-scenario-actions { flex-direction: column; }
+}

@@ -438,18 +438,20 @@ async def get_document(intake_id: str, document_id: str, request: Request):
 
 @router.get("/intakes/{intake_id}/cards")
 async def patient_cards(intake_id: str, request: Request):
-    intake = await owned_intake(intake_id, await require_staff(request))
+    staff = await require_staff(request)
+    intake = await owned_intake(intake_id, staff)
+    sources = await run_in_threadpool(staff_store.patient_card_intakes, staff['practice_id'], intake['patient']['id']) if intake.get('patient') else [intake]
     cards = [{"id": item['id'], "title": item['filename'], "content_type": item['content_type'],
-              "url": f"/api/staff/intakes/{quote(intake_id, safe='')}/documents/{quote(item['id'], safe='')}"}
-             for item in intake['documents']]
+              "url": f"/api/staff/intakes/{quote(source['id'], safe='')}/documents/{quote(item['id'], safe='')}"}
+             for source in sources for item in source['documents']]
     patient_id = (intake.get('patient') or {}).get('ecw_patient_id') or intake.get('fields', {}).get('ecw_patient_id')
     message = ''
     if patient_id:
         try:
             rows = await ecw_backend.insurance_cards(str(patient_id))
             cards.extend({**item, 'url': f"/api/staff/intakes/{quote(intake_id, safe='')}/ecw-card?document_id={quote(item['id'], safe='')}"} for item in rows)
-            if not rows:
-                message = 'This eCW connection returned no insurance-card image. A card visible inside eCW may not be shared through its API.'
+            if not cards:
+                message = 'No insurance-card image was returned by eCW. Scan or upload the card to add a preview.'
         except Exception:
             message = 'eCW insurance-card access is unavailable. Saved ClinicForce card files are still available.'
     return JSONResponse({'cards': cards, 'message': message}, headers=NO_STORE)
