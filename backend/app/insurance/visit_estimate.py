@@ -148,6 +148,8 @@ def price_lines(codes: list[dict], rates: list[dict], benefits: dict, rules: dic
             line_rules['cost_share'] = applied['cost_share']
         if selection_valid:
             line_rules['cost_share'] = selection['cost_share']
+            applied['cost_share'] = selection['cost_share']
+            applied['deductible_applies'] = selection['deductible_applies']
             if not selection['deductible_applies']:
                 applied['deductible_remaining_cents'] = 0
                 applied['review_reasons'] = [reason for reason in applied.get('review_reasons', []) if 'remaining individual deductible' not in reason]
@@ -267,21 +269,35 @@ def price_lines(codes: list[dict], rates: list[dict], benefits: dict, rules: dic
 
 def arrival_collection(price: dict, benefits: dict, review: dict) -> dict:
     """At-service patient obligations, separate from the insurer's later payment."""
-    result = {'amount_cents': None, 'estimated_cents': None, 'status': 'verify', 'basis': 'patient_obligations',
+    result = {'amount_cents': None, 'estimated_cents': None, 'verified_copay_cents': None, 'status': 'verify', 'basis': 'patient_obligations',
               'prior_balance_cents': None, 'noncovered_cents': None, 'payments_received_cents': None,
               'reason': 'Verify coverage, planned services, benefits and approval requirements before collecting.'}
-    if benefits.get('active') is not True or benefits.get('network_status') != 'in_network' or not price.get('complete'):
+    if benefits.get('active') is not True or benefits.get('network_status') != 'in_network' or benefits.get('has_secondary') or any('identity' in reason for reason in benefits.get('review_reasons', [])):
         return result
-    result['estimated_cents'] = price['patient_max_cents']
     if price.get('conditional') or price.get('mode') in {'alternatives', 'options'}:
+        result['estimated_cents'] = price.get('patient_max_cents')
         result['reason'] = 'This is a planning amount. Confirm the services and resolve benefit or approval conditions before collection.'
         return result
+    office = [line for line in price.get('lines', []) if str(line.get('code')) in {str(n) for n in (*range(99202, 99206), *range(99212, 99216))}]
+    if len(office) == 1:
+        terms = office[0]['benefits']
+        if (office[0].get('units') == 1 and not terms.get('requires_review') and not office[0].get('conditions')
+                and terms.get('cost_share') == 'copay' and terms.get('deductible_applies') is False
+                and terms.get('copay_period') in {'VISIT', '27'}
+                and terms.get('copay_cents') is not None and terms.get('oop_remaining_cents') is not None):
+            result['verified_copay_cents'] = min(terms['copay_cents'], terms['oop_remaining_cents'])
+    if not price.get('complete') and result['verified_copay_cents'] is None:
+        return result
     payments = review.get('payments') or {}
-    amount = price['patient_max_cents']
+    result['estimated_cents'] = price.get('patient_max_cents') if price.get('complete') else None
+    amount = result['estimated_cents'] if price.get('complete') else result['verified_copay_cents']
     if payments.get('reference'):
         result['payments_received_cents'] = payments['amount_cents']
         amount = max(0, amount - payments['amount_cents'])
     result.update(amount_cents=amount, status='estimate', reason=(
         'Copay, applicable deductible and coinsurance for this visit, less verified payments. Prior balances and non-covered charges are not included unless separately verified.' if payments.get('reference') else
         'Copay, applicable deductible and coinsurance for this visit, before payments or credits. Check the clinic ledger for prior balances and amounts already collected; those values were not returned.'))
+    if not price.get('complete'):
+        result.update(status='copay_only', reason='Only the verified office copay is included. Additional deductible and coinsurance remain for estimation or post-adjudication billing. ' +
+                      ('Verified payments have been subtracted.' if payments.get('reference') else 'Before payments or credits; check the clinic ledger.'))
     return result

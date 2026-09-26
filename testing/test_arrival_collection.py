@@ -69,3 +69,41 @@ class AsyncEvidenceTests(IsolatedAsyncioTestCase):
             assert len(await ecw_backend.insurance_cards('right')) == 1
             with pytest.raises(ecw_backend.EcwBackendError):
                 await ecw_backend.insurance_cards('right', document_id='card:0')
+
+
+def test_verified_office_copay_is_separate_from_an_unavailable_total():
+    benefits = {'active': True, 'network_status': 'in_network'}
+    office = {'code': '99204', 'units': 1, 'benefits': {'copay_cents': 5000, 'copay_period': 'VISIT',
+        'cost_share': 'copay', 'deductible_applies': False, 'oop_remaining_cents': 100000, 'requires_review': False}}
+    price = {'complete': False, 'lines': [office]}
+    value = visit_estimate.arrival_collection(price, benefits, {'payments': {'amount_cents': 1000, 'reference': 'receipt'}})
+    assert value['status'] == 'copay_only' and value['amount_cents'] == 4000
+    assert value['verified_copay_cents'] == 5000 and value['estimated_cents'] is None
+    for changes in [{'has_secondary': True}, {'network_status': 'unknown'}, {'review_reasons': ['Confirm patient identity']}]:
+        assert visit_estimate.arrival_collection(price, {**benefits, **changes}, {})['amount_cents'] is None
+    office['benefits']['deductible_applies'] = True
+    assert visit_estimate.arrival_collection(price, benefits, {})['amount_cents'] is None
+
+
+def test_ceo_deductible_then_coinsurance_examples_use_allowed_amount():
+    from app.insurance.commercial import estimate
+    benefits = {'active': True, 'network_status': 'in_network', 'coverage_level': 'individual',
+                'deductible_remaining_cents': 10000, 'oop_remaining_cents': 100000, 'coinsurance_percent': '20'}
+    lines = [{'code': '99204', 'units': 1, 'allowed_cents': 24078}]
+    result = estimate(lines, benefits, {'cost_share': 'coinsurance'})
+    assert result['patient_cents'] == 12816 and result['deductible_cents'] == 10000 and result['coinsurance_cents'] == 2816
+    result = estimate(lines, {**benefits, 'deductible_remaining_cents': 50000}, {'cost_share': 'coinsurance'})
+    assert result['patient_cents'] == 24078 and result['coinsurance_cents'] == 0
+
+
+def test_payer_dependent_details_and_identity_mismatch_are_preserved():
+    from app.insurance.commercial import payer_person, plan_details
+    subscriber = {'name': {'person': {'firstName': 'Parent', 'lastName': 'Person'}}, 'memberId': 'ABC'}
+    dependent = {'name': {'person': {'firstName': 'Pat', 'lastName': 'Different'}}, 'dateOfBirth': '1980-01-01',
+                 'additionalInformation': {'group': {'number': 'GROUP'}, 'plan': {'number': 'PLAN'}}}
+    payload = {'subscriber': subscriber, 'dependent': dependent, 'plans': []}
+    assert payer_person(subscriber)['firstName'] == 'Parent'
+    assert plan_details(payload)['group_number'] == 'GROUP' and plan_details(payload)['plan_number'] == 'PLAN'
+    benefits = api._previsit_benefits(payload, {'member_id': 'ABC', 'active_coverages': 1,
+        'patient_first': 'Pat', 'patient_last': 'Example', 'patient_birth_date': '1980-01-01'})
+    assert benefits['requires_review'] and any('identity' in reason for reason in benefits['review_reasons'])

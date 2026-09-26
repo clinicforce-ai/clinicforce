@@ -442,6 +442,11 @@ def _previsit_benefits(payload: dict, coverage: dict, service_date: str | None =
         benefits["requires_review"] = True
         benefits["normalization_notes"].append("Payer response member ID differs from eCW.")
         benefits["review_reasons"].append("Confirm the member identity: the payer response differs from eCW.")
+    person = commercial.payer_person(payload.get('dependent') or payload.get('subscriber') or {})
+    if any(person.get(field) and coverage.get(key) and re.sub(r'\W', '', str(person[field])).casefold() != re.sub(r'\W', '', str(coverage[key])).casefold()
+           for field, key in [('firstName', 'patient_first'), ('lastName', 'patient_last'), ('dateOfBirth', 'patient_birth_date')]):
+        benefits['requires_review'] = True
+        benefits['review_reasons'].append('Confirm patient identity: the payer-returned name or birth date differs from eCW.')
     return benefits
 
 
@@ -567,7 +572,11 @@ def _finish_previsit(result: dict, case: dict, inputs: dict, source: dict, paylo
     result['patient_details'] = source.get('patient_details', {})
     result['insurance_details'] = {**_coverage_snapshot(inputs, source), 'record_status': source.get('coverage_record_status'), 'coverage_period': source.get('coverage_period', {})}
     subscriber = (payload or {}).get('subscriber') or {}
-    result['insurance_details']['payer_subscriber'] = {key: subscriber.get(key) for key in ('firstName', 'lastName', 'memberId', 'dateOfBirth')}
+    dependent = (payload or {}).get('dependent') or {}
+    result['insurance_details'].update(payer_subscriber=commercial.payer_person(subscriber),
+        payer_patient=commercial.payer_person(dependent or subscriber),
+        payer_relationship=dependent.get('relationToSubscriber') or ('SELF' if subscriber else None),
+        payer_coverage_period=((dependent or subscriber).get('dates') or {}).get('plan') or {})
     result.update(ecw_coverage_active=source.get('active_coverages', 0) > 0, calculated_at=_now(), context_token=token, revision=case.get('revision', 0), plan_details={
         'ecw': source.get('plan_details') or {'plan': [source['plan']] if source.get('plan') else []},
         'stedi': commercial.plan_details(payload) if payload else {}}, ecw_retrieved_at=source.get('retrieved_at'),
