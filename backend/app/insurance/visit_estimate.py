@@ -272,7 +272,7 @@ def arrival_collection(price: dict, benefits: dict, review: dict) -> dict:
     result = {'amount_cents': None, 'estimated_cents': None, 'verified_copay_cents': None, 'status': 'verify', 'basis': 'patient_obligations',
               'prior_balance_cents': None, 'noncovered_cents': None, 'payments_received_cents': None,
               'reason': 'Verify coverage, planned services, benefits and approval requirements before collecting.'}
-    if benefits.get('active') is not True or benefits.get('network_status') != 'in_network' or benefits.get('has_secondary') or any('identity' in reason for reason in benefits.get('review_reasons', [])):
+    if benefits.get('active') is not True or benefits.get('network_status') != 'in_network' or benefits.get('has_secondary') or benefits.get('service_date_matches') is False or any('identity' in reason for reason in benefits.get('review_reasons', [])):
         return result
     if price.get('conditional') or price.get('mode') in {'alternatives', 'options'}:
         result['estimated_cents'] = price.get('patient_max_cents')

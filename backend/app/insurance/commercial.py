@@ -11,6 +11,7 @@ import hashlib
 import hmac
 import re
 from dataclasses import dataclass
+from datetime import date
 from decimal import Decimal, ROUND_HALF_UP
 from io import StringIO
 from typing import Any
@@ -329,14 +330,22 @@ def normalize_stedi_271(payload: dict[str, Any], service_type_code: str, provide
     entries = [row for row in entries if relevant_service(row)
                and _network_indicator(row) not in {'N', 'NO', 'OUT_OF_NETWORK'}]
     invalid_dates = False
+    person_dates = (payload.get('dependent') or payload.get('subscriber') or {}).get('dates') or {}
+    returned_service = person_dates.get('service') or {}
+    date_matches = None
+    if service_date and returned_service.get('start'):
+        try:
+            date_matches = date.fromisoformat(returned_service['start']) <= date.fromisoformat(service_date) <= date.fromisoformat(returned_service.get('end') or returned_service['start'])
+        except (ValueError, TypeError):
+            invalid_dates = True
     if service_date:
         applicable = []
         for row in entries:
             plan = (payload.get('plans') or [])[row['plan_index']] if 'plan_index' in row else payload
-            bounds = {**(payload.get('planDateInformation') or {}), **(plan.get('planDateInformation') or {}),
-                      **(plan.get('dates') or {}), **(row.get('benefitsDateInformation') or {}), **(row.get('dates') or {})}
+            bounds = [person_dates, payload.get('planDateInformation') or {}, plan.get('planDateInformation') or {},
+                      plan.get('dates') or {}, row.get('benefitsDateInformation') or {}, row.get('dates') or {}]
             try:
-                if _dates_apply(bounds, service_date):
+                if all(_dates_apply(bound, service_date) for bound in bounds):
                     applicable.append(row)
             except (ValueError, TypeError):
                 invalid_dates = True
@@ -441,6 +450,8 @@ def normalize_stedi_271(payload: dict[str, Any], service_type_code: str, provide
     review_reasons = []
     if invalid_dates:
         review_reasons.append("Verify the payer eligibility dates; an applicable date value could not be interpreted.")
+    if date_matches is False:
+        review_reasons.append(f"Payer evidence covers service date {returned_service['start']}; eligibility for the requested appointment on {service_date} needs verification.")
     if active is not True:
         review_reasons.append("Confirm active coverage for the visit date with the payer.")
     if deductible_cents is None:
@@ -459,7 +470,8 @@ def normalize_stedi_271(payload: dict[str, Any], service_type_code: str, provide
         review_reasons.append("Review the payer's benefit limits before estimating patient cost.")
     if multiple_plans or other_active_coverage:
         review_reasons.append("Confirm which plan pays first and how additional coverage applies.")
-    return {"active": active, "coverage_level": "individual" if wanted else "unknown",
+    return {"active": active, "service_date_matches": date_matches, "returned_service_dates": returned_service,
+            "coverage_level": "individual" if wanted else "unknown",
             "network_status": "in_network" if provider_network_verified else "unknown",
             "deductible_remaining_cents": deductible_cents, "oop_remaining_cents": oop_cents,
             "copay_cents": copay_cents, "coinsurance_percent": str(coinsurance_percent) if coinsurance_percent is not None else None,

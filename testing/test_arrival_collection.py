@@ -107,3 +107,17 @@ def test_payer_dependent_details_and_identity_mismatch_are_preserved():
     benefits = api._previsit_benefits(payload, {'member_id': 'ABC', 'active_coverages': 1,
         'patient_first': 'Pat', 'patient_last': 'Example', 'patient_birth_date': '1980-01-01'})
     assert benefits['requires_review'] and any('identity' in reason for reason in benefits['review_reasons'])
+
+
+def test_returned_service_date_does_not_verify_a_different_appointment():
+    from app.insurance.commercial import normalize_stedi_271
+    payload = {'subscriber': {'dates': {'service': {'start': '2026-09-25'}, 'plan': {'start': '2026-01-01', 'end': '2026-12-31'}}},
+               'plans': [{'benefits': {'statuses': [{'status': 'Active Coverage'}]}}]}
+    benefits = normalize_stedi_271(payload, '98', True, service_date='2026-09-28')
+    assert benefits['active'] is True and benefits['service_date_matches'] is False
+    assert any('Payer evidence' in reason for reason in benefits['review_reasons'])
+    assert visit_estimate.arrival_collection({'complete': True, 'patient_max_cents': 5000}, benefits, {})['amount_cents'] is None
+    assert normalize_stedi_271(payload, '98', True, service_date='2026-09-25')['service_date_matches'] is True
+    payload['subscriber']['dates']['plan']['end'] = '2026-09-27'
+    payload['plans'][0]['dates'] = {'plan': {'start': '2026-01-01', 'end': '2026-12-31'}}
+    assert normalize_stedi_271(payload, '98', True, service_date='2026-09-28')['active'] is None
