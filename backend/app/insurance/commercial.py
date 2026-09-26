@@ -225,6 +225,12 @@ def _network_indicator(row: dict) -> str:
                else row.get("inPlanNetworkIndicatorCode") or row.get("inPlanNetworkIndicator") or "").upper()
 
 
+def payer_person(person: dict) -> dict:
+    name = (person.get('name') or {}).get('person') or person
+    return {**{key: name.get(key) for key in ('firstName', 'lastName', 'middleName')},
+            **{key: person.get(key) for key in ('memberId', 'dateOfBirth')}}
+
+
 def plan_details(payload: dict) -> dict:
     rows = _stedi_entries(payload)
     names = list(dict.fromkeys(str(row.get("planCoverage") or row.get("planCoverageDescription") or "").strip()
@@ -233,8 +239,8 @@ def plan_details(payload: dict) -> dict:
                                if isinstance(plan, dict) and plan.get('name')] + [name for name in names if name]))
     subscriber = payload.get("subscriber") or {}
     info = payload.get("planInformation") or {}
-    additional = subscriber.get("additionalInformation") or {}
-    return {"names": names, "plan_number": subscriber.get("planNumber") or info.get("planNumber"),
+    additional = (payload.get('dependent') or subscriber).get("additionalInformation") or subscriber.get('additionalInformation') or {}
+    return {"names": names, "plan_number": subscriber.get("planNumber") or info.get("planNumber") or (additional.get('plan') or {}).get('number'),
             "group_number": subscriber.get("groupNumber") or info.get("groupNumber") or (additional.get("group") or {}).get("number"),
             "source": "Stedi"}
 
