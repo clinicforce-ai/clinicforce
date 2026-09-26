@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import os
 import re
 from datetime import date, datetime, timedelta, timezone
@@ -636,6 +637,13 @@ async def fetch_inputs(profile: dict[str, Any], practice: dict[str, Any], appoin
             ordered = sorted(eligible, key=lambda row: row.get("order", 999999))
             coverage = ordered[0] if ordered and (len(ordered) == 1 or ordered[0].get("order") != ordered[1].get("order")) else {}
 
+            if not coverage:
+                # Retain the saved policy even if it does not cover this future date.
+                saved_policies = [row for row in coverage_rows if row.get('resourceType') == 'Coverage'
+                                  and _reference(row.get('beneficiary')) == 'Patient/' + patient_id
+                                  and row.get('status') != 'entered-in-error']
+                if len(saved_policies) == 1:
+                    coverage = saved_policies[0]
             visit_refs = set(_source_references(visit))
             relevant_orders = [row for row in orders if f"ServiceRequest/{row.get('id')}" in visit_refs or
                                _reference(row.get("encounter")) == encounter_ref]
@@ -757,8 +765,8 @@ async def fetch_inputs(profile: dict[str, Any], practice: dict[str, Any], appoin
                 "patient": {"patient_first_name": first, "patient_last_name": family,
                             "patient_birth_date": patient.get("birthDate"), "gender": gender, "address": patient_address(patient)},
                 "subscriber": {"firstName": sub_given, "lastName": sub_family,
-                               "birthDate": subscriber_resource.get("birthDate"), "memberId": coverage.get("subscriberId")},
-                "relationship": relationship, "member_id": coverage.get("subscriberId"),
+                               "birthDate": subscriber_resource.get("birthDate"), "memberId": coverage_member_id(coverage)},
+                "relationship": relationship, "member_id": coverage_member_id(coverage),
                 "payer_id": _payer_id(payer, practice.get("payer_aliases")), "group_number": _group(coverage), "plan_number": _plan_number(coverage),
                 "provider": {**billing, "npi": billing_npi}, "submitter_id": practice.get("submitter_id"),
                 "rendering_provider": {**rendering, "npi": rendering_npi},
@@ -858,7 +866,10 @@ async def fetch_inputs(profile: dict[str, Any], practice: dict[str, Any], appoin
     source = {"system": "eClinicalWorks", "retrieved_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
             "_patient_id": patient_id,
               "appointment_id": encounter_id, "coverage_id": str(coverage.get("id") or ""),
-              "active_coverages": len(eligible), "plan": _plan(coverage), "plan_details": _plan_details(coverage),
+              "active_coverages": len(eligible), "coverage_record_status": coverage_record_status(coverage),
+              "patient_details": {"gender": patient.get("gender"), "phone": _phone(patient), "address": patient_address(patient),
+                                  "email": next((r.get("value") for r in patient.get("telecom", []) if r.get("system") == "email"), None)},
+              "coverage_period": coverage.get("period") or {}, "plan": _plan(coverage), "plan_details": _plan_details(coverage),
               "appointment_date": service_date, "appointment_status": visit.get("status"),
               "visit_type": inputs.get("visit_type") or "not_returned",
               "referral_evidence": [
@@ -890,6 +901,23 @@ async def fetch_inputs(profile: dict[str, Any], practice: dict[str, Any], appoin
                             "Condition": len(conditions), "PractitionerRole": len(role_resources),
                             "ChargeItem": len(charges)}}
     return inputs, list(dict.fromkeys(missing)), source
+
+
+def coverage_member_id(coverage: dict) -> str | None:
+    if coverage.get('subscriberId'):
+        return str(coverage['subscriberId']).strip()
+    values = {str(row['value']).strip() for row in coverage.get('identifier', []) if row.get('value') and
+              (any(c.get('code') == 'MB' for c in row.get('type', {}).get('coding', [])) or
+               str(row.get('system', '')).endswith('/memberidentifier'))}
+    return next(iter(values)) if len(values) == 1 else None
+
+
+def coverage_record_status(coverage: dict) -> dict:
+    values = [row.get('valueString') for row in coverage.get('extension', [])
+              if str(row.get('url', '')).endswith('/coverage-eligibilityStatus') and row.get('valueString')]
+    return {'status': values[0] if len(values) == 1 else 'Not returned',
+            'updated_at': coverage.get('meta', {}).get('lastUpdated'),
+            'message': 'Saved eCW insurance status; the record does not specify the service date of this check.'}
 
 
 def saved_eligibility_summary(rows: list[dict], patient_id: str, coverage_id: str, service_date: str) -> dict:
@@ -1020,3 +1048,48 @@ async def probe_saved_eligibility(profile: dict[str, Any], *, transport: httpx.A
     except httpx.HTTPError as exc:
         raise EcwBackendError("eClinicalWorks is temporarily unavailable.") from exc
     return result
+
+
+async def insurance_cards(patient_id: str, *, document_id: str | None = None,
+                          transport: httpx.AsyncBaseTransport | None = None):
+    """Read only explicitly labeled insurance cards belonging to this patient."""
+    client_id, issuer = settings()
+    async with httpx.AsyncClient(timeout=10, follow_redirects=False, transport=transport) as client:
+        token = await _access_token(client, client_id, issuer, SCOPES + ('system/DocumentReference.read', 'system/Binary.read'))
+        rows = await _search(client, issuer, token, 'DocumentReference', {'patient': patient_id})
+        cards = []
+        for row in rows:
+            if (row.get('resourceType') != 'DocumentReference' or row.get('status') == 'entered-in-error'
+                    or _reference(row.get('subject')) != 'Patient/' + patient_id):
+                continue
+            for index, content in enumerate(row.get('content', [])):
+                attachment = content.get('attachment') or {}
+                label = ' '.join([str(row.get('description') or ''), *_concept_labels(row.get('type')), str(attachment.get('title') or '')])
+                mime = attachment.get('contentType')
+                if not re.search(r'\b(?:insurance|payer|member|health plan)\s*(?:id\s*)?card\b', label, re.I) or mime not in {'image/png', 'image/jpeg', 'application/pdf'}:
+                    continue
+                key = str(row.get('id')) + ':' + str(index)
+                if document_id is None:
+                    cards.append({'id': key, 'title': attachment.get('title') or 'eCW insurance card', 'content_type': mime})
+                elif key == document_id:
+                    data = attachment.get('data')
+                    if not data:
+                        url = urljoin(issuer + '/', str(attachment.get('url') or ''))
+                        # Never forward credentials to external attachment hosts or redirects.
+                        if not url.startswith(issuer + '/Binary/') or '?' in url or '#' in url or '/..' in url:
+                            raise EcwBackendError('This card attachment is not available through the authorized eCW connection.')
+                        response = await client.get(url, headers={'Authorization': 'Bearer ' + token, 'Accept': 'application/fhir+json'})
+                        response.raise_for_status()
+                        resource = response.json()
+                        if resource.get('resourceType') != 'Binary' or resource.get('contentType') != mime:
+                            raise EcwBackendError('The eCW card attachment has an unexpected format.')
+                        data = resource.get('data')
+                    if not isinstance(data, str) or len(data) > 14_000_000:
+                        raise EcwBackendError('The card attachment exceeds the supported size.')
+                    try:
+                        return base64.b64decode(data, validate=True), mime
+                    except ValueError as exc:
+                        raise EcwBackendError('The eCW card attachment could not be read.') from exc
+        if document_id is not None:
+            raise EcwBackendError('No matching insurance card was returned for this patient.')
+        return cards

@@ -47,7 +47,7 @@ def _owned_keys(value: Any, practice_id: str, record_ids: list[str]) -> set[str]
 
 
 def delete_record(kind: str, record_id: str, actor: dict, intake_id: str | None = None) -> dict:
-    if kind not in {"patient", "check"} or (kind == "check" and not intake_id):
+    if kind not in {"patient", "check", "intake"} or (kind == "check" and not intake_id):
         raise ValueError("Choose a patient or saved insurance check.")
     practice_id = actor["practice_id"]
     with intake_links_store._connection() as db:
@@ -77,6 +77,13 @@ def delete_record(kind: str, record_id: str, actor: dict, intake_id: str | None 
                 cases = db.execute("""SELECT id,workflow_json FROM insurance_cases WHERE practice_id=%s
                     AND (practice_patient_id=%s OR intake_id=ANY(%s)) ORDER BY id FOR UPDATE""",
                                    (practice_id, record_id, intake_ids)).fetchall()
+            elif kind == "intake":
+                if not intakes:
+                    raise LookupError("Insurance intake not found")
+                if intakes[0].get("patient_id") or intakes[0].get("auto_patient_id"):
+                    raise ValueError("This upload is linked to a patient. Delete it from that patient record.")
+                owned_intakes, intake_ids = intakes, [record_id]
+                cases = db.execute("SELECT id,workflow_json FROM insurance_cases WHERE practice_id=%s AND intake_id=%s ORDER BY id FOR UPDATE", (practice_id, record_id)).fetchall()
             else:
                 if not intakes or not intakes[0]["patient_id"]:
                     raise LookupError("Insurance intake not found")
@@ -109,6 +116,9 @@ def delete_record(kind: str, record_id: str, actor: dict, intake_id: str | None 
                     WHERE practice_id=%s AND %s IN (auto_patient_id,expected_patient_id)""",
                     (record_id, record_id, practice_id, record_id))
                 db.execute("DELETE FROM staff_patients WHERE id=%s AND practice_id=%s", (record_id, practice_id))
+            elif kind == "intake":
+                db.execute("UPDATE insurance_upload_links SET status='revoked',intake_id=NULL WHERE practice_id=%s AND intake_id=%s", (practice_id, record_id))
+                db.execute("DELETE FROM staff_intakes WHERE practice_id=%s AND id=%s", (practice_id, record_id))
             else:
                 remaining = {key: value for key, value in intakes[0]["workflows"].items() if value != record_id}
                 db.execute("""UPDATE staff_intakes SET workflows=%s::jsonb,events=events || %s::jsonb,

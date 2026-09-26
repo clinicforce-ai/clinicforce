@@ -98,7 +98,8 @@ class RecoveryTest(IsolatedAsyncioTestCase):
         assert 'stedi-recovered-member-pending' in events
         result = api._previsit_result(case)
         assert 'eligibility_error' not in result and result['benefits']['active'] is True
-        assert 'new-id' not in json.dumps(result)
+        assert result['insurance_details']['payer_subscriber']['memberId'] == 'new-id'
+        assert 'eligibility_object_key' not in json.dumps(result)
         context = case['previsit_context']
         raw = {'subscriber': {'memberId': 'new-id'}}
         assert not any('identity' in reason for reason in api._case_benefits(raw, context['inputs'], context['source'], case)['review_reasons'])

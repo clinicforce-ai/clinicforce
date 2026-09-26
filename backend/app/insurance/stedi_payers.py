@@ -39,7 +39,8 @@ def select_payer(items: list[dict[str, Any]], name: str, identifiers: list[str])
     observed_ids = {value.casefold().strip() for value in identifiers if isinstance(value, str) and value.strip()}
     by_id = [payer for payer in eligible if observed_ids.intersection(
         str(value).casefold() for value in [payer.get("primaryPayerId"), payer.get("stediId"), *payer.get("aliases", [])] if value)]
-    matches = by_id or [payer for payer in eligible if any(_same_name(name, candidate, payer.get("operatingStates") or [])
+    by_name = [payer for payer in eligible if _same_name(name, payer.get("displayName", ""), payer.get("operatingStates") or [])]
+    matches = by_id or by_name or [payer for payer in eligible if any(_same_name(name, candidate, payer.get("operatingStates") or [])
         for candidate in [payer.get("displayName", ""), *payer.get("names", [])] if isinstance(candidate, str))]
     unique = {payer.get("stediId"): payer for payer in matches if isinstance(payer.get("stediId"), str)}
     return next(iter(unique.values())) if len(unique) == 1 else None

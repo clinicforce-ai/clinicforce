@@ -75,3 +75,13 @@
 .front-desk-coverage .visit-audit-grid{grid-template-columns:repeat(3,minmax(0,1fr))}.front-desk-coverage .visit-check{padding:16px;display:grid;grid-template-columns:20px 1fr;gap:6px 10px}.front-desk-coverage .visit-check dd{grid-column:2;margin:0;font-size:17px}.front-desk-coverage .visit-check small{font-size:12px}.front-desk-coverage .visit-check dt{font-size:14px}
 @media(max-width:900px){.front-desk-coverage .visit-audit-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
 @media(max-width:540px){.front-desk-coverage .visit-audit-grid{grid-template-columns:1fr}}
+
+.insurance-card-preview { margin: 1rem 0; }
+.insurance-card-preview summary { cursor: pointer; padding: .75rem 0; font-weight: 600; }
+.insurance-card-preview iframe { width: 100%; height: 440px; border: 1px solid #d3e0e5; }
+.insurance-card-preview img { display: block; max-width: 100%; height: auto; }
+.insurance-card-preview figure { margin: 1rem 0; }
+
+.collection-components { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 1rem; }
+.collection-components dt { font-size: .875rem; }
+.collection-components dd { margin: .3rem 0 0; font-weight: 600; }

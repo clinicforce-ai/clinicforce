@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 
-from app.api.routers.commercial_estimator import EcwStartInput, _previsit_benefits, previsit_estimate
+from app.api.routers.commercial_estimator import EcwStartInput, VisitReviewInput, _previsit_benefits, previsit_estimate, update_visit_review
 
 
 class PrevisitFlowTest(unittest.IsolatedAsyncioTestCase):
@@ -36,7 +36,10 @@ class PrevisitFlowTest(unittest.IsolatedAsyncioTestCase):
         await self._flow(date.today().isoformat(), reject={'subscriber': {'aaaErrors': [{'code': '72'}]},
             'benefitsInformation': [{'code': '1'}]})
 
-    async def _flow(self, service_date, reject=False, retry_basic=False):
+    async def test_unresolved_payer_still_returns_patient_policy_and_editable_new_visit(self):
+        await self._flow(date.today().isoformat(), payer_missing=True)
+
+    async def _flow(self, service_date, reject=False, retry_basic=False, payer_missing=False):
         session = {"practice_id": "clinic", "intake_id": "intake", "patient_id": "patient",
                    "share_manifest_id": "", "staff": {"id": "staff", "display_name": "Staff", "practice_name": "Clinic"},
                    "intake": {"updated_at": "version", "patient": {"given_name": "Pat", "family_name": "Example",
@@ -70,7 +73,7 @@ class PrevisitFlowTest(unittest.IsolatedAsyncioTestCase):
              patch("app.api.routers.commercial_estimator.ecw_backend.fetch_inputs", new=AsyncMock(return_value=(inputs, [], source))), \
              patch("app.api.routers.commercial_estimator._ecw_practice_config", return_value={}), \
              patch("app.api.routers.commercial_estimator.cpt_suggester.suggest_preliminary_cpt_codes", return_value={"groups": [], "notes": []}), \
-             patch("app.api.routers.commercial_estimator.stedi_payers.search_payer", new=AsyncMock(return_value={"stediId": "QDTRP", "displayName": "Blue Cross and Blue Shield of Texas"})), \
+             patch("app.api.routers.commercial_estimator.stedi_payers.search_payer", new=AsyncMock(return_value=None if payer_missing else {"stediId": "QDTRP", "displayName": "Blue Cross and Blue Shield of Texas"})), \
              patch("app.api.routers.commercial_estimator.store.create_case", return_value=case), \
              patch("app.api.routers.commercial_estimator._save", side_effect=lambda value, *_: value), \
              patch("app.api.routers.commercial_estimator.object_store.enabled", return_value=True), \
@@ -81,6 +84,22 @@ class PrevisitFlowTest(unittest.IsolatedAsyncioTestCase):
                  "STEDI_API_KEY": "production-key", "STEDI_EXECUTION_MODE": "commercial_pilot",
                  "STEDI_LIVE_ELIGIBILITY_ENABLED": "true"}):
             result = await previsit_estimate(EcwStartInput(appointment_id="visit-1"), MagicMock())
+            if payer_missing:
+                self.assertEqual(result['insurance_details']['member_id'], 'M123')
+                self.assertTrue(result['context_token'])
+                self.assertEqual([row['code'] for row in result['codes']], ['99203'])
+                self.assertTrue(result['available_codes'])
+                selected = next(row['id'] for row in result['available_codes'] if row['code'] == '99204')
+                with patch('app.api.routers.commercial_estimator.store.get_case', return_value=case), \
+                     patch('app.api.routers.commercial_estimator.object_store.get_object_bytes') as raw:
+                    edited = await update_visit_review('case-1', VisitReviewInput(
+                        context_token=result['context_token'], revision=0, selected_ids=[selected]), MagicMock())
+                    self.assertEqual([row['code'] for row in edited['codes']], ['99204'])
+                    self.assertTrue(edited['issues'])
+                    self.assertIsNone(edited['benefits']['active'])
+                    raw.assert_not_called()
+                client.post.assert_not_awaited()
+                return
             if reject:
                 self.assertEqual(result['eligibility_error'], 'eligibility_rejected' if isinstance(reject, dict) else 'request_validation')
                 self.assertIsNone(result['benefits']['active'])

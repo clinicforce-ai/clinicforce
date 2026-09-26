@@ -528,15 +528,16 @@ def _finish_previsit(result: dict, case: dict, inputs: dict, source: dict, paylo
     if uploaded_cash:
         known_codes = {row['code'] for row in available}
         available.extend({'id': 'cash:' + row['code'], 'code': row['code'], 'description': row['description'], 'source': 'Practice cash schedule', 'units': 1, 'modifiers': []} for row in uploaded_cash['rows'] if row['code'] not in known_codes)
-    if visit_estimate.is_emg_visit(inputs):
-        # Clinical options work for every practice, even before its prices arrive.
-        # This catalog supplies no prices or coverage assumptions.
-        known_codes = {row['code'] for row in available}
-        descriptions = {**{str(n): 'Nerve conduction studies' for n in range(95907, 95914)},
-                        '95885': 'Limited needle EMG', '95886': 'Complete needle EMG'}
-        available.extend({'id': 'planning:' + code, 'code': code, 'description': description,
-                          'source': 'CPT planning catalog', 'units': 1, 'modifiers': []}
-                         for code, description in descriptions.items() if code not in known_codes)
+    # Clinical options work for every practice, even before its prices arrive.
+    # This catalog supplies no prices or coverage assumptions.
+    known_codes = {row['code'] for row in available}
+    descriptions = {**{str(n): 'Nerve conduction studies' for n in range(95907, 95914)},
+                    '95885': 'Limited needle EMG', '95886': 'Complete needle EMG',
+                    **{str(n): 'Office consultation' for n in range(99202, 99206)},
+                    **{str(n): 'Office consultation' for n in range(99212, 99216)}}
+    available.extend({'id': 'planning:' + code, 'code': code, 'description': description,
+                      'source': 'CPT planning catalog', 'units': 1, 'modifiers': []}
+                     for code, description in descriptions.items() if code not in known_codes)
     for row in available:
         matches = [rate for rate in catalog if rate['code'] == row['code'] and (rate.get('modifier') or '') == ','.join(row.get('modifiers') or [])]
         if len(matches) == 1:
@@ -545,7 +546,7 @@ def _finish_previsit(result: dict, case: dict, inputs: dict, source: dict, paylo
     plan_key = hashlib.sha256(json.dumps([token, source.get('recent_completed_appointments', []),
         [(row['id'], row.get('units')) for row in available]], sort_keys=True).encode()).hexdigest()
     prior_plan = case.get('previsit_plan') or {}
-    if prior_plan.get('key') != plan_key or prior_plan.get('plan', {}).get('version') != 1:
+    if prior_plan.get('key') != plan_key or prior_plan.get('plan', {}).get('version') != 2:
         cash_schedule = nmct_cash.schedule(session['practice_id'], inputs['service_date'])
         planning_source = {**source, 'planning_cash_packages': cash_schedule['packages'] if cash_schedule else []}
         prior_plan = {'key': plan_key, 'plan': cpt_suggester.recommend_visit_plan(inputs, planning_source, available)}
@@ -563,6 +564,10 @@ def _finish_previsit(result: dict, case: dict, inputs: dict, source: dict, paylo
         by_id = {row['id']: row for row in available}
         codes = [by_id[key] for key in selected_ids if key in by_id]
     result['codes'] = [{**row, 'confirmed': bool(review.get('selected_ids')), 'units': units.get(row['id'], row.get('units'))} for row in codes]
+    result['patient_details'] = source.get('patient_details', {})
+    result['insurance_details'] = {**_coverage_snapshot(inputs, source), 'record_status': source.get('coverage_record_status'), 'coverage_period': source.get('coverage_period', {})}
+    subscriber = (payload or {}).get('subscriber') or {}
+    result['insurance_details']['payer_subscriber'] = {key: subscriber.get(key) for key in ('firstName', 'lastName', 'memberId', 'dateOfBirth')}
     result.update(ecw_coverage_active=source.get('active_coverages', 0) > 0, calculated_at=_now(), context_token=token, revision=case.get('revision', 0), plan_details={
         'ecw': source.get('plan_details') or {'plan': [source['plan']] if source.get('plan') else []},
         'stedi': commercial.plan_details(payload) if payload else {}}, ecw_retrieved_at=source.get('retrieved_at'),
@@ -571,6 +576,7 @@ def _finish_previsit(result: dict, case: dict, inputs: dict, source: dict, paylo
     result.pop('network_evidence', None)
     _attach_previsit_pricing(result, session['practice_id'], inputs, exact_source, payer_id, result['benefits'], payload=payload,
                             review={**review, 'selected_ids': selected_ids})
+    result['arrival_collection'] = visit_estimate.arrival_collection(result.get('price_range') or {}, result['benefits'], review)
     cash_review = {'cash_selection': result['service_plan'].get('cash_selection', ''), **review}
     nmct_cash.apply(result, session['practice_id'], inputs['service_date'], cash_review)
     if uploaded_cash:
@@ -763,11 +769,22 @@ async def _post_stedi_eligibility(client: httpx.AsyncClient, headers: dict[str, 
     """Send one eligibility request, falling back once from optional eCW hints."""
     response = await client.post(STEDI_URL, headers=headers, json=body)
     payload = response.json() if response.content else {}
-    if basic_body != body and _request_validation(payload):
+    retried = False
+    if basic_body and basic_body != body and _request_validation(payload):
         response = await client.post(STEDI_URL, headers=headers, json=basic_body)
         payload = response.json() if response.content else {}
-        return response, payload, True
-    return response, payload, False
+        retried = True
+    # AAA 73 rejects the name, not necessarily the supplied ID. The API permits
+    # a member-ID + DOB lookup. Never substitute guessed names or dependents.
+    if isinstance(payload, dict) and '73' in commercial.eligibility_failure(payload)['codes'] and not body.get('dependent'):
+        subscriber = body.get('subscriber') or {}
+        if subscriber.get('memberId') and subscriber.get('dateOfBirth'):
+            retry = deepcopy(basic_body or body)
+            retry['subscriber'] = {key: subscriber[key] for key in ('memberId', 'dateOfBirth')}
+            response = await client.post(STEDI_URL, headers=headers, json=retry)
+            payload = response.json() if response.content else {}
+            return response, payload, True
+    return response, payload, retried
 
 
 def _record_evidence(case: dict, session: dict, data: dict[str, Any], raw_object_key: str | None = None) -> dict:
@@ -1125,6 +1142,18 @@ async def previsit_estimate(value: EcwStartInput, request: Request, background_t
         "suggestions": None, "issues": [], "checked_at": None,
         "ecw_saved_eligibility": source['saved_eligibility'], "ecw_coverage_active": source.get('active_coverages', 0) > 0}
     coverage = _coverage_snapshot(inputs, source)
+
+    async def incomplete_result():
+        binding = _visit_context_token(inputs, source)
+        case = await run_in_threadpool(store.create_case, session['patient_id'], '', binding,
+            {'source_mode': 'commercial_previsit', 'previsit': {'request_state': 'not_requested'}},
+            expected_intake_updated_at=session['intake']['updated_at'],
+            workflow_slot='commercial-unresolved:' + binding, **_scope(session))
+        result['check_id'] = case['id']
+        result['benefits'] = _previsit_benefits({}, coverage, inputs['service_date'])
+        await run_in_threadpool(_finish_previsit, result, case, inputs, source, None, session, '')
+        return _previsit_result(await run_in_threadpool(_save, case, session, 'previsit-awaiting-coverage'))
+
     rendering = source.get("rendering_provider") or {}
     billing = source.get("billing_provider") or {}
     rendering_npi = str(rendering.get("npi") or (inputs.get("rendering_provider") or {}).get("npi") or "")
@@ -1137,18 +1166,14 @@ async def previsit_estimate(value: EcwStartInput, request: Request, background_t
     if not ((re.fullmatch(r"\d{10}", rendering_npi) and rendering_first and rendering_last) or
             (re.fullmatch(r"\d{10}", billing_npi) and organization_name)):
         result["issues"].append("eCW did not return a matched provider name and NPI needed for the payer check.")
-        return result
+        return await incomplete_result()
     api_key = stedi_financial.credentials(session["practice_id"])
     if (os.getenv("STEDI_EXECUTION_MODE", "off") != "commercial_pilot" or
         os.getenv("STEDI_LIVE_ELIGIBILITY_ENABLED", "false").lower() != "true" or
         not api_key or not object_store.enabled()):
         result["issues"].append("Live Stedi eligibility or protected response storage is not configured.")
-        return result
+        return await incomplete_result()
     service_day = date.fromisoformat(inputs["service_date"])
-    month_end = (date.today().replace(day=28) + timedelta(days=4)).replace(day=1) - timedelta(days=1)
-    if service_day > month_end:
-        result["issues"].append("This appointment is beyond Stedi's generally supported future eligibility window. Recheck closer to the visit.")
-        return result
     usable_coverage = (coverage['active_coverages'] == 1 and coverage['coverage_id'] and coverage['member_id'] and
                        coverage['relationship'] and all(coverage.get(key) for key in ('subscriber_first', 'subscriber_last', 'subscriber_birth_date')))
     if not usable_coverage or not source.get('payer'):
@@ -1159,10 +1184,10 @@ async def previsit_estimate(value: EcwStartInput, request: Request, background_t
         payer = await stedi_payers.search_payer(str(source["payer"]), source.get("payer_identifiers") or [], api_key)
     except (httpx.HTTPError, ValueError):
         result["issues"].append("The Stedi payer directory is temporarily unavailable. Retry later.")
-        return result
+        return await incomplete_result()
     if not payer:
         result["issues"].append("The eCW insurer did not resolve to one supported Stedi payer. Clinic staff must verify the payer ID.")
-        return result
+        return await incomplete_result()
     payer_id = payer["stediId"]
     result["stedi_payer"] = {"name": payer.get("displayName"), "id": payer_id}
     try:
@@ -1171,7 +1196,7 @@ async def previsit_estimate(value: EcwStartInput, request: Request, background_t
                                         include_identity_hints=False)
     except commercial.CommercialError as exc:
         result["issues"].append(str(exc))
-        return result
+        return await incomplete_result()
     if service_day == date.today():
         body["encounter"].pop("dates", None)
         basic_body["encounter"].pop("dates", None)
@@ -1195,9 +1220,11 @@ async def previsit_estimate(value: EcwStartInput, request: Request, background_t
     saved = case.get("previsit") or {}
     if case.get('previsit_discovery', {}).get('request_state') in {'pending', 'indeterminate'}:
         return await _start_previsit_recovery(case, session, provider, background_tasks)
-    if saved.get('request_state') == 'rejected' and case.get('previsit_context'):
+    if saved.get('request_state') == 'rejected' and saved.get('identity_retry_version') == 1 and case.get('previsit_context'):
         old = case['previsit_context']['result']
         failure = old.get('eligibility_failure') or {}
+        if failure.get('codes'):
+            failure = {**commercial.eligibility_failure({'errors': [{'code': code} for code in failure['codes']]}), 'attempted_at': failure.get('attempted_at')}
         if {'65', '67', '71', '72', '73', '75'}.intersection(failure.get('codes', [])):
             result.update(eligibility_failure=failure, eligibility_error=old.get('eligibility_error'),
                           issues=[f"{failure['title']}. {failure['action']}"],
@@ -1245,7 +1272,7 @@ async def previsit_estimate(value: EcwStartInput, request: Request, background_t
         result["issues"].append("The Stedi request outcome is unknown. Clinic staff must check payer activity before retrying.")
         return result
     if response.is_error or not isinstance(payload, dict) or str(payload.get("status", "")).upper() in {"ERROR", "FAILED", "REJECTED"} or commercial.eligibility_errors(payload):
-        case["previsit"] = {"request_state": "rejected"}
+        case["previsit"] = {"request_state": "rejected", "identity_retry_version": 1}
         if isinstance(payload, dict):
             case["previsit_raw_object_key"] = await run_in_threadpool(
                 object_store.put_staff_document, session["practice_id"], case["id"],
@@ -1284,11 +1311,12 @@ async def update_visit_review(case_id: str, value: VisitReviewInput, request: Re
     if case.get('revision', 0) != value.revision:
         raise HTTPException(409, 'This estimate changed in another session. Check this visit again before saving.')
     context = case['previsit_context']
-    failed = case.get('previsit', {}).get('request_state') == 'rejected'
+    not_requested = case.get('previsit', {}).get('request_state') == 'not_requested'
+    failed = not_requested or case.get('previsit', {}).get('request_state') == 'rejected'
     if case.get('previsit_discovery', {}).get('request_state') in {'pending', 'indeterminate'}:
         raise HTTPException(409, 'Coverage recovery is still in progress. Wait for the result before changing the estimate.')
     if failed and (value.verification or value.payments_received_cents is not None):
-        raise HTTPException(409, 'A rejected eligibility response cannot be used to verify benefits or collect an insurance estimate.')
+        raise HTTPException(409, 'Complete the eligibility check before verifying benefits or recording payments against an insurance estimate.')
     try:
         checked = datetime.now(timezone.utc) if failed else datetime.fromisoformat(case['previsit']['checked_at'])
         if not failed and checked + timedelta(hours=24) <= datetime.now(timezone.utc):
@@ -1308,7 +1336,7 @@ async def update_visit_review(case_id: str, value: VisitReviewInput, request: Re
         if saved_eligibility.get('checked_at') and datetime.fromisoformat(saved_eligibility['checked_at']) + timedelta(hours=24) <= datetime.now(timezone.utc):
             source['saved_eligibility'] = {'status': 'check_with_stedi', 'message': 'The saved eCW verification is older than 24 hours. Use the current Stedi check.'}
     try:
-        payload = json.loads(await run_in_threadpool(object_store.get_object_bytes, case['previsit_raw_object_key']))
+        payload = {} if not_requested else json.loads(await run_in_threadpool(object_store.get_object_bytes, case['previsit_raw_object_key']))
     except Exception:
         raise HTTPException(503, 'Protected payer evidence could not be read. Retry before saving verification.') from None
     import copy
@@ -1378,7 +1406,8 @@ async def update_visit_review(case_id: str, value: VisitReviewInput, request: Re
                               'verified_at': _now(), 'actor_id': session['staff']['id']}
     case.setdefault('visit_review_history', []).append({'revision': value.revision, 'context_token': value.context_token, 'changes': value.model_dump(mode='json', exclude_none=True), 'actor_id': session['staff']['id'], 'verified_at': _now()})
     case['visit_review'] = review
-    result['issues'] = []
+    if not failed:
+        result['issues'] = []
     result['benefits'] = _case_benefits({} if failed else payload, inputs, source, case)
     recovery = case.get('previsit_discovery') or {}
     pricing_source = recovery.get('pricing_source') if recovery.get('outcome') == 'recovered' else None

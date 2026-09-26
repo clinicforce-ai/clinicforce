@@ -317,7 +317,9 @@ async def create_ecw_lookup(value: EcwLookup, request: Request):
     fields = {"given_name": value.given_name, "middle_initial": value.middle_initial,
               "family_name": value.family_name, "birth_date": value.birth_date.isoformat(),
               "ecw_patient_id": matched["patient"]["id"]}
-    intake = await run_in_threadpool(staff_store.create_intake, str(uuid4()), staff, [], "ecw_lookup", None, fields)
+    intake = await run_in_threadpool(staff_store.find_ecw_intake, staff["practice_id"], fields["ecw_patient_id"])
+    if not intake:
+        intake = await run_in_threadpool(staff_store.create_intake, str(uuid4()), staff, [], "ecw_lookup", None, fields)
     return JSONResponse({**public(intake), "ecw_match": {"patient": {key: matched["patient"][key]
                          for key in ("given_name", "family_name", "birth_date")},
                          "appointments": matched["appointments"]}}, status_code=201, headers=NO_STORE)
@@ -432,6 +434,38 @@ async def get_document(intake_id: str, document_id: str, request: Request):
         raise HTTPException(404, "Card document not found")
     content = await run_in_threadpool(object_store.get_object_bytes, document["object_key"])
     return Response(content, media_type=document["content_type"], headers={**NO_STORE, "X-Content-Type-Options": "nosniff", "Content-Disposition": "inline", "Content-Security-Policy": "sandbox"})
+
+
+@router.get("/intakes/{intake_id}/cards")
+async def patient_cards(intake_id: str, request: Request):
+    intake = await owned_intake(intake_id, await require_staff(request))
+    cards = [{"id": item['id'], "title": item['filename'], "content_type": item['content_type'],
+              "url": f"/api/staff/intakes/{quote(intake_id, safe='')}/documents/{quote(item['id'], safe='')}"}
+             for item in intake['documents']]
+    patient_id = (intake.get('patient') or {}).get('ecw_patient_id') or intake.get('fields', {}).get('ecw_patient_id')
+    message = ''
+    if patient_id:
+        try:
+            rows = await ecw_backend.insurance_cards(str(patient_id))
+            cards.extend({**item, 'url': f"/api/staff/intakes/{quote(intake_id, safe='')}/ecw-card?document_id={quote(item['id'], safe='')}"} for item in rows)
+            if not rows:
+                message = 'This eCW connection returned no insurance-card image. A card visible inside eCW may not be shared through its API.'
+        except Exception:
+            message = 'eCW insurance-card access is unavailable. Saved ClinicForce card files are still available.'
+    return JSONResponse({'cards': cards, 'message': message}, headers=NO_STORE)
+
+
+@router.get("/intakes/{intake_id}/ecw-card")
+async def ecw_card(intake_id: str, document_id: str, request: Request):
+    intake = await owned_intake(intake_id, await require_staff(request))
+    patient_id = (intake.get('patient') or {}).get('ecw_patient_id') or intake.get('fields', {}).get('ecw_patient_id')
+    if not patient_id:
+        raise HTTPException(404, 'No eCW patient is linked to this intake.')
+    try:
+        content, mime = await ecw_backend.insurance_cards(str(patient_id), document_id=document_id)
+    except Exception as exc:
+        raise HTTPException(502, 'The eCW insurance card could not be read.') from exc
+    return Response(content, media_type=mime, headers={**NO_STORE, 'Content-Disposition': 'inline', 'X-Content-Type-Options': 'nosniff', 'Content-Security-Policy': 'sandbox'})
 
 
 @router.put("/intakes/{intake_id}/patient")
@@ -556,6 +590,11 @@ async def delete_clinic_record(kind: str, record_id: str, request: Request, inta
     except ValueError as exc:
         raise HTTPException(409, str(exc)) from exc
     return JSONResponse(result, status_code=202 if result["cleanup_pending"] else 200, headers=NO_STORE)
+
+
+@router.delete("/intakes/{intake_id}")
+async def delete_unconfirmed_intake(intake_id: str, request: Request):
+    return await delete_clinic_record("intake", intake_id, request, intake_id)
 
 
 @router.delete("/patients/{patient_id}")
