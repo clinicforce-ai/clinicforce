@@ -1,4 +1,5 @@
 from copy import deepcopy
+from unittest import IsolatedAsyncioTestCase
 from unittest.mock import AsyncMock, patch
 import httpx
 import pytest
@@ -46,26 +47,25 @@ def test_member_identifier_fallback_never_chooses_a_group_or_ambiguous_id():
     assert ecw_backend.coverage_record_status({'extension': [{'url': 'http://eclinicalworks.com/supportingInfo/patientdemographics/coverage-eligibilityStatus', 'valueString': 'E - Eligible'}]})['status'] == 'E - Eligible'
 
 
-@pytest.mark.asyncio
-async def test_name_rejection_retries_same_member_and_dob_without_guessing_names():
-    client = AsyncMock()
-    client.post.side_effect = [httpx.Response(200, json={'errors': [{'code': '73'}]}), httpx.Response(200, json={'plans': []})]
-    body = {'payerId': 'payer', 'subscriber': {'memberId': 'ABC123', 'dateOfBirth': '1980-01-01', 'name': {'person': {'firstName': 'Sample', 'lastName': 'Person'}}}}
-    await api._post_stedi_eligibility(client, {}, body, deepcopy(body))
-    assert client.post.await_count == 2
-    assert client.post.call_args.kwargs['json']['subscriber'] == {'memberId': 'ABC123', 'dateOfBirth': '1980-01-01'}
-    client.post.reset_mock(side_effect=True)
-    client.post.return_value = httpx.Response(200, json={'errors': [{'code': '73'}]})
-    await api._post_stedi_eligibility(client, {}, {**body, 'dependent': {'name': 'Dependent'}}, {**body, 'dependent': {'name': 'Dependent'}})
-    assert client.post.await_count == 1
+class AsyncEvidenceTests(IsolatedAsyncioTestCase):
+    async def test_name_rejection_retries_same_member_and_dob_without_guessing_names(self):
+        client = AsyncMock()
+        client.post.side_effect = [httpx.Response(200, json={'errors': [{'code': '73'}]}), httpx.Response(200, json={'plans': []})]
+        body = {'payerId': 'payer', 'subscriber': {'memberId': 'ABC123', 'dateOfBirth': '1980-01-01', 'name': {'person': {'firstName': 'Sample', 'lastName': 'Person'}}}}
+        await api._post_stedi_eligibility(client, {}, body, deepcopy(body))
+        assert client.post.await_count == 2
+        assert client.post.call_args.kwargs['json']['subscriber'] == {'memberId': 'ABC123', 'dateOfBirth': '1980-01-01'}
+        client.post.reset_mock(side_effect=True)
+        client.post.return_value = httpx.Response(200, json={'errors': [{'code': '73'}]})
+        await api._post_stedi_eligibility(client, {}, {**body, 'dependent': {'name': 'Dependent'}}, {**body, 'dependent': {'name': 'Dependent'}})
+        assert client.post.await_count == 1
 
 
-@pytest.mark.asyncio
-async def test_insurance_card_requires_patient_binding_and_never_fetches_external_url():
-    document = {'resourceType': 'DocumentReference', 'id': 'card', 'status': 'current', 'subject': {'reference': 'Patient/right'},
-                'description': 'Insurance card', 'content': [{'attachment': {'contentType': 'application/pdf', 'url': 'https://untrusted.example/Binary/1'}}]}
-    with patch.object(ecw_backend, 'settings', return_value=('client', 'https://ecw.example/fhir')), patch.object(ecw_backend, '_access_token', AsyncMock(return_value='token')), patch.object(ecw_backend, '_search', AsyncMock(return_value=[document])):
-        assert await ecw_backend.insurance_cards('wrong') == []
-        assert len(await ecw_backend.insurance_cards('right')) == 1
-        with pytest.raises(ecw_backend.EcwBackendError):
-            await ecw_backend.insurance_cards('right', document_id='card:0')
+    async def test_insurance_card_requires_patient_binding_and_never_fetches_external_url(self):
+        document = {'resourceType': 'DocumentReference', 'id': 'card', 'status': 'current', 'subject': {'reference': 'Patient/right'},
+                    'description': 'Insurance card', 'content': [{'attachment': {'contentType': 'application/pdf', 'url': 'https://untrusted.example/Binary/1'}}]}
+        with patch.object(ecw_backend, 'settings', return_value=('client', 'https://ecw.example/fhir')), patch.object(ecw_backend, '_access_token', AsyncMock(return_value='token')), patch.object(ecw_backend, '_search', AsyncMock(return_value=[document])):
+            assert await ecw_backend.insurance_cards('wrong') == []
+            assert len(await ecw_backend.insurance_cards('right')) == 1
+            with pytest.raises(ecw_backend.EcwBackendError):
+                await ecw_backend.insurance_cards('right', document_id='card:0')
