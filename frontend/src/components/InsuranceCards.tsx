@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import './InsuranceCards.css'
 import { request } from '../services/api/client'
 
 type Cards = { cards: Array<{ id: string; title: string; content_type: string; url: string }>; message: string }
