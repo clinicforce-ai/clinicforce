@@ -259,6 +259,15 @@ def get_intake(intake_id: str, practice_id: str) -> dict | None:
     return dict(row) if row else None
 
 
+def patient_card_intakes(practice_id: str, patient_id: str) -> list[dict]:
+    """Only confirmed intakes for the same clinic patient can supply card previews."""
+    with _connection() as connection:
+        rows = connection.execute("""SELECT id,documents FROM staff_intakes
+            WHERE practice_id=%s AND patient_id=%s AND jsonb_array_length(documents)>0
+            ORDER BY updated_at DESC""", (practice_id, patient_id)).fetchall()
+    return [dict(row) for row in rows]
+
+
 def patient_for_intake_request(intake_id: str, practice_id: str) -> str:
     """A staff request may target an already shared, unconfirmed clinic identity."""
     with _connection() as connection:
