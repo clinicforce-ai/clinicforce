@@ -74,6 +74,17 @@ class StaffDeletionTests(unittest.IsolatedAsyncioTestCase):
         with psycopg.connect(self.database, autocommit=True) as db:
             db.execute(sql.SQL("DROP SCHEMA {} CASCADE").format(sql.Identifier(self.schema)))
 
+    async def test_unconfirmed_upload_can_be_deleted_without_creating_a_patient(self):
+        intake = staff_store.create_intake('draft', self.actor, [{'object_key': self.key('draft', 'card.pdf')}])
+        self.assertIsNone(intake['patient'])
+        response = await self.client.delete('/api/staff/intakes/draft')
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertIsNone(staff_store.get_intake('draft', 'clinic-a'))
+        self.assertIn(self.key('draft', 'card.pdf'), self.deleted)
+        self.assertEqual((await self.client.delete('/api/staff/intakes/draft')).status_code, 200)
+        self.assertEqual((await self.client.delete('/api/staff/intakes/intake-a')).status_code, 409)
+        self.assertEqual((await self.client.delete('/api/staff/intakes/not-owned')).status_code, 404)
+
     async def test_check_delete_is_scoped_audited_and_keeps_patient_and_library(self):
         listing = await self.client.get('/api/staff/intakes/intake-a/checks')
         self.assertEqual(listing.json()['checks'][0]['id'], self.case['id'])

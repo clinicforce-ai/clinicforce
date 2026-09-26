@@ -20,6 +20,8 @@ from pathlib import Path
 from typing import Any
 
 import fitz
+import boto3
+from botocore.config import Config
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from PIL import Image, UnidentifiedImageError
 
@@ -157,6 +159,17 @@ def _image_text(content: bytes) -> str:
     with tempfile.TemporaryDirectory() as directory:
         path = Path(directory) / "card.png"
         _write_ocr_image(image, path)
+        try:
+            if not os.getenv("ECS_CONTAINER_METADATA_URI_V4") and os.getenv("INSURANCE_CARD_OCR") != "textract":
+                return _ocr_images([path])
+            client = boto3.client("textract", region_name=os.getenv("AWS_REGION", "us-east-1"),
+                                  config=Config(connect_timeout=3, read_timeout=12, retries={"max_attempts": 0}))
+            result = client.detect_document_text(Document={"Bytes": path.read_bytes()})
+            text = "\n".join(block["Text"] for block in result.get("Blocks", []) if block.get("BlockType") == "LINE")
+            if text.strip():
+                return text
+        except Exception:
+            pass  # Local OCR keeps uploads usable if Textract is unavailable.
         return _ocr_images([path])
 
 

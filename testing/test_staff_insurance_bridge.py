@@ -127,8 +127,9 @@ class StaffInsuranceBridgeTests(unittest.IsolatedAsyncioTestCase):
                 staff.ecw_backend, "lookup_patient_and_appointments", new=AsyncMock(return_value=match)):
             duplicate = await self.client.post(path, json=details)
         conflicting = await self.client.put(f"/api/staff/intakes/{duplicate.json()['id']}/patient", json=confirmation)
-        self.assertEqual(conflicting.status_code, 409, conflicting.text)
-        self.assertIn("already linked", conflicting.text)
+        self.assertEqual(duplicate.json()["id"], intake_id)
+        self.assertEqual(conflicting.status_code, 200, conflicting.text)
+        self.assertEqual(conflicting.json()["patient"]["id"], saved.json()["patient"]["id"])
 
     async def test_real_header_scope_never_falls_back_to_qr_or_another_patient(self):
         own, other_intake = self.intake(), self.intake(member_id="OTHER")

@@ -8,6 +8,10 @@ export const commercialAppointments = () => request<{ appointments: CommercialAp
 export type CommercialReadiness = { ready: boolean; blockers: string[]; ecw: { payer?: string | null; plan?: string | null; scheduled_codes: Array<{ code?: string | null; units?: number | string | null }>; visit_type?: string | null; reason?: string | null } }
 export const commercialReadiness = (appointment_id: string) => request<CommercialReadiness>(`${root}/appointments/readiness`, json({ appointment_id }))
 export type PrevisitEstimate = {
+  patient_details?: { gender?: string; phone?: string; email?: string; address?: { address1?: string; address2?: string; city?: string; state?: string; postalCode?: string } };
+  insurance_details?: { payer_subscriber?: { firstName?: string; lastName?: string; memberId?: string; dateOfBirth?: string }; member_id?: string; group_number?: string; subscriber_first?: string; subscriber_last?: string; subscriber_birth_date?: string; relationship?: string; record_status?: { status: string; updated_at?: string; message: string }; coverage_period?: { start?: string; end?: string } };
+  arrival_collection?: { estimated_cents?: number | null; prior_balance_cents?: number | null; noncovered_cents?: number | null; payments_received_cents?: number | null; amount_cents: number | null; reason: string; status: string; basis: string };
+
   practice_cash_source?: { filename: string; effective_from: string; version: string };
   payment_mode?: 'cash' | 'insurance';
   referral_evidence?: Array<{ reference: string; status: string; authored_on?: string; source: string }>;

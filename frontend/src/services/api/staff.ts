@@ -171,3 +171,5 @@ export type SavedInsuranceCheck = { id: string; created_at: string; label: strin
 export const getStaffInsuranceChecks = (intakeId: string) => request<{ checks: SavedInsuranceCheck[] }>(`/api/staff/intakes/${encodeURIComponent(intakeId)}/checks`)
 
 export const retryStaffDeletionCleanup = () => request<{ pending_file_cleanup: number }>('/api/staff/deletions/retry-cleanup', { method: 'POST' })
+
+export const deleteStaffIntake = (id: string) => request<{ deleted: boolean; cleanup_pending: boolean }>(`/api/staff/intakes/${encodeURIComponent(id)}`, { method: 'DELETE' })

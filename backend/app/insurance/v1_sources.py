@@ -9,7 +9,7 @@ import fitz
 from app.insurance import golden
 
 
-EXTRACTION_VERSION = "v1-upload-evidence-3"
+EXTRACTION_VERSION = "v1-upload-evidence-4"
 MONEY = r"(?<![-\w])\$\s*(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d{2})?(?![\d,.])"
 
 
@@ -28,7 +28,7 @@ def read_pages(content: bytes, max_pages: int = 100) -> list[tuple[int, str]]:
                     # visible rendered page instead of merging two text sources.
                     scanned = any(span["type"] == 3 or span.get("opacity", 1) == 0 for span in page.get_texttrace())
                     has_card_image = any(fitz.Rect(item["bbox"]).get_area() >= page.rect.get_area() * .2 for item in page.get_image_info())
-                    scanned = scanned or (has_card_image and (max_pages == 2 or len(text) < 200))
+                    scanned = scanned or (has_card_image and not re.search(r"(?:member|subscriber|name|\bid)\s*[:#]", text, re.I))
                     if not text or scanned:
                         scale = min(2, golden.MAX_OCR_DIMENSION / max(page.rect.width, page.rect.height))
                         pixmap = page.get_pixmap(matrix=fitz.Matrix(scale, scale), colorspace=fitz.csRGB, alpha=False)
@@ -71,9 +71,10 @@ def card_fields(pages: list[tuple[int, str]]) -> tuple[dict, dict]:
         evidence[key] = {"page": page, "quote": quote, "value": value}
 
     labels = {
-        "member_name": r"(?:member|subscriber|patient)\s+name|name",
+        "member_name": r"(?:member|subscriber|patient|insured)\s+name|name",
+        "payer": r"insurance(?: company)?|insurer|payer",
         "birth_date": r"(?:(?:member|subscriber|patient)\s+)?(?:date\s+of\s+birth|birth\s+date|dob)",
-        "member_id": r"(?:member|subscriber)\s*(?:id|number)|identification\s+number",
+        "member_id": r"(?:member|subscriber|insured)\s*(?:id|number|no\.?)|identification\s+number|id",
         "group_number": r"group(?:\s*(?:number|no\.?))?",
         "plan_type": r"plan(?:\s*(?:type|/\s*product))?|product",
         "coverage_date": r"(?:coverage|effective)\s*date",
@@ -142,6 +143,13 @@ def card_fields(pages: list[tuple[int, str]]) -> tuple[dict, dict]:
                     add(f"{network}_{section}", value, page, section_heading + "\n" + line)
             elif line:
                 section = ""
+        # Recognize printed insurer wordmarks, retaining the source quote.
+        joined = " ".join(lines)
+        blue = re.search(r"Blue\s*Cross\s*(?:and\s*)?Blue\s*Shield\s*(?:of\s+)?([A-Za-z]+)", joined, re.I)
+        if blue and blue[1].casefold() in {"texas", "tx"}:
+            add("payer", "Blue Cross Blue Shield of Texas", page, blue[0])
+        elif match := re.search(r"\b(Aetna|Cigna|Humana|UnitedHealthcare)\b", joined, re.I):
+            add("payer", match[0], page, match[0])
         # Routing/phone fields only: require the captured value in the same page.
         for key, pattern in golden.CARD_DETAIL_PATTERNS.items():
             if not (key.endswith("_phone") or key.startswith("rx_")):

@@ -263,3 +263,25 @@ def price_lines(codes: list[dict], rates: list[dict], benefits: dict, rules: dic
     if service_issues:
         result['collection'] = {'action': 'complete_services', 'amount_cents': None, 'reason': service_issues[0]}
     return result
+
+
+def arrival_collection(price: dict, benefits: dict, review: dict) -> dict:
+    """At-service patient obligations, separate from the insurer's later payment."""
+    result = {'amount_cents': None, 'estimated_cents': None, 'status': 'verify', 'basis': 'patient_obligations',
+              'prior_balance_cents': None, 'noncovered_cents': None, 'payments_received_cents': None,
+              'reason': 'Verify coverage, planned services, benefits and approval requirements before collecting.'}
+    if benefits.get('active') is not True or benefits.get('network_status') != 'in_network' or not price.get('complete'):
+        return result
+    result['estimated_cents'] = price['patient_max_cents']
+    if price.get('conditional') or price.get('mode') in {'alternatives', 'options'}:
+        result['reason'] = 'This is a planning amount. Confirm the services and resolve benefit or approval conditions before collection.'
+        return result
+    payments = review.get('payments') or {}
+    amount = price['patient_max_cents']
+    if payments.get('reference'):
+        result['payments_received_cents'] = payments['amount_cents']
+        amount = max(0, amount - payments['amount_cents'])
+    result.update(amount_cents=amount, status='estimate', reason=(
+        'Copay, applicable deductible and coinsurance for this visit, less verified payments. Prior balances and non-covered charges are not included unless separately verified.' if payments.get('reference') else
+        'Copay, applicable deductible and coinsurance for this visit, before payments or credits. Check the clinic ledger for prior balances and amounts already collected; those values were not returned.'))
+    return result

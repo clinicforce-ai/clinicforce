@@ -119,7 +119,7 @@ def public_status(discovery: dict) -> dict:
     outcome = discovery.get('outcome')
     message = discovery.get('selection_error') or {
         'recovered': 'Coverage recovered from Stedi and rechecked with the scheduled provider and visit date.',
-        'no_match': 'Stedi searched using the eCW demographics and found no coverage. This does not mean coverage is inactive. Check the current card or the saved eCW eligibility report to correct the payer/member ID.',
+        'no_match': 'The additional Stedi search did not find a matching policy. Saved eCW insurance details are retained below. This search does not establish that coverage is inactive.',
         'review_needed': 'Stedi found coverage for this patient. Select the policy to use for this estimate; ClinicForce will not replace the eCW payer automatically.',
         'rejected': 'Stedi could not complete insurance discovery. The original payer response and clinic rates are retained.',
     }.get(outcome, 'Searching Stedi using the patient details from eCW. This usually takes a few seconds and can take several minutes.')

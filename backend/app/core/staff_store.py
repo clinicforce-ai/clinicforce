@@ -228,6 +228,13 @@ def create_intake(intake_id: str, staff: dict, documents: list[dict], source: st
     return {**dict(row), "patient": None}
 
 
+def find_ecw_intake(practice_id: str, ecw_patient_id: str) -> dict | None:
+    with _connection() as connection:
+        row = connection.execute("""SELECT i.id FROM staff_intakes i JOIN staff_patients p ON p.id=i.patient_id AND p.practice_id=i.practice_id
+            WHERE i.practice_id=%s AND p.ecw_patient_id=%s ORDER BY i.updated_at DESC LIMIT 1""", (practice_id, ecw_patient_id)).fetchone()
+    return get_intake(row['id'], practice_id) if row else None
+
+
 def get_patient(patient_id: str, practice_id: str) -> dict | None:
     with _connection() as connection:
         row = connection.execute("SELECT * FROM staff_patients WHERE id = %s AND practice_id = %s", (patient_id, practice_id)).fetchone()

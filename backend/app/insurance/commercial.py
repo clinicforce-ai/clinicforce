@@ -39,7 +39,13 @@ def eligibility_failure(payload: dict) -> dict:
     if '72' in codes:
         title = 'The payer rejected the member ID'
         action = 'Compare the member ID and insurer in eCW with the insurance card. Correct the policy in eCW, then check again.'
-    elif set(codes) & {'65', '67', '71', '73', '75', '76'}:
+    elif '73' in codes:
+        title = 'The payer rejected the subscriber name'
+        action = 'The member ID was sent, but the payer could not validate the subscriber name. Compare the policyholder name in eCW with the current card and payer record; a saved member ID does not resolve a name mismatch.'
+    elif set(codes) & {'62', '63'}:
+        title = 'The payer could not verify this appointment date'
+        action = 'The requested service date is outside this payer’s inquiry window. Recheck closer to the appointment; earlier eligibility does not confirm this visit.'
+    elif set(codes) & {'65', '67', '71', '75', '76'}:
         title = 'The payer could not match the patient'
         action = 'Compare the policyholder name, date of birth and member ID in eCW with the insurance card, then check again after correction.'
     elif set(codes) & {'42', '80'}:
