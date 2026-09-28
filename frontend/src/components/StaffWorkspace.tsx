@@ -161,7 +161,14 @@ export default function StaffWorkspace({ onBack, onOpenInsurance, onScanQr, onCr
   function openLibrary() { navigate('library'); void perform('library', async () => { const result = await getStaffLibrary(); setLibrary(result.documents); setEra(null) }) }
   function openIntake(id: string) {
     setRecordBack(screen === 'inbox' ? 'inbox' : 'patients')
-    void perform('open', async () => { const record = await getStaffIntake(id); setEcwMatch(null); setIntake(record); setTab('overview'); navigate('record') })
+    void perform('open', async () => {
+      const record = await getStaffIntake(id)
+      setEcwMatch(null); setIntake(record); setTab('overview')
+      if (screen === 'patients' && record.patient && (record.patient.ecw_patient_id || record.fields.ecw_patient_id)) {
+        onOpenInsurance(record.id, 'commercial'); return
+      }
+      navigate('record')
+    })
   }
   function checkFiles(next: File[]) {
     if (!next.length || next.length > 2) return 'Choose one or two files for the front and back of the card.'
@@ -257,7 +264,7 @@ export default function StaffWorkspace({ onBack, onOpenInsurance, onScanQr, onCr
           <label className="staff-field"><span>Middle initial (optional)</span><input maxLength={10} value={lookupDetails.middle_initial} onChange={event => setLookupDetails(current => ({ ...current, middle_initial: event.target.value }))} disabled={Boolean(busy)} /></label>
           <label className="staff-field"><span>Last name</span><input required maxLength={100} autoComplete="family-name" value={lookupDetails.family_name} onChange={event => setLookupDetails(current => ({ ...current, family_name: event.target.value }))} disabled={Boolean(busy)} /></label>
           <label className="staff-field"><span>Date of birth</span><input required type="date" max={today()} autoComplete="bday" value={lookupDetails.birth_date} onChange={event => setLookupDetails(current => ({ ...current, birth_date: event.target.value }))} disabled={Boolean(busy)} /></label>
-        </div><button className="staff-primary" disabled={Boolean(busy)}>Search eCW for patient</button></form></section>
+        </div><button className="staff-primary" disabled={Boolean(busy)}>Pull from eCW</button></form></section>
 <button onClick={() => navigate('patients')}>Back to patients</button></div>}
       {screen === 'add' && <div className="staff-narrow">
         <section className="staff-panel"><h2>Scan or upload insurance card</h2><p className="staff-muted">We will read the card and fill the available fields. Confirm the patient identity before saving a patient record.</p><form onSubmit={event => { event.preventDefault(); saveCard(files) }}><div className="staff-two-columns"><div><Camera className="staff-feature-icon" size={30} /><h3>Scan the card</h3><button className="staff-primary" type="button" disabled={Boolean(busy)} onClick={() => setCamera(true)}>Open card scanner</button></div><div><Upload className="staff-feature-icon" size={30} /><h3>Upload a photo or PDF</h3><label className="staff-field"><span>Card files</span><input type="file" accept="image/jpeg,image/png,application/pdf" multiple onChange={event => { const next = Array.from(event.target.files || []); setFiles(next); setError(next.length ? checkFiles(next) : '') }} disabled={Boolean(busy)} aria-describedby="staff-upload-help" /><small id="staff-upload-help">JPG, PNG, or PDF · Up to 2 files and 2 pages total · 10 MB per file.</small></label><button disabled={Boolean(busy) || !files.length}>Save card and continue</button></div></div></form></section>

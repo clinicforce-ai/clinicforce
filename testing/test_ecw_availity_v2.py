@@ -146,6 +146,11 @@ class EcwBackendSourceTests(unittest.IsolatedAsyncioTestCase):
             "/fhir/Location/location-1": {"resourceType": "Location", "id": "location-1", "name": "Main Office"},
             "/fhir/Patient/patient-1": resources["Patient"][0],
         }
+        resources['Encounter'][0]['appointment'] = [{'reference': 'Appointment/notes'}, {'reference': 'Appointment/other-patient'}]
+        reads['/fhir/Appointment/notes'] = {'resourceType': 'Appointment', 'id': 'notes', 'status': 'booked',
+            'participant': [{'actor': {'reference': 'Patient/patient-1'}}], 'comment': 'Patient: please explain my treatment plan.'}
+        reads['/fhir/Appointment/other-patient'] = {'resourceType': 'Appointment', 'id': 'other-patient', 'status': 'booked',
+            'participant': [{'actor': {'reference': 'Patient/another'}}], 'comment': 'Must not import this.'}
         requests = []
         def handler(request: httpx.Request) -> httpx.Response:
             requests.append(request)
@@ -183,6 +188,10 @@ class EcwBackendSourceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(inputs["reason"], "Reason: Neuropathy consultation; Planned service: 99204; Order reason: G62.9; Procedure: New patient consultation; Procedure reason: G62.9")
         self.assertIsNone(inputs["visit_type"])
         self.assertEqual(inputs["provider"]["npi"], "1234567893")
+        self.assertEqual(source['appointment_notes_status'], 'returned')
+        self.assertEqual([field['text'] for field in source['appointment_fields']], ['Patient: please explain my treatment plan.'])
+        self.assertEqual(source['coverage_records'][0]['member_id'], 'MEMBER123')
+        self.assertNotIn('treatment plan', inputs['reason'])
         self.assertEqual(source["appointment_date"], today)
         self.assertEqual(source["_patient_id"], "patient-1")
         self.assertEqual(source["timed_out_resources"], [])
@@ -243,6 +252,17 @@ class EcwBackendSourceTests(unittest.IsolatedAsyncioTestCase):
             )
         self.assertEqual(selected_inputs["service_date"], today)
         self.assertTrue(any(request.url.path == "/fhir/Encounter/encounter-1" for request in requests))
+
+        async def optional_denied(client, client_id, issuer, scopes=ecw_backend.SCOPES):
+            if 'system/Appointment.read' in scopes:
+                raise ecw_backend.EcwBackendError('Scope unavailable')
+            return 'token'
+        with patch.dict(os.environ, environment), patch.object(ecw, 'ECW_KMS_KEY_ID', 'kms-key'), patch.object(ecw_backend, '_access_token', side_effect=optional_denied):
+            _, _, partial = await ecw_backend.fetch_inputs(
+                {'patient_first_name': 'Pat', 'patient_last_name': 'Example', 'patient_birth_date': '1980-01-01'},
+                practice, 'encounter-1', transport=httpx.MockTransport(handler))
+        self.assertEqual(partial['appointment_notes_status'], 'unavailable')
+        self.assertEqual(partial['appointment_id'], 'encounter-1')
 
     async def test_lists_only_current_selectable_appointments(self):
         today = datetime.now(ZoneInfo("America/New_York")).date()

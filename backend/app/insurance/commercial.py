@@ -9,6 +9,7 @@ from __future__ import annotations
 import csv
 import hashlib
 import hmac
+import json
 import re
 from dataclasses import dataclass
 from datetime import date
@@ -310,21 +311,40 @@ def _dates_apply(dates: dict, service_date: str) -> bool:
     return True
 
 
+def _benefit_notes(value: Any) -> list[str]:
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, list):
+        return [note for item in value for note in _benefit_notes(item)]
+    if isinstance(value, dict):
+        return [note for key in ('description', 'message', 'text', 'messages') for note in _benefit_notes(value.get(key))]
+    return []
+
+
 def normalize_stedi_271(payload: dict[str, Any], service_type_code: str, provider_network_verified: bool,
                         other_active_coverage: bool = False, *, procedure_code: str | None = None,
-                        service_date: str | None = None, selected_ids: list[str] | None = None) -> dict[str, Any]:
+                        service_date: str | None = None, selected_ids: list[str] | None = None,
+                        office_service_types: list[str] | None = None) -> dict[str, Any]:
     """Normalize only unambiguous individual in-network schedule benefits.
 
     A 271 benefit network is not provider participation.  That is supplied by
     the separately verified provider-network record.
     """
     entries = _stedi_entries(payload)
+    office = procedure_code in {str(n) for n in (*range(99202, 99206), *range(99212, 99216))}
+    if office and selected_ids is None:
+        # Explicitly different services sometimes share an office STC. Retain
+        # every raw row in reported_options, but exclude these from office math.
+        unrelated = r'\b(injections?|diagnostic lab|x-ray|acupuncture|applied behavior analysis|chemotherapy)\b'
+        entries = [row for row in entries if _procedure(row) or not re.search(unrelated,
+            ' '.join(_benefit_notes([row.get('messages'), row.get('additionalInformation')])), re.I)]
+        priorities = office_service_types or ['BY', '98']
     def relevant_service(row: dict) -> bool:
         procedure = _procedure(row)
         if procedure:
             return procedure == procedure_code
         stcs = {str(value) for value in row.get("serviceTypeCodes") or []}
-        return not stcs or bool(stcs & {service_type_code, "30"})
+        return not stcs or bool(stcs & ({*priorities, "30"} if office and selected_ids is None else {service_type_code, "30"}))
     # Out-of-network noncoverage and restrictions must not cancel in-network
     # coverage. Raw reported options retain both network schedules below.
     entries = [row for row in entries if relevant_service(row)
@@ -350,6 +370,14 @@ def normalize_stedi_271(payload: dict[str, Any], service_type_code: str, provide
             except (ValueError, TypeError):
                 invalid_dates = True
         entries = applicable
+    if office and selected_ids is None:
+        # Use the best returned category that actually contains cost sharing.
+        service_type_code = next((stc for stc in priorities if any(
+            row.get('code') in {'A', 'B'} and stc in (row.get('serviceTypeCodes') or [])
+            and _network_indicator(row) in {'Y', 'YES', 'IN_NETWORK', 'W', 'IN_AND_OUT_OF_NETWORK'}
+            for row in entries)), service_type_code)
+        entries = [row for row in entries if _procedure(row) or not row.get('serviceTypeCodes')
+                   or set(row['serviceTypeCodes']) & {service_type_code, '30'}]
     statuses = [row for row in entries if row.get("code") in {"status", "1", "2", "3", "4", "5", "6", "7", "8", "I"}]
     if statuses:
         specificity = lambda row: 3 if _procedure(row) else 2 if service_type_code in (row.get("serviceTypeCodes") or []) else 1
@@ -385,9 +413,11 @@ def normalize_stedi_271(payload: dict[str, Any], service_type_code: str, provide
                 return None
         best = max(score for score, _ in matches)
         selected = [row for score, row in matches if score == best]
-        # Exact duplicate benefit rows can differ by unmodelled modifiers.
-        # Do not choose one silently.
-        return selected[0] if len(selected) == 1 else None
+        # Compare every source field, including unmodelled restrictions. Only
+        # evidence location differs for an actual duplicate.
+        signatures = {json.dumps({k: v for k, v in row.items() if k != 'evidence_path'}, sort_keys=True)
+                      for row in selected}
+        return {**selected[0], 'evidence_paths': [row['evidence_path'] for row in selected]} if len(signatures) == 1 else None
     deductible, oop = pick("C", True), pick("G", True)
     copay, coinsurance = pick("B"), pick("A")
     relevant = [row for row in entries if not row.get("serviceTypeCodes") or
@@ -446,7 +476,8 @@ def normalize_stedi_271(payload: dict[str, Any], service_type_code: str, provide
         coinsurance_percent = None
     multiple_plans = len({row["plan_index"] for row in entries if "plan_index" in row and row.get("code") in {"status", "A", "B", "C", "G"}}) > 1
     limitations = any(str(row.get("code") or "").upper() in {"F", "Y"} for row in relevant)
-    conditional_terms = selected_ids is None and any(re.search(r"\b(first|after|before|beginning|visits?|waived|unless|only|limit|specialist|primary care)\b", note, re.IGNORECASE) for row in (copay, coinsurance) if row for note in notes([row.get("messages"), row.get("additionalInformation")]))
+    conditional_terms = selected_ids is None and any(re.search(r"\b(first|after|before|beginning|visits?|waived|unless|only|limit|specialist|primary care)\b", note, re.IGNORECASE) for row in (copay, coinsurance) if row for note in notes([row.get("messages"), row.get("additionalInformation")])
+        if note.strip().upper() not in {"OFFICE VISIT", "OFFICE VISITS", "SPECIALIST OFFICE VISIT", "PHYSICIAN OFFICE VISIT"})
     review_reasons = []
     if invalid_dates:
         review_reasons.append("Verify the payer eligibility dates; an applicable date value could not be interpreted.")
@@ -476,7 +507,7 @@ def normalize_stedi_271(payload: dict[str, Any], service_type_code: str, provide
             "deductible_remaining_cents": deductible_cents, "oop_remaining_cents": oop_cents,
             "copay_cents": copay_cents, "coinsurance_percent": str(coinsurance_percent) if coinsurance_percent is not None else None,
             "has_secondary": other_active_coverage or multiple_plans, "requires_review": bool(review_reasons),
-            "selected_benefit_ids": [row["evidence_path"] for row in (copay, coinsurance) if row],
+            "selected_benefit_ids": [path for row in (copay, coinsurance) if row for path in row.get('evidence_paths', [row['evidence_path']])],
             "deductible_id": deductible.get("evidence_path") if deductible else None,
             "oop_id": oop.get("evidence_path") if oop else None,
             "copay_id": copay.get("evidence_path") if copay else None,
@@ -486,6 +517,7 @@ def normalize_stedi_271(payload: dict[str, Any], service_type_code: str, provide
             "authorization_signal": authorization_signal, "referral_signal": referral_signal,
             "review_reasons": review_reasons,
             "normalization_notes": ["Stedi 271 benefit schedule does not prove provider participation."],
+            "resolved_service_type": service_type_code,
             "reported_options": reported_stedi_options(payload, service_type_code)}
 
 
@@ -513,6 +545,9 @@ def estimate(lines: list[dict[str, Any]], benefits: dict[str, Any], rules: dict[
     if cost_share == "payer_returned":
         has_copay = benefits.get("copay_cents") is not None
         has_coinsurance = benefits.get("coinsurance_percent") is not None
+        # A returned zero-percent term adds no cost share to the fixed copay.
+        if has_copay and benefits.get('coinsurance_percent') is not None and Decimal(str(benefits['coinsurance_percent'])) == 0:
+            has_coinsurance = False
         if has_copay == has_coinsurance:
             raise CommercialError("Payer benefits did not identify one unambiguous office-visit cost-share method.")
         if has_copay and _benefit_cents(benefits, "deductible_remaining_cents"):

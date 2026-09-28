@@ -18,7 +18,7 @@ from PIL import Image, ImageFile
 from app.api.routers import staff
 from app.core import patient_store, staff_store, object_store
 from app.core.patient_models import PatientProfile
-from app.insurance import golden, store as insurance_store
+from app.insurance import golden, store as insurance_store, commercial_store
 
 
 ADMIN_PASSWORD = "synthetic-admin-password-123"
@@ -109,6 +109,32 @@ class StaffDatabaseTests(unittest.IsolatedAsyncioTestCase):
         response = await self.client.put(f"/api/staff/intakes/{intake['id']}/patient", json=data)
         self.assertEqual(response.status_code, 200, response.text)
         return response.json()
+
+    async def test_verified_policy_names_persist_only_for_the_same_clinic_patient(self):
+        actor = await self.sign_in()
+        record = await self.confirm(await self.upload())
+        patient_id = record['patient']['id']
+        proof = {'binding': 'a' * 64, 'reference': 'Payer call', 'actor_id': actor['id'], 'verified_at': '2026-09-28'}
+        staff_store.save_insurance_identity(patient_id, actor['practice_id'], proof)
+        staff_store.save_insurance_identity(patient_id, 'another-clinic', {**proof, 'reference': 'Wrong clinic'})
+        saved = staff_store.get_intake(record['id'], actor['practice_id'])
+        self.assertEqual(saved['patient']['insurance_identities'], {proof['binding']: proof})
+        response = await self.client.get(f"/api/staff/intakes/{record['id']}")
+        self.assertNotIn('insurance_identities', response.json()['patient'])
+        payer = commercial_store.create_connection(actor['practice_id'], {'display_name': 'Example Payer', 'stedi_payer_id': str(uuid4())})
+        network = commercial_store.create_network(actor['practice_id'], {'payer_connection_id': payer['id'],
+            'billing_npi': '1234567890', 'rendering_npi': '1234567890', 'organization_name': 'Example Clinic',
+            'tin': '123456789', 'location_id': 'office', 'place_of_service': '11', 'network_name': 'PPO',
+            'effective_from': '2026-01-01', 'evidence_reference': 'Verified contract'})
+        profile = commercial_store.create_profile(actor['practice_id'], {'payer_connection_id': payer['id'],
+            'provider_network_id': network['id'], 'service_category': 'office', 'rules': {'cost_share': 'payer_returned'}})
+        commercial_store.save_product_mapping(actor['practice_id'], profile['id'], ['Choice Medical'], proof)
+        rules = commercial_store.profile(actor['practice_id'], profile['id'])['rules']
+        self.assertEqual(rules['cost_share'], 'payer_returned')
+        self.assertEqual(rules['product_mappings'], [{'products': ['Choice Medical'], **proof}])
+        with self.assertRaises(Exception):
+            commercial_store.save_product_mapping('another-clinic', profile['id'], ['Wrong plan'], proof)
+
 
     async def test_hash_only_bootstrap_authenticates_without_resetting_existing_staff(self):
         config = json.loads(os.environ["STAFF_BOOTSTRAP_CREDENTIALS"])

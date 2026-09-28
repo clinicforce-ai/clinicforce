@@ -94,6 +94,18 @@ def profile(practice_id: str, profile_id: str) -> dict | None:
     return _row(row)
 
 
+def save_product_mapping(practice_id: str, profile_id: str, products: list[str], evidence: dict) -> None:
+    with _connection() as db:
+        row = db.execute('SELECT rules_json FROM commercial_estimation_profiles WHERE id=%s AND practice_id=%s FOR UPDATE',
+                         (profile_id, practice_id)).fetchone()
+        if not row:
+            raise CommercialError('The estimate profile is no longer available.')
+        rules = json.loads(row['rules_json'])
+        rules.setdefault('product_mappings', []).append({'products': products, **evidence})
+        db.execute('UPDATE commercial_estimation_profiles SET rules_json=%s,updated_at=%s WHERE id=%s AND practice_id=%s',
+                   (_json(rules), _now(), profile_id, practice_id))
+
+
 def create_profile(practice_id: str, data: dict[str, Any]) -> dict:
     if data.get("service_category") not in SERVICE_CATEGORIES:
         raise CommercialError("Only office and EMG/NCS profiles are enabled initially.")

@@ -8,6 +8,10 @@ export const commercialAppointments = () => request<{ appointments: CommercialAp
 export type CommercialReadiness = { ready: boolean; blockers: string[]; ecw: { payer?: string | null; plan?: string | null; scheduled_codes: Array<{ code?: string | null; units?: number | string | null }>; visit_type?: string | null; reason?: string | null } }
 export const commercialReadiness = (appointment_id: string) => request<CommercialReadiness>(`${root}/appointments/readiness`, json({ appointment_id }))
 export type PrevisitEstimate = {
+  identity?: { status: 'matched' | 'review' | 'reconciled'; binding: string; can_confirm: boolean; differences: Array<{ field: string; ecw: string; payer: string }>; evidence?: { reference: string; verified_at: string } };
+  planning_estimate?: { amount_cents: number; collectable: false; explanation: string; assumptions: string[] } | null;
+  mapping_candidate?: { network: string; products: string[]; reference: string };
+  coverage_records?: Array<{ id: string; status: string; order?: number; member_id?: string; group_number?: string; subscriber?: string; relationship?: string; payer?: string[]; period?: { start?: string; end?: string }; cost_to_beneficiary?: Array<{ type?: { text?: string }; valueMoney?: { value: number; currency?: string }; valueQuantity?: { value: number; unit?: string } }> }>;
   patient_details?: { gender?: string; phone?: string; email?: string; address?: { address1?: string; address2?: string; city?: string; state?: string; postalCode?: string } };
   insurance_details?: { payer_patient?: { firstName?: string; lastName?: string; dateOfBirth?: string }; payer_relationship?: string; payer_coverage_period?: { start?: string; end?: string }; payer_subscriber?: { firstName?: string; lastName?: string; memberId?: string; dateOfBirth?: string }; member_id?: string; group_number?: string; subscriber_first?: string; subscriber_last?: string; subscriber_birth_date?: string; relationship?: string; record_status?: { status: string; updated_at?: string; message: string }; coverage_period?: { start?: string; end?: string } };
   arrival_collection?: { verified_copay_cents?: number | null; estimated_cents?: number | null; prior_balance_cents?: number | null; noncovered_cents?: number | null; payments_received_cents?: number | null; amount_cents: number | null; reason: string; status: string; basis: string };
@@ -19,7 +23,7 @@ export type PrevisitEstimate = {
   cash_quote?: { complete: boolean; selection: string; source: string; effective_from: string; message: string; min_cents?: number; max_cents?: number };
   service_plan?: { kind: string; groups: Array<{ id: string; label: string; description: string; selection_mode: string; role: string; ids: string[] }>; recommended_ids: string[]; recommendation_basis: string; history_count: number; selection_source?: string; method?: string; assumptions?: string[]; recommended_units?: Record<string, number> };
   ecw_saved_eligibility?: { status: string; active?: boolean; message: string; checked_at?: string; reference?: string };
-  appointment_context?: { location?: string; rendering_provider?: { name?: string; npi?: string }; appointment_status?: string };
+  appointment_context?: { timezone?: string; notes_status?: string; imported_fields?: Array<{ label: string; text: string; source: string; updated_at?: string }>; location?: string; rendering_provider?: { name?: string; npi?: string }; appointment_status?: string };
   ecw_coverage_active?: boolean;
   recovery?: { state: string; outcome?: string; message: string; started_at?: string; checked_at?: string; reference?: string; coverage_count?: number;
     candidates?: Array<{ id: string; payer: string; payer_identifier?: string; plans: string[]; relationship: string; address_matches: boolean }> };
@@ -67,7 +71,7 @@ export type VisitPricedLine = VisitCode & {
   benefits: NonNullable<PrevisitEstimate['benefits']> & { copay_period?: string; benefit_label?: string; benefit_summary?: string; visits_remaining?: number; deductible_applies?: boolean; policy_evidence?: { title: string; url: string; section: string }; requirements: { referral: VisitRequirement; authorization: VisitRequirement } };
   calculation: null | { cost_share?: string; allowed_cents: number; patient_cents: number; plan_cents: number; deductible_cents: number; copay_cents: number; coinsurance_cents: number; oop_adjustment_cents: number }
 }
-export type VisitReview = { payment_mode?: 'cash' | 'insurance'; cash_selection?: string; selected_ids?: string[]; confirmed_units?: Record<string, number>; payments_received_cents?: number; payment_reference?: string; verification?: {
+export type VisitReview = { identity_confirmation?: { binding: string; reference: string; notes: string }; product_mapping?: { reference: string; notes: string; valid_from: string; valid_to: string }; payment_mode?: 'cash' | 'insurance'; cash_selection?: string; selected_ids?: string[]; confirmed_units?: Record<string, number>; payments_received_cents?: number; payment_reference?: string; verification?: {
   line_id: string; kind: 'referral' | 'authorization' | 'benefits'; status: string; reference: string; notes: string;
   valid_from: string; valid_to: string; units: number; selected_ids?: string[]; cost_share?: string; deductible_applies?: boolean
 } }

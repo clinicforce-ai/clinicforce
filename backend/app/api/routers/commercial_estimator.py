@@ -19,7 +19,8 @@ from fastapi.concurrency import run_in_threadpool
 from pydantic import StrictInt, BaseModel, ConfigDict, Field, ValidationError
 
 from app.api.routers.insurance import _response, _scope, _session as insurance_session
-from app.core import object_store
+from app.core import object_store, staff_store
+from app.insurance import identity as insurance_identity
 from app.insurance import commercial, commercial_store, cpt_rules, cpt_suggester, ecw_backend, golden, stedi_discovery, stedi_payers, store, visit_estimate, nmct_cash, practice_prices, plan_benefits
 from app.insurance import stedi_financial
 
@@ -104,6 +105,21 @@ class VisitVerification(BaseModel):
     deductible_applies: bool = True
 
 
+class IdentityConfirmation(BaseModel):
+    model_config = ConfigDict(extra='forbid', str_strip_whitespace=True)
+    binding: str = Field(pattern=r'^[a-f0-9]{64}$')
+    reference: str = Field(min_length=3, max_length=500)
+    notes: str = Field(min_length=10, max_length=2000)
+
+
+class ProductMapping(BaseModel):
+    model_config = ConfigDict(extra='forbid', str_strip_whitespace=True)
+    reference: str = Field(min_length=3, max_length=500)
+    notes: str = Field(min_length=10, max_length=2000)
+    valid_from: date
+    valid_to: date
+
+
 class VisitReviewInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
     context_token: str = Field(min_length=64, max_length=64)
@@ -115,6 +131,8 @@ class VisitReviewInput(BaseModel):
     verification: VisitVerification | None = None
     payments_received_cents: int | None = Field(default=None, ge=0, le=100_000_000)
     payment_reference: str | None = Field(default=None, min_length=3, max_length=500)
+    identity_confirmation: IdentityConfirmation | None = None
+    product_mapping: ProductMapping | None = None
 
 
 class CoverageCandidateInput(BaseModel):
@@ -260,6 +278,13 @@ def _practice_path(practice_id: str, inputs: dict, source: dict) -> tuple[dict, 
     if product_names:
         aliases = {re.sub(r'[^a-z0-9]', '', str(name).casefold()) for name in
                    [networks[0].get('plan_matcher', ''), *(profiles[0].get('rules', {}).get('plan_product_names') or [])]} - {'', 'ci', 'commercial', 'ppo', 'hmo'}
+        for mapping in profiles[0].get('rules', {}).get('product_mappings', []):
+            if (mapping.get('reference') and mapping.get('actor_id')
+                    and mapping.get('valid_from', '') <= service_date <= mapping.get('valid_to', '')
+                    and mapping.get('network_id') == networks[0]['id']
+                    and mapping.get('network_reference') == networks[0].get('evidence_reference')
+                    and mapping.get('plan_scope') == source.get('payer_plan_scope')):
+                aliases.update(insurance_identity.normalized(name) for name in mapping.get('products', []))
         if not product_names <= aliases and not plan_benefits.network_match(payer.get('stedi_payer_id', ''), product_names, networks[0].get('network_name', '')):
             raise HTTPException(409, 'The clinic fee schedule is not matched to the exact payer product.')
     return payer, networks[0], profiles[0]
@@ -407,7 +432,8 @@ def _previsit_range(practice_id: str, inputs: dict, source: dict, payer_id: str,
     options = bool(codes) and all(row.get('source') == 'Contract service option' for row in codes) and not review.get('selected_ids')
     alternatives = options or (bool(codes) and all(row.get("source") == "conditional office E/M alternative" for row in codes) and not review.get("selected_ids"))
     selected = [row for row in codes if not review.get("selected_ids") or row.get("id") in review['selected_ids']]
-    rates, rules, issues = [], {}, []
+    office_types = ['BQ', 'BY', '98'] if any('neurolog' in role.lower() for role in (source.get('rendering_provider') or {}).get('roles', [])) else ['BY', '98']
+    rates, rules, issues = [], {'office_service_types': office_types}, []
     try:
         _, network, profile = _practice_path(practice_id, {**inputs, "payer_id": payer_id}, source)
         if not network.get("plan_matcher") or not source.get("plan"):
@@ -415,7 +441,7 @@ def _previsit_range(practice_id: str, inputs: dict, source: dict, payer_id: str,
         if not inputs.get("place_of_service"):
             raise commercial.CommercialError("Map the appointment location to its place of service.")
         rates = commercial_store.matching_rates(practice_id, profile, network, inputs["service_date"], selected)
-        rules = profile['rules']
+        rules = {**rules, **profile['rules']}
     except (HTTPException, commercial.CommercialError) as exc:
         issues.append(str(exc.detail) if isinstance(exc, HTTPException) else str(exc))
     priced = visit_estimate.price_lines(selected, rates, benefits, rules, payload=payload,
@@ -437,16 +463,13 @@ def _previsit_range(practice_id: str, inputs: dict, source: dict, payer_id: str,
 
 def _previsit_benefits(payload: dict, coverage: dict, service_date: str | None = None) -> dict:
     benefits = commercial.normalize_stedi_271(payload, "98", False, coverage["active_coverages"] > 1, service_date=service_date)
-    returned_member = (payload.get("subscriber") or {}).get("memberId") if isinstance(payload.get("subscriber"), dict) else None
-    if returned_member and re.sub(r"\W", "", str(returned_member)).casefold() != re.sub(r"\W", "", str(coverage["member_id"])).casefold():
-        benefits["requires_review"] = True
-        benefits["normalization_notes"].append("Payer response member ID differs from eCW.")
-        benefits["review_reasons"].append("Confirm the member identity: the payer response differs from eCW.")
-    person = commercial.payer_person(payload.get('dependent') or payload.get('subscriber') or {})
-    if any(person.get(field) and coverage.get(key) and re.sub(r'\W', '', str(person[field])).casefold() != re.sub(r'\W', '', str(coverage[key])).casefold()
-           for field, key in [('firstName', 'patient_first'), ('lastName', 'patient_last'), ('dateOfBirth', 'patient_birth_date')]):
+    comparison = insurance_identity.compare(payload, coverage)
+    benefits['identity'] = comparison
+    if comparison['status'] == 'review':
         benefits['requires_review'] = True
-        benefits['review_reasons'].append('Confirm patient identity: the payer-returned name or birth date differs from eCW.')
+        benefits['review_reasons'].append('Confirm the member identity: the payer response differs from eCW.'
+            if any(row['field'] == 'member_id' for row in comparison['differences']) else
+            'Confirm patient identity: the payer-returned patient details differ from eCW.')
     return benefits
 
 
@@ -491,6 +514,19 @@ def _finish_previsit(result: dict, case: dict, inputs: dict, source: dict, paylo
     if review.get('context_token') != token:
         review = {'context_token': token}
         case['visit_review'] = review
+    comparison = result['benefits'].get('identity') or {}
+    remembered = ((session.get('intake') or {}).get('patient') or {}).get('insurance_identities') or {}
+    evidence = review.get('identity_confirmation') or remembered.get(comparison.get('binding'))
+    if (comparison.get('can_confirm') and evidence and evidence.get('binding') == comparison.get('binding')
+            and evidence.get('reference') and evidence.get('actor_id') and evidence.get('verified_at')):
+        comparison = {**comparison, 'status': 'reconciled', 'evidence': evidence}
+        result['benefits']['review_reasons'] = [r for r in result['benefits'].get('review_reasons', []) if 'identity' not in r]
+        result['benefits']['requires_review'] = bool(result['benefits']['review_reasons'])
+    result['identity'] = comparison
+    result['benefits']['identity'] = comparison
+    payer_plan = commercial.plan_details(payload or {})
+    exact_source = {**(pricing_source or source), 'payer_plan_names': payer_plan['names'],
+                    'payer_plan_scope': {key: payer_plan.get(key) for key in ('plan_number', 'group_number')}}
     codes = _previsit_codes(inputs)
     available = list(codes)
     known = {row['code'] for row in codes}
@@ -501,7 +537,7 @@ def _finish_previsit(result: dict, case: dict, inputs: dict, source: dict, paylo
     catalog = []
     if len(connections) == 1:
         try:
-            _, network, profile = _practice_path(session['practice_id'], {**inputs, 'payer_id': connections[0]['id']}, pricing_source or source)
+            _, network, profile = _practice_path(session['practice_id'], {**inputs, 'payer_id': connections[0]['id']}, exact_source)
             if network.get('plan_matcher') and (pricing_source or source).get('plan'):
                 catalog = commercial_store.matching_rates(session['practice_id'], profile, network, inputs['service_date'], None)
         except (HTTPException, commercial.CommercialError):
@@ -564,6 +600,10 @@ def _finish_previsit(result: dict, case: dict, inputs: dict, source: dict, paylo
     result['ecw_saved_eligibility'] = source.get('saved_eligibility')
     result['referral_evidence'] = source.get('referral_evidence', [])
     result['appointment_context'] = {key: source.get(key) for key in ('location', 'rendering_provider', 'appointment_status')}
+    result['appointment_context'].update(imported_fields=source.get('appointment_fields', []),
+                                         notes_status=source.get('appointment_notes_status', 'not_exposed'),
+                                         timezone=source.get('timezone') or os.getenv('COMMERCIAL_PRACTICE_TIMEZONE', 'America/New_York'))
+    result['coverage_records'] = source.get('coverage_records', [])
     selected_ids = review.get('selected_ids') or result['service_plan']['recommended_ids']
     if selected_ids:
         by_id = {row['id']: row for row in available}
@@ -581,11 +621,21 @@ def _finish_previsit(result: dict, case: dict, inputs: dict, source: dict, paylo
         'ecw': source.get('plan_details') or {'plan': [source['plan']] if source.get('plan') else []},
         'stedi': commercial.plan_details(payload) if payload else {}}, ecw_retrieved_at=source.get('retrieved_at'),
         response_reference=(payload or {}).get('id'), selected_ids=selected_ids)
-    exact_source = {**(pricing_source or source), 'payer_plan_names': commercial.plan_details(payload or {})['names']}
     result.pop('network_evidence', None)
     _attach_previsit_pricing(result, session['practice_id'], inputs, exact_source, payer_id, result['benefits'], payload=payload,
                             review={**review, 'selected_ids': selected_ids})
     result['arrival_collection'] = visit_estimate.arrival_collection(result.get('price_range') or {}, result['benefits'], review)
+    result['planning_estimate'] = (visit_estimate.planning_estimate(result.get('price_range') or {}, result['benefits'], comparison)
+                                   if result['arrival_collection']['amount_cents'] is None else None)
+    if len(connections) == 1:
+        try:
+            _, network, profile = _practice_path(session['practice_id'], {**inputs, 'payer_id': connections[0]['id']},
+                                                {**exact_source, 'payer_plan_names': []})
+            if network.get('network_name') and network.get('evidence_reference'):
+                result['mapping_candidate'] = {'network': network['network_name'], 'products': exact_source['payer_plan_names'],
+                                               'reference': network['evidence_reference']}
+        except HTTPException:
+            result.pop('mapping_candidate', None)
     cash_review = {'cash_selection': result['service_plan'].get('cash_selection', ''), **review}
     nmct_cash.apply(result, session['practice_id'], inputs['service_date'], cash_review)
     if uploaded_cash:
@@ -1324,7 +1374,7 @@ async def update_visit_review(case_id: str, value: VisitReviewInput, request: Re
     failed = not_requested or case.get('previsit', {}).get('request_state') == 'rejected'
     if case.get('previsit_discovery', {}).get('request_state') in {'pending', 'indeterminate'}:
         raise HTTPException(409, 'Coverage recovery is still in progress. Wait for the result before changing the estimate.')
-    if failed and (value.verification or value.payments_received_cents is not None):
+    if failed and (value.verification or value.payments_received_cents is not None or value.identity_confirmation or value.product_mapping):
         raise HTTPException(409, 'Complete the eligibility check before verifying benefits or recording payments against an insurance estimate.')
     try:
         checked = datetime.now(timezone.utc) if failed else datetime.fromisoformat(case['previsit']['checked_at'])
@@ -1351,6 +1401,12 @@ async def update_visit_review(case_id: str, value: VisitReviewInput, request: Re
     import copy
     result = copy.deepcopy(context['result'])
     review = copy.deepcopy(case.get('visit_review') or {'context_token': value.context_token})
+    if value.identity_confirmation:
+        current_identity = _case_benefits(payload, inputs, source, case).get('identity') or {}
+        if not current_identity.get('can_confirm') or current_identity.get('binding') != value.identity_confirmation.binding:
+            raise HTTPException(409, 'Patient identity evidence changed, or the birth date/member identity needs correction at its source.')
+        review['identity_confirmation'] = {**value.identity_confirmation.model_dump(), 'verified_at': _now(),
+                                           'actor_id': session['staff']['id'], 'verified_by': session['staff'].get('display_name')}
     available = {row['id']: row for row in result.get('available_codes', result['codes'])}
     if value.selected_ids is not None:
         if not value.selected_ids or len(set(value.selected_ids)) != len(value.selected_ids) or set(value.selected_ids) - available.keys():
@@ -1413,6 +1469,19 @@ async def update_visit_review(case_id: str, value: VisitReviewInput, request: Re
             raise HTTPException(422, 'Record the payment ledger reference, including when no payment was received.')
         review['payments'] = {'amount_cents': value.payments_received_cents, 'reference': value.payment_reference,
                               'verified_at': _now(), 'actor_id': session['staff']['id']}
+    if value.product_mapping:
+        _admin(session)
+        item = value.product_mapping
+        if not item.valid_from <= date.fromisoformat(inputs['service_date']) <= item.valid_to:
+            raise HTTPException(422, 'The contract confirmation must include this appointment date.')
+        products = commercial.plan_details(payload)['names']
+        if not products:
+            raise HTTPException(422, 'The payer did not return a product to map.')
+        _, network, profile = _practice_path(session['practice_id'], inputs, {**source, 'payer_plan_names': []})
+        await run_in_threadpool(commercial_store.save_product_mapping, session['practice_id'], profile['id'], products,
+            {**item.model_dump(mode='json'), 'verified_at': _now(), 'actor_id': session['staff']['id'],
+             'plan_scope': {key: commercial.plan_details(payload).get(key) for key in ('plan_number', 'group_number')},
+             'network_id': network['id'], 'network_reference': network['evidence_reference']})
     case.setdefault('visit_review_history', []).append({'revision': value.revision, 'context_token': value.context_token, 'changes': value.model_dump(mode='json', exclude_none=True), 'actor_id': session['staff']['id'], 'verified_at': _now()})
     case['visit_review'] = review
     if not failed:
@@ -1424,6 +1493,8 @@ async def update_visit_review(case_id: str, value: VisitReviewInput, request: Re
     if failed:
         result['response_reference'] = context['result'].get('response_reference')
     saved = await run_in_threadpool(_save, case, session, 'visit-evidence-verified')
+    if value.identity_confirmation:
+        await run_in_threadpool(staff_store.save_insurance_identity, session['patient_id'], session['practice_id'], review['identity_confirmation'])
     return _previsit_result(saved)
 
 
