@@ -11,6 +11,7 @@ export interface StaffSession {
 
 export interface StaffPatient {
   id: string
+  ecw_patient_id?: string | null
   given_name: string
   family_name: string
   birth_date: string

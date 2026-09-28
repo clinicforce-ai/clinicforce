@@ -101,7 +101,7 @@ export function ServicePlanner({ result, busy, save, viewEstimate }: { result: P
     <div className="procedure-catalog"><h3>Additional procedures</h3>{extraGroups.map(group => <details className="visit-line-details" key={group.title}><summary>{group.title}<small>{group.rows.length} options</small></summary><div className="procedure-options">{group.rows.map(row => option(row))}</div></details>)}</div>
     {!!result.service_plan?.assumptions?.length && <details className="plan-assumptions"><summary>Why these suggestions?</summary><p>{result.service_plan.recommendation_basis}</p><ul>{result.service_plan.assumptions.map(item => <li key={item}>{item}</li>)}</ul></details>}
     {editError && <p className="visit-error" role="alert">{editError}</p>}
-    <div className="visit-plan-footer"><span>{chosen.length} {chosen.length === 1 ? 'service' : 'services'} selected{changed ? ' · Unsaved changes' : ' · Current scenario'}</span><div className="plan-scenario-actions"><button type="button" className="visit-text-button" disabled={busy || !changed} onClick={() => void apply(false)}>Update scenario</button><button type="button" className="visit-primary" disabled={busy} onClick={() => void apply(true)}>Continue to collection <ArrowRight size={17} /></button></div></div>
+    <div className="visit-plan-footer"><span>{chosen.length} {chosen.length === 1 ? 'service' : 'services'} selected{changed ? ' · Unsaved changes' : ' · Current scenario'}</span><div className="plan-scenario-actions"><button type="button" className="visit-primary" disabled={busy} onClick={() => void apply(true)}>Recalculate estimate <ArrowRight size={17} /></button></div></div>
   </section>
 }
 

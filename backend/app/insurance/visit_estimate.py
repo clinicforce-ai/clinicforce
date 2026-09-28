@@ -6,7 +6,7 @@ from collections import Counter
 import re
 from datetime import date
 
-from app.insurance import commercial, cpt_rules, plan_benefits
+from app.insurance import commercial, cpt_rules, plan_benefits, identity
 
 
 def clinical_group(code: str) -> str:
@@ -124,6 +124,7 @@ def price_lines(codes: list[dict], rates: list[dict], benefits: dict, rules: dic
     oop_used: dict[str, int] = {}
     copays_applied: set[str] = set()
     prior_unresolved = False
+    name_difference = benefits.get('identity', {}).get('status') == 'review' and identity.name_difference_only(benefits.get('identity', {}))
     for index, code in enumerate(codes):
         line_id = code.get('id') or f"{code['code']}:{index}"
         review = reviews.get(line_id) or {}
@@ -136,9 +137,14 @@ def price_lines(codes: list[dict], rates: list[dict], benefits: dict, rules: dic
         stc = service_type(code['code'], rules)
         raw_benefits = commercial.normalize_stedi_271(payload, stc or '98', benefits.get('network_status') == 'in_network',
             benefits.get('has_secondary', False), procedure_code=code['code'], service_date=service_date,
-            selected_ids=selection.get('selected_ids') if selection_valid else None) if payload is not None else deepcopy(benefits)
-        # An identity/evidence failure cannot be cleared by line-level review.
-        integrity = [reason for reason in benefits.get('review_reasons', []) if 'identity' in reason or 'evidence' in reason]
+            selected_ids=selection.get('selected_ids') if selection_valid else None,
+            office_service_types=rules.get('office_service_types')) if payload is not None else deepcopy(benefits)
+        stc = raw_benefits.get('resolved_service_type') or stc
+        # Name differences remain on the case for billing. They do not stop
+        # arithmetic for an explicitly conditional estimate of this policy.
+        integrity = [reason for reason in benefits.get('review_reasons', []) if 'evidence' in reason or ('identity' in reason and not name_difference)]
+        if name_difference:
+            raw_benefits['review_reasons'] = [reason for reason in raw_benefits.get('review_reasons', []) if 'identity' not in reason]
         raw_benefits['review_reasons'] = list(dict.fromkeys([*raw_benefits.get('review_reasons', []), *integrity]))
         raw_benefits['requires_review'] = bool(raw_benefits['review_reasons'])
         raw_benefits = plan_benefits.apply(raw_benefits, payload or {}, code['code'], service_date)
@@ -168,6 +174,8 @@ def price_lines(codes: list[dict], rates: list[dict], benefits: dict, rules: dic
                 'benefit_basis': applied.get('benefit_label') or f'Service category {stc}' if stc else 'Service category needs mapping',
                 'conditions': [reason for reason in applied.get('review_reasons', []) if _workflow_condition(reason)],
                 'issues': [reason for reason in applied.get('review_reasons', []) if not _workflow_condition(reason)], 'calculation': None}
+        if name_difference:
+            line['conditions'].append('Estimated using the returned policy; patient names differ between eCW and the payer.')
         direct = any(commercial._procedure(row) == code['code'] and row.get('code') in {'A', 'B'} for row in commercial._stedi_entries(payload or {}))
         if direct:
             line['benefit_basis'] = 'Procedure-specific payer benefit'
@@ -184,7 +192,7 @@ def price_lines(codes: list[dict], rates: list[dict], benefits: dict, rules: dic
         if benefits.get('requires_review') and not benefits.get('review_reasons'):
             line['issues'].append('Saved payer evidence needs verification before pricing.')
         period = str(applied.get('copay_period') or '').upper()
-        if applied.get('copay_cents') is not None and period not in {'', 'VISIT', '27', 'SERVICE', 'PROCEDURE'}:
+        if applied.get('copay_cents') is not None and period not in {'', 'VISIT', '27', 'DAY', '7', 'SERVICE', 'PROCEDURE'}:
             line['issues'].append('The returned copay period needs a supported calculation rule.')
         if not alternatives and len(codes) > 1 and applied.get('copay_cents') is not None and not period:
             line['issues'].append('Confirm whether this copay applies once per visit or to each service.')
@@ -212,7 +220,7 @@ def price_lines(codes: list[dict], rates: list[dict], benefits: dict, rules: dic
                 if calculation_benefits.get('oop_remaining_cents') is not None:
                     calculation_benefits['oop_remaining_cents'] = max(0, calculation_benefits['oop_remaining_cents'] - oop_used.get(oop_key, 0))
                 copay_key = applied.get('copay_id') or '|'.join(applied.get('selected_benefit_ids', [])) or 'visit'
-                if period in {'VISIT', '27'} and copay_key in copays_applied:
+                if period in {'VISIT', '27', 'DAY', '7'} and copay_key in copays_applied:
                     calculation_benefits['copay_cents'] = 0
             try:
                 calc = commercial.estimate([{'code': code['code'], 'units': units,
@@ -221,7 +229,7 @@ def price_lines(codes: list[dict], rates: list[dict], benefits: dict, rules: dic
                 if not alternatives:
                     deductible_used[deductible_key] = deductible_used.get(deductible_key, 0) + min(calc['deductible_cents'], calc['patient_cents'])
                     oop_used[oop_key] = oop_used.get(oop_key, 0) + calc['patient_cents']
-                    if period in {'VISIT', '27'}:
+                    if period in {'VISIT', '27', 'DAY', '7'}:
                         copays_applied.add(copay_key)
             except commercial.CommercialError as exc:
                 line['issues'].append(str(exc))
@@ -283,7 +291,7 @@ def arrival_collection(price: dict, benefits: dict, review: dict) -> dict:
         terms = office[0]['benefits']
         if (office[0].get('units') == 1 and not terms.get('requires_review') and not office[0].get('conditions')
                 and terms.get('cost_share') == 'copay' and terms.get('deductible_applies') is False
-                and terms.get('copay_period') in {'VISIT', '27'}
+                and terms.get('copay_period') in {'VISIT', '27', 'DAY', '7'}
                 and terms.get('copay_cents') is not None and terms.get('oop_remaining_cents') is not None):
             result['verified_copay_cents'] = min(terms['copay_cents'], terms['oop_remaining_cents'])
     if not price.get('complete') and result['verified_copay_cents'] is None:
@@ -301,3 +309,38 @@ def arrival_collection(price: dict, benefits: dict, review: dict) -> dict:
         result.update(status='copay_only', reason='Only the verified office copay is included. Additional deductible and coinsurance remain for estimation or post-adjudication billing. ' +
                       ('Verified payments have been subtracted.' if payments.get('reference') else 'Before payments or credits; check the clinic ledger.'))
     return result
+
+
+def planning_estimate(price: dict, benefits: dict, comparison: dict) -> dict | None:
+    """A conditional planning result never authorizes collection or clears evidence."""
+    lines = price.get('lines') or []
+    if (not lines or benefits.get('active') is not True or benefits.get('has_secondary')
+            or benefits.get('network_status') == 'out_of_network'
+            or benefits.get('service_date_matches') is False or price.get('service_issues')
+            or (comparison.get('status') == 'review' and not identity.name_difference_only(comparison))
+            or any('evidence' in r.lower() or 'date' in r.lower() for r in benefits.get('review_reasons', []))
+            or any('needs mapping' in line.get('benefit_basis', '') for line in lines)
+            or any(requirement.get('status') in {'denied', 'expired', 'pending'}
+                   for line in lines for requirement in line.get('benefits', {}).get('requirements', {}).values())):
+        return None
+    assumptions = []
+    if comparison.get('status') == 'review':
+        assumptions.append('Calculated using the returned patient coverage. eCW and payer patient names differ; both are retained for billing.')
+    if benefits.get('network_status') != 'in_network':
+        assumptions.append('The provider and visit location participate in this plan’s network.')
+    assumptions.append('The selected services are covered and any required referral or authorization is in place.')
+    if all(line.get('units') and line['benefits'].get('active') is True
+           and line['benefits'].get('network_status') != 'out_of_network'
+           and line['benefits'].get('oop_remaining_cents') == 0
+           and line['benefits'].get('service_date_matches') is not False
+           and not line['benefits'].get('has_secondary')
+           and not any('limit' in r.lower() or 'date' in r.lower() for r in line['benefits'].get('review_reasons', []))
+           for line in lines):
+        return {'amount_cents': 0, 'collectable': False, 'basis': 'out_of_pocket_limit',
+                'explanation': 'The payer reports $0 remaining in-network out-of-pocket responsibility. Under the assumptions below, the selected covered services have an estimated patient cost of $0.',
+                'assumptions': assumptions}
+    if price.get('complete') and price.get('patient_min_cents') == price.get('patient_max_cents'):
+        return {'amount_cents': price['patient_max_cents'], 'collectable': False, 'basis': 'conditional_services',
+                'explanation': 'Estimated patient responsibility for the selected services, before payments and credits.',
+                'assumptions': assumptions}
+    return None

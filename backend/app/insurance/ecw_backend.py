@@ -8,6 +8,7 @@ import os
 import re
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
+from html.parser import HTMLParser
 from typing import Any
 from urllib.parse import urlparse, urljoin
 from zoneinfo import ZoneInfo
@@ -183,7 +184,7 @@ async def _optional_search(client: httpx.AsyncClient, issuer: str, token: str, r
 
 
 async def _read(client: httpx.AsyncClient, issuer: str, token: str, reference: Any) -> dict[str, Any]:
-    if not isinstance(reference, str) or not re.fullmatch(r"(?:Patient|RelatedPerson|Organization|Practitioner|PractitionerRole|Location|Condition|Encounter)/[A-Za-z0-9.\-]{1,200}", reference):
+    if not isinstance(reference, str) or not re.fullmatch(r"(?:Patient|RelatedPerson|Organization|Practitioner|PractitionerRole|Location|Condition|Encounter|Appointment)/[A-Za-z0-9.\-]{1,200}", reference):
         return {}
     response = await client.get(f"{issuer}/{reference}", headers={"Authorization": f"Bearer {token}", "Accept": "application/fhir+json"})
     if response.status_code in {403, 404}:
@@ -335,6 +336,56 @@ def _visit_context(visit: dict[str, Any], orders: list[dict[str, Any]], procedur
         details.extend(f"Linked condition: {text}" for text in _concept_labels(condition.get("code")))
     unique = list(dict.fromkeys(" ".join(detail.split()) for detail in details if detail.strip()))
     return "; ".join(unique)[:2000] or None
+
+
+def appointment_fields(visit: dict, linked: list[dict] | None = None) -> list[dict]:
+    """Verbatim source context, deliberately kept out of the coding prompt."""
+    fields = []
+    for resource in [visit, *(linked or [])]:
+        reference = f"{resource.get('resourceType', 'Encounter')}/{resource.get('id', '')}"
+        def add(label, value, path):
+            if isinstance(value, str) and value.strip():
+                fields.append({'label': label, 'text': value, 'source': reference + '.' + path,
+                               'updated_at': resource.get('meta', {}).get('lastUpdated'), 'status': 'returned'})
+        for key, label in (('description', 'Appointment description'), ('comment', 'General comments'),
+                           ('patientInstruction', 'Patient instructions')):
+            add(label, resource.get(key), key)
+        for i, note in enumerate(resource.get('note') or []):
+            if isinstance(note, dict):
+                add('Appointment note', note.get('text'), f'note[{i}].text')
+        def extensions(rows, prefix='extension'):
+            for i, extension in enumerate(rows):
+                if not isinstance(extension, dict):
+                    continue
+                url = str(extension.get('url') or '')
+                label = re.sub(r'[-_]', ' ', url.rsplit('/', 1)[-1]) or 'eCW appointment field'
+                for key in ('valueString', 'valueMarkdown'):
+                    add(label, extension.get(key), f'{prefix}[{i}]({url}).{key}')
+                for key in ('valueBoolean', 'valueInteger', 'valueDecimal', 'valueCode', 'valueDate', 'valueDateTime'):
+                    if extension.get(key) is not None:
+                        add(label, str(extension[key]), f'{prefix}[{i}]({url}).{key}')
+                for key in ('valueMoney', 'valueQuantity'):
+                    amount = extension.get(key) or {}
+                    if amount.get('value') is not None:
+                        add(label, f"{amount['value']} {amount.get('currency') or amount.get('unit') or ''}".strip(), f'{prefix}[{i}]({url}).{key}')
+                annotation = extension.get('valueAnnotation') or {}
+                add(label, annotation.get('text'), f'{prefix}[{i}]({url}).valueAnnotation.text')
+                extensions(extension.get('extension') or [], f'{prefix}[{i}].extension')
+        extensions(resource.get('extension') or [])
+        class Narrative(HTMLParser):
+            def __init__(self):
+                super().__init__(); self.parts = []; self.hidden = 0
+            def handle_starttag(self, tag, attrs):
+                if tag in {'script', 'style'}: self.hidden += 1
+                if tag in {'p', 'div', 'br', 'tr', 'li'}: self.parts.append('\n')
+            def handle_endtag(self, tag):
+                if tag in {'script', 'style'}: self.hidden = max(0, self.hidden - 1)
+            def handle_data(self, data):
+                if not self.hidden: self.parts.append(data)
+        narrative = Narrative()
+        narrative.feed(str((resource.get('text') or {}).get('div') or ''))
+        add('eCW appointment narrative', ''.join(narrative.parts).strip(), 'text.div')
+    return fields
 
 
 def _visit_type(visit: dict[str, Any]) -> str | None:
@@ -604,6 +655,25 @@ async def fetch_inputs(profile: dict[str, Any], practice: dict[str, Any], appoin
             service_date = _appointment_date(visit) or today
             encounter_id = str(visit.get("id", ""))
             encounter_ref = f"Encounter/{encounter_id}" if encounter_id else ""
+            linked_appointments = []
+            appointment_notes_status = 'not_exposed'
+            # Optional entitlement: never add a scope to the main intake token.
+            if visit.get('appointment') and os.getenv('ECW_APPOINTMENT_READ_ENABLED', 'true').lower() == 'true':
+                try:
+                    note_token = await asyncio.wait_for(_access_token(client, client_id, issuer, SCOPES + ('system/Appointment.read',)), 4)
+                    for ref in (visit.get('appointment') or [])[:3]:
+                        reference = _reference(ref) or ''
+                        if not re.fullmatch(r'Appointment/[A-Za-z0-9.\-]{1,200}', reference):
+                            continue
+                        row, timed_out = await asyncio.wait_for(_bounded_read(client, issuer, note_token, reference), 4)
+                        if timed_out:
+                            appointment_notes_status = 'timed_out'
+                        elif (row.get('resourceType') == 'Appointment' and row.get('status') != 'entered-in-error'
+                              and any(_reference(p.get('actor')) == f'Patient/{patient_id}' for p in row.get('participant', []))):
+                            linked_appointments.append(row)
+                            appointment_notes_status = 'returned'
+                except (EcwBackendError, httpx.HTTPError, asyncio.TimeoutError):
+                    appointment_notes_status = 'unavailable'
             # History is context only. A short independent query avoids letting
             # an eCW history stall block the appointment insurance workflow.
             history_start = (today_date - timedelta(days=HISTORY_DAYS)).isoformat()
@@ -865,6 +935,16 @@ async def fetch_inputs(profile: dict[str, Any], practice: dict[str, Any], appoin
     ))
     source = {"system": "eClinicalWorks", "retrieved_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
             "_patient_id": patient_id,
+              "timezone": practice.get('timezone', 'America/New_York'),
+              "appointment_fields": appointment_fields(visit, linked_appointments),
+              "appointment_notes_status": appointment_notes_status,
+              "coverage_records": [{"id": row.get('id'), "status": row.get('status'), "order": row.get('order'),
+                  "member_id": coverage_member_id(row), "group_number": _group(row), "plan": _plan_details(row),
+                  "relationship": _relationship(row), "period": row.get('period') or {},
+                  "subscriber": (row.get('subscriber') or {}).get('display'),
+                  "payer": [p.get('display') for p in row.get('payor', []) if p.get('display')],
+                  "cost_to_beneficiary": row.get('costToBeneficiary') or []}
+                  for row in coverage_rows if _reference(row.get('beneficiary')) == f'Patient/{patient_id}'],
               "appointment_id": encounter_id, "coverage_id": str(coverage.get("id") or ""),
               "active_coverages": len(eligible), "coverage_record_status": coverage_record_status(coverage),
               "patient_details": {"gender": patient.get("gender"), "phone": _phone(patient), "address": patient_address(patient),

@@ -154,3 +154,14 @@
   .emg-options { padding-left: 12px; }
   .plan-scenario-actions { flex-direction: column; }
 }
+
+/* The estimate and edits share one page; details remain available below. */
+#visit-estimate, #visit-plan, #visit-coverage, #visit-sources { scroll-margin-top: 24px; }
+.visit-imported { padding: 24px 0; border-top: 1px solid var(--border-color, #d7e4e7); }
+.visit-imported article { margin: 16px 0; }
+.visit-imported article p { white-space: pre-wrap; overflow-wrap: anywhere; }
+.visit-imported small { color: #58727d; }
+.identity-resolution, .product-mapping { padding: 20px 0; }
+.identity-resolution form, .product-mapping form { display: grid; gap: 16px; max-width: 720px; }
+.identity-resolution textarea, .product-mapping textarea { min-height: 90px; padding: 12px; font: inherit; }
+.visit-line-details > summary, .collection-reason > summary { cursor: pointer; padding: 12px 0; font-weight: 600; }

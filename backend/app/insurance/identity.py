@@ -1,0 +1,60 @@
+"""Compare patient and subscriber separately; remember only reviewed policy links."""
+import hashlib
+import json
+import unicodedata
+from datetime import date, datetime
+
+from app.insurance.commercial import payer_person
+
+
+def normalized(value: object) -> str:
+    return ''.join(c for c in unicodedata.normalize('NFKD', str(value or '')).casefold()
+                   if c.isalnum())
+
+
+def birth_date(value: object) -> str:
+    try:
+        text = str(value)
+        return (datetime.strptime(text, '%Y%m%d').date() if len(text) == 8 and text.isdigit() else date.fromisoformat(text)).isoformat()
+    except ValueError:
+        return str(value or '')
+
+
+def name_difference_only(comparison: dict) -> bool:
+    differences = comparison.get('differences') or []
+    return bool(differences) and all(row['field'] in {'first_name', 'last_name'} for row in differences)
+
+
+def compare(payload: dict, coverage: dict, evidence: dict | None = None) -> dict:
+    subscriber = payer_person(payload.get('subscriber') or {})
+    dependent = payload.get('dependent') or {}
+    patient = payer_person(dependent or payload.get('subscriber') or {})
+    relationships = {'18': 'self', '01': 'spouse', '19': 'child', 'G8': 'other'}
+    expected = {field: coverage.get(key) or '' for field, key in (
+        ('first_name', 'patient_first'), ('last_name', 'patient_last'),
+        ('birth_date', 'patient_birth_date'), ('member_id', 'member_id'),
+        ('subscriber_first', 'subscriber_first'), ('subscriber_last', 'subscriber_last'))}
+    expected['relationship'] = relationships.get(coverage.get('relationship'), coverage.get('relationship') or '')
+    returned = {'first_name': patient.get('firstName') or '', 'last_name': patient.get('lastName') or '',
+                'birth_date': patient.get('dateOfBirth') or '', 'member_id': subscriber.get('memberId') or '',
+                'subscriber_first': subscriber.get('firstName') or '', 'subscriber_last': subscriber.get('lastName') or '',
+                'relationship': str(dependent.get('relationToSubscriber') or ('self' if not dependent else '')).lower()}
+    def key(field, value):
+        return birth_date(value) if field == 'birth_date' else normalized(value)
+    differences = [{'field': field, 'ecw': expected[field], 'payer': returned[field]}
+                   for field in expected if expected[field] and returned[field]
+                   and key(field, expected[field]) != key(field, returned[field])]
+    policy_differences = [row for row in differences if row['field'].startswith('subscriber_') or row['field'] == 'relationship']
+    differences = [row for row in differences if row not in policy_differences]
+    # Name-only reconciliation requires all three independent anchors to be present.
+    anchored = all(expected[k] and returned[k] and key(k, expected[k]) == key(k, returned[k])
+                   for k in ('first_name', 'birth_date', 'member_id'))
+    binding = hashlib.sha256(json.dumps({'expected': {k: key(k, v) for k, v in expected.items()},
+        'returned': {k: key(k, v) for k, v in returned.items()},
+        'coverage_id': coverage.get('coverage_id'), 'payer_id': coverage.get('payer_id')}, sort_keys=True).encode()).hexdigest()
+    verified = bool(anchored and evidence and evidence.get('binding') == binding
+                    and evidence.get('reference') and evidence.get('actor_id') and evidence.get('verified_at'))
+    return {'status': 'reconciled' if differences and verified else 'review' if differences else 'matched',
+            'binding': binding, 'differences': differences, 'policy_differences': policy_differences,
+            'can_confirm': bool(differences and anchored),
+            'evidence': evidence if verified else None}

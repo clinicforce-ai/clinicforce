@@ -1,19 +1,25 @@
-import { useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import './InsuranceCards.css'
 import { request } from '../services/api/client'
 
 type Cards = { cards: Array<{ id: string; title: string; content_type: string; url: string }>; message: string }
-export default function InsuranceCards({ intakeId }: { intakeId: string }) {
+export default function InsuranceCards({ intakeId, background = false }: { intakeId: string; background?: boolean }) {
   const [data, setData] = useState<Cards | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
-  async function load() {
+  const load = useCallback(async () => {
     setBusy(true); setError('')
     try { setData(await request<Cards>(`/api/staff/intakes/${encodeURIComponent(intakeId)}/cards`)) }
     catch { setError('Card previews could not be loaded.') }
     finally { setBusy(false) }
-  }
-  return <details className="insurance-card-preview" onToggle={event => { if (event.currentTarget.open && !data && !busy && !error) void load() }}><summary>Insurance card preview</summary>
+  }, [intakeId])
+  useEffect(() => {
+    if (!background) return
+    let active = true
+    request<Cards>(`/api/staff/intakes/${encodeURIComponent(intakeId)}/cards`).then(value => { if (active) setData(value) }).catch(() => { if (active) setError('Card preview unavailable. The estimate uses the policy and payer response.') })
+    return () => { active = false }
+  }, [background, intakeId])
+  return <details className="insurance-card-preview" onToggle={event => { if (event.currentTarget.open && !background && !data && !busy && !error) void load() }}><summary>Insurance card preview</summary>
     {busy && <p role="status">Reading saved cards and eCW card attachments…</p>}
     {error && <p role="alert">{error} <button onClick={() => void load()}>Retry</button></p>}
     {data && !data.cards.length && <p>{data.message || 'No saved card. Scan or upload the insurance card to add a preview.'}</p>}{data && !!data.cards.length && data.message && <p>{data.message}</p>}

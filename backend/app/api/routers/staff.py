@@ -146,6 +146,9 @@ async def require_staff(request: Request) -> dict:
 
 def public(intake: dict) -> dict:
     value = {key: item for key, item in intake.items() if key not in {"created_by", "source_portal_patient_id"}}
+    for key in ('patient', 'expected_patient', 'auto_patient'):
+        if isinstance(value.get(key), dict):
+            value[key] = {k: v for k, v in value[key].items() if k != 'insurance_identities'}
     value["documents"] = [{key: item for key, item in document.items() if key != "object_key"} for document in value.get("documents", [])]
     value["workflow_documents"] = []
     return value
