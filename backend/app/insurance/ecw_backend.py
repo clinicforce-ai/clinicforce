@@ -694,7 +694,8 @@ async def fetch_inputs(profile: dict[str, Any], practice: dict[str, Any], appoin
                 _optional_search(client, issuer, token, "Coverage", query),
                 _optional_search(client, issuer, token, "ServiceRequest", query),
                 _optional_search(client, issuer, token, "ChargeItem", {
-                    "subject": f"Patient/{patient_id}", "context": encounter_ref,
+                    # eCW rejects resource-prefixed references in these search parameters.
+                    "subject": patient_id, "context": encounter_id,
                 }) if encounter_ref else asyncio.sleep(0, result=([], None, None)),
             )
             coverage_rows, orders, procedures, charges = (result[0] for result in
