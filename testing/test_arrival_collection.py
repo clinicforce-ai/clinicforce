@@ -106,7 +106,8 @@ def test_payer_dependent_details_and_identity_mismatch_are_preserved():
     assert plan_details(payload)['group_number'] == 'GROUP' and plan_details(payload)['plan_number'] == 'PLAN'
     benefits = api._previsit_benefits(payload, {'member_id': 'ABC', 'active_coverages': 1,
         'patient_first': 'Pat', 'patient_last': 'Example', 'patient_birth_date': '1980-01-01'})
-    assert benefits['requires_review'] and any('identity' in reason for reason in benefits['review_reasons'])
+    assert benefits['identity']['status'] == 'warning'
+    assert not any('identity' in reason for reason in benefits['review_reasons'])
 
 
 def test_returned_service_date_does_not_verify_a_different_appointment():

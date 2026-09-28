@@ -8,7 +8,8 @@ export const commercialAppointments = () => request<{ appointments: CommercialAp
 export type CommercialReadiness = { ready: boolean; blockers: string[]; ecw: { payer?: string | null; plan?: string | null; scheduled_codes: Array<{ code?: string | null; units?: number | string | null }>; visit_type?: string | null; reason?: string | null } }
 export const commercialReadiness = (appointment_id: string) => request<CommercialReadiness>(`${root}/appointments/readiness`, json({ appointment_id }))
 export type PrevisitEstimate = {
-  identity?: { status: 'matched' | 'review' | 'reconciled'; binding: string; can_confirm: boolean; differences: Array<{ field: string; ecw: string; payer: string }>; evidence?: { reference: string; verified_at: string } };
+  insurance_fallback?: { payer?: string; member_id?: string };
+  identity?: { status: 'matched' | 'warning' | 'review' | 'reconciled'; message?: string; binding: string; can_confirm: boolean; differences: Array<{ field: string; ecw: string; payer: string }>; evidence?: { reference: string; verified_at: string } };
   planning_estimate?: { amount_cents: number; collectable: false; basis?: 'out_of_pocket_limit' | 'conditional_services'; explanation: string; assumptions: string[] } | null;
   mapping_candidate?: { network: string; products: string[]; reference: string };
   coverage_records?: Array<{ id: string; status: string; order?: number; member_id?: string; group_number?: string; subscriber?: string; relationship?: string; payer?: string[]; period?: { start?: string; end?: string }; cost_to_beneficiary?: Array<{ type?: { text?: string }; valueMoney?: { value: number; currency?: string }; valueQuantity?: { value: number; unit?: string } }> }>;
@@ -47,6 +48,7 @@ export type PrevisitEstimate = {
   issues: string[];
 }
 export const commercialPrevisit = (appointment_id: string, refresh_benefits = false) => request<PrevisitEstimate>(`${root}/appointments/previsit`, json({ appointment_id, refresh_benefits }))
+export const commercialPayerResponse = (id: string) => request<{ response: Record<string, unknown> }>(`${root}/cases/${encodeURIComponent(id)}/payer-response`)
 export const commercialSavedPrevisit = (id: string) => request<PrevisitEstimate>(`${root}/cases/${encodeURIComponent(id)}/previsit`)
 export const commercialSelectCoverageCandidate = (result: PrevisitEstimate, candidate_id: string) => request<PrevisitEstimate>(`${root}/cases/${encodeURIComponent(result.check_id!)}/coverage-candidate`, json({ candidate_id, revision: result.revision, context_token: result.context_token }))
 export type CommercialPastVisit = CommercialAppointment & { date: string; visit_type: string; coded_services: string[]; saved_estimate: { created_at?: string; allowed_cents?: number | null; patient_cents?: number | null; plan_cents?: number | null; disclaimer?: string | null } | null }

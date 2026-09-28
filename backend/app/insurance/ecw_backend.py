@@ -829,14 +829,18 @@ async def fetch_inputs(profile: dict[str, Any], practice: dict[str, Any], appoin
                 for item in lines.values():
                     item["diagnosis"] = item["diagnosis"] or diagnoses[0]
 
+            imported_fields = appointment_fields(visit, linked_appointments)
+            insurance_fallback = appointment_insurance_fallback(imported_fields, coverage_member_id(coverage), _display(payer), len(eligible))
+            member_id = coverage_member_id(coverage) or insurance_fallback.get('member_id')
+            payer_name = _display(payer) or insurance_fallback.get('payer')
             first, family = _name(patient)
             gender = {"male": "M", "female": "F"}.get(str(patient.get("gender", "")).lower(), "U")
             inputs = {
                 "patient": {"patient_first_name": first, "patient_last_name": family,
                             "patient_birth_date": patient.get("birthDate"), "gender": gender, "address": patient_address(patient)},
                 "subscriber": {"firstName": sub_given, "lastName": sub_family,
-                               "birthDate": subscriber_resource.get("birthDate"), "memberId": coverage_member_id(coverage)},
-                "relationship": relationship, "member_id": coverage_member_id(coverage),
+                               "birthDate": subscriber_resource.get("birthDate"), "memberId": member_id},
+                "relationship": relationship, "member_id": member_id,
                 "payer_id": _payer_id(payer, practice.get("payer_aliases")), "group_number": _group(coverage), "plan_number": _plan_number(coverage),
                 "provider": {**billing, "npi": billing_npi}, "submitter_id": practice.get("submitter_id"),
                 "rendering_provider": {**rendering, "npi": rendering_npi},
@@ -936,7 +940,8 @@ async def fetch_inputs(profile: dict[str, Any], practice: dict[str, Any], appoin
     source = {"system": "eClinicalWorks", "retrieved_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
             "_patient_id": patient_id,
               "timezone": practice.get('timezone', 'America/New_York'),
-              "appointment_fields": appointment_fields(visit, linked_appointments),
+              "appointment_fields": imported_fields,
+              "insurance_fallback": insurance_fallback,
               "appointment_notes_status": appointment_notes_status,
               "coverage_records": [{"id": row.get('id'), "status": row.get('status'), "order": row.get('order'),
                   "member_id": coverage_member_id(row), "group_number": _group(row), "plan": _plan_details(row),
@@ -961,7 +966,7 @@ async def fetch_inputs(profile: dict[str, Any], practice: dict[str, Any], appoin
                   and any("referral" in text.lower() for text in _concept_labels(row.get("category")))],
               "recent_completed_appointments": recent_completed_appointments,
               "history_status": "timed_out" if history_timeout else "unavailable" if history_unavailable else "loaded",
-              "payer": _display(payer),
+              "payer": payer_name,
               "payer_identifiers": [str(item["value"]) for item in (payer.get("identifier") or [])
                                     if isinstance(item, dict) and item.get("value") and
                                     ("payer" in str(item.get("system") or "").casefold() or
@@ -1040,6 +1045,26 @@ def saved_eligibility_summary(rows: list[dict], patient_id: str, coverage_id: st
     return {'status': 'verified_active' if active else 'verified_inactive', 'active': active,
             'checked_at': created.isoformat(), 'reference': 'CoverageEligibilityResponse/' + str(row.get('id', '')),
             'message': 'Saved eCW payer verification matches this policy and visit date. Benefit amounts and service approvals are checked separately.'}
+
+
+def appointment_insurance_fallback(fields: list[dict], member_id: str | None, payer: str | None,
+                                   active_coverages: int) -> dict:
+    """Read eCW's labeled payment header only; never infer insurance from patient comments."""
+    candidates = {}
+    for field in fields:
+        if re.sub(r'[^a-z]', '', str(field.get('label') or '').lower()) != 'generalnotes':
+            continue
+        header = re.split(r'Patient entered comments on healow\s*:', str(field.get('text') or ''), flags=re.I)[0]
+        for match in re.finditer(r'Patient payment preference\s*:\s*([^,;\r\n]{2,160})[,;\r\n]+\s*Subscriber No\.?\s*:\s*\(?\s*([A-Za-z0-9][A-Za-z0-9-]{1,79})\s*\)?(?=\s*(?:$|[\r\n]))', header, re.I):
+            name, member = match.group(1).strip(), match.group(2)
+            candidates[(_norm(name), _norm(member))] = {'payer': name, 'member_id': member, 'source': field.get('source')}
+    if active_coverages != 1 or len(candidates) != 1:
+        return {}
+    hint = next(iter(candidates.values()))
+    if (member_id and _norm(member_id) != _norm(hint['member_id'])) or (payer and _norm(payer) != _norm(hint['payer'])):
+        return {}
+    fallback = {key: hint[key] for key, value in [('member_id', member_id), ('payer', payer)] if not value}
+    return {**fallback, 'source': hint['source']} if fallback else {}
 
 
 async def fetch_claim_identifiers(source: dict, *, transport: httpx.AsyncBaseTransport | None = None) -> list[str]:

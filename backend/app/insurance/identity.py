@@ -1,4 +1,4 @@
-"""Compare patient and subscriber separately; remember only reviewed policy links."""
+"""Compare patient and subscriber separately; distinguish corroborated names from conflicts."""
 import hashlib
 import json
 import unicodedata
@@ -54,7 +54,9 @@ def compare(payload: dict, coverage: dict, evidence: dict | None = None) -> dict
         'coverage_id': coverage.get('coverage_id'), 'payer_id': coverage.get('payer_id')}, sort_keys=True).encode()).hexdigest()
     verified = bool(anchored and evidence and evidence.get('binding') == binding
                     and evidence.get('reference') and evidence.get('actor_id') and evidence.get('verified_at'))
-    return {'status': 'reconciled' if differences and verified else 'review' if differences else 'matched',
+    surname_warning = anchored and bool(differences) and all(row['field'] == 'last_name' for row in differences)
+    return {'status': 'reconciled' if differences and verified else 'warning' if surname_warning else 'review' if differences else 'matched',
             'binding': binding, 'differences': differences, 'policy_differences': policy_differences,
+            'message': 'Payer surname differs; first name, date of birth and member ID match.' if surname_warning and not verified else '',
             'can_confirm': bool(differences and anchored),
             'evidence': evidence if verified else None}
