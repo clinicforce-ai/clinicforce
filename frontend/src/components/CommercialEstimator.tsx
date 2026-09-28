@@ -86,6 +86,21 @@ function VisitDialog({ open, title, close, children }: { open: boolean; title: s
   </dialog>
 }
 
+function AppointmentNotes({ result }: { result: PrevisitEstimate }) {
+  const fields = result.appointment_context?.imported_fields || []
+  const isStatus = (label: string) => /^(?:(?:appointment|encounter|visit)[ _-]+)?status$/i.test(label.trim())
+  const statuses = fields.filter(field => isStatus(field.label))
+  const details = fields.filter(field => !isStatus(field.label))
+  const hasNotes = details.some(field => /note|comment|instruction|narrative|description/i.test(field.label))
+  return <section className="visit-imported">
+    <h3>{result.reason || 'Scheduled visit'}</h3>
+    <p className="visit-muted">{[result.appointment_context?.rendering_provider?.name, result.appointment_context?.location].filter(Boolean).join(' · ')}</p>
+    {statuses.map((field, index) => <p className="visit-muted" key={index}>Appointment status: {field.text}</p>)}
+    {!hasNotes && <article><h3>General Notes not returned</h3><p>The eCW connection did not return General Notes or patient comments for this appointment.</p></article>}
+    {details.map((field, index) => <article key={`${field.source}:${index}`}><h3>{field.label}</h3><p>{field.text}</p><small>From eCW{field.updated_at ? ` · ${visitDate(field.updated_at)}` : ''}</small></article>)}
+  </section>
+}
+
 function CostPicture({ result }: { result: PrevisitEstimate }) {
   const price = result.price_range
   const patient = price?.patient_min_cents, insurer = price?.plan_min_cents
@@ -303,7 +318,7 @@ export default function CommercialEstimator({ onBack, intakeId }: { onBack: () =
             {!!result.coverage_records?.length && <section className="visit-records"><h3>Policies returned by eCW</h3>{result.coverage_records.map(row => <article key={row.id}><strong>{row.payer?.join(' · ') || 'Insurance record'}</strong><p>{row.status} · Order {row.order ?? 'not returned'} · {row.relationship || 'Relationship not returned'}</p><small>Member {row.member_id || 'not returned'} · Group {row.group_number || 'not returned'}</small><small>Subscriber: {row.subscriber || 'Not returned'} · Coverage: {row.period?.start || 'Start not returned'} – {row.period?.end || 'End not returned'}</small>{row.cost_to_beneficiary?.map((cost, index) => <p key={index}>{cost.type?.text || 'Patient cost share'}: {cost.valueMoney ? `${cost.valueMoney.value} ${cost.valueMoney.currency || 'USD'}` : cost.valueQuantity ? `${cost.valueQuantity.value}${cost.valueQuantity.unit || ''}` : 'See policy'}</p>)}</article>)}</section>}
           </div>
           {panel === 'services' && <ServicePlanner key={`${result.check_id}:${result.revision}`} result={result} busy={!!busy || recovering} save={saveReview} viewEstimate={message => { setPanel(null); setNotice(message || '') }} />}
-          {panel === 'notes' && <section className="visit-imported"><h3>{result.reason || selected?.reason || 'Scheduled visit'}</h3><p className="visit-muted">{[result.appointment_context?.rendering_provider?.name, result.appointment_context?.location].filter(Boolean).join(' · ')}</p>{result.appointment_context?.imported_fields?.map((field, index) => <article key={`${field.source}:${index}`}><h3>{field.label}</h3><p>{field.text}</p><small>{field.source}</small></article>)}{result.appointment_context?.notes_status === 'not_exposed' || !result.appointment_context?.imported_fields?.length ? <p className="visit-muted">Additional appointment notes were not exposed by the connected eCW interface.</p> : null}</section>}
+          {panel === 'notes' && <AppointmentNotes result={result} />}
           {panel === 'calculation' && <section><div className="calculation-summary"><PieChart size={24} aria-hidden="true" /><div><h3>{amountLabel} · {amount || 'Not established'}</h3><p>{explanation}</p></div></div>
             {!!result.planning_estimate?.assumptions.length && <section><h3>Assumptions used</h3><ul>{result.planning_estimate.assumptions.map(item => <li key={item}>{item}</li>)}</ul></section>}
             {!!result.service_plan?.assumptions?.length && <section><h3>Service-plan assumptions</h3><ul>{result.service_plan.assumptions.map(item => <li key={item}>{item}</li>)}</ul></section>}

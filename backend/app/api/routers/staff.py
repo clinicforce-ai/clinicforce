@@ -454,9 +454,9 @@ async def patient_cards(intake_id: str, request: Request):
             rows = await ecw_backend.insurance_cards(str(patient_id))
             cards.extend({**item, 'url': f"/api/staff/intakes/{quote(intake_id, safe='')}/ecw-card?document_id={quote(item['id'], safe='')}"} for item in rows)
             if not cards:
-                message = 'No insurance-card image was returned by eCW. Scan or upload the card to add a preview.'
+                message = 'The current eCW connection did not return a card preview. A card saved in eCW folders may still be available there. Card previews are optional for estimates.'
         except Exception:
-            message = 'eCW insurance-card access is unavailable. Saved ClinicForce card files are still available.'
+            message = 'The eCW card connection is unavailable. Any saved ClinicForce cards appear below. Card previews are optional for estimates.'
     return JSONResponse({'cards': cards, 'message': message}, headers=NO_STORE)
 
 

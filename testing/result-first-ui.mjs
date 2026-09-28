@@ -20,7 +20,7 @@ let result = {
   benefits, price_range: { complete: false, mode: 'services', lines: [{ ...codes[0], benefits, issues: [], calculation: null }], scenarios: [] },
   arrival_collection: { amount_cents: null, reason: 'Verify patient and contract.', status: 'verify' },
   planning_estimate: { basis: 'out_of_pocket_limit', amount_cents: 0, collectable: false, explanation: 'The payer reports $0 remaining in-network out-of-pocket responsibility.', assumptions: ['The patient names refer to the same person.', 'The provider participates in this plan.'] },
-  appointment_context: { timezone: 'America/Chicago', imported_fields: [{ label: 'General notes', text: 'Patient comment\nPlease explain the treatment plan.', source: 'Encounter/sample.extension' }] },
+  appointment_context: { timezone: 'America/Chicago', imported_fields: [{ label: 'General notes', text: 'Patient comment\nPlease explain the treatment plan.', source: 'Encounter/sample.extension' }, { label: 'status', text: 'PEN (Pending)', source: 'Encounter/private-record.extension[0](https://ehr.example/status).valueString' }] },
   mapping_candidate: { network: 'Choice PPO', products: ['Choice Medical'], reference: 'Network record' },
 }
 await page.route(url => url.pathname.startsWith('/api/'), async route => {
@@ -76,6 +76,9 @@ try {
   assert(await page.getByRole('button', { name: /Coverage & card/ }).evaluate(el => document.activeElement === el), 'Dialog restores focus')
   await page.getByRole('button', { name: /Appointment notes/ }).click()
   assert.equal(await page.locator('.visit-imported article p').innerText(), 'Patient comment\nPlease explain the treatment plan.')
+  assert(await page.getByText('Appointment status: PEN (Pending)', { exact: true }).isVisible())
+  assert(!(await page.getByRole('dialog').innerText()).includes('Encounter/'), 'Technical provenance stays out of the clinician panel')
+  assert.equal(await page.getByRole('heading', { name: 'General Notes not returned' }).count(), 0)
   await page.getByRole('button', { name: 'Close details' }).click()
   await page.getByRole('button', { name: 'Adjust services' }).click()
   await page.getByRole('button', { name: /Moderate complexity/ }).click()
@@ -126,6 +129,19 @@ try {
   assert.equal(await page.locator('.arrival-total > strong').innerText(), 'Not available yet')
   assert(await page.getByText('No exact product contract is linked.', { exact: true }).isVisible())
   await noForms()
+  result = { ...result, appointment_context: { ...result.appointment_context, imported_fields: [{ label: 'status', text: 'PEN (Pending)', source: 'Encounter/sample.extension[0]' }] } }
+  const cardMessage = 'The current eCW connection did not return a card preview. A card saved in eCW folders may still be available there. Card previews are optional for estimates.'
+  await page.route('**/api/staff/intakes/*/cards', route => route.fulfill({ json: { cards: [], message: cardMessage } }))
+  await openPatient()
+  await page.getByRole('button', { name: /Coverage & card/ }).click()
+  await page.getByText(cardMessage, { exact: true }).waitFor()
+  assert(!(await page.getByRole('dialog').innerText()).includes('Scan or upload'))
+  await page.keyboard.press('Escape')
+  await page.getByRole('button', { name: /Appointment notes/ }).click()
+  await page.getByRole('heading', { name: 'General Notes not returned' }).waitFor()
+  assert(!(await page.getByRole('dialog').innerText()).includes('Encounter/'))
+  if (process.env.SCREENSHOT_DIR) await page.screenshot({ path: process.env.SCREENSHOT_DIR + '/general-notes-unavailable.png' })
+  await page.keyboard.press('Escape')
   assert(!reviews.some(review => review.identity_confirmation || review.product_mapping || review.payments_received_cents != null), 'No manufactured verification or payments')
   assert.deepEqual(errors, [])
   console.log('PASS: result first; no forms/accordions; card failure isolated; keyboard focus; click-only services; cash/insurance; accurate graphics; missing evidence; responsive layouts')
