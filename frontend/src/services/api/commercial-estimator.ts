@@ -9,7 +9,7 @@ export type CommercialReadiness = { ready: boolean; blockers: string[]; ecw: { p
 export const commercialReadiness = (appointment_id: string) => request<CommercialReadiness>(`${root}/appointments/readiness`, json({ appointment_id }))
 export type PrevisitEstimate = {
   identity?: { status: 'matched' | 'review' | 'reconciled'; binding: string; can_confirm: boolean; differences: Array<{ field: string; ecw: string; payer: string }>; evidence?: { reference: string; verified_at: string } };
-  planning_estimate?: { amount_cents: number; collectable: false; explanation: string; assumptions: string[] } | null;
+  planning_estimate?: { amount_cents: number; collectable: false; basis?: 'out_of_pocket_limit' | 'conditional_services'; explanation: string; assumptions: string[] } | null;
   mapping_candidate?: { network: string; products: string[]; reference: string };
   coverage_records?: Array<{ id: string; status: string; order?: number; member_id?: string; group_number?: string; subscriber?: string; relationship?: string; payer?: string[]; period?: { start?: string; end?: string }; cost_to_beneficiary?: Array<{ type?: { text?: string }; valueMoney?: { value: number; currency?: string }; valueQuantity?: { value: number; unit?: string } }> }>;
   patient_details?: { gender?: string; phone?: string; email?: string; address?: { address1?: string; address2?: string; city?: string; state?: string; postalCode?: string } };
