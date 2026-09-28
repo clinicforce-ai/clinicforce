@@ -203,3 +203,26 @@ def test_name_difference_does_not_block_calculating_the_returned_policy():
     result = visit_estimate.planning_estimate(price, benefits, benefits['identity'])
     assert result['amount_cents'] == 4000 and not result['collectable']
     assert benefits['identity']['status'] == 'review'  # Neither EHR nor payer identity is overwritten.
+
+
+def test_shared_accumulator_with_office_and_injection_labels_is_not_discarded():
+    raw = response('Former')
+    del raw['benefitsInformation']
+    common = {'coverageLevel': 'INDIVIDUAL', 'network': {'indicator': 'IN_NETWORK'}}
+    raw['plans'] = [{'name': 'Example PPO', 'benefits': {
+        'statuses': [{'status': 'ACTIVE', 'service': {'system': 'STC', 'value': '30'}}],
+        'coPayment': [
+            {**common, 'service': {'system': 'STC', 'value': 'BY'}, 'amount': '40', 'timePeriod': 'DAY', 'messages': ['INJECTIONS - PROFESSIONAL']},
+            {**common, 'service': {'system': 'STC', 'value': '98'}, 'amount': '40', 'timePeriod': 'DAY', 'messages': ['OFFICE VISIT - PROFESSIONAL']}],
+        'outOfPocket': [{**common, 'service': {'system': 'STC', 'value': '30'}, 'amount': '0', 'timePeriod': 'REMAINING',
+            'messages': ['DIAGNOSTIC MEDICAL PROCEDURE - PROFESSIONAL;INJECTIONS - PROFESSIONAL;LABORATORY- PROFESSIONAL;OFFICE VISIT - PROFESSIONAL;SURGERY- PROFESSIONAL;XRAY - PROFESSIONAL']}]
+    }}]
+    benefits = api._previsit_benefits(raw, policy(), DAY)
+    priced = visit_estimate.price_lines([{'id': 'office', 'code': '99203', 'units': 1}], [], benefits, {}, payload=raw, service_date=DAY)
+    terms = priced['lines'][0]['benefits']
+    assert terms['copay_cents'] == 4000 and terms['oop_remaining_cents'] == 0
+    assert terms['resolved_service_type'] == '98'
+    assert visit_estimate.planning_estimate(priced, benefits, benefits['identity'])['amount_cents'] == 0
+    # Mentioning injections within an office benefit must not remove it either.
+    raw['plans'][0]['benefits']['coPayment'][1]['messages'] = ['Office visit including injections']
+    assert commercial.normalize_stedi_271(raw, '98', True, procedure_code='99203', service_date=DAY)['copay_cents'] == 4000

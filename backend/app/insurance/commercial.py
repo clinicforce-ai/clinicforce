@@ -335,9 +335,15 @@ def normalize_stedi_271(payload: dict[str, Any], service_type_code: str, provide
     if office and selected_ids is None:
         # Explicitly different services sometimes share an office STC. Retain
         # every raw row in reported_options, but exclude these from office math.
-        unrelated = r'\b(injections?|diagnostic lab|x-ray|acupuncture|applied behavior analysis|chemotherapy)\b'
-        entries = [row for row in entries if _procedure(row) or not re.search(unrelated,
-            ' '.join(_benefit_notes([row.get('messages'), row.get('additionalInformation')])), re.I)]
+        unrelated = r'(?:injections?|diagnostic lab(?:oratory)?|laboratory|(?:diagnostic )?x[ -]?ray|acupuncture|applied behavior analysis|chemotherapy)(?:\s*-\s*professional)?'
+        def other_services_only(row: dict) -> bool:
+            # A shared accumulator can list office visits alongside injections
+            # and lab work. Discard only a list entirely naming other services.
+            labels = [label.strip() for note in _benefit_notes([row.get('messages'), row.get('additionalInformation')])
+                      for label in note.split(';') if label.strip()
+                      and not re.fullmatch(r'(?:no referral required|referral not required|(?:prior )?authorization (?:not )?required)\.?', label.strip(), re.I)]
+            return bool(labels) and all(re.fullmatch(unrelated, label, re.I) for label in labels)
+        entries = [row for row in entries if _procedure(row) or not other_services_only(row)]
         priorities = office_service_types or ['BY', '98']
     def relevant_service(row: dict) -> bool:
         procedure = _procedure(row)
