@@ -39,6 +39,7 @@ export function AppShell() {
   const [error, setError] = useState('')
   const [staffIntakeId, setStaffIntakeId] = useState<string | undefined>()
   const [staffQr, setStaffQr] = useState(false)
+  const [refreshBenefits, setRefreshBenefits] = useState(false)
   useEffect(() => { if (view === 'staff') window.history.replaceState({}, '', '/?staff') }, [view])
   useEffect(() => { const pop = () => { const route = entryRoute(); setEntry(route); setView(route.view); setStaffIntakeContext(null); setStaffIntakeId(undefined); setStaffQr(false) }; window.addEventListener('popstate', pop); return () => window.removeEventListener('popstate', pop) }, [])
   const openEntry = (next: View, url: string) => { window.history.pushState({}, '', url); setEntry(entryRoute()); setView(next) }
@@ -60,7 +61,8 @@ export function AppShell() {
       } else setView('dashboard')
     } catch (caught) { setError(caught instanceof Error ? caught.message : 'Unable to retrieve the patient file.'); setView('pin') }
   }
-  const openStaffInsurance = (id: string, version: 'v1' | 'v2' | 'commercial') => {
+  const openStaffInsurance = (id: string, version: 'v1' | 'v2' | 'commercial', refresh = false) => {
+    setRefreshBenefits(refresh)
     setStaffIntakeId(id); setStaffIntakeContext(id); setView(version === 'v1' ? 'insurance' : 'commercial-estimator')
   }
   return <div className="min-h-dvh bg-[var(--canvas)] text-[var(--ink)]">
@@ -79,7 +81,7 @@ export function AppShell() {
         {view === 'dashboard' && summary && <Dashboard data={summary} onScanAnother={restart} onHome={returnHome} onVerifyInsurance={(version) => { setStaffIntakeContext(null); setStaffIntakeId(undefined); setView(version === 'v2' ? 'insurance-v2' : 'insurance') }} />}
         {view === 'insurance' && <InsuranceVerification staffMode={!!staffIntakeId} onBack={staffIntakeId ? returnStaff : () => setView(summary ? 'dashboard' : 'landing')} />}
         {view === 'insurance-v2' && <InsuranceVerificationV2 staffMode={!!staffIntakeId} onUseDocuments={staffIntakeId ? () => openStaffInsurance(staffIntakeId, 'v1') : undefined} onBack={staffIntakeId ? returnStaff : () => setView(summary ? 'dashboard' : 'landing')} />}
-        {view === 'commercial-estimator' && <CommercialEstimator key={staffIntakeId} onBack={returnStaff} intakeId={staffIntakeId} />}
+        {view === 'commercial-estimator' && <CommercialEstimator key={staffIntakeId} onBack={returnStaff} intakeId={staffIntakeId} refreshBenefits={refreshBenefits} />}
       </Suspense>
     </main><footer className="shell border-t border-[var(--line)] py-6 text-sm text-[var(--muted-ink)]">ClinicForce · Patient records and clinic insurance workspace</footer>
   </div>

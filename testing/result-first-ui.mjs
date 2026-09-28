@@ -4,6 +4,8 @@ const { chromium } = await import(process.env.PLAYWRIGHT_MODULE || 'playwright')
 const browser = await chromium.launch({ headless: true })
 const page = await browser.newPage({ viewport: { width: 1440, height: 1000 }, reducedMotion: 'reduce', locale: 'en-US' })
 const errors = [], requests = [], reviews = []
+const previsitRequests = []
+let lookupLinked = false, confirmations = 0
 page.on('pageerror', e => errors.push(e.message))
 const patient = { id: 'sample', given_name: 'Alex', family_name: 'Morgan', birth_date: '2001-02-03' }
 const visit = { id: 'visit-a', start: '2026-09-29T09:00:00-05:00', status: 'planned', reason: 'New patient neurology consultation' }
@@ -29,13 +31,15 @@ await page.route(url => url.pathname.startsWith('/api/'), async route => {
   let body = {}
   if (path === '/api/staff/session') body = { staff: { id: 'staff', practice_id: 'clinic', practice_name: 'Example Clinic', display_name: 'Clinician', role: 'admin' } }
   else if (path === '/api/staff/patients/dashboard') body = { patients: [{ ...patient, clinic_patient_id: patient.id, account_status: 'clinic', card_status: 'missing', identity_status: 'confirmed', intakes: [intake], intake_ids: [intake.id], latest_intake_id: intake.id }], counts: { all: 1, other: 1 } }
-  else if (path === '/api/staff/intakes/ecw-lookup') body = { ...intake, ecw_match: { patient, appointments: [visit] } }
+  else if (path === '/api/staff/intakes/ecw-lookup') body = { ...intake, patient: lookupLinked ? patient : null, ecw_match: { patient, appointments: [visit] } }
+  else if (path === '/api/staff/patients/search') body = { patients: [] }
+  else if (path === '/api/staff/intakes/sample-intake/patient') { lookupLinked = true; confirmations++; body = intake }
   else if (path === '/api/staff/intakes/search') body = { intakes: [intake], has_more: false }
   else if (path === '/api/staff/intakes/sample-intake') body = intake
   else if (path.endsWith('/cards')) return route.fulfill({ status: 502, json: { detail: 'Unavailable card interface' } })
   else if (path.endsWith('/checks')) body = { checks: [] }
   else if (path.endsWith('/appointments')) body = { appointments: [visit] }
-  else if (path.endsWith('/appointments/previsit')) body = result
+  else if (path.endsWith('/appointments/previsit')) { previsitRequests.push(route.request().postDataJSON()); body = result }
   else if (path.endsWith('/visit-review')) {
     const review = route.request().postDataJSON(); reviews.push(review)
     if (review.selected_ids) result = { ...result, selected_ids: review.selected_ids, codes: codes.filter(row => review.selected_ids.includes(row.id)), service_plan: { ...result.service_plan, selection_source: 'clinician' } }
@@ -142,6 +146,24 @@ try {
   assert(!(await page.getByRole('dialog').innerText()).includes('Encounter/'))
   if (process.env.SCREENSHOT_DIR) await page.screenshot({ path: process.env.SCREENSHOT_DIR + '/general-notes-unavailable.png' })
   await page.keyboard.press('Escape')
+  // New and existing name/DOB lookups both go directly to a fresh estimate.
+  for (const existing of [false, true]) {
+    const before = previsitRequests.length
+    await page.goto(process.env.UI_URL || 'http://127.0.0.1:5182/?staff')
+    await page.getByRole('button', { name: 'Pull patient from eCW', exact: true }).click()
+    await page.getByLabel('First name', { exact: true }).fill('Alex')
+    await page.getByLabel('Last name', { exact: true }).fill('Morgan')
+    await page.getByLabel('Date of birth', { exact: true }).fill('2001-02-03')
+    await page.getByRole('button', { name: 'Pull from eCW', exact: true }).click()
+    await page.locator('.arrival-total > strong').waitFor()
+    assert.equal(previsitRequests.length, before + 1, `${existing ? 'Existing' : 'New'} patient starts one check`)
+    assert.deepEqual(previsitRequests.at(-1), { appointment_id: visit.id, refresh_benefits: true })
+    assert.equal(confirmations, 1, 'Existing lookup reuses the linked record')
+    await noForms()
+  }
+  await page.getByRole('button', { name: 'Check again', exact: true }).click()
+  await page.locator('.arrival-total > strong').waitFor()
+  assert.equal(previsitRequests.at(-1).refresh_benefits, true)
   assert(!reviews.some(review => review.identity_confirmation || review.product_mapping || review.payments_received_cents != null), 'No manufactured verification or payments')
   assert.deepEqual(errors, [])
   console.log('PASS: result first; no forms/accordions; card failure isolated; keyboard focus; click-only services; cash/insurance; accurate graphics; missing evidence; responsive layouts')

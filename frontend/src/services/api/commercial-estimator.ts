@@ -46,7 +46,7 @@ export type PrevisitEstimate = {
   suggestions: null | { groups: Array<{ label: string; codes: Array<{ code: string; reason?: string }> }>; notes: string[] };
   issues: string[];
 }
-export const commercialPrevisit = (appointment_id: string) => request<PrevisitEstimate>(`${root}/appointments/previsit`, json({ appointment_id }))
+export const commercialPrevisit = (appointment_id: string, refresh_benefits = false) => request<PrevisitEstimate>(`${root}/appointments/previsit`, json({ appointment_id, refresh_benefits }))
 export const commercialSavedPrevisit = (id: string) => request<PrevisitEstimate>(`${root}/cases/${encodeURIComponent(id)}/previsit`)
 export const commercialSelectCoverageCandidate = (result: PrevisitEstimate, candidate_id: string) => request<PrevisitEstimate>(`${root}/cases/${encodeURIComponent(result.check_id!)}/coverage-candidate`, json({ candidate_id, revision: result.revision, context_token: result.context_token }))
 export type CommercialPastVisit = CommercialAppointment & { date: string; visit_type: string; coded_services: string[]; saved_estimate: { created_at?: string; allowed_cents?: number | null; patient_cents?: number | null; plan_cents?: number | null; disclaimer?: string | null } | null }
