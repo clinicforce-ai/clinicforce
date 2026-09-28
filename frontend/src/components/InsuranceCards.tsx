@@ -22,7 +22,7 @@ export default function InsuranceCards({ intakeId, background = false, inline = 
   const content = <>
     {busy && <p role="status">Reading saved cards and eCW card attachments…</p>}
     {error && <p role="alert">{error} <button onClick={() => void load()}>Retry</button></p>}
-    {data && !data.cards.length && <p>{inline ? 'No card image was returned. The estimate uses the policy details.' : data.message || 'No saved card. Scan or upload the insurance card to add a preview.'}</p>}{data && !!data.cards.length && data.message && <p>{data.message}</p>}
+    {data && !data.cards.length && <p>{data.message || 'No card preview is available. Card previews are optional for estimates.'}</p>}{data && !!data.cards.length && data.message && <p>{data.message}</p>}
     {data?.cards.map(card => <figure key={card.id}><figcaption>{card.title}</figcaption>{card.content_type === 'application/pdf' ? <iframe title={card.title} src={card.url} /> : <img src={card.url} alt={card.title} />}<a href={card.url} target="_blank" rel="noreferrer">Open card</a></figure>)}
   </>
   return inline ? <section className="insurance-card-preview"><h3>Insurance card</h3>{content}</section> : <details className="insurance-card-preview" onToggle={event => { if (event.currentTarget.open && !background && !data && !busy && !error) void load() }}><summary>Insurance card preview</summary>{content}</details>
