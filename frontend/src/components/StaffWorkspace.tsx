@@ -18,7 +18,7 @@ import './StaffWorkspace.css'
 
 interface StaffWorkspaceProps {
   onBack: () => void
-  onOpenInsurance: (intakeId: string, version: 'v1' | 'v2' | 'commercial') => void
+  onOpenInsurance: (intakeId: string, version: 'v1' | 'v2' | 'commercial', refreshBenefits?: boolean) => void
   onScanQr: () => void
   onCreateClinic: () => void
   onJoinClinic: () => void
@@ -195,7 +195,7 @@ export default function StaffWorkspace({ onBack, onOpenInsurance, onScanQr, onCr
       const { ecw_match, ...record } = await createStaffEcwLookup(lookupDetails)
       setIntake(record); setIntakes(current => [record, ...current.filter(row => row.id !== record.id)])
       setEcwMatch(ecw_match); setFields(patientFieldsFrom(record))
-      if (record.patient) { onOpenInsurance(record.id, 'commercial'); return }
+      if (record.patient) { onOpenInsurance(record.id, 'commercial', true); return }
       const result = await findStaffPatients({ given_name: record.fields.given_name || '', family_name: record.fields.family_name || '', birth_date: record.fields.birth_date || '' })
       // eCW already matched this exact name and date of birth. When one clinic
       // record (or none) has the same identity, open the estimate directly.
@@ -204,7 +204,7 @@ export default function StaffWorkspace({ onBack, onOpenInsurance, onScanQr, onCr
         try {
           const confirmed = await confirmStaffPatient(record.id, { ...patientFieldsFrom(record), ...(result.patients[0] ? { patient_id: result.patients[0].id } : {}), identity_confirmed: true })
           setIntake(confirmed); setIntakes(current => current.map(row => row.id === confirmed.id ? confirmed : row))
-          onOpenInsurance(confirmed.id, 'commercial')
+          onOpenInsurance(confirmed.id, 'commercial', true)
           return
         } catch {
           // A concurrent eCW link or changed clinic record is handled by the
@@ -232,7 +232,7 @@ export default function StaffWorkspace({ onBack, onOpenInsurance, onScanQr, onCr
     void perform('saving', async () => {
       const record = await confirmStaffPatient(intake.id, { ...fields, ...(match === 'new' ? {} : { patient_id: match }), identity_confirmed: true })
       setIntake(record); setIntakes(current => current.map(row => row.id === record.id ? record : row)); setTab('overview')
-      if (record.source === 'ecw_lookup') { onOpenInsurance(record.id, 'commercial'); return }
+      if (record.source === 'ecw_lookup') { onOpenInsurance(record.id, 'commercial', true); return }
       navigate('record')
       setNotice('Patient confirmed. Insurance is saved to this clinic without creating a patient account.')
     })
@@ -258,7 +258,7 @@ export default function StaffWorkspace({ onBack, onOpenInsurance, onScanQr, onCr
       </>}
       {screen === 'links' && <StaffUploadLinks key={linkPatient?.id || linkPatient?.intakeId || 'new'} patientId={linkPatient?.id} intakeId={linkPatient?.intakeId} patientName={linkPatient?.name} initialEmail={linkPatient?.email} backLabel={linkBack === 'record' ? 'Back to patient' : linkBack === 'inbox' ? 'Back to inbox' : 'Back to clinical patients'} onBack={() => navigate(linkBack)} onOpenIntake={openIntake} />}
       {screen === 'lookup' && <div className="staff-narrow">
-        <header className="staff-header"><div><div className="staff-eyebrow">Add insurance</div><h1 tabIndex={-1} ref={heading}>Pull new patient from ECW</h1><p className="staff-muted">Enter the patient's name and date of birth. ClinicForce will check eCW for a matching patient and scheduled visits before creating a clinic intake.</p></div></header>
+        <header className="staff-header"><div><div className="staff-eyebrow">Add insurance</div><h1 tabIndex={-1} ref={heading}>Pull patient from eCW</h1><p className="staff-muted">Enter the patient's name and date of birth. ClinicForce will find or update their clinic record, refresh their visit and insurance details, and open the estimate automatically.</p></div></header>
         <section className="staff-panel"><h2>Patient details</h2><form onSubmit={startEcwLookup}><div className="staff-two-columns">
           <label className="staff-field"><span>First name</span><input required maxLength={100} autoComplete="given-name" value={lookupDetails.given_name} onChange={event => setLookupDetails(current => ({ ...current, given_name: event.target.value }))} disabled={Boolean(busy)} /></label>
           <label className="staff-field"><span>Middle initial (optional)</span><input maxLength={10} value={lookupDetails.middle_initial} onChange={event => setLookupDetails(current => ({ ...current, middle_initial: event.target.value }))} disabled={Boolean(busy)} /></label>

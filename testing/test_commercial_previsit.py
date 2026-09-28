@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 
-from app.api.routers.commercial_estimator import EcwStartInput, VisitReviewInput, _previsit_benefits, previsit_estimate, update_visit_review
+from app.api.routers.commercial_estimator import PrevisitInput, VisitReviewInput, _previsit_benefits, previsit_estimate, update_visit_review
 
 
 class PrevisitFlowTest(unittest.IsolatedAsyncioTestCase):
@@ -23,6 +23,12 @@ class PrevisitFlowTest(unittest.IsolatedAsyncioTestCase):
     async def test_future_visit_uses_documented_service_date_object(self):
         await self._flow((date.today() + timedelta(days=2)).isoformat())
 
+    async def test_refresh_rechecks_same_visit_and_keeps_pending_requests_single(self):
+        await self._flow(date.today().isoformat(), refresh=True)
+
+    async def test_refresh_can_recheck_a_previously_rejected_policy(self):
+        await self._flow(date.today().isoformat(), reject={'errors': [{'code': '72'}]}, refresh=True)
+
     async def test_request_validation_failure_preserves_partial_facts(self):
         await self._flow((date.today() + timedelta(days=2)).isoformat(), reject=True)
 
@@ -39,7 +45,7 @@ class PrevisitFlowTest(unittest.IsolatedAsyncioTestCase):
     async def test_unresolved_payer_still_returns_patient_policy_and_editable_new_visit(self):
         await self._flow(date.today().isoformat(), payer_missing=True)
 
-    async def _flow(self, service_date, reject=False, retry_basic=False, payer_missing=False):
+    async def _flow(self, service_date, reject=False, retry_basic=False, payer_missing=False, refresh=False):
         session = {"practice_id": "clinic", "intake_id": "intake", "patient_id": "patient",
                    "share_manifest_id": "", "staff": {"id": "staff", "display_name": "Staff", "practice_name": "Clinic"},
                    "intake": {"updated_at": "version", "patient": {"given_name": "Pat", "family_name": "Example",
@@ -83,7 +89,7 @@ class PrevisitFlowTest(unittest.IsolatedAsyncioTestCase):
              patch.dict("app.api.routers.commercial_estimator.os.environ", {
                  "STEDI_API_KEY": "production-key", "STEDI_EXECUTION_MODE": "commercial_pilot",
                  "STEDI_LIVE_ELIGIBILITY_ENABLED": "true"}):
-            result = await previsit_estimate(EcwStartInput(appointment_id="visit-1"), MagicMock())
+            result = await previsit_estimate(PrevisitInput(appointment_id="visit-1"), MagicMock())
             if payer_missing:
                 self.assertEqual(result['insurance_details']['member_id'], 'M123')
                 self.assertTrue(result['context_token'])
@@ -114,24 +120,45 @@ class PrevisitFlowTest(unittest.IsolatedAsyncioTestCase):
                     self.assertEqual(result['eligibility_failure']['codes'], ['72'])
                     self.assertIn('Correct the policy in eCW', result['eligibility_failure']['action'])
                     self.assertTrue(result['eligibility_failure']['attempted_at'])
-                    cached = await previsit_estimate(EcwStartInput(appointment_id='visit-1'), MagicMock())
+                    cached = await previsit_estimate(PrevisitInput(appointment_id='visit-1'), MagicMock())
                     self.assertEqual(client.post.await_count, 1)
                     self.assertEqual(cached['eligibility_failure'], result['eligibility_failure'])
+                    if refresh:
+                        client.post.return_value = success_response
+                        checked = await previsit_estimate(PrevisitInput(appointment_id='visit-1', refresh_benefits=True), MagicMock())
+                        self.assertEqual(client.post.await_count, 2)
+                        self.assertTrue(checked['benefits']['active'])
+                        self.assertNotIn('eligibility_failure', checked)
                 else:
                     self.assertIn('not an inactive-coverage result', ' '.join(result['issues']))
                 return
             case["previsit"]["benefits"] = {"requires_review": False, "network_status": "in_network"}
             with patch("app.api.routers.commercial_estimator.object_store.get_object_bytes",
                        return_value=json.dumps(success_response.json()).encode()):
-                cached = await previsit_estimate(EcwStartInput(appointment_id="visit-1"), MagicMock())
+                cached = await previsit_estimate(PrevisitInput(appointment_id="visit-1"), MagicMock())
             self.assertTrue(cached["benefits"]["review_reasons"])
             self.assertTrue(cached["benefits"]["requires_review"])
             self.assertEqual(cached["benefits"]["network_status"], "unknown")
             with patch("app.api.routers.commercial_estimator.object_store.get_object_bytes", side_effect=RuntimeError("unavailable")):
-                unavailable = await previsit_estimate(EcwStartInput(appointment_id="visit-1"), MagicMock())
+                unavailable = await previsit_estimate(PrevisitInput(appointment_id="visit-1"), MagicMock())
             self.assertTrue(unavailable["benefits"]["requires_review"])
             self.assertTrue(any("Saved benefit evidence" in item for item in unavailable["issues"]))
             self.assertEqual(client.post.await_count, 2 if retry_basic else 1)
+            if refresh:
+                case['previsit_discovery'] = {'request_state': 'complete', 'outcome': 'no_match'}
+                client.post.return_value = httpx.Response(200, json={**success_response.json(), 'id': 'eligibility-2'})
+                with patch('app.api.routers.commercial_estimator.object_store.get_object_bytes') as raw:
+                    checked = await previsit_estimate(PrevisitInput(appointment_id='visit-1', refresh_benefits=True), MagicMock())
+                raw.assert_not_called()
+                self.assertEqual(client.post.await_count, 2)
+                self.assertEqual(checked['check_id'], result['check_id'])
+                self.assertEqual(checked['response_reference'], 'eligibility-2')
+                self.assertNotIn('recovery', checked)
+                for state in ('pending', 'indeterminate'):
+                    case['previsit']['request_state'] = state
+                    await previsit_estimate(PrevisitInput(appointment_id='visit-1', refresh_benefits=True), MagicMock())
+                    self.assertEqual(client.post.await_count, 2)
+                case['previsit']['request_state'] = 'complete'
         self.assertEqual([row["code"] for row in result["codes"]], ["99203"])
         self.assertTrue(result["benefits"]["active"])
         self.assertNotIn("patient_min_cents", result["price_range"])
@@ -169,7 +196,7 @@ class PrevisitFlowTest(unittest.IsolatedAsyncioTestCase):
              patch('app.api.routers.commercial_estimator.object_store.enabled', return_value=True), \
              patch('app.api.routers.commercial_estimator._begin_coverage_discovery', AsyncMock(return_value={'recovery': 'started'})) as discovery, \
              patch.dict('app.api.routers.commercial_estimator.os.environ', {'STEDI_API_KEY': 'test', 'STEDI_EXECUTION_MODE': 'commercial_pilot', 'STEDI_LIVE_ELIGIBILITY_ENABLED': 'true'}):
-            result = await previsit_estimate(EcwStartInput(appointment_id='visit'), MagicMock())
+            result = await previsit_estimate(PrevisitInput(appointment_id='visit'), MagicMock())
         self.assertEqual(result, {'recovery': 'started'})
         self.assertEqual(discovery.await_args.args[4]['rendering_npi'], '1234567890')
         self.assertEqual(discovery.await_args.args[4]['rendering_first'], 'Ada')

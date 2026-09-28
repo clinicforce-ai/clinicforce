@@ -111,7 +111,7 @@ function CostPicture({ result }: { result: PrevisitEstimate }) {
   return <div className="cost-picture"><Network size={36} aria-hidden="true" /><h3>{result.benefits?.active ? 'Policy benefits received' : 'Coverage check'}</h3><p>{result.benefits?.active ? 'A final insured amount also depends on the service, provider network and clinic contract.' : 'The saved clinic cash price is available separately when provided.'}</p></div>
 }
 
-export default function CommercialEstimator({ onBack, intakeId }: { onBack: () => void; intakeId?: string }) {
+export default function CommercialEstimator({ onBack, intakeId, refreshBenefits = false }: { onBack: () => void; intakeId?: string; refreshBenefits?: boolean }) {
   const [session, setSession] = useState<StaffSession | null>(null)
   const [patient, setPatient] = useState<StaffPatient | null>(null)
   const [appointments, setAppointments] = useState<CommercialAppointment[]>([])
@@ -178,18 +178,18 @@ export default function CommercialEstimator({ onBack, intakeId }: { onBack: () =
     return () => { stopped = true; window.clearTimeout(timer) }
   }, [recovering, result?.check_id])
 
-  const estimate = useCallback(async () => {
+  const estimate = useCallback(async (refresh = refreshBenefits) => {
     if (!selectedVisit || busy) return
     const current = ++requestId.current
     setResult(null); setError(''); setNotice(''); setDeleteError(''); setBusy('estimate')
     try {
-      const response = await commercialPrevisit(selectedVisit)
+      const response = await commercialPrevisit(selectedVisit, refresh)
       if (response.appointment_id !== selectedVisit) throw new Error('The returned estimate does not match this visit. Refresh visits and try again.')
       if (current === requestId.current) setResult(response)
     } catch (caught) {
       if (current === requestId.current) setError(caught instanceof Error ? caught.message : 'This visit could not be checked.')
     } finally { if (current === requestId.current) setBusy(null) }
-  }, [selectedVisit, busy])
+  }, [selectedVisit, busy, refreshBenefits])
   const automaticEstimate = useRef('')
   useEffect(() => {
     if (!loaded || !selectedVisit || result || error || busy) return
@@ -336,7 +336,7 @@ export default function CommercialEstimator({ onBack, intakeId }: { onBack: () =
             {intakeId && result.check_id && <button className="visit-delete-button" disabled={!!busy || recovering} onClick={() => void deleteCheck()}><Trash2 size={15} />{cleanupPending ? 'Retry file cleanup' : 'Delete saved check'}</button>}
           </section>}
         </VisitDialog>
-        <footer className="visit-result-footer"><span><Clock3 size={14} aria-hidden="true" />{result.checked_at ? `Benefits checked ${visitDate(result.checked_at)} · ${visitTime(result.checked_at)}` : 'Benefits not yet returned'}</span><button disabled={!!busy || cleanupPending || recovering} onClick={() => void estimate()}><RefreshCw size={16} />Check again</button></footer>
+        <footer className="visit-result-footer"><span><Clock3 size={14} aria-hidden="true" />{result.checked_at ? `Benefits checked ${visitDate(result.checked_at)} · ${visitTime(result.checked_at)}` : 'Benefits not yet returned'}</span><button disabled={!!busy || cleanupPending || recovering} onClick={() => void estimate(true)}><RefreshCw size={16} />Check again</button></footer>
       </> : !error && !busy && <div className="visit-empty"><CalendarDays size={28} /><h2>{selected ? 'Preparing this visit' : 'No upcoming visit returned'}</h2><p>{selected ? 'Reading the appointment and benefits.' : 'Clinicforce needs a scheduled eCW visit to match the date, provider and insurance.'}</p><button onClick={() => void load()}><RefreshCw size={16} />Refresh visits</button></div>}
     </div>
   </section>

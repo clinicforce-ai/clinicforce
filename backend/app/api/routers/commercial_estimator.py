@@ -79,6 +79,10 @@ class EcwStartInput(BaseModel):
     appointment_id: str = Field(pattern=r"^[A-Za-z0-9.\-]{1,200}$")
 
 
+class PrevisitInput(EcwStartInput):
+    refresh_benefits: bool = False
+
+
 class ServiceLine(BaseModel):
     model_config = ConfigDict(extra="forbid")
     code: str = Field(pattern=r"^(?:\d{5}|[A-Za-z]\d{4}|\d{4}[A-Za-z])$")
@@ -1090,7 +1094,7 @@ async def _start_previsit_recovery(case: dict, session: dict, provider: dict, ba
     # transaction. All subsequent opens use the recorded outcome.
     process_saved = recovery.get('request_state') == 'complete' and not recovery.get('outcome') and recovery.get('raw_object_key')
     resume_poll = recovery.get('request_state') == 'indeterminate' and recovery.get('discovery_id') and recovery.get('stage') != 'eligibility'
-    if ready and (not recovery or process_saved or resume_poll):
+    if ready and (not recovery or recovery.get('request_state') == 'not_requested' or process_saved or resume_poll):
         recovery.update(request_state='pending', started_at=recovery.get('started_at') or _now(),
                         context_token=case['previsit_context']['context_token'],
                         identity_binding=_recovery_binding(case['previsit_context']['inputs'], case['previsit_context']['source']))
@@ -1137,7 +1141,7 @@ async def select_coverage_candidate(case_id: str, value: CoverageCandidateInput,
 
 
 async def _begin_coverage_discovery(result: dict, session: dict, inputs: dict, source: dict, provider: dict,
-                                    background_tasks: BackgroundTasks | None, detail: str) -> dict:
+                                    background_tasks: BackgroundTasks | None, detail: str, *, refresh_benefits: bool = False) -> dict:
     """Save a no-policy appointment as a recoverable Stedi discovery case."""
     coverage = _coverage_snapshot(inputs, source)
     binding = hashlib.sha256(json.dumps({'patient': inputs.get('patient'), 'appointment': source.get('appointment_id'),
@@ -1159,7 +1163,7 @@ async def _begin_coverage_discovery(result: dict, session: dict, inputs: dict, s
     saved = case.get('previsit') or {}
     if case.get('previsit_discovery', {}).get('request_state') in {'pending', 'indeterminate'}:
         return await _start_previsit_recovery(case, session, provider, background_tasks)
-    if saved.get('request_state') == 'complete' and case.get('previsit_context'):
+    if not refresh_benefits and saved.get('request_state') == 'complete' and case.get('previsit_context'):
         return _previsit_result(case)
     result.update(eligibility_error='coverage_identity_missing', eligibility_failure={
         'kind': 'coverage_identity_missing', 'title': 'eCW coverage needs recovery', 'detail': detail,
@@ -1174,7 +1178,7 @@ async def _begin_coverage_discovery(result: dict, session: dict, inputs: dict, s
 
 
 @router.post("/appointments/previsit")
-async def previsit_estimate(value: EcwStartInput, request: Request, background_tasks: BackgroundTasks = None) -> dict:
+async def previsit_estimate(value: PrevisitInput, request: Request, background_tasks: BackgroundTasks = None) -> dict:
     """Check a future office visit before a final CPT level exists."""
     session = await _session(request)
     if not ecw_backend.configured():
@@ -1238,7 +1242,8 @@ async def previsit_estimate(value: EcwStartInput, request: Request, background_t
     if not usable_coverage or not source.get('payer'):
         detail = ('eCW did not return one usable primary policy with member and policyholder details for this visit.'
                   if not usable_coverage else 'eCW did not return an insurer name for the selected policy.')
-        return await _begin_coverage_discovery(result, session, inputs, source, provider, background_tasks, detail)
+        return await _begin_coverage_discovery(result, session, inputs, source, provider, background_tasks, detail,
+                                               refresh_benefits=value.refresh_benefits)
     try:
         payer = await stedi_payers.search_payer(str(source["payer"]), source.get("payer_identifiers") or [], api_key)
     except (httpx.HTTPError, ValueError):
@@ -1279,7 +1284,7 @@ async def previsit_estimate(value: EcwStartInput, request: Request, background_t
     saved = case.get("previsit") or {}
     if case.get('previsit_discovery', {}).get('request_state') in {'pending', 'indeterminate'}:
         return await _start_previsit_recovery(case, session, provider, background_tasks)
-    if saved.get('request_state') == 'rejected' and saved.get('identity_retry_version') == 1 and case.get('previsit_context'):
+    if not value.refresh_benefits and saved.get('request_state') == 'rejected' and saved.get('identity_retry_version') == 1 and case.get('previsit_context'):
         old = case['previsit_context']['result']
         failure = old.get('eligibility_failure') or {}
         if failure.get('codes'):
@@ -1292,7 +1297,7 @@ async def previsit_estimate(value: EcwStartInput, request: Request, background_t
             result['response_reference'] = old.get('response_reference')
             case = await run_in_threadpool(_save, case, session, 'previsit-rejection-reused')
             return await _start_previsit_recovery(case, session, provider, background_tasks)
-    if saved.get("request_state") == "complete":
+    if not value.refresh_benefits and saved.get("request_state") == "complete":
         try:
             fresh = datetime.fromisoformat(saved["checked_at"]) + timedelta(hours=24) > datetime.now(timezone.utc)
         except (TypeError, ValueError, KeyError):
@@ -1319,6 +1324,7 @@ async def previsit_estimate(value: EcwStartInput, request: Request, background_t
     if saved.get("request_state") in {"pending", "indeterminate"}:
         result["issues"].append("The payer request is pending or its outcome is unknown. Check Stedi activity before retrying.")
         return result
+    case.pop('previsit_discovery', None)
     case["previsit"] = {"request_state": "pending"}
     case = await run_in_threadpool(_save, case, session, "previsit-stedi-pending")
     try:

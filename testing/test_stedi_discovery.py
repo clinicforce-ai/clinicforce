@@ -61,6 +61,24 @@ def test_discovery_returns_safe_dependent_candidate_for_staff_selection():
 
 
 class RecoveryTest(IsolatedAsyncioTestCase):
+    async def test_explicit_refresh_restarts_completed_discovery_but_not_pending_work(self):
+        case, session, provider, _ = setup()
+        session['intake']['updated_at'] = 'version'
+        context = case['previsit_context']
+        case['previsit']['request_state'] = 'complete'
+        case['previsit_discovery'].update(request_state='complete', outcome='recovered')
+        tasks = BackgroundTasks()
+        with patch.object(api.store, 'create_case', return_value=case), \
+             patch.object(api, '_finish_previsit'), \
+             patch.object(api, '_save', side_effect=lambda value, *_: value):
+            await api._begin_coverage_discovery({}, session, context['inputs'], context['source'], provider, tasks, 'Missing policy')
+            assert not tasks.tasks
+            await api._begin_coverage_discovery({}, session, context['inputs'], context['source'], provider, tasks, 'Missing policy', refresh_benefits=True)
+            assert case['previsit_discovery']['request_state'] == 'pending'
+            assert len(tasks.tasks) == 1
+            await api._begin_coverage_discovery({}, session, context['inputs'], context['source'], provider, tasks, 'Missing policy', refresh_benefits=True)
+            assert len(tasks.tasks) == 1
+
     def setUp(self):
         self.cash_patch = patch.object(api.practice_prices, 'current', return_value=None)
         self.cash_patch.start()
