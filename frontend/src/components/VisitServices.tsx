@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { ArrowRight, ChevronDown, Sparkles } from 'lucide-react'
+import { ArrowRight, Check, Minus, Plus } from 'lucide-react'
 import type { PrevisitEstimate, VisitCode, VisitReview } from '../services/api/commercial-estimator'
 const money = (value?: number | null) => value == null ? '—' : new Intl.NumberFormat(undefined, { style: 'currency', currency: 'USD' }).format(value / 100)
 type Save = (review: VisitReview) => Promise<boolean>
@@ -30,7 +30,7 @@ export function ServicePlanner({ result, busy, save, viewEstimate }: { result: P
   const [changed, setChanged] = useState(false)
   const [editError, setEditError] = useState('')
   const emgVisit = result.service_plan?.kind === 'emg_ncs'
-  const [emgRequested, setEmgRequested] = useState(emgVisit || available.some(row => selected.includes(row.id!) && ['nerve', 'muscle'].includes(groupFor(row.code))))
+  const [category, setCategory] = useState(emgVisit ? 'nerve' : 'visit')
   const chosen = available.filter(row => selected.includes(row.id!))
   const nerve = available.filter(row => groupFor(row.code) === 'nerve').sort((a, b) => a.code.localeCompare(b.code))
   const muscle = available.filter(row => ['95885', '95886'].includes(row.code))
@@ -55,7 +55,7 @@ export function ServicePlanner({ result, busy, save, viewEstimate }: { result: P
     if (changed) {
       if (chosen.some(retired)) { setEditError('Remove retired procedure codes before updating this plan.'); return }
       if (!chosen.length) { setEditError('Select at least one service.'); return }
-      if (chosen.some(row => !Number.isInteger(quantities[row.id!]) || quantities[row.id!] < 1 || quantities[row.id!] > 10000)) { setEditError('Enter the planned quantity for each selected service.'); return }
+      if (chosen.some(row => !Number.isInteger(quantities[row.id!]) || quantities[row.id!] < 1 || quantities[row.id!] > 10000)) { setEditError('Choose the planned quantity using the + and − buttons.'); return }
       if (chosen.filter(row => ['95885', '95886'].includes(row.code)).reduce((sum, row) => sum + quantities[row.id!], 0) > 4) { setEditError('EMG examinations can include at most four limbs in this scenario.'); return }
       if (busy || !result.check_id || !result.context_token) { setEditError('Wait for the current check before updating services.'); return }
       const saved = await save({ selected_ids: selected, confirmed_units: Object.fromEntries(selected.map(id => [id, quantities[id]])), ...(result.cash_schedule ? { cash_selection: cashSelection } : {}) })
@@ -63,45 +63,36 @@ export function ServicePlanner({ result, busy, save, viewEstimate }: { result: P
     }
     if (continueToCollection) viewEstimate()
   }
-  const option = (row: VisitCode, rows?: VisitCode[]) => {
-    const included = selected.includes(row.id!)
-    // Unsaved quantities or combinations must not reuse a prior scenario's approvals or patient amount.
-    const priced = !changed && included ? result.price_range?.lines?.find(line => line.id === row.id) : undefined
-    const approval = (kind: 'referral' | 'authorization') => {
-      const item = priced?.benefits.requirements[kind]
-      return !item ? 'Check scenario' : item.required === 'not_required' && item.cleared ? 'Not required' : item.cleared ? 'Verified' : item.required === 'required' ? `Required · ${item.status === 'unknown' ? 'verify' : item.status.replaceAll('_', ' ')}` : 'Not returned'
-    }
-    return <article key={row.id} className={`procedure-choice${included ? ' is-selected' : ''}`}>
-      <label className="procedure-choice-label"><input type={rows ? 'radio' : 'checkbox'} name={rows ? `procedure-${groupFor(row.code)}` : undefined} checked={included} disabled={busy || groupFor(row.code) === 'muscle' && !nerve.some(item => selected.includes(item.id!))} onChange={event => rows ? pickOne(rows, row.id!) : update(event.target.checked ? [...selected, row.id!] : selected.filter(id => id !== row.id))} /><span><strong>{clinicalName(row)}</strong><small>{row.code.startsWith('J') ? 'HCPCS' : 'CPT'} {row.code}{result.service_plan?.recommended_ids.includes(row.id!) ? ' · Suggested' : ''}</small></span></label>
-      <dl className="procedure-facts"><div><dt>Cash / unit</dt><dd>{row.unit_cash_cents != null ? money(row.unit_cash_cents) : 'Package / verify'}</dd></div><div><dt>Contract / unit</dt><dd>{row.unit_allowed_cents != null ? money(row.unit_allowed_cents) : 'Not available'}</dd></div><div><dt>Referral</dt><dd>{approval('referral')}</dd></div><div><dt>Authorization</dt><dd>{approval('authorization')}</dd></div></dl>
-      {included && <div className="procedure-patient-amount"><span>Patient estimate</span><strong>{priced?.calculation ? money(priced.calculation.patient_cents) : changed ? 'Update scenario' : 'Needs verification'}</strong></div>}
-      {included && !rows && <label className="procedure-quantity">{groupFor(row.code) === 'muscle' ? 'Limbs' : row.code.startsWith('J') ? 'Medication units' : 'Quantity'}<input type="number" min="1" max={groupFor(row.code) === 'muscle' ? 4 : 10000} value={quantities[row.id!] || ''} disabled={busy} onChange={event => { setQuantities(current => ({ ...current, [row.id!]: Number(event.target.value) })); setChanged(true); setCashSelection('') }} /></label>}
-    </article>
-  }
-  const choices = (rows: VisitCode[], title: string) => rows.length > 0 && <fieldset className="procedure-group"><legend>{title}</legend><div className="procedure-group-tools"><span>{rows[0].code}–{rows[rows.length - 1].code} · Choose one</span><button type="button" className="visit-text-button" disabled={busy || !rows.some(row => selected.includes(row.id!))} onClick={() => pickOne(rows, '')}>Not included</button></div><div className="procedure-options">{rows.map(row => option(row, rows))}</div></fieldset>
-  const extraGroups = [
-    { title: 'Botox / muscle injections', rows: other.filter(row => /^646/.test(row.code)) },
-    { title: 'Medication', rows: other.filter(row => row.code.startsWith('J')) },
-    { title: 'Other procedures', rows: other.filter(row => !/^646|^J/.test(row.code)) },
+  const groups = [
+    { id: 'visit', label: 'Office visit', rows: office, single: true },
+    { id: 'nerve', label: 'Nerve study', rows: nerve, single: true },
+    { id: 'muscle', label: 'Muscle EMG', rows: muscle, single: false },
+    { id: 'other', label: 'Other care', rows: other, single: false },
   ].filter(group => group.rows.length)
+  const activeGroup = groups.find(group => group.id === category) || groups[0]
+  const quantity = (row: VisitCode, change: number) => {
+    setQuantities(current => ({ ...current, [row.id!]: Math.min(groupFor(row.code) === 'muscle' ? 4 : 10000, Math.max(1, (current[row.id!] || 0) + change)) }))
+    setChanged(true); setCashSelection(''); setEditError('')
+  }
   return <section className="visit-planner" aria-labelledby="service-plan-title">
-    <div className="visit-section-heading"><h2 id="service-plan-title">Plan this visit</h2><span className="visit-badge"><Sparkles size={16} aria-hidden="true" /> {result.service_plan?.selection_source === 'clinician' ? 'Your plan' : 'Suggested plan'}</span></div>
-    <p className="visit-muted">Choose the planned care. Update the scenario to check its price and approvals.</p>
-    {choices(office, result.visit_type === 'new' ? 'New patient consultation' : 'Office consultation')}
-    <label className="emg-request"><input type="checkbox" checked={emgRequested} disabled={busy} onChange={event => {
-      setEmgRequested(event.target.checked)
-      if (!event.target.checked) update(selected.filter(id => !available.some(row => row.id === id && ['nerve', 'muscle'].includes(groupFor(row.code)))))
-      else { const initial = nerve[0]; if (initial) update([...selected, initial.id!]) }
-    }} /> Doctor requested EMG / nerve testing</label>
-    {emgRequested && <div className="emg-options">
-      {result.cash_schedule && emgVisit && <label className="plan-field">Cash package<select disabled={busy} value={cashSelection} onChange={event => choosePackage(event.target.value)}><option value="">Custom plan</option>{result.cash_schedule.packages.map(row => <option key={row.id} value={row.id}>{row.label} · {money(row.amount_cents)}</option>)}</select></label>}
-      {choices(nerve, 'Nerve conduction · study range')}
-      {!!muscle.length && <fieldset className="procedure-group"><legend>Needle EMG · muscle testing</legend><p className="visit-muted">Add to a nerve study. Choose the examination and limb count.</p><div className="procedure-options">{muscle.map(row => option(row))}</div></fieldset>}
-    </div>}
-    <div className="procedure-catalog"><h3>Additional procedures</h3>{extraGroups.map(group => <details className="visit-line-details" key={group.title}><summary>{group.title}<small>{group.rows.length} options</small></summary><div className="procedure-options">{group.rows.map(row => option(row))}</div></details>)}</div>
-    {!!result.service_plan?.assumptions?.length && <details className="plan-assumptions"><summary>Why these suggestions?</summary><p>{result.service_plan.recommendation_basis}</p><ul>{result.service_plan.assumptions.map(item => <li key={item}>{item}</li>)}</ul></details>}
+    <h3 id="service-plan-title">Choose care for this estimate</h3><p className="visit-muted">Selections update the estimate. Final coding follows the care provided.</p>
+    <div className="selected-service-chips" aria-label="Selected services">{chosen.map(row => <span key={row.id}><Check size={14} aria-hidden="true" />{row.code} × {quantities[row.id!] || '—'}</span>)}{!chosen.length && <span>No services selected</span>}</div>
+    <div className="service-category-buttons" aria-label="Service categories">{groups.map(group => <button key={group.id} aria-pressed={activeGroup?.id === group.id} onClick={() => setCategory(group.id)}>{group.label}</button>)}</div>
+    {activeGroup && <><div className="procedure-group-tools"><h3>{activeGroup.label}</h3>{activeGroup.single && <button disabled={busy || !activeGroup.rows.some(row => selected.includes(row.id!))} onClick={() => pickOne(activeGroup.rows, '')}>Remove from plan</button>}</div>
+      <div className="procedure-options">{activeGroup.rows.map(row => {
+        const included = selected.includes(row.id!), single = activeGroup.single
+        const disable = busy || groupFor(row.code) === 'muscle' && !nerve.some(item => selected.includes(item.id!))
+        return <article key={row.id} className={`procedure-choice${included ? ' is-selected' : ''}`}>
+          <button className="procedure-pick" aria-pressed={included} disabled={disable} onClick={() => single ? pickOne(activeGroup.rows, row.id!) : update(included ? selected.filter(id => id !== row.id) : [...selected, row.id!])}><span className="procedure-check" aria-hidden="true">{included && <Check size={16} />}</span><span><strong>{clinicalName(row)}</strong><small>{row.code.startsWith('J') ? 'HCPCS' : 'CPT'} {row.code}</small></span></button>
+          <div className="procedure-price-note">{row.unit_allowed_cents != null ? `Contract / unit ${money(row.unit_allowed_cents)}` : row.unit_cash_cents != null ? `Cash / unit ${money(row.unit_cash_cents)}` : 'Price follows plan and clinic schedule'}</div>
+          {included && !single && <div className="procedure-quantity"><span>{groupFor(row.code) === 'muscle' ? 'Limbs' : row.code.startsWith('J') ? 'Medication units' : 'Quantity'}</span><div className="quantity-stepper">{row.code.startsWith('J') && <button aria-label={`Decrease ${row.code} by 10 units`} disabled={busy || quantities[row.id!] <= 1} onClick={() => quantity(row, -10)}>−10</button>}<button aria-label={`Decrease ${row.code} quantity`} disabled={busy || quantities[row.id!] <= 1} onClick={() => quantity(row, -1)}><Minus size={16} /></button><output aria-label={`${row.code} quantity`} aria-live="polite">{quantities[row.id!] || '—'}</output><button aria-label={`Increase ${row.code} quantity`} disabled={busy || quantities[row.id!] >= (groupFor(row.code) === 'muscle' ? 4 : 10000)} onClick={() => quantity(row, 1)}><Plus size={16} /></button>{row.code.startsWith('J') && <button aria-label={`Increase ${row.code} by 10 units`} disabled={busy || quantities[row.id!] >= 10000} onClick={() => quantity(row, 10)}>+10</button>}</div></div>}
+        </article>
+      })}</div>
+      {activeGroup.id === 'muscle' && !nerve.some(item => selected.includes(item.id!)) && <p className="visit-muted">Choose a nerve study first to add needle EMG.</p>}
+    </>}
+    {result.payment_mode === 'cash' && result.cash_schedule && emgVisit && <section className="cash-package-options"><h3>Cash package</h3>{result.cash_schedule.packages.map(row => <button key={row.id} disabled={busy} aria-pressed={cashSelection === row.id} onClick={() => choosePackage(row.id)}>{row.label} · {money(row.amount_cents)}</button>)}</section>}
     {editError && <p className="visit-error" role="alert">{editError}</p>}
-    <div className="visit-plan-footer"><span>{chosen.length} {chosen.length === 1 ? 'service' : 'services'} selected{changed ? ' · Unsaved changes' : ' · Current scenario'}</span><div className="plan-scenario-actions"><button type="button" className="visit-primary" disabled={busy} onClick={() => void apply(true)}>Recalculate estimate <ArrowRight size={17} /></button></div></div>
+    <div className="visit-plan-footer"><span>{chosen.length} {chosen.length === 1 ? 'service' : 'services'}{changed ? ' · Changes not applied' : ' · Current estimate'}</span><button className="visit-primary" disabled={busy} onClick={() => void apply(true)}>{busy ? 'Updating estimate…' : 'Recalculate estimate'} <ArrowRight size={17} /></button></div>
   </section>
 }
 
@@ -111,6 +102,6 @@ export default function VisitServices({ result }: { result: PrevisitEstimate }) 
   const cash = result.payment_mode === 'cash'
   return <section className="visit-services"><div className="visit-section-heading"><h2>Planned services & patient amounts</h2><span>Main service → supporting care</span></div><div className="clinical-table-wrap"><table className="clinical-service-table"><thead><tr><th>Procedure</th><th>{cash ? 'Cash price' : 'Patient obligation'}</th></tr></thead><tbody>{lines.map(row => <tr key={row.id}><th scope="row">{clinicalName(row)}<small>CPT {row.code}{Number(row.units) > 1 ? ` · ${row.units} ${groupFor(row.code) === 'muscle' ? 'limbs' : 'planned'}` : ''}</small>{!cash && <small>{`Copay: ${row.benefits.copay_cents != null ? money(row.benefits.copay_cents) : row.calculation?.cost_share === 'coinsurance' ? 'not applied' : 'not specified'} · Coinsurance: ${row.benefits.coinsurance_percent != null ? row.benefits.coinsurance_percent + '%' : row.calculation?.cost_share === 'copay' ? 'not applied' : 'not specified'}`}{row.calculation?.deductible_cents ? ` · ${money(row.calculation.deductible_cents)} to deductible` : ''}</small>}</th><td>{cash ? row.cash_included ? 'Included' : money(row.cash_cents) : row.calculation ? money(row.calculation.patient_cents) : 'Not established'}</td></tr>)}</tbody></table></div>
       {cash && result.cash_quote?.complete && <p className="clinical-origin">{result.cash_quote.message}</p>}
-      <details className="visit-line-details"><summary>After-claim amounts & service evidence <ChevronDown size={16} /></summary>{lines.map(row => <article className="service-evidence" key={row.id}><h3>CPT {row.code} · {clinicalName(row)}</h3><dl><div><dt>Contracted allowance</dt><dd>{money(row.allowed_cents)}</dd></div><div><dt>Estimated total patient responsibility</dt><dd>{money(row.calculation?.patient_cents)}</dd></div><div><dt>Estimated insurer share</dt><dd>{money(row.calculation?.plan_cents)}</dd></div><div><dt>Deductible applied</dt><dd>{row.calculation ? money(row.calculation.deductible_cents) : 'Not calculated'}</dd></div><div><dt>Copay applied</dt><dd>{row.calculation ? money(row.calculation.copay_cents) : 'Not calculated'}</dd></div><div><dt>Coinsurance applied</dt><dd>{row.calculation ? money(row.calculation.coinsurance_cents) : 'Not calculated'}</dd></div><div><dt>Benefit source</dt><dd>{row.benefits.policy_evidence ? <a href={row.benefits.policy_evidence.url} target="_blank" rel="noreferrer">{row.benefits.policy_evidence.title}</a> : 'Stedi payer response'}<small>{result.checked_at ? new Date(result.checked_at).toLocaleString() : result.eligibility_failure ? 'Check rejected' : 'Not checked'}</small></dd></div><div><dt>Price source</dt><dd>{row.rate_version ? 'Practice fee schedule' : row.allowed_cents != null ? 'Practice rate' : 'No matching contracted rate'}{row.rate_effective_from && <small>Effective {row.rate_effective_from}</small>}</dd></div></dl>{!!row.issues.length && <ul>{row.issues.map(issue => <li key={issue}>{issue}</li>)}</ul>}</article>)}</details>
+      <section className="service-evidence-list"><h3>Service evidence</h3>{lines.map(row => <article className="service-evidence" key={row.id}><h3>CPT {row.code} · {clinicalName(row)}</h3><dl><div><dt>Contracted allowance</dt><dd>{money(row.allowed_cents)}</dd></div><div><dt>Estimated total patient responsibility</dt><dd>{money(row.calculation?.patient_cents)}</dd></div><div><dt>Estimated insurer share</dt><dd>{money(row.calculation?.plan_cents)}</dd></div><div><dt>Deductible applied</dt><dd>{row.calculation ? money(row.calculation.deductible_cents) : 'Not calculated'}</dd></div><div><dt>Copay applied</dt><dd>{row.calculation ? money(row.calculation.copay_cents) : 'Not calculated'}</dd></div><div><dt>Coinsurance applied</dt><dd>{row.calculation ? money(row.calculation.coinsurance_cents) : 'Not calculated'}</dd></div><div><dt>Benefit source</dt><dd>{row.benefits.policy_evidence ? <a href={row.benefits.policy_evidence.url} target="_blank" rel="noreferrer">{row.benefits.policy_evidence.title}</a> : 'Stedi payer response'}<small>{result.checked_at ? new Date(result.checked_at).toLocaleString() : result.eligibility_failure ? 'Check rejected' : 'Not checked'}</small></dd></div><div><dt>Price source</dt><dd>{row.rate_version ? 'Practice fee schedule' : row.allowed_cents != null ? 'Practice rate' : 'No matching contracted rate'}{row.rate_effective_from && <small>Effective {row.rate_effective_from}</small>}</dd></div></dl>{!!row.issues.length && <ul>{row.issues.map(issue => <li key={issue}>{issue}</li>)}</ul>}</article>)}</section>
   </section>
 }
