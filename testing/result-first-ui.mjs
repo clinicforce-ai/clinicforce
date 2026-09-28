@@ -11,14 +11,14 @@ const patient = { id: 'sample', given_name: 'Alex', family_name: 'Morgan', birth
 const visit = { id: 'visit-a', start: '2026-09-29T09:00:00-05:00', status: 'planned', reason: 'New patient neurology consultation' }
 const intake = { id: 'sample-intake', source: 'ecw_lookup', status: 'ready', patient, fields: { ...patient, ecw_patient_id: 'sample-ecw' }, documents: [], created_at: '2026-09-28T12:00:00Z', updated_at: '2026-09-28T12:00:00Z' }
 const requirements = { referral: { required: 'not_required', status: 'not_applicable', cleared: true }, authorization: { required: 'not_required', status: 'not_applicable', cleared: true } }
-const benefits = { active: true, network_status: 'unknown', oop_remaining_cents: 0, requires_review: true, review_reasons: ['Confirm patient identity: patient surname differs.'], reported_options: [], requirements }
+const benefits = { active: true, network_status: 'unknown', oop_remaining_cents: 0, requires_review: true, review_reasons: [], reported_options: [{ kind: 'copay', service_type_code: '98', network: 'IN_NETWORK', amount_cents: 4000, time_period: 'DAY' }], requirements }
 const codes = ['99203', '99204', '95910', '95886', 'J0585'].map(code => ({ id: code, code, source: 'Planning catalog', units: 1 }))
 let result = {
   check_id: 'sample-check', appointment_id: visit.id, service_date: '2026-09-29', payer: 'Example Health', plan: 'Choice PPO', checked_at: '2026-09-28T16:30:00Z', issues: [], suggestions: null,
   revision: 1, context_token: 'a'.repeat(64), visit_type: 'new', codes: [codes[0]], available_codes: codes, selected_ids: ['99203'],
   service_plan: { kind: 'office', groups: [], recommended_ids: ['99203'], selection_source: 'suggested', recommendation_basis: 'Office visit', history_count: 0 },
   insurance_details: { member_id: 'ABC123', payer_subscriber: { firstName: 'Sam', lastName: 'Other' }, payer_patient: { firstName: 'Alex', lastName: 'Former', dateOfBirth: '2001-02-03' }, payer_relationship: 'CHILD' },
-  identity: { status: 'review', binding: 'b'.repeat(64), can_confirm: true, differences: [{ field: 'last_name', ecw: 'Morgan', payer: 'Former' }] },
+  identity: { status: 'warning', message: 'Payer surname differs; first name, date of birth and member ID match.', binding: 'b'.repeat(64), can_confirm: true, differences: [{ field: 'last_name', ecw: 'Morgan', payer: 'Former' }] },
   benefits, price_range: { complete: false, mode: 'services', lines: [{ ...codes[0], benefits, issues: [], calculation: null }], scenarios: [] },
   arrival_collection: { amount_cents: null, reason: 'Verify patient and contract.', status: 'verify' },
   planning_estimate: { basis: 'out_of_pocket_limit', amount_cents: 0, collectable: false, explanation: 'The payer reports $0 remaining in-network out-of-pocket responsibility.', assumptions: ['The patient names refer to the same person.', 'The provider participates in this plan.'] },
@@ -40,6 +40,7 @@ await page.route(url => url.pathname.startsWith('/api/'), async route => {
   else if (path.endsWith('/checks')) body = { checks: [] }
   else if (path.endsWith('/appointments')) body = { appointments: [visit] }
   else if (path.endsWith('/appointments/previsit')) { previsitRequests.push(route.request().postDataJSON()); body = result }
+  else if (path.endsWith('/payer-response')) body = { source: 'Stedi', response: { id: 'saved-payer-response', benefits: [] } }
   else if (path.endsWith('/visit-review')) {
     const review = route.request().postDataJSON(); reviews.push(review)
     if (review.selected_ids) result = { ...result, selected_ids: review.selected_ids, codes: codes.filter(row => review.selected_ids.includes(row.id)), service_plan: { ...result.service_plan, selection_source: 'clinician' } }
@@ -67,6 +68,9 @@ try {
   assert(await page.locator('#visit-estimate').evaluate(el => el.compareDocumentPosition(document.getElementById('visit-plan')) & Node.DOCUMENT_POSITION_FOLLOWING))
   assert(requests.some(path => path.endsWith('/cards')), 'Cards fetch before details open')
   assert.equal(requests.filter(path => path.endsWith('/appointments/previsit')).length, 1)
+  assert(await page.locator('.visit-identity-notice').isVisible())
+  assert.equal(await page.locator('.visit-snapshots > div').count(), 4)
+  assert((await page.locator('.visit-snapshots').innerText()).includes('Prior authorization'))
   assert((await page.locator('.visit-appointment-strip select').innerText()).includes('9:00 AM CDT'))
   await noForms()
   if (process.env.SCREENSHOT_DIR) await page.screenshot({ path: process.env.SCREENSHOT_DIR + '/visual-estimate-desktop.png', fullPage: true })
@@ -74,6 +78,7 @@ try {
   await page.getByRole('dialog').waitFor()
   assert(await page.getByRole('dialog').getByText('Sam Other', { exact: true }).isVisible())
   assert(await page.getByRole('dialog').getByText('Alex Former', { exact: true }).isVisible())
+  assert(!(await page.getByRole('dialog').innerText()).includes('Service category 98'))
   await page.getByText(/Card preview unavailable/).waitFor()
   await page.keyboard.press('Escape')
   assert.equal(await page.getByRole('dialog').count(), 0)
@@ -101,6 +106,13 @@ try {
   assert.equal(reviews.at(-1).confirmed_units['95886'], 2, 'Quantity buttons persist units')
   await page.getByRole('button', { name: /Sources & history/ }).click()
   await page.getByText('No completed visits returned in the last year.').waitFor()
+  assert(await page.getByText('Service category 98', { exact: true }).isVisible())
+  assert.equal(requests.filter(path => path.endsWith('/payer-response')).length, 0)
+  const checksBeforeSource = previsitRequests.length
+  await page.getByRole('button', { name: 'View saved payer response', exact: true }).click()
+  await page.locator('.visit-raw-response').waitFor()
+  assert((await page.locator('.visit-raw-response').innerText()).includes('saved-payer-response'))
+  assert.equal(previsitRequests.length, checksBeforeSource)
   await page.getByRole('button', { name: 'Close details' }).click()
   for (const width of [375, 768, 1024, 1440]) {
     await page.setViewportSize({ width, height: 900 })
@@ -146,6 +158,13 @@ try {
   assert(!(await page.getByRole('dialog').innerText()).includes('Encounter/'))
   if (process.env.SCREENSHOT_DIR) await page.screenshot({ path: process.env.SCREENSHOT_DIR + '/general-notes-unavailable.png' })
   await page.keyboard.press('Escape')
+  const beforeReload = previsitRequests.length
+  await page.getByRole('button', { name: 'Refresh visits', exact: true }).click()
+  await page.locator('.arrival-total > strong').waitFor()
+  assert.equal(previsitRequests.length, beforeReload + 1, 'Refreshing the same visit restarts the estimate')
+  result = { ...result, price_range: { ...result.price_range, lines: [{ ...result.price_range.lines[0], benefits: { ...benefits, requirements: { ...requirements, authorization: { required: 'not_required', status: 'denied', cleared: false } } } }] } }
+  await openPatient()
+  assert((await page.locator('.visit-snapshots').innerText()).includes('Denied'), 'Conflicting denial stays visible even with a not-required signal')
   // New and existing name/DOB lookups both go directly to a fresh estimate.
   for (const existing of [false, true]) {
     const before = previsitRequests.length

@@ -523,7 +523,7 @@ def _finish_previsit(result: dict, case: dict, inputs: dict, source: dict, paylo
     evidence = review.get('identity_confirmation') or remembered.get(comparison.get('binding'))
     if (comparison.get('can_confirm') and evidence and evidence.get('binding') == comparison.get('binding')
             and evidence.get('reference') and evidence.get('actor_id') and evidence.get('verified_at')):
-        comparison = {**comparison, 'status': 'reconciled', 'evidence': evidence}
+        comparison = {**comparison, 'status': 'reconciled', 'evidence': evidence, 'message': ''}
         result['benefits']['review_reasons'] = [r for r in result['benefits'].get('review_reasons', []) if 'identity' not in r]
         result['benefits']['requires_review'] = bool(result['benefits']['review_reasons'])
     result['identity'] = comparison
@@ -608,6 +608,7 @@ def _finish_previsit(result: dict, case: dict, inputs: dict, source: dict, paylo
                                          notes_status=source.get('appointment_notes_status', 'not_exposed'),
                                          timezone=source.get('timezone') or os.getenv('COMMERCIAL_PRACTICE_TIMEZONE', 'America/New_York'))
     result['coverage_records'] = source.get('coverage_records', [])
+    result['insurance_fallback'] = {key: value for key, value in source.get('insurance_fallback', {}).items() if key != 'source'}
     selected_ids = review.get('selected_ids') or result['service_plan']['recommended_ids']
     if selected_ids:
         by_id = {row['id']: row for row in available}
@@ -1111,6 +1112,21 @@ async def saved_previsit(case_id: str, request: Request) -> dict:
     if not case or case.get('source_mode') != 'commercial_previsit' or not case.get('previsit_context'):
         raise HTTPException(404, 'Saved visit estimate not found.')
     return _previsit_result(case)
+
+
+@router.get('/cases/{case_id}/payer-response')
+async def saved_payer_response(case_id: str, request: Request):
+    session = await _session(request)
+    case = await run_in_threadpool(store.get_case, case_id, session['patient_id'], session['share_manifest_id'], **_scope(session))
+    if (not case or case.get('source_mode') != 'commercial_previsit'
+            or case.get('previsit', {}).get('request_state') not in {'complete', 'rejected'}
+            or not case.get('previsit_raw_object_key')):
+        raise HTTPException(404, 'No completed payer response is available for this visit.')
+    try:
+        payload = json.loads(await run_in_threadpool(object_store.get_object_bytes, case['previsit_raw_object_key']))
+    except Exception as exc:
+        raise HTTPException(502, 'The saved payer response could not be loaded.') from exc
+    return _response({'source': 'Stedi', 'response': payload})
 
 
 @router.post('/cases/{case_id}/coverage-candidate')

@@ -20,9 +20,19 @@ def clinical_group(code: str) -> str:
 
 
 def is_emg_visit(inputs: dict) -> bool:
-    return (any(row.get('service_status') == 'scheduled' and row.get('code') in cpt_rules.NCS_CODES | cpt_rules.EMG_ADD_ONS
-                for row in inputs.get('lines', []))
-            or bool(re.search(r'\b(emg|ncs|electromyograph\w*|nerve conduction)\b', str(inputs.get('reason') or ''), re.I)))
+    if any(row.get('service_status') == 'scheduled' and row.get('code') in cpt_rules.NCS_CODES | cpt_rules.EMG_ADD_ONS
+           for row in inputs.get('lines', [])):
+        return True
+    reason = str(inputs.get('reason') or '')
+    procedure = r'\b(?:emg|ncs|electromyograph\w*|nerve conduction)\b'
+    # A possible future test is not today's booked procedure. Explicit orders win above.
+    optional = r'\b(?:possible|potential|consider\w*|discuss\w*|may need|may require|if needed|if indicated|no|not)\b'
+    for clause in re.split(r'[.;\n]', reason):
+        match = re.search(procedure, clause, re.I)
+        if (match and not re.search(optional, clause[:match.start()], re.I)
+                and not re.search(r'\b(?:if needed|if indicated|only if|as needed|may be needed)\b', clause[match.end():], re.I)):
+            return True
+    return False
 
 
 def service_plan(available: list[dict], inputs: dict, source: dict) -> dict:

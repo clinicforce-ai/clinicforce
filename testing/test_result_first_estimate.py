@@ -42,7 +42,7 @@ def test_dependent_patient_is_compared_separately_from_policyholder():
 def test_name_resolution_is_bound_to_patient_policy_and_payer_not_visit():
     raw = response('Former')
     current = identity.compare(raw, policy())
-    assert current['status'] == 'review' and current['can_confirm']
+    assert current['status'] == 'warning' and current['can_confirm']
     evidence = {'binding': current['binding'], 'reference': 'Payer call 123', 'actor_id': 'reviewer', 'verified_at': DAY}
     assert identity.compare(raw, {**policy(), 'appointment_id': 'next'}, evidence)['status'] == 'reconciled'
     assert identity.compare(raw, {**policy(), 'patient_first': ' ALEX '}, evidence)['status'] == 'reconciled'
@@ -98,7 +98,7 @@ def test_zero_oop_gives_conditional_result_without_clearing_identity_or_collecti
     price = visit_estimate.price_lines([{'id': 'office', 'code': '99204', 'units': 1}], [], benefits, {}, payload=raw, service_date=DAY)
     planning = visit_estimate.planning_estimate(price, benefits, benefits['identity'])
     assert planning['amount_cents'] == 0 and not planning['collectable']
-    assert len(planning['assumptions']) == 3
+    assert len(planning['assumptions']) == 2
     assert visit_estimate.arrival_collection(price, benefits, {})['amount_cents'] is None
     for changes in [{'active': False}, {'network_status': 'out_of_network'}, {'has_secondary': True}, {'service_date_matches': False}, {'review_reasons': ['Verify payer dates']}]:
         assert visit_estimate.planning_estimate(price, {**benefits, **changes}, benefits['identity']) is None
@@ -118,6 +118,23 @@ def test_ecw_context_preserves_comments_and_financial_fields_without_coding_them
     assert any(row['text'] == '250 USD' for row in fields)
     assert fields[-1]['text'] == 'Visit context'
     assert not ecw_backend._visit_context(visit, [], [], [])
+
+
+def test_general_notes_fill_only_missing_policy_fields_from_labeled_header():
+    header = 'Patient payment preference : Example Health - Texas, Subscriber No. : ( ABC123 )'
+    fields = [{'label': 'General Notes', 'text': header + '\nPatient entered comments on healow : symptoms and preferences', 'source': 'Encounter/v/GeneralNotes'}]
+    fallback = ecw_backend.appointment_insurance_fallback
+    assert fallback(fields, None, None, 1) == {'payer': 'Example Health - Texas', 'member_id': 'ABC123', 'source': 'Encounter/v/GeneralNotes'}
+    assert fallback(fields, 'ABC123', None, 1)['payer'] == 'Example Health - Texas'
+    assert fallback(fields, None, 'Example Health - Texas', 1)['member_id'] == 'ABC123'
+    assert fallback(fields, 'ABC123', 'Example Health - Texas', 1) == {}
+    assert fallback(fields, 'OTHER', None, 1) == {}
+    assert fallback(fields, None, 'Different Health', 1) == {}
+    for count in (0, 2):
+        assert fallback(fields, None, None, count) == {}
+    assert fallback([*fields, {**fields[0], 'text': header.replace('ABC123', 'OTHER')}], None, None, 1) == {}
+    assert fallback([{**fields[0], 'text': 'Patient entered comments on healow : ' + header}], None, None, 1) == {}
+    assert fallback([{**fields[0], 'label': 'Patient comments'}], None, None, 1) == {}
 
 
 def test_product_mapping_is_scoped_to_current_network_evidence_dates_and_plan(monkeypatch):
@@ -199,10 +216,65 @@ def test_name_difference_does_not_block_calculating_the_returned_policy():
     benefits['network_status'] = 'in_network'
     price = visit_estimate.price_lines([{'id': 'office', 'code': '99204', 'units': 1}],
         [{'code': '99204', 'allowed_cents': 15000}], benefits, {'cost_share': 'payer_returned'}, payload=raw, service_date=DAY)
-    assert price['complete'] and price['conditional']
+    assert price['complete'] and not price['conditional']
     result = visit_estimate.planning_estimate(price, benefits, benefits['identity'])
     assert result['amount_cents'] == 4000 and not result['collectable']
-    assert benefits['identity']['status'] == 'review'  # Neither EHR nor payer identity is overwritten.
+    assert benefits['identity']['status'] == 'warning'  # Neither EHR nor payer identity is overwritten.
+    assert visit_estimate.arrival_collection(price, benefits, {})['amount_cents'] == 4000
+
+
+def test_surname_notice_requires_first_name_dob_and_member_corroboration():
+    raw = response('Former')
+    assert identity.compare(raw, policy())['status'] == 'warning'
+    for target, key, value in [(raw['dependent'], 'dateOfBirth', '2002-02-03'),
+                               (raw['dependent'], 'firstName', 'Other'),
+                               (raw['subscriber'], 'memberId', 'different')]:
+        original = target[key]
+        target[key] = value
+        benefits = api._previsit_benefits(raw, policy(), DAY)
+        assert benefits['identity']['status'] == 'review'
+        assert any('identity' in reason for reason in benefits['review_reasons'])
+        assert visit_estimate.arrival_collection({'complete': True, 'patient_max_cents': 4000},
+            {**benefits, 'network_status': 'in_network'}, {})['amount_cents'] is None
+        target[key] = original
+        del target[key]
+        assert identity.compare(raw, policy())['status'] == 'review'
+        target[key] = original
+
+
+def test_optional_test_mentions_do_not_replace_the_office_visit():
+    for reason in ['Neurology consultation; consider EMG', 'New patient, possible EMG/NCS',
+                   'Neurology consultation and EMG if needed', 'No EMG planned']:
+        inputs = {'visit_type': 'new', 'reason': reason, 'lines': []}
+        assert not visit_estimate.is_emg_visit(inputs)
+        assert [row['code'] for row in api._previsit_codes(inputs)] == ['99202', '99203', '99204', '99205']
+    for reason in ['EMG/NCS both arms', 'EMG for possible radiculopathy', 'EMG, no separate office visit']:
+        assert visit_estimate.is_emg_visit({'reason': reason})
+    assert visit_estimate.is_emg_visit({'reason': 'Consider EMG', 'lines': [{'code': '95909', 'service_status': 'scheduled'}]})
+
+
+def test_saved_payer_response_is_scoped_and_never_cached(monkeypatch):
+    session = {'patient_id': 'patient', 'share_manifest_id': '', 'practice_id': 'clinic', 'intake_id': 'intake', 'staff': {'id': 'staff', 'display_name': 'Clinician'}}
+    monkeypatch.setattr(api, '_session', AsyncMock(return_value=session))
+    case = {'source_mode': 'commercial_previsit', 'previsit': {'request_state': 'complete'}, 'previsit_raw_object_key': 'protected'}
+    read_case = MagicMock(return_value=case)
+    read_object = MagicMock(return_value=b'{"id":"payer-reference","benefitsInformation":[]}')
+    monkeypatch.setattr(api.store, 'get_case', read_case)
+    monkeypatch.setattr(api.object_store, 'get_object_bytes', read_object)
+    result = asyncio.run(api.saved_payer_response('case', None))
+    assert result.headers['Cache-Control'] == 'no-store'
+    assert json.loads(result.body)['response']['id'] == 'payer-reference'
+    assert read_case.call_args.kwargs == {'practice_id': 'clinic', 'intake_id': 'intake', 'staff_actor': {'id': 'staff', 'display_name': 'Clinician'}}
+    read_object.reset_mock()
+    read_case.return_value = None
+    with pytest.raises(HTTPException) as missing:
+        asyncio.run(api.saved_payer_response('foreign-case', None))
+    assert missing.value.status_code == 404
+    read_object.assert_not_called()
+    for state in ['pending', 'indeterminate']:
+        read_case.return_value = {**case, 'previsit': {'request_state': state}}
+        with pytest.raises(HTTPException): asyncio.run(api.saved_payer_response('case', None))
+    read_object.assert_not_called()
 
 
 def test_shared_accumulator_with_office_and_injection_labels_is_not_discarded():

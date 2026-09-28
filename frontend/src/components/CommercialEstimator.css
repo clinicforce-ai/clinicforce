@@ -70,7 +70,7 @@
 .cost-share-legend dd { margin: 5px 0; font: 500 20px 'Fira Code', monospace; letter-spacing: -.05em; }
 .overview-plan-name { display: flex; align-items: center; gap: 8px; background: var(--ve-canvas); border-top: 1px solid var(--ve-line); padding: 12px 24px; font-size: 13px; color: var(--ve-muted); }
 .cash-comparison { margin-left: auto; text-align: right; }
-.visit-snapshots { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); margin: 18px 0 26px; gap: 14px; }
+.visit-snapshots { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); margin: 18px 0 26px; gap: 14px; }
 .visit-snapshots > div { display: flex; align-items: center; gap: 12px; padding: 16px; border: 1px solid var(--ve-line); border-radius: 12px; background: white; }
 .visit-snapshots svg { color: var(--ve-teal); }
 .visit-snapshots span { font-size: 12px; color: var(--ve-muted); }
@@ -177,3 +177,7 @@
   .visit-plan-footer { flex-wrap: wrap; }.visit-plan-footer .visit-primary { width: 100%; }.clinical-service-table { font-size: 13px; }.clinical-service-table :is(th,td) { padding: 8px; }
 }
 @media print { .visit-estimator button, .visit-detail-links, .visit-detail-panel { display: none !important; }.visit-overview, .visit-care-summary { break-inside: avoid; box-shadow: none; }.visit-content { padding: 12px 0; } }
+
+.visit-identity-notice { display: flex; align-items: center; gap: 8px; color: var(--ve-muted); font-size: 14px; }
+.visit-identity-notice svg { flex-shrink: 0; color: var(--ve-teal); }
+.visit-raw-response { max-height: 28rem; max-width: 100%; overflow: auto; padding: 16px; background: var(--ve-canvas); font-size: 12px; white-space: pre-wrap; overflow-wrap: anywhere; }
