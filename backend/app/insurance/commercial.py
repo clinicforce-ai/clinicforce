@@ -340,7 +340,8 @@ def normalize_stedi_271(payload: dict[str, Any], service_type_code: str, provide
             # A shared accumulator can list office visits alongside injections
             # and lab work. Discard only a list entirely naming other services.
             labels = [label.strip() for note in _benefit_notes([row.get('messages'), row.get('additionalInformation')])
-                      for label in note.split(';') if label.strip()]
+                      for label in note.split(';') if label.strip()
+                      and not re.fullmatch(r'(?:no referral required|referral not required|(?:prior )?authorization (?:not )?required)\.?', label.strip(), re.I)]
             return bool(labels) and all(re.fullmatch(unrelated, label, re.I) for label in labels)
         entries = [row for row in entries if _procedure(row) or not other_services_only(row)]
         priorities = office_service_types or ['BY', '98']
