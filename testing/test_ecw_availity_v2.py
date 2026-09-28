@@ -220,8 +220,9 @@ class EcwBackendSourceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(history_request.url.params.get_list("date"),
                          [f"ge{today_date - timedelta(days=365)}", f"le{yesterday}"])
         charge_request = next(request for request in requests if request.url.path == "/fhir/ChargeItem")
-        self.assertEqual(charge_request.url.params["context"], "Encounter/encounter-1")
-        self.assertEqual(charge_request.url.params["subject"], "Patient/patient-1")
+        # Live eCW accepts bare IDs; qualified references return HTTP 400.
+        self.assertEqual(charge_request.url.params["context"], "encounter-1")
+        self.assertEqual(charge_request.url.params["subject"], "patient-1")
         procedure_request = next(request for request in requests if request.url.path == "/fhir/Procedure")
         self.assertEqual(dict(procedure_request.url.params), {"patient": "patient-1"})
         self.assertLess(requests.index(procedure_request), next(
