@@ -5,7 +5,7 @@ const browser = await chromium.launch({ headless: true })
 const page = await browser.newPage({ viewport: { width: 1440, height: 1000 }, reducedMotion: 'reduce', locale: 'en-US' })
 const errors = [], requests = [], reviews = []
 const previsitRequests = []
-let lookupLinked = false, confirmations = 0, lookupGate = Promise.resolve()
+let lookupLinked = false, confirmations = 0, lookupGate = Promise.resolve(), estimateGate = Promise.resolve(), reviewGate = Promise.resolve()
 page.on('pageerror', e => errors.push(e.message))
 const patient = { id: 'sample', given_name: 'Alex', family_name: 'Morgan', birth_date: '2001-02-03' }
 const visit = { id: 'visit-a', start: '2026-09-29T09:00:00-05:00', status: 'planned', reason: 'New patient neurology consultation' }
@@ -20,7 +20,8 @@ let result = {
   insurance_details: { member_id: 'ABC123', payer_subscriber: { firstName: 'Sam', lastName: 'Other' }, payer_patient: { firstName: 'Alex', lastName: 'Former', dateOfBirth: '2001-02-03' }, payer_relationship: 'CHILD' },
   identity: { status: 'warning', message: 'Payer surname differs; first name, date of birth and member ID match.', binding: 'b'.repeat(64), can_confirm: true, differences: [{ field: 'last_name', ecw: 'Morgan', payer: 'Former' }] },
   benefits, price_range: { complete: false, mode: 'services', lines: [{ ...codes[0], benefits, issues: [], calculation: null }], scenarios: [] },
-  collection_guidance: { amount_cents: 0, status: 'estimated', basis: 'out_of_pocket_limit', reason: 'The payer reports $0 remaining in-network out-of-pocket responsibility.', patient_message: 'Final responsibility follows the claim.', network: 'In network · assumed', requirements: { referral: 'No requirement reported', authorization: 'Not required · assumed' }, assumptions: ['The provider participates in this plan.'], patient_actions: [], services: [{ id: codes[0].id, code: codes[0].code, benefit: 'Service category 98', patient_cents: 0, oop_remaining_cents: 0 }] },
+  collection_guidance: { amount_cents: 0, status: 'estimated', basis: 'out_of_pocket_limit', reason: 'The payer reports $0 remaining in-network out-of-pocket responsibility.', patient_message: 'Final responsibility follows the claim.', network: 'Choice PPO', network_source: 'Clinic contract; exact product match not confirmed', requirements: { referral: 'No requirement reported', authorization: 'Unknown in payer response' }, assumptions: ['The provider participates in this plan.'], patient_actions: [], services: [{ id: codes[0].id, code: codes[0].code, benefit: 'Service category 98', patient_cents: 0, oop_remaining_cents: 0 }] },
+  emg_option: { requested: false, included: false, message: 'Select testing to calculate its cost.' },
   arrival_collection: { amount_cents: null, reason: 'Verify patient and contract.', status: 'verify' },
   planning_estimate: { basis: 'out_of_pocket_limit', amount_cents: 0, collectable: false, explanation: 'The payer reports $0 remaining in-network out-of-pocket responsibility.', assumptions: ['The patient names refer to the same person.', 'The provider participates in this plan.'] },
   appointment_context: { rendering_provider: { name: 'Dr. Taylor Lee', npi: '1234567890' }, timezone: 'America/Chicago', imported_fields: [{ label: 'General notes', text: 'Patient comment\nPlease explain the treatment plan.', source: 'Encounter/sample.extension' }, { label: 'status', text: 'PEN (Pending)', source: 'Encounter/private-record.extension[0](https://ehr.example/status).valueString' }] },
@@ -40,10 +41,11 @@ await page.route(url => url.pathname.startsWith('/api/'), async route => {
   else if (path.endsWith('/cards')) return route.fulfill({ status: 502, json: { detail: 'Unavailable card interface' } })
   else if (path.endsWith('/checks')) body = { checks: [] }
   else if (path.endsWith('/appointments')) body = { appointments: [visit] }
-  else if (path.endsWith('/appointments/previsit')) { previsitRequests.push(route.request().postDataJSON()); body = result }
+  else if (path.endsWith('/appointments/previsit')) { previsitRequests.push(route.request().postDataJSON()); await estimateGate; body = result }
   else if (path.endsWith('/payer-response')) body = { source: 'Stedi', response: { id: 'saved-payer-response', benefits: [] } }
   else if (path.endsWith('/visit-review')) {
-    const review = route.request().postDataJSON(); reviews.push(review)
+    const review = route.request().postDataJSON(); reviews.push(review); await reviewGate
+    if (review.emg_required != null) result = { ...result, emg_option: { ...result.emg_option, requested: review.emg_required, additional_min_cents: 6000, additional_max_cents: 8000, total_min_cents: 10000, total_max_cents: 12000, message: 'Testing scope determines final cost.' } }
     if (review.selected_ids) result = { ...result, selected_ids: review.selected_ids, codes: codes.filter(row => review.selected_ids.includes(row.id)), service_plan: { ...result.service_plan, selection_source: 'clinician' } }
     if (review.payment_mode) result = { ...result, payment_mode: review.payment_mode }
     result = { ...result, revision: result.revision + 1 }; body = result
@@ -65,7 +67,12 @@ async function detail(title) {
   return summary.locator('..')
 }
 try {
-  await openPatient()
+  let releaseEstimate
+  estimateGate = new Promise(resolve => { releaseEstimate = resolve })
+  const opening = openPatient()
+  await page.getByText('Putting the estimate together', { exact: true }).waitFor()
+  assert(!(await page.locator('.visit-content').innerText()).includes('$0.00'))
+  releaseEstimate(); await opening
   assert.equal(await page.locator('.arrival-total > strong').innerText(), '$0.00')
   assert.equal(await page.locator('.arrival-total > span').first().innerText(), 'Collect at arrival')
   assert(await page.locator('.visit-context-facts').getByText('Dr. Taylor Lee', { exact: true }).isVisible())
@@ -119,6 +126,19 @@ try {
   await openPatient()
   assert.equal(await page.locator('.arrival-total > strong').innerText(), '$40.00')
   assert(await page.locator('.arrival-total').getByText(/Specialist\/office-visit copay/).isVisible())
+  const beforeEmg = previsitRequests.length
+  let releaseReview
+  reviewGate = new Promise(resolve => { releaseReview = resolve })
+  await page.getByRole('checkbox', { name: 'EMG / nerve testing required' }).click()
+  await page.waitForFunction(() => document.querySelector('.arrival-total > strong')?.textContent === 'Calculating…')
+  assert(!(await page.locator('.arrival-total').innerText()).includes('$40.00'))
+  releaseReview()
+  await page.waitForFunction(() => document.querySelector('.arrival-total > strong')?.textContent === '$100.00')
+  assert((await page.locator('.emg-option').innerText()).includes('$60.00'))
+  assert.equal(previsitRequests.length, beforeEmg)
+  assert.equal(reviews.at(-1).emg_required, true)
+  await page.getByRole('checkbox', { name: 'EMG / nerve testing required' }).click()
+  await page.waitForFunction(() => document.querySelector('.arrival-total > strong')?.textContent === '$40.00')
   await page.locator('.arrival-total details > summary').click()
   assert(await page.getByText(/Before payments or credits/).first().isVisible())
   for (const width of [320, 375, 768, 1440]) {
@@ -160,12 +180,18 @@ try {
   await page.locator('#visit-estimate .arrival-total > strong').waitFor()
   assert.equal(previsitRequests.at(-1).refresh_benefits, true)
   assert(!reviews.some(review => review.identity_confirmation || review.product_mapping || review.payments_received_cents != null))
-  // Request failures still show a numeric collection, without retaining an old charge.
+  // An unsupported amount is never converted to zero.
+  result = { ...result, collection_guidance: { ...result.collection_guidance, amount_cents: null, status: 'unavailable' } }
+  await openPatient()
+  assert.equal(await page.locator('.arrival-total > strong').innerText(), 'Amount unavailable')
+  result.collection_guidance = { ...result.collection_guidance, amount_cents: 0, status: 'deferred' }
+  await openPatient()
+  assert.equal(await page.locator('.arrival-total > strong').innerText(), 'Amount unavailable')
+  // Request failures do not retain an old charge or invent zero.
   await page.route('**/appointments/previsit', route => route.fulfill({ status: 503, json: { detail: 'Payer unavailable' } }))
   await page.getByRole('button', { name: 'Check again', exact: true }).click()
-  await page.getByText('The estimate could not be updated. Collection is deferred.', { exact: false }).waitFor()
-  assert.equal(await page.locator('.arrival-total > strong').innerText(), '$0.00')
-  assert((await page.locator('.arrival-total').innerText()).includes('after the insurer processes'))
+  await page.getByText('The estimate could not be updated. No collection amount has been calculated.', { exact: false }).waitFor()
+  assert.equal(await page.locator('.arrival-total > strong').innerText(), 'Amount unavailable')
   assert.deepEqual(errors, [])
   console.log('PASS: immediate estimator entry; collection evidence; warning-only surname difference; provider; detail order; optional cards; service changes; cached benefits; hidden raw response; error fallback; responsive layouts')
 } finally { await browser.close() }

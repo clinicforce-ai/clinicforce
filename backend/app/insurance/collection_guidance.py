@@ -1,7 +1,6 @@
-"""Advance collection decisions; a deferred collection never means free care."""
+"""Derive advance collection from visit evidence; missing amounts stay unknown."""
 from __future__ import annotations
 
-import re
 
 
 def build(result: dict, review: dict | None = None) -> dict:
@@ -12,21 +11,21 @@ def build(result: dict, review: dict | None = None) -> dict:
     planning = result.get('planning_estimate') or {}
     assumptions = list(result.get('pricing_assumptions') or [])
     actions = []
-    guidance = {'amount_cents': 0, 'status': 'deferred', 'basis': 'deferred_billing',
-                'reason': 'An advance charge cannot be calculated from the available benefits. Collect $0 now; bill any patient responsibility after the insurer processes the claim.',
-                'patient_message': 'No payment is requested today. This does not mean your care is free; you may receive a bill after your insurer processes the claim.',
+    guidance = {'amount_cents': None, 'status': 'unavailable', 'basis': 'insufficient_evidence',
+                'reason': 'The available benefits do not establish an advance collection amount.',
+                'patient_message': 'Your payment amount is not yet calculated. Missing information does not mean your patient responsibility is zero.',
                 'assumptions': assumptions, 'patient_actions': actions, 'services': [],
                 'network': 'In network' if benefits.get('network_status') == 'in_network' else
                            'Out of network' if benefits.get('network_status') == 'out_of_network' else
-                           'In network · assumed' if assumptions else 'Determined when claim is processed',
-                'requirements': {}}
-    plans = ' '.join((result.get('plan_details') or {}).get('stedi', {}).get('names') or []).upper()
-    routine_ppo = (bool(re.search(r'\bPPO\b|PREFERRED PROVIDER OPTION', plans))
-                   and not re.search(r'\bHMO\b|HEALTHSELECT|\bERS\b', plans)
-                   and bool(lines) and all(re.fullmatch(r'992(?:0[2-5]|1[2-5])', line.get('code', '')) for line in lines))
+                           (result.get('network_evidence') or {}).get('network_name') or 'Not reported',
+                'network_source': ('Clinic provider-network record' if benefits.get('network_status') in {'in_network', 'out_of_network'} else
+                                   'Clinic contract; exact product match not confirmed' if (result.get('network_evidence') or {}).get('network_name') else
+                                   'No provider participation result available'),
+                'requirements': {}, 'requirement_sources': {}}
     adverse = False
-    for kind, label in [('referral', 'referral'), ('authorization', 'prior authorization')]:
+    for kind in ('referral', 'authorization'):
         requirements = [line.get('benefits', {}).get('requirements', {}).get(kind, {}) for line in lines]
+        guidance['requirement_sources'][kind] = 'Stedi / clinic evidence'
         if any(item.get('status') in {'denied', 'expired', 'pending'} or
                item.get('required') == 'required' and not item.get('cleared') for item in requirements):
             adverse = True
@@ -36,15 +35,15 @@ def build(result: dict, review: dict | None = None) -> dict:
         elif requirements and all(item.get('cleared') for item in requirements):
             guidance['requirements'][kind] = 'On file' if any(item.get('required') == 'required' for item in requirements) else 'Not required'
             if kind == 'authorization' and any('absent indicator' in line.get('benefits', {}).get('authorization_basis', '') for line in lines):
-                guidance['requirements'][kind] = 'Not required · assumed'
-                assumptions.append('No authorization indicator was returned for the applicable service; assumed not required under Stedi guidance.')
+                guidance['requirements'][kind] = 'No requirement indicated'
+                guidance['requirement_sources'][kind] = 'Stedi: no authorization indicator'
         else:
-            guidance['requirements'][kind] = ('Plan has not confirmed · assumed covered' if kind == 'authorization' and any(line.get('benefits', {}).get('authorization_basis') == 'Payer indicator' for line in lines) else 'No requirement reported') if lines else 'Determined by plan'
-            if kind == 'referral' and routine_ppo:
-                guidance['requirements'][kind] = 'Not required · assumed'
-                assumptions.append('Routine office care under the returned PPO product is assumed to allow direct specialist access. An explicit payer referral requirement would override this assumption.')
-            elif lines:
-                assumptions.append(f'No confirmed {label} requirement is available. The estimate assumes covered care; this is not an approval.')
+            explicit_unknown = kind == 'authorization' and any(line.get('benefits', {}).get('authorization_basis') == 'Payer indicator' for line in lines)
+            guidance['requirements'][kind] = 'Unknown in payer response' if explicit_unknown else 'No requirement reported'
+            guidance['requirement_sources'][kind] = 'Stedi' if explicit_unknown else 'eCW + Stedi'
+            if kind == 'referral' and result.get('referral_evidence'):
+                guidance['requirements'][kind] = 'Referral record on file'
+                guidance['requirement_sources'][kind] = 'eCW; applicability to this service not established'
     identity = result.get('identity') or benefits.get('identity') or {}
     safe = (benefits.get('active') is True and benefits.get('service_date_matches') is not False
             and benefits.get('network_status') != 'out_of_network' and not benefits.get('has_secondary')
@@ -80,12 +79,18 @@ def build(result: dict, review: dict | None = None) -> dict:
                 and all(line.get('units') == 1 for line in office)
                 and all(t.get('active') is True and t.get('copay_cents') is not None
                         and t.get('copay_period') in {'VISIT', '27', 'DAY', '7'}
-                        and (t.get('deductible_applies') is False or t.get('deductible_remaining_cents') == 0)
+                        and (t.get('deductible_applies') is False or t.get('deductible_remaining_cents') == 0
+                             or t.get('deductible_applies') is not True and t.get('deductible_remaining_cents') is None)
                         and t.get('coinsurance_percent') in {None, '0', '0.0'}
+                        and t.get('cost_share') not in {'coinsurance', 'cumulative'}
                         and not any(any(word in r.lower() for word in ('conditional', 'limit', 'date', 'identity', 'evidence'))
                                     for r in t.get('review_reasons', [])) for t in terms)
                 and len({t['copay_cents'] for t in terms}) == 1):
             amount = min(terms[0]['copay_cents'], terms[0].get('oop_remaining_cents') if terms[0].get('oop_remaining_cents') is not None else terms[0]['copay_cents'])
+            if all(line.get('allowed_cents') is not None for line in office):
+                amount = min(amount, min(line['allowed_cents'] for line in office))
+            if any(t.get('deductible_remaining_cents') is None and t.get('deductible_applies') is not False for t in terms):
+                assumptions.append('The payer returned a fixed office copay but no applicable deductible balance. This advance includes the copay only; any deductible responsibility remains for the claim.')
             guidance.update(status='estimated', basis='office_copay',
                             reason='The applicable office-visit copay is collected once. Any additional service responsibility will follow the claim.')
     failure_codes = set((result.get('eligibility_failure') or {}).get('codes') or [])
@@ -102,25 +107,25 @@ def build(result: dict, review: dict | None = None) -> dict:
         elif payments.get('reference') or strict.get('payments_received_cents') is not None:
             guidance['reason'] += ' Recorded payments have been deducted.'
     else:
-        guidance.update(status='deferred', basis='deferred_billing')
+        guidance.update(status='unavailable', basis='insufficient_evidence')
         if benefits.get('active') is False:
-            guidance['reason'] = 'The payer reports inactive coverage for this visit. Collect $0 now and defer billing while the patient resolves coverage.'
+            guidance['reason'] = 'The payer reports inactive coverage for this visit, so the insurance collection amount cannot be calculated from this policy.'
             actions.append('Contact your insurer to resolve inactive coverage or provide your current insurance card.')
         elif identity.get('status') == 'review':
-            guidance['reason'] = 'The returned policy does not match the patient details reliably. Collect $0 now and defer billing.'
+            guidance['reason'] = 'The returned policy does not match the patient details reliably, so its benefits cannot establish the collection amount for this patient.'
             actions.append('Contact your insurer to correct your member details and bring the updated card.')
         elif adverse:
-            guidance['reason'] = 'A referral or authorization issue affects the selected care. Collect $0 now; an advance payment would not resolve the coverage requirement.'
+            guidance['reason'] = 'A referral or authorization issue affects the selected care. The collection amount depends on resolving that coverage requirement.'
         elif benefits.get('has_secondary'):
-            guidance['reason'] = 'More than one plan may pay for this visit. Collect $0 now and bill after the plans coordinate benefits.'
+            guidance['reason'] = 'More than one plan may pay for this visit. The collection amount depends on how those plans coordinate benefits.'
         elif result.get('eligibility_failure') or benefits.get('active') is not True:
-            guidance['reason'] = 'Current payer benefits are unavailable. Collect $0 now and bill after the insurer processes the claim.'
+            guidance['reason'] = 'Current payer benefits are unavailable, and the remaining information does not establish a collection amount.'
         elif benefits.get('service_date_matches') is False:
-            guidance['reason'] = 'The payer response covers a different date. Collect $0 now and bill after benefits for this visit are established.'
+            guidance['reason'] = 'The payer response covers a different date. Benefits for this appointment are needed to calculate its collection amount.'
         elif price.get('service_issues'):
-            guidance['reason'] = 'The selected services do not form a complete billable plan. Collect $0 now; final documented services will determine the claim.'
+            guidance['reason'] = 'The selected services do not form a complete billable plan. A collection amount cannot be calculated for this selection.'
         else:
-            guidance['reason'] = 'The returned benefits or clinic rates do not establish an advance charge for all selected services. Collect $0 now and bill after the insurer processes the claim.'
+            guidance['reason'] = 'The returned benefits and clinic rates do not establish a collection amount for the selected services.'
     for line in lines:
         mapped = 'needs mapping' not in line.get('benefit_basis', '')
         terms = (line.get('benefits') or {}) if mapped else {}
@@ -136,3 +141,67 @@ def build(result: dict, review: dict | None = None) -> dict:
             guidance['services'][-1]['patient_cents'] = 0
     guidance['assumptions'] = list(dict.fromkeys(assumptions))
     return guidance
+
+
+def emg_option(result: dict, rates: list[dict], rules: dict, payload: dict | None,
+               service_date: str, review: dict) -> dict:
+    """Price complete office + NCS + limb EMG scenarios without choosing a CPT level."""
+    from itertools import product
+    from app.insurance import cpt_rules, visit_estimate
+
+    option = {'requested': bool(review.get('emg_required')), 'additional_min_cents': None,
+              'additional_max_cents': None, 'total_min_cents': None, 'total_max_cents': None,
+              'message': 'Select EMG / nerve testing to calculate its additional patient cost.', 'scenario_count': 0}
+    codes = result.get('codes') or []
+    testing = [row for row in codes if row['code'] in cpt_rules.NCS_CODES | cpt_rules.EMG_ADD_ONS]
+    option['included'] = any(row['code'] in cpt_rules.EMG_ADD_ONS for row in testing)
+    if not option['requested'] and not option['included']:
+        return option
+    baseline = [row for row in codes if row not in testing]
+    if not baseline:
+        option['message'] = 'An office consultation is needed as the comparison for additional testing cost.'
+        return option
+    alternatives = result.get('price_range', {}).get('mode') == 'alternatives'
+    baselines = [[row] for row in baseline] if alternatives else [baseline]
+    nerves = [row for row in testing if row['code'] in cpt_rules.NCS_CODES]
+    needles = [row for row in testing if row['code'] in cpt_rules.EMG_ADD_ONS]
+    def preview(code, units=1):
+        return {'id': 'emg-preview:' + code, 'code': code, 'units': units, 'source': 'Additional testing cost scenario'}
+    if needles:
+        extras = [testing]
+        option['message'] = 'Additional patient cost for the testing already selected below.'
+    else:
+        # At most 224 combinations: four office levels, seven NCS levels,
+        # limited/complete limb EMG, and one through four limbs. No order is created.
+        extras = [[nerve, preview(code, units)] for nerve, code, units in product(
+            nerves or [preview(code) for code in sorted(cpt_rules.NCS_CODES)], ('95885', '95886'), range(1, 5))]
+        option['message'] = 'Range includes one nerve-conduction study level and limited or complete needle EMG of 1–4 limbs. Specify the testing below to narrow the amount. This is a cost scenario, not a procedure order.'
+    calculation_benefits = dict(result.get('benefits') or {})
+    if result.get('pricing_assumptions') and calculation_benefits.get('network_status') != 'out_of_network':
+        calculation_benefits['network_status'] = 'in_network'
+    def amount_for(lines):
+        priced = visit_estimate.price_lines(lines, rates, calculation_benefits, rules, payload=payload,
+            service_date=service_date, reviews=review.get('lines'))
+        # A copay-only advance cannot establish the incremental price of EMG.
+        candidate = {**result, 'price_range': priced,
+            'arrival_collection': visit_estimate.arrival_collection(priced, result['benefits'], review),
+            'planning_estimate': visit_estimate.planning_estimate(priced, result['benefits'], result.get('identity') or {})}
+        guidance = build(candidate, review)
+        return guidance['amount_cents'] if priced.get('complete') or guidance['basis'] == 'out_of_pocket_limit' else None
+    differences, totals = [], []
+    for office in baselines:
+        base_amount = amount_for(office)
+        if base_amount is None:
+            option['message'] = 'The applicable office and testing benefits do not yet support an additional patient-cost calculation.'
+            return option
+        for extra in extras:
+            total = amount_for([*office, *extra])
+            if total is None:
+                option['message'] = 'The returned benefits or clinic rates do not cover every testing option. Specify the nerve study and EMG scope below to calculate the additional cost.'
+                return option
+            differences.append(max(0, total - base_amount))
+            totals.append(total)
+    if totals:
+        option.update(additional_min_cents=min(differences), additional_max_cents=max(differences),
+                      total_min_cents=min(totals), total_max_cents=max(totals), scenario_count=len(totals))
+    return option

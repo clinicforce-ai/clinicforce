@@ -189,6 +189,10 @@ def test_identity_review_persists_across_visits_and_rejects_stale_or_unauthorize
     monkeypatch.setattr(api.staff_store, 'save_insurance_identity', persist)
     api._finish_previsit(result, case, inputs, source, raw, session, 'payer-a')
     token = result['context_token']
+    emg = asyncio.run(api.update_visit_review('case', api.VisitReviewInput(context_token=token, revision=1, emg_required=True), None))
+    assert emg['emg_option']['requested'] is True
+    assert emg['selected_ids'] == result['selected_ids']
+    assert emg['checked_at'] == result['checked_at']
     confirm = {'binding': result['identity']['binding'], 'reference': 'Patient card 123', 'notes': 'Patient verified former surname on this insurance.'}
     updated = asyncio.run(api.update_visit_review('case', api.VisitReviewInput(context_token=token, revision=1, identity_confirmation=confirm), None))
     assert updated['identity']['status'] == 'reconciled'

@@ -19,10 +19,10 @@ def scenario(amount=3800):
 @pytest.mark.parametrize('result', [{}, {'eligibility_failure': {'title': 'Timeout'}},
     {'benefits': {'active': False}}, {'benefits': {'active': True, 'network_status': 'out_of_network'}},
     {'benefits': {'active': True}, 'price_range': {'lines': [], 'mode': 'options'}}])
-def test_errors_always_defer_with_numeric_zero_without_claiming_free_care(result):
+def test_errors_do_not_invent_zero_when_no_amount_is_supported(result):
     value = collection_guidance.build(result)
-    assert value['amount_cents'] == 0 and value['status'] == 'deferred'
-    assert 'does not mean your care is free' in value['patient_message']
+    assert value['amount_cents'] is None and value['status'] == 'unavailable'
+    assert 'does not mean your patient responsibility is zero' in value['patient_message']
 
 
 def test_case_specific_amount_changes_and_payments_are_deducted_once():
@@ -41,7 +41,7 @@ def test_contradictions_override_cached_numeric_amount(change):
     result['arrival_collection'] = {'amount_cents': 3800}
     result['benefits'].update(change)
     value = collection_guidance.build(result)
-    assert value['amount_cents'] == 0 and value['status'] == 'deferred'
+    assert value['amount_cents'] is None and value['status'] == 'unavailable'
 
 
 @pytest.mark.parametrize('kind', ['referral', 'authorization'])
@@ -50,18 +50,18 @@ def test_required_or_adverse_approval_does_not_become_an_assumed_approval(kind, 
     result = scenario()
     result['price_range']['lines'][0]['benefits']['requirements'][kind] = requirement
     value = collection_guidance.build(result)
-    assert value['amount_cents'] == 0 and value['status'] == 'deferred'
+    assert value['amount_cents'] is None and value['status'] == 'unavailable'
     assert value['patient_actions']
 
 
 def test_missing_network_defers_positive_amount_but_scoped_contract_can_support_assumed_estimate():
     result = scenario()
     result['benefits']['network_status'] = 'unknown'
-    assert collection_guidance.build(result)['status'] == 'deferred'
+    assert collection_guidance.build(result)['status'] == 'unavailable'
     result['pricing_assumptions'] = ['Exact product participation is assumed for the scoped provider contract.']
     value = collection_guidance.build(result)
-    assert value['amount_cents'] == 3800 and value['network'] == 'In network · assumed'
-    assert 'approval' in ' '.join(value['assumptions'])
+    assert value['amount_cents'] == 3800 and value['network'] == 'Not reported'
+    assert value['requirements']['authorization'] == 'No requirement reported'
 
 
 def test_oop_zero_is_case_evidence_not_a_universal_free_care_default():
@@ -73,7 +73,7 @@ def test_oop_zero_is_case_evidence_not_a_universal_free_care_default():
     assert value['amount_cents'] == 0 and value['basis'] == 'out_of_pocket_limit'
     assert value['services'][0]['patient_cents'] == 0
     result['identity']['status'] = 'review'
-    assert collection_guidance.build(result)['status'] == 'deferred'
+    assert collection_guidance.build(result)['status'] == 'unavailable'
 
 
 def test_new_patient_alternatives_collect_the_lowest_estimate_and_explain_final_complexity():
@@ -130,7 +130,7 @@ def test_standalone_office_copay_is_one_per_visit_and_requires_unambiguous_terms
     value = collection_guidance.build(result)
     assert value['amount_cents'] == 4700 and value['basis'] == 'office_copay'
     result['price_range']['lines'][0]['benefits']['copay_cents'] = 6200
-    assert collection_guidance.build(result)['status'] == 'deferred'
+    assert collection_guidance.build(result)['status'] == 'unavailable'
 
 
 def test_unmapped_service_cannot_inherit_office_zero_cost_benefit():
@@ -158,12 +158,80 @@ def test_plain_office_description_is_not_a_visit_count_restriction():
     assert any('conditional benefit' in r for r in normalized()['review_reasons'])
 
 
-def test_ppo_referral_assumption_is_limited_to_routine_office_and_never_overrides_required():
+def test_ppo_label_does_not_invent_a_member_referral_requirement():
     result = scenario()
     result['plan_details'] = {'stedi': {'names': ['PREFERRED PROVIDER OPTION MEDICAL']}}
-    assert collection_guidance.build(result)['requirements']['referral'] == 'Not required · assumed'
-    result['price_range']['lines'][0]['benefits']['requirements']['referral']['required'] = 'required'
-    assert collection_guidance.build(result)['status'] == 'deferred'
-    result['plan_details']['stedi']['names'] = ['HMO']
-    result['price_range']['lines'][0]['benefits']['requirements']['referral']['required'] = 'unknown'
     assert collection_guidance.build(result)['requirements']['referral'] == 'No requirement reported'
+    result['price_range']['lines'][0]['benefits']['requirements']['referral']['required'] = 'required'
+    assert collection_guidance.build(result)['status'] == 'unavailable'
+
+
+def test_source_statuses_are_not_replaced_with_calculation_assumptions():
+    result = scenario()
+    result['benefits']['network_status'] = 'unknown'
+    result['pricing_assumptions'] = ['Use the scoped clinic contract for this estimate.']
+    result['network_evidence'] = {'network_name': 'Blue Choice PPO', 'product_assumed': True}
+    result['price_range']['lines'][0]['benefits']['authorization_basis'] = 'Payer indicator'
+    value = collection_guidance.build(result)
+    assert value['network'] == 'Blue Choice PPO'
+    assert value['network_source'] == 'Clinic contract; exact product match not confirmed'
+    assert value['requirements']['authorization'] == 'Unknown in payer response'
+    assert value['requirements']['referral'] == 'No requirement reported'
+    assert 'assumed' not in ' '.join([value['network'], *value['requirements'].values()])
+    result['referral_evidence'] = [{'reference': 'ServiceRequest/example'}]
+    assert collection_guidance.build(result)['requirements']['referral'] == 'Referral record on file'
+
+
+def test_missing_deductible_can_use_the_actual_copay_as_partial_advance_with_explanation():
+    result = scenario()
+    result['price_range'].update(complete=False)
+    terms = result['price_range']['lines'][0]['benefits']
+    terms.update(copay_cents=6300, copay_period='DAY', coinsurance_percent='0', oop_remaining_cents=100000)
+    value = collection_guidance.build(result)
+    assert value['amount_cents'] == 6300 and value['basis'] == 'office_copay'
+    assert any('no applicable deductible balance' in text for text in value['assumptions'])
+    terms['copay_cents'] = 2900
+    assert collection_guidance.build(result)['amount_cents'] == 2900
+    result['price_range']['lines'][0]['allowed_cents'] = 2100
+    assert collection_guidance.build(result)['amount_cents'] == 2100
+    terms['deductible_applies'] = True
+    assert collection_guidance.build(result)['amount_cents'] is None
+
+
+def test_saved_legacy_default_zero_is_rebuilt_from_evidence():
+    result = {'benefits': {}, 'collection_guidance': {'amount_cents': 0, 'status': 'deferred'}}
+    value = api._previsit_result({'previsit_context': {'result': result}})
+    assert value['collection_guidance']['amount_cents'] is None
+
+
+def test_surname_warning_does_not_hide_returned_benefits_or_block_amount():
+    result = scenario(4800)
+    result['identity'] = {'status': 'warning', 'message': 'Payer surname differs; first name, date of birth and member ID match.'}
+    assert collection_guidance.build(result)['amount_cents'] == 4800
+    assert result['benefits']['active'] is True
+
+
+def test_emg_comparison_uses_shared_balances_and_never_adds_a_second_visit_copay():
+    from test_visit_estimate import payload, DAY
+    from app.insurance import cpt_rules
+    raw = payload()
+    codes = [{'id': 'office', 'code': '99203', 'units': 1}]
+    rates = [{'code': code, 'allowed_cents': 10000} for code in ['99203', *cpt_rules.NCS_CODES, '95885', '95886']]
+    result = {'codes': codes, 'benefits': commercial.normalize_stedi_271(raw, '98', True), 'identity': {'status': 'warning'}}
+    result['price_range'] = visit_estimate.price_lines(codes, rates, result['benefits'], {}, payload=raw, service_date=DAY)
+    option = collection_guidance.emg_option(result, rates, {'cost_share': 'payer_returned'}, raw, DAY, {'emg_required': True})
+    assert option['scenario_count'] == 56
+    assert option['additional_min_cents'] == option['additional_max_cents'] == 2000
+    assert option['total_min_cents'] == option['total_max_cents'] == 8000
+    assert not option['included']
+    assert collection_guidance.emg_option(result, [], {'cost_share': 'payer_returned'}, raw, DAY, {})['scenario_count'] == 0
+    assert collection_guidance.emg_option(result, [], {'cost_share': 'payer_returned'}, raw, DAY, {'emg_required': True})['total_min_cents'] is None
+    # Explicit testing is priced once, with its actual quantity.
+    result['codes'] += [{'id': code, 'code': code, 'units': 1} for code in ['95907', '95886']]
+    exact = collection_guidance.emg_option(result, rates, {'cost_share': 'payer_returned'}, raw, DAY, {})
+    assert exact['included'] and exact['scenario_count'] == 1 and exact['total_max_cents'] == 8000
+    # Zero is allowed only when the payer actually reports an exhausted balance.
+    raw['benefitsInformation'][2]['benefitAmount'] = '0'
+    result['benefits'] = commercial.normalize_stedi_271(raw, '98', True)
+    zero = collection_guidance.emg_option(result, rates, {'cost_share': 'payer_returned'}, raw, DAY, {})
+    assert zero['additional_max_cents'] == zero['total_max_cents'] == 0
