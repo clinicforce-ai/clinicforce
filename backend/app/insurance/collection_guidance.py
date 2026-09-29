@@ -122,9 +122,10 @@ def build(result: dict, review: dict | None = None) -> dict:
         else:
             guidance['reason'] = 'The returned benefits or clinic rates do not establish an advance charge for all selected services. Collect $0 now and bill after the insurer processes the claim.'
     for line in lines:
-        terms = line.get('benefits') or {}
+        mapped = 'needs mapping' not in line.get('benefit_basis', '')
+        terms = (line.get('benefits') or {}) if mapped else {}
         guidance['services'].append({'id': line.get('id'), 'code': line.get('code'),
-            'benefit': line.get('benefit_basis') or 'Applicable service benefits',
+            'benefit': (line.get('benefit_basis') or 'Applicable service benefits') if mapped else 'Benefit determined when claim is processed',
             'patient_cents': (line.get('calculation') or {}).get('patient_cents') if safe and amount is not None else None,
             'oop_remaining_cents': terms.get('oop_remaining_cents'),
             'copay_cents': terms.get('copay_cents'), 'coinsurance_percent': terms.get('coinsurance_percent'),

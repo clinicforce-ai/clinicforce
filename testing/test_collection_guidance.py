@@ -142,6 +142,9 @@ def test_unmapped_service_cannot_inherit_office_zero_cost_benefit():
         {'place_of_service': '11'}, payload=payload, service_date='2026-09-29')
     assert 'needs mapping' in priced['lines'][0]['benefit_basis']
     assert visit_estimate.planning_estimate(priced, benefits, {}) is None
+    value = collection_guidance.build({'benefits': benefits, 'price_range': priced})
+    assert value['services'][0]['copay_cents'] is None
+    assert value['services'][0]['selected_benefit_ids'] == []
 
 
 def test_plain_office_description_is_not_a_visit_count_restriction():
