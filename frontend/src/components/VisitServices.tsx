@@ -76,7 +76,7 @@ export function ServicePlanner({ result, busy, save, viewEstimate }: { result: P
   }
   return <section className="visit-planner" aria-labelledby="service-plan-title">
     <h3 id="service-plan-title">Choose care for this estimate</h3><p className="visit-muted">Selections update the estimate. Final coding follows the care provided.</p>
-    <div className="selected-service-chips" aria-label="Selected services">{chosen.map(row => <span key={row.id}><Check size={14} aria-hidden="true" />{row.code} × {quantities[row.id!] || '—'}</span>)}{!chosen.length && <span>No services selected</span>}</div>
+    <div className="selected-service-chips" aria-label="Selected services">{chosen.map(row => <span key={row.id}><Check size={14} aria-hidden="true" />{row.code} × {quantities[row.id!] || '—'}</span>)}{!chosen.length && <span>{result.price_range?.mode === 'alternatives' ? 'Office consultation · final E/M level pending' : 'No services selected'}</span>}</div>
     <div className="service-category-buttons" aria-label="Service categories">{groups.map(group => <button key={group.id} aria-pressed={activeGroup?.id === group.id} onClick={() => setCategory(group.id)}>{group.label}</button>)}</div>
     {activeGroup && <><div className="procedure-group-tools"><h3>{activeGroup.label}</h3>{activeGroup.single && <button disabled={busy || !activeGroup.rows.some(row => selected.includes(row.id!))} onClick={() => pickOne(activeGroup.rows, '')}>Remove from plan</button>}</div>
       <div className="procedure-options">{activeGroup.rows.map(row => {

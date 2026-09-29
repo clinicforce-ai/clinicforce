@@ -528,6 +528,11 @@ def _finish_previsit(result: dict, case: dict, inputs: dict, source: dict, paylo
         result['benefits']['requires_review'] = bool(result['benefits']['review_reasons'])
     result['identity'] = comparison
     result['benefits']['identity'] = comparison
+    result['eligibility_reconciliation'] = visit_estimate.reconcile_eligibility(
+        source.get('saved_eligibility') or {}, result['benefits'], result.get('checked_at'))
+    if result['eligibility_reconciliation']['requires_review']:
+        result['benefits'].setdefault('review_reasons', []).append(result['eligibility_reconciliation']['message'])
+        result['benefits']['requires_review'] = True
     payer_plan = commercial.plan_details(payload or {})
     exact_source = {**(pricing_source or source), 'payer_plan_names': payer_plan['names'],
                     'payer_plan_scope': {key: payer_plan.get(key) for key in ('plan_number', 'group_number')}}
@@ -591,7 +596,7 @@ def _finish_previsit(result: dict, case: dict, inputs: dict, source: dict, paylo
     plan_key = hashlib.sha256(json.dumps([token, source.get('recent_completed_appointments', []),
         [(row['id'], row.get('units')) for row in available]], sort_keys=True).encode()).hexdigest()
     prior_plan = case.get('previsit_plan') or {}
-    if prior_plan.get('key') != plan_key or prior_plan.get('plan', {}).get('version') != 2:
+    if prior_plan.get('key') != plan_key or prior_plan.get('plan', {}).get('version') != 3:
         cash_schedule = nmct_cash.schedule(session['practice_id'], inputs['service_date'])
         planning_source = {**source, 'planning_cash_packages': cash_schedule['packages'] if cash_schedule else []}
         prior_plan = {'key': plan_key, 'plan': cpt_suggester.recommend_visit_plan(inputs, planning_source, available)}
@@ -602,6 +607,13 @@ def _finish_previsit(result: dict, case: dict, inputs: dict, source: dict, paylo
     result['available_codes'] = [{**row, 'units': units.get(row['id'], row.get('units'))} for row in available]
     result['payment_mode'] = review.get('payment_mode', 'insurance')
     result['ecw_saved_eligibility'] = source.get('saved_eligibility')
+    labels = {'selected_ids': 'Services', 'confirmed_units': 'Service quantities', 'payment_mode': 'Payment method',
+              'cash_selection': 'Cash package', 'verification': 'Benefit or approval evidence',
+              'identity_confirmation': 'Patient identity', 'product_mapping': 'Plan mapping',
+              'payments_received_cents': 'Recorded payments'}
+    result['audit_trail'] = [{'checked_at': entry.get('verified_at'), 'by': entry.get('verified_by') or 'Clinic staff',
+                            'changes': [label for key, label in labels.items() if key in entry.get('changes', {})]}
+                           for entry in case.get('visit_review_history', [])]
     result['referral_evidence'] = source.get('referral_evidence', [])
     result['appointment_context'] = {key: source.get(key) for key in ('location', 'rendering_provider', 'appointment_status')}
     result['appointment_context'].update(imported_fields=source.get('appointment_fields', []),
@@ -628,7 +640,7 @@ def _finish_previsit(result: dict, case: dict, inputs: dict, source: dict, paylo
         response_reference=(payload or {}).get('id'), selected_ids=selected_ids)
     result.pop('network_evidence', None)
     _attach_previsit_pricing(result, session['practice_id'], inputs, exact_source, payer_id, result['benefits'], payload=payload,
-                            review={**review, 'selected_ids': selected_ids})
+                            review=review)
     result['arrival_collection'] = visit_estimate.arrival_collection(result.get('price_range') or {}, result['benefits'], review)
     result['planning_estimate'] = (visit_estimate.planning_estimate(result.get('price_range') or {}, result['benefits'], comparison)
                                    if result['arrival_collection']['amount_cents'] is None else None)
@@ -1318,6 +1330,9 @@ async def previsit_estimate(value: PrevisitInput, request: Request, background_t
             fresh = datetime.fromisoformat(saved["checked_at"]) + timedelta(hours=24) > datetime.now(timezone.utc)
         except (TypeError, ValueError, KeyError):
             fresh = False
+        if visit_estimate.reconcile_eligibility(source.get('saved_eligibility') or {},
+                saved.get('benefits') or {}, saved.get('checked_at'))['requires_review']:
+            fresh = False
         if fresh:
             result["checked_at"] = saved.get("checked_at")
             result["benefits"] = dict(saved.get("benefits") or {})
@@ -1504,7 +1519,7 @@ async def update_visit_review(case_id: str, value: VisitReviewInput, request: Re
             {**item.model_dump(mode='json'), 'verified_at': _now(), 'actor_id': session['staff']['id'],
              'plan_scope': {key: commercial.plan_details(payload).get(key) for key in ('plan_number', 'group_number')},
              'network_id': network['id'], 'network_reference': network['evidence_reference']})
-    case.setdefault('visit_review_history', []).append({'revision': value.revision, 'context_token': value.context_token, 'changes': value.model_dump(mode='json', exclude_none=True), 'actor_id': session['staff']['id'], 'verified_at': _now()})
+    case.setdefault('visit_review_history', []).append({'revision': value.revision, 'context_token': value.context_token, 'changes': value.model_dump(mode='json', exclude_none=True), 'actor_id': session['staff']['id'], 'verified_by': session['staff'].get('display_name'), 'verified_at': _now()})
     case['visit_review'] = review
     if not failed:
         result['issues'] = []

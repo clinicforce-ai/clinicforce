@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { ArrowLeft, Camera, Check, ChevronRight, FileText, FolderOpen, Inbox, LoaderCircle, LogOut, Plus, QrCode, RefreshCw, Upload, Users } from 'lucide-react'
 import InsuranceCards from './InsuranceCards'
+import './CommercialEstimator.css'
 import InsuranceCardScanner from './InsuranceCardScanner'
 import StaffUploadLinks from './StaffUploadLinks'
 import StaffShareLink from './StaffShareLink'
@@ -195,7 +196,7 @@ export default function StaffWorkspace({ onBack, onOpenInsurance, onScanQr, onCr
       const { ecw_match, ...record } = await createStaffEcwLookup(lookupDetails)
       setIntake(record); setIntakes(current => [record, ...current.filter(row => row.id !== record.id)])
       setEcwMatch(ecw_match); setFields(patientFieldsFrom(record))
-      if (record.patient) { onOpenInsurance(record.id, 'commercial', true); return }
+      if (record.patient) { onOpenInsurance(record.id, 'commercial', false); return }
       const result = await findStaffPatients({ given_name: record.fields.given_name || '', family_name: record.fields.family_name || '', birth_date: record.fields.birth_date || '' })
       // eCW already matched this exact name and date of birth. When one clinic
       // record (or none) has the same identity, open the estimate directly.
@@ -204,7 +205,7 @@ export default function StaffWorkspace({ onBack, onOpenInsurance, onScanQr, onCr
         try {
           const confirmed = await confirmStaffPatient(record.id, { ...patientFieldsFrom(record), ...(result.patients[0] ? { patient_id: result.patients[0].id } : {}), identity_confirmed: true })
           setIntake(confirmed); setIntakes(current => current.map(row => row.id === confirmed.id ? confirmed : row))
-          onOpenInsurance(confirmed.id, 'commercial', true)
+          onOpenInsurance(confirmed.id, 'commercial', false)
           return
         } catch {
           // A concurrent eCW link or changed clinic record is handled by the
@@ -232,7 +233,7 @@ export default function StaffWorkspace({ onBack, onOpenInsurance, onScanQr, onCr
     void perform('saving', async () => {
       const record = await confirmStaffPatient(intake.id, { ...fields, ...(match === 'new' ? {} : { patient_id: match }), identity_confirmed: true })
       setIntake(record); setIntakes(current => current.map(row => row.id === record.id ? record : row)); setTab('overview')
-      if (record.source === 'ecw_lookup') { onOpenInsurance(record.id, 'commercial', true); return }
+      if (record.source === 'ecw_lookup') { onOpenInsurance(record.id, 'commercial', false); return }
       navigate('record')
       setNotice('Patient confirmed. Insurance is saved to this clinic without creating a patient account.')
     })
@@ -244,6 +245,12 @@ export default function StaffWorkspace({ onBack, onOpenInsurance, onScanQr, onCr
 
   if (restoring) return <section className="staff-workspace"><div className="staff-login"><p role="status">Restoring your staff session…</p></div></section>
   if (!session) return <section className="staff-workspace"><div className="staff-login"><button type="button" className="staff-text-button" onClick={onBack}><ArrowLeft size={18} /> Back</button><div className="staff-eyebrow">ClinicForce · Staff workspace</div><h1 tabIndex={-1} ref={heading}>Sign in to your clinic</h1><p className="staff-muted">Review submitted insurance cards and manage patient insurance. Patients can be added without a ClinicForce account.</p>{alerts}<form onSubmit={event => { event.preventDefault(); const form = event.currentTarget; const data = new FormData(form); void perform('login', async () => { const result = await loginStaff(String(data.get('username')).trim(), String(data.get('password'))); form.reset(); setSession(result.staff); setScreen('patients') }) }}><label className="staff-field"><span>Email or staff username</span><input name="username" autoComplete="username" required disabled={Boolean(busy)} /></label><label className="staff-field"><span>Password</span><input name="password" type="password" autoComplete="current-password" required disabled={Boolean(busy)} /></label><button className="staff-primary staff-full" disabled={Boolean(busy)}>Sign in</button></form><div className="staff-login-links"><button type="button" onClick={onCreateClinic} disabled={Boolean(busy)}>Create a clinic account <ChevronRight size={17} /></button><button type="button" onClick={onJoinClinic} disabled={Boolean(busy)}>Join your clinic <ChevronRight size={17} /></button><button type="button" className="staff-text-button" onClick={onOpenPatientQr} disabled={Boolean(busy)}><QrCode size={18} /> Open a patient QR</button></div><p className="staff-small staff-muted">Clinic administrators can invite colleagues or create staff accounts. A patient QR opens only the records shared with its passcode.</p></div></section>
+
+  if (busy === 'lookup') return <section className="visit-estimator" aria-labelledby="lookup-estimate-title" aria-busy="true">
+    <header className="visit-page-header"><h1 id="lookup-estimate-title">Insurance estimator</h1><span className="visit-practice">{session.practice_name}</span></header>
+    <div className="visit-patient-bar"><div><div><strong>{lookupDetails.given_name} {lookupDetails.family_name}</strong><small>DOB {lookupDetails.birth_date}</small></div></div></div>
+    <div className="visit-empty" role="status"><LoaderCircle className="visit-spin" size={26} aria-hidden="true" /><h2>Finding the patient and scheduled appointment</h2><p>ClinicForce will pull demographics, insurance and available cards, reconcile eligibility, and prepare the arrival estimate.</p></div>
+  </section>
 
   if (screen === 'add' && camera) return <section className="staff-workspace staff-scan-focus"><div className="staff-scan-content"><h1 className="staff-sr-only" tabIndex={-1} ref={heading}>Scan insurance card</h1>{alerts}<InsuranceCardScanner onCaptured={saveCard} onCancel={() => setCamera(false)} /></div></section>
 
@@ -258,13 +265,13 @@ export default function StaffWorkspace({ onBack, onOpenInsurance, onScanQr, onCr
       </>}
       {screen === 'links' && <StaffUploadLinks key={linkPatient?.id || linkPatient?.intakeId || 'new'} patientId={linkPatient?.id} intakeId={linkPatient?.intakeId} patientName={linkPatient?.name} initialEmail={linkPatient?.email} backLabel={linkBack === 'record' ? 'Back to patient' : linkBack === 'inbox' ? 'Back to inbox' : 'Back to clinical patients'} onBack={() => navigate(linkBack)} onOpenIntake={openIntake} />}
       {screen === 'lookup' && <div className="staff-narrow">
-        <header className="staff-header"><div><div className="staff-eyebrow">Add insurance</div><h1 tabIndex={-1} ref={heading}>Pull patient from eCW</h1><p className="staff-muted">Enter the patient's name and date of birth. ClinicForce will find or update their clinic record, refresh their visit and insurance details, and open the estimate automatically.</p></div></header>
+        <header className="staff-header"><div><div className="staff-eyebrow">Add insurance</div><h1 tabIndex={-1} ref={heading}>Find patient & estimate</h1><p className="staff-muted">Enter the patient's name and date of birth. ClinicForce will find or update their clinic record, refresh their visit and insurance details, and open the estimate automatically.</p></div></header>
         <section className="staff-panel"><h2>Patient details</h2><form onSubmit={startEcwLookup}><div className="staff-two-columns">
           <label className="staff-field"><span>First name</span><input required maxLength={100} autoComplete="given-name" value={lookupDetails.given_name} onChange={event => setLookupDetails(current => ({ ...current, given_name: event.target.value }))} disabled={Boolean(busy)} /></label>
           <label className="staff-field"><span>Middle initial (optional)</span><input maxLength={10} value={lookupDetails.middle_initial} onChange={event => setLookupDetails(current => ({ ...current, middle_initial: event.target.value }))} disabled={Boolean(busy)} /></label>
           <label className="staff-field"><span>Last name</span><input required maxLength={100} autoComplete="family-name" value={lookupDetails.family_name} onChange={event => setLookupDetails(current => ({ ...current, family_name: event.target.value }))} disabled={Boolean(busy)} /></label>
           <label className="staff-field"><span>Date of birth</span><input required type="date" max={today()} autoComplete="bday" value={lookupDetails.birth_date} onChange={event => setLookupDetails(current => ({ ...current, birth_date: event.target.value }))} disabled={Boolean(busy)} /></label>
-        </div><button className="staff-primary" disabled={Boolean(busy)}>Pull from eCW</button></form></section>
+        </div><button className="staff-primary" disabled={Boolean(busy)}>Open insurance estimator</button></form></section>
 <button onClick={() => navigate('patients')}>Back to patients</button></div>}
       {screen === 'add' && <div className="staff-narrow">
         <section className="staff-panel"><h2>Scan or upload insurance card</h2><p className="staff-muted">We will read the card and fill the available fields. Confirm the patient identity before saving a patient record.</p><form onSubmit={event => { event.preventDefault(); saveCard(files) }}><div className="staff-two-columns"><div><Camera className="staff-feature-icon" size={30} /><h3>Scan the card</h3><button className="staff-primary" type="button" disabled={Boolean(busy)} onClick={() => setCamera(true)}>Open card scanner</button></div><div><Upload className="staff-feature-icon" size={30} /><h3>Upload a photo or PDF</h3><label className="staff-field"><span>Card files</span><input type="file" accept="image/jpeg,image/png,application/pdf" multiple onChange={event => { const next = Array.from(event.target.files || []); setFiles(next); setError(next.length ? checkFiles(next) : '') }} disabled={Boolean(busy)} aria-describedby="staff-upload-help" /><small id="staff-upload-help">JPG, PNG, or PDF · Up to 2 files and 2 pages total · 10 MB per file.</small></label><button disabled={Boolean(busy) || !files.length}>Save card and continue</button></div></div></form></section>

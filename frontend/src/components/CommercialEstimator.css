@@ -181,3 +181,33 @@
 .visit-identity-notice { display: flex; align-items: center; gap: 8px; color: var(--ve-muted); font-size: 14px; }
 .visit-identity-notice svg { flex-shrink: 0; color: var(--ve-teal); }
 .visit-raw-response { max-height: 28rem; max-width: 100%; overflow: auto; padding: 16px; background: var(--ve-canvas); font-size: 12px; white-space: pre-wrap; overflow-wrap: anywhere; }
+
+.visit-context-facts { display: grid; grid-template-columns: 1fr 2fr 1.2fr 1.5fr; gap: 16px; margin: 0; padding: 16px 20px; border-bottom: 1px solid var(--ve-line); }
+.visit-context-facts dt { font-size: 12px; color: var(--ve-muted); }
+.visit-context-facts dd { margin: 4px 0 0; overflow-wrap: anywhere; }
+.visit-overview .visit-snapshots { padding: 0 24px; margin: 0; gap: 10px; }
+.visit-overview .visit-snapshots > div { background: var(--ve-canvas); border: 0; align-items: flex-start; }
+.visit-overview .visit-snapshots strong { font-size: 16px; }
+.arrival-context { border-left: 1px solid var(--ve-line); padding-left: 24px; }
+.arrival-context h3 { margin: 8px 0; font-size: 18px; }
+.arrival-context p { font-size: 14px; color: var(--ve-muted); }
+.visit-estimator .arrival-sources { margin: 16px 24px; font-size: 13px; color: var(--ve-muted); }
+.visit-detail-sections { display: grid; gap: 10px; margin-top: 24px; }
+.visit-detail-section { background: var(--ve-white); border: 1px solid var(--ve-line); border-radius: 12px; scroll-margin-top: 20px; }
+.visit-detail-section > summary { padding: 18px 20px; cursor: pointer; min-height: 56px; font-weight: 500; }
+.visit-detail-section > summary:focus-visible { outline: 2px solid var(--ve-teal); outline-offset: 3px; border-radius: 12px; }
+.visit-detail-section[open] > summary { border-bottom: 1px solid var(--ve-line); }
+.planning-summary { padding-bottom: 24px; }
+.planning-summary .cost-picture { margin-top: 16px; }
+.visit-identity-notice { color: var(--ve-review); }
+.visit-identity-notice svg { color: var(--ve-review); }
+@media (max-width: 800px) { .visit-context-facts { grid-template-columns: 1fr 1fr; } }
+@media (max-width: 600px) {
+  .visit-context-facts { padding: 14px; gap: 12px; font-size: 14px; }
+  .visit-context-facts > div:nth-child(2) { grid-column: 1 / -1; grid-row: 2; }
+  .arrival-context { padding: 16px 0 0; border-left: 0; border-top: 1px solid var(--ve-line); }
+  .visit-overview .visit-snapshots { padding: 0 16px; }
+  .visit-estimator .arrival-sources { margin: 16px; }
+  .visit-detail-section > summary { padding: 16px; }
+}
+@media print { .visit-detail-section { break-inside: avoid; } }

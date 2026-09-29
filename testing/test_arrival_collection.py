@@ -122,3 +122,56 @@ def test_returned_service_date_does_not_verify_a_different_appointment():
     payload['subscriber']['dates']['plan']['end'] = '2026-09-27'
     payload['plans'][0]['dates'] = {'plan': {'start': '2026-01-01', 'end': '2026-12-31'}}
     assert normalize_stedi_271(payload, '98', True, service_date='2026-09-28')['active'] is None
+
+
+def test_alternative_office_levels_collect_one_common_verified_copay():
+    benefits = {'active': True, 'network_status': 'in_network'}
+    lines = [{'code': str(code), 'units': 1, 'benefits': {
+        'copay_cents': 4000, 'copay_period': 'VISIT', 'cost_share': 'copay',
+        'deductible_applies': False, 'oop_remaining_cents': 100000,
+        'requirements': {kind: {'cleared': True} for kind in ('referral', 'authorization')},
+    }} for code in range(99202, 99206)]
+    price = {'mode': 'alternatives', 'lines': lines}
+    value = visit_estimate.arrival_collection(price, benefits, {})
+    assert value['amount_cents'] == 4000 and value['status'] == 'copay_only'
+    for change in ({'copay_cents': 5000}, {'deductible_applies': True}, {'requires_review': True},
+                   {'requirements': {'referral': {'cleared': False}}}):
+        varied = deepcopy(price)
+        varied['lines'][-1]['benefits'].update(change)
+        assert visit_estimate.arrival_collection(varied, benefits, {})['amount_cents'] is None
+    assert visit_estimate.arrival_collection({**price, 'conditional': True}, benefits, {})['amount_cents'] is None
+    assert visit_estimate.arrival_collection(price, {**benefits, 'network_status': 'unknown'}, {})['amount_cents'] is None
+    for row in lines:
+        row['benefits']['oop_remaining_cents'] = 0
+    assert visit_estimate.arrival_collection(price, benefits, {})['amount_cents'] == 0
+    complete = {**price, 'complete': True, 'patient_min_cents': 0, 'patient_max_cents': 0}
+    for row in lines:
+        row['benefits'].update(cost_share='coinsurance', copay_cents=None)
+    assert visit_estimate.arrival_collection(complete, benefits, {})['amount_cents'] == 0
+    assert visit_estimate.arrival_collection({**complete, 'conditional': True}, benefits, {})['amount_cents'] is None
+    assert visit_estimate.arrival_collection({**complete, 'patient_max_cents': 4000}, benefits, {})['amount_cents'] is None
+
+
+def test_saved_ecw_eligibility_reconciles_by_time_without_inventing_benefits():
+    saved = {'status': 'verified_inactive', 'active': False, 'checked_at': '2026-09-29T10:00:00Z'}
+    assert visit_estimate.reconcile_eligibility(saved, {'active': True}, '2026-09-29T11:00:00Z')['requires_review'] is False
+    conflict = visit_estimate.reconcile_eligibility(saved, {'active': True}, '2026-09-29T09:00:00Z')
+    assert conflict['requires_review'] is True
+    benefits = {'active': True, 'network_status': 'in_network', 'review_reasons': [conflict['message']]}
+    assert visit_estimate.arrival_collection({'complete': True, 'patient_max_cents': 0}, benefits, {})['amount_cents'] is None
+    assert visit_estimate.reconcile_eligibility(saved, {'active': True}, None)['requires_review'] is True
+    assert visit_estimate.reconcile_eligibility(saved, {'active': False}, saved['checked_at'])['requires_review'] is False
+    assert 'still needed' in visit_estimate.reconcile_eligibility(saved, {}, None)['message']
+
+
+def test_uncoded_appointment_uses_em_alternatives_without_model_call():
+    from app.insurance import cpt_suggester
+    for kind, expected in [('new', range(99202, 99206)), ('established', range(99212, 99216))]:
+        inputs = {'visit_type': kind, 'reason': 'Neurology consultation', 'lines': []}
+        codes = api._previsit_codes(inputs)
+        with patch.object(cpt_suggester.boto3, 'client') as model:
+            plan = cpt_suggester.recommend_visit_plan(inputs, {}, codes)
+        model.assert_not_called()
+        assert [row['code'] for row in codes] == list(map(str, expected))
+        assert plan['recommended_ids'] == [] and plan['method'] == 'appointment'
+    assert ecw_backend._display({'name': [{'use': 'official', 'text': 'Dr. Alex Example'}]}) == 'Dr. Alex Example'

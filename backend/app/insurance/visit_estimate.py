@@ -4,7 +4,7 @@ from __future__ import annotations
 from copy import deepcopy
 from collections import Counter
 import re
-from datetime import date
+from datetime import date, datetime
 
 from app.insurance import commercial, cpt_rules, plan_benefits, identity
 
@@ -285,14 +285,48 @@ def price_lines(codes: list[dict], rates: list[dict], benefits: dict, rules: dic
     return result
 
 
+def reconcile_eligibility(saved: dict, benefits: dict, checked_at: str | None) -> dict:
+    """Reconcile dated coverage evidence; an in-force flag supplies no benefit amounts."""
+    active = benefits.get('active')
+    if saved.get('status') not in {'verified_active', 'verified_inactive'}:
+        return {'requires_review': False, 'message': (
+            'Current benefit information comes from Stedi; no usable current eCW eligibility was returned.' if type(active) is bool else
+            'No usable current eCW or Stedi eligibility was returned. Payer verification is still needed.')}
+    if type(active) is not bool:
+        return {'requires_review': False, 'message': 'Current eCW eligibility is on file. Additional payer benefits are still needed for this visit.'}
+    if active == saved.get('active'):
+        return {'requires_review': False, 'message': 'eCW and Stedi agree on coverage. Stedi supplies the additional service benefits.'}
+    try:
+        newer = datetime.fromisoformat(checked_at.replace('Z', '+00:00')) > datetime.fromisoformat(saved['checked_at'].replace('Z', '+00:00'))
+    except (AttributeError, KeyError, TypeError, ValueError):
+        newer = False
+    return {'requires_review': not newer, 'message': (
+        'The newer Stedi check updates the earlier eCW coverage status. Both results are retained.' if newer else
+        'Eligibility evidence conflicts: the eCW result is newer or the order of the checks is unknown. Refresh payer benefits before collection.')}
+
+
 def arrival_collection(price: dict, benefits: dict, review: dict) -> dict:
     """At-service patient obligations, separate from the insurer's later payment."""
     result = {'amount_cents': None, 'estimated_cents': None, 'verified_copay_cents': None, 'status': 'verify', 'basis': 'patient_obligations',
               'prior_balance_cents': None, 'noncovered_cents': None, 'payments_received_cents': None,
               'reason': 'Verify coverage, planned services, benefits and approval requirements before collecting.'}
-    if benefits.get('active') is not True or benefits.get('network_status') != 'in_network' or benefits.get('has_secondary') or benefits.get('service_date_matches') is False or any('identity' in reason for reason in benefits.get('review_reasons', [])):
+    if benefits.get('active') is not True or benefits.get('network_status') != 'in_network' or benefits.get('has_secondary') or benefits.get('service_date_matches') is False or any('identity' in reason.lower() or 'evidence' in reason.lower() for reason in benefits.get('review_reasons', [])):
         return result
-    if price.get('conditional') or price.get('mode') in {'alternatives', 'options'}:
+    same_alternative_total = (price.get('mode') == 'alternatives' and price.get('complete')
+                              and price.get('patient_min_cents') is not None
+                              and price.get('patient_min_cents') == price.get('patient_max_cents'))
+    if price.get('mode') == 'alternatives' and not price.get('conditional') and not same_alternative_total:
+        # One office visit: collect a common verified copay only when every
+        # possible level resolves to the same applicable benefit and approvals.
+        lines = price.get('lines') or []
+        office_codes = {str(n) for n in (*range(99202, 99206), *range(99212, 99216))}
+        if lines and all(row.get('code') in office_codes and
+                         all(row.get('benefits', {}).get('requirements', {}).get(kind, {}).get('cleared')
+                             for kind in ('referral', 'authorization')) for row in lines):
+            amounts = [arrival_collection({'complete': False, 'lines': [row]}, benefits, review) for row in lines]
+            if all(row['status'] == 'copay_only' for row in amounts) and len({row['verified_copay_cents'] for row in amounts}) == 1:
+                return {**amounts[0], 'reason': 'The same verified office-visit copay applies to every anticipated E/M level. ' + amounts[0]['reason']}
+    if price.get('conditional') or price.get('mode') == 'options' or (price.get('mode') == 'alternatives' and not same_alternative_total):
         result['estimated_cents'] = price.get('patient_max_cents')
         result['reason'] = 'This is a planning amount. Confirm the services and resolve benefit or approval conditions before collection.'
         return result
