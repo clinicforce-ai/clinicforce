@@ -262,7 +262,7 @@ export default function CommercialEstimator({ onBack, intakeId, refreshBenefits 
             <div><FileText size={20} aria-hidden="true" /><span>Referral<strong>{requirementLabel('referral')}</strong>{guidance?.requirement_sources?.referral && <small>{guidance.requirement_sources.referral}</small>}</span></div>
             <div><ShieldCheck size={20} aria-hidden="true" /><span>Prior authorization<strong>{requirementLabel('authorization')}</strong>{guidance?.requirement_sources?.authorization && <small>{guidance.requirement_sources.authorization}</small>}</span></div>
           </div>
-          <p className="arrival-sources">Sources: eCW{result.checked_at ? ` + Stedi · benefits checked ${visitDate(result.checked_at)} · ${visitTime(result.checked_at)}` : ' · Current payer benefits unavailable'}</p>
+          <p className="arrival-sources">Sources: eCW{tooEarly ? ' · Payer check deferred until closer to the visit' : result.checked_at ? ` + Stedi · benefits checked ${visitDate(result.checked_at)} · ${visitTime(result.checked_at)}` : ' · Current payer benefits unavailable'}</p>
           <div className="overview-plan-name"><ShieldCheck size={16} aria-hidden="true" /><span>{cash ? 'Clinic self-pay schedule' : planName || result.payer || 'Policy details not returned'}</span>{!cash && cashPrice && <span className="cash-comparison">Cash option {cashPrice}</span>}</div>
         </section>
         {emg && !cash && <section className="visit-overview emg-option" aria-label="Additional testing">
@@ -313,7 +313,7 @@ export default function CommercialEstimator({ onBack, intakeId, refreshBenefits 
             {intakeId && result.check_id && <button className="visit-delete-button" disabled={!!busy || recovering} onClick={() => void deleteCheck()}><Trash2 size={15} />{cleanupPending ? 'Retry file cleanup' : 'Delete saved check'}</button>}
           </section></div></details>
         </div>
-        <footer className="visit-result-footer"><span><Clock3 size={14} aria-hidden="true" />{result.checked_at ? `Benefits checked ${visitDate(result.checked_at)} · ${visitTime(result.checked_at)}` : 'Benefits not yet returned'}</span><button disabled={!!busy || cleanupPending || recovering} onClick={() => void estimate(true)}><RefreshCw size={16} />Check again</button></footer>
+        <footer className="visit-result-footer"><span><Clock3 size={14} aria-hidden="true" />{tooEarly ? `Benefits check opens ${visitDate(result.eligibility_timing!.check_from!)}` : result.checked_at ? `Benefits checked ${visitDate(result.checked_at)} · ${visitTime(result.checked_at)}` : 'Benefits not yet returned'}</span><button disabled={!!busy || cleanupPending || recovering} onClick={() => void estimate(true)}><RefreshCw size={16} />Check again</button></footer>
       </> : !error && !busy && <div className="visit-empty"><CalendarDays size={28} /><h2>{selected ? 'Preparing this visit' : 'No upcoming visit returned'}</h2><p>{selected ? 'Reading the appointment and benefits.' : 'Clinicforce needs a scheduled eCW visit to match the date, provider and insurance.'}</p><button onClick={() => void load()}><RefreshCw size={16} />Refresh visits</button></div>}
     </div>
   </section>
