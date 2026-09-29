@@ -40,6 +40,8 @@ def catalog() -> list[dict]:
     descriptions = {**{code: 'Office consultation' for code in NEW | ESTABLISHED},
                     **{code: 'Nerve conduction study' for code in cpt_rules.NCS_CODES},
                     '95885': 'Limited needle EMG', '95886': 'Complete needle EMG',
+                    '11104': 'Skin punch biopsy · first site', '11105': 'Skin punch biopsy · additional site',
+                    **{code: 'EEG · confirm duration and component' for code in ('95812', '95813', '95816', '95819', '95822')},
                     **{code: 'Botox injection procedure — confirm indication and site' for code in BOTOX},
                     'J0585': 'Botox drug, per unit'}
     return [{'id': 'nmct-cash:' + code, 'code': code, 'description': description,

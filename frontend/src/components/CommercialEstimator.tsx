@@ -216,7 +216,8 @@ export default function CommercialEstimator({ onBack, intakeId, refreshBenefits 
   const payerPatient = result?.insurance_details?.payer_patient
   const policyDates = result?.insurance_details?.payer_coverage_period?.start ? result.insurance_details.payer_coverage_period : result?.insurance_details?.coverage_period
 
-  const policyStatus = benefits?.service_date_matches === false ? 'Coverage returned · verify appointment date' : benefits?.active === true ? 'Coverage active' : benefits?.active === false ? 'Coverage inactive' : result?.ecw_coverage_active ? 'Policy in eCW · verify benefits' : 'Coverage check in progress'
+  const tooEarly = result?.eligibility_timing?.status === 'too_early'
+  const policyStatus = tooEarly ? 'Check closer to visit' : benefits?.service_date_matches === false ? 'Coverage returned · verify appointment date' : benefits?.active === true ? 'Coverage active' : benefits?.active === false ? 'Coverage inactive' : result?.ecw_coverage_active ? 'Policy in eCW · verify benefits' : 'Coverage check in progress'
 
   const cash = result?.payment_mode === 'cash'
   const calculating = (!!busy && busy !== 'delete') || recovering || (!!selected && !result && !error)
@@ -226,7 +227,7 @@ export default function CommercialEstimator({ onBack, intakeId, refreshBenefits 
   const emg = result?.emg_option
   const emgScenario = !cash && emg?.requested && !emg.included
   const amount = calculating || error ? null : cash ? cashPrice : emgScenario ? emg.total_min_cents != null ? money(emg.total_min_cents) : null : supportedAmount ? money(guidance!.amount_cents!) : null
-  const amountText = calculating ? 'Calculating…' : amount || 'Amount unavailable'
+  const amountText = calculating ? 'Calculating…' : amount || (tooEarly ? 'Too early to check' : 'Amount unavailable')
   const amountLabel = 'Collect at arrival'
   const explanation = calculating ? 'Reading the visit, insurance and applicable benefits to calculate the amount.' : cash ? cashPrice && !error ? 'Clinic self-pay price for this service plan.' : 'The clinic cash price could not be calculated for this service plan.' : emgScenario ? emg.total_min_cents != null ? 'Lowest estimated total for the office consultation plus EMG / nerve testing. The testing scope below shows the possible range.' : emg.message : guidance?.reason || unavailableReason
   const requirementLabel = (kind: 'referral' | 'authorization') => guidance?.requirements[kind] || 'Determined by plan'
@@ -238,7 +239,7 @@ export default function CommercialEstimator({ onBack, intakeId, refreshBenefits 
     <div className="visit-patient-bar"><div><span className="patient-monogram" aria-hidden="true">{patient?.given_name?.[0]}{patient?.family_name?.[0]}</span><div><strong>{patient ? `${patient.given_name} ${patient.family_name}` : 'Patient record'}</strong>{patient?.birth_date && <small>DOB {visitDate(patient.birth_date)}</small>}</div></div><span className={benefits?.active === true && benefits.service_date_matches !== false ? 'coverage-chip' : 'coverage-chip is-neutral'}><ShieldCheck size={18} aria-hidden="true" />{policyStatus}</span></div>
     <div className="visit-appointment-strip"><CalendarDays size={22} aria-hidden="true" /><label>Scheduled visit<select value={selectedVisit} disabled={!!busy || !appointments.length} onChange={event => chooseVisit(event.target.value)}>{appointments.length ? appointments.map(visit => <option key={visit.id} value={visit.id}>{visitDate(visit.start)} · {visitTime(visit.start, result?.appointment_context?.timezone)} · {visit.reason || 'Scheduled care'}</option>) : <option value="">{loaded ? 'No scheduled visit returned by eCW' : 'Loading appointments…'}</option>}</select></label><button className="visit-icon-button" aria-label="Refresh visits" disabled={!!busy} onClick={() => void load()}><RefreshCw size={18} className={busy === 'visits' ? 'visit-spin' : ''} /></button></div>
     {result && <dl className="visit-context-facts">
-      <div><dt>Visit type</dt><dd>{result.visit_type === 'new' ? 'New patient' : result.visit_type === 'established' ? 'Established patient' : 'Not returned'}</dd></div>
+      <div><dt>Visit type</dt><dd>{result.visit_type === 'new' ? 'New patient' : result.visit_type === 'established' ? 'Established patient' : result.appointment_context?.appointment_type || 'Not returned'}</dd></div>
       <div><dt>Reason</dt><dd>{result.reason || selected?.reason || 'Not returned'}</dd></div>
       <div><dt>Provider</dt><dd>{provider || 'Name not returned by eCW'}</dd></div>
       <div><dt>Insurance</dt><dd>{result.payer || 'Not returned'}<small>{planName}</small></dd></div>
@@ -251,12 +252,12 @@ export default function CommercialEstimator({ onBack, intakeId, refreshBenefits 
         <section id="visit-estimate" className="visit-overview" aria-labelledby="payment-heading">
           <div className="overview-heading"><h2 id="payment-heading">{cash ? 'Self-pay estimate' : 'Arrival collection'}</h2><div className="payment-toggle" aria-label="Payment method"><button aria-pressed={!cash} disabled={!!busy || recovering} onClick={() => { if (cash) void saveReview({ payment_mode: 'insurance' }) }}><ShieldCheck size={16} />Insurance</button><button aria-pressed={cash} disabled={!!busy || recovering} onClick={() => { if (!cash) void saveReview({ payment_mode: 'cash' }) }}><Wallet size={16} />Cash</button></div></div>
           <div className="overview-amounts"><div className="arrival-total"><span>{amountLabel}</span><strong className={!amount ? 'amount-pending' : undefined} role="status">{amountText}</strong><p><b>Why:</b> {explanation}</p>
-            {!cash && <><span className="estimate-condition">{amount ? 'Advance estimate · assumptions apply.' : calculating ? 'Checking applicable benefits…' : 'No amount calculated.'}</span><p>{!calculating && (guidance?.patient_message || 'Missing information does not establish a zero patient cost.')}</p>
+            {!cash && <><span className="estimate-condition">{amount ? 'Advance estimate · assumptions apply.' : calculating ? 'Checking applicable benefits…' : tooEarly ? 'Appointment found · check within 7 days.' : 'No amount calculated.'}</span><p>{!calculating && (guidance?.patient_message || 'Missing information does not establish a zero patient cost.')}</p>
               {!!guidance?.patient_actions.length && <div><b>Tell the patient:</b><ul>{guidance.patient_actions.map(action => <li key={action}>{action}</li>)}</ul></div>}
               {!!guidance?.assumptions.length && <details><summary>Assumptions used</summary><ul>{guidance.assumptions.map(item => <li key={item}>{item}</li>)}</ul></details>}</>}
           </div><div className="arrival-context"><span className="visit-label">Anticipated service</span><h3>{anticipatedService || result.reason || 'Service not established'}</h3><p>Based on the scheduled appointment. Modify the services below if the planned care changes.</p></div></div>
           <div className="visit-snapshots" aria-label="Coverage summary">
-            <div><ShieldCheck size={20} aria-hidden="true" /><span>Coverage<strong>{benefits?.service_date_matches === false ? 'Different date returned' : benefits?.active === true ? 'Active' : benefits?.active === false ? 'Inactive' : 'Check pending'}</strong></span></div>
+            <div><ShieldCheck size={20} aria-hidden="true" /><span>Coverage<strong>{tooEarly ? 'Check closer to visit' : benefits?.service_date_matches === false ? 'Different date returned' : benefits?.active === true ? 'Active' : benefits?.active === false ? 'Inactive' : 'Check pending'}</strong></span></div>
             <div><Network size={20} aria-hidden="true" /><span>Network<strong>{guidance?.network || 'Not reported'}</strong>{guidance?.network_source && <small>{guidance.network_source}</small>}</span></div>
             <div><FileText size={20} aria-hidden="true" /><span>Referral<strong>{requirementLabel('referral')}</strong>{guidance?.requirement_sources?.referral && <small>{guidance.requirement_sources.referral}</small>}</span></div>
             <div><ShieldCheck size={20} aria-hidden="true" /><span>Prior authorization<strong>{requirementLabel('authorization')}</strong>{guidance?.requirement_sources?.authorization && <small>{guidance.requirement_sources.authorization}</small>}</span></div>

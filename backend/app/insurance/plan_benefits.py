@@ -24,23 +24,23 @@ def _message(row: dict) -> str:
     return ' '.join(str(x) for x in row.get('messages', [])).upper()
 
 
-def apply(value: dict, payload: dict, code: str, service_date: str) -> dict:
+def apply(value: dict, payload: dict, code: str, service_date: str, *, coverage_active: bool | None = None) -> dict:
     names = commercial.plan_details(payload)['names']
     if (len(names) != 1 or re.sub(r'[^A-Z]', '', names[0].upper()) != 'FEPBLUEFOCUS'
             or not '2026-01-01' <= service_date <= '2026-12-31'
-            or value.get('active') is not True or value.get('has_secondary')):
+            or not (value.get('active') is True or value.get('active') is None and coverage_active is True) or value.get('has_secondary')):
         return value
     office = code in {str(n) for n in (*range(99202, 99206), *range(99212, 99216))}
     neuro = code in cpt_rules.NCS_CODES | {'95885', '95886', '95887'}
     if not (office or neuro):
         return value
-    result = dict(value)
+    result = {**value, 'active': True}
     result['policy_evidence'] = {'title': 'FEP Blue Focus · 2026 plan benefits', 'url': FEP_2026,
                                  'section': '5(a), diagnostic tests' if neuro else '5(a), professional visits',
                                  'referral_url': FEP_REFERRALS, 'effective_from': '2026-01-01', 'effective_to': '2026-12-31'}
     # A procedure-specific conflicting payer instruction outranks the general plan.
     exact = [row for row in commercial._stedi_entries(payload) if commercial._procedure(row) == code]
-    if exact:
+    if exact or neuro and any('73' in (row.get('serviceTypeCodes') or []) and row.get('code') in {'A', 'B'} for row in commercial._stedi_entries(payload)):
         return value
     # Do not override a returned requirement for this service (or an unscoped
     # requirement). Explicitly unrelated STC 98 rows, e.g. ABA, are not EMG.
@@ -52,7 +52,8 @@ def apply(value: dict, payload: dict, code: str, service_date: str) -> dict:
             return value
     result.update(referral_signal='not_required', authorization_signal='not_required',
                   authorization_basis='Published plan requirements for this service')
-    reasons = [r for r in result.get('review_reasons', []) if not ('referral' in r.lower() or 'authorization' in r.lower())]
+    reasons = [r for r in result.get('review_reasons', []) if not ('referral' in r.lower() or 'authorization' in r.lower())
+               and not (coverage_active is True and value.get('active') is None and r == 'Confirm active coverage for the visit date with the payer.')]
     cost_reasons = {'Confirm which copay or coinsurance term applies, including any visit-count conditions.',
                     'Confirm which conditional benefit applies to the selected service.',
                     "Review the payer's benefit limits before estimating patient cost."}

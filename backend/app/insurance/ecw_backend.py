@@ -396,7 +396,7 @@ def _visit_type(visit: dict[str, Any]) -> str | None:
     text = " ".join(labels).casefold()
     if re.search(r"\bnew\s+(?:patient|visit)\b", text):
         return "new"
-    if re.search(r"\bestablished\s+(?:patient|visit)\b", text):
+    if re.search(r"\b(?:established\s+(?:patient|visit)|follow[ -]?up|f/u|fu)\b", text):
         return "established"
     return None
 
@@ -851,6 +851,8 @@ async def fetch_inputs(profile: dict[str, Any], practice: dict[str, Any], appoin
                 "place_of_service": location_config.get("place_of_service"), "diagnoses": diagnoses,
                 "patient_phone": _phone(patient),
                 "reason": _visit_context(visit, relevant_orders, relevant_procedures, relevant_conditions),
+                "appointment_reason": "; ".join(_concept_labels(visit.get("reasonCode"))) or None,
+                "appointment_type": "; ".join(_concept_labels(visit.get("type"))) or None,
                 # Do not infer new-versus-established from an incomplete FHIR
                 # history search. eCW must label the appointment explicitly.
                 "visit_type": _visit_type(visit),

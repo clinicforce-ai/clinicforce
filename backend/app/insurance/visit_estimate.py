@@ -83,6 +83,10 @@ def service_type(code: str, rules: dict) -> str | None:
     configured = (rules.get('service_type_by_code') or {}).get(code)
     if configured:
         return str(configured)
+    if code in cpt_rules.NCS_CODES | cpt_rules.EMG_ADD_ONS:
+        return '73'  # Diagnostic medical benefits, not the office consultation copay.
+    if code in {'11104', '11105'}:
+        return '2'
     # Stedi's documented neurology and office/telehealth mappings. Clinic overrides win.
     if code.isdigit() and (95700 <= int(code) <= 96020 or 99202 <= int(code) <= 99215):
         return '98'
@@ -157,7 +161,7 @@ def price_lines(codes: list[dict], rates: list[dict], benefits: dict, rules: dic
             raw_benefits['review_reasons'] = [reason for reason in raw_benefits.get('review_reasons', []) if 'identity' not in reason]
         raw_benefits['review_reasons'] = list(dict.fromkeys([*raw_benefits.get('review_reasons', []), *integrity]))
         raw_benefits['requires_review'] = bool(raw_benefits['review_reasons'])
-        raw_benefits = plan_benefits.apply(raw_benefits, payload or {}, code['code'], service_date)
+        raw_benefits = plan_benefits.apply(raw_benefits, payload or {}, code['code'], service_date, coverage_active=benefits.get('active'))
         applied = resolve_requirements(raw_benefits, review, service_date, units)
         line_rules = dict(rules)
         if applied.get('cost_share'):

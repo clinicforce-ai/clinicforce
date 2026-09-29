@@ -335,6 +335,16 @@ def normalize_stedi_271(payload: dict[str, Any], service_type_code: str, provide
         # Office and telehealth terms can share STC 98 but are different benefits.
         entries = [row for row in entries if not row.get('placesOfService') or
                    any(str(pos.get('code') or '') == place_of_service for pos in row['placesOfService'] if isinstance(pos, dict))]
+    diagnostic = procedure_code in {*(str(n) for n in range(95907, 95914)), '95885', '95886', '95887'}
+    if diagnostic and service_type_code == '73' and not any('73' in (row.get('serviceTypeCodes') or []) and row.get('code') in {'A', 'B'} for row in entries):
+        # Some plans return diagnostic procedure terms under 98. Require that
+        # description; an office-only copay is not an EMG benefit.
+        diagnostic_rows = [row for row in entries if '98' in (row.get('serviceTypeCodes') or [])
+            and any(re.search(r'\bdiagnostic medical(?: procedure)?\b', note, re.I)
+                    for note in _benefit_notes([row.get('messages'), row.get('additionalInformation')]))]
+        if diagnostic_rows:
+            service_type_code = '98'
+            entries = [row for row in entries if '98' not in (row.get('serviceTypeCodes') or []) or row in diagnostic_rows]
     office = procedure_code in {str(n) for n in (*range(99202, 99206), *range(99212, 99216))}
     if office and selected_ids is None:
         # Explicitly different services sometimes share an office STC. Retain
@@ -349,6 +359,12 @@ def normalize_stedi_271(payload: dict[str, Any], service_type_code: str, provide
             return bool(labels) and all(re.fullmatch(unrelated, label, re.I) for label in labels)
         entries = [row for row in entries if _procedure(row) or not other_services_only(row)]
         priorities = office_service_types or ['BY', '98']
+        if 'BQ' in priorities:
+            # Neurology is specialist care. Keep generic and specialist rows,
+            # excluding rows explicitly limited to primary care.
+            entries = [row for row in entries if not any(re.search(r'\bprimary care\b', note, re.I)
+                and not re.search(r'\bspecialist\b', note, re.I)
+                for note in _benefit_notes([row.get('messages'), row.get('additionalInformation')]))]
     def relevant_service(row: dict) -> bool:
         procedure = _procedure(row)
         if procedure:
@@ -487,7 +503,7 @@ def normalize_stedi_271(payload: dict[str, Any], service_type_code: str, provide
     multiple_plans = len({row["plan_index"] for row in entries if "plan_index" in row and row.get("code") in {"status", "A", "B", "C", "G"}}) > 1
     limitations = any(str(row.get("code") or "").upper() in {"F", "Y"} for row in relevant)
     conditional_terms = selected_ids is None and any(re.search(r"\b(first|after|before|beginning|visits?|waived|unless|only|limit|specialist|primary care)\b", note, re.IGNORECASE) for row in (copay, coinsurance) if row for note in notes([row.get("messages"), row.get("additionalInformation")])
-        if not all(re.fullmatch(r"(?:(?:specialist |physician )?office visits?|diagnostic medical procedure)(?:\s*-\s*professional)?", label.strip(), re.I)
+        if not all(re.fullmatch(r"(?:(?:specialist |physician )?office visits?(?: (?:specialist|primary care(?: prov(?:ider)?)?))?|diagnostic medical procedure)(?:\s*-\s*professional)?", label.strip(), re.I)
                    for label in note.split(';') if label.strip()))
     review_reasons = []
     if invalid_dates:
@@ -529,6 +545,7 @@ def normalize_stedi_271(payload: dict[str, Any], service_type_code: str, provide
             "review_reasons": review_reasons,
             "normalization_notes": ["Stedi 271 benefit schedule does not prove provider participation."],
             "resolved_service_type": service_type_code,
+            "network_independent": bool(copay or coinsurance) and all(_network_indicator(row) in {"W", "IN_AND_OUT_OF_NETWORK"} for row in (copay, coinsurance, deductible, oop) if row),
             "reported_options": reported_stedi_options(payload, service_type_code)}
 
 
@@ -559,6 +576,8 @@ def estimate(lines: list[dict[str, Any]], benefits: dict[str, Any], rules: dict[
         # A returned zero-percent term adds no cost share to the fixed copay.
         if has_copay and benefits.get('coinsurance_percent') is not None and Decimal(str(benefits['coinsurance_percent'])) == 0:
             has_coinsurance = False
+        elif has_coinsurance and benefits.get("copay_cents") == 0:
+            has_copay = False
         if has_copay == has_coinsurance:
             raise CommercialError("Payer benefits did not identify one unambiguous office-visit cost-share method.")
         if has_copay and _benefit_cents(benefits, "deductible_remaining_cents"):

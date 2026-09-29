@@ -187,6 +187,23 @@ try {
   result.collection_guidance = { ...result.collection_guidance, amount_cents: 0, status: 'deferred' }
   await openPatient()
   assert.equal(await page.locator('.arrival-total > strong').innerText(), 'Amount unavailable')
+  // The same arrival card explains distant appointments without pending/error language.
+  result = { ...result, visit_type: 'established', reason: '3 month f/u',
+    eligibility_timing: { status: 'too_early', appointment_date: '2026-11-24', check_from: '2026-11-17', message: 'Appointment found on November 24, 2026. Too early to check; reopen November 17.' },
+    collection_guidance: { ...result.collection_guidance, amount_cents: null, status: 'too_early', reason: 'Appointment found on November 24, 2026. Too early to check; reopen November 17.',
+      requirements: { referral: 'Check closer to visit', authorization: 'Check closer to visit' }, network: 'Check closer to visit', network_source: '' },
+    codes: [{ id: '99213', code: '99213', units: 1 }], available_codes: [{ id: '99213', code: '99213', units: 1 }], selected_ids: ['99213'],
+    service_plan: { ...result.service_plan, recommended_ids: ['99213'] }, emg_option: undefined }
+  await openPatient()
+  assert.equal(await page.locator('.arrival-total > strong').innerText(), 'Too early to check')
+  assert((await page.locator('.arrival-total').innerText()).includes('November 24'))
+  assert(!(await page.locator('#visit-estimate').innerText()).includes('Check pending'))
+  assert((await page.locator('.visit-context-facts').innerText()).includes('Established patient'))
+  section = await detail('Possible additional')
+  assert.equal(await section.getByRole('button', { name: /Follow-up · Low complexity/ }).getAttribute('aria-pressed'), 'true')
+  await section.locator('summary').click()
+  result = { ...result, eligibility_timing: undefined }
+  await openPatient()
   // Request failures do not retain an old charge or invent zero.
   await page.route('**/appointments/previsit', route => route.fulfill({ status: 503, json: { detail: 'Payer unavailable' } }))
   await page.getByRole('button', { name: 'Check again', exact: true }).click()

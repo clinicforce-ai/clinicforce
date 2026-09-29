@@ -34,7 +34,7 @@ def test_model_selects_one_scenario_with_history_and_rejects_unsupported_combina
                         [{'code': '95909', 'units': 1}, {'code': '95886', 'units': 3}, {'code': '95885', 'units': 2}],
                         [{'code': 'J0585', 'units': 100}]):
             model.converse.return_value = model_reply(invalid)
-            fallback = cpt_suggester.recommend_visit_plan({'reason': 'EMG'}, {}, catalog())
+            fallback = cpt_suggester.recommend_visit_plan({'reason': 'EMG both arms'}, {}, catalog())
             assert fallback['method'] == 'baseline'
             assert fallback['recommended_ids'] == ['95907']
 
