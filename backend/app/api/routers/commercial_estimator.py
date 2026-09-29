@@ -22,7 +22,7 @@ from app.api.routers.insurance import _response, _scope, _session as insurance_s
 from app.core import object_store, staff_store
 from app.insurance import identity as insurance_identity
 from app.insurance import commercial, commercial_store, cpt_rules, cpt_suggester, ecw_backend, golden, stedi_discovery, stedi_payers, store, visit_estimate, nmct_cash, practice_prices, plan_benefits
-from app.insurance import stedi_financial
+from app.insurance import stedi_financial, collection_guidance
 
 
 router = APIRouter(prefix="/api/doctor/insurance/commercial", tags=["doctor-commercial-estimator"])
@@ -294,6 +294,17 @@ def _practice_path(practice_id: str, inputs: dict, source: dict) -> tuple[dict, 
     return payer, networks[0], profiles[0]
 
 
+def _previsit_practice_path(practice_id: str, inputs: dict, source: dict) -> tuple[dict, dict, dict]:
+    """Use a scoped clinic contract as an estimate when only its product label differs."""
+    try:
+        return _practice_path(practice_id, inputs, source)
+    except HTTPException as exc:
+        if exc.detail != 'The clinic fee schedule is not matched to the exact payer product.':
+            raise
+    payer, network, profile = _practice_path(practice_id, inputs, {**source, 'payer_plan_names': []})
+    return payer, {**network, 'product_assumed': True}, profile
+
+
 def _appointment_readiness(practice_id: str, session: dict, inputs: dict, source: dict) -> dict:
     """Report real eCW and clinic prerequisites before creating a case or calling Stedi."""
     blockers: list[str] = []
@@ -437,15 +448,17 @@ def _previsit_range(practice_id: str, inputs: dict, source: dict, payer_id: str,
     alternatives = options or (bool(codes) and all(row.get("source") == "conditional office E/M alternative" for row in codes) and not review.get("selected_ids"))
     selected = [row for row in codes if not review.get("selected_ids") or row.get("id") in review['selected_ids']]
     office_types = ['BQ', 'BY', '98'] if any('neurolog' in role.lower() for role in (source.get('rendering_provider') or {}).get('roles', [])) else ['BY', '98']
-    rates, rules, issues = [], {'office_service_types': office_types}, []
+    rates, rules, issues = [], {'office_service_types': office_types, 'place_of_service': inputs.get('place_of_service')}, []
     try:
-        _, network, profile = _practice_path(practice_id, {**inputs, "payer_id": payer_id}, source)
+        _, network, profile = _previsit_practice_path(practice_id, {**inputs, "payer_id": payer_id}, source)
         if not network.get("plan_matcher") or not source.get("plan"):
             raise commercial.CommercialError("Clinic pricing: verify the eCW plan against the contracted rate schedule.")
         if not inputs.get("place_of_service"):
             raise commercial.CommercialError("Map the appointment location to its place of service.")
         rates = commercial_store.matching_rates(practice_id, profile, network, inputs["service_date"], selected)
         rules = {**rules, **profile['rules']}
+        if network.get('product_assumed') and benefits.get('network_status') != 'out_of_network':
+            benefits = {**benefits, 'network_status': 'in_network'}
     except (HTTPException, commercial.CommercialError) as exc:
         issues.append(str(exc.detail) if isinstance(exc, HTTPException) else str(exc))
     priced = visit_estimate.price_lines(selected, rates, benefits, rules, payload=payload,
@@ -491,9 +504,12 @@ def _attach_previsit_pricing(result: dict, practice_id: str, inputs: dict, sourc
         return
     connection = connections[0]
     try:
-        _, network, _ = _practice_path(practice_id, {**inputs, "payer_id": connection["id"]}, source)
-        benefits["network_status"] = "in_network"
-        result['network_evidence'] = {key: network.get(key) for key in ('network_name', 'evidence_reference', 'effective_from', 'effective_to')}
+        _, network, _ = _previsit_practice_path(practice_id, {**inputs, "payer_id": connection["id"]}, source)
+        if network.get('product_assumed'):
+            result['pricing_assumptions'] = [f"Estimated using the clinic's {network['network_name']} contract for this payer, provider, location and visit date. The payer product label differs; exact product participation is assumed."]
+        else:
+            benefits["network_status"] = "in_network"
+        result['network_evidence'] = {key: network.get(key) for key in ('network_name', 'evidence_reference', 'effective_from', 'effective_to', 'product_assumed')}
         products = {re.sub(r'[^a-z0-9]', '', name.casefold()) for name in source.get('payer_plan_names', [])}
         if plan_benefits.network_match(payer_id, products, network.get('network_name', '')):
             result['network_evidence']['product_source'] = plan_benefits.FEP_NETWORK
@@ -546,7 +562,7 @@ def _finish_previsit(result: dict, case: dict, inputs: dict, source: dict, paylo
     catalog = []
     if len(connections) == 1:
         try:
-            _, network, profile = _practice_path(session['practice_id'], {**inputs, 'payer_id': connections[0]['id']}, exact_source)
+            _, network, profile = _previsit_practice_path(session['practice_id'], {**inputs, 'payer_id': connections[0]['id']}, exact_source)
             if network.get('plan_matcher') and (pricing_source or source).get('plan'):
                 catalog = commercial_store.matching_rates(session['practice_id'], profile, network, inputs['service_date'], None)
         except (HTTPException, commercial.CommercialError):
@@ -639,6 +655,7 @@ def _finish_previsit(result: dict, case: dict, inputs: dict, source: dict, paylo
         'stedi': commercial.plan_details(payload) if payload else {}}, ecw_retrieved_at=source.get('retrieved_at'),
         response_reference=(payload or {}).get('id'), selected_ids=selected_ids)
     result.pop('network_evidence', None)
+    result.pop('pricing_assumptions', None)
     _attach_previsit_pricing(result, session['practice_id'], inputs, exact_source, payer_id, result['benefits'], payload=payload,
                             review=review)
     result['arrival_collection'] = visit_estimate.arrival_collection(result.get('price_range') or {}, result['benefits'], review)
@@ -646,7 +663,7 @@ def _finish_previsit(result: dict, case: dict, inputs: dict, source: dict, paylo
                                    if result['arrival_collection']['amount_cents'] is None else None)
     if len(connections) == 1:
         try:
-            _, network, profile = _practice_path(session['practice_id'], {**inputs, 'payer_id': connections[0]['id']},
+            _, network, profile = _previsit_practice_path(session['practice_id'], {**inputs, 'payer_id': connections[0]['id']},
                                                 {**exact_source, 'payer_plan_names': []})
             if network.get('network_name') and network.get('evidence_reference'):
                 result['mapping_candidate'] = {'network': network['network_name'], 'products': exact_source['payer_plan_names'],
@@ -657,6 +674,7 @@ def _finish_previsit(result: dict, case: dict, inputs: dict, source: dict, paylo
     nmct_cash.apply(result, session['practice_id'], inputs['service_date'], cash_review)
     if uploaded_cash:
         practice_prices.apply(result, uploaded_cash)
+    result['collection_guidance'] = collection_guidance.build(result, review)
     case['previsit_context'] = {'inputs': inputs, 'source': source, 'payer_id': payer_id,
                               'result': result, 'context_token': token}
 

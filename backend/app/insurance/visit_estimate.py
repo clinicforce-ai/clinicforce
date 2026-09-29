@@ -148,8 +148,8 @@ def price_lines(codes: list[dict], rates: list[dict], benefits: dict, rules: dic
         raw_benefits = commercial.normalize_stedi_271(payload, stc or '98', benefits.get('network_status') == 'in_network',
             benefits.get('has_secondary', False), procedure_code=code['code'], service_date=service_date,
             selected_ids=selection.get('selected_ids') if selection_valid else None,
-            office_service_types=rules.get('office_service_types')) if payload is not None else deepcopy(benefits)
-        stc = raw_benefits.get('resolved_service_type') or stc
+            office_service_types=rules.get('office_service_types'), place_of_service=rules.get('place_of_service')) if payload is not None else deepcopy(benefits)
+        stc = (raw_benefits.get('resolved_service_type') or stc) if stc else None
         # Name differences remain on the case for billing. They do not stop
         # arithmetic for an explicitly conditional estimate of this policy.
         integrity = [reason for reason in benefits.get('review_reasons', []) if 'evidence' in reason or ('identity' in reason and not name_difference)]
