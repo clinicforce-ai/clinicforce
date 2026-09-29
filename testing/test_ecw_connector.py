@@ -62,6 +62,8 @@ class EcwConnectorTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(query["redirect_uri"], ["https://app.clinicforce.ai/api/patient/ecw/callback"])
         self.assertEqual(query["code_challenge_method"], ["S256"])
         self.assertIn("openid", query["scope"][0].split())
+        self.assertIn("fhirUser", query["scope"][0].split())
+        self.assertNotIn("profile", query["scope"][0].split())
         self.assertIn("launch/patient", query["scope"][0].split())
         self.assertNotIn("offline_access", query["scope"][0].split())
         self.assertIn("patient/CareTeam.read", query["scope"][0].split())

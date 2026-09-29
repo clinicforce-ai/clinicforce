@@ -291,7 +291,8 @@ async def begin_authorization(practice_code: str, patient_id: str, redirect_uri:
         "response_type": "code",
         "client_id": ECW_CLIENT_ID,
         "redirect_uri": redirect_uri,
-        "scope": " ".join(("launch/patient", "openid", "profile", "fhirUser", *PATIENT_READ_SCOPES)),
+        # Healow fails after login when profile accompanies fhirUser.
+        "scope": " ".join(("launch/patient", "openid", "fhirUser", *PATIENT_READ_SCOPES)),
         "state": state,
         "aud": fhir_base,
         "code_challenge": pkce_challenge(verifier),
