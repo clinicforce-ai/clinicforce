@@ -46,6 +46,17 @@ def compare(payload: dict, coverage: dict, evidence: dict | None = None) -> dict
                    and key(field, expected[field]) != key(field, returned[field])]
     policy_differences = [row for row in differences if row['field'].startswith('subscriber_') or row['field'] == 'relationship']
     differences = [row for row in differences if row not in policy_differences]
+    # UHC may return its 9-digit member identifier without eCW's subscriber
+    # suffix. Accept only the exact 00 suffix, self coverage, and all demographics.
+    expected_member, returned_member = normalized(expected['member_id']), normalized(returned['member_id'])
+    uhc_suffix = (str(payload.get('payerId') or '') in {'87726', 'KMQTZ'}
+        and expected['relationship'] == returned['relationship'] == 'self'
+        and len(expected_member) == 11 and len(returned_member) == 9
+        and expected_member.isdigit() and returned_member.isdigit()
+        and expected_member == returned_member + '00'
+        and all(expected[k] and returned[k] and key(k, expected[k]) == key(k, returned[k])
+                for k in ('first_name', 'last_name', 'birth_date'))
+        and not policy_differences)
     # Name-only reconciliation requires all three independent anchors to be present.
     anchored = all(expected[k] and returned[k] and key(k, expected[k]) == key(k, returned[k])
                    for k in ('first_name', 'birth_date', 'member_id'))
@@ -55,8 +66,8 @@ def compare(payload: dict, coverage: dict, evidence: dict | None = None) -> dict
     verified = bool(anchored and evidence and evidence.get('binding') == binding
                     and evidence.get('reference') and evidence.get('actor_id') and evidence.get('verified_at'))
     surname_warning = anchored and bool(differences) and all(row['field'] == 'last_name' for row in differences)
-    return {'status': 'reconciled' if differences and verified else 'warning' if surname_warning else 'review' if differences else 'matched',
+    return {'status': 'reconciled' if differences and verified else 'warning' if surname_warning or uhc_suffix else 'review' if differences else 'matched',
             'binding': binding, 'differences': differences, 'policy_differences': policy_differences,
-            'message': 'Payer surname differs; first name, date of birth and member ID match.' if surname_warning and not verified else '',
+            'message': 'UnitedHealthcare returned the matching nine-digit member ID without the eCW 00 suffix; name and date of birth match.' if uhc_suffix else 'Payer surname differs; first name, date of birth and member ID match.' if surname_warning and not verified else '',
             'can_confirm': bool(differences and anchored),
             'evidence': evidence if verified else None}

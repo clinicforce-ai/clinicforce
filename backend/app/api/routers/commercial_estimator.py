@@ -12,6 +12,7 @@ import re
 from copy import deepcopy
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, Literal
+from zoneinfo import ZoneInfo
 
 import httpx
 from fastapi import BackgroundTasks, APIRouter, File, HTTPException, Request, UploadFile
@@ -425,6 +426,31 @@ def _commercial_slot(appointment_id: str) -> str:
     return "commercial:" + hashlib.sha256(appointment_id.encode()).hexdigest()
 
 
+def _previsit_service_types(inputs: dict) -> list[str]:
+    """Ask for the booked categories, including explicitly combined care."""
+    scheduled = [row['code'] for row in inputs.get('lines', []) if row.get('service_status') == 'scheduled' and row.get('code')]
+    categories = [visit_estimate.service_type(code, {}) for code in scheduled]
+    if not scheduled:
+        reason = str(inputs.get('reason') or '')
+        if visit_estimate.is_emg_visit(inputs):
+            categories.append('73')
+        if re.search(r'\bskin\s+(?:punch\s+)?(?:bx|biops\w*)\b|\bpunch\s+biops\w*\b', reason, re.I):
+            categories.append('2')
+        if not categories or re.search(r'\b(?:f/u|fu|follow[ -]?up)\b', reason, re.I):
+            categories.append('98')
+    return list(dict.fromkeys(code for code in categories if code)) or ['30']
+
+
+def _eligibility_timing(service_date: str) -> dict | None:
+    service_day = date.fromisoformat(service_date)
+    today = datetime.now(ZoneInfo(os.getenv("COMMERCIAL_PRACTICE_TIMEZONE", "America/New_York"))).date()
+    if service_day <= today + timedelta(days=7):
+        return None
+    check_from = service_day - timedelta(days=7)
+    return {'status': 'too_early', 'appointment_date': service_date, 'check_from': check_from.isoformat(),
+        'message': f"Appointment found on {service_day.strftime('%B %d, %Y')}. It is too early to check insurance. Reopen this estimate from {check_from.strftime('%B %d, %Y')}; no Stedi request is made while the visit is outside this window."}
+
+
 def _previsit_codes(inputs: dict) -> list[dict[str, Any]]:
     """Office E/M alternatives are coding standards, not a selected service."""
     scheduled = [row for row in inputs.get("lines", []) if row.get("service_status") == "scheduled" and row.get("code")]
@@ -479,8 +505,8 @@ def _previsit_range(practice_id: str, inputs: dict, source: dict, payer_id: str,
     return priced, issues
 
 
-def _previsit_benefits(payload: dict, coverage: dict, service_date: str | None = None) -> dict:
-    benefits = commercial.normalize_stedi_271(payload, "98", False, coverage["active_coverages"] > 1, service_date=service_date)
+def _previsit_benefits(payload: dict, coverage: dict, service_date: str | None = None, service_type: str = "98") -> dict:
+    benefits = commercial.normalize_stedi_271(payload, service_type, False, coverage["active_coverages"] > 1, service_date=service_date)
     comparison = insurance_identity.compare(payload, coverage)
     benefits['identity'] = comparison
     if comparison['status'] == 'review':
@@ -499,7 +525,9 @@ def _attach_previsit_pricing(result: dict, practice_id: str, inputs: dict, sourc
                    if row.get("stedi_payer_id") == payer_id and row.get("status") == "staff_guidance_enabled"]
     if len(connections) != 1:
         result["issues"].append("Clinic pricing: no single approved plan and provider contract is linked to this Stedi payer.")
-        result['price_range'] = visit_estimate.price_lines(result['codes'], [], benefits, {}, payload=payload,
+        result['price_range'] = visit_estimate.price_lines(result['codes'], [], benefits, {'cost_share': 'payer_returned',
+            'office_service_types': ['BQ', 'BY', '98'] if any('neurolog' in role.lower() for role in (source.get('rendering_provider') or {}).get('roles', [])) else ['BY', '98'],
+            'place_of_service': inputs.get('place_of_service')}, payload=payload,
             service_date=inputs.get('service_date', ''), reviews=(review or {}).get('lines'),
             alternatives=not (review or {}).get('selected_ids') and bool(result['codes']) and all(row.get('source') == 'conditional office E/M alternative' for row in result['codes']))
         return
@@ -613,7 +641,7 @@ def _finish_previsit(result: dict, case: dict, inputs: dict, source: dict, paylo
     plan_key = hashlib.sha256(json.dumps([token, source.get('recent_completed_appointments', []),
         [(row['id'], row.get('units')) for row in available]], sort_keys=True).encode()).hexdigest()
     prior_plan = case.get('previsit_plan') or {}
-    if prior_plan.get('key') != plan_key or prior_plan.get('plan', {}).get('version') != 3:
+    if prior_plan.get('key') != plan_key or prior_plan.get('plan', {}).get('version') != 4:
         cash_schedule = nmct_cash.schedule(session['practice_id'], inputs['service_date'])
         planning_source = {**source, 'planning_cash_packages': cash_schedule['packages'] if cash_schedule else []}
         prior_plan = {'key': plan_key, 'plan': cpt_suggester.recommend_visit_plan(inputs, planning_source, available)}
@@ -633,7 +661,7 @@ def _finish_previsit(result: dict, case: dict, inputs: dict, source: dict, paylo
                            for entry in case.get('visit_review_history', [])]
     result['referral_evidence'] = source.get('referral_evidence', [])
     result['appointment_context'] = {key: source.get(key) for key in ('location', 'rendering_provider', 'appointment_status')}
-    result['appointment_context'].update(imported_fields=source.get('appointment_fields', []),
+    result['appointment_context'].update(appointment_type=inputs.get('appointment_type'), imported_fields=source.get('appointment_fields', []),
                                          notes_status=source.get('appointment_notes_status', 'not_exposed'),
                                          timezone=source.get('timezone') or os.getenv('COMMERCIAL_PRACTICE_TIMEZONE', 'America/New_York'))
     result['coverage_records'] = source.get('coverage_records', [])
@@ -643,6 +671,10 @@ def _finish_previsit(result: dict, case: dict, inputs: dict, source: dict, paylo
         by_id = {row['id']: row for row in available}
         codes = [by_id[key] for key in selected_ids if key in by_id]
     result['codes'] = [{**row, 'confirmed': bool(review.get('selected_ids')), 'units': units.get(row['id'], row.get('units'))} for row in codes]
+    if selected_ids:
+        for row in result['codes']:
+            if row.get('source') == 'conditional office E/M alternative':
+                row['source'] = 'Anticipated office visit'
     result['patient_details'] = source.get('patient_details', {})
     result['insurance_details'] = {**_coverage_snapshot(inputs, source), 'record_status': source.get('coverage_record_status'), 'coverage_period': source.get('coverage_period', {})}
     subscriber = (payload or {}).get('subscriber') or {}
@@ -826,7 +858,7 @@ def _stedi_address(value: object) -> dict[str, str] | None:
     return address
 
 
-def stedi_request_body(payer: dict, network: dict, coverage: dict, service_date: str, stc: str,
+def stedi_request_body(payer: dict, network: dict, coverage: dict, service_date: str, stc: str | list[str],
                        *, include_identity_hints: bool = True) -> dict:
     needed = ("member_id", "relationship", "subscriber_first", "subscriber_last", "subscriber_birth_date",
               "patient_first", "patient_last", "patient_birth_date")
@@ -842,7 +874,7 @@ def stedi_request_body(payer: dict, network: dict, coverage: dict, service_date:
     body = {"payerId": payer["stedi_payer_id"], "provider": provider,
             "subscriber": {"memberId": coverage["member_id"], "dateOfBirth": coverage["subscriber_birth_date"],
                            "name": {"person": {"firstName": coverage["subscriber_first"], "lastName": coverage["subscriber_last"]}}},
-            "encounter": {"dates": {"service": {"start": service_date}}, "services": [{"system": "STC", "value": stc}]}}
+            "encounter": {"dates": {"service": {"start": service_date}}, "services": [{"system": "STC", "value": code} for code in ([stc] if isinstance(stc, str) else stc)]}}
     if coverage["relationship"] not in {"18", "self"}:
         body["dependent"] = {"dateOfBirth": coverage["patient_birth_date"],
                              "name": {"person": {"firstName": coverage["patient_first"], "lastName": coverage["patient_last"]}}}
@@ -972,7 +1004,7 @@ def _case_benefits(payload: dict, inputs: dict, source: dict, case: dict) -> dic
                  and recovery.get('verified_coverage'))
     if recovered:
         coverage.update(recovery['verified_coverage'])
-    benefits = _previsit_benefits(payload, coverage, inputs['service_date'])
+    benefits = _previsit_benefits(payload, coverage, inputs['service_date'], _previsit_service_types(inputs)[0])
     if recovered:
         benefits['normalization_notes'].append('Coverage was selected from Stedi discovery for this estimate; eCW was not changed.')
     return benefits
@@ -981,6 +1013,9 @@ def _case_benefits(payload: dict, inputs: dict, source: dict, case: dict) -> dic
 def _previsit_result(case: dict) -> dict:
     result = deepcopy(case['previsit_context']['result'])
     result['revision'] = case.get('revision', 0)
+    timing = _eligibility_timing(result['service_date']) if result.get('service_date') else None
+    if timing:
+        result['eligibility_timing'] = timing
     result['collection_guidance'] = collection_guidance.build(result, case.get('visit_review'))
     if case.get('previsit_discovery'):
         result['recovery'] = stedi_discovery.public_status(case['previsit_discovery'])
@@ -1078,6 +1113,8 @@ async def _recheck_discovery_candidate(case: dict, session: dict, provider: dict
     """Use a selected, persisted discovery candidate without altering eCW."""
     context, discovery = case['previsit_context'], case['previsit_discovery']
     inputs, source = context['inputs'], context['source']
+    if _eligibility_timing(inputs['service_date']):
+        return
     try:
         payload = discovery_payload or json.loads(await run_in_threadpool(object_store.get_object_bytes, discovery['raw_object_key']))
         candidate = next(row for row in discovery.get('candidates', []) if row['id'] == discovery.get('selected_candidate_id'))
@@ -1089,8 +1126,8 @@ async def _recheck_discovery_candidate(case: dict, session: dict, provider: dict
             [str(payer_data.get('payorIdentification') or '')], api_key)
         if not payer:
             raise ValueError('Stedi could not map the selected payer.')
-        body = stedi_request_body({'stedi_payer_id': payer['stediId']}, provider, coverage, inputs['service_date'], '98')
-        basic_body = stedi_request_body({'stedi_payer_id': payer['stediId']}, provider, coverage, inputs['service_date'], '98',
+        body = stedi_request_body({'stedi_payer_id': payer['stediId']}, provider, coverage, inputs['service_date'], _previsit_service_types(inputs))
+        basic_body = stedi_request_body({'stedi_payer_id': payer['stediId']}, provider, coverage, inputs['service_date'], _previsit_service_types(inputs),
                                         include_identity_hints=False)
         if inputs['service_date'] == date.today().isoformat():
             body['encounter'].pop('dates', None)
@@ -1115,7 +1152,7 @@ async def _recheck_discovery_candidate(case: dict, session: dict, provider: dict
         result.update(payer=pricing_source.get('payer'), plan=pricing_source.get('plan'), issues=[], checked_at=_now(),
                       benefits=_case_benefits(verified, inputs, source, case))
         await run_in_threadpool(_finish_previsit, result, case, inputs, source, verified, session, payer['stediId'], pricing_source=pricing_source)
-        case['previsit'].update(request_state='complete', checked_at=result['checked_at'], benefits=result['benefits'])
+        case['previsit'].update(request_state='complete', checked_at=result['checked_at'], benefits=result['benefits'], requested_service_types=_previsit_service_types(inputs))
         case['previsit_original_error_object_key'] = case.get('previsit_raw_object_key')
         case['previsit_raw_object_key'] = discovery['eligibility_object_key']
         await run_in_threadpool(_save, case, session, 'stedi-coverage-recovered')
@@ -1127,6 +1164,8 @@ async def _recheck_discovery_candidate(case: dict, session: dict, provider: dict
 
 async def _start_previsit_recovery(case: dict, session: dict, provider: dict, background_tasks: BackgroundTasks | None) -> dict:
     result = case['previsit_context']['result']
+    if _eligibility_timing(result['service_date']):
+        return _previsit_result(case)
     recovery = case.get('previsit_discovery') or {}
     if recovery and stedi_discovery.public_status(recovery)['state'] == 'indeterminate':
         recovery['request_state'] = 'indeterminate'
@@ -1261,7 +1300,7 @@ async def previsit_estimate(value: PrevisitInput, request: Request, background_t
     codes = _previsit_codes(inputs)
     result: dict[str, Any] = {"appointment_id": value.appointment_id, "service_date": inputs["service_date"],
         "payer": source.get("payer"), "plan": source.get("plan"), "visit_type": inputs.get("visit_type"),
-        "reason": inputs.get("reason"), "codes": codes, "benefits": None, "price_range": None,
+        "reason": inputs.get("appointment_reason") or inputs.get("appointment_type") or inputs.get("reason"), "codes": codes, "benefits": None, "price_range": None,
         "suggestions": None, "issues": [], "checked_at": None,
         "ecw_saved_eligibility": source['saved_eligibility'], "ecw_coverage_active": source.get('active_coverages', 0) > 0}
     coverage = _coverage_snapshot(inputs, source)
@@ -1276,6 +1315,11 @@ async def previsit_estimate(value: PrevisitInput, request: Request, background_t
         result['benefits'] = _previsit_benefits({}, coverage, inputs['service_date'])
         await run_in_threadpool(_finish_previsit, result, case, inputs, source, None, session, '')
         return _previsit_result(await run_in_threadpool(_save, case, session, 'previsit-awaiting-coverage'))
+
+    timing = _eligibility_timing(inputs['service_date'])
+    if timing:
+        result['eligibility_timing'] = timing
+        return await incomplete_result()
 
     rendering = source.get("rendering_provider") or {}
     billing = source.get("billing_provider") or {}
@@ -1313,10 +1357,12 @@ async def previsit_estimate(value: PrevisitInput, request: Request, background_t
         result["issues"].append("The eCW insurer did not resolve to one supported Stedi payer. Clinic staff must verify the payer ID.")
         return await incomplete_result()
     payer_id = payer["stediId"]
+    requested_stc = _previsit_service_types(inputs)
+    result['requested_service_types'] = requested_stc
     result["stedi_payer"] = {"name": payer.get("displayName"), "id": payer_id}
     try:
-        body = stedi_request_body({"stedi_payer_id": payer_id}, provider, coverage, inputs["service_date"], "98")
-        basic_body = stedi_request_body({"stedi_payer_id": payer_id}, provider, coverage, inputs["service_date"], "98",
+        body = stedi_request_body({"stedi_payer_id": payer_id}, provider, coverage, inputs["service_date"], requested_stc)
+        basic_body = stedi_request_body({"stedi_payer_id": payer_id}, provider, coverage, inputs["service_date"], requested_stc,
                                         include_identity_hints=False)
     except commercial.CommercialError as exc:
         result["issues"].append(str(exc))
@@ -1365,7 +1411,7 @@ async def previsit_estimate(value: PrevisitInput, request: Request, background_t
         if visit_estimate.reconcile_eligibility(source.get('saved_eligibility') or {},
                 saved.get('benefits') or {}, saved.get('checked_at'))['requires_review']:
             fresh = False
-        if fresh:
+        if fresh and (saved.get("requested_service_types", [saved.get("requested_service_type", "98")]) == requested_stc):
             result["checked_at"] = saved.get("checked_at")
             result["benefits"] = dict(saved.get("benefits") or {})
             payload = None
@@ -1418,12 +1464,12 @@ async def previsit_estimate(value: PrevisitInput, request: Request, background_t
         return await _start_previsit_recovery(case, session, provider, background_tasks)
     raw_key = await run_in_threadpool(object_store.put_staff_document, session["practice_id"], case["id"],
                                       "previsit-stedi-271.json", json.dumps(payload).encode(), "application/json")
-    benefits = _previsit_benefits(payload, coverage, inputs["service_date"])
+    benefits = _previsit_benefits(payload, coverage, inputs["service_date"], requested_stc[0])
     result["benefits"] = benefits
     result["checked_at"] = _now()
     await run_in_threadpool(_finish_previsit, result, case, inputs, source, payload, session, payer_id)
     case["previsit"] = {"request_state": "complete", "benefits": benefits,
-                        "checked_at": result["checked_at"]}
+                        "checked_at": result["checked_at"], "requested_service_types": requested_stc}
     case["previsit_raw_object_key"] = raw_key
     saved_case = await run_in_threadpool(_save, case, session, "previsit-stedi-complete")
     result["revision"] = saved_case.get("revision", 0)

@@ -17,6 +17,7 @@ export type CollectionGuidance = {
     deductible_remaining_cents?: number | null; selected_benefit_ids: string[] }>;
 }
 export type PrevisitEstimate = {
+  eligibility_timing?: { status: string; appointment_date: string; check_from: string; message: string };
   collection_guidance?: CollectionGuidance;
   emg_option?: { requested: boolean; included: boolean; additional_min_cents: number | null; additional_max_cents: number | null;
     total_min_cents: number | null; total_max_cents: number | null; message: string; scenario_count: number };
@@ -39,7 +40,7 @@ export type PrevisitEstimate = {
   cash_quote?: { complete: boolean; selection: string; source: string; effective_from: string; message: string; min_cents?: number; max_cents?: number };
   service_plan?: { kind: string; groups: Array<{ id: string; label: string; description: string; selection_mode: string; role: string; ids: string[] }>; recommended_ids: string[]; recommendation_basis: string; history_count: number; selection_source?: string; method?: string; assumptions?: string[]; recommended_units?: Record<string, number> };
   ecw_saved_eligibility?: { status: string; active?: boolean; message: string; checked_at?: string; reference?: string };
-  appointment_context?: { timezone?: string; notes_status?: string; imported_fields?: Array<{ label: string; text: string; source: string; updated_at?: string }>; location?: string; rendering_provider?: { name?: string; npi?: string }; appointment_status?: string };
+  appointment_context?: { appointment_type?: string; timezone?: string; notes_status?: string; imported_fields?: Array<{ label: string; text: string; source: string; updated_at?: string }>; location?: string; rendering_provider?: { name?: string; npi?: string }; appointment_status?: string };
   ecw_coverage_active?: boolean;
   recovery?: { state: string; outcome?: string; message: string; started_at?: string; checked_at?: string; reference?: string; coverage_count?: number;
     candidates?: Array<{ id: string; payer: string; payer_identifier?: string; plans: string[]; relationship: string; address_matches: boolean }> };

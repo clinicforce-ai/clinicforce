@@ -20,6 +20,10 @@ class PrevisitFlowTest(unittest.IsolatedAsyncioTestCase):
     async def test_uncoded_new_visit_requests_real_office_benefits_before_pricing(self):
         await self._flow(date.today().isoformat())
 
+    async def test_far_future_visit_does_not_query_stedi_even_on_refresh(self):
+        for offset in (8, 56):
+            await self._flow((date.today() + timedelta(days=offset)).isoformat(), refresh=True, too_early=True)
+
     async def test_future_visit_uses_documented_service_date_object(self):
         await self._flow((date.today() + timedelta(days=2)).isoformat())
 
@@ -48,7 +52,7 @@ class PrevisitFlowTest(unittest.IsolatedAsyncioTestCase):
     async def test_newer_conflicting_ecw_check_refreshes_cached_stedi_evidence(self):
         await self._flow(date.today().isoformat(), newer_ecw=True)
 
-    async def _flow(self, service_date, reject=False, retry_basic=False, payer_missing=False, refresh=False, newer_ecw=False):
+    async def _flow(self, service_date, reject=False, retry_basic=False, payer_missing=False, refresh=False, newer_ecw=False, too_early=False):
         session = {"practice_id": "clinic", "intake_id": "intake", "patient_id": "patient",
                    "share_manifest_id": "", "staff": {"id": "staff", "display_name": "Staff", "practice_name": "Clinic"},
                    "intake": {"updated_at": "version", "patient": {"given_name": "Pat", "family_name": "Example",
@@ -92,7 +96,14 @@ class PrevisitFlowTest(unittest.IsolatedAsyncioTestCase):
              patch.dict("app.api.routers.commercial_estimator.os.environ", {
                  "STEDI_API_KEY": "production-key", "STEDI_EXECUTION_MODE": "commercial_pilot",
                  "STEDI_LIVE_ELIGIBILITY_ENABLED": "true"}):
-            result = await previsit_estimate(PrevisitInput(appointment_id="visit-1"), MagicMock())
+            result = await previsit_estimate(PrevisitInput(appointment_id="visit-1", refresh_benefits=refresh if too_early else False), MagicMock())
+            if too_early:
+                self.assertEqual(result['eligibility_timing']['status'], 'too_early')
+                self.assertEqual(result['collection_guidance']['status'], 'too_early')
+                self.assertIsNone(result['collection_guidance']['amount_cents'])
+                self.assertEqual(result['eligibility_timing']['appointment_date'], service_date)
+                client.post.assert_not_awaited()
+                return
             if newer_ecw:
                 saved = {'status': 'verified_inactive', 'active': False, 'checked_at': datetime.now(timezone.utc).isoformat()}
                 with patch('app.api.routers.commercial_estimator.ecw_backend.fetch_saved_eligibility', AsyncMock(return_value=saved)):

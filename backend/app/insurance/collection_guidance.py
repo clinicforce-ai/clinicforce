@@ -22,6 +22,14 @@ def build(result: dict, review: dict | None = None) -> dict:
                                    'Clinic contract; exact product match not confirmed' if (result.get('network_evidence') or {}).get('network_name') else
                                    'No provider participation result available'),
                 'requirements': {}, 'requirement_sources': {}}
+    if result.get('eligibility_timing', {}).get('status') == 'too_early':
+        guidance.update(status='too_early', basis='appointment_window', reason=result['eligibility_timing']['message'],
+            patient_message='Benefits will be checked closer to this appointment.', network='Check closer to visit',
+            network_source='', requirements={kind: 'Check closer to visit' for kind in ('referral', 'authorization')})
+        return guidance
+    if guidance['network'] == 'Not reported' and lines and all(line.get('benefits', {}).get('network_independent') for line in lines):
+        guidance['network'] = 'Same benefits in / out of network'
+        guidance['network_source'] = 'Payer benefit schedule; provider participation not reported'
     adverse = False
     for kind in ('referral', 'authorization'):
         requirements = [line.get('benefits', {}).get('requirements', {}).get(kind, {}) for line in lines]
@@ -74,7 +82,7 @@ def build(result: dict, review: dict | None = None) -> dict:
         office = [line for line in lines if line.get('code', '').isdigit() and
                   (99202 <= int(line['code']) <= 99205 or 99212 <= int(line['code']) <= 99215)]
         terms = [line.get('benefits') or {} for line in office]
-        if (terms and (benefits.get('network_status') == 'in_network' or result.get('pricing_assumptions'))
+        if (terms and (benefits.get('network_status') == 'in_network' or result.get('pricing_assumptions') or all(t.get('network_independent') for t in terms))
                 and (len(office) == 1 or price.get('mode') == 'alternatives')
                 and all(line.get('units') == 1 for line in office)
                 and all(t.get('active') is True and t.get('copay_cents') is not None
@@ -93,6 +101,13 @@ def build(result: dict, review: dict | None = None) -> dict:
                 assumptions.append('The payer returned a fixed office copay but no applicable deductible balance. This advance includes the copay only; any deductible responsibility remains for the claim.')
             guidance.update(status='estimated', basis='office_copay',
                             reason='The applicable office-visit copay is collected once. Any additional service responsibility will follow the claim.')
+    if amount is None and safe:
+        reference = cash_reference_estimate(result)
+        if reference:
+            amount = reference['amount_cents']
+            assumptions.extend(reference['assumptions'])
+            guidance.update(status='estimated', basis='clinic_price_reference', reason=reference['reason'],
+                range_min_cents=reference['amount_cents'], range_max_cents=reference['max_cents'])
     failure_codes = set((result.get('eligibility_failure') or {}).get('codes') or [])
     if failure_codes & {'72', '73', '65', '67', '71', '75', '76'}:
         actions.append('Contact your insurer to confirm the member ID, policyholder name and date of birth; bring the corrected insurance details.')
@@ -101,6 +116,9 @@ def build(result: dict, review: dict | None = None) -> dict:
         if strict.get('amount_cents') is None and payments.get('reference'):
             amount = max(0, amount - payments['amount_cents'])
         guidance['amount_cents'] = max(0, amount)
+        if guidance.get('range_max_cents') is not None and payments.get('reference'):
+            guidance['range_min_cents'] = guidance['amount_cents']
+            guidance['range_max_cents'] = max(0, guidance['range_max_cents'] - payments['amount_cents'])
         guidance['patient_message'] = 'This is an advance estimate for the planned care. The insurer determines final responsibility when it processes the claim.'
         if amount > 0 and not payments.get('reference') and strict.get('payments_received_cents') is None:
             assumptions.append('No prior payments or credits were deducted because the clinic ledger is unavailable. Tell us if you already paid for this visit and show your receipt to avoid paying twice.')
@@ -205,3 +223,53 @@ def emg_option(result: dict, rates: list[dict], rules: dict, payload: dict | Non
         option.update(additional_min_cents=min(differences), additional_max_cents=max(differences),
                       total_min_cents=min(totals), total_max_cents=max(totals), scenario_count=len(totals))
     return option
+
+
+def cash_reference_estimate(result: dict) -> dict | None:
+    """A disclosed planning estimate, never a fabricated contracted allowance."""
+    from app.insurance import commercial, cpt_rules
+    lines = (result.get('price_range') or {}).get('lines') or []
+    if not lines or any(line.get('allowed_cents') is not None for line in lines):
+        return None
+    terms = [line.get('benefits') or {} for line in lines]
+    if not all(t.get('active') is True and t.get('service_date_matches') is not False
+               and t.get('coverage_level') == 'individual' and not t.get('has_secondary') for t in terms):
+        return None
+    # A whole-package reference cannot be allocated across different benefit terms.
+    keys = ('copay_cents', 'coinsurance_percent', 'deductible_remaining_cents', 'oop_remaining_cents', 'copay_id', 'deductible_id', 'oop_id')
+    if any(tuple(t.get(k) for k in keys) != tuple(terms[0].get(k) for k in keys) for t in terms):
+        return None
+    t = terms[0]
+    if not (t.get('network_independent') or result['benefits'].get('network_status') == 'in_network' or result.get('pricing_assumptions')):
+        return None
+    from app.insurance.visit_estimate import _workflow_condition
+    if any(any(not _workflow_condition(reason) for reason in item.get('review_reasons', [])) for item in terms):
+        return None
+    cash = result.get('cash_quote') or {}
+    low, high = cash.get('min_cents'), cash.get('max_cents')
+    if not cash.get('complete'):
+        codes = {line['code'] for line in lines}
+        packages = (result.get('cash_schedule') or {}).get('packages') or []
+        if not packages or not codes <= cpt_rules.NCS_CODES | {'95885', '95886'}:
+            return None
+        limbs = sum(line.get('units') or 0 for line in lines if line['code'] in {'95885', '95886'})
+        candidates = [package['amount_cents'] for package in packages if package['max_limbs'] >= limbs]
+        if not candidates:
+            return None
+        low, high = min(candidates), max(candidates)
+    if low is None or high is None:
+        return None
+    calculation = {**t, 'network_status': 'in_network', 'requires_review': False, 'review_reasons': []}
+    try:
+        amounts = [commercial.estimate([{'code': 'planning reference', 'units': 1, 'allowed_cents': fee}], calculation,
+                                      {'cost_share': 'payer_returned'})['patient_cents'] for fee in (low, high)]
+    except commercial.CommercialError:
+        return None
+    amount, maximum = min(amounts), max(amounts)
+    share = f"{t['coinsurance_percent']}% coinsurance" if t.get('coinsurance_percent') not in {None, '0', '0.0', '0.00'} else 'the returned copay'
+    return {'amount_cents': amount, 'max_cents': maximum,
+        'reason': f"Advance planning estimate using {share} and the clinic's ${low / 100:,.2f}–${high / 100:,.2f} published price range. Estimated patient share: ${amount / 100:,.2f}–${maximum / 100:,.2f}; collect the lower estimate now. Final responsibility uses the insurer's allowed amount.",
+        'assumptions': ['No contracted rate is available for this payer. The clinic published price is used only as an estimated pricing basis; it is not an insurer-contracted allowance.',
+                        'Final testing scope and the insurer’s allowed amount can change this estimate.',
+                        *(['The returned cost sharing applies both in and out of network; provider participation is not inferred.'] if t.get('network_independent') else []),
+                        'Any required authorization or referral must apply to the performed services; unknown requirements are not confirmed approvals.']}
