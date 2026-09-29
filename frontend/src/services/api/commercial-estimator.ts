@@ -7,7 +7,17 @@ export type CommercialAppointment = { id: string; start: string; status: string;
 export const commercialAppointments = () => request<{ appointments: CommercialAppointment[] }>(`${root}/appointments`)
 export type CommercialReadiness = { ready: boolean; blockers: string[]; ecw: { payer?: string | null; plan?: string | null; scheduled_codes: Array<{ code?: string | null; units?: number | string | null }>; visit_type?: string | null; reason?: string | null } }
 export const commercialReadiness = (appointment_id: string) => request<CommercialReadiness>(`${root}/appointments/readiness`, json({ appointment_id }))
+export type CollectionGuidance = {
+  amount_cents: number; status: string; basis: string; reason: string; patient_message: string;
+  assumptions: string[]; patient_actions: string[]; network: string;
+  requirements: { referral: string; authorization: string };
+  services: Array<{ id: string; code: string; benefit: string; patient_cents: number | null;
+    oop_remaining_cents?: number | null; copay_cents?: number | null; coinsurance_percent?: string | null;
+    deductible_remaining_cents?: number | null; selected_benefit_ids: string[] }>;
+}
 export type PrevisitEstimate = {
+  collection_guidance?: CollectionGuidance;
+  pricing_assumptions?: string[];
   eligibility_reconciliation?: { requires_review: boolean; message: string };
   audit_trail?: Array<{ checked_at?: string; by: string; changes: string[] }>;
   insurance_fallback?: { payer?: string; member_id?: string };

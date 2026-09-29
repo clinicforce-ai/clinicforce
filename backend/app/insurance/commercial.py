@@ -200,7 +200,7 @@ def _stedi_entries(payload: dict[str, Any]) -> list[dict[str, Any]]:
             continue
         for category, code in (("statuses", "status"), ("coInsurance", "A"), ("coPayment", "B"),
                                ("deductible", "C"), ("outOfPocket", "G"), ("limitations", "F"),
-                               ("exclusions", "I"), ("nonCovered", "I"), ("benefitDescription", "D")):
+                               ("exclusions", "I"), ("nonCovered", "I"), ("benefitDescription", "D"), ("coverageBasis", "D")):
             for i, row in enumerate(benefits.get(category) or []):
                 if not isinstance(row, dict):
                     continue
@@ -324,13 +324,17 @@ def _benefit_notes(value: Any) -> list[str]:
 def normalize_stedi_271(payload: dict[str, Any], service_type_code: str, provider_network_verified: bool,
                         other_active_coverage: bool = False, *, procedure_code: str | None = None,
                         service_date: str | None = None, selected_ids: list[str] | None = None,
-                        office_service_types: list[str] | None = None) -> dict[str, Any]:
+                        office_service_types: list[str] | None = None, place_of_service: str | None = None) -> dict[str, Any]:
     """Normalize only unambiguous individual in-network schedule benefits.
 
     A 271 benefit network is not provider participation.  That is supplied by
     the separately verified provider-network record.
     """
     entries = _stedi_entries(payload)
+    if place_of_service:
+        # Office and telehealth terms can share STC 98 but are different benefits.
+        entries = [row for row in entries if not row.get('placesOfService') or
+                   any(str(pos.get('code') or '') == place_of_service for pos in row['placesOfService'] if isinstance(pos, dict))]
     office = procedure_code in {str(n) for n in (*range(99202, 99206), *range(99212, 99216))}
     if office and selected_ids is None:
         # Explicitly different services sometimes share an office STC. Retain
@@ -483,7 +487,8 @@ def normalize_stedi_271(payload: dict[str, Any], service_type_code: str, provide
     multiple_plans = len({row["plan_index"] for row in entries if "plan_index" in row and row.get("code") in {"status", "A", "B", "C", "G"}}) > 1
     limitations = any(str(row.get("code") or "").upper() in {"F", "Y"} for row in relevant)
     conditional_terms = selected_ids is None and any(re.search(r"\b(first|after|before|beginning|visits?|waived|unless|only|limit|specialist|primary care)\b", note, re.IGNORECASE) for row in (copay, coinsurance) if row for note in notes([row.get("messages"), row.get("additionalInformation")])
-        if note.strip().upper() not in {"OFFICE VISIT", "OFFICE VISITS", "SPECIALIST OFFICE VISIT", "PHYSICIAN OFFICE VISIT"})
+        if not all(re.fullmatch(r"(?:(?:specialist |physician )?office visits?|diagnostic medical procedure)(?:\s*-\s*professional)?", label.strip(), re.I)
+                   for label in note.split(';') if label.strip()))
     review_reasons = []
     if invalid_dates:
         review_reasons.append("Verify the payer eligibility dates; an applicable date value could not be interpreted.")

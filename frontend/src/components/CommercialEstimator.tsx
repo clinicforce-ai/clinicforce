@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { ArrowLeft, ArrowRight, CalendarDays, Check, CircleHelp, Clock3, RefreshCw, ShieldCheck, Trash2, BadgeDollarSign, Network, FileText, Wallet, PieChart, ArrowUpRight } from 'lucide-react'
+import { ArrowLeft, ArrowRight, CalendarDays, Check, Clock3, RefreshCw, ShieldCheck, Trash2, BadgeDollarSign, Network, FileText, Wallet, PieChart } from 'lucide-react'
 import { deleteStaffInsuranceCheck, getStaffIntake, getStaffSession, type StaffPatient, type StaffSession } from '../services/api/staff'
-import { commercialPayerResponse, commercialFinancials, type VisitFinancials, commercialAppointments, commercialHistory, commercialPrevisit, commercialSavedPrevisit, commercialSelectCoverageCandidate, commercialVisitReview, type VisitReview, type CommercialAppointment, type CommercialPastVisit, type PrevisitEstimate } from '../services/api/commercial-estimator'
+import { commercialFinancials, type VisitFinancials, commercialAppointments, commercialHistory, commercialPrevisit, commercialSavedPrevisit, commercialSelectCoverageCandidate, commercialVisitReview, type VisitReview, type CommercialAppointment, type CommercialPastVisit, type PrevisitEstimate } from '../services/api/commercial-estimator'
 import VisitServices, { ServicePlanner } from './VisitServices'
 import InsuranceCards from './InsuranceCards'
 import './CommercialEstimator.css'
@@ -15,45 +15,16 @@ const dateLabel = (value: string, options: Intl.DateTimeFormatOptions) => {
 const visitDate = (value: string) => dateLabel(value, { month: 'short', day: 'numeric', year: 'numeric' })
 const visitTime = (value: string, timeZone?: string) => dateLabel(value, { hour: 'numeric', minute: '2-digit', ...(timeZone ? { timeZone, timeZoneName: 'short' } : {}) })
 
-function CoverageCheck({ label, value, confirmed, detail }: { label: string; value: string; confirmed: boolean; detail?: string }) {
-  return <div className="visit-check"><span className={confirmed ? 'visit-check-icon is-confirmed' : 'visit-check-icon'} aria-hidden="true">{confirmed ? <Check size={16} /> : <CircleHelp size={16} />}</span>
-    <div><dt>{label}</dt>{detail && <small>{detail}</small>}</div><dd>{value}</dd></div>
-}
-
-
-function BenefitTable({ rows }: { rows: NonNullable<NonNullable<PrevisitEstimate['benefits']>['reported_options']> }) {
-  return <div className="clinical-table-wrap"><table className="clinical-service-table"><thead><tr><th>Benefit / service</th><th>Network</th><th>Amount / limit</th><th>Applies to</th></tr></thead><tbody>{rows.map((row, index) => <tr key={row.id || index}><th scope="row">{row.kind.replaceAll('_', ' ')}<small>{row.procedure_code ? `CPT ${row.procedure_code}` : `Service category ${row.service_type_code}`}</small>{row.payer_note && <small className="benefit-note">{row.payer_note}</small>}</th><td>{row.network.replaceAll('_', ' ').toLowerCase()}</td><td>{row.amount_cents != null ? money(row.amount_cents) : row.percent != null ? `${row.percent}%` : row.quantity?.value || 'Not specified'}</td><td>{[row.coverage_level, row.time_period].filter(Boolean).join(' · ').replaceAll('_', ' ').toLowerCase()}</td></tr>)}</tbody></table></div>
-}
-
-function visitRequirement(result: PrevisitEstimate, kind: 'referral' | 'authorization') {
-  const values = (result.price_range?.lines || []).flatMap(line => line.benefits.requirements?.[kind] ? [line.benefits.requirements[kind]] : [])
-  const required = values.some(value => value.required === 'required') ? 'Yes' : values.length && values.every(value => value.required === 'not_required') ? 'No' : 'Not stated by payer'
-  const status = values.some(value => value.status === 'denied') ? 'Denied' : values.some(value => value.status === 'expired') ? 'Expired' : values.some(value => value.status === 'pending') ? 'Pending' : values.length && values.every(value => value.cleared) ? required === 'No' ? 'Not needed' : 'Valid for planned care' : kind === 'referral' && result.referral_evidence?.length ? 'On file · validity not established' : 'No matching record returned'
-  return { required, status, valid: status === 'Not needed' || status === 'Valid for planned care' }
-}
-
-
-function FrontDeskCoverage({ result, onViewSources }: { result: PrevisitEstimate; onViewSources: () => void }) {
-  const benefits = result.benefits
-  const plan = result.plan_details?.stedi.names?.join(' · ') || result.plan_details?.ecw.plan?.filter(value => value !== 'CI').join(' · ') || (result.plan !== 'CI' ? result.plan : '')
-  const referral = visitRequirement(result, 'referral'), authorization = visitRequirement(result, 'authorization')
-  const saved = result.ecw_saved_eligibility
-  const checked = result.checked_at || result.eligibility_failure?.attempted_at
-  const time = checked ? `${visitDate(checked)} · ${visitTime(checked)}` : 'Not checked'
-  const record = result.insurance_details?.record_status
-  return <section className="front-desk-coverage" aria-labelledby="front-desk-heading"><div className="visit-section-heading"><div><h2 id="front-desk-heading">Coverage & approvals</h2></div><ShieldCheck size={24} aria-hidden="true" /></div>
-    <div className="coverage-plan"><Network size={22} aria-hidden="true" /><div><small>Exact plan / product</small><strong>{plan || 'Plan name not returned'}</strong><span>{result.payer}</span></div></div>
-    <dl className="visit-audit-grid">
-      <CoverageCheck label={`Eligibility for ${visitDate(result.service_date)}`} value={benefits?.service_date_matches === false ? 'Appointment date not verified' : benefits?.active === true ? 'Eligible' : benefits?.active === false ? 'Ineligible' : result.eligibility_failure ? 'Could not verify' : 'Not verified'} confirmed={benefits?.active === true && benefits?.service_date_matches !== false} detail={benefits?.service_date_matches === false ? `Payer returned ${visitDate(benefits.returned_service_dates?.start || '')} · requested ${visitDate(result.service_date)}` : `Stedi · ${time}`} />
-      <CoverageCheck label="Network status" value={benefits?.network_status === 'in_network' ? 'In network' : benefits?.network_status === 'out_of_network' ? 'Out of network' : 'Not established'} confirmed={benefits?.network_status === 'in_network'} detail={result.network_evidence?.network_name || 'For this provider and plan'} />
-      <CoverageCheck label="Saved eCW insurance status" value={saved?.status === 'verified_active' ? 'Verified · active' : saved?.status === 'verified_inactive' ? 'Verified · inactive' : record?.status || 'Not returned'} confirmed={saved?.status === 'verified_active'} detail={saved?.checked_at ? `${visitDate(saved.checked_at)} · ${visitTime(saved.checked_at)}` : record?.message || 'A saved policy does not verify this appointment'} />
-      <CoverageCheck label="Deductible remaining" value={benefits?.deductible_remaining_cents != null ? money(benefits.deductible_remaining_cents) : 'Balance not returned'} confirmed={benefits?.deductible_remaining_cents != null}  />
-      <CoverageCheck label="Out-of-pocket remaining" value={benefits?.oop_remaining_cents != null ? money(benefits.oop_remaining_cents) : 'Balance not returned'} confirmed={benefits?.oop_remaining_cents != null}  />
-      <CoverageCheck label="Referral" value={`${referral.required === 'Yes' ? 'Required' : referral.required === 'No' ? 'Not required' : 'Requirement not returned'} · ${referral.status}`} confirmed={referral.valid} />
-      <CoverageCheck label="Prior authorization" value={`${authorization.required === 'Yes' ? 'Required' : authorization.required === 'No' ? 'Not required' : 'Requirement not returned'} · ${authorization.status}`} confirmed={authorization.valid} />
-    </dl>
-    <button onClick={onViewSources}>View source details <ArrowUpRight size={15} /></button>
-    <div className="coverage-footnote"><Clock3 size={15} aria-hidden="true" /><span>Benefits: Stedi · {time}. Appointment and saved checks: eCW.</span></div>
+function ApplicableBenefits({ result }: { result: PrevisitEstimate }) {
+  const services = result.collection_guidance?.services || []
+  return <section><h3>Benefits used for this visit</h3><p>Matched to the selected services, visit date and location.</p>
+    {services.map(row => <article className="service-evidence" key={row.id}><h4>CPT {row.code} · {row.benefit}</h4><dl>
+      {row.copay_cents != null && <div><dt>Applicable copay</dt><dd>{money(row.copay_cents)}</dd></div>}
+      {row.coinsurance_percent != null && <div><dt>Coinsurance</dt><dd>{row.coinsurance_percent}%</dd></div>}
+      {row.deductible_remaining_cents != null && <div><dt>Deductible remaining</dt><dd>{money(row.deductible_remaining_cents)}</dd></div>}
+      {row.oop_remaining_cents != null && <div><dt>Out-of-pocket remaining</dt><dd>{money(row.oop_remaining_cents)}</dd></div>}
+    </dl>{row.oop_remaining_cents === 0 && <p>The remaining out-of-pocket limit reduces the estimated cost for covered in-network care to $0.</p>}</article>)}
+    {!services.length && <p>No advance charge is requested while applicable benefits are unavailable.</p>}
   </section>
 }
 
@@ -71,31 +42,16 @@ function FinancialHistory({ checkId }: { checkId: string }) {
   </section>
 }
 
-function PayerResponse({ checkId }: { checkId: string }) {
-  const [value, setValue] = useState('')
-  const [busy, setBusy] = useState(false)
-  const [error, setError] = useState('')
-  const load = async () => {
-    setBusy(true); setError('')
-    try { setValue(JSON.stringify((await commercialPayerResponse(checkId)).response, null, 2)) }
-    catch (caught) { setError(caught instanceof Error ? caught.message : 'The saved payer response could not be loaded.') }
-    finally { setBusy(false) }
-  }
-  return <section><button disabled={busy} onClick={() => value ? setValue('') : void load()}>{busy ? 'Loading payer response…' : value ? 'Hide saved payer response' : 'View saved payer response'}</button>{error && <p role="status">{error}</p>}{value && <pre className="visit-raw-response" tabIndex={0}>{value}</pre>}</section>
-}
-
 type DetailPanel = 'coverage' | 'notes' | 'calculation' | 'sources' | 'services'
 function AppointmentNotes({ result }: { result: PrevisitEstimate }) {
   const fields = result.appointment_context?.imported_fields || []
   const isStatus = (label: string) => /^(?:(?:appointment|encounter|visit)[ _-]+)?status$/i.test(label.trim())
   const statuses = fields.filter(field => isStatus(field.label))
   const details = fields.filter(field => !isStatus(field.label))
-  const hasNotes = details.some(field => /note|comment|instruction|narrative|description/i.test(field.label))
   return <section className="visit-imported">
     <h3>{result.reason || 'Scheduled visit'}</h3>
     <p className="visit-muted">{[result.appointment_context?.rendering_provider?.name, result.appointment_context?.location].filter(Boolean).join(' · ')}</p>
     {statuses.map((field, index) => <p className="visit-muted" key={index}>Appointment status: {field.text}</p>)}
-    {!hasNotes && <article><h3>General Notes not returned</h3><p>The eCW connection did not return General Notes or patient comments for this appointment.</p></article>}
     {details.map((field, index) => <article key={`${field.source}:${index}`}><h3>{field.label}</h3><p>{field.text}</p><small>From eCW{field.updated_at ? ` · ${visitDate(field.updated_at)}` : ''}</small></article>)}
   </section>
 }
@@ -252,25 +208,7 @@ export default function CommercialEstimator({ onBack, intakeId, refreshBenefits 
   const failed = !!result?.eligibility_error
   const failure = result?.eligibility_failure
   const patientPrice = benefits?.active === true && benefits.network_status === 'in_network' && price?.complete && price?.patient_min_cents != null && price.patient_max_cents != null ? range(price.patient_min_cents, price.patient_max_cents) : null
-  const collectionBlockers = [...new Set([
-    benefits?.service_date_matches === false ? `Appointment date unverified · payer returned ${visitDate(benefits.returned_service_dates?.start || '')}.` : '',
-    failed ? failure?.title || 'Eligibility check incomplete.' : '',
-    benefits?.active === false ? 'Coverage is inactive for this visit.' : '',
-    ...(benefits?.review_reasons || []).filter(reason => /identity|evidence/i.test(reason)),
-    benefits?.network_status !== 'in_network' ? 'Provider network: verify participation.' : '',
-    price?.lines?.some(line => line.allowed_cents == null) ? 'Contract rate: missing for selected services.' : '',
-    benefits?.requires_review ? 'Service benefits / approvals: review needed.' : '',
-  ].filter(Boolean))]
-  const officeLines = price?.lines?.filter(line => /^992(0[2-5]|1[2-5])$/.test(line.code)) || []
-  const officeTerms = officeLines.length && officeLines.every(line => line.benefits.copay_cents === officeLines[0].benefits.copay_cents) ? officeLines[0].benefits : null
-  const reportedOfficeCopay = benefits?.active === true && benefits.service_date_matches !== false && result?.identity?.status !== 'review' && officeTerms?.copay_cents != null ? money(officeTerms.copay_cents) : null
-  const requirementLabel = (kind: 'referral' | 'authorization') => {
-    if (!result) return 'Not returned'
-    const value = visitRequirement(result, kind)
-    return value.valid ? value.status : ['Denied', 'Expired', 'Pending'].includes(value.status) ? value.status : value.required === 'Yes' ? 'Required · not verified' : 'Not returned'
-  }
   const calculationReasons = [...new Set((price?.lines || []).map(line => line.benefits.benefit_summary).filter(Boolean))]
-  const collectionDetails = [...new Set([...(result?.issues || []), ...(price?.lines || []).flatMap(line => line.issues || [])])]
   const policySources = [...new Map((price?.lines || []).filter(line => line.benefits.policy_evidence).map(line => [line.benefits.policy_evidence!.url, line.benefits.policy_evidence!])).values()]
   const cashPrice = price?.cash_complete && price.cash_min_cents != null && price.cash_max_cents != null ? range(price.cash_min_cents, price.cash_max_cents) : null
   const planName = result?.plan_details?.stedi.names?.join(' · ') || result?.plan_details?.ecw.plan?.filter(value => value !== 'CI').join(' · ') || (result?.plan !== 'CI' ? result?.plan : null)
@@ -281,17 +219,14 @@ export default function CommercialEstimator({ onBack, intakeId, refreshBenefits 
   const policyStatus = benefits?.service_date_matches === false ? 'Coverage returned · verify appointment date' : benefits?.active === true ? 'Coverage active' : benefits?.active === false ? 'Coverage inactive' : result?.ecw_coverage_active ? 'Policy in eCW · verify benefits' : 'Coverage check in progress'
 
   const cash = result?.payment_mode === 'cash'
-  const amount = cash ? cashPrice : result?.arrival_collection?.amount_cents != null ? money(result.arrival_collection.amount_cents) : null
-  const amountLabel = cash ? 'Cash price' : 'Collect at arrival'
-  const explanation = cash ? 'Clinic self-pay price for this service plan.' : amount
-    ? calculationReasons.join(' ') || (result?.arrival_collection?.status === 'copay_only' ? 'Specialist/office-visit copay returned for this plan.' : result?.arrival_collection?.reason) || 'Patient responsibility for the anticipated visit.'
-    : collectionBlockers[0] || collectionDetails[0] || failure?.title || 'The available evidence does not establish an amount to collect for this visit.'
+  const guidance = !error ? result?.collection_guidance : undefined
+  const deferredReason = error ? 'Current benefits could not be loaded. Collect $0 now; bill any patient responsibility after the insurer processes the claim.' : 'An advance charge is not available yet. Collect $0 now; bill any patient responsibility after the insurer processes the claim.'
+  const amount = cash ? cashPrice || money(0) : money(guidance?.amount_cents ?? 0)
+  const amountLabel = 'Collect at arrival'
+  const explanation = cash ? cashPrice ? 'Clinic self-pay price for this service plan.' : 'The clinic cash price is unavailable. Collect $0 now and defer billing until the price is established.' : guidance?.reason || deferredReason
+  const requirementLabel = (kind: 'referral' | 'authorization') => guidance?.requirements[kind] || 'Determined by plan'
   const provider = result?.appointment_context?.rendering_provider?.name
   const anticipatedService = result?.price_range?.mode === 'alternatives' ? `${result.visit_type === 'new' ? 'New patient' : 'Established patient'} office consultation · E/M alternatives ${result.codes.map(row => row.code).join(', ')}` : result?.service_plan?.recommendation_basis
-  const openPanel = (next: DetailPanel) => {
-    const detail = document.getElementById(`visit-detail-${next}`) as HTMLDetailsElement | null
-    if (detail) { detail.open = true; detail.querySelector('summary')?.focus(); detail.scrollIntoView({ block: 'start', behavior: 'auto' }) }
-  }
 
   return <section className="visit-estimator visit-visual" aria-labelledby="visit-estimate-title">
     <header className="visit-page-header"><div><button className="visit-back" onClick={onBack}><ArrowLeft size={17} /> Back to patient</button><h1 id="visit-estimate-title">Insurance estimator</h1></div><span className="visit-practice">{session?.practice_name}</span></header>
@@ -305,17 +240,19 @@ export default function CommercialEstimator({ onBack, intakeId, refreshBenefits 
     </dl>}
     <div className="visit-content" aria-busy={!!busy || recovering}>
       {notice && <p className="visit-notice" role="status">{notice}</p>}{deleteError && <p className="visit-error" role="alert">{deleteError}</p>}
-      {error && <div className="visit-error" role="alert"><CircleHelp size={20} aria-hidden="true" /><div><strong>This check could not be completed</strong><p>{error}</p><button disabled={!!busy} onClick={() => void (selected ? estimate() : load())}>Try again <ArrowRight size={15} /></button></div></div>}
+      {error && <p className="visit-notice" role="status">The estimate could not be updated. Collection is deferred.<button disabled={!!busy} onClick={() => void (selected ? estimate() : load())}>Try again <ArrowRight size={15} /></button></p>}
+      {(!result || busy === 'estimate' || busy === 'visits') && <section className="visit-overview" aria-label="Arrival collection"><div className="arrival-total"><span>Collect at arrival</span><strong>{money(0)}</strong><p><b>Why:</b> {busy ? 'Benefits are being checked. No advance payment is requested while the estimate is loading.' : deferredReason}</p><p>Final patient responsibility may be billed after the claim.</p></div></section>}
       {busy === 'estimate' || busy === 'visits' ? <div className="visit-empty" role="status"><RefreshCw className="visit-spin" size={26} aria-hidden="true" /><h2>{busy === 'visits' ? 'Finding your visit' : 'Putting the estimate together'}</h2><p>Reading the appointment, patient and insurance from eCW. Checking saved eligibility and any current benefits needed.</p></div> : result ? <>
         <section id="visit-estimate" className="visit-overview" aria-labelledby="payment-heading">
           <div className="overview-heading"><h2 id="payment-heading">{cash ? 'Self-pay estimate' : 'Arrival collection'}</h2><div className="payment-toggle" aria-label="Payment method"><button aria-pressed={!cash} disabled={!!busy || recovering} onClick={() => { if (cash) void saveReview({ payment_mode: 'insurance' }) }}><ShieldCheck size={16} />Insurance</button><button aria-pressed={cash} disabled={!!busy || recovering} onClick={() => { if (!cash) void saveReview({ payment_mode: 'cash' }) }}><Wallet size={16} />Cash</button></div></div>
-          <div className="overview-amounts"><div className="arrival-total"><span>{amountLabel}</span><strong className={!amount ? 'amount-pending' : ''}>{amount || 'Needs verification'}</strong><p><b>Why:</b> {explanation}</p>
-            {!cash && amount && result.arrival_collection?.payments_received_cents == null && <span className="estimate-condition">Before payments or credits. The clinic ledger was not returned; check amounts already collected.</span>}
-            {!cash && result.arrival_collection?.status === 'copay_only' && <span className="estimate-condition">Applicable office copay only. Additional services can change the estimate.</span>}
+          <div className="overview-amounts"><div className="arrival-total"><span>{amountLabel}</span><strong>{amount}</strong><p><b>Why:</b> {explanation}</p>
+            {!cash && <><span className="estimate-condition">{guidance?.status === 'deferred' || !guidance ? 'Collection deferred · final patient cost follows the claim.' : 'Advance estimate · assumptions apply.'}</span><p>{guidance?.patient_message || 'No payment is requested now. The insurer will determine final patient responsibility.'}</p>
+              {!!guidance?.patient_actions.length && <div><b>Tell the patient:</b><ul>{guidance.patient_actions.map(action => <li key={action}>{action}</li>)}</ul></div>}
+              {!!guidance?.assumptions.length && <details><summary>Assumptions used</summary><ul>{guidance.assumptions.map(item => <li key={item}>{item}</li>)}</ul></details>}</>}
           </div><div className="arrival-context"><span className="visit-label">Anticipated service</span><h3>{anticipatedService || result.reason || 'Service not established'}</h3><p>Based on the scheduled appointment. Modify the services below if the planned care changes.</p></div></div>
           <div className="visit-snapshots" aria-label="Coverage summary">
-            <div><ShieldCheck size={20} aria-hidden="true" /><span>Coverage<strong>{benefits?.service_date_matches === false ? 'Date unverified' : benefits?.active === true ? 'Active' : benefits?.active === false ? 'Inactive' : 'Not verified'}</strong></span></div>
-            <div><Network size={20} aria-hidden="true" /><span>Network<strong>{benefits?.network_status === 'in_network' ? 'In network' : benefits?.network_status === 'out_of_network' ? 'Out of network' : 'Not established'}</strong></span></div>
+            <div><ShieldCheck size={20} aria-hidden="true" /><span>Coverage<strong>{benefits?.service_date_matches === false ? 'Different date returned' : benefits?.active === true ? 'Active' : benefits?.active === false ? 'Inactive' : 'Check pending'}</strong></span></div>
+            <div><Network size={20} aria-hidden="true" /><span>Network<strong>{guidance?.network || 'Determined when claim is processed'}</strong></span></div>
             <div><FileText size={20} aria-hidden="true" /><span>Referral<strong>{requirementLabel('referral')}</strong></span></div>
             <div><ShieldCheck size={20} aria-hidden="true" /><span>Prior authorization<strong>{requirementLabel('authorization')}</strong></span></div>
           </div>
@@ -330,36 +267,29 @@ export default function CommercialEstimator({ onBack, intakeId, refreshBenefits 
             <ServicePlanner key={`${result.check_id}:${result.revision}`} result={result} busy={!!busy || recovering} save={saveReview} viewEstimate={message => { setNotice(message || 'Estimate updated.'); document.getElementById('visit-estimate')?.scrollIntoView({ block: 'start' }) }} />
           </div></details>
           <details id="visit-detail-coverage" className="visit-detail-section"><summary>Detailed benefits, insurance & card</summary><div className="visit-detail-body">
-            {failed && <section className="visit-recovery"><h3>{recovering ? 'Finding coverage…' : failure?.title || 'Coverage check incomplete'}</h3><p>{failure?.action || result.issues.join(' ')}</p>{result.recovery?.message && <p>{result.recovery.message}</p>}{result.recovery?.candidates?.map(candidate => <article key={candidate.id}><strong>{candidate.payer}</strong><p>{candidate.plans.join(' · ')}</p><button disabled={!!busy || recovering} onClick={() => void selectCoverage(candidate.id)}>Use this policy</button></article>)}</section>}
+            {failed && <section className="visit-recovery"><h3>{recovering ? 'Finding coverage…' : failure?.title || 'Coverage check incomplete'}</h3><p>{guidance?.reason || deferredReason}</p>{result.recovery?.message && <p>{result.recovery.message}</p>}{result.recovery?.candidates?.map(candidate => <article key={candidate.id}><strong>{candidate.payer}</strong><p>{candidate.plans.join(' · ')}</p><button disabled={!!busy || recovering} onClick={() => void selectCoverage(candidate.id)}>Use this policy</button></article>)}</section>}
             <section className="patient-policy"><div className="policy-relationship"><div><span>Patient</span><strong>{payerPatient?.lastName ? [payerPatient.firstName, payerPatient.lastName].filter(Boolean).join(' ') : patient ? `${patient.given_name} ${patient.family_name}` : 'Not returned'}</strong><small>eCW: {patient?.given_name} {patient?.family_name}</small></div><ArrowRight size={22} aria-hidden="true" /><div><span>Policyholder · {result.insurance_details?.payer_relationship?.toLowerCase() || ({ '18': 'self', '01': 'spouse', '19': 'child', G8: 'other' } as Record<string, string>)[result.insurance_details?.relationship || ''] || 'relationship not returned'}</span><strong>{payerSubscriber?.lastName ? [payerSubscriber.firstName, payerSubscriber.lastName].filter(Boolean).join(' ') : [result.insurance_details?.subscriber_first, result.insurance_details?.subscriber_last].filter(Boolean).join(' ') || 'Not returned'}</strong></div></div>
-              <dl><div><dt>Member ID</dt><dd>{result.insurance_details?.member_id || 'Not returned'}</dd></div><div><dt>Group</dt><dd>{result.insurance_details?.group_number || result.plan_details?.stedi.group_number || 'Not returned'}</dd></div><div><dt>Coverage dates</dt><dd>{policyDates?.start || 'Start not returned'} – {policyDates?.end || 'End not returned'}</dd></div><div><dt>Contact</dt><dd>{result.patient_details?.phone || 'Phone not returned'}<small>{result.patient_details?.email}</small></dd></div><div><dt>Address</dt><dd>{Object.values(result.patient_details?.address || {}).filter(Boolean).join(', ') || 'Not returned'}</dd></div><div><dt>Payer patient DOB</dt><dd>{payerPatient?.dateOfBirth ? visitDate(payerPatient.dateOfBirth) : 'Not returned'}</dd></div></dl>
+              <dl><div><dt>Member ID</dt><dd>{result.insurance_details?.member_id || 'Not returned'}</dd></div>{(result.insurance_details?.group_number || result.plan_details?.stedi.group_number) && <div><dt>Group</dt><dd>{result.insurance_details?.group_number || result.plan_details?.stedi.group_number}</dd></div>}{policyDates?.start && <div><dt>Coverage dates</dt><dd>{policyDates.start}{policyDates.end ? ` – ${policyDates.end}` : ' onward'}</dd></div>}<div><dt>Contact</dt><dd>{result.patient_details?.phone || 'Phone not returned'}<small>{result.patient_details?.email}</small></dd></div><div><dt>Address</dt><dd>{Object.values(result.patient_details?.address || {}).filter(Boolean).join(', ') || 'Not returned'}</dd></div><div><dt>Payer patient DOB</dt><dd>{payerPatient?.dateOfBirth ? visitDate(payerPatient.dateOfBirth) : 'Not returned'}</dd></div></dl>
               {!!result.identity?.differences.length && <p className="visit-muted">Both names are retained with their source. {result.identity.status === 'reconciled' ? 'A verified relationship is on file.' : result.identity.status === 'warning' ? result.identity.message : 'The patient details need reconciliation before collection.'}</p>}
               {intakeId && <InsuranceCards key={intakeId} intakeId={intakeId} background inline />}
-            </section><FrontDeskCoverage result={result} onViewSources={() => openPanel('sources')} />
-            {!!result.coverage_records?.length && <section className="visit-records"><h3>Policies returned by eCW</h3>{result.coverage_records.map(row => <article key={row.id}><strong>{row.payer?.join(' · ') || 'Insurance record'}</strong><p>{row.status} · Order {row.order ?? 'not returned'} · {row.relationship || 'Relationship not returned'}</p><small>Member {row.member_id || 'not returned'} · Group {row.group_number || 'not returned'}</small><small>Subscriber: {row.subscriber || 'Not returned'} · Coverage: {row.period?.start || 'Start not returned'} – {row.period?.end || 'End not returned'}</small>{row.cost_to_beneficiary?.map((cost, index) => <p key={index}>{cost.type?.text || 'Patient cost share'}: {cost.valueMoney ? `${cost.valueMoney.value} ${cost.valueMoney.currency || 'USD'}` : cost.valueQuantity ? `${cost.valueQuantity.value}${cost.valueQuantity.unit || ''}` : 'See policy'}</p>)}</article>)}</section>}
+            </section><ApplicableBenefits result={result} />
             <AppointmentNotes result={result} />
-            {!!benefits?.reported_options?.length && <section><h3>All returned benefits</h3><p className="visit-muted">The arrival amount uses the applicable benefit for this visit.</p><BenefitTable rows={benefits.reported_options} /></section>}
           </div></details>
-          <details className="visit-detail-section"><summary>Raw payer response</summary><div className="visit-detail-body">{result.check_id ? <PayerResponse checkId={result.check_id} /> : <p>No saved payer response is available.</p>}</div></details>
           <details id="visit-detail-calculation" className="visit-detail-section"><summary>Patient estimate</summary><div className="visit-detail-body"><section>
-            <div className="planning-summary"><h3>{cash ? 'Cash price' : 'Estimated patient responsibility'} · {cash ? cashPrice || 'Not established' : result.planning_estimate ? money(result.planning_estimate.amount_cents) : patientPrice || 'Not established'}</h3>
+            <div className="planning-summary"><h3>{cash ? 'Cash price' : 'Estimated patient responsibility'} · {cash ? cashPrice || 'Billed once priced' : guidance?.status === 'deferred' || !guidance ? 'Determined after the claim' : result.planning_estimate ? money(result.planning_estimate.amount_cents) : patientPrice || 'Applicable advance amount shown above'}</h3>
             {result.planning_estimate && <p>{result.planning_estimate.explanation}</p>}
-            {!cash && reportedOfficeCopay && <p>Applicable payer-reported office copay: {reportedOfficeCopay}. Collection depends on the network, approvals and visit plan above.</p>}
-            <CostPicture result={result} /></div><div className="calculation-summary"><PieChart size={24} aria-hidden="true" /><div><h3>{amountLabel} · {amount || 'Not established'}</h3><p>{explanation}</p></div></div>
-            {!!result.planning_estimate?.assumptions.length && <section><h3>Assumptions used</h3><ul>{result.planning_estimate.assumptions.map(item => <li key={item}>{item}</li>)}</ul></section>}
+            <CostPicture result={result} /></div><div className="calculation-summary"><PieChart size={24} aria-hidden="true" /><div><h3>{amountLabel} · {amount}</h3><p>{explanation}</p></div></div>
+            {!!guidance?.assumptions.length && <section><h3>Assumptions used</h3><ul>{guidance.assumptions.map(item => <li key={item}>{item}</li>)}</ul></section>}
             {!!result.service_plan?.assumptions?.length && <section><h3>Service-plan assumptions</h3><ul>{result.service_plan.assumptions.map(item => <li key={item}>{item}</li>)}</ul></section>}
-            {!cash && <dl className="collection-components">{(['copay_cents', 'deductible_cents', 'coinsurance_cents', 'oop_adjustment_cents'] as const).map(key => <div key={key}><dt>{({ copay_cents: 'Copay applied', deductible_cents: 'Deductible applied', coinsurance_cents: 'Coinsurance applied', oop_adjustment_cents: 'Out-of-pocket adjustment' })[key]}</dt><dd>{price?.complete && price.mode === 'services' ? money((price.lines || []).reduce((sum, line) => sum + (line.calculation?.[key] || 0), 0)) : 'Not established'}</dd></div>)}<div><dt>Payments received</dt><dd>{result.arrival_collection?.payments_received_cents != null ? money(result.arrival_collection.payments_received_cents) : 'Not returned by the clinic ledger'}</dd></div></dl>}
+            {!cash && price?.complete && <dl className="collection-components">{(['copay_cents', 'deductible_cents', 'coinsurance_cents', 'oop_adjustment_cents'] as const).map(key => <div key={key}><dt>{({ copay_cents: 'Copay applied', deductible_cents: 'Deductible applied', coinsurance_cents: 'Coinsurance applied', oop_adjustment_cents: 'Out-of-pocket adjustment' })[key]}</dt><dd>{price.mode === 'services' ? money((price.lines || []).reduce((sum, line) => sum + (line.calculation?.[key] || 0), 0)) : 'Depends on final visit level'}</dd></div>)}</dl>}
             {calculationReasons.map(reason => <p key={reason}>{reason}</p>)}<VisitServices result={result} />
-            {!!collectionDetails.length && <section><h3>Evidence still needed</h3><ul>{collectionDetails.map(item => <li key={item}>{item}</li>)}</ul></section>}
-            {!cash && !amount && !!collectionBlockers.length && <ul>{collectionBlockers.map(item => <li key={item}>{item}</li>)}</ul>}
-            <p className="visit-muted">Daily copays apply once to the same benefit in this visit. Earlier same-day collections, credits and prior balances require clinic ledger data.</p>
+            <p className="visit-muted">The arrival amount is an advance collection. Final patient responsibility follows the insurer’s processed claim.</p>
           </section></div></details>
           <details id="visit-detail-sources" className="visit-detail-section" onToggle={event => { if (event.currentTarget.open) { setPanel('sources'); if (history === null && !historyBusy) void loadHistory() } }}><summary>Audit trail & history</summary><div className="visit-detail-body"><section className="visit-provenance"><dl><div><dt>Patient & appointment</dt><dd>eClinicalWorks<small>{result.ecw_retrieved_at && `${visitDate(result.ecw_retrieved_at)} · ${visitTime(result.ecw_retrieved_at)}`}</small></dd></div><div><dt>Payer benefits</dt><dd>Stedi<small>{result.checked_at ? `${visitDate(result.checked_at)} · ${visitTime(result.checked_at)}` : 'Not returned'}</small></dd></div><div><dt>Clinic contract</dt><dd>{result.network_evidence?.network_name || 'No exact product mapping returned'}</dd></div><div><dt>Cash schedule</dt><dd>{result.cash_schedule?.source || result.practice_cash_source?.filename || 'Not returned'}</dd></div></dl>
             {(result.insurance_fallback?.payer || result.insurance_fallback?.member_id) && <p>Missing {result.insurance_fallback.payer && result.insurance_fallback.member_id ? 'payer and member ID' : result.insurance_fallback.payer ? 'payer' : 'member ID'} came from the labeled payment preference in eCW General Notes. Payer verification is checked separately.</p>}
             {policySources.map(source => <p key={source.url}><a href={source.url} target="_blank" rel="noreferrer">{source.title}</a> · {source.section}</p>)}
             {patientPrice && <p>Estimated patient share after the claim: {patientPrice}.</p>}
             {result.eligibility_reconciliation && <p>{result.eligibility_reconciliation.message}</p>}
-            {result.ecw_saved_eligibility && <p>{result.ecw_saved_eligibility.message}</p>}
             {!!result.identity?.differences.length && <p>{result.identity.message || 'Patient identity requires review.'}</p>}
             <p>Response reference: {result.response_reference || 'Not returned'} · Estimate revision: {result.revision ?? 'Not saved'}</p>
             {!!result.audit_trail?.length && <section><h3>Changes to this estimate</h3><ol>{result.audit_trail.map((entry, index) => <li key={index}>{entry.changes.join(', ')} · {entry.by}{entry.checked_at && <small>{visitDate(entry.checked_at)} · {visitTime(entry.checked_at)}</small>}</li>)}</ol></section>}
