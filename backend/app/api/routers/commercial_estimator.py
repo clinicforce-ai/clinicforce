@@ -130,6 +130,7 @@ class VisitReviewInput(BaseModel):
     revision: int = Field(ge=0)
     selected_ids: list[str] | None = Field(default=None, max_length=20)
     payment_mode: Literal["insurance", "cash"] | None = None
+    emg_required: bool | None = None
     cash_selection: str | None = Field(default=None, max_length=40)
     confirmed_units: dict[str, StrictInt] | None = Field(default=None, max_length=20)
     verification: VisitVerification | None = None
@@ -624,7 +625,7 @@ def _finish_previsit(result: dict, case: dict, inputs: dict, source: dict, paylo
     result['payment_mode'] = review.get('payment_mode', 'insurance')
     result['ecw_saved_eligibility'] = source.get('saved_eligibility')
     labels = {'selected_ids': 'Services', 'confirmed_units': 'Service quantities', 'payment_mode': 'Payment method',
-              'cash_selection': 'Cash package', 'verification': 'Benefit or approval evidence',
+              'cash_selection': 'Cash package', 'emg_required': 'EMG testing', 'verification': 'Benefit or approval evidence',
               'identity_confirmation': 'Patient identity', 'product_mapping': 'Plan mapping',
               'payments_received_cents': 'Recorded payments'}
     result['audit_trail'] = [{'checked_at': entry.get('verified_at'), 'by': entry.get('verified_by') or 'Clinic staff',
@@ -675,6 +676,18 @@ def _finish_previsit(result: dict, case: dict, inputs: dict, source: dict, paylo
     if uploaded_cash:
         practice_prices.apply(result, uploaded_cash)
     result['collection_guidance'] = collection_guidance.build(result, review)
+    result.pop('emg_option', None)
+    if inputs.get('visit_type') == 'new' and result['payment_mode'] == 'insurance':
+        emg_rates, emg_rules = [], {'place_of_service': inputs.get('place_of_service'),
+            'office_service_types': ['BQ', 'BY', '98'] if any('neurolog' in role.lower() for role in (source.get('rendering_provider') or {}).get('roles', [])) else ['BY', '98']}
+        if (review.get('emg_required') or any(row['code'] in cpt_rules.NCS_CODES | cpt_rules.EMG_ADD_ONS for row in result['codes'])) and len(connections) == 1:
+            try:
+                _, network, profile = _previsit_practice_path(session['practice_id'], {**inputs, 'payer_id': connections[0]['id']}, exact_source)
+                emg_rates = commercial_store.matching_rates(session['practice_id'], profile, network, inputs['service_date'], None)
+                emg_rules.update(profile['rules'])
+            except (HTTPException, commercial.CommercialError):
+                pass
+        result['emg_option'] = collection_guidance.emg_option(result, emg_rates, emg_rules, payload, inputs['service_date'], review)
     case['previsit_context'] = {'inputs': inputs, 'source': source, 'payer_id': payer_id,
                               'result': result, 'context_token': token}
 
@@ -968,6 +981,7 @@ def _case_benefits(payload: dict, inputs: dict, source: dict, case: dict) -> dic
 def _previsit_result(case: dict) -> dict:
     result = deepcopy(case['previsit_context']['result'])
     result['revision'] = case.get('revision', 0)
+    result['collection_guidance'] = collection_guidance.build(result, case.get('visit_review'))
     if case.get('previsit_discovery'):
         result['recovery'] = stedi_discovery.public_status(case['previsit_discovery'])
     return result
@@ -1477,6 +1491,8 @@ async def update_visit_review(case_id: str, value: VisitReviewInput, request: Re
         group_order = [group['id'] for group in visit_estimate.service_plan(list(available.values()), inputs, source)['groups']]
         review['selected_ids'] = sorted(value.selected_ids, key=lambda key: (group_order.index(visit_estimate.clinical_group(available[key]['code'])), list(available).index(key)))
         review.pop('payments', None)
+    if value.emg_required is not None:
+        review['emg_required'] = value.emg_required
     if value.payment_mode is not None:
         review['payment_mode'] = value.payment_mode
     if value.cash_selection is not None:

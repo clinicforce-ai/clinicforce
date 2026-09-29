@@ -211,3 +211,14 @@
   .visit-detail-section > summary { padding: 16px; }
 }
 @media print { .visit-detail-section { break-inside: avoid; } }
+
+.emg-option { padding: 20px 24px; margin-top: 16px; }
+.emg-option > label { display: flex; align-items: center; gap: 10px; font-weight: 650; cursor: pointer; }
+.emg-option input[type="checkbox"] { width: 20px; height: 20px; flex: 0 0 20px; accent-color: var(--ve-teal); }
+.emg-option > p { color: var(--ve-muted); margin: 12px 0; }
+.visit-snapshots small { display: block; margin-top: 5px; line-height: 1.4; }
+@media (max-width: 600px) {
+  .visit-snapshots span { display: grid; grid-template-columns: auto minmax(0, 1fr); }
+  .visit-snapshots strong { text-align: right; }
+  .visit-snapshots small { grid-column: 1 / -1; margin-top: 0; }
+}
