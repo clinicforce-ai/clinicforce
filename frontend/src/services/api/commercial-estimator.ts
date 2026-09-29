@@ -8,6 +8,8 @@ export const commercialAppointments = () => request<{ appointments: CommercialAp
 export type CommercialReadiness = { ready: boolean; blockers: string[]; ecw: { payer?: string | null; plan?: string | null; scheduled_codes: Array<{ code?: string | null; units?: number | string | null }>; visit_type?: string | null; reason?: string | null } }
 export const commercialReadiness = (appointment_id: string) => request<CommercialReadiness>(`${root}/appointments/readiness`, json({ appointment_id }))
 export type PrevisitEstimate = {
+  eligibility_reconciliation?: { requires_review: boolean; message: string };
+  audit_trail?: Array<{ checked_at?: string; by: string; changes: string[] }>;
   insurance_fallback?: { payer?: string; member_id?: string };
   identity?: { status: 'matched' | 'warning' | 'review' | 'reconciled'; message?: string; binding: string; can_confirm: boolean; differences: Array<{ field: string; ecw: string; payer: string }>; evidence?: { reference: string; verified_at: string } };
   planning_estimate?: { amount_cents: number; collectable: false; basis?: 'out_of_pocket_limit' | 'conditional_services'; explanation: string; assumptions: string[] } | null;

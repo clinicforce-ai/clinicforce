@@ -1,6 +1,6 @@
 import json
 import unittest
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -45,7 +45,10 @@ class PrevisitFlowTest(unittest.IsolatedAsyncioTestCase):
     async def test_unresolved_payer_still_returns_patient_policy_and_editable_new_visit(self):
         await self._flow(date.today().isoformat(), payer_missing=True)
 
-    async def _flow(self, service_date, reject=False, retry_basic=False, payer_missing=False, refresh=False):
+    async def test_newer_conflicting_ecw_check_refreshes_cached_stedi_evidence(self):
+        await self._flow(date.today().isoformat(), newer_ecw=True)
+
+    async def _flow(self, service_date, reject=False, retry_basic=False, payer_missing=False, refresh=False, newer_ecw=False):
         session = {"practice_id": "clinic", "intake_id": "intake", "patient_id": "patient",
                    "share_manifest_id": "", "staff": {"id": "staff", "display_name": "Staff", "practice_name": "Clinic"},
                    "intake": {"updated_at": "version", "patient": {"given_name": "Pat", "family_name": "Example",
@@ -90,10 +93,20 @@ class PrevisitFlowTest(unittest.IsolatedAsyncioTestCase):
                  "STEDI_API_KEY": "production-key", "STEDI_EXECUTION_MODE": "commercial_pilot",
                  "STEDI_LIVE_ELIGIBILITY_ENABLED": "true"}):
             result = await previsit_estimate(PrevisitInput(appointment_id="visit-1"), MagicMock())
+            if newer_ecw:
+                saved = {'status': 'verified_inactive', 'active': False, 'checked_at': datetime.now(timezone.utc).isoformat()}
+                with patch('app.api.routers.commercial_estimator.ecw_backend.fetch_saved_eligibility', AsyncMock(return_value=saved)):
+                    refreshed = await previsit_estimate(PrevisitInput(appointment_id='visit-1'), MagicMock())
+                self.assertEqual(client.post.await_count, 2)
+                self.assertFalse(refreshed['eligibility_reconciliation']['requires_review'])
+                self.assertIn('newer Stedi', refreshed['eligibility_reconciliation']['message'])
+                self.assertEqual(refreshed['price_range']['mode'], 'alternatives')
+                self.assertEqual(refreshed['selected_ids'], [])
+                return
             if payer_missing:
                 self.assertEqual(result['insurance_details']['member_id'], 'M123')
                 self.assertTrue(result['context_token'])
-                self.assertEqual([row['code'] for row in result['codes']], ['99203'])
+                self.assertEqual([row['code'] for row in result['codes']], ['99202', '99203', '99204', '99205'])
                 self.assertTrue(result['available_codes'])
                 selected = next(row['id'] for row in result['available_codes'] if row['code'] == '99204')
                 with patch('app.api.routers.commercial_estimator.store.get_case', return_value=case), \
@@ -110,7 +123,7 @@ class PrevisitFlowTest(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(result['eligibility_error'], 'eligibility_rejected' if isinstance(reject, dict) else 'request_validation')
                 self.assertIsNone(result['benefits']['active'])
                 self.assertEqual(result['plan'], 'CI')
-                self.assertEqual(len(result['price_range']['lines']), 1)
+                self.assertEqual(len(result['price_range']['lines']), 4)
                 self.assertIn('context_token', result)  # anticipated services remain editable
                 self.assertEqual(case['previsit']['request_state'], 'rejected')
                 self.assertEqual(client.post.await_count, 1)
@@ -159,7 +172,7 @@ class PrevisitFlowTest(unittest.IsolatedAsyncioTestCase):
                     await previsit_estimate(PrevisitInput(appointment_id='visit-1', refresh_benefits=True), MagicMock())
                     self.assertEqual(client.post.await_count, 2)
                 case['previsit']['request_state'] = 'complete'
-        self.assertEqual([row["code"] for row in result["codes"]], ["99203"])
+        self.assertEqual([row["code"] for row in result["codes"]], ["99202", "99203", "99204", "99205"])
         self.assertTrue(result["benefits"]["active"])
         self.assertNotIn("patient_min_cents", result["price_range"])
         sent = client.post.await_args.kwargs["json"]

@@ -301,7 +301,9 @@ def _display(resource: dict[str, Any]) -> str | None:
     if resource.get("name") and isinstance(resource.get("name"), str):
         return resource["name"]
     given, family = _name(resource)
-    return " ".join(x for x in (given, family) if x) or None
+    names = [item for item in resource.get('name', []) if isinstance(item, dict)]
+    selected = next((item for item in names if item.get('use') in {'official', 'usual'}), names[0] if names else {})
+    return " ".join(x for x in (given, family) if x) or selected.get('text') or None
 
 
 def _concept_labels(value: Any) -> list[str]:

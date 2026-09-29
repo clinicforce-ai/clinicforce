@@ -186,6 +186,9 @@ class VisitReviewTests(IsolatedAsyncioTestCase):
             assert updated['revision'] == 5
             assert get_case.call_args.kwargs['practice_id'] == 'clinic-b'
             assert case['visit_review_history'][0]['actor_id'] == 'staff-b'
+            assert updated['audit_trail'][0]['changes'] == ['Recorded payments']
+            assert updated['audit_trail'][0]['by'] == 'Staff B'
+            assert 'actor_id' not in updated['audit_trail'][0]
             for data in ({'revision': 3}, {'context_token': 'x'*64}, {'selected_ids': ['not-a-service']}, {'confirmed_units': {'a': 0}}):
                 with self.assertRaises(HTTPException):
                     await api.update_visit_review('case', api.VisitReviewInput(**{'context_token': token, 'revision': 4, **data}), MagicMock())
