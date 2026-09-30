@@ -115,7 +115,13 @@ class EcwBackendSourceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result['resources']['CoverageEligibilityResponse']['status'], 'scope_denied_or_unavailable')
         self.assertEqual(result['resources']['DocumentReference'], {'status': 'available', 'count': 1})
 
+    async def test_backend_ignores_foreign_policy_and_reads_contained_subscriber(self):
+        await self._backend_inputs(contained=True)
+
     async def test_backend_token_and_fhir_resources_become_availity_inputs(self):
+        await self._backend_inputs()
+
+    async def _backend_inputs(self, contained=False):
         today_date = datetime.now(ZoneInfo("America/New_York")).date()
         today = today_date.isoformat()
         yesterday = (today_date - timedelta(days=1)).isoformat()
@@ -140,6 +146,13 @@ class EcwBackendSourceTests(unittest.IsolatedAsyncioTestCase):
             "Condition": [{"resourceType": "Condition", "id": "unrelated-condition",
                            "code": {"coding": [{"system": "http://hl7.org/fhir/sid/icd-10-cm", "code": "E11.9"}]}}],
         }
+        if contained:
+            policy = resources['Coverage'][0]
+            policy['subscriber'] = {'reference': '#sub'}
+            policy['contained'] = [{**resources['Patient'][0], 'id': 'sub', 'resourceType': 'RelatedPerson'}]
+            policy['subscriberId'] = ' '
+            policy['identifier'] = [{'type': {'coding': [{'code': 'MB'}]}, 'value': 'MEMBER123'}]
+            resources['Coverage'].append({**policy, 'id': 'foreign', 'beneficiary': {'reference': 'Patient/other'}})
         reads = {
             "/fhir/Organization/payer-1": {"resourceType": "Organization", "id": "payer-1", "name": "Test Health Plan"},
             "/fhir/Practitioner/provider-1": {"resourceType": "Practitioner", "id": "provider-1", "identifier": [{"system": "http://hl7.org/fhir/sid/us-npi", "value": "1234567893"}], "name": [{"family": "Clinician"}]},

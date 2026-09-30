@@ -17,6 +17,7 @@ export type CollectionGuidance = {
     deductible_remaining_cents?: number | null; selected_benefit_ids: string[] }>;
 }
 export type PrevisitEstimate = {
+  benefit_source?: string | null;
   eligibility_timing?: { status: string; appointment_date: string; check_from: string; message: string };
   collection_guidance?: CollectionGuidance;
   emg_option?: { requested: boolean; included: boolean; additional_min_cents: number | null; additional_max_cents: number | null;
