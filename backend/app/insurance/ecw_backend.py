@@ -950,7 +950,7 @@ async def fetch_inputs(profile: dict[str, Any], practice: dict[str, Any], appoin
               "insurance_fallback": insurance_fallback,
               "appointment_notes_status": appointment_notes_status,
               "subscriber_evidence": {"reference": subscriber_ref, "status": 'returned' if sub_given and sub_family and subscriber_resource.get('birthDate') else 'not_returned',
-                  "member_id_source": 'Coverage.subscriberId' if str(coverage.get('subscriberId') or '').strip() else 'Coverage.identifier' if member_id else None},
+                  "member_id_source": 'Coverage.subscriberId' if str(coverage.get('subscriberId') or '').strip() else 'Coverage.identifier' if coverage_member_id(coverage) else 'eCW appointment General Notes' if insurance_fallback.get('member_id') else None},
               "coverage_records": [{"id": row.get('id'), "status": row.get('status'), "order": row.get('order'),
                   "member_id": coverage_member_id(row), "group_number": _group(row), "plan": _plan_details(row),
                   "relationship": _relationship(row), "period": row.get('period') or {},
