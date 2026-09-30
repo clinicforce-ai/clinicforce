@@ -27,3 +27,5 @@
 .insurance-card-preview iframe { width: 100%; height: 440px; border: 1px solid #d3e0e5; }
 .insurance-card-preview img { max-width: 100%; height: auto; }
 .insurance-card-preview figure { margin: 1rem 0; }
+
+.clinical-pagination{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;border-top:1px solid var(--staff-line);padding-top:16px}.clinical-page-buttons{display:flex;align-items:center;flex-wrap:wrap;gap:6px}.staff-workspace .clinical-page-buttons button{min-width:40px;min-height:40px;padding:8px}.staff-workspace .clinical-page-buttons button[aria-current=page]{background:var(--staff-blue);border-color:var(--staff-blue);color:white}
