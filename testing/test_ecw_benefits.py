@@ -110,3 +110,10 @@ def test_explicit_unresolved_subscriber_is_not_replaced_with_patient():
         'patient': {'patient_first_name': 'Pat', 'patient_last_name': 'Example'}},
         {'_patient_id': 'p', 'subscriber_evidence': {'reference': 'Patient/other'}})
     assert snapshot['subscriber_first'] is None
+
+
+@pytest.mark.parametrize('malformed', [None, 'unreadable', {'category': []}, {'category': {'coding': [None]}}])
+def test_malformed_optional_fhir_item_uses_payer_fallback(malformed):
+    row = saved_response()
+    row['insurance'][0]['item'] = [malformed]
+    assert adapt(row) is None

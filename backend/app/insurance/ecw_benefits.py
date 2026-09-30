@@ -16,6 +16,14 @@ def _code(concept: dict, system: str) -> str | None:
 
 
 def payload(summary: dict, source: dict, inputs: dict) -> dict | None:
+    # A malformed optional FHIR response must fall through to payer verification.
+    try:
+        return _payload(summary, source, inputs)
+    except (AttributeError, KeyError, TypeError, ValueError):
+        return None
+
+
+def _payload(summary: dict, source: dict, inputs: dict) -> dict | None:
     """Only provider-bound, current, matched policy evidence can avoid a check."""
     row = summary.get('_response') or {}
     if summary.get('status') != 'verified_active' or 'benefits' not in row.get('purpose', []):
