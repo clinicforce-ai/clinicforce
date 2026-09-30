@@ -61,6 +61,33 @@ def test_discovery_returns_safe_dependent_candidate_for_staff_selection():
 
 
 class RecoveryTest(IsolatedAsyncioTestCase):
+    async def test_recent_no_match_and_ambiguous_results_are_reused_without_paid_search(self):
+        for outcome, refresh, expired, changed in [
+                ('no_match', False, False, False), ('review_needed', False, False, False),
+                ('no_match', True, False, False), ('no_match', False, True, False),
+                ('no_match', False, False, True)]:
+            case, session, provider, _ = setup()
+            session['intake']['updated_at'] = 'version'
+            context = case['previsit_context']
+            recovery = case['previsit_discovery']
+            recovery.update(request_state='complete', outcome=outcome, discovery_id='saved-search',
+                            checked_at=(datetime.now(timezone.utc) - timedelta(hours=25 if expired else 1)).isoformat())
+            if changed:
+                recovery['identity_binding'] = 'different-patient-details'
+            tasks = BackgroundTasks()
+            with patch.object(api.store, 'create_case', return_value=case), \
+                 patch.object(api, '_finish_previsit'), \
+                 patch.object(api, '_save', side_effect=lambda value, *_: value):
+                await api._begin_coverage_discovery({}, session, context['inputs'], context['source'],
+                    provider, tasks, 'Missing policy', refresh_benefits=refresh)
+            if refresh or expired or changed:
+                assert len(tasks.tasks) == 1
+                assert case['previsit_discovery']['request_state'] == 'pending'
+            else:
+                assert not tasks.tasks
+                assert case['previsit_discovery']['discovery_id'] == 'saved-search'
+                assert case['previsit_discovery']['outcome'] == outcome
+
     async def test_explicit_refresh_restarts_completed_discovery_but_not_pending_work(self):
         case, session, provider, _ = setup()
         session['intake']['updated_at'] = 'version'
