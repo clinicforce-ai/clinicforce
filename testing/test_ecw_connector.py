@@ -190,3 +190,90 @@ class EcwConnectorTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaisesRegex(ecw.EcwError, "session has ended"):
             ecw.get_live_session("expired", "patient-1")
         self.assertNotIn("expired", ecw._live_sessions)
+
+    def live_session(self):
+        return ecw.LiveEcwSession(
+            patient_id="patient-1", practice_code="BEDBAA", fhir_base="https://fhir.example/fhir/BEDBAA",
+            remote_patient_id="remote-1", access_token="test-token", expires_at=time.time() + 300,
+        )
+
+    async def test_required_filters_and_provenance_reverse_include(self):
+        session = self.live_session()
+        search = AsyncMock(return_value=([], "ok"))
+        with patch.object(ecw, "_search_resources", search):
+            await ecw.fetch_resource_type(session, "CarePlan")
+            search.assert_awaited_with(session, "CarePlan", {"patient": "remote-1", "category": "assess-plan", "_revinclude": "Provenance:target"})
+            await ecw.fetch_resource_type(session, "CareTeam")
+            search.assert_awaited_with(session, "CareTeam", {"patient": "remote-1", "status": "active", "_revinclude": "Provenance:target"})
+            await ecw.fetch_resource_type(session, "Provenance")
+            search.assert_awaited_with(session, "Patient", {"_id": "remote-1", "_revinclude": "Provenance:target"})
+
+    async def test_observation_categories_retain_successes_and_deduplicate(self):
+        categories = []
+        observation = {"resourceType": "Observation", "id": "result-1"}
+
+        async def search(_session, family, params):
+            self.assertEqual(family, "Observation")
+            self.assertEqual(params["patient"], "remote-1")
+            categories.append(params["category"])
+            if params["category"] == "survey":
+                raise ecw.EcwError("temporary failure")
+            return [observation], "ok"
+
+        with patch.object(ecw, "_search_resources", side_effect=search):
+            result = await ecw.fetch_resource_type(self.live_session(), "Observation")
+        self.assertEqual(set(categories), {"laboratory", "vital-signs", "social-history", "survey", "exam", "obstetrics-gynecology"})
+        self.assertEqual(result["entry"], [{"resource": observation}])
+        self.assertEqual(result["extension"][0]["valueString"], "partial")
+
+    async def test_later_page_failures_retain_first_page_and_reject_unsafe_links(self):
+        observation = {"resourceType": "Observation", "id": "result-1"}
+        session = self.live_session()
+        for next_url, failure in [
+            (f"{session.fhir_base}/Observation?page=2", ecw.EcwError("temporary failure")),
+            (f"{session.fhir_base}/Observation?page=2", (200, {"resourceType": "OperationOutcome"}, {})),
+            ("https://untrusted.example/steal", None),
+        ]:
+            first = {"resourceType": "Bundle", "entry": [{"resource": observation}], "link": [{"relation": "next", "url": next_url}]}
+            with patch.object(ecw, "_get_json", new=AsyncMock(side_effect=[(200, first, {}), failure])) as get:
+                resources, status = await ecw._search_resources(session, "Observation", {"patient": "remote-1", "category": "laboratory"})
+            self.assertEqual(resources, [observation])
+            self.assertEqual(status, "partial")
+            self.assertEqual(get.await_count, 1 if failure is None else 2)
+
+    async def test_empty_error_and_denied_are_distinct_and_auxiliary_records_do_not_count(self):
+        provenance = {"resourceType": "Provenance", "id": "source-1"}
+        document = {"resourceType": "DocumentReference", "id": "doc-1", "content": [{"attachment": {"url": "https://private.example", "data": "private"}}]}
+
+        async def fetch(_session, family):
+            if family == "Patient":
+                return ecw._collection([{"resourceType": "Patient", "id": "remote-1"}])
+            if family == "CarePlan":
+                raise ecw.EcwError("temporary failure")
+            if family == "CareTeam":
+                return ecw._collection([], "forbidden")
+            if family == "DocumentReference":
+                return ecw._collection([document, document, {"resourceType": "Binary", "id": "bytes", "data": "private"}])
+            return ecw._collection([provenance])
+
+        with patch.object(ecw, "fetch_resource_type", side_effect=fetch):
+            record, availability = await ecw.fetch_record(self.live_session())
+        self.assertEqual(availability["Observation"], "empty")
+        self.assertEqual(availability["CarePlan"], "error")
+        self.assertEqual(availability["CareTeam"], "forbidden")
+        self.assertEqual(availability["Provenance"], "ok")
+        self.assertEqual(len(record["entry"]), 3)
+        self.assertNotIn("Binary", str(record))
+        self.assertNotIn("private", str(record))
+        self.assertIn("private", str(document), "Sanitizing must not mutate the original resource")
+
+    async def test_unexpected_patient_identity_blocks_review(self):
+        for patient in [{"resourceType": "Patient", "id": "another-patient"}, {"resourceType": "OperationOutcome"}]:
+            with patch.object(ecw, "_get_json", new=AsyncMock(return_value=(200, patient, {}))):
+                with self.assertRaisesRegex(ecw.EcwError, "unexpected patient identity"):
+                    await ecw.fetch_resource_type(self.live_session(), "Patient")
+
+    async def test_expired_session_is_not_hidden_by_observation_partial_results(self):
+        with patch.object(ecw, "_search_resources", new=AsyncMock(side_effect=ecw.EcwError("Your eClinicalWorks session has ended."))):
+            with self.assertRaisesRegex(ecw.EcwError, "session has ended"):
+                await ecw.fetch_resource_type(self.live_session(), "Observation")
