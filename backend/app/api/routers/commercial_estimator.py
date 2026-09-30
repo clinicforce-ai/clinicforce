@@ -561,7 +561,8 @@ def _attach_previsit_pricing(result: dict, practice_id: str, inputs: dict, sourc
 
 
 def _visit_context_token(inputs: dict, source: dict) -> str:
-    context = {'coverage': _coverage_snapshot(inputs, source), 'codes': _previsit_codes(inputs),
+    context = {'coverage': {k: v for k, v in _coverage_snapshot(inputs, source).items() if k != 'other_active_coverage'},
+               'codes': _previsit_codes(inputs),
                'provider': inputs.get('rendering_provider'), 'billing': source.get('billing_provider'),
                'reason': inputs.get('reason'), 'location': source.get('location_id'), 'pos': inputs.get('place_of_service'), 'date': inputs.get('service_date')}
     return hashlib.sha256(json.dumps(context, sort_keys=True).encode()).hexdigest()

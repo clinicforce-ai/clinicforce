@@ -130,3 +130,12 @@ def test_fhir_qualifications_and_additional_policy_cannot_be_dropped():
     row = saved_response()
     row['modifierExtension'] = [{'url': 'https://example.test/restriction'}]
     assert adapt(row) is None
+
+
+def test_secondary_benefit_evidence_does_not_change_the_ecw_visit_identity_token():
+    from app.api.routers.commercial_estimator import _visit_context_token
+    source = {'coverage_id': 'primary', 'active_coverages': 1}
+    token = _visit_context_token({}, source)
+    source['saved_eligibility'] = {'_response': {'insurance': [
+        {'coverage': {'reference': 'Coverage/secondary'}, 'inforce': True}]}}
+    assert _visit_context_token({}, source) == token
