@@ -1288,6 +1288,15 @@ async def _begin_coverage_discovery(result: dict, session: dict, inputs: dict, s
         'action': 'ClinicForce is searching Stedi using the patient details from eCW. Select a returned policy before it is used for this estimate.',
         'codes': [], 'attempted_at': _now()}, benefits=_previsit_benefits({}, coverage, inputs['service_date']))
     await run_in_threadpool(_finish_previsit, result, case, inputs, source, None, session, '')
+    recovery = case.get('previsit_discovery') or {}
+    try:
+        reusable = (not refresh_benefits and recovery.get('request_state') == 'complete'
+                    and recovery.get('identity_binding') == _recovery_binding(inputs, source)
+                    and datetime.fromisoformat(recovery['checked_at']) + timedelta(hours=24) > datetime.now(timezone.utc))
+    except (KeyError, TypeError, ValueError):
+        reusable = False
+    if reusable:
+        return _previsit_result(await run_in_threadpool(_save, case, session, 'previsit-discovery-reused'))
     case['previsit'] = {'request_state': 'rejected'}
     case['previsit_discovery'] = {'recovery_requested': True, 'request_state': 'not_requested',
                                   'identity_binding': _recovery_binding(inputs, source)}
