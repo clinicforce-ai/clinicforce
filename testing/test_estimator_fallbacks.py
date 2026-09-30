@@ -1,4 +1,5 @@
 """Synthetic regressions for service selection and evidence-backed advances."""
+import asyncio
 from datetime import datetime, timedelta
 from unittest.mock import patch
 from zoneinfo import ZoneInfo
@@ -99,25 +100,23 @@ def test_secondary_policy_can_be_queried_without_claiming_it_is_only_coverage():
     assert 'not a $0 cost estimate' in g['patient_message']
 
 
-@pytest.mark.asyncio
-async def test_original_medicare_routes_to_verified_cms_directory_entry_only():
+def test_original_medicare_routes_to_verified_cms_directory_entry_only():
     queries = []
     def handler(request):
         queries.append(request.url.params['query'])
         return httpx.Response(200, json={'items': [{'payer': {'stediId': 'cms-example', 'primaryPayerId': 'CMSMED',
             'displayName': 'CMS', 'coverageTypes': ['medical'], 'transactionSupport': {'eligibilityCheck': 'SUPPORTED'}}}]})
     transport = httpx.MockTransport(handler)
-    result = await stedi_payers.search_payer('Medicare of Texas', [], 'test', plan='MB', transport=transport)
+    result = asyncio.run(stedi_payers.search_payer('Medicare of Texas', [], 'test', plan='MB', transport=transport))
     assert result['stediId'] == 'cms-example' and queries == ['CMSMED']
-    assert await stedi_payers.search_payer('Medicare Advantage', [], 'test', plan='MB', transport=transport) is None
+    assert asyncio.run(stedi_payers.search_payer('Medicare Advantage', [], 'test', plan='MB', transport=transport)) is None
 
 
-@pytest.mark.asyncio
-async def test_enrollment_must_be_live_for_exact_provider_payer_and_transaction():
+def test_enrollment_must_be_live_for_exact_provider_payer_and_transaction():
     row = {'status': 'LIVE', 'payer': {'stediPayerId': 'cms'}, 'provider': {'npi': '1234567890'},
            'transactions': {'eligibilityCheck': {'enroll': True}}}
     transport = httpx.MockTransport(lambda request: httpx.Response(200, json={'items': [row]}))
-    assert await stedi_payers.eligibility_enrolled('cms', '1234567890', 'test', transport=transport)
-    assert not await stedi_payers.eligibility_enrolled('cms', '9999999999', 'test', transport=transport)
+    assert asyncio.run(stedi_payers.eligibility_enrolled('cms', '1234567890', 'test', transport=transport))
+    assert not asyncio.run(stedi_payers.eligibility_enrolled('cms', '9999999999', 'test', transport=transport))
     row['status'] = 'PROVIDER_ACTION_REQUIRED'
-    assert not await stedi_payers.eligibility_enrolled('cms', '1234567890', 'test', transport=transport)
+    assert not asyncio.run(stedi_payers.eligibility_enrolled('cms', '1234567890', 'test', transport=transport))
