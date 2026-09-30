@@ -1556,7 +1556,7 @@ async def update_visit_review(case_id: str, value: VisitReviewInput, request: Re
         if saved_eligibility.get('checked_at') and datetime.fromisoformat(saved_eligibility['checked_at']) + timedelta(hours=24) <= datetime.now(timezone.utc):
             source['saved_eligibility'] = {'status': 'check_with_stedi', 'message': 'The saved eCW verification is older than 24 hours. Use the current Stedi check.'}
     try:
-        payload = {} if not_requested else json.loads(await run_in_threadpool(object_store.get_object_bytes, case['previsit_raw_object_key']))
+        payload = {} if failed else json.loads(await run_in_threadpool(object_store.get_object_bytes, case['previsit_raw_object_key']))
     except Exception:
         raise HTTPException(503, 'Protected payer evidence could not be read. Retry before saving verification.') from None
     import copy

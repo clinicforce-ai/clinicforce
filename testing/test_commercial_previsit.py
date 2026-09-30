@@ -186,6 +186,18 @@ class PrevisitFlowTest(unittest.IsolatedAsyncioTestCase):
                         self.assertNotIn('eligibility_failure', checked)
                 else:
                     self.assertIn('not an inactive-coverage result', ' '.join(result['issues']))
+                if case['previsit']['request_state'] == 'rejected':
+                    case.pop('previsit_raw_object_key', None)
+                    hold_date = date.today() + timedelta(days=1)
+                    with patch('app.api.routers.commercial_estimator.store.get_case', return_value=case), \
+                         patch('app.api.routers.commercial_estimator.object_store.get_object_bytes') as raw:
+                        held = await update_visit_review('case-1', VisitReviewInput(
+                            context_token=result['context_token'], revision=0,
+                            insurance_check_from=hold_date), MagicMock())
+                        self.assertEqual(held['eligibility_timing']['check_from'], hold_date.isoformat())
+                        self.assertIsNone(held['benefits']['active'])
+                        raw.assert_not_called()
+                        self.assertEqual(client.post.await_count, 1)
                 return
             case["previsit"]["benefits"] = {"requires_review": False, "network_status": "in_network"}
             with patch("app.api.routers.commercial_estimator.object_store.get_object_bytes",
