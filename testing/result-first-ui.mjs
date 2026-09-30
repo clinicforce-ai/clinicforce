@@ -187,6 +187,12 @@ try {
   result.collection_guidance = { ...result.collection_guidance, amount_cents: 0, status: 'deferred_billing', basis: 'deferred_billing', patient_message: 'No advance requested; final responsibility remains unknown.' }
   await openPatient()
   assert.equal(await page.locator('.arrival-total > strong').innerText(), '$0.00')
+  await page.getByRole('button', { name: 'Cash', exact: true }).click()
+  await page.waitForFunction(() => document.querySelector('.arrival-total > strong')?.textContent === '$250.00')
+  assert((await page.locator('.arrival-total').innerText()).includes('Clinic self-pay price'))
+  assert(!(await page.locator('.arrival-total').innerText()).includes('No advance payment'))
+  await page.getByRole('button', { name: 'Insurance', exact: true }).click()
+  await page.waitForFunction(() => document.querySelector('.arrival-total > strong')?.textContent === '$0.00')
   const spinal = { id: 'planning:62270', code: '62270', units: 1, description: 'Diagnostic spinal tap · without imaging' }
   result = { ...result, codes: [codes[0], spinal], available_codes: [...codes, spinal], selected_ids: ['99203', spinal.id] }
   await openPatient()

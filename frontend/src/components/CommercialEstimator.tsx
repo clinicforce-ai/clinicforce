@@ -227,7 +227,7 @@ export default function CommercialEstimator({ onBack, intakeId, refreshBenefits 
   const emg = result?.emg_option
   const emgScenario = !cash && emg?.requested && !emg.included
   const amount = calculating || error ? null : cash ? cashPrice : emgScenario ? emg.total_min_cents != null ? money(emg.total_min_cents) : null : supportedAmount ? money(guidance!.amount_cents!) : null
-  const deferred = !calculating && !tooEarly && (guidance?.status === 'deferred_billing' || !amount)
+  const deferred = !calculating && !tooEarly && (!cash && guidance?.status === 'deferred_billing' || !amount)
   const amountText = calculating ? 'Calculating…' : amount || (tooEarly ? 'Too early to check' : money(0))
   const amountLabel = 'Collect at arrival'
   const explanation = deferred ? `${cash ? result?.cash_quote?.message || 'The cash price is not established.' : error ? 'Current benefits could not be loaded.' : emgScenario ? emg.message : guidance?.reason || unavailableReason} No advance payment is requested now; final charges remain to be determined.` : calculating ? 'Reading the visit, insurance and applicable benefits to calculate the amount.' : cash ? cashPrice && !error ? 'Clinic self-pay price for this service plan.' : 'The clinic cash price could not be calculated for this service plan.' : emgScenario ? emg.total_min_cents != null ? 'Lowest estimated total for the office consultation plus EMG / nerve testing. The testing scope below shows the possible range.' : emg.message : guidance?.reason || unavailableReason
