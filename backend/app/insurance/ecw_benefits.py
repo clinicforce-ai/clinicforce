@@ -26,7 +26,8 @@ def payload(summary: dict, source: dict, inputs: dict) -> dict | None:
 def _payload(summary: dict, source: dict, inputs: dict) -> dict | None:
     """Only provider-bound, current, matched policy evidence can avoid a check."""
     row = summary.get('_response') or {}
-    if summary.get('status') != 'verified_active' or 'benefits' not in row.get('purpose', []):
+    if (summary.get('status') != 'verified_active' or 'benefits' not in row.get('purpose', [])
+            or row.get('extension') or row.get('modifierExtension')):
         return None
     identifier = (row.get('requestor') or {}).get('identifier') or {}
     provider_npis = {str((source.get(kind) or {}).get('npi') or '')
@@ -35,7 +36,9 @@ def _payload(summary: dict, source: dict, inputs: dict) -> dict | None:
         return None
     policies = [item for item in row.get('insurance', [])
                 if (item.get('coverage') or {}).get('reference') == 'Coverage/' + str(source.get('coverage_id'))]
-    if len(policies) != 1 or policies[0].get('inforce') is not True:
+    if (len(policies) != 1 or policies[0].get('inforce') is not True
+            or policies[0].get('extension') or policies[0].get('modifierExtension')
+            or any(item not in policies and item.get('inforce') is not False for item in row.get('insurance', []))):
         return None
     period = policies[0].get('benefitPeriod') or {}
     try:
@@ -55,7 +58,7 @@ def _payload(summary: dict, source: dict, inputs: dict) -> dict | None:
         # Unsupported qualifications cannot be stripped off otherwise usable money.
         if (not stc or unit != 'individual' or network not in {'in', 'out'}
                 or type(item.get('authorizationRequired')) is not bool
-                or item.get('modifier') or item.get('extension') or item.get('provider')
+                or item.get('modifier') or item.get('extension') or item.get('modifierExtension') or item.get('provider')
                 or item.get('productOrService') and not procedure):
             return None
         base = {'serviceTypeCodes': [stc], 'coverageLevelCode': 'IND',
@@ -73,7 +76,7 @@ def _payload(summary: dict, source: dict, inputs: dict) -> dict | None:
         for benefit in item.get('benefit', []):
             kind = _code(benefit.get('type'), 'http://terminology.hl7.org/CodeSystem/benefit-type')
             # Annual benefit maximum / copay maximum are NOT remaining OOP.
-            if kind not in {'copay', 'deductible', 'copay-percent'} or benefit.get('extension'):
+            if kind not in {'copay', 'deductible', 'copay-percent'} or benefit.get('extension') or benefit.get('modifierExtension'):
                 return None
             try:
                 if kind == 'copay-percent':

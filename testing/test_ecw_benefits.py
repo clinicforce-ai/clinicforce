@@ -117,3 +117,16 @@ def test_malformed_optional_fhir_item_uses_payer_fallback(malformed):
     row = saved_response()
     row['insurance'][0]['item'] = [malformed]
     assert adapt(row) is None
+
+
+def test_fhir_qualifications_and_additional_policy_cannot_be_dropped():
+    from app.api.routers.commercial_estimator import _coverage_snapshot, _previsit_benefits
+    row = saved_response()
+    row['insurance'].append({'coverage': {'reference': 'Coverage/secondary'}, 'inforce': True})
+    assert adapt(row) is None
+    saved = ecw_backend.saved_eligibility_summary([row], 'p', 'coverage-1', row['servicedDate'])
+    coverage = _coverage_snapshot({}, {'coverage_id': 'coverage-1', 'active_coverages': 1, 'saved_eligibility': saved})
+    assert _previsit_benefits({}, coverage)['has_secondary'] is True
+    row = saved_response()
+    row['modifierExtension'] = [{'url': 'https://example.test/restriction'}]
+    assert adapt(row) is None

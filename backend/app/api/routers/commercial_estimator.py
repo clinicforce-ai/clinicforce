@@ -516,7 +516,7 @@ def _previsit_range(practice_id: str, inputs: dict, source: dict, payer_id: str,
 
 
 def _previsit_benefits(payload: dict, coverage: dict, service_date: str | None = None, service_type: str = "98") -> dict:
-    benefits = commercial.normalize_stedi_271(payload, service_type, False, coverage["active_coverages"] > 1, service_date=service_date)
+    benefits = commercial.normalize_stedi_271(payload, service_type, False, coverage["active_coverages"] > 1 or coverage.get("other_active_coverage", False), service_date=service_date)
     benefits['benefit_source'] = payload.get('benefit_source') or 'Stedi'
     comparison = insurance_identity.compare(payload, coverage)
     benefits['identity'] = comparison
@@ -789,6 +789,10 @@ def _coverage_snapshot(inputs: dict, source: dict) -> dict:
                 "patient_first": patient.get("patient_first_name"), "patient_last": patient.get("patient_last_name"),
                 "patient_birth_date": patient.get("patient_birth_date"), "patient_gender": patient.get("gender"),
                 "patient_address": patient.get("address")}
+    saved_response = (source.get('saved_eligibility') or {}).get('_response') or {}
+    if any(row.get('inforce') is True and ecw_backend._reference(row.get('coverage')) !=
+           'Coverage/' + str(source.get('coverage_id')) for row in saved_response.get('insurance', []) if isinstance(row, dict)):
+        snapshot['other_active_coverage'] = True
     if relationship == "18" and (source.get('subscriber_evidence') or {}).get('reference') in {
             None, 'Patient/' + str(source.get('_patient_id'))}:
         snapshot["subscriber_first"] = snapshot["subscriber_first"] or snapshot["patient_first"]
