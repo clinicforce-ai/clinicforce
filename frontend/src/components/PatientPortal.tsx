@@ -1,3 +1,4 @@
+import { HealowRecordReview } from '../features/patient-workspace/HealowRecordReview'
 import * as Dialog from '@radix-ui/react-dialog'
 import { animate, stagger } from 'animejs'
 import { useEffect, useRef, useState, type FormEvent } from 'react'
@@ -72,13 +73,11 @@ import {
 import {
   categoryMeta,
   dateLabel,
-  ecwImportableResourceTypes,
   emptyForm,
   emptyProfileForm,
   epicResourceGroupMeta,
   epicAvailabilityMessage,
   epicResourceDetail,
-  epicResourceSummary,
   groupEpicResources,
   hasEpicPdfLink,
   messageFrom,
@@ -656,6 +655,18 @@ export default function PatientPortal({ onBack }: PatientPortalProps) {
     setNotice('Epic connection cancelled. No Epic data was imported.')
   }
 
+  const reloadEcwRecords = async () => {
+    clearFeedback()
+    setBusy('ecw-load')
+    try {
+      setEcwRecord(await getEcwRecord())
+    } catch (caught) {
+      setError(messageFrom(caught, 'Unable to reload records. Reconnect Healow if your session has expired.'))
+    } finally {
+      setBusy(null)
+    }
+  }
+
   const importConfirmedEcw = async () => {
     clearFeedback()
     setBusy('ecw-import')
@@ -907,21 +918,6 @@ export default function PatientPortal({ onBack }: PatientPortalProps) {
     counts[type] = (counts[type] ?? 0) + 1
     return counts
   }, {})
-  const ecwResources = (ecwRecord?.bundle.entry ?? []).map((entry) => entry.resource).filter(Boolean)
-  const ecwCounts = ecwResources.reduce<Record<string, number>>((counts, resource) => {
-    const type = typeof resource.resourceType === 'string' ? resource.resourceType : 'FHIR resource'
-    counts[type] = (counts[type] ?? 0) + 1
-    return counts
-  }, {})
-  const ecwUnavailable = Object.entries(ecwRecord?.availability ?? {})
-    .filter(([, result]) => result !== 'ok')
-    .map(([resourceType, result]) => {
-      if (result === 'empty') return `${resourceType}: no records returned`
-      if (result === 'forbidden') return `${resourceType}: permission was not granted`
-      if (result === 'unavailable') return `${resourceType}: not available from this practice`
-      return `${resourceType}: ${result}`
-    })
-  const ecwImportableCount = ecwResources.filter((resource) => ecwImportableResourceTypes.has(String(resource.resourceType))).length
   const canCreateShare = recordsAvailable > 0 || epicResources.length > 0
   const demographicProfileComplete = profileIsComplete(profile)
   const selectedEpicEndpoint = epicEndpoints.find((endpoint) => endpoint.id === selectedEpicEndpointId)
@@ -1022,13 +1018,9 @@ export default function PatientPortal({ onBack }: PatientPortalProps) {
             {!ecwRecord ? <>
               <p className="text-sm leading-6 text-[var(--muted-ink)]">Enter the six-character OEM code for the eClinicalWorks practice where you receive care. ClinicForce derives that practice’s FHIR endpoint and opens its secure healow sign-in; it never asks you for an eCW password.</p>
               <div className="storage-choice mt-4"><div className="flex-1"><label htmlFor="ecw-practice-code"><strong>eClinicalWorks practice OEM code</strong></label><input id="ecw-practice-code" value={ecwPracticeCode} onChange={(event) => { setEcwPracticeCode(event.target.value.toUpperCase()); if (ecwPracticeCodeError) setEcwPracticeCodeError('') }} onBlur={(event) => setEcwPracticeCodeError(validateEcwPracticeCode(event.target.value.trim().toUpperCase()) ?? '')} placeholder="e.g. BEDBAA" autoComplete="off" spellCheck="false" maxLength={6} aria-describedby="ecw-practice-code-help" aria-invalid={Boolean(ecwPracticeCodeError)} />{ecwPracticeCodeError ? <p id="ecw-practice-code-help" className="field-help mt-2" role="alert">{ecwPracticeCodeError}</p> : <p id="ecw-practice-code-help" className="field-help mt-2">This is supplied by the practice. It may contain letters, such as BEDBAA.</p>}</div><button className="button button-primary" type="button" disabled={busy === 'ecw-connect' || busy === 'ecw-load'} onClick={() => void connectEcw()}>{busy === 'ecw-connect' || busy === 'ecw-load' ? <LoaderCircle className="size-4 animate-spin" aria-hidden="true" /> : 'Continue to healow'}</button></div>
-              {(busy === 'ecw-connect' || busy === 'ecw-load') && <div className="feedback feedback-success mt-3" role="status"><LoaderCircle className="size-4 animate-spin" aria-hidden="true" /><span>{busy === 'ecw-connect' ? 'healow opened in a secure window. Complete sign-in there, then return here.' : 'Retrieving the resource families healow approved for your review…'}</span></div>}
+              {(busy === 'ecw-connect' || busy === 'ecw-load') && <div className="feedback feedback-success mt-3" role="status"><LoaderCircle className="size-4 animate-spin" aria-hidden="true" /><span>{busy === 'ecw-connect' ? 'healow opened in a secure window. Complete sign-in there, then return here.' : 'Loading the records you agreed to share…'}</span></div>}
             </> : <>
-              <div className="storage-choice mt-4"><div><strong>Review eClinicalWorks data before import</strong><p>Retrieved {dateLabel(ecwRecord.source.retrieved_at)} from practice {ecwRecord.source.practice_code}. Nothing is saved until you confirm below.</p></div><div className="storage-actions"><button className="button button-secondary" type="button" disabled={busy === 'ecw-disconnect' || busy === 'ecw-import'} onClick={() => void discardEcwConnection()}>{busy === 'ecw-disconnect' ? <LoaderCircle className="size-4 animate-spin" aria-hidden="true" /> : 'Discard connection'}</button><button className="button button-primary" type="button" disabled={busy === 'ecw-disconnect' || busy === 'ecw-import' || ecwImportableCount === 0} onClick={() => void importConfirmedEcw()}>{busy === 'ecw-import' ? <LoaderCircle className="size-4 animate-spin" aria-hidden="true" /> : `Import ${ecwImportableCount} confirmed resources`}</button></div></div>
-              <div className="workspace-stats mt-4" aria-label="eClinicalWorks data counts">{Object.entries(ecwCounts).slice(0, 6).map(([type, count]) => <div key={type}><FileText aria-hidden="true" /><span><strong>{count}</strong> {type}</span></div>)}</div>
-              <p className="field-help mt-3">Every imported clinical resource is labeled “eClinicalWorks / healow practice {ecwRecord.source.practice_code}”. Patient identity and Provenance entries remain in this review only; DocumentReference entries include metadata only, never PDF bytes or provider download URLs.</p>
-              {ecwUnavailable.length > 0 && <div className="feedback feedback-error mt-3" role="status"><ShieldAlert aria-hidden="true" /><span>Some requested families could not be retrieved: {ecwUnavailable.join(' · ')}. You can import the displayed data, or ask the practice to grant the missing read permissions and reconnect.</span></div>}
-              <section className="mt-4" aria-label="eClinicalWorks resource review"><p className="document-name">Review ({ecwResources.length} retrieved resources)</p><ul className="record-list mt-3">{ecwResources.slice(0, 20).map((resource, index) => <li key={`${resource.resourceType ?? 'resource'}-${resource.id ?? index}`}><div><strong>{String(resource.resourceType ?? 'FHIR resource')}</strong><p>{epicResourceSummary(resource)}</p></div></li>)}</ul>{ecwResources.length > 20 && <p className="field-help mt-2">Showing the first 20 resources. Confirming imports all {ecwImportableCount} supported clinical resources shown in the counts above.</p>}</section>
+              <HealowRecordReview key={ecwRecord.source.retrieved_at} record={ecwRecord} busy={busy !== null} onRetry={() => void reloadEcwRecords()} onDisconnect={() => void discardEcwConnection()} onImport={() => void importConfirmedEcw()} />
             </>}
           </section>
 

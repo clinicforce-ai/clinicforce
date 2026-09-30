@@ -68,6 +68,7 @@ jobs:
         run: |
           npm ci
           node ../testing/test-card-capture.mjs
+          node ../testing/test-healow-review.mjs
           npm run lint
           npm run build
 

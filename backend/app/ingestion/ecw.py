@@ -79,6 +79,11 @@ USCDI_RESOURCE_TYPES = (
     "Provenance", "ServiceRequest",
 )
 
+# Healow requires category searches; survey includes SDOH assessments.
+OBSERVATION_CATEGORIES = (
+    "laboratory", "vital-signs", "social-history", "survey", "exam", "obstetrics-gynecology",
+)
+
 
 class EcwError(RuntimeError):
     """A fixed, patient-safe eClinicalWorks connection error."""
@@ -432,6 +437,11 @@ def _collection(resources: list[dict[str, Any]], status: str = "ok") -> dict[str
 def _sanitize_resource_for_review(resource: dict[str, Any]) -> dict[str, Any]:
     """Do not send document bytes or provider download URLs to the browser."""
     sanitized = json.loads(json.dumps(resource))
+    if isinstance(sanitized.get("contained"), list):
+        sanitized["contained"] = [
+            _sanitize_resource_for_review(item) for item in sanitized["contained"]
+            if isinstance(item, dict) and item.get("resourceType") != "Binary"
+        ]
     if sanitized.get("resourceType") == "DocumentReference":
         for content in sanitized.get("content", []):
             attachment = content.get("attachment") if isinstance(content, dict) else None
@@ -439,6 +449,16 @@ def _sanitize_resource_for_review(resource: dict[str, Any]) -> dict[str, Any]:
                 attachment.pop("data", None)
                 attachment.pop("url", None)
     return sanitized
+
+
+def _unique_resources(resources: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    unique: dict[tuple[str, str], dict[str, Any]] = {}
+    for resource in resources:
+        if resource.get("resourceType") not in USCDI_RESOURCE_TYPES:
+            continue
+        key = (resource["resourceType"], str(resource.get("id") or json.dumps(resource, sort_keys=True)))
+        unique.setdefault(key, _sanitize_resource_for_review(resource))
+    return list(unique.values())
 
 
 async def _search_resources(
@@ -451,12 +471,20 @@ async def _search_resources(
     if status in {403, 404}:
         return [], "forbidden" if status == 403 else "unavailable"
     resources: list[dict[str, Any]] = []
+    result_status = "ok"
     pages = 0
     visited_pages: set[str] = set()
     while True:
+        if bundle.get("resourceType") != "Bundle" and resources:
+            return resources, "partial"
+        if bundle.get("resourceType") != "Bundle":
+            raise EcwError("eClinicalWorks did not return a clinical search result")
         for entry in bundle.get("entry", []):
             resource = entry.get("resource") if isinstance(entry, dict) else None
-            if isinstance(resource, dict) and resource.get("resourceType") != "OperationOutcome":
+            if isinstance(resource, dict) and resource.get("resourceType") == "OperationOutcome":
+                if any(issue.get("severity") in {"error", "fatal", "warning"} for issue in resource.get("issue", []) if isinstance(issue, dict)):
+                    result_status = "partial"
+            elif isinstance(resource, dict) and resource.get("resourceType") in USCDI_RESOURCE_TYPES:
                 resources.append(_sanitize_resource_for_review(resource))
                 if len(resources) >= MAX_RESOURCES_PER_TYPE:
                     return resources, "truncated"
@@ -466,20 +494,26 @@ async def _search_resources(
         ), None)
         if not next_url:
             break
-        target = _safe_next_url(session.fhir_base, next_url)
+        try:
+            target = _safe_next_url(session.fhir_base, next_url)
+        except EcwError:
+            return resources, "partial"
         if target in visited_pages:
             return resources, "partial"
         visited_pages.add(target)
         pages += 1
         if pages >= MAX_PAGES_PER_RESOURCE:
             return resources, "truncated"
-        status, bundle, _ = await _get_json(session, target)
+        try:
+            status, bundle, _ = await _get_json(session, target)
+        except EcwError:
+            return resources, "partial"
         if status == 401:
             clear_live_session_by_value(session)
             raise EcwError("Your eClinicalWorks session has ended. Reconnect healow to continue.")
         if status != 200:
             return resources, "partial"
-    return resources, "ok"
+    return resources, result_status
 
 
 async def fetch_resource_type(session: LiveEcwSession, resource_type: str) -> dict[str, Any]:
@@ -492,9 +526,37 @@ async def fetch_resource_type(session: LiveEcwSession, resource_type: str) -> di
             raise EcwError("Your eClinicalWorks session has ended. Reconnect healow to continue.")
         if status in {403, 404}:
             return _collection([], "forbidden" if status == 403 else "unavailable")
+        if patient.get("resourceType") != "Patient" or patient.get("id") != session.remote_patient_id:
+            raise EcwError("eClinicalWorks returned an unexpected patient identity. Reconnect before importing.")
         return _collection([_sanitize_resource_for_review(patient)])
-    resources, resource_status = await _search_resources(session, resource_type, {"patient": session.remote_patient_id})
-    return _collection(resources, resource_status)
+    params = {"patient": session.remote_patient_id, "_revinclude": "Provenance:target"}
+    if resource_type == "CarePlan":
+        params["category"] = "assess-plan"
+    elif resource_type == "CareTeam":
+        params["status"] = "active"
+    elif resource_type == "Provenance":
+        # Provenance has no patient search. Request it alongside its targets.
+        resources, result = await _search_resources(session, "Patient", {
+            "_id": session.remote_patient_id, "_revinclude": "Provenance:target",
+        })
+        return _collection([r for r in resources if r.get("resourceType") == "Provenance"], result)
+    if resource_type != "Observation":
+        resources, result = await _search_resources(session, resource_type, params)
+        return _collection(_unique_resources(resources), result)
+
+    resources: list[dict[str, Any]] = []
+    statuses: list[str] = []
+    for category in OBSERVATION_CATEGORIES:
+        try:
+            found, result = await _search_resources(session, "Observation", {**params, "category": category})
+        except EcwError as exc:
+            if "session has ended" in str(exc):
+                raise
+            found, result = [], "error"
+        resources.extend(found)
+        statuses.append(result)
+    result = "ok" if all(s == "ok" for s in statuses) else statuses[0] if len(set(statuses)) == 1 else "partial"
+    return _collection(_unique_resources(resources), result)
 
 
 async def fetch_record(session: LiveEcwSession) -> tuple[dict[str, Any], dict[str, str]]:
@@ -512,16 +574,21 @@ async def fetch_record(session: LiveEcwSession) -> tuple[dict[str, Any], dict[st
     availability: dict[str, str] = {}
     for resource_type, bundle in zip(USCDI_RESOURCE_TYPES, bundles, strict=True):
         if isinstance(bundle, Exception):
-            if "session has ended" in str(bundle):
+            if resource_type == "Patient" or "session has ended" in str(bundle):
                 raise bundle
-            availability[resource_type] = "partial"
+            availability[resource_type] = "error"
             continue
         entries.extend(entry for entry in bundle.get("entry", []) if isinstance(entry, dict))
         result_status = next((
             extension.get("valueString") for extension in bundle.get("extension", [])
             if isinstance(extension, dict) and extension.get("url") == "urn:clinicforce:ecw-status"
         ), "ok")
-        availability[resource_type] = "empty" if result_status == "ok" and not bundle.get("entry") else str(result_status)
+        matches = any(entry.get("resource", {}).get("resourceType") == resource_type for entry in bundle.get("entry", []) if isinstance(entry, dict))
+        availability[resource_type] = "empty" if result_status == "ok" and not matches else str(result_status)
+    resources = _unique_resources([entry["resource"] for entry in entries if isinstance(entry.get("resource"), dict)])
+    entries = [{"resource": resource} for resource in resources]
+    if any(r.get("resourceType") == "Provenance" for r in resources) and availability.get("Provenance") == "empty":
+        availability["Provenance"] = "ok"
     record = {"resourceType": "Bundle", "type": "collection", "entry": entries}
     session.review_bundle = record
     session.review_availability = availability
