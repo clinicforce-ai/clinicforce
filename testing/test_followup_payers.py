@@ -87,12 +87,12 @@ def test_diagnostic_percentage_uses_disclosed_cash_reference_not_an_office_copay
     assert paid['amount_cents'] == 1500
     for change in [{'active': False}, {'has_secondary': True}]:
         invalid = deepcopy(result);invalid['benefits'].update(change)
-        assert collection_guidance.build(invalid)['amount_cents'] is None
+        assert collection_guidance.build(invalid)['basis'] == 'deferred_billing'
     invalid = deepcopy(result);invalid['identity']['status'] = 'review'
-    assert collection_guidance.build(invalid)['amount_cents'] is None
+    assert collection_guidance.build(invalid)['basis'] == 'deferred_billing'
     raw = diagnostic_payload()
     raw['plans'][0]['benefits']['coInsurance'][0]['network']['indicator'] = 'IN_NETWORK'
-    assert collection_guidance.build(diagnostic_result(raw))['amount_cents'] is None
+    assert collection_guidance.build(diagnostic_result(raw))['basis'] == 'deferred_billing'
     raw = diagnostic_payload();raw['plans'][0]['benefits']['coInsurance'][0]['percent'] = '.20'
     assert collection_guidance.build(diagnostic_result(raw))['amount_cents'] == 8000
 

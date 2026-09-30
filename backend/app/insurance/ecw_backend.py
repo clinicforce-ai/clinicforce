@@ -957,6 +957,8 @@ async def fetch_inputs(profile: dict[str, Any], practice: dict[str, Any], appoin
                   for row in coverage_rows if _reference(row.get('beneficiary')) == f'Patient/{patient_id}'],
               "appointment_id": encounter_id, "coverage_id": str(coverage.get("id") or ""),
               "active_coverages": len(eligible), "coverage_record_status": coverage_record_status(coverage),
+              "self_pay_recorded": bool(coverage and (coverage.get('kind') == 'self-pay' or
+                  re.fullmatch(r'(?:self[ -]?pay|cash|uninsured)', payer_name or '', re.I)) and len(eligible) <= 1),
               "patient_details": {"gender": patient.get("gender"), "phone": _phone(patient), "address": patient_address(patient),
                                   "email": next((r.get("value") for r in patient.get("telecom", []) if r.get("system") == "email"), None)},
               "coverage_period": coverage.get("period") or {}, "plan": _plan(coverage), "plan_details": _plan_details(coverage),

@@ -180,13 +180,27 @@ try {
   await page.locator('#visit-estimate .arrival-total > strong').waitFor()
   assert.equal(previsitRequests.at(-1).refresh_benefits, true)
   assert(!reviews.some(review => review.identity_confirmation || review.product_mapping || review.payments_received_cents != null))
-  // An unsupported amount is never converted to zero.
+  // Unresolved evidence defers collection without claiming zero responsibility.
   result = { ...result, collection_guidance: { ...result.collection_guidance, amount_cents: null, status: 'unavailable' } }
   await openPatient()
-  assert.equal(await page.locator('.arrival-total > strong').innerText(), 'Amount unavailable')
-  result.collection_guidance = { ...result.collection_guidance, amount_cents: 0, status: 'deferred' }
+  assert.equal(await page.locator('.arrival-total > strong').innerText(), '$0.00')
+  result.collection_guidance = { ...result.collection_guidance, amount_cents: 0, status: 'deferred_billing', basis: 'deferred_billing', patient_message: 'No advance requested; final responsibility remains unknown.' }
   await openPatient()
-  assert.equal(await page.locator('.arrival-total > strong').innerText(), 'Amount unavailable')
+  assert.equal(await page.locator('.arrival-total > strong').innerText(), '$0.00')
+  await page.getByRole('button', { name: 'Cash', exact: true }).click()
+  await page.waitForFunction(() => document.querySelector('.arrival-total > strong')?.textContent === '$250.00')
+  assert((await page.locator('.arrival-total').innerText()).includes('Clinic self-pay price'))
+  assert(!(await page.locator('.arrival-total').innerText()).includes('No advance payment'))
+  await page.getByRole('button', { name: 'Insurance', exact: true }).click()
+  await page.waitForFunction(() => document.querySelector('.arrival-total > strong')?.textContent === '$0.00')
+  const spinal = { id: 'planning:62270', code: '62270', units: 1, description: 'Diagnostic spinal tap · without imaging' }
+  result = { ...result, codes: [codes[0], spinal], available_codes: [...codes, spinal], selected_ids: ['99203', spinal.id] }
+  await openPatient()
+  section = await detail('Possible additional')
+  assert((await section.locator('.selected-service-chips').innerText()).includes('62270'))
+  await section.getByRole('button', { name: 'Other care', exact: true }).click()
+  assert.equal(await section.getByRole('button', { name: /Diagnostic spinal tap/ }).getAttribute('aria-pressed'), 'true')
+  await section.locator('summary').click()
   // The same arrival card explains distant appointments without pending/error language.
   result = { ...result, visit_type: 'established', reason: '3 month f/u',
     eligibility_timing: { status: 'too_early', appointment_date: '2026-11-24', check_from: '2026-11-17', message: 'Appointment found on November 24, 2026. Too early to check; reopen November 17.' },
@@ -204,11 +218,11 @@ try {
   await section.locator('summary').click()
   result = { ...result, eligibility_timing: undefined }
   await openPatient()
-  // Request failures do not retain an old charge or invent zero.
+  // Request failures clear the prior charge and defer advance collection.
   await page.route('**/appointments/previsit', route => route.fulfill({ status: 503, json: { detail: 'Payer unavailable' } }))
   await page.getByRole('button', { name: 'Check again', exact: true }).click()
-  await page.getByText('The estimate could not be updated. No collection amount has been calculated.', { exact: false }).waitFor()
-  assert.equal(await page.locator('.arrival-total > strong').innerText(), 'Amount unavailable')
+  await page.getByText('The estimate could not be updated. Collect $0 now and resolve billing before requesting payment.', { exact: false }).waitFor()
+  assert.equal(await page.locator('.arrival-total > strong').innerText(), '$0.00')
   assert.deepEqual(errors, [])
   console.log('PASS: immediate estimator entry; collection evidence; warning-only surname difference; provider; detail order; optional cards; service changes; cached benefits; hidden raw response; error fallback; responsive layouts')
 } finally { await browser.close() }
