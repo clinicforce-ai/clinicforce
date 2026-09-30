@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 const { chromium } = await import(process.env.PLAYWRIGHT_MODULE || 'playwright')
 const browser = await chromium.launch({ headless: true })
-const page = await browser.newPage({ viewport: { width: 1280, height: 1000 }, timezoneId: 'America/Los_Angeles', locale: 'en-US' })
+const page = await browser.newPage({ viewport: { width: 1280, height: 1000 }, timezoneId: 'America/Los_Angeles', locale: 'en-US', reducedMotion: 'reduce' })
 const errors = []
 page.on('pageerror', error => errors.push(error.message))
 const session = { patient_id: 'synthetic-review', documents: [], records: [], storage_provider: 's3', drive_connected: false, drive_pending_import_count: 0, drive_sync_message: null, drive_access_upgrade_required: false }
@@ -88,10 +88,10 @@ try {
   }
   if (process.env.SCREENSHOT_DIR) {
     await review.locator('.healow-category').evaluateAll(nodes => nodes.forEach(node => { node.open = false }))
-    await review.evaluate(node => node.scrollIntoView({ block: 'start' }))
+    await review.evaluate(node => node.scrollIntoView({ block: 'start', behavior: 'instant' }))
     await page.screenshot({ path: `${process.env.SCREENSHOT_DIR}/healow-review-desktop.png`, fullPage: false })
     await page.setViewportSize({ width: 375, height: 900 })
-    await review.evaluate(node => node.scrollIntoView({ block: 'start' }))
+    await review.evaluate(node => node.scrollIntoView({ block: 'start', behavior: 'instant' }))
     await page.screenshot({ path: `${process.env.SCREENSHOT_DIR}/healow-review-mobile.png`, fullPage: false })
   }
   assert.deepEqual(errors, [])
