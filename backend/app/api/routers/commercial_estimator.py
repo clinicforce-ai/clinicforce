@@ -23,7 +23,7 @@ from app.api.routers.insurance import _response, _scope, _session as insurance_s
 from app.core import object_store, staff_store
 from app.insurance import identity as insurance_identity
 from app.insurance import commercial, commercial_store, cpt_rules, cpt_suggester, ecw_backend, golden, stedi_discovery, stedi_payers, store, visit_estimate, nmct_cash, practice_prices, plan_benefits
-from app.insurance import stedi_financial, collection_guidance
+from app.insurance import stedi_financial, collection_guidance, ecw_benefits
 
 
 router = APIRouter(prefix="/api/doctor/insurance/commercial", tags=["doctor-commercial-estimator"])
@@ -517,6 +517,7 @@ def _previsit_range(practice_id: str, inputs: dict, source: dict, payer_id: str,
 
 def _previsit_benefits(payload: dict, coverage: dict, service_date: str | None = None, service_type: str = "98") -> dict:
     benefits = commercial.normalize_stedi_271(payload, service_type, False, coverage["active_coverages"] > 1, service_date=service_date)
+    benefits['benefit_source'] = payload.get('benefit_source') or 'Stedi'
     comparison = insurance_identity.compare(payload, coverage)
     benefits['identity'] = comparison
     if comparison['status'] == 'review':
@@ -581,6 +582,7 @@ def _finish_previsit(result: dict, case: dict, inputs: dict, source: dict, paylo
         comparison = {**comparison, 'status': 'reconciled', 'evidence': evidence, 'message': ''}
         result['benefits']['review_reasons'] = [r for r in result['benefits'].get('review_reasons', []) if 'identity' not in r]
         result['benefits']['requires_review'] = bool(result['benefits']['review_reasons'])
+    result['benefit_source'] = (payload or {}).get('benefit_source') or ('Stedi' if result.get('checked_at') else None)
     result['identity'] = comparison
     result['benefits']['identity'] = comparison
     result['eligibility_reconciliation'] = visit_estimate.reconcile_eligibility(
@@ -662,7 +664,7 @@ def _finish_previsit(result: dict, case: dict, inputs: dict, source: dict, paylo
     units = {**auto_units, **(review.get('confirmed_units') or {})}
     result['available_codes'] = [{**row, 'units': units.get(row['id'], row.get('units'))} for row in available]
     result['payment_mode'] = review.get('payment_mode', 'cash' if source.get('self_pay_recorded') else 'insurance')
-    result['ecw_saved_eligibility'] = source.get('saved_eligibility')
+    result['ecw_saved_eligibility'] = {k: v for k, v in (source.get('saved_eligibility') or {}).items() if not k.startswith('_')}
     labels = {'selected_ids': 'Services', 'confirmed_units': 'Service quantities', 'payment_mode': 'Payment method',
               'cash_selection': 'Cash package', 'emg_required': 'EMG testing', 'insurance_check_from': 'Insurance checking date', 'verification': 'Benefit or approval evidence',
               'identity_confirmation': 'Patient identity', 'product_mapping': 'Plan mapping',
@@ -787,7 +789,8 @@ def _coverage_snapshot(inputs: dict, source: dict) -> dict:
                 "patient_first": patient.get("patient_first_name"), "patient_last": patient.get("patient_last_name"),
                 "patient_birth_date": patient.get("patient_birth_date"), "patient_gender": patient.get("gender"),
                 "patient_address": patient.get("address")}
-    if relationship == "18":
+    if relationship == "18" and (source.get('subscriber_evidence') or {}).get('reference') in {
+            None, 'Patient/' + str(source.get('_patient_id'))}:
         snapshot["subscriber_first"] = snapshot["subscriber_first"] or snapshot["patient_first"]
         snapshot["subscriber_last"] = snapshot["subscriber_last"] or snapshot["patient_last"]
         snapshot["subscriber_birth_date"] = snapshot["subscriber_birth_date"] or snapshot["patient_birth_date"]
@@ -1331,7 +1334,7 @@ async def previsit_estimate(value: PrevisitInput, request: Request, background_t
         "payer": source.get("payer"), "plan": source.get("plan"), "visit_type": inputs.get("visit_type"),
         "reason": inputs.get("appointment_reason") or inputs.get("appointment_type") or inputs.get("reason"), "codes": codes, "benefits": None, "price_range": None,
         "suggestions": None, "issues": [], "checked_at": None,
-        "ecw_saved_eligibility": source['saved_eligibility'], "ecw_coverage_active": source.get('active_coverages', 0) > 0}
+        "ecw_saved_eligibility": {k: v for k, v in source['saved_eligibility'].items() if not k.startswith('_')}, "ecw_coverage_active": source.get('active_coverages', 0) > 0}
     coverage = _coverage_snapshot(inputs, source)
 
     async def incomplete_result():
@@ -1360,6 +1363,41 @@ async def previsit_estimate(value: PrevisitInput, request: Request, background_t
         return await incomplete_result()
     if source.get('self_pay_recorded'):
         return await incomplete_result()
+
+    # Evaluate saved eCW evidence before credentials, payer directory or any paid request.
+    ecw_payload = ecw_benefits.payload(source['saved_eligibility'], source, inputs)
+    if ecw_payload and object_store.enabled() and coverage['active_coverages'] == 1:
+        connections = [row for row in commercial_store.list_connections(session['practice_id'])
+                       if row.get('status') == 'staff_guidance_enabled'
+                       and (str(source.get('payer') or '').casefold() in
+                            {str(name).casefold() for name in [row.get('display_name'), *(row.get('aliases') or [])]}
+                            or row.get('stedi_payer_id') in source.get('payer_identifiers', []))]
+        ecw_payer_id = connections[0]['stedi_payer_id'] if len(connections) == 1 else ''
+        binding = _visit_context_token(inputs, source)
+        ecw_case = await run_in_threadpool(store.create_case, session['patient_id'], '', binding,
+            {'source_mode': 'commercial_previsit', 'previsit': {'request_state': 'not_requested'}},
+            expected_intake_updated_at=session['intake']['updated_at'],
+            workflow_slot='commercial-ecw:' + binding, **_scope(session))
+        candidate = deepcopy(result)
+        candidate.update(check_id=ecw_case['id'], checked_at=source['saved_eligibility']['checked_at'],
+            benefits=_previsit_benefits(ecw_payload, coverage, inputs['service_date'], _previsit_service_types(inputs)[0]))
+        await run_in_threadpool(_finish_previsit, candidate, ecw_case, inputs, source, ecw_payload, session, ecw_payer_id)
+        guidance = candidate['collection_guidance']
+        # Never skip a check just because an unsupported result has a numeric fallback.
+        if (guidance['basis'] in {'office_copay', 'anticipated_services', 'patient_obligations'}
+                and (guidance['basis'] != 'office_copay' or len(candidate['codes']) == 1)
+                and not candidate.get('price_range', {}).get('service_issues')
+                and all((line.get('benefits') or {}).get('copay_cents') is not None
+                        or line.get('calculation') is not None for line in candidate['price_range']['lines'])
+                and not any((line.get('benefits') or {}).get('source_errors') for line in candidate['price_range']['lines'])):
+            raw_key = await run_in_threadpool(object_store.put_staff_document, session['practice_id'], ecw_case['id'],
+                'previsit-ecw-eligibility.json', json.dumps(ecw_payload).encode(), 'application/json')
+            ecw_case['previsit'] = {'request_state': 'complete', 'benefits': candidate['benefits'],
+                'checked_at': candidate['checked_at'], 'benefit_source': 'eCW saved eligibility',
+                'requested_service_types': _previsit_service_types(inputs)}
+            ecw_case['previsit_raw_object_key'] = raw_key
+            candidate['ecw_saved_eligibility']['message'] = 'Current eCW benefits support this advance estimate. No Stedi eligibility request was needed.'
+            return _previsit_result(await run_in_threadpool(_save, ecw_case, session, 'previsit-ecw-benefits-reused'))
 
     rendering = source.get("rendering_provider") or {}
     billing = source.get("billing_provider") or {}

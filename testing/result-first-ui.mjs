@@ -201,6 +201,14 @@ try {
   await section.getByRole('button', { name: 'Other care', exact: true }).click()
   assert.equal(await section.getByRole('button', { name: /Diagnostic spinal tap/ }).getAttribute('aria-pressed'), 'true')
   await section.locator('summary').click()
+  result = { ...result, benefit_source: 'eCW saved eligibility' }
+  await openPatient()
+  assert((await page.locator('.arrival-sources').innerText()).includes('eCW saved eligibility'))
+  assert(!(await page.locator('.arrival-sources').innerText()).includes('Stedi'))
+  result.collection_guidance.reason = 'Calculation/source error: invalid payer financial evidence was rejected. Clinic staff must verify the source before collecting.'
+  await openPatient()
+  assert((await page.locator('.arrival-total').innerText()).includes('Calculation/source error'))
+  assert.equal(await page.locator('.arrival-total > strong').innerText(), '$0.00')
   // The same arrival card explains distant appointments without pending/error language.
   result = { ...result, visit_type: 'established', reason: '3 month f/u',
     eligibility_timing: { status: 'too_early', appointment_date: '2026-11-24', check_from: '2026-11-17', message: 'Appointment found on November 24, 2026. Too early to check; reopen November 17.' },

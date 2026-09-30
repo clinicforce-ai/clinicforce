@@ -302,6 +302,8 @@ def price_lines(codes: list[dict], rates: list[dict], benefits: dict, rules: dic
 def reconcile_eligibility(saved: dict, benefits: dict, checked_at: str | None) -> dict:
     """Reconcile dated coverage evidence; an in-force flag supplies no benefit amounts."""
     active = benefits.get('active')
+    if benefits.get('benefit_source') == 'eCW saved eligibility':
+        return {'requires_review': False, 'message': 'Current matched eCW eligibility supplies these service benefits; no Stedi check was needed.'}
     if saved.get('status') not in {'verified_active', 'verified_inactive'}:
         return {'requires_review': False, 'message': (
             'Current benefit information comes from Stedi; no usable current eCW eligibility was returned.' if type(active) is bool else

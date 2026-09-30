@@ -17,6 +17,12 @@ class PrevisitFlowTest(unittest.IsolatedAsyncioTestCase):
         self.cash_patch.start()
         self.addCleanup(self.cash_patch.stop)
 
+    async def test_complete_ecw_benefits_skip_paid_check_and_remain_editable(self):
+        await self._flow(date.today().isoformat(), ecw_saved=True)
+
+    async def test_incomplete_ecw_benefits_fall_through_to_stedi(self):
+        await self._flow(date.today().isoformat(), ecw_saved=True, ecw_incomplete=True)
+
     async def test_explicit_self_pay_skips_stedi_and_defaults_to_cash(self):
         await self._flow(date.today().isoformat(), self_pay=True)
 
@@ -64,7 +70,7 @@ class PrevisitFlowTest(unittest.IsolatedAsyncioTestCase):
     async def test_newer_conflicting_ecw_check_refreshes_cached_stedi_evidence(self):
         await self._flow(date.today().isoformat(), newer_ecw=True)
 
-    async def _flow(self, service_date, reject=False, retry_basic=False, payer_missing=False, refresh=False, newer_ecw=False, too_early=False, self_pay=False, coverage_start=None, saved_hold=False, enrollment_missing=False):
+    async def _flow(self, service_date, reject=False, retry_basic=False, payer_missing=False, refresh=False, newer_ecw=False, too_early=False, self_pay=False, coverage_start=None, saved_hold=False, enrollment_missing=False, ecw_saved=False, ecw_incomplete=False):
         session = {"practice_id": "clinic", "intake_id": "intake", "patient_id": "patient",
                    "share_manifest_id": "", "staff": {"id": "staff", "display_name": "Staff", "practice_name": "Clinic"},
                    "intake": {"updated_at": "version", "patient": {"given_name": "Pat", "family_name": "Example",
@@ -77,6 +83,14 @@ class PrevisitFlowTest(unittest.IsolatedAsyncioTestCase):
         source = {"appointment_id": "visit-1", "coverage_id": "coverage-1", "active_coverages": 1,
                   "payer": "Blue Cross Blue Shield Tx", "plan": "CI", "rendering_provider": {"npi": "1234567890", "first_name": "Ada", "last_name": "Clinician"},
                   "billing_provider": {"name": "Clinic", "npi": "1811853260"}, "location_id": "office"}
+        saved_ecw = {'status': 'check_with_stedi'}
+        if ecw_saved:
+            from test_ecw_benefits import saved_response
+            from app.insurance import ecw_backend
+            response = saved_response(service_date)
+            if ecw_incomplete:
+                response['insurance'][0]['item'][0]['benefit'] = []
+            saved_ecw = ecw_backend.saved_eligibility_summary([response], 'p', 'coverage-1', service_date)
         if retry_basic:
             inputs.update(group_number='GROUP-9', plan_number='PLAN-2')
             inputs['patient'].update(gender='F', address={'address1': '1 Main St', 'city': 'Austin', 'state': 'TX', 'postalCode': '78701'})
@@ -104,6 +118,7 @@ class PrevisitFlowTest(unittest.IsolatedAsyncioTestCase):
              patch("app.api.routers.commercial_estimator.ecw_backend.configured", return_value=True), \
              patch("app.api.routers.commercial_estimator.ecw_backend.fetch_inputs", new=AsyncMock(return_value=(inputs, [], source))), \
              patch("app.api.routers.commercial_estimator._ecw_practice_config", return_value={}), \
+             patch("app.api.routers.commercial_estimator.ecw_backend.fetch_saved_eligibility", AsyncMock(return_value=saved_ecw)), \
              patch("app.api.routers.commercial_estimator.cpt_suggester.suggest_preliminary_cpt_codes", return_value={"groups": [], "notes": []}), \
              patch("app.api.routers.commercial_estimator.stedi_payers.search_payer", new=AsyncMock(return_value=None if payer_missing else {"stediId": "QDTRP", "displayName": "Blue Cross and Blue Shield of Texas", 'transactionSupport': {'eligibilityCheck': 'ENROLLMENT_REQUIRED' if enrollment_missing else 'SUPPORTED'}})), \
              patch("app.api.routers.commercial_estimator.stedi_payers.eligibility_enrolled", new=AsyncMock(return_value=False)), \
@@ -118,6 +133,21 @@ class PrevisitFlowTest(unittest.IsolatedAsyncioTestCase):
                  "STEDI_API_KEY": "production-key", "STEDI_EXECUTION_MODE": "commercial_pilot",
                  "STEDI_LIVE_ELIGIBILITY_ENABLED": "true"}):
             result = await previsit_estimate(PrevisitInput(appointment_id="visit-1", refresh_benefits=refresh if too_early else False), MagicMock())
+            if ecw_saved and not ecw_incomplete:
+                self.assertEqual(result['collection_guidance']['amount_cents'], 4000)
+                self.assertEqual(result['benefit_source'], 'eCW saved eligibility')
+                self.assertNotIn('_response', result['ecw_saved_eligibility'])
+                self.assertIn('no Stedi check', result['eligibility_reconciliation']['message'])
+                from app.insurance import ecw_benefits
+                raw = json.dumps(ecw_benefits.payload(saved_ecw, source, inputs)).encode()
+                with patch('app.api.routers.commercial_estimator.store.get_case', return_value=case), \
+                     patch('app.api.routers.commercial_estimator.object_store.get_object_bytes', return_value=raw):
+                    edited = await update_visit_review('case-1', VisitReviewInput(
+                        context_token=result['context_token'], revision=0, selected_ids=[next(row['id'] for row in result['available_codes'] if row['code'] == '99204')]), MagicMock())
+                self.assertEqual(edited['collection_guidance']['amount_cents'], 4000)
+                self.assertEqual(edited['benefit_source'], 'eCW saved eligibility')
+                client.post.assert_not_awaited()
+                return
             if enrollment_missing:
                 self.assertEqual(result['eligibility_failure']['kind'], 'provider_enrollment')
                 self.assertEqual(result['collection_guidance']['amount_cents'], 0)

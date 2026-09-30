@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import base64
 import os
 import re
@@ -706,6 +707,8 @@ async def fetch_inputs(profile: dict[str, Any], practice: dict[str, Any], appoin
                               if result[1]}
             query_unavailable = {result[2] for result in (coverage_result, order_result, procedure_result, charge_result)
                                  if result[2]}
+            coverage_rows = [row for row in coverage_rows if row.get('resourceType') == 'Coverage'
+                             and _reference(row.get('beneficiary')) == f'Patient/{patient_id}']
             eligible = [row for row in coverage_rows if row.get("status") == "active" and _period_contains(row, service_date)]
             ordered = sorted(eligible, key=lambda row: row.get("order", 999999))
             coverage = ordered[0] if ordered and (len(ordered) == 1 or ordered[0].get("order") != ordered[1].get("order")) else {}
@@ -725,7 +728,7 @@ async def fetch_inputs(profile: dict[str, Any], practice: dict[str, Any], appoin
             resolvable = ("Patient/", "RelatedPerson/", "Organization/", "Practitioner/", "PractitionerRole/",
                           "Location/", "Condition/")
             refs = [ref for ref in dict.fromkeys(
-                ref for row in [visit, coverage, *relevant_orders, *relevant_procedures] for ref in _source_references(row)
+                ref for row in [visit, *coverage_rows, *relevant_orders, *relevant_procedures] for ref in _source_references(row)
             ) if ref != f"Patient/{patient_id}" and ref.startswith(resolvable)]
             resolved_results = await asyncio.gather(*(_bounded_read(client, issuer, token, ref) for ref in refs))
             resolved_list = [row for row, _ in resolved_results]
@@ -761,10 +764,8 @@ async def fetch_inputs(profile: dict[str, Any], practice: dict[str, Any], appoin
             }.values())
 
             subscriber_ref = _reference(coverage.get("subscriber"))
-            subscriber_resource = patient if subscriber_ref == f"Patient/{patient_id}" else resolved.get(subscriber_ref or "", {})
+            subscriber_resource = coverage_subscriber(coverage, patient, resolved)
             relationship = _relationship(coverage)
-            if relationship == "18" and not subscriber_resource:
-                subscriber_resource = patient
             sub_given, sub_family = _name(subscriber_resource)
             payer_ref = next((_reference(item) for item in coverage.get("payor", []) if _reference(item)), None)
             payer = resolved.get(payer_ref or "", {})
@@ -909,7 +910,7 @@ async def fetch_inputs(profile: dict[str, Any], practice: dict[str, Any], appoin
     if not coverage:
         ecw_missing.append("No single active eClinicalWorks coverage was linked to this appointment.")
     if coverage and (not inputs["member_id"] or not relationship or not all(inputs["subscriber"].values())):
-        ecw_missing.append("The eClinicalWorks coverage is missing subscriber identity, relationship, or member ID.")
+        ecw_missing.append("The eClinicalWorks connection did not return complete subscriber identity, relationship, or member ID. Review the policy or retry unavailable references; this does not establish that the chart lacks these fields.")
     if coverage and not _display(payer) and "Organization" not in reference_timeouts:
         ecw_missing.append("The eClinicalWorks coverage did not return its payer organization.")
     if visit and not inputs["reason"]:
@@ -948,11 +949,16 @@ async def fetch_inputs(profile: dict[str, Any], practice: dict[str, Any], appoin
               "appointment_fields": imported_fields,
               "insurance_fallback": insurance_fallback,
               "appointment_notes_status": appointment_notes_status,
+              "subscriber_evidence": {"reference": subscriber_ref, "status": 'returned' if sub_given and sub_family and subscriber_resource.get('birthDate') else 'not_returned',
+                  "member_id_source": 'Coverage.subscriberId' if str(coverage.get('subscriberId') or '').strip() else 'Coverage.identifier' if member_id else None},
               "coverage_records": [{"id": row.get('id'), "status": row.get('status'), "order": row.get('order'),
                   "member_id": coverage_member_id(row), "group_number": _group(row), "plan": _plan_details(row),
                   "relationship": _relationship(row), "period": row.get('period') or {},
-                  "subscriber": (row.get('subscriber') or {}).get('display'),
-                  "payer": [p.get('display') for p in row.get('payor', []) if p.get('display')],
+                  "subscriber": _display(coverage_subscriber(row, patient, resolved)) or (row.get('subscriber') or {}).get('display'),
+                  "subscriber_reference": _reference(row.get('subscriber')),
+                  "subscriber_birth_date": coverage_subscriber(row, patient, resolved).get('birthDate'),
+                  "payer": [_display(resolved.get(_reference(p) or '', {})) or p.get('display')
+                            for p in row.get('payor', []) if _display(resolved.get(_reference(p) or '', {})) or p.get('display')],
                   "cost_to_beneficiary": row.get('costToBeneficiary') or []}
                   for row in coverage_rows if _reference(row.get('beneficiary')) == f'Patient/{patient_id}'],
               "appointment_id": encounter_id, "coverage_id": str(coverage.get("id") or ""),
@@ -995,8 +1001,18 @@ async def fetch_inputs(profile: dict[str, Any], practice: dict[str, Any], appoin
     return inputs, list(dict.fromkeys(missing)), source
 
 
+def coverage_subscriber(coverage: dict, patient: dict, resolved: dict) -> dict:
+    ref = _reference(coverage.get('subscriber'))
+    if ref == 'Patient/' + str(patient.get('id')) or not ref and _relationship(coverage) == '18':
+        return patient
+    if ref and ref.startswith('#'):
+        return next((row for row in coverage.get('contained', []) if '#' + str(row.get('id', '')) == ref
+                     and row.get('resourceType') in {'Patient', 'RelatedPerson'}), {})
+    return resolved.get(ref or '', {})
+
+
 def coverage_member_id(coverage: dict) -> str | None:
-    if coverage.get('subscriberId'):
+    if str(coverage.get('subscriberId') or '').strip():
         return str(coverage['subscriberId']).strip()
     values = {str(row['value']).strip() for row in coverage.get('identifier', []) if row.get('value') and
               (any(c.get('code') == 'MB' for c in row.get('type', {}).get('coding', [])) or
@@ -1046,11 +1062,11 @@ def saved_eligibility_summary(rows: list[dict], patient_id: str, coverage_id: st
         return {'status': 'check_with_stedi', 'message': 'No current eCW verification matches this policy and service date. Use the Stedi result below.'}
     newest = max(item[0] for item in matching)
     latest = [item for item in matching if item[0] == newest]
-    if len({item[2] for item in latest}) != 1:
+    if len({json.dumps(item[1].get('insurance'), sort_keys=True) for item in latest}) != 1:
         return {'status': 'review', 'message': 'eCW contains conflicting eligibility results. Resolve them against the current Stedi check.'}
     created, row, active = latest[0]
     return {'status': 'verified_active' if active else 'verified_inactive', 'active': active,
-            'checked_at': created.isoformat(), 'reference': 'CoverageEligibilityResponse/' + str(row.get('id', '')),
+            'checked_at': created.isoformat(), '_response': row, 'reference': 'CoverageEligibilityResponse/' + str(row.get('id', '')),
             'message': 'Saved eCW payer verification matches this policy and visit date. Benefit amounts and service approvals are checked separately.'}
 
 
@@ -1101,7 +1117,12 @@ async def fetch_saved_eligibility(source: dict, service_date: str, *, transport:
         async with httpx.AsyncClient(timeout=SEARCH_TIMEOUT_SECONDS, follow_redirects=False, transport=transport) as client:
             token = await _access_token(client, client_id, issuer, SCOPES + ('system/CoverageEligibilityResponse.read',))
             rows = await _search(client, issuer, token, 'CoverageEligibilityResponse', {'patient': source['_patient_id']})
-        return saved_eligibility_summary(rows, source['_patient_id'], source['coverage_id'], service_date)
+        primary = saved_eligibility_summary(rows, source['_patient_id'], source['coverage_id'], service_date)
+        primary['other_coverages'] = {row['id']: {k: v for k, v in
+            saved_eligibility_summary(rows, source['_patient_id'], row['id'], service_date).items()
+            if not k.startswith('_')}
+            for row in source.get('coverage_records', []) if row.get('id') and row['id'] != source['coverage_id']}
+        return primary
     except (EcwBackendError, httpx.HTTPError):
         return fallback
 

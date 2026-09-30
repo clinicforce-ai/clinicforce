@@ -34,7 +34,7 @@ def build(result: dict, review: dict | None = None) -> dict:
     adverse = False
     for kind in ('referral', 'authorization'):
         requirements = [line.get('benefits', {}).get('requirements', {}).get(kind, {}) for line in lines]
-        guidance['requirement_sources'][kind] = 'Stedi / clinic evidence'
+        guidance['requirement_sources'][kind] = (result.get('benefit_source') or 'Stedi') + ' / clinic evidence'
         if any(item.get('status') in {'denied', 'expired', 'pending'} or
                item.get('required') == 'required' and not item.get('cleared') for item in requirements):
             adverse = True
@@ -59,6 +59,16 @@ def build(result: dict, review: dict | None = None) -> dict:
             and identity.get('status') != 'review' and not price.get('service_issues') and not adverse
             and not any('evidence' in str(reason).lower() or 'date' in str(reason).lower()
                         for reason in benefits.get('review_reasons', [])))
+    source_errors = [error for terms in [benefits, *(line.get('benefits') or {} for line in lines)]
+                     for error in terms.get('source_errors', [])]
+    for label, values in [('arrival_collection', strict), ('price_range', price),
+                          *((f'line:{line.get("id")}', line.get('calculation') or {}) for line in lines)]:
+        for key in ('amount_cents', 'patient_min_cents', 'patient_max_cents', 'patient_cents'):
+            value = values.get(key)
+            if value is not None and (type(value) is not int or not 0 <= value <= 100_000_000):
+                source_errors.append({'path': label + '.' + key, 'kind': 'invalid_calculation',
+                                      'message': 'Invalid financial evidence: calculation returned an invalid amount.'})
+    safe = safe and not source_errors
     amount = None
     if strict.get('amount_cents') is not None and safe:
         amount = strict['amount_cents']
@@ -87,7 +97,7 @@ def build(result: dict, review: dict | None = None) -> dict:
                 and (len(office) == 1 or price.get('mode') == 'alternatives')
                 and all(line.get('units') == 1 for line in office)
                 and all(t.get('active') is True and t.get('copay_cents') is not None
-                        and t.get('copay_period') in {'VISIT', '27', 'DAY', '7'}
+                        and t.get('copay_period') in {'VISIT', '27', 'DAY', '7', 'SERVICE', 'PROCEDURE'}
                         and (t.get('deductible_applies') is False or t.get('deductible_remaining_cents') == 0
                              or t.get('deductible_applies') is not True and t.get('deductible_remaining_cents') is None)
                         and t.get('coinsurance_percent') in {None, '0', '0.0', '0.00'}
@@ -129,7 +139,10 @@ def build(result: dict, review: dict | None = None) -> dict:
             guidance['reason'] += ' Recorded payments have been deducted.'
     else:
         guidance.update(status='unavailable', basis='insufficient_evidence')
-        if benefits.get('active') is False:
+        if source_errors:
+            guidance['reason'] = 'Calculation/source error: invalid payer financial evidence was rejected. Clinic staff must verify the source before collecting.'
+            guidance['source_errors'] = source_errors
+        elif benefits.get('active') is False:
             guidance['reason'] = 'The payer reports inactive coverage for this visit, so the insurance collection amount cannot be calculated from this policy.'
             actions.append('Contact your insurer to resolve inactive coverage or provide your current insurance card.')
         elif identity.get('status') == 'review':

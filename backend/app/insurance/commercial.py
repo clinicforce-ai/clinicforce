@@ -514,12 +514,28 @@ def normalize_stedi_271(payload: dict[str, Any], service_type_code: str, provide
             coinsurance_percent = None
     except Exception:
         coinsurance_percent = None
+    other_active_coverage = other_active_coverage or any(row.get('code') == 'R' for row in relevant)
     multiple_plans = len({row["plan_index"] for row in entries if "plan_index" in row and row.get("code") in {"status", "A", "B", "C", "G"}}) > 1
     limitations = any(str(row.get("code") or "").upper() in {"F", "Y"} for row in relevant)
     conditional_terms = selected_ids is None and any(re.search(r"\b(first|after|before|beginning|visits?|waived|unless|only|limit|specialist|primary care)\b", note, re.IGNORECASE) for row in (copay, coinsurance) if row for note in notes([row.get("messages"), row.get("additionalInformation")])
         if not all(re.fullmatch(r"(?:(?:specialist |physician )?office visits?(?: (?:specialist|primary care(?: prov(?:ider)?)?))?|phy visit\s*-\s*specialist|(?:PCP AND )?BenefitTier Non Tier 1 Specialist|diagnostic medical procedure)(?:\s*-\s*professional)?", label.strip(), re.I)
                    for label in note.split(';') if label.strip()))
-    review_reasons = []
+    source_errors = []
+    for _, row in wanted:
+        for field in ('benefitAmount', 'benefitPercent', 'percent'):
+            value = row.get(field)
+            if value is None or value == '':
+                continue
+            try:
+                number = Decimal(str(value))
+                invalid = not number.is_finite() or number < 0 or number > (100 if field != 'benefitAmount' else 1000000)
+            except Exception:
+                invalid = True
+            if invalid:
+                source_errors.append({'path': row['evidence_path'] + '.' + field,
+                    'kind': 'invalid_financial_value',
+                    'message': 'Invalid financial evidence: the payer returned an invalid amount or percentage. Verify the source before collection.'})
+    review_reasons = list(dict.fromkeys(error['message'] for error in source_errors))
     if invalid_dates:
         review_reasons.append("Verify the payer eligibility dates; an applicable date value could not be interpreted.")
     if date_matches is False:
@@ -542,7 +558,7 @@ def normalize_stedi_271(payload: dict[str, Any], service_type_code: str, provide
         review_reasons.append("Review the payer's benefit limits before estimating patient cost.")
     if multiple_plans or other_active_coverage:
         review_reasons.append("Confirm which plan pays first and how additional coverage applies.")
-    return {"active": active, "service_date_matches": date_matches, "returned_service_dates": returned_service,
+    return {"active": active, "source_errors": source_errors, "service_date_matches": date_matches, "returned_service_dates": returned_service,
             "coverage_level": "individual" if wanted else "unknown",
             "network_status": "in_network" if provider_network_verified else "unknown",
             "deductible_remaining_cents": deductible_cents, "oop_remaining_cents": oop_cents,
