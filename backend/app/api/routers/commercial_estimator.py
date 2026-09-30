@@ -732,7 +732,7 @@ def _finish_previsit(result: dict, case: dict, inputs: dict, source: dict, paylo
                 pass
         result['emg_option'] = collection_guidance.emg_option(result, emg_rates, emg_rules, payload, inputs['service_date'], review)
     if result.get('eligibility_timing', {}).get('status') == 'too_early':
-        case.setdefault('visit_review', {'context_token': token})['insurance_check_from'] = result['eligibility_timing']['check_from']
+        case.setdefault('visit_review', {'context_token': token}).setdefault('insurance_check_from', result['eligibility_timing']['check_from'])
     case['previsit_context'] = {'inputs': inputs, 'source': source, 'payer_id': payer_id,
                               'result': result, 'context_token': token}
 
@@ -1026,8 +1026,9 @@ def _case_benefits(payload: dict, inputs: dict, source: dict, case: dict) -> dic
 def _previsit_result(case: dict) -> dict:
     result = deepcopy(case['previsit_context']['result'])
     result['revision'] = case.get('revision', 0)
-    timing = _eligibility_timing(result['service_date'], (case.get('visit_review') or {}).get('insurance_check_from') or
-        ((case['previsit_context'].get('source', {}).get('coverage_period') or {}).get('start') or '')[:10] or None) if result.get('service_date') else None
+    check_from = max((case.get('visit_review') or {}).get('insurance_check_from') or '',
+        ((case['previsit_context'].get('source', {}).get('coverage_period') or {}).get('start') or '')[:10])
+    timing = _eligibility_timing(result['service_date'], check_from or None) if result.get('service_date') else None
     if timing:
         result['eligibility_timing'] = timing
     else:
