@@ -336,6 +336,12 @@ def normalize_stedi_271(payload: dict[str, Any], service_type_code: str, provide
         entries = [row for row in entries if not row.get('placesOfService') or
                    any(str(pos.get('code') or '') == place_of_service for pos in row['placesOfService'] if isinstance(pos, dict))]
     diagnostic = procedure_code in {*(str(n) for n in range(95907, 95914)), '95885', '95886', '95887'}
+    if diagnostic:
+        # Sleep studies and radiology share STC 73 with EMG. Their presence
+        # must not prevent use of an explicitly labelled diagnostic benefit.
+        entries = [row for row in entries if _procedure(row) or not any(
+            re.fullmatch(r'(?:sleep study|x[ -]?ray)(?:\s*-\s*professional)?', note.strip(), re.I)
+            for note in _benefit_notes([row.get('messages'), row.get('additionalInformation')]))]
     if diagnostic and service_type_code == '73' and not any('73' in (row.get('serviceTypeCodes') or []) and row.get('code') in {'A', 'B'} for row in entries):
         # Some plans return diagnostic procedure terms under 98. Require that
         # description; an office-only copay is not an EMG benefit.
@@ -362,9 +368,17 @@ def normalize_stedi_271(payload: dict[str, Any], service_type_code: str, provide
         if 'BQ' in priorities:
             # Neurology is specialist care. Keep generic and specialist rows,
             # excluding rows explicitly limited to primary care.
-            entries = [row for row in entries if not any(re.search(r'\bprimary care\b', note, re.I)
+            entries = [row for row in entries if not any(re.search(r'\b(?:primary care|PCP)\b', note, re.I)
                 and not re.search(r'\bspecialist\b', note, re.I)
                 for note in _benefit_notes([row.get('messages'), row.get('additionalInformation')]))]
+            for kind in ('A', 'B'):
+                specialist = [row for row in entries if row.get('code') == kind and any(
+                    re.search(r'\bspecialist\b', note, re.I)
+                    for note in _benefit_notes([row.get('messages'), row.get('additionalInformation')]))]
+                if place_of_service and any(row.get('placesOfService') for row in specialist):
+                    specialist = [row for row in specialist if row.get('placesOfService')]
+                if specialist:
+                    entries = [row for row in entries if row.get('code') != kind or _procedure(row) or row in specialist]
     def relevant_service(row: dict) -> bool:
         procedure = _procedure(row)
         if procedure:
@@ -503,7 +517,7 @@ def normalize_stedi_271(payload: dict[str, Any], service_type_code: str, provide
     multiple_plans = len({row["plan_index"] for row in entries if "plan_index" in row and row.get("code") in {"status", "A", "B", "C", "G"}}) > 1
     limitations = any(str(row.get("code") or "").upper() in {"F", "Y"} for row in relevant)
     conditional_terms = selected_ids is None and any(re.search(r"\b(first|after|before|beginning|visits?|waived|unless|only|limit|specialist|primary care)\b", note, re.IGNORECASE) for row in (copay, coinsurance) if row for note in notes([row.get("messages"), row.get("additionalInformation")])
-        if not all(re.fullmatch(r"(?:(?:specialist |physician )?office visits?(?: (?:specialist|primary care(?: prov(?:ider)?)?))?|diagnostic medical procedure)(?:\s*-\s*professional)?", label.strip(), re.I)
+        if not all(re.fullmatch(r"(?:(?:specialist |physician )?office visits?(?: (?:specialist|primary care(?: prov(?:ider)?)?))?|phy visit\s*-\s*specialist|(?:PCP AND )?BenefitTier Non Tier 1 Specialist|diagnostic medical procedure)(?:\s*-\s*professional)?", label.strip(), re.I)
                    for label in note.split(';') if label.strip()))
     review_reasons = []
     if invalid_dates:
@@ -539,6 +553,9 @@ def normalize_stedi_271(payload: dict[str, Any], service_type_code: str, provide
             "oop_id": oop.get("evidence_path") if oop else None,
             "copay_id": copay.get("evidence_path") if copay else None,
             "authorization_basis": authorization_basis,
+            "benefit_assumptions": ['The returned non-Tier-1 specialist benefit is used; the provider tier has not been confirmed.'] if any(
+                'non tier 1 specialist' in note.casefold() for row in (copay, coinsurance) if row
+                for note in _benefit_notes(row.get('messages'))) else [],
             "copay_period": str((copay or {}).get("timeQualifierCode") or (copay or {}).get("timeQualifier") or ""),
             "plan_details": plan_details(payload),
             "authorization_signal": authorization_signal, "referral_signal": referral_signal,

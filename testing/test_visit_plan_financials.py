@@ -36,7 +36,7 @@ def test_model_selects_one_scenario_with_history_and_rejects_unsupported_combina
             model.converse.return_value = model_reply(invalid)
             fallback = cpt_suggester.recommend_visit_plan({'reason': 'EMG both arms'}, {}, catalog())
             assert fallback['method'] == 'baseline'
-            assert fallback['recommended_ids'] == ['95907']
+            assert fallback['recommended_ids'] == ['95907', '95886']
 
 
 def test_explicit_scheduled_care_wins_and_wrong_patient_status_cannot_be_inferred():

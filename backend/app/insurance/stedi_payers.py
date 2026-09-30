@@ -34,7 +34,7 @@ def _same_name(observed: str, candidate: str, operating_states: list[str]) -> bo
 def select_payer(items: list[dict[str, Any]], name: str, identifiers: list[str]) -> dict | None:
     """Accept one exact identifier/name match; never select a fuzzy first result."""
     eligible = [row.get("payer", {}) for row in items if isinstance(row, dict)]
-    eligible = [payer for payer in eligible if payer.get("transactionSupport", {}).get("eligibilityCheck") == "SUPPORTED"
+    eligible = [payer for payer in eligible if payer.get("transactionSupport", {}).get("eligibilityCheck") in {"SUPPORTED", "ENROLLMENT_REQUIRED"}
                 and (not payer.get("coverageTypes") or "medical" in payer["coverageTypes"])]
     observed_ids = {value.casefold().strip() for value in identifiers if isinstance(value, str) and value.strip()}
     by_id = [payer for payer in eligible if observed_ids.intersection(
@@ -47,14 +47,31 @@ def select_payer(items: list[dict[str, Any]], name: str, identifiers: list[str])
 
 
 async def search_payer(name: str, identifiers: list[str], api_key: str,
-                       *, transport: httpx.AsyncBaseTransport | None = None) -> dict | None:
+                       *, transport: httpx.AsyncBaseTransport | None = None, plan: str | None = None) -> dict | None:
     if not api_key or not name:
         return None
+    # Original Medicare Part B uses CMS/HETS for eligibility, including state
+    # MAC labels. Never route Medicare Advantage or a supplement to CMS.
+    if plan == 'MB' and re.fullmatch(r'Medicare(?: of)? (?:Texas|TX)(?: Part B)?', name, re.I):
+        name, identifiers = 'CMS', ['CMSMED']
     async with httpx.AsyncClient(timeout=httpx.Timeout(10, connect=5), transport=transport) as client:
-        response = await client.get(SEARCH_URL, params={"query": name[:200], "eligibilityCheck": "SUPPORTED", "pageSize": 100},
+        response = await client.get(SEARCH_URL, params={"query": 'CMSMED' if name == 'CMS' and identifiers == ['CMSMED'] else name[:200], "pageSize": 100},
                                     headers={"Authorization": api_key})
         response.raise_for_status()
         payload = response.json()
     if not isinstance(payload, dict) or not isinstance(payload.get("items"), list):
         return None
     return select_payer(payload["items"], name, identifiers)
+
+
+async def eligibility_enrolled(payer_id: str, npi: str, api_key: str, *, transport=None) -> bool:
+    """Read enrollment before a paid request; never create an enrollment."""
+    async with httpx.AsyncClient(timeout=httpx.Timeout(10, connect=5), transport=transport) as client:
+        response = await client.get('https://enrollments.us.stedi.com/2024-09-01/enrollments',
+            params={'payerIds': payer_id, 'providerNpis': npi, 'transactions': 'eligibilityCheck', 'status': 'LIVE', 'pageSize': 100},
+            headers={'Authorization': api_key})
+        response.raise_for_status()
+        return any(row.get('status') == 'LIVE' and row.get('payer', {}).get('stediPayerId') == payer_id
+            and row.get('provider', {}).get('npi') == npi
+            and row.get('transactions', {}).get('eligibilityCheck', {}).get('enroll') is True
+            for row in response.json().get('items', []))

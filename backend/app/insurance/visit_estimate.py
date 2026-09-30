@@ -35,6 +35,16 @@ def is_emg_visit(inputs: dict) -> bool:
     return False
 
 
+def is_spinal_tap(inputs: dict, *, clinic_abbreviation: bool = False) -> bool:
+    reason = str(inputs.get('reason') or '')
+    for clause in re.split(r'[.;\n]', reason):
+        if re.search(r'\b(?:spinal tap|lumbar puncture)\b', clause, re.I) and not re.search(
+                r'\b(?:no|not|possible|consider\w*|discuss\w*|history|results?|review|if needed)\b', clause, re.I):
+            return True
+    # SP is a clinic-confirmed booking abbreviation, not a universal diagnosis.
+    return clinic_abbreviation and str(inputs.get('appointment_reason') or '').strip().upper() == 'SP'
+
+
 def service_plan(available: list[dict], inputs: dict, source: dict) -> dict:
     """Describe planning choices; past care is a suggestion, never a new order."""
     emg = is_emg_visit(inputs)
@@ -85,7 +95,7 @@ def service_type(code: str, rules: dict) -> str | None:
         return str(configured)
     if code in cpt_rules.NCS_CODES | cpt_rules.EMG_ADD_ONS:
         return '73'  # Diagnostic medical benefits, not the office consultation copay.
-    if code in {'11104', '11105'}:
+    if code in {'11104', '11105', '62270', '62328'}:
         return '2'
     # Stedi's documented neurology and office/telehealth mappings. Clinic overrides win.
     if code.isdigit() and (95700 <= int(code) <= 96020 or 99202 <= int(code) <= 99215):

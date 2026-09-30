@@ -10,6 +10,7 @@ def build(result: dict, review: dict | None = None) -> dict:
     strict = result.get('arrival_collection') or {}
     planning = result.get('planning_estimate') or {}
     assumptions = list(result.get('pricing_assumptions') or [])
+    assumptions.extend(note for line in lines for note in line.get('benefits', {}).get('benefit_assumptions', []))
     actions = []
     guidance = {'amount_cents': None, 'status': 'unavailable', 'basis': 'insufficient_evidence',
                 'reason': 'The available benefits do not establish an advance collection amount.',
@@ -82,14 +83,14 @@ def build(result: dict, review: dict | None = None) -> dict:
         office = [line for line in lines if line.get('code', '').isdigit() and
                   (99202 <= int(line['code']) <= 99205 or 99212 <= int(line['code']) <= 99215)]
         terms = [line.get('benefits') or {} for line in office]
-        if (terms and (benefits.get('network_status') == 'in_network' or result.get('pricing_assumptions') or all(t.get('network_independent') for t in terms))
+        if (terms
                 and (len(office) == 1 or price.get('mode') == 'alternatives')
                 and all(line.get('units') == 1 for line in office)
                 and all(t.get('active') is True and t.get('copay_cents') is not None
                         and t.get('copay_period') in {'VISIT', '27', 'DAY', '7'}
                         and (t.get('deductible_applies') is False or t.get('deductible_remaining_cents') == 0
                              or t.get('deductible_applies') is not True and t.get('deductible_remaining_cents') is None)
-                        and t.get('coinsurance_percent') in {None, '0', '0.0'}
+                        and t.get('coinsurance_percent') in {None, '0', '0.0', '0.00'}
                         and t.get('cost_share') not in {'coinsurance', 'cumulative'}
                         and not any(any(word in r.lower() for word in ('conditional', 'limit', 'date', 'identity', 'evidence'))
                                     for r in t.get('review_reasons', [])) for t in terms)
@@ -99,6 +100,8 @@ def build(result: dict, review: dict | None = None) -> dict:
                 amount = min(amount, min(line['allowed_cents'] for line in office))
             if any(t.get('deductible_remaining_cents') is None and t.get('deductible_applies') is not False for t in terms):
                 assumptions.append('The payer returned a fixed office copay but no applicable deductible balance. This advance includes the copay only; any deductible responsibility remains for the claim.')
+            if benefits.get('network_status') != 'in_network' and not result.get('pricing_assumptions') and not all(t.get('network_independent') for t in terms):
+                assumptions.append('This provisional office advance uses the returned in-network specialist copay. Provider participation is unverified; confirm it before care. Final responsibility may differ.')
             guidance.update(status='estimated', basis='office_copay',
                             reason='The applicable office-visit copay is collected once. Any additional service responsibility will follow the claim.')
     if amount is None and safe:
@@ -136,6 +139,9 @@ def build(result: dict, review: dict | None = None) -> dict:
             guidance['reason'] = 'A referral or authorization issue affects the selected care. The collection amount depends on resolving that coverage requirement.'
         elif benefits.get('has_secondary'):
             guidance['reason'] = 'More than one plan may pay for this visit. The collection amount depends on how those plans coordinate benefits.'
+        elif (result.get('eligibility_failure') or {}).get('kind') == 'provider_enrollment':
+            guidance['reason'] = 'The clinic provider’s eligibility enrollment with this payer is not verified in Stedi. No paid eligibility request was submitted.'
+            actions.append('Clinic administrator: verify or complete provider eligibility enrollment in Stedi to retrieve these benefits.')
         elif result.get('eligibility_failure') or benefits.get('active') is not True:
             guidance['reason'] = 'Current payer benefits are unavailable, and the remaining information does not establish a collection amount.'
         elif benefits.get('service_date_matches') is False:
@@ -144,6 +150,9 @@ def build(result: dict, review: dict | None = None) -> dict:
             guidance['reason'] = 'The selected services do not form a complete billable plan. A collection amount cannot be calculated for this selection.'
         else:
             guidance['reason'] = 'The returned benefits and clinic rates do not establish a collection amount for the selected services.'
+        guidance.update(amount_cents=0, status='deferred_billing', basis='deferred_billing',
+            reason=guidance['reason'] + ' Collect no advance while this is resolved; bill the supported responsibility later.',
+            patient_message='No advance payment is requested now because the amount owed is unresolved. This is not a $0 cost estimate or free care; a bill may follow after coverage and charges are established.')
     for line in lines:
         mapped = 'needs mapping' not in line.get('benefit_basis', '')
         terms = (line.get('benefits') or {}) if mapped else {}
@@ -205,7 +214,7 @@ def emg_option(result: dict, rates: list[dict], rules: dict, payload: dict | Non
             'arrival_collection': visit_estimate.arrival_collection(priced, result['benefits'], review),
             'planning_estimate': visit_estimate.planning_estimate(priced, result['benefits'], result.get('identity') or {})}
         guidance = build(candidate, review)
-        return guidance['amount_cents'] if priced.get('complete') or guidance['basis'] == 'out_of_pocket_limit' else None
+        return guidance['amount_cents'] if guidance['status'] != 'deferred_billing' and (priced.get('complete') or guidance['basis'] == 'out_of_pocket_limit') else None
     differences, totals = [], []
     for office in baselines:
         base_amount = amount_for(office)
