@@ -268,6 +268,20 @@ def _appointment_date(resource: dict[str, Any]) -> str:
     return str((resource.get("period") or {}).get("start") or "")[:10]
 
 
+def _is_upcoming_appointment(resource: dict[str, Any], now: datetime) -> bool:
+    """An estimate is for a visit that has not started, even if eCW has not finalized it yet."""
+    if str(resource.get("status") or "").casefold() in {"cancelled", "entered-in-error", "finished", "completed"}:
+        return False
+    start = str((resource.get("period") or {}).get("start") or "")
+    try:
+        started_at = datetime.fromisoformat(start.replace("Z", "+00:00"))
+    except ValueError:
+        return False
+    if started_at.tzinfo is None:
+        started_at = started_at.replace(tzinfo=now.tzinfo)
+    return started_at > now
+
+
 def _coding(resource: Any, kind: str) -> list[str]:
     found: list[str] = []
     def walk(value: Any) -> None:
@@ -582,7 +596,8 @@ async def lookup_patient_and_appointments(profile: dict[str, Any], practice: dic
         async with httpx.AsyncClient(timeout=30, follow_redirects=False, transport=transport) as client:
             token = await _access_token(client, client_id, issuer)
             patient, patient_id, _ = await _patient_for_profile(client, issuer, token, profile)
-            today = datetime.now(ZoneInfo(practice.get("timezone", "America/New_York"))).date()
+            now = datetime.now(ZoneInfo(practice.get("timezone", "America/New_York")))
+            today = now.date()
             encounters, timed_out = await _bounded_search(
                 client, issuer, token, "Encounter",
                 [("patient", patient_id), ("date", f"ge{today}"), ("date", f"le{today + timedelta(days=365)}")],
@@ -598,9 +613,7 @@ async def lookup_patient_and_appointments(profile: dict[str, Any], practice: dic
         appointment_id, start = str(visit.get("id") or ""), str((visit.get("period") or {}).get("start") or "")
         if (_reference(visit.get("subject")) != f"Patient/{patient_id}"
                 or not re.fullmatch(r"[A-Za-z0-9.\-]{1,200}", appointment_id)
-                or not start or _appointment_date(visit) < today.isoformat()):
-            continue
-        if str(visit.get("status") or "").casefold() in {"cancelled", "entered-in-error", "finished", "completed"}:
+                or not _is_upcoming_appointment(visit, now)):
             continue
         appointments.append({"id": appointment_id, "start": start, "status": str(visit.get("status") or "scheduled"),
                              "reason": _visit_context(visit, [], [], []) or ""})
@@ -659,7 +672,8 @@ async def fetch_inputs(profile: dict[str, Any], practice: dict[str, Any], appoin
             token = await _access_token(client, client_id, issuer)
             patient, patient_id, patient_timeout = await _patient_for_profile(client, issuer, token, profile)
             query = {"patient": patient_id}
-            today_date = datetime.now(ZoneInfo(practice.get("timezone", "America/New_York"))).date()
+            now = datetime.now(ZoneInfo(practice.get("timezone", "America/New_York")))
+            today_date = now.date()
             today = today_date.isoformat()
             preferred_date = str(profile.get("ecw_appointment_date") or "")
             if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", preferred_date) or preferred_date < today:
@@ -685,9 +699,7 @@ async def fetch_inputs(profile: dict[str, Any], practice: dict[str, Any], appoin
                 )
             if encounter_timeout:
                 raise EcwBackendError("eClinicalWorks timed out while loading the patient's scheduled encounters. Reload the appointment to retry.")
-            scheduled = [row for row in encounters
-                         if _appointment_date(row) >= today
-                         and str(row.get("status") or "").casefold() not in {"cancelled", "entered-in-error", "finished", "completed"}]
+            scheduled = [row for row in encounters if _is_upcoming_appointment(row, now)]
             next_date = min((_appointment_date(row) for row in scheduled), default="")
             next_visits = [row for row in scheduled if _appointment_date(row) == next_date]
             visit = next_visits[0] if len(next_visits) == 1 else {}
