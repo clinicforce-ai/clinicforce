@@ -7,7 +7,7 @@ from app.insurance import cpt_rules
 
 PRACTICE_ID = 'f378bc13-af1d-4ea5-bfbd-8cd102e42ddc'
 SOURCE = 'NMCT Internal Self Pay Cash Pricelist 2026-09-04.docx'
-SOURCE_SHA256 = 'cd815c5fb846cfe08ed71d6d11f1a9308b69e5a0b327721575f091d188228746'
+SOURCE_SHA256 = '994c2c47fb6ce9b50100134127778525e0dbcd8b90eee170dfbd22e1b230ebb6'
 EFFECTIVE_FROM = '2026-09-04'
 NEW = {str(n) for n in range(99202, 99206)}
 ESTABLISHED = {str(n) for n in range(99212, 99216)}

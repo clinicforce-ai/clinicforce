@@ -8,9 +8,10 @@ const errors = []
 page.on('pageerror', error => errors.push(error.message))
 let role = 'admin'
 let failList = false
-let documents = ['contract', 'fee_schedule', 'self_pay', 'era_835'].map((kind, index) => ({
-  id: `document-${index}`, kind, label: ['Insurance contract', 'Office fee schedule', 'Self-pay rates', 'Final ERA'][index],
-  filename: kind === 'contract' ? 'contract.pdf' : `${kind}.csv`, payer: 'Example payer',
+let documents = ['contract', 'fee_schedule', 'self_pay', 'era_835', 'plan_matrix'].map((kind, index) => ({
+  id: `document-${index}`, kind, label: ['Insurance contract', 'Office fee schedule', 'Self-pay rates', 'Final ERA', 'NMCT payer plan matrix'][index],
+  filename: kind === 'contract' ? 'contract.pdf' : kind === 'plan_matrix' ? 'clinic-plans.xlsx' : kind === 'self_pay' ? 'clinic-cash.docx' : `${kind}.csv`, payer: 'Example payer',
+  estimator_uses: kind === 'self_pay' ? [{ id: 'cash-version', type: 'cash_rates', status: 'active', payer: '', effective_from: '2026-01-01' }] : [],
   created_at: '2026-10-01T10:00:00Z', effective_from: '2026-01-01', effective_to: '2026-12-31',
 }))
 await context.route(url => url.pathname.startsWith('/api/'), async route => {
@@ -41,8 +42,10 @@ const openLibrary = async () => {
 }
 try {
   await openLibrary()
-  await page.getByText('4 documents', { exact: true }).waitFor()
+  await page.getByText('5 documents', { exact: true }).waitFor()
   assert(await page.getByRole('heading', { name: 'Add a clinic document' }).isVisible())
+  assert(await page.getByText('Active in estimator · Clinic self-pay prices', { exact: true }).isVisible())
+  assert.match(await page.locator('main').innerText(), /Clinic fees and self-pay prices are shared across payers/)
   for (const document of documents) {
     const link = page.getByRole('link', { name: `Open ${document.label} in a new tab` })
     assert(await link.isVisible())
@@ -60,7 +63,7 @@ try {
   await page.getByLabel(/^File \*/).setInputFiles({ name: 'contract.pdf', mimeType: 'application/pdf', buffer: Buffer.from('%PDF synthetic') })
   await page.getByRole('button', { name: 'Save clinic document' }).click()
   await page.getByRole('link', { name: 'Open New clinic contract in a new tab' }).waitFor()
-  assert(await page.getByText('5 documents', { exact: true }).isVisible())
+  assert(await page.getByText('6 documents', { exact: true }).isVisible())
   for (const width of [375, 812, 1280]) {
     await page.setViewportSize({ width, height: width === 812 ? 375 : 1000 })
     assert(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), `No horizontal overflow at ${width}px`)
@@ -68,7 +71,7 @@ try {
   }
   role = 'staff'
   await openLibrary()
-  await page.getByText('5 documents', { exact: true }).waitFor()
+  await page.getByText('6 documents', { exact: true }).waitFor()
   assert.equal(await page.getByRole('heading', { name: 'Add a clinic document' }).count(), 0)
   failList = true
   await openLibrary()

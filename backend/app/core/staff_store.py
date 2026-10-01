@@ -83,6 +83,7 @@ def _connection():
                         content_type TEXT NOT NULL, object_key TEXT NOT NULL, created_at TEXT NOT NULL,
                         effective_from TEXT, effective_to TEXT, created_by TEXT NOT NULL REFERENCES staff_members(id)
                     )""")
+                    connection.execute("ALTER TABLE staff_library ADD COLUMN IF NOT EXISTS sha256 TEXT")
                     connection.execute("""CREATE TABLE IF NOT EXISTS staff_deletions (
                         practice_id TEXT NOT NULL, kind TEXT NOT NULL, record_id TEXT NOT NULL,
                         intake_id TEXT, actor_id TEXT NOT NULL, created_at TEXT NOT NULL,
@@ -515,8 +516,8 @@ def get_library(document_id: str, practice_id: str) -> dict | None:
 def create_library(staff: dict, document: dict) -> dict:
     with _connection() as connection:
         row = connection.execute("""INSERT INTO staff_library
-            (id,practice_id,kind,label,payer,filename,content_type,object_key,created_at,effective_from,effective_to,created_by)
-            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING *""",
+            (id,practice_id,kind,label,payer,filename,content_type,object_key,created_at,effective_from,effective_to,created_by,sha256)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING *""",
             (document["id"], staff["practice_id"], document["kind"], document["label"], document["payer"], document["filename"],
-             document["content_type"], document["object_key"], now(), document.get("effective_from"), document.get("effective_to"), staff["id"])).fetchone()
+             document["content_type"], document["object_key"], now(), document.get("effective_from"), document.get("effective_to"), staff["id"], document.get("sha256"))).fetchone()
     return dict(row)

@@ -89,7 +89,7 @@ export const addStaffMember = (member: { username: string; display_name: string;
 export interface StaffLibraryDocument {
   id: string
   practice_id: string
-  kind: 'contract' | 'fee_schedule' | 'self_pay' | 'era_835'
+  kind: 'contract' | 'fee_schedule' | 'self_pay' | 'era_835' | 'plan_matrix'
   label: string
   payer: string
   filename: string
@@ -97,6 +97,7 @@ export interface StaffLibraryDocument {
   created_at: string
   effective_from: string | null
   effective_to: string | null
+  estimator_uses?: Array<{ id: string; type: 'contract_rates' | 'cash_rates'; status: string; payer: string; effective_from: string; effective_to?: string | null; note?: string }>
 }
 
 export interface Era835Summary {

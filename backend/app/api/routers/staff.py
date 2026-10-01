@@ -9,7 +9,6 @@ import mimetypes
 import os
 from datetime import date
 from io import BytesIO
-from io import StringIO
 from pathlib import Path
 from typing import Literal
 from uuid import uuid4
@@ -23,7 +22,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.api.settings import ALLOWED_ORIGINS, CLINICIAN_SHARE_COOKIE, MAX_INSURANCE_CARD_BYTES, MAX_UPLOAD_BYTES, PUBLIC_BASE_URL
-from app.core import clinic_email, object_store, staff_store, staff_deletions
+from app.core import clinic_email, object_store, staff_store, staff_deletions, library_files
 from app.core.patient_store import get_patient_profile
 from app.core.request_address import request_address
 from app.insurance import ecw_backend, era835, golden, v1_sources
@@ -505,11 +504,12 @@ def public_library(document: dict) -> dict:
 async def library(request: Request):
     staff = await require_staff(request)
     documents = await run_in_threadpool(staff_store.list_library, staff["practice_id"])
-    return JSONResponse({"documents": [public_library(value) for value in documents]}, headers=NO_STORE)
+    usage = await run_in_threadpool(library_files.estimator_links, staff['practice_id'], documents)
+    return JSONResponse({"documents": [{**public_library(value), 'estimator_uses': usage['links'][value['id']]} for value in documents]}, headers=NO_STORE)
 
 
 @router.post("/library")
-async def upload_library(request: Request, file: UploadFile = File(...), kind: Literal["contract", "fee_schedule", "self_pay", "era_835"] = Form(...),
+async def upload_library(request: Request, file: UploadFile = File(...), kind: Literal["contract", "fee_schedule", "self_pay", "era_835", "plan_matrix"] = Form(...),
                          label: str = Form(default="", max_length=200), payer: str = Form(default="", max_length=200),
                          effective_from: str = Form(default="", max_length=10), effective_to: str = Form(default="", max_length=10)):
     staff = await require_staff(request)
@@ -536,35 +536,25 @@ async def upload_library(request: Request, file: UploadFile = File(...), kind: L
             era = era835.parse(content)
         except ValueError as exc:
             raise HTTPException(422, str(exc)) from exc
-        content_type, suffix = "application/edi-x12", ".x12"
-    elif filename.lower().endswith(".csv") and kind in {"fee_schedule", "self_pay"}:
+        content_type = "application/edi-x12"
+    elif Path(filename).suffix.lower() in library_files.OFFICE_TYPES:
         try:
-            rows = list(csv.reader(StringIO(content.decode("utf-8-sig")), strict=True))
-            if not 2 <= len(rows) <= 1001 or any(len(row) > 100 for row in rows):
-                raise ValueError
+            await run_in_threadpool(library_files.office_preview, content, filename)
+        except Exception:
+            raise HTTPException(422, "Upload a readable DOCX or XLSX file without macros, up to 30 MB when expanded.") from None
+        content_type = library_files.OFFICE_TYPES[Path(filename).suffix.lower()]
+    elif filename.lower().endswith(".csv"):
+        try:
+            library_files.csv_check(content)
         except (UnicodeError, csv.Error, ValueError):
-            raise HTTPException(422, "Upload a readable CSV with a header and 1–1,000 rows") from None
-        content_type, suffix = "text/csv", ".csv"
-    elif kind != "fee_schedule":
-        content_type, _ = await run_in_threadpool(inspect_file, content, max_pages=100)
-        suffix = {"application/pdf": ".pdf", "image/jpeg": ".jpg", "image/png": ".png"}[content_type]
+            raise HTTPException(422, "Upload a readable CSV with a header and 1–20,000 rows, up to 100 columns.") from None
+        content_type = "text/csv"
     else:
-        raise HTTPException(422, "Upload the clinic fee schedule as a CSV")
-    document_id = str(uuid4())
-    object_key = None
+        content_type, _ = await run_in_threadpool(inspect_file, content, max_pages=100)
     try:
-        object_key = await run_in_threadpool(object_store.put_staff_document, staff["practice_id"], document_id, "source" + suffix, content, content_type)
-        document = await run_in_threadpool(staff_store.create_library, staff, {
-            "id": document_id, "kind": kind, "label": label.strip() or filename, "payer": payer.strip(),
-            "filename": filename, "content_type": content_type, "object_key": object_key,
-            "effective_from": effective_from or None, "effective_to": effective_to or None,
-        })
+        document = await run_in_threadpool(library_files.save, staff, content, filename, content_type, kind,
+                                         label.strip(), payer.strip(), effective_from or None, effective_to or None)
     except Exception:
-        if object_key:
-            try:
-                await run_in_threadpool(object_store.delete_object, object_key)
-            except Exception:
-                pass
         raise HTTPException(503, "The clinic document could not be saved. Please try again.") from None
     return JSONResponse({**public_library(document), **({"era": era} if era else {})}, status_code=201, headers=NO_STORE)
 
@@ -577,10 +567,16 @@ async def library_document(document_id: str, request: Request, preview: bool = F
         raise HTTPException(404, "Clinic document not found")
     content = await run_in_threadpool(object_store.get_object_bytes, document["object_key"])
     content_type = document["content_type"]
+    if preview and content_type in library_files.OFFICE_TYPES.values():
+        try:
+            content = await run_in_threadpool(library_files.office_preview, content, document['filename'])
+        except Exception:
+            raise HTTPException(422, "This document cannot be previewed. Download the original file.") from None
+        content_type = 'text/html'
     if preview and content_type in {"text/csv", "application/edi-x12"}:
         content_type = "text/plain"
     disposition = "inline" if preview else "attachment"
-    return Response(content, media_type=content_type, headers={**NO_STORE, "X-Content-Type-Options": "nosniff", "Content-Disposition": f"{disposition}; filename*=UTF-8''{quote(document['filename'], safe='')}", "Content-Security-Policy": "sandbox"})
+    return Response(content, media_type=content_type, headers={**NO_STORE, "X-Content-Type-Options": "nosniff", "Content-Disposition": f"{disposition}; filename*=UTF-8''{quote(document['filename'], safe='')}", "Content-Security-Policy": "sandbox; default-src 'none'; style-src 'unsafe-inline'"})
 
 
 @router.get("/library/{document_id}/era")
