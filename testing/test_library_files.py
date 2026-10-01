@@ -58,3 +58,50 @@ def test_nmct_cash_source_link_requires_the_clinic_and_exact_file_digest():
         other = library_files.estimator_links('different-clinic', documents)['links']
     assert own['matching'][0]['status'] == 'active'
     assert own['different'] == [] and other['matching'] == []
+
+
+def test_contract_extraction_keeps_each_schedule_and_scanned_exhibit_with_page_evidence():
+    import fitz
+    from PIL import Image
+    from app.core import object_store, staff_store
+    from app.insurance import golden
+    pdf = fitz.open()
+    pdf.new_page().insert_text((40, 50), 'Commercial physician fee schedule\n99203 $100.36 <script>alert(1)</script>')
+    pdf.new_page().insert_text((40, 50), 'Medicare Advantage physician fee schedule\n99205 $241.51')
+    picture = BytesIO()
+    Image.new('RGB', (500, 700), 'white').save(picture, format='PNG')
+    page = pdf.new_page()
+    page.insert_image(page.rect, stream=picture.getvalue())
+    content = pdf.tobytes()
+    document = {'id': 'doc', 'practice_id': 'clinic', 'object_key': 'private-source', 'label': '<img src=x>'}
+    with patch.object(object_store, 'get_object_bytes', return_value=content), \
+         patch.object(staff_store, 'save_library_extraction') as save, \
+         patch.object(golden, '_image_text', return_value='Scanned exhibit: non-physician rates 85%') as ocr:
+        result = library_files.extract_document(document)
+    assert len(result['pages']) == 3 and result['pages'][2]['number'] == 3
+    assert '$100.36' in result['pages'][0]['text'] and '$241.51' not in result['pages'][0]['text']
+    assert '85%' in result['pages'][2]['text']
+    ocr.assert_called_once()
+    save.assert_called_once_with('doc', 'clinic', result)
+    assert 'rates' not in result  # Source text is not an activated allowance.
+    html = library_files.extraction_preview(document, result)
+    assert '<script>' not in html and '<img' not in html and '&lt;script&gt;' in html
+    assert 'document?preview=true#page=3' in html
+    with patch.object(object_store, 'get_object_bytes') as read:
+        assert library_files.extract_document({**document, 'sha256': result['sha256'], 'extraction': result}) == result
+        read.assert_not_called()
+
+
+def test_outlined_body_text_triggers_ocr_but_table_lines_do_not():
+    import fitz
+    from unittest.mock import Mock
+    from app.insurance.v1_sources import outlined_text
+    paths = [{'type': 'f', 'rect': fitz.Rect(40 + col * 8, 80 + line * 30, 46 + col * 8, 90 + line * 30),
+              'items': [('c',)]} for line in range(3) for col in range(8)]
+    page = Mock()
+    page.get_drawings.return_value = paths
+    assert outlined_text(page)
+    page.get_drawings.return_value = [{**path, 'items': [('l',)]} for path in paths]
+    assert not outlined_text(page)
+    page.get_drawings.return_value = paths[:8]
+    assert not outlined_text(page)

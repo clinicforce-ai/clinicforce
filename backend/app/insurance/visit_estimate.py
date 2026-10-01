@@ -392,6 +392,7 @@ def planning_estimate(price: dict, benefits: dict, comparison: dict) -> dict | N
     if all(line.get('units') and line['benefits'].get('active') is True
            and line['benefits'].get('network_status') != 'out_of_network'
            and line['benefits'].get('oop_remaining_cents') == 0
+           and not line['benefits'].get('separate_copay_limit')
            and line['benefits'].get('service_date_matches') is not False
            and not line['benefits'].get('has_secondary')
            and not any('limit' in r.lower() or 'date' in r.lower() for r in line['benefits'].get('review_reasons', []))

@@ -7,7 +7,7 @@ import csv
 import hashlib
 import mimetypes
 import os
-from datetime import date
+from datetime import date, datetime, timedelta, timezone
 from io import BytesIO
 from pathlib import Path
 from typing import Literal
@@ -16,7 +16,7 @@ from urllib.parse import quote
 
 import fitz
 from PIL import Image
-from fastapi import APIRouter, File, Form, HTTPException, Query, Request, Response, UploadFile
+from fastapi import APIRouter, BackgroundTasks, File, Form, HTTPException, Query, Request, Response, UploadFile
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -497,7 +497,7 @@ async def find_patients(body: PatientSearch, request: Request):
 
 
 def public_library(document: dict) -> dict:
-    return {key: value for key, value in document.items() if key not in {"object_key", "created_by"}}
+    return {key: value for key, value in document.items() if key not in {"object_key", "created_by", "extraction"}}
 
 
 @router.get("/library")
@@ -509,7 +509,7 @@ async def library(request: Request):
 
 
 @router.post("/library")
-async def upload_library(request: Request, file: UploadFile = File(...), kind: Literal["contract", "fee_schedule", "self_pay", "era_835", "plan_matrix"] = Form(...),
+async def upload_library(request: Request, background_tasks: BackgroundTasks, file: UploadFile = File(...), kind: Literal["contract", "fee_schedule", "self_pay", "era_835", "plan_matrix"] = Form(...),
                          label: str = Form(default="", max_length=200), payer: str = Form(default="", max_length=200),
                          effective_from: str = Form(default="", max_length=10), effective_to: str = Form(default="", max_length=10)):
     staff = await require_staff(request)
@@ -556,7 +556,40 @@ async def upload_library(request: Request, file: UploadFile = File(...), kind: L
                                          label.strip(), payer.strip(), effective_from or None, effective_to or None)
     except Exception:
         raise HTTPException(503, "The clinic document could not be saved. Please try again.") from None
+    if content_type in {'application/pdf', 'image/png', 'image/jpeg'}:
+        await run_in_threadpool(staff_store.save_library_extraction, document['id'], staff['practice_id'],
+                               {'summary': {'status': 'reading', 'started_at': staff_store.now()}})
+        background_tasks.add_task(library_files.extract_after_upload, document)
     return JSONResponse({**public_library(document), **({"era": era} if era else {})}, status_code=201, headers=NO_STORE)
+
+
+@router.get('/library/{document_id}/text')
+async def library_text(document_id: str, request: Request, background_tasks: BackgroundTasks, retry: bool = False):
+    staff = await require_staff(request)
+    document = await run_in_threadpool(staff_store.get_library, document_id, staff['practice_id'])
+    if not document:
+        raise HTTPException(404, 'Clinic document not found')
+    if document['content_type'] not in {'application/pdf', 'image/png', 'image/jpeg'}:
+        raise HTTPException(422, 'Extracted page text is available for PDFs and images.')
+    headers = {**NO_STORE, 'X-Content-Type-Options': 'nosniff',
+               'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none'"}
+    saved = document.get('extraction') or {}
+    summary = saved.get('summary') or {}
+    if saved.get('version') == library_files.EXTRACTION_VERSION and saved.get('pages') and saved.get('sha256') == document.get('sha256'):
+        return Response(library_files.extraction_preview(document, saved), media_type='text/html', headers=headers)
+    stale = summary.get('started_at') and datetime.fromisoformat(summary['started_at']) < datetime.now(timezone.utc) - timedelta(minutes=30)
+    if (summary.get('status') == 'needs_retry' or stale) and not retry:
+        return Response('<h1>Text extraction needs another attempt</h1><p>The original document is saved. '
+                        'Complete text is not available yet.</p><a href="text?retry=true">Retry extraction</a> · '
+                        '<a href="document?preview=true">Open original</a>', status_code=503, media_type='text/html', headers=headers)
+    if summary.get('status') != 'reading' or stale:
+        await run_in_threadpool(staff_store.save_library_extraction, document['id'], staff['practice_id'],
+                               {'summary': {'status': 'reading', 'started_at': staff_store.now()}})
+        background_tasks.add_task(library_files.extract_after_upload, document)
+    return Response('<!doctype html><meta charset="utf-8"><meta http-equiv="refresh" content="5;url=text">'
+                    '<h1>Reading the document</h1><p>Reading every page and using OCR for scanned or outlined text. '
+                    'This page will refresh when the extracted text is ready.</p><a href="document?preview=true">Open original</a>',
+                    status_code=202, media_type='text/html', headers=headers)
 
 
 @router.get("/library/{document_id}/document")

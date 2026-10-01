@@ -263,6 +263,16 @@ class StaffDatabaseTests(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(download.headers["Content-Disposition"].startswith("attachment;"))
             self.assertEqual(download.headers["Content-Type"].split(";")[0], content_type)
 
+        text_path = f"/api/staff/library/{documents[0]['id']}/text"
+        extracted = await self.client.get(text_path)
+        self.assertEqual(extracted.status_code, 200)
+        self.assertIn('Clinic contract', extracted.text)
+        self.assertIn('default-src', extracted.headers['Content-Security-Policy'])
+        self.assertEqual(extracted.headers['Cache-Control'], 'no-store')
+        summary = (await self.client.get('/api/staff/library')).json()['documents']
+        self.assertTrue(any(doc.get('extraction_summary', {}).get('page_count') == 1 for doc in summary if doc.get('extraction_summary')))
+        self.assertTrue(all('extraction' not in doc for doc in summary))
+
         # Every saved version remains reachable, including beyond the former 200-file cutoff.
         stored = staff_store.get_library(documents[0]["id"], actor["practice_id"])
         for _ in range(198):
@@ -281,9 +291,27 @@ class StaffDatabaseTests(unittest.IsolatedAsyncioTestCase):
         await self.sign_in("other-reader")
         self.assertEqual((await self.client.get("/api/staff/library")).json()["documents"], [])
         self.assertEqual((await self.client.get(path)).status_code, 404)
+        self.assertEqual((await self.client.get(text_path)).status_code, 404)
         self.assertEqual((await self.client.get(path + "?preview=true")).status_code, 404)
         await self.client.post("/api/staff/logout")
         self.assertEqual((await self.client.get(path + "?preview=true")).status_code, 401)
+
+    async def test_failed_contract_extraction_preserves_original_and_can_retry_in_background(self):
+        from app.core import library_files
+        await self.sign_in()
+        original = card_pdf('Contract with a fee schedule')
+        with patch.object(library_files, 'extract_document', side_effect=RuntimeError('OCR unavailable')):
+            response = await self.client.post('/api/staff/library', data={'kind': 'contract'}, files={'file': ('contract.pdf', original, 'application/pdf')})
+        self.assertEqual(response.status_code, 201)
+        path = f"/api/staff/library/{response.json()['id']}"
+        self.assertEqual((await self.client.get(path + '/document')).content, original)
+        self.assertEqual((await self.client.get(path + '/text')).status_code, 503)
+        pending = await self.client.get(path + '/text?retry=true')
+        self.assertEqual(pending.status_code, 202)
+        self.assertIn('refresh', pending.text)
+        ready = await self.client.get(path + '/text')
+        self.assertEqual(ready.status_code, 200)
+        self.assertIn('Contract with a fee schedule', ready.text)
 
     async def test_office_library_originals_and_estimator_imports_stay_connected(self):
         import hashlib

@@ -1,6 +1,7 @@
 """Keep original clinic references and render Office documents without active content."""
 import csv
 import hashlib
+import re
 from html import escape
 from io import BytesIO, StringIO
 from pathlib import Path
@@ -10,6 +11,8 @@ from zipfile import ZipFile
 from lxml import etree
 
 from app.core import object_store, staff_store
+
+EXTRACTION_VERSION = 'clinic-pages-1'
 
 OFFICE_TYPES = {
     '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
@@ -97,6 +100,62 @@ def csv_check(content: bytes) -> None:
     rows = list(csv.reader(StringIO(content.decode('utf-8-sig')), strict=True))
     if not 2 <= len(rows) <= 20001 or any(len(row) > 100 for row in rows):
         raise ValueError('Upload a CSV with a header and 1–20,000 rows, up to 100 columns.')
+
+
+def extract_document(document: dict) -> dict:
+    """Read every page, including scanned exhibits; retain evidence without inventing rates."""
+    from app.insurance import v1_sources
+    saved = document.get('extraction') or {}
+    if saved.get('version') == EXTRACTION_VERSION and saved.get('sha256') == document.get('sha256') and saved.get('pages'):
+        return saved
+    content = object_store.get_object_bytes(document['object_key'])
+    if document.get('sha256') and hashlib.sha256(content).hexdigest() != document['sha256']:
+        raise ValueError('The stored document does not match its saved checksum.')
+    pages = v1_sources.read_pages(content, detect_outlined_text=True)
+    result = {'version': EXTRACTION_VERSION, 'sha256': hashlib.sha256(content).hexdigest(),
+              'pages': [{'number': number, 'text': text} for number, text in pages],
+              'summary': {'status': 'read', 'page_count': len(pages),
+                          'empty_pages': [number for number, text in pages if not text.strip()]}}
+    # Index source passages, not inferred terms. One PDF can contain several
+    # products, provider types, dates and fee schedules on different pages.
+    result['passages'] = []
+    for number, text in pages:
+        lines = text.splitlines()
+        indices = set()
+        for index, line in enumerate(lines):
+            if re.search(r'fee schedule|rate schedule|reimbursement|payment appendix|compensation|effective date|\b99[2-4]\d{2}\b|\d\s*%', line, re.I):
+                indices.update(range(max(0, index - 1), min(len(lines), index + 2)))
+        if indices:
+            result['passages'].append({'page': number, 'text': '\n'.join(lines[index] for index in sorted(indices))})
+    staff_store.save_library_extraction(document['id'], document['practice_id'], result)
+    return result
+
+
+def extract_after_upload(document: dict) -> None:
+    try:
+        extract_document(document)
+    except Exception:
+        # The original remains saved. Opening extracted text retries and reports
+        # the failure instead of silently using a partial document for pricing.
+        staff_store.save_library_extraction(document['id'], document['practice_id'],
+            {'summary': {'status': 'needs_retry'}})
+
+
+def extraction_preview(document: dict, result: dict) -> str:
+    title = escape(document['label'])
+    passages = ''.join(f'<li><a href="#page-{row["page"]}">Page {row["page"]}</a><pre>{escape(row["text"])}</pre></li>'
+                       for row in result['passages'])
+    pages = ''.join(f'<section id="page-{page["number"]}"><h2>Page {page["number"]}</h2>'
+                    f'<a href="document?preview=true#page={page["number"]}" target="_blank" rel="noopener noreferrer">Open original page</a>'
+                    f'<pre>{escape(page["text"])}</pre></section>' for page in result['pages'])
+    return ('<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">'
+            f'<title>{title} · Extracted text</title><style>body{{font:16px/1.5 system-ui;max-width:1100px;margin:32px auto;padding:0 20px;color:#172b4d}}'
+            'pre{white-space:pre-wrap;overflow-wrap:anywhere;font:14px/1.6 monospace}section{border-top:1px solid #ccd5df;margin-top:32px}a{color:#1458a6}</style></head>'
+            f'<body><h1>{title}</h1><p>{len(result["pages"])} pages read. Search this page to find terms across the full document.</p>'
+            '<p>Compare extracted figures with the original page. A contract can contain several schedules. '
+            'Its payer, product, provider type, location and effective date must match the visit before a rate is used. '
+            'Extraction does not activate contract rates.</p>'
+            f'<details><summary>Payment and rate passages</summary><ul>{passages}</ul></details>{pages}</body></html>')
 
 
 def save(staff: dict, content: bytes, filename: str, content_type: str, kind: str,

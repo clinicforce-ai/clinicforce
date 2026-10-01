@@ -9,7 +9,7 @@ page.on('pageerror', error => errors.push(error.message))
 let role = 'admin'
 let failList = false
 let documents = ['contract', 'fee_schedule', 'self_pay', 'era_835', 'plan_matrix'].map((kind, index) => ({
-  id: `document-${index}`, kind, label: ['Insurance contract', 'Office fee schedule', 'Self-pay rates', 'Final ERA', 'NMCT payer plan matrix'][index],
+  id: `document-${index}`, content_type: kind === 'contract' ? 'application/pdf' : 'text/csv', kind, label: ['Insurance contract', 'Office fee schedule', 'Self-pay rates', 'Final ERA', 'NMCT payer plan matrix'][index],
   filename: kind === 'contract' ? 'contract.pdf' : kind === 'plan_matrix' ? 'clinic-plans.xlsx' : kind === 'self_pay' ? 'clinic-cash.docx' : `${kind}.csv`, payer: 'Example payer',
   estimator_uses: kind === 'self_pay' ? [{ id: 'cash-version', type: 'cash_rates', status: 'active', payer: '', effective_from: '2026-01-01' }] : [],
   created_at: '2026-10-01T10:00:00Z', effective_from: '2026-01-01', effective_to: '2026-12-31',
@@ -46,6 +46,7 @@ try {
   assert(await page.getByRole('heading', { name: 'Add a clinic document' }).isVisible())
   assert(await page.getByText('Active in estimator · Clinic self-pay prices', { exact: true }).isVisible())
   assert.match(await page.locator('main').innerText(), /Clinic fees and self-pay prices are shared across payers/)
+  assert.equal(await page.getByRole('link', { name: 'Read extracted text', exact: true }).getAttribute('href'), '/api/staff/library/document-0/text')
   for (const document of documents) {
     const link = page.getByRole('link', { name: `Open ${document.label} in a new tab` })
     assert(await link.isVisible())

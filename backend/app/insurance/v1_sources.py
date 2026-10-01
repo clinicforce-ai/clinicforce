@@ -13,7 +13,23 @@ EXTRACTION_VERSION = "v1-upload-evidence-4"
 MONEY = r"(?<![-\w])\$\s*(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d{2})?(?![\d,.])"
 
 
-def read_pages(content: bytes, max_pages: int = 100) -> list[tuple[int, str]]:
+def outlined_text(page) -> bool:
+    """Spot repeated letter-sized filled curves that PDF text extraction cannot read."""
+    shapes = []
+    # Materialize the native drawing list before walking it. Some producer
+    # generated PDFs have hundreds of vector glyph paths on a page.
+    for path in list(page.get_drawings()):
+        rect = path.get('rect')
+        items = path.get('items') or []
+        if (path.get('type') in {'f', 'fs'} and rect and 1 <= rect.height <= 20
+                and 0 < rect.width < 30 and any(item and item[0] == 'c' for item in list(items))):
+            shapes.append((float(rect.y0), float(rect.height), float(rect.width)))
+    # ponytail: detect body text across several lines; a small isolated logo
+    # stays digital. Original page links remain necessary for visual review.
+    return len(shapes) >= 20 and len({int(y / 20) for y, _, _ in shapes}) >= 3
+
+
+def read_pages(content: bytes, max_pages: int = 100, *, detect_outlined_text: bool = False) -> list[tuple[int, str]]:
     if content.startswith((b"\xff\xd8\xff", b"\x89PNG\r\n\x1a\n")):
         pages = [(1, golden._image_text(content))]
     elif content.startswith(b"%PDF"):
@@ -26,9 +42,23 @@ def read_pages(content: bytes, max_pages: int = 100) -> list[tuple[int, str]]:
                     text = page.get_text(sort=True).strip()
                     # Scanned cards can contain stale/invisible OCR text. Read the
                     # visible rendered page instead of merging two text sources.
-                    scanned = any(span["type"] == 3 or span.get("opacity", 1) == 0 for span in page.get_texttrace())
-                    has_card_image = any(fitz.Rect(item["bbox"]).get_area() >= page.rect.get_area() * .2 for item in page.get_image_info())
+                    # Contract PDFs can contain thousands of vector table
+                    # elements. Their ordinary text is read directly, then the
+                    # contract-specific outlined-text detector decides OCR.
+                    # Avoid PyMuPDF's text-trace iterator for that layout.
+                    scanned = False
+                    if not detect_outlined_text:
+                        for span in list(page.get_texttrace()):
+                            if span.get("type") == 3 or span.get("opacity", 1) == 0:
+                                scanned = True
+                                break
+                    has_card_image = False
+                    for item in list(page.get_image_info()):
+                        if fitz.Rect(item["bbox"]).get_area() >= page.rect.get_area() * .2:
+                            has_card_image = True
+                            break
                     scanned = scanned or (has_card_image and not re.search(r"(?:member|subscriber|name|\bid)\s*[:#]", text, re.I))
+                    scanned = scanned or detect_outlined_text and outlined_text(page)
                     if not text or scanned:
                         scale = min(2, golden.MAX_OCR_DIMENSION / max(page.rect.width, page.rect.height))
                         pixmap = page.get_pixmap(matrix=fitz.Matrix(scale, scale), colorspace=fitz.csRGB, alpha=False)
