@@ -570,13 +570,17 @@ async def upload_library(request: Request, file: UploadFile = File(...), kind: L
 
 
 @router.get("/library/{document_id}/document")
-async def library_document(document_id: str, request: Request):
+async def library_document(document_id: str, request: Request, preview: bool = False):
     staff = await require_staff(request)
     document = await run_in_threadpool(staff_store.get_library, document_id, staff["practice_id"])
     if not document:
         raise HTTPException(404, "Clinic document not found")
     content = await run_in_threadpool(object_store.get_object_bytes, document["object_key"])
-    return Response(content, media_type=document["content_type"], headers={**NO_STORE, "X-Content-Type-Options": "nosniff", "Content-Disposition": "attachment", "Content-Security-Policy": "sandbox"})
+    content_type = document["content_type"]
+    if preview and content_type in {"text/csv", "application/edi-x12"}:
+        content_type = "text/plain"
+    disposition = "inline" if preview else "attachment"
+    return Response(content, media_type=content_type, headers={**NO_STORE, "X-Content-Type-Options": "nosniff", "Content-Disposition": f"{disposition}; filename*=UTF-8''{quote(document['filename'], safe='')}", "Content-Security-Policy": "sandbox"})
 
 
 @router.get("/library/{document_id}/era")
