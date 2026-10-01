@@ -196,8 +196,12 @@ def _load(case_id: str, session: dict) -> dict:
 
 
 def _save(case: dict, session: dict, event: str) -> dict:
+    snapshot = None
+    if case.get('source_mode') == 'commercial_previsit' and case.get('previsit_context'):
+        snapshot = {'result': _previsit_result({**case, 'revision': case.get('revision', 0) + 1}),
+                    'patient': session['intake']['patient']}
     try:
-        saved = store.save_case(case, session["patient_id"], session["share_manifest_id"], event, **_scope(session))
+        saved = store.save_case(case, session["patient_id"], session["share_manifest_id"], event, snapshot=snapshot, **_scope(session))
     except store.StaffCaseConflict as exc:
         raise HTTPException(409, str(exc)) from exc
     if not saved:
@@ -1721,15 +1725,19 @@ async def previsit_financials(case_id: str, request: Request) -> dict:
     case = await run_in_threadpool(store.get_case, case_id, session['patient_id'], session['share_manifest_id'], **_scope(session))
     if not case or case.get('source_mode') != 'commercial_previsit' or not case.get('previsit_context'):
         raise HTTPException(404, 'Saved visit estimate not found.')
+    return _response(await saved_visit_financials(case, session['practice_id']))
+
+
+async def saved_visit_financials(case: dict, practice_id: str) -> dict:
     context = case['previsit_context']
     inputs, source = context['inputs'], context['source']
     billing_npi = (source.get('billing_provider') or {}).get('npi')
-    networks = await run_in_threadpool(commercial_store.list_networks, session['practice_id'])
+    networks = await run_in_threadpool(commercial_store.list_networks, practice_id)
     tins = {row['tin'] for row in networks if row.get('status') == 'verified' and row.get('billing_npi') == billing_npi}
     identity = {**_coverage_snapshot(inputs, source), 'billing_npi': billing_npi,
                 'tin': next(iter(tins)) if len(tins) == 1 else None}
     identity['claim_identifiers'] = await ecw_backend.fetch_claim_identifiers(source)
-    return _response(await stedi_financial.fetch_patient_financials(session['practice_id'], identity))
+    return await stedi_financial.fetch_patient_financials(practice_id, identity)
 
 
 @router.get("/history")

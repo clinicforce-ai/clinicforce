@@ -29,3 +29,15 @@
 .insurance-card-preview figure { margin: 1rem 0; }
 
 .clinical-pagination{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;border-top:1px solid var(--staff-line);padding-top:16px}.clinical-page-buttons{display:flex;align-items:center;flex-wrap:wrap;gap:6px}.staff-workspace .clinical-page-buttons button{min-width:40px;min-height:40px;padding:8px}.staff-workspace .clinical-page-buttons button[aria-current=page]{background:var(--staff-blue);border-color:var(--staff-blue);color:white}
+
+.staff-saved-checks .staff-document { flex-wrap: wrap; }
+.staff-saved-checks .staff-document > span { display: block; min-width: 0; flex: 1 1 220px; }
+.staff-saved-checks .staff-document .staff-text-button { max-width: 100%; text-align: left; overflow-wrap: anywhere; }
+.staff-saved-checks .clinical-table-wrap { max-width: 100%; overflow-x: auto; }
+@media (max-width: 600px) {
+  .staff-saved-checks { padding: 12px; }
+  .staff-saved-checks .visit-context-facts,
+  .staff-saved-checks .patient-policy dl,
+  .staff-saved-checks .visit-provenance dl,
+  .staff-saved-checks .service-evidence dl { grid-template-columns: 1fr; }
+}

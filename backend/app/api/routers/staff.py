@@ -623,10 +623,47 @@ async def saved_insurance_checks(intake_id: str, request: Request):
     from app.insurance import store
     actor = await require_staff(request)
     intake = await owned_intake(intake_id, actor)
-    cases = await run_in_threadpool(store.get_cases, list(intake.get("workflows", {}).values()),
-        intake["patient"]["id"], "", practice_id=actor["practice_id"], intake_id=intake_id) if intake.get("patient") else []
+    records = await run_in_threadpool(store.patient_checks, actor['practice_id'], intake['patient']['id']) if intake.get('patient') else []
     labels = {"commercial_previsit": "Visit estimate", "commercial": "Coded-service estimate",
               "documents": "Document review", "availity": "Connected insurance review"}
-    return JSONResponse({"checks": [{"id": case["id"], "created_at": case["created_at"],
+    return JSONResponse({"checks": [{"id": case["id"], "created_at": case["created_at"], 'intake_id': record['intake_id'],
+        'source_mode': case.get('source_mode'),
+        'service_date': case.get('previsit_context', {}).get('result', {}).get('service_date'),
+        'visit_type': case.get('previsit_context', {}).get('result', {}).get('visit_type'),
         "label": labels.get(case.get("source_mode"), "Insurance check"),
-        "pending": staff_deletions._pending(case)} for case in cases]}, headers=NO_STORE)
+        "pending": staff_deletions._pending(case)} for record in records for case in [record['case']]]}, headers=NO_STORE)
+
+
+@router.get('/intakes/{intake_id}/checks/{case_id}')
+async def saved_insurance_check(intake_id: str, case_id: str, request: Request):
+    from copy import deepcopy
+    from app.insurance import store
+    actor, intake, case = await owned_saved_check(intake_id, case_id, request)
+    patient = intake['patient']
+    snapshots = await run_in_threadpool(store.check_snapshots, case_id, actor['practice_id'], patient['id'], intake_id)
+    if not snapshots:
+        # Older checks retain their stored result. Never recalculate historical
+        # guidance using today's benefits, contract, or eligibility window.
+        result = deepcopy(case['previsit_context']['result'])
+        result.update(check_id=case['id'], revision=case.get('revision', 0))
+        snapshots = [{'result': result, 'patient': patient, 'saved_at': None, 'stage': 'legacy', 'legacy': True}]
+    return JSONResponse({'snapshots': snapshots}, headers=NO_STORE)
+
+
+async def owned_saved_check(intake_id: str, case_id: str, request: Request):
+    from app.insurance import store
+    actor = await require_staff(request)
+    intake = await owned_intake(intake_id, actor)
+    patient = intake.get('patient')
+    case = await run_in_threadpool(store.get_case, case_id, patient['id'], '',
+        practice_id=actor['practice_id'], intake_id=intake_id) if patient else None
+    if not case or case.get('source_mode') != 'commercial_previsit' or not case.get('previsit_context'):
+        raise HTTPException(404, 'Saved visit estimate not found.')
+    return actor, intake, case
+
+
+@router.get('/intakes/{intake_id}/checks/{case_id}/financials')
+async def saved_insurance_check_financials(intake_id: str, case_id: str, request: Request):
+    from app.api.routers.commercial_estimator import saved_visit_financials
+    actor, _, case = await owned_saved_check(intake_id, case_id, request)
+    return JSONResponse(await saved_visit_financials(case, actor['practice_id']), headers=NO_STORE)
