@@ -157,15 +157,23 @@ def build(result: dict, review: dict | None = None) -> dict:
             guidance['reason'] = 'A referral or authorization issue affects the selected care. The collection amount depends on resolving that coverage requirement.'
         elif benefits.get('has_secondary'):
             guidance['reason'] = 'More than one plan may pay for this visit. The collection amount depends on how those plans coordinate benefits.'
+            if (result.get('eligibility_failure') or {}).get('kind') == 'provider_enrollment':
+                guidance['reason'] += ' A current payer check also requires clinic provider enrollment.'
         elif (result.get('eligibility_failure') or {}).get('kind') == 'provider_enrollment':
             guidance['reason'] = 'The clinic provider’s eligibility enrollment with this payer is not verified in Stedi. No paid eligibility request was submitted.'
             actions.append('Clinic administrator: verify or complete provider eligibility enrollment in Stedi to retrieve these benefits.')
+        elif (result.get('recovery') or {}).get('outcome') == 'review_needed':
+            guidance['reason'] = 'Stedi found possible coverage that needs a policy selection and a completed eligibility check.'
         elif result.get('eligibility_failure') or benefits.get('active') is not True:
-            guidance['reason'] = 'Current payer benefits are unavailable, and the remaining information does not establish a collection amount.'
+            failure = result.get('eligibility_failure') or {}
+            guidance['reason'] = failure.get('detail') or next((issue for issue in result.get('issues', []) if issue), None) or 'Current payer benefits are unavailable, and the remaining information does not establish a collection amount.'
         elif benefits.get('service_date_matches') is False:
             guidance['reason'] = 'The payer response covers a different date. Benefits for this appointment are needed to calculate its collection amount.'
         elif price.get('service_issues'):
             guidance['reason'] = 'The selected services do not form a complete billable plan. A collection amount cannot be calculated for this selection.'
+        elif any('remaining individual deductible' in reason.lower() or 'remaining individual out-of-pocket' in reason.lower()
+                 for reason in benefits.get('review_reasons', [])):
+            guidance['reason'] = 'The payer did not return the individual deductible or out-of-pocket balance needed for these services. Check the member-specific benefits or a payer cost estimate.'
         else:
             guidance['reason'] = 'The returned benefits and clinic rates do not establish a collection amount for the selected services.'
         guidance.update(amount_cents=None, status='deferred_billing', basis='deferred_billing',

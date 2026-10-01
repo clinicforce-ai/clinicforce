@@ -25,6 +25,34 @@ def test_missing_evidence_defers_advance_without_asserting_zero_responsibility(r
     assert 'not a $0 cost estimate' in value['patient_message']
 
 
+def test_unresolved_coverage_explains_the_actual_recovery_step():
+    result = {'benefits': {}, 'price_range': {'lines': []},
+              'eligibility_failure': {'kind': 'coverage_identity_missing', 'detail': 'eCW lacks policyholder details.'},
+              'recovery': {'outcome': 'review_needed'}}
+    value = collection_guidance.build(result)
+    assert value['amount_cents'] is None
+    assert 'policy selection' in value['reason']
+    result.pop('recovery')
+    assert 'eCW lacks policyholder details.' in collection_guidance.build(result)['reason']
+
+
+def test_secondary_coverage_retains_provider_enrollment_blocker():
+    result = {'benefits': {'has_secondary': True}, 'eligibility_failure': {'kind': 'provider_enrollment'}}
+    value = collection_guidance.build(result)
+    assert value['amount_cents'] is None
+    assert 'coordinate benefits' in value['reason']
+    assert 'provider enrollment' in value['reason']
+
+
+def test_family_only_accumulators_do_not_become_individual_collection():
+    result = scenario()
+    result['price_range']['complete'] = False
+    result['benefits']['review_reasons'] = ['Confirm the remaining individual deductible that applies to this visit.']
+    value = collection_guidance.build(result)
+    assert value['amount_cents'] is None
+    assert 'individual deductible' in value['reason']
+
+
 def test_case_specific_amount_changes_and_payments_are_deducted_once():
     result = scenario()
     assert collection_guidance.build(result)['amount_cents'] == 3800

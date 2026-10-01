@@ -451,7 +451,9 @@ def _previsit_service_types(inputs: dict) -> list[str]:
             categories.append('2')
         if not categories or re.search(r'\b(?:f/u|fu|follow[ -]?up)\b', reason, re.I):
             categories.append('98')
-    return list(dict.fromkeys(code for code in categories if code)) or ['30']
+    # General medical benefits carry deductible and out-of-pocket accumulators
+    # that a service-specific response may omit. Keep the booked service first.
+    return list(dict.fromkeys([*(code for code in categories if code), '30']))
 
 
 def _eligibility_timing(service_date: str, check_from_date: str | None = None) -> dict | None:
@@ -1051,9 +1053,9 @@ def _previsit_result(case: dict) -> dict:
         result['eligibility_timing'] = timing
     else:
         result.pop('eligibility_timing', None)
-    result['collection_guidance'] = collection_guidance.build(result, case.get('visit_review'))
     if case.get('previsit_discovery'):
         result['recovery'] = stedi_discovery.public_status(case['previsit_discovery'])
+    result['collection_guidance'] = collection_guidance.build(result, case.get('visit_review'))
     return result
 
 
