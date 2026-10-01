@@ -260,7 +260,7 @@ class PrevisitFlowTest(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(result["benefits"]["active"])
         self.assertNotIn("patient_min_cents", result["price_range"])
         sent = client.post.await_args.kwargs["json"]
-        self.assertEqual(sent["encounter"]["services"], [{"system": "STC", "value": "98"}])
+        self.assertEqual(sent["encounter"]["services"], [{"system": "STC", "value": "98"}, {"system": "STC", "value": "30"}])
         if service_date == date.today().isoformat():
             self.assertNotIn("dates", sent["encounter"])
         else:

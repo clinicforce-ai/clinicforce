@@ -27,7 +27,7 @@ def test_biopsy_catalog_and_combined_visit_preserve_all_procedures_and_units():
     plan = cpt_suggester.recommend_visit_plan(inputs, {}, available)
     rows = {r['id']: r for r in available}
     assert [(rows[key]['code'], plan['recommended_units'][key]) for key in plan['recommended_ids']] == [('99213', 1), ('11104', 1), ('11105', 2)]
-    assert api._previsit_service_types(inputs) == ['2', '98']
+    assert api._previsit_service_types(inputs) == ['2', '98', '30']
     assert not nmct_cash.quote([{'code': '11104', 'units': 1}, {'code': '11105', 'units': 2}])['complete']
     inputs['reason'] = 'Skin punch biopsy; 2 sites'
     plan = cpt_suggester.recommend_visit_plan(inputs, {}, available)
@@ -42,8 +42,8 @@ def test_eligibility_window_boundary_and_service_categories():
     today = datetime.now(ZoneInfo('America/New_York')).date()
     assert api._eligibility_timing((today + timedelta(days=7)).isoformat()) is None
     assert api._eligibility_timing((today + timedelta(days=8)).isoformat())['check_from'] == (today + timedelta(days=1)).isoformat()
-    assert api._previsit_service_types({'reason': 'Visit type: EMG Visit'}) == ['73']
-    assert api._previsit_service_types({'lines': [{'code': code, 'service_status': 'scheduled'} for code in ['99213', '95910', '95886']]}) == ['98', '73']
+    assert api._previsit_service_types({'reason': 'Visit type: EMG Visit'}) == ['73', '30']
+    assert api._previsit_service_types({'lines': [{'code': code, 'service_status': 'scheduled'} for code in ['99213', '95910', '95886']]}) == ['98', '73', '30']
 
 
 def test_uhc_suffix_requires_exact_self_demographics_and_never_strips_other_ids():
