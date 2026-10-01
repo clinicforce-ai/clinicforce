@@ -124,6 +124,7 @@ class EcwBackendSourceTests(unittest.IsolatedAsyncioTestCase):
     async def _backend_inputs(self, contained=False):
         today_date = datetime.now(ZoneInfo("America/New_York")).date()
         today = today_date.isoformat()
+        tomorrow = (today_date + timedelta(days=1)).isoformat()
         yesterday = (today_date - timedelta(days=1)).isoformat()
         metadata = {"resourceType": "CapabilityStatement", "rest": [{"security": {"extension": [{
             "url": "http://fhir-registry.smarthealthit.org/StructureDefinition/oauth-uris",
@@ -132,8 +133,8 @@ class EcwBackendSourceTests(unittest.IsolatedAsyncioTestCase):
         resources = {
             "Patient": [{"resourceType": "Patient", "id": "patient-1", "name": [{"use": "official", "given": ["Pat"], "family": "Example"}], "birthDate": "1980-01-01", "gender": "female", "telecom": [{"system": "phone", "value": "555-234-7700"}]}],
             "Coverage": [{"resourceType": "Coverage", "id": "coverage-1", "status": "active", "subscriberId": "MEMBER123", "beneficiary": {"reference": "Patient/patient-1"}, "subscriber": {"reference": "Patient/patient-1"}, "relationship": {"coding": [{"code": "self"}]}, "payor": [{"reference": "Organization/payer-1"}], "period": {"start": "2026-01-01"}, "class": [{"type": {"coding": [{"code": "group"}]}, "value": "GROUP123"}]}],
-            "Encounter": [{"resourceType": "Encounter", "id": "encounter-1", "status": "planned", "subject": {"reference": "Patient/patient-1"}, "period": {"start": f"{today}T14:00:00Z"}, "reasonCode": [{"text": "Neuropathy consultation"}], "participant": [{"individual": {"reference": "Practitioner/provider-1"}}], "location": [{"location": {"reference": "Location/location-1"}}]}],
-            "ServiceRequest": [{"resourceType": "ServiceRequest", "id": "order-1", "encounter": {"reference": "Encounter/encounter-1"}, "occurrenceDateTime": f"{today}T14:00:00Z", "code": {"coding": [{"system": "http://www.ama-assn.org/go/cpt", "code": "99204"}]}, "quantityQuantity": {"value": 1}, "reasonCode": [{"coding": [{"system": "http://hl7.org/fhir/sid/icd-10-cm", "code": "G62.9"}]}]}],
+            "Encounter": [{"resourceType": "Encounter", "id": "encounter-1", "status": "planned", "subject": {"reference": "Patient/patient-1"}, "period": {"start": f"{tomorrow}T14:00:00Z"}, "reasonCode": [{"text": "Neuropathy consultation"}], "participant": [{"individual": {"reference": "Practitioner/provider-1"}}], "location": [{"location": {"reference": "Location/location-1"}}]}],
+            "ServiceRequest": [{"resourceType": "ServiceRequest", "id": "order-1", "encounter": {"reference": "Encounter/encounter-1"}, "occurrenceDateTime": f"{tomorrow}T14:00:00Z", "code": {"coding": [{"system": "http://www.ama-assn.org/go/cpt", "code": "99204"}]}, "quantityQuantity": {"value": 1}, "reasonCode": [{"coding": [{"system": "http://hl7.org/fhir/sid/icd-10-cm", "code": "G62.9"}]}]}],
             "Procedure": [{"resourceType": "Procedure", "id": "procedure-1", "status": "preparation",
                            "encounter": {"reference": "Encounter/encounter-1"},
                            "code": {"coding": [{"system": "http://www.ama-assn.org/go/cpt", "code": "99204", "display": "New patient consultation"}]},
@@ -205,7 +206,7 @@ class EcwBackendSourceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([field['text'] for field in source['appointment_fields']], ['Patient: please explain my treatment plan.'])
         self.assertEqual(source['coverage_records'][0]['member_id'], 'MEMBER123')
         self.assertNotIn('treatment plan', inputs['reason'])
-        self.assertEqual(source["appointment_date"], today)
+        self.assertEqual(source["appointment_date"], tomorrow)
         self.assertEqual(source["_patient_id"], "patient-1")
         self.assertEqual(source["timed_out_resources"], [])
         self.assertEqual(source["visit_type"], "not_returned")
@@ -250,13 +251,13 @@ class EcwBackendSourceTests(unittest.IsolatedAsyncioTestCase):
             await ecw_backend.fetch_inputs(
                 {"patient_first_name": "Pat", "patient_last_name": "Example",
                  "patient_birth_date": "1980-01-01", "ecw_patient_id": "patient-1",
-                 "ecw_appointment_date": today},
+                 "ecw_appointment_date": tomorrow},
                 practice, transport=httpx.MockTransport(handler),
             )
         self.assertTrue(any(request.url.path == "/fhir/Patient/patient-1" for request in requests))
         self.assertFalse(any(request.url.path == "/fhir/Patient" for request in requests))
         encounter_request = next(request for request in requests if request.url.path == "/fhir/Encounter")
-        self.assertEqual(dict(encounter_request.url.params), {"patient": "patient-1", "date": today})
+        self.assertEqual(dict(encounter_request.url.params), {"patient": "patient-1", "date": tomorrow})
 
         requests.clear()
         with patch.dict(os.environ, environment), patch.object(ecw, "ECW_KMS_KEY_ID", "kms-key"), patch.object(ecw, "_client_assertion", return_value="signed-assertion"):
@@ -264,7 +265,7 @@ class EcwBackendSourceTests(unittest.IsolatedAsyncioTestCase):
                 {"patient_first_name": "Pat", "patient_last_name": "Example", "patient_birth_date": "1980-01-01"},
                 practice, "encounter-1", transport=httpx.MockTransport(handler),
             )
-        self.assertEqual(selected_inputs["service_date"], today)
+        self.assertEqual(selected_inputs["service_date"], tomorrow)
         self.assertTrue(any(request.url.path == "/fhir/Encounter/encounter-1" for request in requests))
 
         async def optional_denied(client, client_id, issuer, scopes=ecw_backend.SCOPES):
@@ -279,7 +280,8 @@ class EcwBackendSourceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(partial['appointment_id'], 'encounter-1')
 
     async def test_lists_only_current_selectable_appointments(self):
-        today = datetime.now(ZoneInfo("America/New_York")).date()
+        now = datetime.now(ZoneInfo("America/New_York"))
+        today = now.date()
         tomorrow = (today + timedelta(days=1)).isoformat()
         metadata = {"resourceType": "CapabilityStatement", "rest": [{"security": {"extension": [{
             "url": "http://fhir-registry.smarthealthit.org/StructureDefinition/oauth-uris",
@@ -287,6 +289,8 @@ class EcwBackendSourceTests(unittest.IsolatedAsyncioTestCase):
         }]}}]}
         patient = {"resourceType": "Patient", "id": "patient-1", "name": [{"given": ["Pat"], "family": "Example"}], "birthDate": "1980-01-01"}
         encounters = [
+            {"resourceType": "Encounter", "id": "already-started", "status": "planned", "subject": {"reference": "Patient/patient-1"}, "period": {"start": (now - timedelta(minutes=5)).isoformat()}},
+            {"resourceType": "Encounter", "id": "later-today", "status": "planned", "subject": {"reference": "Patient/patient-1"}, "period": {"start": (now + timedelta(hours=2)).isoformat()}, "reasonCode": [{"text": "Later today"}]},
             {"resourceType": "Encounter", "id": "scheduled", "status": "planned", "subject": {"reference": "Patient/patient-1"}, "period": {"start": f"{tomorrow}T09:00:00Z"}, "reasonCode": [{"text": "Follow-up"}]},
             {"resourceType": "Encounter", "id": "cancelled", "status": "cancelled", "subject": {"reference": "Patient/patient-1"}, "period": {"start": f"{tomorrow}T10:00:00Z"}},
             {"resourceType": "Encounter", "id": "other-patient", "status": "planned", "subject": {"reference": "Patient/patient-2"}, "period": {"start": f"{tomorrow}T11:00:00Z"}},
@@ -306,7 +310,10 @@ class EcwBackendSourceTests(unittest.IsolatedAsyncioTestCase):
                 {"patient_first_name": "Pat", "patient_last_name": "Example", "patient_birth_date": "1980-01-01"},
                 {"timezone": "America/New_York"}, transport=httpx.MockTransport(handler),
             )
-        self.assertEqual(result, [{"id": "scheduled", "start": f"{tomorrow}T09:00:00Z", "status": "planned", "reason": "Reason: Follow-up"}])
+        self.assertEqual(result, [
+            {"id": "later-today", "start": (now + timedelta(hours=2)).isoformat(), "status": "planned", "reason": "Reason: Later today"},
+            {"id": "scheduled", "start": f"{tomorrow}T09:00:00Z", "status": "planned", "reason": "Reason: Follow-up"},
+        ])
 
     async def test_patient_lookup_retries_family_and_birthdate_then_requires_unique_match(self):
         profile = {"patient_first_name": "Pat", "patient_last_name": "Example", "patient_birth_date": "1980-01-01"}
