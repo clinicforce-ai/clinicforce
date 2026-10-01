@@ -130,6 +130,63 @@ class StaffDeletionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((await self.client.delete(self.check_url.replace('intake-a', 'other-intake'))).status_code, 404)
         self.assertEqual(self.deleted, [])
 
+    async def test_saved_history_preserves_results_and_scopes_patient_intakes(self):
+        from app.api.routers import commercial_estimator
+        patient = staff_store.get_intake('intake-a', 'clinic-a')['patient']
+        session = {'patient_id': 'patient-a', 'share_manifest_id': '', 'practice_id': 'clinic-a',
+                   'intake_id': 'intake-a', 'staff': self.actor, 'intake': {'patient': patient}}
+        original = {'service_date': '2025-01-02', 'visit_type': 'established', 'codes': [],
+                    'collection_guidance': {'amount_cents': 4000}, 'appointment_id': 'past-visit'}
+        self.case['previsit_context'] = {'result': original}
+        self.case = store.save_case(self.case, 'patient-a', '', 'legacy-result',
+            practice_id='clinic-a', intake_id='intake-a')
+        changed = {**original, 'collection_guidance': {'amount_cents': 7500}}
+        self.case['previsit_context']['result'] = changed
+        with patch.object(commercial_estimator, '_previsit_result', return_value={**changed, 'revision': self.case['revision'] + 1}):
+            self.case = commercial_estimator._save(self.case, session, 'visit-review')
+        with patch.object(commercial_estimator, '_previsit_result', side_effect=AssertionError('History must never recalculate')):
+            response = await self.client.get(self.check_url)
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.headers['cache-control'], 'no-store')
+        snapshots = response.json()['snapshots']
+        self.assertEqual([row['result']['collection_guidance']['amount_cents'] for row in snapshots], [7500, 4000])
+        self.assertTrue(snapshots[1]['legacy'])
+        self.assertIsNone(snapshots[1]['saved_at'])
+        self.assertNotIn('previsit_raw_object_key', response.text)
+        with self.assertRaises(store.StaffCaseConflict):
+            store.save_case({**self.case, 'revision': 0}, 'patient-a', '', 'stale', snapshot=snapshots[0], practice_id='clinic-a', intake_id='intake-a')
+        self.assertEqual(len(store.check_snapshots(self.case['id'], 'clinic-a', 'patient-a', 'intake-a')), 2)
+        self.assertEqual((await self.client.get(self.check_url.replace('intake-a', 'other-intake'))).status_code, 404)
+        with patch.object(staff_store, 'get_session', return_value={**self.actor, 'practice_id': 'clinic-b'}):
+            self.assertEqual((await self.client.get(self.check_url)).status_code, 404)
+        with patch.object(staff_store, 'get_session', return_value=None):
+            self.assertEqual((await self.client.get(self.check_url)).status_code, 401)
+        with staff_store._connection() as db:
+            db.execute("UPDATE staff_intakes SET patient_id='patient-a' WHERE id='other-intake'")
+        followup = store.create_case('patient-a', '', 'followup', {'source_mode': 'commercial_previsit',
+            'previsit_context': {'result': {**original, 'service_date': '2025-02-03'}}},
+            practice_id='clinic-a', intake_id='other-intake', workflow_slot='commercial-previsit:followup')
+        listing = (await self.client.get('/api/staff/intakes/intake-a/checks')).json()['checks']
+        self.assertEqual({row['id'] for row in listing}, {self.case['id'], followup['id']})
+        self.assertEqual({row['intake_id'] for row in listing}, {'intake-a', 'other-intake'})
+        with staff_store._connection() as db:
+            db.execute("UPDATE staff_intakes SET patient_id='patient-b' WHERE id='other-intake'")
+        listing = (await self.client.get('/api/staff/intakes/intake-a/checks')).json()['checks']
+        self.assertEqual([row['id'] for row in listing], [self.case['id']])
+
+    async def test_saved_claim_comparison_uses_the_owned_case(self):
+        from unittest.mock import AsyncMock
+        from app.api.routers import commercial_estimator
+        self.case['previsit_context'] = {'result': {'service_date': '2025-01-02'}}
+        self.case = store.save_case(self.case, 'patient-a', '', 'saved', practice_id='clinic-a', intake_id='intake-a')
+        with patch.object(commercial_estimator, 'saved_visit_financials', AsyncMock(return_value={'lines': []})) as read:
+            response = await self.client.get(self.check_url + '/financials')
+            self.assertEqual(response.status_code, 200, response.text)
+            self.assertEqual(read.call_args.args, (self.case, 'clinic-a'))
+            response = await self.client.get(self.check_url.replace('intake-a', 'other-intake') + '/financials')
+            self.assertEqual(response.status_code, 404)
+            self.assertEqual(read.call_count, 1)
+
     async def test_unresolved_payer_request_cannot_be_erased_then_resubmitted(self):
         for state in ('pending', 'indeterminate'):
             self.case = store.save_case({**self.case, 'previsit': {'request_state': state}}, 'patient-a', '', 'pending',

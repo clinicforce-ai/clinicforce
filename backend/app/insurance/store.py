@@ -147,7 +147,7 @@ def get_cases(case_ids: list[str], patient_id: str, share_manifest_id: str, **sc
     return [json.loads(row["workflow_json"]) for row in rows]
 
 
-def save_case(case: dict[str, Any], patient_id: str, share_manifest_id: str, event: str, **scope) -> dict[str, Any] | None:
+def save_case(case: dict[str, Any], patient_id: str, share_manifest_id: str, event: str, *, snapshot: dict | None = None, **scope) -> dict[str, Any] | None:
     now = _now()
     owner, values = _owner(patient_id, share_manifest_id, **scope)
     revision = case.get("revision", 0)
@@ -158,6 +158,26 @@ def save_case(case: dict[str, Any], patient_id: str, share_manifest_id: str, eve
             if not connection.execute("SELECT 1 FROM staff_intakes WHERE id=%s AND practice_id=%s FOR UPDATE",
                                       (scope["intake_id"], scope["practice_id"])).fetchone():
                 return None
+        if snapshot is not None:
+            prior = connection.execute(
+                f"SELECT workflow_json FROM insurance_cases WHERE id=%s AND {owner} FOR UPDATE",
+                (case['id'], *values),
+            ).fetchone()
+            if not prior:
+                return None
+            previous = json.loads(prior['workflow_json'])
+            if previous.get('revision', 0) != revision:
+                raise StaffCaseConflict("This review changed in another request. Reopen the review before continuing.")
+            if previous.get('previsit_context', {}).get('result') and not connection.execute(
+                "SELECT 1 FROM insurance_case_events WHERE case_id=%s AND snapshot_json IS NOT NULL LIMIT 1", (case['id'],)
+            ).fetchone():
+                # Preserve the last pre-upgrade result before its first update.
+                legacy = {'result': {**previous['previsit_context']['result'], 'check_id': case['id'], 'revision': revision},
+                          'patient': snapshot['patient'], 'legacy': True, 'saved_at': None}
+                connection.execute(
+                    "INSERT INTO insurance_case_events (case_id,stage,created_at,snapshot_json) VALUES (%s,%s,%s,%s)",
+                    (case['id'], 'legacy', now.isoformat(), json.dumps(legacy)),
+                )
         updated = connection.execute(
             f"""UPDATE insurance_cases SET workflow_json = %s WHERE id = %s AND {owner}
                 AND COALESCE(workflow_json::jsonb ->> 'revision', '0') = %s""",
@@ -168,11 +188,35 @@ def save_case(case: dict[str, Any], patient_id: str, share_manifest_id: str, eve
                 raise StaffCaseConflict("This review changed in another request. Reopen the review before continuing.")
             return None
         connection.execute(
-            "INSERT INTO insurance_case_events (case_id, stage, created_at) VALUES (%s, %s, %s)",
-            (case["id"], event[:80], now.isoformat()),
+            "INSERT INTO insurance_case_events (case_id, stage, created_at, snapshot_json) VALUES (%s, %s, %s, %s)",
+            (case["id"], event[:80], now.isoformat(), json.dumps(snapshot) if snapshot is not None else None),
         )
         _staff_progress(connection, value, event, scope, now.isoformat())
     return value
+
+
+def patient_checks(practice_id: str, patient_id: str) -> list[dict]:
+    """Only explicitly linked clinic patients share history across intakes."""
+    with _connection() as connection:
+        rows = connection.execute(
+            """SELECT c.workflow_json,c.intake_id FROM insurance_cases c
+               JOIN staff_intakes i ON i.id=c.intake_id AND i.practice_id=c.practice_id
+               WHERE c.practice_id=%s AND c.practice_patient_id=%s AND i.patient_id=%s
+               ORDER BY c.created_at DESC,c.id""", (practice_id, patient_id, patient_id),
+        ).fetchall()
+    return [{"case": json.loads(row["workflow_json"]), "intake_id": row["intake_id"]} for row in rows]
+
+
+def check_snapshots(case_id: str, practice_id: str, patient_id: str, intake_id: str) -> list[dict]:
+    with _connection() as connection:
+        rows = connection.execute(
+            """SELECT e.created_at,e.stage,e.snapshot_json FROM insurance_case_events e
+               JOIN insurance_cases c ON c.id=e.case_id
+               WHERE c.id=%s AND c.practice_id=%s AND c.practice_patient_id=%s AND c.intake_id=%s
+                 AND e.snapshot_json IS NOT NULL ORDER BY e.id DESC""",
+            (case_id, practice_id, patient_id, intake_id),
+        ).fetchall()
+    return [{"saved_at": row["created_at"], "stage": row["stage"], **json.loads(row["snapshot_json"])} for row in rows]
 
 
 def save_v2(case: dict[str, Any], patient_id: str, share_manifest_id: str, event: str, revision: int, **scope) -> dict[str, Any] | None:

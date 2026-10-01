@@ -287,6 +287,7 @@ def _initialize_schema(connection: psycopg.Connection[Any]) -> None:
         cursor.execute("""CREATE TABLE IF NOT EXISTS insurance_case_events (
             id BIGSERIAL PRIMARY KEY, case_id TEXT NOT NULL, stage TEXT NOT NULL, created_at TEXT NOT NULL
         )""")
+        cursor.execute("ALTER TABLE insurance_case_events ADD COLUMN IF NOT EXISTS snapshot_json TEXT")
         # Commercial-estimator configuration is practice-scoped.  No member IDs,
         # card images, or raw payer responses belong in these relational records.
         cursor.execute("""CREATE TABLE IF NOT EXISTS practice_cash_schedules (
