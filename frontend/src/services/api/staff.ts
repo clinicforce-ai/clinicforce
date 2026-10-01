@@ -167,7 +167,7 @@ export const getClinicalPatients = () => request<ClinicalDashboard>('/api/staff/
 
 export type PatientAppointment = {
   id: string; appointment_id?: string; start: string | null; date?: string; status: string;
-  reason: string; visit_type?: string; from_ecw: boolean; checks: SavedInsuranceCheck[];
+  reason: string | null; visit_type?: string; from_ecw: boolean; checks: SavedInsuranceCheck[];
 }
 export type PatientAppointmentHistory = { appointments: PatientAppointment[]; ecw_status: 'not_requested' | 'not_linked' | 'complete' | 'incomplete'; ecw_account_number?: string | null }
 export const getPatientAppointments = (patientId: string, includeEcw = false) => request<PatientAppointmentHistory>(`/api/staff/patients/${encodeURIComponent(patientId)}/appointments?include_ecw=${includeEcw}`)
