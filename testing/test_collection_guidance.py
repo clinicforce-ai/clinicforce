@@ -21,7 +21,7 @@ def scenario(amount=3800):
     {'benefits': {'active': True}, 'price_range': {'lines': [], 'mode': 'options'}}])
 def test_missing_evidence_defers_advance_without_asserting_zero_responsibility(result):
     value = collection_guidance.build(result)
-    assert value['amount_cents'] == 0 and value['status'] == 'deferred_billing'
+    assert value['amount_cents'] is None and value['status'] == 'deferred_billing'
     assert 'not a $0 cost estimate' in value['patient_message']
 
 
@@ -41,7 +41,7 @@ def test_contradictions_override_cached_numeric_amount(change):
     result['arrival_collection'] = {'amount_cents': 3800}
     result['benefits'].update(change)
     value = collection_guidance.build(result)
-    assert value['amount_cents'] == 0 and value['status'] == 'deferred_billing'
+    assert value['amount_cents'] is None and value['status'] == 'deferred_billing'
 
 
 @pytest.mark.parametrize('kind', ['referral', 'authorization'])
@@ -50,7 +50,7 @@ def test_required_or_adverse_approval_does_not_become_an_assumed_approval(kind, 
     result = scenario()
     result['price_range']['lines'][0]['benefits']['requirements'][kind] = requirement
     value = collection_guidance.build(result)
-    assert value['amount_cents'] == 0 and value['status'] == 'deferred_billing'
+    assert value['amount_cents'] is None and value['status'] == 'deferred_billing'
     assert value['patient_actions']
 
 
@@ -189,7 +189,7 @@ def test_missing_deductible_can_use_the_actual_copay_as_partial_advance_with_exp
     terms.update(copay_cents=6300, copay_period='DAY', coinsurance_percent='0', oop_remaining_cents=100000)
     value = collection_guidance.build(result)
     assert value['amount_cents'] == 6300 and value['basis'] == 'office_copay'
-    assert any('no applicable deductible balance' in text for text in value['assumptions'])
+    assert any('did not establish whether the deductible applies' in text for text in value['assumptions'])
     terms['copay_cents'] = 2900
     assert collection_guidance.build(result)['amount_cents'] == 2900
     result['price_range']['lines'][0]['allowed_cents'] = 2100
@@ -201,7 +201,7 @@ def test_missing_deductible_can_use_the_actual_copay_as_partial_advance_with_exp
 def test_saved_legacy_default_zero_is_rebuilt_from_evidence():
     result = {'benefits': {}, 'collection_guidance': {'amount_cents': 0, 'status': 'deferred'}}
     value = api._previsit_result({'previsit_context': {'result': result}})
-    assert value['collection_guidance']['amount_cents'] == 0
+    assert value['collection_guidance']['amount_cents'] is None
     assert value['collection_guidance']['basis'] == 'deferred_billing'
 
 

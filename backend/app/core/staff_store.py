@@ -84,6 +84,7 @@ def _connection():
                         effective_from TEXT, effective_to TEXT, created_by TEXT NOT NULL REFERENCES staff_members(id)
                     )""")
                     connection.execute("ALTER TABLE staff_library ADD COLUMN IF NOT EXISTS sha256 TEXT")
+                    connection.execute("ALTER TABLE staff_library ADD COLUMN IF NOT EXISTS extraction JSONB")
                     connection.execute("""CREATE TABLE IF NOT EXISTS staff_deletions (
                         practice_id TEXT NOT NULL, kind TEXT NOT NULL, record_id TEXT NOT NULL,
                         intake_id TEXT, actor_id TEXT NOT NULL, created_at TEXT NOT NULL,
@@ -503,7 +504,9 @@ def add_event(intake_id: str, practice_id: str, action: str, actor: dict | str |
 
 def list_library(practice_id: str) -> list[dict]:
     with _connection() as connection:
-        rows = connection.execute("SELECT * FROM staff_library WHERE practice_id = %s ORDER BY created_at DESC, id DESC", (practice_id,)).fetchall()
+        rows = connection.execute("""SELECT id,practice_id,kind,label,payer,filename,content_type,object_key,
+            created_at,effective_from,effective_to,created_by,sha256,extraction->'summary' AS extraction_summary
+            FROM staff_library WHERE practice_id = %s ORDER BY created_at DESC, id DESC""", (practice_id,)).fetchall()
     return [dict(row) for row in rows]
 
 
@@ -521,3 +524,9 @@ def create_library(staff: dict, document: dict) -> dict:
             (document["id"], staff["practice_id"], document["kind"], document["label"], document["payer"], document["filename"],
              document["content_type"], document["object_key"], now(), document.get("effective_from"), document.get("effective_to"), staff["id"], document.get("sha256"))).fetchone()
     return dict(row)
+
+
+def save_library_extraction(document_id: str, practice_id: str, extraction: dict) -> None:
+    with _connection() as connection:
+        connection.execute('UPDATE staff_library SET extraction=%s::jsonb, sha256=COALESCE(sha256,%s) WHERE id=%s AND practice_id=%s',
+                           (json.dumps(extraction), extraction.get('sha256'), document_id, practice_id))

@@ -150,7 +150,7 @@ class PrevisitFlowTest(unittest.IsolatedAsyncioTestCase):
                 return
             if enrollment_missing:
                 self.assertEqual(result['eligibility_failure']['kind'], 'provider_enrollment')
-                self.assertEqual(result['collection_guidance']['amount_cents'], 0)
+                self.assertIsNone(result['collection_guidance']['amount_cents'])
                 self.assertEqual(case['previsit']['request_state'], 'not_requested')
                 client.post.assert_not_awaited()
                 return

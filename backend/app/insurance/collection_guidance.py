@@ -97,19 +97,24 @@ def build(result: dict, review: dict | None = None) -> dict:
                 and (len(office) == 1 or price.get('mode') == 'alternatives')
                 and all(line.get('units') == 1 for line in office)
                 and all(t.get('active') is True and t.get('copay_cents') is not None
-                        and t.get('copay_period') in {'VISIT', '27', 'DAY', '7', 'SERVICE', 'PROCEDURE'}
-                        and (t.get('deductible_applies') is False or t.get('deductible_remaining_cents') == 0
-                             or t.get('deductible_applies') is not True and t.get('deductible_remaining_cents') is None)
+                        and t.get('copay_period') in {'', 'VISIT', '27', 'DAY', '7', 'SERVICE', 'PROCEDURE'}
+                        and (t.get('deductible_applies') is not True or t.get('deductible_remaining_cents') == 0)
+                        and (not t.get('separate_copay_limit') or t.get('copay_remaining_cents') is not None)
                         and t.get('coinsurance_percent') in {None, '0', '0.0', '0.00'}
                         and t.get('cost_share') not in {'coinsurance', 'cumulative'}
                         and not any(any(word in r.lower() for word in ('conditional', 'limit', 'date', 'identity', 'evidence'))
                                     for r in t.get('review_reasons', [])) for t in terms)
                 and len({t['copay_cents'] for t in terms}) == 1):
-            amount = min(terms[0]['copay_cents'], terms[0].get('oop_remaining_cents') if terms[0].get('oop_remaining_cents') is not None else terms[0]['copay_cents'])
+            cap = terms[0].get('copay_remaining_cents') if terms[0].get('separate_copay_limit') else terms[0].get('oop_remaining_cents')
+            amount = min(terms[0]['copay_cents'], cap if cap is not None else terms[0]['copay_cents'])
             if all(line.get('allowed_cents') is not None for line in office):
                 amount = min(amount, min(line['allowed_cents'] for line in office))
-            if any(t.get('deductible_remaining_cents') is None and t.get('deductible_applies') is not False for t in terms):
-                assumptions.append('The payer returned a fixed office copay but no applicable deductible balance. This advance includes the copay only; any deductible responsibility remains for the claim.')
+            if any(t.get('deductible_remaining_cents') != 0 and t.get('deductible_applies') is not False for t in terms):
+                assumptions.append('The payer returned a fixed office copay but did not establish whether the deductible applies to it. This advance includes the copay only; additional deductible responsibility may follow the claim.')
+            if any(t.get('separate_copay_limit') for t in terms):
+                assumptions.append('The payer reports a separate remaining copay maximum. The office copay uses that balance, while the general out-of-pocket balance remains separate.')
+            if any(not t.get('copay_period') for t in terms):
+                assumptions.append('The payer did not specify a copay period. This advance applies one copay to the single office consultation.')
             if benefits.get('network_status') != 'in_network' and not result.get('pricing_assumptions') and not all(t.get('network_independent') for t in terms):
                 assumptions.append('This provisional office advance uses the returned in-network specialist copay. Provider participation is unverified; confirm it before care. Final responsibility may differ.')
             guidance.update(status='estimated', basis='office_copay',
@@ -163,9 +168,9 @@ def build(result: dict, review: dict | None = None) -> dict:
             guidance['reason'] = 'The selected services do not form a complete billable plan. A collection amount cannot be calculated for this selection.'
         else:
             guidance['reason'] = 'The returned benefits and clinic rates do not establish a collection amount for the selected services.'
-        guidance.update(amount_cents=0, status='deferred_billing', basis='deferred_billing',
-            reason=guidance['reason'] + ' Collect no advance while this is resolved; bill the supported responsibility later.',
-            patient_message='No advance payment is requested now because the amount owed is unresolved. This is not a $0 cost estimate or free care; a bill may follow after coverage and charges are established.')
+        guidance.update(amount_cents=None, status='deferred_billing', basis='deferred_billing',
+            reason=guidance['reason'] + ' Verify the missing information before quoting a collection amount.',
+            patient_message='The amount is not yet determined. Missing information is not a $0 cost estimate or free care; payment may be due once benefits and charges are verified.')
     for line in lines:
         mapped = 'needs mapping' not in line.get('benefit_basis', '')
         terms = (line.get('benefits') or {}) if mapped else {}
@@ -177,6 +182,8 @@ def build(result: dict, review: dict | None = None) -> dict:
             'deductible_remaining_cents': terms.get('deductible_remaining_cents'),
             'selected_benefit_ids': list(dict.fromkeys([*(terms.get('selected_benefit_ids') or []),
                 *[terms[key] for key in ('deductible_id', 'oop_id') if terms.get(key)]]))})
+        guidance['services'][-1]['selected_benefit_ids'].extend(terms.get('copay_limit_ids') or [])
+        guidance['services'][-1]['selected_benefit_ids'].extend(terms.get('deductible_waiver_ids') or [])
         if guidance['basis'] == 'out_of_pocket_limit':
             guidance['services'][-1]['patient_cents'] = 0
     guidance['assumptions'] = list(dict.fromkeys(assumptions))

@@ -75,14 +75,14 @@ def test_invalid_payer_financial_value_is_an_explicit_error_not_a_missing_benefi
     terms = commercial.normalize_stedi_271(payload, '98', True)
     assert terms['source_errors'][0]['path'] == 'benefitsInformation[1].benefitAmount'
     result = collection_guidance.build({'benefits': terms, 'arrival_collection': {'amount_cents': 5000}})
-    assert result['amount_cents'] == 0 and result['status'] == 'deferred_billing'
+    assert result['amount_cents'] is None and result['status'] == 'deferred_billing'
     assert 'Calculation/source error' in result['reason']
 
 
 @pytest.mark.parametrize('value', [-1, float('nan'), True, '40'])
 def test_invalid_calculated_amount_cannot_be_clamped_to_an_apparently_valid_zero(value):
     result = collection_guidance.build({'benefits': {'active': True}, 'arrival_collection': {'amount_cents': value}})
-    assert result['amount_cents'] == 0
+    assert result['amount_cents'] is None
     assert result['source_errors'][0]['kind'] == 'invalid_calculation'
     assert 'Calculation/source error' in result['reason']
 

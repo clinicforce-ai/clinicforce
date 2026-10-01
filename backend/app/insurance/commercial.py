@@ -368,12 +368,12 @@ def normalize_stedi_271(payload: dict[str, Any], service_type_code: str, provide
         if 'BQ' in priorities:
             # Neurology is specialist care. Keep generic and specialist rows,
             # excluding rows explicitly limited to primary care.
-            entries = [row for row in entries if not any(re.search(r'\b(?:primary care|PCP)\b', note, re.I)
-                and not re.search(r'\bspecialist\b', note, re.I)
-                for note in _benefit_notes([row.get('messages'), row.get('additionalInformation')]))]
+            entries = [row for row in entries if not (
+                re.search(r'\b(?:primary care|PCP)\b', ' '.join(_benefit_notes([row.get('messages'), row.get('additionalInformation')])), re.I)
+                and not re.search(r'\bspecialist\b', ' '.join(_benefit_notes([row.get('messages'), row.get('additionalInformation')])), re.I))]
             for kind in ('A', 'B'):
                 specialist = [row for row in entries if row.get('code') == kind and any(
-                    re.search(r'\bspecialist\b', note, re.I)
+                    re.search(r'\bspecialist\b|\bprovider role other\b', note, re.I)
                     for note in _benefit_notes([row.get('messages'), row.get('additionalInformation')]))]
                 if place_of_service and any(row.get('placesOfService') for row in specialist):
                     specialist = [row for row in specialist if row.get('placesOfService')]
@@ -440,7 +440,8 @@ def normalize_stedi_271(payload: dict[str, Any], service_type_code: str, provide
         # Specific requested STC wins; general medical (30) is an allowed
         # fallback only when no specific counterpart exists.
         specificity = 3 if _procedure(row) and _procedure(row) == procedure_code else 2 if service_type_code in service_types else 1 if "30" in service_types else 0
-        if (level not in {"INDIVIDUAL", "IND"} and not (not level and row.get("code") in {"A", "B"})) or indicator not in {"Y", "YES", "IN_NETWORK", "IN_AND_OUT_OF_NETWORK", "W"} or not specificity:
+        individual = level in {"INDIVIDUAL", "IND"} or (level in {"EMP", "EMPLOYEE_ONLY"} and not payload.get('dependent'))
+        if (not individual and not (not level and row.get("code") in {"A", "B"})) or indicator not in {"Y", "YES", "IN_NETWORK", "IN_AND_OUT_OF_NETWORK", "W"} or not specificity:
             continue
         wanted.append((specificity, row))
     def pick(code: str, remaining: bool = False) -> dict[str, Any] | None:
@@ -516,9 +517,37 @@ def normalize_stedi_271(payload: dict[str, Any], service_type_code: str, provide
         coinsurance_percent = None
     other_active_coverage = other_active_coverage or any(row.get('code') == 'R' for row in relevant)
     multiple_plans = len({row["plan_index"] for row in entries if "plan_index" in row and row.get("code") in {"status", "A", "B", "C", "G"}}) > 1
-    limitations = any(str(row.get("code") or "").upper() in {"F", "Y"} for row in relevant)
+    # Some plans track office copays separately from the general OOP balance.
+    # Retain both buckets: a met general maximum must not erase that copay.
+    copay_caps = [(score, row) for score, row in wanted if row.get('code') == 'F'
+                  and str(row.get('timeQualifierCode') or row.get('timeQualifier') or '').upper() in {'29', 'REMAINING'}
+                  and any(re.fullmatch(r'COPAY MAX(?:IMUM)?', note.strip(), re.I)
+                          for note in notes([row.get('messages'), row.get('additionalInformation')]))]
+    cap_rows = [row for score, row in copay_caps if score == max(s for s, _ in copay_caps)] if copay_caps else []
+    cap_values = {_stedi_cents(row.get('benefitAmount')) for row in cap_rows}
+    copay_cap = next(iter(cap_values)) if len(cap_values) == 1 and None not in cap_values else None
+    waived_rows = [row for _, row in wanted if office and row.get('code') == 'F' and any(
+        re.fullmatch(r'(?:Specialist Visit or Evaluation|(?:Specialist )?Office Visit)/Plan Ded Waived', note.strip(), re.I)
+        for note in notes([row.get('messages'), row.get('additionalInformation')]))]
+    def unresolved_limit(row):
+        if str(row.get('code') or '').upper() not in {'F', 'Y'}:
+            return False
+        labels = notes([row.get('messages'), row.get('additionalInformation')])
+        # General administrative messages do not establish a service limit.
+        if not row.get('benefitAmount') and not row.get('quantity') and all(
+            re.search(r'participating in this patient|may require precert|Plan includes NAP|^SELF-FUNDED$|^All Other In-Network Providers$|/Plan Ded Waived$', note, re.I)
+            for note in labels) and labels:
+            return False
+        if copay_cap is not None and row.get('code') == 'F' and row.get('benefitAmount') is not None:
+            # Annual/remaining copay maxima come as individual and family rows.
+            # Only recognize the annual row when paired with an explicit cap.
+            return not (row in cap_rows or any(re.fullmatch(r'COPAY MAX(?:IMUM)?', note.strip(), re.I) for note in labels)
+                        or str(row.get('timeQualifierCode') or row.get('timeQualifier') or '').upper() in {'23', 'CALENDAR_YEAR'}
+                        and labels == ['All Other In-Network Providers'])
+        return True
+    limitations = any(unresolved_limit(row) for row in relevant)
     conditional_terms = selected_ids is None and any(re.search(r"\b(first|after|before|beginning|visits?|waived|unless|only|limit|specialist|primary care)\b", note, re.IGNORECASE) for row in (copay, coinsurance) if row for note in notes([row.get("messages"), row.get("additionalInformation")])
-        if not all(re.fullmatch(r"(?:(?:specialist |physician )?office visits?(?: (?:specialist|primary care(?: prov(?:ider)?)?))?|phy visit\s*-\s*specialist|(?:PCP AND )?BenefitTier Non Tier 1 Specialist|diagnostic medical procedure)(?:\s*-\s*professional)?", label.strip(), re.I)
+        if not all(re.fullmatch(r"(?:(?:specialist |physician )?office visits?(?: (?:specialist|primary care(?: prov(?:ider)?)?))?|(?:Specialist|Primary Care) Visit or Evaluation|GYN Visit|phy visit\s*-\s*specialist|(?:PCP AND )?BenefitTier Non Tier 1 Specialist|diagnostic medical procedure)(?:\s*-\s*professional)?", label.strip(), re.I)
                    for label in note.split(';') if label.strip()))
     source_errors = []
     for _, row in wanted:
@@ -568,6 +597,10 @@ def normalize_stedi_271(payload: dict[str, Any], service_type_code: str, provide
             "deductible_id": deductible.get("evidence_path") if deductible else None,
             "oop_id": oop.get("evidence_path") if oop else None,
             "copay_id": copay.get("evidence_path") if copay else None,
+            "copay_remaining_cents": copay_cap,
+            "copay_limit_ids": [row['evidence_path'] for row in cap_rows],
+            "separate_copay_limit": bool(cap_rows),
+            **({'deductible_applies': False, 'deductible_waiver_ids': [row['evidence_path'] for row in waived_rows]} if waived_rows else {}),
             "authorization_basis": authorization_basis,
             "benefit_assumptions": ['The returned non-Tier-1 specialist benefit is used; the provider tier has not been confirmed.'] if any(
                 'non tier 1 specialist' in note.casefold() for row in (copay, coinsurance) if row
@@ -597,6 +630,8 @@ def estimate(lines: list[dict[str, Any]], benefits: dict[str, Any], rules: dict[
     if benefits.get("requires_review"):
         raise CommercialError(" ".join(benefits.get("review_reasons") or
                                       ["The selected benefits contain an unresolved limit, authorization, referral, or payer review."]))
+    if benefits.get('separate_copay_limit'):
+        raise CommercialError('Separate copay and general out-of-pocket limits require a scoped copay advance or plan review.')
     if _benefit_cents(benefits, 'oop_remaining_cents') == 0:
         # Covered in-network services cannot exceed an exhausted patient cap.
         # These calculation inputs do not overwrite the returned benefit facts.

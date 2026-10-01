@@ -96,7 +96,7 @@ def test_secondary_policy_can_be_queried_without_claiming_it_is_only_coverage():
         api.stedi_request_body({'stedi_payer_id': 'payer'}, provider, coverage, '2026-10-01', '98')
     r = {'benefits': {'active': True, 'has_secondary': True}, 'arrival_collection': {'amount_cents': 10000}}
     g = collection_guidance.build(r)
-    assert g['amount_cents'] == 0 and g['basis'] == 'deferred_billing'
+    assert g['amount_cents'] is None and g['basis'] == 'deferred_billing'
     assert 'not a $0 cost estimate' in g['patient_message']
 
 
