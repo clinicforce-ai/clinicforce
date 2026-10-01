@@ -59,6 +59,7 @@ def _connection():
                     connection.execute("ALTER TABLE staff_patients ADD COLUMN IF NOT EXISTS email TEXT")
                     connection.execute("ALTER TABLE staff_patients ADD COLUMN IF NOT EXISTS identity_status TEXT NOT NULL DEFAULT 'confirmed'")
                     connection.execute("ALTER TABLE staff_patients ADD COLUMN IF NOT EXISTS ecw_patient_id TEXT")
+                    connection.execute("ALTER TABLE staff_patients ADD COLUMN IF NOT EXISTS ecw_account_number TEXT")
                     connection.execute("ALTER TABLE staff_patients ADD COLUMN IF NOT EXISTS insurance_identities JSONB NOT NULL DEFAULT '{}'")
                     connection.execute("""CREATE TABLE IF NOT EXISTS staff_intakes (
                         id TEXT PRIMARY KEY, practice_id TEXT NOT NULL, created_by TEXT NOT NULL REFERENCES staff_members(id),
@@ -253,8 +254,8 @@ def save_insurance_identity(patient_id: str, practice_id: str, evidence: dict) -
 def set_ecw_patient_id(patient_id: str, practice_id: str, ecw_patient_id: str) -> None:
     with _connection() as connection:
         connection.execute(
-            "UPDATE staff_patients SET ecw_patient_id=%s WHERE id=%s AND practice_id=%s",
-            (ecw_patient_id, patient_id, practice_id),
+            "UPDATE staff_patients SET ecw_account_number=CASE WHEN ecw_patient_id=%s THEN ecw_account_number ELSE NULL END,ecw_patient_id=%s WHERE id=%s AND practice_id=%s",
+            (ecw_patient_id, ecw_patient_id, patient_id, practice_id),
         )
 
 
@@ -296,6 +297,15 @@ def patient_for_intake_request(intake_id: str, practice_id: str) -> str:
             (patient_id, practice_id, fields["given_name"], fields["family_name"], fields["birth_date"], fields.get("email"), now()))
         connection.execute("UPDATE staff_intakes SET auto_patient_id=%s WHERE id=%s AND practice_id=%s", (patient_id, intake_id, practice_id))
     return patient_id
+
+
+def save_ecw_account_number(patient_id: str, practice_id: str, ecw_patient_id: str, account_number: str | None) -> None:
+    """Refresh display metadata only on an existing verified eCW patient link."""
+    if not account_number or not ecw_patient_id:
+        return
+    with _connection() as connection:
+        connection.execute('UPDATE staff_patients SET ecw_account_number=%s WHERE id=%s AND practice_id=%s AND ecw_patient_id=%s',
+                           (account_number, patient_id, practice_id, ecw_patient_id))
 
 
 def patient_dashboard(practice_id: str) -> dict:
@@ -344,6 +354,7 @@ def patient_dashboard(practice_id: str) -> dict:
         rows.append({"id": public_id, "clinic_patient_id": patient.get("id"), "identity_status": patient.get("identity_status", "unverified"),
             **{name: patient.get(name) or fields.get(name) or "" for name in ("given_name", "family_name", "birth_date")},
             "email": patient.get("email") or next((item["fields"].get("email") for item in history if item["fields"].get("email")), None),
+            "ecw_account_number": patient.get("ecw_account_number"),
             "account_status": account, "card_status": "received" if has_card else "missing", "latest_intake_id": latest.get("id"),
             "intake_ids": [item["id"] for item in history], "intake_count": len(history),
             "updated_at": latest.get("updated_at") or patient["created_at"],
@@ -356,7 +367,7 @@ def list_intakes(practice_id: str, query: str = "", status: str = "", offset: in
     with _connection() as connection:
         rows = connection.execute("""SELECT i.*, to_jsonb(p) AS patient FROM staff_intakes i
             LEFT JOIN staff_patients p ON p.id = i.patient_id AND p.practice_id = i.practice_id
-            WHERE i.practice_id = %s AND (%s = '' OR i.status = %s)
+            WHERE i.practice_id = %s AND COALESCE(i.source, '') <> 'ecw_lookup' AND (%s = '' OR i.status = %s)
               AND (%s = '' OR concat_ws(' ', p.given_name,p.family_name,p.birth_date,i.fields->>'member_name',i.fields->>'member_id',i.fields->>'payer') ILIKE %s)
             ORDER BY i.updated_at DESC,i.id DESC LIMIT 101 OFFSET %s""", (practice_id, status, status, query, "%" + query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%", offset)).fetchall()
     return [dict(row) for row in rows]
@@ -421,9 +432,10 @@ def confirm_patient(intake_id: str, staff: dict, data: dict) -> dict | None:
         if not patient_id and automatic and automatic["identity_status"] == "unverified":
             patient_id = automatic["id"]
             connection.execute("""UPDATE staff_patients SET given_name=%s,family_name=%s,birth_date=%s,
+                               ecw_account_number=CASE WHEN %s THEN NULL ELSE ecw_account_number END,
                                ecw_patient_id=CASE WHEN %s THEN NULL ELSE ecw_patient_id END
                                WHERE id=%s AND practice_id=%s""",
-                               (data["given_name"], data["family_name"], data["birth_date"], identity_changed,
+                               (data["given_name"], data["family_name"], data["birth_date"], identity_changed, identity_changed,
                                 patient_id, staff["practice_id"]))
             if identity_changed:
                 connection.execute("UPDATE staff_intakes SET source_portal_patient_id=NULL WHERE auto_patient_id=%s AND practice_id=%s", (patient_id, staff["practice_id"]))
@@ -444,8 +456,8 @@ def confirm_patient(intake_id: str, staff: dict, data: dict) -> dict | None:
                                                (patient_id, staff["practice_id"])).fetchone()
             if existing_link and existing_link["ecw_patient_id"] not in {None, ecw_patient_id}:
                 raise ValueError("The selected clinic record is linked to a different eCW patient.")
-            connection.execute("UPDATE staff_patients SET ecw_patient_id=%s WHERE id=%s AND practice_id=%s",
-                               (ecw_patient_id, patient_id, staff["practice_id"]))
+            connection.execute("UPDATE staff_patients SET ecw_patient_id=%s,ecw_account_number=COALESCE(%s,ecw_account_number) WHERE id=%s AND practice_id=%s",
+                               (ecw_patient_id, intake['fields'].get('ecw_account_number'), patient_id, staff["practice_id"]))
         connection.execute("UPDATE staff_patients SET identity_status='confirmed',email=COALESCE(NULLIF(%s,''),email) WHERE id=%s AND practice_id=%s",
                            (data.get("email") or intake["fields"].get("email"), patient_id, staff["practice_id"]))
         if automatic and automatic["identity_status"] == "unverified" and automatic["id"] != patient_id:

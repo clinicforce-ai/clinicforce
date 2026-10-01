@@ -538,6 +538,42 @@ async def _patient_for_profile(client: httpx.AsyncClient, issuer: str, token: st
     return patient, patient_id, patient_timeout
 
 
+def patient_account_number(patient: dict) -> str | None:
+    # eCW's Patient specification identifies the ACCT number with use=secondary.
+    # The usual identifier and resource ID can be encrypted; never substitute them.
+    values = {str(row['value']).strip() for row in patient.get('identifier', [])
+              if isinstance(row, dict) and row.get('use') == 'secondary' and row.get('value')}
+    return next(iter(values)) if len(values) == 1 else None
+
+
+async def patient_appointment_history(profile: dict[str, Any], practice: dict[str, Any], *,
+                                      transport: httpx.AsyncBaseTransport | None = None) -> dict:
+    """Patient-scoped encounter history, without the estimator's recent-visit cutoff."""
+    client_id, issuer = settings()
+    try:
+        async with httpx.AsyncClient(timeout=30, follow_redirects=False, transport=transport) as client:
+            token = await _access_token(client, client_id, issuer)
+            patient, patient_id, _ = await _patient_for_profile(client, issuer, token, profile)
+            encounters, timed_out = await _bounded_search(client, issuer, token, 'Encounter',
+                {'patient': patient_id}, timeout_seconds=20)
+            if timed_out:
+                raise EcwBackendError('The eCW appointment history did not finish loading.')
+    except httpx.HTTPError as exc:
+        raise EcwBackendError('The eCW appointment history did not finish loading.') from exc
+    visits = []
+    for encounter in encounters:
+        encounter_id = str(encounter.get('id') or '')
+        if (_reference(encounter.get('subject')) != f'Patient/{patient_id}'
+                or not re.fullmatch(r'[A-Za-z0-9.\-]{1,200}', encounter_id)
+                or not _appointment_date(encounter)
+                or encounter.get('status') == 'entered-in-error'):
+            continue
+        visits.append({'id': encounter_id, 'start': (encounter.get('period') or {}).get('start'),
+                       **_history_summary(encounter, [], [])})
+    return {'patient_id': patient_id, 'ecw_account_number': patient_account_number(patient),
+            'appointments': sorted(visits, key=lambda row: (row['start'] or '', row['id']), reverse=True)}
+
+
 async def lookup_patient_and_appointments(profile: dict[str, Any], practice: dict[str, Any], *,
                                           transport: httpx.AsyncBaseTransport | None = None) -> dict[str, Any]:
     """Verify one eCW patient and return only current/future appointments; no eligibility request."""
@@ -570,7 +606,7 @@ async def lookup_patient_and_appointments(profile: dict[str, Any], practice: dic
                              "reason": _visit_context(visit, [], [], []) or ""})
     first, family = _name(patient)
     return {"patient": {"id": patient_id, "given_name": first, "family_name": family,
-                        "birth_date": patient.get("birthDate")},
+                        "birth_date": patient.get("birthDate"), "ecw_account_number": patient_account_number(patient)},
             "appointments": sorted(appointments, key=lambda row: (row["start"], row["id"]))}
 
 
@@ -965,7 +1001,8 @@ async def fetch_inputs(profile: dict[str, Any], practice: dict[str, Any], appoin
               "active_coverages": len(eligible), "coverage_record_status": coverage_record_status(coverage),
               "self_pay_recorded": bool(coverage and (coverage.get('kind') == 'self-pay' or
                   re.fullmatch(r'(?:self[ -]?pay|cash|uninsured)', payer_name or '', re.I)) and len(eligible) <= 1),
-              "patient_details": {"gender": patient.get("gender"), "phone": _phone(patient), "address": patient_address(patient),
+              "patient_details": {"ecw_account_number": patient_account_number(patient),
+                                  "gender": patient.get("gender"), "phone": _phone(patient), "address": patient_address(patient),
                                   "email": next((r.get("value") for r in patient.get("telecom", []) if r.get("system") == "email"), None)},
               "coverage_period": coverage.get("period") or {}, "plan": _plan(coverage), "plan_details": _plan_details(coverage),
               "appointment_date": service_date, "appointment_status": visit.get("status"),

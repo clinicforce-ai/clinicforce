@@ -3,7 +3,7 @@ import { Trash2 } from 'lucide-react'
 import { deleteStaffInsuranceCheck, getStaffInsuranceChecks, getStaffInsuranceCheck, type InsuranceCheckSnapshot, type SavedInsuranceCheck } from '../services/api/staff'
 import CommercialEstimator, { FinancialHistory } from './CommercialEstimator'
 
-export default function SavedInsuranceChecks({ intakeId, patientName, onChange }: { intakeId: string; patientName: string; onChange: () => Promise<void> }) {
+export default function SavedInsuranceChecks({ intakeId, patientName, onChange, checksForVisit }: { intakeId: string; patientName: string; onChange: () => Promise<void>; checksForVisit?: SavedInsuranceCheck[] }) {
   const [checks, setChecks] = useState<SavedInsuranceCheck[] | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
@@ -29,7 +29,7 @@ export default function SavedInsuranceChecks({ intakeId, patientName, onChange }
   async function load() {
     setBusy(true); setError('')
     try {
-      const result = (await getStaffInsuranceChecks(intakeId)).checks
+      const result = checksForVisit || (await getStaffInsuranceChecks(intakeId)).checks
       setChecks(result)
       const latest = result.find(check => check.source_mode === 'commercial_previsit')
       if (latest) void open(latest)
@@ -53,8 +53,8 @@ export default function SavedInsuranceChecks({ intakeId, patientName, onChange }
     finally { setBusy(false) }
   }
   return <details className="staff-panel staff-saved-checks" onToggle={event => { if (event.currentTarget.open && checks === null && !busy && !error) void load() }}>
-    <summary>Saved insurance checks</summary>
-    <p className="staff-muted">Patient history across visits and confirmed intakes. Open a visit to review the saved recommendation, benefits, services, and assumptions.</p>
+    <summary>{checksForVisit ? 'View saved estimate results' : 'Saved insurance checks'}</summary>
+    <p className="staff-muted">{checksForVisit ? 'Recommendations recorded for this appointment, with the benefits, services, and assumptions used at the time.' : 'Patient history across visits and confirmed intakes. Open a visit to review the saved recommendation, benefits, services, and assumptions.'}</p>
     {notice && <p role="status">{notice}</p>}
     {error && <p className="staff-alert staff-error" role="alert">{error}{checks === null && <button disabled={busy} onClick={() => void load()}>Try again</button>}</p>}
     {busy && <p role="status">Updating saved checks…</p>}

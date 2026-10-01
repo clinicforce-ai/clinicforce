@@ -40,6 +40,7 @@ await page.route(url => url.pathname.startsWith('/api/'), async route => {
   else if (path === '/api/staff/intakes/sample-intake') body = intake
   else if (path.endsWith('/cards')) return route.fulfill({ status: 502, json: { detail: 'Unavailable card interface' } })
   else if (path.endsWith('/checks')) body = { checks: [] }
+  else if (path === '/api/staff/patients/sample/appointments') body = { appointments: [], ecw_status: 'complete' }
   else if (path.endsWith('/appointments')) body = { appointments: [visit] }
   else if (path.endsWith('/appointments/previsit')) { previsitRequests.push(route.request().postDataJSON()); await estimateGate; body = result }
   else if (path.endsWith('/payer-response')) body = { source: 'Stedi', response: { id: 'saved-payer-response', benefits: [] } }
@@ -49,7 +50,8 @@ await page.route(url => url.pathname.startsWith('/api/'), async route => {
     if (review.selected_ids) result = { ...result, selected_ids: review.selected_ids, codes: codes.filter(row => review.selected_ids.includes(row.id)), service_plan: { ...result.service_plan, selection_source: 'clinician' } }
     if (review.payment_mode) result = { ...result, payment_mode: review.payment_mode }
     result = { ...result, revision: result.revision + 1 }; body = result
-  } else if (path.endsWith('/financials')) body = { lines: [], message: 'No receipts', checked_at: '2026-09-28T16:00:00Z' }
+  } else if (path === '/api/staff/patients/sample/appointments') body = { appointments: [], ecw_status: 'complete' }
+  else if (path.endsWith('/financials')) body = { lines: [], message: 'No receipts', checked_at: '2026-09-28T16:00:00Z' }
   else if (path.endsWith('/history')) body = { visits: [] }
   else if (path.endsWith('/cash-schedules')) body = { schedules: [] }
   else throw new Error('Unexpected API ' + path)

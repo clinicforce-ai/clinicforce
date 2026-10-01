@@ -206,6 +206,10 @@ def _save(case: dict, session: dict, event: str) -> dict:
         raise HTTPException(409, str(exc)) from exc
     if not saved:
         raise HTTPException(404, "Commercial estimate case not found.")
+    if snapshot:
+        source = case['previsit_context'].get('source') or {}
+        staff_store.save_ecw_account_number(session['patient_id'], session['practice_id'], source.get('_patient_id'),
+                                            (snapshot['result'].get('patient_details') or {}).get('ecw_account_number'))
     return saved
 
 

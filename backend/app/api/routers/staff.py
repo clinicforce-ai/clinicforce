@@ -319,12 +319,17 @@ async def create_ecw_lookup(value: EcwLookup, request: Request):
         raise HTTPException(502, str(exc)) from exc
     fields = {"given_name": value.given_name, "middle_initial": value.middle_initial,
               "family_name": value.family_name, "birth_date": value.birth_date.isoformat(),
-              "ecw_patient_id": matched["patient"]["id"]}
+              "ecw_patient_id": matched["patient"]["id"],
+              "ecw_account_number": matched['patient'].get('ecw_account_number')}
     intake = await run_in_threadpool(staff_store.find_ecw_intake, staff["practice_id"], fields["ecw_patient_id"])
     if not intake:
         intake = await run_in_threadpool(staff_store.create_intake, str(uuid4()), staff, [], "ecw_lookup", None, fields)
+    elif intake.get('patient'):
+        await run_in_threadpool(staff_store.save_ecw_account_number, intake['patient']['id'], staff['practice_id'],
+                                fields['ecw_patient_id'], fields['ecw_account_number'])
+        intake = await run_in_threadpool(staff_store.get_intake, intake['id'], staff['practice_id'])
     return JSONResponse({**public(intake), "ecw_match": {"patient": {key: matched["patient"][key]
-                         for key in ("given_name", "family_name", "birth_date")},
+                         for key in ("given_name", "family_name", "birth_date", "ecw_account_number") if key in matched['patient']},
                          "appointments": matched["appointments"]}}, status_code=201, headers=NO_STORE)
 
 
@@ -632,6 +637,62 @@ async def saved_insurance_checks(intake_id: str, request: Request):
         'visit_type': case.get('previsit_context', {}).get('result', {}).get('visit_type'),
         "label": labels.get(case.get("source_mode"), "Insurance check"),
         "pending": staff_deletions._pending(case)} for record in records for case in [record['case']]]}, headers=NO_STORE)
+
+
+@router.get('/patients/{patient_id}/appointments')
+async def patient_appointments(patient_id: str, request: Request, include_ecw: bool = False):
+    from app.insurance import store
+    from app.api.routers.commercial_estimator import _ecw_practice_config
+    actor = await require_staff(request)
+    patient = await run_in_threadpool(staff_store.get_patient, patient_id, actor['practice_id'])
+    if not patient:
+        raise HTTPException(404, 'Clinic patient not found.')
+    records = await run_in_threadpool(store.patient_checks, actor['practice_id'], patient_id)
+    visits = {}
+    account_number = patient.get('ecw_account_number')
+    ecw_patient_id = patient.get('ecw_patient_id')
+    for record in records:
+        case = record['case']
+        context = case.get('previsit_context') or {}
+        result, source = context.get('result') or {}, context.get('source') or {}
+        if case.get('source_mode') != 'commercial_previsit' or not result:
+            continue
+        appointment_id = source.get('appointment_id') or result.get('appointment_id')
+        source_patient_id = source.get('_patient_id') or ecw_patient_id
+        key = f'{source_patient_id}:{appointment_id}' if appointment_id and source_patient_id else f'check:{case["id"]}'
+        visit = visits.setdefault(key, {'id': key, 'appointment_id': appointment_id,
+            'start': source.get('appointment_date') or result.get('service_date'),
+            'date': result.get('service_date'), 'reason': result.get('reason') or '',
+            'visit_type': result.get('visit_type'), 'status': source.get('appointment_status') or 'Saved visit',
+            'from_ecw': False, 'checks': []})
+        visit['checks'].append({'id': case['id'], 'intake_id': record['intake_id'], 'created_at': case['created_at'],
+            'source_mode': 'commercial_previsit', 'service_date': result.get('service_date'),
+            'visit_type': result.get('visit_type'), 'label': 'Visit estimate', 'pending': staff_deletions._pending(case)})
+        account_number = account_number or (result.get('patient_details') or {}).get('ecw_account_number')
+    ecw_status = 'not_requested'
+    if include_ecw:
+        if patient.get('identity_status') != 'confirmed' or not ecw_patient_id or not ecw_backend.configured():
+            ecw_status = 'not_linked'
+        else:
+            try:
+                history = await asyncio.wait_for(ecw_backend.patient_appointment_history(
+                    {'ecw_patient_id': ecw_patient_id, 'patient_first_name': patient['given_name'],
+                     'patient_last_name': patient['family_name'], 'patient_birth_date': patient['birth_date']},
+                    _ecw_practice_config(actor['practice_id'])), timeout=38)
+                if history['patient_id'] != ecw_patient_id:
+                    raise ecw_backend.EcwBackendError('Patient link differs from the requested record.')
+                for item in history['appointments']:
+                    key = f'{ecw_patient_id}:{item["id"]}'
+                    previous = visits.get(key) or {}
+                    visits[key] = {**item, 'id': key, 'appointment_id': item['id'],
+                                   'from_ecw': True, 'checks': previous.get('checks', [])}
+                account_number = history.get('ecw_account_number') or account_number
+                ecw_status = 'complete'
+            except (ecw_backend.EcwBackendError, asyncio.TimeoutError):
+                # An optional history refresh must not hide saved recommendations.
+                ecw_status = 'incomplete'
+    return JSONResponse({'appointments': sorted(visits.values(), key=lambda item: (item.get('start') or '', item['id']), reverse=True),
+                         'ecw_status': ecw_status, 'ecw_account_number': account_number}, headers=NO_STORE)
 
 
 @router.get('/intakes/{intake_id}/checks/{case_id}')
