@@ -12,6 +12,7 @@ export interface StaffSession {
 export interface StaffPatient {
   id: string
   ecw_patient_id?: string | null
+  ecw_account_number?: string | null
   given_name: string
   family_name: string
   birth_date: string
@@ -79,7 +80,7 @@ export function createStaffIntake(files: File[], details: StaffCardDetails) {
   return request<StaffIntake>('/api/staff/intakes', { method: 'POST', body })
 }
 
-export type EcwPatientMatch = { patient: { given_name: string; family_name: string; birth_date: string }; appointments: Array<{ id: string; start: string; status: string; reason: string }> }
+export type EcwPatientMatch = { patient: { ecw_account_number?: string | null; given_name: string; family_name: string; birth_date: string }; appointments: Array<{ id: string; start: string; status: string; reason: string }> }
 export const createStaffEcwLookup = (details: { given_name: string; middle_initial: string; family_name: string; birth_date: string }) => request<StaffIntake & { ecw_match: EcwPatientMatch }>('/api/staff/intakes/ecw-lookup', json(details))
 
 export const confirmStaffPatient = (id: string, fields: StaffPatientFields & { identity_confirmed: true; patient_id?: string }) => request<StaffIntake>(`/api/staff/intakes/${encodeURIComponent(id)}/patient`, { ...json(fields), method: 'PUT' })
@@ -147,6 +148,7 @@ export const revokeStaffInvitation = (id: string) => request<void>(`/api/staff/i
 export interface ClinicalPatient {
   id: string
   clinic_patient_id: string | null
+  ecw_account_number?: string | null
   identity_status: 'unverified' | 'confirmed'
   given_name: string
   family_name: string
@@ -162,6 +164,13 @@ export interface ClinicalPatient {
 }
 export interface ClinicalDashboard { pending_file_cleanup?: number; patients: ClinicalPatient[]; counts: { all: number; accounts_with_cards: number; accounts_without_cards: number; card_only: number; other: number } }
 export const getClinicalPatients = () => request<ClinicalDashboard>('/api/staff/patients/dashboard')
+
+export type PatientAppointment = {
+  id: string; appointment_id?: string; start: string | null; date?: string; status: string;
+  reason: string | null; visit_type?: string; from_ecw: boolean; checks: SavedInsuranceCheck[];
+}
+export type PatientAppointmentHistory = { appointments: PatientAppointment[]; ecw_status: 'not_requested' | 'not_linked' | 'complete' | 'incomplete'; ecw_account_number?: string | null }
+export const getPatientAppointments = (patientId: string, includeEcw = false) => request<PatientAppointmentHistory>(`/api/staff/patients/${encodeURIComponent(patientId)}/appointments?include_ecw=${includeEcw}`)
 
 
 export type DeletionResult = { deleted: boolean; cleanup_pending: boolean }

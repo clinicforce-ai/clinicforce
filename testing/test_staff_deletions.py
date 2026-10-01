@@ -187,6 +187,65 @@ class StaffDeletionTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(response.status_code, 404)
             self.assertEqual(read.call_count, 1)
 
+    async def test_patient_appointment_history_groups_exact_visits_and_keeps_saved_results(self):
+        from unittest.mock import AsyncMock
+        from app.insurance import ecw_backend
+        from app.api.routers import commercial_estimator
+        with staff_store._connection() as db:
+            db.execute("UPDATE staff_patients SET ecw_patient_id='ecw-a',identity_status='confirmed' WHERE id='patient-a'")
+            db.execute("UPDATE staff_intakes SET patient_id='patient-a' WHERE id='other-intake'")
+        def create(visit, intake_id, slot):
+            return store.create_case('patient-a', '', slot, {'source_mode': 'commercial_previsit', 'previsit_context': {
+                'source': {'_patient_id': 'ecw-a', 'appointment_id': visit},
+                'result': {'appointment_id': visit, 'service_date': '2020-01-02', 'reason': 'Saved reason',
+                           'patient_details': {'ecw_account_number': '001234'},
+                           'collection_guidance': {'amount_cents': 4000}}}},
+                practice_id='clinic-a', intake_id=intake_id, workflow_slot=slot)
+        first = create('morning', 'intake-a', 'first')
+        followup = create('morning', 'other-intake', 'followup')
+        create('afternoon', 'intake-a', 'afternoon')
+        url = '/api/staff/patients/patient-a/appointments'
+        with patch.object(ecw_backend, 'patient_appointment_history', AsyncMock(side_effect=AssertionError('No external read'))), \
+             patch.object(commercial_estimator, '_previsit_result', side_effect=AssertionError('No recalculation')):
+            response = await self.client.get(url)
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.headers['cache-control'], 'no-store')
+        visits = response.json()['appointments']
+        self.assertEqual(len(visits), 2)
+        self.assertEqual(response.json()['ecw_account_number'], '001234')
+        morning = next(row for row in visits if row['appointment_id'] == 'morning')
+        self.assertEqual({row['id'] for row in morning['checks']}, {first['id'], followup['id']})
+        self.assertEqual({row['id'] for row in visits if row['appointment_id'] == 'afternoon'}, {'ecw-a:afternoon'})
+        remote = {'patient_id': 'ecw-a', 'ecw_account_number': '001234', 'appointments': [
+            {'id': 'morning', 'start': '2020-01-02T09:00:00-05:00', 'status': 'finished', 'date': '2020-01-02', 'reason': 'eCW reason'},
+            {'id': 'older', 'start': '2010-01-02T09:00:00-05:00', 'status': 'finished', 'date': '2010-01-02', 'reason': ''}]}
+        with patch.object(ecw_backend, 'configured', return_value=True), \
+             patch.object(ecw_backend, 'patient_appointment_history', AsyncMock(return_value=remote)) as read:
+            merged = (await self.client.get(url + '?include_ecw=true')).json()
+            self.assertEqual(read.call_args.args[0]['ecw_patient_id'], 'ecw-a')
+        self.assertEqual(merged['ecw_status'], 'complete')
+        self.assertEqual(len(merged['appointments']), 3)
+        self.assertEqual(next(row for row in merged['appointments'] if row['appointment_id'] == 'older')['checks'], [])
+        with patch.object(ecw_backend, 'configured', return_value=True), \
+             patch.object(ecw_backend, 'patient_appointment_history', AsyncMock(side_effect=ecw_backend.EcwBackendError('timeout'))):
+            fallback = (await self.client.get(url + '?include_ecw=true')).json()
+        self.assertEqual(fallback['ecw_status'], 'incomplete')
+        self.assertEqual(fallback['appointments'], visits)
+        self.assertEqual((await self.client.get('/api/staff/patients/patient-b/appointments')).json()['appointments'], [])
+        with patch.object(staff_store, 'get_session', return_value={**self.actor, 'practice_id': 'clinic-b'}):
+            self.assertEqual((await self.client.get(url)).status_code, 404)
+        with patch.object(staff_store, 'get_session', return_value=None):
+            self.assertEqual((await self.client.get(url)).status_code, 401)
+        staff_store.save_ecw_account_number('patient-a', 'clinic-b', 'ecw-a', 'WRONG')
+        staff_store.save_ecw_account_number('patient-a', 'clinic-a', 'ecw-b', 'WRONG')
+        self.assertIsNone(staff_store.get_patient('patient-a', 'clinic-a')['ecw_account_number'])
+        staff_store.save_ecw_account_number('patient-a', 'clinic-a', 'ecw-a', '001234')
+        self.assertEqual(staff_store.get_patient('patient-a', 'clinic-a')['ecw_account_number'], '001234')
+        with staff_store._connection() as db:
+            db.execute("UPDATE staff_intakes SET source='ecw_lookup' WHERE id='intake-a'")
+        self.assertNotIn('intake-a', {row['id'] for row in staff_store.list_intakes('clinic-a')})
+        self.assertIsNotNone(staff_store.get_intake('intake-a', 'clinic-a'))
+
     async def test_unresolved_payer_request_cannot_be_erased_then_resubmitted(self):
         for state in ('pending', 'indeterminate'):
             self.case = store.save_case({**self.case, 'previsit': {'request_state': state}}, 'patient-a', '', 'pending',

@@ -18,6 +18,7 @@ await page.route(url => url.pathname.startsWith('/api/'), async route => {
   if (path === '/api/staff/session') body = { staff: { id: 'staff', practice_id: 'clinic', practice_name: 'Example Clinic', display_name: 'Clinician', role: 'admin' } }
   else if (path === '/api/staff/intakes/search') body = { intakes: [], has_more: false }
   else if (path === '/api/staff/patients/dashboard') body = { patients, counts: { all: patients.length, accounts_with_cards: patients.filter(p => p.card_status === 'received').length, accounts_without_cards: patients.filter(p => p.card_status === 'missing').length, card_only: 0, other: 0 } }
+  else if (path.endsWith('/appointments')) body = { appointments: [], ecw_status: 'complete' }
   else if (path === '/api/staff/patients/8' && route.request().method() === 'DELETE') { patients = patients.filter(p => p.id !== '8'); body = { cleanup_pending: false } }
   else throw new Error('Unexpected API ' + path)
   await route.fulfill({ json: body })

@@ -41,3 +41,8 @@
   .staff-saved-checks .visit-provenance dl,
   .staff-saved-checks .service-evidence dl { grid-template-columns: 1fr; }
 }
+
+.patient-appointment { padding: 20px 0; border-top: 1px solid var(--staff-border, #dbe3ea); min-width: 0; }
+.patient-appointment > header { display: flex; flex-wrap: wrap; gap: 8px 20px; align-items: baseline; justify-content: space-between; }
+.patient-appointment h3 { margin: 0; }
+.patient-appointment .staff-saved-checks { margin-top: 12px; }
