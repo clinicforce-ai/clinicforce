@@ -23,7 +23,7 @@ const check = { id: 'saved-check', intake_id: 'past-intake', source_mode: 'comme
 const appointments = [{ id: 'completed-visit', appointment_id: 'completed-visit', start: '2025-08-15T09:00:00-05:00', date: '2025-08-15', status: 'finished', reason: 'Morning follow-up', visit_type: 'established', checks: [check] }, { id: 'same-day', start: '2025-08-15T14:00:00-05:00', date: '2025-08-15', status: 'finished', reason: 'Afternoon visit without an estimate', checks: [] }, ...Array.from({ length: 8 }, (_, i) => ({ id: `old-${i}`, date: '2010-01-01', start: '2010-01-01', status: 'finished', reason: 'Older visit', checks: [] }))]
 const snapshots = [
   { result, patient, saved_at: '2025-08-14T16:30:00Z', stage: 'visit-review' },
-  { result: { ...result, revision: 1, collection_guidance: { ...result.collection_guidance, amount_cents: 2500 } }, patient, saved_at: '2025-08-14T15:00:00Z', stage: 'previsit-complete' },
+  { result: { ...result, patient_details: {}, revision: 1, collection_guidance: { ...result.collection_guidance, amount_cents: 2500 } }, patient, saved_at: '2025-08-14T15:00:00Z', stage: 'previsit-complete' },
 ]
 await page.route(url => url.pathname.startsWith('/api/'), async route => {
   const req = route.request(), path = new URL(req.url()).pathname
@@ -69,6 +69,7 @@ try {
   assert.equal(await archive.locator('details:not([open])').count(), 0)
   await page.getByLabel('Recorded versions').selectOption('1')
   await page.waitForFunction(() => document.querySelector('.arrival-total')?.textContent.includes('$25.00'))
+  assert.match(await archive.innerText(), /eCW ACCT \(current record\): 001234/)
   await page.getByText('Compare with processed claims', { exact: true }).click()
   await page.getByText('One processed claim matched.', { exact: true }).waitFor()
   assert.match(await page.locator('.financial-history').innerText(), /\$35\.00/)

@@ -38,7 +38,7 @@ export default function PatientAppointmentHistory({ patientId, patientName }: { 
       <header><h3>{visit.date || visit.start?.slice(0, 10) || 'Visit date not retained'}{visit.visit_type && ` · ${visit.visit_type === 'new' ? 'New patient' : visit.visit_type === 'established' ? 'Established / follow-up patient' : visit.visit_type}`}</h3><span className="staff-small staff-muted">{visit.status.replaceAll('_', ' ')}</span></header>
       {visit.reason && <p>{visit.reason}</p>}
       {visit.start?.includes('T') && <p className="staff-small staff-muted">Appointment: {new Date(visit.start).toLocaleString()}</p>}
-      {visit.checks.length ? <SavedInsuranceChecks intakeId={visit.checks[0].intake_id!} patientName={patientName} checksForVisit={visit.checks} onChange={async () => refresh()} /> : <p className="staff-small staff-muted">No saved Clinicforce estimate is linked to this appointment.</p>}
+      {visit.checks.length ? <SavedInsuranceChecks intakeId={visit.checks[0].intake_id!} patientName={patientName} checksForVisit={visit.checks} currentAccountNumber={history?.ecw_account_number} onChange={async () => refresh()} /> : <p className="staff-small staff-muted">No saved Clinicforce estimate is linked to this appointment.</p>}
     </article>)}
     {pageCount > 1 && <nav className="clinical-pagination" aria-label="Appointment pages"><button disabled={currentPage === 1} onClick={() => setPage(currentPage - 1)}>Previous appointments</button><span>Page {currentPage} of {pageCount}</span><button disabled={currentPage === pageCount} onClick={() => setPage(currentPage + 1)}>Next appointments</button></nav>}
   </section>

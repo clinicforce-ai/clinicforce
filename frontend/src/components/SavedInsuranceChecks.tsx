@@ -3,7 +3,7 @@ import { Trash2 } from 'lucide-react'
 import { deleteStaffInsuranceCheck, getStaffInsuranceChecks, getStaffInsuranceCheck, type InsuranceCheckSnapshot, type SavedInsuranceCheck } from '../services/api/staff'
 import CommercialEstimator, { FinancialHistory } from './CommercialEstimator'
 
-export default function SavedInsuranceChecks({ intakeId, patientName, onChange, checksForVisit }: { intakeId: string; patientName: string; onChange: () => Promise<void>; checksForVisit?: SavedInsuranceCheck[] }) {
+export default function SavedInsuranceChecks({ intakeId, patientName, onChange, checksForVisit, currentAccountNumber }: { intakeId: string; patientName: string; onChange: () => Promise<void>; checksForVisit?: SavedInsuranceCheck[]; currentAccountNumber?: string | null }) {
   const [checks, setChecks] = useState<SavedInsuranceCheck[] | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
@@ -64,7 +64,7 @@ export default function SavedInsuranceChecks({ intakeId, patientName, onChange, 
       {loadingCheck && <p role="status">Loading the saved estimate…</p>}
       {checkError && <p className="staff-alert staff-error" role="alert">{checkError} <button onClick={() => void open(selected)}>Retry</button></p>}
       {snapshots.length > 1 && <label className="staff-field"><span>Recorded versions</span><select value={revision} onChange={event => setRevision(Number(event.target.value))}>{snapshots.map((snapshot, index) => <option key={index} value={index}>{snapshot.saved_at ? new Date(snapshot.saved_at).toLocaleString() : 'Earlier saved result'} · Revision {snapshot.result.revision} · {snapshot.stage.replaceAll('-', ' ')}</option>)}</select></label>}
-      {snapshots[revision] && <CommercialEstimator key={`${selected.id}:${revision}`} intakeId={selected.intake_id || intakeId} saved={snapshots[revision]} />}
+      {snapshots[revision] && <CommercialEstimator key={`${selected.id}:${revision}`} intakeId={selected.intake_id || intakeId} saved={snapshots[revision]} currentAccountNumber={currentAccountNumber} />}
       {!!snapshots.length && <details className="staff-panel" onToggle={event => setShowClaims(event.currentTarget.open)}><summary>Compare with processed claims</summary><p className="staff-muted">Compare the saved patient estimate above with the insurer’s actual patient share below. These claim records are retrieved now; the saved recommendation stays unchanged.</p>{showClaims && <FinancialHistory key={selected.id} checkId={selected.id} intakeId={selected.intake_id || intakeId} />}</details>}
     </section>}
   </details>
