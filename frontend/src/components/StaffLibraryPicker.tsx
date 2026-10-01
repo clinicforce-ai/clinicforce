@@ -15,7 +15,10 @@ export default function StaffLibraryPicker({ kinds, disabled, onFile }: { kinds:
       .catch((caught: unknown) => { if (!canceled) setError(caught instanceof Error ? caught.message : 'Unable to load clinic files.') })
     return () => { canceled = true }
   }, [])
-  const applicable = documents.filter(document => kinds.includes(document.kind) || (kinds.includes('fees') && document.kind === 'fee_schedule'))
+  const applicable = documents.filter(document =>
+    (kinds.includes(document.kind) || (kinds.includes('fees') && document.kind === 'fee_schedule')) &&
+    (document.kind === 'fee_schedule' ? /\.csv$/i.test(document.filename) :
+      document.kind === 'contract' ? /\.(pdf|png|jpe?g)$/i.test(document.filename) : /\.(csv|pdf|png|jpe?g)$/i.test(document.filename)))
   const choose = async () => {
     const document = applicable.find(item => item.id === selected)
     if (!document) return

@@ -4,6 +4,8 @@ This route is deliberately separate from the existing Availity workflow.
 """
 from __future__ import annotations
 
+from pathlib import Path
+
 import hashlib
 import asyncio
 import json
@@ -1879,6 +1881,14 @@ async def import_rates(request: Request, payer_connection_id: str, source_type: 
     if len(content) > 20 * 1024 * 1024: raise HTTPException(413, "Rate imports must be 20 MB or smaller.")
     try:
         rows = commercial.parse_rate_csv(content, file.filename or "rates.csv")
+        payer = commercial_store.connection(session['practice_id'], payer_connection_id)
+        if not payer or source_type not in commercial.RATE_SOURCE_TYPES or not source_reference.strip() or not 0 <= change_ceiling_bps <= 10000:
+            raise commercial.CommercialError('Provide a valid clinic payer, source reference, source type and change ceiling.')
+        from app.core import library_files
+        if not object_store.enabled():
+            raise HTTPException(503, 'Clinic document storage is unavailable.')
+        await run_in_threadpool(library_files.save, session['staff'], content, file.filename or 'rates.csv',
+            'text/csv', 'fee_schedule', file.filename or 'Contracted rates', payer['display_name'], effective_from, effective_to)
         return commercial_store.import_rates(session["practice_id"], payer_connection_id, source_type, source_reference, hashlib.sha256(content).hexdigest(), effective_from, effective_to, change_ceiling_bps, rows)
     except commercial.CommercialError as exc: raise HTTPException(422, str(exc)) from exc
 
@@ -2031,7 +2041,20 @@ async def upload_cash_schedule(request: Request, effective_from: date, file: Upl
     if len(content) > 20 * 1024 * 1024:
         raise HTTPException(413, 'Price schedules must be 20 MB or smaller.')
     try:
-        return await run_in_threadpool(practice_prices.create, session['practice_id'], session['staff']['id'], content, file.filename or '', effective_from.isoformat())
+        from app.core import library_files
+        filename = file.filename or ''
+        await run_in_threadpool(practice_prices.read_rows, content, filename)
+        if not object_store.enabled():
+            raise HTTPException(503, 'Clinic document storage is unavailable.')
+        content_type = {'.csv': 'text/csv', '.pdf': 'application/pdf', **library_files.OFFICE_TYPES}[Path(filename).suffix.lower()]
+        if Path(filename).suffix.lower() in library_files.OFFICE_TYPES:
+            try:
+                await run_in_threadpool(library_files.office_preview, content, filename)
+            except Exception:
+                raise commercial.CommercialError('Upload a readable Word document without macros.') from None
+        await run_in_threadpool(library_files.save, session['staff'], content, filename, content_type,
+                               'self_pay', filename, '', effective_from.isoformat())
+        return await run_in_threadpool(practice_prices.create, session['practice_id'], session['staff']['id'], content, filename, effective_from.isoformat())
     except commercial.CommercialError as exc:
         raise HTTPException(422, str(exc)) from exc
 

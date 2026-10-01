@@ -257,7 +257,8 @@ class StaffDatabaseTests(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(preview.headers["Content-Disposition"].startswith("inline;"))
             self.assertEqual(preview.headers["Content-Type"].split(";")[0], "application/pdf" if kind == "contract" else "text/plain")
             self.assertEqual(preview.headers["Cache-Control"], "no-store")
-            self.assertEqual(preview.headers["Content-Security-Policy"], "sandbox")
+            self.assertIn("sandbox", preview.headers["Content-Security-Policy"])
+            self.assertIn("default-src 'none'", preview.headers["Content-Security-Policy"])
             download = await self.client.get(path)
             self.assertTrue(download.headers["Content-Disposition"].startswith("attachment;"))
             self.assertEqual(download.headers["Content-Type"].split(";")[0], content_type)
@@ -283,6 +284,65 @@ class StaffDatabaseTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((await self.client.get(path + "?preview=true")).status_code, 404)
         await self.client.post("/api/staff/logout")
         self.assertEqual((await self.client.get(path + "?preview=true")).status_code, 401)
+
+    async def test_office_library_originals_and_estimator_imports_stay_connected(self):
+        import hashlib
+        from unittest.mock import AsyncMock
+        from test_library_files import word_file, workbook_file
+        from app.api.routers import commercial_estimator
+        from app.insurance import commercial_store
+        actor = await self.sign_in()
+        for kind, filename, content, expected in [
+            ('plan_matrix', 'clinic-plans.xlsx', workbook_file(), 'Aetna'),
+            ('self_pay', 'cash.docx', word_file(), '$250'),
+        ]:
+            response = await self.client.post('/api/staff/library', data={'kind': kind, 'label': filename}, files={'file': (filename, content)})
+            self.assertEqual(response.status_code, 201, response.text)
+            document = response.json()
+            self.assertEqual(document['sha256'], hashlib.sha256(content).hexdigest())
+            path = f"/api/staff/library/{document['id']}/document"
+            self.assertEqual((await self.client.get(path)).content, content)
+            preview = await self.client.get(path + '?preview=true')
+            self.assertEqual(preview.status_code, 200)
+            self.assertIn(expected, preview.text)
+            self.assertNotIn('<script>', preview.text)
+        response = await self.client.post('/api/staff/library', data={'kind': 'plan_matrix'}, files={'file': ('bad.xlsx', b'not a workbook')})
+        self.assertEqual(response.status_code, 422)
+
+        payer = commercial_store.create_connection(actor['practice_id'], {'display_name': 'Example insurance', 'stedi_payer_id': 'TEST-' + uuid4().hex})
+        content = b'CPT,Allowed Amount,Network,POS,Effective From\n99203,125,Example PPO,11,2026-01-01\n'
+        self.app.include_router(commercial_estimator.router)
+        session = {'practice_id': actor['practice_id'], 'staff': actor}
+        with patch.object(commercial_estimator, '_session', new=AsyncMock(return_value=session)):
+            response = await self.client.post('/api/doctor/insurance/commercial/rates', params={
+                'payer_connection_id': payer['id'], 'source_type': 'contract_export',
+                'source_reference': 'Approved original contract', 'effective_from': '2026-01-01',
+            }, files={'file': ('contract-rates.csv', content, 'text/csv')})
+            self.assertEqual(response.status_code, 200, response.text)
+            version = response.json()
+            self.assertEqual(version['source_reference'], 'Approved original contract')
+            commercial_store.activate_rates(actor['practice_id'], version['id'])
+            response = await self.client.post('/api/doctor/insurance/commercial/cash-schedules', params={'effective_from': '2026-01-01'}, files={'file': ('shared-cash.csv', b'CPT,Cash Price\n99203,150\n', 'text/csv')})
+            self.assertEqual(response.status_code, 200, response.text)
+        listed = (await self.client.get('/api/staff/library')).json()['documents']
+        self.assertEqual(len(listed), 4)
+        source = next(doc for doc in listed if doc['filename'] == 'contract-rates.csv')
+        self.assertEqual(source['estimator_uses'][0]['status'], 'active')
+        self.assertEqual(source['estimator_uses'][0]['payer'], 'Example insurance')
+        original = await self.client.get(f"/api/staff/library/{source['id']}/document")
+        self.assertEqual(original.content, content)
+        with commercial_store._connection() as db:
+            cash_before = db.execute('SELECT filename,sha256,rows_json,status FROM practice_cash_schedules WHERE practice_id=%s ORDER BY id', (actor['practice_id'],)).fetchall()
+        # Uploading another insurer's agreement does not change shared cash prices or active rates.
+        response = await self.client.post('/api/staff/library', data={'kind': 'contract', 'payer': 'Another insurer'}, files={'file': ('agreement.pdf', card_pdf())})
+        self.assertEqual(response.status_code, 201)
+        with commercial_store._connection() as db:
+            self.assertEqual(db.execute('SELECT filename,sha256,rows_json,status FROM practice_cash_schedules WHERE practice_id=%s ORDER BY id', (actor['practice_id'],)).fetchall(), cash_before)
+        self.assertEqual(next(v for v in commercial_store.list_rate_versions(actor['practice_id']) if v['id'] == version['id'])['status'], 'active')
+        staff_store.create_member({**actor, 'practice_id': 'other-library-clinic'}, 'other-library-reader', 'Other reader', ADMIN_PASSWORD, 'staff')
+        await self.sign_in('other-library-reader')
+        self.assertEqual((await self.client.get('/api/staff/library')).json()['documents'], [])
+        self.assertEqual((await self.client.get(f"/api/staff/library/{source['id']}/document?preview=true")).status_code, 404)
 
     async def test_manual_fallback_survives_ocr_failure_and_ocr_replaces_card_values(self):
         await self.sign_in()
