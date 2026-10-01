@@ -502,7 +502,7 @@ def add_event(intake_id: str, practice_id: str, action: str, actor: dict | str |
 
 def list_library(practice_id: str) -> list[dict]:
     with _connection() as connection:
-        rows = connection.execute("SELECT * FROM staff_library WHERE practice_id = %s ORDER BY created_at DESC LIMIT 200", (practice_id,)).fetchall()
+        rows = connection.execute("SELECT * FROM staff_library WHERE practice_id = %s ORDER BY created_at DESC, id DESC", (practice_id,)).fetchall()
     return [dict(row) for row in rows]
 
 
