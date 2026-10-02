@@ -329,6 +329,24 @@ class EcwBackendSourceTests(unittest.IsolatedAsyncioTestCase):
             with self.assertRaisesRegex(ecw_backend.EcwBackendError, "No eClinicalWorks patient matched"):
                 await ecw_backend._patient_for_profile(None, "", "", profile)
 
+    async def test_patient_lookup_finds_unique_multiword_ecw_surname(self):
+        profile = {"patient_first_name": "Sample", "patient_middle_initial": "T",
+                   "patient_last_name": "Vale", "patient_birth_date": "1980-01-01"}
+        patient = {"resourceType": "Patient", "id": "patient-1", "name": [
+            {"given": ["Sample", "Taylor"], "family": "North Vale"}], "birthDate": "1980-01-01"}
+        other = {**patient, "id": "patient-2", "name": [{"given": ["Sample", "Taylor"], "family": "Other Vale"}]}
+        async def search(_, __, ___, resource, params):
+            self.assertEqual(resource, "Patient")
+            return [patient] if "name" in params else []
+        with patch.object(ecw_backend, "_search", new=AsyncMock(side_effect=search)) as query:
+            matched, patient_id, _ = await ecw_backend._patient_for_profile(None, "", "", profile)
+        self.assertEqual((matched, patient_id), (patient, "patient-1"))
+        self.assertEqual(query.await_count, 3)
+        self.assertEqual(query.await_args.args[-1], {"name": "Vale", "birthdate": "1980-01-01"})
+        with patch.object(ecw_backend, "_search", new=AsyncMock(side_effect=lambda *args: [patient, other] if "name" in args[-1] else [])):
+            with self.assertRaisesRegex(ecw_backend.EcwBackendError, "Multiple eClinicalWorks patients matched"):
+                await ecw_backend._patient_for_profile(None, "", "", profile)
+
     async def test_lists_completed_history_without_an_eligibility_request(self):
         today = datetime.now(ZoneInfo("America/New_York")).date()
         yesterday = (today - timedelta(days=1)).isoformat()

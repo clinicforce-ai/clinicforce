@@ -22,7 +22,7 @@ def scenario(amount=3800):
 def test_missing_evidence_defers_advance_without_asserting_zero_responsibility(result):
     value = collection_guidance.build(result)
     assert value['amount_cents'] is None and value['status'] == 'deferred_billing'
-    assert 'not a $0 cost estimate' in value['patient_message']
+    assert 'later bill may be due' in value['patient_message']
 
 
 def test_unresolved_coverage_explains_the_actual_recovery_step():

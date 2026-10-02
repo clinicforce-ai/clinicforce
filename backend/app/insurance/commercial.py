@@ -483,6 +483,23 @@ def normalize_stedi_271(payload: dict[str, Any], service_type_code: str, provide
         if isinstance(value, dict):
             return [note for key in ("description", "message", "text", "messages") for note in notes(value.get(key))]
         return []
+    # A met family out-of-pocket limit covers every member's covered in-network
+    # cost share. Keep it separate from the individual accumulator: a positive
+    # family balance cannot establish this member's remaining responsibility.
+    family_oop = [row for row in relevant if row.get('code') == 'G'
+                  and (not _procedure(row) or _procedure(row) == procedure_code)
+                  and str(row.get('coverageLevel') or row.get('coverageLevelCode') or '').upper() in {'FAMILY', 'FAM'}
+                  and _network_indicator(row) in {'Y', 'YES', 'IN_NETWORK', 'W', 'IN_AND_OUT_OF_NETWORK'}
+                  and str(row.get('timeQualifierCode') or row.get('timeQualifier') or '').upper() in {'29', 'REMAINING'}]
+    family_scores = [(3 if _procedure(row) == procedure_code and procedure_code else
+                      2 if service_type_code in (row.get('serviceTypeCodes') or []) else 1, row)
+                     for row in family_oop]
+    family_best = [row for score, row in family_scores if score == max(s for s, _ in family_scores)] if family_scores else []
+    family_amounts = {_stedi_cents(row.get('benefitAmount')) for row in family_best}
+    family_oop_cents = next(iter(family_amounts)) if len(family_amounts) == 1 else None
+    family_oop_zero_applies = (family_oop_cents == 0 and not any(
+        re.fullmatch(r'COPAY MAX(?:IMUM)?', note.strip(), re.I)
+        for row in relevant for note in notes([row.get('messages'), row.get('additionalInformation')])))
     descriptions = [note.casefold() for row in relevant for field in ("additionalInformation", "messages")
                     for note in notes(row.get(field))]
     authorization_basis = 'Payer indicator' if authorization_values - {''} else 'Not confirmed'
@@ -591,6 +608,9 @@ def normalize_stedi_271(payload: dict[str, Any], service_type_code: str, provide
             "coverage_level": "individual" if wanted else "unknown",
             "network_status": "in_network" if provider_network_verified else "unknown",
             "deductible_remaining_cents": deductible_cents, "oop_remaining_cents": oop_cents,
+            "family_oop_remaining_cents": family_oop_cents,
+            "family_oop_zero_applies": family_oop_zero_applies,
+            "family_oop_ids": [row['evidence_path'] for row in family_best] if family_oop_zero_applies else [],
             "copay_cents": copay_cents, "coinsurance_percent": str(coinsurance_percent) if coinsurance_percent is not None else None,
             "has_secondary": other_active_coverage or multiple_plans, "requires_review": bool(review_reasons),
             "selected_benefit_ids": [path for row in (copay, coinsurance) if row for path in row.get('evidence_paths', [row['evidence_path']])],

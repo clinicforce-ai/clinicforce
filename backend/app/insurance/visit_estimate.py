@@ -391,14 +391,18 @@ def planning_estimate(price: dict, benefits: dict, comparison: dict) -> dict | N
     assumptions.append('The selected services are covered and any required referral or authorization is in place.')
     if all(line.get('units') and line['benefits'].get('active') is True
            and line['benefits'].get('network_status') != 'out_of_network'
-           and line['benefits'].get('oop_remaining_cents') == 0
+           and (line['benefits'].get('oop_remaining_cents') == 0 or
+                line['benefits'].get('family_oop_zero_applies'))
            and not line['benefits'].get('separate_copay_limit')
            and line['benefits'].get('service_date_matches') is not False
            and not line['benefits'].get('has_secondary')
            and not any('limit' in r.lower() or 'date' in r.lower() for r in line['benefits'].get('review_reasons', []))
            for line in lines):
+        family = any(line['benefits'].get('family_oop_zero_applies') for line in lines)
+        if family:
+            assumptions.append('The payer reports $0 remaining on the family in-network out-of-pocket limit for these services; individual balances remain separate.')
         return {'amount_cents': 0, 'collectable': False, 'basis': 'out_of_pocket_limit',
-                'explanation': 'The payer reports $0 remaining in-network out-of-pocket responsibility. Under the assumptions below, the selected covered services have an estimated patient cost of $0.',
+                'explanation': 'The payer reports $0 remaining on the applicable in-network out-of-pocket limit. Under the assumptions below, the selected covered services have an estimated patient cost of $0.',
                 'assumptions': assumptions}
     if price.get('complete') and price.get('patient_min_cents') == price.get('patient_max_cents'):
         return {'amount_cents': price['patient_max_cents'], 'collectable': False, 'basis': 'conditional_services',

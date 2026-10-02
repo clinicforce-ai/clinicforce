@@ -185,19 +185,22 @@ try {
   // Unresolved evidence defers collection without claiming zero responsibility.
   result = { ...result, collection_guidance: { ...result.collection_guidance, amount_cents: null, status: 'unavailable' } }
   await openPatient()
-  assert.equal(await page.locator('.arrival-total > strong').innerText(), 'Needs verification')
+  assert.equal(await page.locator('.arrival-total > strong').innerText(), '$250.00')
   result.collection_guidance = { ...result.collection_guidance, amount_cents: 0, status: 'deferred_billing', basis: 'deferred_billing', patient_message: 'No advance requested; final responsibility remains unknown.' }
   await openPatient()
-  assert.equal(await page.locator('.arrival-total > strong').innerText(), 'Needs verification')
+  assert.equal(await page.locator('.arrival-total > strong').innerText(), '$250.00')
   await page.getByRole('button', { name: 'Cash', exact: true }).click()
   await page.waitForFunction(() => document.querySelector('.arrival-total > strong')?.textContent === '$250.00')
   assert((await page.locator('.arrival-total').innerText()).includes('Clinic self-pay price'))
   assert(!(await page.locator('.arrival-total').innerText()).includes('No advance payment'))
   await page.getByRole('button', { name: 'Insurance', exact: true }).click()
-  await page.waitForFunction(() => document.querySelector('.arrival-total > strong')?.textContent === 'Needs verification')
+  await page.waitForFunction(() => document.querySelector('.arrival-total > strong')?.textContent === '$250.00')
   const spinal = { id: 'planning:62270', code: '62270', units: 1, description: 'Diagnostic spinal tap · without imaging' }
-  result = { ...result, codes: [codes[0], spinal], available_codes: [...codes, spinal], selected_ids: ['99203', spinal.id] }
+  result = { ...result, codes: [codes[0], spinal], available_codes: [...codes, spinal], selected_ids: ['99203', spinal.id],
+    price_range: { ...result.price_range, cash_complete: false, cash_min_cents: null, cash_max_cents: null } }
   await openPatient()
+  assert.equal(await page.locator('.arrival-total > strong').innerText(), '$0.00')
+  assert((await page.locator('.arrival-total').innerText()).includes('Collect no insurance advance today'))
   section = await detail('Possible additional')
   assert((await section.locator('.selected-service-chips').innerText()).includes('62270'))
   await section.getByRole('button', { name: 'Other care', exact: true }).click()
@@ -210,7 +213,7 @@ try {
   result.collection_guidance.reason = 'Calculation/source error: invalid payer financial evidence was rejected. Clinic staff must verify the source before collecting.'
   await openPatient()
   assert((await page.locator('.arrival-total').innerText()).includes('Calculation/source error'))
-  assert.equal(await page.locator('.arrival-total > strong').innerText(), 'Needs verification')
+  assert.equal(await page.locator('.arrival-total > strong').innerText(), '$0.00')
   // The same arrival card explains distant appointments without pending/error language.
   result = { ...result, visit_type: 'established', reason: '3 month f/u',
     eligibility_timing: { status: 'too_early', appointment_date: '2026-11-24', check_from: '2026-11-17', message: 'Appointment found on November 24, 2026. Too early to check; reopen November 17.' },
@@ -231,8 +234,8 @@ try {
   // Request failures clear the prior charge and defer advance collection.
   await page.route('**/appointments/previsit', route => route.fulfill({ status: 503, json: { detail: 'Payer unavailable' } }))
   await page.getByRole('button', { name: 'Check again', exact: true }).click()
-  await page.getByText('The estimate could not be updated. The collection amount needs verification.', { exact: false }).waitFor()
-  assert.equal(await page.locator('.arrival-total > strong').innerText(), 'Needs verification')
+  await page.getByText('The estimate could not be updated. Collect no insurance advance from this result.', { exact: false }).waitFor()
+  assert.equal(await page.locator('.arrival-total > strong').innerText(), '$0.00')
   assert.deepEqual(errors, [])
   console.log('PASS: immediate estimator entry; collection evidence; warning-only surname difference; provider; detail order; optional cards; service changes; cached benefits; hidden raw response; error fallback; responsive layouts')
 } finally { await browser.close() }

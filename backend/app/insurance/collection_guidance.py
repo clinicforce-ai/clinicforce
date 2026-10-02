@@ -79,7 +79,7 @@ def build(result: dict, review: dict | None = None) -> dict:
         amount = 0
         assumptions.extend(planning.get('assumptions') or [])
         guidance.update(status='estimated', basis='out_of_pocket_limit',
-                        reason='The payer reports $0 remaining in-network out-of-pocket responsibility for the selected covered services. No advance payment is needed.')
+                        reason='The payer reports $0 remaining on the applicable in-network out-of-pocket limit for the selected covered services. No advance payment is needed.')
     elif safe and price.get('complete') and price.get('mode') != 'options':
         amount = price.get('patient_min_cents')
         guidance.update(status='estimated', basis='anticipated_services',
@@ -177,8 +177,7 @@ def build(result: dict, review: dict | None = None) -> dict:
         else:
             guidance['reason'] = 'The returned benefits and clinic rates do not establish a collection amount for the selected services.'
         guidance.update(amount_cents=None, status='deferred_billing', basis='deferred_billing',
-            reason=guidance['reason'] + ' Verify the missing information before quoting a collection amount.',
-            patient_message='The amount is not yet determined. Missing information is not a $0 cost estimate or free care; payment may be due once benefits and charges are verified.')
+            patient_message='No insurance advance is collected today. The insurer determines final responsibility when the claim is processed; a later bill may be due.')
     for line in lines:
         mapped = 'needs mapping' not in line.get('benefit_basis', '')
         terms = (line.get('benefits') or {}) if mapped else {}
@@ -192,6 +191,7 @@ def build(result: dict, review: dict | None = None) -> dict:
                 *[terms[key] for key in ('deductible_id', 'oop_id') if terms.get(key)]]))})
         guidance['services'][-1]['selected_benefit_ids'].extend(terms.get('copay_limit_ids') or [])
         guidance['services'][-1]['selected_benefit_ids'].extend(terms.get('deductible_waiver_ids') or [])
+        guidance['services'][-1]['selected_benefit_ids'].extend(terms.get('family_oop_ids') or [])
         if guidance['basis'] == 'out_of_pocket_limit':
             guidance['services'][-1]['patient_cents'] = 0
     guidance['assumptions'] = list(dict.fromkeys(assumptions))
