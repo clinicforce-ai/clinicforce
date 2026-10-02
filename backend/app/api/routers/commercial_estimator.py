@@ -1424,7 +1424,8 @@ async def _begin_coverage_discovery(result: dict, session: dict, inputs: dict, s
     except (KeyError, TypeError, ValueError):
         reusable = False
     if reusable:
-        return _previsit_result(await run_in_threadpool(_save, case, session, 'previsit-discovery-reused'))
+        case = await run_in_threadpool(_save, case, session, 'previsit-discovery-reused')
+        return await _start_previsit_recovery(case, session, provider, background_tasks)
     case['previsit'] = {'request_state': 'rejected'}
     case['previsit_discovery'] = {'recovery_requested': discovery_ready,
                                   'request_state': 'not_requested' if discovery_ready else 'complete',
