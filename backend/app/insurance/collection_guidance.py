@@ -162,7 +162,7 @@ def build(result: dict, review: dict | None = None) -> dict:
         elif (result.get('eligibility_failure') or {}).get('kind') == 'provider_enrollment':
             guidance['reason'] = 'The clinic provider’s eligibility enrollment with this payer is not verified in Stedi. No paid eligibility request was submitted.'
             actions.append('Clinic administrator: verify or complete provider eligibility enrollment in Stedi to retrieve these benefits.')
-        elif (result.get('recovery') or {}).get('outcome') == 'review_needed':
+        elif (result.get('recovery') or {}).get('outcome') == 'review_needed' and result.get('eligibility_error') != 'payer_routing_unresolved':
             guidance['reason'] = 'Stedi found possible coverage that needs a policy selection and a completed eligibility check.'
         elif result.get('eligibility_failure') or benefits.get('active') is not True:
             failure = result.get('eligibility_failure') or {}

@@ -106,6 +106,25 @@ def patient_matches(item: dict, inputs: dict) -> bool:
     return bool(identity and identity['relationship'] == 'self' and identity['address_matches'])
 
 
+def matches_ecw_policy(item: dict, inputs: dict, source: dict) -> bool:
+    """Permit automatic payer recovery only for the same active eCW policy."""
+    identity = candidate_identity(item, inputs)
+    if not (identity and identity['relationship'] == 'self' and source.get('active_coverages') == 1
+            and source.get('coverage_id') and inputs.get('member_id')
+            and normalized(identity['member_id']) == normalized(inputs['member_id'])):
+        return False
+    payer = item.get('payer') or {}
+    ecw_ids = {normalized(value) for value in source.get('payer_identifiers') or [] if normalized(value)}
+    returned_ids = {normalized(value) for value in (item.get('payerId'), payer.get('payorIdentification')) if normalized(value)}
+    ecw_name = normalized(source.get('payer'))
+    returned_name = normalized(payer.get('name') or payer.get('lastName'))
+    if not (ecw_ids & returned_ids or (ecw_name and returned_name
+            and (ecw_name in returned_name or returned_name in ecw_name))):
+        return False
+    benefits = commercial.normalize_stedi_271(item, '30', False, service_date=inputs.get('service_date'))
+    return benefits['active'] is True and benefits['service_date_matches'] is not False
+
+
 def public_status(discovery: dict) -> dict:
     state = discovery.get('request_state')
     # ponytail: background work is bounded below ten minutes. Interrupted tasks

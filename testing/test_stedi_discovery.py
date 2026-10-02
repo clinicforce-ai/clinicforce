@@ -17,7 +17,8 @@ def setup():
     inputs = {'patient': patient, 'subscriber': {'firstName': 'Pat', 'lastName': 'Example', 'birthDate': '1980-01-01'},
               'member_id': 'old-id', 'relationship': '18', 'service_date': date.today().isoformat(),
               'lines': [], 'visit_type': 'new', 'place_of_service': '11'}
-    source = {'appointment_id': 'visit', 'coverage_id': 'coverage', 'active_coverages': 1, 'plan': 'Choice'}
+    source = {'appointment_id': 'visit', 'coverage_id': 'coverage', 'active_coverages': 1,
+              'payer': 'Example Payer', 'plan': 'Choice'}
     session = {'practice_id': 'clinic', 'intake_id': 'intake', 'patient_id': 'patient', 'share_manifest_id': '',
                'staff': {'id': 'staff', 'display_name': 'Staff'}, 'intake': {'patient': {'given_name': 'Pat', 'family_name': 'Example', 'birth_date': '1980-01-01'}, 'fields': {}}}
     result = {'check_id': 'case', 'appointment_id': 'visit', 'service_date': inputs['service_date'],
@@ -60,7 +61,80 @@ def test_discovery_returns_safe_dependent_candidate_for_staff_selection():
     assert 'family-id' not in json.dumps(rows)
 
 
+def test_automatic_payer_recovery_requires_same_active_ecw_policy():
+    case, _, _, item = setup()
+    inputs, source = case['previsit_context']['inputs'], case['previsit_context']['source']
+    inputs['member_id'] = 'new-id'
+    assert discovery.matches_ecw_policy(item, inputs, source)
+    no_address = deepcopy(item)
+    no_address['subscriber'].pop('address')
+    assert discovery.matches_ecw_policy(no_address, inputs, source)
+    assert not discovery.matches_ecw_policy(item, {**inputs, 'member_id': 'different'}, source)
+    assert not discovery.matches_ecw_policy(item, inputs, {**source, 'active_coverages': 2})
+    assert not discovery.matches_ecw_policy(item, inputs, {**source, 'payer': 'Unrelated Insurer'})
+    assert discovery.matches_ecw_policy(item, inputs, {**source, 'payer': 'Unrelated Insurer', 'payer_identifiers': ['example']})
+    inactive = deepcopy(item)
+    inactive['benefitsInformation'] = [{'code': '6', 'serviceTypeCodes': ['30']}]
+    inactive.pop('plans', None)
+    assert not discovery.matches_ecw_policy(inactive, inputs, source)
+    expired = deepcopy(item)
+    expired['planDateInformation'] = {'planEnd': '20200101'}
+    assert not discovery.matches_ecw_policy(expired, inputs, source)
+
+
+def test_failed_automatic_routes_open_cash_toggle_when_quote_is_complete():
+    case, _, _, _ = setup()
+    case['previsit_context']['result'].update(eligibility_error='payer_routing_unresolved',
+        payment_mode='insurance', cash_quote={'complete': True})
+    case['previsit_discovery'].update(request_state='complete', outcome='no_match')
+    assert api._previsit_result(case)['payment_mode'] == 'cash'
+    case['visit_review'] = {'payment_mode': 'insurance'}
+    assert api._previsit_result(case)['payment_mode'] == 'insurance'
+    case.pop('visit_review')
+    case['previsit_discovery']['request_state'] = 'pending'
+    assert api._previsit_result(case)['payment_mode'] == 'insurance'
+    case['previsit_discovery']['request_state'] = 'complete'
+    case['previsit_context']['result']['cash_quote']['complete'] = False
+    assert api._previsit_result(case)['payment_mode'] == 'insurance'
+
+
 class RecoveryTest(IsolatedAsyncioTestCase):
+    async def test_unroutable_ecw_payer_starts_discovery_automatically(self):
+        case, session, provider, _ = setup()
+        case.pop('previsit_discovery')
+        session['intake']['updated_at'] = 'version'
+        inputs, source = case['previsit_context']['inputs'], case['previsit_context']['source']
+        source['payer'] = 'Humana Health Plan'
+        inputs['patient']['address'] = {'address1': '100 Test St', 'city': 'Austin', 'state': 'TX', 'postalCode': '78701'}
+        tasks = BackgroundTasks()
+        with patch.object(api.store, 'create_case', return_value=case), \
+             patch.object(api, '_finish_previsit', side_effect=lambda result, saved, *_: saved['previsit_context'].update(result=result)), \
+             patch.object(api, '_save', side_effect=lambda value, *_: value):
+            result = await api._begin_coverage_discovery({'service_date': inputs['service_date'], 'issues': [], 'codes': []}, session, inputs, source, provider, tasks,
+                'The eCW payer name and ID did not identify one Stedi route.')
+        assert result['eligibility_error'] == 'payer_routing_unresolved'
+        assert result['recovery']['state'] == 'pending'
+        assert len(tasks.tasks) == 1
+
+    async def test_unroutable_ecw_payer_is_recovered_without_staff_selection(self):
+        case, session, provider, item = setup()
+        case['previsit_context']['payer_id'] = None
+        case['previsit_context']['inputs']['member_id'] = 'new-id'
+        case['previsit_context']['result']['eligibility_failure']['detail'] = 'Payer route unresolved'
+        response = {'status': 'COMPLETE', 'discoveryId': 'discovery-1', 'coveragesFound': 1, 'items': [item]}
+        client = MagicMock(); client.__aenter__ = AsyncMock(return_value=client); client.__aexit__ = AsyncMock(return_value=None)
+        client.post = AsyncMock(side_effect=[httpx.Response(200, json=response),
+                                              httpx.Response(200, json={**payload(), 'subscriber': {'memberId': 'new-id'}})])
+        with patch.object(api.httpx, 'AsyncClient', return_value=client), \
+             patch.object(api, '_save', side_effect=lambda value, *_: value), \
+             patch.object(api.object_store, 'put_staff_document', return_value='protected'), \
+             patch.object(api.stedi_payers, 'search_payer', AsyncMock(return_value={'stediId': 'HUMAN'})), \
+             patch.object(api.commercial_store, 'list_connections', return_value=[]):
+            await api._recover_previsit(case, session, provider)
+        assert case['previsit_discovery']['outcome'] == 'recovered'
+        assert case['previsit']['request_state'] == 'complete'
+        assert client.post.await_count == 2
+
     async def test_recent_no_match_and_ambiguous_results_are_reused_without_paid_search(self):
         for outcome, refresh, expired, changed in [
                 ('no_match', False, False, False), ('review_needed', False, False, False),
@@ -111,8 +185,12 @@ class RecoveryTest(IsolatedAsyncioTestCase):
         self.cash_patch.start()
         self.addCleanup(self.cash_patch.stop)
 
-    async def exercise(self, response, *, directory='payer', timeout=False, saved=False):
+    async def exercise(self, response, *, directory='payer', timeout=False, saved=False, unroutable=False):
         case, session, provider, _ = setup()
+        if unroutable:
+            case['previsit_context']['payer_id'] = None
+            case['previsit_context']['result'].update(eligibility_error='payer_routing_unresolved',
+                eligibility_failure={'kind': 'payer_routing_unresolved', 'detail': 'Payer route unresolved', 'codes': []})
         client = MagicMock(); client.__aenter__ = AsyncMock(return_value=client); client.__aexit__ = AsyncMock(return_value=None)
         final = {**payload(), 'id': 'verified', 'subscriber': {'memberId': 'new-id'}}
         client.post = AsyncMock(side_effect=httpx.ReadTimeout('timeout') if timeout else
@@ -161,6 +239,16 @@ class RecoveryTest(IsolatedAsyncioTestCase):
             assert client.post.await_count == 1
             assert case['previsit']['request_state'] == 'rejected'
             assert case['previsit_context']['result']['benefits'] is None
+
+    async def test_failed_directory_and_discovery_report_unverified_not_inactive(self):
+        _, _, _, item = setup()
+        for items in ([], [item]):
+            case, client, _ = await self.exercise({'status': 'COMPLETE', 'coveragesFound': len(items), 'items': items},
+                                                   unroutable=True)
+            detail = case['previsit_context']['result']['eligibility_failure']['detail']
+            assert 'payer name and ID' in detail and 'discover' in detail.lower()
+            assert 'unverified, not proven inactive' in detail
+            assert client.post.await_count == 1
 
     async def test_other_payer_is_selectable_without_exposing_member_id(self):
         _, _, _, item = setup()

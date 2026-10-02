@@ -48,20 +48,33 @@ def select_payer(items: list[dict[str, Any]], name: str, identifiers: list[str])
 
 async def search_payer(name: str, identifiers: list[str], api_key: str,
                        *, transport: httpx.AsyncBaseTransport | None = None, plan: str | None = None) -> dict | None:
-    if not api_key or not name:
+    if not api_key or not (name or identifiers):
         return None
     # Original Medicare Part B uses CMS/HETS for eligibility, including state
     # MAC labels. Never route Medicare Advantage or a supplement to CMS.
     if plan == 'MB' and re.fullmatch(r'Medicare(?: of)? (?:Texas|TX)(?: Part B)?', name, re.I):
         name, identifiers = 'CMS', ['CMSMED']
     async with httpx.AsyncClient(timeout=httpx.Timeout(10, connect=5), transport=transport) as client:
-        response = await client.get(SEARCH_URL, params={"query": 'CMSMED' if name == 'CMS' and identifiers == ['CMSMED'] else name[:200], "pageSize": 100},
+        # Search exact eCW payer IDs first; a name search may omit their record.
+        by_id = []
+        for identifier in dict.fromkeys(value.strip() for value in identifiers if isinstance(value, str) and value.strip()):
+            response = await client.get(SEARCH_URL, params={"query": identifier[:200], "pageSize": 100},
+                                        headers={"Authorization": api_key})
+            response.raise_for_status()
+            payload = response.json()
+            if isinstance(payload, dict) and isinstance(payload.get("items"), list):
+                by_id.extend(match for row in payload['items']
+                             if (match := select_payer([row], '', [identifier])))
+        by_id = list({row['stediId']: row for row in by_id}.values())
+        if len(by_id) != 0:
+            return by_id[0] if len(by_id) == 1 else None
+        if not name:
+            return None
+        response = await client.get(SEARCH_URL, params={"query": name[:200], "pageSize": 100},
                                     headers={"Authorization": api_key})
         response.raise_for_status()
         payload = response.json()
-    if not isinstance(payload, dict) or not isinstance(payload.get("items"), list):
-        return None
-    return select_payer(payload["items"], name, identifiers)
+        return select_payer(payload["items"], name, []) if isinstance(payload, dict) and isinstance(payload.get("items"), list) else None
 
 
 async def eligibility_enrolled(payer_id: str, npi: str, api_key: str, *, transport=None) -> bool:
