@@ -546,14 +546,22 @@ async def _patient_for_profile(client: httpx.AsyncClient, issuer: str, token: st
     matches = {str(row.get("id") or ""): row for row in patient_rows if _patient_matches(row, profile)}
     if not matches and not cached_patient_id:
         # eCW can store a multiword family name when the patient supplies only
-        # its last word. Search the documented name+DOB route, then require a
-        # unique first-name, middle-initial, surname-suffix and DOB match.
-        patient_rows = await _search(client, issuer, token, "Patient", {
-            "name": str(profile.get("patient_last_name") or ""),
-            "birthdate": str(profile.get("patient_birth_date") or ""),
-        })
-        matches = {str(row.get("id") or ""): row for row in patient_rows
-                   if _patient_matches(row, profile, family_suffix=True)}
+        # its last word. eCW may index a multiword name by its first word, so
+        # search both supplied name parts with DOB and require a unique match.
+        for term in dict.fromkeys((str(profile.get("patient_last_name") or ""),
+                                   str(profile.get("patient_first_name") or ""))):
+            patient_rows = await _search(client, issuer, token, "Patient", {
+                "name": term, "birthdate": str(profile.get("patient_birth_date") or ""),
+            })
+            matches.update({str(row.get("id") or ""): row for row in patient_rows
+                            if _patient_matches(row, profile, family_suffix=True)})
+        if not matches:
+            patient_rows = await _search(client, issuer, token, "Patient", {
+                "given": str(profile.get("patient_first_name") or ""),
+                "birthdate": str(profile.get("patient_birth_date") or ""),
+            })
+            matches = {str(row.get("id") or ""): row for row in patient_rows
+                       if _patient_matches(row, profile, family_suffix=True)}
     if not matches:
         raise EcwBackendError("No eClinicalWorks patient matched the entered name and date of birth. Check the patient's eCW record before continuing.")
     if len(matches) != 1:
