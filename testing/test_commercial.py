@@ -1,7 +1,11 @@
+import asyncio
 import unittest
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
-from app.api.routers.commercial_estimator import _attach_previsit_pricing, _ecw_practice_config, _appointment_readiness, _coverage_snapshot, _ecw_conflicts, _practice_path, _past_visit_with_saved_estimate, _previsit_codes, _previsit_range, _subscriber_identity, stedi_request_body
+from fastapi import HTTPException
+
+from app.api.routers import staff as staff_api
+from app.api.routers.commercial_estimator import _attach_previsit_pricing, _ecw_practice_config, _appointment_readiness, _coverage_snapshot, _ecw_conflicts, _practice_path, _previsit_practice_path, _past_visit_with_saved_estimate, _previsit_codes, _previsit_range, _subscriber_identity, stedi_request_body
 from app.insurance.commercial import CommercialError, estimate, normalize_stedi_271, parse_rate_csv
 from app.insurance import commercial_store
 from app.insurance.ecw_backend import _patient_matches, _payer_id
@@ -9,6 +13,57 @@ from app.insurance.stedi_payers import select_payer
 
 
 class CommercialRulesTest(unittest.TestCase):
+    def test_patient_uses_only_its_matching_payer_and_product_contract(self):
+        payers = {key: {"id": key, "category": "commercial_medical", "status": "staff_guidance_enabled"}
+                  for key in ("bcbstx", "uhc")}
+        networks = [{"id": key + "-network", "payer_connection_id": key, "status": "verified",
+                     "billing_npi": "1111111111", "rendering_npi": "2222222222", "location_id": "office",
+                     "place_of_service": "11", "plan_matcher": plan, "effective_from": "2026-01-01"}
+                    for key, plan in (("bcbstx", "CI"), ("uhc", "Group PPO"))]
+        profiles = [{"payer_connection_id": row["payer_connection_id"], "provider_network_id": row["id"],
+                     "status": "staff_guidance_enabled", "plan_matcher": row["plan_matcher"],
+                     "rules": {"plan_product_names": [product]}}
+                    for row, product in zip(networks, ("BCBSTX Blue Choice PPO", "UnitedHealthcare Group Medicare Advantage (PPO)"))]
+        inputs = {"payer_id": "uhc", "service_date": "2026-10-02", "rendering_provider": {"npi": "2222222222"},
+                  "place_of_service": "11"}
+        source = {"billing_provider": {"npi": "1111111111"}, "location_id": "office", "plan": "Group PPO",
+                  "payer_plan_names": ["UnitedHealthcare Group Medicare Advantage (PPO)"]}
+        with patch.object(commercial_store, "connection", side_effect=lambda _, key: payers.get(key)), \
+             patch.object(commercial_store, "list_networks", return_value=networks), \
+             patch.object(commercial_store, "list_profiles", return_value=profiles):
+            self.assertEqual(_previsit_practice_path("clinic", inputs, source)[1]["id"], "uhc-network")
+            with self.assertRaisesRegex(HTTPException, "exact payer product"):
+                _previsit_practice_path("clinic", inputs, {**source, "payer_plan_names": ["Regional PPO"]})
+
+    def test_activating_another_schedule_does_not_supersede_all_payer_contracts(self):
+        db = MagicMock(spec=["execute", "__enter__", "__exit__"])
+        db.__enter__.return_value = db
+        db.execute.return_value.fetchone.return_value = {"id": "new-version", "payer_connection_id": "uhc",
+                                                         "source_reference": "library:group-ppo"}
+        with patch.object(commercial_store, "_connection", return_value=db):
+            commercial_store.activate_rates("clinic", "new-version")
+        supersede = [call for call in db.execute.call_args_list if "SET status='superseded'" in call.args[0]]
+        self.assertEqual(len(supersede), 1)
+        self.assertIn("source_reference=%s", supersede[0].args[0])
+        self.assertEqual(supersede[0].args[1], ("clinic", "uhc", "library:group-ppo", "new-version"))
+
+    def test_retiring_outdated_rates_is_practice_scoped_and_admin_only(self):
+        db = MagicMock(spec=["execute", "__enter__", "__exit__"])
+        db.__enter__.return_value = db
+        db.execute.return_value.fetchone.return_value = {"id": "old-version", "status": "retired"}
+        with patch.object(commercial_store, "_connection", return_value=db):
+            self.assertEqual(commercial_store.retire_rates("clinic", "old-version")["status"], "retired")
+        query, params = db.execute.call_args.args
+        self.assertIn("status='active'", query)
+        self.assertIn("practice_id=%s", query)
+        self.assertEqual(params, ("old-version", "clinic"))
+        with patch.object(staff_api, "require_staff", new=AsyncMock(return_value={"practice_id": "clinic", "role": "staff"})), \
+             patch.object(commercial_store, "retire_rates") as retire:
+            with self.assertRaises(HTTPException) as denied:
+                asyncio.run(staff_api.retire_library_rate_version("old-version", object()))
+            self.assertEqual(denied.exception.status_code, 403)
+            retire.assert_not_called()
+
     def test_practice_mappings_reject_conflicts_independent_of_row_order(self):
         payers = [{"id": key, "display_name": name, "aliases": ["Shared insurance"],
                    "category": "commercial_medical", "status": "staff_guidance_enabled"}
@@ -313,7 +368,7 @@ class CommercialRulesTest(unittest.TestCase):
         self.assertEqual(result["ecw"]["payer"], "Real eCW payer")
         self.assertTrue(any("Stedi payer ID" in item for item in result["blockers"]))
         self.assertTrue(any("provider-network" in item for item in result["blockers"]))
-        self.assertTrue(any("contracted CPT" in item for item in result["blockers"]))
+        self.assertFalse(any("contracted CPT" in item for item in result["blockers"]))
         self.assertTrue(any("CPT/HCPCS-coded" in item for item in result["blockers"]))
         self.assertFalse(any("rendering provider NPI" in item for item in result["blockers"]))
 
@@ -334,7 +389,9 @@ class CommercialRulesTest(unittest.TestCase):
         with patch("app.api.routers.commercial_estimator.commercial_store.list_connections", return_value=[payer]), \
              patch("app.api.routers.commercial_estimator.commercial_store.list_networks", return_value=[network]), \
              patch("app.api.routers.commercial_estimator.commercial_store.list_profiles", return_value=[profile]), \
-             patch("app.api.routers.commercial_estimator.commercial_store.list_rate_versions", return_value=[{"status": "active"}]), \
+             patch("app.api.routers.commercial_estimator.commercial_store.list_rate_versions", return_value=[
+                 {"payer_connection_id": "another-payer", "status": "active", "effective_from": "2026-01-01"},
+                 {"payer_connection_id": "bcbs", "status": "active", "effective_from": "2026-01-01"}]), \
              patch("app.api.routers.commercial_estimator._ecw_coded_lines", return_value=([{"code": "99204", "units": 1, "allowed_cents": 25000}], [])), \
              patch("app.api.routers.commercial_estimator.object_store.enabled", return_value=True), \
              patch.dict("app.api.routers.commercial_estimator.os.environ", {"STEDI_EXECUTION_MODE": "commercial_pilot", "STEDI_LIVE_ELIGIBILITY_ENABLED": "true", "STEDI_API_KEY": "test-only-key"}):

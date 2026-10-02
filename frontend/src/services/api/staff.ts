@@ -112,6 +112,7 @@ export interface Era835Summary {
 
 export const getStaffLibrary = () => request<{ documents: StaffLibraryDocument[] }>('/api/staff/library')
 export const uploadStaffLibrary = (body: FormData) => request<StaffLibraryDocument>('/api/staff/library', { method: 'POST', body })
+export const retireStaffRateVersion = (id: string) => request<{ id: string; status: string }>(`/api/staff/library/rate-versions/${encodeURIComponent(id)}/retire`, json({}))
 export const getStaffEra835 = (documentId: string) => request<Era835Summary>(`/api/staff/library/${encodeURIComponent(documentId)}/era`)
 export const createStaffIntakeFromShare = () => request<StaffIntake>('/api/doctor/insurance/staff-intake', json({}))
 export const downloadStaffDocument = (intakeId: string, documentId: string, filename: string) => downloadStaffFile(`/api/staff/intakes/${encodeURIComponent(intakeId)}/documents/${encodeURIComponent(documentId)}`, filename)

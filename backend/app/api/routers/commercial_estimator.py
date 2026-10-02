@@ -308,14 +308,8 @@ def _practice_path(practice_id: str, inputs: dict, source: dict) -> tuple[dict, 
 
 
 def _previsit_practice_path(practice_id: str, inputs: dict, source: dict) -> tuple[dict, dict, dict]:
-    """Use a scoped clinic contract as an estimate when only its product label differs."""
-    try:
-        return _practice_path(practice_id, inputs, source)
-    except HTTPException as exc:
-        if exc.detail != 'The clinic fee schedule is not matched to the exact payer product.':
-            raise
-    payer, network, profile = _practice_path(practice_id, inputs, {**source, 'payer_plan_names': []})
-    return payer, {**network, 'product_assumed': True}, profile
+    """Only price the payer product verified for this visit."""
+    return _practice_path(practice_id, inputs, source)
 
 
 def _appointment_readiness(practice_id: str, session: dict, inputs: dict, source: dict) -> dict:
@@ -335,8 +329,6 @@ def _appointment_readiness(practice_id: str, session: dict, inputs: dict, source
         blockers.append("Clinic setup: no verified provider-network participation record is available for this practice.")
     if not any(row["status"] == "staff_guidance_enabled" for row in all_profiles):
         blockers.append("Clinic setup: no enabled estimate profile is available for this practice.")
-    if not any(row["status"] == "active" for row in rate_versions):
-        blockers.append("Clinic setup: no actual contracted CPT rate version is active for this practice.")
 
     service_date = str(inputs.get("service_date") or "")
     rendering_npi = str((inputs.get("rendering_provider") or {}).get("npi") or "")
@@ -379,13 +371,15 @@ def _appointment_readiness(practice_id: str, session: dict, inputs: dict, source
         blockers.append("A scheduled eClinicalWorks service has a modifier; a matching contracted rate is required.")
     elif any(not row.get("units") for row in planned):
         blockers.append("eClinicalWorks did not return units for every scheduled coded service.")
-    if profile and planned:
+    payer_rates_active = bool(payer and any(
+        row.get("payer_connection_id") == payer["id"] and row["status"] == "active"
+        and row["effective_from"] <= service_date and (not row.get("effective_to") or row["effective_to"] >= service_date)
+        for row in rate_versions))
+    if payer and not payer_rates_active:
+        blockers.append("Clinic setup: import and activate this payer's contracted CPT rates effective on this visit date.")
+    if profile and planned and payer_rates_active:
         _, rate_tasks = _ecw_coded_lines(practice_id, profile, network, service_date, inputs)
         blockers.extend(rate_tasks)
-    elif payer and not any(row["payer_connection_id"] == payer["id"] and row["status"] == "active"
-                           and row["effective_from"] <= service_date and (not row.get("effective_to") or row["effective_to"] >= service_date)
-                           for row in rate_versions):
-        blockers.append("Clinic setup: import and activate the actual contracted CPT rates effective on this visit date.")
 
     coverage = _coverage_snapshot(inputs, source)
     if coverage["active_coverages"] != 1 or not coverage["coverage_id"]:
@@ -506,8 +500,6 @@ def _previsit_range(practice_id: str, inputs: dict, source: dict, payer_id: str,
             raise commercial.CommercialError("Map the appointment location to its place of service.")
         rates = commercial_store.matching_rates(practice_id, profile, network, inputs["service_date"], selected)
         rules = {**rules, **profile['rules']}
-        if network.get('product_assumed') and benefits.get('network_status') != 'out_of_network':
-            benefits = {**benefits, 'network_status': 'in_network'}
     except (HTTPException, commercial.CommercialError) as exc:
         issues.append(str(exc.detail) if isinstance(exc, HTTPException) else str(exc))
     priced = visit_estimate.price_lines(selected, rates, benefits, rules, payload=payload,
@@ -557,11 +549,8 @@ def _attach_previsit_pricing(result: dict, practice_id: str, inputs: dict, sourc
     connection = connections[0]
     try:
         _, network, _ = _previsit_practice_path(practice_id, {**inputs, "payer_id": connection["id"]}, source)
-        if network.get('product_assumed'):
-            result['pricing_assumptions'] = [f"Estimated using the clinic's {network['network_name']} contract for this payer, provider, location and visit date. The payer product label differs; exact product participation is assumed."]
-        else:
-            benefits["network_status"] = "in_network"
-        result['network_evidence'] = {key: network.get(key) for key in ('network_name', 'evidence_reference', 'effective_from', 'effective_to', 'product_assumed')}
+        benefits["network_status"] = "in_network"
+        result['network_evidence'] = {key: network.get(key) for key in ('network_name', 'evidence_reference', 'effective_from', 'effective_to')}
         products = {re.sub(r'[^a-z0-9]', '', name.casefold()) for name in source.get('payer_plan_names', [])}
         if plan_benefits.network_match(payer_id, products, network.get('network_name', '')):
             result['network_evidence']['product_source'] = plan_benefits.FEP_NETWORK
@@ -1118,14 +1107,17 @@ async def _recover_previsit(case: dict, session: dict, provider: dict) -> None:
                 discovery.update(request_state='rejected', outcome='rejected')
             # With no directory route, discovery must prove the same active eCW
             # policy before choosing a payer automatically.
-            if discovery['request_state'] != 'complete' or len(candidates) != 1:
+            matching = [row for row in candidates if
+                        (stedi_discovery.patient_matches(items[row['index']], inputs) if payer_id else
+                         stedi_discovery.matches_ecw_policy(items[row['index']], inputs, context['source']))]
+            if discovery['request_state'] != 'complete' or len(matching) != 1:
                 if not payer_id:
                     context['result']['eligibility_failure']['detail'] = (
                         'The eCW payer name and ID did not identify one Stedi route. Insurance discovery did not return one active policy matching this patient, eCW member ID, and visit date. Coverage remains unverified, not proven inactive.')
                     discovery['selection_error'] = context['result']['eligibility_failure']['detail']
                 await run_in_threadpool(_save, case, session, 'stedi-discovery-finished')
                 return
-            candidate = candidates[0]
+            candidate = matching[0]
             item = items[candidate['index']]
             payer = item.get('payer') or {}
             match = await stedi_payers.search_payer(payer.get('name') or payer.get('lastName') or '',

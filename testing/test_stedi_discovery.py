@@ -71,8 +71,9 @@ def test_automatic_payer_recovery_requires_same_active_ecw_policy():
     assert discovery.matches_ecw_policy(no_address, inputs, source)
     assert not discovery.matches_ecw_policy(item, {**inputs, 'member_id': 'different'}, source)
     assert not discovery.matches_ecw_policy(item, inputs, {**source, 'active_coverages': 2})
-    assert not discovery.matches_ecw_policy(item, inputs, {**source, 'payer': 'Unrelated Insurer'})
-    assert discovery.matches_ecw_policy(item, inputs, {**source, 'payer': 'Unrelated Insurer', 'payer_identifiers': ['example']})
+    assert discovery.matches_ecw_policy(item, inputs, {**source, 'payer': 'UHC Medicare'})
+    assert not discovery.matches_ecw_policy(item, inputs, {**source, 'payer_identifiers': ['different-payer']})
+    assert discovery.matches_ecw_policy(item, inputs, {**source, 'payer_identifiers': ['example']})
     inactive = deepcopy(item)
     inactive['benefitsInformation'] = [{'code': '6', 'serviceTypeCodes': ['30']}]
     inactive.pop('plans', None)
@@ -185,12 +186,16 @@ class RecoveryTest(IsolatedAsyncioTestCase):
         self.cash_patch.start()
         self.addCleanup(self.cash_patch.stop)
 
-    async def exercise(self, response, *, directory='payer', timeout=False, saved=False, unroutable=False):
+    async def exercise(self, response, *, directory='payer', timeout=False, saved=False, unroutable=False,
+                       matching_ecw=False):
         case, session, provider, _ = setup()
         if unroutable:
             case['previsit_context']['payer_id'] = None
             case['previsit_context']['result'].update(eligibility_error='payer_routing_unresolved',
                 eligibility_failure={'kind': 'payer_routing_unresolved', 'detail': 'Payer route unresolved', 'codes': []})
+        if matching_ecw:
+            case['previsit_context']['inputs']['member_id'] = 'new-id'
+            case['previsit_context']['source']['payer'] = 'UHC Medicare'
         client = MagicMock(); client.__aenter__ = AsyncMock(return_value=client); client.__aexit__ = AsyncMock(return_value=None)
         final = {**payload(), 'id': 'verified', 'subscriber': {'memberId': 'new-id'}}
         client.post = AsyncMock(side_effect=httpx.ReadTimeout('timeout') if timeout else
@@ -230,6 +235,18 @@ class RecoveryTest(IsolatedAsyncioTestCase):
         assert not any('identity' in reason for reason in api._case_benefits(raw, planned, context['source'], case)['review_reasons'])
         changed = {**context['inputs'], 'service_date': '2099-01-01'}
         assert any('identity' in reason for reason in api._case_benefits(raw, changed, context['source'], case)['review_reasons'])
+
+    async def test_unroutable_label_selects_one_active_ecw_member_among_discovery_results(self):
+        _, _, _, item = setup()
+        item['payer']['name'] = 'UnitedHealthcare Group Medicare Advantage PPO'
+        other = deepcopy(item)
+        other['subscriber']['memberId'] = 'another-member'
+        case, client, _ = await self.exercise(
+            {'status': 'COMPLETE', 'coveragesFound': 2, 'items': [other, item]},
+            unroutable=True, matching_ecw=True)
+        assert case['previsit_discovery']['outcome'] == 'recovered'
+        assert client.post.await_count == 2
+        assert case['previsit_context']['result']['benefits']['active'] is True
 
     async def test_no_match_ambiguous_patient_or_other_payer_never_becomes_inactive_or_quoted(self):
         _, _, _, item = setup()

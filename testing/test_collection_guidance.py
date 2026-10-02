@@ -136,13 +136,14 @@ def test_office_and_telehealth_benefits_are_scoped_to_actual_visit_location():
     assert commercial.normalize_stedi_271(payload, '98', True, place_of_service='11', **args)['authorization_signal'] == 'required'
 
 
-def test_product_label_fallback_does_not_bypass_provider_location_or_date_matching():
+def test_product_mismatch_never_falls_back_to_another_contract():
     mismatch = HTTPException(409, 'The clinic fee schedule is not matched to the exact payer product.')
-    with patch.object(api, '_practice_path', side_effect=[mismatch, ({}, {'network_name': 'PPO'}, {})]) as path:
-        _, network, _ = api._previsit_practice_path('clinic', {'place_of_service': '11'}, {'payer_plan_names': ['Product']})
-        assert network['product_assumed'] is True
+    with patch.object(api, '_practice_path', side_effect=mismatch) as path:
+        with pytest.raises(HTTPException, match='exact payer product'):
+            api._previsit_practice_path('clinic', {'place_of_service': '11'}, {'payer_plan_names': ['Product']})
+        assert path.call_count == 1
         assert path.call_args.args[1] == {'place_of_service': '11'}
-        assert path.call_args.args[2]['payer_plan_names'] == []
+        assert path.call_args.args[2]['payer_plan_names'] == ['Product']
     with patch.object(api, '_practice_path', side_effect=HTTPException(409, 'Provider record missing')) as path:
         with pytest.raises(HTTPException):
             api._previsit_practice_path('clinic', {}, {})
