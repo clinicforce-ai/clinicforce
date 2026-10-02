@@ -1157,6 +1157,53 @@ async def _recover_previsit(case: dict, session: dict, provider: dict) -> None:
         await run_in_threadpool(_save, case, session, 'stedi-discovery-indeterminate')
 
 
+async def _reconcile_saved_discovery(case: dict, session: dict) -> None:
+    """Add current safe match diagnostics to a legacy discovery response.
+
+    This reads the protected response already obtained from Stedi. It must never
+    turn opening an older estimate into a new discovery or eligibility request.
+    """
+    context, discovery = case['previsit_context'], case['previsit_discovery']
+    try:
+        payload = json.loads(await run_in_threadpool(object_store.get_object_bytes, discovery['raw_object_key']))
+        if not isinstance(payload, dict):
+            raise ValueError('Invalid saved discovery response')
+        inputs, source = context['inputs'], context['source']
+        items = payload.get('items') or []
+        candidates = stedi_discovery.candidates(payload, inputs)
+        for row in candidates:
+            row['matches_ecw_policy'] = stedi_discovery.matches_ecw_policy(items[row['index']], inputs, source)
+        discovery.update(request_state='complete', candidates=candidates,
+                         outcome='no_match' if not candidates else 'review_needed', checked_at=_now())
+        if payload.get('status') != 'COMPLETE' or payload.get('errors'):
+            discovery.update(request_state='rejected', outcome='rejected', stage='discovery_rejected',
+                             reason_code='discovery_request_rejected')
+        else:
+            matching = [row for row in candidates if row['matches_ecw_policy']]
+            reason = ('no_matching_ecw_policy' if not matching else 'multiple_matching_ecw_policies'
+                      if len(matching) > 1 else 'matching_ecw_policy_ready')
+            discovery.update(stage='candidate_match_review', reason_code=reason)
+            if not matching:
+                context['result']['eligibility_failure']['detail'] = (
+                    'The eCW payer name and ID did not identify one Stedi route. Insurance discovery did not return '
+                    'an active policy matching this patient, eCW member ID, and visit date. Coverage remains unverified, not proven inactive.')
+            elif len(matching) > 1:
+                context['result']['eligibility_failure']['detail'] = (
+                    'The eCW payer name and ID did not identify one Stedi route. Insurance discovery returned multiple '
+                    'active policies matching this patient, eCW member ID, and visit date. Coverage remains unverified, not proven inactive.')
+            else:
+                context['result']['eligibility_failure']['detail'] = (
+                    'Insurance discovery found one active policy matching this patient, eCW member ID, and visit date. '
+                    'Review and select it before ClinicForce sends a follow-up eligibility check.')
+            discovery['selection_error'] = context['result']['eligibility_failure']['detail']
+        await run_in_threadpool(_save, case, session, 'stedi-discovery-reconciled')
+    except (ValueError, KeyError, TypeError, json.JSONDecodeError):
+        discovery.update(request_state='complete', outcome='review_needed', stage='saved_discovery_unavailable',
+                         reason_code='saved_discovery_unavailable',
+                         selection_error='The saved discovery response could not be read. Check the current insurance card before another discovery request.')
+        await run_in_threadpool(_save, case, session, 'stedi-discovery-reconcile-failed')
+
+
 def _discovered_coverage(inputs: dict, source: dict, item: dict) -> dict:
     identity = stedi_discovery.candidate_identity(item, inputs)
     if not identity:
@@ -1242,6 +1289,20 @@ async def _start_previsit_recovery(case: dict, session: dict, provider: dict, ba
     recovery = case.get('previsit_discovery') or {}
     if recovery and stedi_discovery.public_status(recovery)['state'] == 'indeterminate':
         recovery['request_state'] = 'indeterminate'
+    legacy_result = bool(
+        not case['previsit_context'].get('payer_id')
+        and recovery.get('request_state') == 'complete'
+        and recovery.get('outcome') == 'review_needed'
+        and recovery.get('raw_object_key')
+        and any('matches_ecw_policy' not in row for row in recovery.get('candidates') or [])
+    )
+    if legacy_result and background_tasks is not None:
+        recovery.update(request_state='pending', stage='reconciling_saved_discovery',
+                        reason_code='reconciling_saved_discovery')
+        case['previsit_discovery'] = recovery
+        case = await run_in_threadpool(_save, case, session, 'stedi-discovery-reconciling')
+        background_tasks.add_task(_reconcile_saved_discovery, case, session)
+        return _previsit_result(case)
     failure = result.get('eligibility_failure') or {}
     identity_errors = {'65', '67', '71', '72', '73', '75'}
     ready = bool(background_tasks is not None and
