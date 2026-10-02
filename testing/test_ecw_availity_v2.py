@@ -337,12 +337,17 @@ class EcwBackendSourceTests(unittest.IsolatedAsyncioTestCase):
         other = {**patient, "id": "patient-2", "name": [{"given": ["Sample", "Taylor"], "family": "Other Vale"}]}
         async def search(_, __, ___, resource, params):
             self.assertEqual(resource, "Patient")
-            return [patient] if "name" in params else []
+            return [patient] if params.get("name") == "Sample" else []
         with patch.object(ecw_backend, "_search", new=AsyncMock(side_effect=search)) as query:
             matched, patient_id, _ = await ecw_backend._patient_for_profile(None, "", "", profile)
         self.assertEqual((matched, patient_id), (patient, "patient-1"))
-        self.assertEqual(query.await_count, 3)
-        self.assertEqual(query.await_args.args[-1], {"name": "Vale", "birthdate": "1980-01-01"})
+        self.assertEqual(query.await_count, 4)
+        self.assertEqual(query.await_args.args[-1], {"name": "Sample", "birthdate": "1980-01-01"})
+        with patch.object(ecw_backend, "_search", new=AsyncMock(
+                side_effect=lambda *args: [patient] if args[-1] == {"given": "Sample", "birthdate": "1980-01-01"} else [])) as query:
+            matched, patient_id, _ = await ecw_backend._patient_for_profile(None, "", "", profile)
+        self.assertEqual((matched, patient_id), (patient, "patient-1"))
+        self.assertEqual(query.await_count, 5)
         with patch.object(ecw_backend, "_search", new=AsyncMock(side_effect=lambda *args: [patient, other] if "name" in args[-1] else [])):
             with self.assertRaisesRegex(ecw_backend.EcwBackendError, "Multiple eClinicalWorks patients matched"):
                 await ecw_backend._patient_for_profile(None, "", "", profile)
