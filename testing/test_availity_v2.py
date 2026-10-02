@@ -158,6 +158,25 @@ class ResultsAndIntakeTests(unittest.TestCase):
                                                        'certificationEffectiveDate': '2026-09-01', 'certificationExpirationDate': '2026-10-01'}}
         self.assertEqual(v2.front_desk_summary(case)['heading'], 'Collect $0.00 for the scheduled visit')
 
+    def test_estimate_waits_for_required_referral_and_authorization(self):
+        case = {'inputs': {'service_date': '2026-09-11', 'coverage_missing': [], 'review_missing': [],
+                           'patient_phone': '5552347700', 'diagnoses': ['G629'], 'lines': [
+                               {'code': '99204', 'units': '1', 'charge': '300.00', 'diagnosis': 'G629', 'service_status': 'scheduled'},
+                           ]}, 'transactions': {'coverage': {'result': {'active': True, 'plans': [{
+                               'insuranceType': 'HMO', 'benefits': [{'authorizationRequired': True}],
+                           }]}}}}
+        required = v2.request_missing(case, 'estimate')
+        self.assertIn('Complete and obtain an approved referral', ' '.join(required))
+        self.assertIn('Complete and obtain an approved prior authorization', ' '.join(required))
+        case['transactions'].update({
+            'referral': {'result': {'status_code': 'A1', 'certificationNumber': 'REF-1',
+                                    'certificationEffectiveDate': '2026-09-01', 'certificationExpirationDate': '2026-10-01'}},
+            'authorization': {'result': {'status_code': 'A1'}},
+        })
+        ready = v2.request_missing(case, 'estimate')
+        self.assertNotIn('Complete and obtain an approved referral', ' '.join(ready))
+        self.assertNotIn('Complete and obtain an approved prior authorization', ' '.join(ready))
+
     def test_fee_csv_rejects_ambiguous_amount_column(self):
         with self.assertRaisesRegex(golden.GoldenCaseError, 'Cash Price and/or Billed Charge'):
             intake.read_fee_schedule(

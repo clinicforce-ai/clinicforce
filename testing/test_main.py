@@ -1343,7 +1343,7 @@ Final study type is determined by the physician.""")
             )
         self.assertEqual(response.status_code, 200, response.text)
         file = response.json()["files"][0]
-        self.assertEqual(file, {"contentType": "application/fhir+json", "location": "https://s3.example.test/signed"})
+        self.assertEqual(file, {"contentType": "application/fhir+json;fhirVersion=4.0.1", "location": "https://s3.example.test/signed"})
         put_payload.assert_called_once_with("A" * 43, "encrypted-payload")
         presign.assert_called_once_with("clinicforce/shl/token.jwe")
 

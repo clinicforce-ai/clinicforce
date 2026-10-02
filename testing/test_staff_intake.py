@@ -211,6 +211,53 @@ class StaffDatabaseTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len((await self.client.get("/api/staff/library")).json()["documents"]), 1)
         self.assertEqual((await self.client.get(f"/api/staff/library/{response.json()['id']}/document")).status_code, 200)
 
+    async def test_library_lists_all_clinic_files_and_opens_only_owned_documents(self):
+        self.assertEqual((await self.client.get("/api/staff/library")).status_code, 401)
+        actor = await self.sign_in()
+        documents = []
+        for kind, filename, content, content_type in [
+            ("contract", "Payer contract.pdf", card_pdf("Clinic contract"), "application/pdf"),
+            ("fee_schedule", "fees.csv", b"CPT,Billed Charge\n99213,200\n", "text/csv"),
+            ("self_pay", "cash.csv", b"CPT,Cash Price\n99213,100\n", "text/csv"),
+        ]:
+            response = await self.client.post("/api/staff/library", data={"kind": kind, "label": filename}, files={"file": (filename, content, content_type)})
+            self.assertEqual(response.status_code, 201, response.text)
+            document = response.json()
+            documents.append(document)
+            path = f"/api/staff/library/{document['id']}/document"
+            preview = await self.client.get(path + "?preview=true")
+            self.assertEqual(preview.status_code, 200)
+            self.assertEqual(preview.content, content)
+            self.assertTrue(preview.headers["Content-Disposition"].startswith("inline;"))
+            self.assertEqual(preview.headers["Content-Type"].split(";")[0], "application/pdf" if kind == "contract" else "text/plain")
+            self.assertEqual(preview.headers["Cache-Control"], "no-store")
+            self.assertEqual(preview.headers["Content-Security-Policy"], "sandbox")
+            download = await self.client.get(path)
+            self.assertTrue(download.headers["Content-Disposition"].startswith("attachment;"))
+            self.assertEqual(download.headers["Content-Type"].split(";")[0], content_type)
+
+        # Every saved version remains reachable, including beyond the former 200-file cutoff.
+        stored = staff_store.get_library(documents[0]["id"], actor["practice_id"])
+        for _ in range(198):
+            staff_store.create_library(actor, {**stored, "id": str(uuid4())})
+        listed = (await self.client.get("/api/staff/library")).json()["documents"]
+        self.assertEqual(len(listed), 201)
+        self.assertTrue({doc["id"] for doc in documents}.issubset({doc["id"] for doc in listed}))
+        self.assertTrue(all("object_key" not in doc and "created_by" not in doc for doc in listed))
+
+        staff_store.create_member(actor, "library-reader", "Clinic reader", ADMIN_PASSWORD, "staff")
+        await self.sign_in("library-reader")
+        self.assertEqual(len((await self.client.get("/api/staff/library")).json()["documents"]), 201)
+        path = f"/api/staff/library/{documents[0]['id']}/document"
+        self.assertEqual((await self.client.get(path + "?preview=true")).status_code, 200)
+        staff_store.create_member({**actor, "practice_id": "another-clinic"}, "other-reader", "Other clinic", ADMIN_PASSWORD, "staff")
+        await self.sign_in("other-reader")
+        self.assertEqual((await self.client.get("/api/staff/library")).json()["documents"], [])
+        self.assertEqual((await self.client.get(path)).status_code, 404)
+        self.assertEqual((await self.client.get(path + "?preview=true")).status_code, 404)
+        await self.client.post("/api/staff/logout")
+        self.assertEqual((await self.client.get(path + "?preview=true")).status_code, 401)
+
     async def test_manual_fallback_survives_ocr_failure_and_ocr_replaces_card_values(self):
         await self.sign_in()
         response = await self.client.post("/api/staff/intakes", data={"full_name": "Pat Example", "member_id": "MEM-MANUAL", "birth_date": "1990-01-01"}, files=[("files", ("card.pdf", card_pdf("Member ID: MEM-CARD\nDOB: 02/03/1991"), "application/pdf"))])

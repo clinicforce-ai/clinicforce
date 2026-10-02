@@ -56,7 +56,7 @@ def context_fingerprint(secret: str, context: dict[str, object]) -> str:
     if not secret:
         raise CommercialError("Commercial evidence fingerprinting is not configured.")
     fields = ("practice_id", "patient_id", "coverage_id", "subscriber_relationship", "payer_connection_id",
-              "service_date", "rendering_npi", "place_of_service", "service_category")
+              "service_date", "rendering_npi", "place_of_service", "service_category", "appointment_id", "member_id", "ecw_coverage_id")
     canonical = "|".join(str(context.get(field) or "") for field in fields)
     return hmac.new(secret.encode(), canonical.encode(), hashlib.sha256).hexdigest()
 
@@ -159,11 +159,14 @@ def _stedi_entries(payload: dict[str, Any]) -> list[dict[str, Any]]:
                     entries.append({"code": code, "benefitAmount": row.get("amount"), "percent": row.get("percent"),
                                     "coverageLevel": row.get("coverageLevel"), "network": row.get("network"),
                                     "timeQualifier": row.get("timePeriod"), "priorAuthIndicator": row.get("priorAuthIndicator"),
+                                    "authOrCertIndicator": row.get("authOrCertIndicator"),
+                                    "additionalInformation": row.get("additionalInformation"),
                                     "serviceTypeCodes": row.get("serviceTypeCodes", [])})
     return entries
 
 
-def normalize_stedi_271(payload: dict[str, Any], service_type_code: str, provider_network_verified: bool) -> dict[str, Any]:
+def normalize_stedi_271(payload: dict[str, Any], service_type_code: str, provider_network_verified: bool,
+                        other_active_coverage: bool = False) -> dict[str, Any]:
     """Normalize only unambiguous individual in-network schedule benefits.
 
     A 271 benefit network is not provider participation.  That is supplied by
@@ -201,23 +204,43 @@ def normalize_stedi_271(payload: dict[str, Any], service_type_code: str, provide
         return selected[0] if len(selected) == 1 else None
     deductible, oop = pick("C", True), pick("G", True)
     copay, coinsurance = pick("B"), pick("A")
-    prior_auth = any(str(row.get("priorAuthIndicator") or "").upper() == "REQUIRED" for _, row in wanted)
+    # Requirement signals may be returned without an explicit network flag.
+    # Such rows cannot set a dollar benefit, but must still block a quote.
+    relevant = [row for row in entries if not row.get("serviceTypeCodes") or
+                service_type_code in {str(value) for value in row.get("serviceTypeCodes", [])} or
+                "30" in {str(value) for value in row.get("serviceTypeCodes", [])}]
+    auth_flags = {str(row.get("authOrCertIndicator") or row.get("priorAuthIndicator") or "").upper()
+                  for row in relevant}
+    prior_auth = bool(auth_flags & {"Y", "U", "REQUIRED", "UNKNOWN"})
+    auth_unknown = not auth_flags or auth_flags - {"", "N", "NOT_REQUIRED"} or not (auth_flags & {"N", "NOT_REQUIRED"})
+    messages = [str(item.get("description") or item.get("message") or "" if isinstance(item, dict) else item).casefold()
+                for row in relevant for item in (row.get("additionalInformation") or [])]
+    requirements = any("referral" in message or "authoriz" in message or "precert" in message for message in messages)
+    limitations = any(str(row.get("code") or "").upper() in {"F", "Y"} for row in relevant)
     deductible_cents = _stedi_cents(deductible.get("benefitAmount")) if deductible else None
     oop_cents = _stedi_cents(oop.get("benefitAmount")) if oop else None
     copay_cents = _stedi_cents(copay.get("benefitAmount")) if copay else None
     try:
-        coinsurance_percent = Decimal(str(coinsurance.get("percent"))) if coinsurance else None
+        if coinsurance:
+            raw_percent = coinsurance.get("benefitPercent")
+            raw_percent = raw_percent if raw_percent is not None else coinsurance.get("percent")
+            coinsurance_percent = Decimal(str(raw_percent)) if raw_percent is not None else None
+            if coinsurance_percent is not None and coinsurance_percent <= 1:
+                coinsurance_percent *= 100
+        else:
+            coinsurance_percent = None
         if coinsurance_percent is not None and not Decimal("0") <= coinsurance_percent <= Decimal("100"):
             coinsurance_percent = None
     except Exception:
         coinsurance_percent = None
     missing = active is not True or deductible_cents is None or oop_cents is None or (copay_cents is None and coinsurance_percent is None)
+    multiple_plans = len([plan for plan in payload.get("plans", []) if isinstance(plan, dict)]) > 1
     return {"active": active, "coverage_level": "individual" if wanted else "unknown",
             "network_status": "in_network" if provider_network_verified else "unknown",
             "deductible_remaining_cents": deductible_cents, "oop_remaining_cents": oop_cents,
             "copay_cents": copay_cents, "coinsurance_percent": str(coinsurance_percent) if coinsurance_percent is not None else None,
-            "has_secondary": False, "requires_review": bool(missing or prior_auth),
-            "authorization_signal": "required" if prior_auth else "not_returned",
+            "has_secondary": other_active_coverage, "requires_review": bool(missing or prior_auth or auth_unknown or requirements or limitations or multiple_plans or other_active_coverage),
+            "authorization_signal": "review" if prior_auth else "unknown" if auth_unknown else "not_required",
             "normalization_notes": ["Stedi 271 benefit schedule does not prove provider participation."]}
 
 

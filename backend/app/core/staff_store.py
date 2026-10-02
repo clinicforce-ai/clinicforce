@@ -214,7 +214,7 @@ def create_intake(intake_id: str, staff: dict, documents: list[dict], source: st
         row = connection.execute(
             """INSERT INTO staff_intakes (id,practice_id,created_by,status,documents,events,created_at,updated_at,source,source_portal_patient_id,fields,field_sources)
                VALUES (%s,%s,%s,'needs_confirmation',%s::jsonb,%s::jsonb,%s,%s,%s,%s,%s::jsonb,%s::jsonb) RETURNING *""",
-            (intake_id, staff["practice_id"], staff["id"], json.dumps(documents), json.dumps([_event("QR patient details received" if source == "clinicforce_qr" else "Insurance card received", staff)]), stamp, stamp,
+            (intake_id, staff["practice_id"], staff["id"], json.dumps(documents), json.dumps([_event("eCW patient lookup started" if source == "ecw_lookup" else "QR patient details received" if source == "clinicforce_qr" else "Insurance card received", staff)]), stamp, stamp,
              source, source_portal_patient_id, json.dumps(fields or {}), json.dumps({key: source for key in fields or {}})),
         ).fetchone()
     return {**dict(row), "patient": None}
@@ -353,7 +353,7 @@ def confirm_patient(intake_id: str, staff: dict, data: dict) -> dict | None:
             return None
         if intake["workflows"]:
             raise ValueError("Start a new intake before changing details used by an insurance workflow.")
-        if intake["source"] != "clinicforce_qr" and not data.get("member_id"):
+        if intake["source"] not in {"clinicforce_qr", "ecw_lookup"} and not data.get("member_id"):
             raise ValueError("Confirm the insurance member ID before starting verification.")
         identity_changed = any(str(intake["fields"].get(key, "")).strip().casefold() != str(data[key]).strip().casefold() for key in ("given_name", "family_name", "birth_date"))
         portal_patient_id = None if identity_changed else intake["source_portal_patient_id"]
@@ -429,7 +429,7 @@ def add_event(intake_id: str, practice_id: str, action: str, actor: dict | str |
 
 def list_library(practice_id: str) -> list[dict]:
     with _connection() as connection:
-        rows = connection.execute("SELECT * FROM staff_library WHERE practice_id = %s ORDER BY created_at DESC LIMIT 200", (practice_id,)).fetchall()
+        rows = connection.execute("SELECT * FROM staff_library WHERE practice_id = %s ORDER BY created_at DESC, id DESC", (practice_id,)).fetchall()
     return [dict(row) for row in rows]
 
 

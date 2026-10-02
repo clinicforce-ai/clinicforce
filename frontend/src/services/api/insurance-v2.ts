@@ -30,15 +30,24 @@ export interface V2ReviewLine {
 export interface V2Transaction {
   outcome: 'submitting' | 'pending' | 'complete' | 'input_error' | 'payer_error' | 'unavailable' | 'indeterminate'
   message?: string; resource_id?: string; transaction_id?: string; submitted_at?: string; checked_at?: string
+  source?: 'availity' | 'stedi'
   mock_response?: boolean; next_poll_at?: number
   http_status?: number
   result?: {
+    source?: 'availity' | 'stedi'; check_id?: string; confidence?: string
     payer?: string; status?: string; active?: boolean | null; as_of_date?: string; plans?: V2Plan[]; pce_available?: boolean
     provider_network?: string; provider_network_status?: 'in_network' | 'out_of_network' | 'unconfirmed'; notes?: string[]; message?: string; disclaimer?: string
     estimate_available?: boolean; lines?: V2PriceLine[]; patient_cents?: number | null; allowed_cents?: number | null
     status_code?: string; certificationNumber?: string; certificationEffectiveDate?: string; certificationExpirationDate?: string
     fromDate?: string; toDate?: string; procedures?: V2ReviewLine[]
   }
+}
+export interface V2ManualReview {
+  source: 'payer_portal' | 'payer_call'
+  network_status: 'in_network' | 'out_of_network' | 'unconfirmed'; network_reference: string
+  referral_status: 'unconfirmed' | 'not_required' | 'approved' | 'required'; referral_reference: string
+  authorization_status: 'unconfirmed' | 'not_required' | 'approved' | 'required'; authorization_reference: string
+  price_path: 'pending' | 'cash'; verified_at?: string
 }
 export interface V2Case {
   id: string; revision: number; created_at: string; expires_at: string | null; environment: 'demo' | 'production'
@@ -63,6 +72,7 @@ export interface V2Case {
     lines: Array<{ code: string; description?: string; charge?: string; cash_cents?: number | null; group_id: string; recommendation_reason: string; requires_quantity: boolean; unit_label: string }>
     notes: string[]
   }
+  manual_review?: V2ManualReview
   summary: {
     action: 'collect' | 'verify' | 'do_not_schedule' | 'self_pay' | 'review_oon'; heading: string
     coverage: 'active' | 'inactive' | 'unconfirmed'; hmo: boolean
@@ -70,6 +80,7 @@ export interface V2Case {
     authorization: { required: boolean; unknown: boolean; approved: boolean; status?: string; reference?: string; effective?: string; expiration?: string }
     scheduled: { codes: string[]; insurance_cents?: number | null; allowed_cents?: number | null; cash_cents?: number | null; network?: string; network_status?: string }
     possible: { codes: string[]; insurance_cents?: number | null; allowed_cents?: number | null; cash_cents?: number | null; network?: string; network_status?: string }
+    manual_review: { source?: string; network_status?: string; price_path?: string }
   }
   events: Array<{ stage: string; at: string }>
 }
@@ -79,6 +90,7 @@ export const latestV2Case = () => request<{ case: V2Case | null }>(`${base}/case
 export const getV2Appointments = () => request<{ appointments: V2Appointment[] }>(`${base}/appointments`)
 export const createV2Case = (appointment_id?: string, scenario = 'Coverages-Complete-i') => request<V2Case>(`${base}/cases`, json({ scenario, ...(appointment_id ? { appointment_id } : {}) }))
 export const getV2Case = (id: string) => request<V2Case>(`${base}/cases/${encodeURIComponent(id)}`)
+export const saveV2ManualReview = (id: string, review: V2ManualReview) => request<V2Case>(`${base}/cases/${encodeURIComponent(id)}/manual-review`, { ...json(review), method: 'PUT' })
 export const getV2Requirements = (id: string) => request<V2Case>(`${base}/cases/${encodeURIComponent(id)}/requirements`, json({}))
 export const suggestV2Services = (id: string) => request<V2Case>(`${base}/cases/${encodeURIComponent(id)}/suggestions`, json({}))
 export const confirmV2Services = (id: string, lines: Array<{ code: string; quantity: number; service_status: 'scheduled' | 'possible' }>) => request<V2Case>(`${base}/cases/${encodeURIComponent(id)}/services`, json({ lines }))

@@ -116,7 +116,7 @@ input:focus, textarea:focus, select:focus { border-color: var(--blue); box-shado
 .workspace-grid { display: grid; grid-template-columns: minmax(0, 1fr); align-items: start; gap: 14px; }
 .workspace-tabs { position: static; display: flex; align-self: auto; overflow-x: auto; margin: 0; padding: 6px; }
 .workspace-tabs button { justify-content: center; }
-.workspace-main { display: grid; gap: 22px; }
+.workspace-main { display: grid; grid-template-columns: minmax(0, 1fr); min-width: 0; gap: 22px; }
 .section-card, .share-card, .summary-section { border: 1px solid var(--line); border-radius: 18px; background: var(--surface); box-shadow: var(--shadow-sm); }
 .section-card { padding: clamp(20px, 3vw, 28px); }
 .section-heading { display: flex; justify-content: space-between; gap: 16px; margin-bottom: 20px; }
@@ -480,7 +480,7 @@ td { line-height: 1.45; }
 .trend-chart h3 { margin: 0 8px 6px; color: var(--ink); font-size: .88rem; line-height: 1.35; }
 
 @media (max-width: 1100px) {
-  .workspace-grid { grid-template-columns: 1fr; }
+  .workspace-grid { grid-template-columns: minmax(0, 1fr); }
 }
 
 @media (max-width: 900px) {
@@ -490,7 +490,7 @@ td { line-height: 1.45; }
   .auth-layout > .back-control { grid-column: 1; order: -1; margin-top: 0; }
   .auth-aside { padding-block: 0; }
   .auth-panel { max-width: 580px; }
-  .workspace-grid { grid-template-columns: 1fr; }
+  .workspace-grid { grid-template-columns: minmax(0, 1fr); }
   .workspace-tabs { position: static; display: flex; overflow-x: auto; margin-bottom: 0; }
   .storage-choice { align-items: flex-start; flex-direction: column; }
   .storage-actions { justify-content: flex-start; }
@@ -510,6 +510,7 @@ td { line-height: 1.45; }
   .workspace-banner { align-items: flex-start; flex-wrap: wrap; }
   .signout-button { margin-left: 65px; }
   .workspace-stats { grid-template-columns: 1fr; }
+  .workspace .section-heading { flex-wrap: wrap; }
   .workspace-stats > div + div { border-top: 1px solid var(--line); border-left: 0; }
   .category-picker { grid-template-columns: repeat(2, 1fr); }
   .summary-hero { align-items: flex-start; flex-direction: column; }
@@ -653,6 +654,14 @@ td { line-height: 1.45; }
 .v2-price-explanation strong, .v2-price-explanation small { display: block; }
 .v2-price-explanation strong { color: var(--ink); font: 600 .72rem "Fira Code", monospace; }
 .v2-price-explanation small { margin-top: 4px; line-height: 1.5; }
+.v2-manual-review { padding: 38px 0; border-bottom: 1px solid var(--line); }
+.v2-manual-review > div > p:not(.section-kicker) { max-width: 70ch; color: var(--muted-ink); line-height: 1.65; }
+.v2-manual-review-form { margin-top: 22px; border: 1px solid #e7d6b4; border-left: 4px solid #ab741f; background: #fffaf0; padding: clamp(18px, 3vw, 28px); }
+.v2-manual-review-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+.v2-manual-review-grid label { display: grid; gap: 7px; color: var(--ink); font-size: .78rem; font-weight: 750; }
+.v2-manual-review-grid select, .v2-manual-review-grid input { min-height: 44px; border: 1px solid var(--line); border-radius: 6px; background: #fff; padding: 10px 12px; color: var(--ink); font: inherit; font-weight: 500; }
+.v2-manual-review-form .v2-next-step { margin: 18px 0 0; }
+.v2-manual-review-form .button { margin-top: 16px; }
 .v2-services, .v2-workflow { padding: 38px 0; border-bottom: 1px solid var(--line); }
 .v2-services > div:first-child > p:not(.section-kicker), .v2-workflow > p:not(.section-kicker) { max-width: 68ch; color: var(--muted-ink); line-height: 1.65; }
 .v2-fee-upload { position: relative; display: grid; grid-template-columns: 32px 1fr auto; align-items: center; gap: 14px; margin: 22px 0; border: 1px solid #9cc6d3; border-radius: 11px; background: #f3f9fb; padding: 18px; color: var(--blue-deep); cursor: pointer; }
@@ -715,6 +724,7 @@ td { line-height: 1.45; }
   .v2-fee-upload::after { grid-column: 2; width: fit-content; }
   .v2-service-list > div { grid-template-columns: 1fr; gap: 5px; }
   .v2-suggestion-controls { grid-template-columns: 1fr; margin-left: 0; }
+  .v2-manual-review-grid { grid-template-columns: 1fr; }
   .v2-action-list > article { grid-template-columns: 38px minmax(0, 1fr); gap: 10px; }
 }
 .beta-context-menu { position: fixed; z-index: 120; min-width: 170px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); padding: 6px; box-shadow: var(--shadow-lg); }

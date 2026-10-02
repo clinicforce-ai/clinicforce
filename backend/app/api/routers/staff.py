@@ -112,6 +112,20 @@ class PatientSearch(Model):
     birth_date: str = Field(default="", max_length=10)
 
 
+class EcwLookup(Model):
+    given_name: str = Field(min_length=1, max_length=100)
+    middle_initial: str = Field(default="", max_length=10)
+    family_name: str = Field(min_length=1, max_length=100)
+    birth_date: date
+
+    @field_validator("birth_date")
+    @classmethod
+    def plausible_birth_date(cls, value):
+        if not date(1850, 1, 1) <= value <= date.today():
+            raise ValueError("Enter a valid date of birth that is not in the future")
+        return value
+
+
 def check_origin(request: Request) -> None:
     if request.method in {"GET", "HEAD", "OPTIONS"}:
         return
@@ -341,6 +355,14 @@ async def upload_cards(request: Request, files: list[UploadFile] = File(...), fu
     return JSONResponse(public(intake), status_code=201, headers=NO_STORE)
 
 
+@router.post("/intakes/ecw-lookup")
+async def create_ecw_lookup(body: EcwLookup, request: Request):
+    staff = await require_staff(request)
+    fields = body.model_dump(mode="json")
+    intake = await run_in_threadpool(staff_store.create_intake, str(uuid4()), staff, [], "ecw_lookup", None, fields)
+    return JSONResponse(public(intake), status_code=201, headers=NO_STORE)
+
+
 @router.post("/intakes/from-share")
 async def from_share(request: Request):
     staff = await require_staff(request)
@@ -481,13 +503,17 @@ async def upload_library(request: Request, file: UploadFile = File(...), kind: L
 
 
 @router.get("/library/{document_id}/document")
-async def library_document(document_id: str, request: Request):
+async def library_document(document_id: str, request: Request, preview: bool = False):
     staff = await require_staff(request)
     document = await run_in_threadpool(staff_store.get_library, document_id, staff["practice_id"])
     if not document:
         raise HTTPException(404, "Clinic document not found")
     content = await run_in_threadpool(object_store.get_object_bytes, document["object_key"])
-    return Response(content, media_type=document["content_type"], headers={**NO_STORE, "X-Content-Type-Options": "nosniff", "Content-Disposition": "attachment", "Content-Security-Policy": "sandbox"})
+    content_type = document["content_type"]
+    if preview and content_type in {"text/csv", "application/edi-x12"}:
+        content_type = "text/plain"
+    disposition = "inline" if preview else "attachment"
+    return Response(content, media_type=content_type, headers={**NO_STORE, "X-Content-Type-Options": "nosniff", "Content-Disposition": f"{disposition}; filename*=UTF-8''{quote(document['filename'], safe='')}", "Content-Security-Policy": "sandbox"})
 
 
 @router.get("/library/{document_id}/era")

@@ -149,15 +149,35 @@ def matching_rates(practice_id: str, profile: dict, network: dict, service_date:
     with _connection() as db:
         rows = db.execute("""SELECT l.* FROM commercial_rate_lines l JOIN commercial_rate_versions v ON v.id=l.version_id
           WHERE v.practice_id=%s AND v.payer_connection_id=%s AND v.status='active' AND l.code = ANY(%s)
+          AND v.effective_from<=%s AND (v.effective_to IS NULL OR v.effective_to>=%s)
           AND l.network_name=%s AND l.place_of_service=%s AND l.effective_from<=%s AND (l.effective_to IS NULL OR l.effective_to>=%s)
-          ORDER BY l.id DESC""", (practice_id, profile["payer_connection_id"], codes, network["network_name"], network["place_of_service"], service_date, service_date)).fetchall()
-    selected: dict[str, dict] = {}
+          ORDER BY l.id DESC""", (practice_id, profile["payer_connection_id"], codes, service_date, service_date,
+                                    network["network_name"], network["place_of_service"], service_date, service_date)).fetchall()
+    return select_matching_rates([dict(row) for row in rows], profile, network, lines)
+
+
+def select_matching_rates(rows: list[dict], profile: dict, network: dict, lines: list[dict]) -> list[dict]:
+    """Select an exact contract dimension, preferring a scoped row over a general row."""
+    if network.get("plan_matcher") and network["plan_matcher"] != profile.get("plan_matcher"):
+        raise CommercialError("The estimation profile does not match the verified provider-network plan.")
+    selected: dict[str, tuple[int, dict]] = {}
     for row in rows:
-        value = dict(row)
-        if value["code"] in selected:
-            raise CommercialError(f"More than one active rate matches {value['code']}; resolve the rate version first.")
-        selected[value["code"]] = value
-    return [selected[code] for code in codes if code in selected]
+        if row.get("modifier") or row.get("unit_rule") not in {None, "", "per_unit"}:
+            continue
+        if row.get("provider_npi") and row["provider_npi"] != network.get("rendering_npi"):
+            continue
+        if row.get("tin") and row["tin"] != network.get("tin"):
+            continue
+        if row.get("plan_matcher") and row["plan_matcher"] != profile.get("plan_matcher"):
+            continue
+        code = row["code"]
+        score = sum(bool(row.get(key)) for key in ("provider_npi", "tin", "plan_matcher"))
+        previous = selected.get(code)
+        if previous and previous[0] == score:
+            raise CommercialError(f"More than one active rate matches {code}; resolve the rate version first.")
+        if not previous or score > previous[0]:
+            selected[code] = (score, row)
+    return [selected[line["code"].upper()][1] for line in lines if line["code"].upper() in selected]
 
 
 def save_evidence(practice_id: str, case_id: str, context_hash: str, data: dict[str, Any]) -> dict:

@@ -2,13 +2,13 @@ import {
   AlertTriangle, ArrowLeft, ArrowRight, Check, CheckCircle2, Clipboard, FileSpreadsheet,
   LoaderCircle, Mail, RefreshCw, ShieldCheck, Sparkles,
 } from 'lucide-react'
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { type FormEvent, useCallback, useEffect, useRef, useState } from 'react'
 import StaffLibraryPicker from './StaffLibraryPicker'
 import {
   confirmV2Services, createV2Case, getV2Case, getV2Configuration, getV2Requirements,
   getV2Appointments, latestV2Case, refreshV2Transaction, retryV2Transaction, submitV2Transaction,
-  suggestV2Services, uploadV2Document,
-  type V2Appointment, type V2Case, type V2Configuration, type V2Resource, type V2Transaction,
+  saveV2ManualReview, suggestV2Services, uploadV2Document,
+  type V2Appointment, type V2Case, type V2Configuration, type V2ManualReview, type V2Resource, type V2Transaction,
 } from '../services/api'
 
 interface Props { onBack: () => void; staffMode?: boolean; onUseDocuments?: () => void }
@@ -37,7 +37,7 @@ function TransactionStatus({ transaction }: { transaction: V2Transaction }) {
     </div>
     {transaction.message && <p>{transaction.message}</p>}
     <dl className="v2-facts">
-      <div><dt>Availity result ID</dt><dd>{transaction.resource_id || 'Not returned'}</dd></div>
+      <div><dt>{transaction.source === 'stedi' ? 'Stedi check ID' : 'Availity result ID'}</dt><dd>{transaction.resource_id || 'Not returned'}</dd></div>
       <div><dt>Transaction ID</dt><dd>{transaction.transaction_id || 'Not returned'}</dd></div>
       <div><dt>Last checked</dt><dd>{dateTime(transaction.checked_at)}</dd></div>
     </dl>
@@ -109,12 +109,13 @@ export default function InsuranceVerificationV2({ onBack, staffMode = false, onU
   const coverage = insuranceCase?.transactions.coverage
   const coverageDone = coverage?.outcome === 'complete'
   const coverageActive = !ecwPreview && (demo || coverage?.result?.active === true)
+  const stediCoverage = coverage?.source === 'stedi'
   const servicesLocked = !!insuranceCase && (['estimate', 'procedure_estimate', 'authorization', 'referral'] as V2Resource[]).some(resource => !!insuranceCase.transactions[resource])
   const hasPending = !!insuranceCase && resources.some(resource => ['submitting', 'pending'].includes(insuranceCase.transactions[resource.id]?.outcome || ''))
 
   const run = (resource: V2Resource) => {
     if (!insuranceCase || ecwPreview) return
-    void perform(`Sending ${resources.find(item => item.id === resource)?.label.toLowerCase()} to Availity…`, async () => {
+    void perform(`Sending ${resources.find(item => item.id === resource)?.label.toLowerCase()} to the payer…`, async () => {
       let current = insuranceCase
       if (!demo && !current.discovery.checked_at) current = await getV2Requirements(current.id)
       return submitV2Transaction(current.id, resource)
@@ -123,7 +124,7 @@ export default function InsuranceVerificationV2({ onBack, staffMode = false, onU
 
   const getAnswer = () => {
     if (!insuranceCase || ecwPreview) return
-    void perform('Checking the selected appointment with Availity…', async () => {
+    void perform('Checking the selected appointment with the payer…', async () => {
       let current = insuranceCase
       if (!demo && !current.discovery.checked_at) current = await getV2Requirements(current.id)
       if (!current.transactions.coverage) current = await submitV2Transaction(current.id, 'coverage')
@@ -159,6 +160,23 @@ export default function InsuranceVerificationV2({ onBack, staffMode = false, onU
     }))
     if (!lines.length) { setError('Choose at least one clinician-reviewed service.'); return }
     void perform('Saving reviewed services…', () => confirmV2Services(insuranceCase.id, lines))
+  }
+
+  const recordManualReview = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    if (!insuranceCase) return
+    const values = new FormData(event.currentTarget)
+    const review: V2ManualReview = {
+      source: values.get('source') as V2ManualReview['source'],
+      network_status: values.get('network_status') as V2ManualReview['network_status'],
+      network_reference: String(values.get('network_reference') || ''),
+      referral_status: values.get('referral_status') as V2ManualReview['referral_status'],
+      referral_reference: String(values.get('referral_reference') || ''),
+      authorization_status: values.get('authorization_status') as V2ManualReview['authorization_status'],
+      authorization_reference: String(values.get('authorization_reference') || ''),
+      price_path: values.get('price_path') as V2ManualReview['price_path'],
+    }
+    void perform('Saving manual payer verification…', () => saveV2ManualReview(insuranceCase.id, review))
   }
 
   const copySummary = async () => {
@@ -224,9 +242,27 @@ export default function InsuranceVerificationV2({ onBack, staffMode = false, onU
         </section>
 
         <section className="v2-prices" aria-label="Visit price comparison">
-          <article><p>Scheduled visit</p><h3>{money(insuranceCase.summary.scheduled.insurance_cents)}</h3><span>Availity patient estimate</span><dl><div><dt>Clinic cash price</dt><dd>{money(insuranceCase.summary.scheduled.cash_cents)}</dd></div><div><dt>Allowed amount</dt><dd>{money(insuranceCase.summary.scheduled.allowed_cents)}</dd></div></dl><small>{insuranceCase.summary.scheduled.codes.join(', ') || 'No scheduled code confirmed'}</small><PriceExplanation transaction={insuranceCase.transactions.estimate} /></article>
-          <article><p>Possible procedure</p><h3>{money(insuranceCase.summary.possible.insurance_cents)}</h3><span>Separate Availity patient estimate</span><dl><div><dt>Clinic cash price</dt><dd>{money(insuranceCase.summary.possible.cash_cents)}</dd></div><div><dt>Allowed amount</dt><dd>{money(insuranceCase.summary.possible.allowed_cents)}</dd></div></dl><small>{insuranceCase.summary.possible.codes.join(', ') || 'No possible procedure confirmed'}</small><PriceExplanation transaction={insuranceCase.transactions.procedure_estimate} /></article>
+          <article><p>Scheduled visit</p><h3>{money(insuranceCase.summary.scheduled.insurance_cents)}</h3><span>{stediCoverage ? 'Stedi benefits require pricing review' : 'Availity patient estimate'}</span><dl><div><dt>Clinic cash price</dt><dd>{money(insuranceCase.summary.scheduled.cash_cents)}</dd></div><div><dt>Allowed amount</dt><dd>{money(insuranceCase.summary.scheduled.allowed_cents)}</dd></div></dl><small>{insuranceCase.summary.scheduled.codes.join(', ') || 'No scheduled code confirmed'}</small><PriceExplanation transaction={insuranceCase.transactions.estimate} /></article>
+          <article><p>Possible procedure</p><h3>{money(insuranceCase.summary.possible.insurance_cents)}</h3><span>{stediCoverage ? 'Stedi benefits require pricing review' : 'Separate Availity patient estimate'}</span><dl><div><dt>Clinic cash price</dt><dd>{money(insuranceCase.summary.possible.cash_cents)}</dd></div><div><dt>Allowed amount</dt><dd>{money(insuranceCase.summary.possible.allowed_cents)}</dd></div></dl><small>{insuranceCase.summary.possible.codes.join(', ') || 'No possible procedure confirmed'}</small><PriceExplanation transaction={insuranceCase.transactions.procedure_estimate} /></article>
         </section></>}
+
+        {stediCoverage && coverageDone && <section className="v2-manual-review" aria-labelledby="manual-review-heading">
+          <div><p className="section-kicker">Stedi benefits-only path</p><h2 id="manual-review-heading">Record payer verification before scheduling</h2><p>Stedi did not return a patient-price estimate. Verify the payer portal or call the payer, record its confirmation reference, then choose either a pending insurance estimate or the clinic cash-price path.</p></div>
+          {!staffMode ? <p className="v2-next-step">Clinic staff must record the payer verification. No insured amount will be shown for this case.</p> : <form className="v2-manual-review-form" onSubmit={recordManualReview}>
+            <div className="v2-manual-review-grid">
+              <label><span>Verification source</span><select name="source" defaultValue={insuranceCase.manual_review?.source || 'payer_portal'}><option value="payer_portal">Payer portal</option><option value="payer_call">Payer phone call</option></select></label>
+              <label><span>Network status</span><select name="network_status" defaultValue={insuranceCase.manual_review?.network_status || 'unconfirmed'}><option value="unconfirmed">Not verified</option><option value="in_network">In network</option><option value="out_of_network">Out of network</option></select></label>
+              <label><span>Network confirmation reference</span><input name="network_reference" defaultValue={insuranceCase.manual_review?.network_reference || ''} maxLength={200} /></label>
+              <label><span>Referral status</span><select name="referral_status" defaultValue={insuranceCase.manual_review?.referral_status || 'unconfirmed'}><option value="unconfirmed">Not verified</option><option value="not_required">Not required</option><option value="approved">Approved</option><option value="required">Required / pending</option></select></label>
+              <label><span>Referral confirmation reference</span><input name="referral_reference" defaultValue={insuranceCase.manual_review?.referral_reference || ''} maxLength={200} /></label>
+              <label><span>Prior-authorization status</span><select name="authorization_status" defaultValue={insuranceCase.manual_review?.authorization_status || 'unconfirmed'}><option value="unconfirmed">Not verified</option><option value="not_required">Not required</option><option value="approved">Approved</option><option value="required">Required / pending</option></select></label>
+              <label><span>Authorization confirmation reference</span><input name="authorization_reference" defaultValue={insuranceCase.manual_review?.authorization_reference || ''} maxLength={200} /></label>
+              <label><span>Price path</span><select name="price_path" defaultValue={insuranceCase.manual_review?.price_path || 'pending'}><option value="pending">Insurance estimate pending</option><option value="cash">Offer clinic cash price only</option></select></label>
+            </div>
+            <p className="v2-next-step">A reference is required for every status other than “Not verified.” This record documents staff verification; it never creates an insured price estimate.</p>
+            <button className="button button-primary" type="submit" disabled={!!busy}><Check size={16} aria-hidden="true" /> Save payer verification</button>
+          </form>}
+        </section>}
 
         <section className="v2-services" aria-labelledby="services-heading">
           <div><p className="section-kicker">Services and clinic prices</p><h2 id="services-heading">Confirm what is being estimated</h2><p>eClinicalWorks coded services are used first. Clinic staff use the applicable saved fee schedule; it supplies billed charges and cash prices, never insurance benefits.</p></div>
@@ -261,17 +297,17 @@ export default function InsuranceVerificationV2({ onBack, staffMode = false, onU
         </section> : <section className="v2-workflow" aria-labelledby="workflow-heading">
           <p className="section-kicker">Payer workflow</p><h2 id="workflow-heading">Complete each needed payer check</h2>
           {!coverage && <button className="button button-primary" type="button" disabled={!!busy} onClick={getAnswer}>Get insurance answer</button>}
-          {!coverage && <p className="v2-next-step">ClinicForce checks eligibility first, then includes the scheduled-visit estimate whenever the payer and clinic data support it. Referral and authorization results remain separate actions because they create payer work.</p>}
+          {!coverage && <p className="v2-next-step">ClinicForce checks eligibility first. It requests an insured estimate only after any payer-required referral or authorization has an approved result. Referral and authorization remain separate actions because they create payer work.</p>}
           <div className="v2-action-list">{resources.map((resource, index) => {
             const transaction = insuranceCase.transactions[resource.id]
             const missing = insuranceCase.missing_by_resource[resource.id] || []
             const hasLines = resource.id === 'coverage' || insuranceCase.inputs.lines.some(line => (line.service_status || 'scheduled') === (resource.id === 'procedure_estimate' ? 'possible' : 'scheduled'))
-            const canSubmit = (demo || missing.length === 0) && hasLines && (resource.id === 'coverage' || (coverageDone && coverageActive))
+            const canSubmit = !stediCoverage && (demo || missing.length === 0) && hasLines && (resource.id === 'coverage' || (coverageDone && coverageActive))
             return <article key={resource.id}>
               <div className="v2-action-number">{String(index + 1).padStart(2, '0')}</div>
               <div><h3>{resource.label}</h3><p>{resource.help}</p>
                 {!transaction && <button className="button button-primary" type="button" disabled={!!busy || !canSubmit} onClick={() => run(resource.id)}>{resource.action}</button>}
-                {!transaction && !canSubmit && <small className="v2-next-step">{resource.id !== 'coverage' && !coverageDone ? 'Complete eligibility first.' : resource.id !== 'coverage' && !coverageActive ? 'Coverage is not active; stop the insured-price path.' : missing[0] || 'Confirm a matching service above.'}</small>}
+                {!transaction && !canSubmit && <small className="v2-next-step">{stediCoverage && resource.id !== 'coverage' ? 'Stedi returned benefits only; review pricing, authorization, and referral manually.' : resource.id !== 'coverage' && !coverageDone ? 'Complete eligibility first.' : resource.id !== 'coverage' && !coverageActive ? 'Coverage is not active; stop the insured-price path.' : missing[0] || 'Confirm a matching service above.'}</small>}
                 {transaction && <TransactionStatus transaction={transaction} />}
                 {transaction && !transaction.resource_id && [401, 403, 429].includes(transaction.http_status ?? 0) && <button className="button button-secondary" type="button" disabled={!!busy} onClick={() => void perform('Retrying the rejected Availity request…', () => retryV2Transaction(insuranceCase.id, resource.id))}>Retry after access is fixed</button>}
                 {transaction && ['pending', 'unavailable'].includes(transaction.outcome) && transaction.resource_id && <button className="button button-secondary" type="button" disabled={!!busy} onClick={() => void perform('Checking the saved Availity response…', () => refreshV2Transaction(insuranceCase.id, resource.id))}><RefreshCw size={16} aria-hidden="true" /> Check existing response</button>}
@@ -289,7 +325,7 @@ export default function InsuranceVerificationV2({ onBack, staffMode = false, onU
             {coverage?.result?.plans?.map((plan, index) => <details className="v2-plan" key={index}><summary>{plan.name || plan.planName || `Plan ${index + 1}`} · {plan.status || 'Status not returned'}</summary><p>{plan.insuranceType} · Group {plan.groupNumber || 'not returned'} · Effective {plan.effectiveDate || 'not returned'} · Ends {plan.expirationDate || 'not returned'}</p><div className="v2-table-wrap"><table><thead><tr><th>Benefit</th><th>Network</th><th>Amount</th><th>Remaining / total</th><th>Conditions</th></tr></thead><tbody>{plan.benefits.map((benefit, row) => <tr key={row}><td>{readable(benefit.category)}<small>{benefit.service}</small></td><td>{readable(benefit.network)}<small>{benefit.level}</small></td><td>{benefit.amount ?? 'Not returned'}</td><td>{benefit.remaining ?? 'Not returned'} / {benefit.total ?? 'Not returned'}</td><td>{benefit.description}{benefit.authorizationRequired && <small>Authorization required</small>}{benefit.referralNumber && <small>Referral {benefit.referralNumber}</small>}</td></tr>)}</tbody></table></div></details>)}
             <h3>Response history</h3><ol className="v2-history">{insuranceCase.events.map((event, index) => <li key={index}><span>{readable(event.stage.replaceAll('-', ' '))}</span><time dateTime={event.at}>{dateTime(event.at)}</time></li>)}</ol>
             <div className="v2-technical-actions"><button className="button button-secondary" type="button" disabled={!!busy} onClick={() => void perform('Refreshing saved case…', () => getV2Case(insuranceCase.id))}><RefreshCw size={15} aria-hidden="true" /> Refresh saved case</button><button className="button button-secondary" type="button" disabled={!!busy || hasPending} onClick={() => void perform('Loading a new appointment…', () => createV2Case())}>{hasPending ? 'Finish pending response first' : ecwPreview ? 'Reload eCW appointment' : demo ? 'Start new demo case' : 'Reload eCW appointment'}</button></div>
-            <small>Only Availity-returned amounts appear as insured estimates. Clinic cash prices come from the uploaded fee CSV. Case {insuranceCase.id} {insuranceCase.expires_at ? `expires ${dateTime(insuranceCase.expires_at)}` : 'is saved to the clinic record'}.</small>
+            <small>{stediCoverage ? 'Stedi returned eligibility and benefits, not a patient-price estimate. Clinic cash prices come from the uploaded fee CSV.' : 'Only Availity-returned amounts appear as insured estimates. Clinic cash prices come from the uploaded fee CSV.'} Case {insuranceCase.id} {insuranceCase.expires_at ? `expires ${dateTime(insuranceCase.expires_at)}` : 'is saved to the clinic record'}.</small>
           </div>
         </details>
       </>}
