@@ -235,10 +235,13 @@ def _name(resource: dict[str, Any]) -> tuple[str | None, str | None]:
             str(selected.get("family")) if selected.get("family") else None)
 
 
-def _patient_matches(resource: dict[str, Any], profile: dict[str, Any]) -> bool:
+def _patient_matches(resource: dict[str, Any], profile: dict[str, Any], *, family_suffix: bool = False) -> bool:
     first, family = _name(resource)
     words = str(first or "").split()
-    if not words or _norm(words[0]) != _norm(profile.get("patient_first_name")) or _norm(family) != _norm(profile.get("patient_last_name")):
+    expected_family = _norm(profile.get("patient_last_name"))
+    family_matches = _norm(family) == expected_family or (family_suffix and expected_family and family and family.strip() and
+                      _norm(family.split()[-1]) == expected_family)
+    if not words or _norm(words[0]) != _norm(profile.get("patient_first_name")) or not family_matches:
         return False
     names = [item for item in resource.get("name", []) if isinstance(item, dict)]
     selected = next((item for item in names if item.get("use") in {"official", "usual"}), names[0] if names else {})
@@ -541,6 +544,16 @@ async def _patient_for_profile(client: httpx.AsyncClient, issuer: str, token: st
                 "birthdate": str(profile.get("patient_birth_date") or ""),
             })
     matches = {str(row.get("id") or ""): row for row in patient_rows if _patient_matches(row, profile)}
+    if not matches and not cached_patient_id:
+        # eCW can store a multiword family name when the patient supplies only
+        # its last word. Search the documented name+DOB route, then require a
+        # unique first-name, middle-initial, surname-suffix and DOB match.
+        patient_rows = await _search(client, issuer, token, "Patient", {
+            "name": str(profile.get("patient_last_name") or ""),
+            "birthdate": str(profile.get("patient_birth_date") or ""),
+        })
+        matches = {str(row.get("id") or ""): row for row in patient_rows
+                   if _patient_matches(row, profile, family_suffix=True)}
     if not matches:
         raise EcwBackendError("No eClinicalWorks patient matched the entered name and date of birth. Check the patient's eCW record before continuing.")
     if len(matches) != 1:

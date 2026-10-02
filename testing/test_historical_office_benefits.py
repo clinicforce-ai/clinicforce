@@ -95,12 +95,19 @@ def test_unknown_service_limit_or_conflicting_specialist_term_still_blocks_advan
     assert replay(raw)[0]['amount_cents'] is None
 
 
-def test_family_balances_remain_distinct_and_do_not_validate_an_unrelated_contract_amount():
+def test_met_family_oop_supports_zero_advance_without_copying_family_balances_to_individual():
     raw = {'plans': [{'benefits': {'statuses': [{'status': 'Active'}],
         'coInsurance': [row(percent='.2')],
         'deductible': [row('0', level='FAMILY', period='REMAINING')],
         'outOfPocket': [row('0', level='FAMILY', period='REMAINING')]}}]}
     guidance, terms = replay(raw)
-    assert guidance['amount_cents'] is None
+    assert guidance['amount_cents'] == 0 and guidance['basis'] == 'out_of_pocket_limit'
     assert terms['deductible_remaining_cents'] is None and terms['oop_remaining_cents'] is None
+    assert terms['family_oop_zero_applies'] is True
+    assert terms['family_oop_ids'] == ['plans[0].benefits.outOfPocket[0]']
     assert any(option['coverage_level'] == 'FAMILY' for option in terms['reported_options'])
+    raw['plans'][0]['benefits']['outOfPocket'][0]['amount'] = '500'
+    assert replay(raw)[0]['amount_cents'] is None
+    raw['plans'][0]['benefits']['outOfPocket'][0]['amount'] = '0'
+    raw['plans'][0]['benefits']['limitations'] = [row('100', level='FAMILY', period='REMAINING', messages=['COPAY MAX'])]
+    assert replay(raw)[0]['amount_cents'] is None

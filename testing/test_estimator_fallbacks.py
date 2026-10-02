@@ -97,7 +97,7 @@ def test_secondary_policy_can_be_queried_without_claiming_it_is_only_coverage():
     r = {'benefits': {'active': True, 'has_secondary': True}, 'arrival_collection': {'amount_cents': 10000}}
     g = collection_guidance.build(r)
     assert g['amount_cents'] is None and g['basis'] == 'deferred_billing'
-    assert 'not a $0 cost estimate' in g['patient_message']
+    assert 'later bill may be due' in g['patient_message']
 
 
 def test_original_medicare_routes_to_verified_cms_directory_entry_only():
