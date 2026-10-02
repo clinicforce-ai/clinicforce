@@ -25,7 +25,7 @@ from app.api.settings import ALLOWED_ORIGINS, CLINICIAN_SHARE_COOKIE, MAX_INSURA
 from app.core import clinic_email, object_store, staff_store, staff_deletions, library_files
 from app.core.patient_store import get_patient_profile
 from app.core.request_address import request_address
-from app.insurance import ecw_backend, era835, golden, v1_sources
+from app.insurance import commercial, commercial_store, ecw_backend, era835, golden, v1_sources
 
 
 router = APIRouter(prefix="/api/staff", tags=["staff"])
@@ -506,6 +506,18 @@ async def library(request: Request):
     documents = await run_in_threadpool(staff_store.list_library, staff["practice_id"])
     usage = await run_in_threadpool(library_files.estimator_links, staff['practice_id'], documents)
     return JSONResponse({"documents": [{**public_library(value), 'estimator_uses': usage['links'][value['id']]} for value in documents]}, headers=NO_STORE)
+
+
+@router.post("/library/rate-versions/{version_id}/retire")
+async def retire_library_rate_version(version_id: str, request: Request):
+    staff = await require_staff(request)
+    if staff['role'] != 'admin':
+        raise HTTPException(403, "Only a clinic administrator can retire contract rates.")
+    try:
+        version = await run_in_threadpool(commercial_store.retire_rates, staff['practice_id'], version_id)
+    except commercial.CommercialError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    return JSONResponse({'id': version['id'], 'status': version['status']}, headers=NO_STORE)
 
 
 @router.post("/library")

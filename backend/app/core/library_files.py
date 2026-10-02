@@ -178,9 +178,11 @@ def estimator_links(practice_id: str, documents: list[dict]) -> dict:
     from app.insurance import commercial_store, nmct_cash
     payers = commercial_store.list_connections(practice_id)
     versions = commercial_store.list_rate_versions(practice_id)
-    with commercial_store._connection() as db:
-        cash_versions = [dict(row) for row in db.execute(
-            'SELECT id,sha256,status,effective_from FROM practice_cash_schedules WHERE practice_id=%s', (practice_id,)).fetchall()]
+    cash_versions = []
+    if practice_id != nmct_cash.PRACTICE_ID:
+        with commercial_store._connection() as db:
+            cash_versions = [dict(row) for row in db.execute(
+                'SELECT id,sha256,status,effective_from FROM practice_cash_schedules WHERE practice_id=%s', (practice_id,)).fetchall()]
     names = {row['id']: row['display_name'] for row in payers}
     links = {}
     for document in documents:

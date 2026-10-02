@@ -151,9 +151,23 @@ def activate_rates(practice_id: str, version_id: str) -> dict:
         row = db.execute("SELECT * FROM commercial_rate_versions WHERE id=%s AND practice_id=%s FOR UPDATE", (version_id, practice_id)).fetchone()
         if not row or not db.execute("SELECT 1 FROM commercial_rate_lines WHERE version_id=%s", (version_id,)).fetchone():
             raise CommercialError("This rate version has no importable rows.")
-        db.execute("UPDATE commercial_rate_versions SET status='superseded' WHERE practice_id=%s AND payer_connection_id=%s AND status='active'", (practice_id, row["payer_connection_id"]))
+        # A payer may have separate active schedules for products, networks or
+        # provider types. Replace only a revision of this same source.
+        db.execute("UPDATE commercial_rate_versions SET status='superseded' WHERE practice_id=%s AND payer_connection_id=%s AND source_reference=%s AND id<>%s AND status='active'",
+                   (practice_id, row["payer_connection_id"], row["source_reference"], version_id))
         db.execute("UPDATE commercial_rate_versions SET status='active', activated_at=%s WHERE id=%s", (now, version_id))
         return dict(db.execute("SELECT * FROM commercial_rate_versions WHERE id=%s", (version_id,)).fetchone())
+
+
+def retire_rates(practice_id: str, version_id: str) -> dict:
+    """Stop an outdated allowance version from pricing future visits."""
+    with _connection() as db:
+        row = db.execute("""UPDATE commercial_rate_versions SET status='retired'
+            WHERE id=%s AND practice_id=%s AND status='active' RETURNING *""",
+            (version_id, practice_id)).fetchone()
+    if not row:
+        raise CommercialError("Only an active rate version in this practice can be retired.")
+    return dict(row)
 
 
 def matching_rates(practice_id: str, profile: dict, network: dict, service_date: str, lines: list[dict] | None) -> list[dict]:

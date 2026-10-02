@@ -116,10 +116,10 @@ def matches_ecw_policy(item: dict, inputs: dict, source: dict) -> bool:
     payer = item.get('payer') or {}
     ecw_ids = {normalized(value) for value in source.get('payer_identifiers') or [] if normalized(value)}
     returned_ids = {normalized(value) for value in (item.get('payerId'), payer.get('payorIdentification')) if normalized(value)}
-    ecw_name = normalized(source.get('payer'))
-    returned_name = normalized(payer.get('name') or payer.get('lastName'))
-    if not (ecw_ids & returned_ids or (ecw_name and returned_name
-            and (ecw_name in returned_name or returned_name in ecw_name))):
+    # eCW's display label can be shorter than the discovered payer name.
+    # An explicit payer ID must still agree; otherwise the unique active
+    # patient/member/date match below can identify the eCW policy.
+    if ecw_ids and not ecw_ids & returned_ids:
         return False
     benefits = commercial.normalize_stedi_271(item, '30', False, service_date=inputs.get('service_date'))
     return benefits['active'] is True and benefits['service_date_matches'] is not False

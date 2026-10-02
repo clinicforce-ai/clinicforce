@@ -51,13 +51,15 @@ def test_nmct_cash_source_link_requires_the_clinic_and_exact_file_digest():
     from unittest.mock import MagicMock
     db = MagicMock()
     db.__enter__.return_value = db
-    db.execute.return_value.fetchall.return_value = []
-    documents = [{'id': 'matching', 'sha256': nmct_cash.SOURCE_SHA256}, {'id': 'different', 'sha256': 'changed'}]
+    db.execute.return_value.fetchall.return_value = [{'id': 'old-csv', 'sha256': 'stale', 'status': 'active', 'effective_from': '2026-01-01'}]
+    documents = [{'id': 'matching', 'sha256': nmct_cash.SOURCE_SHA256},
+                 {'id': 'different', 'sha256': 'changed'}, {'id': 'old-csv', 'sha256': 'stale'}]
     with patch.object(commercial_store, '_connection', return_value=db), patch.object(commercial_store, 'list_connections', return_value=[]), patch.object(commercial_store, 'list_rate_versions', return_value=[]):
         own = library_files.estimator_links(nmct_cash.PRACTICE_ID, documents)['links']
         other = library_files.estimator_links('different-clinic', documents)['links']
     assert own['matching'][0]['status'] == 'active'
-    assert own['different'] == [] and other['matching'] == []
+    assert own['different'] == [] and own['old-csv'] == [] and other['matching'] == []
+    assert other['old-csv'][0]['status'] == 'active'
 
 
 def test_contract_extraction_keeps_each_schedule_and_scanned_exhibit_with_page_evidence():
