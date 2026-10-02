@@ -270,6 +270,26 @@ class RecoveryTest(IsolatedAsyncioTestCase):
                     revision=case['revision'], candidate_id=candidate['id']), MagicMock(), BackgroundTasks())
         assert rejected.exception.status_code == 409
 
+    async def test_legacy_discovery_is_reconciled_without_a_new_stedi_request(self):
+        case, session, _, item = setup()
+        case['previsit_context']['payer_id'] = None
+        case['previsit_context']['inputs']['member_id'] = 'new-id'
+        other = deepcopy(item)
+        other['subscriber']['memberId'] = 'different-member'
+        case['previsit_discovery'].update(request_state='complete', outcome='review_needed', raw_object_key='saved',
+                                          candidates=discovery.candidates({'items': [other, item]}, case['previsit_context']['inputs']))
+        events = []
+        with patch.object(api.object_store, 'get_object_bytes', return_value=json.dumps(
+                {'status': 'COMPLETE', 'coveragesFound': 2, 'items': [other, item]}).encode()), \
+             patch.object(api, '_save', side_effect=lambda value, _, event: events.append(event) or value):
+            await api._reconcile_saved_discovery(case, session)
+        recovery = case['previsit_discovery']
+        assert recovery['request_state'] == 'complete'
+        assert recovery['reason_code'] == 'matching_ecw_policy_ready'
+        assert [row['matches_ecw_policy'] for row in recovery['candidates']] == [False, True]
+        assert events == ['stedi-discovery-reconciled']
+        assert 'Review and select it' in case['previsit_context']['result']['eligibility_failure']['detail']
+
     async def test_no_match_ambiguous_patient_or_other_payer_never_becomes_inactive_or_quoted(self):
         _, _, _, item = setup()
         for items, directory, outcome in [([], 'payer', 'no_match'), ([item, item], 'payer', 'review_needed'), ([item], 'other', 'review_needed')]:
