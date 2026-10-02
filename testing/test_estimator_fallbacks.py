@@ -112,6 +112,21 @@ def test_original_medicare_routes_to_verified_cms_directory_entry_only():
     assert asyncio.run(stedi_payers.search_payer('Medicare Advantage', [], 'test', plan='MB', transport=transport)) is None
 
 
+def test_ecw_payer_id_is_searched_before_an_ambiguous_name():
+    queries = []
+    payer = {'stediId': 'HUMAN', 'primaryPayerId': '61101', 'displayName': 'Humana',
+             'coverageTypes': ['medical'], 'transactionSupport': {'eligibilityCheck': 'SUPPORTED'}}
+    def handler(request):
+        queries.append(request.url.params['query'])
+        return httpx.Response(200, json={'items': [{'payer': payer}]})
+    found = asyncio.run(stedi_payers.search_payer('Humana Health Plan', ['61101'], 'test',
+                                                  transport=httpx.MockTransport(handler)))
+    assert found == payer and queries == ['61101']
+    other = {**payer, 'stediId': 'OTHER'}
+    ambiguous = httpx.MockTransport(lambda _: httpx.Response(200, json={'items': [{'payer': payer}, {'payer': other}]}))
+    assert asyncio.run(stedi_payers.search_payer('Humana Health Plan', ['61101'], 'test', transport=ambiguous)) is None
+
+
 def test_enrollment_must_be_live_for_exact_provider_payer_and_transaction():
     row = {'status': 'LIVE', 'payer': {'stediPayerId': 'cms'}, 'provider': {'npi': '1234567890'},
            'transactions': {'eligibilityCheck': {'enroll': True}}}
