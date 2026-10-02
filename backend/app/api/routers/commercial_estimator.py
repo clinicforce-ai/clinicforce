@@ -1096,15 +1096,20 @@ async def _recover_previsit(case: dict, session: dict, provider: dict) -> None:
             discovery['raw_object_key'] = await run_in_threadpool(object_store.put_staff_document,
                 session['practice_id'], case['id'], 'stedi-discovery.json', json.dumps(payload).encode(), 'application/json')
             if payload.get('status') == 'PENDING':
-                discovery['request_state'] = 'indeterminate'
+                discovery.update(request_state='indeterminate', stage='awaiting_result', reason_code='discovery_pending')
                 await run_in_threadpool(_save, case, session, 'stedi-discovery-awaiting-result')
                 return
             items = payload.get('items') or []
             candidates = stedi_discovery.candidates(payload, inputs)
+            if not payer_id:
+                for row in candidates:
+                    row['matches_ecw_policy'] = stedi_discovery.matches_ecw_policy(
+                        items[row['index']], inputs, source)
             discovery.update(request_state='complete', candidates=candidates,
                              outcome='no_match' if not candidates else 'review_needed')
             if payload.get('status') != 'COMPLETE' or payload.get('errors'):
-                discovery.update(request_state='rejected', outcome='rejected')
+                discovery.update(request_state='rejected', outcome='rejected', stage='discovery_rejected',
+                                 reason_code='discovery_request_rejected')
             # With no directory route, discovery must prove the same active eCW
             # policy before choosing a payer automatically.
             matching = [row for row in candidates if
@@ -1112,9 +1117,21 @@ async def _recover_previsit(case: dict, session: dict, provider: dict) -> None:
                          stedi_discovery.matches_ecw_policy(items[row['index']], inputs, context['source']))]
             if discovery['request_state'] != 'complete' or len(matching) != 1:
                 if not payer_id:
-                    context['result']['eligibility_failure']['detail'] = (
-                        'The eCW payer name and ID did not identify one Stedi route. Insurance discovery did not return one active policy matching this patient, eCW member ID, and visit date. Coverage remains unverified, not proven inactive.')
+                    if discovery['request_state'] != 'complete':
+                        context['result']['eligibility_failure']['detail'] = (
+                            'The eCW payer name and ID did not identify one Stedi route. Insurance discovery could not '
+                            'complete. Coverage remains unverified, not proven inactive.')
+                    else:
+                        reason = ('no_matching_ecw_policy' if not matching else 'multiple_matching_ecw_policies')
+                        context['result']['eligibility_failure']['detail'] = (
+                            'The eCW payer name and ID did not identify one Stedi route. Insurance discovery did not return '
+                            + ('an active policy matching this patient, eCW member ID, and visit date.' if not matching else
+                               'one unique active policy matching this patient, eCW member ID, and visit date.')
+                            + ' Coverage remains unverified, not proven inactive.')
+                        discovery.update(stage='candidate_match_review', reason_code=reason)
                     discovery['selection_error'] = context['result']['eligibility_failure']['detail']
+                elif discovery['request_state'] == 'complete':
+                    discovery.update(stage='candidate_review', reason_code='multiple_discovery_candidates')
                 await run_in_threadpool(_save, case, session, 'stedi-discovery-finished')
                 return
             candidate = matching[0]
@@ -1129,6 +1146,7 @@ async def _recover_previsit(case: dict, session: dict, provider: dict) -> None:
                     context['result']['eligibility_failure']['detail'] = (
                         'The eCW payer name and ID did not identify one Stedi route. The discovered policy did not uniquely confirm the same active patient, member ID, and visit date. Coverage remains unverified, not proven inactive.')
                     discovery['selection_error'] = context['result']['eligibility_failure']['detail']
+                    discovery.update(stage='payer_route_review', reason_code='discovered_payer_not_routable')
                 await run_in_threadpool(_save, case, session, 'stedi-discovery-match-needs-review')
                 return
             discovery.update(request_state='pending', stage='eligibility', selected_candidate_id=candidate['id'])
@@ -1208,7 +1226,7 @@ async def _recheck_discovery_candidate(case: dict, session: dict, provider: dict
         case['previsit_raw_object_key'] = discovery['eligibility_object_key']
         await run_in_threadpool(_save, case, session, 'stedi-coverage-recovered')
     except (httpx.HTTPError, ValueError, KeyError, TypeError, StopIteration, IndexError):
-        discovery.update(request_state='complete', outcome='review_needed', stage='selection_error',
+        discovery.update(request_state='complete', outcome='review_needed', stage='selection_error', reason_code='selected_policy_check_failed',
                          selection_error='The selected policy could not be checked. Select another returned policy or check the current card.')
         if context.get('payer_id') is None and context['result'].get('eligibility_error') == 'payer_routing_unresolved':
             context['result']['eligibility_failure']['detail'] = (
@@ -1282,6 +1300,10 @@ async def select_coverage_candidate(case_id: str, value: CoverageCandidateInput,
     if not any(row.get('id') == value.candidate_id for row in discovery.get('candidates', [])):
         raise HTTPException(422, 'Select a coverage option returned for this patient.')
     source, inputs = case['previsit_context']['source'], case['previsit_context']['inputs']
+    if not case['previsit_context'].get('payer_id'):
+        candidate = next(row for row in discovery['candidates'] if row['id'] == value.candidate_id)
+        if not candidate.get('matches_ecw_policy'):
+            raise HTTPException(409, 'The selected policy does not match the active eClinicalWorks member and visit date.')
     rendering, billing = source.get('rendering_provider') or {}, source.get('billing_provider') or {}
     provider = {'rendering_npi': str(rendering.get('npi') or (inputs.get('rendering_provider') or {}).get('npi') or ''),
                 'rendering_first': str(rendering.get('first_name') or ''), 'rendering_last': str(rendering.get('last_name') or ''),
@@ -1345,7 +1367,9 @@ async def _begin_coverage_discovery(result: dict, session: dict, inputs: dict, s
     case['previsit'] = {'request_state': 'rejected'}
     case['previsit_discovery'] = {'recovery_requested': discovery_ready,
                                   'request_state': 'not_requested' if discovery_ready else 'complete',
-                                  'identity_binding': _recovery_binding(inputs, source)}
+                                  'identity_binding': _recovery_binding(inputs, source),
+                                  'stage': 'not_started' if discovery_ready else 'not_available',
+                                  'reason_code': 'payer_route_unresolved' if discovery_ready else 'discovery_input_missing'}
     if not discovery_ready:
         case['previsit_discovery'].update(outcome='not_available', checked_at=_now(), selection_error=detail)
     case = await run_in_threadpool(_save, case, session, 'previsit-coverage-recovery-requested')

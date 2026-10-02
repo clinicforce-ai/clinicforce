@@ -148,4 +148,5 @@ def public_status(discovery: dict) -> dict:
     return {'state': state, 'outcome': outcome, 'message': message,
             'started_at': discovery.get('started_at'), 'checked_at': discovery.get('checked_at'),
             'reference': discovery.get('discovery_id'), 'coverage_count': discovery.get('coverage_count'),
+            'stage': discovery.get('stage'), 'reason_code': discovery.get('reason_code'),
             'candidates': candidates}

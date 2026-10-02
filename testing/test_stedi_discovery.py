@@ -248,6 +248,28 @@ class RecoveryTest(IsolatedAsyncioTestCase):
         assert client.post.await_count == 2
         assert case['previsit_context']['result']['benefits']['active'] is True
 
+    async def test_unresolved_route_only_offers_matching_ecw_policy_for_selection(self):
+        _, _, _, item = setup()
+        other = deepcopy(item)
+        other['subscriber']['memberId'] = 'different-member'
+        case, client, _ = await self.exercise(
+            {'status': 'COMPLETE', 'coveragesFound': 3, 'items': [other, item, item]},
+            unroutable=True, matching_ecw=True)
+        case['previsit_context']['payer_id'] = ''
+        assert case['previsit_discovery']['outcome'] == 'review_needed'
+        assert [row['matches_ecw_policy'] for row in case['previsit_discovery']['candidates']] == [False, True, True]
+        assert client.post.await_count == 1
+
+        session = setup()[1]
+        candidate = case['previsit_discovery']['candidates'][0]
+        with patch.object(api, '_session', AsyncMock(return_value=session)), \
+             patch.object(api.store, 'get_case', return_value=case):
+            with self.assertRaises(HTTPException) as rejected:
+                await api.select_coverage_candidate('case', api.CoverageCandidateInput(
+                    context_token=case['previsit_context']['context_token'],
+                    revision=case['revision'], candidate_id=candidate['id']), MagicMock(), BackgroundTasks())
+        assert rejected.exception.status_code == 409
+
     async def test_no_match_ambiguous_patient_or_other_payer_never_becomes_inactive_or_quoted(self):
         _, _, _, item = setup()
         for items, directory, outcome in [([], 'payer', 'no_match'), ([item, item], 'payer', 'review_needed'), ([item], 'other', 'review_needed')]:
@@ -265,7 +287,17 @@ class RecoveryTest(IsolatedAsyncioTestCase):
             detail = case['previsit_context']['result']['eligibility_failure']['detail']
             assert 'payer name and ID' in detail and 'discover' in detail.lower()
             assert 'unverified, not proven inactive' in detail
+            assert case['previsit_discovery']['reason_code'] == 'no_matching_ecw_policy'
             assert client.post.await_count == 1
+
+    def test_public_recovery_status_includes_safe_stop_reason_and_reference(self):
+        status = discovery.public_status({'request_state': 'complete', 'outcome': 'review_needed',
+                                          'stage': 'candidate_match_review',
+                                          'reason_code': 'multiple_matching_ecw_policies',
+                                          'discovery_id': 'discovery-1'})
+        assert status['stage'] == 'candidate_match_review'
+        assert status['reason_code'] == 'multiple_matching_ecw_policies'
+        assert status['reference'] == 'discovery-1'
 
     async def test_other_payer_is_selectable_without_exposing_member_id(self):
         _, _, _, item = setup()
