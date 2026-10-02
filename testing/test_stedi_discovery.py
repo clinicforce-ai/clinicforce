@@ -163,6 +163,26 @@ class RecoveryTest(IsolatedAsyncioTestCase):
                 assert case['previsit_discovery']['discovery_id'] == 'saved-search'
                 assert case['previsit_discovery']['outcome'] == outcome
 
+    async def test_reused_legacy_result_schedules_local_reconciliation_only(self):
+        case, session, provider, item = setup()
+        session['intake']['updated_at'] = 'version'
+        context = case['previsit_context']
+        context['payer_id'] = None
+        context['inputs']['member_id'] = 'new-id'
+        case['previsit_discovery'].update(request_state='complete', outcome='review_needed', raw_object_key='saved',
+                                          candidates=discovery.candidates({'items': [item]}, context['inputs']),
+                                          checked_at=datetime.now(timezone.utc).isoformat(),
+                                          identity_binding=api._recovery_binding(context['inputs'], context['source']))
+        tasks = BackgroundTasks()
+        with patch.object(api.store, 'create_case', return_value=case), \
+             patch.object(api, '_finish_previsit'), \
+             patch.object(api, '_save', side_effect=lambda value, *_: value):
+            await api._begin_coverage_discovery({}, session, context['inputs'], context['source'], provider,
+                                                tasks, 'Missing policy')
+        assert case['previsit_discovery']['request_state'] == 'pending'
+        assert case['previsit_discovery']['stage'] == 'reconciling_saved_discovery'
+        assert len(tasks.tasks) == 1
+
     async def test_explicit_refresh_restarts_completed_discovery_but_not_pending_work(self):
         case, session, provider, _ = setup()
         session['intake']['updated_at'] = 'version'
