@@ -7,6 +7,7 @@ import csv
 import hashlib
 import mimetypes
 import os
+import time
 from datetime import date, datetime, timedelta, timezone
 from io import BytesIO
 from pathlib import Path
@@ -26,6 +27,7 @@ from app.core import clinic_email, object_store, staff_store, staff_deletions, l
 from app.core.patient_store import get_patient_profile
 from app.core.request_address import request_address
 from app.insurance import commercial, commercial_store, ecw_backend, era835, golden, v1_sources
+from app.logs.collection_audit import collection_event
 
 
 router = APIRouter(prefix="/api/staff", tags=["staff"])
@@ -304,7 +306,10 @@ def manual_card_fields(full_name: str, member_id: str, birth_date: str) -> dict:
 @router.post("/intakes/ecw-lookup")
 async def create_ecw_lookup(value: EcwLookup, request: Request):
     staff = await require_staff(request)
+    started = time.monotonic()
+    collection_event('ecw_lookup_started', practice_id=staff['practice_id'], staff_id=staff['id'], stage='patient_search')
     if not ecw_backend.configured():
+        collection_event('ecw_lookup_blocked', practice_id=staff['practice_id'], stage='patient_search', reason_code='ecw_not_configured')
         raise HTTPException(503, "The eClinicalWorks practice connection is not configured.")
     try:
         matched = await asyncio.wait_for(ecw_backend.lookup_patient_and_appointments(
@@ -313,20 +318,26 @@ async def create_ecw_lookup(value: EcwLookup, request: Request):
             {"timezone": os.getenv("COMMERCIAL_PRACTICE_TIMEZONE", "America/New_York")},
         ), timeout=38)
     except asyncio.TimeoutError:
+        collection_event('ecw_lookup_failed', practice_id=staff['practice_id'], stage='patient_search', reason_code='timeout', duration_ms=int((time.monotonic() - started) * 1000))
         raise HTTPException(504, "eClinicalWorks did not respond to the patient search in time. Retry the lookup.") from None
     except ecw_backend.EcwBackendError as exc:
+        collection_event('ecw_lookup_failed', practice_id=staff['practice_id'], stage='patient_search', reason_code='ecw_error', duration_ms=int((time.monotonic() - started) * 1000))
         raise HTTPException(502, str(exc)) from exc
     fields = {"given_name": value.given_name, "middle_initial": value.middle_initial,
               "family_name": value.family_name, "birth_date": value.birth_date.isoformat(),
               "ecw_patient_id": matched["patient"]["id"],
               "ecw_account_number": matched['patient'].get('ecw_account_number')}
     intake = await run_in_threadpool(staff_store.find_ecw_intake, staff["practice_id"], fields["ecw_patient_id"])
+    reused = bool(intake)
     if not intake:
         intake = await run_in_threadpool(staff_store.create_intake, str(uuid4()), staff, [], "ecw_lookup", None, fields)
     elif intake.get('patient'):
         await run_in_threadpool(staff_store.save_ecw_account_number, intake['patient']['id'], staff['practice_id'],
                                 fields['ecw_patient_id'], fields['ecw_account_number'])
         intake = await run_in_threadpool(staff_store.get_intake, intake['id'], staff['practice_id'])
+    collection_event('ecw_lookup_completed', practice_id=staff['practice_id'], intake_id=intake['id'],
+                     staff_id=staff['id'], stage='patient_search', outcome='reused' if reused else 'created',
+                     count=len(matched['appointments']), duration_ms=int((time.monotonic() - started) * 1000))
     return JSONResponse({**public(intake), "ecw_match": {"patient": {key: matched["patient"][key]
                          for key in ("given_name", "family_name", "birth_date", "ecw_account_number") if key in matched['patient']},
                          "appointments": matched["appointments"]}}, status_code=201, headers=NO_STORE)
@@ -486,6 +497,9 @@ async def confirm_patient(intake_id: str, body: Patient, request: Request):
         raise HTTPException(409, str(exc)) from exc
     if not intake:
         raise HTTPException(404, "Insurance intake not found")
+    if intake.get('source') == 'ecw_lookup':
+        collection_event('ecw_identity_confirmed', practice_id=staff['practice_id'], intake_id=intake['id'],
+                         staff_id=staff['id'], stage='identity', outcome='confirmed')
     return JSONResponse(public(intake), headers=NO_STORE)
 
 

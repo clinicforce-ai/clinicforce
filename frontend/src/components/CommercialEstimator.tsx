@@ -315,7 +315,7 @@ export default function CommercialEstimator({ onBack, intakeId, refreshBenefits 
             {patientPrice && !emgScenario && <p>Estimated patient share after the claim: {patientPrice}.</p>}
             {result.eligibility_reconciliation && <p>{result.eligibility_reconciliation.message}</p>}
             {!!result.identity?.differences.length && <p>{result.identity.message || 'Patient identity requires review.'}</p>}
-            <p>Response reference: {result.response_reference || 'Not returned'} · Estimate revision: {result.revision ?? 'Not saved'}</p>
+            <p>Check ID: {result.check_id || 'Not saved'} · Response reference: {result.response_reference || 'Not returned'} · Estimate revision: {result.revision ?? 'Not saved'}</p>
             {!!result.audit_trail?.length && <section><h3>Changes to this estimate</h3><ol>{result.audit_trail.map((entry, index) => <li key={index}>{entry.changes.join(', ')} · {entry.by}{entry.checked_at && <small>{visitDate(entry.checked_at)} · {visitTime(entry.checked_at)}</small>}</li>)}</ol></section>}
             {!readOnly && <><h3>Previous eCW visits</h3>{historyBusy && <p role="status">Reading visit history…</p>}{historyError && <p>{historyError}<button onClick={() => void loadHistory()}>Retry</button></p>}{history?.map(visit => <article key={visit.id}><strong>{visitDate(visit.start)} · {visit.reason || 'Previous visit'}</strong><p>{visit.coded_services.join(', ')}</p></article>)}{history?.length === 0 && <p>No completed visits returned in the last year.</p>}</>}
             {!readOnly && panel === 'sources' && result.check_id && <FinancialHistory key={result.check_id} checkId={result.check_id} />}
