@@ -26,9 +26,10 @@ class ReleaseSafetyTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 validate_run(run, invalid)
 
+    @patch("watch_deploy.aws", return_value=[])
     @patch("watch_deploy.progress", side_effect=RuntimeError("unavailable"))
     @patch("watch_deploy.subprocess.Popen")
-    def test_progress_failure_cannot_hide_operation_failure(self, popen, progress):
+    def test_progress_failure_cannot_hide_operation_failure(self, popen, progress, aws):
         process = Mock()
         process.poll.return_value = 42
         popen.return_value = process

@@ -20,7 +20,7 @@ def aws(*args):
 
 def progress(stack, seen):
     events = aws("cloudformation", "describe-stack-events", "--stack-name", stack,
-                 "--max-items", "30")["StackEvents"]
+                 "--max-items", "100")["StackEvents"]
     for event in reversed(events):
         if event["EventId"] not in seen:
             seen.add(event["EventId"])
@@ -53,6 +53,13 @@ def main():
                 print(f"Progress temporarily unavailable: {exc}", flush=True)
             result = process.poll()
             if result is not None:
+                if result:
+                    try:
+                        failures = aws("cloudformation", "describe-stack-events", "--stack-name", args.stack,
+                                       "--query", "StackEvents[?contains(ResourceStatus, `FAILED`)].{time:Timestamp,resource:LogicalResourceId,status:ResourceStatus,reason:ResourceStatusReason}")
+                        print("CloudFormation failure summary:", json.dumps(failures[:30], indent=2), flush=True)
+                    except (RuntimeError, subprocess.TimeoutExpired):
+                        print("Could not retrieve failure details; inspect CloudFormation before retrying.", flush=True)
                 return result
             if time.monotonic() - started > args.timeout:
                 print("Monitor deadline reached; AWS operation may still be running. Inspect before retrying.", flush=True)
