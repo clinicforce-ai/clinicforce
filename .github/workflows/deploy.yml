@@ -1,34 +1,38 @@
 name: Deploy ClinicForce application
+run-name: Release ${{ inputs.environment || 'staging' }} ${{ inputs.request_id || github.sha }}
 
 on:
   pull_request:
-    paths:
-      - 'backend/**'
-      - 'frontend/**'
-      - 'testing/**'
-      - '.github/workflows/deploy.yml'
   push:
     branches: [main]
-    paths:
-      - 'backend/**'
-      - 'frontend/**'
-      - 'hapi/**'
-      - 'testing/**'
-      - '.github/workflows/deploy.yml'
   workflow_dispatch:
+    inputs:
+      environment:
+        type: choice
+        options: [staging, production]
+        default: staging
+        required: true
+      staging_run_id:
+        description: Successful main-branch staging run to promote unchanged
+        type: string
+      verification_reference:
+        description: Required for production; reference to successful representative workflow checks (no patient data)
+        type: string
+      request_id:
+        description: Deployment CLI correlation ID
+        type: string
 
 permissions:
-  id-token: write
   contents: read
+  actions: read
 
 concurrency:
-  group: clinicforce-production-deploy
+  group: clinicforce-${{ github.event_name == 'pull_request' && github.ref || inputs.environment || 'staging' }}-deploy
   cancel-in-progress: false
 
 env:
   AWS_REGION: us-east-1
-  AWS_ACCOUNT_ID: '311057178360'
-  STACK_NAME: clinicforce-production
+  AWS_DEFAULT_REGION: us-east-1
 
 jobs:
   verify:
@@ -49,12 +53,20 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Scan credentials before release
+        run: >-
+          docker run --rm --volume "$GITHUB_WORKSPACE:/repo:ro"
+          zricethezav/gitleaks:v8.21.2 detect --source=/repo --no-git --redact --exit-code=1
+
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '24.11.0'
           cache: npm
           cache-dependency-path: frontend/package-lock.json
+
+      - name: Check deployment safety
+        run: python3 -m unittest discover -s scripts -p "test_*.py"
 
       - name: Validate backend source
         run: |
@@ -72,124 +84,112 @@ jobs:
           npm run lint
           npm run build
 
-  deploy:
-    # GitHub environment branch protection is unavailable on the current plan,
-    # so enforce the production main-only boundary in the workflow itself.
-    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+
+  build:
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && inputs.environment != 'production'
     needs: verify
     runs-on: ubuntu-latest
-    environment: production
+    timeout-minutes: 30
+    environment: staging
+    permissions:
+      contents: read
+      id-token: write
     steps:
       - uses: actions/checkout@v4
-
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
+      - uses: actions/setup-node@v4
         with:
           node-version: '24.11.0'
           cache: npm
           cache-dependency-path: frontend/package-lock.json
-
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
+      - uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: arn:aws:iam::311057178360:role/clinicforce-github-actions-deploy-managed
+          role-to-assume: arn:aws:iam::311057178360:role/clinicforce-github-actions-staging-deploy
           aws-region: ${{ env.AWS_REGION }}
-
-      - name: Log in to Amazon ECR
+      - uses: aws-actions/amazon-ecr-login@v2
         id: ecr
-        uses: aws-actions/amazon-ecr-login@v2
-
-      - name: Build and publish immutable application images
+      - name: Build release once and resolve image digests
         env:
           REGISTRY: ${{ steps.ecr.outputs.registry }}
-          IMAGE_TAG: ${{ github.sha }}
+          IMAGE_TAG: ${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
         run: |
           set -euo pipefail
-          docker build --pull --tag "$REGISTRY/clinicforce-backend:$IMAGE_TAG" backend
-          docker build --pull --tag "$REGISTRY/clinicforce-hapi:$IMAGE_TAG" hapi
-          docker push "$REGISTRY/clinicforce-backend:$IMAGE_TAG"
-          docker push "$REGISTRY/clinicforce-hapi:$IMAGE_TAG"
-
-      - name: Update only the released image parameters
-        id: release_stack
-        env:
-          REGISTRY: ${{ steps.ecr.outputs.registry }}
-          IMAGE_TAG: ${{ github.sha }}
-        run: |
-          set -euo pipefail
-          # Infrastructure releases run in a separate repository. Let an active
-          # stack update finish before reading and preserving its parameters.
-          stack_status=$(aws cloudformation describe-stacks --stack-name "$STACK_NAME" \
-            --query 'Stacks[0].StackStatus' --output text)
-          if [[ "$stack_status" == *_IN_PROGRESS ]]; then
-            aws cloudformation wait stack-update-complete --stack-name "$STACK_NAME"
-          fi
-          # Preserve every existing integration parameter, including newly added secrets.
-          aws cloudformation describe-stacks --stack-name "$STACK_NAME" \
-            --query 'Stacks[0].Parameters[].ParameterKey' --output json > /tmp/clinicforce-parameter-keys.json
-          jq --arg backend "$REGISTRY/clinicforce-backend:$IMAGE_TAG" \
-             --arg hapi "$REGISTRY/clinicforce-hapi:$IMAGE_TAG" \
-             'map(if . == "BackendImageUri" then {ParameterKey: ., ParameterValue: $backend}
-                  elif . == "HapiImageUri" then {ParameterKey: ., ParameterValue: $hapi}
-                  else {ParameterKey: ., UsePreviousValue: true} end)' \
-             /tmp/clinicforce-parameter-keys.json > /tmp/clinicforce-release-parameters.json
-          aws cloudformation update-stack \
-            --stack-name "$STACK_NAME" \
-            --use-previous-template \
-            --capabilities CAPABILITY_NAMED_IAM \
-            --parameters file:///tmp/clinicforce-release-parameters.json
-          aws cloudformation wait stack-update-complete --stack-name "$STACK_NAME"
-          aws ecs wait services-stable --cluster clinicforce-production --services backend hapi
-
-      - name: Report stack rollback details
-        if: ${{ failure() && steps.release_stack.outcome == 'failure' }}
-        run: |
-          set +e
-          aws cloudformation describe-stacks \
-            --stack-name "$STACK_NAME" \
-            --query 'Stacks[0].{status:StackStatus,reason:StackStatusReason}' \
-            --output table
-          aws cloudformation describe-stack-events \
-            --stack-name "$STACK_NAME" \
-            --max-items 40 \
-            --query 'StackEvents[?contains(ResourceStatus, `FAILED`) || contains(ResourceStatus, `ROLLBACK`)].{time:Timestamp,resource:LogicalResourceId,type:ResourceType,status:ResourceStatus,reason:ResourceStatusReason}' \
-            --output table
+          mkdir -p release
           for service in backend hapi; do
-            echo "Stopped tasks for $service"
-            task_arns=$(aws ecs list-tasks --cluster clinicforce-production --service-name "$service" --desired-status STOPPED --query 'taskArns' --output text)
-            if [ -n "$task_arns" ] && [ "$task_arns" != "None" ]; then
-              aws ecs describe-tasks --cluster clinicforce-production --tasks $task_arns \
-                --query 'tasks[].{task:taskArn,stopped:stoppedReason,containers:containers[].{name:name,reason:reason,exit:exitCode}}' \
-                --output json
-            fi
+            repository="clinicforce-staging-$service"
+            docker build --progress=plain --pull --tag "$REGISTRY/$repository:$IMAGE_TAG" "$service"
+            docker push "$REGISTRY/$repository:$IMAGE_TAG"
+            digest=$(aws ecr describe-images --repository-name "$repository" --image-ids "imageTag=$IMAGE_TAG" --query 'imageDetails[0].imageDigest' --output text)
+            echo "$REGISTRY/$repository@$digest" > "release/$service-image"
           done
-
-      - name: Build and publish frontend assets
-        id: frontend
-        working-directory: frontend
-        run: |
-          set -euo pipefail
+          jq -n --arg sha "$GITHUB_SHA" --arg backend "$(cat release/backend-image)" --arg hapi "$(cat release/hapi-image)" \
+            '{sha:$sha,backend:$backend,hapi:$hapi}' > release/manifest.json
+          cd frontend
           npm ci
           npm run build
-          echo "bucket=$(aws cloudformation describe-stacks --stack-name "$STACK_NAME" --query 'Stacks[0].Outputs[?OutputKey==`StaticBucketName`].OutputValue' --output text)" >> "$GITHUB_OUTPUT"
-          echo "distribution=$(aws cloudformation describe-stacks --stack-name "$STACK_NAME" --query 'Stacks[0].Outputs[?OutputKey==`DistributionId`].OutputValue' --output text)" >> "$GITHUB_OUTPUT"
+          cp -r dist ../release/frontend
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release
+          path: release/
+          if-no-files-found: error
+          retention-days: 90
 
-      - name: Publish frontend and invalidate CloudFront
-        working-directory: frontend
+  deploy:
+    name: Deploy ${{ inputs.environment || 'staging' }}
+    if: >-
+      always() && needs.verify.result == 'success' &&
+      github.event_name != 'pull_request' && github.ref == 'refs/heads/main' &&
+      (needs.build.result == 'success' ||
+       (github.event_name == 'workflow_dispatch' && inputs.environment == 'production'))
+    needs: [verify, build]
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    environment: ${{ inputs.environment || 'staging' }}
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Enforce production verification and staging provenance
+        if: inputs.environment == 'production'
+        id: promotion
         env:
-          STATIC_BUCKET: ${{ steps.frontend.outputs.bucket }}
-          DISTRIBUTION_ID: ${{ steps.frontend.outputs.distribution }}
+          GH_TOKEN: ${{ github.token }}
+          STAGING_RUN: ${{ inputs.staging_run_id }}
+          VERIFICATION_REFERENCE: ${{ inputs.verification_reference }}
         run: |
           set -euo pipefail
-          test -n "$STATIC_BUCKET"
-          test -n "$DISTRIBUTION_ID"
-          # Keep old hashed chunks available to tabs that were opened before
-          # this release. The HTML entry point must always be revalidated.
-          aws s3 sync dist/assets/ "s3://$STATIC_BUCKET/assets/" \
-            --cache-control 'public,max-age=31536000,immutable'
-          aws s3 cp dist/clinicforce-logo.png "s3://$STATIC_BUCKET/clinicforce-logo.png" \
-            --cache-control 'no-cache,max-age=0,must-revalidate'
-          aws s3 cp dist/index.html "s3://$STATIC_BUCKET/index.html" \
-            --content-type 'text/html' \
-            --cache-control 'no-store,max-age=0,must-revalidate'
-          aws cloudfront create-invalidation --distribution-id "$DISTRIBUTION_ID" --paths '/*'
+          test -n "${VERIFICATION_REFERENCE//[[:space:]]/}" || { echo 'Successful workflow verification is required'; exit 1; }
+          python3 scripts/check_release.py "$STAGING_RUN"
+      - uses: actions/download-artifact@v4
+        if: inputs.environment != 'production'
+        with:
+          name: release
+          path: release
+      - uses: actions/download-artifact@v4
+        if: inputs.environment == 'production'
+        with:
+          name: release
+          path: release
+          run-id: ${{ inputs.staging_run_id }}
+          github-token: ${{ github.token }}
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ inputs.environment == 'production' && 'arn:aws:iam::311057178360:role/clinicforce-github-actions-deploy-managed' || 'arn:aws:iam::311057178360:role/clinicforce-github-actions-staging-deploy' }}
+          aws-region: ${{ env.AWS_REGION }}
+      - name: Release images and frontend, watch AWS progress, verify result
+        env:
+          TARGET: ${{ inputs.environment || 'staging' }}
+          RELEASE_SHA: ${{ steps.promotion.outputs.sha || github.sha }}
+          STAGING_SMOKE_PASSWORD: ${{ inputs.environment != 'production' && secrets.STAGING_SMOKE_PASSWORD || '' }}
+        run: python3 scripts/release.py "$TARGET" --sha "$RELEASE_SHA"
+      - name: Publish release summary
+        if: always()
+        env:
+          TARGET: ${{ inputs.environment || 'staging' }}
+          RELEASE_SHA: ${{ steps.promotion.outputs.sha || github.sha }}
+          STAGING_RUN: ${{ inputs.staging_run_id }}
+        run: |
+          printf 'Environment: %s\n\nCommit: %s\n\nStaging source run: %s\n' "$TARGET" "$RELEASE_SHA" "$STAGING_RUN" >> "$GITHUB_STEP_SUMMARY"
+          echo 'Deployment events appear in the release step. Application logs remain in CloudWatch.' >> "$GITHUB_STEP_SUMMARY"
