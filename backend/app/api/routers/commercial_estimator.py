@@ -500,6 +500,8 @@ def _previsit_range(practice_id: str, inputs: dict, source: dict, payer_id: str,
             raise commercial.CommercialError("Map the appointment location to its place of service.")
         rates = commercial_store.matching_rates(practice_id, profile, network, inputs["service_date"], selected)
         rules = {**rules, **profile['rules']}
+        if network.get('product_assumed') and benefits.get('network_status') != 'out_of_network':
+            benefits = {**benefits, 'network_status': 'in_network'}
     except (HTTPException, commercial.CommercialError) as exc:
         issues.append(str(exc.detail) if isinstance(exc, HTTPException) else str(exc))
     priced = visit_estimate.price_lines(selected, rates, benefits, rules, payload=payload,

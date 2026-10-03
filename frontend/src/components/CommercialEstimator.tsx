@@ -43,19 +43,6 @@ export function FinancialHistory({ checkId, intakeId }: { checkId: string; intak
   </section>
 }
 
-function PayerResponse({ checkId }: { checkId: string }) {
-  const [value, setValue] = useState('')
-  const [busy, setBusy] = useState(false)
-  const [error, setError] = useState('')
-  const load = async () => {
-    setBusy(true); setError('')
-    try { setValue(JSON.stringify((await commercialPayerResponse(checkId)).response, null, 2)) }
-    catch (caught) { setError(caught instanceof Error ? caught.message : 'The saved payer response could not be loaded.') }
-    finally { setBusy(false) }
-  }
-  return <section><button disabled={busy} onClick={() => value ? setValue('') : void load()}>{busy ? 'Loading payer response…' : value ? 'Hide saved payer response' : 'View saved payer response'}</button>{error && <p role="status">{error}</p>}{value && <pre className="visit-raw-response" tabIndex={0}>{value}</pre>}</section>
-}
-
 type DetailPanel = 'coverage' | 'notes' | 'calculation' | 'sources' | 'services'
 function AppointmentNotes({ result }: { result: PrevisitEstimate }) {
   const fields = result.appointment_context?.imported_fields || []
@@ -80,7 +67,6 @@ function AppointmentNotes({ result }: { result: PrevisitEstimate }) {
     <h3>{result.reason || 'Scheduled visit'}</h3>
     <p className="visit-muted">{[result.appointment_context?.rendering_provider?.name, result.appointment_context?.location].filter(Boolean).join(' · ')}</p>
     {statuses.map((field, index) => <p className="visit-muted" key={index}>Appointment status: {field.text}</p>)}
-    {!hasNotes && <article><h3>General Notes not returned</h3><p>The eCW connection did not return General Notes or patient comments for this appointment.</p></article>}
     {details.map((field, index) => <article key={`${field.source}:${index}`}><h3>{field.label}</h3><p>{field.text}</p><small>From eCW{field.updated_at ? ` · ${visitDate(field.updated_at)}` : ''}</small></article>)}
   </section>
 }
