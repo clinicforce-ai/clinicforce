@@ -62,8 +62,10 @@ def main():
             raise RuntimeError("ECS rolled back or did not adopt the selected release")
     outputs = {v["OutputKey"]: v["OutputValue"] for v in aws("cloudformation", "describe-stacks", "--stack-name", stack)["Stacks"][0]["Outputs"]}
     bucket = outputs["StaticBucketName"]
-    command("aws", "s3", "sync", "release/frontend/", f"s3://{bucket}/", "--exclude", "index.html",
+    command("aws", "s3", "sync", "release/frontend/assets/", f"s3://{bucket}/assets/",
             "--cache-control", "public,max-age=31536000,immutable")
+    command("aws", "s3", "sync", "release/frontend/", f"s3://{bucket}/", "--exclude", "assets/*", "--exclude", "index.html",
+            "--cache-control", "no-cache,max-age=0,must-revalidate")
     command("aws", "s3", "cp", "release/frontend/index.html", f"s3://{bucket}/index.html",
             "--content-type", "text/html", "--cache-control", "no-store,max-age=0,must-revalidate")
     invalidation = aws("cloudfront", "create-invalidation", "--distribution-id", outputs["DistributionId"], "--paths", "/*")
