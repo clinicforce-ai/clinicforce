@@ -207,7 +207,7 @@ class StaffInsuranceBridgeTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(store.get_case(legacy["id"], "legacy", "legacy-share"))
         self.assertEqual(staff_store.get_intake(intake["id"], intake["practice_id"])["documents"][0]["object_key"], "staff-insurance/synthetic-original")
 
-    async def test_v2_practice_binding_and_demo_ecw_preview(self):
+    async def test_v2_practice_binding_and_production_ecw_preview(self):
         intake = self.intake()
         headers = {"X-ClinicForce-Intake": intake["id"]}
         paths = [("GET", "/configuration"), ("GET", "/cases/latest"), ("POST", "/cases"), ("GET", "/cases/unknown"), ("POST", "/cases/unknown/transactions/coverage")]
@@ -221,14 +221,14 @@ class StaffInsuranceBridgeTests(unittest.IsolatedAsyncioTestCase):
         inputs.update(member_id="MEM123", group_number="GROUP", payer_id="SYNTHETIC", relationship="18")
         inputs["patient"] = {"patient_first_name": "Pat", "patient_last_name": "Example", "patient_birth_date": "1990-01-01", "gender": "U"}
         inputs["subscriber"] = {"firstName": "Pat", "lastName": "Example", "birthDate": "1990-01-01", "memberId": "MEM123"}
-        practice = {"payer_aliases": {"Synthetic payer": "SYNTHETIC"}}
+        practice = {"production_enabled": True, "payer_aliases": {"Synthetic payer": "SYNTHETIC"}}
         ecw_result = (inputs, [], {"system": "eClinicalWorks", "payer": "Synthetic payer", "appointment_date": "2026-09-17"})
         refreshed_inputs = copy.deepcopy(inputs)
         refreshed_inputs["reason"] = "Updated eCW visit reason"
         refreshed_result = (refreshed_inputs, [], {"system": "eClinicalWorks", "payer": "Synthetic payer",
                                                     "appointment_date": "2026-09-18"})
         with patch.dict(os.environ, {"STAFF_INTEGRATION_PRACTICE_ID": "", "STAFF_INTEGRATION_PRACTICE_IDS": f"primary, {intake['practice_id']}"}), \
-                patch.object(insurance_v2, "configuration", return_value=(SimpleNamespace(environment="demo", client_id="", client_secret=""), practice, "synthetic")), \
+                patch.object(insurance_v2, "configuration", return_value=(SimpleNamespace(environment="production", client_id="", client_secret=""), practice, "synthetic")), \
                 patch.object(insurance_v2.ecw_backend, "configured", return_value=True), \
                 patch.object(insurance_v2.ecw_backend, "fetch_inputs", new=AsyncMock(side_effect=[ecw_result, refreshed_result])) as fetch:
             configuration = await self.client.get("/api/doctor/insurance/v2/configuration", headers=headers)
@@ -247,9 +247,6 @@ class StaffInsuranceBridgeTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(refreshed.json()["sources"]["ecw"]["appointment_date"], "2026-09-18")
             self.assertEqual(fetch.await_count, 2)
             self.assertEqual(fetch.await_args_list[1].args[0]["ecw_appointment_date"], "2026-09-17")
-            blocked = await self.client.post(f"/api/doctor/insurance/v2/cases/{response.json()['id']}/transactions/coverage", headers=headers)
-            self.assertEqual(blocked.status_code, 409, "Real eCW data must never be sent to Availity demo")
-            self.assertIn("No patient data was submitted", blocked.text)
             async def slow_fetch(*_args):
                 await asyncio.sleep(1)
             with patch.object(insurance_v2, "ECW_FETCH_TIMEOUT_SECONDS", 0.01), \
@@ -257,6 +254,13 @@ class StaffInsuranceBridgeTests(unittest.IsolatedAsyncioTestCase):
                 timed_out = await self.client.post("/api/doctor/insurance/v2/cases", headers=headers, json={})
             self.assertEqual(timed_out.status_code, 502, timed_out.text)
             self.assertIn("did not respond in time", timed_out.text)
+
+        with patch.dict(os.environ, {"STAFF_INTEGRATION_PRACTICE_IDS": intake["practice_id"]}), \
+                patch.object(insurance_v2, "configuration", return_value=(SimpleNamespace(environment="demo"), practice, "synthetic")), \
+                patch.object(insurance_v2.ecw_backend, "fetch_inputs", new=AsyncMock()) as fetch:
+            blocked = await self.client.post("/api/doctor/insurance/v2/cases", headers=headers, json={})
+            self.assertEqual(blocked.status_code, 409, blocked.text)
+            fetch.assert_not_awaited()
 
     async def test_v2_fee_original_persists_and_conflict_cleans_only_new_object(self):
         intake = self.intake()

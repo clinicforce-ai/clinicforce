@@ -72,49 +72,6 @@ def validate_staff_coverage(fields: dict, inputs: dict, source: dict, practice: 
     raise HTTPException(409, "The confirmed payer could not be matched to the eCW coverage. Ask the administrator to check the payer name and approved payer mapping, or use document review. Your card is saved.")
 
 
-async def _session(request: Request) -> dict:
-    session = await _insurance_session(request)
-    if session.get("practice_id"):
-        configured = os.getenv("STAFF_INTEGRATION_PRACTICE_IDS", "").strip()
-        if configured:
-            configured_practices = {value.strip() for value in configured.split(",") if value.strip()}
-        else:
-            configured_practices = {os.getenv("STAFF_INTEGRATION_PRACTICE_ID", "").strip()}
-        if session["practice_id"] not in configured_practices:
-            raise HTTPException(403, "Connected insurance is not configured for this clinic. Your intake is saved; use document review.")
-    return session
-
-
-def validate_staff_coverage(fields: dict, inputs: dict, source: dict, practice: dict) -> None:
-    """Compare stated card details; missing EHR values remain normal input gaps."""
-    subscriber = inputs.get("subscriber") or {}
-    relationships = {"self": "18", "spouse": "01", "child": "19", "other": "G8"}
-    relationship = relationships.get(fields.get("relationship"), fields.get("relationship"))
-    pairs = (("member ID", fields.get("member_id"), inputs.get("member_id")),
-             ("group number", fields.get("group_number"), inputs.get("group_number")),
-             ("subscriber relationship", relationship, inputs.get("relationship")),
-             ("subscriber name", fields.get("subscriber_name"), " ".join(str(subscriber.get(key) or "") for key in ("firstName", "lastName")).strip()),
-             ("subscriber birth date", fields.get("subscriber_birth_date"), subscriber.get("birthDate")))
-    for label, confirmed, connected in pairs:
-        if confirmed and connected and intake.normalize(str(confirmed)) != intake.normalize(str(connected)):
-            raise HTTPException(409, f"The eCW {label} differs from the confirmed card. Review the coverage in eCW before checking benefits; your card is saved.")
-    payer = intake.normalize(str(fields.get("payer") or ""))
-    if not payer:
-        return
-    connected_id = intake.normalize(str(inputs.get("payer_id") or ""))
-    connected_name = intake.normalize(str(source.get("payer") or ""))
-    # An eCW payer name without a configured Availity ID is an explicit input gap,
-    # not evidence that the confirmed card conflicts with the connected coverage.
-    if not connected_id:
-        return
-    if payer in {connected_id, connected_name}:
-        return
-    mapped = {intake.normalize(value) for key, value in practice.get("payer_aliases", {}).items() if intake.normalize(key) == payer}
-    if len(mapped) == 1 and (not connected_id or connected_id in mapped):
-        return
-    raise HTTPException(409, "The confirmed payer could not be matched to the eCW coverage. Ask the administrator to check the payer name and approved payer mapping, or use document review. Your card is saved.")
-
-
 def apply_staff_card_coverage(fields: dict, inputs: dict, missing: list[str], practice: dict) -> bool:
     """Fill only eCW coverage fields absent from a staff-confirmed scanned card."""
     relationship = {"self": "18", "spouse": "01", "child": "19", "other": "G8"}.get(fields.get("relationship"), fields.get("relationship"))
