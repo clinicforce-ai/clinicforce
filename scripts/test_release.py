@@ -59,7 +59,7 @@ class ReleaseSafetyTests(unittest.TestCase):
         run.return_value = subprocess.CompletedProcess([], 0, "", "")
         aws.side_effect = [
             {"Stacks": [{"StackStatus": "UPDATE_COMPLETE"}]},
-            ["BackendImageUri", "HapiImageUri", "EcwBackendIssuer"],
+            ["EnvironmentName", "BackendImageUri", "HapiImageUri", "EcwBackendIssuer"],
             {"services": [{"taskDefinition": "old-task"}]},
             {"taskDefinition": {"containerDefinitions": [{"name": "backend", "image": "old-image"}]}},
         ]

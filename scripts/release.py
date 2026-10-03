@@ -39,6 +39,8 @@ def main():
         watch("aws", "cloudformation", "wait", "stack-update-complete", "--stack-name", stack)
     keys = aws("cloudformation", "describe-stacks", "--stack-name", stack,
                "--query", "Stacks[0].Parameters[].ParameterKey")
+    if "EnvironmentName" not in keys:
+        raise ValueError("Apply the staging-aware infrastructure template with the operator identity before an application release")
     if not {"BackendImageUri", "HapiImageUri"}.issubset(keys):
         raise ValueError("Target stack lacks application image parameters")
     images = {"BackendImageUri": manifest["backend"], "HapiImageUri": manifest["hapi"]}
