@@ -190,6 +190,10 @@ class EcwBackendSourceTests(unittest.IsolatedAsyncioTestCase):
         with patch.dict(os.environ, environment), patch.object(ecw, "ECW_KMS_KEY_ID", "kms-key"), patch.object(ecw, "_client_assertion", return_value="signed-assertion"):
             inputs, missing, source = await ecw_backend.fetch_inputs(
                 {"patient_first_name": "Pat", "patient_last_name": "Example", "patient_birth_date": "1980-01-01"},
+                practice, "encounter-1", transport=httpx.MockTransport(handler),
+            )
+            appointments = await ecw_backend.list_appointments(
+                {"patient_first_name": "Pat", "patient_last_name": "Example", "patient_birth_date": "1980-01-01"},
                 practice, transport=httpx.MockTransport(handler),
             )
 

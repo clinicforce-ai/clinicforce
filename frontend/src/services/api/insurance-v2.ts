@@ -6,6 +6,7 @@ export interface V2Configuration {
   environment: 'demo' | 'production'; credentials_configured: boolean; practice_configured: boolean
   ecw_configured: boolean; production_enabled: boolean; stedi_temporary_enabled: boolean; message: string
 }
+export interface V2Appointment { id: string; start: string; status: string; reason: string }
 export interface V2Benefit {
   category: string; network: string; service?: string; level?: string; description?: string
   amount?: string; remaining?: string; total?: string
@@ -39,6 +40,13 @@ export interface V2Transaction {
     status_code?: string; certificationNumber?: string; certificationEffectiveDate?: string; certificationExpirationDate?: string
     fromDate?: string; toDate?: string; procedures?: V2ReviewLine[]
   }
+}
+export interface V2ManualReview {
+  source: 'payer_portal' | 'payer_call'
+  network_status: 'in_network' | 'out_of_network' | 'unconfirmed'; network_reference: string
+  referral_status: 'unconfirmed' | 'not_required' | 'approved' | 'required'; referral_reference: string
+  authorization_status: 'unconfirmed' | 'not_required' | 'approved' | 'required'; authorization_reference: string
+  price_path: 'pending' | 'cash'; verified_at?: string
 }
 export interface V2Case {
   id: string; revision: number; created_at: string; expires_at: string | null; environment: 'demo' | 'production'
@@ -74,6 +82,7 @@ export interface V2Case {
     notes: string[]
     requires_fee_schedule?: boolean
   }
+  manual_review?: V2ManualReview
   summary: {
     action: 'collect' | 'verify' | 'do_not_schedule' | 'self_pay' | 'review_oon'; heading: string
     coverage: 'active' | 'inactive' | 'unconfirmed'; hmo: boolean
@@ -87,8 +96,10 @@ export interface V2Case {
 const base = '/api/doctor/insurance/v2'
 export const getV2Configuration = () => request<V2Configuration>(`${base}/configuration`)
 export const latestV2Case = () => request<{ case: V2Case | null }>(`${base}/cases/latest`)
-export const createV2Case = (scenario = 'Coverages-Complete-i') => request<V2Case>(`${base}/cases`, json({ scenario }))
+export const getV2Appointments = () => request<{ appointments: V2Appointment[] }>(`${base}/appointments`)
+export const createV2Case = (appointment_id?: string, scenario = 'Coverages-Complete-i') => request<V2Case>(`${base}/cases`, json({ scenario, ...(appointment_id ? { appointment_id } : {}) }))
 export const getV2Case = (id: string) => request<V2Case>(`${base}/cases/${encodeURIComponent(id)}`)
+export const saveV2ManualReview = (id: string, review: V2ManualReview) => request<V2Case>(`${base}/cases/${encodeURIComponent(id)}/manual-review`, { ...json(review), method: 'PUT' })
 export const getV2Requirements = (id: string) => request<V2Case>(`${base}/cases/${encodeURIComponent(id)}/requirements`, json({}))
 export const suggestV2Services = (id: string) => request<V2Case>(`${base}/cases/${encodeURIComponent(id)}/suggestions`, json({}))
 export const confirmV2Services = (id: string, lines: Array<{ code: string; quantity: number; service_status: 'scheduled' | 'possible' }>) => request<V2Case>(`${base}/cases/${encodeURIComponent(id)}/services`, json({ lines }))

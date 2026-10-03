@@ -2,13 +2,13 @@ import {
   AlertTriangle, ArrowLeft, ArrowRight, Check, CheckCircle2, Clipboard, FileSpreadsheet,
   LoaderCircle, Mail, RefreshCw, ShieldCheck, Sparkles,
 } from 'lucide-react'
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { type FormEvent, useCallback, useEffect, useRef, useState } from 'react'
 import StaffLibraryPicker from './StaffLibraryPicker'
 import {
   confirmV2Services, createV2Case, getV2Case, getV2Configuration, getV2Requirements,
-  latestV2Case, refreshV2Transaction, retryV2Transaction, submitV2Transaction,
-  suggestV2Services, uploadV2Document,
-  type V2Case, type V2Configuration, type V2Resource, type V2Transaction,
+  getV2Appointments, latestV2Case, refreshV2Transaction, retryV2Transaction, submitV2Transaction,
+  saveV2ManualReview, suggestV2Services, uploadV2Document,
+  type V2Appointment, type V2Case, type V2Configuration, type V2ManualReview, type V2Resource, type V2Transaction,
 } from '../services/api'
 
 interface Props { onBack: () => void; staffMode?: boolean; onUseDocuments?: () => void }
@@ -59,6 +59,8 @@ function PriceExplanation({ transaction }: { transaction?: V2Transaction }) {
 export default function InsuranceVerificationV2({ onBack, staffMode = false, onUseDocuments }: Props) {
   const [config, setConfig] = useState<V2Configuration | null>(null)
   const [insuranceCase, setCase] = useState<V2Case | null>(null)
+  const [appointments, setAppointments] = useState<V2Appointment[]>([])
+  const [appointmentId, setAppointmentId] = useState('')
   const [busy, setBusy] = useState('Loading insurance settings…')
   const [error, setError] = useState('')
   const [choices, setChoices] = useState<Record<string, Choice>>({})
@@ -69,8 +71,8 @@ export default function InsuranceVerificationV2({ onBack, staffMode = false, onU
 
   useEffect(() => {
     let canceled = false
-    Promise.all([getV2Configuration(), latestV2Case()]).then(([settings, latest]) => {
-      if (!canceled) { setConfig(settings); setCase(latest.case) }
+    Promise.all([getV2Configuration(), latestV2Case(), staffMode ? getV2Appointments() : Promise.resolve({ appointments: [] })]).then(([settings, latest, visits]) => {
+      if (!canceled) { setConfig(settings); setCase(latest.case); setAppointments(visits.appointments) }
     }).catch((caught: unknown) => {
       if (!canceled) setError(caught instanceof Error ? caught.message : 'Unable to open insurance verification.')
     }).finally(() => { if (!canceled) setBusy('') })
@@ -137,6 +139,20 @@ export default function InsuranceVerificationV2({ onBack, staffMode = false, onU
     })
   }
 
+  const getAnswer = () => {
+    if (!insuranceCase || ecwPreview) return
+    void perform('Checking the selected appointment with the payer…', async () => {
+      let current = insuranceCase
+      if (!demo && !current.discovery.checked_at) current = await getV2Requirements(current.id)
+      if (!current.transactions.coverage) current = await submitV2Transaction(current.id, 'coverage')
+      const coverageResult = current.transactions.coverage?.result
+      const canEstimate = current.transactions.coverage?.outcome === 'complete' && coverageResult?.active === true &&
+        coverageResult.pce_available !== false && current.missing_by_resource.estimate.length === 0 &&
+        current.inputs.lines.some(line => (line.service_status || 'scheduled') === 'scheduled')
+      return canEstimate && !current.transactions.estimate ? submitV2Transaction(current.id, 'estimate') : current
+    })
+  }
+
   const uploadFees = (file: File) => {
     if (!insuranceCase) return
     void perform('Reading clinic prices and suggesting services…', async () => {
@@ -161,6 +177,23 @@ export default function InsuranceVerificationV2({ onBack, staffMode = false, onU
     }))
     if (!lines.length) { setError('Choose at least one clinician-reviewed service.'); return }
     void perform('Saving reviewed services…', () => confirmV2Services(insuranceCase.id, lines))
+  }
+
+  const recordManualReview = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    if (!insuranceCase) return
+    const values = new FormData(event.currentTarget)
+    const review: V2ManualReview = {
+      source: values.get('source') as V2ManualReview['source'],
+      network_status: values.get('network_status') as V2ManualReview['network_status'],
+      network_reference: String(values.get('network_reference') || ''),
+      referral_status: values.get('referral_status') as V2ManualReview['referral_status'],
+      referral_reference: String(values.get('referral_reference') || ''),
+      authorization_status: values.get('authorization_status') as V2ManualReview['authorization_status'],
+      authorization_reference: String(values.get('authorization_reference') || ''),
+      price_path: values.get('price_path') as V2ManualReview['price_path'],
+    }
+    void perform('Saving manual payer verification…', () => saveV2ManualReview(insuranceCase.id, review))
   }
 
   const copySummary = async () => {
@@ -195,9 +228,10 @@ export default function InsuranceVerificationV2({ onBack, staffMode = false, onU
 
       {!insuranceCase && <section className="v2-start">
         <p className="section-kicker">Start here</p>
-        <h2>{ecwPreview ? 'Load the patient’s eCW appointment' : demo ? 'Run the Availity synthetic workflow' : 'Load the patient’s next scheduled visit'}</h2>
-        <p>{config?.message}</p>
-        <button className="button button-primary" type="button" disabled={!!busy} onClick={() => void perform('Starting a saved insurance case…', () => createV2Case())}>{ecwPreview ? 'Load eCW appointment' : demo ? 'Start demo case' : 'Load eCW appointment'} <ArrowRight size={17} aria-hidden="true" /></button>
+        <h2>{staffMode ? 'Choose the eCW appointment to verify' : demo ? 'Run the Availity synthetic workflow' : 'Load the patient’s next scheduled visit'}</h2>
+        <p>{staffMode ? 'The insurance card is already saved with this clinic intake. Choose the visit that this verification should cover.' : config?.message}</p>
+        {staffMode && <label className="v2-appointment-choice"><span>Scheduled appointment</span><select value={appointmentId} onChange={event => setAppointmentId(event.target.value)} disabled={!!busy || !appointments.length}><option value="">{appointments.length ? 'Choose an appointment' : 'No scheduled appointments found'}</option>{appointments.map(visit => <option key={visit.id} value={visit.id}>{dateTime(visit.start)} · {visit.reason || 'Reason not returned'} · {readable(visit.status)}</option>)}</select></label>}
+        <button className="button button-primary" type="button" disabled={!!busy || (staffMode && !appointmentId)} onClick={() => void perform('Starting a saved insurance case…', () => createV2Case(appointmentId || undefined))}>{staffMode ? 'Verify selected appointment' : demo ? 'Start demo case' : 'Load eCW appointment'} <ArrowRight size={17} aria-hidden="true" /></button>
       </section>}
 
       {insuranceCase && <>
@@ -230,6 +264,24 @@ export default function InsuranceVerificationV2({ onBack, staffMode = false, onU
           <article><p>Scheduled visit</p><h3>{money(insuranceCase.summary.scheduled.insurance_cents)}</h3><span>{stediCoverage ? 'Stedi + clinic contract estimate' : 'Availity patient estimate'}</span><dl><div><dt>Clinic cash price</dt><dd>{money(insuranceCase.summary.scheduled.cash_cents)}</dd></div><div><dt>Allowed amount</dt><dd>{money(insuranceCase.summary.scheduled.allowed_cents)}</dd></div></dl><small>{insuranceCase.summary.scheduled.codes.join(', ') || 'No scheduled code confirmed'}</small><PriceExplanation transaction={insuranceCase.transactions.estimate} /></article>
           <article><p>Possible procedure</p><h3>{money(insuranceCase.summary.possible.insurance_cents)}</h3><span>{stediCoverage ? 'Separate Stedi + clinic contract estimate' : 'Separate Availity patient estimate'}</span><dl><div><dt>Clinic cash price</dt><dd>{money(insuranceCase.summary.possible.cash_cents)}</dd></div><div><dt>Allowed amount</dt><dd>{money(insuranceCase.summary.possible.allowed_cents)}</dd></div></dl><small>{insuranceCase.summary.possible.codes.join(', ') || 'No possible procedure confirmed'}</small><PriceExplanation transaction={insuranceCase.transactions.procedure_estimate} /></article>
         </section></>}
+
+        {stediCoverage && coverageDone && <section className="v2-manual-review" aria-labelledby="manual-review-heading">
+          <div><p className="section-kicker">Stedi benefits-only path</p><h2 id="manual-review-heading">Record payer verification before scheduling</h2><p>Stedi did not return a patient-price estimate. Verify the payer portal or call the payer, record its confirmation reference, then choose either a pending insurance estimate or the clinic cash-price path.</p></div>
+          {!staffMode ? <p className="v2-next-step">Clinic staff must record the payer verification. No insured amount will be shown for this case.</p> : <form className="v2-manual-review-form" onSubmit={recordManualReview}>
+            <div className="v2-manual-review-grid">
+              <label><span>Verification source</span><select name="source" defaultValue={insuranceCase.manual_review?.source || 'payer_portal'}><option value="payer_portal">Payer portal</option><option value="payer_call">Payer phone call</option></select></label>
+              <label><span>Network status</span><select name="network_status" defaultValue={insuranceCase.manual_review?.network_status || 'unconfirmed'}><option value="unconfirmed">Not verified</option><option value="in_network">In network</option><option value="out_of_network">Out of network</option></select></label>
+              <label><span>Network confirmation reference</span><input name="network_reference" defaultValue={insuranceCase.manual_review?.network_reference || ''} maxLength={200} /></label>
+              <label><span>Referral status</span><select name="referral_status" defaultValue={insuranceCase.manual_review?.referral_status || 'unconfirmed'}><option value="unconfirmed">Not verified</option><option value="not_required">Not required</option><option value="approved">Approved</option><option value="required">Required / pending</option></select></label>
+              <label><span>Referral confirmation reference</span><input name="referral_reference" defaultValue={insuranceCase.manual_review?.referral_reference || ''} maxLength={200} /></label>
+              <label><span>Prior-authorization status</span><select name="authorization_status" defaultValue={insuranceCase.manual_review?.authorization_status || 'unconfirmed'}><option value="unconfirmed">Not verified</option><option value="not_required">Not required</option><option value="approved">Approved</option><option value="required">Required / pending</option></select></label>
+              <label><span>Authorization confirmation reference</span><input name="authorization_reference" defaultValue={insuranceCase.manual_review?.authorization_reference || ''} maxLength={200} /></label>
+              <label><span>Price path</span><select name="price_path" defaultValue={insuranceCase.manual_review?.price_path || 'pending'}><option value="pending">Insurance estimate pending</option><option value="cash">Offer clinic cash price only</option></select></label>
+            </div>
+            <p className="v2-next-step">A reference is required for every status other than “Not verified.” This record documents staff verification; it never creates an insured price estimate.</p>
+            <button className="button button-primary" type="submit" disabled={!!busy}><Check size={16} aria-hidden="true" /> Save payer verification</button>
+          </form>}
+        </section>}
 
         <section className="v2-services" aria-labelledby="services-heading">
           <div><p className="section-kicker">{ecwPreview ? 'Step 1 · clinical coding review' : 'Services and clinic prices'}</p><h2 id="services-heading">{ecwPreview ? 'Choose the services for this appointment' : 'Confirm what is being estimated'}</h2><p>{ecwPreview ? 'Start with codes attached to this eCW appointment. If eCW has not returned a code, ClinicForce can show review-only candidates from the appointment context. A clinician must confirm every selection.' : stediTemporary ? 'eClinicalWorks coded services are used first. The fee CSV must supply the clinic’s contract allowed amount for each estimated CPT/HCPCS code.' : 'eClinicalWorks coded services are used first. The fee CSV supplies the clinic’s billed charge and cash price. It never supplies insurance benefits.'}</p></div>
@@ -267,6 +319,8 @@ export default function InsuranceVerificationV2({ onBack, staffMode = false, onU
           <p>{!insuranceCase.inputs.lines.length ? 'This scheduled appointment has no coded service attached yet. ClinicForce uses the current appointment and the most recent completed visit to prepare clinician-reviewed candidates.' : additionalMissing.length ? 'Some appointment details are still loading. Reload if you need the latest information.' : 'ClinicForce received the available appointment, coverage, provider, diagnosis, and service details.'}</p>
         </section> : <section className="v2-workflow" aria-labelledby="workflow-heading">
           <p className="section-kicker">Payer workflow</p><h2 id="workflow-heading">Complete each needed payer check</h2>
+          {!coverage && <button className="button button-primary" type="button" disabled={!!busy} onClick={getAnswer}>Get insurance answer</button>}
+          {!coverage && <p className="v2-next-step">ClinicForce checks eligibility first. It requests an insured estimate only after any payer-required referral or authorization has an approved result. Referral and authorization remain separate actions because they create payer work.</p>}
           <div className="v2-action-list">{resources.map((resource, index) => {
             const transaction = insuranceCase.transactions[resource.id]
             const missing = insuranceCase.missing_by_resource[resource.id] || []

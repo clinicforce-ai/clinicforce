@@ -395,6 +395,14 @@ async def upload_cards(request: Request, files: list[UploadFile] = File(default=
     return JSONResponse(public(intake), status_code=201, headers=NO_STORE)
 
 
+@router.post("/intakes/ecw-lookup")
+async def create_ecw_lookup(body: EcwLookup, request: Request):
+    staff = await require_staff(request)
+    fields = body.model_dump(mode="json")
+    intake = await run_in_threadpool(staff_store.create_intake, str(uuid4()), staff, [], "ecw_lookup", None, fields)
+    return JSONResponse(public(intake), status_code=201, headers=NO_STORE)
+
+
 @router.post("/intakes/from-share")
 async def from_share(request: Request):
     staff = await require_staff(request)

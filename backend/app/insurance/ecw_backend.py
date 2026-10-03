@@ -783,7 +783,14 @@ async def fetch_inputs(profile: dict[str, Any], practice: dict[str, Any], appoin
             scheduled = [row for row in encounters if _is_upcoming_appointment(row, now)]
             next_date = min((_appointment_date(row) for row in scheduled), default="")
             next_visits = [row for row in scheduled if _appointment_date(row) == next_date]
-            visit = next_visits[0] if len(next_visits) == 1 else {}
+            if appointment_id:
+                if not re.fullmatch(r"[A-Za-z0-9.\-]{1,200}", appointment_id):
+                    raise EcwBackendError("The selected eClinicalWorks appointment is invalid.")
+                visit = next((row for row in scheduled if row.get("id") == appointment_id), None)
+                if visit is None:
+                    raise EcwBackendError("The selected eClinicalWorks appointment is no longer available. Refresh the appointment list.")
+            else:
+                visit = next_visits[0] if len(next_visits) == 1 else {}
             service_date = _appointment_date(visit) or today
             encounter_id = str(visit.get("id", ""))
             encounter_ref = f"Encounter/{encounter_id}" if encounter_id else ""
@@ -994,7 +1001,7 @@ async def fetch_inputs(profile: dict[str, Any], practice: dict[str, Any], appoin
         raise EcwBackendError("eClinicalWorks is temporarily unavailable.") from exc
 
     coverage_missing: list[str] = []
-    if len(next_visits) > 1:
+    if not appointment_id and len(next_visits) > 1:
         coverage_missing.append("eClinicalWorks returned more than one appointment on the next service date; an appointment-specific identifier is required to choose safely.")
     elif not visit:
         coverage_missing.append("eClinicalWorks did not return a scheduled appointment or encounter for this patient.")

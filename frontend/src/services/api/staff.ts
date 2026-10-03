@@ -110,6 +110,15 @@ export interface Era835Summary {
   claims: Array<{ patient_control_number: string; payer_claim_control_number: string; status_code: string; billed_cents: number; insurer_paid_cents: number; patient_responsibility_cents: number }>
 }
 
+export interface Era835Summary {
+  payment_cents: number
+  payment_date: string
+  payer: string
+  payer_id: string
+  claim_count: number
+  claims: Array<{ patient_control_number: string; payer_claim_control_number: string; status_code: string; billed_cents: number; insurer_paid_cents: number; patient_responsibility_cents: number }>
+}
+
 export const getStaffLibrary = () => request<{ documents: StaffLibraryDocument[] }>('/api/staff/library')
 export const uploadStaffLibrary = (body: FormData) => request<StaffLibraryDocument>('/api/staff/library', { method: 'POST', body })
 export const retireStaffRateVersion = (id: string) => request<{ id: string; status: string }>(`/api/staff/library/rate-versions/${encodeURIComponent(id)}/retire`, json({}))
