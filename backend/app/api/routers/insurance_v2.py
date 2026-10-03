@@ -72,45 +72,6 @@ def validate_staff_coverage(fields: dict, inputs: dict, source: dict, practice: 
     raise HTTPException(409, "The confirmed payer could not be matched to the eCW coverage. Ask the administrator to check the payer name and approved payer mapping, or use document review. Your card is saved.")
 
 
-def apply_staff_card_coverage(fields: dict, inputs: dict, missing: list[str], practice: dict) -> bool:
-    """Fill only coverage values eCW did not return from a staff-confirmed card."""
-    subscriber = inputs.setdefault("subscriber", {})
-    if not inputs.get("member_id") and fields.get("member_id"):
-        inputs["member_id"] = fields["member_id"]
-    if not subscriber.get("memberId") and inputs.get("member_id"):
-        subscriber["memberId"] = inputs["member_id"]
-    if not inputs.get("group_number") and fields.get("group_number"):
-        inputs["group_number"] = fields["group_number"]
-    if not inputs.get("payer_id"):
-        payer = intake.normalize(str(fields.get("payer") or ""))
-        inputs["payer_id"] = next((value for name, value in practice.get("payer_aliases", {}).items()
-                                    if payer and intake.normalize(name) == payer), None)
-    if inputs.get("relationship") == "18":
-        patient = inputs.get("patient") or {}
-        for target, source in (("firstName", "patient_first_name"), ("lastName", "patient_last_name"), ("birthDate", "patient_birth_date")):
-            if not subscriber.get(target) and patient.get(source):
-                subscriber[target] = patient[source]
-    elif fields.get("subscriber_name"):
-        first, _, last = " ".join(str(fields["subscriber_name"]).split()).partition(" ")
-        if not subscriber.get("firstName"):
-            subscriber["firstName"] = first
-        if not subscriber.get("lastName") and last:
-            subscriber["lastName"] = last
-        if not subscriber.get("birthDate") and fields.get("subscriber_birth_date"):
-            subscriber["birthDate"] = fields["subscriber_birth_date"]
-    complete = bool(inputs.get("member_id") and inputs.get("payer_id") and inputs.get("relationship") and
-                    all(subscriber.get(key) for key in ("firstName", "lastName", "birthDate", "memberId")))
-    if not complete:
-        return False
-    resolved = ("eClinicalWorks did not identify one active primary coverage for this appointment.",
-                "The eClinicalWorks coverage is missing the subscriber identity, relationship or member ID required by Availity.",
-                "Administrator: map the exact eClinicalWorks payer name or identifier")
-    inputs["coverage_missing"] = [item for item in inputs.get("coverage_missing", []) if not item.startswith(resolved)]
-    inputs["review_missing"] = [item for item in inputs.get("review_missing", []) if not item.startswith(resolved)]
-    missing[:] = [item for item in missing if not item.startswith(resolved)]
-    return True
-
-
 async def _session(request: Request) -> dict:
     session = await _insurance_session(request)
     if session.get("practice_id"):
@@ -1101,6 +1062,61 @@ async def submit_stedi(case: dict, session: dict, resource: str, practice: dict)
                                        "checked_at": datetime.now(timezone.utc).isoformat(), "source_refs": source_refs, "result": result,
                                        "message": result["message"]}
     return _response(public(await save(case, session, f"{resource}-stedi-local-estimate")))
+
+
+def stedi_fallback_reason(response: dict) -> str | None:
+    """Only fall back after Availity's coverage answer is conclusively unusable."""
+    if response.get("outcome") == "unavailable" and not response.get("resource_id"):
+        return "Availity was unavailable before it returned a coverage result."
+    if response.get("http_status") == 501 and not response.get("resource_id"):
+        return "Availity confirmed that this coverage route is not available."
+    payload = response.get("payload")
+    if response.get("outcome") == "payer_error" and (payload == [] or payload == {} or not isinstance(payload, dict)):
+        return "Availity returned an empty or unusable coverage response."
+    if response.get("outcome") == "payer_error" and isinstance(payload, dict):
+        coverages = payload.get("coverages")
+        if coverages == []:
+            return "Availity returned an empty coverage response."
+    return None
+
+
+def stedi_attempt(response: dict, reason: str) -> dict:
+    return {"source": "availity", "outcome": response.get("outcome"), "http_status": response.get("http_status"),
+            "transaction_id": response.get("transaction_id"), "reason": reason,
+            "checked_at": datetime.now(timezone.utc).isoformat()}
+
+
+async def stedi_coverage(case: dict, session: dict, practice: dict, attempts: list[dict], reason: str) -> dict:
+    settings = stedi.Settings.read()
+    previous = case["transactions"].get("coverage", {"submitted_at": datetime.now(timezone.utc).isoformat(),
+                                                        "source_refs": {k: {n: source[n] for n in ("filename", "sha256", "observed_at", "retrieved_at") if n in source}
+                                                                        for k, source in case["sources"].items()}})
+    attempts = [*previous.get("attempts", []), *attempts][-10:]
+    body, error = stedi.request_body(case["inputs"], practice)
+    if error:
+        case["transactions"]["coverage"] = {**previous, "attempts": attempts, "outcome": "payer_error", "source": "stedi",
+                                                "message": f"{reason} {error}", "checked_at": datetime.now(timezone.utc).isoformat(), "result": {}}
+        case["operation_until"] = 0
+        return _response(public(await save(case, session, "coverage-stedi-not-configured")))
+    case["transactions"]["coverage"] = {**previous, "attempts": attempts, "outcome": "submitting", "source": "stedi", "request_body": body,
+                                            "message": "Availity did not return usable coverage. Submitting a Stedi eligibility check."}
+    case = await save(case, session, "coverage-stedi-fallback-started")
+    response = await stedi.Client(settings).check(body)
+    value = {**case["transactions"]["coverage"], **response, "source": "stedi", "resource_id": response.get("check_id"),
+             "checked_at": datetime.now(timezone.utc).isoformat(), "next_poll_at": time.time()}
+    value["result"] = stedi_results.coverage(results.obj(response.get("payload"))) if response.get("outcome") == "complete" else {}
+    if response.get("outcome") == "complete":
+        value["message"] = "Stedi returned eligibility and benefits after Availity did not return a usable coverage response."
+    case["transactions"]["coverage"] = value
+    case["operation_until"] = 0
+    return _response(public(await save(case, session, f"coverage-stedi-{value['outcome']}")))
+
+
+def use_stedi_without_availity(case: dict, settings: Settings) -> bool:
+    if settings.environment != "production" or stedi.Settings.read().mode != "production" or not stedi.fallback_enabled():
+        return False
+    coverage_requirement = case.get("discovery", {}).get("requirements", {}).get("coverage", {})
+    return bool(case.get("discovery")) and not coverage_requirement.get("available")
 
 
 @router.post("/cases/{case_id}/transactions/{resource}")

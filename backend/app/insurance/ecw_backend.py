@@ -186,29 +186,6 @@ async def _optional_search(client: httpx.AsyncClient, issuer: str, token: str, r
         return [], None, resource + " (read failed)"
 
 
-async def _bounded_search(client: httpx.AsyncClient, issuer: str, token: str, resource: str,
-                          params: dict[str, str] | list[tuple[str, str]], *, attempts: int = 1
-                          ) -> tuple[list[dict[str, Any]], str | None]:
-    for _ in range(attempts):
-        try:
-            return await asyncio.wait_for(
-                _search(client, issuer, token, resource, params), timeout=SEARCH_TIMEOUT_SECONDS,
-            ), None
-        except (asyncio.TimeoutError, httpx.TimeoutException):
-            pass
-    return [], resource
-
-
-async def _optional_search(client: httpx.AsyncClient, issuer: str, token: str, resource: str,
-                           params: dict[str, str] | list[tuple[str, str]]
-                           ) -> tuple[list[dict[str, Any]], str | None, str | None]:
-    try:
-        rows, timed_out = await _bounded_search(client, issuer, token, resource, params)
-        return rows, timed_out, None
-    except EcwBackendError:
-        return [], None, resource
-
-
 async def _read(client: httpx.AsyncClient, issuer: str, token: str, reference: Any) -> dict[str, Any]:
     if not isinstance(reference, str) or not re.fullmatch(r"(?:Patient|RelatedPerson|Organization|Practitioner|PractitionerRole|Location|Condition|Encounter|Appointment)/[A-Za-z0-9.\-]{1,200}", reference):
         return {}
@@ -243,41 +220,6 @@ async def _cached_patient(client: httpx.AsyncClient, issuer: str, token: str,
     patient, timed_out = await _bounded_read(client, issuer, token, f"Patient/{patient_id}")
     if timed_out:
         raise EcwBackendError("eClinicalWorks timed out while verifying the saved patient. Retry the lookup.")
-    if not patient:
-        raise EcwBackendError("The saved eClinicalWorks patient link no longer exists.")
-    return patient, None
-
-
-async def _bounded_read(client: httpx.AsyncClient, issuer: str, token: str,
-                        reference: str) -> tuple[dict[str, Any], str | None]:
-    resource, resource_id = reference.split("/", 1)
-    try:
-        return await asyncio.wait_for(_read(client, issuer, token, reference), timeout=REFERENCE_TIMEOUT_SECONDS), None
-    except (asyncio.TimeoutError, httpx.TimeoutException):
-        # eCW direct reads intermittently stall while the equivalent supported
-        # `_id` search succeeds. Try that once without extending the API timeout.
-        try:
-            rows = await asyncio.wait_for(
-                _search(client, issuer, token, resource, {"_id": resource_id}),
-                timeout=REFERENCE_TIMEOUT_SECONDS,
-            )
-        except (asyncio.TimeoutError, httpx.TimeoutException):
-            return {}, resource
-        return (rows[0] if len(rows) == 1 else {}), None
-
-
-async def _cached_patient(client: httpx.AsyncClient, issuer: str, token: str,
-                          patient_id: str, profile: dict[str, Any]) -> tuple[dict[str, Any], str | None]:
-    fallback = {
-        "resourceType": "Patient", "id": patient_id,
-        "name": [{"use": "official", "given": [str(profile.get("patient_first_name") or "")],
-                  "family": str(profile.get("patient_last_name") or "")}],
-        "birthDate": str(profile.get("patient_birth_date") or ""),
-        "gender": {"M": "male", "F": "female"}.get(profile.get("gender"), "unknown"),
-    }
-    patient, timed_out = await _bounded_read(client, issuer, token, f"Patient/{patient_id}")
-    if timed_out:
-        return fallback, "Patient"
     if not patient:
         raise EcwBackendError("The saved eClinicalWorks patient link no longer exists.")
     return patient, None

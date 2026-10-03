@@ -11,6 +11,11 @@ import httpx
 ELIGIBILITY_URL = "https://healthcare.us.stedi.com/2026-06-01/eligibility-check"
 
 
+def fallback_enabled() -> bool:
+    """Allow operations to turn off Stedi once Availity is the sole workflow."""
+    return os.getenv("STEDI_FALLBACK_ENABLED", "true").strip().lower() in {"1", "true", "yes"}
+
+
 @dataclass(frozen=True)
 class Settings:
     mode: str

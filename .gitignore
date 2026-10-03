@@ -32,3 +32,7 @@ nmct-golden-patient.local.json
 *golden-identity*.json
 *golden-evidence*.zip
 design-system/
+
+graphify-out/
+data/export/
+data/epic_sandbox/tempass.txt

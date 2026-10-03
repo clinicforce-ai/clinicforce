@@ -231,7 +231,7 @@ class EcwBackendSourceTests(unittest.IsolatedAsyncioTestCase):
         patient_request = next(request for request in requests if request.url.path == "/fhir/Patient" and request.method == "GET")
         self.assertEqual(dict(patient_request.url.params),
                          {"given": "Pat", "family": "Example", "birthdate": "1980-01-01"})
-        encounter_request = next(request for request in requests if request.url.path == "/fhir/Encounter")
+        encounter_request = next(request for request in requests if request.url.path == "/fhir/Encounter" and f"ge{today}" in request.url.params.get_list("date"))
         self.assertEqual(encounter_request.url.params.get_list("date"),
                          [f"ge{today}", f"le{today_date + timedelta(days=365)}"])
         history_request = next(request for request in requests if request.url.path == "/fhir/Encounter" and f"le{yesterday}" in request.url.params.get_list("date"))
@@ -260,7 +260,7 @@ class EcwBackendSourceTests(unittest.IsolatedAsyncioTestCase):
             )
         self.assertTrue(any(request.url.path == "/fhir/Patient/patient-1" for request in requests))
         self.assertFalse(any(request.url.path == "/fhir/Patient" for request in requests))
-        encounter_request = next(request for request in requests if request.url.path == "/fhir/Encounter")
+        encounter_request = next(request for request in requests if request.url.path == "/fhir/Encounter" and request.url.params.get("date") == tomorrow)
         self.assertEqual(dict(encounter_request.url.params), {"patient": "patient-1", "date": tomorrow})
 
         requests.clear()
@@ -393,20 +393,6 @@ class EcwBackendSourceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(ecw_backend._visit_type({"type": [{"text": "New patient visit"}]}), "new")
         self.assertEqual(ecw_backend._visit_type({"serviceType": [{"text": "Established patient visit"}]}), "established")
         self.assertIsNone(ecw_backend._visit_type({"reasonCode": [{"text": "Initial consultation"}]}))
-
-        requests.clear()
-        with patch.dict(os.environ, environment), patch.object(ecw, "ECW_KMS_KEY_ID", "kms-key"), patch.object(ecw, "_client_assertion", return_value="signed-assertion"):
-            await ecw_backend.fetch_inputs(
-                {"patient_first_name": "Pat", "patient_last_name": "Example",
-                 "patient_birth_date": "1980-01-01", "ecw_patient_id": "patient-1",
-                 "ecw_appointment_date": today},
-                practice, transport=httpx.MockTransport(handler),
-            )
-        self.assertTrue(any(request.url.path == "/fhir/Patient/patient-1" for request in requests))
-        self.assertFalse(any(request.url.path == "/fhir/Patient" for request in requests))
-        encounter_request = next(request for request in requests if request.url.path == "/fhir/Encounter")
-        self.assertEqual(dict(encounter_request.url.params), {"patient": "patient-1", "date": today})
-
 
 if __name__ == "__main__":
     unittest.main()

@@ -74,32 +74,6 @@ export function ServicePlanner({ result, busy, save, viewEstimate }: { result: P
     setQuantities(current => ({ ...current, [row.id!]: Math.min(groupFor(row.code) === 'muscle' ? 4 : 10000, Math.max(1, (current[row.id!] || 0) + change)) }))
     setChanged(true); setCashSelection(''); setEditError('')
   }
-  const option = (row: VisitCode, rows?: VisitCode[]) => {
-    const included = selected.includes(row.id!)
-    // Unsaved quantities or combinations must not reuse a prior scenario's approvals or patient amount.
-    const priced = !changed && included ? result.price_range?.lines?.find(line => line.id === row.id) : undefined
-    const approval = (kind: 'referral' | 'authorization') => {
-      const item = priced?.benefits.requirements[kind]
-      return !item ? 'Check scenario' : item.required === 'not_required' && item.cleared ? 'Not required' : item.cleared ? 'Verified' : item.required === 'required' ? `Required · ${item.status === 'unknown' ? 'verify' : item.status.replaceAll('_', ' ')}` : 'Not returned'
-    }
-    return <article key={row.id} className={`procedure-choice${included ? ' is-selected' : ''}`}>
-      <label className="procedure-choice-label"><input type={rows ? 'radio' : 'checkbox'} name={rows ? `procedure-${groupFor(row.code)}` : undefined} checked={included} disabled={busy || groupFor(row.code) === 'muscle' && !nerve.some(item => selected.includes(item.id!))} onChange={event => rows ? pickOne(rows, row.id!) : update(event.target.checked ? [...selected, row.id!] : selected.filter(id => id !== row.id))} /><span><strong>{clinicalName(row)}</strong><small>{row.code.startsWith('J') ? 'HCPCS' : 'CPT'} {row.code}{result.service_plan?.recommended_ids.includes(row.id!) ? ' · Suggested' : ''}</small></span></label>
-      <dl className="procedure-facts"><div><dt>Cash / unit</dt><dd>{row.unit_cash_cents != null ? money(row.unit_cash_cents) : 'Package / verify'}</dd></div><div><dt>Contract / unit</dt><dd>{row.unit_allowed_cents != null ? money(row.unit_allowed_cents) : 'Not available'}</dd></div><div><dt>Referral</dt><dd>{approval('referral')}</dd></div><div><dt>Authorization</dt><dd>{approval('authorization')}</dd></div></dl>
-      {included && <div className="procedure-patient-amount"><span>Patient estimate</span><strong>{priced?.calculation ? money(priced.calculation.patient_cents) : changed ? 'Update scenario' : 'Needs verification'}</strong></div>}
-      {included && !rows && <label className="procedure-quantity">{groupFor(row.code) === 'muscle' ? 'Limbs' : row.code.startsWith('J') ? 'Medication units' : 'Quantity'}<input type="number" min="1" max={groupFor(row.code) === 'muscle' ? 4 : 10000} value={quantities[row.id!] || ''} disabled={busy} onChange={event => { setQuantities(current => ({ ...current, [row.id!]: Number(event.target.value) })); setChanged(true); setCashSelection('') }} /></label>}
-    </article>
-  }
-  const choices = (rows: VisitCode[], title: string) => rows.length > 0 && <fieldset className="procedure-group"><legend>{title}</legend><div className="procedure-group-tools"><span>{rows[0].code}–{rows[rows.length - 1].code} · Choose one</span><button type="button" className="visit-text-button" disabled={busy || !rows.some(row => selected.includes(row.id!))} onClick={() => pickOne(rows, '')}>Not included</button></div><div className="procedure-options">{rows.map(row => option(row, rows))}</div></fieldset>
-  const extraGroups = [
-    { title: 'Botox / muscle injections', rows: other.filter(row => /^646/.test(row.code)) },
-    { title: 'Medication', rows: other.filter(row => row.code.startsWith('J')) },
-    { title: 'Other procedures', rows: other.filter(row => !/^646|^J/.test(row.code)) },
-  ].filter(group => group.rows.length)
-  const activeGroup = groups.find(group => group.id === category) || groups[0]
-  const quantity = (row: VisitCode, change: number) => {
-    setQuantities(current => ({ ...current, [row.id!]: Math.min(groupFor(row.code) === 'muscle' ? 4 : 10000, Math.max(1, (current[row.id!] || 0) + change)) }))
-    setChanged(true); setCashSelection(''); setEditError('')
-  }
   return <section className="visit-planner" aria-labelledby="service-plan-title">
     <h3 id="service-plan-title">Choose care for this estimate</h3><p className="visit-muted">Selections update the estimate. Final coding follows the care provided.</p>
     <div className="selected-service-chips" aria-label="Selected services">{chosen.map(row => <span key={row.id}><Check size={14} aria-hidden="true" />{row.code} × {quantities[row.id!] || '—'}</span>)}{!chosen.length && <span>{result.price_range?.mode === 'alternatives' ? 'Office consultation · final E/M level pending' : 'No services selected'}</span>}</div>

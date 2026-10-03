@@ -98,7 +98,9 @@ def service_type(code: str, rules: dict) -> str | None:
     if code in {'11104', '11105', '62270', '62328'}:
         return '2'
     # Stedi's documented neurology and office/telehealth mappings. Clinic overrides win.
-    if code.isdigit() and (95700 <= int(code) <= 96020 or 99202 <= int(code) <= 99215):
+    if code in cpt_rules.NCS_CODES | cpt_rules.EMG_ADD_ONS:
+        return '73'
+    if code.isdigit() and 99202 <= int(code) <= 99215:
         return '98'
     return None
 
@@ -112,7 +114,9 @@ def service_type(code: str, rules: dict) -> str | None:
     if configured:
         return str(configured)
     # Stedi's documented neurology and office/telehealth mappings. Clinic overrides win.
-    if code.isdigit() and (95700 <= int(code) <= 96020 or 99202 <= int(code) <= 99215):
+    if code in cpt_rules.NCS_CODES | cpt_rules.EMG_ADD_ONS:
+        return '73'
+    if code.isdigit() and 99202 <= int(code) <= 99215:
         return '98'
     return None
 
@@ -264,8 +268,6 @@ def price_lines(codes: list[dict], rates: list[dict], benefits: dict, rules: dic
                 calc = commercial.estimate([{'code': code['code'], 'units': units,
                     'allowed_cents': rate['allowed_cents'], 'rate_id': rate.get('id')}], calculation_benefits, line_rules)
                 line['calculation'] = calc
-                if deductible_scenario:
-                    calc['cost_share'] = 'deductible_scenario'
                 if not alternatives:
                     deductible_used[deductible_key] = deductible_used.get(deductible_key, 0) + min(calc['deductible_cents'], calc['patient_cents'])
                     oop_used[oop_key] = oop_used.get(oop_key, 0) + calc['patient_cents']
