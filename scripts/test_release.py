@@ -10,6 +10,18 @@ import release
 
 
 class ReleaseSafetyTests(unittest.TestCase):
+    @patch("release.aws")
+    @patch("release.subprocess.run")
+    def test_existing_production_requires_infrastructure_transition_before_writes(self, run, aws):
+        manifest = {"sha": "a" * 40, **{s: f"311057178360.dkr.ecr.us-east-1.amazonaws.com/clinicforce-staging-{s}@sha256:" + "b" * 64 for s in ["backend", "hapi"]}}
+        aws.side_effect = [{"Stacks": [{"StackStatus": "UPDATE_COMPLETE"}]}, ["BackendImageUri", "HapiImageUri"]]
+        with patch("sys.argv", ["release", "production", "--sha", "a" * 40]), \
+                patch("release.Path.read_text", return_value=json.dumps(manifest)), \
+                patch("release.Path.is_file", return_value=True):
+            with self.assertRaisesRegex(ValueError, "operator identity"):
+                release.main()
+        run.assert_not_called()
+
     def test_promotion_requires_a_successful_main_staging_deployment(self):
         run = {"path": ".github/workflows/deploy.yml", "head_branch": "main",
                "event": "push", "conclusion": "success", "head_sha": "a" * 40}
