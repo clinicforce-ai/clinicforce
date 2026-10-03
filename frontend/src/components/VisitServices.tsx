@@ -95,6 +95,11 @@ export function ServicePlanner({ result, busy, save, viewEstimate }: { result: P
     { title: 'Medication', rows: other.filter(row => row.code.startsWith('J')) },
     { title: 'Other procedures', rows: other.filter(row => !/^646|^J/.test(row.code)) },
   ].filter(group => group.rows.length)
+  const activeGroup = groups.find(group => group.id === category) || groups[0]
+  const quantity = (row: VisitCode, change: number) => {
+    setQuantities(current => ({ ...current, [row.id!]: Math.min(groupFor(row.code) === 'muscle' ? 4 : 10000, Math.max(1, (current[row.id!] || 0) + change)) }))
+    setChanged(true); setCashSelection(''); setEditError('')
+  }
   return <section className="visit-planner" aria-labelledby="service-plan-title">
     <h3 id="service-plan-title">Choose care for this estimate</h3><p className="visit-muted">Selections update the estimate. Final coding follows the care provided.</p>
     <div className="selected-service-chips" aria-label="Selected services">{chosen.map(row => <span key={row.id}><Check size={14} aria-hidden="true" />{row.code} × {quantities[row.id!] || '—'}</span>)}{!chosen.length && <span>{result.price_range?.mode === 'alternatives' ? 'Office consultation · final E/M level pending' : 'No services selected'}</span>}</div>
