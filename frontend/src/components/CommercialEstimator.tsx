@@ -57,6 +57,21 @@ function AppointmentNotes({ result }: { result: PrevisitEstimate }) {
   </section>
 }
 
+function AppointmentNotes({ result }: { result: PrevisitEstimate }) {
+  const fields = result.appointment_context?.imported_fields || []
+  const isStatus = (label: string) => /^(?:(?:appointment|encounter|visit)[ _-]+)?status$/i.test(label.trim())
+  const statuses = fields.filter(field => isStatus(field.label))
+  const details = fields.filter(field => !isStatus(field.label))
+  const hasNotes = details.some(field => /note|comment|instruction|narrative|description/i.test(field.label))
+  return <section className="visit-imported">
+    <h3>{result.reason || 'Scheduled visit'}</h3>
+    <p className="visit-muted">{[result.appointment_context?.rendering_provider?.name, result.appointment_context?.location].filter(Boolean).join(' · ')}</p>
+    {statuses.map((field, index) => <p className="visit-muted" key={index}>Appointment status: {field.text}</p>)}
+    {!hasNotes && <article><h3>General Notes not returned</h3><p>The eCW connection did not return General Notes or patient comments for this appointment.</p></article>}
+    {details.map((field, index) => <article key={`${field.source}:${index}`}><h3>{field.label}</h3><p>{field.text}</p><small>From eCW{field.updated_at ? ` · ${visitDate(field.updated_at)}` : ''}</small></article>)}
+  </section>
+}
+
 function CostPicture({ result }: { result: PrevisitEstimate }) {
   const price = result.price_range
   const patient = price?.patient_min_cents, insurer = price?.plan_min_cents
