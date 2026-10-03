@@ -30,6 +30,7 @@ from app.core.patient_store import InvalidManifestPin, PatientProfile  # noqa: E
 from app.core.shl import encrypt_bundle, generate_symmetric_key, hash_pin  # noqa: E402
 from app.core.source_links import create_document_download_token, verify_document_download_token  # noqa: E402
 from app.core import patient_store  # noqa: E402
+from app.api.routers.staff import router as staff_routes  # noqa: E402
 from app.ingestion.bedrock_extractor import ExtractedFact, facts_to_fhir_bundle  # noqa: E402
 from app.ingestion.pdf_parser import parse_pdf_text_with_llm, pdf_extraction_to_fhir_bundle  # noqa: E402
 from app.insurance import documented, golden  # noqa: E402
@@ -97,11 +98,18 @@ class MainRouteTests(unittest.IsolatedAsyncioTestCase):
     async def test_api_documentation_is_available_under_the_api_prefix(self) -> None:
         schema = await self.client.get("/api/openapi.json")
         docs = await self.client.get("/api/docs")
+        redoc = await self.client.get("/api/redoc")
         self.assertEqual(schema.status_code, 200)
         self.assertEqual(schema.json()["info"]["title"], "ClinicForce API")
         self.assertIn("/api/patient/login", schema.json()["paths"])
+        self.assertEqual(schema.json()["paths"]["/api/patient/login"]["post"]["tags"], ["Patient account"])
         self.assertEqual(docs.status_code, 200)
         self.assertIn("/api/openapi.json", docs.text)
+        self.assertIn("Follow the request. Understand the record.", docs.text)
+        self.assertIn("supportedSubmitMethods:[]", docs.text)
+        self.assertEqual(redoc.status_code, 200)
+        self.assertIn('<redoc spec-url="/api/openapi.json">', redoc.text)
+        self.assertEqual(1, sum(route.path == "/api/staff/intakes/ecw-lookup" for route in staff_routes.routes))
 
     async def test_insurance_beta_is_off_by_default_and_rejects_session_bypass(self) -> None:
         with patch.dict(os.environ, {"INSURANCE_BETA_ENABLED": "false"}, clear=False):

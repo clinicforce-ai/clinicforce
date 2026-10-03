@@ -135,6 +135,7 @@ from app.api.settings import (
     PATIENT_SESSION_MAX_AGE, PUBLIC_BASE_URL, SHL_SHARE_TTL_SECONDS,
     SOURCE_TAGS as _SOURCE_TAGS, insurance_beta_enabled,
 )
+from app.api.developer_docs import OPENAPI_DESCRIPTION, enrich_openapi, render_docs
 from app.insurance import golden as insurance_golden
 
 
@@ -143,16 +144,11 @@ _epic_endpoint_sync_task: asyncio.Task[None] | None = None
 
 app = FastAPI(
     title="ClinicForce API",
-    description=(
-        "Backend contract for the ClinicForce web application. Requests use "
-        "same-origin session cookies; do not enter patient data, credentials, "
-        "or production secrets in this documentation UI."
-    ),
+    description=OPENAPI_DESCRIPTION,
     version="1.0.0",
-    docs_url="/api/docs",
-    redoc_url="/api/redoc",
+    docs_url=None,
+    redoc_url=None,
     openapi_url="/api/openapi.json",
-    swagger_ui_parameters={"supportedSubmitMethods": []},
 )
 app.add_middleware(
     CORSMiddleware,
@@ -161,6 +157,18 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.get("/api/docs", include_in_schema=False)
+async def swagger_docs():
+    return render_docs("swagger")
+
+
+@app.get("/api/redoc", include_in_schema=False)
+async def redoc_docs():
+    return render_docs("redoc")
+
+
 app.include_router(insurance_router)
 from app.api.routers.insurance_v2 import router as insurance_v2_router
 app.include_router(insurance_v2_router)
@@ -1416,3 +1424,13 @@ async def decrypt_and_summarize(request: DoctorSummaryRequest, response: Respons
 
 # Pretty public links must follow the concrete API and health routes.
 app.include_router(public_entry_router)
+
+
+_original_openapi = app.openapi
+
+
+def guided_openapi() -> dict:
+    return enrich_openapi(_original_openapi())
+
+
+app.openapi = guided_openapi
