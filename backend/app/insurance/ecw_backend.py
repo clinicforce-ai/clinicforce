@@ -7,6 +7,8 @@ import json
 import base64
 import os
 import re
+import time
+from contextlib import contextmanager
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 from html.parser import HTMLParser
@@ -18,6 +20,7 @@ import httpx
 
 from app.ingestion import ecw
 from app.insurance.stedi_discovery import patient_address
+from app.logs.collection_audit import collection_event
 
 
 # ChargeItem is intentionally omitted until it is granted in the eCW app.
@@ -43,11 +46,69 @@ TOKEN_STAGE_TIMEOUT_SECONDS = 10
 
 
 class EcwBackendError(RuntimeError):
-    pass
+    def __init__(self, message: str, *, reason_code: str | None = None, stage: str | None = None):
+        super().__init__(message)
+        self.reason_code = reason_code
+        self.stage = stage
 
 
 class EcwResourceUnavailable(EcwBackendError):
     """A resource is not available to this activated eCW app."""
+
+
+def _failure_reason(exc: BaseException) -> str:
+    # Exception strings and URLs can contain patient data or credentials.
+    if isinstance(exc, asyncio.CancelledError):
+        return "cancelled"
+    if isinstance(exc, httpx.TimeoutException):
+        return {httpx.ConnectTimeout: "connect_timeout", httpx.ReadTimeout: "read_timeout",
+                httpx.WriteTimeout: "write_timeout", httpx.PoolTimeout: "pool_timeout"}.get(type(exc), "transport_timeout")
+    if isinstance(exc, (TimeoutError, asyncio.TimeoutError)):
+        return "stage_timeout"
+    if isinstance(exc, httpx.HTTPStatusError):
+        return "upstream_http_error"
+    if isinstance(exc, httpx.HTTPError):
+        return "transport_error"
+    if isinstance(exc, ValueError):
+        return "invalid_response"
+    if isinstance(exc, EcwBackendError) and exc.reason_code:
+        return exc.reason_code
+    if exc.__cause__ is not None:
+        return _failure_reason(exc.__cause__)
+    return "lookup_error" if isinstance(exc, EcwBackendError) else "internal_error"
+
+
+@contextmanager
+def _stage(stage: str, **fields):
+    """Log fixed stage/query labels and numeric facts, never request or response values."""
+    started = time.monotonic()
+    collection_event("ecw_stage_started", stage=stage, **fields)
+    facts = {}
+    try:
+        yield facts
+    except BaseException as exc:
+        reason = _failure_reason(exc)
+        if isinstance(exc, EcwBackendError):
+            exc.reason_code = reason
+            exc.stage = exc.stage or stage
+        collection_event("ecw_stage_failed", stage=stage, outcome="error", reason_code=reason,
+                         duration_ms=int((time.monotonic() - started) * 1000), **fields, **facts)
+        raise
+    else:
+        outcome = "unavailable" if facts.get("http_status") in {403, 404} else "success"
+        collection_event("ecw_stage_completed", stage=stage, outcome=outcome,
+                         duration_ms=int((time.monotonic() - started) * 1000), **fields, **facts)
+
+
+def _query_kind(params) -> str:
+    keys = frozenset(dict(params or {}))
+    return {frozenset({"given", "family", "birthdate"}): "given_family_birthdate",
+            frozenset({"family", "birthdate"}): "family_birthdate",
+            frozenset({"given", "birthdate"}): "given_birthdate",
+            frozenset({"name", "birthdate"}): "name_birthdate",
+            frozenset({"_id"}): "id",
+            frozenset({"patient", "date"}): "patient_date",
+            frozenset({"patient"}): "patient"}.get(keys, "filtered")
 
 
 def settings() -> tuple[str, str]:
@@ -111,34 +172,38 @@ async def _response_json(response: httpx.Response, message: str) -> dict[str, An
 async def _access_token(client: httpx.AsyncClient, client_id: str, issuer: str,
                         scopes: tuple[str, ...] = SCOPES) -> str:
     try:
-        metadata_response = await asyncio.wait_for(
-            client.get(f"{issuer}/metadata", params={"_format": "json"}, headers={"Accept": "application/fhir+json"}),
-            TOKEN_STAGE_TIMEOUT_SECONDS)
+        with _stage("metadata") as facts:
+            metadata_response = await asyncio.wait_for(
+                client.get(f"{issuer}/metadata", params={"_format": "json"}, headers={"Accept": "application/fhir+json"}),
+                TOKEN_STAGE_TIMEOUT_SECONDS)
+            facts["http_status"] = metadata_response.status_code
+            metadata = await _response_json(metadata_response, "The activated eClinicalWorks practice metadata is unavailable.")
     except asyncio.TimeoutError as exc:
-        raise EcwBackendError("eClinicalWorks metadata timed out. Retry the connection.") from exc
-    metadata = await _response_json(
-        metadata_response,
-        "The activated eClinicalWorks practice metadata is unavailable.",
-    )
+        raise EcwBackendError("eClinicalWorks metadata timed out. Retry the connection.",
+                              reason_code="stage_timeout", stage="metadata") from exc
     endpoint = _token_endpoint(metadata)
     try:
-        assertion = await asyncio.wait_for(
-            asyncio.to_thread(ecw._client_assertion, endpoint, client_id), TOKEN_STAGE_TIMEOUT_SECONDS)
-        token_response = await asyncio.wait_for(client.post(endpoint, data={
-            "grant_type": "client_credentials",
-            "scope": " ".join(scopes),
-            "client_assertion_type": "urn:ietf:params:oauth:client-assertion-type:jwt-bearer",
-            "client_assertion": assertion,
-        }, headers={"Accept": "application/json"}), TOKEN_STAGE_TIMEOUT_SECONDS)
+        with _stage("assertion_signing"):
+            assertion = await asyncio.wait_for(
+                asyncio.to_thread(ecw._client_assertion, endpoint, client_id), TOKEN_STAGE_TIMEOUT_SECONDS)
+        with _stage("token_exchange") as facts:
+            token_response = await asyncio.wait_for(client.post(endpoint, data={
+                "grant_type": "client_credentials",
+                "scope": " ".join(scopes),
+                "client_assertion_type": "urn:ietf:params:oauth:client-assertion-type:jwt-bearer",
+                "client_assertion": assertion,
+            }, headers={"Accept": "application/json"}), TOKEN_STAGE_TIMEOUT_SECONDS)
+            facts["http_status"] = token_response.status_code
+            token = await _response_json(
+                token_response,
+                "eClinicalWorks rejected the backend app. Confirm that this practice activated the app and that its client ID, issuer, scopes and JWKS match.",
+            )
+            value = token.get("access_token")
+            if not isinstance(value, str) or not value:
+                raise EcwBackendError("eClinicalWorks did not return a backend access token.", reason_code="invalid_token")
     except asyncio.TimeoutError as exc:
-        raise EcwBackendError("eClinicalWorks backend authorization timed out. Retry the connection.") from exc
-    token = await _response_json(
-        token_response,
-        "eClinicalWorks rejected the backend app. Confirm that this practice activated the app and that its client ID, issuer, scopes and JWKS match.",
-    )
-    value = token.get("access_token")
-    if not isinstance(value, str) or not value:
-        raise EcwBackendError("eClinicalWorks did not return a backend access token.")
+        raise EcwBackendError("eClinicalWorks backend authorization timed out. Retry the connection.",
+                              reason_code="stage_timeout", stage="backend_authorization") from exc
     return value
 
 
@@ -152,17 +217,22 @@ async def _search(client: httpx.AsyncClient, issuer: str, token: str, resource: 
                   params: dict[str, str] | list[tuple[str, str]]) -> list[dict[str, Any]]:
     url, rows, seen = f"{issuer}/{resource}", [], set()
     origin = urlparse(issuer)
-    for _ in range(10):
+    for page in range(1, 11):
         parsed = urlparse(url)
         if (parsed.scheme, parsed.netloc) != (origin.scheme, origin.netloc) or not parsed.path.startswith(origin.path.rstrip('/') + '/') or url in seen:
             raise EcwBackendError(f"eClinicalWorks returned an invalid pagination link for {resource}.")
         seen.add(url)
-        response = await client.get(url, params=params,
-                                    headers={"Authorization": f"Bearer {token}", "Accept": "application/fhir+json"})
-        if response.status_code in {403, 404}:
-            raise EcwResourceUnavailable(resource)
-        bundle = await _response_json(response, f"eClinicalWorks could not return {resource} data for this patient.")
-        rows.extend(_entries(bundle))
+        with _stage("resource_search", resource=resource.lower(),
+                    query_kind=_query_kind(params) if page == 1 else "pagination", page=page) as facts:
+            response = await client.get(url, params=params,
+                                        headers={"Authorization": f"Bearer {token}", "Accept": "application/fhir+json"})
+            facts["http_status"] = response.status_code
+            if response.status_code in {403, 404}:
+                raise EcwResourceUnavailable(resource, reason_code="resource_unavailable")
+            bundle = await _response_json(response, f"eClinicalWorks could not return {resource} data for this patient.")
+            entries = _entries(bundle)
+            facts["count"] = len(entries)
+            rows.extend(entries)
         next_links = [link.get('url') for link in bundle.get('link', []) if link.get('relation') == 'next']
         if not next_links:
             return rows
@@ -203,10 +273,12 @@ async def _optional_search(client: httpx.AsyncClient, issuer: str, token: str, r
 async def _read(client: httpx.AsyncClient, issuer: str, token: str, reference: Any) -> dict[str, Any]:
     if not isinstance(reference, str) or not re.fullmatch(r"(?:Patient|RelatedPerson|Organization|Practitioner|PractitionerRole|Location|Condition|Encounter|Appointment)/[A-Za-z0-9.\-]{1,200}", reference):
         return {}
-    response = await client.get(f"{issuer}/{reference}", headers={"Authorization": f"Bearer {token}", "Accept": "application/fhir+json"})
-    if response.status_code in {403, 404}:
-        return {}
-    return await _response_json(response, "eClinicalWorks could not resolve an appointment-linked resource.")
+    with _stage("resource_read", resource=reference.split("/", 1)[0].lower()) as facts:
+        response = await client.get(f"{issuer}/{reference}", headers={"Authorization": f"Bearer {token}", "Accept": "application/fhir+json"})
+        facts["http_status"] = response.status_code
+        if response.status_code in {403, 404}:
+            return {}
+        return await _response_json(response, "eClinicalWorks could not resolve an appointment-linked resource.")
 
 
 async def _bounded_read(client: httpx.AsyncClient, issuer: str, token: str,
@@ -579,13 +651,18 @@ async def _patient_for_profile(client: httpx.AsyncClient, issuer: str, token: st
             matches = {str(row.get("id") or ""): row for row in patient_rows
                        if _patient_matches(row, profile, family_suffix=True)}
     if not matches:
-        raise EcwBackendError("No eClinicalWorks patient matched the entered name and date of birth. Check the patient's eCW record before continuing.")
+        collection_event("ecw_patient_match", stage="patient_identity", outcome="error", reason_code="no_match", count=0)
+        raise EcwBackendError("No eClinicalWorks patient matched the entered name and date of birth. Check the patient's eCW record before continuing.",
+                              reason_code="no_match", stage="patient_identity")
     if len(matches) != 1:
-        raise EcwBackendError("Multiple eClinicalWorks patients matched the entered name and date of birth. Resolve the identity in eCW before continuing.")
+        collection_event("ecw_patient_match", stage="patient_identity", outcome="error", reason_code="ambiguous_match", count=len(matches))
+        raise EcwBackendError("Multiple eClinicalWorks patients matched the entered name and date of birth. Resolve the identity in eCW before continuing.",
+                              reason_code="ambiguous_match", stage="patient_identity")
     patient = next(iter(matches.values()))
     patient_id = str(patient.get("id", ""))
     if not re.fullmatch(r"[A-Za-z0-9.\-]{1,200}", patient_id):
         raise EcwBackendError("eClinicalWorks returned an invalid patient identifier.")
+    collection_event("ecw_patient_match", stage="patient_identity", outcome="success", count=1)
     return patient, patient_id, patient_timeout
 
 
@@ -629,12 +706,17 @@ async def lookup_patient_and_appointments(profile: dict[str, Any], practice: dic
                                           transport: httpx.AsyncBaseTransport | None = None) -> dict[str, Any]:
     """Verify one eCW patient and return only current/future appointments; no eligibility request."""
     client_id, issuer = settings()
+    phase = "backend_authorization"
+    started = time.monotonic()
     async def read() -> dict[str, Any]:
+        nonlocal phase
         async with httpx.AsyncClient(timeout=30, follow_redirects=False, transport=transport) as client:
             token = await _access_token(client, client_id, issuer)
+            phase = "patient_identity"
             patient, patient_id, _ = await _patient_for_profile(client, issuer, token, profile)
             now = datetime.now(ZoneInfo(practice.get("timezone", "America/New_York")))
             today = now.date()
+            phase = "appointment_search"
             encounters, timed_out = await _bounded_search(
                 client, issuer, token, "Encounter",
                 [("patient", patient_id), ("date", f"ge{today}"), ("date", f"le{today + timedelta(days=365)}")],
@@ -650,6 +732,7 @@ async def lookup_patient_and_appointments(profile: dict[str, Any], practice: dic
                 continue
             appointments.append({"id": appointment_id, "start": start, "status": str(visit.get("status") or "scheduled"),
                                  "reason": _visit_context(visit, [], [], []) or ""})
+        collection_event("ecw_appointments_selected", stage="appointment_search", outcome="success", count=len(appointments))
         first, family = _name(patient)
         return {"patient": {"id": patient_id, "given_name": first, "family_name": family,
                             "birth_date": patient.get("birthDate"), "ecw_account_number": patient_account_number(patient)},
@@ -658,11 +741,17 @@ async def lookup_patient_and_appointments(profile: dict[str, Any], practice: dic
     try:
         return await asyncio.wait_for(read(), LOOKUP_TIMEOUT_SECONDS)
     except asyncio.TimeoutError as exc:
-        raise EcwBackendError("eClinicalWorks lookup timed out. Retry the lookup or verify the appointment in eClinicalWorks.") from exc
+        collection_event("ecw_lookup_deadline", stage=phase, outcome="error", reason_code="lookup_deadline",
+                         duration_ms=int((time.monotonic() - started) * 1000))
+        label = {"backend_authorization": "backend authorization", "patient_identity": "patient verification",
+                 "appointment_search": "appointment search"}[phase]
+        raise EcwBackendError(f"eClinicalWorks lookup timed out during {label} at ClinicForce's {LOOKUP_TIMEOUT_SECONDS}-second limit. Retry the lookup.",
+                              reason_code="lookup_deadline", stage=phase) from exc
     except EcwResourceUnavailable as exc:
         raise EcwBackendError(f"eClinicalWorks did not authorize ClinicForce to read {exc} data. Confirm the activated app scope and practice activation.") from exc
     except httpx.HTTPError as exc:
-        raise EcwBackendError("eClinicalWorks is temporarily unavailable.") from exc
+        raise EcwBackendError("The eClinicalWorks request could not be completed. Retry the lookup.",
+                              reason_code=_failure_reason(exc), stage=phase) from exc
 
 
 async def list_appointments(profile: dict[str, Any], practice: dict[str, Any], *, transport: httpx.AsyncBaseTransport | None = None) -> list[dict[str, str]]:

@@ -305,7 +305,12 @@ def manual_card_fields(full_name: str, member_id: str, birth_date: str) -> dict:
 
 @router.post("/intakes/ecw-lookup")
 async def create_ecw_lookup(value: EcwLookup, request: Request):
-    """Confirm an eCW patient and upcoming visits; a slow upstream returns a retryable error before the edge deadline."""
+    """Confirm an eCW patient and upcoming visits.
+
+    The shared reader has a 24-second deadline. HTTP 502 errors identify the
+    failed lookup phase; X-ClinicForce-Request-ID joins the safe stage logs in
+    CloudWatch. No patient or appointment is inferred from a timed-out read.
+    """
     staff = await require_staff(request)
     started = time.monotonic()
     collection_event('ecw_lookup_started', practice_id=staff['practice_id'], staff_id=staff['id'], stage='patient_search')
@@ -322,7 +327,7 @@ async def create_ecw_lookup(value: EcwLookup, request: Request):
         collection_event('ecw_lookup_failed', practice_id=staff['practice_id'], stage='patient_search', reason_code='timeout', duration_ms=int((time.monotonic() - started) * 1000))
         raise HTTPException(504, "eClinicalWorks did not respond to the patient search in time. Retry the lookup.") from None
     except ecw_backend.EcwBackendError as exc:
-        collection_event('ecw_lookup_failed', practice_id=staff['practice_id'], stage='patient_search', reason_code='ecw_error', duration_ms=int((time.monotonic() - started) * 1000))
+        collection_event('ecw_lookup_failed', practice_id=staff['practice_id'], stage=exc.stage or 'patient_search', reason_code=exc.reason_code or 'ecw_error', duration_ms=int((time.monotonic() - started) * 1000))
         raise HTTPException(502, str(exc)) from exc
     fields = {"given_name": value.given_name, "middle_initial": value.middle_initial,
               "family_name": value.family_name, "birth_date": value.birth_date.isoformat(),
