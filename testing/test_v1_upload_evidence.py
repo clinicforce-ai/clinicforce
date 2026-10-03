@@ -36,6 +36,61 @@ class SourceTests(unittest.TestCase):
         self.assertEqual(fields["member_id"], "ABC123")
         self.assertEqual(evidence["member_name"]["quote"], "Member Name\nPAT EXAMPLE")
 
+    def test_three_column_card_header_keeps_identity_with_evidence(self):
+        text = ("Plan Type: Member ID: Group #: scored\nMedical TEST12345 GRP678\nMember ID Cards\n"
+                "Name:_ Effective Dates:\nPAT EXAMPLE 01/01/2026 - 12/31/2026\n"
+                "Date of Birth: Policy Status:\n01/02/1980 Active")
+        fields, evidence = v1_sources.card_fields([(1, text)])
+        self.assertEqual({key: fields[key] for key in ("member_name", "birth_date", "member_id", "group_number", "plan_type")},
+                         {"member_name": "PAT EXAMPLE", "birth_date": "1980-01-02", "member_id": "TEST12345",
+                          "group_number": "GRP678", "plan_type": "Medical"})
+        self.assertTrue(all(evidence[key]["page"] == 1 for key in fields))
+
+    def test_bcbstx_sample_layout_uses_subscriber_and_identification_labels(self):
+        text = ("BlueCross BlueShield of Texas\nSubscriber: JANE Q SAMPLE\n"
+                "Identification No.: ABC12345678\nGroup No.: 987654\nCoverage Date: 01/01/2026\n"
+                "RxBIN: 000000")
+        fields, evidence = v1_sources.card_fields([(1, text)])
+        self.assertEqual({key: fields[key] for key in ("member_name", "member_id", "group_number", "payer")},
+                         {"member_name": "JANE Q SAMPLE", "member_id": "ABC12345678",
+                          "group_number": "987654", "payer": "Blue Cross Blue Shield of Texas"})
+        self.assertNotIn("birth_date", fields)  # Many printed cards omit DOB.
+        self.assertEqual(evidence["member_id"]["quote"], "Identification No.: ABC12345678")
+
+    def test_united_healthcare_standalone_card_labels(self):
+        text = ("United Healthcare\nMember: PAT EXAMPLE\nMember ID #: UHC123456\n"
+                "Group #: 704321\nDOB: 01/02/1980\nRxBIN: 610279")
+        fields, _ = v1_sources.card_fields([(1, text)])
+        self.assertEqual({key: fields[key] for key in ("member_name", "member_id", "group_number", "birth_date", "payer")},
+                         {"member_name": "PAT EXAMPLE", "member_id": "UHC123456", "group_number": "704321",
+                          "birth_date": "1980-01-02", "payer": "UnitedHealthcare"})
+
+    def test_card_reader_combines_missing_fields_from_alternate_ocr_layouts(self):
+        image = BytesIO()
+        Image.new("RGB", (500, 300), "white").save(image, format="PNG")
+        texts = {
+            None: "Member Name: PAT EXAMPLE\nMember ID: TEST12345\nDate of Birth: Policy Status:",
+            "6": "Member ID: TEST12345\nGroup Number: GRP678\nDOB: 01/02/1980",
+            "11": "United Healthcare\nMember ID: TEST12345",
+        }
+        with patch("app.insurance.golden._image_text", side_effect=lambda _, **kwargs: texts[kwargs.get("local_mode")]) as ocr:
+            fields, evidence, counts = v1_sources.read_card_fields([image.getvalue()])
+        self.assertEqual(counts, [1])
+        self.assertEqual({key: fields[key] for key in ("member_name", "member_id", "group_number", "birth_date", "payer")},
+                         {"member_name": "PAT EXAMPLE", "member_id": "TEST12345", "group_number": "GRP678",
+                          "birth_date": "1980-01-02", "payer": "UnitedHealthcare"})
+        self.assertEqual(evidence["group_number"]["quote"], "Group Number: GRP678")
+        self.assertEqual(ocr.call_count, 3)
+
+    def test_card_reader_does_not_retry_a_complete_card_without_dob(self):
+        image = BytesIO()
+        Image.new("RGB", (500, 300), "white").save(image, format="PNG")
+        text = "BCBSTX\nSubscriber Name: PAT EXAMPLE\nIdentification Number: ABC123\nGroup Number: GRP678"
+        with patch("app.insurance.golden._image_text", return_value=text) as ocr:
+            fields, _, _ = v1_sources.read_card_fields([image.getvalue()])
+        self.assertNotIn("birth_date", fields)
+        ocr.assert_called_once()
+
     def test_missing_identity_is_not_filled_from_other_fields(self):
         fields, _ = v1_sources.card_fields([(1, "Member Name:\nMember ID: ABC123\nGroup Number: XYZ123")])
         self.assertNotIn("member_name", fields)
@@ -84,6 +139,24 @@ class SourceTests(unittest.TestCase):
             fields, _ = v1_sources.card_fields(v1_sources.read_pages(content, 2))
         ocr.assert_called_once()
         self.assertEqual(fields["member_id"], "ABC123")
+
+    def test_embedded_card_uses_original_image_instead_of_whole_pdf_page(self):
+        image = BytesIO()
+        Image.new("RGB", (900, 550), "white").save(image, format="PNG")
+        with fitz.open() as doc:
+            page = doc.new_page()
+            page.insert_text((30, 30), "Member ID Card")
+            page.insert_image(fitz.Rect(30, 70, 570, 400), stream=image.getvalue())
+            content = doc.tobytes()
+        seen = []
+        def ocr(raw):
+            with Image.open(BytesIO(raw)) as card:
+                seen.append(card.size)
+            return "Subscriber Name: PAT EXAMPLE\nIdentification Number: ABC123\nGroup Number: GRP123"
+        with patch("app.insurance.golden._image_text", side_effect=ocr):
+            fields, _ = v1_sources.card_fields(v1_sources.read_pages(content, 2))
+        self.assertEqual(seen, [(900, 550)])
+        self.assertEqual(fields["member_name"], "PAT EXAMPLE")
 
     def test_coverage_does_not_cross_benefit_sections_or_infer_network(self):
         fields, _ = documented._coverage_fields([(1, "In Network\nIndividual Deductible $600 total\nIndividual Out Of Pocket $900 Remaining")])

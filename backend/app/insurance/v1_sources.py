@@ -29,9 +29,13 @@ def outlined_text(page) -> bool:
     return len(shapes) >= 20 and len({int(y / 20) for y, _, _ in shapes}) >= 3
 
 
-def read_pages(content: bytes, max_pages: int = 100, *, detect_outlined_text: bool = False) -> list[tuple[int, str]]:
+def read_pages(content: bytes, max_pages: int = 100, *, detect_outlined_text: bool = False,
+               local_ocr_mode: str | None = None) -> list[tuple[int, str]]:
+    def image_text(image: bytes) -> str:
+        return golden._image_text(image) if local_ocr_mode is None else golden._image_text(image, local_mode=local_ocr_mode)
+
     if content.startswith((b"\xff\xd8\xff", b"\x89PNG\r\n\x1a\n")):
-        pages = [(1, golden._image_text(content))]
+        pages = [(1, image_text(content))]
     elif content.startswith(b"%PDF"):
         try:
             with fitz.open(stream=content, filetype="pdf") as document:
@@ -52,17 +56,22 @@ def read_pages(content: bytes, max_pages: int = 100, *, detect_outlined_text: bo
                             if span.get("type") == 3 or span.get("opacity", 1) == 0:
                                 scanned = True
                                 break
-                    has_card_image = False
-                    for item in list(page.get_image_info()):
-                        if fitz.Rect(item["bbox"]).get_area() >= page.rect.get_area() * .2:
-                            has_card_image = True
-                            break
+                    card_images = [item for item in page.get_image_info(xrefs=True)
+                                   if fitz.Rect(item["bbox"]).get_area() >= page.rect.get_area() * .2]
+                    has_card_image = bool(card_images)
                     scanned = scanned or (has_card_image and not re.search(r"(?:member|subscriber|name|\bid)\s*[:#]", text, re.I))
                     scanned = scanned or detect_outlined_text and outlined_text(page)
                     if not text or scanned:
-                        scale = min(2, golden.MAX_OCR_DIMENSION / max(page.rect.width, page.rect.height))
-                        pixmap = page.get_pixmap(matrix=fitz.Matrix(scale, scale), colorspace=fitz.csRGB, alpha=False)
-                        text = golden._image_text(pixmap.tobytes("png"))
+                        # A portal export often places one card image on a
+                        # mostly blank PDF page. OCR its original pixels, not
+                        # the page header, whitespace, and adjacent columns.
+                        image = card_images[0] if len(card_images) == 1 else None
+                        if image and image.get("xref"):
+                            text = image_text(document.extract_image(image["xref"])["image"])
+                        else:
+                            scale = min(2, golden.MAX_OCR_DIMENSION / max(page.rect.width, page.rect.height))
+                            pixmap = page.get_pixmap(matrix=fitz.Matrix(scale, scale), colorspace=fitz.csRGB, alpha=False)
+                            text = image_text(pixmap.tobytes("png"))
                     pages.append((number, text))
         except (golden.GoldenCaseError, golden.OCRServiceError):
             raise
@@ -101,21 +110,45 @@ def card_fields(pages: list[tuple[int, str]]) -> tuple[dict, dict]:
         evidence[key] = {"page": page, "quote": quote, "value": value}
 
     labels = {
-        "member_name": r"(?:member|subscriber|patient|insured)\s+name|name",
+        "member_name": r"(?:member|subscriber|patient|insured)\s+name|(?:member|subscriber|patient|insured)(?=\s*[:#-])|name",
         "payer": r"insurance(?: company)?|insurer|payer",
         "birth_date": r"(?:(?:member|subscriber|patient)\s+)?(?:date\s+of\s+birth|birth\s+date|dob)",
-        "member_id": r"(?:member|subscriber|insured)\s*(?:id|number|no\.?)|identification\s+number|id",
+        "member_id": r"(?:member|subscriber|insured|enrollee)\s*(?:id|number|no\.?)|identification\s*(?:number|no\.?)|id",
         "group_number": r"group(?:\s*(?:number|no\.?))?",
         "plan_type": r"plan(?:\s*(?:type|/\s*product))?|product",
         "coverage_date": r"(?:coverage|effective)\s*date",
         "coinsurance": r"coinsurance",
     }
     for page, text in pages:
-        lines = [" ".join(line.split()) for line in text.splitlines()]
+        lines = [" ".join(line.split()) for line in text.splitlines() if line.strip()]
         section = section_heading = ""
         for index, line in enumerate(lines):
+            if re.fullmatch(r"(?:Sample )?Member ID Cards?", line, re.I):
+                continue
+            # OCR often flattens a card's three-column header into one label
+            # row followed by one value row. Accept only the labeled layout.
+            following = lines[index + 1] if index + 1 < len(lines) else ""
+            if re.search(r"\bPlan Type:.*\bMember ID:.*\bGroup #:", line, re.I):
+                match = re.fullmatch(r"(Medical|Dental|Vision|Pharmacy)\s+([A-Z0-9-]{3,40})\s+([A-Z0-9-]{3,40})", following, re.I)
+                if match:
+                    for key, value in zip(("plan_type", "member_id", "group_number"), match.groups()):
+                        add(key, value, page, line + "\n" + following)
+                    continue
+            elif re.fullmatch(r"Name:\s*[^A-Za-z0-9]*\s*Effective Dates?:", line, re.I):
+                match = re.fullmatch(r"([A-Z][A-Z .,'-]{2,100})\s+\d{1,2}[/-]\d{1,2}[/-]\d{4}\s*[-–]\s*\d{1,2}[/-]\d{1,2}[/-]\d{4}", following, re.I)
+                if match:
+                    add("member_name", match[1], page, line + "\n" + following)
+            elif re.fullmatch(r"Date of Birth:\s*Policy Status:", line, re.I):
+                match = re.fullmatch(r"(\d{1,2}[/-]\d{1,2}[/-]\d{4})\s+(?:Active|Inactive|Pending)", following, re.I)
+                if match:
+                    try:
+                        birth = datetime.strptime(match[1].replace("-", "/"), "%m/%d/%Y").date()
+                    except ValueError:
+                        birth = None
+                    if birth and date(1850, 1, 1) <= birth <= date.today():
+                        add("birth_date", birth.isoformat(), page, line + "\n" + following)
             for key, label in labels.items():
-                match = re.fullmatch(rf"(?:{label})(?:\s*[:#-]\s*|\s+)(.*)", line, re.I)
+                match = re.fullmatch(rf"(?:{label})(?:\s*[:#-](?:\s*[:#-])?\s*|\s+)(.*)", line, re.I)
                 label_only = re.fullmatch(rf"(?:{label})\s*[:#-]?", line, re.I)
                 if not match and not label_only:
                     continue
@@ -178,7 +211,11 @@ def card_fields(pages: list[tuple[int, str]]) -> tuple[dict, dict]:
         blue = re.search(r"Blue\s*Cross\s*(?:and\s*)?Blue\s*Shield\s*(?:of\s+)?([A-Za-z]+)", joined, re.I)
         if blue and blue[1].casefold() in {"texas", "tx"}:
             add("payer", "Blue Cross Blue Shield of Texas", page, blue[0])
-        elif match := re.search(r"\b(Aetna|Cigna|Humana|UnitedHealthcare)\b", joined, re.I):
+        elif match := re.search(r"\bBCBSTX\b", joined, re.I):
+            add("payer", "Blue Cross Blue Shield of Texas", page, match[0])
+        elif match := re.search(r"\bUnited\s*Healthcare\b", joined, re.I):
+            add("payer", "UnitedHealthcare", page, match[0])
+        elif match := re.search(r"\b(Aetna|Cigna|Humana)\b", joined, re.I):
             add("payer", match[0], page, match[0])
         # Routing/phone fields only: require the captured value in the same page.
         for key, pattern in golden.CARD_DETAIL_PATTERNS.items():
@@ -188,6 +225,36 @@ def card_fields(pages: list[tuple[int, str]]) -> tuple[dict, dict]:
                 for match in re.finditer(pattern, line):
                     add(key, match[1], page, match[0])
     return fields, evidence
+
+
+def read_card_fields(contents: list[bytes]) -> tuple[dict, dict, list[int]]:
+    """Read card pages and fill fields missed by the primary OCR layout."""
+    pages, counts, offset = [], [], 0
+    for content in contents:
+        extracted = read_pages(content, 2)
+        pages.extend((number + offset, text) for number, text in extracted)
+        counts.append(len(extracted))
+        offset += len(extracted)
+    fields, evidence = card_fields(pages)
+    has_birth_label = any(re.search(r"\b(?:DOB|Date of Birth|Birth Date)\b", text, re.I) for _, text in pages)
+    for mode in ("6", "11"):
+        if all(fields.get(key) for key in ("member_name", "member_id", "group_number", "payer")) and (fields.get("birth_date") or not has_birth_label):
+            break
+        try:
+            alternate, offset = [], 0
+            for content, count in zip(contents, counts):
+                extracted = read_pages(content, 2, local_ocr_mode=mode)
+                if len(extracted) != count:
+                    raise golden.OCRServiceError("Card page count changed during OCR")
+                alternate.extend((number + offset, text) for number, text in extracted)
+                offset += count
+            proposed, citations = card_fields(alternate)
+            for key, value in proposed.items():
+                if key not in fields:
+                    fields[key], evidence[key] = value, citations[key]
+        except (golden.GoldenCaseError, golden.OCRServiceError):
+            continue  # The primary OCR evidence remains available for review.
+    return fields, evidence, counts
 
 
 def individual_balance_cells(content: bytes) -> list[tuple[str, int, dict]]:

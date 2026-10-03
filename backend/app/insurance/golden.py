@@ -101,7 +101,9 @@ def open_share_token(token: str, require_beta: bool = False) -> dict[str, Any]:
 
 def _write_ocr_image(image: Image.Image, path: Path) -> None:
     prepared = image.convert("RGB")
-    prepared.thumbnail((MAX_OCR_DIMENSION, MAX_OCR_DIMENSION), Image.Resampling.LANCZOS)
+    scale = min(2, MAX_OCR_DIMENSION / max(prepared.size))
+    if scale != 1:
+        prepared = prepared.resize((max(1, round(prepared.width * scale)), max(1, round(prepared.height * scale))), Image.Resampling.LANCZOS)
     prepared.save(path, "PNG")
 
 
@@ -148,7 +150,7 @@ def _card_fields(text: str) -> dict[str, str]:
     return fields
 
 
-def _image_text(content: bytes) -> str:
+def _image_text(content: bytes, *, local_mode: str | None = None) -> str:
     try:
         image = Image.open(BytesIO(content))
         if image.width * image.height > MAX_PIXELS:
@@ -159,9 +161,11 @@ def _image_text(content: bytes) -> str:
     with tempfile.TemporaryDirectory() as directory:
         path = Path(directory) / "card.png"
         _write_ocr_image(image, path)
+        if local_mode is not None:
+            return _tesseract(path, local_mode)
+        if not os.getenv("ECS_CONTAINER_METADATA_URI_V4") and os.getenv("INSURANCE_CARD_OCR") != "textract":
+            return _ocr_images([path])
         try:
-            if not os.getenv("ECS_CONTAINER_METADATA_URI_V4") and os.getenv("INSURANCE_CARD_OCR") != "textract":
-                return _ocr_images([path])
             client = boto3.client("textract", region_name=os.getenv("AWS_REGION", "us-east-1"),
                                   config=Config(connect_timeout=3, read_timeout=12, retries={"max_attempts": 0}))
             result = client.detect_document_text(Document={"Bytes": path.read_bytes()})

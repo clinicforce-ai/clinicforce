@@ -1012,7 +1012,7 @@ async def configuration(request: Request) -> dict:
 
 @router.get("/appointments")
 async def ecw_appointments(request: Request) -> dict:
-    """List the confirmed patient's scheduled visits without creating an eligibility check."""
+    """List confirmed scheduled visits without an eligibility check; slow eCW lookups return a retryable error."""
     session = await _session(request)
     if not ecw_backend.configured():
         raise HTTPException(503, "The eClinicalWorks backend connection is not configured for this deployment.")

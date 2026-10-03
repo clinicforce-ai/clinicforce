@@ -305,6 +305,7 @@ def manual_card_fields(full_name: str, member_id: str, birth_date: str) -> dict:
 
 @router.post("/intakes/ecw-lookup")
 async def create_ecw_lookup(value: EcwLookup, request: Request):
+    """Confirm an eCW patient and upcoming visits; a slow upstream returns a retryable error before the edge deadline."""
     staff = await require_staff(request)
     started = time.monotonic()
     collection_event('ecw_lookup_started', practice_id=staff['practice_id'], staff_id=staff['id'], stage='patient_search')
@@ -316,7 +317,7 @@ async def create_ecw_lookup(value: EcwLookup, request: Request):
             {"patient_first_name": value.given_name, "patient_middle_initial": value.middle_initial,
              "patient_last_name": value.family_name, "patient_birth_date": value.birth_date.isoformat()},
             {"timezone": os.getenv("COMMERCIAL_PRACTICE_TIMEZONE", "America/New_York")},
-        ), timeout=38)
+        ), timeout=26)
     except asyncio.TimeoutError:
         collection_event('ecw_lookup_failed', practice_id=staff['practice_id'], stage='patient_search', reason_code='timeout', duration_ms=int((time.monotonic() - started) * 1000))
         raise HTTPException(504, "eClinicalWorks did not respond to the patient search in time. Retry the lookup.") from None
@@ -346,6 +347,7 @@ async def create_ecw_lookup(value: EcwLookup, request: Request):
 @router.post("/intakes")
 async def upload_cards(request: Request, files: list[UploadFile] = File(default=[]), full_name: str = Form(default="", max_length=200),
                        member_id: str = Form(default="", max_length=80), birth_date: str = Form(default="", max_length=10)):
+    """Save card files, propose cited OCR fields, and retain manual entry when a card omits details."""
     staff = await require_staff(request)
     manual_fields = manual_card_fields(full_name, member_id, birth_date)
     if len(files) > 2:
@@ -383,14 +385,13 @@ async def upload_cards(request: Request, files: list[UploadFile] = File(default=
     if not files:
         return JSONResponse(public(intake), status_code=201, headers=NO_STORE)
     try:
-        extracted_pages, offset, source_pages = [], 0, {}
-        for index, (_, content, _) in enumerate(prepared):
-            result = await run_in_threadpool(v1_sources.read_pages, content, 2)
-            extracted_pages.extend((number + offset, text) for number, text in result)
+        fields, evidence, counts = await asyncio.wait_for(
+            asyncio.to_thread(v1_sources.read_card_fields, [content for _, content, _ in prepared]), timeout=20)
+        offset, source_pages = 0, {}
+        for index, count in enumerate(counts):
             source_pages.update({number + offset: {"document_id": documents[index]["id"],
-                "source_filename": documents[index]["filename"], "source_page": number} for number, _ in result})
-            offset += len(result)
-        fields, evidence = v1_sources.card_fields(extracted_pages)
+                "source_filename": documents[index]["filename"], "source_page": number} for number in range(1, count + 1)})
+            offset += count
         for item in evidence.values():
             item.update(source_pages.get(item.get("page"), {}))
         warning = None if fields.get("member_id") or manual_fields.get("member_id") else "Card saved. Enter the missing details below before starting verification."
