@@ -43,6 +43,19 @@ export function FinancialHistory({ checkId, intakeId }: { checkId: string; intak
   </section>
 }
 
+function PayerResponse({ checkId }: { checkId: string }) {
+  const [value, setValue] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+  const load = async () => {
+    setBusy(true); setError('')
+    try { setValue(JSON.stringify((await commercialPayerResponse(checkId)).response, null, 2)) }
+    catch (caught) { setError(caught instanceof Error ? caught.message : 'The saved payer response could not be loaded.') }
+    finally { setBusy(false) }
+  }
+  return <section><button disabled={busy} onClick={() => value ? setValue('') : void load()}>{busy ? 'Loading payer response…' : value ? 'Hide saved payer response' : 'View saved payer response'}</button>{error && <p role="status">{error}</p>}{value && <pre className="visit-raw-response" tabIndex={0}>{value}</pre>}</section>
+}
+
 type DetailPanel = 'coverage' | 'notes' | 'calculation' | 'sources' | 'services'
 function AppointmentNotes({ result }: { result: PrevisitEstimate }) {
   const fields = result.appointment_context?.imported_fields || []
