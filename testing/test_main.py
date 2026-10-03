@@ -94,6 +94,15 @@ class MainRouteTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json(), {"status": "ok"})
 
+    async def test_api_documentation_is_available_under_the_api_prefix(self) -> None:
+        schema = await self.client.get("/api/openapi.json")
+        docs = await self.client.get("/api/docs")
+        self.assertEqual(schema.status_code, 200)
+        self.assertEqual(schema.json()["info"]["title"], "ClinicForce API")
+        self.assertIn("/api/patient/login", schema.json()["paths"])
+        self.assertEqual(docs.status_code, 200)
+        self.assertIn("/api/openapi.json", docs.text)
+
     async def test_insurance_beta_is_off_by_default_and_rejects_session_bypass(self) -> None:
         with patch.dict(os.environ, {"INSURANCE_BETA_ENABLED": "false"}, clear=False):
             disabled = await self.client.post("/api/doctor/insurance/beta")

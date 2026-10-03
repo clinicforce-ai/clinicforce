@@ -2095,16 +2095,21 @@ async def stedi_eligibility(case_id: str, request: Request) -> Any:
     except commercial.CommercialError as exc:
         raise HTTPException(409, str(exc)) from exc
     data["request_state"] = "pending"; case = await run_in_threadpool(_save, case, session, "stedi-request-pending")
+    started = time.monotonic()
+    log_info("Commercial estimator", "Stedi eligibility started: case=%s service_lines=%d", case_id, len(data["lines"]))
     try:
         async with httpx.AsyncClient(timeout=httpx.Timeout(30, connect=5)) as client:
             response, payload, _ = await _post_stedi_eligibility(
                 client, {"Authorization": api_key, "Content-Type": "application/json"}, body, basic_body)
     except (httpx.HTTPError, ValueError):
+        log_warning("Commercial estimator", "Stedi eligibility indeterminate: case=%s duration_ms=%d", case_id, (time.monotonic() - started) * 1000)
         case = await run_in_threadpool(_load, case_id, session); case["commercial"]["request_state"] = "review"; case["review_tasks"] = ["Stedi request outcome is indeterminate; check Stedi activity before retrying."]
         return _response(_public(await run_in_threadpool(_save, case, session, "stedi-indeterminate")))
     if response.is_error or not isinstance(payload, dict):
+        log_warning("Commercial estimator", "Stedi eligibility rejected: case=%s http_status=%s duration_ms=%d", case_id, response.status_code, (time.monotonic() - started) * 1000)
         case = await run_in_threadpool(_load, case_id, session); case["commercial"]["request_state"] = "review"; case["review_tasks"] = ["Stedi/payer did not return usable eligibility. Review payer response in the protected audit record."]
         return _response(_public(await run_in_threadpool(_save, case, session, "stedi-error")))
+    log_info("Commercial estimator", "Stedi eligibility response: case=%s http_status=%s transaction_id=%s duration_ms=%d", case_id, response.status_code, payload.get("id"), (time.monotonic() - started) * 1000)
     raw_key = None
     if object_store.enabled(): raw_key = await run_in_threadpool(object_store.put_staff_document, session["practice_id"], case_id, "stedi-eligibility.json", json.dumps(payload).encode(), "application/json")
     # The normalizer only accepts Stedi's documented individual, remaining,
@@ -2143,9 +2148,11 @@ async def calculate(case_id: str, request: Request) -> Any:
         if evidence["case_id"] != case_id or evidence["context_hash"] != expected or evidence["requested_dos"] != data["service_date"]:
             raise commercial.CommercialError("Stedi evidence does not match this patient, policy, provider, and appointment.")
         case["estimate"] = commercial.estimate(data["lines"], evidence["normalized"], profile["rules"]); case["review_tasks"] = []
+        log_info("Commercial estimator", "Estimate recalculated: case=%s estimate_available=true", case_id)
         return _response(_public(await run_in_threadpool(_save, case, session, "estimate-calculated")))
     except commercial.CommercialError as exc:
         case["estimate"] = None; case["review_tasks"] = [str(exc)]
+        log_warning("Commercial estimator", "Estimate requires review: case=%s", case_id)
         return _response(_public(await run_in_threadpool(_save, case, session, "estimate-review-required")))
 
 

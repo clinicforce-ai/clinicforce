@@ -24,6 +24,7 @@ from app.core.patient_store import get_patient_profile
 from app.core import object_store, staff_store
 from app.insurance import availity_intake as intake, availity_results as results, cpt_rules, cpt_suggester, ecw_backend, golden, stedi, stedi_estimate, stedi_results, store
 from app.insurance.availity import Settings, gateway, PATHS, DEMO_SCENARIOS, unwrap
+from app.logs.logger import log_info, log_warning
 
 
 router = APIRouter(prefix="/api/doctor/insurance/v2", tags=["doctor-insurance-v2"])
@@ -1150,8 +1151,11 @@ async def submit(case_id: str, resource: Resource, request: Request):
     case = await save(case, session, f"{resource}-submission-started")
     api_resource = canonical(resource)
     scenario = (case["scenario"] if resource == "coverage" else DEMO_SCENARIOS[api_resource][0]) if settings.environment == "demo" else None
+    started = time.monotonic()
+    log_info("Insurance estimator", "Availity submission started: case=%s resource=%s environment=%s service_lines=%d", case["id"], resource, settings.environment, len(service_lines(case, resource)))
     response = await gateway(settings).request("POST", PATHS[api_resource], data=body if resource == "coverage" else None,
                                                 body=body if resource != "coverage" else None, scenario=scenario, resource=api_resource)
+    log_info("Insurance estimator", "Availity submission response: case=%s resource=%s outcome=%s http_status=%s transaction_id=%s resource_id=%s duration_ms=%d", case["id"], resource, response.get("outcome"), response.get("http_status"), response.get("transaction_id"), response.get("resource_id"), (time.monotonic() - started) * 1000)
     return await finish(case, session, resource, response, settings, practice)
 
 
@@ -1174,7 +1178,10 @@ async def refresh(case_id: str, resource: Resource, request: Request):
     case = await save(case, session, f"{resource}-poll-started")
     api_resource = canonical(resource)
     scenario = (case["scenario"] if resource == "coverage" else DEMO_SCENARIOS[api_resource][1]) if settings.environment == "demo" else None
+    started = time.monotonic()
+    log_info("Insurance estimator", "Availity poll started: case=%s resource=%s resource_id=%s", case["id"], resource, transaction["resource_id"])
     response = await gateway(settings).request("GET", PATHS[api_resource] + "/" + transaction["resource_id"], scenario=scenario, resource=api_resource)
+    log_info("Insurance estimator", "Availity poll response: case=%s resource=%s outcome=%s http_status=%s duration_ms=%d", case["id"], resource, response.get("outcome"), response.get("http_status"), (time.monotonic() - started) * 1000)
     return await finish(case, session, resource, response, settings, practice)
 
 
@@ -1200,6 +1207,7 @@ async def retry_rejected(case_id: str, resource: Resource, request: Request):
 async def finish(case: dict, session: dict, resource: str, response: dict, settings: Settings, practice: dict):
     reason = stedi_fallback_reason(response) if resource == "coverage" else None
     if reason and settings.environment == "production" and stedi.Settings.read().mode == "production" and stedi.fallback_enabled():
+        log_warning("Insurance estimator", "Availity coverage fallback selected: case=%s outcome=%s reason=%s", case["id"], response.get("outcome"), reason)
         return await stedi_coverage(case, session, practice, [stedi_attempt(response, reason)], reason)
     previous = case["transactions"][resource]
     value = {**previous, **response, "message": response.get("message"), "checked_at": datetime.now(timezone.utc).isoformat(),
@@ -1225,4 +1233,6 @@ async def finish(case: dict, session: dict, resource: str, response: dict, setti
     case["transactions"][resource] = value
     case["operation_until"] = 0
     case = await save(case, session, f"{resource}-{value['outcome']}")
+    logger = log_info if value["outcome"] in {"complete", "pending", "retrying"} else log_warning
+    logger("Insurance estimator", "Payer transaction finished: case=%s resource=%s source=availity outcome=%s http_status=%s resource_id=%s", case["id"], resource, value["outcome"], value.get("http_status"), value.get("resource_id"))
     return _response(public(case))
