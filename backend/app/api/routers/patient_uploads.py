@@ -1,5 +1,6 @@
 """Account-free, write-only insurance submissions and authenticated clinic link management."""
 
+import asyncio
 from datetime import date
 from pathlib import Path
 from typing import Annotated
@@ -71,12 +72,7 @@ async def prepared_cards(files: list[UploadFile]) -> list[tuple[str, bytes, str]
 
 
 def card_fields(prepared: list[tuple[str, bytes, str]]) -> dict:
-    pages, offset = [], 0
-    for _, content, _ in prepared:
-        extracted = v1_sources.read_pages(content, 2)
-        pages.extend((number + offset, text) for number, text in extracted)
-        offset += len(extracted)
-    fields, _ = v1_sources.card_fields(pages)
+    fields, _, _ = v1_sources.read_card_fields([content for _, content, _ in prepared])
     return {key: fields[key] for key in ("member_name", "birth_date", "member_id") if fields.get(key)}
 
 
@@ -153,12 +149,13 @@ async def get_metadata(clinic_code: LegacyClinicCode, upload_code: UploadCode):
 @router.post("/api/insurance-upload/{clinic_code}/{upload_code}/read-card")
 async def read_patient_card(clinic_code: LegacyClinicCode, upload_code: UploadCode, request: Request,
                             files: list[UploadFile] = File(...)):
+    """Suggest member name, birth date and member ID from a card; missing printed fields require manual entry."""
     staff.check_origin(request)
     row = await call(links.metadata, clinic_code, upload_code)
     await call(links.check_rate, request_address(request), row["practice_id"], "read-card")
     prepared = await prepared_cards(files)
     try:
-        fields = await run_in_threadpool(card_fields, prepared)
+        fields = await asyncio.wait_for(asyncio.to_thread(card_fields, prepared), timeout=20)
     except Exception:
         raise HTTPException(422, "We could not read details from this card. Enter them manually or try a clearer image.", headers=HEADERS) from None
     return JSONResponse({"fields": fields}, headers=HEADERS)
@@ -200,6 +197,7 @@ async def submit(clinic_code: LegacyClinicCode, upload_code: UploadCode, request
 
 @router.post("/api/staff/intakes/{intake_id}/read-card")
 async def read_card(intake_id: str, request: Request):
+    """Reread saved card images with alternate OCR layout when the primary read misses identity details."""
     actor = await staff.require_staff(request)
     record = await staff.owned_intake(intake_id, actor)
     if record.get("patient") or record.get("workflows"):
@@ -208,14 +206,15 @@ async def read_card(intake_id: str, request: Request):
         raise HTTPException(422, "This intake has no saved card files to read.", headers=HEADERS)
     await call(links.check_rate, actor["id"], actor["practice_id"], "staff-read-card")
     try:
-        pages, evidence_sources, offset = [], {}, 0
+        contents = []
         for document in record["documents"]:
-            content = await run_in_threadpool(object_store.get_object_bytes, document["object_key"])
-            extracted = await run_in_threadpool(v1_sources.read_pages, content, 2)
-            pages.extend((number + offset, text) for number, text in extracted)
-            evidence_sources.update({number + offset: {"document_id": document["id"], "source_filename": document["filename"], "source_page": number} for number, _ in extracted})
-            offset += len(extracted)
-        fields, evidence = v1_sources.card_fields(pages)
+            contents.append(await run_in_threadpool(object_store.get_object_bytes, document["object_key"]))
+        fields, evidence, counts = await asyncio.wait_for(
+            asyncio.to_thread(v1_sources.read_card_fields, contents), timeout=20)
+        evidence_sources, offset = {}, 0
+        for document, count in zip(record["documents"], counts):
+            evidence_sources.update({number + offset: {"document_id": document["id"], "source_filename": document["filename"], "source_page": number} for number in range(1, count + 1)})
+            offset += count
         for item in evidence.values():
             item.update(evidence_sources.get(item.get("page"), {}))
         if fields.get("member_name"):

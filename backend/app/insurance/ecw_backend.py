@@ -38,6 +38,8 @@ SEARCH_TIMEOUT_SECONDS = 6
 HISTORY_TIMEOUT_SECONDS = 3
 HISTORY_DAYS = 365
 HISTORY_VISIT_LIMIT = 12
+LOOKUP_TIMEOUT_SECONDS = 24  # CloudFront stops waiting for the origin after 30 seconds.
+TOKEN_STAGE_TIMEOUT_SECONDS = 10
 
 
 class EcwBackendError(RuntimeError):
@@ -108,18 +110,30 @@ async def _response_json(response: httpx.Response, message: str) -> dict[str, An
 
 async def _access_token(client: httpx.AsyncClient, client_id: str, issuer: str,
                         scopes: tuple[str, ...] = SCOPES) -> str:
+    try:
+        metadata_response = await asyncio.wait_for(
+            client.get(f"{issuer}/metadata", params={"_format": "json"}, headers={"Accept": "application/fhir+json"}),
+            TOKEN_STAGE_TIMEOUT_SECONDS)
+    except asyncio.TimeoutError as exc:
+        raise EcwBackendError("eClinicalWorks metadata timed out. Retry the connection.") from exc
     metadata = await _response_json(
-        await client.get(f"{issuer}/metadata", params={"_format": "json"}, headers={"Accept": "application/fhir+json"}),
+        metadata_response,
         "The activated eClinicalWorks practice metadata is unavailable.",
     )
     endpoint = _token_endpoint(metadata)
-    token = await _response_json(
-        await client.post(endpoint, data={
+    try:
+        assertion = await asyncio.wait_for(
+            asyncio.to_thread(ecw._client_assertion, endpoint, client_id), TOKEN_STAGE_TIMEOUT_SECONDS)
+        token_response = await asyncio.wait_for(client.post(endpoint, data={
             "grant_type": "client_credentials",
             "scope": " ".join(scopes),
             "client_assertion_type": "urn:ietf:params:oauth:client-assertion-type:jwt-bearer",
-            "client_assertion": ecw._client_assertion(endpoint, client_id),
-        }, headers={"Accept": "application/json"}),
+            "client_assertion": assertion,
+        }, headers={"Accept": "application/json"}), TOKEN_STAGE_TIMEOUT_SECONDS)
+    except asyncio.TimeoutError as exc:
+        raise EcwBackendError("eClinicalWorks backend authorization timed out. Retry the connection.") from exc
+    token = await _response_json(
+        token_response,
         "eClinicalWorks rejected the backend app. Confirm that this practice activated the app and that its client ID, issuer, scopes and JWKS match.",
     )
     value = token.get("access_token")
@@ -615,7 +629,7 @@ async def lookup_patient_and_appointments(profile: dict[str, Any], practice: dic
                                           transport: httpx.AsyncBaseTransport | None = None) -> dict[str, Any]:
     """Verify one eCW patient and return only current/future appointments; no eligibility request."""
     client_id, issuer = settings()
-    try:
+    async def read() -> dict[str, Any]:
         async with httpx.AsyncClient(timeout=30, follow_redirects=False, transport=transport) as client:
             token = await _access_token(client, client_id, issuer)
             patient, patient_id, _ = await _patient_for_profile(client, issuer, token, profile)
@@ -627,23 +641,28 @@ async def lookup_patient_and_appointments(profile: dict[str, Any], practice: dic
             )
             if timed_out:
                 raise EcwBackendError("eClinicalWorks timed out while loading the patient's scheduled encounters. Reload the appointment to retry.")
+        appointments = []
+        for visit in encounters:
+            appointment_id, start = str(visit.get("id") or ""), str((visit.get("period") or {}).get("start") or "")
+            if (_reference(visit.get("subject")) != f"Patient/{patient_id}"
+                    or not re.fullmatch(r"[A-Za-z0-9.\-]{1,200}", appointment_id)
+                    or not _is_upcoming_appointment(visit, now)):
+                continue
+            appointments.append({"id": appointment_id, "start": start, "status": str(visit.get("status") or "scheduled"),
+                                 "reason": _visit_context(visit, [], [], []) or ""})
+        first, family = _name(patient)
+        return {"patient": {"id": patient_id, "given_name": first, "family_name": family,
+                            "birth_date": patient.get("birthDate"), "ecw_account_number": patient_account_number(patient)},
+                "appointments": sorted(appointments, key=lambda row: (row["start"], row["id"]))}
+
+    try:
+        return await asyncio.wait_for(read(), LOOKUP_TIMEOUT_SECONDS)
+    except asyncio.TimeoutError as exc:
+        raise EcwBackendError("eClinicalWorks lookup timed out. Retry the lookup or verify the appointment in eClinicalWorks.") from exc
     except EcwResourceUnavailable as exc:
         raise EcwBackendError(f"eClinicalWorks did not authorize ClinicForce to read {exc} data. Confirm the activated app scope and practice activation.") from exc
     except httpx.HTTPError as exc:
         raise EcwBackendError("eClinicalWorks is temporarily unavailable.") from exc
-    appointments = []
-    for visit in encounters:
-        appointment_id, start = str(visit.get("id") or ""), str((visit.get("period") or {}).get("start") or "")
-        if (_reference(visit.get("subject")) != f"Patient/{patient_id}"
-                or not re.fullmatch(r"[A-Za-z0-9.\-]{1,200}", appointment_id)
-                or not _is_upcoming_appointment(visit, now)):
-            continue
-        appointments.append({"id": appointment_id, "start": start, "status": str(visit.get("status") or "scheduled"),
-                             "reason": _visit_context(visit, [], [], []) or ""})
-    first, family = _name(patient)
-    return {"patient": {"id": patient_id, "given_name": first, "family_name": family,
-                        "birth_date": patient.get("birthDate"), "ecw_account_number": patient_account_number(patient)},
-            "appointments": sorted(appointments, key=lambda row: (row["start"], row["id"]))}
 
 
 async def list_appointments(profile: dict[str, Any], practice: dict[str, Any], *, transport: httpx.AsyncBaseTransport | None = None) -> list[dict[str, str]]:

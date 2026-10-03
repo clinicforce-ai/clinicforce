@@ -18,6 +18,29 @@ from app.ingestion import ecw
 
 
 class EcwBackendSourceTests(unittest.IsolatedAsyncioTestCase):
+    async def test_patient_lookup_returns_before_edge_timeout(self):
+        async def slow_token(*_):
+            await asyncio.sleep(1)
+        with patch.object(ecw_backend, "settings", return_value=("client", "https://ehr.example.test/fhir")), \
+                patch.object(ecw_backend, "LOOKUP_TIMEOUT_SECONDS", 0.01), \
+                patch.object(ecw_backend, "_access_token", side_effect=slow_token):
+            with self.assertRaisesRegex(ecw_backend.EcwBackendError, "lookup timed out"):
+                await ecw_backend.lookup_patient_and_appointments({}, {}, transport=httpx.MockTransport(lambda _: httpx.Response(200)))
+
+    async def test_backend_authorization_timeout_identifies_the_stage(self):
+        metadata = {"rest": [{"security": {"extension": [{"url": "oauth-uris", "extension": [
+            {"url": "token", "valueUri": "https://ehr.example.test/token"}]}]}}]}
+        async def handler(request: httpx.Request) -> httpx.Response:
+            if request.url.path.endswith("/metadata"):
+                return httpx.Response(200, json=metadata)
+            await asyncio.sleep(1)
+            return httpx.Response(200, json={"access_token": "synthetic"})
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            with patch.object(ecw_backend.ecw, "_client_assertion", return_value="synthetic"), \
+                    patch.object(ecw_backend, "TOKEN_STAGE_TIMEOUT_SECONDS", 0.01):
+                with self.assertRaisesRegex(ecw_backend.EcwBackendError, "authorization timed out"):
+                    await ecw_backend._access_token(client, "client", "https://ehr.example.test/fhir")
+
     async def test_slow_cached_patient_read_does_not_invent_a_patient(self):
         profile = {"patient_first_name": "Pat", "patient_last_name": "Example",
                    "patient_birth_date": "1980-01-01", "gender": "F"}
