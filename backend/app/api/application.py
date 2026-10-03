@@ -141,7 +141,19 @@ from app.insurance import golden as insurance_golden
 _epic_endpoint_sync_task: asyncio.Task[None] | None = None
 
 
-app = FastAPI(title="ClinicForce")
+app = FastAPI(
+    title="ClinicForce API",
+    description=(
+        "Backend contract for the ClinicForce web application. Requests use "
+        "same-origin session cookies; do not enter patient data, credentials, "
+        "or production secrets in this documentation UI."
+    ),
+    version="1.0.0",
+    docs_url="/api/docs",
+    redoc_url="/api/redoc",
+    openapi_url="/api/openapi.json",
+    swagger_ui_parameters={"supportedSubmitMethods": []},
+)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=ALLOWED_ORIGINS,
