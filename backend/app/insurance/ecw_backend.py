@@ -186,6 +186,29 @@ async def _optional_search(client: httpx.AsyncClient, issuer: str, token: str, r
         return [], None, resource + " (read failed)"
 
 
+async def _bounded_search(client: httpx.AsyncClient, issuer: str, token: str, resource: str,
+                          params: dict[str, str] | list[tuple[str, str]], *, attempts: int = 1
+                          ) -> tuple[list[dict[str, Any]], str | None]:
+    for _ in range(attempts):
+        try:
+            return await asyncio.wait_for(
+                _search(client, issuer, token, resource, params), timeout=SEARCH_TIMEOUT_SECONDS,
+            ), None
+        except (asyncio.TimeoutError, httpx.TimeoutException):
+            pass
+    return [], resource
+
+
+async def _optional_search(client: httpx.AsyncClient, issuer: str, token: str, resource: str,
+                           params: dict[str, str] | list[tuple[str, str]]
+                           ) -> tuple[list[dict[str, Any]], str | None, str | None]:
+    try:
+        rows, timed_out = await _bounded_search(client, issuer, token, resource, params)
+        return rows, timed_out, None
+    except EcwBackendError:
+        return [], None, resource
+
+
 async def _read(client: httpx.AsyncClient, issuer: str, token: str, reference: Any) -> dict[str, Any]:
     if not isinstance(reference, str) or not re.fullmatch(r"(?:Patient|RelatedPerson|Organization|Practitioner|PractitionerRole|Location|Condition|Encounter|Appointment)/[A-Za-z0-9.\-]{1,200}", reference):
         return {}
