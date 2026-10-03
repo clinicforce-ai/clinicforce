@@ -140,7 +140,10 @@ def validate_staff_coverage(fields: dict, inputs: dict, source: dict, practice: 
     if not payer:
         return
     connected_id = intake.normalize(str(inputs.get("payer_id") or ""))
-    if payer in {connected_id, intake.normalize(str(source.get("payer") or ""))}:
+    connected_name = intake.normalize(str(source.get("payer") or ""))
+    if not connected_id and not connected_name:
+        return
+    if payer in {connected_id, connected_name}:
         return
     mapped = {intake.normalize(value) for key, value in practice.get("payer_aliases", {}).items() if intake.normalize(key) == payer}
     if len(mapped) == 1 and connected_id in mapped:
