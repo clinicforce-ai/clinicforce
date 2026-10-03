@@ -20,6 +20,8 @@ from app.ingestion import ecw
 from app.insurance.stedi_discovery import patient_address
 
 
+# This clinic's eCW backend registration does not grant ChargeItem. The query
+# remains optional below and degrades to missing charge data on a 403.
 SCOPES = (
     "system/Patient.read", "system/Coverage.read", "system/Encounter.read",
     "system/ServiceRequest.read", "system/Procedure.read", "system/Condition.read",
