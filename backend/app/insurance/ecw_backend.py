@@ -20,8 +20,8 @@ from app.ingestion import ecw
 from app.insurance.stedi_discovery import patient_address
 
 
-# This clinic's eCW backend registration does not grant ChargeItem. The query
-# remains optional below and degrades to missing charge data on a 403.
+# ChargeItem is intentionally omitted until it is granted in the eCW app.
+# Procedure and PractitionerRole are already granted by the registered app.
 SCOPES = (
     "system/Patient.read", "system/Coverage.read", "system/Encounter.read",
     "system/ServiceRequest.read", "system/Procedure.read", "system/Condition.read",
@@ -227,10 +227,20 @@ async def _cached_patient(client: httpx.AsyncClient, issuer: str, token: str,
 
 async def _bounded_read(client: httpx.AsyncClient, issuer: str, token: str,
                         reference: str) -> tuple[dict[str, Any], str | None]:
+    resource, resource_id = reference.split("/", 1)
     try:
-        return await asyncio.wait_for(_read(client, issuer, token, reference), timeout=5), None
-    except asyncio.TimeoutError:
-        return {}, reference.split("/", 1)[0]
+        return await asyncio.wait_for(_read(client, issuer, token, reference), timeout=REFERENCE_TIMEOUT_SECONDS), None
+    except (asyncio.TimeoutError, httpx.TimeoutException):
+        # eCW direct reads intermittently stall while the equivalent supported
+        # `_id` search succeeds. Try that once without extending the API timeout.
+        try:
+            rows = await asyncio.wait_for(
+                _search(client, issuer, token, resource, {"_id": resource_id}),
+                timeout=REFERENCE_TIMEOUT_SECONDS,
+            )
+        except (asyncio.TimeoutError, httpx.TimeoutException):
+            return {}, resource
+        return (rows[0] if len(rows) == 1 else {}), None
 
 
 async def _cached_patient(client: httpx.AsyncClient, issuer: str, token: str,
@@ -242,9 +252,8 @@ async def _cached_patient(client: httpx.AsyncClient, issuer: str, token: str,
         "birthDate": str(profile.get("patient_birth_date") or ""),
         "gender": {"M": "male", "F": "female"}.get(profile.get("gender"), "unknown"),
     }
-    try:
-        patient = await asyncio.wait_for(_read(client, issuer, token, f"Patient/{patient_id}"), timeout=5)
-    except asyncio.TimeoutError:
+    patient, timed_out = await _bounded_read(client, issuer, token, f"Patient/{patient_id}")
+    if timed_out:
         return fallback, "Patient"
     if not patient:
         raise EcwBackendError("The saved eClinicalWorks patient link no longer exists.")
