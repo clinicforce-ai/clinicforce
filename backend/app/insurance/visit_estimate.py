@@ -107,6 +107,20 @@ def _workflow_condition(reason: str) -> bool:
     return 'authorization' in reason.lower() or 'referral' in reason.lower()
 
 
+def service_type(code: str, rules: dict) -> str | None:
+    configured = (rules.get('service_type_by_code') or {}).get(code)
+    if configured:
+        return str(configured)
+    # Stedi's documented neurology and office/telehealth mappings. Clinic overrides win.
+    if code.isdigit() and (95700 <= int(code) <= 96020 or 99202 <= int(code) <= 99215):
+        return '98'
+    return None
+
+
+def _workflow_condition(reason: str) -> bool:
+    return 'authorization' in reason.lower() or 'referral' in reason.lower()
+
+
 def review_valid(review: dict, service_date: str, units: int | None) -> bool:
     try:
         return (bool(review.get('reference')) and bool(review.get('verified_at'))
@@ -250,6 +264,8 @@ def price_lines(codes: list[dict], rates: list[dict], benefits: dict, rules: dic
                 calc = commercial.estimate([{'code': code['code'], 'units': units,
                     'allowed_cents': rate['allowed_cents'], 'rate_id': rate.get('id')}], calculation_benefits, line_rules)
                 line['calculation'] = calc
+                if deductible_scenario:
+                    calc['cost_share'] = 'deductible_scenario'
                 if not alternatives:
                     deductible_used[deductible_key] = deductible_used.get(deductible_key, 0) + min(calc['deductible_cents'], calc['patient_cents'])
                     oop_used[oop_key] = oop_used.get(oop_key, 0) + calc['patient_cents']
