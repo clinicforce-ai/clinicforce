@@ -2,11 +2,13 @@ import type { PatientSession } from './patient-models'
 
 export class ApiError extends Error {
   readonly status: number
+  readonly requestId?: string
 
-  constructor(status: number, message: string) {
-    super(message)
+  constructor(status: number, message: string, requestId?: string) {
+    super(requestId ? `${message} Support reference: ${requestId}` : message)
     this.name = 'ApiError'
     this.status = status
+    this.requestId = requestId
   }
 }
 
@@ -41,7 +43,7 @@ export async function request<T>(path: string, init: RequestInit = {}): Promise<
     const response = await fetch(path, { ...init, headers, credentials: 'same-origin', signal: controller.signal })
     const body: unknown = await response.json().catch(() => null)
     if (!response.ok) {
-      throw new ApiError(response.status, detailFrom(body, `Request failed (${response.status}).`))
+      throw new ApiError(response.status, detailFrom(body, `Request failed (${response.status}).`), response.headers.get('X-ClinicForce-Request-ID') || undefined)
     }
     return body as T
   } catch (error) {

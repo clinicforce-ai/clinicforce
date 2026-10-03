@@ -8,6 +8,7 @@ import hashlib
 import json
 import os
 import secrets
+import time
 from datetime import date, datetime, timedelta, timezone
 from html import escape
 from copy import deepcopy
@@ -36,6 +37,8 @@ from app.core.shl import (
     verify_password,
 )
 from app.logs.logger import log_error, log_info, log_warning
+from app.logs.collection_audit import request_id as collection_request_id
+from app.logs.collection_audit import collection_event
 from app.reports.pdf_builder import render_doctor_pdf_bytes
 from app.reports.summarizer import summarize_fhir_bundle
 from jwcrypto import jwe, jwk
@@ -157,6 +160,31 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.middleware("http")
+async def collection_audit_request_id(request: Request, call_next):
+    token = collection_request_id.set(str(uuid4()))
+    started = time.monotonic()
+    path = request.url.path
+    stage = ('patient_search' if path == '/api/staff/intakes/ecw-lookup' else
+             'previsit' if path == '/api/doctor/insurance/commercial/appointments/previsit' else
+             'identity' if path.startswith('/api/staff/intakes/') and path.endswith('/patient') else None)
+    try:
+        response = await call_next(request)
+        if path.startswith(("/api/staff/intakes", "/api/doctor/insurance/commercial")):
+            response.headers["X-ClinicForce-Request-ID"] = collection_request_id.get()
+        if stage:
+            collection_event('collection_http_completed', stage=stage, outcome='success' if response.status_code < 400 else 'error',
+                             http_status=response.status_code, duration_ms=int((time.monotonic() - started) * 1000))
+        return response
+    except Exception:
+        if stage:
+            collection_event('collection_http_failed', stage=stage, outcome='error',
+                             reason_code='unhandled_error', duration_ms=int((time.monotonic() - started) * 1000))
+        raise
+    finally:
+        collection_request_id.reset(token)
 
 
 @app.get("/api/docs", include_in_schema=False)
