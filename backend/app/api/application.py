@@ -168,6 +168,7 @@ async def collection_audit_request_id(request: Request, call_next):
     started = time.monotonic()
     path = request.url.path
     stage = ('patient_search' if path == '/api/staff/intakes/ecw-lookup' else
+             'appointment_list' if path == '/api/doctor/insurance/commercial/appointments' else
              'previsit' if path == '/api/doctor/insurance/commercial/appointments/previsit' else
              'identity' if path.startswith('/api/staff/intakes/') and path.endswith('/patient') else None)
     try:
