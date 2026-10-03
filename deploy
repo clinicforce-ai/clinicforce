@@ -1,0 +1,55 @@
+#!/usr/bin/env python3
+"""One-command Actions deployment with progress and failure logs."""
+import argparse
+import json
+import subprocess
+import time
+import uuid
+import sys
+sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parent / "scripts"))
+from watch_deploy import progress
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("environment", choices=["staging", "production"])
+    parser.add_argument("--staging-run", help="Successful staging Actions run ID to promote")
+    parser.add_argument("--verified", help="Non-sensitive reference to successful representative workflow verification")
+    args = parser.parse_args()
+    if args.environment == "production" and (not args.staging_run or not args.verified):
+        parser.error("production requires --staging-run and --verified; failing workflows block release")
+    repo = "clinicforce-ai/clinicforce"
+    nonce = uuid.uuid4().hex
+    command = ["gh", "workflow", "run", "deploy.yml", "--repo", repo, "--ref", "main",
+               "-f", f"environment={args.environment}", "-f", f"request_id={nonce}"]
+    if args.staging_run:
+        command += ["-f", f"staging_run_id={args.staging_run}"]
+    if args.verified:
+        command += ["-f", f"verification_reference={args.verified}"]
+    subprocess.run(command, check=True)
+    print(f"Dispatched {args.environment}, request {nonce}", flush=True)
+    for _ in range(30):
+        runs = json.loads(subprocess.check_output(["gh", "api",
+                         f"repos/{repo}/actions/workflows/deploy.yml/runs?event=workflow_dispatch&per_page=30"]))["workflow_runs"]
+        run = next((r for r in runs if nonce in r["display_title"]), None)
+        if run:
+            print(run["html_url"], flush=True)
+            process = subprocess.Popen(["gh", "run", "watch", str(run["id"]), "--repo", repo, "--exit-status", "--interval", "10"])
+            seen = set()
+            while process.poll() is None:
+                try:
+                    progress(f"clinicforce-{args.environment}", seen)
+                except (RuntimeError, subprocess.TimeoutExpired, FileNotFoundError):
+                    pass  # AWS credentials are optional locally; Actions always prints AWS progress.
+                time.sleep(15)
+            result = process
+            if result.returncode:
+                subprocess.run(["gh", "run", "view", str(run["id"]), "--repo", repo, "--log-failed"])
+            return result.returncode
+        time.sleep(2)
+    print("Dispatch accepted, run not visible yet. Inspect Actions before retrying.")
+    return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
