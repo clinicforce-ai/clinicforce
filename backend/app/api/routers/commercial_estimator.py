@@ -8,6 +8,7 @@ import hashlib
 import json
 import os
 import re
+import time
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, Literal
 
@@ -19,6 +20,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from app.api.routers.insurance import _response, _scope, _session as insurance_session
 from app.core import object_store
 from app.insurance import commercial, commercial_store, ecw_backend, golden, store
+from app.logs.logger import log_info, log_warning
 
 
 router = APIRouter(prefix="/api/doctor/insurance/commercial", tags=["doctor-commercial-estimator"])
@@ -380,6 +382,7 @@ async def start_from_ecw(value: EcwVisitInput, request: Request) -> Any:
                                        expected_intake_updated_at=session["intake"]["updated_at"], **_scope(session))
     except store.StaffCaseConflict as exc:
         raise HTTPException(409, str(exc)) from exc
+    log_info("Commercial estimator", "eCW estimate case created: case=%s service_lines=%d", case["id"], len(priced))
     return _response(_public(case))
 
 
@@ -531,16 +534,21 @@ async def stedi_eligibility(case_id: str, request: Request) -> Any:
     except commercial.CommercialError as exc:
         raise HTTPException(422, str(exc)) from exc
     data["request_state"] = "pending"; case = await run_in_threadpool(_save, case, session, "stedi-request-pending")
+    started = time.monotonic()
+    log_info("Commercial estimator", "Stedi eligibility started: case=%s service_lines=%d", case_id, len(data["lines"]))
     try:
         async with httpx.AsyncClient(timeout=httpx.Timeout(30, connect=5)) as client:
             response = await client.post(STEDI_URL, headers={"Authorization": api_key, "Content-Type": "application/json"}, json=body)
         payload = response.json() if response.content else {}
     except (httpx.HTTPError, ValueError):
+        log_warning("Commercial estimator", "Stedi eligibility indeterminate: case=%s duration_ms=%d", case_id, (time.monotonic() - started) * 1000)
         case = await run_in_threadpool(_load, case_id, session); case["commercial"]["request_state"] = "review"; case["review_tasks"] = ["Stedi request outcome is indeterminate; check Stedi activity before retrying."]
         return _response(_public(await run_in_threadpool(_save, case, session, "stedi-indeterminate")))
     if response.is_error or not isinstance(payload, dict):
+        log_warning("Commercial estimator", "Stedi eligibility rejected: case=%s http_status=%s duration_ms=%d", case_id, response.status_code, (time.monotonic() - started) * 1000)
         case = await run_in_threadpool(_load, case_id, session); case["commercial"]["request_state"] = "review"; case["review_tasks"] = ["Stedi/payer did not return usable eligibility. Review payer response in the protected audit record."]
         return _response(_public(await run_in_threadpool(_save, case, session, "stedi-error")))
+    log_info("Commercial estimator", "Stedi eligibility response: case=%s http_status=%s transaction_id=%s duration_ms=%d", case_id, response.status_code, payload.get("id"), (time.monotonic() - started) * 1000)
     raw_key = None
     if object_store.enabled(): raw_key = await run_in_threadpool(object_store.put_staff_document, session["practice_id"], case_id, "stedi-eligibility.json", json.dumps(payload).encode(), "application/json")
     # The normalizer only accepts Stedi's documented individual, remaining,
@@ -558,6 +566,7 @@ async def stedi_eligibility(case_id: str, request: Request) -> Any:
     except commercial.CommercialError as exc:
         case["estimate"] = None
         case["review_tasks"] = [str(exc)]
+    log_info("Commercial estimator", "Stedi eligibility processed: case=%s estimate_available=%s review_tasks=%d", case_id, case["estimate"] is not None, len(case["review_tasks"]))
     return _response(_public(await run_in_threadpool(_save, case, session, "stedi-evidence-recorded")))
 
 
@@ -588,7 +597,9 @@ async def calculate(case_id: str, request: Request) -> Any:
         if len(current_rates) != len(data["lines"]) or any(line.get("rate_id") != rate["id"] or line.get("allowed_cents") != rate["allowed_cents"] for line, rate in zip(data["lines"], current_rates)):
             raise commercial.CommercialError("Contracted rates changed. Start a new estimate from the current visit.")
         case["estimate"] = commercial.estimate(data["lines"], evidence["normalized"], profile["rules"]); case["review_tasks"] = []
+        log_info("Commercial estimator", "Estimate recalculated: case=%s estimate_available=true", case_id)
         return _response(_public(await run_in_threadpool(_save, case, session, "estimate-calculated")))
     except commercial.CommercialError as exc:
         case["estimate"] = None; case["review_tasks"] = [str(exc)]
+        log_warning("Commercial estimator", "Estimate requires review: case=%s", case_id)
         return _response(_public(await run_in_threadpool(_save, case, session, "estimate-review-required")))
