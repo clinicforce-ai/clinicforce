@@ -225,6 +225,14 @@ async def _cached_patient(client: httpx.AsyncClient, issuer: str, token: str,
     return patient, None
 
 
+async def _bounded_read(client: httpx.AsyncClient, issuer: str, token: str,
+                        reference: str) -> tuple[dict[str, Any], str | None]:
+    try:
+        return await asyncio.wait_for(_read(client, issuer, token, reference), timeout=5), None
+    except asyncio.TimeoutError:
+        return {}, reference.split("/", 1)[0]
+
+
 def _norm(value: Any) -> str:
     return re.sub(r"[^a-z0-9]", "", str(value or "").casefold())
 
