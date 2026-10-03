@@ -110,6 +110,40 @@ def apply_staff_card_coverage(fields: dict, inputs: dict, missing: list[str], pr
     return True
 
 
+async def _session(request: Request) -> dict:
+    session = await _insurance_session(request)
+    if session.get("practice_id"):
+        configured_practice = os.getenv("STAFF_INTEGRATION_PRACTICE_ID", "").strip()
+        if not configured_practice or configured_practice != session["practice_id"]:
+            raise HTTPException(403, "Connected insurance is not configured for this clinic. Your intake is saved; use document review.")
+    return session
+
+
+def validate_staff_coverage(fields: dict, inputs: dict, source: dict, practice: dict) -> None:
+    """Compare stated card details; missing EHR values remain normal input gaps."""
+    subscriber = inputs.get("subscriber") or {}
+    relationships = {"self": "18", "spouse": "01", "child": "19", "other": "G8"}
+    relationship = relationships.get(fields.get("relationship"), fields.get("relationship"))
+    pairs = (("member ID", fields.get("member_id"), inputs.get("member_id")),
+             ("group number", fields.get("group_number"), inputs.get("group_number")),
+             ("subscriber relationship", relationship, inputs.get("relationship")),
+             ("subscriber name", fields.get("subscriber_name"), " ".join(str(subscriber.get(key) or "") for key in ("firstName", "lastName")).strip()),
+             ("subscriber birth date", fields.get("subscriber_birth_date"), subscriber.get("birthDate")))
+    for label, confirmed, connected in pairs:
+        if confirmed and connected and intake.normalize(str(confirmed)) != intake.normalize(str(connected)):
+            raise HTTPException(409, f"The eCW {label} differs from the confirmed card. Review the coverage in eCW before checking benefits; your card is saved.")
+    payer = intake.normalize(str(fields.get("payer") or ""))
+    if not payer:
+        return
+    connected_id = intake.normalize(str(inputs.get("payer_id") or ""))
+    if payer in {connected_id, intake.normalize(str(source.get("payer") or ""))}:
+        return
+    mapped = {intake.normalize(value) for key, value in practice.get("payer_aliases", {}).items() if intake.normalize(key) == payer}
+    if len(mapped) == 1 and connected_id in mapped:
+        return
+    raise HTTPException(409, "The confirmed payer could not be matched to the eCW coverage. Ask the administrator to check the payer name and approved payer mapping, or use document review. Your card is saved.")
+
+
 class Start(BaseModel):
     model_config = ConfigDict(extra="forbid")
     scenario: Literal["Coverages-Complete-i", "Coverages-InProgress-i", "Coverages-Retrying-i", "Coverages-PayerError1-i", "Coverages-RequestError1-i"] = "Coverages-Complete-i"
@@ -571,6 +605,8 @@ async def latest(request: Request):
 async def create(body: Start, request: Request):
     session = await _session(request)
     settings, practice, binding = configuration()
+    if session.get("practice_id") and settings.environment != "production":
+        raise HTTPException(409, "Live Availity verification is not activated. Your intake is saved; use document review. Synthetic demo results cannot verify this patient.")
     if settings.environment == "production" and practice.get("production_enabled") is not True:
         raise HTTPException(409, "An administrator must finish Availity contracting, enrollment and practice setup, then enable production in AVAILITY_PRACTICE_CONFIG.")
     if session.get("practice_id"):
