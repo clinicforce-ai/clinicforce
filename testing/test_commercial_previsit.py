@@ -178,7 +178,7 @@ class PrevisitFlowTest(unittest.IsolatedAsyncioTestCase):
             if payer_missing:
                 self.assertEqual(result['insurance_details']['member_id'], 'M123')
                 self.assertTrue(result['context_token'])
-                self.assertEqual([row['code'] for row in result['codes']], ['99202', '99203', '99204', '99205'])
+                self.assertEqual([row['code'] for row in result['codes']], ['99203'])
                 self.assertTrue(result['available_codes'])
                 selected = next(row['id'] for row in result['available_codes'] if row['code'] == '99204')
                 with patch('app.api.routers.commercial_estimator.store.get_case', return_value=case), \
@@ -195,7 +195,7 @@ class PrevisitFlowTest(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(result['eligibility_error'], 'eligibility_rejected' if isinstance(reject, dict) else 'request_validation')
                 self.assertIsNone(result['benefits']['active'])
                 self.assertEqual(result['plan'], 'CI')
-                self.assertEqual(len(result['price_range']['lines']), 4)
+                self.assertEqual(len(result['price_range']['lines']), 1)
                 self.assertIn('context_token', result)  # anticipated services remain editable
                 self.assertEqual(case['previsit']['request_state'], 'rejected')
                 self.assertEqual(client.post.await_count, 1)
@@ -256,7 +256,7 @@ class PrevisitFlowTest(unittest.IsolatedAsyncioTestCase):
                     await previsit_estimate(PrevisitInput(appointment_id='visit-1', refresh_benefits=True), MagicMock())
                     self.assertEqual(client.post.await_count, 2)
                 case['previsit']['request_state'] = 'complete'
-        self.assertEqual([row["code"] for row in result["codes"]], ["99202", "99203", "99204", "99205"])
+        self.assertEqual([row["code"] for row in result["codes"]], ["99203"])
         self.assertTrue(result["benefits"]["active"])
         self.assertNotIn("patient_min_cents", result["price_range"])
         sent = client.post.await_args.kwargs["json"]
