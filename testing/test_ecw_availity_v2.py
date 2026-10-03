@@ -390,6 +390,16 @@ class EcwBackendSourceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(ecw_backend._visit_type({"serviceType": [{"text": "Established patient visit"}]}), "established")
         self.assertIsNone(ecw_backend._visit_type({"reasonCode": [{"text": "Initial consultation"}]}))
 
+        requests.clear()
+        with patch.dict(os.environ, environment), patch.object(ecw, "ECW_KMS_KEY_ID", "kms-key"), patch.object(ecw, "_client_assertion", return_value="signed-assertion"):
+            await ecw_backend.fetch_inputs(
+                {"patient_first_name": "Pat", "patient_last_name": "Example",
+                 "patient_birth_date": "1980-01-01", "ecw_patient_id": "patient-1"},
+                practice, transport=httpx.MockTransport(handler),
+            )
+        self.assertTrue(any(request.url.path == "/fhir/Patient/patient-1" for request in requests))
+        self.assertFalse(any(request.url.path == "/fhir/Patient" for request in requests))
+
 
 if __name__ == "__main__":
     unittest.main()
