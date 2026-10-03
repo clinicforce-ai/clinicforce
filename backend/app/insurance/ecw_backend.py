@@ -233,6 +233,24 @@ async def _bounded_read(client: httpx.AsyncClient, issuer: str, token: str,
         return {}, reference.split("/", 1)[0]
 
 
+async def _cached_patient(client: httpx.AsyncClient, issuer: str, token: str,
+                          patient_id: str, profile: dict[str, Any]) -> tuple[dict[str, Any], str | None]:
+    fallback = {
+        "resourceType": "Patient", "id": patient_id,
+        "name": [{"use": "official", "given": [str(profile.get("patient_first_name") or "")],
+                  "family": str(profile.get("patient_last_name") or "")}],
+        "birthDate": str(profile.get("patient_birth_date") or ""),
+        "gender": {"M": "male", "F": "female"}.get(profile.get("gender"), "unknown"),
+    }
+    try:
+        patient = await asyncio.wait_for(_read(client, issuer, token, f"Patient/{patient_id}"), timeout=5)
+    except asyncio.TimeoutError:
+        return fallback, "Patient"
+    if not patient:
+        raise EcwBackendError("The saved eClinicalWorks patient link no longer exists.")
+    return patient, None
+
+
 def _norm(value: Any) -> str:
     return re.sub(r"[^a-z0-9]", "", str(value or "").casefold())
 
