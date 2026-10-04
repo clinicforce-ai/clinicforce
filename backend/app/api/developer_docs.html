@@ -25,12 +25,13 @@
   <header class="topbar"><div class="top-inner"><a class="brand" href="/"><i aria-hidden="true"></i>ClinicForce <span style="font-weight:400;color:#52647d">/ engineering</span></a><nav class="topnav" aria-label="Documentation views"><a href="/api/docs" {{SWAGGER_CURRENT}}>Swagger</a><a href="/api/redoc" {{REDOC_CURRENT}}>ReDoc</a><a href="/api/openapi.json">OpenAPI JSON</a><a href="/">App</a></nav></div></header>
   <div class="hero"><div class="hero-inner"><p class="eyebrow">Developer guide · deployed API</p><h1>Follow the request. Understand the record.</h1><p class="lead">A working map of ClinicForce: where each screen sends data, which service owns it, how insurance evidence moves, and how the deployed infrastructure serves the result.</p><div class="hero-links"><a href="#getting-started">Start reading</a><a href="#reference">Jump to the API reference</a></div></div></div>
   <div class="docs-layout">
-    <aside class="toc" aria-label="Guide sections"><p>In this guide</p><nav><a href="#getting-started">Getting started</a><a href="#local-setup">Run locally</a><a href="#provider-setup">Accounts and integrations</a><a href="#architecture">Architecture</a><a href="#journeys">User journeys</a><a href="#data">Data model</a><a href="#pipelines">Insurance pipelines</a><a href="#code-atlas">Code and libraries</a><a href="#infrastructure">Infrastructure and storage</a><a href="#release-runbook">Staging → production</a><a href="#worked-example">Patient → estimate example</a><a href="#debugging">Debugging</a><a href="#reference">API reference</a></nav></aside>
+    <aside class="toc" aria-label="Guide sections"><p>In this guide</p><nav><a href="#getting-started">Getting started</a><a href="#local-setup">Run locally</a><a href="#provider-setup">Accounts and integrations</a><a href="#architecture">Architecture</a><a href="#journeys">User journeys</a><a href="#data">Data model</a><a href="#data-inspection">Query RDS and browse S3</a><a href="#pipelines">Insurance pipelines</a><a href="#code-atlas">Code and libraries</a><a href="#infrastructure">Infrastructure and storage</a><a href="#release-runbook">Staging → production</a><a href="#worked-example">Patient → estimate example</a><a href="#debugging">Debugging</a><a href="#reference">API reference</a></nav></aside>
     <main class="article">
-      <details class="mobile-toc"><summary>Browse guide sections</summary><nav aria-label="Guide sections"><a href="#getting-started">Getting started</a><a href="#local-setup">Run locally</a><a href="#provider-setup">Accounts and integrations</a><a href="#architecture">Architecture</a><a href="#journeys">User journeys</a><a href="#data">Data model</a><a href="#pipelines">Insurance pipelines</a><a href="#code-atlas">Code and libraries</a><a href="#infrastructure">Infrastructure and storage</a><a href="#release-runbook">Staging → production</a><a href="#worked-example">Patient → estimate example</a><a href="#debugging">Debugging</a><a href="#reference">API reference</a></nav></details>
+      <details class="mobile-toc"><summary>Browse guide sections</summary><nav aria-label="Guide sections"><a href="#getting-started">Getting started</a><a href="#local-setup">Run locally</a><a href="#provider-setup">Accounts and integrations</a><a href="#architecture">Architecture</a><a href="#journeys">User journeys</a><a href="#data">Data model</a><a href="#data-inspection">Query RDS and browse S3</a><a href="#pipelines">Insurance pipelines</a><a href="#code-atlas">Code and libraries</a><a href="#infrastructure">Infrastructure and storage</a><a href="#release-runbook">Staging → production</a><a href="#worked-example">Patient → estimate example</a><a href="#debugging">Debugging</a><a href="#reference">API reference</a></nav></details>
       <section id="getting-started" aria-labelledby="start-title"><p class="eyebrow">01 / orientation</p><h2 id="start-title">Getting started</h2><p class="section-intro">ClinicForce has a patient portal and a clinic workspace. A portal patient account and a clinic patient record are separate identities; the clinic can accept an insurance card from someone who has never created a portal account.</p>
         <div class="cards"><div class="card"><h3>Reading the system</h3><p>Choose a user action, find its screen, then follow the API adapter, route, service, and saved record. The operation list below gives exact request and response fields.</p></div><div class="card"><h3>Running locally</h3><p>Start PostgreSQL and HAPI with Docker Compose, provide an ignored local <code>.env</code> with the application database URL, run the backend, then run Vite. Vite forwards <code>/api</code> and <code>/manifest</code> to port 8000.</p></div></div>
-<p>Follow <a href="#local-setup">the complete local setup</a> for installation, databases, environment variables, staff login and exact startup commands. Then read <a href="#provider-setup">which provider accounts to register</a>, <a href="#release-runbook">how to release through staging</a>, and the <a href="#worked-example">worked eCW → Stedi estimate</a>. Examples are synthetic. Source links point to the private GitHub repositories and require organization access.</p>
+<p>Follow <a href="#local-setup">the complete local setup</a> for installation, databases, environment variables, staff login and exact startup commands. Then read <a href="#provider-setup">which provider accounts to register</a>, <a href="#release-runbook">how to release through staging</a>, and the <a href="#worked-example">worked eCW → Stedi estimate</a>. For database rows and files, follow <a href="#data-inspection">Query RDS and browse S3</a>. Examples are synthetic. Source links point to the private GitHub repositories and require organization access.</p>
+<p><strong>For future changes:</strong> start with this guide’s <a href="#code-atlas">code map</a> and the section for the workflow you are changing, then inspect its linked source and tests. The repository <code>AGENTS.md</code> instructs Codex to use this guide first. The shared workspace also has <code>contextforcodex/clinicforce-context-index.md</code> for a compact topic-to-file index and dated investigation links. Keep these entry points current; verify current code and deployed versions rather than treating an old note as live state.</p>
 <div class="callout"><p><strong>Read-only documentation.</strong> Swagger has “Try it out” disabled on these pages. Inspect contracts here; use synthetic local data for mutation tests. Do not paste patient information, passwords, or payer credentials into a documentation viewer.</p></div>
       </section>
 <section id="local-setup" aria-labelledby="local-setup-title"><h2 id="local-setup-title">Run ClinicForce locally</h2>
@@ -239,6 +240,177 @@ docker compose start</code></pre>
             ├── workflow_json → case state and payer outcome
             └── insurance_case_events → stage and saved snapshot history</code></pre><p><code>patients.patient_id</code> is a portal identity; <code>staff_patients.id</code> is a clinic identity. Some relationships are checked by scoped application queries or JSON references rather than database foreign keys. A case row does not prove a payer answered: inspect the saved outcome, source, timestamp, and response reference.</p>
       </section>
+<section id="data-inspection" aria-labelledby="data-inspection-title"><h2 id="data-inspection-title">Inspect database tables, run SQL, and browse S3</h2>
+<p>Use this section when you want to see what the application actually saved. PostgreSQL stores rows and relationships; S3 stores files addressed by object keys. AWS RDS manages the PostgreSQL server. The RDS console shows the server, connectivity and monitoring; use a PostgreSQL client to browse this instance’s tables and execute SQL. An AWS console login, a ClinicForce staff login, and a PostgreSQL login are three different credentials.</p>
+<div class="callout"><p><strong>Current access boundary:</strong> the checked-in stack makes RDS private and allows PostgreSQL traffic only from the backend/HAPI security groups. It provisions no operator VPN, SSM jump host, SQL browser, or read-only database login, and does not enable ECS Exec. The RDS instructions below require an operator-provisioned access path and database role first. They document how to use that access; publishing this guide does not create it. Do not turn on public RDS access to make a desktop client connect.</p></div>
+<h3>1. Start with the local database</h3>
+<p>Complete <a href="#local-setup">local setup</a>, including starting the backend and signing in once so the relevant stores initialize their tables. From the application repository, open the PostgreSQL terminal supplied by Compose:</p>
+<pre><code class="language-bash">docker compose ps
+# Opens an interactive SQL prompt in your local application database.
+docker compose exec -e PGOPTIONS=&#x27;-c default_transaction_read_only=on -c statement_timeout=10000&#x27; postgres psql -X -U hapi -d clinicforce</code></pre>
+<p>Commands starting with a backslash below are <code>psql</code> commands, not Bash. SQL statements end with a semicolon. <code>\d</code> describes columns and indexes; it does not display rows. Press <code>q</code> to leave the pager, or turn it off as shown.</p>
+<pre><code class="language-text">\conninfo
+\pset pager off
+\dt public.*
+\d public.staff_patients
+\d public.staff_intakes
+SHOW transaction_read_only;
+SELECT current_database(), current_user;
+-- Continue with the SQL examples in step 5, then exit:
+\q</code></pre>
+<p>Local HAPI uses a separate <code>hapi</code> database. To inspect its table names use <code>docker compose exec postgres psql -X -U hapi -d hapi</code>, then <code>\dt public.*</code>. In AWS, both the application and HAPI use the <code>clinicforce</code> database. Browse HAPI table metadata to understand storage; change clinical resources through its FHIR API, not hand-written HAPI SQL updates.</p>
+<h3>2. Locate the correct AWS database and buckets</h3>
+<p>In the AWS console select <strong>us-east-1</strong>. Open <strong>CloudFormation → clinicforce-staging → Resources → Database</strong> to find the RDS instance. In RDS, its <strong>Connectivity &amp; security</strong> tab shows its endpoint, port and security groups. CloudFormation’s <strong>Outputs</strong> tab gives <code>DocumentsBucketName</code> and <code>StaticBucketName</code>. Do not guess generated resource names. For production, deliberately choose <code>clinicforce-production</code>.</p>
+<p>For the CLI, use the AWS profile your operator assigned. The example profile name is a placeholder. If your organization uses IAM Identity Center, configure it once with <code>aws configure sso --profile clinicforce-operator</code> and sign in with <code>aws sso login --profile clinicforce-operator</code>. Otherwise use the organization’s existing credential method. Installing the CLI alone does not grant access.</p>
+<pre><code class="language-bash">export AWS_PROFILE=clinicforce-operator
+export AWS_DEFAULT_REGION=us-east-1
+export AWS_PAGER=&#x27;&#x27;
+aws sts get-caller-identity
+
+# Start in staging. Re-run discovery after deliberately changing environments.
+export CF_STACK=clinicforce-staging
+CF_DB_ID=$(aws cloudformation describe-stack-resource   --stack-name &quot;$CF_STACK&quot; --logical-resource-id Database   --query &#x27;StackResourceDetail.PhysicalResourceId&#x27; --output text)
+export CF_DB_HOST=$(aws rds describe-db-instances   --db-instance-identifier &quot;$CF_DB_ID&quot;   --query &#x27;DBInstances[0].Endpoint.Address&#x27; --output text)
+aws rds describe-db-instances --db-instance-identifier &quot;$CF_DB_ID&quot;   --query &#x27;DBInstances[0].{ID:DBInstanceIdentifier,Engine:Engine,Version:EngineVersion,Database:DBName,Host:Endpoint.Address,Port:Endpoint.Port,Public:PubliclyAccessible}&#x27;
+export CF_DOCUMENT_BUCKET=$(aws cloudformation describe-stacks   --stack-name &quot;$CF_STACK&quot;   --query &quot;Stacks[0].Outputs[?OutputKey==&#x27;DocumentsBucketName&#x27;].OutputValue | [0]&quot; --output text)
+export CF_STATIC_BUCKET=$(aws cloudformation describe-stacks   --stack-name &quot;$CF_STACK&quot;   --query &quot;Stacks[0].Outputs[?OutputKey==&#x27;StaticBucketName&#x27;].OutputValue | [0]&quot; --output text)</code></pre>
+<p>These commands read resource metadata, not database rows or secret values. Expected database: <code>clinicforce</code>, port <code>5432</code>, <code>Public: false</code>. The host and bucket variables apply to this terminal only. A missing value or <code>AccessDenied</code> means stop and resolve the profile/resource permissions; it is not evidence that the database is empty.</p>
+<h3>3. Establish private RDS access</h3>
+<p>The operator must provide both <strong>network access</strong> and <strong>database permission</strong>. A supported approach is an SSM-managed EC2 jump host in the selected environment’s VPC: it needs DNS/routing to RDS, SSM Agent 3.1.1374.0 or newer, an SSM instance role, and HTTPS access to Systems Manager through endpoints or outbound connectivity. Add a dedicated jump-host security group and allow it to reach RDS on 5432 through a reviewed infrastructure change. No public SSH port is needed. Alternatively use an approved VPN with database routing and security-group access. Neither is included in the current stack.</p>
+<p>On your computer install the <a href="https://docs.aws.amazon.com/systems-manager/latest/userguide/session-manager-working-with-install-plugin.html">Session Manager plugin</a> and a <a href="https://www.postgresql.org/download/">PostgreSQL client</a>. Prefer a client matching or newer than the server’s major version for catalog commands. On Ubuntu, <code>sudo apt-get install postgresql-client</code> supplies the distribution’s client; check <code>psql --version</code> against the RDS version above. The operator’s AWS role needs <code>ssm:StartSession</code> scoped to the approved managed node and remote-host forwarding document, and permissions to resume/terminate its own sessions.</p>
+<pre><code class="language-bash"># Terminal A: keep the discovered CF_DB_HOST and AWS profile from step 2.
+session-manager-plugin --version
+psql --version
+# Replace this placeholder with the operator-provided managed EC2 instance.
+export CF_SSM_TARGET=i-REPLACE_WITH_APPROVED_INSTANCE
+aws ssm start-session --target &quot;$CF_SSM_TARGET&quot;   --document-name AWS-StartPortForwardingSessionToRemoteHost   --parameters &quot;host=$CF_DB_HOST,portNumber=5432,localPortNumber=15432&quot;</code></pre>
+<p>Leave terminal A running. It forwards your local port 15432 to the private database through the managed host. In terminal B, repeat the profile and database-discovery commands from step 2, then connect below. SSM authorization does not log you into PostgreSQL. See AWS’s <a href="https://docs.aws.amazon.com/systems-manager/latest/userguide/session-manager-working-with-sessions-start.html">remote-host port forwarding instructions</a> and <a href="https://aws.amazon.com/blogs/mt/use-port-forwarding-in-aws-systems-manager-session-manager-to-connect-to-remote-hosts/">worked networking example</a>.</p>
+<h3>4. Use a separate database reader account</h3>
+<p>Ask the database administrator for an individual read-only PostgreSQL login and its approved table/view scope. This is independent of your AWS role and ClinicForce account. The deployed application uses the <code>clinicforce</code> master role with an RDS-managed password injected into its tasks; do not copy that application credential into the guide, Git, a command argument, or your SQL client configuration. Deliver the reader password through the approved private credential channel.</p>
+<details><summary>Administrator-only example: provision a reader for selected tables</summary><div><p>This block changes database permissions and must be run by the DBA over an authorized connection, after these tables exist. It is a template for a <em>new</em> login, not a routine inspection command. Substitute an individual role name and approve the table list. <code>\password</code> prompts without placing the password in the SQL text.</p>
+<pre><code class="language-sql">CREATE ROLE clinicforce_reader LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION;
+\password clinicforce_reader
+GRANT CONNECT ON DATABASE clinicforce TO clinicforce_reader;
+GRANT USAGE ON SCHEMA public TO clinicforce_reader;
+GRANT SELECT ON public.staff_patients, public.staff_intakes,
+  public.insurance_cases, public.insurance_case_events,
+  public.patient_documents, public.commercial_rate_versions,
+  public.commercial_rate_lines TO clinicforce_reader;
+ALTER ROLE clinicforce_reader SET default_transaction_read_only = on;
+ALTER ROLE clinicforce_reader SET statement_timeout = &#x27;10s&#x27;;</code></pre>
+<p>The listed grants expose all rows and columns of those tables, including patient information. They do not enforce clinic isolation: a <code>WHERE practice_id = ...</code> clause is a query filter, not an access boundary. For clinic-limited access, the DBA must instead grant approved restricted views or implement reviewed row-level policies. Check effective inherited/PUBLIC permissions and callable functions before issuing the login. Read-only defaults reduce mistakes; SELECT-only permissions are the main restriction. Do not grant all tables, all future tables, session/token tables, or master-role membership merely to make a missing-table error disappear.</p></div></details>
+<pre><code class="language-bash"># Terminal B: CF_DB_HOST must be the actual RDS DNS endpoint from step 2.
+mkdir -p &quot;$HOME/.postgresql&quot;
+curl --fail --silent --show-error   https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem   -o &quot;$HOME/.postgresql/rds-global-bundle.pem&quot;
+export CF_DB_USER=clinicforce_reader
+PGOPTIONS=&#x27;-c default_transaction_read_only=on -c statement_timeout=10000 -c lock_timeout=2000&#x27; PSQL_HISTORY=/dev/null psql -X -W &quot;host=$CF_DB_HOST hostaddr=127.0.0.1 port=15432 dbname=clinicforce user=$CF_DB_USER sslmode=verify-full sslrootcert=$HOME/.postgresql/rds-global-bundle.pem connect_timeout=10&quot;</code></pre>
+<p>Enter the reader password at the prompt. <code>hostaddr</code> sends traffic through the local tunnel while <code>host</code> retains the real RDS name for certificate verification. Keep <code>sslmode=verify-full</code>; changing it to disable encryption is not a connection fix. With an approved direct VPN connection, omit <code>hostaddr=127.0.0.1</code> and use port 5432. Learn <a href="https://www.postgresql.org/docs/current/libpq-connect.html">PostgreSQL connection parameters</a> and <a href="https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/UsingWithRDS.SSL.html">RDS certificate bundles</a>.</p>
+<h3>5. List tables, inspect columns, and query rows</h3>
+<p>Run these inside <code>psql</code>, either locally or through the RDS connection. Start by checking where you connected. Use <code>BEGIN READ ONLY</code> and end with <code>ROLLBACK</code>; this avoids leaving a transaction open while you browse. If a query errors, run <code>ROLLBACK;</code> before starting another transaction.</p>
+<pre><code class="language-sql">\conninfo
+\pset pager off
+SELECT current_database(), current_user;
+SHOW transaction_read_only;
+BEGIN READ ONLY;
+-- Lists tables/views visible to your database role.
+SELECT table_schema, table_name, table_type
+FROM information_schema.tables
+WHERE table_schema = &#x27;public&#x27;
+ORDER BY table_name;
+
+-- Inspect one table without reading its patient values.
+SELECT column_name, data_type, is_nullable
+FROM information_schema.columns
+WHERE table_schema = &#x27;public&#x27; AND table_name = &#x27;staff_intakes&#x27;
+ORDER BY ordinal_position;
+ROLLBACK;</code></pre>
+<p>Now query data. These examples use the synthetic practice <code>release-qa</code> (<code>local-demo</code> for the local recipe). Replace it only with a practice you are authorized to inspect. Empty results mean no visible matching rows; staging is not a copy of production. <code>LIMIT 20</code> limits returned rows, while the timeout bounds execution time.</p>
+<pre><code class="language-sql">\set practice_id &#x27;release-qa&#x27;
+BEGIN READ ONLY;
+-- A small patient grid: actual values, displayed only in your private SQL client.
+SELECT id, given_name, family_name, birth_date, identity_status, created_at
+FROM public.staff_patients
+WHERE practice_id = :&#x27;practice_id&#x27;
+ORDER BY created_at DESC, id
+LIMIT 20;
+
+-- Intake status counts, without expanding patient or OCR JSON.
+SELECT status, count(*) AS intake_count
+FROM public.staff_intakes
+WHERE practice_id = :&#x27;practice_id&#x27;
+GROUP BY status ORDER BY status;
+
+-- Follow intake -&gt; insurance case; these rows do not prove payer success.
+SELECT i.id AS intake_id, i.status, c.id AS case_id, c.created_at
+FROM public.staff_intakes AS i
+LEFT JOIN public.insurance_cases AS c
+  ON c.intake_id = i.id AND c.practice_id = i.practice_id
+WHERE i.practice_id = :&#x27;practice_id&#x27;
+ORDER BY i.updated_at DESC, i.id, c.id
+LIMIT 20;
+
+-- Review saved case stages, keeping clinic scope in the join.
+SELECT c.id AS case_id, e.stage, e.created_at
+FROM public.insurance_cases AS c
+JOIN public.insurance_case_events AS e ON e.case_id = c.id
+WHERE c.practice_id = :&#x27;practice_id&#x27;
+ORDER BY e.created_at DESC, e.id DESC
+LIMIT 20;
+ROLLBACK;</code></pre>
+<p>For one specifically authorized row, inspect its <code>fields</code>, <code>documents</code>, or <code>workflow_json</code> only when needed. <code>fields</code> and <code>documents</code> are JSONB; <code>insurance_cases.workflow_json</code> and event snapshots are JSON stored as text. The SQL below extracts one intake’s saved document references instead of dumping the full record. The UUID is a synthetic placeholder.</p>
+<pre><code class="language-sql">\set intake_id &#x27;00000000-0000-0000-0000-000000000000&#x27;
+BEGIN READ ONLY;
+SELECT i.id, d.value -&gt;&gt; &#x27;object_key&#x27; AS object_key,
+       d.value -&gt;&gt; &#x27;content_type&#x27; AS content_type
+FROM public.staff_intakes AS i
+CROSS JOIN LATERAL jsonb_array_elements(i.documents) AS d(value)
+WHERE i.practice_id = :&#x27;practice_id&#x27; AND i.id = :&#x27;intake_id&#x27;
+LIMIT 20;
+ROLLBACK;
+\q</code></pre>
+<p>Portal uploads use <code>patient_documents.s3_key</code> with <code>storage_provider</code>; a Google Drive document is not an S3 object despite that column name. Clinic library files use <code>staff_library.object_key</code> and need a separate SELECT grant. Read SQL in a private client; do not paste query results, patient names, raw JSON, filenames or tokens into public tickets, shared logs, screenshots, this guide, or Codex context notes. Use explicit columns rather than <code>SELECT *</code>. For query-plan investigation start with <code>EXPLAIN</code>; <code>EXPLAIN ANALYZE</code> actually runs the query.</p>
+<h3>6. Browse a table visually with pgAdmin</h3>
+<p>Install <a href="https://www.pgadmin.org/download/">pgAdmin</a> if you prefer a table grid. Register a server with a clear name such as <code>ClinicForce staging — read only</code>. For local Compose use host <code>localhost</code>, port <code>5432</code>, database <code>clinicforce</code>, user <code>hapi</code>, and the local Compose password. For RDS over an approved VPN use the real endpoint, port 5432, database <code>clinicforce</code>, the reader login, SSL mode <code>verify-full</code> and the downloaded RDS CA bundle.</p>
+<p>For the SSM tunnel, use pgAdmin’s connection parameters: <code>host</code> is the real RDS endpoint, <code>hostaddr</code> is <code>127.0.0.1</code>, port is <code>15432</code>, and SSL remains <code>verify-full</code>. Under <strong>Parameters → + → Host address</strong>, enter <code>127.0.0.1</code> (the <code>hostaddr</code> setting); if your client version lacks this field, use the psql recipe or the VPN connection instead of disabling certificate checks. The pgAdmin process must run on the same machine as the tunnel; a remote/web-hosted pgAdmin server has a different localhost. See the <a href="https://www.pgadmin.org/docs/pgadmin4/latest/server_dialog.html">server connection dialog reference</a>.</p>
+<p>Expand <strong>Servers → your connection → Databases → clinicforce → Schemas → public → Tables</strong>. Select a table to see its Columns. Open <strong>Tools → Query Tool</strong> to run the SQL above. Backslash commands such as <code>\set</code> are psql-only: in Query Tool replace <code>:'practice_id'</code> with the quoted synthetic value <code>'release-qa'</code> and remove the backslash lines. For a row grid, prefer a filtered SELECT with LIMIT; “View/Edit Data → First 100 Rows” is appropriate only when you are authorized to view every returned row. Keep the reader login and avoid grid-edit/save operations. Do not export production rows as development fixtures.</p>
+<h3>7. Browse S3 files and connect them to database rows</h3>
+<p>In <strong>S3 → Buckets</strong>, open the document bucket discovered in step 2, then its <strong>Objects</strong> tab. Prefixes look like folders, but an object key is the entire path. Choose an authorized object to see its size, type, encryption and versions. <strong>Download</strong> retrieves its contents to your computer. Use the approved private workspace; do not make the bucket public or create shareable presigned links for troubleshooting. The static bucket contains website assets, not clinic documents.</p>
+<p>Your AWS role needs <code>s3:ListBucket</code> for the permitted bucket/prefix and <code>s3:GetObject</code> for the permitted objects. Downloading SSE-KMS documents additionally needs <code>kms:Decrypt</code> allowed by IAM and the key policy. SQL SELECT privileges do not grant any S3 access. Bucket discovery requires CloudFormation read permission; RDS discovery requires RDS describe permission.</p>
+<pre><code class="language-bash"># Run in the AWS terminal from step 2. Show only a bounded first page.
+aws s3api list-objects-v2 --bucket &quot;$CF_DOCUMENT_BUCKET&quot;   --prefix &#x27;clinicforce/&#x27; --delimiter &#x27;/&#x27; --max-keys 20 --no-paginate   --query &#x27;{Prefixes:CommonPrefixes[].Prefix,More:IsTruncated}&#x27;
+
+# Use a specific approved record prefix copied from its saved object key.
+# Placeholder only: replace it with that record&#x27;s exact prefix.
+CF_OBJECT_PREFIX=&#x27;clinicforce/staff-insurance/REPLACE_PRACTICE_HASH/REPLACE_RECORD_ID/&#x27;
+aws s3api list-objects-v2 --bucket &quot;$CF_DOCUMENT_BUCKET&quot;   --prefix &quot;$CF_OBJECT_PREFIX&quot; --max-keys 20 --no-paginate   --query &#x27;{Objects:Contents[].{Key:Key,Bytes:Size,Modified:LastModified},More:IsTruncated}&#x27;
+
+# Inspect one exact object, without printing its contents or custom metadata.
+read -r -p &#x27;Exact authorized S3 object key: &#x27; CF_OBJECT_KEY
+aws s3api head-object --bucket &quot;$CF_DOCUMENT_BUCKET&quot; --key &quot;$CF_OBJECT_KEY&quot;   --query &#x27;{Bytes:ContentLength,Type:ContentType,Encryption:ServerSideEncryption,Modified:LastModified,Version:VersionId}&#x27;</code></pre>
+<p><code>More: true</code> means the first page is incomplete, not that the bucket has only 20 objects. Narrow the prefix or use the console’s pagination. Hashed practice partitions and opaque IDs must be obtained from the saved reference; guessing patient names as S3 paths will not work. See <a href="https://docs.aws.amazon.com/cli/latest/reference/s3api/list-objects-v2.html">listing and pagination</a> and <a href="https://docs.aws.amazon.com/cli/latest/reference/s3api/head-object.html">object metadata</a>.</p>
+<pre><code class="language-bash"># Optional: download ONLY the selected authorized object to a private temp folder.
+umask 077
+CF_INSPECT_DIR=$(mktemp -d &quot;${TMPDIR:-/tmp}/clinicforce-inspect.XXXXXX&quot;)
+chmod 700 &quot;$CF_INSPECT_DIR&quot;
+aws s3api get-object --bucket &quot;$CF_DOCUMENT_BUCKET&quot; --key &quot;$CF_OBJECT_KEY&quot;   &quot;$CF_INSPECT_DIR/object.bin&quot; --query &#x27;{Bytes:ContentLength,Type:ContentType}&#x27;
+file &quot;$CF_INSPECT_DIR/object.bin&quot;
+# Open this local file in the approved viewer for its reported type.
+# After inspection, remove precisely this local copy (does not delete S3 data).
+rm -i -- &quot;$CF_INSPECT_DIR/object.bin&quot;
+rmdir -- &quot;$CF_INSPECT_DIR&quot;</code></pre>
+<p>An SSE-KMS download is decrypted by S3 for an authorized caller, so the downloaded copy needs protection. Some payloads also have application-level encryption (for example SHL JWE); downloading them does not turn them into plaintext. Prefer the authenticated application viewer for those. This recipe does not bulk-sync a bucket, change objects, or print document bodies into the terminal. Object-download documentation: <a href="https://docs.aws.amazon.com/cli/latest/reference/s3api/get-object.html">GetObject</a>.</p>
+<h3>8. Troubleshoot access and find the implementation</h3>
+<div class="table-wrap"><table><thead><tr><th>What you see</th><th>What to check</th></tr></thead><tbody>
+<tr><td>RDS connection times out</td><td>Correct environment/endpoint, tunnel running, unused local port, managed-host DNS/routes and database security-group ingress. A timeout usually precedes password authentication.</td></tr>
+<tr><td>SSM target not connected / plugin missing</td><td>Approved target ID, SSM Agent/instance role/outbound connectivity, local plugin and operator StartSession permissions. No jump host is currently created by this stack.</td></tr>
+<tr><td>Password failed / permission denied for table</td><td>Correct database reader login/password and explicit grants. The app staff password cannot authenticate to PostgreSQL.</td></tr>
+<tr><td>Certificate name mismatch</td><td>Use the actual RDS hostname for <code>host</code> and local loopback only for <code>hostaddr</code>; check the CA bundle. Do not switch SSL off.</td></tr>
+<tr><td>No tables / relation does not exist</td><td>Confirm database and schema, role visibility, deployed version and whether the relevant app store has initialized. Do not run app schema initialization as the reader.</td></tr>
+<tr><td>Read-only error / statement timeout</td><td>Expected for writes or expensive inspection queries. Narrow the query and use indexes. Do not remove read-only restrictions to inspect rows.</td></tr>
+<tr><td>S3 AccessDenied / object not found</td><td>Correct environment, bucket, exact saved key, S3 grants and KMS decrypt permission. A 403 can conceal whether a key exists; a missing object may reflect lifecycle expiry or deletion. SQL references alone do not prove bytes remain.</td></tr>
+</tbody></table></div>
+<p>Schema definitions: <a href="https://github.com/clinicforce-ai/clinicforce/blob/main/backend/app/core/patient_store.py"><code>patient_store.py</code></a>, <a href="https://github.com/clinicforce-ai/clinicforce/blob/main/backend/app/core/staff_store.py"><code>staff_store.py</code></a>, <a href="https://github.com/clinicforce-ai/clinicforce/blob/main/backend/app/core/clinic_store.py"><code>clinic_store.py</code></a>, and <a href="https://github.com/clinicforce-ai/clinicforce/blob/main/backend/app/core/intake_links_store.py"><code>intake_links_store.py</code></a>. Object keys/encryption: <a href="https://github.com/clinicforce-ai/clinicforce/blob/main/backend/app/core/object_store.py"><code>object_store.py</code></a>. AWS resources and access boundaries: <a href="https://github.com/clinicforce-ai/clinicforce-aws/blob/main/stacks/clinicforce-production.yaml"><code>stacks/clinicforce-production.yaml</code></a>. Learn <a href="https://www.postgresql.org/docs/current/tutorial-sql.html">SQL fundamentals</a>, <a href="https://www.postgresql.org/docs/current/app-psql.html">psql</a>, and <a href="https://www.postgresql.org/docs/current/ddl-priv.html">PostgreSQL privileges</a>.</p>
+</section>
       <section id="pipelines" aria-labelledby="pipe-title"><p class="eyebrow">05 / evidence to result</p><h2 id="pipe-title">Insurance pipelines</h2><p class="section-intro">The three insurance screens may look alike but make different claims. Keep the evidence type attached to every visible result.</p>
         <div class="table-wrap"><table><thead><tr><th>Path</th><th>Input → result</th><th>Key functions</th></tr></thead><tbody><tr><td>V1 document review</td><td>Uploaded card, policy, fee and clinical documents → cited facts, requirements, staged review. No automatic proof of live payer eligibility.</td><td><code>routers/insurance.py</code> → <code>v1_sources.py</code>, <code>documented.py</code>, <code>golden.py</code>, <code>store.py</code>.</td></tr><tr><td>V2 payer transactions</td><td>eCW appointment and confirmed services → coverage, referral, authorization, estimate or procedure-estimate request → submitting/pending/complete/error state.</td><td><code>insurance_v2.py</code> → <code>ecw_backend.fetch_inputs()</code>, <code>availity.py</code>, <code>availity_results.py</code>, <code>store.save_v2()</code>.</td></tr><tr><td>Commercial previsit</td><td>eCW visit → coverage candidate if needed → saved eCW or Stedi eligibility → rate match and benefit interpretation → estimate or review-required result.</td><td><code>commercial_estimator.previsit_estimate()</code> → <code>stedi_discovery.py</code>, <code>stedi.py</code>, <code>commercial_store.py</code>, <code>visit_estimate.py</code>.</td></tr></tbody></table></div>
         <h3>Commercial visit, step by step</h3><ol class="steps"><li><strong>Identify the visit.</strong> <code>GET /api/doctor/insurance/commercial/appointments</code> reads the clinic's eCW appointment context. Patient, appointment, coverage, provider, location, service date, and planned codes must be reconciled.</li><li><strong>Prepare the case.</strong> <code>POST /appointments/readiness</code> reports missing inputs. <code>POST /appointments/previsit</code> saves or reuses a case. Ambiguous discovery candidates stop the flow for staff review.</li><li><strong>Check coverage.</strong> An existing eCW eligibility result may be reused; otherwise configured Stedi may perform eligibility. A discovery search finds potential coverage, not a completed 270 eligibility check. An uncertain or pending request must not be blindly repeated.</li><li><strong>Price only with evidence.</strong> Match a verified payer connection, provider network, active rate version, CPT/HCPCS, place of service, and effective date. <code>visit_estimate.price_lines()</code> separates insured amount, conditional planning estimate, and cash option.</li><li><strong>Preserve history.</strong> <code>insurance_cases.workflow_json</code> stores working state; <code>insurance_case_events.snapshot_json</code> freezes eligible historical results. <code>GET /commercial/history</code> is eCW visit history; saved checks and later 835/financial reads are separate concepts.</li></ol>
