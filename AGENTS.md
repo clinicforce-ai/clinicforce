@@ -2,7 +2,7 @@
 
 ## Required starting context
 
-Start with `backend/app/api/developer_docs.html` and read the section relevant to the requested change before broad codebase searches. Its `#code-atlas`, `#data`, `#data-inspection`, `#worked-example`, `#infrastructure`, `#release-runbook`, and `#debugging` sections map behavior to implementation files and operating procedures. In the shared workspace, also read `/home/mustansir/clinicforce/contextforcodex/clinicforce-context-index.md` when present. Follow the linked implementation/tests and verify current source and deployment state; the guide is a map, not a substitute for verification. Keep it current as part of the change.
+Start with `backend/app/api/developer_docs.html` and read the section relevant to the requested change before broad codebase searches. Its `#architecture-decisions`, `#swagger-access`, `#code-atlas`, `#data`, `#data-inspection`, `#worked-example`, `#infrastructure`, `#release-runbook`, and `#debugging` sections map behavior to implementation files and operating procedures. In the shared workspace, also read `/home/mustansir/clinicforce/contextforcodex/clinicforce-context-index.md` when present. Follow the linked implementation/tests and verify current source and deployment state; the guide is a map, not a substitute for verification. Keep it current as part of the change.
 
 ## Live documentation
 

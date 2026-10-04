@@ -1,11 +1,19 @@
-"""Read-only developer guide and OpenAPI navigation for the deployed API."""
+"""Public engineering guide with session-gated Swagger execution."""
 
 from pathlib import Path
+
+import psycopg
+from fastapi import Request
+from fastapi.concurrency import run_in_threadpool
+from fastapi.responses import JSONResponse
+
+from app.core import patient_store, staff_store
+from app.api.settings import PATIENT_SESSION_COOKIE, PUBLIC_BASE_URL, ALLOWED_ORIGINS
 
 from fastapi.responses import HTMLResponse
 
 
-OPENAPI_DESCRIPTION = """ClinicForce serves patient records, clinic intake, and insurance workflows through a same-origin API. Start with the [guided engineering map](/api/docs#getting-started) or the [ReDoc reading view](/api/redoc#getting-started) before using an operation. The guide explains the request path, data ownership, clinical evidence, deployed infrastructure, and worked user flows. This reference is read-only: do not enter patient data, passwords, or integration secrets here."""
+OPENAPI_DESCRIPTION = """ClinicForce serves patient records, clinic intake, and insurance workflows through a same-origin API. Start with the [guided engineering map](/api/docs#getting-started) or the [ReDoc reading view](/api/redoc#getting-started) before using an operation. The guide explains the request path, data ownership, clinical evidence, deployed infrastructure, and worked user flows. All operations are visible publicly. Swagger execution requires an existing same-site patient or clinic workspace session of the appropriate kind; sign in through the main app first. Existing permissions and resource ownership still apply. ReDoc is read-only. Executing an operation performs a real action in this environment."""
 
 TAG_NAMES = {
     "staff": "Clinic workspace",
@@ -47,6 +55,44 @@ def _tag_for(path: str) -> str:
     return "Patient account"
 
 
+def required_session(path: str) -> str:
+    """Swagger audience only; each API retains its own finer authorization."""
+    if not path.startswith("/api/"):
+        return "reference"
+    if path.startswith(("/api/staff/", "/api/doctor/")):
+        return "clinician"
+    if path.startswith("/api/patient/") or path == "/api/insurance-upload/account":
+        return "patient"
+    return "either"
+
+
+async def docs_sessions(request: Request) -> dict[str, bool]:
+    # No credentials in the response and no patient workspace/record loading.
+    patient_token = request.cookies.get(PATIENT_SESSION_COOKIE, "")
+    staff_token = request.cookies.get("clinicforce_staff_session", "")
+    return {
+        "patient": bool(await run_in_threadpool(patient_store.get_patient_session, patient_token)) if patient_token else False,
+        "clinician": bool(await run_in_threadpool(staff_store.get_session, staff_token)) if staff_token else False,
+    }
+
+
+async def guard_docs_execution(request: Request, call_next):
+    """Extra gate for Swagger requests, never a replacement for route auth."""
+    if "__clinicforce_docs" in request.query_params:
+        headers = {"Cache-Control": "no-store"}
+        if request.method not in {"GET", "HEAD", "OPTIONS"} and request.headers.get("origin", "").rstrip("/") not in {PUBLIC_BASE_URL.rstrip("/"), *(o.rstrip("/") for o in ALLOWED_ORIGINS)}:
+            return JSONResponse({"detail": "Swagger changes must come from the ClinicForce site"}, status_code=403, headers=headers)
+        try:
+            sessions = await docs_sessions(request)
+        except psycopg.Error:
+            return JSONResponse({"detail": "Unable to verify your session; try again later"}, status_code=503, headers=headers)
+        audience = required_session(request.url.path)
+        allowed = any(sessions.values()) if audience == "either" else sessions.get(audience, False)
+        if not allowed:
+            return JSONResponse({"detail": "Sign in to the matching patient or clinic workspace in the main app, then refresh Swagger"}, status_code=403 if any(sessions.values()) else 401, headers=headers)
+    return await call_next(request)
+
+
 def enrich_openapi(schema: dict) -> dict:
     """Give the existing operations readable groups without changing their routes."""
     schema["tags"] = [{"name": name, "description": description} for name, description in TAG_GUIDES]
@@ -54,25 +100,33 @@ def enrich_openapi(schema: dict) -> dict:
         for method, operation in methods.items():
             if method not in {"get", "post", "put", "patch", "delete"}:
                 continue
+            operation["x-clinicforce-session"] = required_session(path)
             operation["tags"] = [TAG_NAMES.get(tag, tag) for tag in operation.get("tags", [])] or [_tag_for(path)]
     return schema
 
+
+_SWAGGER_SCRIPT = Path(__file__).with_name("developer_docs.js").read_text(encoding="utf-8")
 
 _TEMPLATE = Path(__file__).with_name("developer_docs.html").read_text(encoding="utf-8")
 
 
 def render_docs(view: str) -> HTMLResponse:
     if view == "swagger":
-        viewer = """<div id="swagger-ui" aria-label="Swagger API reference"></div>
-<script src="https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui-bundle.js"></script>
-<script>SwaggerUIBundle({url:'/api/openapi.json',dom_id:'#swagger-ui',deepLinking:true,filter:true,docExpansion:'none',supportedSubmitMethods:[],presets:[SwaggerUIBundle.presets.apis,SwaggerUIBundle.SwaggerUIStandalonePreset],layout:'BaseLayout'});</script>"""
+        viewer = """<div class="viewer-fallback"><p id="swagger-session-status" role="status">Checking your main-app session…</p>
+<p><a href="/" target="_blank" rel="noopener">Sign in in the main app</a> · <button type="button" onclick="location.reload()">Refresh session</button></p>
+<label for="swagger-intake">Clinic intake ID (only when required by an insurance operation)</label>
+<input id="swagger-intake" type="text" autocomplete="off" maxlength="200" placeholder="Intake ID from your clinic workspace">
+<p>Execute sends a real request. Existing clinic permissions, patient ownership and workflow requirements still apply.</p></div>
+<div id="swagger-ui" aria-label="Swagger API reference"></div>
+<script src="https://cdn.jsdelivr.net/npm/swagger-ui-dist@5.32.0/swagger-ui-bundle.js"></script>
+<script>""" + _SWAGGER_SCRIPT + "</script>"
     elif view == "redoc":
         viewer = """<redoc spec-url="/api/openapi.json"></redoc>
 <script src="https://cdn.jsdelivr.net/npm/redoc@2/bundles/redoc.standalone.js"></script>"""
     else:
         raise ValueError("Unknown documentation view")
     html = (_TEMPLATE.replace("{{VIEWER}}", viewer)
-            .replace("{{VIEWER_CSS}}", '<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui.css">' if view == "swagger" else "")
+            .replace("{{VIEWER_CSS}}", '<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/swagger-ui-dist@5.32.0/swagger-ui.css">' if view == "swagger" else "")
             .replace("{{SWAGGER_CURRENT}}", 'aria-current="page"' if view == "swagger" else "")
             .replace("{{REDOC_CURRENT}}", 'aria-current="page"' if view == "redoc" else "")
             .replace("{{VIEW_NAME}}", "Swagger" if view == "swagger" else "ReDoc"))
