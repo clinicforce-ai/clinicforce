@@ -138,7 +138,7 @@ from app.api.settings import (
     PATIENT_SESSION_MAX_AGE, PUBLIC_BASE_URL, SHL_SHARE_TTL_SECONDS,
     SOURCE_TAGS as _SOURCE_TAGS, insurance_beta_enabled,
 )
-from app.api.developer_docs import OPENAPI_DESCRIPTION, enrich_openapi, render_docs
+from app.api.developer_docs import OPENAPI_DESCRIPTION, enrich_openapi, render_docs, docs_sessions, guard_docs_execution
 from app.insurance import golden as insurance_golden
 
 
@@ -160,6 +160,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+app.middleware("http")(guard_docs_execution)
 
 
 @app.middleware("http")
@@ -186,6 +189,11 @@ async def collection_audit_request_id(request: Request, call_next):
         raise
     finally:
         collection_request_id.reset(token)
+
+
+@app.get("/api/docs/session", include_in_schema=False)
+async def swagger_session(request: Request):
+    return JSONResponse(await docs_sessions(request), headers={"Cache-Control": "no-store"})
 
 
 @app.get("/api/docs", include_in_schema=False)

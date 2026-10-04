@@ -35,6 +35,16 @@ def main():
             raise RuntimeError("Expected release documentation is absent")
         if path == "/api/openapi.json" and "paths" not in json.loads(data):
             raise RuntimeError("Invalid API reference")
+    sessions = json.loads(request("/api/docs/session"))
+    if sessions != {"patient": False, "clinician": False}:
+        raise RuntimeError("Anonymous Swagger session status is incorrect")
+    try:
+        request("/api/staff/session?__clinicforce_docs=1")
+    except RuntimeError as exc:
+        if "HTTP 401" not in str(exc):
+            raise
+    else:
+        raise RuntimeError("Anonymous Swagger execution was not blocked")
     if args.environment == "staging":
         password = os.environ.get("STAGING_SMOKE_PASSWORD")
         if not password:
@@ -42,6 +52,19 @@ def main():
         try:
             request("/api/staff/login", "POST", {"username": "release-qa@clinicforce.invalid", "password": password})
             staff = json.loads(request("/api/staff/session"))["staff"]
+            sessions = json.loads(request("/api/docs/session"))
+            if sessions != {"patient": False, "clinician": True}:
+                raise RuntimeError("Swagger did not recognize the main-app clinic session")
+            swagger_staff = json.loads(request("/api/staff/session?__clinicforce_docs=1"))["staff"]
+            if swagger_staff["id"] != staff["id"]:
+                raise RuntimeError("Swagger used a different clinic identity")
+            try:
+                request("/api/patient/profile?__clinicforce_docs=1")
+            except RuntimeError as exc:
+                if "HTTP 403" not in str(exc):
+                    raise
+            else:
+                raise RuntimeError("Clinic session unexpectedly enabled patient Swagger execution")
             if staff["practice_id"] != "release-qa":
                 raise RuntimeError("Smoke account must belong to the isolated release-qa practice")
         finally:
@@ -53,6 +76,8 @@ def main():
                 raise
         else:
             raise RuntimeError("Logout did not revoke the session")
+        if json.loads(request("/api/docs/session")) != {"patient": False, "clinician": False}:
+            raise RuntimeError("Swagger retained a logged-out session")
         print("PASS synthetic staff sign-in, session and logout; provider workflows require separate verification")
 
 
