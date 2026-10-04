@@ -105,12 +105,15 @@ class MainRouteTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(schema.json()["paths"]["/api/patient/login"]["post"]["tags"], ["Patient account"])
         self.assertEqual(docs.status_code, 200)
         self.assertIn("/api/openapi.json", docs.text)
-        self.assertIn("Follow the request. Understand the record.", docs.text)
+        self.assertIn("Get to know", docs.text)
+        self.assertIn('id="guide-search"', docs.text)
         self.assertIn("/api/docs/session", docs.text)
         self.assertIn("allowTryItOutFor", docs.text)
         self.assertIn("__clinicforce_docs", docs.text)
-        self.assertEqual(redoc.status_code, 200)
-        self.assertIn('<redoc spec-url="/api/openapi.json">', redoc.text)
+        self.assertEqual(redoc.status_code, 308)
+        self.assertEqual(redoc.headers["location"], "/api/docs")
+        self.assertNotIn("redoc.standalone", docs.text)
+        self.assertNotIn("{{GUIDE_", docs.text)
         self.assertEqual(1, sum(route.path == "/api/staff/intakes/ecw-lookup" for route in staff_routes.routes))
 
     async def test_insurance_beta_is_off_by_default_and_rejects_session_bypass(self) -> None:

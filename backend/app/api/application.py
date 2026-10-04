@@ -198,12 +198,12 @@ async def swagger_session(request: Request):
 
 @app.get("/api/docs", include_in_schema=False)
 async def swagger_docs():
-    return render_docs("swagger")
+    return render_docs()
 
 
 @app.get("/api/redoc", include_in_schema=False)
 async def redoc_docs():
-    return render_docs("redoc")
+    return RedirectResponse(url="/api/docs", status_code=308)
 
 
 app.include_router(insurance_router)

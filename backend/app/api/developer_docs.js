@@ -19,9 +19,17 @@
   function allowed(audience) {
     return audience === 'either' ? sessions.patient || sessions.clinician : sessions[audience] === true;
   }
+  const guideHash = document.getElementById(location.hash.slice(1)) ? location.hash : null;
   await refreshSession();
   SwaggerUIBundle({
     url: '/api/openapi.json', dom_id: '#swagger-ui', deepLinking: true,
+    onComplete: () => {
+      // Swagger normalizes fragments to #/tag/operation; preserve guide bookmarks.
+      if (guideHash && (location.hash === guideHash || location.hash === `#/${guideHash.slice(1)}`)) {
+        history.replaceState(null, '', guideHash);
+        window.dispatchEvent(new HashChangeEvent('hashchange'));
+      }
+    },
     filter: true, docExpansion: 'none', validatorUrl: null,
     supportedSubmitMethods: ['get', 'post', 'put', 'patch', 'delete', 'head', 'options'],
     presets: [SwaggerUIBundle.presets.apis], layout: 'BaseLayout',

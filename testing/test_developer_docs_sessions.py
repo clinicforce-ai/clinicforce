@@ -23,7 +23,7 @@ class SwaggerSessions(unittest.IsolatedAsyncioTestCase):
         await self.client.aclose()
 
     async def test_public_docs_and_schema_remain_visible_without_database_access(self):
-        for path in ['/api/docs', '/api/redoc', '/api/openapi.json', '/api/docs/session']:
+        for path in ['/api/docs', '/api/openapi.json', '/api/docs/session']:
             response = await self.client.get(path)
             self.assertEqual(response.status_code, 200)
         self.patient.assert_not_called()
