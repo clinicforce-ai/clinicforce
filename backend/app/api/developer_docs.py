@@ -13,7 +13,7 @@ from app.api.settings import PATIENT_SESSION_COOKIE, PUBLIC_BASE_URL, ALLOWED_OR
 from fastapi.responses import HTMLResponse
 
 
-OPENAPI_DESCRIPTION = """ClinicForce serves patient records, clinic intake, and insurance workflows through a same-origin API. Start with the [guided engineering map](/api/docs#getting-started) or the [ReDoc reading view](/api/redoc#getting-started) before using an operation. The guide explains the request path, data ownership, clinical evidence, deployed infrastructure, and worked user flows. All operations are visible publicly. Swagger execution requires an existing same-site patient or clinic workspace session of the appropriate kind; sign in through the main app first. Existing permissions and resource ownership still apply. ReDoc is read-only. Executing an operation performs a real action in this environment."""
+OPENAPI_DESCRIPTION = """Start with the [ClinicForce developer guide](/api/docs#getting-started) for diagrams, setup instructions and searchable explanations. Browse all operations below. To execute a request, sign in to the patient or clinic workspace on this same site, then refresh the guide. Your existing permissions still apply. Execute performs a real action in this environment."""
 
 TAG_NAMES = {
     "staff": "Clinic workspace",
@@ -110,9 +110,12 @@ _SWAGGER_SCRIPT = Path(__file__).with_name("developer_docs.js").read_text(encodi
 _TEMPLATE = Path(__file__).with_name("developer_docs.html").read_text(encoding="utf-8")
 
 
-def render_docs(view: str) -> HTMLResponse:
-    if view == "swagger":
-        viewer = """<div class="viewer-fallback"><p id="swagger-session-status" role="status">Checking your main-app session…</p>
+_GUIDE_STYLE = Path(__file__).with_name("developer_guide.css").read_text(encoding="utf-8")
+_GUIDE_SCRIPT = Path(__file__).with_name("developer_guide.js").read_text(encoding="utf-8")
+
+
+def render_docs() -> HTMLResponse:
+    viewer = """<div class="viewer-fallback"><p id="swagger-session-status" role="status">Checking your main-app session…</p>
 <p><a href="/" target="_blank" rel="noopener">Sign in in the main app</a> · <button type="button" onclick="location.reload()">Refresh session</button></p>
 <label for="swagger-intake">Clinic intake ID (only when required by an insurance operation)</label>
 <input id="swagger-intake" type="text" autocomplete="off" maxlength="200" placeholder="Intake ID from your clinic workspace">
@@ -120,14 +123,7 @@ def render_docs(view: str) -> HTMLResponse:
 <div id="swagger-ui" aria-label="Swagger API reference"></div>
 <script src="https://cdn.jsdelivr.net/npm/swagger-ui-dist@5.32.0/swagger-ui-bundle.js"></script>
 <script>""" + _SWAGGER_SCRIPT + "</script>"
-    elif view == "redoc":
-        viewer = """<redoc spec-url="/api/openapi.json"></redoc>
-<script src="https://cdn.jsdelivr.net/npm/redoc@2/bundles/redoc.standalone.js"></script>"""
-    else:
-        raise ValueError("Unknown documentation view")
     html = (_TEMPLATE.replace("{{VIEWER}}", viewer)
-            .replace("{{VIEWER_CSS}}", '<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/swagger-ui-dist@5.32.0/swagger-ui.css">' if view == "swagger" else "")
-            .replace("{{SWAGGER_CURRENT}}", 'aria-current="page"' if view == "swagger" else "")
-            .replace("{{REDOC_CURRENT}}", 'aria-current="page"' if view == "redoc" else "")
-            .replace("{{VIEW_NAME}}", "Swagger" if view == "swagger" else "ReDoc"))
+            .replace("{{GUIDE_STYLE}}", _GUIDE_STYLE)
+            .replace("{{GUIDE_SCRIPT}}", _GUIDE_SCRIPT))
     return HTMLResponse(html, headers={"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff", "Referrer-Policy": "no-referrer"})

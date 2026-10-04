@@ -23,6 +23,8 @@ def main():
             with client.open(req, timeout=30) as response:
                 if response.status != expected:
                     raise RuntimeError(f"{path}: unexpected HTTP status")
+                if path == "/api/redoc" and response.geturl() != base + "/api/docs":
+                    raise RuntimeError("Legacy documentation URL did not redirect to the guide")
                 data = response.read()
         except urllib.error.HTTPError as exc:
             raise RuntimeError(f"{path}: HTTP {exc.code}; response body withheld") from None
@@ -31,7 +33,7 @@ def main():
 
     for path in ["/", "/healthz", "/readyz", "/api/docs", "/api/redoc", "/api/openapi.json"]:
         data = request(path)
-        if path in {"/api/docs", "/api/redoc"} and b"Staging and production releases" not in data:
+        if path in {"/api/docs", "/api/redoc"} and (b'id="guide-search"' not in data or b"Staging and production releases" not in data or b"redoc.standalone" in data):
             raise RuntimeError("Expected release documentation is absent")
         if path == "/api/openapi.json" and "paths" not in json.loads(data):
             raise RuntimeError("Invalid API reference")
