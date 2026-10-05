@@ -12,9 +12,9 @@ class ManifestRequest(RequestModel):
     """SHL manifests allow forward-compatible fields from conforming clients."""
 
     model_config = ConfigDict(extra="ignore")
-    recipient: str = Field(min_length=1, max_length=512)
-    passcode: str | None = Field(default=None, min_length=1, max_length=128)
-    embeddedLengthMax: int | None = Field(default=None, ge=0)
+    recipient: str = Field(min_length=1, max_length=512, description="Receiving application label. Required by the exchange; never written to sharing diagnostics.")
+    passcode: str | None = Field(default=None, min_length=1, max_length=128, description="Patient's PIN for standard shares. Omit for ecw_compat shares.")
+    embeddedLengthMax: int | None = Field(default=None, ge=0, description="Maximum embedded encrypted-payload length. Use 0 to request a temporary download URL; omission permits embedding.")
 
     @field_validator("passcode")
     @classmethod
@@ -36,7 +36,7 @@ class DoctorSummaryRequest(RequestModel):
 class GeneratePatientLinkRequest(PatientCredentials):
     """Create either the default protected share or a bare SHL test share."""
 
-    share_mode: Literal["standard", "ecw_compat"] = "standard"
+    share_mode: Literal["standard", "ecw_compat"] = Field(default="standard", description="standard: PIN-protected ClinicForce viewer link. ecw_compat: bare SMART Health Link without a PIN for a mobile-EHR compatibility test; not confirmation of EHR import.")
     passcode: str | None = Field(default=None, min_length=4, max_length=4, pattern=r"^\d{4}$")
 
     @field_validator("passcode")

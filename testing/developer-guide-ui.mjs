@@ -23,6 +23,8 @@ const {chromium}=await import(process.env.PLAYWRIGHT_MODULE || 'playwright');
   ['coinsurance',/worked-example/],
   ['pgAdmin',/data-inspection/],
   ['frontend libraries',/code-atlas/],
+  ['eClinicalTouch QR',/ecw-mobile-sharing/],
+  ['manifest logs',/sharing-logs/],
  ];
  const outcome=[];
  const before=requests.length;
@@ -69,6 +71,7 @@ const {chromium}=await import(process.env.PLAYWRIGHT_MODULE || 'playwright');
  if(process.env.GUIDE_SCREENSHOT_DIR) await page.screenshot({path:path.join(process.env.GUIDE_SCREENSHOT_DIR,`visual-guide-${label}-desktop.png`)});
  for(const width of [375,768,1024,1440]){
   await page.setViewportSize({width,height:900});
+  await page.locator('#ecw-mobile-sharing, #sharing-logs').evaluateAll(els=>els.forEach(el=>el.open=true));
   await page.locator('#getting-started').scrollIntoViewIfNeeded();
   assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false,`Overflow at ${width}`);
  }
