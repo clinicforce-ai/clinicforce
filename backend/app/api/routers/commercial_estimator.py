@@ -1014,7 +1014,7 @@ async def configuration(request: Request) -> dict:
 async def ecw_appointments(request: Request) -> dict:
     """List confirmed scheduled visits without an eligibility check.
 
-    The shared reader has a 24-second deadline. HTTP 502 errors identify the
+    The shared reader has a 110-second deadline. HTTP 502 errors identify the
     failed lookup phase; X-ClinicForce-Request-ID joins the safe stage logs in
     CloudWatch. A failed read does not establish that no appointment exists.
     """

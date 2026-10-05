@@ -13,6 +13,7 @@ export class ApiError extends Error {
 }
 
 export const REQUEST_TIMEOUT_MS = 45_000
+export const ECW_LOOKUP_TIMEOUT_MS = 130_000
 
 let staffIntakeId: string | null = null
 export function setStaffIntakeContext(id: string | null) { staffIntakeId = id }
@@ -34,9 +35,9 @@ export function detailFrom(body: unknown, fallback: string): string {
   return fallback
 }
 
-export async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
+export async function request<T>(path: string, init: RequestInit = {}, timeoutMs = REQUEST_TIMEOUT_MS): Promise<T> {
   const controller = new AbortController()
-  const timeout = window.setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS)
+  const timeout = window.setTimeout(() => controller.abort(), timeoutMs)
   try {
     const headers = new Headers(init.headers)
     if (staffIntakeId && path.startsWith('/api/doctor/insurance')) headers.set('X-ClinicForce-Intake', staffIntakeId)

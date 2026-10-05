@@ -41,8 +41,10 @@ SEARCH_TIMEOUT_SECONDS = 6
 HISTORY_TIMEOUT_SECONDS = 3
 HISTORY_DAYS = 365
 HISTORY_VISIT_LIMIT = 12
-LOOKUP_TIMEOUT_SECONDS = 24  # CloudFront stops waiting for the origin after 30 seconds.
-TOKEN_STAGE_TIMEOUT_SECONDS = 10
+LOOKUP_TIMEOUT_SECONDS = 110  # Keep below the 120-second CloudFront origin timeout.
+LOOKUP_READ_TIMEOUT_SECONDS = 75
+LOOKUP_APPOINTMENT_TIMEOUT_SECONDS = 30
+TOKEN_STAGE_TIMEOUT_SECONDS = 30
 
 
 class EcwBackendError(RuntimeError):
@@ -282,17 +284,17 @@ async def _read(client: httpx.AsyncClient, issuer: str, token: str, reference: A
 
 
 async def _bounded_read(client: httpx.AsyncClient, issuer: str, token: str,
-                        reference: str) -> tuple[dict[str, Any], str | None]:
+                        reference: str, *, timeout_seconds: int = REFERENCE_TIMEOUT_SECONDS) -> tuple[dict[str, Any], str | None]:
     resource, resource_id = reference.split("/", 1)
     try:
-        return await asyncio.wait_for(_read(client, issuer, token, reference), timeout=REFERENCE_TIMEOUT_SECONDS), None
+        return await asyncio.wait_for(_read(client, issuer, token, reference), timeout=timeout_seconds), None
     except (asyncio.TimeoutError, httpx.TimeoutException):
         # eCW direct reads intermittently stall while the equivalent supported
         # `_id` search succeeds. Try that once without extending the API timeout.
         try:
             rows = await asyncio.wait_for(
                 _search(client, issuer, token, resource, {"_id": resource_id}),
-                timeout=REFERENCE_TIMEOUT_SECONDS,
+                timeout=timeout_seconds,
             )
         except (asyncio.TimeoutError, httpx.TimeoutException):
             return {}, resource
@@ -302,8 +304,9 @@ async def _bounded_read(client: httpx.AsyncClient, issuer: str, token: str,
 
 
 async def _cached_patient(client: httpx.AsyncClient, issuer: str, token: str,
-                          patient_id: str, profile: dict[str, Any]) -> tuple[dict[str, Any], str | None]:
-    patient, timed_out = await _bounded_read(client, issuer, token, f"Patient/{patient_id}")
+                          patient_id: str, profile: dict[str, Any], *,
+                          timeout_seconds: int = REFERENCE_TIMEOUT_SECONDS) -> tuple[dict[str, Any], str | None]:
+    patient, timed_out = await _bounded_read(client, issuer, token, f"Patient/{patient_id}", timeout_seconds=timeout_seconds)
     if timed_out:
         raise EcwBackendError("eClinicalWorks timed out while verifying the saved patient. Retry the lookup.")
     if not patient:
@@ -611,13 +614,15 @@ def _source_references(resource: dict[str, Any]) -> list[str]:
     return list(dict.fromkeys(values))
 
 
-async def _patient_for_profile(client: httpx.AsyncClient, issuer: str, token: str, profile: dict[str, Any]) -> tuple[dict, str, str | None]:
+async def _patient_for_profile(client: httpx.AsyncClient, issuer: str, token: str, profile: dict[str, Any], *,
+                               timeout_seconds: int = REFERENCE_TIMEOUT_SECONDS) -> tuple[dict, str, str | None]:
     """Resolve exactly one confirmed patient without exposing a broad patient search."""
     cached_patient_id = str(profile.get("ecw_patient_id") or "")
     if cached_patient_id:
         if not re.fullmatch(r"[A-Za-z0-9.\-]{1,200}", cached_patient_id):
             raise EcwBackendError("The saved eClinicalWorks patient link is invalid.")
-        patient, patient_timeout = await _cached_patient(client, issuer, token, cached_patient_id, profile)
+        patient, patient_timeout = await _cached_patient(client, issuer, token, cached_patient_id, profile,
+                                                       timeout_seconds=timeout_seconds)
         patient_rows = [patient]
     else:
         patient_timeout = None
@@ -710,16 +715,19 @@ async def lookup_patient_and_appointments(profile: dict[str, Any], practice: dic
     started = time.monotonic()
     async def read() -> dict[str, Any]:
         nonlocal phase
-        async with httpx.AsyncClient(timeout=30, follow_redirects=False, transport=transport) as client:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(LOOKUP_READ_TIMEOUT_SECONDS, connect=10),
+                                     follow_redirects=False, transport=transport) as client:
             token = await _access_token(client, client_id, issuer)
             phase = "patient_identity"
-            patient, patient_id, _ = await _patient_for_profile(client, issuer, token, profile)
+            patient, patient_id, _ = await _patient_for_profile(client, issuer, token, profile,
+                                                              timeout_seconds=LOOKUP_READ_TIMEOUT_SECONDS)
             now = datetime.now(ZoneInfo(practice.get("timezone", "America/New_York")))
             today = now.date()
             phase = "appointment_search"
             encounters, timed_out = await _bounded_search(
                 client, issuer, token, "Encounter",
                 [("patient", patient_id), ("date", f"ge{today}"), ("date", f"le{today + timedelta(days=365)}")],
+                timeout_seconds=LOOKUP_APPOINTMENT_TIMEOUT_SECONDS,
             )
             if timed_out:
                 raise EcwBackendError("eClinicalWorks timed out while loading the patient's scheduled encounters. Reload the appointment to retry.")

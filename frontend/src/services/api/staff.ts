@@ -1,4 +1,4 @@
-import { ApiError, detailFrom, json, request } from './client'
+import { ApiError, detailFrom, ECW_LOOKUP_TIMEOUT_MS, json, request } from './client'
 
 export interface StaffSession {
   id: string
@@ -81,7 +81,7 @@ export function createStaffIntake(files: File[], details: StaffCardDetails) {
 }
 
 export type EcwPatientMatch = { patient: { ecw_account_number?: string | null; given_name: string; family_name: string; birth_date: string }; appointments: Array<{ id: string; start: string; status: string; reason: string }> }
-export const createStaffEcwLookup = (details: { given_name: string; middle_initial: string; family_name: string; birth_date: string }) => request<StaffIntake & { ecw_match: EcwPatientMatch }>('/api/staff/intakes/ecw-lookup', json(details))
+export const createStaffEcwLookup = (details: { given_name: string; middle_initial: string; family_name: string; birth_date: string }) => request<StaffIntake & { ecw_match: EcwPatientMatch }>('/api/staff/intakes/ecw-lookup', json(details), ECW_LOOKUP_TIMEOUT_MS)
 
 export const confirmStaffPatient = (id: string, fields: StaffPatientFields & { identity_confirmed: true; patient_id?: string }) => request<StaffIntake>(`/api/staff/intakes/${encodeURIComponent(id)}/patient`, { ...json(fields), method: 'PUT' })
 export const addStaffMember = (member: { username: string; display_name: string; password: string; role: 'staff' | 'admin' }) => request<unknown>('/api/staff/members', json(member))

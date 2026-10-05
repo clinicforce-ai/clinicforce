@@ -307,7 +307,7 @@ def manual_card_fields(full_name: str, member_id: str, birth_date: str) -> dict:
 async def create_ecw_lookup(value: EcwLookup, request: Request):
     """Confirm an eCW patient and upcoming visits.
 
-    The shared reader has a 24-second deadline. HTTP 502 errors identify the
+    The shared reader has a 110-second deadline. HTTP 502 errors identify the
     failed lookup phase; X-ClinicForce-Request-ID joins the safe stage logs in
     CloudWatch. No patient or appointment is inferred from a timed-out read.
     """
@@ -322,7 +322,7 @@ async def create_ecw_lookup(value: EcwLookup, request: Request):
             {"patient_first_name": value.given_name, "patient_middle_initial": value.middle_initial,
              "patient_last_name": value.family_name, "patient_birth_date": value.birth_date.isoformat()},
             {"timezone": os.getenv("COMMERCIAL_PRACTICE_TIMEZONE", "America/New_York")},
-        ), timeout=26)
+        ), timeout=ecw_backend.LOOKUP_TIMEOUT_SECONDS + 2)
     except asyncio.TimeoutError:
         collection_event('ecw_lookup_failed', practice_id=staff['practice_id'], stage='patient_search', reason_code='timeout', duration_ms=int((time.monotonic() - started) * 1000))
         raise HTTPException(504, "eClinicalWorks did not respond to the patient search in time. Retry the lookup.") from None

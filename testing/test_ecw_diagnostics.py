@@ -2,6 +2,7 @@
 
 import asyncio
 from contextlib import contextmanager
+from datetime import datetime, timedelta, timezone
 import io
 import json
 import logging
@@ -15,6 +16,51 @@ from fastapi import HTTPException
 from app.insurance import ecw_backend as ecw
 from app.logs.collection_audit import logger, request_id
 from app.main import app
+
+
+@pytest.mark.parametrize("saved_patient", [False, True])
+def test_lookup_allows_slow_authorization_patient_and_appointment_reads(saved_patient):
+    # Scale the real deadlines and provider delays together so this exercises
+    # cancellation without adding a minute to every test run.
+    wait_for = asyncio.wait_for
+    async def scaled_wait_for(awaitable, timeout):
+        return await wait_for(awaitable, timeout / 100)
+
+    patient = {"resourceType": "Patient", "id": "synthetic-patient",
+               "name": [{"given": ["Pat"], "family": "Example"}], "birthDate": "1980-01-01"}
+    profile = {"patient_first_name": "Pat", "patient_last_name": "Example",
+               "patient_birth_date": "1980-01-01"}
+    if saved_patient:
+        profile["ecw_patient_id"] = patient["id"]
+    visit = {"resourceType": "Encounter", "id": "synthetic-visit", "status": "planned",
+             "subject": {"reference": "Patient/synthetic-patient"},
+             "period": {"start": (datetime.now(timezone.utc) + timedelta(days=1)).isoformat()}}
+
+    async def handler(request):
+        if request.url.path.endswith("/metadata"):
+            await asyncio.sleep(0.11)  # Longer than the former 10-second stage budget.
+            return httpx.Response(200, json={"rest": [{"security": {"extension": [
+                {"url": "oauth-uris", "extension": [{"url": "token", "valueUri": "https://ehr.example.test/token"}]}]}}]})
+        if request.url.path == "/token":
+            await asyncio.sleep(0.11)
+            return httpx.Response(200, json={"access_token": "synthetic-token"})
+        assert request.extensions["timeout"]["read"] == 75
+        if "/Patient" in request.url.path:
+            await asyncio.sleep(0.31)
+            return httpx.Response(200, json=patient if saved_patient else {"entry": [{"resource": patient}]})
+        assert request.url.path.endswith("/Encounter")
+        await asyncio.sleep(0.07)  # Longer than the former 6-second search budget.
+        return httpx.Response(200, json={"entry": [{"resource": visit}]})
+
+    async def run():
+        with patch.object(ecw, "settings", return_value=("client", "https://ehr.example.test/fhir")), \
+                patch.object(ecw.ecw, "_client_assertion", return_value="synthetic-assertion"), \
+                patch.object(ecw.asyncio, "wait_for", side_effect=scaled_wait_for):
+            return await ecw.lookup_patient_and_appointments(profile, {}, transport=httpx.MockTransport(handler))
+
+    result = asyncio.run(run())
+    assert result["patient"]["id"] == patient["id"]
+    assert [row["id"] for row in result["appointments"]] == [visit["id"]]
 
 
 @contextmanager

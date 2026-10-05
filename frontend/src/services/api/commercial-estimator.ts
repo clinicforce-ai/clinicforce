@@ -1,10 +1,10 @@
-import { json, request } from './client'
+import { ECW_LOOKUP_TIMEOUT_MS, json, request } from './client'
 
 const root = '/api/doctor/insurance/commercial'
 export type CommercialConfiguration = { connections: Array<Record<string, unknown>>; networks: Array<Record<string, unknown>>; profiles: Array<Record<string, unknown>>; rate_versions: Array<Record<string, unknown>>; stedi_execution_mode: string; live_eligibility_enabled: boolean }
 export const commercialConfiguration = () => request<CommercialConfiguration>(`${root}/configuration`)
 export type CommercialAppointment = { id: string; start: string; status: string; reason: string }
-export const commercialAppointments = () => request<{ appointments: CommercialAppointment[] }>(`${root}/appointments`)
+export const commercialAppointments = () => request<{ appointments: CommercialAppointment[] }>(`${root}/appointments`, {}, ECW_LOOKUP_TIMEOUT_MS)
 export type CommercialReadiness = { ready: boolean; blockers: string[]; ecw: { payer?: string | null; plan?: string | null; scheduled_codes: Array<{ code?: string | null; units?: number | string | null }>; visit_type?: string | null; reason?: string | null } }
 export const commercialReadiness = (appointment_id: string) => request<CommercialReadiness>(`${root}/appointments/readiness`, json({ appointment_id }))
 export type CollectionGuidance = {
