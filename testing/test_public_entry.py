@@ -56,7 +56,8 @@ class PublicEntryTests(unittest.TestCase):
     def test_access_filter_redacts_only_private_link_paths_and_query_values(self):
         filter_ = public_entry.PrivateLinkAccessFilter()
         for target in ("/join/" + TOKEN, "/" + NPI + "/" + TOKEN, "/?clinic=" + NPI + "&upload=" + TOKEN, "/?join=" + TOKEN,
-                       "/api/insurance-upload/" + NPI + "/" + TOKEN, "/api/staff/invitations/" + TOKEN):
+                       "/api/insurance-upload/" + NPI + "/" + TOKEN, "/api/staff/invitations/" + TOKEN,
+                       "/manifest/" + TOKEN, "/manifest/short?key=" + TOKEN):
             record = logging.LogRecord("uvicorn.access", logging.INFO, "", 0, '%s - "%s %s HTTP/%s" %d', ("client", "GET", target, "1.1", 303), None)
             self.assertTrue(filter_.filter(record))
             self.assertNotIn(TOKEN, record.getMessage())

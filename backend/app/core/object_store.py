@@ -12,6 +12,7 @@ from pathlib import PurePath
 from uuid import uuid4
 
 import boto3
+from botocore.config import Config
 
 
 S3_BUCKET = os.getenv("S3_BUCKET", "").strip()
@@ -130,7 +131,9 @@ def presign_shl_payload(key: str, expires_in: int = 3600) -> str:
     """Return an SHL file URL valid for no more than the one-hour spec limit."""
     if not S3_BUCKET:
         raise RuntimeError("S3_BUCKET must be configured for oversized SHL files")
-    return boto3.client("s3").generate_presigned_url(
+    # KMS-encrypted objects require SigV4, including in us-east-1 where the SDK
+    # can otherwise select the older S3 presigning format.
+    return boto3.client("s3", config=Config(signature_version="s3v4")).generate_presigned_url(
         "get_object",
         Params={"Bucket": S3_BUCKET, "Key": key, "ResponseContentType": "application/jose"},
         ExpiresIn=min(max(expires_in, 1), 3600),

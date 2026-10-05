@@ -43,12 +43,15 @@ def collection_event(event: str, *, practice_id: str | None = None, intake_id: s
                      cash_min_cents: int | None = None, cash_max_cents: int | None = None,
                      duration_ms: int | None = None, revision: int | None = None,
                      page: int | None = None,
-                     http_status: int | None = None) -> None:
+                     http_status: int | None = None,
+                     cloudfront_request_id: str | None = None) -> None:
     """Only opaque UUIDs, fixed codes and numeric facts may enter this log."""
     if not _code(event):
         raise ValueError("Collection audit events require a fixed code")
     data = {"at": datetime.now(timezone.utc).isoformat(), "event": event,
             "request_id": request_id.get()}
+    if isinstance(cloudfront_request_id, str) and re.fullmatch(r"[A-Za-z0-9_+=/-]{16,128}", cloudfront_request_id):
+        data["cloudfront_request_id"] = cloudfront_request_id
     for key, value in {"practice_id": practice_id, "intake_id": intake_id,
                        "case_id": case_id, "staff_id": staff_id}.items():
         if safe := _uuid(value):

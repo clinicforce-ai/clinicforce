@@ -170,19 +170,32 @@ async def collection_audit_request_id(request: Request, call_next):
     token = collection_request_id.set(str(uuid4()))
     started = time.monotonic()
     path = request.url.path
+    share_stage = ('share_create' if path == '/api/patient/generate-link' else
+                   'manifest_fetch' if path.startswith('/manifest/') else
+                   'share_summary' if path == '/api/doctor/decrypt-and-summarize' else None)
     stage = ('patient_search' if path == '/api/staff/intakes/ecw-lookup' else
              'appointment_list' if path == '/api/doctor/insurance/commercial/appointments' else
              'previsit' if path == '/api/doctor/insurance/commercial/appointments/previsit' else
              'identity' if path.startswith('/api/staff/intakes/') and path.endswith('/patient') else None)
     try:
         response = await call_next(request)
-        if path.startswith(("/api/staff/intakes", "/api/doctor/insurance/commercial")):
+        if share_stage or path.startswith(("/api/staff/intakes", "/api/doctor/insurance/commercial")):
             response.headers["X-ClinicForce-Request-ID"] = collection_request_id.get()
+        if share_stage:
+            response.headers['Cache-Control'] = 'no-store'
+            collection_event('sharing_http_completed', stage=share_stage,
+                             outcome='success' if response.status_code < 400 else 'error',
+                             http_status=response.status_code, duration_ms=int((time.monotonic() - started) * 1000),
+                             cloudfront_request_id=request.headers.get('x-amz-cf-id'))
         if stage:
             collection_event('collection_http_completed', stage=stage, outcome='success' if response.status_code < 400 else 'error',
                              http_status=response.status_code, duration_ms=int((time.monotonic() - started) * 1000))
         return response
     except Exception:
+        if share_stage:
+            collection_event('sharing_http_failed', stage=share_stage, outcome='error',
+                             reason_code='unhandled_error', duration_ms=int((time.monotonic() - started) * 1000),
+                             cloudfront_request_id=request.headers.get('x-amz-cf-id'))
         if stage:
             collection_event('collection_http_failed', stage=stage, outcome='error',
                              reason_code='unhandled_error', duration_ms=int((time.monotonic() - started) * 1000))
@@ -1075,6 +1088,13 @@ async def import_external_shl(request: ExternalShlImportRequest, http_request: R
 
 @app.post("/api/patient/generate-link")
 async def generate_patient_link(request: GeneratePatientLinkRequest, http_request: Request) -> dict[str, Any]:
+    """Create an encrypted FHIR snapshot and QR, expiring after three hours by default.
+
+    Standard mode requires a four-digit PIN and opens the ClinicForce viewer.
+    ecw_compat creates a bare, no-passcode SMART Health Link for a receiving EHR's
+    QR importer. It does not write to eCW or confirm import; the receiver resolves
+    POST /manifest/{token} and decrypts the returned JWE with the QR-carried key.
+    """
     patient_id = await _authenticate_patient(request.patient_id, request.password, http_request)
     protected_share = request.share_mode == "standard"
     if protected_share and (not request.passcode or len(request.passcode) != 4):
@@ -1368,7 +1388,14 @@ async def test_integration(request: IntegrationTestRequest) -> dict[str, Any]:
 
 @app.post("/manifest/{manifest_id}")
 async def retrieve_manifest(manifest_id: str, request: ManifestRequest) -> dict[str, Any]:
-    """Return an encrypted SHL payload after successful passcode verification."""
+    """Resolve a SMART Health Link to encrypted FHIR R4 data.
+
+    POST a recipient and, for protected shares, the passcode. ecw_compat needs no
+    passcode. Return embedded JWE or a short-lived payload URL when the JWE exceeds
+    embeddedLengthMax. 401 means an invalid PIN; 404 means unavailable, expired or
+    revoked; 422 means an invalid request; 503 means payload storage is unavailable.
+    A 200 response confirms retrieval only, not mobile decryption or chart import.
+    """
     log_info("Secure Sharing", "SHL manifest fetch attempt")
     try:
         manifest = await asyncio.to_thread(verify_manifest_pin, manifest_id, request.passcode or "")
