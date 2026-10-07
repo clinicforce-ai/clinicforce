@@ -68,3 +68,30 @@ def test_schedule_activation_and_effective_dates_are_practice_scoped():
     finally:
         with psycopg.connect(url, autocommit=True) as db:
             db.execute(sql.SQL('DROP SCHEMA {} CASCADE').format(sql.Identifier(schema)))
+
+
+@pytest.mark.parametrize('practice_id', ['clinic-a', 'f378bc13-af1d-4ea5-bfbd-8cd102e42ddc'])
+@pytest.mark.parametrize('amount', [17321, 28109, None])
+def test_previsit_uses_active_schedule_without_clinic_defaults(practice_id, amount):
+    from app.api.routers import commercial_estimator as api
+    inputs = {'service_date': '2026-10-07', 'visit_type': 'new', 'lines': []}
+    source = {'active_coverages': 0, 'self_pay_recorded': True}
+    # Recalculation must discard the old built-in schedule, including saved prices.
+    result = {'issues': [], 'benefits': {}, 'cash_quote': {'complete': True, 'min_cents': 25000, 'max_cents': 25000},
+              'cash_schedule': {'source': 'old embedded schedule'}, 'collection_policy': 'defer_original_medicare_secondary'}
+    config = {'id': 'version', 'filename': 'approved.csv', 'effective_from': '2026-01-01',
+              'rows': [{'code': str(c), 'cash_cents': amount, 'description': 'Office visit'} for c in range(99202, 99206)]} if amount is not None else None
+    with patch.object(api.commercial_store, 'list_connections', return_value=[]), \
+         patch.object(api.practice_prices, 'current', return_value=config) as current, \
+         patch.object(api.cpt_suggester.boto3, 'client', side_effect=RuntimeError('offline test')):
+        api._finish_previsit(result, {}, inputs, source, None, {'practice_id': practice_id}, '')
+    current.assert_called_once_with(practice_id, '2026-10-07')
+    assert result['payment_mode'] == 'cash'
+    assert 'cash_schedule' not in result and 'collection_policy' not in result
+    assert result['price_range'].get('cash_min_cents') == amount
+    assert result['collection_guidance']['amount_cents'] is None  # No insured amount.
+    if amount is not None:
+        assert result['cash_quote']['min_cents'] == amount
+        assert result['practice_cash_source']['version'] == 'version'
+    else:
+        assert not result['price_range']['cash_complete']

@@ -175,14 +175,12 @@ def save(staff: dict, content: bytes, filename: str, content_type: str, kind: st
 
 
 def estimator_links(practice_id: str, documents: list[dict]) -> dict:
-    from app.insurance import commercial_store, nmct_cash
+    from app.insurance import commercial_store
     payers = commercial_store.list_connections(practice_id)
     versions = commercial_store.list_rate_versions(practice_id)
-    cash_versions = []
-    if practice_id != nmct_cash.PRACTICE_ID:
-        with commercial_store._connection() as db:
-            cash_versions = [dict(row) for row in db.execute(
-                'SELECT id,sha256,status,effective_from FROM practice_cash_schedules WHERE practice_id=%s', (practice_id,)).fetchall()]
+    with commercial_store._connection() as db:
+        cash_versions = [dict(row) for row in db.execute(
+            'SELECT id,sha256,status,effective_from FROM practice_cash_schedules WHERE practice_id=%s', (practice_id,)).fetchall()]
     names = {row['id']: row['display_name'] for row in payers}
     links = {}
     for document in documents:
@@ -196,9 +194,5 @@ def estimator_links(practice_id: str, documents: list[dict]) -> dict:
         for version in cash_versions:
             if digest and digest == version['sha256']:
                 uses.append({**version, 'type': 'cash_rates', 'payer': ''})
-        if practice_id == nmct_cash.PRACTICE_ID and digest == nmct_cash.SOURCE_SHA256:
-            uses.append({'id': 'nmct-cash', 'type': 'cash_rates', 'status': 'active', 'payer': '',
-                         'effective_from': nmct_cash.EFFECTIVE_FROM,
-                         'note': 'Office visits, Botox and NCS/EMG packages. Proposed biopsy and EEG prices remain excluded.'})
         links[document['id']] = uses
     return {'links': links}

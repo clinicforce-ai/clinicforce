@@ -6,7 +6,7 @@ from unittest.mock import patch
 import pytest
 
 from app.core import library_files
-from app.insurance import commercial_store, nmct_cash
+from app.insurance import commercial_store
 
 
 def word_file(text='Clinic cash prices &lt;script&gt;bad()&lt;/script&gt;'):
@@ -47,19 +47,17 @@ def test_office_previews_preserve_text_tables_and_do_not_create_active_content()
         library_files.office_preview(data.getvalue(), 'bad.docx')
 
 
-def test_nmct_cash_source_link_requires_the_clinic_and_exact_file_digest():
+def test_cash_source_link_requires_an_actual_schedule_version():
     from unittest.mock import MagicMock
     db = MagicMock()
     db.__enter__.return_value = db
-    db.execute.return_value.fetchall.return_value = [{'id': 'old-csv', 'sha256': 'stale', 'status': 'active', 'effective_from': '2026-01-01'}]
-    documents = [{'id': 'matching', 'sha256': nmct_cash.SOURCE_SHA256},
-                 {'id': 'different', 'sha256': 'changed'}, {'id': 'old-csv', 'sha256': 'stale'}]
+    db.execute.return_value.fetchall.return_value = [{'id': 'version', 'sha256': 'stored-digest', 'status': 'active', 'effective_from': '2026-01-01'}]
+    documents = [{'id': 'matching', 'sha256': 'stored-digest'}, {'id': 'reference-only', 'sha256': 'other'}]
     with patch.object(commercial_store, '_connection', return_value=db), patch.object(commercial_store, 'list_connections', return_value=[]), patch.object(commercial_store, 'list_rate_versions', return_value=[]):
-        own = library_files.estimator_links(nmct_cash.PRACTICE_ID, documents)['links']
-        other = library_files.estimator_links('different-clinic', documents)['links']
-    assert own['matching'][0]['status'] == 'active'
-    assert own['different'] == [] and own['old-csv'] == [] and other['matching'] == []
-    assert other['old-csv'][0]['status'] == 'active'
+        links = library_files.estimator_links('clinic', documents)['links']
+    assert links['matching'][0]['id'] == 'version'
+    assert links['reference-only'] == []
+    assert db.execute.call_args.args[1] == ('clinic',)
 
 
 def test_contract_extraction_keeps_each_schedule_and_scanned_exhibit_with_page_evidence():

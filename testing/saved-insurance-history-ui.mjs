@@ -47,6 +47,7 @@ try {
   assert.equal(await page.getByText('Saved insurance checks', { exact: true }).count(), 0)
   await page.getByRole('button', { name: 'View patient appointments' }).click()
   await page.getByRole('heading', { name: 'Appointments and saved estimates' }).waitFor()
+  await page.locator('.patient-appointment').first().waitFor()
   assert.equal(await page.locator('.patient-appointment').count(), 7)
   await page.getByRole('button', { name: 'Next appointments' }).click()
   assert.equal(await page.locator('.patient-appointment').count(), 3)

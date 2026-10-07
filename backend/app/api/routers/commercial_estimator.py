@@ -24,8 +24,8 @@ from pydantic import StrictInt, BaseModel, ConfigDict, Field, ValidationError
 from app.api.routers.insurance import _response, _scope, _session as insurance_session
 from app.core import object_store, staff_store
 from app.insurance import identity as insurance_identity
-from app.insurance import commercial, commercial_store, cpt_rules, cpt_suggester, ecw_backend, golden, stedi_discovery, stedi_payers, store, visit_estimate, nmct_cash, practice_prices, plan_benefits
-from app.insurance import stedi_financial, collection_guidance, ecw_benefits
+from app.insurance import commercial, commercial_store, cpt_rules, cpt_suggester, ecw_backend, golden, stedi_discovery, stedi_payers, store, visit_estimate, practice_prices
+from app.insurance import stedi_financial, collection_guidance, ecw_benefits, ecw_billing
 from app.logs.collection_audit import collection_event
 from app.logs.logger import log_info, log_warning
 
@@ -137,7 +137,7 @@ class VisitReviewInput(BaseModel):
     payment_mode: Literal["insurance", "cash"] | None = None
     emg_required: bool | None = None
     insurance_check_from: date | None = None
-    cash_selection: str | None = Field(default=None, max_length=40)
+    cash_selection: str | None = Field(default=None, max_length=40, description="Legacy cash package selection. Only an empty value is accepted to clear it; prices use the active per-service schedule.")
     confirmed_units: dict[str, StrictInt] | None = Field(default=None, max_length=20)
     verification: VisitVerification | None = None
     payments_received_cents: int | None = Field(default=None, ge=0, le=100_000_000)
@@ -312,7 +312,7 @@ def _practice_path(practice_id: str, inputs: dict, source: dict) -> tuple[dict, 
                     and mapping.get('network_reference') == networks[0].get('evidence_reference')
                     and mapping.get('plan_scope') == source.get('payer_plan_scope')):
                 aliases.update(insurance_identity.normalized(name) for name in mapping.get('products', []))
-        if not product_names <= aliases and not plan_benefits.network_match(payer.get('stedi_payer_id', ''), product_names, networks[0].get('network_name', '')):
+        if not product_names <= aliases:
             raise HTTPException(409, 'The clinic fee schedule is not matched to the exact payer product.')
     return payer, networks[0], profiles[0]
 
@@ -487,8 +487,7 @@ def _previsit_codes(inputs: dict) -> list[dict[str, Any]]:
 
 
 def _office_service_types(practice_id: str, source: dict) -> list[str]:
-    # NMCT is a neurology practice even when eCW omits PractitionerRole.
-    specialist = practice_id == nmct_cash.PRACTICE_ID or any('neurolog' in role.lower()
+    specialist = any('neurolog' in role.lower()
         for role in (source.get('rendering_provider') or {}).get('roles', []))
     return ['BQ', 'BY', '98'] if specialist else ['BY', '98']
 
@@ -545,7 +544,10 @@ def _previsit_benefits(payload: dict, coverage: dict, service_date: str | None =
 def _attach_previsit_pricing(result: dict, practice_id: str, inputs: dict, source: dict,
                              payer_id: str, benefits: dict, *, payload: dict | None = None,
                              review: dict | None = None) -> None:
-    benefits["network_status"] = "unknown"
+    # Retain a scoped payer assertion about the requesting provider. A generic
+    # in-network benefit schedule alone still cannot establish participation.
+    if benefits.get('network_source') != 'payer_participation_message':
+        benefits["network_status"] = "unknown"
     connections = [row for row in commercial_store.list_connections(practice_id)
                    if row.get("stedi_payer_id") == payer_id and row.get("status") == "staff_guidance_enabled"]
     if len(connections) != 1:
@@ -560,10 +562,8 @@ def _attach_previsit_pricing(result: dict, practice_id: str, inputs: dict, sourc
     try:
         _, network, _ = _previsit_practice_path(practice_id, {**inputs, "payer_id": connection["id"]}, source)
         benefits["network_status"] = "in_network"
+        benefits['network_source'] = 'clinic_record'
         result['network_evidence'] = {key: network.get(key) for key in ('network_name', 'evidence_reference', 'effective_from', 'effective_to')}
-        products = {re.sub(r'[^a-z0-9]', '', name.casefold()) for name in source.get('payer_plan_names', [])}
-        if plan_benefits.network_match(payer_id, products, network.get('network_name', '')):
-            result['network_evidence']['product_source'] = plan_benefits.FEP_NETWORK
     except HTTPException:
         pass
     result["price_range"], issues = _previsit_range(practice_id, inputs, source, connection["id"], result["codes"], benefits,
@@ -641,9 +641,9 @@ def _finish_previsit(result: dict, case: dict, inputs: dict, source: dict, paylo
                 available.append({'id': 'suggested:' + code, 'code': code, 'source': 'Clinician-confirmed candidate',
                                   'description': candidate.get('reason'), 'units': None, 'modifiers': []})
                 known.add(code)
-    if nmct_cash.schedule(session['practice_id'], inputs['service_date']):
-        available.extend(row for row in nmct_cash.catalog() if row['code'] not in {item['code'] for item in available})
-    uploaded_cash = practice_prices.current(session['practice_id'], inputs['service_date']) if session['practice_id'] != nmct_cash.PRACTICE_ID else None
+    for key in ('cash_schedule', 'cash_quote', 'practice_cash_source', 'collection_policy'):
+        result.pop(key, None)
+    uploaded_cash = practice_prices.current(session['practice_id'], inputs['service_date'])
     if uploaded_cash:
         known_codes = {row['code'] for row in available}
         available.extend({'id': 'cash:' + row['code'], 'code': row['code'], 'description': row['description'], 'source': 'Practice cash schedule', 'units': 1, 'modifiers': []} for row in uploaded_cash['rows'] if row['code'] not in known_codes)
@@ -667,15 +667,15 @@ def _finish_previsit(result: dict, case: dict, inputs: dict, source: dict, paylo
         [(row['id'], row.get('units')) for row in available]], sort_keys=True).encode()).hexdigest()
     prior_plan = case.get('previsit_plan') or {}
     if prior_plan.get('key') != plan_key or prior_plan.get('plan', {}).get('version') != 5:
-        cash_schedule = nmct_cash.schedule(session['practice_id'], inputs['service_date'])
-        planning_source = {**source, 'spinal_tap_abbreviation': session['practice_id'] == nmct_cash.PRACTICE_ID, 'planning_cash_packages': cash_schedule['packages'] if cash_schedule else []}
-        prior_plan = {'key': plan_key, 'plan': cpt_suggester.recommend_visit_plan(inputs, planning_source, available)}
+        prior_plan = {'key': plan_key, 'plan': cpt_suggester.recommend_visit_plan(inputs, source, available)}
         case['previsit_plan'] = prior_plan
     result['service_plan'] = {**prior_plan['plan'], 'selection_source': 'clinician' if review.get('selected_ids') else 'suggested'}
     auto_units = result['service_plan'].get('recommended_units') or {}
     units = {**auto_units, **(review.get('confirmed_units') or {})}
     result['available_codes'] = [{**row, 'units': units.get(row['id'], row.get('units'))} for row in available]
-    result['payment_mode'] = review.get('payment_mode', 'cash' if source.get('self_pay_recorded') else 'insurance')
+    result['billing_note'] = ecw_billing.collection_note(source.get('appointment_fields') or [])
+    note_self_pay = (result['billing_note'] or {}).get('kind') == 'self_pay'
+    result['payment_mode'] = review.get('payment_mode', 'cash' if source.get('self_pay_recorded') or note_self_pay else 'insurance')
     result['ecw_saved_eligibility'] = {k: v for k, v in (source.get('saved_eligibility') or {}).items() if not k.startswith('_')}
     labels = {'selected_ids': 'Services', 'confirmed_units': 'Service quantities', 'payment_mode': 'Payment method',
               'cash_selection': 'Cash package', 'emg_required': 'EMG testing', 'insurance_check_from': 'Insurance checking date', 'verification': 'Benefit or approval evidence',
@@ -728,8 +728,6 @@ def _finish_previsit(result: dict, case: dict, inputs: dict, source: dict, paylo
                                                'reference': network['evidence_reference']}
         except HTTPException:
             result.pop('mapping_candidate', None)
-    cash_review = {'cash_selection': result['service_plan'].get('cash_selection', ''), **review}
-    nmct_cash.apply(result, session['practice_id'], inputs['service_date'], cash_review)
     if uploaded_cash:
         practice_prices.apply(result, uploaded_cash)
     result['collection_guidance'] = collection_guidance.build(result, review)
@@ -1469,7 +1467,18 @@ async def _begin_coverage_discovery(result: dict, session: dict, inputs: dict, s
 
 @router.post("/appointments/previsit")
 async def previsit_estimate(value: PrevisitInput, request: Request, background_tasks: BackgroundTasks = None) -> dict:
-    """Check a future office visit before a final CPT level exists."""
+    """Estimate selected visit CPTs from current eligibility and clinic prices.
+
+    Uses applicable saved eCW or Stedi benefits, verified network mappings and
+    active clinic rate schedules. A disclosed clinic-price reference may support
+    a provisional advance when no contracted allowance is available. Missing
+    eligibility or secondary-benefit coordination does not imply zero liability.
+    Explicit visit-linked eCW billing notes can supply a collection instruction
+    or a fallback office copay; their source and timestamp accompany the result.
+    They do not establish payer eligibility.
+    Self-pay uses recorded cash mode and the active schedule, without built-in
+    clinic prices or plan-name benefit overrides. Earlier snapshots are unchanged.
+    """
     session = await _session(request)
     collection_event('previsit_started', practice_id=session['practice_id'], intake_id=(session.get('intake') or {}).get('id'),
                      staff_id=(session.get('staff') or {}).get('id'), stage='appointment')
@@ -1498,7 +1507,6 @@ async def previsit_estimate(value: PrevisitInput, request: Request, background_t
     except asyncio.TimeoutError:
         source['saved_eligibility'] = {'status': 'check_with_stedi', 'message': 'The saved eCW check took too long to load. Continue with Stedi verification and retry eCW later.'}
 
-    inputs['spinal_tap_abbreviation'] = session['practice_id'] == nmct_cash.PRACTICE_ID
     codes = _previsit_codes(inputs)
     result: dict[str, Any] = {"appointment_id": value.appointment_id, "service_date": inputs["service_date"],
         "payer": source.get("payer"), "plan": source.get("plan"), "visit_type": inputs.get("visit_type"),
@@ -1533,7 +1541,8 @@ async def previsit_estimate(value: PrevisitInput, request: Request, background_t
         collection_event('previsit_deferred', practice_id=session['practice_id'], intake_id=(session.get('intake') or {}).get('id'),
                          stage='eligibility', reason_code='outside_check_window')
         return await incomplete_result()
-    if source.get('self_pay_recorded'):
+    billing_note = ecw_billing.collection_note(source.get('appointment_fields') or [])
+    if source.get('self_pay_recorded') or (billing_note or {}).get('kind') == 'self_pay':
         collection_event('previsit_deferred', practice_id=session['practice_id'], intake_id=(session.get('intake') or {}).get('id'),
                          stage='eligibility', reason_code='self_pay_recorded')
         return await incomplete_result()
@@ -1829,9 +1838,8 @@ async def update_visit_review(case_id: str, value: VisitReviewInput, request: Re
     if value.payment_mode is not None:
         review['payment_mode'] = value.payment_mode
     if value.cash_selection is not None:
-        config = nmct_cash.schedule(session['practice_id'], inputs['service_date'])
-        if not config or value.cash_selection not in {'', 'friends_family', *(row['id'] for row in config['packages'])}:
-            raise HTTPException(422, 'Select a cash option from this clinic’s current schedule.')
+        if value.cash_selection:
+            raise HTTPException(422, 'The active per-service cash schedule does not define packages or discounts.')
         review['cash_selection'] = value.cash_selection
         review.pop('payments', None)
     if value.confirmed_units is not None:
@@ -2218,9 +2226,8 @@ async def calculate(case_id: str, request: Request) -> Any:
 
 @router.post('/cash-schedules')
 async def upload_cash_schedule(request: Request, effective_from: date, file: UploadFile = File(...)) -> dict:
+    """Import a draft per-service cash schedule for this clinic; activation is separate."""
     session = await _session(request); _admin(session)
-    if session['practice_id'] == nmct_cash.PRACTICE_ID:
-        raise HTTPException(409, 'NMCT uses its supplied, versioned Word schedule including clinical packages.')
     content = await file.read(20 * 1024 * 1024 + 1)
     if len(content) > 20 * 1024 * 1024:
         raise HTTPException(413, 'Price schedules must be 20 MB or smaller.')
@@ -2245,9 +2252,8 @@ async def upload_cash_schedule(request: Request, effective_from: date, file: Upl
 
 @router.post('/cash-schedules/{version_id}/activate')
 async def activate_cash_schedule(version_id: str, request: Request) -> dict:
+    """Activate a clinic-owned cash schedule used on or after its effective date."""
     session = await _session(request); _admin(session)
-    if session['practice_id'] == nmct_cash.PRACTICE_ID:
-        raise HTTPException(409, 'NMCT uses its supplied Word schedule.')
     try:
         return await run_in_threadpool(practice_prices.activate, session['practice_id'], version_id)
     except commercial.CommercialError as exc:

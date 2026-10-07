@@ -179,7 +179,6 @@ def test_identity_review_persists_across_visits_and_rejects_stale_or_unauthorize
     monkeypatch.setattr(api.ecw_backend, 'fetch_inputs', AsyncMock(return_value=(inputs, [], source)))
     monkeypatch.setattr(api.commercial_store, 'list_connections', lambda *a: [])
     monkeypatch.setattr(api.practice_prices, 'current', lambda *a: None)
-    monkeypatch.setattr(api.nmct_cash, 'schedule', lambda *a: None)
     monkeypatch.setattr(api.cpt_suggester, 'recommend_visit_plan', lambda i, s, rows: {
         'version': 2, 'recommended_ids': [rows[0]['id']], 'recommended_units': {rows[0]['id']: 1}})
     monkeypatch.setattr(api.store, 'get_case', lambda *a, **kw: case)

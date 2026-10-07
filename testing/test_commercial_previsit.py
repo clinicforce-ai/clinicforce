@@ -29,6 +29,16 @@ class PrevisitFlowTest(unittest.IsolatedAsyncioTestCase):
     async def test_missing_provider_enrollment_prevents_paid_eligibility(self):
         await self._flow(date.today().isoformat(), enrollment_missing=True)
 
+    async def test_medicare_secondary_without_eligibility_does_not_invent_zero(self):
+        await self._flow(date.today().isoformat(), enrollment_missing=True, medicare_secondary=True)
+
+    async def test_medicare_enrollment_failure_uses_returned_billing_instruction(self):
+        await self._flow(date.today().isoformat(), enrollment_missing=True, medicare_secondary=True,
+            billing_note='No need to collect money from the patient. Secondary will take care.')
+
+    async def test_self_pay_billing_note_skips_paid_eligibility(self):
+        await self._flow(date.today().isoformat(), billing_note='Self Pay')
+
     async def test_saved_insurance_hold_prevents_paid_refresh(self):
         await self._flow((date.today() + timedelta(days=2)).isoformat(), refresh=True, too_early=True, saved_hold=True)
 
@@ -70,7 +80,7 @@ class PrevisitFlowTest(unittest.IsolatedAsyncioTestCase):
     async def test_newer_conflicting_ecw_check_refreshes_cached_stedi_evidence(self):
         await self._flow(date.today().isoformat(), newer_ecw=True)
 
-    async def _flow(self, service_date, reject=False, retry_basic=False, payer_missing=False, refresh=False, newer_ecw=False, too_early=False, self_pay=False, coverage_start=None, saved_hold=False, enrollment_missing=False, ecw_saved=False, ecw_incomplete=False):
+    async def _flow(self, service_date, reject=False, retry_basic=False, payer_missing=False, refresh=False, newer_ecw=False, too_early=False, self_pay=False, coverage_start=None, saved_hold=False, enrollment_missing=False, ecw_saved=False, ecw_incomplete=False, medicare_secondary=False, billing_note=None):
         session = {"practice_id": "clinic", "intake_id": "intake", "patient_id": "patient",
                    "share_manifest_id": "", "staff": {"id": "staff", "display_name": "Staff", "practice_name": "Clinic"},
                    "intake": {"updated_at": "version", "patient": {"given_name": "Pat", "family_name": "Example",
@@ -84,6 +94,8 @@ class PrevisitFlowTest(unittest.IsolatedAsyncioTestCase):
                   "payer": "Blue Cross Blue Shield Tx", "plan": "CI", "rendering_provider": {"npi": "1234567890", "first_name": "Ada", "last_name": "Clinician"},
                   "billing_provider": {"name": "Clinic", "npi": "1811853260"}, "location_id": "office"}
         saved_ecw = {'status': 'check_with_stedi'}
+        if medicare_secondary:
+            source.update(payer='Medicare of Texas', active_coverages=2)
         if ecw_saved:
             from test_ecw_benefits import saved_response
             from app.insurance import ecw_backend
@@ -96,6 +108,9 @@ class PrevisitFlowTest(unittest.IsolatedAsyncioTestCase):
             inputs['patient'].update(gender='F', address={'address1': '1 Main St', 'city': 'Austin', 'state': 'TX', 'postalCode': '78701'})
         case = {"id": "case-1", "source_mode": "commercial_previsit", "previsit": {"request_state": "not_requested"}}
         source['self_pay_recorded'] = self_pay
+        if billing_note:
+            source['appointment_fields'] = [{'label': 'Billing Notes', 'text': billing_note, 'source': 'Encounter/visit-1.extension[0].valueString',
+                'updated_at': (datetime.now(timezone.utc) - timedelta(minutes=1)).isoformat()}]
         if coverage_start:
             source['coverage_period'] = {'start': coverage_start}
         if saved_hold:
@@ -150,7 +165,9 @@ class PrevisitFlowTest(unittest.IsolatedAsyncioTestCase):
                 return
             if enrollment_missing:
                 self.assertEqual(result['eligibility_failure']['kind'], 'provider_enrollment')
-                self.assertIsNone(result['collection_guidance']['amount_cents'])
+                self.assertEqual(result['collection_guidance']['amount_cents'], 0 if billing_note else None)
+                if billing_note:
+                    self.assertEqual(result['collection_guidance']['basis'], 'ecw_billing_note')
                 self.assertEqual(case['previsit']['request_state'], 'not_requested')
                 client.post.assert_not_awaited()
                 return
@@ -171,7 +188,7 @@ class PrevisitFlowTest(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(refreshed['price_range']['mode'], 'services')
                 self.assertEqual(refreshed['selected_ids'], ['99203:1'])
                 return
-            if self_pay:
+            if self_pay or billing_note == 'Self Pay':
                 self.assertEqual(result['payment_mode'], 'cash')
                 client.post.assert_not_awaited()
                 return
