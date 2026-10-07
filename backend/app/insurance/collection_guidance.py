@@ -19,7 +19,8 @@ def build(result: dict, review: dict | None = None) -> dict:
                 'network': 'In network' if benefits.get('network_status') == 'in_network' else
                            'Out of network' if benefits.get('network_status') == 'out_of_network' else
                            (result.get('network_evidence') or {}).get('network_name') or 'Not reported',
-                'network_source': ('Clinic provider-network record' if benefits.get('network_status') in {'in_network', 'out_of_network'} else
+                'network_source': ('Payer statement about the requesting provider' if benefits.get('network_source') == 'payer_participation_message' else
+                                   'Clinic provider-network record' if benefits.get('network_status') in {'in_network', 'out_of_network'} else
                                    'Clinic contract; exact product match not confirmed' if (result.get('network_evidence') or {}).get('network_name') else
                                    'No provider participation result available'),
                 'requirements': {}, 'requirement_sources': {}}
@@ -126,12 +127,38 @@ def build(result: dict, review: dict | None = None) -> dict:
             assumptions.extend(reference['assumptions'])
             guidance.update(status='estimated', basis='clinic_price_reference', reason=reference['reason'],
                 range_min_cents=reference['amount_cents'], range_max_cents=reference['max_cents'])
+    note = result.get('billing_note') or {}
+    if (note and identity.get('status') != 'review' and not source_errors
+            and not price.get('service_issues') and result.get('payment_mode') != 'cash'):
+        office_only = bool(lines) and all(line.get('code', '').isdigit() and
+            (99202 <= int(line['code']) <= 99205 or 99212 <= int(line['code']) <= 99215)
+            and line.get('units') == 1 for line in lines) and (len(lines) == 1 or price.get('mode') == 'alternatives')
+        copay_matches = all((line.get('benefits') or {}).get('copay_cents') in {None, note.get('amount_cents')} for line in lines)
+        if note['kind'] == 'no_collection':
+            amount = 0
+            guidance.update(status='no_advance', basis='ecw_billing_note',
+                reason='The eCW billing instruction for this visit says not to collect from the patient.')
+        elif (amount is None and note['kind'] == 'office_copay' and office_only and copay_matches
+                and not adverse and benefits.get('active') is not False
+                and benefits.get('service_date_matches') is not False and not benefits.get('has_secondary')
+                and benefits.get('network_status') != 'out_of_network'
+                and all((line.get('benefits') or {}).get('coinsurance_percent') in {None, '0', '0.0', '0.00'}
+                    and (line.get('benefits') or {}).get('deductible_remaining_cents') in {None, 0}
+                    and (line.get('benefits') or {}).get('active') is not False for line in lines)):
+            amount = note['amount_cents']
+            guidance.update(status='estimated', basis='ecw_billing_note',
+                reason='Office-visit copay recorded in the eCW billing note; the note records active coverage and a met deductible.')
+        if guidance['basis'] == 'ecw_billing_note':
+            guidance.pop('range_min_cents', None)
+            guidance.pop('range_max_cents', None)
+            guidance['billing_note'] = note
+            assumptions.append('Source: the visit-linked eCW billing note, not a completed payer eligibility check. Final responsibility follows claim processing.')
     failure_codes = set((result.get('eligibility_failure') or {}).get('codes') or [])
     if failure_codes & {'72', '73', '65', '67', '71', '75', '76'}:
         actions.append('Contact your insurer to confirm the member ID, policyholder name and date of birth; bring the corrected insurance details.')
     if amount is not None:
         payments = (review or {}).get('payments') or {}
-        if strict.get('amount_cents') is None and payments.get('reference'):
+        if (strict.get('amount_cents') is None or guidance['basis'] == 'ecw_billing_note') and payments.get('reference'):
             amount = max(0, amount - payments['amount_cents'])
         guidance['amount_cents'] = max(0, amount)
         if guidance.get('range_max_cents') is not None and payments.get('reference'):
@@ -194,6 +221,11 @@ def build(result: dict, review: dict | None = None) -> dict:
         guidance['services'][-1]['selected_benefit_ids'].extend(terms.get('family_oop_ids') or [])
         if guidance['basis'] == 'out_of_pocket_limit':
             guidance['services'][-1]['patient_cents'] = 0
+    if guidance['basis'] == 'ecw_billing_note':
+        guidance['patient_message'] = ('No payment is requested at arrival under the recorded eCW billing instruction. Final responsibility follows claim processing.'
+            if note['kind'] == 'no_collection' else 'This advance uses the office copay recorded by the clinic. Additional services and final responsibility follow claim processing.')
+        for service in guidance['services']:
+            service['patient_cents'] = None
     guidance['assumptions'] = list(dict.fromkeys(assumptions))
     return guidance
 

@@ -57,6 +57,8 @@ async def clinic_entry(clinic_code: str):
 def _redacted_target(target: str) -> str:
     parsed = urlsplit(target)
     path = parsed.path
+    if path.startswith('/manifest/'):
+        return '/manifest/[redacted]'
     parts = path.strip("/").split("/")
     if (len(parts) == 2 and (parts[0] == "join" or clinic_store.valid_npi(parts[0]) or clinic_store.valid_legacy_code(parts[0]))
             and re.fullmatch(r"[A-Za-z0-9_-]{32,128}", parts[1])):

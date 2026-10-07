@@ -5,7 +5,7 @@ from zoneinfo import ZoneInfo
 from unittest.mock import patch
 import pytest
 from app.api.routers import commercial_estimator as api
-from app.insurance import commercial, cpt_suggester, ecw_backend, identity, nmct_cash, visit_estimate, collection_guidance
+from app.insurance import commercial, cpt_suggester, ecw_backend, identity, practice_prices, visit_estimate, collection_guidance
 
 
 @pytest.mark.parametrize('label', ['Follow Up', 'follow-up', 'Followup', 'F/U', 'FU', 'Established Patient'])
@@ -22,13 +22,12 @@ def test_ecw_followup_label_selects_an_editable_followup(label):
 
 
 def test_biopsy_catalog_and_combined_visit_preserve_all_procedures_and_units():
-    inputs = {'visit_type': 'established', 'reason': 'Reason: 3 month f/u; skin bx; Visit type: Follow Up'}
-    available = [*api._previsit_codes(inputs), *nmct_cash.catalog()]
+    inputs = {'visit_type': 'established', 'reason': 'Reason: 3 month f/u; skin bx; 3 sites; Visit type: Follow Up'}
+    available = [*api._previsit_codes(inputs), *[{'id': c, 'code': c, 'units': 1, 'source': 'CPT planning catalog'} for c in ('11104', '11105', '95907', '95910', '95886')]]
     plan = cpt_suggester.recommend_visit_plan(inputs, {}, available)
     rows = {r['id']: r for r in available}
     assert [(rows[key]['code'], plan['recommended_units'][key]) for key in plan['recommended_ids']] == [('99213', 1), ('11104', 1), ('11105', 2)]
     assert api._previsit_service_types(inputs) == ['2', '98', '30']
-    assert not nmct_cash.quote([{'code': '11104', 'units': 1}, {'code': '11105', 'units': 2}])['complete']
     inputs['reason'] = 'Skin punch biopsy; 2 sites'
     plan = cpt_suggester.recommend_visit_plan(inputs, {}, available)
     assert [(rows[key]['code'], plan['recommended_units'][key]) for key in plan['recommended_ids']] == [('11104', 1), ('11105', 1)]
@@ -72,14 +71,15 @@ def diagnostic_result(raw):
     codes = [{'id': c, 'code': c, 'units': 1} for c in ['95910', '95886']]
     result = {'benefits': benefits, 'codes': codes, 'available_codes': codes, 'identity': {'status': 'warning'},
               'price_range': visit_estimate.price_lines(codes, [], benefits, {}, payload=raw, service_date='2026-09-30')}
-    nmct_cash.apply(result, nmct_cash.PRACTICE_ID, '2026-09-30', {})
+    practice_prices.apply(result, {'id': 'schedule', 'filename': 'cash.csv', 'effective_from': '2026-01-01',
+        'rows': [{'code': '95910', 'cash_cents': 30000}, {'code': '95886', 'cash_cents': 10000}]})
     return result
 
 
 def test_diagnostic_percentage_uses_disclosed_cash_reference_not_an_office_copay():
     result = diagnostic_result(diagnostic_payload())
     value = collection_guidance.build(result)
-    assert value['amount_cents'] == 2000 and value['range_max_cents'] == 6500
+    assert value['amount_cents'] == 2000 and value['range_max_cents'] == 2000
     assert value['basis'] == 'clinic_price_reference'
     assert 'not an insurer-contracted allowance' in ' '.join(value['assumptions'])
     assert all(row['benefits']['resolved_service_type'] == '73' for row in result['price_range']['lines'])
@@ -117,8 +117,8 @@ def test_diagnostic_only_response_keeps_active_coverage_at_case_level():
 
 def test_generic_emg_selects_an_editable_pair_without_inventing_an_anatomical_diagnosis():
     with patch.object(cpt_suggester.boto3, 'client') as model:
-        plan = cpt_suggester.recommend_visit_plan({'reason': 'Visit type: EMG Visit'}, {}, nmct_cash.catalog())
+        plan = cpt_suggester.recommend_visit_plan({'reason': 'Visit type: EMG Visit'}, {}, [{'id': c, 'code': c, 'units': 1, 'source': 'CPT planning catalog'} for c in ('11104', '11105', '95907', '95910', '95886')])
     model.assert_not_called()
-    assert plan['recommended_ids'] == ['nmct-cash:95907', 'nmct-cash:95886']
+    assert plan['recommended_ids'] == ['95907', '95886']
     assert 'cash_selection' not in plan
     assert len(plan['assumptions']) == 1 and 'Initial planning scope' in plan['assumptions'][0]

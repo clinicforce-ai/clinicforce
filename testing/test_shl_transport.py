@@ -7,6 +7,7 @@ import json
 import sys
 import threading
 import unittest
+from urllib.parse import parse_qs, urlsplit
 from pathlib import Path
 from unittest.mock import patch
 
@@ -14,6 +15,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "backend"))
 
 from app.core import patient_store  # noqa: E402
 from app.core.shl import create_shl_uri, encrypt_bundle, generate_symmetric_key, hash_pin  # noqa: E402
+from app.core import object_store  # noqa: E402
 
 
 class _Result:
@@ -59,6 +61,21 @@ class _ManifestConnection:
 
 
 class ShlTransportTests(unittest.TestCase):
+    def test_download_url_uses_kms_compatible_sigv4_and_at_most_one_hour(self):
+        import boto3
+        create_client = boto3.client
+        def synthetic_client(service, **kwargs):
+            return create_client(service, region_name='us-east-1',
+                                 aws_access_key_id='synthetic-access',
+                                 aws_secret_access_key='synthetic-secret', **kwargs)
+        with patch.object(object_store, 'S3_BUCKET', 'synthetic-share-bucket'), \
+             patch.object(object_store.boto3, 'client', side_effect=synthetic_client):
+            url = object_store.presign_shl_payload('synthetic.jwe', expires_in=7200)
+        query = parse_qs(urlsplit(url).query)
+        self.assertEqual(query['X-Amz-Algorithm'], ['AWS4-HMAC-SHA256'])
+        self.assertEqual(query['X-Amz-Expires'], ['3600'])
+        self.assertNotIn('AWSAccessKeyId', query)
+
     def test_manifest_tokens_are_43_character_base64url_256_bit_values(self) -> None:
         tokens = {patient_store.generate_manifest_token() for _ in range(20)}
         self.assertEqual(len(tokens), 20)

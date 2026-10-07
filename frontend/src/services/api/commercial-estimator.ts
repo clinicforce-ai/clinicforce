@@ -7,7 +7,9 @@ export type CommercialAppointment = { id: string; start: string; status: string;
 export const commercialAppointments = () => request<{ appointments: CommercialAppointment[] }>(`${root}/appointments`, {}, ECW_LOOKUP_TIMEOUT_MS)
 export type CommercialReadiness = { ready: boolean; blockers: string[]; ecw: { payer?: string | null; plan?: string | null; scheduled_codes: Array<{ code?: string | null; units?: number | string | null }>; visit_type?: string | null; reason?: string | null } }
 export const commercialReadiness = (appointment_id: string) => request<CommercialReadiness>(`${root}/appointments/readiness`, json({ appointment_id }))
+export type BillingNote = { kind: 'no_collection' | 'office_copay' | 'self_pay'; amount_cents?: number; source: string; updated_at: string; text: string };
 export type CollectionGuidance = {
+  billing_note?: BillingNote;
   amount_cents: number | null; status: string; basis: string; reason: string; patient_message: string;
   assumptions: string[]; patient_actions: string[]; network: string;
   network_source?: string; requirement_sources?: { referral?: string; authorization?: string };
@@ -17,6 +19,7 @@ export type CollectionGuidance = {
     deductible_remaining_cents?: number | null; selected_benefit_ids: string[] }>;
 }
 export type PrevisitEstimate = {
+  billing_note?: BillingNote | null;
   benefit_source?: string | null;
   eligibility_timing?: { status: string; appointment_date: string; check_from: string; message: string };
   collection_guidance?: CollectionGuidance;
@@ -53,7 +56,7 @@ export type PrevisitEstimate = {
   visit_type?: string | null; reason?: string | null; checked_at?: string | null;
   stedi_payer?: { name?: string; id: string };
   codes: VisitCode[];
-  benefits: null | { service_date_matches?: boolean | null; returned_service_dates?: { start?: string; end?: string }; active?: boolean | null; network_status?: string; deductible_remaining_cents?: number | null;
+  benefits: null | { service_date_matches?: boolean | null; returned_service_dates?: { start?: string; end?: string }; active?: boolean | null; network_status?: string; network_source?: 'clinic_record' | 'payer_participation_message' | null; network_evidence_ids?: string[]; deductible_remaining_cents?: number | null;
     oop_remaining_cents?: number | null; copay_cents?: number | null; coinsurance_percent?: string | null;
     authorization_basis?: string; authorization_signal?: string; referral_signal?: string; normalization_notes?: string[]; review_reasons?: string[]; requires_review?: boolean;
     reported_options?: Array<{ id?: string; procedure_code?: string; coverage_level?: string; plan_name?: string; kind: string; service_type_code: string; network: string; time_period: string;
