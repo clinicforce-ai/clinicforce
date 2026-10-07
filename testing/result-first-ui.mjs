@@ -240,6 +240,18 @@ try {
   assert.equal(await page.locator('.arrival-total > strong').innerText(), '$0.00')
   await page.getByText('eCW billing note ·', { exact: false }).click()
   assert(await page.getByText(billing.text, { exact: true }).isVisible())
+  // Cash prices remain usable when an earlier insurance inquiry is unresolved.
+  const beforeCash = structuredClone(result)
+  result = { ...result, payment_mode: 'cash', eligibility_timing: undefined,
+    eligibility_error: 'coverage_identity_missing', benefits: { ...benefits, active: null },
+    price_range: { ...result.price_range, cash_complete: true, cash_min_cents: 22000, cash_max_cents: 22000 },
+    cash_quote: { complete: true, min_cents: 22000, max_cents: 22000, source: 'Clinic final prices.docx', message: 'Clinic self-pay price.' } }
+  await openPatient()
+  assert.equal(await page.locator('.arrival-total > strong').innerText(), '$220.00')
+  assert((await page.locator('.coverage-chip').innerText()).includes('Self-pay · insurance not used'))
+  assert(!(await page.locator('.visit-snapshots').innerText()).includes('Unverified'))
+  assert((await page.locator('.arrival-sources').innerText()).includes('Clinic final prices.docx'))
+  result = beforeCash
   // A failed refresh retains the saved estimate, labelled for rechecking.
   result = { ...result, emg_option: undefined, collection_guidance: { ...result.collection_guidance, status: 'estimated', amount_cents: 4735,
     billing_note: { ...billing, kind: 'office_copay', amount_cents: 4735, text: 'Active, $47.35 copay, ded met' } } }

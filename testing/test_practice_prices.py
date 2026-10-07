@@ -9,7 +9,7 @@ from psycopg import sql
 from psycopg.conninfo import make_conninfo
 import pytest
 import fitz
-from app.core import patient_store
+from app.core import patient_store, staff_store
 from app.insurance import commercial, practice_prices
 
 CSV = b'CPT,Description,Cash Price\n99202-99205,Consultation,$250\n95910,Nerve studies,$700\n'
@@ -53,7 +53,7 @@ def test_schedule_activation_and_effective_dates_are_practice_scoped():
     with psycopg.connect(url, autocommit=True) as db:
         db.execute(sql.SQL('CREATE SCHEMA {}').format(sql.Identifier(schema)))
     try:
-        with patch.object(patient_store, 'DATABASE_URL', make_conninfo(url, options=f'-csearch_path={schema}')), patch.object(patient_store, '_schema_initialized', False):
+        with patch.object(patient_store, 'DATABASE_URL', make_conninfo(url, options=f'-csearch_path={schema}')), patch.object(patient_store, '_schema_initialized', False), patch.object(staff_store, '_schema_initialized', False):
             draft = practice_prices.create('clinic-a', 'admin-a', CSV, 'clinic.csv', '2026-09-01')
             assert practice_prices.current('clinic-a', '2026-09-28') is None
             with pytest.raises(commercial.CommercialError): practice_prices.activate('clinic-b', draft['id'])

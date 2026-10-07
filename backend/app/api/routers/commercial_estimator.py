@@ -25,7 +25,7 @@ from app.api.routers.insurance import _response, _scope, _session as insurance_s
 from app.core import object_store, staff_store
 from app.insurance import identity as insurance_identity
 from app.insurance import commercial, commercial_store, cpt_rules, cpt_suggester, ecw_backend, golden, stedi_discovery, stedi_payers, store, visit_estimate, practice_prices
-from app.insurance import stedi_financial, collection_guidance, ecw_benefits, ecw_billing
+from app.insurance import stedi_financial, collection_guidance, ecw_benefits, ecw_billing, library_network
 from app.logs.collection_audit import collection_event
 from app.logs.logger import log_info, log_warning
 
@@ -546,8 +546,20 @@ def _attach_previsit_pricing(result: dict, practice_id: str, inputs: dict, sourc
                              review: dict | None = None) -> None:
     # Retain a scoped payer assertion about the requesting provider. A generic
     # in-network benefit schedule alone still cannot establish participation.
-    if benefits.get('network_source') != 'payer_participation_message':
+    if benefits.get('network_source') != 'payer_participation_message' and benefits.get('network_status') != 'out_of_network':
         benefits["network_status"] = "unknown"
+        benefits['network_source'] = None
+    if source.get('payer_plan_names') and (source.get('billing_provider') or {}).get('name'):
+        try:
+            evidence = library_network.network(practice_id, source.get('payer') or '', source['payer_plan_names'],
+                                               source['billing_provider'], inputs['service_date'])
+        except Exception:
+            evidence = None
+            result['issues'].append('The uploaded contract evidence could not be read. Retry the document read; payer evidence is retained.')
+        if evidence:
+            result['network_evidence'] = evidence
+            if benefits.get('network_status') == 'unknown' and not benefits.get('network_conflict'):
+                benefits.update(network_status='in_network', network_source='clinic_library')
     connections = [row for row in commercial_store.list_connections(practice_id)
                    if row.get("stedi_payer_id") == payer_id and row.get("status") == "staff_guidance_enabled"]
     if len(connections) != 1:
@@ -643,7 +655,11 @@ def _finish_previsit(result: dict, case: dict, inputs: dict, source: dict, paylo
                 known.add(code)
     for key in ('cash_schedule', 'cash_quote', 'practice_cash_source', 'collection_policy'):
         result.pop(key, None)
-    uploaded_cash = practice_prices.current(session['practice_id'], inputs['service_date'])
+    try:
+        uploaded_cash = practice_prices.current(session['practice_id'], inputs['service_date'])
+    except commercial.CommercialError as exc:
+        uploaded_cash = None
+        result['issues'].append(str(exc))
     if uploaded_cash:
         known_codes = {row['code'] for row in available}
         available.extend({'id': 'cash:' + row['code'], 'code': row['code'], 'description': row['description'], 'source': 'Practice cash schedule', 'units': 1, 'modifiers': []} for row in uploaded_cash['rows'] if row['code'] not in known_codes)
@@ -908,7 +924,10 @@ def stedi_request_body(payer: dict, network: dict, coverage: dict, service_date:
               "patient_first", "patient_last", "patient_birth_date")
     if any(not coverage.get(key) for key in needed) or not coverage.get("active_coverages") or (coverage["active_coverages"] > 1 and not coverage.get("coverage_id")):
         raise commercial.CommercialError("eClinicalWorks did not return one usable primary coverage with member and policyholder details.")
-    if network.get("rendering_first") and network.get("rendering_last") and network.get("rendering_npi"):
+    # CMS attestation belongs to the billing NPI, not each rendering clinician.
+    if payer["stedi_payer_id"] in {"JDNSN", "CMSMED", "CMS"} and network.get("billing_npi") and network.get("organization_name"):
+        provider = {"npi": network["billing_npi"], "name": {"organization": network["organization_name"]}}
+    elif network.get("rendering_first") and network.get("rendering_last") and network.get("rendering_npi"):
         provider = {"npi": network["rendering_npi"], "name": {"person": {
             "firstName": network["rendering_first"], "lastName": network["rendering_last"]}}}
     elif network.get("billing_npi") and network.get("organization_name"):
@@ -1071,13 +1090,6 @@ def _previsit_result(case: dict) -> dict:
         result.pop('eligibility_timing', None)
     if case.get('previsit_discovery'):
         result['recovery'] = stedi_discovery.public_status(case['previsit_discovery'])
-    recovery = case.get('previsit_discovery') or {}
-    if (result.get('eligibility_error') == 'payer_routing_unresolved'
-            and recovery.get('request_state') in {'complete', 'rejected'}
-            and recovery.get('outcome') != 'recovered'
-            and (result.get('cash_quote') or {}).get('complete')
-            and not (case.get('visit_review') or {}).get('payment_mode')):
-        result['payment_mode'] = 'cash'
     result['collection_guidance'] = collection_guidance.build(result, case.get('visit_review'))
     return result
 
@@ -1469,15 +1481,16 @@ async def _begin_coverage_discovery(result: dict, session: dict, inputs: dict, s
 async def previsit_estimate(value: PrevisitInput, request: Request, background_tasks: BackgroundTasks = None) -> dict:
     """Estimate selected visit CPTs from current eligibility and clinic prices.
 
-    Uses applicable saved eCW or Stedi benefits, verified network mappings and
-    active clinic rate schedules. A disclosed clinic-price reference may support
+    Uses applicable saved eCW or Stedi benefits, matching uploaded clinic contracts
+    and active clinic rates. Stedi determines eligibility and provider access; an
+    enrollment-list status does not block the request. CMS inquiries use the billing NPI. A disclosed clinic-price reference may support
     a provisional advance when no contracted allowance is available. Missing
     eligibility or secondary-benefit coordination does not imply zero liability.
     Explicit visit-linked eCW billing notes can supply a collection instruction
     or a fallback office copay; their source and timestamp accompany the result.
     They do not establish payer eligibility.
-    Self-pay uses recorded cash mode and the active schedule, without built-in
-    clinic prices or plan-name benefit overrides. Earlier snapshots are unchanged.
+    Self-pay uses recorded cash mode and an active schedule or final per-code prices
+    in the dated uploaded self-pay document. Proposed and discounted rows are excluded. Earlier snapshots are unchanged.
     """
     session = await _session(request)
     collection_event('previsit_started', practice_id=session['practice_id'], intake_id=(session.get('intake') or {}).get('id'),
@@ -1530,6 +1543,15 @@ async def previsit_estimate(value: PrevisitInput, request: Request, background_t
     workflows = list(session['intake'].get('workflows', {}).values())
     if workflows:
         prior_cases = await run_in_threadpool(store.get_cases, workflows, session['patient_id'], session['share_manifest_id'], **_scope(session))
+        cash_case = next((row for row in prior_cases
+            if row.get('previsit_context', {}).get('source', {}).get('appointment_id') == value.appointment_id
+            and row.get('visit_review', {}).get('payment_mode') == 'cash'
+            and row['visit_review'].get('context_token') == _visit_context_token(inputs, source)), None)
+        if cash_case:
+            result['check_id'] = cash_case['id']
+            result['benefits'] = _previsit_benefits({}, coverage, inputs['service_date'])
+            await run_in_threadpool(_finish_previsit, result, cash_case, inputs, source, None, session, '')
+            return _previsit_result(await run_in_threadpool(_save, cash_case, session, 'previsit-cash-recalculated'))
         holds = [row['visit_review']['insurance_check_from'] for row in prior_cases
                  if row.get('previsit_context', {}).get('source', {}).get('appointment_id') == value.appointment_id
                  and row.get('visit_review', {}).get('insurance_check_from')]
@@ -1703,21 +1725,8 @@ async def previsit_estimate(value: PrevisitInput, request: Request, background_t
         collection_event('eligibility_held', practice_id=session['practice_id'], intake_id=(session.get('intake') or {}).get('id'),
                          case_id=case['id'], stage='eligibility', status=saved.get('request_state'))
         return result
-    if payer.get('transactionSupport', {}).get('eligibilityCheck') == 'ENROLLMENT_REQUIRED':
-        npi = rendering_npi if rendering_first and rendering_last and rendering_npi else billing_npi
-        try:
-            enrolled = await stedi_payers.eligibility_enrolled(payer_id, npi, api_key)
-        except (httpx.HTTPError, ValueError):
-            enrolled = False
-        if not enrolled:
-            result['eligibility_failure'] = {'kind': 'provider_enrollment', 'title': 'Provider eligibility enrollment required',
-                'detail': 'A live Stedi eligibility enrollment was not verified for this payer and provider NPI.',
-                'action': 'The clinic administrator must verify and complete the payer eligibility enrollment in Stedi. No paid eligibility request was submitted.', 'codes': []}
-            result['issues'].append(result['eligibility_failure']['action'])
-            case['previsit'] = {'request_state': 'not_requested'}
-            result['benefits'] = _previsit_benefits({}, coverage, inputs['service_date'])
-            await run_in_threadpool(_finish_previsit, result, case, inputs, source, None, session, payer_id)
-            return _previsit_result(await run_in_threadpool(_save, case, session, 'previsit-enrollment-required'))
+    # Enrollment metadata can lag completed attestation. Submit the authorized
+    # inquiry and retain the actual payer response, including access rejections.
     case.pop('previsit_discovery', None)
     case["previsit"] = {"request_state": "pending"}
     case = await run_in_threadpool(_save, case, session, "previsit-stedi-pending")

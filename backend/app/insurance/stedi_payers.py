@@ -75,16 +75,3 @@ async def search_payer(name: str, identifiers: list[str], api_key: str,
         response.raise_for_status()
         payload = response.json()
         return select_payer(payload["items"], name, []) if isinstance(payload, dict) and isinstance(payload.get("items"), list) else None
-
-
-async def eligibility_enrolled(payer_id: str, npi: str, api_key: str, *, transport=None) -> bool:
-    """Read enrollment before a paid request; never create an enrollment."""
-    async with httpx.AsyncClient(timeout=httpx.Timeout(10, connect=5), transport=transport) as client:
-        response = await client.get('https://enrollments.us.stedi.com/2024-09-01/enrollments',
-            params={'payerIds': payer_id, 'providerNpis': npi, 'transactions': 'eligibilityCheck', 'status': 'LIVE', 'pageSize': 100},
-            headers={'Authorization': api_key})
-        response.raise_for_status()
-        return any(row.get('status') == 'LIVE' and row.get('payer', {}).get('stediPayerId') == payer_id
-            and row.get('provider', {}).get('npi') == npi
-            and row.get('transactions', {}).get('eligibilityCheck', {}).get('enroll') is True
-            for row in response.json().get('items', []))

@@ -20,6 +20,7 @@ def build(result: dict, review: dict | None = None) -> dict:
                            'Out of network' if benefits.get('network_status') == 'out_of_network' else
                            (result.get('network_evidence') or {}).get('network_name') or 'Not reported',
                 'network_source': ('Payer statement about the requesting provider' if benefits.get('network_source') == 'payer_participation_message' else
+                                   'Uploaded clinic contract and matched product' if benefits.get('network_source') == 'clinic_library' else
                                    'Clinic provider-network record' if benefits.get('network_status') in {'in_network', 'out_of_network'} else
                                    'Clinic contract; exact product match not confirmed' if (result.get('network_evidence') or {}).get('network_name') else
                                    'No provider participation result available'),
@@ -202,7 +203,15 @@ def build(result: dict, review: dict | None = None) -> dict:
                  for reason in benefits.get('review_reasons', [])):
             guidance['reason'] = 'The payer did not return the individual deductible or out-of-pocket balance needed for these services. Check the member-specific benefits or a payer cost estimate.'
         else:
-            guidance['reason'] = 'The returned benefits and clinic rates do not establish a collection amount for the selected services.'
+            missing = []
+            if benefits.get('network_status') == 'unknown':
+                missing.append('provider participation is not established by the payer or a matching clinic contract')
+            if lines and any(line.get('allowed_cents') is None for line in lines):
+                missing.append('no contracted price is available for the selected services')
+            if any('conditional benefit' in reason.lower() for line in lines for reason in line.get('benefits', {}).get('review_reasons', [])):
+                missing.append('the applicable conditional benefit needs review')
+            guidance['reason'] = ('Cannot calculate an insurance advance: ' + '; '.join(missing) + '.' if missing else
+                'The returned benefits and clinic rates do not establish a collection amount for the selected services.')
         guidance.update(amount_cents=None, status='deferred_billing', basis='deferred_billing',
             patient_message='No insurance advance is collected today. The insurer determines final responsibility when the claim is processed; a later bill may be due.')
     for line in lines:

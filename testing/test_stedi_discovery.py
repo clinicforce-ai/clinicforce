@@ -83,12 +83,12 @@ def test_automatic_payer_recovery_requires_same_active_ecw_policy():
     assert not discovery.matches_ecw_policy(expired, inputs, source)
 
 
-def test_failed_automatic_routes_open_cash_toggle_when_quote_is_complete():
+def test_failed_insurance_routes_do_not_choose_self_pay_for_the_patient():
     case, _, _, _ = setup()
     case['previsit_context']['result'].update(eligibility_error='payer_routing_unresolved',
         payment_mode='insurance', cash_quote={'complete': True})
     case['previsit_discovery'].update(request_state='complete', outcome='no_match')
-    assert api._previsit_result(case)['payment_mode'] == 'cash'
+    assert api._previsit_result(case)['payment_mode'] == 'insurance'
     case['visit_review'] = {'payment_mode': 'insurance'}
     assert api._previsit_result(case)['payment_mode'] == 'insurance'
     case.pop('visit_review')

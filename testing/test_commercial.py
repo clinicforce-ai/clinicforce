@@ -292,6 +292,8 @@ class CommercialRulesTest(unittest.TestCase):
         self.assertEqual(body["encounter"]["dates"], {"service": {"start": "2026-10-01"}})
         self.assertEqual(body["provider"], {"npi": "1234567890", "name": {"person": {"firstName": "Ada", "lastName": "Clinician"}}})
         self.assertEqual(body["subscriber"]["dateOfBirth"], "1950-01-01")
+        cms = stedi_request_body({"stedi_payer_id": "JDNSN"}, {"rendering_npi": "1234567890", "rendering_first": "Ada", "rendering_last": "Clinician", "billing_npi": "1811853260", "organization_name": "Clinic"}, coverage, "2026-10-01", "98")
+        self.assertEqual(cms["provider"], {"npi": "1811853260", "name": {"organization": "Clinic"}})
         self.assertEqual(body["dependent"]["dateOfBirth"], "1980-01-01")
         enriched = _coverage_snapshot({**inputs, 'group_number': 'GROUP-9', 'plan_number': 'PLAN-2',
                                        'patient': {**inputs['patient'], 'gender': 'F',

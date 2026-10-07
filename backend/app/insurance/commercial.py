@@ -620,6 +620,7 @@ def normalize_stedi_271(payload: dict[str, Any], service_type_code: str, provide
             "network_status": "in_network" if provider_network_verified or payer_network_verified else "unknown",
             "network_source": 'clinic_record' if provider_network_verified else 'payer_participation_message' if payer_network_verified else None,
             "network_evidence_ids": participation if payer_network_verified else [],
+            "network_conflict": conflicting_network,
             "deductible_remaining_cents": deductible_cents, "oop_remaining_cents": oop_cents,
             "family_oop_remaining_cents": family_oop_cents,
             "family_oop_zero_applies": family_oop_zero_applies,

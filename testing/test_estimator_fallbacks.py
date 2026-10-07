@@ -125,13 +125,3 @@ def test_ecw_payer_id_is_searched_before_an_ambiguous_name():
     other = {**payer, 'stediId': 'OTHER'}
     ambiguous = httpx.MockTransport(lambda _: httpx.Response(200, json={'items': [{'payer': payer}, {'payer': other}]}))
     assert asyncio.run(stedi_payers.search_payer('Humana Health Plan', ['61101'], 'test', transport=ambiguous)) is None
-
-
-def test_enrollment_must_be_live_for_exact_provider_payer_and_transaction():
-    row = {'status': 'LIVE', 'payer': {'stediPayerId': 'cms'}, 'provider': {'npi': '1234567890'},
-           'transactions': {'eligibilityCheck': {'enroll': True}}}
-    transport = httpx.MockTransport(lambda request: httpx.Response(200, json={'items': [row]}))
-    assert asyncio.run(stedi_payers.eligibility_enrolled('cms', '1234567890', 'test', transport=transport))
-    assert not asyncio.run(stedi_payers.eligibility_enrolled('cms', '9999999999', 'test', transport=transport))
-    row['status'] = 'PROVIDER_ACTION_REQUIRED'
-    assert not asyncio.run(stedi_payers.eligibility_enrolled('cms', '1234567890', 'test', transport=transport))

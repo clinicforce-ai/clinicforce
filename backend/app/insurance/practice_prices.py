@@ -13,7 +13,7 @@ import fitz
 from app.insurance import commercial, commercial_store
 
 
-def read_rows(content: bytes, filename: str) -> list[dict]:
+def read_rows(content: bytes, filename: str, *, library: bool = False) -> list[dict]:
     suffix = Path(filename).suffix.lower()
     tables = []
     document_text = ''
@@ -29,22 +29,34 @@ def read_rows(content: bytes, filename: str) -> list[dict]:
                 root = ElementTree.fromstring(archive.read(item))
             document_text = ' '.join(root.itertext())
             ns = {'w': 'http://schemas.openxmlformats.org/wordprocessingml/2006/main'}
-            tables = [[[' '.join(node.text or '' for node in cell.findall('.//w:t', ns)) for cell in row.findall('w:tc', ns)]
-                       for row in table.findall('w:tr', ns)] for table in root.findall('.//w:tbl', ns)]
+            context = ''
+            for node in root.find('w:body', ns):
+                if node.tag.endswith('}p'):
+                    paragraph = ' '.join(node.itertext()).strip()
+                    if re.match(r'^\d+\.', paragraph):
+                        context = paragraph
+                    else:
+                        context += ' ' + paragraph
+                elif node.tag.endswith('}tbl'):
+                    table = [[' '.join(item.text or '' for item in cell.findall('.//w:t', ns)) for cell in row.findall('w:tc', ns)]
+                             for row in node.findall('w:tr', ns)]
+                    if not library or not re.search(r'\b(pending|suggested|proposed|draft)\b', context, re.I):
+                        tables.append(table)
         elif suffix == '.pdf':
             with fitz.open(stream=content, filetype='pdf') as document:
                 if len(document) > 100:
                     raise ValueError('too many pages')
                 for page in document:
                     document_text += page.get_text()
-                    tables.extend(table.extract() for table in page.find_tables().tables)
+                    if not library or not re.search(r'\b(pending|suggested|proposed|draft)\b', page.get_text(), re.I):
+                        tables.extend(table.extract() for table in page.find_tables().tables)
         else:
             raise commercial.CommercialError('Upload a PDF, DOCX or UTF-8 CSV price schedule.')
     except commercial.CommercialError:
         raise
     except Exception as exc:
         raise commercial.CommercialError('The schedule could not be read. Use a readable table with CPT, Description and Cash Price columns.') from exc
-    if re.search(r'\b(pending|suggested|proposed|draft)\b', document_text, re.I):
+    if not library and re.search(r'\b(pending|suggested|proposed|draft)\b', document_text, re.I):
         raise commercial.CommercialError('This document contains provisional pricing. Upload the approved schedule.')
     result = []
     seen = set()
@@ -52,6 +64,8 @@ def read_rows(content: bytes, filename: str) -> list[dict]:
         if not table:
             continue
         headers = [re.sub(r'[^a-z]', '', str(x or '').lower()) for x in table[0]]
+        if library and re.search(r'pending|suggested|proposed|draft', ' '.join(headers), re.I):
+            continue
         codes = [i for i, h in enumerate(headers) if h in {'cpt','hcpcs','code','procedurecode','cptcode','cptrange'}]
         prices = [i for i,h in enumerate(headers) if 'cash' in h or 'selfpay' in h]
         if not prices:
@@ -61,6 +75,12 @@ def read_rows(content: bytes, filename: str) -> list[dict]:
         descriptions = [i for i,h in enumerate(headers) if h in {'description','service','procedure'}]
         for number, row in enumerate(table[1:],2):
             if not any(row):
+                continue
+            # Library documents can contain approved standard prices alongside
+            # proposed prices, special discounts and packages. Never apply those
+            # conditional rows as the ordinary per-CPT price.
+            if library and re.search(r'pending|suggested|proposed|draft|discount|friends|family|package|session',
+                                     ' '.join(str(x or '') for x in row), re.I):
                 continue
             if max(codes[0], prices[0]) >= len(row):
                 raise commercial.CommercialError(f'Incomplete price row {number}.')
@@ -115,8 +135,30 @@ def current(practice_id: str, service_date: str) -> dict | None:
     with commercial_store._connection() as db:
         row=db.execute("SELECT * FROM practice_cash_schedules WHERE practice_id=%s AND status='active' AND effective_from<=%s ORDER BY effective_from DESC,created_at DESC,id DESC LIMIT 1",(practice_id,service_date)).fetchone()
     if not row:
-        return None
+        return from_library(practice_id, service_date)
     return {**dict(row),'rows':json.loads(row['rows_json'])}
+
+
+def from_library(practice_id: str, service_date: str) -> dict | None:
+    """Use the clinic's dated uploaded prices without a second activation step."""
+    from app.core import object_store, staff_store
+    documents = [doc for doc in staff_store.list_library(practice_id)
+                 if doc['kind'] == 'self_pay' and doc.get('effective_from')
+                 and doc['effective_from'] <= service_date
+                 and (not doc.get('effective_to') or service_date <= doc['effective_to'])]
+    if not documents:
+        return None
+    document = max(documents, key=lambda doc: (doc['effective_from'], doc.get('created_at', ''), doc['id']))
+    try:
+        content = object_store.get_object_bytes(document['object_key'])
+    except Exception as exc:
+        raise commercial.CommercialError('The uploaded self-pay document could not be read. Retry the document read.') from exc
+    if hashlib.sha256(content).hexdigest() != document.get('sha256'):
+        raise commercial.CommercialError('The uploaded self-pay document could not be verified.')
+    rows = read_rows(content, document['filename'], library=True)
+    return {'id': 'library:' + document['id'], 'filename': document['filename'],
+            'effective_from': document['effective_from'], 'rows': rows, 'status': 'library',
+            'sha256': document['sha256']}
 
 
 def apply(result: dict, config: dict) -> None:

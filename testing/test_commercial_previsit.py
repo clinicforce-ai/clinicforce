@@ -26,7 +26,10 @@ class PrevisitFlowTest(unittest.IsolatedAsyncioTestCase):
     async def test_explicit_self_pay_skips_stedi_and_defaults_to_cash(self):
         await self._flow(date.today().isoformat(), self_pay=True)
 
-    async def test_missing_provider_enrollment_prevents_paid_eligibility(self):
+    async def test_staff_cash_selection_survives_refresh_without_insurance_discovery(self):
+        await self._flow(date.today().isoformat(), cash_review=True)
+
+    async def test_enrollment_metadata_does_not_prevent_payer_eligibility(self):
         await self._flow(date.today().isoformat(), enrollment_missing=True)
 
     async def test_medicare_secondary_without_eligibility_does_not_invent_zero(self):
@@ -80,7 +83,7 @@ class PrevisitFlowTest(unittest.IsolatedAsyncioTestCase):
     async def test_newer_conflicting_ecw_check_refreshes_cached_stedi_evidence(self):
         await self._flow(date.today().isoformat(), newer_ecw=True)
 
-    async def _flow(self, service_date, reject=False, retry_basic=False, payer_missing=False, refresh=False, newer_ecw=False, too_early=False, self_pay=False, coverage_start=None, saved_hold=False, enrollment_missing=False, ecw_saved=False, ecw_incomplete=False, medicare_secondary=False, billing_note=None):
+    async def _flow(self, service_date, reject=False, retry_basic=False, payer_missing=False, refresh=False, newer_ecw=False, too_early=False, self_pay=False, coverage_start=None, saved_hold=False, enrollment_missing=False, ecw_saved=False, ecw_incomplete=False, medicare_secondary=False, billing_note=None, cash_review=False):
         session = {"practice_id": "clinic", "intake_id": "intake", "patient_id": "patient",
                    "share_manifest_id": "", "staff": {"id": "staff", "display_name": "Staff", "practice_name": "Clinic"},
                    "intake": {"updated_at": "version", "patient": {"given_name": "Pat", "family_name": "Example",
@@ -117,6 +120,12 @@ class PrevisitFlowTest(unittest.IsolatedAsyncioTestCase):
             session['intake']['workflows'] = {'saved': 'held-case'}
         held_cases = [{'previsit_context': {'source': {'appointment_id': 'visit-1'}},
                        'visit_review': {'insurance_check_from': (date.today() + timedelta(days=1)).isoformat()}}]
+        if cash_review:
+            from app.api.routers.commercial_estimator import _visit_context_token
+            session['intake']['workflows'] = {'saved': 'case-1'}
+            case['previsit_context'] = {'source': source}
+            case['visit_review'] = {'payment_mode': 'cash', 'context_token': _visit_context_token(inputs, source)}
+            held_cases = [case]
         client = MagicMock()
         client.__aenter__ = AsyncMock(return_value=client)
         client.__aexit__ = AsyncMock(return_value=None)
@@ -124,6 +133,8 @@ class PrevisitFlowTest(unittest.IsolatedAsyncioTestCase):
             "id": "eligibility-1", "plans": [{"benefits": {"statuses": [{"status": "Active"}]}}],
             "benefitsInformation": [{"code": "1"}]})
         client.post = AsyncMock(return_value=success_response)
+        if enrollment_missing and medicare_secondary:
+            reject = {'errors': [{'code': '41'}]}
         if reject:
             client.post.return_value = httpx.Response(200 if isinstance(reject, dict) else 400,
                 json=reject if isinstance(reject, dict) else {'errors': [{'path': '/encounter/dates/service', 'message': 'Must be an object'}]})
@@ -136,7 +147,6 @@ class PrevisitFlowTest(unittest.IsolatedAsyncioTestCase):
              patch("app.api.routers.commercial_estimator.ecw_backend.fetch_saved_eligibility", AsyncMock(return_value=saved_ecw)), \
              patch("app.api.routers.commercial_estimator.cpt_suggester.suggest_preliminary_cpt_codes", return_value={"groups": [], "notes": []}), \
              patch("app.api.routers.commercial_estimator.stedi_payers.search_payer", new=AsyncMock(return_value=None if payer_missing else {"stediId": "QDTRP", "displayName": "Blue Cross and Blue Shield of Texas", 'transactionSupport': {'eligibilityCheck': 'ENROLLMENT_REQUIRED' if enrollment_missing else 'SUPPORTED'}})), \
-             patch("app.api.routers.commercial_estimator.stedi_payers.eligibility_enrolled", new=AsyncMock(return_value=False)), \
              patch("app.api.routers.commercial_estimator.store.get_cases", return_value=held_cases), \
              patch("app.api.routers.commercial_estimator.store.create_case", return_value=case), \
              patch("app.api.routers.commercial_estimator._save", side_effect=lambda value, *_: value), \
@@ -163,13 +173,13 @@ class PrevisitFlowTest(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(edited['benefit_source'], 'eCW saved eligibility')
                 client.post.assert_not_awaited()
                 return
-            if enrollment_missing:
-                self.assertEqual(result['eligibility_failure']['kind'], 'provider_enrollment')
+            if enrollment_missing and medicare_secondary:
+                self.assertEqual(result['eligibility_failure']['codes'], ['41'])
                 self.assertEqual(result['collection_guidance']['amount_cents'], 0 if billing_note else None)
                 if billing_note:
                     self.assertEqual(result['collection_guidance']['basis'], 'ecw_billing_note')
-                self.assertEqual(case['previsit']['request_state'], 'not_requested')
-                client.post.assert_not_awaited()
+                self.assertEqual(case['previsit']['request_state'], 'rejected')
+                client.post.assert_awaited_once()
                 return
             if too_early:
                 self.assertEqual(result['eligibility_timing']['status'], 'too_early')
@@ -188,7 +198,7 @@ class PrevisitFlowTest(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(refreshed['price_range']['mode'], 'services')
                 self.assertEqual(refreshed['selected_ids'], ['99203:1'])
                 return
-            if self_pay or billing_note == 'Self Pay':
+            if self_pay or cash_review or billing_note == 'Self Pay':
                 self.assertEqual(result['payment_mode'], 'cash')
                 client.post.assert_not_awaited()
                 return
