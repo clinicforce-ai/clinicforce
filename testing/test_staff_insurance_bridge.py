@@ -131,6 +131,36 @@ class StaffInsuranceBridgeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(conflicting.status_code, 200, conflicting.text)
         self.assertEqual(conflicting.json()["patient"]["id"], saved.json()["patient"]["id"])
 
+    async def test_ecw_candidate_review_saves_only_confirmed_canonical_identity(self):
+        details = {"given_name": "Marry Ann", "family_name": "Example", "birth_date": "1980-01-15"}
+        candidate = {"id": "synthetic-1", "given_name": "Mary Ann", "family_name": "Example",
+                     "birth_date": "1980-01-15", "match_kind": "similar_first_name"}
+        path = "/api/staff/intakes/ecw-lookup"
+        with patch.object(staff.ecw_backend, "configured", return_value=True), patch.object(
+                staff.ecw_backend, "lookup_patient_and_appointments", new=AsyncMock(side_effect=[
+                    staff.ecw_backend.EcwPatientCandidates([candidate]),
+                    {"patient": candidate, "appointments": [{"id": "visit-1"}]},
+                ])):
+            review = await self.client.post(path, json=details)
+            self.assertEqual(review.status_code, 200, review.text)
+            with patient_store._connection() as connection:
+                self.assertEqual(connection.execute("SELECT count(*) AS count FROM staff_intakes").fetchone()["count"], 0)
+            confirmed = await self.client.post(path, json={**details, "candidate_id": candidate["id"],
+                "candidate_given_name": candidate["given_name"], "identity_confirmed": True})
+        self.assertEqual(confirmed.status_code, 201, confirmed.text)
+        intake = confirmed.json()
+        self.assertEqual(intake["fields"]["given_name"], "Mary Ann")
+        with patient_store._connection() as connection:
+            self.assertEqual(connection.execute("SELECT count(*) AS count FROM staff_intakes").fetchone()["count"], 1)
+        confirmation = {**details, "relationship": "unknown", "identity_confirmed": True}
+        wrong = await self.client.put(f"/api/staff/intakes/{intake['id']}/patient", json=confirmation)
+        self.assertEqual(wrong.status_code, 409, wrong.text)
+        saved = await self.client.put(f"/api/staff/intakes/{intake['id']}/patient",
+                                      json={**confirmation, "given_name": "Mary Ann"})
+        self.assertEqual(saved.status_code, 200, saved.text)
+        self.assertEqual(saved.json()["patient"]["ecw_patient_id"], candidate["id"])
+        self.assertEqual(saved.json()["patient"]["given_name"], "Mary Ann")
+
     async def test_real_header_scope_never_falls_back_to_qr_or_another_patient(self):
         own, other_intake = self.intake(), self.intake(member_id="OTHER")
         response = await self.client.post("/api/doctor/insurance/staff-case", headers={"X-ClinicForce-Intake": own["id"]})

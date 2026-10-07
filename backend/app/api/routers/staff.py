@@ -120,6 +120,19 @@ class EcwLookup(Model):
     middle_initial: str = Field(default="", max_length=10)
     family_name: str = Field(min_length=1, max_length=100)
     birth_date: date
+    candidate_id: str | None = Field(default=None, pattern=r"^[A-Za-z0-9.\-]{1,200}$",
+                                    description="Candidate returned by this demographic search; revalidated before use.")
+    candidate_given_name: str | None = Field(default=None, min_length=1, max_length=200,
+                                            description="Exact candidate given name shown during review; changed results require a new search.")
+    identity_confirmed: Literal[True] | None = Field(default=None,
+        description="Send true only after the clinician confirms the displayed candidate identity.")
+
+    @model_validator(mode="after")
+    def candidate_confirmation(self):
+        values = (self.candidate_id, self.candidate_given_name, self.identity_confirmed)
+        if any(value is not None for value in values) and not all(values):
+            raise ValueError("Candidate ID, displayed given name and identity confirmation are required together")
+        return self
 
     @field_validator("birth_date")
     @classmethod
@@ -127,6 +140,20 @@ class EcwLookup(Model):
         if not date(1850, 1, 1) <= value <= date.today():
             raise ValueError("Enter a valid date of birth that is not in the future")
         return value
+
+
+class EcwCandidate(Model):
+    id: str
+    given_name: str
+    family_name: str
+    birth_date: date
+    ecw_account_number: str | None = None
+    match_kind: Literal["exact", "similar_first_name"]
+
+
+class EcwCandidateReview(Model):
+    requires_confirmation: Literal[True] = True
+    candidates: list[EcwCandidate]
 
 
 def check_origin(request: Request) -> None:
@@ -303,13 +330,26 @@ def manual_card_fields(full_name: str, member_id: str, birth_date: str) -> dict:
     return fields
 
 
-@router.post("/intakes/ecw-lookup")
+@router.post("/intakes/ecw-lookup", status_code=201, responses={
+    200: {"model": EcwCandidateReview, "description": "Review candidates; no intake or patient link has been created."},
+    409: {"description": "Selected candidate changed or is no longer eligible; search again."},
+})
 async def create_ecw_lookup(value: EcwLookup, request: Request):
     """Confirm an eCW patient and upcoming visits.
 
     The shared reader has a 24-second deadline. HTTP 502 errors identify the
     failed lookup phase; X-ClinicForce-Request-ID joins the safe stage logs in
     CloudWatch. No patient or appointment is inferred from a timed-out read.
+    An exact unique match creates/reuses an intake (201). A first-name typo of
+    one insertion, deletion, substitution or adjacent transposition can return
+    up to five candidates (200, requires_confirmation) only with exact surname
+    and DOB and no conflicting supplied middle initial. Names shorter than four
+    normalized characters are not suggested. Multiple exact matches also require
+    review. Candidates create no intake or appointment request. Confirm by
+    resubmitting the original demographics with candidate_id, its displayed
+    candidate_given_name and identity_confirmed=true. The search is rerun against
+    eCW before loading appointments or persisting the verified eCW spelling.
+    No-match and genuine upstream errors remain failures; DOB is never fuzzy.
     """
     staff = await require_staff(request)
     started = time.monotonic()
@@ -322,15 +362,23 @@ async def create_ecw_lookup(value: EcwLookup, request: Request):
             {"patient_first_name": value.given_name, "patient_middle_initial": value.middle_initial,
              "patient_last_name": value.family_name, "patient_birth_date": value.birth_date.isoformat()},
             {"timezone": os.getenv("COMMERCIAL_PRACTICE_TIMEZONE", "America/New_York")},
+            suggest_matches=True, candidate_id=value.candidate_id, candidate_given_name=value.candidate_given_name,
         ), timeout=26)
     except asyncio.TimeoutError:
         collection_event('ecw_lookup_failed', practice_id=staff['practice_id'], stage='patient_search', reason_code='timeout', duration_ms=int((time.monotonic() - started) * 1000))
         raise HTTPException(504, "eClinicalWorks did not respond to the patient search in time. Retry the lookup.") from None
+    except ecw_backend.EcwPatientCandidates as exc:
+        return JSONResponse(EcwCandidateReview(candidates=exc.candidates).model_dump(mode="json"), headers=NO_STORE)
     except ecw_backend.EcwBackendError as exc:
         collection_event('ecw_lookup_failed', practice_id=staff['practice_id'], stage=exc.stage or 'patient_search', reason_code=exc.reason_code or 'ecw_error', duration_ms=int((time.monotonic() - started) * 1000))
-        raise HTTPException(502, str(exc)) from exc
-    fields = {"given_name": value.given_name, "middle_initial": value.middle_initial,
-              "family_name": value.family_name, "birth_date": value.birth_date.isoformat(),
+        raise HTTPException(409 if exc.reason_code == "candidate_changed" else 502, str(exc)) from exc
+    if value.candidate_id:
+        collection_event('ecw_candidate_confirmed', practice_id=staff['practice_id'], staff_id=staff['id'],
+                         stage='patient_identity', outcome='success')
+    fields = {"given_name": matched['patient']['given_name'] if value.candidate_id else value.given_name,
+              "middle_initial": value.middle_initial,
+              "family_name": matched['patient']['family_name'] if value.candidate_id else value.family_name,
+              "birth_date": value.birth_date.isoformat(),
               "ecw_patient_id": matched["patient"]["id"],
               "ecw_account_number": matched['patient'].get('ecw_account_number')}
     intake = await run_in_threadpool(staff_store.find_ecw_intake, staff["practice_id"], fields["ecw_patient_id"])

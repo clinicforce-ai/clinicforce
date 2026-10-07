@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { ArrowLeft, Camera, Check, ChevronRight, ExternalLink, FileText, FolderOpen, Inbox, LoaderCircle, LogOut, Plus, QrCode, RefreshCw, Upload, Users } from 'lucide-react'
 import InsuranceCards from './InsuranceCards'
+import EcwCandidateReview from './EcwCandidateReview'
 import './CommercialEstimator.css'
 import InsuranceCardScanner from './InsuranceCardScanner'
 import StaffUploadLinks from './StaffUploadLinks'
@@ -12,7 +13,7 @@ import {
   addStaffMember, confirmStaffPatient, createStaffEcwLookup, createStaffIntake, downloadStaffDocument, findStaffPatients,
   getStaffIntake, getStaffIntakes, getStaffLibrary, getStaffSession, loginStaff, logoutStaff,
   downloadStaffLibraryDocument, downloadStaffWorkflowDocument, getStaffEra835, retireStaffRateVersion, uploadStaffLibrary,
-  type EcwPatientMatch, type Era835Summary, type StaffCardDetails, type StaffIntake, type StaffLibraryDocument, type StaffPatient, type StaffPatientFields, type StaffSession,
+  type EcwCandidate, type EcwLookupDetails, type EcwPatientMatch, type Era835Summary, type StaffCardDetails, type StaffIntake, type StaffLibraryDocument, type StaffPatient, type StaffPatientFields, type StaffSession,
 } from '../services/api/staff'
 import './StaffWorkspace.css'
 
@@ -69,6 +70,7 @@ export default function StaffWorkspace({ onBack, onOpenInsurance, onScanQr, onCr
   const [status, setStatus] = useState('')
   const [files, setFiles] = useState<File[]>([])
   const [lookupDetails, setLookupDetails] = useState({ given_name: '', middle_initial: '', family_name: '', birth_date: '' })
+  const [ecwReview, setEcwReview] = useState<{ candidates: EcwCandidate[]; entered: EcwLookupDetails } | null>(null)
   const [ecwMatch, setEcwMatch] = useState<EcwPatientMatch | null>(null)
   const [camera, setCamera] = useState(false)
   const [library, setLibrary] = useState<StaffLibraryDocument[] | null>(null)
@@ -134,7 +136,7 @@ export default function StaffWorkspace({ onBack, onOpenInsurance, onScanQr, onCr
     setBusy(name); setError(''); setNotice('')
     try { await action() } catch (caught) {
       if (session && caught instanceof ApiError && caught.status === 401) {
-        setSession(null); setInvitation(null); setInvitations(null); setLinkPatient(null); setIntakes([]); setIntake(null); setFiles([]); setFields(emptyFields); setCandidates([]); setCamera(false); setLibrary(null); setInboxLoaded(false); setNextOffset(null)
+        setSession(null); setEcwReview(null); setInvitation(null); setInvitations(null); setLinkPatient(null); setIntakes([]); setIntake(null); setFiles([]); setFields(emptyFields); setCandidates([]); setCamera(false); setLibrary(null); setInboxLoaded(false); setNextOffset(null)
         setError('Your staff session has ended. Sign in again to continue.')
       } else if (name === 'upload' && caught instanceof ApiError && [0, 408, 502, 504].includes(caught.status)) {
         setError('Upload confirmation was interrupted. The card may already be saved. Open the insurance inbox and refresh before uploading it again.')
@@ -142,7 +144,7 @@ export default function StaffWorkspace({ onBack, onOpenInsurance, onScanQr, onCr
     } finally { setBusy('') }
   }
 
-  function navigate(next: typeof screen) { if (next === 'patients') setHistoryPatientId(undefined); setScreen(next); setError(''); setNotice(''); setCamera(false) }
+  function navigate(next: typeof screen) { setEcwReview(null); if (next === 'patients') setHistoryPatientId(undefined); setScreen(next); setError(''); setNotice(''); setCamera(false) }
   function editPatient(record: StaffIntake) {
     setFields(patientFieldsFrom(record))
     setIdentityConfirmed(false); setMatch(''); navigate('review')
@@ -200,8 +202,18 @@ export default function StaffWorkspace({ onBack, onOpenInsurance, onScanQr, onCr
   }
   function startEcwLookup(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
+    runEcwLookup(lookupDetails)
+  }
+  function runEcwLookup(details: EcwLookupDetails, candidate?: EcwCandidate) {
+    if (busy) return
+    setEcwReview(null)
     void perform('lookup', async () => {
-      const { ecw_match, ...record } = await createStaffEcwLookup(lookupDetails)
+      const response = await createStaffEcwLookup({ ...details, ...(candidate ? { candidate_id: candidate.id, candidate_given_name: candidate.given_name, identity_confirmed: true as const } : {}) })
+      if ('requires_confirmation' in response) {
+        setEcwReview({ candidates: response.candidates, entered: { ...details } })
+        return
+      }
+      const { ecw_match, ...record } = response
       setIntake(record); setIntakes(current => [record, ...current.filter(row => row.id !== record.id)])
       setEcwMatch(ecw_match); setFields(patientFieldsFrom(record))
       if (record.patient) { onOpenInsurance(record.id, 'commercial', false); return }
@@ -263,7 +275,7 @@ export default function StaffWorkspace({ onBack, onOpenInsurance, onScanQr, onCr
   if (screen === 'add' && camera) return <section className="staff-workspace staff-scan-focus"><div className="staff-scan-content"><h1 className="staff-sr-only" tabIndex={-1} ref={heading}>Scan insurance card</h1>{alerts}<InsuranceCardScanner onCaptured={saveCard} onCancel={() => setCamera(false)} /></div></section>
 
   return <section className="staff-workspace">
-    <aside className="staff-sidebar"><div><div className="staff-brand">clinic<span>force</span></div><p className="staff-small staff-muted">{session.practice_name}</p></div><nav aria-label="Staff navigation"><button className={screen === 'patients' ? 'staff-current' : ''} onClick={() => navigate('patients')} disabled={Boolean(busy)}><Users size={18} /> Clinical patients</button><button className={screen === 'inbox' ? 'staff-current' : ''} onClick={() => { navigate('inbox'); void perform('refresh', refreshInbox) }} disabled={Boolean(busy)}><Inbox size={18} /> Insurance inbox</button><button className={screen === 'links' ? 'staff-current' : ''} onClick={() => { setLinkBack('inbox'); setLinkPatient(null); navigate('links') }} disabled={Boolean(busy)}><Upload size={18} /> Patient upload links</button><button className={screen === 'library' ? 'staff-current' : ''} onClick={openLibrary} disabled={Boolean(busy)}><FolderOpen size={18} /> Clinic library</button>{session.role === 'admin' && <button className={screen === 'members' ? 'staff-current' : ''} onClick={() => navigate('members')} disabled={Boolean(busy)}><Users size={18} /> Staff access</button>}<button onClick={onBack} disabled={Boolean(busy)}><ArrowLeft size={18} /> ClinicForce home</button></nav><div className="staff-user"><strong>{session.display_name}</strong><span>{session.role === 'admin' ? 'Clinic administrator' : 'Clinic staff'}</span><button className="staff-text-button" disabled={Boolean(busy)} onClick={() => void perform('logout', async () => { await logoutStaff(); setSession(null); setInvitation(null); setInvitations(null); setLinkPatient(null); setIntakes([]); setIntake(null); setFields(emptyFields); setFiles([]); setCandidates([]); setQuery(''); setStatus(''); setLibrary(null); setEra(null); setInboxLoaded(false); setNextOffset(null) })}><LogOut size={17} /> Sign out</button></div></aside>
+    <aside className="staff-sidebar"><div><div className="staff-brand">clinic<span>force</span></div><p className="staff-small staff-muted">{session.practice_name}</p></div><nav aria-label="Staff navigation"><button className={screen === 'patients' ? 'staff-current' : ''} onClick={() => navigate('patients')} disabled={Boolean(busy)}><Users size={18} /> Clinical patients</button><button className={screen === 'inbox' ? 'staff-current' : ''} onClick={() => { navigate('inbox'); void perform('refresh', refreshInbox) }} disabled={Boolean(busy)}><Inbox size={18} /> Insurance inbox</button><button className={screen === 'links' ? 'staff-current' : ''} onClick={() => { setLinkBack('inbox'); setLinkPatient(null); navigate('links') }} disabled={Boolean(busy)}><Upload size={18} /> Patient upload links</button><button className={screen === 'library' ? 'staff-current' : ''} onClick={openLibrary} disabled={Boolean(busy)}><FolderOpen size={18} /> Clinic library</button>{session.role === 'admin' && <button className={screen === 'members' ? 'staff-current' : ''} onClick={() => navigate('members')} disabled={Boolean(busy)}><Users size={18} /> Staff access</button>}<button onClick={onBack} disabled={Boolean(busy)}><ArrowLeft size={18} /> ClinicForce home</button></nav><div className="staff-user"><strong>{session.display_name}</strong><span>{session.role === 'admin' ? 'Clinic administrator' : 'Clinic staff'}</span><button className="staff-text-button" disabled={Boolean(busy)} onClick={() => void perform('logout', async () => { await logoutStaff(); setSession(null); setEcwReview(null); setInvitation(null); setInvitations(null); setLinkPatient(null); setIntakes([]); setIntake(null); setFields(emptyFields); setFiles([]); setCandidates([]); setQuery(''); setStatus(''); setLibrary(null); setEra(null); setInboxLoaded(false); setNextOffset(null) })}><LogOut size={17} /> Sign out</button></div></aside>
     <div className="staff-main" role="region" aria-label="Staff insurance workspace">{alerts}
       {screen === 'patients' && <ClinicalPatientDashboard initialPatientId={historyPatientId} onPullEcw={() => navigate('lookup')} onOpenIntake={openIntake} onRequestCard={requestPatientCard} onAddCard={() => { setFiles([]); navigate('add') }} />}
       {screen === 'inbox' && <>
@@ -273,14 +285,15 @@ export default function StaffWorkspace({ onBack, onOpenInsurance, onScanQr, onCr
       </>}
       {screen === 'links' && <StaffUploadLinks key={linkPatient?.id || linkPatient?.intakeId || 'new'} patientId={linkPatient?.id} intakeId={linkPatient?.intakeId} patientName={linkPatient?.name} initialEmail={linkPatient?.email} backLabel={linkBack === 'record' ? 'Back to patient' : linkBack === 'inbox' ? 'Back to inbox' : 'Back to clinical patients'} onBack={() => navigate(linkBack)} onOpenIntake={openIntake} />}
       {screen === 'lookup' && <div className="staff-narrow">
-        <header className="staff-header"><div><div className="staff-eyebrow">Add insurance</div><h1 tabIndex={-1} ref={heading}>Find patient & estimate</h1><p className="staff-muted">Enter the patient's name and date of birth. ClinicForce will find or update their clinic record, refresh their visit and insurance details, and open the estimate automatically.</p></div></header>
+        <header className="staff-header"><div><div className="staff-eyebrow">Add insurance</div><h1 tabIndex={-1} ref={heading}>Find patient & estimate</h1><p className="staff-muted">Enter the patient's name and date of birth. Exact matches continue automatically. If a first name has a small spelling difference, review and confirm the eCW patient before continuing.</p></div></header>
         <section className="staff-panel"><h2>Patient details</h2><form onSubmit={startEcwLookup}><div className="staff-two-columns">
-          <label className="staff-field"><span>First name</span><input required maxLength={100} autoComplete="given-name" value={lookupDetails.given_name} onChange={event => setLookupDetails(current => ({ ...current, given_name: event.target.value }))} disabled={Boolean(busy)} /></label>
-          <label className="staff-field"><span>Middle initial (optional)</span><input maxLength={10} value={lookupDetails.middle_initial} onChange={event => setLookupDetails(current => ({ ...current, middle_initial: event.target.value }))} disabled={Boolean(busy)} /></label>
-          <label className="staff-field"><span>Last name</span><input required maxLength={100} autoComplete="family-name" value={lookupDetails.family_name} onChange={event => setLookupDetails(current => ({ ...current, family_name: event.target.value }))} disabled={Boolean(busy)} /></label>
-          <label className="staff-field"><span>Date of birth</span><input required type="date" max={today()} autoComplete="bday" value={lookupDetails.birth_date} onChange={event => setLookupDetails(current => ({ ...current, birth_date: event.target.value }))} disabled={Boolean(busy)} /></label>
-        </div><button className="staff-primary" disabled={Boolean(busy)}>Open insurance estimator</button></form></section>
-<button onClick={() => navigate('patients')}>Back to patients</button></div>}
+          <label className="staff-field"><span>First name</span><input required maxLength={100} autoComplete="given-name" value={lookupDetails.given_name} onChange={event => { setEcwReview(null); setLookupDetails(current => ({ ...current, given_name: event.target.value })) }} disabled={Boolean(busy)} /></label>
+          <label className="staff-field"><span>Middle initial (optional)</span><input maxLength={10} value={lookupDetails.middle_initial} onChange={event => { setEcwReview(null); setLookupDetails(current => ({ ...current, middle_initial: event.target.value })) }} disabled={Boolean(busy)} /></label>
+          <label className="staff-field"><span>Last name</span><input required maxLength={100} autoComplete="family-name" value={lookupDetails.family_name} onChange={event => { setEcwReview(null); setLookupDetails(current => ({ ...current, family_name: event.target.value })) }} disabled={Boolean(busy)} /></label>
+          <label className="staff-field"><span>Date of birth</span><input required type="date" max={today()} autoComplete="bday" value={lookupDetails.birth_date} onChange={event => { setEcwReview(null); setLookupDetails(current => ({ ...current, birth_date: event.target.value })) }} disabled={Boolean(busy)} /></label>
+        </div><button className="staff-primary" disabled={Boolean(busy)}>{busy === 'lookup' ? 'Checking eCW…' : 'Open insurance estimator'}</button></form></section>
+{ecwReview && <EcwCandidateReview candidates={ecwReview.candidates} entered={ecwReview.entered} busy={Boolean(busy)} onConfirm={candidate => runEcwLookup(ecwReview.entered, candidate)} onCancel={() => { setEcwReview(null); heading.current?.focus() }} />}
+<button disabled={Boolean(busy)} onClick={() => navigate('patients')}>Back to patients</button></div>}
       {screen === 'add' && <div className="staff-narrow">
         <section className="staff-panel"><h2>Scan or upload insurance card</h2><p className="staff-muted">We will read the card and fill the available fields. Confirm the patient identity before saving a patient record.</p><form onSubmit={event => { event.preventDefault(); saveCard(files) }}><div className="staff-two-columns"><div><Camera className="staff-feature-icon" size={30} /><h3>Scan the card</h3><button className="staff-primary" type="button" disabled={Boolean(busy)} onClick={() => setCamera(true)}>Open card scanner</button></div><div><Upload className="staff-feature-icon" size={30} /><h3>Upload a photo or PDF</h3><label className="staff-field"><span>Card files</span><input type="file" accept="image/jpeg,image/png,application/pdf" multiple onChange={event => { const next = Array.from(event.target.files || []); setFiles(next); setError(next.length ? checkFiles(next) : '') }} disabled={Boolean(busy)} aria-describedby="staff-upload-help" /><small id="staff-upload-help">JPG, PNG, or PDF · Up to 2 files and 2 pages total · 10 MB per file.</small></label><button disabled={Boolean(busy) || !files.length}>Save card and continue</button></div></div></form></section>
         <section className="staff-panel staff-qr-option"><div><h2>Patient has a ClinicForce QR?</h2><p className="staff-muted">Open the insurance and records they choose to share with their passcode.</p></div><button onClick={onScanQr} disabled={Boolean(busy)}><QrCode size={18} /> Scan ClinicForce QR</button></section>

@@ -370,14 +370,57 @@ class EcwBackendSourceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((matched, patient_id), (patient, "patient-1"))
         self.assertEqual(query.await_count, 4)
         self.assertEqual(query.await_args.args[-1], {"name": "Sample", "birthdate": "1980-01-01"})
-        with patch.object(ecw_backend, "_search", new=AsyncMock(
-                side_effect=lambda *args: [patient] if args[-1] == {"given": "Sample", "birthdate": "1980-01-01"} else [])) as query:
-            matched, patient_id, _ = await ecw_backend._patient_for_profile(None, "", "", profile)
-        self.assertEqual((matched, patient_id), (patient, "patient-1"))
-        self.assertEqual(query.await_count, 5)
         with patch.object(ecw_backend, "_search", new=AsyncMock(side_effect=lambda *args: [patient, other] if "name" in args[-1] else [])):
             with self.assertRaisesRegex(ecw_backend.EcwBackendError, "Multiple eClinicalWorks patients matched"):
                 await ecw_backend._patient_for_profile(None, "", "", profile)
+
+    async def test_compound_given_name_resolves_patient_and_appointment(self):
+        profile = {"patient_first_name": "Mary Ann", "patient_middle_initial": "B",
+                   "patient_last_name": "Example", "patient_birth_date": "1980-01-15"}
+        start = (datetime.now(ZoneInfo("America/New_York")) + timedelta(days=1)).isoformat()
+        for given in (["Mary Ann", "Beth"], ["Mary", "Ann", "Beth"]):
+            with self.subTest(given=given):
+                patient = {"resourceType": "Patient", "id": "patient-1", "name": [
+                    {"use": "official", "given": given, "family": "Example"}], "birthDate": "1980-01-15"}
+                def handler(request):
+                    if request.url.path.endswith("/Patient"):
+                        rows = [patient]
+                    else:
+                        self.assertTrue(request.url.path.endswith("/Encounter"))
+                        rows = [{"resourceType": "Encounter", "id": "visit-1", "status": "planned",
+                                 "subject": {"reference": "Patient/patient-1"}, "period": {"start": start}}]
+                    return httpx.Response(200, json={"resourceType": "Bundle", "entry": [{"resource": row} for row in rows]})
+                with patch.object(ecw_backend, "settings", return_value=("client", "https://ehr.example.test/fhir")), \
+                        patch.object(ecw_backend, "_access_token", new=AsyncMock(return_value="synthetic")):
+                    result = await ecw_backend.lookup_patient_and_appointments(profile, {}, transport=httpx.MockTransport(handler))
+                self.assertEqual(result["patient"]["id"], "patient-1")
+                self.assertEqual([row["id"] for row in result["appointments"]], ["visit-1"])
+                for field, wrong in (("patient_first_name", "Mary Anne"), ("patient_middle_initial", "C"),
+                                     ("patient_last_name", "Different"), ("patient_birth_date", "1980-01-16")):
+                    self.assertFalse(ecw_backend._patient_matches(patient, {**profile, field: wrong}))
+                with patch.object(ecw_backend, "_search", new=AsyncMock(return_value=[patient, {**patient, "id": "patient-2"}])):
+                    with self.assertRaisesRegex(ecw_backend.EcwBackendError, "Multiple eClinicalWorks patients matched"):
+                        await ecw_backend._patient_for_profile(None, "", "", profile)
+
+    async def test_no_match_does_not_call_rejected_given_birthdate_fallback(self):
+        profile = {"patient_first_name": "Pat", "patient_middle_initial": "B",
+                   "patient_last_name": "Example", "patient_birth_date": "1980-01-15"}
+        patient = {"resourceType": "Patient", "id": "patient-1", "name": [
+            {"given": ["Pat", "Charles"], "family": "Example"}], "birthDate": "1980-01-15"}
+        for rows in ([], [patient]):
+            with self.subTest(candidate_returned=bool(rows)):
+                queries = []
+                def handler(request):
+                    queries.append(dict(request.url.params))
+                    if set(request.url.params) == {"given", "birthdate"}:
+                        return httpx.Response(400, json={"resourceType": "OperationOutcome"})
+                    return httpx.Response(200, json={"resourceType": "Bundle", "entry": [{"resource": row} for row in rows]})
+                async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+                    with self.assertRaises(ecw_backend.EcwBackendError) as error:
+                        await ecw_backend._patient_for_profile(client, "https://ehr.example.test/fhir", "synthetic", profile)
+                self.assertEqual(error.exception.reason_code, "no_match")
+                self.assertEqual(error.exception.stage, "patient_identity")
+                self.assertNotIn({"given": "Pat", "birthdate": "1980-01-15"}, queries)
 
     async def test_lists_completed_history_without_an_eligibility_request(self):
         today = datetime.now(ZoneInfo("America/New_York")).date()

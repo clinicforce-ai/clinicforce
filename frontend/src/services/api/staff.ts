@@ -81,7 +81,10 @@ export function createStaffIntake(files: File[], details: StaffCardDetails) {
 }
 
 export type EcwPatientMatch = { patient: { ecw_account_number?: string | null; given_name: string; family_name: string; birth_date: string }; appointments: Array<{ id: string; start: string; status: string; reason: string }> }
-export const createStaffEcwLookup = (details: { given_name: string; middle_initial: string; family_name: string; birth_date: string }) => request<StaffIntake & { ecw_match: EcwPatientMatch }>('/api/staff/intakes/ecw-lookup', json(details))
+export type EcwLookupDetails = { given_name: string; middle_initial: string; family_name: string; birth_date: string }
+export type EcwCandidate = { id: string; given_name: string; family_name: string; birth_date: string; ecw_account_number?: string | null; match_kind: 'exact' | 'similar_first_name' }
+export type EcwLookupResult = (StaffIntake & { ecw_match: EcwPatientMatch }) | { requires_confirmation: true; candidates: EcwCandidate[] }
+export const createStaffEcwLookup = (details: EcwLookupDetails & { candidate_id?: string; candidate_given_name?: string; identity_confirmed?: true }) => request<EcwLookupResult>('/api/staff/intakes/ecw-lookup', json(details))
 
 export const confirmStaffPatient = (id: string, fields: StaffPatientFields & { identity_confirmed: true; patient_id?: string }) => request<StaffIntake>(`/api/staff/intakes/${encodeURIComponent(id)}/patient`, { ...json(fields), method: 'PUT' })
 export const addStaffMember = (member: { username: string; display_name: string; password: string; role: 'staff' | 'admin' }) => request<unknown>('/api/staff/members', json(member))
