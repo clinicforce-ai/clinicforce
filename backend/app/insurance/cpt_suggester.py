@@ -141,25 +141,23 @@ def recommend_visit_plan(inputs: dict, source: dict, available: list[dict]) -> d
     baseline = visit_estimate.service_plan(available, inputs, source)
     alternatives = [row for row in available if row.get('source') == 'conditional office E/M alternative']
     scheduled = any(row.get('source') == 'eCW scheduled service' for row in available)
-    # The clinic document describes its neurologic skin biopsy as a punch biopsy.
-    # This is an editable price-planning scope; it creates no clinical order.
+    # Plan biopsy sites only when the appointment explicitly gives the count.
     reason = str(inputs.get('reason') or '')
     biopsy = any(re.search(r'\bskin\s+(?:punch\s+)?(?:bx|biops\w*)\b|\bpunch\s+biops\w*\b', clause, re.I)
                  and not re.search(r'\b(?:no|not|consider|possible|discuss|history|results?|report|review)\b', clause, re.I)
                  for clause in re.split(r'[;\n.]', reason))
-    clinic_punch = by_code.get('11104', {}).get('source') == 'NMCT cash schedule option'
+    site_count = re.search(r'\b([1-9]|one|two|three)[ -]?(?:sites?|punch(?:es)?|biopsies)\b', reason, re.I)
     spinal = visit_estimate.is_spinal_tap(inputs, clinic_abbreviation=source.get('spinal_tap_abbreviation') is True)
     emg = visit_estimate.is_emg_visit(inputs)
     planned = []
     assumptions = []
-    if biopsy and clinic_punch:
-        count = re.search(r'\b([1-9]|one|two|three)[ -]?(?:sites?|punch(?:es)?|biopsies)\b', reason, re.I)
-        sites = ({'one': 1, 'two': 2, 'three': 3}.get(count[1].lower()) or int(count[1])) if count else 3
+    if biopsy and site_count and '11104' in by_code:
+        sites = {'one': 1, 'two': 2, 'three': 3}.get(site_count[1].lower()) or int(site_count[1])
         planned = [{'code': '11104', 'units': 1}] + ([{'code': '11105', 'units': sites - 1}] if sites > 1 else [])
-        assumptions.append(f'Planning {sites} biopsy site(s); confirm the intended sites before care. The clinic document describes a three-site neurologic biopsy.')
+        assumptions.append(f'Planning {sites} biopsy site(s); confirm the intended sites before care.')
     if spinal and '62270' in by_code:
         planned.append({'code': '62270', 'units': 1})
-        assumptions.append('SP means spinal tap in this clinic. Diagnostic lumbar puncture without imaging is the initial planning scenario; confirm technique before care. No approved cash price is supplied.')
+        assumptions.append('Diagnostic lumbar puncture without imaging is the initial planning scenario; confirm technique before care. No approved cash price is supplied.')
     if emg and not scheduled and all(code in by_code for code in ('95907', '95886')):
         # Specific anatomical EMG packages continue through the existing planner.
         if planned or re.fullmatch(r'(?:Visit type:\s*)?EMG(?: Visit)?', reason.strip(), re.I) or alternatives or scheduled:

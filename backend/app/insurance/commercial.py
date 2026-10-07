@@ -327,8 +327,8 @@ def normalize_stedi_271(payload: dict[str, Any], service_type_code: str, provide
                         office_service_types: list[str] | None = None, place_of_service: str | None = None) -> dict[str, Any]:
     """Normalize only unambiguous individual in-network schedule benefits.
 
-    A 271 benefit network is not provider participation.  That is supplied by
-    the separately verified provider-network record.
+    A benefit network indicator is not provider participation. Use a verified
+    clinic record or an explicit payer assertion about the requesting provider.
     """
     entries = _stedi_entries(payload)
     if place_of_service:
@@ -564,7 +564,7 @@ def normalize_stedi_271(payload: dict[str, Any], service_type_code: str, provide
         return True
     limitations = any(unresolved_limit(row) for row in relevant)
     conditional_terms = selected_ids is None and any(re.search(r"\b(first|after|before|beginning|visits?|waived|unless|only|limit|specialist|primary care)\b", note, re.IGNORECASE) for row in (copay, coinsurance) if row for note in notes([row.get("messages"), row.get("additionalInformation")])
-        if not all(re.fullmatch(r"(?:(?:specialist |physician )?office visits?(?: (?:specialist|primary care(?: prov(?:ider)?)?))?|(?:Specialist|Primary Care) Visit or Evaluation|GYN Visit|phy visit\s*-\s*specialist|(?:PCP AND )?BenefitTier Non Tier 1 Specialist|diagnostic medical procedure)(?:\s*-\s*professional)?", label.strip(), re.I)
+        if not all(re.fullmatch(r"(?:All Other In-Network Providers\s+)?(?:(?:specialist |physician )?office visits?(?: (?:specialist|primary care(?: prov(?:ider)?)?))?|(?:Specialist|Primary Care) Visit or Evaluation|GYN Visit|Walk In Clinic Visit|Telemedicine (?:General Medicine|Specialist) Visit|phy visit\s*-\s*specialist|(?:PCP AND )?BenefitTier Non Tier 1 Specialist|diagnostic medical procedure)(?:\s*-\s*professional)?(?:\s*,\s*COINS APPLIES TO OUT OF POCKET)?", label.strip(), re.I)
                    for label in note.split(';') if label.strip()))
     source_errors = []
     for _, row in wanted:
@@ -604,9 +604,22 @@ def normalize_stedi_271(payload: dict[str, Any], service_type_code: str, provide
         review_reasons.append("Review the payer's benefit limits before estimating patient cost.")
     if multiple_plans or other_active_coverage:
         review_reasons.append("Confirm which plan pays first and how additional coverage applies.")
+    participation = [row['evidence_path'] for row in relevant if any(
+        re.search(r"(?:^|[.!?]\s+)Our records indicate the provider ID you entered is participating in this patient's network\.(?:\s|$)", note, re.I)
+        for note in notes([row.get('messages'), row.get('additionalInformation')]))]
+    conflicting_network = any(re.search(r'\b(?:not participating|non[- ]participating|out[- ]of[- ]network)\b', note, re.I)
+                              for note in descriptions)
+    # A contrary statement about this provider may sit on an out-of-network
+    # row excluded from the in-network cost-sharing calculation above.
+    conflicting_network |= any(re.search(r'\bprovider(?: ID you entered)? is (?:not participating|non[- ]participating|out[- ]of[- ]network)\b', note, re.I)
+        for row in _stedi_entries(payload) for note in notes([row.get('messages'), row.get('additionalInformation')]))
+    payer_network_verified = bool(participation and not conflicting_network and active is True
+        and not multiple_plans and not invalid_dates and date_matches is not False and not source_errors)
     return {"active": active, "source_errors": source_errors, "service_date_matches": date_matches, "returned_service_dates": returned_service,
             "coverage_level": "individual" if wanted else "unknown",
-            "network_status": "in_network" if provider_network_verified else "unknown",
+            "network_status": "in_network" if provider_network_verified or payer_network_verified else "unknown",
+            "network_source": 'clinic_record' if provider_network_verified else 'payer_participation_message' if payer_network_verified else None,
+            "network_evidence_ids": participation if payer_network_verified else [],
             "deductible_remaining_cents": deductible_cents, "oop_remaining_cents": oop_cents,
             "family_oop_remaining_cents": family_oop_cents,
             "family_oop_zero_applies": family_oop_zero_applies,

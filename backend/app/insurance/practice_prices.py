@@ -136,3 +136,5 @@ def apply(result: dict, config: dict) -> None:
     result['cash_quote']={'complete':complete,'source':config['filename'],'effective_from':config['effective_from'],'selection':'',
                           'message':'Practice cash schedule for the selected services.' if complete else 'The practice cash schedule does not cover all selected services.'}
     result['practice_cash_source']={'filename':config['filename'],'effective_from':config['effective_from'],'version':config['id']}
+    if complete:
+        result['cash_quote'].update(min_cents=priced['cash_min_cents'], max_cents=priced['cash_max_cents'])

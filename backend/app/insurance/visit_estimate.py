@@ -6,7 +6,7 @@ from collections import Counter
 import re
 from datetime import date, datetime
 
-from app.insurance import commercial, cpt_rules, plan_benefits, identity
+from app.insurance import commercial, cpt_rules, identity
 
 
 def clinical_group(code: str) -> str:
@@ -181,6 +181,9 @@ def price_lines(codes: list[dict], rates: list[dict], benefits: dict, rules: dic
             benefits.get('has_secondary', False), procedure_code=code['code'], service_date=service_date,
             selected_ids=selection.get('selected_ids') if selection_valid else None,
             office_service_types=rules.get('office_service_types'), place_of_service=rules.get('place_of_service')) if payload is not None else deepcopy(benefits)
+        if benefits.get('network_status') == 'in_network' and benefits.get('network_source'):
+            raw_benefits['network_source'] = benefits['network_source']
+            raw_benefits['network_evidence_ids'] = benefits.get('network_evidence_ids', [])
         stc = (raw_benefits.get('resolved_service_type') or stc) if stc else None
         # Name differences remain on the case for billing. They do not stop
         # arithmetic for an explicitly conditional estimate of this policy.
@@ -189,7 +192,6 @@ def price_lines(codes: list[dict], rates: list[dict], benefits: dict, rules: dic
             raw_benefits['review_reasons'] = [reason for reason in raw_benefits.get('review_reasons', []) if 'identity' not in reason]
         raw_benefits['review_reasons'] = list(dict.fromkeys([*raw_benefits.get('review_reasons', []), *integrity]))
         raw_benefits['requires_review'] = bool(raw_benefits['review_reasons'])
-        raw_benefits = plan_benefits.apply(raw_benefits, payload or {}, code['code'], service_date, coverage_active=benefits.get('active'))
         applied = resolve_requirements(raw_benefits, review, service_date, units)
         line_rules = dict(rules)
         if applied.get('cost_share'):

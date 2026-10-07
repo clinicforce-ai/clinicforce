@@ -187,6 +187,81 @@ def test_plain_office_description_is_not_a_visit_count_restriction():
     assert any('conditional benefit' in r for r in normalized()['review_reasons'])
 
 
+def office_coinsurance_payload():
+    common = {'service': {'system': 'STC', 'value': '98'}, 'coverageLevel': 'INDIVIDUAL',
+              'network': {'indicator': 'IN_NETWORK'}}
+    return {'subscriber': {'dates': {'service': {'start': '2026-10-07'}}}, 'plans': [{'benefits': {
+        'statuses': [{'status': 'Active Coverage'}],
+        'coPayment': [{**common, 'amount': '0', 'messages': ['Specialist Visit or Evaluation', 'Walk In Clinic Visit']}],
+        'coInsurance': [{**common, 'percent': '0.20', 'messages': ['All Other In-Network Providers',
+            'Specialist Visit or Evaluation,COINS APPLIES TO OUT OF POCKET',
+            'Walk In Clinic Visit,COINS APPLIES TO OUT OF POCKET',
+            'Telemedicine General Medicine Visit,COINS APPLIES TO OUT OF POCKET',
+            'Telemedicine Specialist Visit,COINS APPLIES TO OUT OF POCKET']}],
+        'deductible': [{**common, 'amount': '0', 'timePeriod': 'REMAINING'}],
+        'outOfPocket': [{**common, 'amount': '1500', 'timePeriod': 'REMAINING'}],
+        'limitations': [{**common, 'messages': [
+            "Our records indicate the provider ID you entered is participating in this patient's network."]}]}}]}
+
+
+@pytest.mark.parametrize(('copay', 'coinsurance', 'fee', 'deductible', 'expected'), [
+    ('0', '0.20', 25000, '0', 5000), ('0', '0.20', 17321, '0', 3464),
+    ('0', '0.20', 17321, '20', 5064), ('0', '0', 25000, '0', 0),
+    ('50', '0', 25000, '0', 5000), ('60', '0', 25000, '0', 6000)])
+def test_office_collection_uses_actual_cost_share_and_active_schedule(copay, coinsurance, fee, deductible, expected):
+    payload = office_coinsurance_payload()
+    terms = payload['plans'][0]['benefits']
+    terms['coPayment'][0]['amount'] = copay
+    terms['coInsurance'][0]['percent'] = coinsurance
+    terms['deductible'][0]['amount'] = deductible
+    benefits = commercial.normalize_stedi_271(payload, '98', False, service_date='2026-10-07')
+    result = {'benefits': benefits, 'issues': [], 'codes': [{'id': 'office', 'code': '99203', 'units': 1}]}
+    with patch.object(api.commercial_store, 'list_connections', return_value=[]):
+        api._attach_previsit_pricing(result, 'synthetic-clinic', {'service_date': '2026-10-07', 'place_of_service': '11'},
+            {}, 'synthetic-payer', benefits, payload=payload)
+    result['available_codes'] = result['codes']
+    api.practice_prices.apply(result, {'id': 'active-version', 'filename': 'approved.csv', 'effective_from': '2026-01-01',
+        'rows': [{'code': '99203', 'cash_cents': fee}]})
+    guidance = collection_guidance.build(result)
+    assert guidance['amount_cents'] == expected
+    assert guidance['network_source'] == 'Payer statement about the requesting provider'
+    assert all(line['allowed_cents'] is None for line in result['price_range']['lines'])
+    assert result['price_range']['lines'][0]['benefits']['network_source'] == 'payer_participation_message'
+    if coinsurance == '0.20':
+        assert guidance['basis'] == 'clinic_price_reference'
+        assert 'not an insurer-contracted allowance' in ' '.join(guidance['assumptions'])
+
+
+@pytest.mark.parametrize('change', ['absent', 'generic', 'negated', 'contradictory', 'out_of_network_conflict', 'date', 'inactive', 'conditional'])
+def test_payer_participation_and_cost_share_guards_remain(change):
+    payload = office_coinsurance_payload()
+    terms = payload['plans'][0]['benefits']
+    if change == 'absent': terms['limitations'] = []
+    if change == 'generic': terms['limitations'][0]['messages'] = ['In-network specialist office benefit.']
+    if change == 'negated': terms['limitations'][0]['messages'] = ["Our records indicate the provider ID you entered is not participating in this patient's network."]
+    if change == 'contradictory': terms['limitations'][0]['messages'].append('The provider is out-of-network.')
+    if change == 'out_of_network_conflict':
+        terms['limitations'].append({**terms['limitations'][0], 'network': {'indicator': 'OUT_OF_NETWORK'},
+            'messages': ["Our records indicate the provider ID you entered is not participating in this patient's network."]})
+    if change == 'date': payload['subscriber']['dates']['service']['start'] = '2026-10-06'
+    if change == 'inactive': terms['statuses'][0]['status'] = 'Inactive Coverage'
+    if change == 'conditional': terms['coInsurance'][0]['messages'].append('FIRST 10 VISITS ONLY')
+    benefits = commercial.normalize_stedi_271(payload, '98', False, service_date='2026-10-07', procedure_code='99203')
+    if change == 'conditional':
+        assert any('conditional benefit' in reason for reason in benefits['review_reasons'])
+    else:
+        assert benefits['network_status'] == 'unknown'
+        assert benefits['network_evidence_ids'] == []
+
+
+def test_legacy_collection_policy_cannot_supply_a_zero_without_benefits():
+    result = {'collection_policy': 'defer_original_medicare_secondary', 'benefits': {'has_secondary': True},
+              'eligibility_failure': {'kind': 'provider_enrollment'}}
+    guidance = collection_guidance.build(result)
+    assert guidance['amount_cents'] is None
+    assert 'provider enrollment' in guidance['reason']
+
+
 def test_ppo_label_does_not_invent_a_member_referral_requirement():
     result = scenario()
     result['plan_details'] = {'stedi': {'names': ['PREFERRED PROVIDER OPTION MEDICAL']}}
