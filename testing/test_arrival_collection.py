@@ -47,6 +47,16 @@ def test_member_identifier_fallback_never_chooses_a_group_or_ambiguous_id():
     assert ecw_backend.coverage_record_status({'extension': [{'url': 'http://eclinicalworks.com/supportingInfo/patientdemographics/coverage-eligibilityStatus', 'valueString': 'E - Eligible'}]})['status'] == 'E - Eligible'
 
 
+def test_subscriber_relationship_is_never_assumed_from_patient_demographics():
+    patient = {'resourceType': 'Patient', 'id': 'patient', 'birthDate': '1980-01-01'}
+    spouse = {'resourceType': 'RelatedPerson', 'id': 'spouse', 'birthDate': '1982-02-02'}
+    assert ecw_backend.coverage_subscriber({}, patient, {}) == {}
+    assert ecw_backend.coverage_subscriber({'relationship': {'coding': [{'code': 'self'}]}}, patient, {}) == patient
+    dependent = {'relationship': {'coding': [{'code': 'spouse'}]}, 'subscriber': {'reference': 'RelatedPerson/spouse'}}
+    assert ecw_backend.coverage_subscriber(dependent, patient, {'RelatedPerson/spouse': spouse}) == spouse
+    assert ecw_backend.coverage_subscriber(dependent, patient, {}) == {}
+
+
 class AsyncEvidenceTests(IsolatedAsyncioTestCase):
     async def test_name_rejection_retries_same_member_and_dob_without_guessing_names(self):
         client = AsyncMock()

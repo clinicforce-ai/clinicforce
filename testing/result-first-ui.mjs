@@ -43,6 +43,7 @@ await page.route(url => url.pathname.startsWith('/api/'), async route => {
   else if (path === '/api/staff/patients/sample/appointments') body = { appointments: [], ecw_status: 'complete' }
   else if (path.endsWith('/appointments')) body = { appointments: [visit] }
   else if (path.endsWith('/appointments/previsit')) { previsitRequests.push(route.request().postDataJSON()); await estimateGate; body = result }
+  else if (path.endsWith('/cases/sample-check/previsit')) body = result
   else if (path.endsWith('/payer-response')) body = { source: 'Stedi', response: { id: 'saved-payer-response', benefits: [] } }
   else if (path.endsWith('/visit-review')) {
     const review = route.request().postDataJSON(); reviews.push(review); await reviewGate
@@ -57,11 +58,12 @@ await page.route(url => url.pathname.startsWith('/api/'), async route => {
   else throw new Error('Unexpected API ' + path)
   await route.fulfill({ json: body })
 })
-async function openPatient() {
+async function openPatient(pending = false) {
   await page.goto(process.env.UI_URL || 'http://127.0.0.1:5182/?staff')
   await page.getByRole('button', { name: /Alex Morgan/ }).click()
   await page.getByRole('button', { name: 'Open insurance review', exact: true }).click()
-  await page.locator('#visit-estimate .arrival-total > strong').waitFor()
+  if (pending) await page.locator('.coverage-chip').filter({ hasText: 'Coverage check in progress' }).waitFor()
+  else await page.locator('#visit-estimate .arrival-total > strong').waitFor()
 }
 async function detail(title) {
   const summary = page.locator('.visit-detail-section > summary').filter({ hasText: title })
@@ -240,6 +242,64 @@ try {
   assert.equal(await page.locator('.arrival-total > strong').innerText(), '$0.00')
   await page.getByText('eCW billing note ·', { exact: false }).click()
   assert(await page.getByText(billing.text, { exact: true }).isVisible())
+  // Completed empty/failed searches must not retain the pending label or invent a price.
+  const beforeRecovery = structuredClone(result)
+  for (const [state, outcome, coverageStatus, label] of [
+    ['complete', 'no_match', 'NOT_FOUND', 'Coverage not found electronically'],
+    ['complete', 'review_needed', 'REVIEW_REQUIRED', 'Coverage unverified · review required'],
+    ['complete', 'not_available', 'REVIEW_REQUIRED', 'Coverage unverified · review required'],
+    ['rejected', 'rejected', 'REVIEW_REQUIRED', 'Coverage check could not complete'],
+    ['indeterminate', null, 'REVIEW_REQUIRED', 'Coverage check outcome unknown'],
+    ['pending', null, 'REVIEW_REQUIRED', 'Coverage check in progress'],
+  ]) {
+    result = { ...beforeRecovery, benefits: null, ecw_coverage_active: false, coverage_status: coverageStatus,
+      eligibility_error: 'coverage_identity_missing', recovery: { state, outcome, message: 'Electronic retrieval does not establish that the patient is uninsured.' },
+      collection_guidance: { ...beforeRecovery.collection_guidance, billing_note: undefined, status: 'deferred_billing', amount_cents: null, reason: 'Coverage remains unverified.' }, emg_option: undefined }
+    await openPatient(state === 'pending')
+    assert.equal(await page.locator('.visit-patient-bar .coverage-chip').innerText(), label)
+    if (state === 'pending') {
+      assert(!(await page.locator('.arrival-total > strong').innerText()).includes('$'))
+    } else {
+      assert.equal(await page.locator('.visit-snapshots > div').first().locator('strong').innerText(), label)
+      assert.equal(await page.locator('.arrival-total > strong').innerText(), 'Review billing details')
+      assert.equal(await page.getByRole('button', { name: 'Check again', exact: true }).isDisabled(), false)
+    }
+  }
+  // Terminal automatic recovery changes payment mode without a staff action.
+  const reviewsBeforeCash = reviews.length
+  result = { ...beforeRecovery, benefits: null, ecw_coverage_active: false, coverage_status: 'REVIEW_REQUIRED',
+    payment_mode: 'cash', eligibility_error: 'coverage_identity_missing', emg_option: undefined,
+    cash_fallback: { reason: 'Automatic insurance recovery finished. Cash / self-pay pricing selected; insurance remains unverified.' },
+    recovery: { state: 'complete', outcome: 'review_needed', exhausted: true, message: 'Available automatic checks finished.',
+      candidates: [{ id: 'ambiguous', payer: 'Example Plan', plans: [], member_id: 'SYNTHETIC-FAMILY',
+        subscriber: { firstName: 'Parent', lastName: 'Example', dateOfBirth: null },
+        dependent: { firstName: 'Alex', lastName: 'Morgan', dateOfBirth: '2001-02-03' },
+        verification_status: 'REVIEW_REQUIRED', source: 'stedi_discovery',
+        reason_codes: ['SUBSCRIBER_DOB_MISSING', 'ADDITIONAL_IDENTITY_EVIDENCE_REQUIRED'] }],
+      payer_routes: [{ id: 'suggested', name: 'Unverified route', aliases: [], names: [] }] },
+    insurance_diagnosis: { coverageSource: 'stedi_discovery', rawCandidateCount: 1, retainedCandidateCount: 1,
+      verifiedCandidateCount: 0, identityStatus: 'REVIEW_REQUIRED', eligibilityStatus: 'NOT_VERIFIED',
+      pricingStatus: 'NOT_CALCULATED', reasonCodes: [], states: [], pricingReasons: ['Additional identity evidence is required.'] },
+    price_range: { ...beforeRecovery.price_range, cash_complete: true, cash_min_cents: 16000, cash_max_cents: 16000 },
+    collection_guidance: { ...beforeRecovery.collection_guidance, billing_note: undefined, amount_cents: 16000, status: 'cash_estimate', basis: 'practice_cash_price', reason: 'Insurance remains unverified.' } }
+  await openPatient()
+  assert.equal(await page.locator('.arrival-total > strong').innerText(), '$160.00')
+  assert.equal(await page.locator('.coverage-chip').innerText(), 'Coverage unverified · cash pricing')
+  assert.equal(reviews.length, reviewsBeforeCash)
+  section = await detail('Detailed benefits')
+  const candidateSection = section.getByRole('region', { name: 'Returned insurance candidates' })
+  assert((await candidateSection.innerText()).includes('SYNTHETIC-FAMILY'))
+  assert((await candidateSection.innerText()).includes('Review required'))
+  assert.equal(await candidateSection.locator('div').filter({ has: page.locator('dt', { hasText: 'Policyholder DOB' }) }).locator('dd').innerText(), 'Unknown')
+  assert((await candidateSection.innerText()).includes('Alex Morgan · DOB 2001-02-03'))
+  assert((await section.getByRole('region', { name: 'Insurance check diagnosis' }).innerText()).includes('1 returned · 1 retained · 0 matched candidates'))
+  assert.equal(await section.getByRole('button', { name: 'Check this policy', exact: true }).count(), 0)
+  assert.equal(await section.getByRole('heading', { name: 'Select the payer to check', exact: true }).count(), 0)
+  result.price_range = { ...result.price_range, cash_complete: false }
+  result.collection_guidance = { ...result.collection_guidance, amount_cents: null, status: 'cash_price_missing', basis: 'practice_cash_price' }
+  await openPatient()
+  assert(!(await page.locator('.arrival-total > strong').innerText()).includes('$'))
+  result = beforeRecovery
   // A failed refresh retains the saved estimate, labelled for rechecking.
   result = { ...result, emg_option: undefined, collection_guidance: { ...result.collection_guidance, status: 'estimated', amount_cents: 4735,
     billing_note: { ...billing, kind: 'office_copay', amount_cents: 4735, text: 'Active, $47.35 copay, ded met' } } }

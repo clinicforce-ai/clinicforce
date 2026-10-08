@@ -136,7 +136,7 @@ class PrevisitFlowTest(unittest.IsolatedAsyncioTestCase):
              patch("app.api.routers.commercial_estimator.ecw_backend.fetch_saved_eligibility", AsyncMock(return_value=saved_ecw)), \
              patch("app.api.routers.commercial_estimator.cpt_suggester.suggest_preliminary_cpt_codes", return_value={"groups": [], "notes": []}), \
              patch("app.api.routers.commercial_estimator.stedi_payers.search_payer", new=AsyncMock(return_value=None if payer_missing else {"stediId": "QDTRP", "displayName": "Blue Cross and Blue Shield of Texas", 'transactionSupport': {'eligibilityCheck': 'ENROLLMENT_REQUIRED' if enrollment_missing else 'SUPPORTED'}})), \
-             patch("app.api.routers.commercial_estimator.stedi_payers.eligibility_enrolled", new=AsyncMock(return_value=False)), \
+             patch("app.api.routers.commercial_estimator.stedi_payers.eligibility_enrollment", new=AsyncMock(return_value={'status': 'MISSING', 'reason_code': 'enrollment_missing'})), \
              patch("app.api.routers.commercial_estimator.store.get_cases", return_value=held_cases), \
              patch("app.api.routers.commercial_estimator.store.create_case", return_value=case), \
              patch("app.api.routers.commercial_estimator._save", side_effect=lambda value, *_: value), \
