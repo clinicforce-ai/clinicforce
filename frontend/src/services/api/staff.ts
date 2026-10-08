@@ -98,7 +98,7 @@ export interface StaffLibraryDocument {
   created_at: string
   effective_from: string | null
   effective_to: string | null
-  extraction_summary?: { status: 'read' | 'reading' | 'needs_retry'; page_count?: number; empty_pages?: number[] } | null
+  extraction_summary?: { status: 'read' | 'reading' | 'needs_retry' | 'usable' | 'partial' | 'missing_dependency' | 'conflict' | 'provisional'; page_count?: number; empty_pages?: number[]; usable_rules?: number; issues?: Array<{ status: string; reason: string; locator?: string }> } | null
   estimator_uses?: Array<{ id: string; type: 'contract_rates' | 'cash_rates'; status: string; payer: string; effective_from: string; effective_to?: string | null; note?: string }>
 }
 

@@ -227,3 +227,34 @@ def test_document_timeout_is_reported_separately_from_absent_cards():
     diagnosis = api._previsit_result(case)['insurance_diagnosis']
     assert 'CARD_READ_TIMEOUT' in diagnosis['reasonCodes']
     eligibility.assert_not_called()
+
+
+def test_expired_dependent_policy_keeps_patient_match_member_group_and_dates():
+    case, _, _, item = dependent_case()
+    item['subscriber'].update(groupNumber='SYNTHETIC-GROUP', middleName='Q')
+    item['planDateInformation'] = {'planBegin': '20000101', 'planEnd': '20001231'}
+    item['benefitsInformation'] = [{'code': '6', 'name': 'Inactive', 'serviceTypeCodes': ['30']}]
+    item.pop('plans', None)
+    context = case['previsit_context']
+    row = discovery.candidates({'items': [item]}, context['inputs'], context['source'])[0]
+    assert row['member_id'] == 'SYNTHETIC-FAMILY' and row['group_number'] == 'SYNTHETIC-GROUP'
+    assert row['identity_status'] == 'MATCHED'
+    assert row['subscriber']['middleName'] == 'Q' and row['subscriber']['dateOfBirth'] is None
+    assert row['coverage_evidence'] == {'status': 'EXPIRED', 'reported_status': 'INACTIVE', 'start': '2000-01-01', 'end': '2000-12-31'}
+    assert 'COVERAGE_EXPIRED' in row['reason_codes'] and not row['inquiry_eligible']
+    case['previsit_discovery'].update(request_state='complete', outcome='review_needed', exhausted=True, candidates=[row])
+    result = api._previsit_result(case)
+    assert result['insurance_diagnosis']['identityStatus'] == 'VERIFIED'
+    assert result['insurance_diagnosis']['eligibilityStatus'] == 'EXPIRED'
+    assert result['payment_mode'] == 'cash'
+
+
+def test_missing_corroborating_address_allows_inquiry_but_conflicting_identity_does_not():
+    case, _, _, item = dependent_case()
+    context = case['previsit_context']
+    assert discovery.inquiry_eligible(item, context['inputs'], context['source'])
+    assert not discovery.automatic_match(item, context['inputs'], context['source'])
+    item['dependent']['address'] = {**context['inputs']['patient']['address'], 'address1': 'Unrelated address'}
+    assert not discovery.inquiry_eligible(item, context['inputs'], context['source'])
+    item['dependent'].pop('address'); item['dependent']['dateOfBirth'] = '19990101'
+    assert not discovery.inquiry_eligible(item, context['inputs'], context['source'])

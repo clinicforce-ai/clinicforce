@@ -27,7 +27,7 @@ from app.api.routers.insurance import _response, _scope, _session as insurance_s
 from app.core import object_store, staff_store
 from app.insurance import identity as insurance_identity
 from app.insurance import commercial, commercial_store, cpt_rules, cpt_suggester, ecw_backend, golden, stedi_discovery, stedi_payers, store, visit_estimate, practice_prices
-from app.insurance import stedi_financial, collection_guidance, ecw_benefits, ecw_billing
+from app.insurance import stedi_financial, collection_guidance, ecw_benefits, ecw_billing, library_pricing
 from app.logs.collection_audit import collection_event
 from app.logs.logger import log_info, log_warning
 
@@ -299,12 +299,15 @@ def _practice_path(practice_id: str, inputs: dict, source: dict) -> tuple[dict, 
     billing_npi = str((source.get("billing_provider") or {}).get("npi") or "")
     plan = re.sub(r"[^a-z0-9]", "", str(source.get("plan") or "").casefold())
     networks = [row for row in commercial_store.list_networks(practice_id)
-                if row["payer_connection_id"] == payer["id"] and row["status"] == "verified"
+                if row["payer_connection_id"] == payer["id"]
                 and row["billing_npi"] == billing_npi and row["rendering_npi"] == rendering_npi
                 and row["location_id"] == str(source.get("location_id") or "")
                 and row["place_of_service"] == str(inputs.get("place_of_service") or "")
                 and (not row.get("plan_matcher") or (plan and re.sub(r"[^a-z0-9]", "", row["plan_matcher"].casefold()) == plan))
                 and row["effective_from"] <= service_date and (not row.get("effective_to") or row["effective_to"] >= service_date)]
+    if any(row['status'] == 'nonparticipating' for row in networks):
+        raise HTTPException(409, 'A sourced nonparticipation rule applies to this provider, product, location and date.')
+    networks = [row for row in networks if row['status'] == 'verified']
     if len(networks) != 1:
         raise HTTPException(409, "This practice has no single verified provider-network record for this eCW provider and location.")
     profiles = [row for row in commercial_store.list_profiles(practice_id)
@@ -386,8 +389,8 @@ def _appointment_readiness(practice_id: str, session: dict, inputs: dict, source
             blockers.append("Clinic setup: enable exactly one estimate profile for this payer and provider network.")
 
     planned = [row for row in inputs.get("lines", []) if row.get("service_status") == "scheduled"]
-    if not planned:
-        blockers.append("eClinicalWorks did not return a CPT/HCPCS-coded service linked to this scheduled visit. The planned service must be coded in eCW before a dollar estimate is possible.")
+    if not planned and not _previsit_codes(inputs):
+        blockers.append("This appointment has neither a scheduled CPT/HCPCS-coded service nor a supported anticipated office-service plan.")
     elif any(row.get("modifiers") for row in planned):
         blockers.append("A scheduled eClinicalWorks service has a modifier; a matching contracted rate is required.")
     elif any(not row.get("units") for row in planned):
@@ -605,6 +608,8 @@ def _finish_previsit(result: dict, case: dict, inputs: dict, source: dict, paylo
         comparison = {**comparison, 'status': 'reconciled', 'evidence': evidence, 'message': ''}
         result['benefits']['review_reasons'] = [r for r in result['benefits'].get('review_reasons', []) if 'identity' not in r]
         result['benefits']['requires_review'] = bool(result['benefits']['review_reasons'])
+    result['library_pricing'] = session.get('library_pricing', case.get('library_pricing', []))
+    case['library_pricing'] = result['library_pricing']
     result['benefit_source'] = (payload or {}).get('benefit_source') or ('Stedi' if result.get('checked_at') else None)
     result['identity'] = comparison
     result['benefits']['identity'] = comparison
@@ -621,7 +626,15 @@ def _finish_previsit(result: dict, case: dict, inputs: dict, source: dict, paylo
     known = {row['code'] for row in codes}
     # A clinic-scoped catalog is useful before final coding exists. Prices and
     # descriptions come from its active contract, never from AI or example defaults.
-    connections = [row for row in commercial_store.list_connections(session['practice_id'])
+    configured_connections = commercial_store.list_connections(session['practice_id'])
+    if not payer_id and payload is None:
+        # A deferred payer check must not discard the already mapped eCW policy.
+        # A returned payer route/product still takes precedence once benefits arrive.
+        mapped = [row for row in configured_connections if row.get('id') == inputs.get('payer_id')
+                  and row.get('category') == 'commercial_medical' and row.get('status') == 'staff_guidance_enabled']
+        if len(mapped) == 1:
+            payer_id = str(mapped[0].get('stedi_payer_id') or '')
+    connections = [row for row in configured_connections
                    if row.get('stedi_payer_id') == payer_id and row.get('status') == 'staff_guidance_enabled']
     catalog = []
     if len(connections) == 1:
@@ -657,7 +670,7 @@ def _finish_previsit(result: dict, case: dict, inputs: dict, source: dict, paylo
     uploaded_cash = practice_prices.current(session['practice_id'], inputs['service_date'])
     if uploaded_cash:
         known_codes = {row['code'] for row in available}
-        available.extend({'id': 'cash:' + row['code'], 'code': row['code'], 'description': row['description'], 'source': 'Practice cash schedule', 'units': 1, 'modifiers': []} for row in uploaded_cash['rows'] if row['code'] not in known_codes)
+        available.extend({'id': 'cash:' + row['code'], 'code': row['code'], 'description': row['description'], 'source': 'Practice cash schedule', 'units': 1, 'modifiers': []} for row in uploaded_cash['rows'] if row['code'] not in known_codes and not row['code'].startswith('package:'))
     # Clinical options work for every practice, even before its prices arrive.
     # This catalog supplies no prices or coverage assumptions.
     known_codes = {row['code'] for row in available}
@@ -1068,7 +1081,10 @@ async def ecw_appointments(request: Request) -> dict:
 
 @router.post("/appointments/readiness")
 async def ecw_appointment_readiness(value: EcwStartInput, request: Request) -> dict:
-    """Read visit prerequisites without a payer transaction. Unresolved identity
+    """Read visit prerequisites without a payer transaction. An uncoded routine
+    office visit can use the estimator's anticipated service without staff
+    confirmation; scheduled_codes remains the actual eCW coding, possibly empty.
+    Readiness does not establish payer benefits or a dollar amount. Unresolved identity
     returns 409 with code ecw_patient_selection_required for staff selection.
     """
     session = await _session(request)
@@ -1129,6 +1145,8 @@ def _insurance_diagnosis(case: dict, result: dict, guidance: dict) -> dict:
     identity = result.get('identity') or benefits.get('identity') or {}
     verified = (recovery.get('outcome') == 'recovered' and recovery.get('state') == 'complete') or (
         not recovery and benefits.get('active') is True and identity.get('status') in {'matched', 'verified', 'reconciled'})
+    identity_verified = identity.get('status') in {'matched', 'verified', 'reconciled'} or any(
+        row.get('identity_status') == 'MATCHED' for row in candidates)
     reasons = [reason for row in candidates for reason in row.get('reason_codes', [])]
     raw_recovery = case.get('previsit_discovery') or {}
     retrieval = case['previsit_context'].get('source', {}).get('coverage_retrieval') or {}
@@ -1148,7 +1166,7 @@ def _insurance_diagnosis(case: dict, result: dict, guidance: dict) -> dict:
         states.append('CANDIDATES_REJECTED')
     if sum(row.get('active_medical') is True for row in candidates) > 1:
         reasons.append('MULTIPLE_COVERAGES'); states.append('MULTIPLE_COVERAGES')
-    states.append('IDENTITY_VERIFIED' if verified else 'IDENTITY_REVIEW_REQUIRED')
+    states.append('IDENTITY_VERIFIED' if identity_verified else 'IDENTITY_REVIEW_REQUIRED')
     enrollment = raw_recovery.get('enrollment') or result.get('enrollment')
     if enrollment and enrollment.get('status') != 'LIVE':
         reasons.append(enrollment['reason_code'].upper()); states.append('ENROLLMENT_BLOCKED')
@@ -1156,6 +1174,10 @@ def _insurance_diagnosis(case: dict, result: dict, guidance: dict) -> dict:
         states.append('ELIGIBILITY_NOT_VERIFIED')
     else:
         states.append('BENEFITS_VERIFIED')
+    candidate_states = {row.get('coverage_evidence', {}).get('status') for row in candidates}
+    eligibility_state = (benefits.get('coverage_evidence') or {}).get('status')
+    if not eligibility_state and len(candidate_states) == 1:
+        eligibility_state = next(iter(candidate_states))
     available = guidance.get('amount_cents') is not None
     details = []
     if not available:
@@ -1184,8 +1206,8 @@ def _insurance_diagnosis(case: dict, result: dict, guidance: dict) -> dict:
                 ('stedi_discovery' if recovery else result.get('benefit_source') or 'ecw'),
             'rawCandidateCount': raw_count, 'retainedCandidateCount': len(candidates),
             'verifiedCandidateCount': recovery.get('verified_candidate_count', 0),
-            'identityStatus': 'VERIFIED' if verified else 'REVIEW_REQUIRED',
-            'eligibilityStatus': 'BENEFITS_VERIFIED' if verified and benefits.get('active') is True else 'NOT_VERIFIED',
+            'identityStatus': 'VERIFIED' if identity_verified else 'REVIEW_REQUIRED',
+            'eligibilityStatus': 'BENEFITS_VERIFIED' if verified and benefits.get('active') is True else eligibility_state if eligibility_state in {'INACTIVE', 'EXPIRED', 'FUTURE', 'CONFLICT'} else 'NOT_VERIFIED',
             'pricingStatus': 'ESTIMATE_READY' if available else 'NOT_CALCULATED',
             'reasonCodes': list(dict.fromkeys(reasons)), 'states': list(dict.fromkeys(states)),
             'pricingReasons': details, 'enrollment': enrollment, 'ecwCoverage': retrieval,
@@ -1624,7 +1646,7 @@ async def _recover_discovery(case: dict, session: dict, provider: dict) -> None:
                                 reason='candidates_retained' if candidates else 'all_candidates_filtered' if items else 'no_upstream_candidates')
                 for row in candidates:
                     row['matches_ecw_policy'] = stedi_discovery.matches_ecw_policy(items[row['index']], inputs, context['source'])
-                discovery.update(request_state='complete', candidates=candidates, raw_candidate_count=len(items), candidate_version=2,
+                discovery.update(request_state='complete', candidates=candidates, raw_candidate_count=len(items), candidate_version=3,
                                  outcome='no_match' if not items else 'review_needed')
                 if payload.get('status') != 'COMPLETE' or payload.get('errors'):
                     discovery.update(request_state='rejected', outcome='rejected', stage='discovery_rejected',
@@ -1642,6 +1664,12 @@ async def _recover_discovery(case: dict, session: dict, provider: dict) -> None:
                     case.update(await run_in_threadpool(_save, case, session, 'stedi-recovered-member-pending'))
                     _recovery_event(case, session, 'candidate_match', 'matched', count=1)
                     await _recheck_discovery_candidate(case, session, provider, discovery_payload=payload, reuse_benefits=True)
+                    return
+                inquiry = [row for row in candidates if row.get('inquiry_eligible')]
+                if len(inquiry) == 1 and sum(row['active_medical'] for row in candidates) <= 1 and context['source'].get('active_coverages', 0) <= 1:
+                    discovery.update(request_state='pending', stage='eligibility', selected_candidate_id=inquiry[0]['id'], evidence_source='stedi_discovery')
+                    case.update(await run_in_threadpool(_save, case, session, 'stedi-candidate-inquiry-pending'))
+                    await _recheck_discovery_candidate(case, session, provider, discovery_payload=payload, inquiry_only=True)
                     return
                 reason = 'no_coverage_found' if not items else 'multiple_active_policies' if len(matching) > 1 else 'identity_or_coverage_review'
                 detail = ('No coverage was returned by the completed insurance search. This does not establish that the patient is uninsured.'
@@ -1695,7 +1723,7 @@ async def _reconcile_saved_discovery(case: dict, session: dict) -> None:
         for row in candidates:
             row['matches_ecw_policy'] = stedi_discovery.matches_ecw_policy(items[row['index']], inputs, source)
         discovery.update(request_state='complete', candidates=candidates, coverage_count=payload.get('coveragesFound'),
-                         raw_candidate_count=len(items), candidate_version=2,
+                         raw_candidate_count=len(items), candidate_version=3,
                          outcome='no_match' if not items else 'review_needed', checked_at=_now())
         if payload.get('status') != 'COMPLETE' or payload.get('errors'):
             discovery.update(request_state='rejected', outcome='rejected', stage='discovery_rejected',
@@ -1900,7 +1928,7 @@ async def _start_previsit_recovery(case: dict, session: dict, provider: dict, ba
         recovery.get('request_state') == 'complete'
         and recovery.get('outcome') in {'review_needed', 'no_match'}
         and recovery.get('raw_object_key')
-        and recovery.get('candidate_version') != 2
+        and recovery.get('candidate_version') != 3
     )
     if legacy_result and background_tasks is not None:
         recovery.update(request_state='pending', stage='reconciling_saved_discovery',
@@ -1955,7 +1983,7 @@ async def saved_previsit(case_id: str, request: Request) -> dict:
         raise HTTPException(404, 'Saved visit estimate not found.')
     recovery = case.get('previsit_discovery') or {}
     if (recovery.get('request_state') == 'complete' and recovery.get('outcome') in {'review_needed', 'no_match'}
-            and recovery.get('raw_object_key') and recovery.get('candidate_version') != 2):
+            and recovery.get('raw_object_key') and recovery.get('candidate_version') != 3):
         await _reconcile_saved_discovery(case, session)
     return _previsit_result(case)
 
@@ -2064,6 +2092,28 @@ async def _begin_coverage_discovery(result: dict, session: dict, inputs: dict, s
     if case.get('previsit_discovery', {}).get('request_state') in {'pending', 'indeterminate'}:
         return await _start_previsit_recovery(case, session, provider, background_tasks)
     if not refresh_benefits and saved.get('request_state') == 'complete' and case.get('previsit_context'):
+        try:
+            fresh = datetime.fromisoformat(saved['checked_at']) + timedelta(hours=24) > datetime.now(timezone.utc)
+        except (KeyError, TypeError, ValueError):
+            fresh = False
+        # Reopening completed recovery never submits a payer request. Reprice
+        # current evidence; stale/unreadable evidence cannot authorize insurance.
+        old_context = case['previsit_context']
+        raw_key = case.get('previsit_raw_object_key')
+        payload = None
+        if fresh and raw_key:
+            try:
+                payload = json.loads(await run_in_threadpool(object_store.get_object_bytes, raw_key))
+            except Exception:
+                payload = None
+        result = deepcopy(old_context['result'])
+        result['benefits'] = _case_benefits(payload, inputs, source, case) if payload else _previsit_benefits({}, coverage, inputs['service_date'])
+        if not payload:
+            result.setdefault('issues', []).append('Saved payer evidence is stale or unavailable for insurance recalculation.')
+        pricing_source = case.get('previsit_discovery', {}).get('pricing_source')
+        await run_in_threadpool(_finish_previsit, result, case, inputs, source, payload, session,
+                                old_context.get('payer_id') or '', pricing_source=pricing_source)
+        case.update(await run_in_threadpool(_save, case, session, 'previsit-library-recalculated'))
         _recovery_event(case, session, 'discovery_cache', 'reused', reason='saved_result')
         return _previsit_result(case)
     discovery_ready = bool(stedi_discovery.request_body(inputs, provider))
@@ -2149,8 +2199,15 @@ async def previsit_estimate(value: PrevisitInput, request: Request, background_t
     raw/retained/verified candidate counts, enrollment state and specific blockers.
     Protected recovery.candidates retain partial subscriber/dependent identities;
     absent subscriber DOB stays null and does not discard a dependent's policy.
+    Library rules are prepared automatically before pricing. library_pricing
+    retains source processing summaries and missing dependencies. Candidates
+    expose identity_status, group_number and dated coverage_evidence separately.
+    Multiple policy/payer suggestions are optional; choosing one for display
+    does not submit eligibility or postpone terminal automatic cash fallback.
     """
     session = await _session(request)
+    library_documents = await run_in_threadpool(library_pricing.prepare, session['practice_id'])
+    session['library_pricing'] = [{'document_id': row['id'], 'label': row['label'], 'payer': row.get('payer'), 'summary': row.get('extraction_summary')} for row in library_documents]
     collection_event('previsit_started', practice_id=session['practice_id'], intake_id=(session.get('intake') or {}).get('id'),
                      staff_id=(session.get('staff') or {}).get('id'), stage='appointment')
     if not ecw_backend.configured():
@@ -2301,7 +2358,7 @@ async def previsit_estimate(value: PrevisitInput, request: Request, background_t
         return await incomplete_result('stedi_unavailable')
     service_day = date.fromisoformat(inputs["service_date"])
     usable_coverage = (coverage['active_coverages'] >= 1 and coverage['coverage_id'] and
-                       coverage['relationship'] and all(coverage.get(key) for key in ('subscriber_first', 'subscriber_last', 'subscriber_birth_date')))
+                       coverage['relationship'] and all(coverage.get(key) for key in ('subscriber_first', 'subscriber_last')))
     if not usable_coverage or not source.get('payer'):
         detail = ('eCW did not return one usable primary policy with member and policyholder details for this visit.'
                   if not usable_coverage else 'eCW did not return an insurer name for the selected policy.')
@@ -2503,6 +2560,8 @@ async def update_visit_review(case_id: str, value: VisitReviewInput, request: Re
             _ecw_practice_config(session['practice_id']), context['source']['appointment_id'])
     except ecw_backend.EcwBackendError as exc:
         raise HTTPException(502, str(exc)) from exc
+    library_documents = await run_in_threadpool(library_pricing.prepare, session['practice_id'])
+    session['library_pricing'] = [{'document_id': row['id'], 'label': row['label'], 'payer': row.get('payer'), 'summary': row.get('extraction_summary')} for row in library_documents]
     if value.context_token != context['context_token'] or _visit_context_token(inputs, source) != value.context_token:
         raise HTTPException(409, 'The appointment, coverage or services changed in eCW. Check the visit again.')
     saved_eligibility = (context.get('source') or {}).get('saved_eligibility')

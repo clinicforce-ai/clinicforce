@@ -10,6 +10,9 @@ from app.api.routers.commercial_estimator import PrevisitInput, VisitReviewInput
 
 class PrevisitFlowTest(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
+        self.library_patch = patch('app.api.routers.commercial_estimator.library_pricing.prepare', return_value=[])
+        self.library_patch.start()
+        self.addCleanup(self.library_patch.stop)
         self.model_patch = patch('app.insurance.cpt_suggester.boto3.client', side_effect=RuntimeError('offline synthetic test'))
         self.model_patch.start()
         self.addCleanup(self.model_patch.stop)

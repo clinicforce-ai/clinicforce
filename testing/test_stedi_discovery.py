@@ -666,6 +666,24 @@ class RecoveryTest(IsolatedAsyncioTestCase):
         assert case['previsit_discovery']['outcome'] == 'recovered'
         assert client.post.await_count == 2
 
+    async def test_missing_address_runs_one_targeted_inquiry_without_staff_selection(self):
+        _, _, _, item = setup()
+        item['subscriber'].pop('address')
+        case, client, _ = await self.exercise({'status': 'COMPLETE', 'coveragesFound': 1, 'items': [item]})
+        assert client.post.await_count == 2  # One discovery, one targeted eligibility.
+        assert case['previsit_discovery']['outcome'] == 'recovered'
+        assert case['previsit_discovery']['selected_candidate_id']
+
+    async def test_expired_policy_does_not_trigger_a_redundant_targeted_check(self):
+        _, _, _, item = setup()
+        item['subscriber'].pop('address')
+        item['planDateInformation'] = {'planBegin': '20000101', 'planEnd': '20001231'}
+        case, client, _ = await self.exercise({'status': 'COMPLETE', 'coveragesFound': 1, 'items': [item]})
+        assert client.post.await_count == 1
+        assert case['previsit_discovery']['exhausted'] is True
+        assert api._previsit_result(case)['payment_mode'] == 'cash'
+        assert case['previsit_discovery']['candidates'][0]['coverage_evidence']['status'] == 'EXPIRED'
+
     def test_public_recovery_status_includes_safe_stop_reason_and_reference(self):
         status = discovery.public_status({'request_state': 'complete', 'outcome': 'review_needed',
                                           'stage': 'candidate_match_review',
@@ -721,6 +739,7 @@ class RecoveryTest(IsolatedAsyncioTestCase):
         case, session, _, _ = setup(); case.pop('previsit_discovery')
         context = case['previsit_context']; inputs, source = context['inputs'], context['source']
         with patch.object(api, '_session', AsyncMock(return_value=session)), patch.object(api.store, 'get_case', return_value=case), \
+             patch.object(api.library_pricing, 'prepare', return_value=[]), \
              patch.object(api.ecw_backend, 'fetch_inputs', AsyncMock(return_value=(inputs, [], source))), \
              patch.object(api, '_ecw_practice_config', return_value={}), \
              patch.object(api.object_store, 'get_object_bytes', return_value=b'{"errors":[{"code":"72"}]}'), \

@@ -159,6 +159,7 @@ def test_estimator_identity_failure_returns_actionable_code_without_benefits():
     app.include_router(commercial_estimator.router)
     client = TestClient(app)
     with patch.object(commercial_estimator, '_session', AsyncMock(return_value={'practice_id': 'practice'})), \
+         patch.object(commercial_estimator.library_pricing, 'prepare', return_value=[]), \
          patch.object(commercial_estimator, '_ecw_identity', return_value=PROFILE), \
          patch.object(commercial_estimator, '_ecw_practice_config', return_value={}), \
          patch.object(ecw, 'configured', return_value=True), \

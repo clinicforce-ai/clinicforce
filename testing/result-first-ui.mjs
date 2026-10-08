@@ -289,12 +289,27 @@ try {
   section = await detail('Detailed benefits')
   const candidateSection = section.getByRole('region', { name: 'Returned insurance candidates' })
   assert((await candidateSection.innerText()).includes('SYNTHETIC-FAMILY'))
-  assert((await candidateSection.innerText()).includes('Review required'))
+  assert((await candidateSection.innerText()).includes('Coverage not verified'))
   assert.equal(await candidateSection.locator('div').filter({ has: page.locator('dt', { hasText: 'Policyholder DOB' }) }).locator('dd').innerText(), 'Unknown')
   assert((await candidateSection.innerText()).includes('Alex Morgan · DOB 2001-02-03'))
   assert((await section.getByRole('region', { name: 'Insurance check diagnosis' }).innerText()).includes('1 returned · 1 retained · 0 matched candidates'))
-  assert.equal(await section.getByRole('button', { name: 'Check this policy', exact: true }).count(), 0)
+  assert.equal(await section.getByRole('button', { name: 'Check this policy', exact: true }).count(), 1)
   assert.equal(await section.getByRole('heading', { name: 'Select the payer to check', exact: true }).count(), 0)
+  // Multiple retained policies and directory routes always have optional dropdowns,
+  // including after automatic cash fallback. Viewing a suggestion is not a paid check.
+  result.recovery.candidates.push({ ...result.recovery.candidates[0], id: 'second', member_id: 'SECOND-POLICY', payer: 'Another Payer', coverage_evidence: { status: 'EXPIRED', reported_status: 'INACTIVE', start: '2000-01-01', end: '2000-12-31' } })
+  result.recovery.payer_routes.push({ id: 'route-2', name: 'Another route', aliases: [], names: [] })
+  await openPatient()
+  section = await detail('Detailed benefits')
+  const suggestions = section.getByRole('combobox', { name: 'Insurance policy suggestions' })
+  assert.equal(await suggestions.locator('option').count(), 3)
+  const beforeSuggestion = requests.length
+  await suggestions.selectOption('second')
+  assert((await section.getByRole('region', { name: 'Returned insurance candidates' }).innerText()).includes('2000-12-31'))
+  await section.getByRole('combobox', { name: 'Payer suggestions' }).selectOption('route-2')
+  assert.equal(requests.length, beforeSuggestion)
+  assert.equal(reviews.length, reviewsBeforeCash)
+  assert.equal(await page.locator('.arrival-total > strong').innerText(), '$160.00')
   result.price_range = { ...result.price_range, cash_complete: false }
   result.collection_guidance = { ...result.collection_guidance, amount_cents: null, status: 'cash_price_missing', basis: 'practice_cash_price' }
   await openPatient()

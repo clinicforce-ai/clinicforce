@@ -126,7 +126,7 @@ def parse_discovery_candidate(item: object) -> dict | None:
         details = commercial.plan_details(item)
     except (AttributeError, TypeError, ValueError):
         return None
-    person_keys = ('firstName', 'lastName', 'dateOfBirth', 'memberId')
+    person_keys = ('firstName', 'middleName', 'lastName', 'dateOfBirth', 'memberId', 'groupNumber')
     if any(person.get(key) is not None and not isinstance(person[key], str)
            for person in (subscriber, dependent) for key in person_keys):
         return None
@@ -138,6 +138,7 @@ def parse_discovery_candidate(item: object) -> dict | None:
     return {'subscriber': {key: subscriber.get(key) or None for key in person_keys},
             'dependent': {key: dependent.get(key) or None for key in person_keys} if dependent else None,
             'member_id': subscriber.get('memberId') or None,
+            'group_number': subscriber.get('groupNumber') or (item.get('planInformation') or {}).get('groupNumber'),
             'relationship': 'dependent' if dependent else 'self',
             'relationship_code': dependent.get('relationToSubscriberCode') if dependent else '18',
             'payer': (item.get('payer') or {}).get('name') or (item.get('payer') or {}).get('lastName'),
@@ -175,9 +176,12 @@ def candidate_identity(item: dict, inputs: dict) -> dict | None:
         normalized(address[key]) == normalized(returned[key]) for key in ('address1', 'city', 'state'))
         and bool(address.get('postalCode') and returned.get('postalCode'))
         and normalized(address['postalCode'])[:5] == normalized(returned['postalCode'])[:5] for address in addresses)
+    address_conflict = bool(not address_matches and all(returned.get(key) for key in ('address1', 'city', 'state', 'postalCode'))
+                            and any(all(address.get(key) for key in ('address1', 'city', 'state', 'postalCode')) for address in addresses))
     return {'member_id': subscriber['memberId'], 'subscriber_first': subscriber['firstName'],
             'subscriber_last': subscriber['lastName'], 'subscriber_birth_date': subscriber.get('dateOfBirth'),
             'relationship': 'dependent' if dependent else 'self', 'address_matches': address_matches,
+            'address_conflict': address_conflict,
             'relationship_code': str(dependent.get('relationToSubscriberCode') or 'dependent') if dependent else '18',
             'group_number': subscriber.get('groupNumber') or (item.get('planInformation') or {}).get('groupNumber'),
             'plan_number': subscriber.get('planNumber') or (item.get('planInformation') or {}).get('planNumber')}
@@ -215,6 +219,8 @@ def verify_candidate(item: dict, inputs: dict, source: dict | None = None) -> di
     if commercial.eligibility_errors(item):
         reasons.append('PAYER_REJECTED')
     identity = candidate_identity(item, inputs)
+    if identity and identity.get('address_conflict'):
+        reasons.append('PATIENT_ADDRESS_MISMATCH')
     if not candidate['member_id']:
         reasons.append('MEMBER_ID_MISSING')
     if not all(candidate['subscriber'].get(key) for key in ('firstName', 'lastName')):
@@ -236,6 +242,9 @@ def verify_candidate(item: dict, inputs: dict, source: dict | None = None) -> di
         benefits = commercial.normalize_stedi_271(item, '30', False, service_date=inputs.get('service_date'))
         if not active:
             reasons.append('ACTIVE_MEDICAL_COVERAGE_NOT_VERIFIED')
+            state = (benefits.get('coverage_evidence') or {}).get('status')
+            if state in {'INACTIVE', 'EXPIRED', 'FUTURE', 'CONFLICT'}:
+                reasons.append('COVERAGE_' + state)
         person_dates = ((item.get('dependent') or item.get('subscriber') or {}).get('dates') or {})
         bounds = [item.get('planDateInformation') or {}, person_dates]
         for plan in item.get('plans') or []:
@@ -260,6 +269,20 @@ def verify_candidate(item: dict, inputs: dict, source: dict | None = None) -> di
         reasons.append('ADDITIONAL_IDENTITY_EVIDENCE_REQUIRED')
     return {'status': 'REVIEW_REQUIRED' if reasons else 'VERIFIED',
             'reason_codes': list(dict.fromkeys(reasons)), 'pathway': pathway}
+
+
+def inquiry_eligible(item: dict, inputs: dict, source: dict) -> bool:
+    """An exact demographic match permits an inquiry, not automatic adoption.
+
+    Missing address/subscriber DOB are not mismatches. Do not repeat a search
+    for an explicitly inactive/expired policy or select among conflicting people.
+    """
+    if not candidate_identity(item, inputs):
+        return False
+    verification = verify_candidate(item, inputs, source)
+    allowed = {'ADDITIONAL_IDENTITY_EVIDENCE_REQUIRED', 'ACTIVE_MEDICAL_COVERAGE_NOT_VERIFIED',
+               'COVERAGE_DATE_NOT_VERIFIED'}
+    return not set(verification['reason_codes']) - allowed
 
 
 def card_candidate(fields: dict, inputs: dict) -> dict | None:
@@ -303,9 +326,14 @@ def candidates(payload: dict, inputs: dict, source: dict | None = None) -> list[
         token = hashlib.sha256(signature.encode()).hexdigest()[:20]
         try:
             active = active_medical(item, inputs)
+            coverage = commercial.normalize_stedi_271(item, '30', False, service_date=inputs.get('service_date'))['coverage_evidence']
         except (AttributeError, TypeError, ValueError):
             active = False
+            coverage = {'status': 'UNKNOWN', 'reported_status': 'UNKNOWN', 'start': None, 'end': None}
         rows.append({**parsed, 'id': token, 'index': index,
+                     'identity_status': 'MATCHED' if identity else 'REVIEW_REQUIRED',
+                     'coverage_evidence': coverage,
+                     'inquiry_eligible': inquiry_eligible(item, inputs, source or {}),
                      'address_matches': bool(identity and identity['address_matches']), 'active_medical': active,
                      'verification_status': verification['status'], 'verification': verification,
                      'reason_codes': list(dict.fromkeys(parsed['reason_codes'] + verification['reason_codes']))})

@@ -564,9 +564,12 @@ def public_library(document: dict) -> dict:
 
 
 @router.get("/library")
-async def library(request: Request):
+async def library(request: Request, background_tasks: BackgroundTasks):
+    """List sourced estimator use; resume unfinished Library processing automatically."""
     staff = await require_staff(request)
     documents = await run_in_threadpool(staff_store.list_library, staff["practice_id"])
+    from app.insurance import library_pricing
+    background_tasks.add_task(library_pricing.prepare, staff["practice_id"])
     usage = await run_in_threadpool(library_files.estimator_links, staff['practice_id'], documents)
     return JSONResponse({"documents": [{**public_library(value), 'estimator_uses': usage['links'][value['id']]} for value in documents]}, headers=NO_STORE)
 
@@ -587,6 +590,13 @@ async def retire_library_rate_version(version_id: str, request: Request):
 async def upload_library(request: Request, background_tasks: BackgroundTasks, file: UploadFile = File(...), kind: Literal["contract", "fee_schedule", "self_pay", "era_835", "plan_matrix"] = Form(...),
                          label: str = Form(default="", max_length=200), payer: str = Form(default="", max_length=200),
                          effective_from: str = Form(default="", max_length=10), effective_to: str = Form(default="", max_length=10)):
+    """Save a practice source and automatically compile supported final rules.
+
+    Processing covers PDF/OCR, DOCX, XLSX and CSV. The Library exposes per-source
+    processing status, usable rules and unresolved dependencies. Final supported
+    prices publish without per-patient staff activation; provisional or ambiguous
+    terms remain unavailable. Originals and historical estimates are retained.
+    """
     staff = await require_staff(request)
     if staff["role"] != "admin":
         raise HTTPException(403, "Only a clinic administrator can update clinic documents")
@@ -631,9 +641,10 @@ async def upload_library(request: Request, background_tasks: BackgroundTasks, fi
                                          label.strip(), payer.strip(), effective_from or None, effective_to or None)
     except Exception:
         raise HTTPException(503, "The clinic document could not be saved. Please try again.") from None
-    if content_type in {'application/pdf', 'image/png', 'image/jpeg'}:
+    if kind != 'era_835':
+        document['extraction_summary'] = {'status': 'reading', 'started_at': staff_store.now()}
         await run_in_threadpool(staff_store.save_library_extraction, document['id'], staff['practice_id'],
-                               {'summary': {'status': 'reading', 'started_at': staff_store.now()}})
+                               {'summary': document['extraction_summary']})
         background_tasks.add_task(library_files.extract_after_upload, document)
     return JSONResponse({**public_library(document), **({"era": era} if era else {})}, status_code=201, headers=NO_STORE)
 
@@ -644,8 +655,8 @@ async def library_text(document_id: str, request: Request, background_tasks: Bac
     document = await run_in_threadpool(staff_store.get_library, document_id, staff['practice_id'])
     if not document:
         raise HTTPException(404, 'Clinic document not found')
-    if document['content_type'] not in {'application/pdf', 'image/png', 'image/jpeg'}:
-        raise HTTPException(422, 'Extracted page text is available for PDFs and images.')
+    if document['kind'] == 'era_835':
+        raise HTTPException(422, 'Use the structured ERA view for remittance documents.')
     headers = {**NO_STORE, 'X-Content-Type-Options': 'nosniff',
                'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none'"}
     saved = document.get('extraction') or {}
