@@ -11,6 +11,7 @@ import time
 from contextlib import contextmanager
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
+from difflib import SequenceMatcher
 from html.parser import HTMLParser
 from typing import Any
 from urllib.parse import urlparse, urljoin
@@ -50,6 +51,15 @@ class EcwBackendError(RuntimeError):
         super().__init__(message)
         self.reason_code = reason_code
         self.stage = stage
+
+
+class EcwPatientSelectionRequired(EcwBackendError):
+    """Unconfirmed suggestions; callers must not fetch visits or eligibility."""
+
+    def __init__(self, candidates: list[dict]):
+        super().__init__("Choose and confirm an eClinicalWorks patient.",
+                         reason_code="patient_selection_required", stage="patient_identity")
+        self.candidates = candidates
 
 
 class EcwResourceUnavailable(EcwBackendError):
@@ -214,7 +224,7 @@ def _entries(bundle: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 async def _search(client: httpx.AsyncClient, issuer: str, token: str, resource: str,
-                  params: dict[str, str] | list[tuple[str, str]]) -> list[dict[str, Any]]:
+                  params: dict[str, str] | list[tuple[str, str]], *, first_page_only: bool = False) -> list[dict[str, Any]]:
     url, rows, seen = f"{issuer}/{resource}", [], set()
     origin = urlparse(issuer)
     for page in range(1, 11):
@@ -233,6 +243,8 @@ async def _search(client: httpx.AsyncClient, issuer: str, token: str, resource: 
             entries = _entries(bundle)
             facts["count"] = len(entries)
             rows.extend(entries)
+        if first_page_only:
+            return rows[:100]
         next_links = [link.get('url') for link in bundle.get('link', []) if link.get('relation') == 'next']
         if not next_links:
             return rows
@@ -323,20 +335,48 @@ def _name(resource: dict[str, Any]) -> tuple[str | None, str | None]:
             str(selected.get("family")) if selected.get("family") else None)
 
 
-def _patient_matches(resource: dict[str, Any], profile: dict[str, Any], *, family_suffix: bool = False) -> bool:
-    first, family = _name(resource)
-    words = str(first or "").split()
-    expected_family = _norm(profile.get("patient_last_name"))
-    family_matches = _norm(family) == expected_family or (family_suffix and expected_family and family and family.strip() and
-                      _norm(family.split()[-1]) == expected_family)
-    if not words or _norm(words[0]) != _norm(profile.get("patient_first_name")) or not family_matches:
-        return False
+def _given_words(resource: dict[str, Any]) -> list[str]:
     names = [item for item in resource.get("name", []) if isinstance(item, dict)]
     selected = next((item for item in names if item.get("use") in {"official", "usual"}), names[0] if names else {})
     given = selected.get("given", [])
-    middle = str(given[1]) if isinstance(given, list) and len(given) > 1 else words[1] if len(words) > 1 else ""
+    return [word for part in given if isinstance(part, str) for word in part.split()] if isinstance(given, list) else []
+
+
+def _patient_matches(resource: dict[str, Any], profile: dict[str, Any], *, family_suffix: bool = False) -> bool:
+    if resource.get("active") is False:
+        return False
+    _, family = _name(resource)
+    # FHIR given names are ordered and may contain spaces within each element.
+    # Consume the entire entered first name before checking the middle initial.
+    words = _given_words(resource)
+    expected_words = str(profile.get("patient_first_name") or "").split()
+    expected_family = _norm(profile.get("patient_last_name"))
+    family_matches = _norm(family) == expected_family or (family_suffix and expected_family and family and family.strip() and
+                      _norm(family.split()[-1]) == expected_family)
+    if (not expected_words or not all(_norm(word) for word in expected_words)
+            or [_norm(word) for word in words[:len(expected_words)]] != [_norm(word) for word in expected_words]
+            or not family_matches):
+        return False
+    middle = words[len(expected_words)] if len(words) > len(expected_words) else ""
     expected = str(profile.get("patient_middle_initial") or "").strip()
     return (not expected or not middle or _norm(middle[0]) == _norm(expected[0])) and resource.get("birthDate") == profile.get("patient_birth_date")
+
+
+def _one_name_edit(left: str, right: str) -> bool:
+    """One insertion, deletion, substitution or adjacent swap; never auto-link."""
+    if min(len(left), len(right)) < 4 or abs(len(left) - len(right)) > 1:
+        return False
+    if len(left) == len(right):
+        different = [i for i, (a, b) in enumerate(zip(left, right)) if a != b]
+        return len(different) == 1 or (len(different) == 2 and different[1] == different[0] + 1
+            and left[different[0]] == right[different[1]] and left[different[1]] == right[different[0]])
+    short, long = sorted((left, right), key=len)
+    index = next((i for i, (a, b) in enumerate(zip(short, long)) if a != b), len(short))
+    return short[index:] == long[index + 1:]
+
+
+def _candidate_given_name(resource: dict, profile: dict) -> str:
+    return " ".join(_given_words(resource)[:len(str(profile.get("patient_first_name") or "").split())])
 
 
 def _phone(resource: dict[str, Any]) -> str | None:
@@ -611,14 +651,25 @@ def _source_references(resource: dict[str, Any]) -> list[str]:
     return list(dict.fromkeys(values))
 
 
-async def _patient_for_profile(client: httpx.AsyncClient, issuer: str, token: str, profile: dict[str, Any]) -> tuple[dict, str, str | None]:
+async def _patient_for_profile(client: httpx.AsyncClient, issuer: str, token: str, profile: dict[str, Any], *, allow_suggestions: bool = False) -> tuple[dict, str, str | None]:
     """Resolve exactly one confirmed patient without exposing a broad patient search."""
+    considered = []
     cached_patient_id = str(profile.get("ecw_patient_id") or "")
     if cached_patient_id:
         if not re.fullmatch(r"[A-Za-z0-9.\-]{1,200}", cached_patient_id):
             raise EcwBackendError("The saved eClinicalWorks patient link is invalid.")
         patient, patient_timeout = await _cached_patient(client, issuer, token, cached_patient_id, profile)
+        if patient.get("resourceType") != "Patient" or patient.get("id") != cached_patient_id:
+            raise EcwBackendError("The saved eClinicalWorks patient link returned a different patient.")
+        if profile.get("ecw_account_number") and patient_account_number(patient) != profile["ecw_account_number"]:
+            raise EcwBackendError("The selected patient's eCW account changed. Search again and confirm the patient.",
+                                  reason_code="candidate_changed", stage="patient_identity")
         patient_rows = [patient]
+    elif profile.get("ecw_account_number"):
+        patient_timeout = None
+        patient_rows = [row for row in await _search(client, issuer, token, "Patient", {
+            "identifier": str(profile["ecw_account_number"]), "birthdate": str(profile.get("patient_birth_date") or ""),
+        }) if patient_account_number(row) == profile["ecw_account_number"]]
     else:
         patient_timeout = None
         patient_rows = await _search(client, issuer, token, "Patient", {
@@ -626,13 +677,16 @@ async def _patient_for_profile(client: httpx.AsyncClient, issuer: str, token: st
             "family": str(profile.get("patient_last_name") or ""),
             "birthdate": str(profile.get("patient_birth_date") or ""),
         })
+        considered.extend(patient_rows)
         if not any(_patient_matches(row, profile) for row in patient_rows):
             patient_rows = await _search(client, issuer, token, "Patient", {
                 "family": str(profile.get("patient_last_name") or ""),
                 "birthdate": str(profile.get("patient_birth_date") or ""),
             })
-    matches = {str(row.get("id") or ""): row for row in patient_rows if _patient_matches(row, profile)}
-    if not matches and not cached_patient_id:
+    considered.extend(patient_rows)
+    matches = {str(row.get("id") or ""): row for row in patient_rows
+               if _patient_matches(row, profile, family_suffix=bool(cached_patient_id))}
+    if not matches and not cached_patient_id and not profile.get("ecw_account_number"):
         # eCW can store a multiword family name when the patient supplies only
         # its last word. eCW may index a multiword name by its first word, so
         # search both supplied name parts with DOB and require a unique match.
@@ -641,15 +695,26 @@ async def _patient_for_profile(client: httpx.AsyncClient, issuer: str, token: st
             patient_rows = await _search(client, issuer, token, "Patient", {
                 "name": term, "birthdate": str(profile.get("patient_birth_date") or ""),
             })
+            considered.extend(patient_rows)
             matches.update({str(row.get("id") or ""): row for row in patient_rows
                             if _patient_matches(row, profile, family_suffix=True)})
-        if not matches:
-            patient_rows = await _search(client, issuer, token, "Patient", {
-                "given": str(profile.get("patient_first_name") or ""),
-                "birthdate": str(profile.get("patient_birth_date") or ""),
-            })
-            matches = {str(row.get("id") or ""): row for row in patient_rows
-                       if _patient_matches(row, profile, family_suffix=True)}
+        # eCW does not support given+birthdate alone. The name+birthdate queries
+        # above cover the supported demographic fallbacks.
+    if allow_suggestions and not cached_patient_id and len(matches) != 1:
+        candidates = _patient_suggestions(list(matches.values()) if matches else considered, profile)
+        if not candidates:
+            # Documented name-only search can find a DOB typo. Read only the
+            # first page, then require both names locally; never scan the roster.
+            for term in dict.fromkeys((str(profile.get("patient_last_name") or ""),
+                                       str(profile.get("patient_first_name") or ""))):
+                if len(_norm(term)) < 3:
+                    continue
+                rows = await _search(client, issuer, token, "Patient", {"name": term}, first_page_only=True)
+                candidates = _patient_suggestions(rows, profile)
+                if candidates:
+                    break
+        collection_event("ecw_patient_match", stage="patient_identity", outcome="review", count=len(candidates))
+        raise EcwPatientSelectionRequired(candidates)
     if not matches:
         collection_event("ecw_patient_match", stage="patient_identity", outcome="error", reason_code="no_match", count=0)
         raise EcwBackendError("No eClinicalWorks patient matched the entered name and date of birth. Check the patient's eCW record before continuing.",
@@ -664,6 +729,40 @@ async def _patient_for_profile(client: httpx.AsyncClient, issuer: str, token: st
         raise EcwBackendError("eClinicalWorks returned an invalid patient identifier.")
     collection_event("ecw_patient_match", stage="patient_identity", outcome="success", count=1)
     return patient, patient_id, patient_timeout
+
+
+def _patient_suggestions(rows: list[dict], profile: dict) -> list[dict]:
+    """Rank bounded search results for human review; never establish identity."""
+    first, family = _norm(profile.get("patient_first_name")), _norm(profile.get("patient_last_name"))
+    ranked = {}
+    for row in rows:
+        given, last = _candidate_given_name(row, profile), _name(row)[1]
+        patient_id, dob = str(row.get("id") or ""), row.get("birthDate")
+        if (row.get("resourceType") != "Patient" or row.get("active") is False
+                or not re.fullmatch(r"[A-Za-z0-9.\-]{1,200}", patient_id) or not given or not last
+                or not isinstance(dob, str) or not re.fullmatch(r"\d{4}-\d{2}-\d{2}", dob)):
+            continue
+        g, f = _norm(given), _norm(last)
+        same_dob = dob == profile.get("patient_birth_date")
+        family_tail = _norm(last.split()[-1])
+        g_score = SequenceMatcher(None, first, g).ratio()
+        f_score = max(SequenceMatcher(None, family, f).ratio(), SequenceMatcher(None, family, family_tail).ratio())
+        same_account = bool(profile.get("ecw_account_number")) and patient_account_number(row) == profile["ecw_account_number"]
+        first_typo = _one_name_edit(first, g) and family in {f, family_tail}
+        family_typo = g == first and (_one_name_edit(family, f) or _one_name_edit(family, family_tail))
+        corrected = {**profile, "patient_first_name": given, "patient_last_name": last}
+        if profile.get("ecw_account_number") and not same_account:
+            continue
+        if not (same_account or (_patient_matches(row, corrected) and (first_typo or family_typo))
+                or _patient_matches(row, {**profile, "patient_birth_date": dob}, family_suffix=True)):
+            continue
+        differences = [label for label, equal in (("First name", g == first), ("Last name", f == family),
+                                                   ("Date of birth", same_dob)) if not equal]
+        ranked[patient_id] = (g_score + f_score + int(same_dob), {
+            "id": patient_id, "given_name": given, "family_name": last, "birth_date": dob,
+            "ecw_account_number": patient_account_number(row), "differences": differences,
+        })
+    return [item for _, item in sorted(ranked.values(), key=lambda pair: (-pair[0], pair[1]["id"]))[:8]]
 
 
 def patient_account_number(patient: dict) -> str | None:
@@ -703,7 +802,7 @@ async def patient_appointment_history(profile: dict[str, Any], practice: dict[st
 
 
 async def lookup_patient_and_appointments(profile: dict[str, Any], practice: dict[str, Any], *,
-                                          transport: httpx.AsyncBaseTransport | None = None) -> dict[str, Any]:
+                                          allow_suggestions: bool = False, transport: httpx.AsyncBaseTransport | None = None) -> dict[str, Any]:
     """Verify one eCW patient and return only current/future appointments; no eligibility request."""
     client_id, issuer = settings()
     phase = "backend_authorization"
@@ -713,7 +812,7 @@ async def lookup_patient_and_appointments(profile: dict[str, Any], practice: dic
         async with httpx.AsyncClient(timeout=30, follow_redirects=False, transport=transport) as client:
             token = await _access_token(client, client_id, issuer)
             phase = "patient_identity"
-            patient, patient_id, _ = await _patient_for_profile(client, issuer, token, profile)
+            patient, patient_id, _ = await _patient_for_profile(client, issuer, token, profile, allow_suggestions=allow_suggestions)
             now = datetime.now(ZoneInfo(practice.get("timezone", "America/New_York")))
             today = now.date()
             phase = "appointment_search"
@@ -733,7 +832,7 @@ async def lookup_patient_and_appointments(profile: dict[str, Any], practice: dic
             appointments.append({"id": appointment_id, "start": start, "status": str(visit.get("status") or "scheduled"),
                                  "reason": _visit_context(visit, [], [], []) or ""})
         collection_event("ecw_appointments_selected", stage="appointment_search", outcome="success", count=len(appointments))
-        first, family = _name(patient)
+        first, family = _candidate_given_name(patient, profile), _name(patient)[1]
         return {"patient": {"id": patient_id, "given_name": first, "family_name": family,
                             "birth_date": patient.get("birthDate"), "ecw_account_number": patient_account_number(patient)},
                 "appointments": sorted(appointments, key=lambda row: (row["start"], row["id"]))}

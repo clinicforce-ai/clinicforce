@@ -95,6 +95,31 @@ class StaffInsuranceBridgeTests(unittest.IsolatedAsyncioTestCase):
         return {**documented.pending_case({"member_name": "PAT EXAMPLE", "member_id": "MEM123", "group_number": "GROUP"}),
                 "extraction_version": v1_sources.EXTRACTION_VERSION, "evidence_manifest_id": golden.evidence_binding()}
 
+    async def test_confirm_ecw_demographics_preserves_links_and_workflow_snapshots(self):
+        details = {"given_name": "Pat", "family_name": "Example", "birth_date": "1990-01-01", "ecw_patient_id": "synthetic-ecw"}
+        record = staff_store.create_intake(str(uuid4()), self.actor, [], "ecw_lookup", "synthetic-portal", details)
+        record = staff_store.confirm_patient(record['id'], self.actor, {**details, "relationship": "unknown", "identity_confirmed": True})
+        staff_store.save_insurance_identity(record['patient']['id'], self.actor['practice_id'], {"binding": "old", "status": "confirmed"})
+        with staff_store._connection() as connection:
+            connection.execute("UPDATE staff_intakes SET workflows=%s::jsonb WHERE id=%s", (json.dumps({'commercial': 'synthetic-snapshot'}), record['id']))
+        record = staff_store.get_intake(record['id'], self.actor['practice_id'])
+        before = record['workflows']
+        canonical = {**details, "given_name": "Patricia", "middle_initial": "", "ecw_account_number": "SYNTHETIC-001"}
+        staff_store.confirm_ecw_demographics(record['id'], self.actor, canonical)
+        updated = staff_store.get_intake(record['id'], self.actor['practice_id'])
+        self.assertEqual(updated['patient']['id'], record['patient']['id'])
+        self.assertEqual(updated['patient']['given_name'], 'Patricia')
+        self.assertEqual(updated['patient']['insurance_identities'], {})
+        self.assertEqual(updated['fields']['given_name'], 'Patricia')
+        self.assertEqual(updated['field_sources']['given_name'], 'ecw_confirmed')
+        self.assertEqual(updated['workflows'], before)
+        self.assertIsNone(updated['source_portal_patient_id'])
+        with self.assertRaises(ValueError):
+            staff_store.confirm_ecw_demographics(record['id'], {**self.actor, 'practice_id': 'another-practice'}, canonical)
+        with self.assertRaises(ValueError):
+            staff_store.confirm_ecw_demographics(record['id'], self.actor, {**canonical, 'ecw_patient_id': 'another-person'})
+        self.assertEqual(staff_store.get_intake(record['id'], self.actor['practice_id'])['patient']['ecw_patient_id'], 'synthetic-ecw')
+
     async def test_ecw_lookup_verifies_before_intake_and_links_verified_patient(self):
         details = {"given_name": "Pat", "middle_initial": "Q", "family_name": "Example", "birth_date": "1990-01-01"}
         path = "/api/staff/intakes/ecw-lookup"

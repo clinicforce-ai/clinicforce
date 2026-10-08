@@ -1,3 +1,4 @@
+import { ApiError } from '../services/api/client'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { ArrowLeft, ArrowRight, CalendarDays, Check, Clock3, RefreshCw, ShieldCheck, Trash2, BadgeDollarSign, Network, FileText, Wallet, PieChart } from 'lucide-react'
 import { getStaffCheckFinancials, deleteStaffInsuranceCheck, getStaffIntake, getStaffSession, type InsuranceCheckSnapshot, type StaffPatient, type StaffSession } from '../services/api/staff'
@@ -69,7 +70,7 @@ function CostPicture({ result }: { result: PrevisitEstimate }) {
   return <div className="cost-picture"><Network size={36} aria-hidden="true" /><h3>{result.benefits?.active ? 'Policy benefits received' : 'Coverage check'}</h3><p>{result.benefits?.active ? 'A final insured amount also depends on the service, provider network and clinic contract.' : 'The saved clinic cash price is available separately when provided.'}</p></div>
 }
 
-export default function CommercialEstimator({ onBack, intakeId, refreshBenefits = false, saved, currentAccountNumber }: { onBack?: () => void; intakeId?: string; refreshBenefits?: boolean; saved?: InsuranceCheckSnapshot; currentAccountNumber?: string | null }) {
+export default function CommercialEstimator({ onBack, onResolvePatient, intakeId, refreshBenefits = false, saved, currentAccountNumber }: { onBack?: () => void; onResolvePatient?: () => void; intakeId?: string; refreshBenefits?: boolean; saved?: InsuranceCheckSnapshot; currentAccountNumber?: string | null }) {
   const readOnly = !!saved
   const [session, setSession] = useState<StaffSession | null>(null)
   const [patient, setPatient] = useState<StaffPatient | null>(saved?.patient || null)
@@ -77,6 +78,7 @@ export default function CommercialEstimator({ onBack, intakeId, refreshBenefits 
   const [history, setHistory] = useState<CommercialPastVisit[] | null>(null)
   const [result, setResult] = useState<PrevisitEstimate | null>(saved?.result || null)
   const [error, setError] = useState('')
+  const [patientResolutionNeeded, setPatientResolutionNeeded] = useState(false)
   const [historyError, setHistoryError] = useState('')
   const [historyBusy, setHistoryBusy] = useState(false)
   const [selectedVisit, setSelectedVisit] = useState('')
@@ -92,7 +94,7 @@ export default function CommercialEstimator({ onBack, intakeId, refreshBenefits 
   const load = useCallback(async () => {
     const current = ++requestId.current
     automaticEstimate.current = ''
-    setBusy('visits'); setError(''); setDeleteError(''); setCleanupPending(false); setNotice(''); setResult(null); setPatient(null)
+    setBusy('visits'); setError(''); setPatientResolutionNeeded(false); setDeleteError(''); setCleanupPending(false); setNotice(''); setResult(null); setPatient(null)
     const [staff, schedule, record] = await Promise.allSettled([
       getStaffSession(), commercialAppointments(), intakeId ? getStaffIntake(intakeId) : Promise.resolve(null),
     ])
@@ -105,6 +107,7 @@ export default function CommercialEstimator({ onBack, intakeId, refreshBenefits 
       setSelectedVisit(previous => schedule.value.appointments.some(visit => visit.id === previous) ? previous : schedule.value.appointments[0]?.id || '')
       setLoaded(true)
     } else {
+      setPatientResolutionNeeded(schedule.reason instanceof ApiError && schedule.reason.code === 'ecw_patient_selection_required')
       setError(schedule.reason instanceof Error ? schedule.reason.message : 'Scheduled visits could not be loaded.')
       setAppointments([]); setSelectedVisit(''); setLoaded(false)
     }
@@ -143,13 +146,17 @@ export default function CommercialEstimator({ onBack, intakeId, refreshBenefits 
   const estimate = useCallback(async (refresh = refreshBenefits) => {
     if (!selectedVisit || busy) return
     const current = ++requestId.current
+    setPatientResolutionNeeded(false)
     setError(''); setNotice(''); setDeleteError(''); setBusy('estimate')
     try {
       const response = await commercialPrevisit(selectedVisit, refresh)
       if (response.appointment_id !== selectedVisit) throw new Error('The returned estimate does not match this visit. Refresh visits and try again.')
       if (current === requestId.current) setResult(response)
     } catch (caught) {
-      if (current === requestId.current) setError(caught instanceof Error ? caught.message : 'This visit could not be checked.')
+      if (current === requestId.current) {
+        setPatientResolutionNeeded(caught instanceof ApiError && caught.code === 'ecw_patient_selection_required')
+        setError(caught instanceof Error ? caught.message : 'This visit could not be checked.')
+      }
     } finally { if (current === requestId.current) setBusy(null) }
   }, [selectedVisit, busy, refreshBenefits])
   useEffect(() => {
@@ -256,7 +263,8 @@ export default function CommercialEstimator({ onBack, intakeId, refreshBenefits 
     </dl>}
     <div className="visit-content" aria-busy={!!busy || recovering}>
       {notice && <p className="visit-notice" role="status">{notice}</p>}{deleteError && <p className="visit-error" role="alert">{deleteError}</p>}
-      {error && <p className="visit-notice" role="alert">The estimate could not be updated: {error} {previousEstimate ? 'The saved visit details and estimate are retained below. Reconfirm before collecting.' : 'Check the eCW visit and billing details, then retry the benefits check.'}<button disabled={!!busy} onClick={() => void (selected ? estimate() : load())}>Try again <ArrowRight size={15} /></button></p>}
+      {patientResolutionNeeded && onResolvePatient && <section className="visit-notice" aria-label="Confirm eCW patient"><h2>Confirm the eCW patient</h2><p>The saved details need review. Search for a matching patient and confirm the name, date of birth and account before checking benefits.</p><button onClick={onResolvePatient}>Find matching eCW patients</button></section>}
+      {error && !(patientResolutionNeeded && onResolvePatient) && <p className="visit-notice" role="alert">The estimate could not be updated: {error} {previousEstimate ? 'The saved visit details and estimate are retained below. Reconfirm before collecting.' : 'Check the eCW visit and billing details, then retry the benefits check.'}<button disabled={!!busy} onClick={() => void (selected ? estimate() : load())}>Try again <ArrowRight size={15} /></button></p>}
       {(!result || busy === 'estimate' || busy === 'visits') && <section className="visit-overview" aria-label="Arrival collection"><div className="arrival-total"><span>{amountLabel}</span><strong className="amount-pending" role="status">{amountText}</strong><p>{explanation}</p></div></section>}
       {busy === 'estimate' || busy === 'visits' ? <div className="visit-empty" role="status"><RefreshCw className="visit-spin" size={26} aria-hidden="true" /><h2>{busy === 'visits' ? 'Finding your visit' : 'Putting the estimate together'}</h2><p>Reading the appointment, patient and insurance from eCW. Checking saved eligibility and any current benefits needed.</p></div> : result ? <>
         <section id="visit-estimate" className="visit-overview" aria-labelledby="payment-heading">

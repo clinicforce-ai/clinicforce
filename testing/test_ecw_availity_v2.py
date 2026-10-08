@@ -372,9 +372,10 @@ class EcwBackendSourceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(query.await_args.args[-1], {"name": "Sample", "birthdate": "1980-01-01"})
         with patch.object(ecw_backend, "_search", new=AsyncMock(
                 side_effect=lambda *args: [patient] if args[-1] == {"given": "Sample", "birthdate": "1980-01-01"} else [])) as query:
-            matched, patient_id, _ = await ecw_backend._patient_for_profile(None, "", "", profile)
-        self.assertEqual((matched, patient_id), (patient, "patient-1"))
-        self.assertEqual(query.await_count, 5)
+            with self.assertRaisesRegex(ecw_backend.EcwBackendError, "No eClinicalWorks patient matched"):
+                await ecw_backend._patient_for_profile(None, "", "", profile)
+        self.assertEqual(query.await_count, 4)
+        self.assertTrue(all(set(call.args[-1]) != {"given", "birthdate"} for call in query.await_args_list))
         with patch.object(ecw_backend, "_search", new=AsyncMock(side_effect=lambda *args: [patient, other] if "name" in args[-1] else [])):
             with self.assertRaisesRegex(ecw_backend.EcwBackendError, "Multiple eClinicalWorks patients matched"):
                 await ecw_backend._patient_for_profile(None, "", "", profile)
