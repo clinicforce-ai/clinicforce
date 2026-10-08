@@ -22,6 +22,8 @@ function ApplicableBenefits({ result }: { result: PrevisitEstimate }) {
       {row.copay_cents != null && <div><dt>Applicable copay</dt><dd>{money(row.copay_cents)}</dd></div>}
       {row.coinsurance_percent != null && <div><dt>Coinsurance</dt><dd>{row.coinsurance_percent}%</dd></div>}
       {row.deductible_remaining_cents != null && <div><dt>Deductible remaining</dt><dd>{money(row.deductible_remaining_cents)}</dd></div>}
+      {row.deductible_annual_cents != null && <div><dt>Annual deductible</dt><dd>{money(row.deductible_annual_cents)}</dd></div>}
+      <div><dt>Deductible for this service</dt><dd>{({ DOES_NOT_APPLY: 'Does not apply', APPLIES: 'Applies first', ALREADY_MET: 'Already met', UNKNOWN: 'Not confirmed' })[row.deductible_applicability || 'UNKNOWN']}</dd></div>
       {row.oop_remaining_cents != null && <div><dt>Out-of-pocket remaining</dt><dd>{money(row.oop_remaining_cents)}</dd></div>}
     </dl>{row.oop_remaining_cents === 0 && <p>The remaining out-of-pocket limit reduces the estimated cost for covered in-network care to $0.</p>}</article>)}
     {!services.length && <p>Applicable benefits are still needed to calculate the collection amount.</p>}

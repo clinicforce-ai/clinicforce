@@ -16,7 +16,8 @@ export type CollectionGuidance = {
   requirements: { referral: string; authorization: string };
   services: Array<{ id: string; code: string; benefit: string; patient_cents: number | null;
     oop_remaining_cents?: number | null; copay_cents?: number | null; coinsurance_percent?: string | null;
-    deductible_remaining_cents?: number | null; selected_benefit_ids: string[] }>;
+    deductible_remaining_cents?: number | null; deductible_annual_cents?: number | null;
+    deductible_applicability?: 'DOES_NOT_APPLY' | 'APPLIES' | 'ALREADY_MET' | 'UNKNOWN'; selected_benefit_ids: string[] }>;
 }
 export type PrevisitEstimate = {
   billing_note?: BillingNote | null;
