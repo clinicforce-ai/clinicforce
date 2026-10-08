@@ -620,6 +620,8 @@ def normalize_stedi_271(payload: dict[str, Any], service_type_code: str, provide
                     'kind': 'invalid_financial_value',
                     'message': 'Invalid financial evidence: the payer returned an invalid amount or percentage. Verify the source before collection.'})
     review_reasons = list(dict.fromkeys(error['message'] for error in source_errors))
+    if inactive and has_active:
+        review_reasons.append('The payer returned both active coverage and inactive or noncovered benefits for the selected service scope. Verify which coverage restriction applies before estimating.')
     if invalid_dates:
         review_reasons.append("Verify the payer eligibility dates; an applicable date value could not be interpreted.")
     if date_matches is False:
@@ -655,7 +657,9 @@ def normalize_stedi_271(payload: dict[str, Any], service_type_code: str, provide
         for row in _stedi_entries(payload) for note in notes([row.get('messages'), row.get('additionalInformation')]))
     payer_network_verified = bool(participation and not conflicting_network and active is True
         and not multiple_plans and not invalid_dates and date_matches is not False and not source_errors)
-    return {"active": active, "source_errors": source_errors, "service_date_matches": date_matches, "returned_service_dates": returned_service,
+    return {"active": active, "coverage_status_conflict": bool(inactive and has_active),
+            "coverage_dates_invalid": invalid_dates,
+            "source_errors": source_errors, "service_date_matches": date_matches, "returned_service_dates": returned_service,
             "coverage_level": "individual" if wanted else "unknown",
             "network_status": "in_network" if provider_network_verified or payer_network_verified else "unknown",
             "network_source": 'clinic_record' if provider_network_verified else 'payer_participation_message' if payer_network_verified else None,

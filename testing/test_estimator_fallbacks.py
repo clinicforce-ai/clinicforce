@@ -97,7 +97,7 @@ def test_secondary_policy_can_be_queried_without_claiming_it_is_only_coverage():
     r = {'benefits': {'active': True, 'has_secondary': True}, 'arrival_collection': {'amount_cents': 10000}}
     g = collection_guidance.build(r)
     assert g['amount_cents'] is None and g['basis'] == 'deferred_billing'
-    assert 'later bill may be due' in g['patient_message']
+    assert 'estimate is not available yet' in g['patient_message']
 
 
 def test_original_medicare_routes_to_verified_cms_directory_entry_only():
@@ -125,6 +125,13 @@ def test_ecw_payer_id_is_searched_before_an_ambiguous_name():
     other = {**payer, 'stediId': 'OTHER'}
     ambiguous = httpx.MockTransport(lambda _: httpx.Response(200, json={'items': [{'payer': payer}, {'payer': other}]}))
     assert asyncio.run(stedi_payers.search_payer('Humana Health Plan', ['61101'], 'test', transport=ambiguous)) is None
+    routes = []
+    assert asyncio.run(stedi_payers.search_payer('Humana Health Plan', ['61101'], 'test', transport=ambiguous, candidates=routes)) is None
+    assert {row['stediId'] for row in routes} == {'HUMAN', 'OTHER'}
+    assert all(row['match_basis'] == 'identifier' for row in routes)
+    suggestions = []
+    assert asyncio.run(stedi_payers.search_payer('Hummana typo', [], 'test', transport=ambiguous, candidates=suggestions)) is None
+    assert len(suggestions) == 2 and all(row['match_basis'] == 'directory_suggestion' for row in suggestions)
 
 
 def test_enrollment_must_be_live_for_exact_provider_payer_and_transaction():
