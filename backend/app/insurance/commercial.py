@@ -22,6 +22,16 @@ class CommercialError(ValueError):
     pass
 
 
+def _deductible_message(note: str) -> bool | None:
+    """Interpret complete, unqualified phrases; preserve conditional prose."""
+    text = note.strip().rstrip('.').casefold()
+    if re.fullmatch(r'(?:deductible (?:does not apply|waived)|no deductible|not subject to deductible|copay (?:applies )?before deductible)', text):
+        return False
+    if re.fullmatch(r'(?:(?:\$[\d,.]+ )?copay(?:ment)? )?(?:after deductible(?: is met)?|subject to deductible|deductible applies)', text):
+        return True
+    return None
+
+
 def eligibility_errors(payload: dict) -> list[dict]:
     """Both Stedi layouts can put AAA errors on the subscriber or dependent."""
     rows = list(payload.get('errors') or [])
@@ -364,7 +374,7 @@ def normalize_stedi_271(payload: dict[str, Any], service_type_code: str, provide
                       and not re.fullmatch(r'(?:no referral required|referral not required|(?:prior )?authorization (?:not )?required)\.?', label.strip(), re.I)]
             return bool(labels) and all(re.fullmatch(unrelated, label, re.I) for label in labels)
         entries = [row for row in entries if _procedure(row) or not other_services_only(row)]
-        priorities = office_service_types or ['BY', '98']
+        priorities = office_service_types or ['98', 'BY', '1']
         if 'BQ' in priorities:
             # Neurology is specialist care. Keep generic and specialist rows,
             # excluding rows explicitly limited to primary care.
@@ -441,11 +451,17 @@ def normalize_stedi_271(payload: dict[str, Any], service_type_code: str, provide
         # fallback only when no specific counterpart exists.
         specificity = 3 if _procedure(row) and _procedure(row) == procedure_code else 2 if service_type_code in service_types else 1 if "30" in service_types else 0
         individual = level in {"INDIVIDUAL", "IND"} or (level in {"EMP", "EMPLOYEE_ONLY"} and not payload.get('dependent'))
-        if (not individual and not (not level and row.get("code") in {"A", "B"})) or indicator not in {"Y", "YES", "IN_NETWORK", "IN_AND_OUT_OF_NETWORK", "W"} or not specificity:
+        service_waiver = (not level and row.get('code') == 'C' and specificity >= 2
+                          and _stedi_cents(row.get('benefitAmount')) == 0
+                          and str(row.get('timeQualifierCode') or row.get('timeQualifier') or '').upper() in {'', '23', 'CALENDAR_YEAR', '22', 'SERVICE_YEAR'})
+        if (not individual and not service_waiver and not (not level and row.get("code") in {"A", "B"})) or indicator not in {"Y", "YES", "IN_NETWORK", "IN_AND_OUT_OF_NETWORK", "W"} or not specificity:
             continue
         wanted.append((specificity, row))
-    def pick(code: str, remaining: bool = False) -> dict[str, Any] | None:
-        matches = [(specificity, row) for specificity, row in wanted if str(row.get("code") or "").upper() == code and (not remaining or str(row.get("timeQualifierCode") or row.get("timeQualifier") or "").upper() in {"29", "REMAINING"})]
+    def pick(code: str, remaining: bool = False, periods: set[str] | None = None, *, plan_wide: bool = False) -> dict[str, Any] | None:
+        periods = {'29', 'REMAINING'} if remaining else periods
+        matches = [(specificity, row) for specificity, row in wanted if str(row.get("code") or "").upper() == code and (periods is None or str(row.get("timeQualifierCode") or row.get("timeQualifier") or "").upper() in periods)]
+        if plan_wide:
+            matches = [(score, row) for score, row in matches if not _procedure(row) and '30' in (row.get('serviceTypeCodes') or [])]
         if not matches:
             return None
         if selected_ids is not None and code in {"A", "B"}:
@@ -460,6 +476,7 @@ def normalize_stedi_271(payload: dict[str, Any], service_type_code: str, provide
                       for row in selected}
         return {**selected[0], 'evidence_paths': [row['evidence_path'] for row in selected]} if len(signatures) == 1 else None
     deductible, oop = pick("C", True), pick("G", True)
+    annual_deductible = pick('C', periods={'23', 'CALENDAR_YEAR', '22', 'SERVICE_YEAR'}, plan_wide=True)
     copay, coinsurance = pick("B"), pick("A")
     relevant = [row for row in entries if not row.get("serviceTypeCodes") or
                 service_type_code in {str(value) for value in row.get("serviceTypeCodes", [])} or
@@ -546,6 +563,27 @@ def normalize_stedi_271(payload: dict[str, Any], service_type_code: str, provide
     waived_rows = [row for _, row in wanted if office and row.get('code') == 'F' and any(
         re.fullmatch(r'(?:Specialist Visit or Evaluation|(?:Specialist )?Office Visit)/Plan Ded Waived', note.strip(), re.I)
         for note in notes([row.get('messages'), row.get('additionalInformation')]))]
+    deductible_signals = [(False, row) for row in waived_rows]
+    for specificity, row in wanted:
+        period = str(row.get('timeQualifierCode') or row.get('timeQualifier') or '').upper()
+        amount = _stedi_cents(row.get('benefitAmount')) if row.get('code') == 'C' else None
+        # A zero remaining balance means met, never waived. General positive
+        # accumulators do not prove that today's service uses the deductible.
+        if amount is not None and (specificity >= 2 or amount == 0) and (period in {'', '23', 'CALENDAR_YEAR', '22', 'SERVICE_YEAR'}
+                or specificity >= 2 and amount > 0 and period in {'29', 'REMAINING'}):
+            deductible_signals.append((amount > 0, row))
+        if specificity >= 2 and (row is copay or row is coinsurance or row.get('code') == 'C'
+                or row.get('evidence_path') in {x.get('evidence_path') for x in (copay, coinsurance) if x}):
+            for note in notes([row.get('messages'), row.get('additionalInformation')]):
+                for label in note.split(';'):
+                    applies = _deductible_message(label)
+                    if applies is not None:
+                        deductible_signals.append((applies, row))
+    deductible_values = {value for value, _ in deductible_signals}
+    deductible_applies = next(iter(deductible_values)) if len(deductible_values) == 1 else None
+    deductible_conflict = len(deductible_values) > 1
+    deductible_applicability = ('UNKNOWN' if deductible_conflict else 'DOES_NOT_APPLY' if deductible_applies is False
+                               else 'ALREADY_MET' if deductible_cents == 0 else 'APPLIES' if deductible_applies is True else 'UNKNOWN')
     def unresolved_limit(row):
         if str(row.get('code') or '').upper() not in {'F', 'Y'}:
             return False
@@ -564,7 +602,7 @@ def normalize_stedi_271(payload: dict[str, Any], service_type_code: str, provide
         return True
     limitations = any(unresolved_limit(row) for row in relevant)
     conditional_terms = selected_ids is None and any(re.search(r"\b(first|after|before|beginning|visits?|waived|unless|only|limit|specialist|primary care)\b", note, re.IGNORECASE) for row in (copay, coinsurance) if row for note in notes([row.get("messages"), row.get("additionalInformation")])
-        if not all(re.fullmatch(r"(?:All Other In-Network Providers\s+)?(?:(?:specialist |physician )?office visits?(?: (?:specialist|primary care(?: prov(?:ider)?)?))?|(?:Specialist|Primary Care) Visit or Evaluation|GYN Visit|Walk In Clinic Visit|Telemedicine (?:General Medicine|Specialist) Visit|phy visit\s*-\s*specialist|(?:PCP AND )?BenefitTier Non Tier 1 Specialist|diagnostic medical procedure)(?:\s*-\s*professional)?(?:\s*,\s*COINS APPLIES TO OUT OF POCKET)?", label.strip(), re.I)
+        if not all(_deductible_message(label) is not None or re.fullmatch(r"(?:All Other In-Network Providers\s+)?(?:(?:specialist |physician )?office visits?(?: (?:specialist|primary care(?: prov(?:ider)?)?))?|Specialist|per visit|(?:Specialist|Primary Care) Visit or Evaluation|GYN Visit|Walk In Clinic Visit|Telemedicine (?:General Medicine|Specialist) Visit|phy visit\s*-\s*specialist|(?:PCP AND )?BenefitTier Non Tier 1 Specialist|diagnostic medical procedure)(?:\s*-\s*professional)?(?:\s*,\s*COINS APPLIES TO OUT OF POCKET)?", label.strip(), re.I)
                    for label in note.split(';') if label.strip()))
     source_errors = []
     for _, row in wanted:
@@ -588,7 +626,9 @@ def normalize_stedi_271(payload: dict[str, Any], service_type_code: str, provide
         review_reasons.append(f"Payer evidence covers service date {returned_service['start']}; eligibility for the requested appointment on {service_date} needs verification.")
     if active is not True:
         review_reasons.append("Confirm active coverage for the visit date with the payer.")
-    if deductible_cents is None:
+    if deductible_conflict:
+        review_reasons.append('Conflicting deductible applicability evidence requires review before calculation.')
+    if deductible_cents is None and deductible_applies is not False:
         review_reasons.append("Confirm the remaining individual deductible that applies to this visit.")
     if oop_cents is None:
         review_reasons.append("Confirm the remaining individual out-of-pocket maximum.")
@@ -621,6 +661,9 @@ def normalize_stedi_271(payload: dict[str, Any], service_type_code: str, provide
             "network_source": 'clinic_record' if provider_network_verified else 'payer_participation_message' if payer_network_verified else None,
             "network_evidence_ids": participation if payer_network_verified else [],
             "deductible_remaining_cents": deductible_cents, "oop_remaining_cents": oop_cents,
+            "deductible_annual_cents": _stedi_cents(annual_deductible.get('benefitAmount')) if annual_deductible else None,
+            "deductible_applicability": deductible_applicability,
+            "deductible_applicability_ids": list(dict.fromkeys(row['evidence_path'] for _, row in deductible_signals)),
             "family_oop_remaining_cents": family_oop_cents,
             "family_oop_zero_applies": family_oop_zero_applies,
             "family_oop_ids": [row['evidence_path'] for row in family_best] if family_oop_zero_applies else [],
@@ -633,7 +676,8 @@ def normalize_stedi_271(payload: dict[str, Any], service_type_code: str, provide
             "copay_remaining_cents": copay_cap,
             "copay_limit_ids": [row['evidence_path'] for row in cap_rows],
             "separate_copay_limit": bool(cap_rows),
-            **({'deductible_applies': False, 'deductible_waiver_ids': [row['evidence_path'] for row in waived_rows]} if waived_rows else {}),
+            **({'deductible_applies': deductible_applies} if deductible_applies is not None else {}),
+            'deductible_waiver_ids': [row['evidence_path'] for value, row in deductible_signals if value is False],
             "authorization_basis": authorization_basis,
             "benefit_assumptions": ['The returned non-Tier-1 specialist benefit is used; the provider tier has not been confirmed.'] if any(
                 'non tier 1 specialist' in note.casefold() for row in (copay, coinsurance) if row
@@ -670,6 +714,8 @@ def estimate(lines: list[dict[str, Any]], benefits: dict[str, Any], rules: dict[
         # These calculation inputs do not overwrite the returned benefit facts.
         benefits = {**benefits, 'deductible_remaining_cents': 0, 'coinsurance_percent': '0', 'copay_cents': 0}
         rules = {**rules, 'cost_share': 'coinsurance'}
+    if benefits.get('deductible_applies') is False:
+        benefits = {**benefits, 'deductible_remaining_cents': 0}
     cost_share = rules.get("cost_share")
     if cost_share == "payer_returned":
         has_copay = benefits.get("copay_cents") is not None
@@ -681,7 +727,7 @@ def estimate(lines: list[dict[str, Any]], benefits: dict[str, Any], rules: dict[
             has_copay = False
         if has_copay == has_coinsurance:
             raise CommercialError("Payer benefits did not identify one unambiguous office-visit cost-share method.")
-        if has_copay and _benefit_cents(benefits, "deductible_remaining_cents"):
+        if has_copay and _benefit_cents(benefits, "deductible_remaining_cents") and benefits.get('deductible_applies') is not True:
             raise CommercialError("Payer did not confirm whether the office-visit copay is subject to the remaining deductible.")
         cost_share = "copay" if has_copay else "coinsurance"
     if cost_share not in {"coinsurance", "copay", "cumulative"}:

@@ -16,9 +16,11 @@ export type CollectionGuidance = {
   requirements: { referral: string; authorization: string };
   services: Array<{ id: string; code: string; benefit: string; patient_cents: number | null;
     oop_remaining_cents?: number | null; copay_cents?: number | null; coinsurance_percent?: string | null;
-    deductible_remaining_cents?: number | null; selected_benefit_ids: string[] }>;
+    deductible_remaining_cents?: number | null; deductible_annual_cents?: number | null;
+    deductible_applicability?: 'DOES_NOT_APPLY' | 'APPLIES' | 'ALREADY_MET' | 'UNKNOWN'; selected_benefit_ids: string[] }>;
 }
 export type PrevisitEstimate = {
+  cash_fallback?: { reason: string };
   billing_note?: BillingNote | null;
   benefit_source?: string | null;
   eligibility_timing?: { status: string; appointment_date: string; check_from: string; message: string };
@@ -46,7 +48,10 @@ export type PrevisitEstimate = {
   ecw_saved_eligibility?: { status: string; active?: boolean; message: string; checked_at?: string; reference?: string };
   appointment_context?: { appointment_type?: string; timezone?: string; notes_status?: string; imported_fields?: Array<{ label: string; text: string; source: string; updated_at?: string }>; location?: string; rendering_provider?: { name?: string; npi?: string }; appointment_status?: string };
   ecw_coverage_active?: boolean;
+  coverage_status?: 'VERIFIED' | 'REVIEW_REQUIRED' | 'NOT_FOUND';
   recovery?: { state: string; outcome?: string; message: string; started_at?: string; checked_at?: string; reference?: string; coverage_count?: number; stage?: string; reason_code?: string;
+    coverage_status?: 'VERIFIED' | 'REVIEW_REQUIRED' | 'NOT_FOUND'; card_status?: string; attempt_count?: number;
+    payer_routes?: Array<{ id: string; name: string; payer_id?: string; aliases: string[]; names: string[]; match_basis: string; eligibility?: string }>;
     candidates?: Array<{ id: string; payer: string; payer_identifier?: string; plans: string[]; relationship: string; address_matches: boolean; matches_ecw_policy?: boolean }> };
   eligibility_failure?: { kind: string; codes: string[]; title: string; detail: string; action: string; attempted_at: string };
   eligibility_error?: string; context_token?: string; revision?: number; selected_ids?: string[]; available_codes?: VisitCode[];
@@ -71,6 +76,7 @@ export const commercialPrevisit = (appointment_id: string, refresh_benefits = fa
 export const commercialPayerResponse = (id: string) => request<{ response: Record<string, unknown> }>(`${root}/cases/${encodeURIComponent(id)}/payer-response`)
 export const commercialSavedPrevisit = (id: string) => request<PrevisitEstimate>(`${root}/cases/${encodeURIComponent(id)}/previsit`)
 export const commercialSelectCoverageCandidate = (result: PrevisitEstimate, candidate_id: string) => request<PrevisitEstimate>(`${root}/cases/${encodeURIComponent(result.check_id!)}/coverage-candidate`, json({ candidate_id, revision: result.revision, context_token: result.context_token }))
+export const commercialSelectPayerRoute = (result: PrevisitEstimate, route_id: string) => request<PrevisitEstimate>(`${root}/cases/${encodeURIComponent(result.check_id!)}/payer-route`, json({ route_id, revision: result.revision, context_token: result.context_token }))
 export type CommercialPastVisit = CommercialAppointment & { date: string; visit_type: string; coded_services: string[]; saved_estimate: { created_at?: string; allowed_cents?: number | null; patient_cents?: number | null; plan_cents?: number | null; disclaimer?: string | null } | null }
 export const commercialHistory = () => request<{ visits: CommercialPastVisit[] }>(`${root}/history`)
 export const commercialCreate = (path: 'connections' | 'networks' | 'profiles', body: object) => request<Record<string, unknown>>(`${root}/${path}`, json(body))

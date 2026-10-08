@@ -1,6 +1,7 @@
 """Trace stalled eCW reads without disclosing identity, URLs, or credentials."""
 
 import asyncio
+import base64
 from contextlib import contextmanager
 import io
 import json
@@ -15,6 +16,47 @@ from fastapi import HTTPException
 from app.insurance import ecw_backend as ecw
 from app.logs.collection_audit import logger, request_id
 from app.main import app
+
+
+def test_inline_insurance_card_does_not_request_binary_scope():
+    async def run():
+        document = {'resourceType': 'DocumentReference', 'id': 'card', 'status': 'current',
+            'subject': {'reference': 'Patient/synthetic'}, 'description': 'Insurance card',
+            'content': [{'attachment': {'contentType': 'image/png', 'data': base64.b64encode(b'synthetic-card').decode()}}]}
+        def handler(request):
+            assert request.url.path == '/fhir/DocumentReference'
+            return httpx.Response(200, json={'resourceType': 'Bundle', 'entry': [{'resource': document}]})
+        with patch.object(ecw, 'settings', return_value=('client', 'https://ehr.example.test/fhir')), \
+             patch.object(ecw, '_access_token', AsyncMock(return_value='synthetic-token')) as token:
+            cards = await ecw.insurance_cards('synthetic', transport=httpx.MockTransport(handler))
+            data, mime = await ecw.insurance_cards('synthetic', document_id=cards[0]['id'], transport=httpx.MockTransport(handler))
+        assert data == b'synthetic-card' and mime == 'image/png'
+        assert all('system/Binary.read' not in call.args[3] for call in token.call_args_list)
+    asyncio.run(run())
+
+
+def test_card_lookup_uses_ecw_type_search_and_patient_bound_included_binary():
+    async def run():
+        document = {'resourceType': 'DocumentReference', 'id': 'card', 'status': 'current',
+            'subject': {'reference': 'Patient/synthetic'},
+            'type': {'coding': [{'system': 'http://loinc.org', 'code': '64290-0'}]},
+            'content': [{'attachment': {'contentType': 'image/png', 'url': 'Binary/image'}}]}
+        binary = {'resourceType': 'Binary', 'id': 'image', 'contentType': 'image/png',
+                  'data': base64.b64encode(b'synthetic-card').decode()}
+        def handler(request):
+            assert request.url.path == '/fhir/DocumentReference'
+            assert request.url.params['patient'] == 'synthetic'
+            rows = [document, binary] if request.url.params.get('type') == '64290-0' else []
+            return httpx.Response(200, json={'resourceType': 'Bundle', 'entry': [{'resource': row} for row in rows]})
+        with patch.object(ecw, 'settings', return_value=('client', 'https://ehr.example.test/fhir')), \
+             patch.object(ecw, '_access_token', AsyncMock(return_value='synthetic-token')) as token:
+            cards = await ecw.insurance_cards('synthetic', transport=httpx.MockTransport(handler))
+            data, _ = await ecw.insurance_cards('synthetic', document_id=cards[0]['id'], transport=httpx.MockTransport(handler))
+            assert data == b'synthetic-card'
+            assert all('system/Binary.read' not in call.args[3] for call in token.call_args_list)
+            document['subject']['reference'] = 'Patient/someone-else'
+            assert not await ecw.insurance_cards('synthetic', transport=httpx.MockTransport(handler))
+    asyncio.run(run())
 
 
 @contextmanager

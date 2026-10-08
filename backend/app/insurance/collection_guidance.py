@@ -29,6 +29,19 @@ def build(result: dict, review: dict | None = None) -> dict:
             patient_message='Benefits will be checked closer to this appointment.', network='Check closer to visit',
             network_source='', requirements={kind: 'Check closer to visit' for kind in ('referral', 'authorization')})
         return guidance
+    if result.get('payment_mode') == 'cash':
+        amounts = [price.get(key) for key in ('cash_min_cents', 'cash_max_cents')]
+        complete = (price.get('cash_complete') and not price.get('service_issues')
+                    and all(type(value) is int and 0 <= value <= 100_000_000 for value in amounts)
+                    and amounts[0] <= amounts[1])
+        message = ((result.get('cash_fallback') or {}).get('reason') or 'Cash pricing for the selected services.')
+        guidance.update(status='cash_estimate' if complete else 'cash_price_missing', basis='practice_cash_price',
+            amount_cents=amounts[0] if complete else None,
+            range_min_cents=amounts[0] if complete else None, range_max_cents=amounts[1] if complete else None,
+            reason=message if complete else message + ' The practice has no complete cash price for the selected services.',
+            patient_message=message, network='Cash pricing', network_source='Practice cash schedule or explicit clinic cash rates',
+            requirements={kind: 'Insurance requirements do not establish the cash price' for kind in ('referral', 'authorization')})
+        return guidance
     if guidance['network'] == 'Not reported' and lines and all(line.get('benefits', {}).get('network_independent') for line in lines):
         guidance['network'] = 'Same benefits in / out of network'
         guidance['network_source'] = 'Payer benefit schedule; provider participation not reported'
@@ -204,7 +217,7 @@ def build(result: dict, review: dict | None = None) -> dict:
         else:
             guidance['reason'] = 'The returned benefits and clinic rates do not establish a collection amount for the selected services.'
         guidance.update(amount_cents=None, status='deferred_billing', basis='deferred_billing',
-            patient_message='No insurance advance is collected today. The insurer determines final responsibility when the claim is processed; a later bill may be due.')
+            patient_message='The insurance estimate is not available yet. Coverage, applicable benefits and clinic prices are needed before an insured amount can be quoted.')
     for line in lines:
         mapped = 'needs mapping' not in line.get('benefit_basis', '')
         terms = (line.get('benefits') or {}) if mapped else {}
@@ -214,10 +227,13 @@ def build(result: dict, review: dict | None = None) -> dict:
             'oop_remaining_cents': terms.get('oop_remaining_cents'),
             'copay_cents': terms.get('copay_cents'), 'coinsurance_percent': terms.get('coinsurance_percent'),
             'deductible_remaining_cents': terms.get('deductible_remaining_cents'),
+            'deductible_annual_cents': terms.get('deductible_annual_cents'),
+            'deductible_applicability': terms.get('deductible_applicability', 'UNKNOWN'),
             'selected_benefit_ids': list(dict.fromkeys([*(terms.get('selected_benefit_ids') or []),
                 *[terms[key] for key in ('deductible_id', 'oop_id') if terms.get(key)]]))})
         guidance['services'][-1]['selected_benefit_ids'].extend(terms.get('copay_limit_ids') or [])
         guidance['services'][-1]['selected_benefit_ids'].extend(terms.get('deductible_waiver_ids') or [])
+        guidance['services'][-1]['selected_benefit_ids'].extend(terms.get('deductible_applicability_ids') or [])
         guidance['services'][-1]['selected_benefit_ids'].extend(terms.get('family_oop_ids') or [])
         if guidance['basis'] == 'out_of_pocket_limit':
             guidance['services'][-1]['patient_cents'] = 0

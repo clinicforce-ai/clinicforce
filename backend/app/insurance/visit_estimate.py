@@ -200,6 +200,8 @@ def price_lines(codes: list[dict], rates: list[dict], benefits: dict, rules: dic
             line_rules['cost_share'] = selection['cost_share']
             applied['cost_share'] = selection['cost_share']
             applied['deductible_applies'] = selection['deductible_applies']
+            applied['deductible_applicability'] = ('DOES_NOT_APPLY' if not selection['deductible_applies'] else
+                'ALREADY_MET' if applied.get('deductible_remaining_cents') == 0 else 'APPLIES')
             if not selection['deductible_applies']:
                 applied['deductible_remaining_cents'] = 0
                 applied['review_reasons'] = [reason for reason in applied.get('review_reasons', []) if 'remaining individual deductible' not in reason]
@@ -243,7 +245,7 @@ def price_lines(codes: list[dict], rates: list[dict], benefits: dict, rules: dic
         deductible_key = applied.get('deductible_id') or 'encounter'
         oop_key = applied.get('oop_id') or 'encounter'
         if not alternatives:
-            if deductible_used and deductible_key not in deductible_used and applied.get('deductible_remaining_cents'):
+            if any(deductible_used.values()) and deductible_key not in deductible_used and applied.get('deductible_remaining_cents') and applied.get('deductible_applies') is not False:
                 line['issues'].append('Confirm how the different service deductibles share an accumulator before totaling the visit.')
             if oop_used and oop_key not in oop_used:
                 line['issues'].append('Confirm how the different out-of-pocket limits apply together.')
