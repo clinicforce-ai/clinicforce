@@ -164,6 +164,7 @@ def test_product_mapping_is_scoped_to_current_network_evidence_dates_and_plan(mo
 
 
 def test_identity_review_persists_across_visits_and_rejects_stale_or_unauthorized_edits(monkeypatch):
+    monkeypatch.setattr(api.library_pricing, 'prepare', lambda practice: [])
     inputs = {'service_date': DAY, 'payer_id': 'payer-a', 'member_id': 'ABC123', 'relationship': '18',
               'subscriber': {'firstName': 'Alex', 'lastName': 'Morgan', 'birthDate': '2001-02-03'},
               'patient': {'patient_first_name': 'Alex', 'patient_last_name': 'Morgan', 'patient_birth_date': '2001-02-03'},

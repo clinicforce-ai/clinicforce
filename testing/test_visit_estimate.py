@@ -160,6 +160,9 @@ def test_eligibility_period_excludes_expired_rows_without_hiding_returned_facts(
 
 class VisitReviewTests(IsolatedAsyncioTestCase):
     def setUp(self):
+        self.library_patch = patch.object(api.library_pricing, 'prepare', return_value=[])
+        self.library_patch.start()
+        self.addCleanup(self.library_patch.stop)
         self.cash_patch = patch.object(api.practice_prices, 'current', return_value=None)
         self.cash_patch.start()
         self.addCleanup(self.cash_patch.stop)

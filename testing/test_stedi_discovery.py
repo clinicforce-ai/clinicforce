@@ -739,6 +739,7 @@ class RecoveryTest(IsolatedAsyncioTestCase):
         case, session, _, _ = setup(); case.pop('previsit_discovery')
         context = case['previsit_context']; inputs, source = context['inputs'], context['source']
         with patch.object(api, '_session', AsyncMock(return_value=session)), patch.object(api.store, 'get_case', return_value=case), \
+             patch.object(api.library_pricing, 'prepare', return_value=[]), \
              patch.object(api.ecw_backend, 'fetch_inputs', AsyncMock(return_value=(inputs, [], source))), \
              patch.object(api, '_ecw_practice_config', return_value={}), \
              patch.object(api.object_store, 'get_object_bytes', return_value=b'{"errors":[{"code":"72"}]}'), \
