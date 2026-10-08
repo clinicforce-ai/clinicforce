@@ -239,6 +239,32 @@ def find_ecw_intake(practice_id: str, ecw_patient_id: str) -> dict | None:
     return get_intake(row['id'], practice_id) if row else None
 
 
+def confirm_ecw_demographics(intake_id: str, staff: dict, fields: dict) -> None:
+    """Apply freshly re-read demographics after explicit staff selection of the same eCW ID."""
+    with _connection() as connection:
+        intake = connection.execute("SELECT * FROM staff_intakes WHERE id=%s AND practice_id=%s FOR UPDATE",
+                                    (intake_id, staff['practice_id'])).fetchone()
+        patient = connection.execute("SELECT * FROM staff_patients WHERE id=%s AND practice_id=%s FOR UPDATE",
+                                     (intake['patient_id'] if intake else None, staff['practice_id'])).fetchone()
+        if not patient or patient['ecw_patient_id'] != fields['ecw_patient_id']:
+            raise ValueError('The linked patient changed. Search again and confirm the eCW account.')
+        changed = any(str(patient[key]) != str(fields[key]) for key in ('given_name', 'family_name', 'birth_date'))
+        source_changed = any(str(intake['fields'].get(key, '')).casefold() != str(fields[key]).casefold()
+                             for key in ('given_name', 'family_name', 'birth_date'))
+        connection.execute("""UPDATE staff_patients SET given_name=%s,family_name=%s,birth_date=%s,
+            ecw_account_number=COALESCE(%s,ecw_account_number),
+            insurance_identities=CASE WHEN %s THEN '{}'::jsonb ELSE insurance_identities END
+            WHERE id=%s AND practice_id=%s""",
+            (fields['given_name'], fields['family_name'], fields['birth_date'], fields.get('ecw_account_number'),
+             changed, patient['id'], staff['practice_id']))
+        connection.execute("""UPDATE staff_intakes SET fields=fields || %s::jsonb,
+            field_sources=field_sources || %s::jsonb, events=events || %s::jsonb,updated_at=%s,
+            source_portal_patient_id=CASE WHEN %s THEN NULL ELSE source_portal_patient_id END
+            WHERE id=%s AND practice_id=%s""",
+            (json.dumps(fields), json.dumps({key: 'ecw_confirmed' for key in fields}),
+             json.dumps([_event('eCW patient details confirmed', staff)]), now(), source_changed, intake_id, staff['practice_id']))
+
+
 def get_patient(patient_id: str, practice_id: str) -> dict | None:
     with _connection() as connection:
         row = connection.execute("SELECT * FROM staff_patients WHERE id = %s AND practice_id = %s", (patient_id, practice_id)).fetchone()

@@ -3,12 +3,14 @@ import type { PatientSession } from './patient-models'
 export class ApiError extends Error {
   readonly status: number
   readonly requestId?: string
+  readonly code?: string
 
-  constructor(status: number, message: string, requestId?: string) {
+  constructor(status: number, message: string, requestId?: string, code?: string) {
     super(requestId ? `${message} Support reference: ${requestId}` : message)
     this.name = 'ApiError'
     this.status = status
     this.requestId = requestId
+    this.code = code
   }
 }
 
@@ -43,7 +45,8 @@ export async function request<T>(path: string, init: RequestInit = {}): Promise<
     const response = await fetch(path, { ...init, headers, credentials: 'same-origin', signal: controller.signal })
     const body: unknown = await response.json().catch(() => null)
     if (!response.ok) {
-      throw new ApiError(response.status, detailFrom(body, `Request failed (${response.status}).`), response.headers.get('X-ClinicForce-Request-ID') || undefined)
+      throw new ApiError(response.status, detailFrom(body, `Request failed (${response.status}).`), response.headers.get('X-ClinicForce-Request-ID') || undefined,
+        body && typeof body === 'object' && 'code' in body && typeof body.code === 'string' ? body.code : undefined)
     }
     return body as T
   } catch (error) {

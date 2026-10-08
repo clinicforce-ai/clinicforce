@@ -17,6 +17,7 @@ from typing import Any, Literal
 from zoneinfo import ZoneInfo
 
 import httpx
+from fastapi.responses import JSONResponse
 from fastapi import BackgroundTasks, APIRouter, File, HTTPException, Request, UploadFile
 from fastapi.concurrency import run_in_threadpool
 from pydantic import StrictInt, BaseModel, ConfigDict, Field, ValidationError
@@ -1008,9 +1009,13 @@ async def configuration(request: Request) -> dict:
     return _config(session["practice_id"])
 
 
-@router.get("/appointments")
+@router.get("/appointments", responses={409: {"description": "ecw_patient_selection_required: return to staff lookup and confirm the patient before checking benefits."}})
 async def ecw_appointments(request: Request) -> dict:
-    """List confirmed scheduled visits without an eligibility check.
+    """Unresolved eCW identity returns HTTP 409 with code
+    ecw_patient_selection_required. Return to staff lookup and confirm a patient
+    before checking benefits. No payer request is made on this failure.
+
+    List confirmed scheduled visits without an eligibility check.
 
     The shared reader has a 24-second deadline. HTTP 502 errors identify the
     failed lookup phase; X-ClinicForce-Request-ID joins the safe stage logs in
@@ -1022,13 +1027,20 @@ async def ecw_appointments(request: Request) -> dict:
     try:
         values = await ecw_backend.list_appointments(_ecw_identity(session, date.today().isoformat()), _ecw_practice_config(session["practice_id"]))
     except ecw_backend.EcwBackendError as exc:
+        if exc.reason_code in {"no_match", "ambiguous_match"}:
+            return JSONResponse({"detail": "Confirm the eCW patient to continue.", "code": "ecw_patient_selection_required"},
+                                status_code=409, headers={"Cache-Control": "no-store"})
         raise HTTPException(502, str(exc)) from exc
     return {"appointments": values}
 
 
 @router.post("/appointments/readiness")
 async def ecw_appointment_readiness(value: EcwStartInput, request: Request) -> dict:
-    """Read one selected visit and explain all known prerequisites without a Stedi transaction."""
+    """Unresolved eCW identity returns HTTP 409 with code
+    ecw_patient_selection_required. Return to staff lookup and confirm a patient
+    before checking benefits. No payer request is made on this failure.
+
+    Read one selected visit and explain all known prerequisites without a Stedi transaction."""
     session = await _session(request)
     if not ecw_backend.configured():
         raise HTTPException(503, "The eClinicalWorks backend connection is not configured for this deployment.")
@@ -1037,6 +1049,9 @@ async def ecw_appointment_readiness(value: EcwStartInput, request: Request) -> d
             _ecw_identity(session, date.today().isoformat()),
             _ecw_practice_config(session["practice_id"]), value.appointment_id)
     except ecw_backend.EcwBackendError as exc:
+        if exc.reason_code in {"no_match", "ambiguous_match"}:
+            return JSONResponse({"detail": "Confirm the eCW patient to continue.", "code": "ecw_patient_selection_required"},
+                                status_code=409, headers={"Cache-Control": "no-store"})
         raise HTTPException(502, str(exc)) from exc
     return _appointment_readiness(session["practice_id"], session, inputs, source)
 
@@ -1467,7 +1482,11 @@ async def _begin_coverage_discovery(result: dict, session: dict, inputs: dict, s
 
 @router.post("/appointments/previsit")
 async def previsit_estimate(value: PrevisitInput, request: Request, background_tasks: BackgroundTasks = None) -> dict:
-    """Estimate selected visit CPTs from current eligibility and clinic prices.
+    """Unresolved eCW identity returns HTTP 409 with code
+    ecw_patient_selection_required. Return to staff lookup and confirm a patient
+    before checking benefits. No payer request is made on this failure.
+
+    Estimate selected visit CPTs from current eligibility and clinic prices.
 
     Uses applicable saved eCW or Stedi benefits, verified network mappings and
     active clinic rate schedules. A disclosed clinic-price reference may support
@@ -1493,6 +1512,9 @@ async def previsit_estimate(value: PrevisitInput, request: Request, background_t
     except ecw_backend.EcwBackendError as exc:
         collection_event('previsit_failed', practice_id=session['practice_id'], intake_id=(session.get('intake') or {}).get('id'),
                          stage='appointment', reason_code='ecw_error')
+        if exc.reason_code in {"no_match", "ambiguous_match"}:
+            return JSONResponse({"detail": "Confirm the eCW patient to continue.", "code": "ecw_patient_selection_required"},
+                                status_code=409, headers={"Cache-Control": "no-store"})
         raise HTTPException(502, str(exc)) from exc
     if source.get("appointment_id") != value.appointment_id:
         collection_event('previsit_failed', practice_id=session['practice_id'], intake_id=(session.get('intake') or {}).get('id'),
