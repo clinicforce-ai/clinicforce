@@ -7,6 +7,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import hashlib
+import ipaddress
 import asyncio
 import json
 import os
@@ -151,6 +152,13 @@ class CoverageCandidateInput(BaseModel):
     context_token: str = Field(min_length=64, max_length=64)
     revision: int = Field(ge=0)
     candidate_id: str = Field(pattern=r"^[a-f0-9]{20}$")
+
+
+class PayerRouteInput(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    context_token: str = Field(min_length=64, max_length=64)
+    revision: int = Field(ge=0)
+    route_id: str = Field(min_length=1, max_length=100, description='A supported Stedi route returned for this saved policy; never an arbitrary payer ID.')
 
 
 class EvidenceInput(BaseModel):
@@ -702,6 +710,15 @@ def _finish_previsit(result: dict, case: dict, inputs: dict, source: dict, paylo
                 row['source'] = 'Anticipated service from appointment'
     result['patient_details'] = source.get('patient_details', {})
     result['insurance_details'] = {**_coverage_snapshot(inputs, source), 'record_status': source.get('coverage_record_status'), 'coverage_period': source.get('coverage_period', {})}
+    recovered = case.get('previsit_discovery') or {}
+    if recovered.get('outcome') == 'recovered' and recovered.get('identity_binding') == _recovery_binding(inputs, source):
+        result['insurance_details'].update(recovered.get('verified_coverage') or {})
+        result['insurance_details'].update(ecw_member_id=inputs.get('member_id'),
+            member_source=recovered.get('evidence_source') or 'Stedi verified coverage')
+    elif not inputs.get('member_id') and result['benefits'].get('active') is True:
+        returned_identity = stedi_discovery.candidate_identity(payload or {}, inputs)
+        if returned_identity:
+            result['insurance_details'].update(member_id=returned_identity['member_id'], ecw_member_id=None, member_source='Stedi eligibility')
     subscriber = (payload or {}).get('subscriber') or {}
     dependent = (payload or {}).get('dependent') or {}
     result['insurance_details'].update(payer_subscriber=commercial.payer_person(subscriber),
@@ -808,6 +825,7 @@ def _coverage_snapshot(inputs: dict, source: dict) -> dict:
                 "plan": source.get("plan"), "payer_id": inputs.get("payer_id"), "group_number": inputs.get("group_number"),
                 "plan_number": inputs.get("plan_number") or source.get("plan_number"),
                 "member_id": inputs.get("member_id"), "relationship": relationship,
+                "member_source": (source.get('subscriber_evidence') or {}).get('member_id_source'),
                 "subscriber_first": subscriber.get("firstName"), "subscriber_last": subscriber.get("lastName"),
                 "subscriber_birth_date": subscriber.get("birthDate"),
                 "patient_first": patient.get("patient_first_name"), "patient_last": patient.get("patient_last_name"),
@@ -903,10 +921,21 @@ def _stedi_address(value: object) -> dict[str, str] | None:
 
 
 def stedi_request_body(payer: dict, network: dict, coverage: dict, service_date: str, stc: str | list[str],
-                       *, include_identity_hints: bool = True) -> dict:
-    needed = ("member_id", "relationship", "subscriber_first", "subscriber_last", "subscriber_birth_date",
+                       *, include_identity_hints: bool = True, allow_demographic: bool = False,
+                       inquiry_only: bool = False) -> dict:
+    if inquiry_only and coverage.get('active_coverages', 0) <= 1:
+        # An inquiry slot is not a policyholder assertion. Only the returned
+        # patient/member identity can create verified coverage.
+        coverage = dict(coverage)
+        if coverage.get('relationship') in {None, '', 'unknown'}:
+            coverage.update(relationship='18', subscriber_first=coverage.get('patient_first'),
+                subscriber_last=coverage.get('patient_last'), subscriber_birth_date=coverage.get('patient_birth_date'))
+        coverage['active_coverages'] = 1
+    needed = ("relationship", "subscriber_first", "subscriber_last",
               "patient_first", "patient_last", "patient_birth_date")
-    if any(not coverage.get(key) for key in needed) or not coverage.get("active_coverages") or (coverage["active_coverages"] > 1 and not coverage.get("coverage_id")):
+    if (any(not coverage.get(key) for key in needed) or not coverage.get("active_coverages")
+            or (not coverage.get('member_id') and not allow_demographic)
+            or (coverage["active_coverages"] > 1 and not coverage.get("coverage_id"))):
         raise commercial.CommercialError("eClinicalWorks did not return one usable primary coverage with member and policyholder details.")
     if network.get("rendering_first") and network.get("rendering_last") and network.get("rendering_npi"):
         provider = {"npi": network["rendering_npi"], "name": {"person": {
@@ -916,9 +945,10 @@ def stedi_request_body(payer: dict, network: dict, coverage: dict, service_date:
     else:
         raise commercial.CommercialError("eClinicalWorks did not return one matching provider name and NPI for the Stedi inquiry.")
     body = {"payerId": payer["stedi_payer_id"], "provider": provider,
-            "subscriber": {"memberId": coverage["member_id"], "dateOfBirth": coverage["subscriber_birth_date"],
+            "subscriber": {"memberId": coverage.get("member_id"), "dateOfBirth": coverage.get("subscriber_birth_date"),
                            "name": {"person": {"firstName": coverage["subscriber_first"], "lastName": coverage["subscriber_last"]}}},
             "encounter": {"dates": {"service": {"start": service_date}}, "services": [{"system": "STC", "value": code} for code in ([stc] if isinstance(stc, str) else stc)]}}
+    body['subscriber'] = {key: value for key, value in body['subscriber'].items() if value}
     if coverage["relationship"] not in {"18", "self"}:
         body["dependent"] = {"dateOfBirth": coverage["patient_birth_date"],
                              "name": {"person": {"firstName": coverage["patient_first"], "lastName": coverage["patient_last"]}}}
@@ -1071,117 +1101,445 @@ def _previsit_result(case: dict) -> dict:
         result.pop('eligibility_timing', None)
     if case.get('previsit_discovery'):
         result['recovery'] = stedi_discovery.public_status(case['previsit_discovery'])
-    recovery = case.get('previsit_discovery') or {}
-    if (result.get('eligibility_error') == 'payer_routing_unresolved'
-            and recovery.get('request_state') in {'complete', 'rejected'}
+        result['coverage_status'] = result['recovery']['coverage_status']
+    recovery = result.get('recovery') or {}
+    if (not timing and recovery.get('state') in {'complete', 'rejected'}
             and recovery.get('outcome') != 'recovered'
-            and (result.get('cash_quote') or {}).get('complete')
-            and not (case.get('visit_review') or {}).get('payment_mode')):
+            and recovery.get('exhausted') is not False
+            and (case.get('visit_review') or {}).get('payment_mode') != 'insurance'):
         result['payment_mode'] = 'cash'
+        result['cash_fallback'] = {'reason': 'Automatic insurance recovery finished without usable coverage. Cash / self-pay pricing selected; insurance remains unverified.'}
+        result.pop('emg_option', None)
+    # Cash is a separate price path, never evidence of inactive insurance.
     result['collection_guidance'] = collection_guidance.build(result, case.get('visit_review'))
     return result
 
 
+def _recovery_event(case: dict, session: dict, stage: str, outcome: str, *, reason: str | None = None,
+                    count: int | None = None, http_status: int | None = None) -> None:
+    collection_event('coverage_recovery', practice_id=session['practice_id'],
+        intake_id=(session.get('intake') or {}).get('id'), case_id=case['id'], stage=stage,
+        outcome=outcome, reason_code=reason, count=count, http_status=http_status)
+
+
+async def _recover_card(case: dict, session: dict, provider: dict) -> bool:
+    """Read patient-bound stored/eCW cards once; OCR is never benefit evidence."""
+    from app.insurance import golden, v1_sources
+    from app.api.routers.staff import inspect_file
+    context, recovery = case['previsit_context'], case['previsit_discovery']
+    patient_id = context['source'].get('_patient_id')
+    if recovery.get('card_status'):
+        return False
+    recovery['card_status'] = 'reading'
+    case.update(await run_in_threadpool(_save, case, session, 'coverage-card-started'))
+    _recovery_event(case, session, 'insurance_card', 'started')
+    contents = []
+    unavailable = False
+    try:
+        intakes = await run_in_threadpool(staff_store.patient_card_intakes, session['practice_id'], session['patient_id'])
+        card_intakes = [intake for intake in intakes if intake.get('documents')]
+        docs = card_intakes[0]['documents'] if len(card_intakes) == 1 else []
+        # Front/back documents belong to one intake. Do not merge unrelated cards.
+        if len(card_intakes) > 1 or len(docs) > 2:
+            recovery['card_status'] = 'multiple_cards'
+        if len(docs) <= 2:
+            for doc in docs:
+                if doc.get('size_bytes', 0) <= 10_000_000 and doc.get('object_key'):
+                    contents.append(await run_in_threadpool(object_store.get_object_bytes, doc['object_key']))
+        if not contents and patient_id:
+            cards = await asyncio.wait_for(ecw_backend.insurance_cards(patient_id), timeout=24)
+            if len(cards) <= 2:
+                for card in cards:
+                    data, _ = await asyncio.wait_for(ecw_backend.insurance_cards(patient_id, document_id=card['id']), timeout=24)
+                    contents.append(data)
+            else:
+                recovery['card_status'] = 'multiple_cards'
+        if contents:
+            _recovery_event(case, session, 'card_download', 'complete', count=len(contents))
+            for content in contents:
+                await run_in_threadpool(inspect_file, content)
+            _recovery_event(case, session, 'card_ocr', 'started')
+            fields, evidence, _ = await asyncio.wait_for(asyncio.to_thread(v1_sources.read_card_fields, contents), timeout=20)
+            _recovery_event(case, session, 'card_ocr', 'complete', count=len(fields))
+            recovery['card_evidence'] = evidence
+            item = stedi_discovery.card_candidate(fields, context['inputs'])
+            if item:
+                payload = {'items': [item]}
+                key = await run_in_threadpool(object_store.put_staff_document, session['practice_id'], case['id'],
+                    'card-coverage-hints.json', json.dumps(payload).encode(), 'application/json')
+                recovery.update(card_status='read', card_object_key=key,
+                    candidates=stedi_discovery.candidates(payload, context['inputs']))
+                if recovery['candidates'] and context['source'].get('active_coverages', 0) <= 1:
+                    recovery.update(selected_candidate_id=recovery['candidates'][0]['id'], stage='eligibility',
+                                    request_state='pending', evidence_source='insurance_card')
+                    case.update(await run_in_threadpool(_save, case, session, 'coverage-card-eligibility-pending'))
+                    recovery = case['previsit_discovery']
+                    await _recheck_discovery_candidate(case, session, provider, discovery_payload=payload)
+                    if recovery.get('outcome') == 'recovered' or recovery.get('request_state') == 'indeterminate':
+                        return True
+            recovery['card_status'] = 'read_no_verified_policy'
+    except (ecw_backend.EcwBackendError, httpx.HTTPError, TimeoutError, ValueError, HTTPException, golden.OCRServiceError):
+        unavailable = True
+        recovery['card_status'] = 'unavailable'
+    if recovery.get('card_status') == 'reading':
+        recovery['card_status'] = 'not_found'
+    _recovery_event(case, session, 'insurance_card', 'unavailable' if unavailable else 'complete',
+                    reason=recovery['card_status'], count=len(contents))
+    recovery.update(request_state='pending', stage='discovery', outcome=None, selection_error=None,
+                    candidates=[], selected_candidate_id=None, evidence_source='stedi_discovery')
+    case.update(await run_in_threadpool(_save, case, session, 'coverage-card-finished'))
+    return False
+
+
+def _recovery_stopped(case: dict) -> bool:
+    recovery = case['previsit_discovery']
+    return recovery.get('outcome') == 'recovered' or recovery.get('request_state') == 'indeterminate'
+
+
+def _request_ip_chain(request: Request) -> str | None:
+    """Preserve upstream HETS traceability privately, never in public results."""
+    forwarded = request.headers.get('x-forwarded-for', '')
+    if len(forwarded) > 2048:
+        return None
+    try:
+        hops = [str(ipaddress.ip_address(part.strip())) for part in forwarded.split(',') if part.strip()]
+        if request.client:
+            peer = str(ipaddress.ip_address(request.client.host))
+            if peer not in hops:
+                hops.append(peer)
+        return ', '.join(hops) if 0 < len(hops) <= 20 else None
+    except ValueError:
+        return None
+
+
+async def _recover_saved_policy(case: dict, session: dict, provider: dict, *, allow_query: bool = True) -> None:
+    """Reuse protected evidence only from explicitly linked patient records."""
+    context, recovery = case['previsit_context'], case['previsit_discovery']
+    if recovery.get('steps', {}).get('saved_policy') or context['source'].get('active_coverages', 0) > 1:
+        return
+    recovery.setdefault('steps', {})['saved_policy'] = 'not_found'
+    rows = await run_in_threadpool(store.patient_checks, session['practice_id'], session['patient_id'])
+    policies = {}
+    for row in rows[:10]:
+        old = row['case']
+        if old.get('id') == case['id'] or (old.get('previsit') or {}).get('request_state') != 'complete':
+            continue
+        key = old.get('previsit_raw_object_key')
+        if not key:
+            continue
+        try:
+            item = json.loads(await run_in_threadpool(object_store.get_object_bytes, key))
+            identity = stedi_discovery.candidate_identity(item, context['inputs'])
+            payer = item.get('payer') or {}
+            if not identity or not (payer.get('name') or payer.get('lastName')):
+                continue
+            if context['inputs'].get('member_id') and stedi_discovery.normalized(identity['member_id']) != stedi_discovery.normalized(context['inputs']['member_id']):
+                continue
+            # Retain distinct policies; never choose the newest policy as primary.
+            token = (str(payer.get('payorIdentification') or payer.get('name') or payer.get('lastName')),
+                     identity['member_id'])
+            policies.setdefault(token, (old, item))
+        except (ValueError, TypeError, KeyError):
+            continue
+    if len(policies) != 1:
+        recovery['steps']['saved_policy'] = 'multiple_policies' if policies else 'not_found'
+        _recovery_event(case, session, 'saved_policy', 'complete', count=len(policies))
+        return
+    old, item = next(iter(policies.values()))
+    previous = old.get('previsit_context') or {}
+    old_source = previous.get('source') or {}
+    expected_npi = provider.get('rendering_npi') or provider.get('billing_npi')
+    previous_npi = (old_source.get('rendering_provider') or {}).get('npi') or (old_source.get('billing_provider') or {}).get('npi')
+    try:
+        fresh = datetime.fromisoformat(old['previsit']['checked_at']) + timedelta(hours=24) > datetime.now(timezone.utc)
+    except (KeyError, TypeError, ValueError):
+        fresh = False
+    reusable = (fresh and expected_npi == previous_npi and previous.get('inputs', {}).get('service_date') == context['inputs']['service_date']
+        and old['previsit'].get('requested_service_types') == _previsit_service_types(context['inputs'])
+        and not visit_estimate.reconcile_eligibility(context['source'].get('saved_eligibility') or {},
+            old['previsit'].get('benefits') or {}, old['previsit'].get('checked_at'))['requires_review']
+        and previous.get('payer_id') and stedi_discovery.automatic_match(item, context['inputs'], context['source']))
+    recovery.update(evidence_source='saved_payer_response', route_source='returned_policy')
+    if reusable:
+        recovery['eligibility_object_key'] = old['previsit_raw_object_key']
+        await _accept_recovered_coverage(case, session, item,
+            {'stediId': previous['payer_id'], 'displayName': (item.get('payer') or {}).get('name')},
+            _discovered_coverage(context['inputs'], context['source'], item))
+        recovery['steps']['saved_policy'] = 'reused'
+    elif allow_query:
+        recovery['candidates'] = stedi_discovery.candidates({'items': [item]}, context['inputs'])
+        if recovery['candidates']:
+            recovery['selected_candidate_id'] = recovery['candidates'][0]['id']
+            recovery['steps']['saved_policy'] = 'rechecked'
+            await _recheck_discovery_candidate(case, session, provider, discovery_payload={'items': [item]})
+    else:
+        recovery['steps']['saved_policy'] = 'needs_current_eligibility'
+    _recovery_event(case, session, 'saved_policy', recovery['steps']['saved_policy'], count=1)
+
+
+async def _recover_known_payer(case: dict, session: dict, provider: dict) -> None:
+    context, recovery = case['previsit_context'], case['previsit_discovery']
+    source = context['source']
+    # The normal path already queried a resolved payer; do not pay to repeat it.
+    if (context.get('payer_id') or recovery.get('steps', {}).get('known_payer')
+            or not source.get('payer') or source.get('active_coverages', 0) > 1
+            or context['result'].get('eligibility_error') == 'payer_routing_unresolved'):
+        return
+    recovery.setdefault('steps', {})['known_payer'] = 'unavailable'
+    routes = []
+    try:
+        payer = await stedi_payers.search_payer(source['payer'], source.get('payer_identifiers') or [],
+            stedi_financial.credentials(session['practice_id']), plan=source.get('plan'), candidates=routes)
+        if not payer:
+            recovery.update(payer_routes=routes, route_source='ecw')
+            return
+        recovery.update(route_source='ecw', evidence_source='ecw_insurance_hints')
+        await _recheck_discovery_candidate(case, session, provider, selected_route=payer, inquiry_only=True)
+        recovery['steps']['known_payer'] = recovery.get('outcome') or recovery['request_state']
+    except (httpx.HTTPError, ValueError):
+        _recovery_event(case, session, 'known_payer', 'unavailable', reason='payer_directory_unavailable')
+
+
+async def _recover_mbi(case: dict, session: dict, provider: dict) -> None:
+    context, recovery = case['previsit_context'], case['previsit_discovery']
+    if recovery.get('steps', {}).get('mbi'):
+        return
+    if recovery.get('coverage_count') or recovery.get('candidates'):
+        recovery.setdefault('steps', {})['mbi'] = 'policy_order_unresolved'
+        return
+    body = stedi_discovery.mbi_request_body(context['inputs'], context['source'], provider)
+    recovery.setdefault('steps', {})['mbi'] = 'not_applicable' if not body else 'enrollment_unavailable'
+    if not body:
+        return
+    ip_chain = context['source'].get('_request_ip_chain')
+    if not ip_chain:
+        recovery['steps']['mbi'] = 'request_trace_unavailable'
+        return
+    api_key = stedi_financial.credentials(session['practice_id'])
+    submitted = False
+    try:
+        # Both are read-only checks. Never submit or attest enrollment here.
+        cms = await stedi_payers.search_payer('CMS', ['CMS'], api_key)
+        lookup = await stedi_payers.search_payer('CMS MBI Lookup Without SSN', ['MBILUNOSSN'], api_key)
+        for payer in (cms, lookup):
+            if not payer or not await stedi_payers.eligibility_enrolled(payer['stediId'], provider['billing_npi'], api_key):
+                _recovery_event(case, session, 'mbi', 'skipped', reason='provider_enrollment_required')
+                return
+        request_key = await run_in_threadpool(object_store.put_staff_document, session['practice_id'], case['id'],
+            'mbi-request.json', json.dumps(body).encode(), 'application/json')
+        recovery.update(request_state='pending', stage='eligibility', outcome=None, mbi_request_object_key=request_key)
+        recovery['steps']['mbi'] = 'pending'
+        case.update(await run_in_threadpool(_save, case, session, 'mbi-lookup-submitting'))
+        recovery = case['previsit_discovery']
+        _recovery_event(case, session, 'mbi', 'requested')
+        async with httpx.AsyncClient(timeout=httpx.Timeout(35, connect=5)) as client:
+            submitted = True
+            response = await client.post(stedi_discovery.MBI_URL,
+                headers={'Authorization': api_key, 'X-Forwarded-For': ip_chain}, json=body)
+        item = response.json()
+        if not isinstance(item, dict):
+            raise ValueError('Invalid MBI response')
+        recovery['mbi_response_object_key'] = await run_in_threadpool(object_store.put_staff_document,
+            session['practice_id'], case['id'], 'mbi-response.json', json.dumps(item).encode(), 'application/json')
+        if str(item.get('status') or '').upper() == 'PENDING':
+            recovery.update(request_state='indeterminate', stage='eligibility', reason_code='mbi_outcome_unknown')
+            recovery['steps']['mbi'] = 'indeterminate'
+            return
+        identity = stedi_discovery.candidate_identity(item, context['inputs'])
+        managed_plan = any(row.get('code') == 'U' and row.get('insuranceTypeCode') in {'HM', 'HN'}
+                           for row in commercial._stedi_entries(item))
+        if (response.is_error or str(item.get('status') or '').upper() in {'ERROR', 'FAILED', 'REJECTED'}
+                or item.get('tradingPartnerServiceId') not in {'CMS', 'CMSMED', cms['stediId']}
+                or managed_plan or not identity or identity['relationship'] != 'self'
+                or not stedi_discovery.active_medical(item, context['inputs'])):
+            recovery.update(request_state='complete', outcome='review_needed', reason_code='mbi_not_verified')
+            recovery['steps']['mbi'] = 'not_verified'
+            return
+        recovery.update(eligibility_object_key=recovery['mbi_response_object_key'], evidence_source='medicare_mbi_lookup')
+        recovery['steps']['mbi'] = 'recovered'
+        # STC 30 can verify a policy without supplying specialist cost sharing.
+        # The normalizer preserves unavailable service benefits and prices.
+        await _accept_recovered_coverage(case, session, item, cms,
+            _discovered_coverage(context['inputs'], context['source'], item), http_status=response.status_code)
+        case['previsit']['requested_service_types'] = ['30']
+    except (httpx.HTTPError, ValueError, TypeError, KeyError):
+        recovery['steps']['mbi'] = 'indeterminate' if submitted else 'unavailable'
+        if submitted:
+            recovery.update(request_state='indeterminate', stage='eligibility', reason_code='mbi_outcome_unknown')
+        _recovery_event(case, session, 'mbi', recovery['steps']['mbi'])
+
+
 async def _recover_previsit(case: dict, session: dict, provider: dict) -> None:
-    """Persist each stage before network I/O; never repeat a POST with an unknown outcome."""
+    """Finish every applicable automatic route before choosing cash pricing."""
+    if _previsit_result(case).get('eligibility_timing'):
+        return
+    recovery = case['previsit_discovery']
+    recovery['exhausted'] = False
+    # Resuming a saved discovery polls/consumes that transaction first. Opening
+    # a completed legacy result never starts these new paid recovery stages.
+    if not recovery.get('raw_object_key'):
+        await _recover_saved_policy(case, session, provider)
+        if not _recovery_stopped(case):
+            await _recover_card(case, session, provider)
+        if not _recovery_stopped(case):
+            await _recover_known_payer(case, session, provider)
+    if not _recovery_stopped(case):
+        recovery = case['previsit_discovery']
+        recovery.update(request_state='pending', outcome=None, stage='discovery')
+        await _recover_discovery(case, session, provider)
+    if not _recovery_stopped(case):
+        await _recover_mbi(case, session, provider)
+    recovery = case['previsit_discovery']
+    recovery['exhausted'] = recovery.get('request_state') in {'complete', 'rejected'}
+    case.update(await run_in_threadpool(_save, case, session, 'coverage-recovery-finished'))
+    _recovery_event(case, session, 'recovery', 'complete' if recovery['exhausted'] else 'indeterminate',
+        reason='coverage_recovered' if recovery.get('outcome') == 'recovered' else 'available_paths_exhausted' if recovery['exhausted'] else 'outcome_unknown')
+
+
+async def _recover_discovery(case: dict, session: dict, provider: dict) -> None:
+    """Discovery with distinct documented addresses; never replay an unknown POST."""
     context = case['previsit_context']
-    inputs, source, payer_id = context['inputs'], context['source'], context.get('payer_id')
+    inputs = context['inputs']
     if _previsit_result(case).get('eligibility_timing'):
         return
     discovery = case['previsit_discovery']
     api_key = stedi_financial.credentials(session['practice_id'])
     try:
-        async with httpx.AsyncClient(timeout=httpx.Timeout(140, connect=5)) as client:
-            headers = {'Authorization': api_key}
-            payload = None
-            if discovery.get('raw_object_key'):
-                payload = json.loads(await run_in_threadpool(object_store.get_object_bytes, discovery['raw_object_key']))
-            if payload is None:
-                response = await client.post(stedi_discovery.URL, headers=headers,
-                    json=stedi_discovery.request_body(inputs, provider))
-                payload = response.json()
-                if not isinstance(payload, dict):
-                    raise ValueError('Invalid discovery response')
-                if response.is_error:
-                    payload['status'] = 'ERROR'
-                discovery['discovery_id'] = payload.get('discoveryId')
+        if api_key and not discovery.get('raw_object_key') and not discovery.get('steps', {}).get('discovery_enrollment'):
+            try:
+                route = await stedi_payers.search_payer('Stedi Insurance Discovery', ['DISCOVERY'], api_key)
+                enrolled = bool(route and await stedi_payers.eligibility_enrolled(route['stediId'],
+                    provider.get('rendering_npi') or provider.get('billing_npi'), api_key))
+                status = 'live' if enrolled else 'limited_search'
+            except (httpx.HTTPError, ValueError):
+                status = 'unavailable'
+            discovery.setdefault('steps', {})['discovery_enrollment'] = status
+            _recovery_event(case, session, 'discovery_enrollment', status)
+            # Enrollment expands the search but is not required by DISCOVERY.
+        addresses = [inputs.get('patient', {}).get('address') or {},
+                     *inputs.get('patient', {}).get('previous_addresses', [])[:2]]
+        # Deduplicate before changing state for a retry, including when the last
+        # recorded address would produce the same request as the current one.
+        addresses = list({json.dumps(stedi_discovery.request_body(
+            {**inputs, 'patient': {**inputs['patient'], 'address': address}}, provider), sort_keys=True): address
+            for address in addresses}.values())
+        for address_index in range(discovery.get('address_index', 0), len(addresses)):
+            discovery['address_index'] = address_index
+            async with httpx.AsyncClient(timeout=httpx.Timeout(140, connect=5)) as client:
+                headers = {'Authorization': api_key}
+                payload = None
+                if discovery.get('raw_object_key'):
+                    payload = json.loads(await run_in_threadpool(object_store.get_object_bytes, discovery['raw_object_key']))
+                    _recovery_event(case, session, 'discovery_cache', 'reused', reason='saved_response')
+                if payload is None:
+                    request_inputs = {**inputs, 'patient': {**inputs['patient'], 'address': addresses[address_index]}}
+                    body = stedi_discovery.request_body(request_inputs, provider)
+                    fingerprint = hashlib.sha256(json.dumps(body, sort_keys=True).encode()).hexdigest()
+                    attempts = discovery.setdefault('attempts', [])
+                    if any(row['fingerprint'] == fingerprint for row in attempts):
+                        continue
+                    request_key = await run_in_threadpool(object_store.put_staff_document,
+                        session['practice_id'], case['id'], 'stedi-discovery-request.json', json.dumps(body).encode(), 'application/json')
+                    attempts.append({'fingerprint': fingerprint, 'request_object_key': request_key})
+                    discovery.update(request_state='pending', stage='discovery', outcome=None, selection_error=None)
+                    case.update(await run_in_threadpool(_save, case, session, 'stedi-discovery-submitting'))
+                    discovery = case['previsit_discovery']
+                    _recovery_event(case, session, 'discovery', 'requested', count=len(attempts),
+                                    reason='previous_address' if address_index else 'current_address')
+                    response = await client.post(stedi_discovery.URL, headers=headers, json=body)
+                    payload = response.json()
+                    if not isinstance(payload, dict):
+                        raise ValueError('Invalid discovery response')
+                    if response.is_error:
+                        payload['status'] = 'ERROR'
+                    discovery['discovery_id'] = payload.get('discoveryId')
+                    discovery['raw_object_key'] = await run_in_threadpool(object_store.put_staff_document,
+                        session['practice_id'], case['id'], 'stedi-discovery.json', json.dumps(payload).encode(), 'application/json')
+                    case.update(await run_in_threadpool(_save, case, session, 'stedi-discovery-response'))
+                    discovery = case['previsit_discovery']
+                    _recovery_event(case, session, 'discovery', 'received', http_status=response.status_code)
+                for _ in range(2):
+                    if payload.get('status') != 'PENDING' or not re.fullmatch(r'[A-Za-z0-9_-]{1,200}', str(discovery.get('discovery_id') or '')):
+                        break
+                    response = await client.get(stedi_discovery.URL + '/' + str(discovery['discovery_id']), headers=headers)
+                    payload = response.json()
+                    if not isinstance(payload, dict):
+                        raise ValueError('Invalid discovery response')
+                    if response.is_error:
+                        payload['status'] = 'ERROR'
+                discovery.update(checked_at=_now(), coverage_count=payload.get('coveragesFound'))
+                if any(row.get('code') == 'discovery::enrollment::auto_enrollment_created' for row in payload.get('warnings') or []):
+                    _recovery_event(case, session, 'discovery', 'warning', reason='auto_enrollment_created')
                 discovery['raw_object_key'] = await run_in_threadpool(object_store.put_staff_document,
                     session['practice_id'], case['id'], 'stedi-discovery.json', json.dumps(payload).encode(), 'application/json')
-                case = await run_in_threadpool(_save, case, session, 'stedi-discovery-response')
-                discovery = case['previsit_discovery']
-            # Stedi may return 202. Poll that ID, never submit a second search.
-            for _ in range(2):
-                if payload.get('status') != 'PENDING' or not re.fullmatch(r'[A-Za-z0-9_-]{1,200}', str(discovery.get('discovery_id') or '')):
-                    break
-                response = await client.get(stedi_discovery.URL + '/' + str(discovery['discovery_id']), headers=headers)
-                payload = response.json()
-                if not isinstance(payload, dict):
-                    raise ValueError('Invalid discovery response')
-                if response.is_error:
-                    payload['status'] = 'ERROR'
-            discovery.update(checked_at=_now(), coverage_count=payload.get('coveragesFound'))
-            discovery['raw_object_key'] = await run_in_threadpool(object_store.put_staff_document,
-                session['practice_id'], case['id'], 'stedi-discovery.json', json.dumps(payload).encode(), 'application/json')
-            if payload.get('status') == 'PENDING':
-                discovery.update(request_state='indeterminate', stage='awaiting_result', reason_code='discovery_pending')
-                await run_in_threadpool(_save, case, session, 'stedi-discovery-awaiting-result')
-                return
-            items = payload.get('items') or []
-            candidates = stedi_discovery.candidates(payload, inputs)
-            if not payer_id:
+                if discovery.get('attempts'):
+                    discovery['attempts'][-1].update(response_object_key=discovery['raw_object_key'],
+                        discovery_id=discovery.get('discovery_id'), status=payload.get('status'))
+                if payload.get('status') == 'PENDING':
+                    discovery.update(request_state='indeterminate', stage='awaiting_result', reason_code='discovery_pending')
+                    case.update(await run_in_threadpool(_save, case, session, 'stedi-discovery-awaiting-result'))
+                    _recovery_event(case, session, 'discovery', 'pending', reason='discovery_pending')
+                    return
+                items = payload.get('items') or []
+                candidates = stedi_discovery.candidates(payload, inputs)
+                _recovery_event(case, session, 'discovery_result', 'received', count=len(items),
+                                reason='upstream_no_policies' if payload.get('status') == 'COMPLETE' and not payload.get('errors') and not items else 'upstream_response')
+                _recovery_event(case, session, 'candidate_filter', 'complete', count=len(candidates),
+                                reason='candidates_retained' if candidates else 'all_candidates_filtered' if items else 'no_upstream_candidates')
                 for row in candidates:
-                    row['matches_ecw_policy'] = stedi_discovery.matches_ecw_policy(
-                        items[row['index']], inputs, source)
-            discovery.update(request_state='complete', candidates=candidates,
-                             outcome='no_match' if not candidates else 'review_needed')
-            if payload.get('status') != 'COMPLETE' or payload.get('errors'):
-                discovery.update(request_state='rejected', outcome='rejected', stage='discovery_rejected',
-                                 reason_code='discovery_request_rejected')
-            # With no directory route, discovery must prove the same active eCW
-            # policy before choosing a payer automatically.
-            matching = [row for row in candidates if
-                        (stedi_discovery.patient_matches(items[row['index']], inputs) if payer_id else
-                         stedi_discovery.matches_ecw_policy(items[row['index']], inputs, context['source']))]
-            if discovery['request_state'] != 'complete' or len(matching) != 1:
-                if not payer_id:
-                    if discovery['request_state'] != 'complete':
-                        context['result']['eligibility_failure']['detail'] = (
-                            'The eCW payer name and ID did not identify one Stedi route. Insurance discovery could not '
-                            'complete. Coverage remains unverified, not proven inactive.')
-                    else:
-                        reason = ('no_matching_ecw_policy' if not matching else 'multiple_matching_ecw_policies')
-                        context['result']['eligibility_failure']['detail'] = (
-                            'The eCW payer name and ID did not identify one Stedi route. Insurance discovery did not return '
-                            + ('an active policy matching this patient, eCW member ID, and visit date.' if not matching else
-                               'one unique active policy matching this patient, eCW member ID, and visit date.')
-                            + ' Coverage remains unverified, not proven inactive.')
-                        discovery.update(stage='candidate_match_review', reason_code=reason)
-                    discovery['selection_error'] = context['result']['eligibility_failure']['detail']
-                elif discovery['request_state'] == 'complete':
-                    discovery.update(stage='candidate_review', reason_code='multiple_discovery_candidates')
-                await run_in_threadpool(_save, case, session, 'stedi-discovery-finished')
-                return
-            candidate = matching[0]
-            item = items[candidate['index']]
-            payer = item.get('payer') or {}
-            match = await stedi_payers.search_payer(payer.get('name') or payer.get('lastName') or '',
-                [str(value) for value in (item.get('payerId'), payer.get('payorIdentification')) if value], api_key)
-            same_policy = (stedi_discovery.patient_matches(item, inputs) if payer_id else
-                           stedi_discovery.matches_ecw_policy(item, inputs, context['source']))
-            if not match or (payer_id and match.get('stediId') != payer_id) or not same_policy:
-                if not payer_id:
-                    context['result']['eligibility_failure']['detail'] = (
-                        'The eCW payer name and ID did not identify one Stedi route. The discovered policy did not uniquely confirm the same active patient, member ID, and visit date. Coverage remains unverified, not proven inactive.')
-                    discovery['selection_error'] = context['result']['eligibility_failure']['detail']
-                    discovery.update(stage='payer_route_review', reason_code='discovered_payer_not_routable')
-                await run_in_threadpool(_save, case, session, 'stedi-discovery-match-needs-review')
-                return
-            discovery.update(request_state='pending', stage='eligibility', selected_candidate_id=candidate['id'])
-            case = await run_in_threadpool(_save, case, session, 'stedi-recovered-member-pending')
-            await _recheck_discovery_candidate(case, session, provider, discovery_payload=payload)
+                    row['matches_ecw_policy'] = stedi_discovery.matches_ecw_policy(items[row['index']], inputs, context['source'])
+                discovery.update(request_state='complete', candidates=candidates,
+                                 outcome='no_match' if not items else 'review_needed')
+                if payload.get('status') != 'COMPLETE' or payload.get('errors'):
+                    discovery.update(request_state='rejected', outcome='rejected', stage='discovery_rejected',
+                                     reason_code='discovery_request_rejected')
+                    _recovery_event(case, session, 'discovery', 'rejected', reason='discovery_request_rejected')
+                    case.update(await run_in_threadpool(_save, case, session, 'stedi-discovery-finished'))
+                    return
+                matching = [row for row in candidates if stedi_discovery.automatic_match(items[row['index']], inputs, context['source'])]
+                # Do not use a first match or infer payer primacy from discovery.
+                if (len(matching) == 1 and sum(row['active_medical'] for row in candidates) == 1
+                        and context['source'].get('active_coverages', 0) <= 1):
+                    candidate = matching[0]
+                    discovery.update(request_state='pending', stage='eligibility', selected_candidate_id=candidate['id'],
+                                     evidence_source='stedi_discovery')
+                    case.update(await run_in_threadpool(_save, case, session, 'stedi-recovered-member-pending'))
+                    _recovery_event(case, session, 'candidate_match', 'matched', count=1)
+                    await _recheck_discovery_candidate(case, session, provider, discovery_payload=payload, reuse_benefits=True)
+                    return
+                reason = 'no_coverage_found' if not items else 'multiple_active_policies' if len(matching) > 1 else 'identity_or_coverage_review'
+                detail = ('No coverage was returned by the completed insurance search. This does not establish that the patient is uninsured.'
+                          if not items else 'Returned coverage requires identity, service-date or payer-order reconciliation before it can supply an insured estimate.')
+                discovery.update(stage='candidate_match_review', reason_code=reason, selection_error=detail)
+                context['result'].setdefault('eligibility_failure', {})['detail'] = detail
+                _recovery_event(case, session, 'candidate_match', discovery['outcome'], reason=reason, count=len(candidates))
+                case.update(await run_in_threadpool(_save, case, session, 'stedi-discovery-finished'))
+                if items or address_index + 1 >= len(addresses):
+                    return
+                # Retry only a completed no-match with a different recorded address.
+                discovery.pop('raw_object_key', None)
+                discovery.pop('discovery_id', None)
+                discovery.update(request_state='pending', stage='discovery', address_index=address_index + 1)
+                case.update(await run_in_threadpool(_save, case, session, 'stedi-discovery-address-retry'))
+                discovery = case['previsit_discovery']
     except (httpx.HTTPError, ValueError, KeyError, TypeError):
-        case['previsit_discovery']['request_state'] = 'indeterminate'
-        await run_in_threadpool(_save, case, session, 'stedi-discovery-indeterminate')
+        case['previsit_discovery'].update(request_state='indeterminate', reason_code='transport_or_parse_error')
+        case.update(await run_in_threadpool(_save, case, session, 'stedi-discovery-indeterminate'))
+        _recovery_event(case, session, 'discovery', 'indeterminate', reason='transport_or_parse_error')
+
+
+async def _run_coverage_recovery(case: dict, session: dict, provider: dict) -> None:
+    """Bound background work and retain unknown submissions for reconciliation."""
+    try:
+        await asyncio.wait_for(_recover_previsit(case, session, provider), timeout=540)
+    except Exception as exc:
+        reason = 'recovery_deadline' if isinstance(exc, TimeoutError) else 'recovery_failed'
+        _recovery_event(case, session, 'recovery', 'indeterminate', reason=reason)
+        case['previsit_discovery'].update(request_state='indeterminate', reason_code=reason)
+        try:
+            case.update(await run_in_threadpool(_save, case, session, 'coverage-recovery-interrupted'))
+        except Exception:
+            _recovery_event(case, session, 'persistence', 'unavailable', reason='recovery_save_failed')
 
 
 async def _reconcile_saved_discovery(case: dict, session: dict) -> None:
@@ -1200,8 +1558,8 @@ async def _reconcile_saved_discovery(case: dict, session: dict) -> None:
         candidates = stedi_discovery.candidates(payload, inputs)
         for row in candidates:
             row['matches_ecw_policy'] = stedi_discovery.matches_ecw_policy(items[row['index']], inputs, source)
-        discovery.update(request_state='complete', candidates=candidates,
-                         outcome='no_match' if not candidates else 'review_needed', checked_at=_now())
+        discovery.update(request_state='complete', candidates=candidates, coverage_count=payload.get('coveragesFound'),
+                         outcome='no_match' if not items else 'review_needed', checked_at=_now())
         if payload.get('status') != 'COMPLETE' or payload.get('errors'):
             discovery.update(request_state='rejected', outcome='rejected', stage='discovery_rejected',
                              reason_code='discovery_request_rejected')
@@ -1237,7 +1595,7 @@ def _discovered_coverage(inputs: dict, source: dict, item: dict) -> dict:
         raise ValueError('Discovery candidate no longer matches the eCW patient.')
     coverage = _coverage_snapshot(inputs, source)
     coverage.update(identity, active_coverages=1, coverage_id=coverage.get('coverage_id') or 'stedi-discovery')
-    coverage['relationship'] = '18' if identity['relationship'] == 'self' else '19'
+    coverage['relationship'] = identity['relationship_code']
     return coverage
 
 
@@ -1245,68 +1603,150 @@ def _discovery_pricing_source(source: dict, item: dict, payer: dict) -> dict:
     details = commercial.plan_details(item)
     return {**source, 'payer': payer.get('displayName') or (item.get('payer') or {}).get('name'),
             'payer_identifiers': [str((item.get('payer') or {}).get('payorIdentification') or '')],
-            'plan': (details.get('names') or [None])[0], 'plan_details': source.get('plan_details') or {}}
+            'plan': (details.get('names') or [None])[0],
+            'plan_details': {'plan': details.get('names') or [],
+                             'group_number': [details['group_number']] if details.get('group_number') else []}}
 
 
-async def _recheck_discovery_candidate(case: dict, session: dict, provider: dict, *, discovery_payload: dict | None = None) -> None:
+async def _accept_recovered_coverage(case: dict, session: dict, verified: dict, payer: dict,
+                                     coverage: dict, *, http_status: int = 200) -> None:
+    context, discovery = case['previsit_context'], case['previsit_discovery']
+    inputs, source = context['inputs'], context['source']
+    pricing_source = _discovery_pricing_source(source, verified, payer)
+    discovery.update(request_state='complete', outcome='recovered', stage='complete', verified_coverage=coverage,
+                     pricing_source=pricing_source, checked_at=_now(), reason_code='coverage_recovered', selection_error=None)
+    result = deepcopy(context['result'])
+    result.pop('eligibility_failure', None); result.pop('eligibility_error', None)
+    result.update(payer=pricing_source.get('payer'), plan=pricing_source.get('plan'), issues=[], checked_at=_now(),
+                  benefits=_case_benefits(verified, inputs, source, case))
+    await run_in_threadpool(_finish_previsit, result, case, inputs, source, verified, session, payer['stediId'], pricing_source=pricing_source)
+    guidance = result.get('collection_guidance') or collection_guidance.build(result, case.get('visit_review'))
+    _recovery_event(case, session, 'pricing', 'priced' if guidance.get('amount_cents') is not None else 'unavailable',
+                    reason=guidance.get('basis') if guidance.get('amount_cents') is not None else 'benefits_or_rates_incomplete')
+    case['previsit'].update(request_state='complete', checked_at=result['checked_at'], benefits=result['benefits'], requested_service_types=_previsit_service_types(inputs))
+    case['previsit_original_error_object_key'] = case.get('previsit_raw_object_key')
+    case['previsit_raw_object_key'] = discovery['eligibility_object_key']
+    case.update(await run_in_threadpool(_save, case, session, 'stedi-coverage-recovered'))
+    _recovery_event(case, session, 'eligibility', 'verified', reason='coverage_recovered', http_status=http_status)
+
+
+async def _recheck_discovery_candidate(case: dict, session: dict, provider: dict, *, discovery_payload: dict | None = None,
+                                      selected_route: dict | None = None, inquiry_only: bool = False,
+                                      reuse_benefits: bool = False) -> None:
     """Use a selected, persisted discovery candidate without altering eCW."""
     context, discovery = case['previsit_context'], case['previsit_discovery']
     inputs, source = context['inputs'], context['source']
     if _previsit_result(case).get('eligibility_timing'):
         return
+    submitted = False
     try:
-        payload = discovery_payload or json.loads(await run_in_threadpool(object_store.get_object_bytes, discovery['raw_object_key']))
-        candidate = next(row for row in discovery.get('candidates', []) if row['id'] == discovery.get('selected_candidate_id'))
-        item = (payload.get('items') or [])[candidate['index']]
-        coverage = _discovered_coverage(inputs, source, item)
+        ecw_route = selected_route is not None and discovery.get('route_source') == 'ecw'
+        if ecw_route:
+            item = {}
+            coverage = _coverage_snapshot(inputs, source)
+        else:
+            payload = discovery_payload or json.loads(await run_in_threadpool(object_store.get_object_bytes,
+                discovery.get('route_payload_key') if selected_route else discovery['raw_object_key']))
+            candidate = ({'index': discovery['route_item_index']} if selected_route else
+                next(row for row in discovery.get('candidates', []) if row['id'] == discovery.get('selected_candidate_id')))
+            item = (payload.get('items') or [])[candidate['index']]
+            coverage = _discovered_coverage(inputs, source, item)
         api_key = stedi_financial.credentials(session['practice_id'])
         payer_data = item.get('payer') or {}
-        payer = await stedi_payers.search_payer(payer_data.get('name') or payer_data.get('lastName') or '',
-            [str(value) for value in (item.get('payerId'), payer_data.get('payorIdentification')) if value], api_key)
+        routes = []
+        payer = selected_route or await stedi_payers.search_payer(payer_data.get('name') or payer_data.get('lastName') or '',
+            [str(value) for value in (item.get('payerId'), payer_data.get('payorIdentification')) if value], api_key, candidates=routes)
         if not payer:
-            raise ValueError('Stedi could not map the selected payer.')
-        body = stedi_request_body({'stedi_payer_id': payer['stediId']}, provider, coverage, inputs['service_date'], _previsit_service_types(inputs))
+            if routes:
+                discovery.update(payer_routes=routes, route_source='returned_policy',
+                    route_item_index=candidate['index'],
+                    route_payload_key=discovery.get('card_object_key') if item.get('evidence_source') == 'insurance_card' else discovery.get('raw_object_key'))
+            discovery.update(request_state='complete', outcome='review_needed', stage='payer_route_review',
+                reason_code='discovered_payer_not_routable', selection_error='The returned payer has no unique supported eligibility route.')
+            case.update(await run_in_threadpool(_save, case, session, 'stedi-discovery-route-unresolved'))
+            _recovery_event(case, session, 'payer_routing', 'review_needed', reason='discovered_payer_not_routable')
+            return
+        returned_services = {code for row in commercial._stedi_entries(item) for code in row.get('serviceTypeCodes', [])}
+        if (reuse_benefits and stedi_discovery.active_medical(item, inputs)
+                and set(_previsit_service_types(inputs)) <= returned_services):
+            key = await run_in_threadpool(object_store.put_staff_document, session['practice_id'], case['id'],
+                'discovered-eligibility.json', json.dumps(item).encode(), 'application/json')
+            discovery.update(eligibility_object_key=key, evidence_source='stedi_discovery')
+            await _accept_recovered_coverage(case, session, item, payer, coverage)
+            _recovery_event(case, session, 'eligibility', 'reused', reason='discovery_benefits_sufficient')
+            return
+        if payer.get('transactionSupport', {}).get('eligibilityCheck') == 'ENROLLMENT_REQUIRED':
+            enrolled = await stedi_payers.eligibility_enrolled(payer['stediId'], provider.get('rendering_npi') or provider.get('billing_npi'), api_key)
+            if not enrolled:
+                discovery.update(request_state='complete', outcome='review_needed', stage='provider_enrollment',
+                    reason_code='provider_enrollment_required', selection_error='The returned payer requires provider eligibility enrollment. No eligibility request was submitted.')
+                case.update(await run_in_threadpool(_save, case, session, 'stedi-discovery-enrollment-required'))
+                _recovery_event(case, session, 'eligibility', 'unavailable', reason='provider_enrollment_required')
+                return
+        body = stedi_request_body({'stedi_payer_id': payer['stediId']}, provider, coverage, inputs['service_date'], _previsit_service_types(inputs), allow_demographic=not coverage.get('member_id'), inquiry_only=inquiry_only)
         basic_body = stedi_request_body({'stedi_payer_id': payer['stediId']}, provider, coverage, inputs['service_date'], _previsit_service_types(inputs),
-                                        include_identity_hints=False)
+                                        include_identity_hints=False, allow_demographic=not coverage.get('member_id'), inquiry_only=inquiry_only)
         if inputs['service_date'] == date.today().isoformat():
             body['encounter'].pop('dates', None)
             basic_body['encounter'].pop('dates', None)
+        fingerprint = hashlib.sha256(json.dumps(body, sort_keys=True).encode()).hexdigest()
+        attempts = discovery.setdefault('eligibility_attempts', [])
+        if any(row['fingerprint'] == fingerprint for row in attempts):
+            discovery.update(request_state='complete', outcome='review_needed', reason_code='duplicate_inquiry_skipped')
+            return
+        request_key = await run_in_threadpool(object_store.put_staff_document, session['practice_id'], case['id'],
+            'recovery-eligibility-request.json', json.dumps(body).encode(), 'application/json')
+        attempts.append({'fingerprint': fingerprint, 'request_object_key': request_key})
+        discovery.update(request_state='pending', stage='eligibility', outcome=None)
+        case.update(await run_in_threadpool(_save, case, session, 'recovery-eligibility-submitting'))
+        discovery = case['previsit_discovery']
         async with httpx.AsyncClient(timeout=httpx.Timeout(35, connect=5)) as client:
+            _recovery_event(case, session, 'eligibility', 'requested')
+            submitted = True
             response, verified, _ = await _post_stedi_eligibility(
                 client, {'Authorization': api_key, 'Content-Type': 'application/json'}, body, basic_body)
         if not isinstance(verified, dict):
             raise ValueError('Invalid eligibility response')
         discovery['eligibility_object_key'] = await run_in_threadpool(object_store.put_staff_document,
             session['practice_id'], case['id'], 'stedi-recovered-eligibility.json', json.dumps(verified).encode(), 'application/json')
-        returned = (verified.get('subscriber') or {}).get('memberId')
-        if response.is_error or str(verified.get('status') or '').upper() in {'ERROR', 'FAILED', 'REJECTED'} or commercial.eligibility_errors(verified) or not returned or stedi_discovery.normalized(returned) != stedi_discovery.normalized(coverage['member_id']):
+        returned_identity = stedi_discovery.candidate_identity(verified, inputs)
+        identity_matches = False
+        if returned_identity:
+            identity_matches = bool((not coverage.get('member_id') or stedi_discovery.normalized(returned_identity['member_id']) == stedi_discovery.normalized(coverage['member_id'])) and
+                all(stedi_discovery.normalized(returned_identity[key]) == stedi_discovery.normalized(coverage.get(key))
+                    for key in ('subscriber_first', 'subscriber_last')) and
+                (not coverage.get('subscriber_birth_date') or not returned_identity.get('subscriber_birth_date') or
+                 insurance_identity.birth_date(coverage['subscriber_birth_date']) == insurance_identity.birth_date(returned_identity['subscriber_birth_date'])) and
+                ((returned_identity['relationship'] == 'self') == (coverage['relationship'] in {'18', 'self'})))
+            if inquiry_only and coverage.get('relationship') in {None, '', 'unknown'}:
+                identity_matches = bool(not coverage.get('member_id') or
+                    stedi_discovery.normalized(returned_identity['member_id']) == stedi_discovery.normalized(coverage['member_id']))
+        if (response.is_error or str(verified.get('status') or '').upper() in {'ERROR', 'FAILED', 'REJECTED'}
+                or commercial.eligibility_errors(verified) or not identity_matches or not stedi_discovery.active_medical(verified, inputs, _previsit_service_types(inputs)[0])):
             discovery.update(request_state='complete', outcome='review_needed', stage='eligibility_rejected', selection_error='The selected policy was not accepted by the payer. Select another returned policy or check the current card.')
+            discovery['reason_code'] = ('eligibility_rejected' if response.is_error or commercial.eligibility_errors(verified)
+                                        else 'returned_identity_or_coverage_mismatch')
+            _recovery_event(case, session, 'eligibility', 'rejected', reason=discovery['reason_code'], http_status=response.status_code)
             if context.get('payer_id') is None and context['result'].get('eligibility_error') == 'payer_routing_unresolved':
                 context['result']['eligibility_failure']['detail'] = (
                     'The eCW payer name and ID did not identify one Stedi route. Discovery matched the eCW policy, but the payer rejected its follow-up eligibility check. Coverage remains unverified, not proven inactive.')
                 discovery['selection_error'] = context['result']['eligibility_failure']['detail']
-            await run_in_threadpool(_save, case, session, 'stedi-discovery-selection-rejected')
+            case.update(await run_in_threadpool(_save, case, session, 'stedi-discovery-selection-rejected'))
             return
-        pricing_source = _discovery_pricing_source(source, item, payer)
-        discovery.update(request_state='complete', outcome='recovered', stage='complete', verified_coverage=coverage,
-                         pricing_source=pricing_source, checked_at=_now())
-        result = deepcopy(context['result'])
-        result.pop('eligibility_failure', None); result.pop('eligibility_error', None)
-        result.update(payer=pricing_source.get('payer'), plan=pricing_source.get('plan'), issues=[], checked_at=_now(),
-                      benefits=_case_benefits(verified, inputs, source, case))
-        await run_in_threadpool(_finish_previsit, result, case, inputs, source, verified, session, payer['stediId'], pricing_source=pricing_source)
-        case['previsit'].update(request_state='complete', checked_at=result['checked_at'], benefits=result['benefits'], requested_service_types=_previsit_service_types(inputs))
-        case['previsit_original_error_object_key'] = case.get('previsit_raw_object_key')
-        case['previsit_raw_object_key'] = discovery['eligibility_object_key']
-        await run_in_threadpool(_save, case, session, 'stedi-coverage-recovered')
-    except (httpx.HTTPError, ValueError, KeyError, TypeError, StopIteration, IndexError):
-        discovery.update(request_state='complete', outcome='review_needed', stage='selection_error', reason_code='selected_policy_check_failed',
+        coverage.update({key: returned_identity[key] for key in ('member_id', 'group_number', 'plan_number') if returned_identity.get(key)})
+        if inquiry_only:
+            coverage = _discovered_coverage(inputs, source, verified)
+        await _accept_recovered_coverage(case, session, verified, payer, coverage, http_status=response.status_code)
+    except (httpx.HTTPError, ValueError, KeyError, TypeError, StopIteration, IndexError, commercial.CommercialError):
+        discovery.update(request_state='indeterminate' if submitted else 'complete', outcome='review_needed',
+                         stage='eligibility' if submitted else 'selection_error', reason_code='selected_policy_check_failed',
                          selection_error='The selected policy could not be checked. Select another returned policy or check the current card.')
+        _recovery_event(case, session, 'eligibility', 'indeterminate' if submitted else 'unavailable', reason='selected_policy_check_failed')
         if context.get('payer_id') is None and context['result'].get('eligibility_error') == 'payer_routing_unresolved':
             context['result']['eligibility_failure']['detail'] = (
                 'The eCW payer name and ID did not identify one Stedi route. Discovery found the matching policy, but its follow-up eligibility check could not be completed. Coverage remains unverified, not proven inactive.')
             discovery['selection_error'] = context['result']['eligibility_failure']['detail']
-        await run_in_threadpool(_save, case, session, 'stedi-discovery-selection-error')
+        case.update(await run_in_threadpool(_save, case, session, 'stedi-discovery-selection-error'))
 
 
 async def _start_previsit_recovery(case: dict, session: dict, provider: dict, background_tasks: BackgroundTasks | None) -> dict:
@@ -1340,17 +1780,24 @@ async def _start_previsit_recovery(case: dict, session: dict, provider: dict, ba
     process_saved = recovery.get('request_state') == 'complete' and not recovery.get('outcome') and recovery.get('raw_object_key')
     resume_poll = recovery.get('request_state') == 'indeterminate' and recovery.get('discovery_id') and recovery.get('stage') != 'eligibility'
     if ready and (not recovery or recovery.get('request_state') == 'not_requested' or process_saved or resume_poll):
-        recovery.update(request_state='pending', started_at=recovery.get('started_at') or _now(),
+        recovery.update(request_state='pending', exhausted=False, started_at=recovery.get('started_at') or _now(),
                         context_token=case['previsit_context']['context_token'],
                         identity_binding=_recovery_binding(case['previsit_context']['inputs'], case['previsit_context']['source']))
         case['previsit_discovery'] = recovery
         case = await run_in_threadpool(_save, case, session, 'stedi-discovery-pending')
-        background_tasks.add_task(_recover_previsit, case, session, provider)
+        background_tasks.add_task(_run_coverage_recovery, case, session, provider)
     return _previsit_result(case)
 
 
 @router.get('/cases/{case_id}/previsit')
 async def saved_previsit(case_id: str, request: Request) -> dict:
+    """Read saved recovery without submitting or retrying a paid transaction.
+
+    recovery.coverage_status is VERIFIED, REVIEW_REQUIRED, or NOT_FOUND.
+    NOT_FOUND means a completed search returned no policies, not uninsured.
+    recovery.state separately reports pending/indeterminate transport state.
+    Coverage verification does not imply that a price is available.
+    """
     session = await _session(request)
     case = await run_in_threadpool(store.get_case, case_id, session['patient_id'], session['share_manifest_id'], **_scope(session))
     if not case or case.get('source_mode') != 'commercial_previsit' or not case.get('previsit_context'):
@@ -1373,6 +1820,41 @@ async def saved_payer_response(case_id: str, request: Request):
     return _response({'source': 'Stedi', 'response': payload})
 
 
+@router.post('/cases/{case_id}/payer-route')
+async def select_payer_route(case_id: str, value: PayerRouteInput, request: Request,
+                            background_tasks: BackgroundTasks) -> dict:
+    """Select a saved directory suggestion and run eligibility with known identity.
+
+    Selection is not coverage verification. Stale, arbitrary and already-pending
+    selections are rejected before any payer transaction. No eCW data is changed.
+    """
+    session = await _session(request)
+    case = await run_in_threadpool(store.get_case, case_id, session['patient_id'], session['share_manifest_id'], **_scope(session))
+    if not case or case.get('source_mode') != 'commercial_previsit' or not case.get('previsit_context'):
+        raise HTTPException(404, 'Saved visit estimate not found.')
+    context = case['previsit_context']
+    if case.get('revision', 0) != value.revision or context['context_token'] != value.context_token:
+        raise HTTPException(409, 'This estimate changed. Reopen it before selecting a payer route.')
+    recovery = case.get('previsit_discovery') or {}
+    if stedi_discovery.public_status(recovery)['state'] not in {'complete', 'rejected'} or recovery.get('outcome') == 'recovered':
+        raise HTTPException(409, 'Wait for the existing recovery request before selecting a payer route.')
+    payer = next((row for row in recovery.get('payer_routes', []) if row['stediId'] == value.route_id), None)
+    if not payer:
+        raise HTTPException(422, 'Select one of the payer routes returned for this policy.')
+    inputs, source = context['inputs'], context['source']
+    rendering, billing = source.get('rendering_provider') or {}, source.get('billing_provider') or {}
+    provider = {'rendering_npi': str(rendering.get('npi') or (inputs.get('rendering_provider') or {}).get('npi') or ''),
+        'rendering_first': str(rendering.get('first_name') or ''), 'rendering_last': str(rendering.get('last_name') or ''),
+        'billing_npi': str(billing.get('npi') or ''),
+        'organization_name': str(billing.get('name') or session.get('staff', {}).get('practice_name') or '')}
+    recovery.update(request_state='pending', outcome='review_needed', stage='eligibility',
+        selected_route_id=value.route_id, selection_error=None, started_at=_now())
+    case = await run_in_threadpool(_save, case, session, 'stedi-payer-route-selected')
+    _recovery_event(case, session, 'payer_routing', 'selected', reason=payer.get('match_basis', 'name_or_alias'))
+    background_tasks.add_task(_recheck_discovery_candidate, case, session, provider, selected_route=payer)
+    return _previsit_result(case)
+
+
 @router.post('/cases/{case_id}/coverage-candidate')
 async def select_coverage_candidate(case_id: str, value: CoverageCandidateInput, request: Request,
                                     background_tasks: BackgroundTasks) -> dict:
@@ -1388,10 +1870,8 @@ async def select_coverage_candidate(case_id: str, value: CoverageCandidateInput,
     if not any(row.get('id') == value.candidate_id for row in discovery.get('candidates', [])):
         raise HTTPException(422, 'Select a coverage option returned for this patient.')
     source, inputs = case['previsit_context']['source'], case['previsit_context']['inputs']
-    if not case['previsit_context'].get('payer_id'):
-        candidate = next(row for row in discovery['candidates'] if row['id'] == value.candidate_id)
-        if not candidate.get('matches_ecw_policy'):
-            raise HTTPException(409, 'The selected policy does not match the active eClinicalWorks member and visit date.')
+    # Staff may reconcile a different/new policy. Its patient identity and active
+    # service-date coverage are still revalidated against the payer response.
     rendering, billing = source.get('rendering_provider') or {}, source.get('billing_provider') or {}
     provider = {'rendering_npi': str(rendering.get('npi') or (inputs.get('rendering_provider') or {}).get('npi') or ''),
                 'rendering_first': str(rendering.get('first_name') or ''), 'rendering_last': str(rendering.get('last_name') or ''),
@@ -1405,7 +1885,8 @@ async def select_coverage_candidate(case_id: str, value: CoverageCandidateInput,
 
 
 async def _begin_coverage_discovery(result: dict, session: dict, inputs: dict, source: dict, provider: dict,
-                                    background_tasks: BackgroundTasks | None, detail: str, *, refresh_benefits: bool = False) -> dict:
+                                    background_tasks: BackgroundTasks | None, detail: str, *, refresh_benefits: bool = False,
+                                    payer_routes: list[dict] | None = None) -> dict:
     """Save a no-policy appointment as a recoverable Stedi discovery case."""
     coverage = _coverage_snapshot(inputs, source)
     binding = hashlib.sha256(json.dumps({'patient': inputs.get('patient'), 'appointment': source.get('appointment_id'),
@@ -1428,6 +1909,7 @@ async def _begin_coverage_discovery(result: dict, session: dict, inputs: dict, s
     if case.get('previsit_discovery', {}).get('request_state') in {'pending', 'indeterminate'}:
         return await _start_previsit_recovery(case, session, provider, background_tasks)
     if not refresh_benefits and saved.get('request_state') == 'complete' and case.get('previsit_context'):
+        _recovery_event(case, session, 'discovery_cache', 'reused', reason='saved_result')
         return _previsit_result(case)
     discovery_ready = bool(stedi_discovery.request_body(inputs, provider))
     routing_failure = bool(source.get('payer') and coverage.get('member_id'))
@@ -1437,10 +1919,10 @@ async def _begin_coverage_discovery(result: dict, session: dict, inputs: dict, s
     result.update(eligibility_error='payer_routing_unresolved' if routing_failure else 'coverage_identity_missing', eligibility_failure={
         'kind': 'payer_routing_unresolved' if routing_failure else 'coverage_identity_missing',
         'title': 'Insurance payer needs recovery' if routing_failure else 'eCW coverage needs recovery', 'detail': detail,
-        'action': ('ClinicForce is searching Stedi using the patient details from eCW. It will use a policy automatically only when it uniquely matches the eCW patient, member ID, and visit date.'
+        'action': ('ClinicForce is reading accessible insurance cards and searching Stedi. A unique active patient match continues automatically to service-specific eligibility.'
                    if routing_failure and discovery_ready else
                    'Insurance discovery could not start from the available eCW data.' if routing_failure else
-                   'ClinicForce is searching Stedi using the patient details from eCW. Select a returned policy before it is used for this estimate.'),
+                   'ClinicForce is reading accessible insurance cards and searching Stedi. A unique active patient match continues automatically to service-specific eligibility.'),
         'codes': [], 'attempted_at': _now()}, benefits=_previsit_benefits({}, coverage, inputs['service_date']))
     await run_in_threadpool(_finish_previsit, result, case, inputs, source, None, session, '')
     recovery = case.get('previsit_discovery') or {}
@@ -1451,6 +1933,7 @@ async def _begin_coverage_discovery(result: dict, session: dict, inputs: dict, s
     except (KeyError, TypeError, ValueError):
         reusable = False
     if reusable:
+        _recovery_event(case, session, 'discovery_cache', 'reused', reason='completed_search')
         case = await run_in_threadpool(_save, case, session, 'previsit-discovery-reused')
         return await _start_previsit_recovery(case, session, provider, background_tasks)
     case['previsit'] = {'request_state': 'rejected'}
@@ -1459,8 +1942,10 @@ async def _begin_coverage_discovery(result: dict, session: dict, inputs: dict, s
                                   'identity_binding': _recovery_binding(inputs, source),
                                   'stage': 'not_started' if discovery_ready else 'not_available',
                                   'reason_code': 'payer_route_unresolved' if discovery_ready else 'discovery_input_missing'}
+    if payer_routes:
+        case['previsit_discovery'].update(payer_routes=payer_routes, route_source='ecw')
     if not discovery_ready:
-        case['previsit_discovery'].update(outcome='not_available', checked_at=_now(), selection_error=detail)
+        case['previsit_discovery'].update(outcome='not_available', exhausted=True, checked_at=_now(), selection_error=detail)
     case = await run_in_threadpool(_save, case, session, 'previsit-coverage-recovery-requested')
     return await _start_previsit_recovery(case, session, provider, background_tasks)
 
@@ -1476,8 +1961,30 @@ async def previsit_estimate(value: PrevisitInput, request: Request, background_t
     Explicit visit-linked eCW billing notes can supply a collection instruction
     or a fallback office copay; their source and timestamp accompany the result.
     They do not establish payer eligibility.
-    Self-pay uses recorded cash mode and the active schedule, without built-in
-    clinic prices or plan-name benefit overrides. Earlier snapshots are unchanged.
+    Self-pay uses recorded cash mode or the terminal coverage-recovery fallback
+    and configured cash prices, without built-in clinic prices or plan-name
+    benefit overrides. Earlier snapshots are unchanged.
+
+    Missing policy/routing or failed identity checks start bounded background
+    recovery through linked saved policies, card/OCR, uniquely routed eCW hints,
+    discovery and, for eligible enrolled Original Medicare cases, MBI lookup.
+    Applicable saved/discovered 271 benefits are reused before another request.
+    A unique patient/address/active medical match continues automatically;
+    multiple active policies never select a primary without evidence.
+    Recovery may try up to two recorded prior addresses
+    after completed no-match responses, never guessing identifiers or replaying
+    an indeterminate submission. Pending results are read from /cases/{id}/previsit.
+    recovery.coverage_status is VERIFIED, REVIEW_REQUIRED, or NOT_FOUND;
+    NOT_FOUND describes a completed empty electronic search, not uninsured.
+    Returned policies rejected by identity filtering remain REVIEW_REQUIRED.
+    Labeled appointment-note payer/member candidates are retained without a
+    Coverage record; they never supply an inferred subscriber or eligibility.
+    Terminal and unavailable searches do not imply recovery is still pending.
+    recovery.exhausted remains false until every applicable stage has finished;
+    recovery.steps records safe outcomes and unavailable prerequisites.
+    Completed recovery without usable coverage falls back to configured cash
+    pricing unless staff explicitly retained insurance mode. Missing cash rates
+    leave collection_guidance.amount_cents null; no price is invented.
     """
     session = await _session(request)
     collection_event('previsit_started', practice_id=session['practice_id'], intake_id=(session.get('intake') or {}).get('id'),
@@ -1498,6 +2005,7 @@ async def previsit_estimate(value: PrevisitInput, request: Request, background_t
         collection_event('previsit_failed', practice_id=session['practice_id'], intake_id=(session.get('intake') or {}).get('id'),
                          stage='appointment', reason_code='appointment_mismatch')
         raise HTTPException(409, "The selected upcoming eClinicalWorks appointment could not be verified.")
+    source['_request_ip_chain'] = _request_ip_chain(request)
     collection_event('previsit_appointment_loaded', practice_id=session['practice_id'], intake_id=(session.get('intake') or {}).get('id'),
                      stage='appointment', count=len(inputs.get('lines') or []), source='ecw')
 
@@ -1515,7 +2023,16 @@ async def previsit_estimate(value: PrevisitInput, request: Request, background_t
         "ecw_saved_eligibility": {k: v for k, v in source['saved_eligibility'].items() if not k.startswith('_')}, "ecw_coverage_active": source.get('active_coverages', 0) > 0}
     coverage = _coverage_snapshot(inputs, source)
 
-    async def incomplete_result():
+    async def incomplete_result(terminal_reason: str | None = None):
+        if terminal_reason:
+            for prior in prior_cases:
+                if (prior.get('previsit_context', {}).get('source', {}).get('appointment_id') == value.appointment_id
+                        and any(prior.get(key, {}).get('request_state') in {'pending', 'indeterminate'}
+                                for key in ('previsit', 'previsit_discovery'))):
+                    held = deepcopy(prior)
+                    held['previsit_discovery'] = {**held.get('previsit_discovery', {}),
+                        'request_state': 'indeterminate', 'outcome': None, 'exhausted': False}
+                    return _previsit_result(held)
         binding = _visit_context_token(inputs, source)
         case = await run_in_threadpool(store.create_case, session['patient_id'], '', binding,
             {'source_mode': 'commercial_previsit', 'previsit': {'request_state': 'not_requested'}},
@@ -1524,10 +2041,18 @@ async def previsit_estimate(value: PrevisitInput, request: Request, background_t
         result['check_id'] = case['id']
         result['benefits'] = _previsit_benefits({}, coverage, inputs['service_date'])
         await run_in_threadpool(_finish_previsit, result, case, inputs, source, None, session, '')
+        if terminal_reason:
+            case['previsit_discovery'] = {'request_state': 'complete', 'outcome': 'not_available',
+                'exhausted': True, 'reason_code': terminal_reason, 'stage': 'not_available',
+                'steps': {'payer_checks': terminal_reason}, 'checked_at': _now()}
+            if terminal_reason == 'stedi_unavailable' and object_store.enabled():
+                case['previsit_discovery']['identity_binding'] = _recovery_binding(inputs, source)
+                await _recover_saved_policy(case, session, provider, allow_query=False)
         return _previsit_result(await run_in_threadpool(_save, case, session, 'previsit-awaiting-coverage'))
 
     check_from = ((source.get('coverage_period') or {}).get('start') or '')[:10] or None
     workflows = list(session['intake'].get('workflows', {}).values())
+    prior_cases = []
     if workflows:
         prior_cases = await run_in_threadpool(store.get_cases, workflows, session['patient_id'], session['share_manifest_id'], **_scope(session))
         holds = [row['visit_review']['insurance_check_from'] for row in prior_cases
@@ -1598,7 +2123,7 @@ async def previsit_estimate(value: PrevisitInput, request: Request, background_t
         result["issues"].append("eCW did not return a matched provider name and NPI needed for the payer check.")
         collection_event('previsit_deferred', practice_id=session['practice_id'], intake_id=(session.get('intake') or {}).get('id'),
                          stage='eligibility', reason_code='provider_identity_missing')
-        return await incomplete_result()
+        return await incomplete_result('provider_identity_missing')
     api_key = stedi_financial.credentials(session["practice_id"])
     if (os.getenv("STEDI_EXECUTION_MODE", "off") != "commercial_pilot" or
         os.getenv("STEDI_LIVE_ELIGIBILITY_ENABLED", "false").lower() != "true" or
@@ -1606,32 +2131,34 @@ async def previsit_estimate(value: PrevisitInput, request: Request, background_t
         result["issues"].append("Live Stedi eligibility or protected response storage is not configured.")
         collection_event('previsit_deferred', practice_id=session['practice_id'], intake_id=(session.get('intake') or {}).get('id'),
                          stage='eligibility', reason_code='stedi_unavailable')
-        return await incomplete_result()
+        return await incomplete_result('stedi_unavailable')
     service_day = date.fromisoformat(inputs["service_date"])
-    usable_coverage = (coverage['active_coverages'] >= 1 and coverage['coverage_id'] and coverage['member_id'] and
+    usable_coverage = (coverage['active_coverages'] >= 1 and coverage['coverage_id'] and
                        coverage['relationship'] and all(coverage.get(key) for key in ('subscriber_first', 'subscriber_last', 'subscriber_birth_date')))
     if not usable_coverage or not source.get('payer'):
         detail = ('eCW did not return one usable primary policy with member and policyholder details for this visit.'
                   if not usable_coverage else 'eCW did not return an insurer name for the selected policy.')
         return await _begin_coverage_discovery(result, session, inputs, source, provider, background_tasks, detail,
                                                refresh_benefits=value.refresh_benefits)
+    payer_routes = []
     try:
-        payer = await stedi_payers.search_payer(str(source["payer"]), source.get("payer_identifiers") or [], api_key, plan=source.get("plan"))
+        payer = await stedi_payers.search_payer(str(source["payer"]), source.get("payer_identifiers") or [], api_key, plan=source.get("plan"), candidates=payer_routes)
     except (httpx.HTTPError, ValueError):
-        result["issues"].append("The Stedi payer directory is temporarily unavailable. Retry later.")
-        return await incomplete_result()
+        return await _begin_coverage_discovery(result, session, inputs, source, provider, background_tasks,
+            'The payer directory is unavailable. Continuing with other automatic coverage sources.',
+            refresh_benefits=value.refresh_benefits)
     if not payer:
         return await _begin_coverage_discovery(result, session, inputs, source, provider, background_tasks,
             'The eCW payer name and ID did not identify one Stedi route. ClinicForce is checking the same policy through insurance discovery.',
-            refresh_benefits=value.refresh_benefits)
+            refresh_benefits=value.refresh_benefits, payer_routes=payer_routes)
     payer_id = payer["stediId"]
     requested_stc = _previsit_service_types(inputs)
     result['requested_service_types'] = requested_stc
     result["stedi_payer"] = {"name": payer.get("displayName"), "id": payer_id}
     try:
-        body = stedi_request_body({"stedi_payer_id": payer_id}, provider, coverage, inputs["service_date"], requested_stc)
+        body = stedi_request_body({"stedi_payer_id": payer_id}, provider, coverage, inputs["service_date"], requested_stc, allow_demographic=not coverage.get('member_id'))
         basic_body = stedi_request_body({"stedi_payer_id": payer_id}, provider, coverage, inputs["service_date"], requested_stc,
-                                        include_identity_hints=False)
+                                        include_identity_hints=False, allow_demographic=not coverage.get('member_id'))
     except commercial.CommercialError as exc:
         result["issues"].append(str(exc))
         return await incomplete_result()
@@ -1717,7 +2244,9 @@ async def previsit_estimate(value: PrevisitInput, request: Request, background_t
             case['previsit'] = {'request_state': 'not_requested'}
             result['benefits'] = _previsit_benefits({}, coverage, inputs['service_date'])
             await run_in_threadpool(_finish_previsit, result, case, inputs, source, None, session, payer_id)
-            return _previsit_result(await run_in_threadpool(_save, case, session, 'previsit-enrollment-required'))
+            case['previsit_discovery'] = {'request_state': 'not_requested', 'recovery_requested': True}
+            case = await run_in_threadpool(_save, case, session, 'previsit-enrollment-required')
+            return await _start_previsit_recovery(case, session, provider, background_tasks)
     case.pop('previsit_discovery', None)
     case["previsit"] = {"request_state": "pending"}
     case = await run_in_threadpool(_save, case, session, "previsit-stedi-pending")
@@ -1734,13 +2263,21 @@ async def previsit_estimate(value: PrevisitInput, request: Request, background_t
                          case_id=case['id'], stage='eligibility', reason_code='transport_or_parse_error')
         result["issues"].append("The Stedi request outcome is unknown. Clinic staff must check payer activity before retrying.")
         return result
-    if response.is_error or not isinstance(payload, dict) or str(payload.get("status", "")).upper() in {"ERROR", "FAILED", "REJECTED"} or commercial.eligibility_errors(payload):
+    demographic_unresolved = bool(not coverage.get('member_id') and isinstance(payload, dict)
+                                  and not stedi_discovery.candidate_identity(payload, inputs))
+    if response.is_error or not isinstance(payload, dict) or str(payload.get("status", "")).upper() in {"ERROR", "FAILED", "REJECTED"} or commercial.eligibility_errors(payload) or demographic_unresolved:
         case["previsit"] = {"request_state": "rejected", "identity_retry_version": 1}
         if isinstance(payload, dict):
             case["previsit_raw_object_key"] = await run_in_threadpool(
                 object_store.put_staff_document, session["practice_id"], case["id"],
                 "previsit-stedi-error.json", json.dumps(payload).encode(), "application/json")
         failure = commercial.eligibility_failure(payload if isinstance(payload, dict) else {})
+        if demographic_unresolved and not commercial.eligibility_errors(payload):
+            failure = {'kind': 'member_identity_unresolved', 'title': 'Demographic lookup needs recovery',
+                'detail': 'The payer did not return matching patient identity and a usable subscriber ID.',
+                'action': 'Continuing through card and insurance discovery recovery.', 'codes': []}
+        if not coverage.get('member_id'):
+            case['previsit_discovery'] = {'request_state': 'not_requested', 'recovery_requested': True}
         collection_event('eligibility_rejected', practice_id=session['practice_id'], intake_id=(session.get('intake') or {}).get('id'),
                          case_id=case['id'], stage='eligibility', source='stedi', http_status=response.status_code,
                          reason_code=failure.get('kind'))
@@ -1766,6 +2303,13 @@ async def previsit_estimate(value: PrevisitInput, request: Request, background_t
                         "checked_at": result["checked_at"], "requested_service_types": requested_stc}
     case["previsit_raw_object_key"] = raw_key
     saved_case = await run_in_threadpool(_save, case, session, "previsit-stedi-complete")
+    if benefits.get('active') is False:
+        saved_case['previsit_discovery'] = {'request_state': 'not_requested', 'recovery_requested': True}
+        result.update(eligibility_error='coverage_inactive', eligibility_failure={
+            'kind': 'coverage_inactive', 'title': 'Searching for current coverage',
+            'detail': 'The known policy returned inactive coverage. Continuing through insurance recovery.',
+            'action': 'Searching for active medical coverage for this appointment.', 'codes': []})
+        return await _start_previsit_recovery(saved_case, session, provider, background_tasks)
     result["revision"] = saved_case.get("revision", 0)
     return result
 

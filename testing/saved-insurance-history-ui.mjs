@@ -59,6 +59,7 @@ try {
   await page.getByRole('button', { name: '2025-08-15 · Established / follow-up patient' }).waitFor()
   const archive = page.locator('.visit-estimator')
   await archive.getByRole('heading', { name: 'Saved insurance estimate' }).waitFor()
+  assert.equal(await archive.locator('.coverage-chip').innerText(), 'Coverage check was pending')
   assert.match(await archive.innerText(), /\$40\.00/)
   assert.match(await archive.innerText(), /Return visit: symptoms improved/)
   assert.match(await archive.innerText(), /Established patient/)
