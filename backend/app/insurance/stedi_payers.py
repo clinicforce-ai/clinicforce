@@ -99,12 +99,48 @@ async def search_payer(name: str, identifiers: list[str], api_key: str,
 
 async def eligibility_enrolled(payer_id: str, npi: str, api_key: str, *, transport=None) -> bool:
     """Read enrollment before a paid request; never create an enrollment."""
+    return (await eligibility_enrollment(payer_id, npi, api_key, transport=transport))['status'] == 'LIVE'
+
+
+async def eligibility_enrollment(payer_id: str, npi: str, api_key: str, *, transport=None) -> dict:
+    """Report exact provider/payer eligibility state, including read failures.
+
+    No status filter: non-live enrollment must not look like an absent record.
+    Pagination uses only the documented token on the fixed Stedi endpoint.
+    """
+    statuses = set()
+    params = {'payerIds': payer_id, 'providerNpis': npi, 'transactions': 'eligibilityCheck', 'pageSize': 100}
     async with httpx.AsyncClient(timeout=httpx.Timeout(10, connect=5), transport=transport) as client:
-        response = await client.get('https://enrollments.us.stedi.com/2024-09-01/enrollments',
-            params={'payerIds': payer_id, 'providerNpis': npi, 'transactions': 'eligibilityCheck', 'status': 'LIVE', 'pageSize': 100},
-            headers={'Authorization': api_key})
-        response.raise_for_status()
-        return any(row.get('status') == 'LIVE' and row.get('payer', {}).get('stediPayerId') == payer_id
-            and row.get('provider', {}).get('npi') == npi
-            and row.get('transactions', {}).get('eligibilityCheck', {}).get('enroll') is True
-            for row in response.json().get('items', []))
+        try:
+            seen = set()
+            for _ in range(10):
+                response = await client.get('https://enrollments.us.stedi.com/2024-09-01/enrollments',
+                    params=params, headers={'Authorization': api_key})
+                response.raise_for_status()
+                payload = response.json()
+                if not isinstance(payload, dict) or not isinstance(payload.get('items'), list):
+                    raise ValueError('Invalid enrollment response')
+                for row in payload['items']:
+                    if (row.get('payer', {}).get('stediPayerId') == payer_id
+                            and row.get('provider', {}).get('npi') == npi
+                            and row.get('transactions', {}).get('eligibilityCheck', {}).get('enroll') is True):
+                        statuses.add(row.get('status'))
+                if 'LIVE' in statuses:
+                    return {'status': 'LIVE', 'reason_code': 'enrollment_live'}
+                token = payload.get('nextPageToken')
+                if not token:
+                    break
+                if not isinstance(token, str) or token in seen:
+                    raise ValueError('Invalid enrollment pagination')
+                seen.add(token)
+                params['pageToken'] = token
+            else:
+                raise ValueError('Incomplete enrollment search')
+        except (httpx.HTTPError, ValueError, TypeError, AttributeError):
+            return {'status': 'LOOKUP_FAILED', 'reason_code': 'enrollment_lookup_failed'}
+    status = next((value for value in ('PROVIDER_ACTION_REQUIRED', 'STEDI_ACTION_REQUIRED', 'PROVISIONING',
+                                      'SUBMITTED', 'DRAFT', 'REJECTED', 'CANCELED') if value in statuses),
+                  'UNKNOWN' if statuses else 'MISSING')
+    reason = ('enrollment_pending' if status in {'STEDI_ACTION_REQUIRED', 'PROVISIONING', 'SUBMITTED'}
+              else 'enrollment_' + status.lower())
+    return {'status': status, 'reason_code': reason}

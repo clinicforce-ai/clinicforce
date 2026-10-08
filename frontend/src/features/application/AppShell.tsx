@@ -38,6 +38,7 @@ export function AppShell() {
   const [summary, setSummary] = useState<DoctorSummary | null>(null)
   const [error, setError] = useState('')
   const [staffIntakeId, setStaffIntakeId] = useState<string | undefined>()
+  const [resolveEcwPatient, setResolveEcwPatient] = useState(false)
   const [staffQr, setStaffQr] = useState(false)
   const [refreshBenefits, setRefreshBenefits] = useState(false)
   useEffect(() => { if (view === 'staff') window.history.replaceState({}, '', '/?staff') }, [view])
@@ -45,7 +46,7 @@ export function AppShell() {
   const openEntry = (next: View, url: string) => { window.history.pushState({}, '', url); setEntry(entryRoute()); setView(next) }
   const restart = () => { setView('scan'); setLink(null); setPin(''); setSummary(null); setError('') }
   const returnHome = () => { setStaffIntakeContext(null); setStaffIntakeId(undefined); setStaffQr(false); setView('landing'); setLink(null); setPin(''); setSummary(null); setError(''); window.history.replaceState({}, '', '/') }
-  const returnStaff = () => { setStaffIntakeContext(null); setStaffQr(false); setView('staff') }
+  const returnStaff = () => { setResolveEcwPatient(false); setStaffIntakeContext(null); setStaffQr(false); setView('staff') }
   const handleLinkScanned = (nextLink: SmartHealthLink) => {
     setLink(nextLink); setError(''); setView(isClinicforceIssuedLink(nextLink) ? 'pin' : 'external')
   }
@@ -62,6 +63,7 @@ export function AppShell() {
     } catch (caught) { setError(caught instanceof Error ? caught.message : 'Unable to retrieve the patient file.'); setView('pin') }
   }
   const openStaffInsurance = (id: string, version: 'v1' | 'v2' | 'commercial', refresh = false) => {
+    setResolveEcwPatient(false)
     setRefreshBenefits(refresh)
     setStaffIntakeId(id); setStaffIntakeContext(id); setView(version === 'v1' ? 'insurance' : 'commercial-estimator')
   }
@@ -73,7 +75,7 @@ export function AppShell() {
         {view === 'patient' && <PatientPortal onBack={returnHome} />}
         {view === 'patient-upload' && <PatientInsuranceUpload key={`${entry.clinic}/${entry.upload}`} clinicCode={entry.clinic} uploadCode={entry.upload} onBack={returnHome} />}
         {(view === 'staff-create' || view === 'staff-join') && <StaffOnboarding key={`${view}/${entry.invitation}`} mode={view === 'staff-create' ? 'create' : 'join'} token={entry.invitation} onBack={returnStaff} onComplete={returnStaff} onJoin={token => openEntry('staff-join', `/?join=${encodeURIComponent(token)}`)} />}
-        {view === 'staff' && <StaffWorkspace onBack={returnHome} onCreateClinic={() => openEntry('staff-create', '/?staff=create')} onJoinClinic={() => openEntry('staff-join', '/?join')} onOpenPatientQr={() => { setStaffQr(false); restart() }} initialIntakeId={staffIntakeId} onOpenInsurance={openStaffInsurance} onScanQr={() => { setStaffQr(true); setStaffIntakeContext(null); restart() }} />}
+        {view === 'staff' && <StaffWorkspace onBack={returnHome} onCreateClinic={() => openEntry('staff-create', '/?staff=create')} onJoinClinic={() => openEntry('staff-join', '/?join')} onOpenPatientQr={() => { setStaffQr(false); restart() }} initialIntakeId={staffIntakeId} initialEcwLookup={resolveEcwPatient} onOpenInsurance={openStaffInsurance} onScanQr={() => { setStaffQr(true); setStaffIntakeContext(null); restart() }} />}
         {view === 'scan' && <Scanner clinicforceOnly={staffQr} onScanned={handleLinkScanned} onCancel={returnStaff} />}
         {view === 'external' && link && <ExternalShlReceiver link={link} onCancel={restart} onImported={() => { setLink(null); setView('patient') }} />}
         {view === 'pin' && <AccessPin pin={pin} error={error} onBack={restart} onPinChange={setPin} onSubmit={handleSubmitPin} />}
@@ -81,7 +83,7 @@ export function AppShell() {
         {view === 'dashboard' && summary && <Dashboard data={summary} onScanAnother={restart} onHome={returnHome} onVerifyInsurance={(version) => { setStaffIntakeContext(null); setStaffIntakeId(undefined); setView(version === 'v2' ? 'insurance-v2' : 'insurance') }} />}
         {view === 'insurance' && <InsuranceVerification staffMode={!!staffIntakeId} onBack={staffIntakeId ? returnStaff : () => setView(summary ? 'dashboard' : 'landing')} />}
         {view === 'insurance-v2' && <InsuranceVerificationV2 staffMode={!!staffIntakeId} onUseDocuments={staffIntakeId ? () => openStaffInsurance(staffIntakeId, 'v1') : undefined} onBack={staffIntakeId ? returnStaff : () => setView(summary ? 'dashboard' : 'landing')} />}
-        {view === 'commercial-estimator' && <CommercialEstimator key={staffIntakeId} onBack={returnStaff} intakeId={staffIntakeId} refreshBenefits={refreshBenefits} />}
+        {view === 'commercial-estimator' && <CommercialEstimator key={staffIntakeId} onResolvePatient={() => { returnStaff(); setResolveEcwPatient(true) }} onBack={returnStaff} intakeId={staffIntakeId} refreshBenefits={refreshBenefits} />}
       </Suspense>
     </main><footer className="shell border-t border-[var(--line)] py-6 text-sm text-[var(--muted-ink)]">ClinicForce · Patient records and clinic insurance workspace</footer>
   </div>

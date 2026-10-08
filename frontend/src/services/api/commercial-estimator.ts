@@ -21,6 +21,10 @@ export type CollectionGuidance = {
 }
 export type PrevisitEstimate = {
   cash_fallback?: { reason: string };
+  insurance_hints?: Array<{ payer?: string | null; member_id?: string | null; sources: string[] }>;
+  insurance_diagnosis?: { coverageSource: string; rawCandidateCount: number | null; retainedCandidateCount: number;
+    verifiedCandidateCount: number; identityStatus: string; eligibilityStatus: string; pricingStatus: string;
+    reasonCodes: string[]; states: string[]; pricingReasons: string[]; enrollment?: { status: string; reason_code: string } | null };
   billing_note?: BillingNote | null;
   benefit_source?: string | null;
   eligibility_timing?: { status: string; appointment_date: string; check_from: string; message: string };
@@ -36,7 +40,7 @@ export type PrevisitEstimate = {
   mapping_candidate?: { network: string; products: string[]; reference: string };
   coverage_records?: Array<{ id: string; status: string; order?: number; member_id?: string; group_number?: string; subscriber?: string; relationship?: string; payer?: string[]; period?: { start?: string; end?: string }; cost_to_beneficiary?: Array<{ type?: { text?: string }; valueMoney?: { value: number; currency?: string }; valueQuantity?: { value: number; unit?: string } }> }>;
   patient_details?: { ecw_account_number?: string | null; gender?: string; phone?: string; email?: string; address?: { address1?: string; address2?: string; city?: string; state?: string; postalCode?: string } };
-  insurance_details?: { payer_patient?: { firstName?: string; lastName?: string; dateOfBirth?: string }; payer_relationship?: string; payer_coverage_period?: { start?: string; end?: string }; payer_subscriber?: { firstName?: string; lastName?: string; memberId?: string; dateOfBirth?: string }; member_id?: string; group_number?: string; subscriber_first?: string; subscriber_last?: string; subscriber_birth_date?: string; relationship?: string; record_status?: { status: string; updated_at?: string; message: string }; coverage_period?: { start?: string; end?: string } };
+  insurance_details?: { payer_patient?: { firstName?: string; lastName?: string; dateOfBirth?: string }; payer_relationship?: string; payer_coverage_period?: { start?: string; end?: string }; payer_subscriber?: { firstName?: string; lastName?: string; memberId?: string; dateOfBirth?: string }; member_id?: string; member_source?: string | null; group_number?: string; subscriber_first?: string; subscriber_last?: string; subscriber_birth_date?: string; relationship?: string; record_status?: { status: string; updated_at?: string; message: string }; coverage_period?: { start?: string; end?: string } };
   arrival_collection?: { verified_copay_cents?: number | null; estimated_cents?: number | null; prior_balance_cents?: number | null; noncovered_cents?: number | null; payments_received_cents?: number | null; amount_cents: number | null; reason: string; status: string; basis: string };
 
   practice_cash_source?: { filename: string; effective_from: string; version: string };
@@ -48,11 +52,18 @@ export type PrevisitEstimate = {
   ecw_saved_eligibility?: { status: string; active?: boolean; message: string; checked_at?: string; reference?: string };
   appointment_context?: { appointment_type?: string; timezone?: string; notes_status?: string; imported_fields?: Array<{ label: string; text: string; source: string; updated_at?: string }>; location?: string; rendering_provider?: { name?: string; npi?: string }; appointment_status?: string };
   ecw_coverage_active?: boolean;
+  library_pricing?: Array<{ document_id: string; label: string; payer?: string; summary?: { status: string; usable_rules?: number; issues?: Array<{ status: string; reason: string; locator?: string }> } }>;
   coverage_status?: 'VERIFIED' | 'REVIEW_REQUIRED' | 'NOT_FOUND';
   recovery?: { state: string; outcome?: string; message: string; started_at?: string; checked_at?: string; reference?: string; coverage_count?: number; stage?: string; reason_code?: string;
+    exhausted?: boolean; steps?: Record<string, string>;
     coverage_status?: 'VERIFIED' | 'REVIEW_REQUIRED' | 'NOT_FOUND'; card_status?: string; attempt_count?: number;
     payer_routes?: Array<{ id: string; name: string; payer_id?: string; aliases: string[]; names: string[]; match_basis: string; eligibility?: string }>;
-    candidates?: Array<{ id: string; payer: string; payer_identifier?: string; plans: string[]; relationship: string; address_matches: boolean; matches_ecw_policy?: boolean }> };
+    raw_candidate_count?: number; retained_candidate_count?: number; verified_candidate_count?: number;
+    candidates?: Array<{ id: string; payer: string; payer_identifier?: string; plans: string[]; relationship: string; address_matches: boolean; matches_ecw_policy?: boolean;
+      group_number?: string | null; coverage_evidence?: { status: string; reported_status: string; start?: string | null; end?: string | null }; identity_status?: string; inquiry_eligible?: boolean;
+      member_id?: string | null; subscriber?: { firstName?: string | null; lastName?: string | null; dateOfBirth?: string | null };
+      dependent?: { firstName?: string | null; lastName?: string | null; dateOfBirth?: string | null } | null;
+      source?: string; state?: string; verification_status?: string; reason_codes?: string[] }> };
   eligibility_failure?: { kind: string; codes: string[]; title: string; detail: string; action: string; attempted_at: string };
   eligibility_error?: string; context_token?: string; revision?: number; selected_ids?: string[]; available_codes?: VisitCode[];
   plan_details?: { ecw: Record<string, string[]>; stedi: { names?: string[]; plan_number?: string; group_number?: string } };
@@ -61,7 +72,7 @@ export type PrevisitEstimate = {
   visit_type?: string | null; reason?: string | null; checked_at?: string | null;
   stedi_payer?: { name?: string; id: string };
   codes: VisitCode[];
-  benefits: null | { service_date_matches?: boolean | null; returned_service_dates?: { start?: string; end?: string }; active?: boolean | null; network_status?: string; network_source?: 'clinic_record' | 'payer_participation_message' | null; network_evidence_ids?: string[]; deductible_remaining_cents?: number | null;
+  benefits: null | { coverage_evidence?: { status: string; reported_status: string; start?: string | null; end?: string | null }; service_date_matches?: boolean | null; returned_service_dates?: { start?: string; end?: string }; active?: boolean | null; network_status?: string; network_source?: 'clinic_record' | 'payer_participation_message' | null; network_evidence_ids?: string[]; deductible_remaining_cents?: number | null;
     oop_remaining_cents?: number | null; copay_cents?: number | null; coinsurance_percent?: string | null;
     authorization_basis?: string; authorization_signal?: string; referral_signal?: string; normalization_notes?: string[]; review_reasons?: string[]; requires_review?: boolean;
     reported_options?: Array<{ id?: string; procedure_code?: string; coverage_level?: string; plan_name?: string; kind: string; service_type_code: string; network: string; time_period: string;

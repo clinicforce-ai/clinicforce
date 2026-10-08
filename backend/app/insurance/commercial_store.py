@@ -193,6 +193,9 @@ def matching_rates(practice_id: str, profile: dict, network: dict, service_date:
         if lines is not None and key not in requested:
             continue
         if key in selected and value['match_rank'] == selected[key]['match_rank']:
+            if all(value.get(field) == selected[key].get(field) for field in ('allowed_cents', 'cash_cents', 'unit_rule')):
+                selected[key].setdefault('equivalent_sources', [selected[key]['source_reference']]).append(value['source_reference'])
+                continue
             raise CommercialError(f"More than one active rate matches {value['code']}; resolve the rate version first.")
         if key not in selected:
             selected[key] = value

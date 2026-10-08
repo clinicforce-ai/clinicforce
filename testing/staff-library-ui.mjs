@@ -45,8 +45,8 @@ try {
   await page.getByText('5 documents', { exact: true }).waitFor()
   assert(await page.getByRole('heading', { name: 'Add a clinic document' }).isVisible())
   assert(await page.getByText('Active in estimator · Clinic self-pay prices', { exact: true }).isVisible())
-  assert.match(await page.locator('main').innerText(), /Clinic fees and self-pay prices are shared across payers/)
-  assert.equal(await page.getByRole('link', { name: 'Read extracted text', exact: true }).getAttribute('href'), '/api/staff/library/document-0/text')
+  assert.match(await page.locator('main').innerText(), /Documents are processed automatically/)
+  assert.equal(await page.getByRole('link', { name: 'Read extracted text', exact: true }).first().getAttribute('href'), '/api/staff/library/document-0/text')
   for (const document of documents) {
     const link = page.getByRole('link', { name: `Open ${document.label} in a new tab` })
     assert(await link.isVisible())

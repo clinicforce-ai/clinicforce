@@ -12,7 +12,7 @@ from lxml import etree
 
 from app.core import object_store, staff_store
 
-EXTRACTION_VERSION = 'clinic-pages-1'
+EXTRACTION_VERSION = 'clinic-pages-2'
 
 OFFICE_TYPES = {
     '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
@@ -38,8 +38,8 @@ def office_preview(content: bytes, filename: str) -> str:
         def text(node):
             return ''.join(node.xpath('.//*[local-name()="t"]/text()'))
 
-        def table(rows):
-            return '<table>' + ''.join('<tr>' + ''.join('<td>' + escape(str(cell)) + '</td>' for cell in row) + '</tr>' for row in rows) + '</table>'
+        def table(rows, row_numbers=None):
+            return '<table>' + ''.join(f'<tr data-row="{row_numbers[index] if row_numbers else index + 1}">' + ''.join('<td>' + escape(str(cell)) + '</td>' for cell in row) + '</tr>' for index, row in enumerate(rows)) + '</table>'
 
         blocks = []
         if Path(filename).suffix.lower() == '.docx':
@@ -50,7 +50,9 @@ def office_preview(content: bytes, filename: str) -> str:
             for node in bodies[0]:
                 name = etree.QName(node).localname
                 if name == 'p':
-                    blocks.append('<p>' + escape(text(node)) + '</p>')
+                    styles = node.xpath('./*[local-name()="pPr"]/*[local-name()="pStyle"]/@*[local-name()="val"]')
+                    heading = bool(styles and re.match(r'heading\d|title', styles[0], re.I))
+                    blocks.append(('<h3>' if heading else '<p>') + escape(text(node)) + ('</h3>' if heading else '</p>'))
                 elif name == 'tbl':
                     blocks.append(table([[text(cell) for cell in row.xpath('./*[local-name()="tc"]')]
                                          for row in node.xpath('./*[local-name()="tr"]')]))
@@ -64,7 +66,7 @@ def office_preview(content: bytes, filename: str) -> str:
                 name = target.lstrip('/') if target.startswith('/xl/') else 'xl/' + target
                 if not name.startswith('xl/worksheets/') or '..' in name:
                     raise ValueError('Unsupported worksheet location.')
-                rows = []
+                rows, row_numbers = [], []
                 for row in xml(name).xpath('//*[local-name()="sheetData"]/*'):
                     cells = []
                     for cell in row:
@@ -82,11 +84,14 @@ def office_preview(content: bytes, filename: str) -> str:
                             value = shared[int(value)]
                         elif cell.get('t') == 'inlineStr':
                             value = text(cell)
+                        if cell.xpath('./*[local-name()="f"]'):
+                            value = '[Formula cell; cached value: ' + value + ']'
                         cells[column - 1] = value
                     rows.append(cells)
+                    row_numbers.append(int(row.get('r') or len(rows)))
                     if len(rows) > 10000:
                         raise ValueError('Worksheets may have up to 10,000 rows.')
-                blocks.append('<h2>' + escape(sheet.get('name', 'Worksheet')) + '</h2>' + table(rows))
+                blocks.append('<h2>' + escape(sheet.get('name', 'Worksheet')) + '</h2>' + table(rows, row_numbers))
     if not blocks:
         raise ValueError('No readable document content found.')
     return ('<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">'
@@ -102,24 +107,72 @@ def csv_check(content: bytes) -> None:
         raise ValueError('Upload a CSV with a header and 1–20,000 rows, up to 100 columns.')
 
 
+def structured_content(content: bytes, filename: str) -> tuple[list[dict], list[dict]]:
+    """Inert source blocks and tables with page/section/sheet/row coordinates."""
+    from app.insurance import v1_sources
+    suffix = Path(filename).suffix.lower()
+    pages, tables = [], []
+    if suffix in OFFICE_TYPES:
+        root = etree.HTML(office_preview(content, filename))
+        context, heading, sheet, number = '', '', '', 0
+        for node in root.find('body'):
+            if node.tag == 'h1':
+                continue
+            number += 1
+            text = '\n'.join(node.itertext())
+            if node.tag == 'h2':
+                sheet = text
+            if node.tag == 'h3':
+                heading, context = text, ''
+            if node.tag == 'p':
+                if re.match(r'^\s*\d+[.)]\s', text):
+                    heading, context = text, ''
+                else:
+                    context += '\n' + text
+            locator = f'Sheet {sheet}' if sheet else f'Section {number}'
+            pages.append({'number': number, 'text': text, 'locator': locator})
+            if node.tag == 'table':
+                tables.append({'locator': locator, 'context': heading + '\n' + context,
+                               'row_numbers': [int(row.get('data-row') or index + 1) for index, row in enumerate(node)],
+                               'rows': [[''.join(cell.itertext()) for cell in row] for row in node]})
+                context = ''
+    elif suffix == '.csv':
+        csv_check(content)
+        rows = list(csv.reader(StringIO(content.decode('utf-8-sig'))))
+        pages = [{'number': 1, 'text': '\n'.join(' | '.join(row) for row in rows), 'locator': 'CSV'}]
+        tables = [{'locator': 'CSV', 'context': '', 'rows': rows}]
+    else:
+        pages = [{'number': number, 'text': text, 'locator': f'Page {number}'}
+                 for number, text in v1_sources.read_pages(content, detect_outlined_text=True)]
+        if suffix == '.pdf':
+            import fitz
+            with fitz.open(stream=content, filetype='pdf') as pdf:
+                for number, page in enumerate(pdf, 1):
+                    for table in page.find_tables().tables:
+                        tables.append({'locator': f'Page {number}',
+                                       'context': page.get_text(clip=fitz.Rect(0, 0, page.rect.width, table.bbox[1])),
+                                       'rows': table.extract()})
+    return pages, tables
+
+
 def extract_document(document: dict) -> dict:
     """Read every page, including scanned exhibits; retain evidence without inventing rates."""
-    from app.insurance import v1_sources
     saved = document.get('extraction') or {}
     if saved.get('version') == EXTRACTION_VERSION and saved.get('sha256') == document.get('sha256') and saved.get('pages'):
         return saved
     content = object_store.get_object_bytes(document['object_key'])
     if document.get('sha256') and hashlib.sha256(content).hexdigest() != document['sha256']:
         raise ValueError('The stored document does not match its saved checksum.')
-    pages = v1_sources.read_pages(content, detect_outlined_text=True)
+    pages, tables = structured_content(content, document.get('filename', 'source.pdf'))
     result = {'version': EXTRACTION_VERSION, 'sha256': hashlib.sha256(content).hexdigest(),
-              'pages': [{'number': number, 'text': text} for number, text in pages],
+              'pages': pages, 'tables': tables,
               'summary': {'status': 'read', 'page_count': len(pages),
-                          'empty_pages': [number for number, text in pages if not text.strip()]}}
+                          'empty_pages': [page['number'] for page in pages if not page['text'].strip()]}}
     # Index source passages, not inferred terms. One PDF can contain several
     # products, provider types, dates and fee schedules on different pages.
     result['passages'] = []
-    for number, text in pages:
+    for page in pages:
+        number, text = page['number'], page['text']
         lines = text.splitlines()
         indices = set()
         for index, line in enumerate(lines):
@@ -133,7 +186,8 @@ def extract_document(document: dict) -> dict:
 
 def extract_after_upload(document: dict) -> None:
     try:
-        extract_document(document)
+        from app.insurance import library_pricing
+        library_pricing.prepare(document['practice_id'])
     except Exception:
         # The original remains saved. Opening extracted text retries and reports
         # the failure instead of silently using a partial document for pricing.
@@ -154,7 +208,7 @@ def extraction_preview(document: dict, result: dict) -> str:
             f'<body><h1>{title}</h1><p>{len(result["pages"])} pages read. Search this page to find terms across the full document.</p>'
             '<p>Compare extracted figures with the original page. A contract can contain several schedules. '
             'Its payer, product, provider type, location and effective date must match the visit before a rate is used. '
-            'Extraction does not activate contract rates.</p>'
+            'Supported final rules are processed automatically. Missing schedules, incomplete scope and conflicting terms remain unavailable for pricing.</p>'
             f'<details><summary>Payment and rate passages</summary><ul>{passages}</ul></details>{pages}</body></html>')
 
 

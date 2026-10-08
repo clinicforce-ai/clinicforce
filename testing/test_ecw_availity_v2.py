@@ -18,6 +18,35 @@ from app.ingestion import ecw
 
 
 class EcwBackendSourceTests(unittest.IsolatedAsyncioTestCase):
+    async def test_empty_coverage_preserves_note_candidate_without_inventing_subscriber(self):
+        tomorrow = (datetime.now(ZoneInfo('America/New_York')).date() + timedelta(days=1)).isoformat()
+        patient = {'resourceType': 'Patient', 'id': 'synthetic', 'name': [{'given': ['Pat'], 'family': 'Example'}],
+                   'birthDate': '1980-01-01'}
+        visit = {'resourceType': 'Encounter', 'id': 'visit', 'status': 'planned',
+                 'subject': {'reference': 'Patient/synthetic'}, 'period': {'start': tomorrow + 'T15:00:00Z'},
+                 'extension': [{'url': 'https://ehr.test/General_Notes',
+                                'valueString': 'Patient payment preference: Example Health, Subscriber No.: SYNTHETIC123'}]}
+        def handler(request):
+            if request.url.path.endswith('/Patient/synthetic'):
+                return httpx.Response(200, json=patient)
+            if request.url.path.endswith('/Encounter/visit'):
+                return httpx.Response(200, json=visit)
+            return httpx.Response(200, json={'resourceType': 'Bundle', 'total': 0, 'entry': []})
+        with patch.object(ecw_backend, 'settings', return_value=('client', 'https://ehr.test/fhir')), \
+             patch.object(ecw_backend, '_access_token', AsyncMock(return_value='synthetic-token')):
+            for has_notes in (True, False):
+                if not has_notes:
+                    visit.pop('extension')
+                inputs, _, source = await ecw_backend.fetch_inputs(
+                    {'ecw_patient_id': 'synthetic', 'patient_first_name': 'Pat', 'patient_last_name': 'Example',
+                     'patient_birth_date': '1980-01-01'}, {}, 'visit', transport=httpx.MockTransport(handler))
+                assert source['active_coverages'] == 0 and source['coverage_id'] == ''
+                assert source['coverage_records'] == [] and source['self_pay_recorded'] is False
+                assert inputs['member_id'] == ('SYNTHETIC123' if has_notes else None)
+                assert len(source['insurance_candidates']) == int(has_notes)
+                assert not inputs['subscriber']['firstName'] and not inputs['subscriber']['birthDate']
+                assert not inputs['relationship']
+
     async def test_patient_lookup_returns_before_edge_timeout(self):
         async def slow_token(*_):
             await asyncio.sleep(1)
@@ -372,9 +401,10 @@ class EcwBackendSourceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(query.await_args.args[-1], {"name": "Sample", "birthdate": "1980-01-01"})
         with patch.object(ecw_backend, "_search", new=AsyncMock(
                 side_effect=lambda *args: [patient] if args[-1] == {"given": "Sample", "birthdate": "1980-01-01"} else [])) as query:
-            matched, patient_id, _ = await ecw_backend._patient_for_profile(None, "", "", profile)
-        self.assertEqual((matched, patient_id), (patient, "patient-1"))
-        self.assertEqual(query.await_count, 5)
+            with self.assertRaisesRegex(ecw_backend.EcwBackendError, "No eClinicalWorks patient matched"):
+                await ecw_backend._patient_for_profile(None, "", "", profile)
+        self.assertEqual(query.await_count, 4)
+        self.assertTrue(all(set(call.args[-1]) != {"given", "birthdate"} for call in query.await_args_list))
         with patch.object(ecw_backend, "_search", new=AsyncMock(side_effect=lambda *args: [patient, other] if "name" in args[-1] else [])):
             with self.assertRaisesRegex(ecw_backend.EcwBackendError, "Multiple eClinicalWorks patients matched"):
                 await ecw_backend._patient_for_profile(None, "", "", profile)

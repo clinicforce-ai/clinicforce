@@ -233,3 +233,6 @@
 .identity-resolution form, .product-mapping form { display: grid; gap: 16px; max-width: 720px; }
 .identity-resolution textarea, .product-mapping textarea { min-height: 90px; padding: 12px; font: inherit; }
 .visit-line-details > summary, .collection-reason > summary { cursor: pointer; padding: 12px 0; font-weight: 600; }
+
+.visit-recovery label { display: grid; gap: 8px; margin: 12px 0; }
+.visit-recovery select { width: 100%; max-width: 100%; min-width: 0; padding: 10px; border: 1px solid #cbd5e1; border-radius: 8px; background: white; color: #172b4d; }

@@ -147,7 +147,8 @@ def test_conditional_benefits_need_evidence_and_waiver_is_explicit():
 def test_eligibility_period_excludes_expired_rows_without_hiding_returned_facts():
     raw = payload(); raw['planDateInformation'] = {'planBegin': '20200101', 'planEnd': '20211231'}
     result = commercial.normalize_stedi_271(raw, '98', True, service_date=DAY)
-    assert result['active'] is None and result['copay_cents'] is None
+    assert result['active'] is False and result['copay_cents'] is None
+    assert result['coverage_evidence']['status'] == 'EXPIRED'
     assert result['reported_options']
     raw['planDateInformation'] = {'planBegin': '20200101', 'planEnd': '20991231'}
     raw['benefitsInformation'][3]['benefitsDateInformation'] = {'eligibilityEnd': '20210101'}

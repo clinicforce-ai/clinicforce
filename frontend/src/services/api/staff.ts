@@ -81,7 +81,8 @@ export function createStaffIntake(files: File[], details: StaffCardDetails) {
 }
 
 export type EcwPatientMatch = { patient: { ecw_account_number?: string | null; given_name: string; family_name: string; birth_date: string }; appointments: Array<{ id: string; start: string; status: string; reason: string }> }
-export const createStaffEcwLookup = (details: { given_name: string; middle_initial: string; family_name: string; birth_date: string }) => request<StaffIntake & { ecw_match: EcwPatientMatch }>('/api/staff/intakes/ecw-lookup', json(details))
+export type EcwPatientSuggestion = EcwPatientMatch['patient'] & { id: string; differences: string[] }
+export const createStaffEcwLookup = (details: { given_name: string; middle_initial: string; family_name: string; birth_date: string; ecw_account_number?: string; selected_patient_id?: string; identity_confirmed?: boolean }) => request<(StaffIntake & { ecw_match: EcwPatientMatch }) | { status: 'selection_required'; candidates: EcwPatientSuggestion[] }>('/api/staff/intakes/ecw-lookup', json(details))
 
 export const confirmStaffPatient = (id: string, fields: StaffPatientFields & { identity_confirmed: true; patient_id?: string }) => request<StaffIntake>(`/api/staff/intakes/${encodeURIComponent(id)}/patient`, { ...json(fields), method: 'PUT' })
 export const addStaffMember = (member: { username: string; display_name: string; password: string; role: 'staff' | 'admin' }) => request<unknown>('/api/staff/members', json(member))
@@ -97,7 +98,7 @@ export interface StaffLibraryDocument {
   created_at: string
   effective_from: string | null
   effective_to: string | null
-  extraction_summary?: { status: 'read' | 'reading' | 'needs_retry'; page_count?: number; empty_pages?: number[] } | null
+  extraction_summary?: { status: 'read' | 'reading' | 'needs_retry' | 'usable' | 'partial' | 'missing_dependency' | 'conflict' | 'provisional'; page_count?: number; empty_pages?: number[]; usable_rules?: number; issues?: Array<{ status: string; reason: string; locator?: string }> } | null
   estimator_uses?: Array<{ id: string; type: 'contract_rates' | 'cash_rates'; status: string; payer: string; effective_from: string; effective_to?: string | null; note?: string }>
 }
 

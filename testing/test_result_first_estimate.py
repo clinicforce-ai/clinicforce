@@ -130,8 +130,11 @@ def test_general_notes_fill_only_missing_policy_fields_from_labeled_header():
     assert fallback(fields, 'ABC123', 'Example Health - Texas', 1) == {}
     assert fallback(fields, 'OTHER', None, 1) == {}
     assert fallback(fields, None, 'Different Health', 1) == {}
-    for count in (0, 2):
-        assert fallback(fields, None, None, count) == {}
+    assert fallback(fields, None, None, 0) == fallback(fields, None, None, 1)
+    assert fallback(fields, None, None, 2) == {}
+    assert len(ecw_backend.appointment_insurance_candidates(fields)) == 1
+    assert len(ecw_backend.appointment_insurance_candidates([
+        *fields, {**fields[0], 'text': header.replace('ABC123', 'OTHER')}])) == 2
     assert fallback([*fields, {**fields[0], 'text': header.replace('ABC123', 'OTHER')}], None, None, 1) == {}
     assert fallback([{**fields[0], 'text': 'Patient entered comments on healow : ' + header}], None, None, 1) == {}
     assert fallback([{**fields[0], 'label': 'Patient comments'}], None, None, 1) == {}

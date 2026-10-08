@@ -116,6 +116,16 @@ class PatientSearch(Model):
 
 
 class EcwLookup(Model):
+    ecw_account_number: str = Field(default="", max_length=80, description="Optional exact eCW secondary account identifier; mismatched demographics still require explicit selection.")
+    selected_patient_id: str | None = Field(default=None, pattern=r"^[A-Za-z0-9.\-]{1,200}$", description="eCW suggestion explicitly selected by staff; re-read and verify against the submitted canonical demographics.")
+    identity_confirmed: bool = Field(default=False, description="Required when selecting a suggested patient.")
+
+    @model_validator(mode="after")
+    def confirmed_selection(self):
+        if self.selected_patient_id and not self.identity_confirmed:
+            raise ValueError("Confirm the selected patient before continuing")
+        return self
+
     given_name: str = Field(min_length=1, max_length=100)
     middle_initial: str = Field(default="", max_length=10)
     family_name: str = Field(min_length=1, max_length=100)
@@ -303,9 +313,23 @@ def manual_card_fields(full_name: str, member_id: str, birth_date: str) -> dict:
     return fields
 
 
-@router.post("/intakes/ecw-lookup")
+@router.post("/intakes/ecw-lookup", responses={
+    200: {"description": "selection_required with up to eight unconfirmed candidates (possibly empty); no intake or visit read yet."},
+    201: {"description": "Verified/reused clinic intake and eCW patient/appointments."},
+    409: {"description": "The selected patient's details changed; repeat the search and confirmation."},
+})
 async def create_ecw_lookup(value: EcwLookup, request: Request):
     """Confirm an eCW patient and upcoming visits.
+
+    HTTP 200 selection_required returns up to eight unconfirmed similar patients
+    (or an empty list); no intake, visits, or payer request is created. Submit the
+    selected ID, canonical demographics and identity_confirmed=true to reverify.
+    HTTP 201 returns the verified intake and visits. Timeout/auth failures remain errors.
+
+    Explicit selection can refresh a linked clinic record only for its existing
+    eCW ID. Saved insurance snapshots are preserved; cached identity approvals
+    are cleared when demographics change. Account lookup uses identifier+DOB;
+    bounded name-only fallback requires both returned names to match locally.
 
     The shared reader has a 24-second deadline. HTTP 502 errors identify the
     failed lookup phase; X-ClinicForce-Request-ID joins the safe stage logs in
@@ -320,26 +344,45 @@ async def create_ecw_lookup(value: EcwLookup, request: Request):
     try:
         matched = await asyncio.wait_for(ecw_backend.lookup_patient_and_appointments(
             {"patient_first_name": value.given_name, "patient_middle_initial": value.middle_initial,
-             "patient_last_name": value.family_name, "patient_birth_date": value.birth_date.isoformat()},
+             "patient_last_name": value.family_name, "patient_birth_date": value.birth_date.isoformat(),
+             "ecw_account_number": value.ecw_account_number,
+             **({"ecw_patient_id": value.selected_patient_id} if value.selected_patient_id else {})},
             {"timezone": os.getenv("COMMERCIAL_PRACTICE_TIMEZONE", "America/New_York")},
+            allow_suggestions=not bool(value.selected_patient_id),
         ), timeout=26)
     except asyncio.TimeoutError:
         collection_event('ecw_lookup_failed', practice_id=staff['practice_id'], stage='patient_search', reason_code='timeout', duration_ms=int((time.monotonic() - started) * 1000))
         raise HTTPException(504, "eClinicalWorks did not respond to the patient search in time. Retry the lookup.") from None
+    except ecw_backend.EcwPatientSelectionRequired as exc:
+        return JSONResponse({"status": "selection_required", "candidates": exc.candidates}, headers=NO_STORE)
     except ecw_backend.EcwBackendError as exc:
         collection_event('ecw_lookup_failed', practice_id=staff['practice_id'], stage=exc.stage or 'patient_search', reason_code=exc.reason_code or 'ecw_error', duration_ms=int((time.monotonic() - started) * 1000))
-        raise HTTPException(502, str(exc)) from exc
-    fields = {"given_name": value.given_name, "middle_initial": value.middle_initial,
-              "family_name": value.family_name, "birth_date": value.birth_date.isoformat(),
+        raise HTTPException(409 if value.selected_patient_id and exc.reason_code in {"candidate_changed", "no_match"} else 502, str(exc)) from exc
+    fields = {"given_name": matched["patient"]["given_name"], "middle_initial": value.middle_initial,
+              "family_name": matched["patient"]["family_name"], "birth_date": matched["patient"]["birth_date"],
               "ecw_patient_id": matched["patient"]["id"],
               "ecw_account_number": matched['patient'].get('ecw_account_number')}
     intake = await run_in_threadpool(staff_store.find_ecw_intake, staff["practice_id"], fields["ecw_patient_id"])
     reused = bool(intake)
+    if intake and intake.get('patient') and not value.selected_patient_id:
+        saved = intake['patient']
+        current = {"name": [{"given": [fields['given_name']], "family": fields['family_name']}], "birthDate": fields['birth_date']}
+        if not ecw_backend._patient_matches(current, {"patient_first_name": saved['given_name'],
+                "patient_last_name": saved['family_name'], "patient_birth_date": str(saved['birth_date'])}, family_suffix=True):
+            return JSONResponse({"status": "selection_required", "candidates": [{**matched['patient'],
+                "differences": [label for key, label in (("given_name", "Saved first name"), ("family_name", "Saved last name"),
+                                                         ("birth_date", "Saved date of birth")) if str(saved[key]) != str(fields[key])]}]}, headers=NO_STORE)
     if not intake:
         intake = await run_in_threadpool(staff_store.create_intake, str(uuid4()), staff, [], "ecw_lookup", None, fields)
     elif intake.get('patient'):
-        await run_in_threadpool(staff_store.save_ecw_account_number, intake['patient']['id'], staff['practice_id'],
-                                fields['ecw_patient_id'], fields['ecw_account_number'])
+        if value.selected_patient_id:
+            try:
+                await run_in_threadpool(staff_store.confirm_ecw_demographics, intake['id'], staff, fields)
+            except ValueError as exc:
+                raise HTTPException(409, str(exc)) from exc
+        else:
+            await run_in_threadpool(staff_store.save_ecw_account_number, intake['patient']['id'], staff['practice_id'],
+                                    fields['ecw_patient_id'], fields['ecw_account_number'])
         intake = await run_in_threadpool(staff_store.get_intake, intake['id'], staff['practice_id'])
     collection_event('ecw_lookup_completed', practice_id=staff['practice_id'], intake_id=intake['id'],
                      staff_id=staff['id'], stage='patient_search', outcome='reused' if reused else 'created',
@@ -521,9 +564,12 @@ def public_library(document: dict) -> dict:
 
 
 @router.get("/library")
-async def library(request: Request):
+async def library(request: Request, background_tasks: BackgroundTasks):
+    """List sourced estimator use; resume unfinished Library processing automatically."""
     staff = await require_staff(request)
     documents = await run_in_threadpool(staff_store.list_library, staff["practice_id"])
+    from app.insurance import library_pricing
+    background_tasks.add_task(library_pricing.prepare, staff["practice_id"])
     usage = await run_in_threadpool(library_files.estimator_links, staff['practice_id'], documents)
     return JSONResponse({"documents": [{**public_library(value), 'estimator_uses': usage['links'][value['id']]} for value in documents]}, headers=NO_STORE)
 
@@ -544,6 +590,13 @@ async def retire_library_rate_version(version_id: str, request: Request):
 async def upload_library(request: Request, background_tasks: BackgroundTasks, file: UploadFile = File(...), kind: Literal["contract", "fee_schedule", "self_pay", "era_835", "plan_matrix"] = Form(...),
                          label: str = Form(default="", max_length=200), payer: str = Form(default="", max_length=200),
                          effective_from: str = Form(default="", max_length=10), effective_to: str = Form(default="", max_length=10)):
+    """Save a practice source and automatically compile supported final rules.
+
+    Processing covers PDF/OCR, DOCX, XLSX and CSV. The Library exposes per-source
+    processing status, usable rules and unresolved dependencies. Final supported
+    prices publish without per-patient staff activation; provisional or ambiguous
+    terms remain unavailable. Originals and historical estimates are retained.
+    """
     staff = await require_staff(request)
     if staff["role"] != "admin":
         raise HTTPException(403, "Only a clinic administrator can update clinic documents")
@@ -588,9 +641,10 @@ async def upload_library(request: Request, background_tasks: BackgroundTasks, fi
                                          label.strip(), payer.strip(), effective_from or None, effective_to or None)
     except Exception:
         raise HTTPException(503, "The clinic document could not be saved. Please try again.") from None
-    if content_type in {'application/pdf', 'image/png', 'image/jpeg'}:
+    if kind != 'era_835':
+        document['extraction_summary'] = {'status': 'reading', 'started_at': staff_store.now()}
         await run_in_threadpool(staff_store.save_library_extraction, document['id'], staff['practice_id'],
-                               {'summary': {'status': 'reading', 'started_at': staff_store.now()}})
+                               {'summary': document['extraction_summary']})
         background_tasks.add_task(library_files.extract_after_upload, document)
     return JSONResponse({**public_library(document), **({"era": era} if era else {})}, status_code=201, headers=NO_STORE)
 
@@ -601,8 +655,8 @@ async def library_text(document_id: str, request: Request, background_tasks: Bac
     document = await run_in_threadpool(staff_store.get_library, document_id, staff['practice_id'])
     if not document:
         raise HTTPException(404, 'Clinic document not found')
-    if document['content_type'] not in {'application/pdf', 'image/png', 'image/jpeg'}:
-        raise HTTPException(422, 'Extracted page text is available for PDFs and images.')
+    if document['kind'] == 'era_835':
+        raise HTTPException(422, 'Use the structured ERA view for remittance documents.')
     headers = {**NO_STORE, 'X-Content-Type-Options': 'nosniff',
                'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none'"}
     saved = document.get('extraction') or {}

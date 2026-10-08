@@ -331,6 +331,55 @@ def _benefit_notes(value: Any) -> list[str]:
     return []
 
 
+def coverage_evidence(payload: dict, service_date: str | None, entries: list[dict] | None = None) -> dict:
+    """Preserve payer status independently of date-filtered cost-sharing rows."""
+    rows = [row for row in _stedi_entries(payload) if not row.get('serviceTypeCodes') or '30' in row['serviceTypeCodes']] if entries is None else entries
+    statuses = [row for row in rows if row.get('code') in {'status', '1', '2', '3', '4', '5', '6', '7', '8', 'I'}]
+    text = ' '.join(str(row.get('status') or '') for row in statuses).lower()
+    inactive = any(row.get('code') in {'6', '7', '8', 'I'} for row in statuses) or bool(re.search(r'\b(inactive|ineligible|terminated|cancelled|canceled|expired)\b', text))
+    active = any(row.get('code') in {'1', '2', '3', '4', '5'} for row in statuses) or bool(re.search(r'\b(active|eligible)\b', text))
+    reported = 'CONFLICT' if active and inactive else 'INACTIVE' if inactive else 'ACTIVE' if active else 'UNKNOWN'
+    bounds = [payload.get('planDateInformation') or {},
+              ((payload.get('dependent') or payload.get('subscriber') or {}).get('dates') or {})]
+    if len(payload.get('plans') or []) == 1:
+        plan = payload['plans'][0]
+        bounds.extend([plan.get('dates') or {}, plan.get('planDateInformation') or {}])
+    starts, ends = [], []
+    def iso(value):
+        value = str(value)
+        return date.fromisoformat(f'{value[:4]}-{value[4:6]}-{value[6:]}' if re.fullmatch(r'\d{8}', value) else value).isoformat()
+    try:
+        for bound in bounds:
+            for key, value in bound.items():
+                if not value or key not in {'planBegin', 'planEnd', 'eligibilityBegin', 'eligibilityEnd', 'plan', 'eligibility', 'policyEffective', 'policyExpiration'}:
+                    continue
+                if isinstance(value, dict):
+                    start, end = value.get('start'), value.get('end')
+                elif re.fullmatch(r'\d{8}-\d{8}', str(value)):
+                    start, end = str(value).split('-')
+                else:
+                    start = value if key.endswith(('Begin', 'Effective')) else None
+                    end = value if key.endswith(('End', 'Expiration')) else None
+                if start:
+                    starts.append(iso(start))
+                if end:
+                    ends.append(iso(end))
+        start, end = max(starts, default=None), min(ends, default=None)
+        state = reported
+        if start and end and start > end:
+            state = 'CONFLICT'
+        elif state != 'CONFLICT' and service_date:
+            if start and service_date < start:
+                state = 'FUTURE'
+            elif end and service_date > end:
+                state = 'EXPIRED'
+        if eligibility_errors(payload):
+            state = 'UNKNOWN'
+        return {'status': state, 'reported_status': reported, 'start': start, 'end': end}
+    except (ValueError, TypeError):
+        return {'status': 'UNKNOWN', 'reported_status': reported, 'start': None, 'end': None}
+
+
 def normalize_stedi_271(payload: dict[str, Any], service_type_code: str, provider_network_verified: bool,
                         other_active_coverage: bool = False, *, procedure_code: str | None = None,
                         service_date: str | None = None, selected_ids: list[str] | None = None,
@@ -399,9 +448,18 @@ def normalize_stedi_271(payload: dict[str, Any], service_type_code: str, provide
     # coverage. Raw reported options retain both network schedules below.
     entries = [row for row in entries if relevant_service(row)
                and _network_indicator(row) not in {'N', 'NO', 'OUT_OF_NETWORK'}]
+    coverage = coverage_evidence(payload, service_date, entries)
     invalid_dates = False
     person_dates = (payload.get('dependent') or payload.get('subscriber') or {}).get('dates') or {}
-    returned_service = person_dates.get('service') or {}
+    returned_service = person_dates.get('service') or (payload.get('planDateInformation') or {}).get('service') or {}
+    if isinstance(returned_service, str):
+        parts = returned_service.split('-') if re.fullmatch(r'\d{8}-\d{8}', returned_service) else [returned_service]
+        try:
+            parsed = [date.fromisoformat(f'{part[:4]}-{part[4:6]}-{part[6:]}' if re.fullmatch(r'\d{8}', part) else part).isoformat() for part in parts]
+            returned_service = {'start': parsed[0], 'end': parsed[-1]}
+        except ValueError:
+            returned_service = {}
+            invalid_dates = True
     date_matches = None
     if service_date and returned_service.get('start'):
         try:
@@ -437,9 +495,18 @@ def normalize_stedi_271(payload: dict[str, Any], service_type_code: str, provide
     inactive = any(token in status_text for token in ("inactive", "ineligible", "terminated", "cancelled", "canceled", "expired")) or any(row.get("code") in {"6", "7", "8", "I"} for row in statuses)
     has_active = "active" in status_text.replace("inactive", "") or "eligible" in status_text.replace("ineligible", "") or any(row.get("code") in {"1", "2", "3", "4", "5"} for row in statuses)
     active = None if inactive and has_active else False if inactive else True if has_active else None
+    if statuses and coverage['status'] not in {'EXPIRED', 'FUTURE'}:
+        # Historical/status rows for other dates must not contradict the
+        # applicable, most specific status. Retain the original report separately.
+        coverage['status'] = 'CONFLICT' if inactive and has_active else 'INACTIVE' if inactive else 'ACTIVE' if has_active else 'UNKNOWN'
+    if coverage['status'] in {'INACTIVE', 'EXPIRED', 'FUTURE'}:
+        active = False
+    elif coverage['status'] == 'CONFLICT':
+        active = None
     response_failed = str(payload.get("status") or "").upper() in {"ERROR", "FAILED", "REJECTED"} or bool(eligibility_errors(payload))
     if response_failed or any(row.get("code") == "V" for row in entries):
         active = None
+        coverage['status'] = 'UNKNOWN'
     wanted = []
     for row in entries:
         level = str(row.get("coverageLevel") or row.get("coverageLevelCode") or "").upper()
@@ -620,6 +687,8 @@ def normalize_stedi_271(payload: dict[str, Any], service_type_code: str, provide
                     'kind': 'invalid_financial_value',
                     'message': 'Invalid financial evidence: the payer returned an invalid amount or percentage. Verify the source before collection.'})
     review_reasons = list(dict.fromkeys(error['message'] for error in source_errors))
+    if inactive and has_active:
+        review_reasons.append('The payer returned both active coverage and inactive or noncovered benefits for the selected service scope. Verify which coverage restriction applies before estimating.')
     if invalid_dates:
         review_reasons.append("Verify the payer eligibility dates; an applicable date value could not be interpreted.")
     if date_matches is False:
@@ -655,7 +724,10 @@ def normalize_stedi_271(payload: dict[str, Any], service_type_code: str, provide
         for row in _stedi_entries(payload) for note in notes([row.get('messages'), row.get('additionalInformation')]))
     payer_network_verified = bool(participation and not conflicting_network and active is True
         and not multiple_plans and not invalid_dates and date_matches is not False and not source_errors)
-    return {"active": active, "source_errors": source_errors, "service_date_matches": date_matches, "returned_service_dates": returned_service,
+    return {"active": active, "coverage_evidence": coverage,
+            "coverage_status_conflict": bool(inactive and has_active) or coverage['status'] == 'CONFLICT',
+            "coverage_dates_invalid": invalid_dates,
+            "source_errors": source_errors, "service_date_matches": date_matches, "returned_service_dates": returned_service,
             "coverage_level": "individual" if wanted else "unknown",
             "network_status": "in_network" if provider_network_verified or payer_network_verified else "unknown",
             "network_source": 'clinic_record' if provider_network_verified else 'payer_participation_message' if payer_network_verified else None,

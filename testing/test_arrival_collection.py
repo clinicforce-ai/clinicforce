@@ -47,6 +47,16 @@ def test_member_identifier_fallback_never_chooses_a_group_or_ambiguous_id():
     assert ecw_backend.coverage_record_status({'extension': [{'url': 'http://eclinicalworks.com/supportingInfo/patientdemographics/coverage-eligibilityStatus', 'valueString': 'E - Eligible'}]})['status'] == 'E - Eligible'
 
 
+def test_subscriber_relationship_is_never_assumed_from_patient_demographics():
+    patient = {'resourceType': 'Patient', 'id': 'patient', 'birthDate': '1980-01-01'}
+    spouse = {'resourceType': 'RelatedPerson', 'id': 'spouse', 'birthDate': '1982-02-02'}
+    assert ecw_backend.coverage_subscriber({}, patient, {}) == {}
+    assert ecw_backend.coverage_subscriber({'relationship': {'coding': [{'code': 'self'}]}}, patient, {}) == patient
+    dependent = {'relationship': {'coding': [{'code': 'spouse'}]}, 'subscriber': {'reference': 'RelatedPerson/spouse'}}
+    assert ecw_backend.coverage_subscriber(dependent, patient, {'RelatedPerson/spouse': spouse}) == spouse
+    assert ecw_backend.coverage_subscriber(dependent, patient, {}) == {}
+
+
 class AsyncEvidenceTests(IsolatedAsyncioTestCase):
     async def test_name_rejection_retries_same_member_and_dob_without_guessing_names(self):
         client = AsyncMock()
@@ -121,7 +131,9 @@ def test_returned_service_date_does_not_verify_a_different_appointment():
     assert normalize_stedi_271(payload, '98', True, service_date='2026-09-25')['service_date_matches'] is True
     payload['subscriber']['dates']['plan']['end'] = '2026-09-27'
     payload['plans'][0]['dates'] = {'plan': {'start': '2026-01-01', 'end': '2026-12-31'}}
-    assert normalize_stedi_271(payload, '98', True, service_date='2026-09-28')['active'] is None
+    expired = normalize_stedi_271(payload, '98', True, service_date='2026-09-28')
+    assert expired['active'] is False
+    assert expired['coverage_evidence']['status'] == 'EXPIRED'
 
 
 def test_alternative_office_levels_collect_one_common_verified_copay():
