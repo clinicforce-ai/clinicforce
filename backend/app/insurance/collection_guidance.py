@@ -214,10 +214,13 @@ def build(result: dict, review: dict | None = None) -> dict:
             'oop_remaining_cents': terms.get('oop_remaining_cents'),
             'copay_cents': terms.get('copay_cents'), 'coinsurance_percent': terms.get('coinsurance_percent'),
             'deductible_remaining_cents': terms.get('deductible_remaining_cents'),
+            'deductible_annual_cents': terms.get('deductible_annual_cents'),
+            'deductible_applicability': terms.get('deductible_applicability', 'UNKNOWN'),
             'selected_benefit_ids': list(dict.fromkeys([*(terms.get('selected_benefit_ids') or []),
                 *[terms[key] for key in ('deductible_id', 'oop_id') if terms.get(key)]]))})
         guidance['services'][-1]['selected_benefit_ids'].extend(terms.get('copay_limit_ids') or [])
         guidance['services'][-1]['selected_benefit_ids'].extend(terms.get('deductible_waiver_ids') or [])
+        guidance['services'][-1]['selected_benefit_ids'].extend(terms.get('deductible_applicability_ids') or [])
         guidance['services'][-1]['selected_benefit_ids'].extend(terms.get('family_oop_ids') or [])
         if guidance['basis'] == 'out_of_pocket_limit':
             guidance['services'][-1]['patient_cents'] = 0

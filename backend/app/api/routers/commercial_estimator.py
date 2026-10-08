@@ -489,7 +489,7 @@ def _previsit_codes(inputs: dict) -> list[dict[str, Any]]:
 def _office_service_types(practice_id: str, source: dict) -> list[str]:
     specialist = any('neurolog' in role.lower()
         for role in (source.get('rendering_provider') or {}).get('roles', []))
-    return ['BQ', 'BY', '98'] if specialist else ['BY', '98']
+    return ['98', 'BQ', 'BY', '1'] if specialist else ['98', 'BY', '1']
 
 
 def _previsit_range(practice_id: str, inputs: dict, source: dict, payer_id: str,
