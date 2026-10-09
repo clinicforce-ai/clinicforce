@@ -20,9 +20,22 @@ def birth_date(value: object) -> str:
         return str(value or '')
 
 
+def one_name_edit(left: str, right: str) -> bool:
+    """One insertion, deletion, substitution or adjacent swap; requires independent identity anchors."""
+    if min(len(left), len(right)) < 4 or abs(len(left) - len(right)) > 1:
+        return False
+    if len(left) == len(right):
+        different = [i for i, (a, b) in enumerate(zip(left, right)) if a != b]
+        return len(different) == 1 or (len(different) == 2 and different[1] == different[0] + 1
+            and left[different[0]] == right[different[1]] and left[different[1]] == right[different[0]])
+    short, long = sorted((left, right), key=len)
+    index = next((i for i, (a, b) in enumerate(zip(short, long)) if a != b), len(short))
+    return short[index:] == long[index + 1:]
+
+
 def name_difference_only(comparison: dict) -> bool:
     differences = comparison.get('differences') or []
-    return bool(differences) and all(row['field'] in {'first_name', 'last_name'} for row in differences)
+    return bool(differences) and not comparison.get('policy_differences') and all(row['field'] in {'first_name', 'last_name'} for row in differences)
 
 
 def compare(payload: dict, coverage: dict, evidence: dict | None = None) -> dict:
@@ -38,7 +51,8 @@ def compare(payload: dict, coverage: dict, evidence: dict | None = None) -> dict
     returned = {'first_name': patient.get('firstName') or '', 'last_name': patient.get('lastName') or '',
                 'birth_date': patient.get('dateOfBirth') or '', 'member_id': subscriber.get('memberId') or '',
                 'subscriber_first': subscriber.get('firstName') or '', 'subscriber_last': subscriber.get('lastName') or '',
-                'relationship': str(dependent.get('relationToSubscriber') or ('self' if not dependent else '')).lower()}
+                'relationship': str(dependent.get('relationToSubscriberCode') or dependent.get('relationToSubscriber') or ('self' if not dependent else '')).lower()}
+    returned['relationship'] = relationships.get(returned['relationship'].upper(), returned['relationship'])
     def key(field, value):
         return birth_date(value) if field == 'birth_date' else normalized(value)
     differences = [{'field': field, 'ecw': expected[field], 'payer': returned[field]}
@@ -80,12 +94,12 @@ def compare(payload: dict, coverage: dict, evidence: dict | None = None) -> dict
     binding = hashlib.sha256(json.dumps({'expected': {k: key(k, v) for k, v in expected.items()},
         'returned': {k: key(k, v) for k, v in returned.items()},
         'coverage_id': coverage.get('coverage_id'), 'payer_id': coverage.get('payer_id')}, sort_keys=True).encode()).hexdigest()
-    verified = bool(anchored and evidence and evidence.get('binding') == binding
+    verified = bool(anchored and not policy_differences and evidence and evidence.get('binding') == binding
                     and evidence.get('reference') and evidence.get('actor_id') and evidence.get('verified_at'))
     surname_warning = anchored and bool(differences) and all(row['field'] == 'last_name' for row in differences)
-    return {'status': 'reconciled' if differences and verified else 'warning' if surname_warning or uhc_suffix or cigna_suffix else 'review' if differences else 'matched',
+    return {'status': 'review' if policy_differences else 'reconciled' if differences and verified else 'warning' if surname_warning or uhc_suffix or cigna_suffix else 'review' if differences else 'matched',
             'binding': binding, 'differences': differences, 'policy_differences': policy_differences,
-            'message': 'Cigna returned the same base member ID with a different suffix representation; patient, subscriber, relationship and group match.' if cigna_suffix else 'UnitedHealthcare returned the matching nine-digit member ID without the eCW 00 suffix; name and date of birth match.' if uhc_suffix else 'Payer surname differs; first name, date of birth and member ID match.' if surname_warning and not verified else '',
+            'message': 'The subscriber relationship could not be verified automatically from eCW and payer evidence.' if policy_differences else 'Cigna returned the same base member ID with a different suffix representation; patient, subscriber, relationship and group match.' if cigna_suffix else 'UnitedHealthcare returned the matching nine-digit member ID without the eCW 00 suffix; name and date of birth match.' if uhc_suffix else 'Payer surname differs; first name, date of birth and member ID match.' if surname_warning and not verified else '',
             'reconciliation_rule': 'cigna_member_suffix' if cigna_suffix else None,
-            'can_confirm': bool(differences and anchored),
+            'can_confirm': bool(differences and anchored and not policy_differences),
             'evidence': evidence if verified else None}

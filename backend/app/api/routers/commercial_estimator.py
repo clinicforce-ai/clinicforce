@@ -410,7 +410,7 @@ def _appointment_readiness(practice_id: str, session: dict, inputs: dict, source
     if coverage["active_coverages"] != 1 or not coverage["coverage_id"]:
         blockers.append("eClinicalWorks did not identify exactly one active primary coverage for this visit.")
     if not coverage["member_id"] or not coverage["relationship"] or not all(coverage.get(key) for key in
-            ("subscriber_first", "subscriber_last", "subscriber_birth_date")):
+            ("subscriber_first", "subscriber_last")):
         blockers.append("eClinicalWorks coverage is missing the member ID, relationship, or policyholder identity needed for Stedi.")
     if payer and network and profile:
         data = {"payer_connection_id": payer["id"], "provider_network_id": network["id"], "service_date": service_date}
@@ -562,11 +562,22 @@ def _previsit_benefits(payload: dict, coverage: dict, service_date: str | None =
         procedure_code=codes[0]['code'] if office_only else None,
         office_service_types=_office_service_types('', source or {}), **context)
     benefits['benefit_source'] = payload.get('benefit_source') or 'Stedi'
+    if (inputs and source and not coverage.get('other_active_coverage')
+            and stedi_discovery.corroborates_patient_policy(payload, inputs, source)
+            and stedi_discovery.automatic_match(payload, inputs, source)):
+        recorded = insurance_identity.compare(payload, coverage)
+        if recorded.get('policy_differences'):
+            coverage = _discovered_coverage(inputs, source, payload)
+            benefits['policy_match'] = {'source': 'payer_response', 'status': 'verified',
+                'recorded_differences': recorded['policy_differences']}
+            benefits['normalization_notes'].append(
+                'The payer linked this patient to the recorded member policy as a dependent. Subscriber details were matched automatically; eCW was not changed.')
     comparison = insurance_identity.compare(payload, coverage)
     benefits['identity'] = comparison
     if comparison['status'] == 'review':
         benefits['requires_review'] = True
-        benefits['review_reasons'].append('Confirm the member identity: the payer response differs from eCW.'
+        benefits['review_reasons'].append('The subscriber relationship could not be verified automatically from eCW and payer evidence.'
+            if comparison.get('policy_differences') else 'Confirm the member identity: the payer response differs from eCW.'
             if any(row['field'] == 'member_id' for row in comparison['differences']) else
             'Confirm patient identity: the payer-returned patient details differ from eCW.')
     return benefits
@@ -861,6 +872,7 @@ def _coverage_snapshot(inputs: dict, source: dict) -> dict:
                 "plan_number": inputs.get("plan_number") or source.get("plan_number"),
                 "member_id": inputs.get("member_id"), "relationship": relationship,
                 "member_source": (source.get('subscriber_evidence') or {}).get('member_id_source'),
+                "subscriber_patient_linked": (source.get('subscriber_evidence') or {}).get('patient_linked') is True,
                 "subscriber_first": subscriber.get("firstName"), "subscriber_last": subscriber.get("lastName"),
                 "subscriber_birth_date": subscriber.get("birthDate"),
                 "patient_first": patient.get("patient_first_name"), "patient_last": patient.get("patient_last_name"),
@@ -895,7 +907,7 @@ def _ecw_conflicts(case: dict, session: dict, inputs: dict, source: dict) -> lis
         conflicts.append("eClinicalWorks did not return one identifiable coverage with member and relationship details.")
     if coverage["active_coverages"] != 1:
         conflicts.append("Multiple or no active eClinicalWorks coverages require coordination-of-benefits review.")
-    if not all(coverage.get(key) for key in ("subscriber_first", "subscriber_last", "subscriber_birth_date")):
+    if not all(coverage.get(key) for key in ("subscriber_first", "subscriber_last")):
         conflicts.append("eClinicalWorks did not return the policyholder identity needed for Stedi.")
     if fields.get("subscriber_birth_date") and str(fields["subscriber_birth_date"]) != str(coverage["subscriber_birth_date"]):
         conflicts.append("The card policyholder birth date differs from eClinicalWorks coverage.")
@@ -958,6 +970,11 @@ def _stedi_address(value: object) -> dict[str, str] | None:
 def stedi_request_body(payer: dict, network: dict, coverage: dict, service_date: str, stc: str | list[str],
                        *, include_identity_hints: bool = True, allow_demographic: bool = False,
                        inquiry_only: bool = False) -> dict:
+    if (coverage.get('subscriber_patient_linked') and coverage.get('relationship') in {'18', 'self'}
+            and coverage.get('subscriber_first') and coverage.get('patient_first')
+            and insurance_identity.normalized(coverage['subscriber_first']) != insurance_identity.normalized(coverage['patient_first'])):
+        # A linked different subscriber needs a dependent inquiry, not the patient's DOB in their slot.
+        coverage = {**coverage, 'relationship': 'dependent'}
     if inquiry_only and coverage.get('active_coverages', 0) <= 1:
         # An inquiry slot is not a policyholder assertion. Only the returned
         # patient/member identity can create verified coverage.
@@ -1332,20 +1349,20 @@ async def _recover_card(case: dict, session: dict, provider: dict) -> bool:
             fields, evidence, _ = await asyncio.wait_for(asyncio.to_thread(v1_sources.read_card_fields, contents), timeout=20)
             _recovery_event(case, session, 'card_ocr', 'complete', count=len(fields))
             recovery['card_evidence'] = evidence
-            item = stedi_discovery.card_candidate(fields, context['inputs'])
+            item = stedi_discovery.card_candidate(fields, context['inputs'], context['source'])
             if item:
                 payload = {'items': [item]}
                 key = await run_in_threadpool(object_store.put_staff_document, session['practice_id'], case['id'],
                     'card-coverage-hints.json', json.dumps(payload).encode(), 'application/json')
                 recovery.update(card_status='read', card_object_key=key,
-                    candidates=stedi_discovery.candidates(payload, context['inputs']))
+                    candidates=stedi_discovery.candidates(payload, context['inputs'], context['source']))
                 recovery['card_candidates'] = recovery['candidates']
                 if recovery['candidates'] and context['source'].get('active_coverages', 0) <= 1:
                     recovery.update(selected_candidate_id=recovery['candidates'][0]['id'], stage='eligibility',
                                     request_state='pending', evidence_source='insurance_card')
                     case.update(await run_in_threadpool(_save, case, session, 'coverage-card-eligibility-pending'))
                     recovery = case['previsit_discovery']
-                    await _recheck_discovery_candidate(case, session, provider, discovery_payload=payload)
+                    await _recheck_discovery_candidate(case, session, provider, discovery_payload=payload, inquiry_only=True)
                     if recovery.get('outcome') == 'recovered' or recovery.get('request_state') == 'indeterminate':
                         return True
             recovery['card_status'] = 'read_no_verified_policy'
@@ -1665,7 +1682,7 @@ async def _recover_discovery(case: dict, session: dict, provider: dict) -> None:
                                 reason='candidates_retained' if candidates else 'all_candidates_filtered' if items else 'no_upstream_candidates')
                 for row in candidates:
                     row['matches_ecw_policy'] = stedi_discovery.matches_ecw_policy(items[row['index']], inputs, context['source'])
-                discovery.update(request_state='complete', candidates=candidates, raw_candidate_count=len(items), candidate_version=3,
+                discovery.update(request_state='complete', candidates=candidates, raw_candidate_count=len(items), candidate_version=4,
                                  outcome='no_match' if not items else 'review_needed')
                 if payload.get('status') != 'COMPLETE' or payload.get('errors'):
                     discovery.update(request_state='rejected', outcome='rejected', stage='discovery_rejected',
@@ -1742,7 +1759,7 @@ async def _reconcile_saved_discovery(case: dict, session: dict) -> None:
         for row in candidates:
             row['matches_ecw_policy'] = stedi_discovery.matches_ecw_policy(items[row['index']], inputs, source)
         discovery.update(request_state='complete', candidates=candidates, coverage_count=payload.get('coveragesFound'),
-                         raw_candidate_count=len(items), candidate_version=3,
+                         raw_candidate_count=len(items), candidate_version=4,
                          outcome='no_match' if not items else 'review_needed', checked_at=_now())
         if payload.get('status') != 'COMPLETE' or payload.get('errors'):
             discovery.update(request_state='rejected', outcome='rejected', stage='discovery_rejected',
@@ -1835,6 +1852,12 @@ async def _recheck_discovery_candidate(case: dict, session: dict, provider: dict
             candidate = ({'index': discovery['route_item_index']} if selected_route else
                 next(row for row in discovery.get('candidates', []) if row['id'] == discovery.get('selected_candidate_id')))
             item = (payload.get('items') or [])[candidate['index']]
+            if 'RELATIONSHIP_CONFLICT' in stedi_discovery.verify_candidate(item, inputs, source)['reason_codes']:
+                discovery.update(request_state='complete', outcome='review_needed', stage='candidate_match_review',
+                    reason_code='subscriber_relationship_conflict',
+                    selection_error='Available eCW and payer evidence could not link this subscriber policy to the patient.')
+                case.update(await run_in_threadpool(_save, case, session, 'subscriber-link-unresolved'))
+                return
             coverage = _discovered_coverage(inputs, source, item)
         api_key = stedi_financial.credentials(session['practice_id'])
         payer_data = item.get('payer') or {}
@@ -1908,6 +1931,11 @@ async def _recheck_discovery_candidate(case: dict, session: dict, provider: dict
             if inquiry_only and coverage.get('relationship') in {None, '', 'unknown'}:
                 identity_matches = bool(not coverage.get('member_id') or
                     stedi_discovery.normalized(returned_identity['member_id']) == stedi_discovery.normalized(coverage['member_id']))
+            if returned_identity.get('address_conflict'):
+                identity_matches = False
+            recorded = insurance_identity.compare(verified, _coverage_snapshot(inputs, source))
+            if recorded.get('policy_differences') and not stedi_discovery.automatic_match(verified, inputs, source):
+                identity_matches = False
         if (response.is_error or str(verified.get('status') or '').upper() in {'ERROR', 'FAILED', 'REJECTED'}
                 or commercial.eligibility_errors(verified) or not identity_matches or not stedi_discovery.active_medical(verified, inputs, _previsit_service_types(inputs)[0])):
             discovery.update(request_state='complete', outcome='review_needed', stage='eligibility_rejected', selection_error='The selected policy was not accepted by the payer. Select another returned policy or check the current card.')
@@ -1947,7 +1975,7 @@ async def _start_previsit_recovery(case: dict, session: dict, provider: dict, ba
         recovery.get('request_state') == 'complete'
         and recovery.get('outcome') in {'review_needed', 'no_match'}
         and recovery.get('raw_object_key')
-        and recovery.get('candidate_version') != 3
+        and recovery.get('candidate_version') != 4
     )
     if legacy_result and background_tasks is not None:
         recovery.update(request_state='pending', stage='reconciling_saved_discovery',
@@ -2002,7 +2030,7 @@ async def saved_previsit(case_id: str, request: Request) -> dict:
         raise HTTPException(404, 'Saved visit estimate not found.')
     recovery = case.get('previsit_discovery') or {}
     if (recovery.get('request_state') == 'complete' and recovery.get('outcome') in {'review_needed', 'no_match'}
-            and recovery.get('raw_object_key') and recovery.get('candidate_version') != 3):
+            and recovery.get('raw_object_key') and recovery.get('candidate_version') != 4):
         await _reconcile_saved_discovery(case, session)
     return _previsit_result(case)
 
@@ -2225,6 +2253,14 @@ async def previsit_estimate(value: PrevisitInput, request: Request, background_t
 
     insurance_diagnosis separately reports identity, eligibility and pricing status,
     raw/retained/verified candidate counts, enrollment state and specific blockers.
+    eCW Coverage.subscriber references are resolved to patient-linked identities.
+    Dated payer evidence can automatically reconcile a stale subscriber/relationship
+    using the same full member ID and corroborating patient, address or policy
+    evidence. A one-edit surname difference additionally requires matching DOB,
+    first name, full member ID and address. benefits.policy_match records applied
+    policy differences; original eCW evidence remains unchanged. There is no
+    policy-reconciliation input form or write endpoint. Neither API is treated
+    as a roster of all members enrolled in a plan.
     Protected recovery.candidates retain partial subscriber/dependent identities;
     absent subscriber DOB stays null and does not discard a dependent's policy.
     Library rules are prepared automatically before pricing. library_pricing
@@ -2476,6 +2512,9 @@ async def previsit_estimate(value: PrevisitInput, request: Request, background_t
                 result['benefits'].setdefault('review_reasons', []).append('Saved benefit evidence is unavailable for recalculation.')
             await run_in_threadpool(_finish_previsit, result, case, inputs, source, payload, session, payer_id)
             saved_case = await run_in_threadpool(_save, case, session, "previsit-recalculated")
+            if (result['benefits'].get('identity') or {}).get('policy_differences'):
+                saved_case.setdefault('previsit_discovery', {'request_state': 'not_requested', 'recovery_requested': True})
+                return await _start_previsit_recovery(saved_case, session, provider, background_tasks)
             return _previsit_result(saved_case)
     if saved.get("request_state") in {"pending", "indeterminate"}:
         result["issues"].append("The payer request is pending or its outcome is unknown. Check Stedi activity before retrying.")
@@ -2551,6 +2590,9 @@ async def previsit_estimate(value: PrevisitInput, request: Request, background_t
                         "checked_at": result["checked_at"], "requested_service_types": requested_stc}
     case["previsit_raw_object_key"] = raw_key
     saved_case = await run_in_threadpool(_save, case, session, "previsit-stedi-complete")
+    if (benefits.get('identity') or {}).get('policy_differences'):
+        saved_case['previsit_discovery'] = {'request_state': 'not_requested', 'recovery_requested': True}
+        return await _start_previsit_recovery(saved_case, session, provider, background_tasks)
     if benefits.get('active') is False:
         saved_case['previsit_discovery'] = {'request_state': 'not_requested', 'recovery_requested': True}
         result.update(eligibility_error='coverage_inactive', eligibility_failure={

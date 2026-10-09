@@ -16,7 +16,7 @@ DAY = date.today().isoformat()
 def policy():
     return {'coverage_id': 'policy-a', 'payer_id': 'payer-a', 'member_id': 'ABC123', 'active_coverages': 1,
             'patient_first': 'Alex', 'patient_last': 'Morgan', 'patient_birth_date': '2001-02-03',
-            'subscriber_first': 'Alex', 'subscriber_last': 'Morgan', 'relationship': '18'}
+            'subscriber_first': 'Sam', 'subscriber_last': 'Other', 'relationship': '19'}
 
 
 def response(last='Morgan'):
@@ -32,7 +32,7 @@ def response(last='Morgan'):
 
 def test_dependent_patient_is_compared_separately_from_policyholder():
     result = identity.compare(response(), policy())
-    assert result['status'] == 'matched' and result['policy_differences']
+    assert result['status'] == 'matched' and not result['policy_differences']
     assert not any('identity' in r for r in api._previsit_benefits(response(), policy(), DAY)['review_reasons'])
     raw = response('Mór-gan')
     raw['dependent']['dateOfBirth'] = '20010203'
@@ -165,8 +165,8 @@ def test_product_mapping_is_scoped_to_current_network_evidence_dates_and_plan(mo
 
 def test_identity_review_persists_across_visits_and_rejects_stale_or_unauthorized_edits(monkeypatch):
     monkeypatch.setattr(api.library_pricing, 'prepare', lambda practice: [])
-    inputs = {'service_date': DAY, 'payer_id': 'payer-a', 'member_id': 'ABC123', 'relationship': '18',
-              'subscriber': {'firstName': 'Alex', 'lastName': 'Morgan', 'birthDate': '2001-02-03'},
+    inputs = {'service_date': DAY, 'payer_id': 'payer-a', 'member_id': 'ABC123', 'relationship': '19',
+              'subscriber': {'firstName': 'Sam', 'lastName': 'Other'},
               'patient': {'patient_first_name': 'Alex', 'patient_last_name': 'Morgan', 'patient_birth_date': '2001-02-03'},
               'lines': [{'code': '99204', 'units': 1, 'service_status': 'scheduled'}], 'visit_type': 'new'}
     source = {'appointment_id': 'visit-a', 'coverage_id': 'policy-a', 'active_coverages': 1, 'plan': 'CI'}

@@ -7,7 +7,7 @@ import json
 from datetime import date, datetime, timedelta, timezone
 
 from app.insurance import commercial
-from app.insurance.identity import birth_date, normalized
+from app.insurance.identity import birth_date, normalized, one_name_edit
 
 URL = 'https://healthcare.us.stedi.com/2024-04-01/insurance-discovery/check/v1'
 MBI_URL = 'https://healthcare.us.stedi.com/2024-04-01/change/medicalnetwork/eligibility/v3'
@@ -99,6 +99,11 @@ def request_body(inputs: dict, provider: dict) -> dict | None:
     return body
 
 
+def _dependent_relationship(dependent: dict) -> str:
+    value = str(dependent.get('relationToSubscriberCode') or dependent.get('relationToSubscriber') or 'dependent')
+    return {'SELF': '18', 'SPOUSE': '01', 'CHILD': '19', 'OTHER': 'G8', 'DEPENDENT': 'dependent'}.get(value.upper(), value.upper())
+
+
 def parse_discovery_candidate(item: object) -> dict | None:
     """Retain partial evidence. Parsing makes no claim about the patient's identity.
 
@@ -140,7 +145,7 @@ def parse_discovery_candidate(item: object) -> dict | None:
             'member_id': subscriber.get('memberId') or None,
             'group_number': subscriber.get('groupNumber') or (item.get('planInformation') or {}).get('groupNumber'),
             'relationship': 'dependent' if dependent else 'self',
-            'relationship_code': dependent.get('relationToSubscriberCode') if dependent else '18',
+            'relationship_code': _dependent_relationship(dependent) if dependent else '18',
             'payer': (item.get('payer') or {}).get('name') or (item.get('payer') or {}).get('lastName'),
             'payer_identifier': str(item.get('payerId') or (item.get('payer') or {}).get('payorIdentification') or ''),
             'plans': details.get('names') or [], 'coverage_dates': item.get('planDateInformation') or
@@ -165,7 +170,8 @@ def candidate_identity(item: dict, inputs: dict) -> dict | None:
     insured = dependent or subscriber
     expected = {'firstName': patient.get('patient_first_name'), 'lastName': patient.get('patient_last_name'),
                 'dateOfBirth': patient.get('patient_birth_date')}
-    if not all(normalized(value) and normalized(insured.get(key)) == normalized(value) for key, value in expected.items()):
+    if not all(normalized(value) and normalized(insured.get(key)) == normalized(value)
+               for key, value in expected.items() if key != 'lastName'):
         return None
     if not all(subscriber.get(key) for key in ('memberId', 'firstName', 'lastName')):
         return None
@@ -178,11 +184,17 @@ def candidate_identity(item: dict, inputs: dict) -> dict | None:
         and normalized(address['postalCode'])[:5] == normalized(returned['postalCode'])[:5] for address in addresses)
     address_conflict = bool(not address_matches and all(returned.get(key) for key in ('address1', 'city', 'state', 'postalCode'))
                             and any(all(address.get(key) for key in ('address1', 'city', 'state', 'postalCode')) for address in addresses))
-    return {'member_id': subscriber['memberId'], 'subscriber_first': subscriber['firstName'],
+    surname_matches = bool(normalized(expected['lastName']) and normalized(expected['lastName']) == normalized(insured.get('lastName')))
+    surname_typo = (not surname_matches and address_matches and inputs.get('member_id')
+        and normalized(inputs['member_id']) == normalized(subscriber['memberId'])
+        and one_name_edit(normalized(expected['lastName']), normalized(insured.get('lastName'))))
+    if not surname_matches and not surname_typo:
+        return None
+    return {'surname_typo': bool(surname_typo), 'member_id': subscriber['memberId'], 'subscriber_first': subscriber['firstName'],
             'subscriber_last': subscriber['lastName'], 'subscriber_birth_date': subscriber.get('dateOfBirth'),
             'relationship': 'dependent' if dependent else 'self', 'address_matches': address_matches,
             'address_conflict': address_conflict,
-            'relationship_code': str(dependent.get('relationToSubscriberCode') or 'dependent') if dependent else '18',
+            'relationship_code': _dependent_relationship(dependent) if dependent else '18',
             'group_number': subscriber.get('groupNumber') or (item.get('planInformation') or {}).get('groupNumber'),
             'plan_number': subscriber.get('planNumber') or (item.get('planInformation') or {}).get('planNumber')}
 
@@ -192,6 +204,35 @@ def active_medical(item: dict, inputs: dict, service_type: str = '30') -> bool:
         return False
     benefits = commercial.normalize_stedi_271(item, service_type, False, service_date=inputs.get('service_date'))
     return benefits['active'] is True and benefits['service_date_matches'] is not False
+
+
+def corroborates_patient_policy(item: dict, inputs: dict, source: dict) -> bool:
+    """A patient-bound policy can correct a stale self/subscriber designation.
+
+    This permits verification; active, dated payer benefits are still required.
+    A cardholder, relative or matching plan name alone never meets this rule.
+    """
+    identity = candidate_identity(item, inputs)
+    if (not identity or identity['relationship'] != 'dependent' or identity.get('address_conflict')
+            or source.get('active_coverages') != 1 or not source.get('coverage_id')
+            or not inputs.get('member_id')
+            or normalized(identity['member_id']) != normalized(inputs['member_id'])):
+        return False
+    if identity['relationship_code'] not in {'01', '19', 'G8', 'dependent'}:
+        return False
+    for key in ('group_number', 'plan_number'):
+        if inputs.get(key) and identity.get(key) and normalized(inputs[key]) != normalized(identity[key]):
+            return False
+    subscriber = inputs.get('subscriber') or {}
+    linked = ((source.get('subscriber_evidence') or {}).get('patient_linked') is True
+        and all(subscriber.get(key) and normalized(subscriber[key]) == normalized(identity[target])
+                for key, target in [('firstName', 'subscriber_first'), ('lastName', 'subscriber_last')]))
+    payer = item.get('payer') or {}
+    expected_ids = {normalized(value) for value in source.get('payer_identifiers') or [] if value}
+    returned_ids = {normalized(value) for value in (item.get('payerId'), payer.get('payorIdentification')) if value}
+    payer_matches = bool(expected_ids & returned_ids) if expected_ids else bool(
+        normalized(source.get('payer')) and normalized(source['payer']) == normalized(payer.get('name') or payer.get('lastName')))
+    return bool(identity['address_matches'] or linked or (payer_matches and not identity.get('surname_typo')))
 
 
 def automatic_match(item: dict, inputs: dict, source: dict) -> bool:
@@ -206,6 +247,8 @@ def verify_candidate(item: dict, inputs: dict, source: dict | None = None) -> di
     if candidate is None:
         return {'status': 'REVIEW_REQUIRED', 'reason_codes': ['MALFORMED_RESPONSE'], 'pathway': None}
     reasons = []
+    identity = candidate_identity(item, inputs)
+    policy_link = corroborates_patient_policy(item, inputs, source)
     patient = inputs.get('patient') or {}
     insured = candidate['dependent'] or candidate['subscriber']
     for key, expected_key, code in [('firstName', 'patient_first_name', 'PATIENT_NAME'),
@@ -215,10 +258,10 @@ def verify_candidate(item: dict, inputs: dict, source: dict | None = None) -> di
         if not expected or not returned:
             reasons.append(code + '_MISSING')
         elif normalized(expected) != normalized(returned):
-            reasons.append(code + '_MISMATCH')
+            if not (key == 'lastName' and identity and identity.get('surname_typo')):
+                reasons.append(code + '_MISMATCH')
     if commercial.eligibility_errors(item):
         reasons.append('PAYER_REJECTED')
-    identity = candidate_identity(item, inputs)
     if identity and identity.get('address_conflict'):
         reasons.append('PATIENT_ADDRESS_MISMATCH')
     if not candidate['member_id']:
@@ -228,12 +271,12 @@ def verify_candidate(item: dict, inputs: dict, source: dict | None = None) -> di
     if not candidate['payer_identifier']:
         reasons.append('PAYER_ROUTE_MISSING')
     relationship = inputs.get('relationship')
-    if relationship not in {None, '', 'unknown'} and (
+    if not policy_link and relationship not in {None, '', 'unknown'} and (
             (relationship in {'18', 'self'}) != (candidate['relationship'] == 'self')):
         reasons.append('RELATIONSHIP_CONFLICT')
     if candidate['dependent'] and candidate['relationship_code'] == '18':
         reasons.append('RELATIONSHIP_CONFLICT')
-    if relationship in {'01', '19', 'G8'} and candidate['relationship_code'] and relationship != candidate['relationship_code']:
+    if not policy_link and relationship in {'01', '19', 'G8'} and candidate['relationship_code'] and relationship != candidate['relationship_code']:
         reasons.append('RELATIONSHIP_CONFLICT')
     if source.get('active_coverages', 0) > 1:
         reasons.append('MULTIPLE_COVERAGES')
@@ -264,7 +307,7 @@ def verify_candidate(item: dict, inputs: dict, source: dict | None = None) -> di
     except (AttributeError, KeyError, TypeError, ValueError):
         reasons.append('COVERAGE_EVIDENCE_INVALID')
         ecw_match = False
-    pathway = 'ecw_policy' if ecw_match else 'independent_discovery' if identity and identity['address_matches'] else None
+    pathway = 'ecw_policy' if ecw_match else 'patient_policy_link' if policy_link else 'independent_discovery' if identity and identity['address_matches'] else None
     if not pathway:
         reasons.append('ADDITIONAL_IDENTITY_EVIDENCE_REQUIRED')
     return {'status': 'REVIEW_REQUIRED' if reasons else 'VERIFIED',
@@ -285,17 +328,35 @@ def inquiry_eligible(item: dict, inputs: dict, source: dict) -> bool:
     return not set(verification['reason_codes']) - allowed
 
 
-def card_candidate(fields: dict, inputs: dict) -> dict | None:
+def card_candidate(fields: dict, inputs: dict, source: dict | None = None) -> dict | None:
     """OCR supplies request hints only; a payer response must validate them."""
     patient, subscriber = inputs.get('patient') or {}, inputs.get('subscriber') or {}
     if not all(fields.get(key) for key in ('member_id', 'payer', 'member_name')):
         return None
     dependent = inputs.get('relationship') not in {None, '', 'unknown', '18', 'self'}
+    # Coverage.subscriber is an explicit policy link, even if its self label is stale.
+    linked = ((source or {}).get('subscriber_evidence') or {}).get('patient_linked') is True
+    if (linked and subscriber.get('firstName') and subscriber.get('lastName')
+            and normalized(fields['member_name']) == normalized(f"{subscriber['firstName']} {subscriber['lastName']}")
+            and normalized(fields['member_name']) != normalized(f"{patient.get('patient_first_name')} {patient.get('patient_last_name')}")
+            and inputs.get('member_id') and normalized(fields['member_id']) == normalized(inputs['member_id'])):
+        dependent = True
     first = subscriber.get('firstName') if dependent else patient.get('patient_first_name')
     last = subscriber.get('lastName') if dependent else patient.get('patient_last_name')
     dob = subscriber.get('birthDate') if dependent else patient.get('patient_birth_date')
     if not first or not last or normalized(fields['member_name']) != normalized(f'{first} {last}'):
-        return None
+        # The patient-bound card may name a different subscriber on this same policy.
+        # Only an unambiguous two-part printed name is a request hint, never enrollment proof.
+        parts = str(fields['member_name']).split()
+        if (not source or not source.get('_patient_id') or not source.get('coverage_id')
+                or source.get('active_coverages') != 1 or not inputs.get('member_id')
+                or normalized(fields['member_id']) != normalized(inputs['member_id'])
+                or len(parts) != 2 or not all(part[0].isalpha() and all(c.isalpha() or c in "-'’." for c in part) for part in parts)
+                or (fields.get('group_number') and inputs.get('group_number')
+                    and normalized(fields['group_number']) != normalized(inputs['group_number']))):
+            return None
+        first, last = parts
+        dob, dependent = None, True
     if fields.get('birth_date') and dob and birth_date(fields['birth_date']) != birth_date(dob):
         return None
     item = {'subscriber': {'firstName': first, 'lastName': last, 'dateOfBirth': dob,
@@ -305,7 +366,7 @@ def card_candidate(fields: dict, inputs: dict) -> dict | None:
     if dependent:
         item['dependent'] = {'firstName': patient.get('patient_first_name'), 'lastName': patient.get('patient_last_name'),
             'dateOfBirth': patient.get('patient_birth_date'), 'address': patient.get('address'),
-            'relationToSubscriberCode': inputs['relationship']}
+            'relationToSubscriberCode': inputs['relationship'] if inputs.get('relationship') in {'01', '19', 'G8'} else 'dependent'}
     return item
 
 

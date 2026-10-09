@@ -86,6 +86,40 @@ def test_card_lookup_uses_ecw_type_search_and_patient_bound_included_binary():
     asyncio.run(run())
 
 
+def test_enabled_card_read_survives_denied_optional_documents_and_uses_narrow_scope():
+    async def run():
+        document = {'resourceType': 'DocumentReference', 'id': 'card', 'status': 'current',
+            'subject': {'reference': 'Patient/synthetic'},
+            'type': {'coding': [{'system': 'http://loinc.org', 'code': '64290-0'}]},
+            'content': [{'attachment': {'contentType': 'image/png', 'data': base64.b64encode(b'card').decode()}}]}
+        def handler(request):
+            if request.url.params.get('type') == '103140-0':
+                return httpx.Response(403)
+            return httpx.Response(200, json={'resourceType': 'Bundle', 'entry': [{'resource': document}]})
+        with patch.object(ecw, 'settings', return_value=('client', 'https://ehr.example.test/fhir')), \
+             patch.object(ecw, '_access_token', AsyncMock(return_value='synthetic-token')) as token:
+            data, mime = await ecw.insurance_cards('synthetic', document_id='card:0', transport=httpx.MockTransport(handler))
+        assert (data, mime) == (b'card', 'image/png')
+        assert token.call_args.args[3] == ('system/DocumentReference.read',)
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize('document_type,status', [('53245-7', 'current'), ('64290-0', 'superseded')])
+def test_government_ids_and_superseded_cards_are_not_current_insurance(document_type, status):
+    async def run():
+        document = {'resourceType': 'DocumentReference', 'id': 'doc', 'status': status,
+            'subject': {'reference': 'Patient/synthetic'}, 'description': 'Insurance card',
+            'type': {'coding': [{'system': 'http://loinc.org', 'code': document_type}]},
+            'content': [{'attachment': {'contentType': 'image/png', 'url': 'Binary/image'}}]}
+        def handler(request):
+            assert request.url.path == '/fhir/DocumentReference'
+            return httpx.Response(200, json={'resourceType': 'Bundle', 'entry': [{'resource': document}]})
+        with patch.object(ecw, 'settings', return_value=('client', 'https://ehr.example.test/fhir')), \
+             patch.object(ecw, '_access_token', AsyncMock(return_value='synthetic-token')):
+            assert await ecw.insurance_cards('synthetic', transport=httpx.MockTransport(handler)) == []
+    asyncio.run(run())
+
+
 @contextmanager
 def captured():
     stream = io.StringIO()

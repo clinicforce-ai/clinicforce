@@ -22,6 +22,7 @@ import httpx
 from app.ingestion import ecw
 from app.insurance.stedi_discovery import patient_address, previous_addresses
 from app.insurance import provider_specialty
+from app.insurance.identity import one_name_edit as _one_name_edit
 from app.logs.collection_audit import collection_event
 
 
@@ -217,7 +218,7 @@ async def _access_token(client: httpx.AsyncClient, client_id: str, issuer: str,
                 raise EcwBackendError("eClinicalWorks did not return a backend access token.", reason_code="invalid_token")
             if isinstance(token.get('scope'), str):
                 granted = set(token['scope'].split())
-                for resource in ('Coverage', 'DocumentReference', 'Binary'):
+                for resource in ('Coverage', 'CoverageEligibilityResponse', 'DocumentReference', 'Binary'):
                     scope = f'system/{resource}.read'
                     if scope in scopes:
                         collection_event('ecw_scope_result', stage='token_exchange', resource=resource.lower(),
@@ -310,6 +311,9 @@ async def _bounded_read(client: httpx.AsyncClient, issuer: str, token: str,
     try:
         return await asyncio.wait_for(_read(client, issuer, token, reference), timeout=REFERENCE_TIMEOUT_SECONDS), None
     except (asyncio.TimeoutError, httpx.TimeoutException):
+        if resource == 'RelatedPerson':
+            # eCW documents only reads by ID for RelatedPerson, not a search endpoint.
+            return {}, resource
         # eCW direct reads intermittently stall while the equivalent supported
         # `_id` search succeeds. Try that once without extending the API timeout.
         try:
@@ -372,18 +376,6 @@ def _patient_matches(resource: dict[str, Any], profile: dict[str, Any], *, famil
     expected = str(profile.get("patient_middle_initial") or "").strip()
     return (not expected or not middle or _norm(middle[0]) == _norm(expected[0])) and resource.get("birthDate") == profile.get("patient_birth_date")
 
-
-def _one_name_edit(left: str, right: str) -> bool:
-    """One insertion, deletion, substitution or adjacent swap; never auto-link."""
-    if min(len(left), len(right)) < 4 or abs(len(left) - len(right)) > 1:
-        return False
-    if len(left) == len(right):
-        different = [i for i, (a, b) in enumerate(zip(left, right)) if a != b]
-        return len(different) == 1 or (len(different) == 2 and different[1] == different[0] + 1
-            and left[different[0]] == right[different[1]] and left[different[1]] == right[different[0]])
-    short, long = sorted((left, right), key=len)
-    index = next((i for i, (a, b) in enumerate(zip(short, long)) if a != b), len(short))
-    return short[index:] == long[index + 1:]
 
 
 def _candidate_given_name(resource: dict, profile: dict) -> str:
@@ -1271,7 +1263,8 @@ async def fetch_inputs(profile: dict[str, Any], practice: dict[str, Any], appoin
                   "status": "unavailable" if 'Coverage' in query_timeouts or any(value.startswith('Coverage') for value in query_unavailable)
                       else "returned" if coverage_result[0] else "empty"},
               "appointment_notes_status": appointment_notes_status,
-              "subscriber_evidence": {"reference": subscriber_ref, "status": 'returned' if sub_given and sub_family and subscriber_resource.get('birthDate') else 'not_returned',
+              "subscriber_evidence": {"reference": subscriber_ref, "status": 'returned' if sub_given and sub_family else 'not_returned',
+                  "patient_linked": bool(subscriber_resource),
                   "member_id_source": 'Coverage.subscriberId' if str(coverage.get('subscriberId') or '').strip() else 'Coverage.identifier' if coverage_member_id(coverage) else 'eCW appointment General Notes' if insurance_fallback.get('member_id') else None},
               "coverage_records": [{"id": row.get('id'), "status": row.get('status'), "order": row.get('order'),
                   "member_id": coverage_member_id(row), "group_number": _group(row), "plan": _plan_details(row),
@@ -1325,13 +1318,25 @@ async def fetch_inputs(profile: dict[str, Any], practice: dict[str, Any], appoin
 
 
 def coverage_subscriber(coverage: dict, patient: dict, resolved: dict) -> dict:
+    """Follow this beneficiary's Coverage link, never a household/name search."""
+    patient_ref = 'Patient/' + str(patient.get('id'))
+    if _reference(coverage.get('beneficiary')) != patient_ref:
+        return {}
     ref = _reference(coverage.get('subscriber'))
-    if ref == 'Patient/' + str(patient.get('id')) or not ref and _relationship(coverage) == '18':
+    if ref == patient_ref or not ref and _relationship(coverage) == '18':
         return patient
     if ref and ref.startswith('#'):
-        return next((row for row in coverage.get('contained', []) if '#' + str(row.get('id', '')) == ref
-                     and row.get('resourceType') in {'Patient', 'RelatedPerson'}), {})
-    return resolved.get(ref or '', {})
+        rows = [row for row in coverage.get('contained', []) if '#' + str(row.get('id', '')) == ref]
+        person = rows[0] if len(rows) == 1 else {}
+    else:
+        person = resolved.get(ref or '', {})
+        if ref != f"{person.get('resourceType')}/{person.get('id')}":
+            return {}
+    if person.get('resourceType') not in {'Patient', 'RelatedPerson'} or person.get('active') is False:
+        return {}
+    if person.get('resourceType') == 'RelatedPerson' and _reference(person.get('patient')) != patient_ref:
+        return {}
+    return person
 
 
 def coverage_member_id(coverage: dict) -> str | None:
@@ -1444,7 +1449,7 @@ async def fetch_saved_eligibility(source: dict, service_date: str, *, transport:
     try:
         client_id, issuer = settings()
         async with httpx.AsyncClient(timeout=SEARCH_TIMEOUT_SECONDS, follow_redirects=False, transport=transport) as client:
-            token = await _access_token(client, client_id, issuer, SCOPES + ('system/CoverageEligibilityResponse.read',))
+            token = await _access_token(client, client_id, issuer, ('system/CoverageEligibilityResponse.read',))
             rows = await _search(client, issuer, token, 'CoverageEligibilityResponse', {'patient': source['_patient_id']})
         primary = saved_eligibility_summary(rows, source['_patient_id'], source['coverage_id'], service_date)
         primary['other_coverages'] = {row['id']: {k: v for k, v in
@@ -1492,7 +1497,8 @@ async def probe_saved_eligibility(profile: dict[str, Any], *, transport: httpx.A
                 # One unsupported optional scope must not hide other authorized
                 # evidence resources or report that the working app is rejected.
                 try:
-                    evidence_token = await _access_token(client, client_id, issuer, SCOPES + (f"system/{resource}.read",))
+                    scopes = (f'system/{resource}.read',)
+                    evidence_token = await _access_token(client, client_id, issuer, scopes)
                 except EcwBackendError:
                     result['resources'][resource] = {'status': 'scope_denied_or_unavailable', 'count': None}
                     continue
@@ -1519,20 +1525,27 @@ async def insurance_cards(patient_id: str, *, document_id: str | None = None,
     async with httpx.AsyncClient(timeout=10, follow_redirects=False, transport=transport) as client:
         # Listing and inline cards need only DocumentReference. A denied Binary
         # scope must not hide otherwise accessible cards.
-        token = await _access_token(client, client_id, issuer, SCOPES + ('system/DocumentReference.read',))
+        token = await _access_token(client, client_id, issuer, ('system/DocumentReference.read',))
         # eCW's card and patient-document endpoints require the type parameter;
         # a patient-only search can return only CCDs and clinical notes.
         rows = []
         for document_type in ('64290-0', '103140-0'):
-            rows.extend(await _search(client, issuer, token, 'DocumentReference', {'patient': patient_id, 'type': document_type}))
+            try:
+                rows.extend(await _search(client, issuer, token, 'DocumentReference', {'patient': patient_id, 'type': document_type}))
+            except (EcwBackendError, httpx.HTTPError):
+                if not rows or document_type == '64290-0':
+                    raise
+                # Optional patient-document access must not hide a returned insurance card.
         if not any(row.get('resourceType') == 'DocumentReference' for row in rows):
             rows = await _search(client, issuer, token, 'DocumentReference', {'patient': patient_id})
         binaries = {row.get('id'): row for row in rows if row.get('resourceType') == 'Binary' and row.get('id')}
         cards = []
         seen = set()
         for row in rows:
-            if (row.get('resourceType') != 'DocumentReference' or row.get('status') == 'entered-in-error'
+            if (row.get('resourceType') != 'DocumentReference' or row.get('status') != 'current'
                     or _reference(row.get('subject')) != 'Patient/' + patient_id):
+                continue
+            if any(c.get('code') == '53245-7' for c in row.get('type', {}).get('coding', [])):
                 continue
             for index, content in enumerate(row.get('content', [])):
                 attachment = content.get('attachment') or {}
@@ -1556,7 +1569,7 @@ async def insurance_cards(patient_id: str, *, document_id: str | None = None,
                             raise EcwBackendError('This card attachment is not available through the authorized eCW connection.')
                         resource = binaries.get(url.rsplit('/', 1)[-1])
                         if resource is None:
-                            binary_token = await _access_token(client, client_id, issuer, SCOPES + ('system/Binary.read',))
+                            binary_token = await _access_token(client, client_id, issuer, ('system/Binary.read',))
                             with _stage('resource_read', resource='binary') as facts:
                                 response = await client.get(url, headers={'Authorization': 'Bearer ' + binary_token, 'Accept': 'application/fhir+json'})
                                 facts['http_status'] = response.status_code

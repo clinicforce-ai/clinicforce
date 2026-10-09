@@ -49,10 +49,12 @@ def test_member_identifier_fallback_never_chooses_a_group_or_ambiguous_id():
 
 def test_subscriber_relationship_is_never_assumed_from_patient_demographics():
     patient = {'resourceType': 'Patient', 'id': 'patient', 'birthDate': '1980-01-01'}
-    spouse = {'resourceType': 'RelatedPerson', 'id': 'spouse', 'birthDate': '1982-02-02'}
+    spouse = {'resourceType': 'RelatedPerson', 'id': 'spouse', 'birthDate': '1982-02-02', 'patient': {'reference': 'Patient/patient'}}
+    beneficiary = {'reference': 'Patient/patient'}
     assert ecw_backend.coverage_subscriber({}, patient, {}) == {}
-    assert ecw_backend.coverage_subscriber({'relationship': {'coding': [{'code': 'self'}]}}, patient, {}) == patient
-    dependent = {'relationship': {'coding': [{'code': 'spouse'}]}, 'subscriber': {'reference': 'RelatedPerson/spouse'}}
+    assert ecw_backend.coverage_subscriber({'relationship': {'coding': [{'code': 'self'}]}}, patient, {}) == {}
+    assert ecw_backend.coverage_subscriber({'beneficiary': beneficiary, 'relationship': {'coding': [{'code': 'self'}]}}, patient, {}) == patient
+    dependent = {'beneficiary': beneficiary, 'relationship': {'coding': [{'code': 'spouse'}]}, 'subscriber': {'reference': 'RelatedPerson/spouse'}}
     assert ecw_backend.coverage_subscriber(dependent, patient, {'RelatedPerson/spouse': spouse}) == spouse
     assert ecw_backend.coverage_subscriber(dependent, patient, {}) == {}
 
