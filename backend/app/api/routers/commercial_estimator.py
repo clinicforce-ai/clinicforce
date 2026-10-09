@@ -28,6 +28,7 @@ from app.core import object_store, staff_store
 from app.insurance import identity as insurance_identity
 from app.insurance import commercial, commercial_store, cpt_rules, cpt_suggester, ecw_backend, golden, stedi_discovery, stedi_payers, store, visit_estimate, practice_prices
 from app.insurance import stedi_financial, collection_guidance, ecw_benefits, ecw_billing, library_pricing
+from app.insurance import provider_specialty
 from app.logs.collection_audit import collection_event
 from app.logs.logger import log_info, log_warning
 
@@ -501,9 +502,17 @@ def _previsit_codes(inputs: dict) -> list[dict[str, Any]]:
 
 
 def _office_service_types(practice_id: str, source: dict) -> list[str]:
-    specialist = any('neurolog' in role.lower()
-        for role in (source.get('rendering_provider') or {}).get('roles', []))
+    specialist = provider_specialty.office_role((source.get('rendering_provider') or {}).get('roles', [])) == 'specialist'
     return ['98', 'BQ', 'BY', '1'] if specialist else ['98', 'BY', '1']
+
+
+def _benefit_context(inputs: dict, source: dict) -> dict:
+    rendering = source.get('rendering_provider') or {}
+    # The inquiry uses the rendering NPI only with a complete provider name.
+    npi = rendering.get('npi') if rendering.get('first_name') and rendering.get('last_name') else None
+    return {'place_of_service': inputs.get('place_of_service'),
+            'visit_context': {key: inputs.get(key) for key in ('reason', 'diagnoses')},
+            'provider_npi': npi}
 
 
 def _previsit_range(practice_id: str, inputs: dict, source: dict, payer_id: str,
@@ -514,7 +523,7 @@ def _previsit_range(practice_id: str, inputs: dict, source: dict, payer_id: str,
     alternatives = options or (bool(codes) and all(row.get("source") == "conditional office E/M alternative" for row in codes) and not review.get("selected_ids"))
     selected = [row for row in codes if not review.get("selected_ids") or row.get("id") in review['selected_ids']]
     office_types = _office_service_types(practice_id, source)
-    rates, rules, issues = [], {'office_service_types': office_types, 'place_of_service': inputs.get('place_of_service')}, []
+    rates, rules, issues = [], {'office_service_types': office_types, **_benefit_context(inputs, source)}, []
     try:
         _, network, profile = _previsit_practice_path(practice_id, {**inputs, "payer_id": payer_id}, source)
         if not network.get("plan_matcher") or not source.get("plan"):
@@ -542,8 +551,16 @@ def _previsit_range(practice_id: str, inputs: dict, source: dict, payer_id: str,
     return priced, issues
 
 
-def _previsit_benefits(payload: dict, coverage: dict, service_date: str | None = None, service_type: str = "98") -> dict:
-    benefits = commercial.normalize_stedi_271(payload, service_type, False, coverage["active_coverages"] > 1 or coverage.get("other_active_coverage", False), service_date=service_date)
+def _previsit_benefits(payload: dict, coverage: dict, service_date: str | None = None, service_type: str = "98",
+                       *, inputs: dict | None = None, source: dict | None = None) -> dict:
+    context = _benefit_context(inputs, source or {}) if inputs else {}
+    codes = _previsit_codes(inputs) if inputs else []
+    office_only = bool(codes) and all(row['code'].isdigit() and
+        (99202 <= int(row['code']) <= 99205 or 99212 <= int(row['code']) <= 99215) for row in codes)
+    benefits = commercial.normalize_stedi_271(payload, service_type, False,
+        coverage["active_coverages"] > 1 or coverage.get("other_active_coverage", False), service_date=service_date,
+        procedure_code=codes[0]['code'] if office_only else None,
+        office_service_types=_office_service_types('', source or {}), **context)
     benefits['benefit_source'] = payload.get('benefit_source') or 'Stedi'
     comparison = insurance_identity.compare(payload, coverage)
     benefits['identity'] = comparison
@@ -568,7 +585,7 @@ def _attach_previsit_pricing(result: dict, practice_id: str, inputs: dict, sourc
         result["issues"].append("Clinic pricing: no single approved plan and provider contract is linked to this Stedi payer.")
         result['price_range'] = visit_estimate.price_lines(result['codes'], [], benefits, {'cost_share': 'payer_returned',
             'office_service_types': _office_service_types(practice_id, source),
-            'place_of_service': inputs.get('place_of_service')}, payload=payload,
+            **_benefit_context(inputs, source)}, payload=payload,
             service_date=inputs.get('service_date', ''), reviews=(review or {}).get('lines'),
             alternatives=not (review or {}).get('selected_ids') and bool(result['codes']) and all(row.get('source') == 'conditional office E/M alternative' for row in result['codes']))
         return
@@ -588,7 +605,9 @@ def _attach_previsit_pricing(result: dict, practice_id: str, inputs: dict, sourc
 def _visit_context_token(inputs: dict, source: dict) -> str:
     context = {'coverage': {k: v for k, v in _coverage_snapshot(inputs, source).items() if k != 'other_active_coverage'},
                'codes': _previsit_codes(inputs),
-               'provider': inputs.get('rendering_provider'), 'billing': source.get('billing_provider'),
+               'provider': inputs.get('rendering_provider'),
+               'provider_evidence': {key: (source.get('rendering_provider') or {}).get(key) for key in ('npi', 'roles')},
+               'diagnoses': inputs.get('diagnoses'), 'billing': source.get('billing_provider'),
                'reason': inputs.get('reason'), 'location': source.get('location_id'), 'pos': inputs.get('place_of_service'), 'date': inputs.get('service_date')}
     return hashlib.sha256(json.dumps(context, sort_keys=True).encode()).hexdigest()
 
@@ -766,7 +785,7 @@ def _finish_previsit(result: dict, case: dict, inputs: dict, source: dict, paylo
     result['collection_guidance'] = collection_guidance.build(result, review)
     result.pop('emg_option', None)
     if inputs.get('visit_type') == 'new' and result['payment_mode'] == 'insurance':
-        emg_rates, emg_rules = [], {'place_of_service': inputs.get('place_of_service'),
+        emg_rates, emg_rules = [], {**_benefit_context(inputs, source),
             'office_service_types': _office_service_types(session['practice_id'], source)}
         if (review.get('emg_required') or any(row['code'] in cpt_rules.NCS_CODES | cpt_rules.EMG_ADD_ONS for row in result['codes'])) and len(connections) == 1:
             try:
@@ -1114,7 +1133,7 @@ def _case_benefits(payload: dict, inputs: dict, source: dict, case: dict) -> dic
                  and recovery.get('verified_coverage'))
     if recovered:
         coverage.update(recovery['verified_coverage'])
-    benefits = _previsit_benefits(payload, coverage, inputs['service_date'], _previsit_service_types(inputs)[0])
+    benefits = _previsit_benefits(payload, coverage, inputs['service_date'], _previsit_service_types(inputs)[0], inputs=inputs, source=source)
     if recovered:
         benefits['normalization_notes'].append('Coverage was selected from Stedi discovery for this estimate; eCW was not changed.')
     return benefits
@@ -2195,6 +2214,15 @@ async def previsit_estimate(value: PrevisitInput, request: Request, background_t
     without a supported insurance amount, falls back to configured cash pricing
     unless staff explicitly retained insurance mode. Missing cash rates leave
     collection_guidance.amount_cents null; no price is invented.
+    Office estimates reconcile corroborated Cigna base/suffix identifiers, use the
+    rendering provider specialty and visit setting, scope named TMJ exclusions to
+    linked clinical context, and recognize provider-specific network evidence.
+    identity.reconciliation_rule and benefits.excluded_service_evidence_ids retain
+    the applied rules; appointment_context.rendering_provider.specialty_evidence
+    identifies an optional public NPPES fallback. Unknown ledger values remain
+    unknown, and missing cards or contract rates do not alone block a verified
+    fixed office copay.
+
     insurance_diagnosis separately reports identity, eligibility and pricing status,
     raw/retained/verified candidate counts, enrollment state and specific blockers.
     Protected recovery.candidates retain partial subscriber/dependent identities;
@@ -2312,7 +2340,7 @@ async def previsit_estimate(value: PrevisitInput, request: Request, background_t
             workflow_slot='commercial-ecw:' + binding, **_scope(session))
         candidate = deepcopy(result)
         candidate.update(check_id=ecw_case['id'], checked_at=source['saved_eligibility']['checked_at'],
-            benefits=_previsit_benefits(ecw_payload, coverage, inputs['service_date'], _previsit_service_types(inputs)[0]))
+            benefits=_previsit_benefits(ecw_payload, coverage, inputs['service_date'], _previsit_service_types(inputs)[0], inputs=inputs, source=source))
         await run_in_threadpool(_finish_previsit, candidate, ecw_case, inputs, source, ecw_payload, session, ecw_payer_id)
         guidance = candidate['collection_guidance']
         # Never skip a check just because an unsupported result has a numeric fallback.
@@ -2513,7 +2541,7 @@ async def previsit_estimate(value: PrevisitInput, request: Request, background_t
         return await _start_previsit_recovery(case, session, provider, background_tasks)
     raw_key = await run_in_threadpool(object_store.put_staff_document, session["practice_id"], case["id"],
                                       "previsit-stedi-271.json", json.dumps(payload).encode(), "application/json")
-    benefits = _previsit_benefits(payload, coverage, inputs["service_date"], requested_stc[0])
+    benefits = _previsit_benefits(payload, coverage, inputs["service_date"], requested_stc[0], inputs=inputs, source=source)
     result["benefits"] = benefits
     result["checked_at"] = _now()
     collection_event('eligibility_received', practice_id=session['practice_id'], intake_id=(session.get('intake') or {}).get('id'),

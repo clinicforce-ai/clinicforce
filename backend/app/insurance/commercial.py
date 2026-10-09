@@ -380,16 +380,25 @@ def coverage_evidence(payload: dict, service_date: str | None, entries: list[dic
         return {'status': 'UNKNOWN', 'reported_status': reported, 'start': None, 'end': None}
 
 
+def _provider_participation(note: str, provider_npi: str | None = None) -> bool:
+    return bool(re.search(r"(?:^|[.!?]\s+)Our records indicate the provider ID you entered is participating in this patient's network\.(?:\s|$)", note, re.I)
+        or provider_npi and re.fullmatch(r'Provider is in[ -]network based on NPI ID provided in request\.?', note.strip(), re.I))
+
+
 def normalize_stedi_271(payload: dict[str, Any], service_type_code: str, provider_network_verified: bool,
                         other_active_coverage: bool = False, *, procedure_code: str | None = None,
                         service_date: str | None = None, selected_ids: list[str] | None = None,
-                        office_service_types: list[str] | None = None, place_of_service: str | None = None) -> dict[str, Any]:
+                        office_service_types: list[str] | None = None, place_of_service: str | None = None,
+                        visit_context: dict | None = None, provider_npi: str | None = None) -> dict[str, Any]:
     """Normalize only unambiguous individual in-network schedule benefits.
 
     A benefit network indicator is not provider participation. Use a verified
     clinic record or an explicit payer assertion about the requesting provider.
     """
     entries = _stedi_entries(payload)
+    echoed_npi = str((payload.get('provider') or {}).get('npi') or '')
+    provider_npi = provider_npi if re.fullmatch(r'\d{10}', provider_npi or '') and (not echoed_npi or echoed_npi == provider_npi) else None
+    excluded_service_ids = []
     if place_of_service:
         # Office and telehealth terms can share STC 98 but are different benefits.
         entries = [row for row in entries if not row.get('placesOfService') or
@@ -412,6 +421,20 @@ def normalize_stedi_271(payload: dict[str, Any], service_type_code: str, provide
             entries = [row for row in entries if '98' not in (row.get('serviceTypeCodes') or []) or row in diagnostic_rows]
     office = procedure_code in {str(n) for n in (*range(99202, 99206), *range(99212, 99216))}
     if office and selected_ids is None:
+        # Diagnosis context must establish an unrelated visit. Unknown/TMJ/jaw
+        # context retains the exclusion; an office CPT alone cannot disprove TMJ.
+        context = visit_context or {}
+        diagnoses = [str(code).upper().replace('.', '') for code in (context.get('diagnoses') or [])]
+        unrelated_tmj = (bool(diagnoses) and any(not code.startswith('Z') and code != 'R69' for code in diagnoses)
+            and all(re.fullmatch(r'[A-Z][0-9][A-Z0-9]{1,5}', code) for code in diagnoses)
+            and not any(code.startswith(('M26', 'R6884')) for code in diagnoses)
+            and not re.search(r'\b(?:TMJ|TMD|temporomandibular|jaw)\b', str(context.get('reason') or ''), re.I))
+        def unrelated_exclusion(row: dict) -> bool:
+            labels = _benefit_notes([row.get('messages'), row.get('additionalInformation')])
+            return bool(unrelated_tmj and row.get('code') == 'I' and not _procedure(row) and labels
+                and all(re.fullmatch(r'TMJ (?:PCP AND TMJ Specialist|Specialist|PCP)', label.strip(), re.I) for label in labels))
+        excluded_service_ids = [row['evidence_path'] for row in entries if unrelated_exclusion(row)]
+        entries = [row for row in entries if row['evidence_path'] not in excluded_service_ids]
         # Explicitly different services sometimes share an office STC. Retain
         # every raw row in reported_options, but exclude these from office math.
         unrelated = r'(?:injections?|diagnostic lab(?:oratory)?|laboratory|(?:diagnostic )?x[ -]?ray|acupuncture|applied behavior analysis|chemotherapy)(?:\s*-\s*professional)?'
@@ -423,9 +446,13 @@ def normalize_stedi_271(payload: dict[str, Any], service_type_code: str, provide
                       and not re.fullmatch(r'(?:no referral required|referral not required|(?:prior )?authorization (?:not )?required)\.?', label.strip(), re.I)]
             return bool(labels) and all(re.fullmatch(unrelated, label, re.I) for label in labels)
         entries = [row for row in entries if _procedure(row) or not other_services_only(row)]
+        if place_of_service == '11':
+            entries = [row for row in entries if _procedure(row) or not (
+                (labels := _benefit_notes([row.get('messages'), row.get('additionalInformation')]))
+                and all(re.fullmatch(r'Telemedicine (?:General Medicine|Specialist) Visit', label.strip(), re.I) for label in labels))]
         priorities = office_service_types or ['98', 'BY', '1']
         if 'BQ' in priorities:
-            # Neurology is specialist care. Keep generic and specialist rows,
+            # Keep generic and specialist rows,
             # excluding rows explicitly limited to primary care.
             entries = [row for row in entries if not (
                 re.search(r'\b(?:primary care|PCP)\b', ' '.join(_benefit_notes([row.get('messages'), row.get('additionalInformation')])), re.I)
@@ -657,7 +684,7 @@ def normalize_stedi_271(payload: dict[str, Any], service_type_code: str, provide
         labels = notes([row.get('messages'), row.get('additionalInformation')])
         # General administrative messages do not establish a service limit.
         if not row.get('benefitAmount') and not row.get('quantity') and all(
-            re.search(r'participating in this patient|may require precert|Plan includes NAP|^SELF-FUNDED$|^All Other In-Network Providers$|/Plan Ded Waived$', note, re.I)
+            (_provider_participation(note, provider_npi) or re.search(r'participating in this patient|may require precert|Plan includes NAP|^SELF-FUNDED$|^All Other In-Network Providers$|/Plan Ded Waived$', note, re.I))
             for note in labels) and labels:
             return False
         if copay_cap is not None and row.get('code') == 'F' and row.get('benefitAmount') is not None:
@@ -669,7 +696,7 @@ def normalize_stedi_271(payload: dict[str, Any], service_type_code: str, provide
         return True
     limitations = any(unresolved_limit(row) for row in relevant)
     conditional_terms = selected_ids is None and any(re.search(r"\b(first|after|before|beginning|visits?|waived|unless|only|limit|specialist|primary care)\b", note, re.IGNORECASE) for row in (copay, coinsurance) if row for note in notes([row.get("messages"), row.get("additionalInformation")])
-        if not all(_deductible_message(label) is not None or re.fullmatch(r"(?:All Other In-Network Providers\s+)?(?:(?:specialist |physician )?office visits?(?: (?:specialist|primary care(?: prov(?:ider)?)?))?|Specialist|per visit|(?:Specialist|Primary Care) Visit or Evaluation|GYN Visit|Walk In Clinic Visit|Telemedicine (?:General Medicine|Specialist) Visit|phy visit\s*-\s*specialist|(?:PCP AND )?BenefitTier Non Tier 1 Specialist|diagnostic medical procedure)(?:\s*-\s*professional)?(?:\s*,\s*COINS APPLIES TO OUT OF POCKET)?", label.strip(), re.I)
+        if not all(_deductible_message(label) is not None or re.fullmatch(r"(?:All Other In-Network Providers\s+)?(?:(?:specialist |physician )?office visits?(?: (?:specialist|primary care(?: prov(?:ider)?)?))?|Specialist(?: AND PCP)?|PCP AND Specialist|per visit|(?:Specialist|Primary Care) Visit or Evaluation|GYN Visit|Walk In Clinic Visit|Telemedicine (?:General Medicine|Specialist) Visit|phy visit\s*-\s*specialist|(?:PCP AND )?BenefitTier Non Tier 1 Specialist|diagnostic medical procedure)(?:\s*-\s*professional)?(?:\s*,\s*COINS APPLIES TO OUT OF POCKET)?", label.strip(), re.I)
                    for label in note.split(';') if label.strip()))
     source_errors = []
     for _, row in wanted:
@@ -714,17 +741,20 @@ def normalize_stedi_271(payload: dict[str, Any], service_type_code: str, provide
     if multiple_plans or other_active_coverage:
         review_reasons.append("Confirm which plan pays first and how additional coverage applies.")
     participation = [row['evidence_path'] for row in relevant if any(
-        re.search(r"(?:^|[.!?]\s+)Our records indicate the provider ID you entered is participating in this patient's network\.(?:\s|$)", note, re.I)
+        _provider_participation(note, provider_npi)
         for note in notes([row.get('messages'), row.get('additionalInformation')]))]
-    conflicting_network = any(re.search(r'\b(?:not participating|non[- ]participating|out[- ]of[- ]network)\b', note, re.I)
+    conflicting_network = any(re.search(r'\b(?:not participating|not in[ -]network|non[- ]participating|out[- ]of[- ]network)\b', note, re.I)
                               for note in descriptions)
     # A contrary statement about this provider may sit on an out-of-network
     # row excluded from the in-network cost-sharing calculation above.
-    conflicting_network |= any(re.search(r'\bprovider(?: ID you entered)? is (?:not participating|non[- ]participating|out[- ]of[- ]network)\b', note, re.I)
+    conflicting_network |= any(re.search(r'\bprovider(?: ID you entered)? is (?:not participating|not in[ -]network|non[- ]participating|out[- ]of[- ]network)\b', note, re.I)
         for row in _stedi_entries(payload) for note in notes([row.get('messages'), row.get('additionalInformation')]))
+    if conflicting_network:
+        review_reasons.append('Provider-network evidence reports nonparticipation or contradicts the in-network assertion. Verify participation before estimating.')
     payer_network_verified = bool(participation and not conflicting_network and active is True
         and not multiple_plans and not invalid_dates and date_matches is not False and not source_errors)
     return {"active": active, "coverage_evidence": coverage,
+            "excluded_service_evidence_ids": excluded_service_ids,
             "coverage_status_conflict": bool(inactive and has_active) or coverage['status'] == 'CONFLICT',
             "coverage_dates_invalid": invalid_dates,
             "source_errors": source_errors, "service_date_matches": date_matches, "returned_service_dates": returned_service,

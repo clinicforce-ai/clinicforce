@@ -21,6 +21,7 @@ import httpx
 
 from app.ingestion import ecw
 from app.insurance.stedi_discovery import patient_address, previous_addresses
+from app.insurance import provider_specialty
 from app.logs.collection_audit import collection_event
 
 
@@ -1247,10 +1248,19 @@ async def fetch_inputs(profile: dict[str, Any], practice: dict[str, Any], appoin
     if remaining_unavailable:
         ecw_missing.append("eClinicalWorks rejected or could not return " + ", ".join(remaining_unavailable) + " for this appointment.")
 
+    rendering_roles = [role for role in role_resources if role.get('active') is not False
+        and _period_contains(role, service_date)
+        and _reference(role.get('practitioner')) == 'Practitioner/' + str(rendering_resource.get('id') or '')]
     role_labels = list(dict.fromkeys(
-        label for role in role_resources for field in (role.get("code"), role.get("specialty"))
+        label for role in rendering_roles
+        for field in (role.get("code"), role.get("specialty"))
         for label in _concept_labels(field)
     ))
+    # Do not override a reported but ambiguous eCW specialty with a registry default.
+    has_specialty = any(role.get('specialty') for role in rendering_roles) or any(provider_specialty.office_role([label]) for label in role_labels)
+    specialty = (await provider_specialty.lookup(str(ecw_rendering_npi or '')) if not has_specialty else {})
+    if specialty:
+        role_labels = specialty['roles']
     source = {"system": "eClinicalWorks", "retrieved_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
             "_patient_id": patient_id,
               "timezone": practice.get('timezone', 'America/New_York'),
@@ -1302,7 +1312,7 @@ async def fetch_inputs(profile: dict[str, Any], practice: dict[str, Any], appoin
               "rendering_provider": {"name": _display(rendering_resource), "npi": ecw_rendering_npi,
                                      "first_name": _name(rendering_resource)[0],
                                      "last_name": _name(rendering_resource)[1],
-                                     "roles": role_labels[:10]},
+                                     "roles": role_labels[:10], "specialty_evidence": specialty or None},
               "missing": list(dict.fromkeys(ecw_missing)),
               "timed_out_resources": reference_timeouts,
               "unavailable_resources": sorted(query_unavailable),
