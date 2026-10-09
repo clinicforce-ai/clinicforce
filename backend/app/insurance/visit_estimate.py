@@ -180,7 +180,8 @@ def price_lines(codes: list[dict], rates: list[dict], benefits: dict, rules: dic
         raw_benefits = commercial.normalize_stedi_271(payload, stc or '98', benefits.get('network_status') == 'in_network',
             benefits.get('has_secondary', False), procedure_code=code['code'], service_date=service_date,
             selected_ids=selection.get('selected_ids') if selection_valid else None,
-            office_service_types=rules.get('office_service_types'), place_of_service=rules.get('place_of_service')) if payload is not None else deepcopy(benefits)
+            office_service_types=rules.get('office_service_types'), place_of_service=rules.get('place_of_service'),
+            visit_context=rules.get('visit_context'), provider_npi=rules.get('provider_npi')) if payload is not None else deepcopy(benefits)
         if benefits.get('network_status') == 'in_network' and benefits.get('network_source'):
             raw_benefits['network_source'] = benefits['network_source']
             raw_benefits['network_evidence_ids'] = benefits.get('network_evidence_ids', [])

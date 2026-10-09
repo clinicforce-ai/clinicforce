@@ -18,6 +18,11 @@ from app.ingestion import ecw
 
 
 class EcwBackendSourceTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        registry = patch.object(ecw_backend.provider_specialty, 'lookup', AsyncMock(return_value={}))
+        registry.start()
+        self.addCleanup(registry.stop)
+
     async def test_empty_coverage_preserves_note_candidate_without_inventing_subscriber(self):
         tomorrow = (datetime.now(ZoneInfo('America/New_York')).date() + timedelta(days=1)).isoformat()
         patient = {'resourceType': 'Patient', 'id': 'synthetic', 'name': [{'given': ['Pat'], 'family': 'Example'}],
