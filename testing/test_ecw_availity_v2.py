@@ -155,7 +155,7 @@ class EcwBackendSourceTests(unittest.IsolatedAsyncioTestCase):
             "CoverageEligibilityResponse": {"status": "forbidden", "count": None},
             "DocumentReference": {"status": "available", "count": 1},
         })
-        self.assertEqual(access_token.await_args.args[3], ecw_backend.SCOPES + ('system/DocumentReference.read',))
+        self.assertEqual(access_token.await_args.args[3], ('system/DocumentReference.read',))
         self.assertEqual(access_token.await_count, 3)
 
         async def scoped_token(client, client_id, issuer, scopes=ecw_backend.SCOPES):
@@ -207,7 +207,7 @@ class EcwBackendSourceTests(unittest.IsolatedAsyncioTestCase):
         if contained:
             policy = resources['Coverage'][0]
             policy['subscriber'] = {'reference': '#sub'}
-            policy['contained'] = [{**resources['Patient'][0], 'id': 'sub', 'resourceType': 'RelatedPerson'}]
+            policy['contained'] = [{**resources['Patient'][0], 'id': 'sub', 'resourceType': 'RelatedPerson', 'patient': {'reference': 'Patient/patient-1'}}]
             policy['subscriberId'] = ' '
             policy['identifier'] = [{'type': {'coding': [{'code': 'MB'}]}, 'value': 'MEMBER123'}]
             resources['Coverage'].append({**policy, 'id': 'foreign', 'beneficiary': {'reference': 'Patient/other'}})

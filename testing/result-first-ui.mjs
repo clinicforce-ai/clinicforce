@@ -77,6 +77,8 @@ try {
   await page.getByText('Putting the estimate together', { exact: true }).waitFor()
   assert(!(await page.locator('.visit-content').innerText()).includes('$0.00'))
   releaseEstimate(); await opening
+  assert.equal(await page.getByText('Reconcile policy details', { exact: true }).count(), 0)
+  assert.equal(await page.locator('.policy-reconciliation').count(), 0)
   assert.equal(await page.locator('.arrival-total > strong').innerText(), '$0.00')
   assert.equal(await page.locator('.arrival-total > span').first().innerText(), 'Collect at arrival')
   assert(await page.locator('.visit-context-facts').getByText('Dr. Taylor Lee', { exact: true }).isVisible())
