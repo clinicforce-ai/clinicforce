@@ -505,6 +505,11 @@ async def get_document(intake_id: str, document_id: str, request: Request):
 
 @router.get("/intakes/{intake_id}/cards")
 async def patient_cards(intake_id: str, request: Request):
+    """List patient-bound ClinicForce cards and eCW health insurance card previews.
+
+    eCW DocumentReference type 64290-0 is required for its cards; government ID
+    documents are excluded. An empty result explains the separate eCW grant.
+    """
     staff = await require_staff(request)
     intake = await owned_intake(intake_id, staff)
     sources = await run_in_threadpool(staff_store.patient_card_intakes, staff['practice_id'], intake['patient']['id']) if intake.get('patient') else [intake]
@@ -518,7 +523,7 @@ async def patient_cards(intake_id: str, request: Request):
             rows = await ecw_backend.insurance_cards(str(patient_id))
             cards.extend({**item, 'url': f"/api/staff/intakes/{quote(intake_id, safe='')}/ecw-card?document_id={quote(item['id'], safe='')}"} for item in rows)
             if not cards:
-                message = 'The current eCW connection did not return a card preview. A card saved in eCW folders may still be available there. Card previews are optional for estimates.'
+                message = 'eCW returned no health insurance card for this patient. Ask eCW to verify DocumentReference type 64290-0 for this practice; government ID access is separate.'
         except Exception:
             message = 'The eCW card connection is unavailable. Any saved ClinicForce cards appear below. Card previews are optional for estimates.'
     return JSONResponse({'cards': cards, 'message': message}, headers=NO_STORE)
@@ -526,6 +531,7 @@ async def patient_cards(intake_id: str, request: Request):
 
 @router.get("/intakes/{intake_id}/ecw-card")
 async def ecw_card(intake_id: str, document_id: str, request: Request):
+    """Read one patient-bound eCW health insurance card image or PDF for preview."""
     intake = await owned_intake(intake_id, await require_staff(request))
     patient_id = (intake.get('patient') or {}).get('ecw_patient_id') or intake.get('fields', {}).get('ecw_patient_id')
     if not patient_id:
