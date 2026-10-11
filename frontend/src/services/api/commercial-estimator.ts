@@ -20,6 +20,7 @@ export type CollectionGuidance = {
     deductible_applicability?: 'DOES_NOT_APPLY' | 'APPLIES' | 'ALREADY_MET' | 'UNKNOWN'; selected_benefit_ids: string[] }>;
 }
 export type PrevisitEstimate = {
+  card_check?: { status: 'read' | 'matched' | 'filled_missing' | 'conflict' | 'unverified' | 'not_found' | 'multiple_cards' | 'unavailable'; source?: string | null; fields_added: string[]; conflicts: string[]; differences: string[] };
   cash_fallback?: { reason: string };
   insurance_hints?: Array<{ payer?: string | null; member_id?: string | null; sources: string[] }>;
   insurance_diagnosis?: { coverageSource: string; rawCandidateCount: number | null; retainedCandidateCount: number;

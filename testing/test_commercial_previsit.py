@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 
-from app.api.routers.commercial_estimator import PrevisitInput, VisitReviewInput, _previsit_benefits, previsit_estimate, update_visit_review
+from app.api.routers.commercial_estimator import PrevisitInput, VisitReviewInput, _compare_card_hints, _previsit_benefits, previsit_estimate, update_visit_review
 
 
 class PrevisitFlowTest(unittest.IsolatedAsyncioTestCase):
@@ -25,6 +25,28 @@ class PrevisitFlowTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_incomplete_ecw_benefits_fall_through_to_stedi(self):
         await self._flow(date.today().isoformat(), ecw_saved=True, ecw_incomplete=True)
+
+    async def test_card_ocr_fills_missing_member_before_first_stedi_request(self):
+        await self._flow(date.today().isoformat(), member_id_missing=True,
+            card_fields={'payer': 'Blue Cross Blue Shield Tx', 'member_name': 'Pat Example',
+                         'member_id': 'CARD-123', 'group_number': 'GROUP-9'})
+
+    async def test_card_member_conflict_holds_first_stedi_request(self):
+        await self._flow(date.today().isoformat(), card_conflict=True,
+            card_fields={'payer': 'Blue Cross Blue Shield Tx', 'member_name': 'Pat Example',
+                         'member_id': 'CARD-999'})
+
+    async def test_multiple_card_sets_hold_first_stedi_request(self):
+        await self._flow(date.today().isoformat(), card_status='multiple_cards')
+
+    def test_card_id_conflict_is_held_even_when_printed_name_is_unmatched(self):
+        inputs = {'member_id': 'ECW-123', 'patient': {'patient_first_name': 'Pat', 'patient_last_name': 'Example'},
+                  'subscriber': {}, 'relationship': '18'}
+        check = _compare_card_hints({'status': 'read', 'fields': {'member_id': 'CARD-999',
+            'member_name': 'Another Person', 'payer': 'Example Payer'}}, inputs, {'payer': 'Example Payer'})
+        self.assertEqual(check['status'], 'conflict')
+        self.assertEqual(check['conflicts'], ['member_id'])
+        self.assertEqual(inputs['member_id'], 'ECW-123')
 
     async def test_explicit_self_pay_skips_stedi_and_defaults_to_cash(self):
         await self._flow(date.today().isoformat(), self_pay=True)
@@ -83,13 +105,13 @@ class PrevisitFlowTest(unittest.IsolatedAsyncioTestCase):
     async def test_newer_conflicting_ecw_check_refreshes_cached_stedi_evidence(self):
         await self._flow(date.today().isoformat(), newer_ecw=True)
 
-    async def _flow(self, service_date, reject=False, retry_basic=False, payer_missing=False, refresh=False, newer_ecw=False, too_early=False, self_pay=False, coverage_start=None, saved_hold=False, enrollment_missing=False, ecw_saved=False, ecw_incomplete=False, medicare_secondary=False, billing_note=None):
+    async def _flow(self, service_date, reject=False, retry_basic=False, payer_missing=False, refresh=False, newer_ecw=False, too_early=False, self_pay=False, coverage_start=None, saved_hold=False, enrollment_missing=False, ecw_saved=False, ecw_incomplete=False, medicare_secondary=False, billing_note=None, member_id_missing=False, card_fields=None, card_conflict=False, card_status=None):
         session = {"practice_id": "clinic", "intake_id": "intake", "patient_id": "patient",
                    "share_manifest_id": "", "staff": {"id": "staff", "display_name": "Staff", "practice_name": "Clinic"},
                    "intake": {"updated_at": "version", "patient": {"given_name": "Pat", "family_name": "Example",
                                                                    "birth_date": "1980-01-01"}, "fields": {}}}
         inputs = {"service_date": service_date, "visit_type": "new", "reason": "New patient consultation",
-                  "lines": [], "member_id": "M123", "relationship": "18",
+                  "lines": [], "member_id": None if member_id_missing else "M123", "relationship": "18",
                   "subscriber": {"firstName": "Pat", "lastName": "Example", "birthDate": "1980-01-01"},
                   "patient": {"patient_first_name": "Pat", "patient_last_name": "Example", "patient_birth_date": "1980-01-01"},
                   "rendering_provider": {"npi": "1234567890"}}
@@ -137,6 +159,8 @@ class PrevisitFlowTest(unittest.IsolatedAsyncioTestCase):
              patch("app.api.routers.commercial_estimator.ecw_backend.fetch_inputs", new=AsyncMock(return_value=(inputs, [], source))), \
              patch("app.api.routers.commercial_estimator._ecw_practice_config", return_value={}), \
              patch("app.api.routers.commercial_estimator.ecw_backend.fetch_saved_eligibility", AsyncMock(return_value=saved_ecw)), \
+             patch("app.api.routers.commercial_estimator._read_card_hints", new=AsyncMock(return_value={
+                 'status': card_status or ('read' if card_fields else 'not_found'), 'fields': card_fields or {}}), create=True), \
              patch("app.api.routers.commercial_estimator.cpt_suggester.suggest_preliminary_cpt_codes", return_value={"groups": [], "notes": []}), \
              patch("app.api.routers.commercial_estimator.stedi_payers.search_payer", new=AsyncMock(return_value=None if payer_missing else {"stediId": "QDTRP", "displayName": "Blue Cross and Blue Shield of Texas", 'transactionSupport': {'eligibilityCheck': 'ENROLLMENT_REQUIRED' if enrollment_missing else 'SUPPORTED'}})), \
              patch("app.api.routers.commercial_estimator.stedi_payers.eligibility_enrollment", new=AsyncMock(return_value={'status': 'MISSING', 'reason_code': 'enrollment_missing'})), \
@@ -151,6 +175,23 @@ class PrevisitFlowTest(unittest.IsolatedAsyncioTestCase):
                  "STEDI_API_KEY": "production-key", "STEDI_EXECUTION_MODE": "commercial_pilot",
                  "STEDI_LIVE_ELIGIBILITY_ENABLED": "true"}):
             result = await previsit_estimate(PrevisitInput(appointment_id="visit-1", refresh_benefits=refresh if too_early else False), MagicMock())
+            if card_conflict:
+                self.assertEqual(result['card_check']['status'], 'conflict')
+                self.assertEqual(result['eligibility_failure']['kind'], 'card_conflict')
+                client.post.assert_not_awaited()
+                return
+            if card_status == 'multiple_cards':
+                self.assertEqual(result['card_check']['status'], 'multiple_cards')
+                self.assertEqual(result['eligibility_failure']['kind'], 'multiple_cards')
+                client.post.assert_not_awaited()
+                return
+            if card_fields:
+                self.assertEqual(result['card_check']['status'], 'filled_missing')
+                sent = client.post.await_args.kwargs['json']
+                self.assertEqual(sent['subscriber']['memberId'], 'CARD-123')
+                self.assertEqual(sent['subscriber']['groupNumber'], 'GROUP-9')
+                self.assertEqual(result['insurance_details']['member_source'], 'card_ocr')
+                return
             if ecw_saved and not ecw_incomplete:
                 self.assertEqual(result['collection_guidance']['amount_cents'], 4000)
                 self.assertEqual(result['benefit_source'], 'eCW saved eligibility')
@@ -310,6 +351,7 @@ class PrevisitFlowTest(unittest.IsolatedAsyncioTestCase):
              patch('app.api.routers.commercial_estimator.ecw_backend.configured', return_value=True), \
              patch('app.api.routers.commercial_estimator.ecw_backend.fetch_inputs', AsyncMock(return_value=(inputs, [], source))), \
              patch('app.api.routers.commercial_estimator._ecw_practice_config', return_value={}), \
+             patch('app.api.routers.commercial_estimator._read_card_hints', AsyncMock(return_value={'status': 'not_found', 'fields': {}})), \
              patch('app.api.routers.commercial_estimator.object_store.enabled', return_value=True), \
              patch('app.api.routers.commercial_estimator._begin_coverage_discovery', AsyncMock(return_value={'recovery': 'started'})) as discovery, \
              patch.dict('app.api.routers.commercial_estimator.os.environ', {'STEDI_API_KEY': 'test', 'STEDI_EXECUTION_MODE': 'commercial_pilot', 'STEDI_LIVE_ELIGIBILITY_ENABLED': 'true'}):

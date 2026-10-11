@@ -1309,10 +1309,96 @@ def _recovery_event(case: dict, session: dict, stage: str, outcome: str, *, reas
         outcome=outcome, reason_code=reason, count=count, http_status=http_status)
 
 
+async def _read_card_hints(session: dict, patient_id: str | None) -> dict:
+    """Read one patient-bound card set; OCR fields are inquiry hints, not benefits."""
+    from app.insurance import v1_sources
+    from app.api.routers.staff import inspect_file
+    contents = []
+    source = None
+    try:
+        intakes = await run_in_threadpool(staff_store.patient_card_intakes, session['practice_id'], session['patient_id'])
+        card_intakes = [intake for intake in intakes if intake.get('documents')]
+        if len(card_intakes) > 1:
+            return {'status': 'multiple_cards', 'fields': {}, 'count': 0}
+        docs = card_intakes[0]['documents'] if card_intakes else []
+        if len(docs) > 2:
+            return {'status': 'multiple_cards', 'fields': {}, 'count': 0}
+        for doc in docs:
+            if doc.get('size_bytes', 0) <= 10_000_000 and doc.get('object_key'):
+                contents.append(await run_in_threadpool(object_store.get_object_bytes, doc['object_key']))
+        if contents:
+            source = 'clinicforce_card'
+        elif patient_id:
+            cards = await asyncio.wait_for(ecw_backend.insurance_cards(patient_id), timeout=24)
+            if len(cards) > 2:
+                return {'status': 'multiple_cards', 'fields': {}, 'count': 0}
+            for card in cards:
+                data, _ = await asyncio.wait_for(ecw_backend.insurance_cards(patient_id, document_id=card['id']), timeout=24)
+                contents.append(data)
+            if contents:
+                source = 'ecw_card'
+        if not contents:
+            return {'status': 'not_found', 'fields': {}, 'count': 0}
+        if any(len(content) > 10_000_000 for content in contents):
+            return {'status': 'unavailable', 'fields': {}, 'count': len(contents), 'failure_reason': 'card_too_large'}
+        for content in contents:
+            await run_in_threadpool(inspect_file, content)
+        fields, evidence, _ = await asyncio.wait_for(asyncio.to_thread(v1_sources.read_card_fields, contents), timeout=20)
+        return {'status': 'read', 'fields': fields, 'evidence': evidence, 'count': len(contents), 'source': source}
+    except (ecw_backend.EcwBackendError, httpx.HTTPError, TimeoutError, ValueError, HTTPException,
+            golden.OCRServiceError, golden.GoldenCaseError) as exc:
+        return {'status': 'unavailable', 'fields': {}, 'count': len(contents),
+                'failure_reason': 'card_read_timeout' if isinstance(exc, (TimeoutError, httpx.TimeoutException)) else 'card_unavailable'}
+
+
+def _compare_card_hints(card: dict, inputs: dict, source: dict) -> dict:
+    """Fill absent eCW inquiry fields only when OCR names the linked patient/policy."""
+    status = card['status']
+    result = {'status': status, 'source': card.get('source'), 'fields_added': [], 'conflicts': [], 'differences': []}
+    if status != 'read':
+        return result
+    fields = card['fields']
+    if not fields.get('member_id'):
+        result['status'] = 'unverified'
+        return result
+    for field in ('member_id', 'group_number'):
+        if (inputs.get(field) and fields.get(field)
+                and stedi_discovery.normalized(inputs[field]) != stedi_discovery.normalized(fields[field])):
+            result['conflicts'].append(field)
+    if result['conflicts']:
+        result['status'] = 'conflict'
+        return result
+    candidate = stedi_discovery.card_candidate({**fields, 'payer': fields.get('payer') or source.get('payer')}, inputs, source)
+    if not candidate:
+        result['status'] = 'unverified'
+        result['differences'].append('member_name_or_birth_date')
+        return result
+    if (source.get('payer') and fields.get('payer')
+            and stedi_discovery.normalized(source['payer']) != stedi_discovery.normalized(fields['payer'])):
+        result['differences'].append('payer_name')
+    for field in ('member_id', 'group_number'):
+        if not inputs.get(field) and fields.get(field):
+            inputs[field] = fields[field]
+            result['fields_added'].append(field)
+    if not source.get('payer') and fields.get('payer'):
+        source['payer'] = fields['payer']
+        source['payer_source'] = 'card_ocr'
+        result['fields_added'].append('payer')
+    if 'member_id' in result['fields_added']:
+        source['subscriber_evidence'] = {**(source.get('subscriber_evidence') or {}), 'member_id_source': 'card_ocr'}
+    if fields.get('birth_date') and not (inputs.get('subscriber') or {}).get('birthDate'):
+        subscriber = inputs.get('subscriber') or {}
+        name = f"{subscriber.get('firstName') or ''} {subscriber.get('lastName') or ''}"
+        if stedi_discovery.normalized(name) == stedi_discovery.normalized(fields.get('member_name')):
+            subscriber['birthDate'] = fields['birth_date']
+            inputs['subscriber'] = subscriber
+            result['fields_added'].append('subscriber_birth_date')
+    result['status'] = 'filled_missing' if result['fields_added'] else 'matched'
+    return result
+
+
 async def _recover_card(case: dict, session: dict, provider: dict) -> bool:
     """Read patient-bound stored/eCW cards once; OCR is never benefit evidence."""
-    from app.insurance import golden, v1_sources
-    from app.api.routers.staff import inspect_file
     context, recovery = case['previsit_context'], case['previsit_discovery']
     patient_id = context['source'].get('_patient_id')
     if recovery.get('card_status'):
@@ -1320,33 +1406,18 @@ async def _recover_card(case: dict, session: dict, provider: dict) -> bool:
     recovery['card_status'] = 'reading'
     case.update(await run_in_threadpool(_save, case, session, 'coverage-card-started'))
     _recovery_event(case, session, 'insurance_card', 'started')
-    contents = []
     unavailable = False
+    count = 0
     try:
-        intakes = await run_in_threadpool(staff_store.patient_card_intakes, session['practice_id'], session['patient_id'])
-        card_intakes = [intake for intake in intakes if intake.get('documents')]
-        docs = card_intakes[0]['documents'] if len(card_intakes) == 1 else []
-        # Front/back documents belong to one intake. Do not merge unrelated cards.
-        if len(card_intakes) > 1 or len(docs) > 2:
-            recovery['card_status'] = 'multiple_cards'
-        if len(docs) <= 2:
-            for doc in docs:
-                if doc.get('size_bytes', 0) <= 10_000_000 and doc.get('object_key'):
-                    contents.append(await run_in_threadpool(object_store.get_object_bytes, doc['object_key']))
-        if not contents and patient_id:
-            cards = await asyncio.wait_for(ecw_backend.insurance_cards(patient_id), timeout=24)
-            if len(cards) <= 2:
-                for card in cards:
-                    data, _ = await asyncio.wait_for(ecw_backend.insurance_cards(patient_id, document_id=card['id']), timeout=24)
-                    contents.append(data)
-            else:
-                recovery['card_status'] = 'multiple_cards'
-        if contents:
-            _recovery_event(case, session, 'card_download', 'complete', count=len(contents))
-            for content in contents:
-                await run_in_threadpool(inspect_file, content)
-            _recovery_event(case, session, 'card_ocr', 'started')
-            fields, evidence, _ = await asyncio.wait_for(asyncio.to_thread(v1_sources.read_card_fields, contents), timeout=20)
+        card = await _read_card_hints(session, patient_id)
+        count = card.get('count', 0)
+        recovery['card_status'] = card['status']
+        unavailable = card['status'] == 'unavailable'
+        if unavailable:
+            recovery['card_failure_reason'] = card.get('failure_reason') or 'card_unavailable'
+        if card['status'] == 'read':
+            fields, evidence = card['fields'], card['evidence']
+            _recovery_event(case, session, 'card_download', 'complete', count=count)
             _recovery_event(case, session, 'card_ocr', 'complete', count=len(fields))
             recovery['card_evidence'] = evidence
             item = stedi_discovery.card_candidate(fields, context['inputs'], context['source'])
@@ -1373,7 +1444,7 @@ async def _recover_card(case: dict, session: dict, provider: dict) -> bool:
     if recovery.get('card_status') == 'reading':
         recovery['card_status'] = 'not_found'
     _recovery_event(case, session, 'insurance_card', 'unavailable' if unavailable else 'complete',
-                    reason=recovery['card_status'], count=len(contents))
+                    reason=recovery['card_status'], count=count)
     recovery.update(request_state='pending', stage='discovery', outcome=None, selection_error=None,
                     candidates=[], selected_candidate_id=None, evidence_source='stedi_discovery')
     case.update(await run_in_threadpool(_save, case, session, 'coverage-card-finished'))
@@ -2213,6 +2284,9 @@ async def previsit_estimate(value: PrevisitInput, request: Request, background_t
     Explicit visit-linked eCW billing notes can supply a collection instruction
     or a fallback office copay; their source and timestamp accompany the result.
     They do not establish payer eligibility.
+    Before any new Stedi request, patient-bound card OCR compares with eCW and
+    fills only missing matched inquiry fields. Member/group conflicts or multiple
+    card sets hold the request for review. card_check excludes image bytes.
     Self-pay uses recorded cash mode or the terminal coverage-recovery fallback
     and configured cash prices, without built-in clinic prices or plan-name
     benefit overrides. Earlier snapshots are unchanged.
@@ -2358,6 +2432,28 @@ async def previsit_estimate(value: PrevisitInput, request: Request, background_t
     if source.get('self_pay_recorded') or (billing_note or {}).get('kind') == 'self_pay':
         collection_event('previsit_deferred', practice_id=session['practice_id'], intake_id=(session.get('intake') or {}).get('id'),
                          stage='eligibility', reason_code='self_pay_recorded')
+        return await incomplete_result()
+
+    try:
+        card = await asyncio.wait_for(_read_card_hints(session, source.get('_patient_id')), timeout=8)
+    except asyncio.TimeoutError:
+        card = {'status': 'unavailable', 'fields': {}, 'count': 0}
+    result['card_check'] = _compare_card_hints(card, inputs, source)
+    coverage = _coverage_snapshot(inputs, source)
+    result['payer'] = source.get('payer')
+    collection_event('card_precheck', practice_id=session['practice_id'], intake_id=(session.get('intake') or {}).get('id'),
+                     stage='before_eligibility', outcome=result['card_check']['status'], count=card.get('count', 0))
+    if result['card_check']['status'] in {'conflict', 'multiple_cards'}:
+        conflicting = result['card_check']['status'] == 'conflict'
+        kind = 'card_conflict' if conflicting else 'multiple_cards'
+        result.update(eligibility_error=kind, eligibility_failure={
+            'kind': kind, 'title': 'Card and eCW policy differ' if conflicting else 'Multiple card sets need review',
+            'detail': ('The card member ID or group differs from the eCW policy.' if conflicting
+                       else 'More than one saved card set or more than two card pages were found.'),
+            'action': ('Review the current card and correct the eCW policy before requesting eligibility.' if conflicting
+                       else 'Confirm the current insurance card before requesting eligibility.'),
+            'codes': [], 'attempted_at': _now()})
+        result['issues'].append(result['eligibility_failure']['detail'])
         return await incomplete_result()
 
     # Evaluate saved eCW evidence before credentials, payer directory or any paid request.

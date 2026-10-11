@@ -1528,17 +1528,25 @@ async def insurance_cards(patient_id: str, *, document_id: str | None = None,
         token = await _access_token(client, client_id, issuer, ('system/DocumentReference.read',))
         # eCW's card and patient-document endpoints require the type parameter;
         # a patient-only search can return only CCDs and clinical notes.
-        rows = []
+        groups = []
         for document_type in ('64290-0', '103140-0'):
             try:
-                rows.extend(await _search(client, issuer, token, 'DocumentReference', {'patient': patient_id, 'type': document_type}))
+                groups.append(await _search(client, issuer, token, 'DocumentReference', {'patient': patient_id, 'type': document_type}))
             except (EcwBackendError, httpx.HTTPError):
-                if not rows or document_type == '64290-0':
+                if not groups or document_type == '64290-0':
                     raise
                 # Optional patient-document access must not hide a returned insurance card.
+        rows = [row for group in groups for row in group]
         if not any(row.get('resourceType') == 'DocumentReference' for row in rows):
-            rows = await _search(client, issuer, token, 'DocumentReference', {'patient': patient_id})
+            groups = [await _search(client, issuer, token, 'DocumentReference', {'patient': patient_id})]
+            rows = groups[0]
         binaries = {row.get('id'): row for row in rows if row.get('resourceType') == 'Binary' and row.get('id')}
+        unique_included = {}
+        for group in groups:
+            documents = [row for row in group if row.get('resourceType') == 'DocumentReference']
+            images = [row for row in group if row.get('resourceType') == 'Binary']
+            if len(documents) == len(images) == 1 and len(documents[0].get('content', [])) == 1:
+                unique_included[documents[0].get('id')] = images[0]
         cards = []
         seen = set()
         for row in rows:
@@ -1568,6 +1576,12 @@ async def insurance_cards(patient_id: str, *, document_id: str | None = None,
                         if not url.startswith(issuer + '/Binary/') or '?' in url or '#' in url or '/..' in url:
                             raise EcwBackendError('This card attachment is not available through the authorized eCW connection.')
                         resource = binaries.get(url.rsplit('/', 1)[-1])
+                        # eCW can include a Binary with a different ID from the attachment URL.
+                        # Pair it only with the sole document in that search response.
+                        if resource is None:
+                            included = unique_included.get(row.get('id')) or {}
+                            if included.get('contentType') == mime:
+                                resource = included
                         if resource is None:
                             binary_token = await _access_token(client, client_id, issuer, ('system/Binary.read',))
                             with _stage('resource_read', resource='binary') as facts:

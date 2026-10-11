@@ -346,6 +346,17 @@ export default function CommercialEstimator({ onBack, onResolvePatient, intakeId
               <dl><div><dt>Member ID</dt><dd>{result.insurance_details?.member_id || 'Not returned'}</dd></div>{(result.insurance_details?.group_number || result.plan_details?.stedi.group_number) && <div><dt>Group</dt><dd>{result.insurance_details?.group_number || result.plan_details?.stedi.group_number}</dd></div>}{policyDates?.start && <div><dt>Coverage dates</dt><dd>{policyDates.start}{policyDates.end ? ` – ${policyDates.end}` : ' onward'}</dd></div>}<div><dt>Contact</dt><dd>{result.patient_details?.phone || 'Phone not returned'}<small>{result.patient_details?.email}</small></dd></div><div><dt>Address</dt><dd>{Object.values(result.patient_details?.address || {}).filter(Boolean).join(', ') || 'Not returned'}</dd></div><div><dt>Payer patient DOB</dt><dd>{payerPatient?.dateOfBirth ? visitDate(payerPatient.dateOfBirth) : 'Not returned'}</dd></div></dl>
               {!!result.identity?.differences.length && <p className="visit-muted">Both names are retained with their source. {result.identity.status === 'reconciled' ? 'A verified relationship is on file.' : result.identity.status === 'warning' ? result.identity.message : 'The patient details need reconciliation before collection.'}</p>}
               {intakeId && <InsuranceCards key={intakeId} intakeId={intakeId} background inline savedOnly={readOnly} />}
+              {result.card_check && <p className="visit-muted" role="status">{({
+                filled_missing: `Card OCR filled missing ${result.card_check.fields_added.map(field => field.replaceAll('_', ' ')).join(', ')} before the payer check.`,
+                matched: 'Card OCR matched the available eCW policy details before the payer check.',
+                conflict: 'The card and eCW member ID or group differ. No new Stedi check was sent; review the policy.',
+                unverified: 'The card text could not be matched to the eCW patient or policy. No card fields were added.',
+                not_found: 'No insurance card was available to compare with eCW before the payer check.',
+                multiple_cards: 'Multiple card sets need review. No new Stedi check was sent.',
+                unavailable: 'The insurance card could not be read before the payer check.',
+                read: 'The insurance card was read before the payer check.',
+              } as Record<string, string>)[result.card_check.status]}</p>}
+              {result.card_check?.differences?.includes('payer_name') && <p className="visit-muted">The payer name on the card is worded differently from eCW. Confirm they refer to the same plan.</p>}
             </section><ApplicableBenefits result={result} />
             <AppointmentNotes result={result} />
           </div></details>

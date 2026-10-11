@@ -86,6 +86,77 @@ def test_card_lookup_uses_ecw_type_search_and_patient_bound_included_binary():
     asyncio.run(run())
 
 
+def test_card_lookup_reads_unique_ecw_included_binary_with_different_id():
+    async def run():
+        document = {'resourceType': 'DocumentReference', 'id': 'card', 'status': 'current',
+            'subject': {'reference': 'Patient/synthetic'},
+            'type': {'coding': [{'system': 'http://loinc.org', 'code': '64290-0'}]},
+            'content': [{'attachment': {'contentType': 'image/png', 'url': 'Binary/card'}}]}
+        binary = {'resourceType': 'Binary', 'id': 'included-image', 'contentType': 'image/png',
+                  'data': base64.b64encode(b'synthetic-card').decode()}
+        def handler(request):
+            assert request.url.path == '/fhir/DocumentReference'
+            rows = [document, binary] if request.url.params.get('type') == '64290-0' else []
+            return httpx.Response(200, json={'resourceType': 'Bundle', 'entry': [
+                {'resource': row, 'search': {'mode': 'match' if row is document else 'include'}} for row in rows]})
+        with patch.object(ecw, 'settings', return_value=('client', 'https://ehr.example.test/fhir')), \
+             patch.object(ecw, '_access_token', AsyncMock(return_value='synthetic-token')) as token:
+            cards = await ecw.insurance_cards('synthetic', transport=httpx.MockTransport(handler))
+            data, mime = await ecw.insurance_cards('synthetic', document_id=cards[0]['id'], transport=httpx.MockTransport(handler))
+        assert (data, mime) == (b'synthetic-card', 'image/png')
+        assert all('system/Binary.read' not in call.args[3] for call in token.call_args_list)
+    asyncio.run(run())
+
+
+def test_card_lookup_does_not_assign_ambiguous_included_binary():
+    async def run():
+        documents = [
+            {'resourceType': 'DocumentReference', 'id': name, 'status': 'current',
+             'subject': {'reference': 'Patient/synthetic'},
+             'type': {'coding': [{'system': 'http://loinc.org', 'code': '64290-0'}]},
+             'content': [{'attachment': {'contentType': 'image/png', 'url': f'Binary/{name}'}}]}
+            for name in ('front', 'back')]
+        included = {'resourceType': 'Binary', 'id': 'unrelated', 'contentType': 'image/png',
+                    'data': base64.b64encode(b'wrong-image').decode()}
+        requested = []
+        def handler(request):
+            requested.append(request.url.path)
+            if request.url.path == '/fhir/Binary/front':
+                return httpx.Response(200, json={'resourceType': 'Binary', 'id': 'front',
+                    'contentType': 'image/png', 'data': base64.b64encode(b'correct-front').decode()})
+            rows = documents + [included] if request.url.params.get('type') == '64290-0' else []
+            return httpx.Response(200, json={'resourceType': 'Bundle',
+                'entry': [{'resource': row} for row in rows]})
+        with patch.object(ecw, 'settings', return_value=('client', 'https://ehr.example.test/fhir')), \
+             patch.object(ecw, '_access_token', AsyncMock(return_value='synthetic-token')) as token:
+            data, _ = await ecw.insurance_cards('synthetic', document_id='front:0', transport=httpx.MockTransport(handler))
+        assert data == b'correct-front'
+        assert '/fhir/Binary/front' in requested
+        assert 'system/Binary.read' in token.call_args.args[3]
+    asyncio.run(run())
+
+
+def test_card_lookup_does_not_pair_binary_from_another_search():
+    async def run():
+        document = {'resourceType': 'DocumentReference', 'id': 'card', 'status': 'current',
+            'subject': {'reference': 'Patient/synthetic'},
+            'type': {'coding': [{'system': 'http://loinc.org', 'code': '64290-0'}]},
+            'content': [{'attachment': {'contentType': 'image/png', 'url': 'Binary/card'}}]}
+        unrelated = {'resourceType': 'Binary', 'id': 'other', 'contentType': 'image/png',
+                     'data': base64.b64encode(b'wrong-image').decode()}
+        def handler(request):
+            if request.url.path == '/fhir/Binary/card':
+                return httpx.Response(200, json={'resourceType': 'Binary', 'id': 'card',
+                    'contentType': 'image/png', 'data': base64.b64encode(b'correct-image').decode()})
+            row = document if request.url.params.get('type') == '64290-0' else unrelated
+            return httpx.Response(200, json={'resourceType': 'Bundle', 'entry': [{'resource': row}]})
+        with patch.object(ecw, 'settings', return_value=('client', 'https://ehr.example.test/fhir')), \
+             patch.object(ecw, '_access_token', AsyncMock(return_value='synthetic-token')):
+            data, _ = await ecw.insurance_cards('synthetic', document_id='card:0', transport=httpx.MockTransport(handler))
+        assert data == b'correct-image'
+    asyncio.run(run())
+
+
 def test_enabled_card_read_survives_denied_optional_documents_and_uses_narrow_scope():
     async def run():
         document = {'resourceType': 'DocumentReference', 'id': 'card', 'status': 'current',
