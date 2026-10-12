@@ -163,13 +163,49 @@ def test_product_mapping_is_scoped_to_current_network_evidence_dates_and_plan(mo
     with pytest.raises(HTTPException): api._practice_path('clinic', inputs, source)
 
 
+def test_network_pdf_points_only_to_its_uploaded_contract(monkeypatch):
+    library_source = {'document_id': 'contract-a', 'reference': 'library:contract-a',
+                      'sha256': 'source-hash', 'locator': 'Page 3, row 7'}
+    network = {'network_name': 'Choice PPO', 'evidence_reference': 'library:contract-a'}
+    profile = {'rules': {'library_source': library_source}}
+    document = {'kind': 'contract', 'content_type': 'application/pdf', 'sha256': 'source-hash',
+                'label': 'Signed Choice PPO contract'}
+    monkeypatch.setattr(api.commercial_store, 'list_connections', lambda *_: [{'id': 'payer-a', 'stedi_payer_id': 'route-a', 'status': 'staff_guidance_enabled'}])
+    monkeypatch.setattr(api, '_previsit_practice_path', lambda *_: ({}, network, profile))
+    monkeypatch.setattr(api, '_previsit_range', lambda *_, **__: ({'lines': []}, []))
+    lookup = MagicMock(return_value=document)
+    monkeypatch.setattr(api.staff_store, 'get_library', lookup)
+
+    def estimate():
+        result = {'codes': [], 'issues': []}
+        api._attach_previsit_pricing(result, 'clinic', {'service_date': DAY}, {}, 'route-a', {})
+        return result['network_evidence']
+
+    assert estimate()['document_id'] == 'contract-a'
+    assert estimate()['locator'] == 'Page 3, row 7'
+    lookup.assert_called_with('contract-a', 'clinic')
+    document['content_type'] = 'text/csv'
+    assert 'document_id' not in estimate()
+    document['content_type'] = 'application/pdf'
+    profile['rules']['library_source']['reference'] = 'library:other-contract'
+    assert 'document_id' not in estimate()
+
+
 def test_identity_review_persists_across_visits_and_rejects_stale_or_unauthorized_edits(monkeypatch):
-    monkeypatch.setattr(api.library_pricing, 'prepare', lambda practice: [])
+    library_document = {'id': 'signed-contract', 'kind': 'contract', 'content_type': 'application/pdf',
+                        'payer': 'Example Health', 'label': 'Synthetic contract',
+                        'filename': 'synthetic-contract.pdf', 'sha256': 'digest',
+                        'extraction': {'sha256': 'digest', 'pages': [{'number': 9,
+                            'text': 'Provider will comply with all Referral and Preauthorization requirements set forth in the Policies and Procedures.'}],
+                            'tables': []}}
+    monkeypatch.setattr(api.library_pricing, 'prepare', lambda practice: [library_document])
+    monkeypatch.setattr(api.staff_store, 'get_library', lambda document_id, practice: library_document)
     inputs = {'service_date': DAY, 'payer_id': 'payer-a', 'member_id': 'ABC123', 'relationship': '19',
               'subscriber': {'firstName': 'Sam', 'lastName': 'Other'},
               'patient': {'patient_first_name': 'Alex', 'patient_last_name': 'Morgan', 'patient_birth_date': '2001-02-03'},
               'lines': [{'code': '99204', 'units': 1, 'service_status': 'scheduled'}], 'visit_type': 'new'}
-    source = {'appointment_id': 'visit-a', 'coverage_id': 'policy-a', 'active_coverages': 1, 'plan': 'CI'}
+    source = {'appointment_id': 'visit-a', 'coverage_id': 'policy-a', 'active_coverages': 1,
+              'plan': 'CI', 'payer': 'Example Health'}
     session = {'practice_id': 'clinic', 'patient_id': 'patient', 'share_manifest_id': '', 'intake_id': 'intake',
                'staff': {'id': 'staff', 'role': 'staff', 'display_name': 'Reviewer'}, 'intake': {'fields': {}, 'patient': {'id': 'patient', 'given_name': 'Alex', 'family_name': 'Morgan', 'birth_date': '2001-02-03'}}}
     raw = response('Former'); raw['benefitsInformation'][2]['benefitAmount'] = '0'
@@ -177,6 +213,7 @@ def test_identity_review_persists_across_visits_and_rejects_stale_or_unauthorize
     result = {'checked_at': checked, 'check_id': 'case', 'issues': [], 'suggestions': None,
               'codes': api._previsit_codes(inputs), 'benefits': api._case_benefits(raw, inputs, source, {})}
     case = {'id': 'case', 'revision': 1, 'source_mode': 'commercial_previsit',
+            'library_pricing': [{'document_id': 'signed-contract'}],
             'previsit': {'checked_at': checked}, 'previsit_raw_object_key': 'protected'}
     monkeypatch.setattr(api, '_session', AsyncMock(return_value=session))
     monkeypatch.setattr(api, '_ecw_practice_config', lambda *a: {})
@@ -191,6 +228,8 @@ def test_identity_review_persists_across_visits_and_rejects_stale_or_unauthorize
     persist = MagicMock(side_effect=lambda patient, practice, proof: session['intake']['patient'].update(insurance_identities={proof['binding']: proof}))
     monkeypatch.setattr(api.staff_store, 'save_insurance_identity', persist)
     api._finish_previsit(result, case, inputs, source, raw, session, 'payer-a')
+    assert result['requirement_evidence']['referral']['status'] == 'Verification required'
+    assert result['requirement_evidence']['referral']['sources'][0]['page'] == 9
     token = result['context_token']
     emg = asyncio.run(api.update_visit_review('case', api.VisitReviewInput(context_token=token, revision=1, emg_required=True), None))
     assert emg['emg_option']['requested'] is True

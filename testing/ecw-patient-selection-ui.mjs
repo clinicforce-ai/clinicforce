@@ -24,7 +24,7 @@ await page.route(url => url.pathname.startsWith('/api/'), async route => {
       assert.equal(value.identity_confirmed, true)
       assert.equal(value.family_name, candidate.family_name)
       body = { ...intake, ecw_match: { patient: candidate, appointments: [] } }
-    } else body = { status: 'selection_required', candidates: mode === 'empty' ? [] : [candidate, { ...candidate, id: 'ecw-2', ecw_account_number: 'SYNTHETIC-002' }] }
+    } else body = { status: 'selection_required', candidates: mode === 'empty' ? [] : value.ecw_account_number ? [candidate] : [candidate, { ...candidate, id: 'ecw-2', ecw_account_number: 'SYNTHETIC-002' }] }
   } else if (path === '/api/staff/intakes/intake-1') body = intake
   else if (path === '/api/doctor/insurance/commercial/appointments') {
     appointments.push(path)
@@ -47,6 +47,24 @@ async function start() {
   await search()
 }
 try {
+  await page.goto(process.env.UI_URL || 'http://127.0.0.1:5182/?staff')
+  await page.getByRole('button', { name: /Pull patient from eCW/ }).click()
+  await page.getByLabel('eCW account number (optional)').fill('SYNTHETIC-001')
+  await page.getByLabel('Date of birth', { exact: true }).fill('1980-01-01')
+  await search()
+  const accountSelect = page.getByLabel('Similar eCW patients')
+  await accountSelect.waitFor()
+  assert.equal(lookups.at(-1).ecw_account_number, 'SYNTHETIC-001')
+  assert.equal(lookups.at(-1).birth_date, '1980-01-01')
+  assert.equal(lookups.at(-1).given_name, '')
+  assert.equal(appointments.length, 0)
+  await accountSelect.selectOption('ecw-1')
+  await page.getByRole('checkbox', { name: /I confirmed this patient's/ }).check()
+  await page.getByRole('button', { name: 'Use selected patient' }).click()
+  await page.getByRole('heading', { name: 'Insurance estimator', exact: true }).waitFor()
+  await page.getByRole('heading', { name: 'No upcoming visit returned' }).waitFor()
+  assert.equal(lookups.at(-1).family_name, candidate.family_name)
+  appointments.length = 0
   await start()
   const select = page.getByLabel('Similar eCW patients')
   const confirm = page.getByRole('checkbox', { name: /I confirmed this patient's/ })

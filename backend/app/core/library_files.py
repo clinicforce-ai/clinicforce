@@ -12,7 +12,7 @@ from lxml import etree
 
 from app.core import object_store, staff_store
 
-EXTRACTION_VERSION = 'clinic-pages-2'
+EXTRACTION_VERSION = 'clinic-pages-3'
 
 OFFICE_TYPES = {
     '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
@@ -38,6 +38,21 @@ def office_preview(content: bytes, filename: str) -> str:
         def text(node):
             return ''.join(node.xpath('.//*[local-name()="t"]/text()'))
 
+        def docx_cell_text(node):
+            parts = []
+            for paragraph in node.xpath('./*[local-name()="p"]'):
+                if parts:
+                    parts.append('\n')
+                for item in paragraph.iter():
+                    name = etree.QName(item).localname
+                    if name == 't' and item.text:
+                        parts.append(item.text)
+                    elif name in {'br', 'cr'}:
+                        parts.append('\n')
+                    elif name == 'tab':
+                        parts.append('\t')
+            return ''.join(parts) if parts else text(node)
+
         def table(rows, row_numbers=None):
             return '<table>' + ''.join(f'<tr data-row="{row_numbers[index] if row_numbers else index + 1}">' + ''.join('<td>' + escape(str(cell)) + '</td>' for cell in row) + '</tr>' for index, row in enumerate(rows)) + '</table>'
 
@@ -54,7 +69,7 @@ def office_preview(content: bytes, filename: str) -> str:
                     heading = bool(styles and re.match(r'heading\d|title', styles[0], re.I))
                     blocks.append(('<h3>' if heading else '<p>') + escape(text(node)) + ('</h3>' if heading else '</p>'))
                 elif name == 'tbl':
-                    blocks.append(table([[text(cell) for cell in row.xpath('./*[local-name()="tc"]')]
+                    blocks.append(table([[docx_cell_text(cell) for cell in row.xpath('./*[local-name()="tc"]')]
                                          for row in node.xpath('./*[local-name()="tr"]')]))
         else:
             workbook = xml('xl/workbook.xml')

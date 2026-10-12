@@ -27,7 +27,7 @@ def _deductible_message(note: str) -> bool | None:
     text = note.strip().rstrip('.').casefold()
     if re.fullmatch(r'(?:deductible (?:does not apply|waived)|no deductible|not subject to deductible|copay (?:applies )?before deductible)', text):
         return False
-    if re.fullmatch(r'(?:(?:\$[\d,.]+ )?copay(?:ment)? )?(?:after deductible(?: is met)?|subject to deductible|deductible applies)', text):
+    if re.fullmatch(r'(?:(?:\$[\d,.]+ )?copay(?:ment)? )?(?:applies )?(?:after deductible(?: is met)?|subject to deductible|deductible applies)', text):
         return True
     return None
 
@@ -390,7 +390,7 @@ def normalize_stedi_271(payload: dict[str, Any], service_type_code: str, provide
                         service_date: str | None = None, selected_ids: list[str] | None = None,
                         office_service_types: list[str] | None = None, place_of_service: str | None = None,
                         visit_context: dict | None = None, provider_npi: str | None = None) -> dict[str, Any]:
-    """Normalize only unambiguous individual in-network schedule benefits.
+    """Normalize individual benefits for the provider's verified network tier.
 
     A benefit network indicator is not provider participation. Use a verified
     clinic record or an explicit payer assertion about the requesting provider.
@@ -471,11 +471,42 @@ def normalize_stedi_271(payload: dict[str, Any], service_type_code: str, provide
             return procedure == procedure_code
         stcs = {str(value) for value in row.get("serviceTypeCodes") or []}
         return not stcs or bool(stcs & ({*priorities, "30"} if office and selected_ids is None else {service_type_code, "30"}))
-    # Out-of-network noncoverage and restrictions must not cancel in-network
-    # coverage. Raw reported options retain both network schedules below.
+    # A benefit row names a schedule, not the provider's participation. Only
+    # an explicit statement about the requesting provider can select the
+    # out-of-network tier automatically. Contrary clinic evidence blocks it.
+    def provider_row_in_date(row: dict) -> bool:
+        if not service_date:
+            return True
+        plan = (payload.get('plans') or [])[row['plan_index']] if 'plan_index' in row else payload
+        person_dates = (payload.get('dependent') or payload.get('subscriber') or {}).get('dates') or {}
+        bounds = [person_dates, payload.get('planDateInformation') or {}, plan.get('planDateInformation') or {},
+                  plan.get('dates') or {}, row.get('benefitsDateInformation') or {}, row.get('dates') or {}]
+        try:
+            return all(_dates_apply(bound, service_date) for bound in bounds)
+        except (ValueError, TypeError):
+            return False
+    provider_rows = [row for row in _stedi_entries(payload) if relevant_service(row) and provider_row_in_date(row)]
+    negative_provider_ids = [row['evidence_path'] for row in provider_rows if any(
+        re.search(r'\bprovider(?: ID you entered)? is (?:not participating|not in[ -]network|non[- ]participating|out[- ]of[- ]network)\b', note, re.I)
+        for note in _benefit_notes([row.get('messages'), row.get('additionalInformation')]))]
+    positive_provider_ids = [row['evidence_path'] for row in provider_rows if any(
+        _provider_participation(note, provider_npi)
+        for note in _benefit_notes([row.get('messages'), row.get('additionalInformation')]))]
+    network_conflict = bool(negative_provider_ids and (positive_provider_ids or provider_network_verified))
+    selected_tier = 'out_of_network' if negative_provider_ids and not network_conflict else 'in_network'
+    accepted_networks = ({'N', 'NO', 'OUT_OF_NETWORK', 'W', 'IN_AND_OUT_OF_NETWORK'} if selected_tier == 'out_of_network'
+                         else {'Y', 'YES', 'IN_NETWORK', 'W', 'IN_AND_OUT_OF_NETWORK'})
     entries = [row for row in entries if relevant_service(row)
-               and _network_indicator(row) not in {'N', 'NO', 'OUT_OF_NETWORK'}]
+               and (_network_indicator(row) in accepted_networks or
+                    not _network_indicator(row) and (row.get('code') in {'status', '1', '2', '3', '4', '5', '6', '7', '8', 'I', 'R'}
+                                                       or row.get('code') == 'D' and _procedure(row) == procedure_code))]
     coverage = coverage_evidence(payload, service_date, entries)
+    if coverage['status'] == 'UNKNOWN' and selected_tier == 'out_of_network':
+        # A payer may return plan status only on its in-network schedule.
+        # That proves enrollment, while the separate OON rows supply terms.
+        broad_status = coverage_evidence(payload, service_date)
+        if broad_status['status'] == 'ACTIVE':
+            coverage = broad_status
     invalid_dates = False
     person_dates = (payload.get('dependent') or payload.get('subscriber') or {}).get('dates') or {}
     returned_service = person_dates.get('service') or (payload.get('planDateInformation') or {}).get('service') or {}
@@ -509,7 +540,7 @@ def normalize_stedi_271(payload: dict[str, Any], service_type_code: str, provide
         # Use the best returned category that actually contains cost sharing.
         service_type_code = next((stc for stc in priorities if any(
             row.get('code') in {'A', 'B'} and stc in (row.get('serviceTypeCodes') or [])
-            and _network_indicator(row) in {'Y', 'YES', 'IN_NETWORK', 'W', 'IN_AND_OUT_OF_NETWORK'}
+            and _network_indicator(row) in accepted_networks
             for row in entries)), service_type_code)
         entries = [row for row in entries if _procedure(row) or not row.get('serviceTypeCodes')
                    or set(row['serviceTypeCodes']) & {service_type_code, '30'}]
@@ -530,6 +561,8 @@ def normalize_stedi_271(payload: dict[str, Any], service_type_code: str, provide
         active = False
     elif coverage['status'] == 'CONFLICT':
         active = None
+    elif active is None and coverage['status'] == 'ACTIVE':
+        active = True
     response_failed = str(payload.get("status") or "").upper() in {"ERROR", "FAILED", "REJECTED"} or bool(eligibility_errors(payload))
     if response_failed or any(row.get("code") == "V" for row in entries):
         active = None
@@ -548,9 +581,14 @@ def normalize_stedi_271(payload: dict[str, Any], service_type_code: str, provide
         service_waiver = (not level and row.get('code') == 'C' and specificity >= 2
                           and _stedi_cents(row.get('benefitAmount')) == 0
                           and str(row.get('timeQualifierCode') or row.get('timeQualifier') or '').upper() in {'', '23', 'CALENDAR_YEAR', '22', 'SERVICE_YEAR'})
-        if (not individual and not service_waiver and not (not level and row.get("code") in {"A", "B"})) or indicator not in {"Y", "YES", "IN_NETWORK", "IN_AND_OUT_OF_NETWORK", "W"} or not specificity:
+        if (not individual and not service_waiver and not (not level and row.get("code") in {"A", "B"})) or indicator not in accepted_networks or not specificity:
             continue
         wanted.append((specificity, row))
+    # A CPT-specific cost share replaces a broader category cost share for
+    # this CPT. Deductible and out-of-pocket accumulators remain plan-wide.
+    cost_share_scope = max((score for score, row in wanted if row.get('code') in {'A', 'B'}), default=0)
+    wanted = [(score, row) for score, row in wanted
+              if row.get('code') not in {'A', 'B'} or score == cost_share_scope]
     def pick(code: str, remaining: bool = False, periods: set[str] | None = None, *, plan_wide: bool = False) -> dict[str, Any] | None:
         periods = {'29', 'REMAINING'} if remaining else periods
         matches = [(specificity, row) for specificity, row in wanted if str(row.get("code") or "").upper() == code and (periods is None or str(row.get("timeQualifierCode") or row.get("timeQualifier") or "").upper() in periods)]
@@ -600,7 +638,7 @@ def normalize_stedi_271(payload: dict[str, Any], service_type_code: str, provide
     family_oop = [row for row in relevant if row.get('code') == 'G'
                   and (not _procedure(row) or _procedure(row) == procedure_code)
                   and str(row.get('coverageLevel') or row.get('coverageLevelCode') or '').upper() in {'FAMILY', 'FAM'}
-                  and _network_indicator(row) in {'Y', 'YES', 'IN_NETWORK', 'W', 'IN_AND_OUT_OF_NETWORK'}
+                  and _network_indicator(row) in accepted_networks
                   and str(row.get('timeQualifierCode') or row.get('timeQualifier') or '').upper() in {'29', 'REMAINING'}]
     family_scores = [(3 if _procedure(row) == procedure_code and procedure_code else
                       2 if service_type_code in (row.get('serviceTypeCodes') or []) else 1, row)
@@ -666,8 +704,8 @@ def normalize_stedi_271(payload: dict[str, Any], service_type_code: str, provide
         if amount is not None and (specificity >= 2 or amount == 0) and (period in {'', '23', 'CALENDAR_YEAR', '22', 'SERVICE_YEAR'}
                 or specificity >= 2 and amount > 0 and period in {'29', 'REMAINING'}):
             deductible_signals.append((amount > 0, row))
-        if specificity >= 2 and (row is copay or row is coinsurance or row.get('code') == 'C'
-                or row.get('evidence_path') in {x.get('evidence_path') for x in (copay, coinsurance) if x}):
+        if (row.get('evidence_path') in {x.get('evidence_path') for x in (copay, coinsurance) if x}
+                or specificity >= 2 and row.get('code') == 'C'):
             for note in notes([row.get('messages'), row.get('additionalInformation')]):
                 for label in note.split(';'):
                     applies = _deductible_message(label)
@@ -748,10 +786,12 @@ def normalize_stedi_271(payload: dict[str, Any], service_type_code: str, provide
     # A contrary statement about this provider may sit on an out-of-network
     # row excluded from the in-network cost-sharing calculation above.
     conflicting_network |= any(re.search(r'\bprovider(?: ID you entered)? is (?:not participating|not in[ -]network|non[- ]participating|out[- ]of[- ]network)\b', note, re.I)
-        for row in _stedi_entries(payload) for note in notes([row.get('messages'), row.get('additionalInformation')]))
-    if conflicting_network:
+        for row in provider_rows for note in notes([row.get('messages'), row.get('additionalInformation')]))
+    if network_conflict:
         review_reasons.append('Provider-network evidence reports nonparticipation or contradicts the in-network assertion. Verify participation before estimating.')
     payer_network_verified = bool(participation and not conflicting_network and active is True
+        and not multiple_plans and not invalid_dates and date_matches is not False and not source_errors)
+    out_of_network_verified = bool(negative_provider_ids and not network_conflict and active is True
         and not multiple_plans and not invalid_dates and date_matches is not False and not source_errors)
     return {"active": active, "coverage_evidence": coverage,
             "excluded_service_evidence_ids": excluded_service_ids,
@@ -759,9 +799,9 @@ def normalize_stedi_271(payload: dict[str, Any], service_type_code: str, provide
             "coverage_dates_invalid": invalid_dates,
             "source_errors": source_errors, "service_date_matches": date_matches, "returned_service_dates": returned_service,
             "coverage_level": "individual" if wanted else "unknown",
-            "network_status": "in_network" if provider_network_verified or payer_network_verified else "unknown",
-            "network_source": 'clinic_record' if provider_network_verified else 'payer_participation_message' if payer_network_verified else None,
-            "network_evidence_ids": participation if payer_network_verified else [],
+            "network_status": "out_of_network" if out_of_network_verified else "in_network" if provider_network_verified and not network_conflict or payer_network_verified else "unknown",
+            "network_source": 'payer_participation_message' if out_of_network_verified or payer_network_verified else 'clinic_record' if provider_network_verified and not network_conflict else None,
+            "network_evidence_ids": negative_provider_ids if out_of_network_verified else participation if payer_network_verified else [],
             "deductible_remaining_cents": deductible_cents, "oop_remaining_cents": oop_cents,
             "deductible_annual_cents": _stedi_cents(annual_deductible.get('benefitAmount')) if annual_deductible else None,
             "deductible_applicability": deductible_applicability,
@@ -773,8 +813,10 @@ def normalize_stedi_271(payload: dict[str, Any], service_type_code: str, provide
             "has_secondary": other_active_coverage or multiple_plans, "requires_review": bool(review_reasons),
             "selected_benefit_ids": [path for row in (copay, coinsurance) if row for path in row.get('evidence_paths', [row['evidence_path']])],
             "deductible_id": deductible.get("evidence_path") if deductible else None,
+            "deductible_annual_id": annual_deductible.get("evidence_path") if annual_deductible else None,
             "oop_id": oop.get("evidence_path") if oop else None,
             "copay_id": copay.get("evidence_path") if copay else None,
+            "coinsurance_id": coinsurance.get("evidence_path") if coinsurance else None,
             "copay_remaining_cents": copay_cap,
             "copay_limit_ids": [row['evidence_path'] for row in cap_rows],
             "separate_copay_limit": bool(cap_rows),
@@ -795,14 +837,20 @@ def normalize_stedi_271(payload: dict[str, Any], service_type_code: str, provide
 
 
 def estimate(lines: list[dict[str, Any]], benefits: dict[str, Any], rules: dict[str, Any]) -> dict[str, Any]:
-    """Calculate one in-network primary-plan encounter or fail closed."""
+    """Calculate a primary-plan share only from an allowance for the verified tier."""
     if not lines:
         raise CommercialError("Confirm at least one service before calculating an estimate.")
     if benefits.get("active") is not True:
         raise CommercialError("Active primary coverage is required for an insured estimate.")
     if benefits.get("coverage_level") != "individual":
         raise CommercialError("A compatible individual benefit level is required for an automatic estimate.")
-    if benefits.get("network_status") != "in_network":
+    out_of_network = benefits.get('network_status') == 'out_of_network'
+    if out_of_network:
+        if (benefits.get('network_source') != 'payer_participation_message' or
+                rules.get('allowed_basis') != 'payer_out_of_network' or
+                any(line.get('allowed_source') != 'payer_out_of_network' or not line.get('rate_id') for line in lines)):
+            raise CommercialError('A verified payer out-of-network allowed amount is required for every selected CPT.')
+    elif benefits.get("network_status") != "in_network":
         raise CommercialError("Confirmed in-network provider participation is required for an automatic estimate.")
     if benefits.get("has_secondary"):
         raise CommercialError("Multiple active coverages require staff review.")
@@ -872,5 +920,8 @@ def estimate(lines: list[dict[str, Any]], benefits: dict[str, Any], rules: dict[
         "allowed_cents": allowed, "deductible_cents": deductible, "coinsurance_cents": coinsurance_cents,
         "copay_cents": copay, "oop_adjustment_cents": raw_patient - patient,
         "patient_cents": patient, "plan_cents": allowed - patient, "lines": explanation,
-        "cost_share": cost_share, "calculation_version": "commercial-v1", "disclaimer": "Pre-service estimate only; final responsibility depends on services performed and payer adjudication.",
+        "cost_share": cost_share, "network_tier": 'out_of_network' if out_of_network else 'in_network',
+        "possible_additional_out_of_network_charges_cents": None if out_of_network else 0,
+        "calculation_version": "commercial-v1", "disclaimer": "Pre-service estimate only; final responsibility depends on services performed and payer adjudication." +
+            (' Out-of-network balance billing may add charges above the payer allowed amount.' if out_of_network else ''),
     }

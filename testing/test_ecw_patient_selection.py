@@ -104,6 +104,19 @@ def test_live_reader_contract_suggestions_do_not_read_visits_and_confirmation_re
                 await ecw.lookup_patient_and_appointments({**PROFILE, 'ecw_account_number': 'OTHER'}, {}, allow_suggestions=True, transport=transport)
             except ecw.EcwPatientSelectionRequired as exc:
                 assert exc.candidates == []
+            encounter_reads = sum(request.url.path.endswith('/Encounter') for request in calls)
+            try:
+                await ecw.lookup_patient_and_appointments({'patient_first_name': '', 'patient_last_name': '',
+                    'patient_birth_date': '1980-01-01', 'ecw_account_number': 'SYNTHETIC-001'}, {},
+                    allow_suggestions=True, transport=transport)
+            except ecw.EcwPatientSelectionRequired as exc:
+                assert len(exc.candidates) == 1 and exc.candidates[0]['given_name'] == 'Sample'
+            else:
+                raise AssertionError('Account plus DOB without names must require selection')
+            assert sum(request.url.path.endswith('/Encounter') for request in calls) == encounter_reads
+            confirmed = await ecw.lookup_patient_and_appointments({**canonical, 'ecw_account_number': 'SYNTHETIC-001'}, {}, transport=transport)
+            assert confirmed['patient']['ecw_account_number'] == 'SYNTHETIC-001'
+            assert sum(request.url.path.endswith('/Encounter') for request in calls) == encounter_reads + 1
     asyncio.run(run())
 
 
@@ -152,6 +165,31 @@ def test_selection_api_auth_confirmation_no_writes_and_canonical_storage():
         find.return_value = None
         read.side_effect = ecw.EcwBackendError('Provider timed out', reason_code='read_timeout')
         assert client.post(path, json=DETAILS).status_code == 502
+
+
+def test_account_and_birth_date_api_needs_no_name():
+    app = FastAPI()
+    app.include_router(staff.router)
+    client = TestClient(app)
+    actor = {'id': 'staff', 'practice_id': 'practice'}
+    path = '/api/staff/intakes/ecw-lookup'
+    with patch.object(staff, 'require_staff', AsyncMock(return_value=actor)), \
+         patch.object(ecw, 'configured', return_value=True), \
+         patch.object(ecw, 'lookup_patient_and_appointments', AsyncMock(side_effect=ecw.EcwPatientSelectionRequired([{
+             'id': 'patient-1', 'given_name': 'Sample', 'family_name': 'North Vale',
+             'birth_date': '1980-01-01', 'ecw_account_number': 'SYNTHETIC-001', 'differences': [],
+         }]))) as read:
+        response = client.post(path, json={'ecw_account_number': ' SYNTHETIC-001 ', 'birth_date': '1980-01-01'})
+        assert response.status_code == 200 and len(response.json()['candidates']) == 1
+        assert read.call_args.args[0]['ecw_account_number'] == 'SYNTHETIC-001'
+        assert read.call_args.args[0]['patient_birth_date'] == '1980-01-01'
+        assert 'ecw_patient_id' not in read.call_args.args[0]
+        assert read.call_args.kwargs['allow_suggestions'] is True
+        read.reset_mock()
+        response = client.post(path, json={'ecw_account_number': 'SYNTHETIC-NEW'})
+        assert response.status_code == 422
+        read.assert_not_awaited()
+        assert client.post(path, json={}).status_code == 422
 
 
 def test_estimator_identity_failure_returns_actionable_code_without_benefits():

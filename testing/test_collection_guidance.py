@@ -206,8 +206,8 @@ def office_coinsurance_payload():
 
 
 @pytest.mark.parametrize(('copay', 'coinsurance', 'fee', 'deductible', 'expected'), [
-    ('0', '0.20', 25000, '0', 5000), ('0', '0.20', 17321, '0', 3464),
-    ('0', '0.20', 17321, '20', 5064), ('0', '0', 25000, '0', 0),
+    ('0', '0.20', 25000, '0', None), ('0', '0.20', 17321, '0', None),
+    ('0', '0.20', 17321, '20', None), ('0', '0', 25000, '0', 0),
     ('50', '0', 25000, '0', 5000), ('60', '0', 25000, '0', 6000)])
 def test_office_collection_uses_actual_cost_share_and_active_schedule(copay, coinsurance, fee, deductible, expected):
     payload = office_coinsurance_payload()
@@ -229,8 +229,8 @@ def test_office_collection_uses_actual_cost_share_and_active_schedule(copay, coi
     assert all(line['allowed_cents'] is None for line in result['price_range']['lines'])
     assert result['price_range']['lines'][0]['benefits']['network_source'] == 'payer_participation_message'
     if coinsurance == '0.20':
-        assert guidance['basis'] == 'clinic_price_reference'
-        assert 'not an insurer-contracted allowance' in ' '.join(guidance['assumptions'])
+        assert guidance['basis'] == 'deferred_billing'
+        assert guidance.get('range_max_cents') is None
 
 
 @pytest.mark.parametrize('change', ['absent', 'generic', 'negated', 'contradictory', 'out_of_network_conflict', 'date', 'inactive', 'conditional'])
@@ -250,6 +250,9 @@ def test_payer_participation_and_cost_share_guards_remain(change):
     benefits = commercial.normalize_stedi_271(payload, '98', False, service_date='2026-10-07', procedure_code='99203')
     if change == 'conditional':
         assert any('conditional benefit' in reason for reason in benefits['review_reasons'])
+    elif change == 'negated':
+        assert benefits['network_status'] == 'out_of_network'
+        assert benefits['network_evidence_ids']
     else:
         assert benefits['network_status'] == 'unknown'
         assert benefits['network_evidence_ids'] == []

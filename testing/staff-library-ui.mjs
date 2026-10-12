@@ -1,7 +1,7 @@
 // Synthetic clinic data only; intercept every API request.
 import assert from 'node:assert/strict'
 const { chromium } = await import(process.env.PLAYWRIGHT_MODULE || 'playwright')
-const browser = await chromium.launch({ headless: true })
+const browser = await chromium.launch({ headless: true, ...(process.env.CHROMIUM_PATH ? { executablePath: process.env.CHROMIUM_PATH } : {}) })
 const context = await browser.newContext({ viewport: { width: 1280, height: 1000 } })
 const page = await context.newPage()
 const errors = []
@@ -38,33 +38,42 @@ await context.route(url => url.pathname.startsWith('/api/'), async route => {
 const openLibrary = async () => {
   await page.goto(process.env.UI_URL || 'http://127.0.0.1:5189/?staff')
   await page.getByRole('button', { name: 'Clinic library', exact: true }).click()
-  await page.getByRole('heading', { name: 'Saved clinic documents' }).waitFor()
+  await page.getByRole('heading', { name: 'Folders' }).waitFor()
 }
 try {
   await openLibrary()
-  await page.getByText('5 documents', { exact: true }).waitFor()
-  assert(await page.getByRole('heading', { name: 'Add a clinic document' }).isVisible())
-  assert(await page.getByText('Active in estimator · Clinic self-pay prices', { exact: true }).isVisible())
-  assert.match(await page.locator('main').innerText(), /Documents are processed automatically/)
-  assert.equal(await page.getByRole('link', { name: 'Read extracted text', exact: true }).first().getAttribute('href'), '/api/staff/library/document-0/text')
-  for (const document of documents) {
+  for (const title of ['Insurance contracts', 'Fee schedules', 'Self-pay rates']) {
+    assert(await page.getByRole('button', { name: new RegExp(title) }).isVisible())
+  }
+  if (process.env.SCREENSHOT_DIR) await page.screenshot({ path: `${process.env.SCREENSHOT_DIR}/clinic-library-folders.png`, fullPage: true })
+  assert.equal(await page.getByText('Final ERA').count(), 0)
+  assert.equal(await page.getByText('NMCT payer plan matrix').count(), 0)
+  await page.getByRole('button', { name: /Insurance contracts/ }).click()
+  assert(await page.getByRole('heading', { name: 'Add to insurance contracts' }).isVisible())
+  assert.equal(await page.getByLabel('Document type').count(), 0)
+  assert.equal(await page.getByRole('link', { name: 'Read extracted text', exact: true }).getAttribute('href'), '/api/staff/library/document-0/text')
+  for (const document of documents.filter(item => item.kind === 'contract')) {
     const link = page.getByRole('link', { name: `Open ${document.label} in a new tab` })
     assert(await link.isVisible())
     assert.equal(await link.getAttribute('href'), `/api/staff/library/${document.id}/document?preview=true`)
     assert.equal(await link.getAttribute('rel'), 'noopener noreferrer')
   }
+  await page.getByRole('button', { name: 'All folders' }).click()
+  await page.getByRole('button', { name: /Self-pay rates/ }).click()
+  assert(await page.getByText('Active in estimator · Clinic self-pay prices', { exact: true }).isVisible())
   const popupPromise = context.waitForEvent('page')
   await page.getByRole('link', { name: 'Open Self-pay rates in a new tab' }).click()
   const popup = await popupPromise
   await popup.waitForLoadState()
   assert.match(await popup.locator('body').innerText(), /99213,100/)
   await popup.close()
-  await page.getByLabel('Document type').selectOption('contract')
+  await page.getByRole('button', { name: 'All folders' }).click()
+  await page.getByRole('button', { name: /Insurance contracts/ }).click()
   await page.getByLabel('Label *', { exact: true }).fill('New clinic contract')
   await page.getByLabel(/^File \*/).setInputFiles({ name: 'contract.pdf', mimeType: 'application/pdf', buffer: Buffer.from('%PDF synthetic') })
-  await page.getByRole('button', { name: 'Save clinic document' }).click()
+  await page.getByRole('button', { name: 'Save to insurance contracts' }).click()
   await page.getByRole('link', { name: 'Open New clinic contract in a new tab' }).waitFor()
-  assert(await page.getByText('6 documents', { exact: true }).isVisible())
+  assert(await page.getByText('2 files', { exact: true }).isVisible())
   for (const width of [375, 812, 1280]) {
     await page.setViewportSize({ width, height: width === 812 ? 375 : 1000 })
     assert(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), `No horizontal overflow at ${width}px`)
@@ -72,16 +81,18 @@ try {
   }
   role = 'staff'
   await openLibrary()
-  await page.getByText('6 documents', { exact: true }).waitFor()
-  assert.equal(await page.getByRole('heading', { name: 'Add a clinic document' }).count(), 0)
+  await page.getByRole('button', { name: /Insurance contracts/ }).click()
+  await page.getByText('2 files', { exact: true }).waitFor()
+  assert.equal(await page.getByRole('heading', { name: 'Add to insurance contracts' }).count(), 0)
   failList = true
   await openLibrary()
   await page.getByRole('alert').waitFor()
-  assert.equal(await page.getByText('No clinic documents yet', { exact: true }).count(), 0)
+  assert.equal(await page.getByText('No files in this folder', { exact: true }).count(), 0)
   failList = false
   documents = []
   await page.getByRole('button', { name: 'Refresh', exact: true }).click()
-  await page.getByText('No clinic documents yet', { exact: true }).waitFor()
+  await page.getByRole('button', { name: /Insurance contracts/ }).click()
+  await page.getByText('No files in this folder', { exact: true }).waitFor()
   assert.deepEqual(errors, [])
   console.log('PASS: document list, open in new tab, upload refresh, responsive layout, staff access, errors and empty state.')
 } finally { await browser.close() }

@@ -35,12 +35,28 @@ def build(result: dict, review: dict | None = None) -> dict:
                     and all(type(value) is int and 0 <= value <= 100_000_000 for value in amounts)
                     and amounts[0] <= amounts[1])
         message = ((result.get('cash_fallback') or {}).get('reason') or 'Cash pricing for the selected services.')
+        payments = (review or {}).get('payments') or {}
+        paid = payments.get('amount_cents', 0) if payments.get('reference') else 0
         guidance.update(status='cash_estimate' if complete else 'cash_price_missing', basis='practice_cash_price',
-            amount_cents=amounts[0] if complete else None,
-            range_min_cents=amounts[0] if complete else None, range_max_cents=amounts[1] if complete else None,
+            amount_cents=max(0, amounts[0] - paid) if complete else None,
+            range_min_cents=max(0, amounts[0] - paid) if complete else None,
+            range_max_cents=max(0, amounts[1] - paid) if complete else None,
             reason=message if complete else message + ' The practice has no complete cash price for the selected services.',
             patient_message=message, network='Cash pricing', network_source='Practice cash schedule or explicit clinic cash rates',
             requirements={kind: 'Insurance requirements do not establish the cash price' for kind in ('referral', 'authorization')})
+        if payments.get('reference') and complete:
+            guidance['reason'] += ' The recorded payment was deducted once.'
+        for line in lines:
+            terms = line.get('benefits') or {}
+            guidance['services'].append({'id': line.get('id'), 'code': line.get('code'),
+                'benefit_source': line.get('benefit_source') or result.get('benefit_source'),
+                'benefit': line.get('benefit_basis') or 'Applicable service benefits',
+                'patient_cents': None, 'copay_cents': terms.get('copay_cents'),
+                'coinsurance_percent': terms.get('coinsurance_percent'),
+                'deductible_remaining_cents': terms.get('deductible_remaining_cents'),
+                'deductible_applicability': terms.get('deductible_applicability', 'UNKNOWN'),
+                'oop_remaining_cents': terms.get('oop_remaining_cents'),
+                'selected_benefit_ids': terms.get('selected_benefit_ids') or []})
         return guidance
     if guidance['network'] == 'Not reported' and lines and all(line.get('benefits', {}).get('network_independent') for line in lines):
         guidance['network'] = 'Same benefits in / out of network'
@@ -69,7 +85,8 @@ def build(result: dict, review: dict | None = None) -> dict:
                 guidance['requirement_sources'][kind] = 'eCW; applicability to this service not established'
     identity = result.get('identity') or benefits.get('identity') or {}
     safe = (benefits.get('active') is True and benefits.get('service_date_matches') is not False
-            and benefits.get('network_status') != 'out_of_network' and not benefits.get('has_secondary')
+            and (benefits.get('network_status') != 'out_of_network' or benefits.get('network_source') == 'payer_participation_message')
+            and not benefits.get('has_secondary')
             and identity.get('status') != 'review' and not price.get('service_issues') and not adverse
             and not any('evidence' in str(reason).lower() or 'date' in str(reason).lower()
                         for reason in benefits.get('review_reasons', [])))
@@ -97,10 +114,15 @@ def build(result: dict, review: dict | None = None) -> dict:
     elif safe and price.get('complete') and price.get('mode') != 'options':
         amount = price.get('patient_min_cents')
         guidance.update(status='estimated', basis='anticipated_services',
-                        reason='Estimated copay, deductible and coinsurance using the applicable visit benefits and clinic rates.')
+                        reason=('Estimated patient share of the payer out-of-network allowed amount; possible additional doctor charges remain unknown.'
+                                if benefits.get('network_status') == 'out_of_network' else
+                                'Estimated copay, deductible and coinsurance using the applicable visit benefits and clinic rates.'))
         if price.get('patient_min_cents') != price.get('patient_max_cents'):
             assumptions.append('Collect the lowest estimated office-visit amount now. Final complexity and any remaining responsibility follow the claim.')
-        if benefits.get('network_status') != 'in_network' and not result.get('pricing_assumptions'):
+        if benefits.get('network_status') == 'out_of_network' and not all(
+                line.get('allowed_basis') == 'payer_out_of_network' for line in lines):
+            amount = None
+        elif benefits.get('network_status') == 'unknown' and not result.get('pricing_assumptions'):
             amount = None
     elif safe and lines and price.get('mode') != 'options':
         # A unique fixed office copay can stand alone without an allowed rate.
@@ -113,6 +135,8 @@ def build(result: dict, review: dict | None = None) -> dict:
                 and all(t.get('active') is True and t.get('copay_cents') is not None
                         and t.get('copay_period') in {'', 'VISIT', '27', 'DAY', '7', 'SERVICE', 'PROCEDURE'}
                         and (t.get('deductible_applies') is not True or t.get('deductible_remaining_cents') == 0)
+                        and (benefits.get('network_status') != 'out_of_network' or
+                             t.get('deductible_applies') is False or t.get('deductible_remaining_cents') == 0)
                         and (not t.get('separate_copay_limit') or t.get('copay_remaining_cents') is not None)
                         and t.get('coinsurance_percent') in {None, '0', '0.0', '0.00'}
                         and t.get('cost_share') not in {'coinsurance', 'cumulative'}
@@ -129,17 +153,12 @@ def build(result: dict, review: dict | None = None) -> dict:
                 assumptions.append('The payer reports a separate remaining copay maximum. The office copay uses that balance, while the general out-of-pocket balance remains separate.')
             if any(not t.get('copay_period') for t in terms):
                 assumptions.append('The payer did not specify a copay period. This advance applies one copay to the single office consultation.')
-            if benefits.get('network_status') != 'in_network' and not result.get('pricing_assumptions') and not all(t.get('network_independent') for t in terms):
+            if benefits.get('network_status') not in {'in_network', 'out_of_network'} and not result.get('pricing_assumptions') and not all(t.get('network_independent') for t in terms):
                 assumptions.append('This provisional office advance uses the returned in-network specialist copay. Provider participation is unverified; confirm it before care. Final responsibility may differ.')
+            if benefits.get('network_status') == 'out_of_network':
+                assumptions.append('This is only the verified out-of-network office copay. The payer allowed amount and possible additional charges are unknown.')
             guidance.update(status='estimated', basis='office_copay',
                             reason='The applicable office-visit copay is collected once. Any additional service responsibility will follow the claim.')
-    if amount is None and safe:
-        reference = cash_reference_estimate(result)
-        if reference:
-            amount = reference['amount_cents']
-            assumptions.extend(reference['assumptions'])
-            guidance.update(status='estimated', basis='clinic_price_reference', reason=reference['reason'],
-                range_min_cents=reference['amount_cents'], range_max_cents=reference['max_cents'])
     note = result.get('billing_note') or {}
     if (note and identity.get('status') != 'review' and not source_errors
             and not price.get('service_issues') and result.get('payment_mode') != 'cash'):
@@ -222,6 +241,7 @@ def build(result: dict, review: dict | None = None) -> dict:
         mapped = 'needs mapping' not in line.get('benefit_basis', '')
         terms = (line.get('benefits') or {}) if mapped else {}
         guidance['services'].append({'id': line.get('id'), 'code': line.get('code'),
+            'benefit_source': line.get('benefit_source') or result.get('benefit_source'),
             'benefit': (line.get('benefit_basis') or 'Applicable service benefits') if mapped else 'Benefit determined when claim is processed',
             'patient_cents': (line.get('calculation') or {}).get('patient_cents') if safe and amount is not None else None,
             'oop_remaining_cents': terms.get('oop_remaining_cents'),
@@ -308,53 +328,3 @@ def emg_option(result: dict, rates: list[dict], rules: dict, payload: dict | Non
         option.update(additional_min_cents=min(differences), additional_max_cents=max(differences),
                       total_min_cents=min(totals), total_max_cents=max(totals), scenario_count=len(totals))
     return option
-
-
-def cash_reference_estimate(result: dict) -> dict | None:
-    """A disclosed planning estimate, never a fabricated contracted allowance."""
-    from app.insurance import commercial, cpt_rules
-    lines = (result.get('price_range') or {}).get('lines') or []
-    if not lines or any(line.get('allowed_cents') is not None for line in lines):
-        return None
-    terms = [line.get('benefits') or {} for line in lines]
-    if not all(t.get('active') is True and t.get('service_date_matches') is not False
-               and t.get('coverage_level') == 'individual' and not t.get('has_secondary') for t in terms):
-        return None
-    # A whole-package reference cannot be allocated across different benefit terms.
-    keys = ('copay_cents', 'coinsurance_percent', 'deductible_remaining_cents', 'oop_remaining_cents', 'copay_id', 'deductible_id', 'oop_id')
-    if any(tuple(t.get(k) for k in keys) != tuple(terms[0].get(k) for k in keys) for t in terms):
-        return None
-    t = terms[0]
-    if not (t.get('network_independent') or result['benefits'].get('network_status') == 'in_network' or result.get('pricing_assumptions')):
-        return None
-    from app.insurance.visit_estimate import _workflow_condition
-    if any(any(not _workflow_condition(reason) for reason in item.get('review_reasons', [])) for item in terms):
-        return None
-    cash = result.get('cash_quote') or {}
-    low, high = cash.get('min_cents'), cash.get('max_cents')
-    if not cash.get('complete'):
-        codes = {line['code'] for line in lines}
-        packages = (result.get('cash_schedule') or {}).get('packages') or []
-        if not packages or not codes <= cpt_rules.NCS_CODES | {'95885', '95886'}:
-            return None
-        limbs = sum(line.get('units') or 0 for line in lines if line['code'] in {'95885', '95886'})
-        candidates = [package['amount_cents'] for package in packages if package['max_limbs'] >= limbs]
-        if not candidates:
-            return None
-        low, high = min(candidates), max(candidates)
-    if low is None or high is None:
-        return None
-    calculation = {**t, 'network_status': 'in_network', 'requires_review': False, 'review_reasons': []}
-    try:
-        amounts = [commercial.estimate([{'code': 'planning reference', 'units': 1, 'allowed_cents': fee}], calculation,
-                                      {'cost_share': 'payer_returned'})['patient_cents'] for fee in (low, high)]
-    except commercial.CommercialError:
-        return None
-    amount, maximum = min(amounts), max(amounts)
-    share = f"{t['coinsurance_percent']}% coinsurance" if t.get('coinsurance_percent') not in {None, '0', '0.0', '0.00'} else 'the returned copay'
-    return {'amount_cents': amount, 'max_cents': maximum,
-        'reason': f"Advance planning estimate using {share} and the clinic's ${low / 100:,.2f}–${high / 100:,.2f} published price range. Estimated patient share: ${amount / 100:,.2f}–${maximum / 100:,.2f}; collect the lower estimate now. Final responsibility uses the insurer's allowed amount.",
-        'assumptions': ['No contracted rate is available for this payer. The clinic published price is used only as an estimated pricing basis; it is not an insurer-contracted allowance.',
-                        'Final testing scope and the insurer’s allowed amount can change this estimate.',
-                        *(['The returned cost sharing applies both in and out of network; provider participation is not inferred.'] if t.get('network_independent') else []),
-                        'Any required authorization or referral must apply to the performed services; unknown requirements are not confirmed approvals.']}

@@ -15,9 +15,9 @@ from decimal import Decimal, ROUND_HALF_UP
 from uuid import NAMESPACE_URL, uuid5
 
 from app.core import library_files, staff_store
-from app.insurance import commercial, commercial_store
+from app.insurance import commercial, commercial_store, plan_matrix
 
-VERSION = 'library-rules-1'
+VERSION = 'library-rules-2'
 PROVISIONAL = re.compile(r'\b(?:proposed|pending|suggested|draft|unapproved)\b', re.I)
 CODE = r'(?:\d{5}|[A-Z]\d{4}|\d{4}[A-Z])'
 DOLLARS = r'\$?\s*\d[\d,]*(?:\.\d{1,2})?'
@@ -31,9 +31,82 @@ def dollars(value: str) -> int:
     return commercial._money(value.replace('$', '').replace(',', '').strip(), 'Document price')
 
 
+def _final_cash_categories(tables: list[dict]) -> set[str]:
+    """A suggested price in a different table cannot become an active rate."""
+    final = set()
+    for table in tables:
+        rows = table.get('rows') or []
+        if not rows or [commercial._key(cell) for cell in rows[0]][:3] != ['category', 'status', 'pricestatus']:
+            continue
+        for row in rows[1:]:
+            if len(row) >= 3 and 'final / in use' in str(row[2]).casefold() and not PROVISIONAL.search(str(row[1]) + ' ' + str(row[2])):
+                final.add(commercial._key(row[0]))
+    return final
+
+
+def _named_cash_rules(table: dict, source: dict, final: set[str]) -> tuple[list[dict], list[dict]] | None:
+    """Read final service packages without treating likely CPTs as inclusions."""
+    rows = table.get('rows') or []
+    if not rows:
+        return None
+    headers = [commercial._key(cell) for cell in rows[0]]
+    context = str(table.get('context') or '')
+    if headers[:4] == ['component', 'cpthcpcsreference', 'cashprice', 'howtoapply'] and 'botox' in context.casefold():
+        if 'botox' not in final:
+            return [], [{'status': 'provisional', 'reason': 'Botox price is not marked final in the source status table.', **source, 'locator': table['locator']}]
+        if len(rows) != 3:
+            return [], [{'status': 'missing_dependency', 'reason': 'Botox session and drug prices must both be stated.', **source, 'locator': table['locator']}]
+        session, drug = rows[1:]
+        session_price = re.fullmatch(rf'({DOLLARS})\s*/\s*session', str(session[2]).strip(), re.I)
+        drug_price = re.fullmatch(rf'({DOLLARS})\s*/\s*unit', str(drug[2]).strip(), re.I)
+        ranges = re.findall(r'(\d{5})\s*[-–]\s*(\d{5})', str(session[1]))
+        if (not session_price or not drug_price or 'J0585' not in str(drug[1]).upper()
+                or len(ranges) != 2 or 'injection' not in str(session[0]).casefold()):
+            return [], [{'status': 'missing_dependency', 'reason': 'Botox session CPT scope or per-unit drug price is incomplete.', **source, 'locator': table['locator']}]
+        codes = set()
+        for first, last in ranges:
+            if int(first) > int(last) or int(last) - int(first) > 10:
+                return [], [{'status': 'missing_dependency', 'reason': 'Botox CPT range is too broad.', **source, 'locator': table['locator']}]
+            codes.update(str(code) for code in range(int(first), int(last) + 1))
+        codes -= {'64613', '64614'}  # Already excluded from the current visit planner.
+        def evidence(index: int) -> dict:
+            number = (table.get('row_numbers') or list(range(1, len(rows) + 1)))[index]
+            return {**source, 'locator': f"{table['locator']}, row {number}, price column 3"}
+        session_rows = [{'code': code, 'cash_cents': dollars(session_price[1]), 'price_kind': 'fixed',
+                         'session_group': 'botox', 'description': 'Botox injection session', 'modifier': '',
+                         'effective_to': source.get('effective_to'), 'source': evidence(1)} for code in sorted(codes)]
+        return [*session_rows, {'code': 'J0585', 'cash_cents': dollars(drug_price[1]), 'price_kind': 'per_unit',
+                'requires_session': 'botox', 'description': 'Botox drug per unit', 'modifier': '',
+                'effective_to': source.get('effective_to'), 'source': evidence(2)}], []
+    if headers[:4] == ['packagebestfor', 'cashprice', 'likelycptexamples', 'codingscopenote']:
+        if 'ncsemgpackages' not in final or PROVISIONAL.search(context):
+            return [], [{'status': 'missing_dependency', 'reason': 'Named NCS/EMG packages need explicit final status and clinical package selection.', **source, 'locator': table['locator']}]
+        packages, issues = [], []
+        for index, row in enumerate(rows[1:], 1):
+            label, _, indication = str(row[0] or '').partition('\n')
+            label = label.strip(); indication = indication.strip()
+            amount = str(row[1] or '').strip()
+            number = (table.get('row_numbers') or list(range(1, len(rows) + 1)))[index]
+            evidence = {**source, 'locator': f"{table['locator']}, row {number}, price column 2"}
+            if not label or PROVISIONAL.search(' '.join(str(cell or '') for cell in row)) or not re.fullmatch(DOLLARS, amount):
+                issues.append({'status': 'missing_dependency', 'reason': 'Named package needs a final fixed price and a clear name.', **evidence})
+                continue
+            identifier = 'named:' + hashlib.sha256(label.casefold().encode()).hexdigest()[:20]
+            packages.append({'code': identifier, 'cash_cents': dollars(amount), 'price_kind': 'named_package',
+                             'label': label, 'indication': indication, 'scope_note': str(row[3] or '').strip(), 'description': label,
+                             'modifier': '', 'effective_to': source.get('effective_to'), 'source': evidence})
+        return packages, issues
+    return None
+
+
 def cash_tables(tables: list[dict], source: dict) -> tuple[list[dict], list[dict]]:
     rows, issues = [], []
+    final = _final_cash_categories(tables)
     for table in tables:
+        named = _named_cash_rules(table, source, final)
+        if named is not None:
+            rows.extend(named[0]); issues.extend(named[1])
+            continue
         cells = table['rows']
         if not cells:
             continue
@@ -132,6 +205,10 @@ def compile_document(document: dict, extracted: dict, connections: list[dict], n
     source = {'document_id': document['id'], 'sha256': extracted['sha256'],
               'effective_to': document.get('effective_to'), 'reference': 'library:' + document['id']}
     compiled = {'version': VERSION, 'source': source, 'cash': [], 'rates': [], 'networks': [], 'issues': [], 'schedule_terms': []}
+    if document['kind'] == 'plan_matrix':
+        # This workbook supplies referral/auth research only. Its tables must
+        # never become payer connections, participation, or price rules.
+        return compiled
     tables = extracted.get('tables') or []
     text = '\n'.join(page['text'] for page in extracted['pages'])
     effective = document.get('effective_from')
@@ -355,6 +432,18 @@ def source_conflicts(prepared: list[tuple[dict, dict, dict]]) -> None:
 
 def publish(document: dict, extracted: dict, compiled: dict) -> None:
     """Publish prices and their source manifest atomically, including on retry."""
+    if document['kind'] == 'plan_matrix':
+        try:
+            plan_matrix.parse(extracted.get('tables') or [], document['filename'])
+            status, issues = 'usable', []
+        except ValueError:
+            status = 'missing_dependency'
+            issues = [{'status': status, 'reason': 'A complete three-sheet payer plan matrix is required.'}]
+        extracted['compiled'] = compiled
+        extracted['summary'].update(status=status, compiler_version=VERSION,
+            processed_at=staff_store.now(), usable_rules=0, issues=issues, estimator_version=None)
+        staff_store.save_library_extraction(document['id'], document['practice_id'], extracted)
+        return
     practice = document['practice_id']
     rate_digest = hashlib.sha256(json.dumps([{k: v for k, v in row.items() if k != 'source'} for row in compiled['rates']], sort_keys=True).encode()).hexdigest()
     version = stable_id(practice, extracted['sha256'], document['kind'], document.get('payer') or '', compiled.get('effective_from') or '', document.get('effective_to') or '', VERSION, rate_digest)

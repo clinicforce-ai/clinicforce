@@ -27,7 +27,7 @@ from app.api.routers.insurance import _response, _scope, _session as insurance_s
 from app.core import object_store, staff_store
 from app.insurance import identity as insurance_identity
 from app.insurance import commercial, commercial_store, cpt_rules, cpt_suggester, ecw_backend, golden, stedi_discovery, stedi_payers, store, visit_estimate, practice_prices
-from app.insurance import stedi_financial, collection_guidance, ecw_benefits, ecw_billing, library_pricing
+from app.insurance import stedi_financial, collection_guidance, amount_explanation, contract_requirements, ecw_benefits, ecw_billing, library_pricing
 from app.insurance import provider_specialty
 from app.logs.collection_audit import collection_event
 from app.logs.logger import log_info, log_warning
@@ -140,7 +140,7 @@ class VisitReviewInput(BaseModel):
     payment_mode: Literal["insurance", "cash"] | None = None
     emg_required: bool | None = None
     insurance_check_from: date | None = None
-    cash_selection: str | None = Field(default=None, max_length=40, description="Legacy cash package selection. Only an empty value is accepted to clear it; prices use the active per-service schedule.")
+    cash_selection: str | None = Field(default=None, max_length=40, description="ID of a named package in the active cash schedule, or an empty string to clear the selection. Package selection is a clinician choice; example CPTs in the source are not automatically selected.")
     confirmed_units: dict[str, StrictInt] | None = Field(default=None, max_length=20)
     verification: VisitVerification | None = None
     payments_received_cents: int | None = Field(default=None, ge=0, le=100_000_000)
@@ -524,16 +524,19 @@ def _previsit_range(practice_id: str, inputs: dict, source: dict, payer_id: str,
     selected = [row for row in codes if not review.get("selected_ids") or row.get("id") in review['selected_ids']]
     office_types = _office_service_types(practice_id, source)
     rates, rules, issues = [], {'office_service_types': office_types, **_benefit_context(inputs, source)}, []
-    try:
-        _, network, profile = _previsit_practice_path(practice_id, {**inputs, "payer_id": payer_id}, source)
-        if not network.get("plan_matcher") or not source.get("plan"):
-            raise commercial.CommercialError("Clinic pricing: verify the eCW plan against the contracted rate schedule.")
-        if not inputs.get("place_of_service"):
-            raise commercial.CommercialError("Map the appointment location to its place of service.")
-        rates = commercial_store.matching_rates(practice_id, profile, network, inputs["service_date"], selected)
-        rules = {**rules, **profile['rules']}
-    except (HTTPException, commercial.CommercialError) as exc:
-        issues.append(str(exc.detail) if isinstance(exc, HTTPException) else str(exc))
+    if benefits.get('network_status') == 'out_of_network':
+        issues.append('The payer did not supply an out-of-network allowed amount for these CPTs; clinic contract and cash prices cannot replace it.')
+    else:
+        try:
+            _, network, profile = _previsit_practice_path(practice_id, {**inputs, "payer_id": payer_id}, source)
+            if not network.get("plan_matcher") or not source.get("plan"):
+                raise commercial.CommercialError("Clinic pricing: verify the eCW plan against the contracted rate schedule.")
+            if not inputs.get("place_of_service"):
+                raise commercial.CommercialError("Map the appointment location to its place of service.")
+            rates = commercial_store.matching_rates(practice_id, profile, network, inputs["service_date"], selected)
+            rules = {**rules, **profile['rules']}
+        except (HTTPException, commercial.CommercialError) as exc:
+            issues.append(str(exc.detail) if isinstance(exc, HTTPException) else str(exc))
     priced = visit_estimate.price_lines(selected, rates, benefits, rules, payload=payload,
         service_date=inputs.get('service_date', ''), reviews=review.get('lines'), alternatives=alternatives)
     if options:
@@ -602,10 +605,20 @@ def _attach_previsit_pricing(result: dict, practice_id: str, inputs: dict, sourc
         return
     connection = connections[0]
     try:
-        _, network, _ = _previsit_practice_path(practice_id, {**inputs, "payer_id": connection["id"]}, source)
+        if benefits.get('network_status') == 'out_of_network':
+            raise HTTPException(422, 'Payer confirmed out-of-network participation; in-network contract prices do not apply.')
+        _, network, profile = _previsit_practice_path(practice_id, {**inputs, "payer_id": connection["id"]}, source)
         benefits["network_status"] = "in_network"
         benefits['network_source'] = 'clinic_record'
         result['network_evidence'] = {key: network.get(key) for key in ('network_name', 'evidence_reference', 'effective_from', 'effective_to')}
+        library_source = (profile.get('rules') or {}).get('library_source') or {}
+        document_id = library_source.get('document_id')
+        if (document_id and network.get('evidence_reference') == library_source.get('reference') == f'library:{document_id}'):
+            document = staff_store.get_library(document_id, practice_id)
+            if (document and document.get('kind') == 'contract' and document.get('content_type') == 'application/pdf'
+                    and document.get('sha256') == library_source.get('sha256')):
+                result['network_evidence'].update(document_id=document_id, document_label=document['label'],
+                                                  locator=library_source.get('locator'))
     except HTTPException:
         pass
     result["price_range"], issues = _previsit_range(practice_id, inputs, source, connection["id"], result["codes"], benefits,
@@ -641,6 +654,7 @@ def _finish_previsit(result: dict, case: dict, inputs: dict, source: dict, paylo
     result['library_pricing'] = session.get('library_pricing', case.get('library_pricing', []))
     case['library_pricing'] = result['library_pricing']
     result['benefit_source'] = (payload or {}).get('benefit_source') or ('Stedi' if result.get('checked_at') else None)
+    result['payer_source'] = source.get('payer_source')
     result['identity'] = comparison
     result['benefits']['identity'] = comparison
     result['eligibility_reconciliation'] = visit_estimate.reconcile_eligibility(
@@ -700,7 +714,7 @@ def _finish_previsit(result: dict, case: dict, inputs: dict, source: dict, paylo
     uploaded_cash = practice_prices.current(session['practice_id'], inputs['service_date'])
     if uploaded_cash:
         known_codes = {row['code'] for row in available}
-        available.extend({'id': 'cash:' + row['code'], 'code': row['code'], 'description': row['description'], 'source': 'Practice cash schedule', 'units': 1, 'modifiers': []} for row in uploaded_cash['rows'] if row['code'] not in known_codes and not row['code'].startswith('package:'))
+        available.extend({'id': 'cash:' + row['code'], 'code': row['code'], 'description': row['description'], 'source': 'Practice cash schedule', 'units': 1, 'modifiers': []} for row in uploaded_cash['rows'] if row['code'] not in known_codes and row.get('price_kind') not in {'package', 'named_package'})
     # Clinical options work for every practice, even before its prices arrive.
     # This catalog supplies no prices or coverage assumptions.
     known_codes = {row['code'] for row in available}
@@ -756,11 +770,14 @@ def _finish_previsit(result: dict, case: dict, inputs: dict, source: dict, paylo
                 row['source'] = 'Anticipated service from appointment'
     result['patient_details'] = source.get('patient_details', {})
     result['insurance_details'] = {**_coverage_snapshot(inputs, source), 'record_status': source.get('coverage_record_status'), 'coverage_period': source.get('coverage_period', {})}
+    result['insurance_details']['group_source'] = ('card_ocr' if 'group_number' in (result.get('card_check') or {}).get('fields_added', [])
+                                                   else 'eCW Coverage' if result['insurance_details'].get('group_number') else None)
     recovered = case.get('previsit_discovery') or {}
     if recovered.get('outcome') == 'recovered' and recovered.get('identity_binding') == _recovery_binding(inputs, source):
         result['insurance_details'].update(recovered.get('verified_coverage') or {})
         result['insurance_details'].update(ecw_member_id=inputs.get('member_id'),
-            member_source=recovered.get('evidence_source') or 'Stedi verified coverage')
+            member_source=recovered.get('evidence_source') or 'Stedi verified coverage',
+            group_source=(recovered.get('evidence_source') or 'Stedi verified coverage') if (recovered.get('verified_coverage') or {}).get('group_number') else result['insurance_details'].get('group_source'))
     elif not inputs.get('member_id') and result['benefits'].get('active') is True:
         returned_identity = stedi_discovery.candidate_identity(payload or {}, inputs)
         if returned_identity:
@@ -792,7 +809,7 @@ def _finish_previsit(result: dict, case: dict, inputs: dict, source: dict, paylo
         except HTTPException:
             result.pop('mapping_candidate', None)
     if uploaded_cash:
-        practice_prices.apply(result, uploaded_cash)
+        practice_prices.apply(result, uploaded_cash, review)
     result['collection_guidance'] = collection_guidance.build(result, review)
     result.pop('emg_option', None)
     if inputs.get('visit_type') == 'new' and result['payment_mode'] == 'insurance':
@@ -806,6 +823,31 @@ def _finish_previsit(result: dict, case: dict, inputs: dict, source: dict, paylo
             except (HTTPException, commercial.CommercialError):
                 pass
         result['emg_option'] = collection_guidance.emg_option(result, emg_rates, emg_rules, payload, inputs['service_date'], review)
+    library_ids = ([row['id'] for row in session['_library_documents']
+                    if row.get('kind') == 'plan_matrix' or row.get('kind') == 'contract' and row.get('content_type') == 'application/pdf']
+                   if '_library_documents' in session else
+                   [row['document_id'] for row in case.get('library_pricing', []) if row.get('document_id')])
+    library_sources = [staff_store.get_library(document_id, session['practice_id']) for document_id in library_ids]
+    payer_connections = [row for row in connections if row.get('stedi_payer_id') == payer_id]
+    connection = payer_connections[0] if len(payer_connections) == 1 else {}
+    result['requirement_evidence'] = contract_requirements.evaluate(result, {
+        'service_date': inputs['service_date'], 'payer_verified': bool(connection),
+        'payer_names': [result.get('payer'), source.get('payer'), connection.get('display_name'),
+                        connection.get('stedi_payer_id'), *(connection.get('aliases') or [])],
+        'plans': [source.get('plan'), result.get('plan'),
+                  *(name for names in (source.get('plan_details') or {}).values() for name in names),
+                  *(result['plan_details']['stedi'].get('names') or [])],
+        'network': (result.get('network_evidence') or {}).get('network_name'),
+        'rendering_npi': (inputs.get('rendering_provider') or {}).get('npi'),
+        'billing_npi': (source.get('billing_provider') or {}).get('npi'),
+        'tin': (source.get('billing_provider') or {}).get('tin'),
+        'group_number': result['insurance_details'].get('group_number') or inputs.get('group_number'),
+        'plan_number': inputs.get('plan_number'),
+        'member_id': result['insurance_details'].get('member_id') or inputs.get('member_id'),
+        'coverage_period': source.get('coverage_period') or result['insurance_details'].get('payer_coverage_period'),
+        'location_id': source.get('location_id'),
+        'pos': inputs.get('place_of_service'),
+    }, [document for document in library_sources if document])
     guidance = result['collection_guidance']
     emg = result.get('emg_option') or {}
     price = result.get('price_range') or {}
@@ -1215,6 +1257,9 @@ def _insurance_diagnosis(case: dict, result: dict, guidance: dict) -> dict:
     if not eligibility_state and len(candidate_states) == 1:
         eligibility_state = next(iter(candidate_states))
     available = guidance.get('amount_cents') is not None
+    partial = bool(available and guidance.get('basis') == 'office_copay' and any(
+        line.get('calculation') is None and visit_estimate.clinical_group(str(line.get('code') or '')) != 'visit'
+        for line in price.get('lines', [])))
     details = []
     if not available:
         details = list(dict.fromkeys([guidance.get('reason') or '', *benefits.get('review_reasons', []), *result.get('issues', []),
@@ -1235,16 +1280,20 @@ def _insurance_diagnosis(case: dict, result: dict, guidance: dict) -> dict:
             reasons.append('CONTRACTED_RATE_MISSING')
         if not reasons:
             reasons.append('BENEFIT_OR_PRICE_REQUIREMENT_UNRESOLVED')
+    elif partial:
+        details = list(dict.fromkeys(issue for line in price.get('lines', []) if line.get('calculation') is None
+            for issue in line.get('issues', [])))
+        reasons.append('ADDITIONAL_SERVICE_PRICE_UNRESOLVED')
     if failure.get('kind'):
         reasons.append(failure['kind'].upper())
-    states.append('ESTIMATE_READY' if available else 'PRICING_UNAVAILABLE')
+    states.append('PARTIAL_AMOUNT_READY' if partial else 'ESTIMATE_READY' if available else 'PRICING_UNAVAILABLE')
     return {'coverageSource': (case.get('previsit_discovery') or {}).get('evidence_source') or
                 ('stedi_discovery' if recovery else result.get('benefit_source') or 'ecw'),
             'rawCandidateCount': raw_count, 'retainedCandidateCount': len(candidates),
             'verifiedCandidateCount': recovery.get('verified_candidate_count', 0),
             'identityStatus': 'VERIFIED' if identity_verified else 'REVIEW_REQUIRED',
             'eligibilityStatus': 'BENEFITS_VERIFIED' if verified and benefits.get('active') is True else eligibility_state if eligibility_state in {'INACTIVE', 'EXPIRED', 'FUTURE', 'CONFLICT'} else 'NOT_VERIFIED',
-            'pricingStatus': 'ESTIMATE_READY' if available else 'NOT_CALCULATED',
+            'pricingStatus': 'PARTIAL_AMOUNT' if partial else 'ESTIMATE_READY' if available else 'NOT_CALCULATED',
             'reasonCodes': list(dict.fromkeys(reasons)), 'states': list(dict.fromkeys(states)),
             'pricingReasons': details, 'enrollment': enrollment, 'ecwCoverage': retrieval,
             'discoveryEnrollment': raw_recovery.get('discovery_enrollment'), 'mbiEnrollment': raw_recovery.get('mbi_enrollment')}
@@ -1299,6 +1348,7 @@ def _previsit_result(case: dict) -> dict:
         result.pop('emg_option', None)
     # Cash is a separate price path, never evidence of inactive insurance.
     result['collection_guidance'] = collection_guidance.build(result, case.get('visit_review'))
+    result['payment_explanation'] = amount_explanation.build(result, result['collection_guidance'], case.get('visit_review'))
     return result
 
 
@@ -1354,7 +1404,8 @@ async def _read_card_hints(session: dict, patient_id: str | None) -> dict:
 def _compare_card_hints(card: dict, inputs: dict, source: dict) -> dict:
     """Fill absent eCW inquiry fields only when OCR names the linked patient/policy."""
     status = card['status']
-    result = {'status': status, 'source': card.get('source'), 'fields_added': [], 'conflicts': [], 'differences': []}
+    result = {'status': status, 'source': card.get('source'), 'fields_added': [], 'conflicts': [],
+              'differences': [], 'alternative_supported': False}
     if status != 'read':
         return result
     fields = card['fields']
@@ -1365,17 +1416,45 @@ def _compare_card_hints(card: dict, inputs: dict, source: dict) -> dict:
         if (inputs.get(field) and fields.get(field)
                 and stedi_discovery.normalized(inputs[field]) != stedi_discovery.normalized(fields[field])):
             result['conflicts'].append(field)
+    payer_difference = bool(source.get('payer') and fields.get('payer') and
+        stedi_discovery.normalized(source['payer']) != stedi_discovery.normalized(fields['payer']))
+    if payer_difference:
+        result['differences'].append('payer_name')
+        result['payer_comparison'] = {'ecw': source['payer'], 'card': fields['payer']}
+    candidate = stedi_discovery.card_candidate({**fields, 'payer': fields.get('payer') or source.get('payer')}, inputs, source)
+    patient = inputs.get('patient') or {}
+    subscriber = inputs.get('subscriber') or {}
+    printed_name = stedi_discovery.normalized(fields.get('member_name'))
+    names = {stedi_discovery.normalized(f"{person.get(first) or ''} {person.get(last) or ''}")
+             for person, first, last in ((patient, 'patient_first_name', 'patient_last_name'),
+                                         (subscriber, 'firstName', 'lastName'))}
+    name_matches = bool(printed_name and printed_name in names)
+    expected_dobs = {insurance_identity.birth_date(value) for value in
+                     (patient.get('patient_birth_date'), subscriber.get('birthDate')) if value}
+    card_dob = insurance_identity.birth_date(fields['birth_date']) if fields.get('birth_date') else None
+    dob_matches = bool(card_dob and card_dob in expected_dobs)
+    group_matches = bool(inputs.get('group_number') and fields.get('group_number') and
+                         stedi_discovery.normalized(inputs['group_number']) == stedi_discovery.normalized(fields['group_number']))
+    member_matches = bool(inputs.get('member_id') and
+        stedi_discovery.normalized(inputs['member_id']) == stedi_discovery.normalized(fields['member_id']))
+    patient_bound = bool(card.get('count') in {1, 2} and source.get('_patient_id') and
+                         source.get('coverage_id') and source.get('active_coverages') == 1)
+    result['alternative_supported'] = bool(patient_bound and candidate and name_matches and
+        (not card_dob or dob_matches) and (
+            bool(result['conflicts']) and dob_matches and group_matches or
+            payer_difference and member_matches and (group_matches or dob_matches)))
+    if result['alternative_supported']:
+        result['alternative_fingerprint'] = hashlib.sha256(json.dumps(fields, sort_keys=True).encode()).hexdigest()
     if result['conflicts']:
         result['status'] = 'conflict'
         return result
-    candidate = stedi_discovery.card_candidate({**fields, 'payer': fields.get('payer') or source.get('payer')}, inputs, source)
     if not candidate:
         result['status'] = 'unverified'
         result['differences'].append('member_name_or_birth_date')
         return result
-    if (source.get('payer') and fields.get('payer')
-            and stedi_discovery.normalized(source['payer']) != stedi_discovery.normalized(fields['payer'])):
-        result['differences'].append('payer_name')
+    if payer_difference and result['alternative_supported']:
+        result['status'] = 'conflict'
+        return result
     for field in ('member_id', 'group_number'):
         if not inputs.get(field) and fields.get(field):
             inputs[field] = fields[field]
@@ -1417,6 +1496,11 @@ async def _recover_card(case: dict, session: dict, provider: dict) -> bool:
             recovery['card_failure_reason'] = card.get('failure_reason') or 'card_unavailable'
         if card['status'] == 'read':
             fields, evidence = card['fields'], card['evidence']
+            if (recovery.get('card_conflict') and
+                    hashlib.sha256(json.dumps(fields, sort_keys=True).encode()).hexdigest() != recovery.get('card_fingerprint')):
+                recovery.update(card_status='changed', request_state='complete', outcome='review_needed',
+                                reason_code='card_changed_before_check')
+                return True
             _recovery_event(case, session, 'card_download', 'complete', count=count)
             _recovery_event(case, session, 'card_ocr', 'complete', count=len(fields))
             recovery['card_evidence'] = evidence
@@ -1434,7 +1518,7 @@ async def _recover_card(case: dict, session: dict, provider: dict) -> bool:
                     case.update(await run_in_threadpool(_save, case, session, 'coverage-card-eligibility-pending'))
                     recovery = case['previsit_discovery']
                     await _recheck_discovery_candidate(case, session, provider, discovery_payload=payload, inquiry_only=True)
-                    if recovery.get('outcome') == 'recovered' or recovery.get('request_state') == 'indeterminate':
+                    if recovery.get('card_conflict') or recovery.get('outcome') == 'recovered' or recovery.get('request_state') == 'indeterminate':
                         return True
             recovery['card_status'] = 'read_no_verified_policy'
     except (ecw_backend.EcwBackendError, httpx.HTTPError, TimeoutError, ValueError, HTTPException, golden.OCRServiceError) as exc:
@@ -1638,6 +1722,17 @@ async def _recover_previsit(case: dict, session: dict, provider: dict) -> None:
         return
     recovery = case['previsit_discovery']
     recovery['exhausted'] = False
+    if recovery.get('card_conflict'):
+        # A conflicting eCW policy cannot be tried as a fallback. Only the
+        # patient-bound card route is checked, once, with response validation.
+        await _recover_card(case, session, provider)
+        recovery = case['previsit_discovery']
+        if recovery.get('request_state') not in {'indeterminate'} and recovery.get('outcome') != 'recovered':
+            recovery.update(request_state='complete', outcome='review_needed', stage='card_review',
+                            reason_code=recovery.get('reason_code') or 'card_alternative_not_verified')
+        recovery['exhausted'] = recovery.get('request_state') == 'complete'
+        case.update(await run_in_threadpool(_save, case, session, 'card-alternative-finished'))
+        return
     # Resuming a saved discovery polls/consumes that transaction first. Opening
     # a completed legacy result never starts these new paid recovery stages.
     if not recovery.get('raw_object_key'):
@@ -2094,6 +2189,8 @@ async def saved_previsit(case_id: str, request: Request) -> dict:
     pricingReasons and enrollment status. A completed missing insurance price
     selects separate cash pricing unless explicitly overridden; it never
     changes coverage verification or manufactures a missing cash amount.
+    payment_explanation is recalculated from the saved result and remains one
+    plain sentence with the network/pricing basis and any unresolved CPTs.
     """
     session = await _session(request)
     case = await run_in_threadpool(store.get_case, case_id, session['patient_id'], session['share_manifest_id'], **_scope(session))
@@ -2192,7 +2289,10 @@ async def _begin_coverage_discovery(result: dict, session: dict, inputs: dict, s
     coverage = _coverage_snapshot(inputs, source)
     binding = hashlib.sha256(json.dumps({'patient': inputs.get('patient'), 'appointment': source.get('appointment_id'),
         'provider': provider, 'service_date': inputs.get('service_date')}, sort_keys=True).encode()).hexdigest()
-    slot = 'commercial-previsit-recovery:' + hashlib.sha256(f"{source.get('appointment_id')}:{binding}".encode()).hexdigest()
+    card_conflict = bool((result.get('card_check') or {}).get('alternative_supported') and
+                         (result.get('card_check') or {}).get('status') == 'conflict')
+    slot = 'commercial-previsit-recovery:' + hashlib.sha256(
+        f"{source.get('appointment_id')}:{binding}:{(result.get('card_check') or {}).get('alternative_fingerprint') if card_conflict else ''}".encode()).hexdigest()
     try:
         case = await run_in_threadpool(store.create_case, session['patient_id'], '', binding,
             {'source_mode': 'commercial_previsit', 'previsit': {'request_state': 'not_requested'}},
@@ -2239,14 +2339,16 @@ async def _begin_coverage_discovery(result: dict, session: dict, inputs: dict, s
     if routing_failure and not discovery_ready:
         detail = ('The eCW payer name and ID did not identify one Stedi route. Insurance discovery could not run '
                   'because eCW did not provide the patient and provider details it requires. Coverage remains unverified, not proven inactive.')
-    result.update(eligibility_error='payer_routing_unresolved' if routing_failure else 'coverage_identity_missing', eligibility_failure={
-        'kind': 'payer_routing_unresolved' if routing_failure else 'coverage_identity_missing',
-        'title': 'Insurance payer needs recovery' if routing_failure else 'eCW coverage needs recovery', 'detail': detail,
-        'action': ('ClinicForce is reading accessible insurance cards and searching Stedi. A unique active patient match continues automatically to service-specific eligibility.'
-                   if routing_failure and discovery_ready else
-                   'Insurance discovery could not start from the available eCW data.' if routing_failure else
-                   'ClinicForce is reading accessible insurance cards and searching Stedi. A unique active patient match continues automatically to service-specific eligibility.'),
-        'codes': [], 'attempted_at': _now()}, benefits=_previsit_benefits({}, coverage, inputs['service_date']))
+    if not card_conflict:
+        result.update(eligibility_error='payer_routing_unresolved' if routing_failure else 'coverage_identity_missing', eligibility_failure={
+            'kind': 'payer_routing_unresolved' if routing_failure else 'coverage_identity_missing',
+            'title': 'Insurance payer needs recovery' if routing_failure else 'eCW coverage needs recovery', 'detail': detail,
+            'action': ('ClinicForce is reading accessible insurance cards and searching Stedi. A unique active patient match continues automatically to service-specific eligibility.'
+                       if routing_failure and discovery_ready else
+                       'Insurance discovery could not start from the available eCW data.' if routing_failure else
+                       'ClinicForce is reading accessible insurance cards and searching Stedi. A unique active patient match continues automatically to service-specific eligibility.'),
+            'codes': [], 'attempted_at': _now()})
+    result['benefits'] = _previsit_benefits({}, coverage, inputs['service_date'])
     await run_in_threadpool(_finish_previsit, result, case, inputs, source, None, session, '')
     recovery = case.get('previsit_discovery') or {}
     try:
@@ -2265,6 +2367,10 @@ async def _begin_coverage_discovery(result: dict, session: dict, inputs: dict, s
                                   'identity_binding': _recovery_binding(inputs, source),
                                   'stage': 'not_started' if discovery_ready else 'not_available',
                                   'reason_code': 'payer_route_unresolved' if discovery_ready else 'discovery_input_missing'}
+    if card_conflict:
+        case['previsit_discovery'].update(card_conflict=True,
+            card_fingerprint=result['card_check']['alternative_fingerprint'],
+            reason_code='card_alternative_check')
     if payer_routes:
         case['previsit_discovery'].update(payer_routes=payer_routes, route_source='ecw')
     if not discovery_ready:
@@ -2285,9 +2391,17 @@ async def previsit_estimate(value: PrevisitInput, request: Request, background_t
     or a fallback office copay; their source and timestamp accompany the result.
     They do not establish payer eligibility.
     Before any new Stedi request, patient-bound card OCR compares with eCW and
-    fills only missing matched inquiry fields. Member/group conflicts or multiple
-    card sets hold the request for review. card_check excludes image bytes.
-    Self-pay uses recorded cash mode or the terminal coverage-recovery fallback
+    fills only missing matched inquiry fields. A single conflicting card with
+    matching patient identity can use one uniquely supported card payer route;
+    its response must verify identity and active coverage before use. Other
+    conflicts and multiple card sets hold the request for review. Neither path
+    edits eCW or repeats an indeterminate paid request. card_check excludes image bytes.
+    payment_explanation gives one doctor-only sentence, a reason code, network
+    tier, pricing basis, unpriced CPTs and an optional resolved-mismatch note.
+    insurance_diagnosis.pricingStatus is PARTIAL_AMOUNT when a known office
+    copay is shown but a separately planned CPT remains unpriced.
+    Out-of-network benefit terms are retained; a percentage without a verified
+    payer allowed amount never becomes a dollar total. Self-pay uses recorded cash mode or the terminal coverage-recovery fallback
     and configured cash prices, without built-in clinic prices or plan-name
     benefit overrides. Earlier snapshots are unchanged.
 
@@ -2324,6 +2438,11 @@ async def previsit_estimate(value: PrevisitInput, request: Request, background_t
     identifies an optional public NPPES fallback. Unknown ledger values remain
     unknown, and missing cards or contract rates do not alone block a verified
     fixed office copay.
+    Coverage source is benefit_source for returned eligibility, otherwise the
+    eCW policy or discovery state. network_evidence includes document_id,
+    document_label and locator only when the applied clinic network profile
+    traces to the same practice's uploaded PDF contract. The document route
+    requires a staff session and serves the original PDF.
 
     insurance_diagnosis separately reports identity, eligibility and pricing status,
     raw/retained/verified candidate counts, enrollment state and specific blockers.
@@ -2342,9 +2461,19 @@ async def previsit_estimate(value: PrevisitInput, request: Request, background_t
     expose identity_status, group_number and dated coverage_evidence separately.
     Multiple policy/payer suggestions are optional; choosing one for display
     does not submit eligibility or postpone terminal automatic cash fallback.
+    requirement_evidence separately reports referral and authorization status,
+    reason, source, workbook verification channel/contact and portal URL, and
+    an applicable original contract PDF page. Authorization approval_status
+    is separate from the rule requiring approval.
+    Exact plan and CPT research comes from the bundled three-sheet NMCT matrix
+    or a valid current Clinical Library plan_matrix upload; research is labeled
+    and never implies a successful portal check or authorization approval.
+    Conflicting or incomplete evidence remains verification required. These
+    card findings do not change the negotiated rate or collection calculation.
     """
     session = await _session(request)
     library_documents = await run_in_threadpool(library_pricing.prepare, session['practice_id'])
+    session['_library_documents'] = library_documents
     session['library_pricing'] = [{'document_id': row['id'], 'label': row['label'], 'payer': row.get('payer'), 'summary': row.get('extraction_summary')} for row in library_documents]
     collection_event('previsit_started', practice_id=session['practice_id'], intake_id=(session.get('intake') or {}).get('id'),
                      staff_id=(session.get('staff') or {}).get('id'), stage='appointment')
@@ -2448,12 +2577,16 @@ async def previsit_estimate(value: PrevisitInput, request: Request, background_t
         kind = 'card_conflict' if conflicting else 'multiple_cards'
         result.update(eligibility_error=kind, eligibility_failure={
             'kind': kind, 'title': 'Card and eCW policy differ' if conflicting else 'Multiple card sets need review',
-            'detail': ('The card member ID or group differs from the eCW policy.' if conflicting
+            'detail': ('The card member ID, group, or insurer differs from the eCW policy.' if conflicting
                        else 'More than one saved card set or more than two card pages were found.'),
-            'action': ('Review the current card and correct the eCW policy before requesting eligibility.' if conflicting
+            'action': ('ClinicForce will check the card with its unique supported payer route; review the result before changing eCW.' if conflicting and result['card_check'].get('alternative_supported') else
+                       'Review the current card and correct the eCW policy before requesting eligibility.' if conflicting
                        else 'Confirm the current insurance card before requesting eligibility.'),
             'codes': [], 'attempted_at': _now()})
         result['issues'].append(result['eligibility_failure']['detail'])
+        if conflicting and result['card_check'].get('alternative_supported'):
+            return await _begin_coverage_discovery(result, session, inputs, source, provider, background_tasks,
+                result['eligibility_failure']['detail'], refresh_benefits=value.refresh_benefits)
         return await incomplete_result()
 
     # Evaluate saved eCW evidence before credentials, payer directory or any paid request.
@@ -2702,6 +2835,14 @@ async def previsit_estimate(value: PrevisitInput, request: Request, background_t
 
 @router.post("/cases/{case_id}/visit-review")
 async def update_visit_review(case_id: str, value: VisitReviewInput, request: Request) -> dict:
+    """Reprice a saved visit after service, payment or evidence review.
+
+    A clinician can select a named cash package from the active schedule;
+    included care is priced once and source CPT examples are never auto-selected.
+    A verified payment is deducted once from the displayed cash or insured
+    amount. The returned and saved payment_explanation describes only the
+    known amount; unpriced CPTs stay unresolved.
+    """
     session = await _session(request)
     case = await run_in_threadpool(store.get_case, case_id, session['patient_id'], session['share_manifest_id'], **_scope(session))
     if not case or case.get('source_mode') != 'commercial_previsit' or not case.get('previsit_context'):
@@ -2727,6 +2868,7 @@ async def update_visit_review(case_id: str, value: VisitReviewInput, request: Re
     except ecw_backend.EcwBackendError as exc:
         raise HTTPException(502, str(exc)) from exc
     library_documents = await run_in_threadpool(library_pricing.prepare, session['practice_id'])
+    session['_library_documents'] = library_documents
     session['library_pricing'] = [{'document_id': row['id'], 'label': row['label'], 'payer': row.get('payer'), 'summary': row.get('extraction_summary')} for row in library_documents]
     if value.context_token != context['context_token'] or _visit_context_token(inputs, source) != value.context_token:
         raise HTTPException(409, 'The appointment, coverage or services changed in eCW. Check the visit again.')
@@ -2769,9 +2911,12 @@ async def update_visit_review(case_id: str, value: VisitReviewInput, request: Re
         review['insurance_check_from'] = value.insurance_check_from.isoformat()
     if value.payment_mode is not None:
         review['payment_mode'] = value.payment_mode
+    if value.cash_selection is None and (value.selected_ids is not None or value.confirmed_units is not None):
+        review['cash_selection'] = ''
     if value.cash_selection is not None:
-        if value.cash_selection:
-            raise HTTPException(422, 'The active per-service cash schedule does not define packages or discounts.')
+        packages = {row['id'] for row in (result.get('cash_schedule') or {}).get('packages', [])}
+        if value.cash_selection and value.cash_selection not in packages:
+            raise HTTPException(422, 'Choose a package from the active cash schedule for this visit.')
         review['cash_selection'] = value.cash_selection
         review.pop('payments', None)
     if value.confirmed_units is not None:
@@ -3158,7 +3303,7 @@ async def calculate(case_id: str, request: Request) -> Any:
 
 @router.post('/cash-schedules')
 async def upload_cash_schedule(request: Request, effective_from: date, file: UploadFile = File(...)) -> dict:
-    """Import a draft per-service cash schedule for this clinic; activation is separate."""
+    """Import a draft cash schedule with supported final CPT, session and named package prices; activation is separate."""
     session = await _session(request); _admin(session)
     content = await file.read(20 * 1024 * 1024 + 1)
     if len(content) > 20 * 1024 * 1024:
