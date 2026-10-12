@@ -379,7 +379,8 @@ def _patient_matches(resource: dict[str, Any], profile: dict[str, Any], *, famil
 
 
 def _candidate_given_name(resource: dict, profile: dict) -> str:
-    return " ".join(_given_words(resource)[:len(str(profile.get("patient_first_name") or "").split())])
+    count = len(str(profile.get("patient_first_name") or "").split())
+    return " ".join(_given_words(resource)[:count]) if count else (_name(resource)[0] or "")
 
 
 def _phone(resource: dict[str, Any]) -> str | None:
@@ -759,8 +760,8 @@ def _patient_suggestions(rows: list[dict], profile: dict) -> list[dict]:
         if not (same_account or (_patient_matches(row, corrected) and (first_typo or family_typo))
                 or _patient_matches(row, {**profile, "patient_birth_date": dob}, family_suffix=True)):
             continue
-        differences = [label for label, equal in (("First name", g == first), ("Last name", f == family),
-                                                   ("Date of birth", same_dob)) if not equal]
+        differences = [label for label, supplied, equal in (("First name", first, g == first), ("Last name", family, f == family),
+                                                             ("Date of birth", profile.get("patient_birth_date"), same_dob)) if supplied and not equal]
         ranked[patient_id] = (g_score + f_score + int(same_dob), {
             "id": patient_id, "given_name": given, "family_name": last, "birth_date": dob,
             "ecw_account_number": patient_account_number(row), "differences": differences,

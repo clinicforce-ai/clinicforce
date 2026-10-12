@@ -116,20 +116,27 @@ class PatientSearch(Model):
 
 
 class EcwLookup(Model):
-    ecw_account_number: str = Field(default="", max_length=80, description="Optional exact eCW secondary account identifier; mismatched demographics still require explicit selection.")
+    ecw_account_number: str = Field(default="", max_length=80, description="Exact eCW secondary ACCT identifier. With birth date, this can find a patient without entering a name; staff must confirm the returned identity.")
     selected_patient_id: str | None = Field(default=None, pattern=r"^[A-Za-z0-9.\-]{1,200}$", description="eCW suggestion explicitly selected by staff; re-read and verify against the submitted canonical demographics.")
     identity_confirmed: bool = Field(default=False, description="Required when selecting a suggested patient.")
+
+    @field_validator("ecw_account_number")
+    @classmethod
+    def clean_account_number(cls, value):
+        return value.strip()
 
     @model_validator(mode="after")
     def confirmed_selection(self):
         if self.selected_patient_id and not self.identity_confirmed:
             raise ValueError("Confirm the selected patient before continuing")
+        if (self.selected_patient_id or not self.ecw_account_number) and not all((self.given_name, self.family_name)):
+            raise ValueError("Enter first and last name, or search by eCW ACCT number and date of birth")
         return self
 
-    given_name: str = Field(min_length=1, max_length=100)
+    given_name: str = Field(default="", max_length=100, description="Patient first name; optional when an eCW ACCT number is supplied.")
     middle_initial: str = Field(default="", max_length=10)
-    family_name: str = Field(min_length=1, max_length=100)
-    birth_date: date
+    family_name: str = Field(default="", max_length=100, description="Patient last name; optional when an eCW ACCT number is supplied.")
+    birth_date: date = Field(description="Patient DOB; required for both demographic and eCW ACCT lookup.")
 
     @field_validator("birth_date")
     @classmethod
@@ -317,6 +324,7 @@ def manual_card_fields(full_name: str, member_id: str, birth_date: str) -> dict:
     200: {"description": "selection_required with up to eight unconfirmed candidates (possibly empty); no intake or visit read yet."},
     201: {"description": "Verified/reused clinic intake and eCW patient/appointments."},
     409: {"description": "The selected patient's details changed; repeat the search and confirmation."},
+    422: {"description": "Missing or invalid date of birth, or neither a full name nor an eCW ACCT number."},
 })
 async def create_ecw_lookup(value: EcwLookup, request: Request):
     """Confirm an eCW patient and upcoming visits.
@@ -325,6 +333,10 @@ async def create_ecw_lookup(value: EcwLookup, request: Request):
     (or an empty list); no intake, visits, or payer request is created. Submit the
     selected ID, canonical demographics and identity_confirmed=true to reverify.
     HTTP 201 returns the verified intake and visits. Timeout/auth failures remain errors.
+
+    ACCT plus DOB can find a patient without supplied names. The returned
+    secondary identifier is verified and staff must confirm the candidate before
+    any encounters are read or an intake is saved.
 
     Explicit selection can refresh a linked clinic record only for its existing
     eCW ID. Saved insurance snapshots are preserved; cached identity approvals

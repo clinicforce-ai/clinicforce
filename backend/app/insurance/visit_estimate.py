@@ -182,7 +182,7 @@ def price_lines(codes: list[dict], rates: list[dict], benefits: dict, rules: dic
             selected_ids=selection.get('selected_ids') if selection_valid else None,
             office_service_types=rules.get('office_service_types'), place_of_service=rules.get('place_of_service'),
             visit_context=rules.get('visit_context'), provider_npi=rules.get('provider_npi')) if payload is not None else deepcopy(benefits)
-        if benefits.get('network_status') == 'in_network' and benefits.get('network_source'):
+        if benefits.get('network_status') in {'in_network', 'out_of_network'} and benefits.get('network_source'):
             raw_benefits['network_source'] = benefits['network_source']
             raw_benefits['network_evidence_ids'] = benefits.get('network_evidence_ids', [])
         stc = (raw_benefits.get('resolved_service_type') or stc) if stc else None
@@ -207,8 +207,15 @@ def price_lines(codes: list[dict], rates: list[dict], benefits: dict, rules: dic
                 applied['deductible_remaining_cents'] = 0
                 applied['review_reasons'] = [reason for reason in applied.get('review_reasons', []) if 'remaining individual deductible' not in reason]
                 applied['requires_review'] = bool(applied['review_reasons'])
+        out_of_network = benefits.get('network_status') == 'out_of_network'
         matches = [rate for rate in rates if rate['code'] == code['code']
-                   and (rate.get('modifier') or '') == ','.join(code.get('modifiers') or [])]
+                   and (rate.get('modifier') or '') == ','.join(code.get('modifiers') or [])
+                   and (not out_of_network or
+                        rate.get('basis') == 'payer_out_of_network' and rate.get('id') and rate.get('source_reference')
+                        and rate.get('verified_at') and rate.get('service_date') == service_date
+                        and rate.get('provider_npi') == rules.get('provider_npi') and rules.get('provider_npi')
+                        and rate.get('place_of_service') == rules.get('place_of_service') and rules.get('place_of_service')
+                        and rate.get('patient_binding') == rules.get('patient_binding') and rules.get('patient_binding'))]
         rate = matches[0] if len(matches) == 1 else {}
         line = {**code, 'id': line_id, 'units': units, 'benefits': applied,
                 'unit_cash_cents': rate.get('cash_cents'),
@@ -216,8 +223,12 @@ def price_lines(codes: list[dict], rates: list[dict], benefits: dict, rules: dic
                 'cash_source': rate.get('source_reference') if rate.get('cash_cents') is not None else None,
                 'unit_allowed_cents': rate.get('allowed_cents'),
                 'allowed_cents': rate['allowed_cents'] * units if rate.get('allowed_cents') is not None and units else None,
-                'rate_source': rate.get('source_reference') or 'Clinic contract', 'rate_version': rate.get('version_id'),
-                'rate_effective_from': rate.get('effective_from'), 'benefit_source': 'Stedi', 'benefit_verification': selection if selection_valid else None,
+                'allowed_basis': rate.get('basis') or 'clinic_contract',
+                'rate_source': rate.get('source_reference') or ('Payer out-of-network allowance needed' if out_of_network else 'Clinic contract'), 'rate_version': rate.get('version_id'),
+                'rate_row_number': rate.get('row_number'),
+                'rate_effective_from': rate.get('effective_from'),
+                'benefit_source': benefits.get('benefit_source') or (payload or {}).get('benefit_source') or ('Stedi' if payload is not None else None),
+                'benefit_verification': selection if selection_valid else None,
                 'benefit_basis': applied.get('benefit_label') or f'Service category {stc}' if stc else 'Service category needs mapping',
                 'conditions': [reason for reason in applied.get('review_reasons', []) if _workflow_condition(reason)],
                 'issues': [reason for reason in applied.get('review_reasons', []) if not _workflow_condition(reason)], 'calculation': None}
@@ -233,8 +244,9 @@ def price_lines(codes: list[dict], rates: list[dict], benefits: dict, rules: dic
         if not units:
             line['issues'].append('Confirm the number of units for this service.')
         if line['allowed_cents'] is None:
-            line['issues'].append('Add an active clinic contract rate matching this code, modifier and visit.')
-        if benefits.get('network_status') != 'in_network':
+            line['issues'].append('Get the payer allowed amount for this out-of-network CPT and visit.' if out_of_network else
+                                  'Add an active clinic contract rate matching this code, modifier and visit.')
+        if benefits.get('network_status') == 'unknown':
             line['issues'].append('Verify provider participation for this plan and visit location.')
         if benefits.get('requires_review') and not benefits.get('review_reasons'):
             line['issues'].append('Saved payer evidence needs verification before pricing.')
@@ -270,8 +282,11 @@ def price_lines(codes: list[dict], rates: list[dict], benefits: dict, rules: dic
                 if period in {'VISIT', '27', 'DAY', '7'} and copay_key in copays_applied:
                     calculation_benefits['copay_cents'] = 0
             try:
+                if out_of_network:
+                    line_rules['allowed_basis'] = 'payer_out_of_network'
                 calc = commercial.estimate([{'code': code['code'], 'units': units,
-                    'allowed_cents': rate['allowed_cents'], 'rate_id': rate.get('id')}], calculation_benefits, line_rules)
+                    'allowed_cents': rate['allowed_cents'], 'rate_id': rate.get('id'),
+                    'allowed_source': rate.get('basis')}], calculation_benefits, line_rules)
                 line['calculation'] = calc
                 if not alternatives:
                     deductible_used[deductible_key] = deductible_used.get(deductible_key, 0) + min(calc['deductible_cents'], calc['patient_cents'])

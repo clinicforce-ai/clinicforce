@@ -47,6 +47,14 @@ def test_office_previews_preserve_text_tables_and_do_not_create_active_content()
         library_files.office_preview(data.getvalue(), 'bad.docx')
 
 
+def test_docx_table_line_break_keeps_package_name_separate_from_description():
+    data = BytesIO()
+    with ZipFile(data, 'w') as archive:
+        archive.writestr('word/document.xml', '''<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:tbl><w:tr><w:tc><w:p><w:r><w:t>One Hand</w:t><w:br/><w:t>Symptoms</w:t></w:r></w:p></w:tc></w:tr></w:tbl></w:body></w:document>''')
+    _, tables = library_files.structured_content(data.getvalue(), 'cash.docx')
+    assert tables[0]['rows'][0][0] == 'One Hand\nSymptoms'
+
+
 def test_cash_source_link_requires_an_actual_schedule_version():
     from unittest.mock import MagicMock
     db = MagicMock()

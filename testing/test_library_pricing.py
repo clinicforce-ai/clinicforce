@@ -29,10 +29,47 @@ def table(rows, context='', locator='Section 1'):
     return {'rows': rows, 'context': context, 'locator': locator}
 
 
-def quote(rows, codes, mode='services'):
+def quote(rows, codes, mode='services', review=None):
     result = {'available_codes': [], 'price_range': {'mode': mode, 'lines': codes}}
-    practice_prices.apply(result, {'id': 'version', 'filename': 'approved.csv', 'effective_from': '2026-01-01', 'rows': rows})
+    practice_prices.apply(result, {'id': 'version', 'filename': 'approved.csv', 'effective_from': '2026-01-01', 'rows': rows}, review)
     return result
+
+
+def test_final_session_and_named_package_cash_prices_do_not_infer_cpt_scope():
+    rows, issues = rules.cash_tables([
+        table([['Category', 'Status', 'Price Status'],
+               ['Botox', 'Current', 'Final / in use'], ['NCS / EMG Packages', 'Current', 'Final / in use'],
+               ['Biopsy', 'Pending approval', 'Suggested']]),
+        table([['Component', 'CPT / HCPCS Reference', 'Cash Price', 'How to Apply'],
+               ['Injection session', '64611-64616; 64642-64645', '$450 / session', 'One fee'],
+               ['Drug', 'J0585', '$7.50 / unit', 'Add to session fee']], 'Botox cash pricing'),
+        table([['Package / Best For', 'Cash Price', 'Likely CPT Example(s)', 'Coding / Scope Note'],
+               ['One Hand\nCarpal tunnel', '$500', '95909 + 95886', 'Focused visit included'],
+               ['Both Legs\nNeuropathy', '$800', '95910 + 95886 X 2', 'Focused visit included']], 'NCS / EMG Packages'),
+        table([['Service', 'CPT Reference', 'Suggested Cash Price'], ['Biopsy', '11104', '$450']], 'Pending approval'),
+    ], {})
+    assert len(rows) == 11 and not any(issue['status'] == 'conflict' for issue in issues)
+    assert not any(row['code'] == '11104' for row in rows)
+    session = [{'code': '64615', 'units': 1}, {'code': 'J0585', 'units': 100}]
+    assert quote(rows, session)['cash_quote']['min_cents'] == 120000
+    session[1]['units'] = 155
+    assert quote(rows, session)['cash_quote']['min_cents'] == 161250
+    session[1]['units'] = 200
+    assert quote(rows, session)['cash_quote']['min_cents'] == 195000
+    assert not quote(rows, [{'code': 'J0585', 'units': 100}])['cash_quote']['complete']
+    assert not quote(rows, [{'code': '95909', 'units': 1}, {'code': '95886', 'units': 1}])['cash_quote']['complete']
+    package = next(row for row in rows if row.get('label') == 'One Hand')
+    package['schedule_filename'] = 'named-source.docx'
+    package['schedule_effective_from'] = '2026-09-04'
+    selected = quote(rows, [{'code': '99203', 'units': 1}, {'code': '95909', 'units': 1},
+                            {'code': '95886', 'units': 1}], review={'cash_selection': package['code']})
+    assert selected['cash_quote']['min_cents'] == 50000
+    assert all(line['cash_included'] for line in selected['price_range']['lines'])
+    assert selected['cash_quote']['package_label'] == 'One Hand'
+    assert selected['cash_quote']['source'] == 'named-source.docx'
+    assert selected['cash_quote']['effective_from'] == '2026-09-04'
+    assert not quote(rows, [{'code': '95909', 'units': 1}, {'code': '62270', 'units': 1}],
+                     review={'cash_selection': package['code']})['cash_quote']['complete']
 
 
 def test_final_sections_survive_proposals_and_conflicts_are_excluded():
@@ -44,6 +81,29 @@ def test_final_sections_survive_proposals_and_conflicts_are_excluded():
     assert {issue['status'] for issue in compiled['issues']} == {'provisional', 'conflict'}
     assert compiled['cash'][0]['source']['locator'] == 'Section 1, row 2, price column 3'
     assert compiled['cash'][0]['source']['sha256'] == 'digest'
+
+
+def test_plan_matrix_cannot_publish_price_network_or_payer_rules():
+    source = document('plan_matrix')
+    evidence = extracted([
+        table([['CPT', 'Allowed Amount', 'Network', 'Plan', 'POS', 'Effective From'],
+               ['99213', '200', 'Preferred', 'Example Product', '11', '2026-01-01']]),
+        table([['Billing NPI', 'Rendering NPI', 'Organization Name', 'TIN', 'Location ID',
+                'POS', 'Network', 'Plan', 'Effective From', 'Participation', 'Execution Status'],
+               ['1234567893', '1234567893', 'Example', '123456789', 'office', '11',
+                'Preferred', 'Example Product', '2026-01-01', 'participating', 'executed']]),
+        table([['Stedi Payer ID', 'Payer Name', 'Payer Category'],
+               ['newpayer', 'Example Payer', 'commercial_medical']]),
+    ])
+    compiled = rules.compile_document(source, evidence, [], [])
+    assert not any(compiled.get(key) for key in
+                   ('cash', 'rates', 'networks', 'schedule_terms', 'payer_connection_id', 'connection'))
+    with patch.object(staff_store, 'save_library_extraction') as save, \
+            patch.object(staff_store, '_connection', side_effect=AssertionError('pricing publication attempted')):
+        rules.publish(source, evidence, compiled)
+    save.assert_called_once()
+    assert evidence['summary']['status'] == 'missing_dependency'
+    assert evidence['summary']['estimator_version'] is None
 
 
 def test_formulas_packages_and_alternatives_never_double_charge():

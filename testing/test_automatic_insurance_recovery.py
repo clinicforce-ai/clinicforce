@@ -88,6 +88,39 @@ def test_cash_only_after_all_applicable_checks_finish(recovery):
     assert api._previsit_result(case)['collection_guidance']['amount_cents'] is None
 
 
+@pytest.mark.parametrize('route_found', [True, False])
+def test_conflicting_card_checks_only_its_unique_route(recovery, monkeypatch, route_found):
+    case, session, provider, item, client, _, _ = recovery
+    context = case['previsit_context']
+    context['inputs'].update(member_id='new-id', group_number='G7', relationship='18',
+        subscriber={'firstName': 'Pat', 'lastName': 'Example', 'birthDate': '1980-01-01'})
+    context['source'].update(_patient_id='ecw-patient', coverage_id='coverage', active_coverages=1,
+        payer='BCBS Texas')
+    card = {'status': 'read', 'count': 1, 'source': 'eCW card', 'evidence': {'source': 'eCW card'},
+            'fields': {'payer': 'BCBS Illinois', 'member_id': 'new-id', 'group_number': 'G7',
+                       'member_name': 'Pat Example', 'birth_date': '1980-01-01'}}
+    check = api._compare_card_hints(card, context['inputs'], context['source'])
+    assert check['status'] == 'conflict' and check['alternative_supported']
+    context['result'].update(card_check=check, eligibility_error='card_conflict',
+        eligibility_failure={'kind': 'card_conflict', 'detail': 'The card and eCW insurers differ.', 'codes': []})
+    case['previsit_discovery'].update(card_conflict=True,
+        card_fingerprint=check['alternative_fingerprint'], request_state='pending')
+    monkeypatch.setattr(api, '_read_card_hints', AsyncMock(return_value=card))
+    monkeypatch.setattr(api.stedi_payers, 'search_payer', AsyncMock(return_value=(
+        {'stediId': 'ILLINOIS', 'displayName': 'BCBS Illinois'} if route_found else None)))
+    item['payer'] = {'name': 'BCBS Illinois'}
+    client.post.return_value = httpx.Response(200, json=item)
+    asyncio.run(api._recover_previsit(case, session, provider))
+    result = api._previsit_result(case)
+    assert client.post.await_count == (1 if route_found else 0)
+    if route_found:
+        assert case['previsit_discovery']['outcome'] == 'recovered'
+        assert result['payment_explanation']['notice']
+    else:
+        assert case['previsit_discovery']['outcome'] == 'review_needed'
+        assert result['payment_mode'] == 'cash'
+
+
 def test_discovery_with_requested_services_reuses_item_without_paid_recheck(recovery):
     case, session, provider, item, client, objects, _ = recovery
     case['previsit_context']['result']['enrollment'] = {'status': 'MISSING', 'reason_code': 'enrollment_missing'}

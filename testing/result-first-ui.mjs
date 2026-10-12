@@ -1,7 +1,7 @@
 // Run against Vite with PLAYWRIGHT_MODULE pointing to an installed Playwright module.
 import assert from 'node:assert/strict'
 const { chromium } = await import(process.env.PLAYWRIGHT_MODULE || 'playwright')
-const browser = await chromium.launch({ headless: true })
+const browser = await chromium.launch({ headless: true, executablePath: process.env.CHROMIUM_EXECUTABLE_PATH || undefined })
 const page = await browser.newPage({ viewport: { width: 1440, height: 1000 }, reducedMotion: 'reduce', locale: 'en-US' })
 const errors = [], requests = [], reviews = []
 const previsitRequests = []
@@ -14,13 +14,17 @@ const requirements = { referral: { required: 'not_required', status: 'not_applic
 const benefits = { active: true, network_status: 'unknown', oop_remaining_cents: 0, requires_review: true, review_reasons: [], reported_options: [{ kind: 'copay', service_type_code: '98', network: 'IN_NETWORK', amount_cents: 4000, time_period: 'DAY' }], requirements }
 const codes = ['99203', '99204', '95910', '95886', 'J0585'].map(code => ({ id: code, code, source: 'Planning catalog', units: 1 }))
 let result = {
-  check_id: 'sample-check', appointment_id: visit.id, service_date: '2026-09-29', payer: 'Example Health', plan: 'Choice PPO', checked_at: '2026-09-28T16:30:00Z', issues: [], suggestions: null,
+  check_id: 'sample-check', appointment_id: visit.id, service_date: '2026-09-29', payer: 'Example Health', plan: 'Choice PPO', checked_at: '2026-09-28T16:30:00Z', benefit_source: 'Stedi', issues: [], suggestions: null,
   revision: 1, context_token: 'a'.repeat(64), visit_type: 'new', codes: [codes[0]], available_codes: codes, selected_ids: ['99203'],
   service_plan: { kind: 'office', groups: [], recommended_ids: ['99203'], selection_source: 'suggested', recommendation_basis: 'Office visit', history_count: 0 },
-  insurance_details: { member_id: 'ABC123', payer_subscriber: { firstName: 'Sam', lastName: 'Other' }, payer_patient: { firstName: 'Alex', lastName: 'Former', dateOfBirth: '2001-02-03' }, payer_relationship: 'CHILD' },
+  insurance_details: { member_id: 'ABC123', member_source: 'Coverage.subscriberId', payer_subscriber: { firstName: 'Sam', lastName: 'Other' }, payer_patient: { firstName: 'Alex', lastName: 'Former', dateOfBirth: '2001-02-03' }, payer_relationship: 'CHILD' },
   identity: { status: 'warning', message: 'Payer surname differs; first name, date of birth and member ID match.', binding: 'b'.repeat(64), can_confirm: true, differences: [{ field: 'last_name', ecw: 'Morgan', payer: 'Former' }] },
   benefits, price_range: { complete: false, mode: 'services', lines: [{ ...codes[0], benefits, issues: [], calculation: null }], scenarios: [] },
   collection_guidance: { amount_cents: 0, status: 'estimated', basis: 'out_of_pocket_limit', reason: 'The payer reports $0 remaining in-network out-of-pocket responsibility.', patient_message: 'Final responsibility follows the claim.', network: 'Choice PPO', network_source: 'Clinic contract; exact product match not confirmed', requirements: { referral: 'No requirement reported', authorization: 'Unknown in payer response' }, assumptions: ['The provider participates in this plan.'], patient_actions: [], services: [{ id: codes[0].id, code: codes[0].code, benefit: 'Service category 98', patient_cents: 0, oop_remaining_cents: 0 }] },
+  requirement_evidence: {
+    referral: { status: 'Verification required', reason: 'No applicable contract rule was confirmed.', sources: [] },
+    authorization: { status: 'Verification required', reason: 'Payer authorization rule needs review.', sources: [] },
+  },
   emg_option: { requested: false, included: false, message: 'Select testing to calculate its cost.' },
   arrival_collection: { amount_cents: null, reason: 'Verify patient and contract.', status: 'verify' },
   planning_estimate: { basis: 'out_of_pocket_limit', amount_cents: 0, collectable: false, explanation: 'The payer reports $0 remaining in-network out-of-pocket responsibility.', assumptions: ['The patient names refer to the same person.', 'The provider participates in this plan.'] },
@@ -63,7 +67,10 @@ async function openPatient(pending = false) {
   await page.getByRole('button', { name: /Alex Morgan/ }).click()
   await page.getByRole('button', { name: 'Open insurance review', exact: true }).click()
   if (pending) await page.locator('.coverage-chip').filter({ hasText: 'Coverage check in progress' }).waitFor()
-  else await page.locator('#visit-estimate .arrival-total > strong').waitFor()
+  else await page.locator('#visit-estimate .arrival-total > strong').waitFor().catch(async error => {
+    console.error('Estimator did not render:', errors, (await page.locator('body').innerText()).slice(0, 1000))
+    throw error
+  })
 }
 async function detail(title) {
   const summary = page.locator('.visit-detail-section > summary').filter({ hasText: title })
@@ -76,6 +83,7 @@ try {
   const opening = openPatient()
   await page.getByText('Putting the estimate together', { exact: true }).waitFor()
   assert(!(await page.locator('.visit-content').innerText()).includes('$0.00'))
+  assert(!(await page.locator('.coverage-chip').evaluate(el => el.classList.contains('is-missing'))), 'Coverage not checked yet is neutral')
   releaseEstimate(); await opening
   assert.equal(await page.getByText('Reconcile policy details', { exact: true }).count(), 0)
   assert.equal(await page.locator('.policy-reconciliation').count(), 0)
@@ -86,6 +94,14 @@ try {
   assert.equal(previsitRequests.length, 1)
   assert(await page.locator('.visit-identity-notice').isVisible())
   assert.equal(await page.locator('.visit-snapshots > div').count(), 4)
+  assert(await page.locator('.visit-snapshots > div').first().evaluate(el => el.classList.contains('is-confirmed')), 'Active coverage card is green')
+  assert(await page.locator('.coverage-chip').evaluate(el => el.classList.contains('is-confirmed')), 'Active coverage badge is green')
+  assert(await page.locator('.visit-snapshots > div').nth(1).evaluate(el => el.classList.contains('is-missing')), 'Unconfirmed network card is red')
+  assert(await page.locator('.visit-snapshots > div').nth(2).evaluate(el => el.classList.contains('is-missing')), 'Unverified referral card is red')
+  assert.equal(await page.locator('.visit-snapshots > div').first().locator('small').innerText(), 'Payer eligibility via Stedi')
+  assert.equal(await page.locator('.visit-snapshots > div').nth(1).getByRole('link').count(), 0)
+  assert((await page.locator('.visit-snapshots > div').nth(2).innerText()).includes('Verification required\nSource: No confirmed source\nReason: No applicable contract rule was confirmed.'))
+  assert((await page.locator('.visit-snapshots > div').nth(3).innerText()).includes('Verification required\nSource: No confirmed source\nReason: Payer authorization rule needs review.'))
   assert((await page.locator('.visit-appointment-strip select').innerText()).includes('9:00 AM CDT'))
   assert.deepEqual(await page.locator('.visit-detail-section > summary').allTextContents(), [
     'Possible additional services / modify inputs', 'Detailed benefits, insurance & card',
@@ -98,6 +114,7 @@ try {
   section = await detail('Detailed benefits')
   assert(await section.getByText('Sam Other', { exact: true }).isVisible())
   assert(await section.getByText('Alex Former', { exact: true }).isVisible())
+  assert((await section.innerText()).includes('Source: eCW Coverage.subscriberId'))
   await section.getByText(/Card preview unavailable/).waitFor()
   assert(await section.getByRole('heading', { name: /Service category 98/ }).isVisible())
   assert.equal(await section.locator('.visit-imported article p').innerText(), 'Patient comment\nPlease explain the treatment plan.')
@@ -124,15 +141,25 @@ try {
   await section.getByText('No completed visits returned in the last year.').waitFor()
   await section.locator('summary').click()
   // Ready amounts, including verified zero, come from collection evidence.
-  result = { ...result, collection_guidance: { ...result.collection_guidance, amount_cents: 4000, reason: 'Specialist/office-visit copay returned for this plan.', assumptions: ['Before payments or credits; show a receipt if already paid.'] }, codes: [codes[0]], selected_ids: ['99203'], planning_estimate: null,
+  result = { ...result, collection_guidance: { ...result.collection_guidance, amount_cents: 4000, reason: 'Specialist/office-visit copay returned for this plan.', assumptions: ['Before payments or credits; show a receipt if already paid.'],
+      services: [{ ...result.collection_guidance.services[0], copay_cents: 4000, benefit_source: 'Stedi' }] }, codes: [codes[0]], selected_ids: ['99203'], planning_estimate: null,
+    library_pricing: [{ document_id: 'contract-rate', label: 'Example clinic contract' }],
     cash_quote: { complete: true, min_cents: 25000, max_cents: 25000, message: 'Clinic self-pay price for the selected office visit.' },
     benefits: { ...benefits, network_status: 'in_network', oop_remaining_cents: 50000 },
     arrival_collection: { amount_cents: 4000, status: 'copay_only', payments_received_cents: null, reason: 'Specialist/office-visit copay returned for this plan.' },
     price_range: { complete: true, mode: 'services', patient_min_cents: 4000, patient_max_cents: 4000, plan_min_cents: 10000, plan_max_cents: 10000, cash_complete: true, cash_min_cents: 25000, cash_max_cents: 25000,
-      lines: [{ ...codes[0], benefits: { ...benefits, requirements }, issues: [], calculation: { patient_cents: 4000, plan_cents: 10000, copay_cents: 4000 } }], scenarios: [] } }
+      lines: [{ ...codes[0], benefit_source: 'Stedi', rate_source: 'library:contract-rate', rate_row_number: 7, allowed_cents: 14000, allowed_basis: 'clinic_contract', benefits: { ...benefits, copay_id: 'benefitsInformation[3]', requirements }, issues: [], calculation: { patient_cents: 4000, plan_cents: 10000, copay_cents: 4000 } }], scenarios: [] } }
   await openPatient()
   assert.equal(await page.locator('.arrival-total > strong').innerText(), '$40.00')
+  assert(await page.locator('.visit-snapshots > div').nth(1).evaluate(el => el.classList.contains('is-missing')), 'Unconfirmed product match is red even when a network name is shown')
   assert(await page.locator('.arrival-total').getByText(/Specialist\/office-visit copay/).isVisible())
+  section = await detail('Patient estimate')
+  assert(/Benefit source:\s*Stedi/i.test(await section.innerText()))
+  assert(/Allowed price source:\s*Clinic contract · Example clinic contract · row 7/i.test(await section.innerText()))
+  await section.locator('summary').click()
+  section = await detail('Detailed benefits')
+  assert((await section.innerText()).includes('Response row: benefitsInformation[3]'))
+  await section.locator('summary').click()
   const beforeEmg = previsitRequests.length
   let releaseReview
   reviewGate = new Promise(resolve => { releaseReview = resolve })
@@ -140,8 +167,10 @@ try {
   await page.waitForFunction(() => document.querySelector('.arrival-total > strong')?.textContent === 'Calculating…')
   assert(!(await page.locator('.arrival-total').innerText()).includes('$40.00'))
   releaseReview()
-  await page.waitForFunction(() => document.querySelector('.arrival-total > strong')?.textContent === '$100.00')
+  await page.waitForFunction(() => document.querySelector('.arrival-total > strong')?.textContent === '$40.00')
   assert((await page.locator('.emg-option').innerText()).includes('$60.00'))
+  assert((await page.locator('.emg-option').innerText()).includes('Planning total with testing'))
+  assert((await page.locator('.emg-option').innerText()).includes('$100.00 – $120.00'))
   assert.equal(previsitRequests.length, beforeEmg)
   assert.equal(reviews.at(-1).emg_required, true)
   await page.getByRole('checkbox', { name: 'EMG / nerve testing required' }).click()
@@ -261,8 +290,12 @@ try {
     assert.equal(await page.locator('.visit-patient-bar .coverage-chip').innerText(), label)
     if (state === 'pending') {
       assert(!(await page.locator('.arrival-total > strong').innerText()).includes('$'))
+      assert(!(await page.locator('.visit-snapshots > div').first().evaluate(el => el.classList.contains('is-missing'))), 'Pending coverage is neutral')
+      assert(!(await page.locator('.coverage-chip').evaluate(el => el.classList.contains('is-missing'))), 'Pending coverage badge is neutral')
     } else {
       assert.equal(await page.locator('.visit-snapshots > div').first().locator('strong').innerText(), label)
+      assert(await page.locator('.visit-snapshots > div').first().evaluate(el => el.classList.contains('is-missing')), 'Missing or failed coverage card is red')
+      assert(await page.locator('.coverage-chip').evaluate(el => el.classList.contains('is-missing')), 'Missing or failed coverage badge is red')
       assert.equal(await page.locator('.arrival-total > strong').innerText(), 'Review billing details')
       assert.equal(await page.getByRole('button', { name: 'Check again', exact: true }).isDisabled(), false)
     }
@@ -286,6 +319,7 @@ try {
     collection_guidance: { ...beforeRecovery.collection_guidance, billing_note: undefined, amount_cents: 16000, status: 'cash_estimate', basis: 'practice_cash_price', reason: 'Insurance remains unverified.' } }
   await openPatient()
   assert.equal(await page.locator('.arrival-total > strong').innerText(), '$160.00')
+  assert.equal(await page.locator('.arrival-total > span').first().innerText(), 'Self-pay option for this visit')
   assert.equal(await page.locator('.coverage-chip').innerText(), 'Coverage unverified · cash pricing')
   assert.equal(reviews.length, reviewsBeforeCash)
   section = await detail('Detailed benefits')
@@ -317,13 +351,76 @@ try {
   await openPatient()
   assert(!(await page.locator('.arrival-total > strong').innerText()).includes('$'))
   result = beforeRecovery
+  const withoutContract = structuredClone(result)
+  result = { ...result, benefits: { ...result.benefits, network_status: 'in_network', network_source: 'clinic_record' },
+    network_evidence: { document_id: 'signed-contract', document_label: 'Signed Choice PPO contract', locator: 'Page 3, row 7' },
+    requirement_evidence: {
+      referral: { status: 'Required', reason: 'Contract row marks CPT 99203 referral required.', verify_url: 'https://availity.com', verification: 'Check the member in Availity.', contact: '800-000-0000', sources: [{ filename: '2026_Example_Health_Choice_PPO_signed_professional_agreement.pdf', document_id: 'signed-contract', page: 3 }] },
+      authorization: { status: 'Verification required', reason: 'Contract refers this requirement to payer policies.', verify_url: 'https://availity.com', approval_status: 'Unknown', sources: [{ filename: '2026_Example_Health_Choice_PPO_signed_professional_agreement.pdf', document_id: 'signed-contract', page: 6 }] },
+    } }
+  await openPatient()
+  const contractLink = page.locator('.visit-snapshots > div').nth(1).getByRole('link', { name: /Signed Choice PPO contract PDF/ })
+  assert.equal(await contractLink.getAttribute('href'), '/api/staff/library/signed-contract/document?preview=true#page=3')
+  assert((await page.locator('.visit-snapshots > div').nth(2).innerText()).includes('Required\nSource: 2026_Example_Health_Choice_PPO_signed_professional_agreement.pdf · page 3\nReason: Contract row marks CPT 99203 referral required.'))
+  assert(await page.locator('.visit-snapshots > div').nth(2).evaluate(el => el.classList.contains('is-review')), 'Required referral is a review state, not an error')
+  assert((await page.locator('.visit-snapshots > div').nth(2).innerText()).includes('How to verify: Check the member in Availity.\nPayer contact: 800-000-0000\nVerification link: Open payer portal'))
+  assert.equal(await page.locator('.visit-snapshots > div').nth(2).getByRole('link', { name: 'Open payer portal' }).getAttribute('href'), 'https://availity.com')
+  assert.equal(await page.locator('.visit-snapshots > div').nth(2).getByRole('link', { name: 'View PDF' }).getAttribute('href'), '/api/staff/library/signed-contract/document?preview=true#page=3')
+  assert((await page.locator('.visit-snapshots > div').nth(3).innerText()).includes('Verification required\nSource: 2026_Example_Health_Choice_PPO_signed_professional_agreement.pdf · page 6'))
+  assert((await page.locator('.visit-snapshots > div').nth(3).innerText()).includes('Approval: Unknown'))
+  assert.equal(await page.locator('.visit-snapshots > div').nth(3).getByRole('link', { name: 'Open payer portal' }).getAttribute('href'), 'https://availity.com')
+  assert.equal(await page.locator('.visit-snapshots > div').nth(3).getByRole('link', { name: 'View PDF' }).getAttribute('href'), '/api/staff/library/signed-contract/document?preview=true#page=6')
+  result = { ...result, requirement_evidence: {
+    referral: { status: 'Not required', reason: 'The applicable contract confirms no referral is needed.', sources: [] },
+    authorization: { status: 'Not required', reason: 'The applicable contract confirms no authorization is needed.', sources: [] },
+  } }
+  await openPatient()
+  assert(await page.locator('.visit-snapshots > div').nth(2).evaluate(el => el.classList.contains('is-confirmed')), 'No referral needed stays green')
+  assert(await page.locator('.visit-snapshots > div').nth(3).evaluate(el => el.classList.contains('is-confirmed')), 'No authorization needed stays green')
+  result = withoutContract
   // A failed refresh retains the saved estimate, labelled for rechecking.
+  const beforeExplanation = result
+  result = { ...result, emg_option: undefined, benefits: { ...result.benefits, reported_options: [
+    ...result.benefits.reported_options, { id: 'out-network', kind: 'coinsurance', service_type_code: '98',
+      network: 'OUT_OF_NETWORK', percent: '40' }] }, payment_explanation: {
+    sentence: 'This is the office copay; the cost of nerve testing is still unknown.',
+    reason_code: 'office_copay_partial', network_tier: 'in_network', pricing_basis: 'office_copay',
+    unpriced_codes: ['95910'], known_amount_only: true,
+    notice: 'The card and eCW differed; the payer confirmed the card-based check.' } }
+  await openPatient()
+  assert.equal(await page.locator('#visit-estimate .arrival-total > p').first().innerText(),
+    'Why: This is the office copay; the cost of nerve testing is still unknown.')
+  assert((await page.locator('#visit-estimate .arrival-total').innerText()).includes('The card and eCW differed; the payer confirmed the card-based check.'))
+  section = await detail('Detailed benefits')
+  assert((await section.innerText()).includes('Other network terms reported by the plan'))
+  assert((await section.innerText()).includes('coinsurance 40%'))
+  result = beforeExplanation
   result = { ...result, emg_option: undefined, collection_guidance: { ...result.collection_guidance, status: 'estimated', amount_cents: 4735,
     billing_note: { ...billing, kind: 'office_copay', amount_cents: 4735, text: 'Active, $47.35 copay, ded met' } } }
   result.emg_option = { requested: true, included: false, total_min_cents: null, message: 'Testing needs an applicable rate.' }
   await openPatient()
   assert.equal(await page.locator('.arrival-total > strong').innerText(), '$47.35')
-  assert((await page.locator('.arrival-total').innerText()).includes('Testing is not yet priced'))
+  assert((await page.locator('.arrival-total').innerText()).includes('price of nerve testing is still unknown'))
+  const beforePackage = structuredClone(result)
+  result = { ...result, payment_mode: 'cash', service_plan: { ...result.service_plan, kind: 'emg_ncs' },
+    selected_ids: ['99203', '95910'], codes: [codes[0], codes[2]], available_codes: codes,
+    cash_schedule: { source: 'named-source.docx', effective_from: '2026-09-04', packages: [
+      { id: 'named:onehand', label: 'One Hand Evaluation', amount_cents: 50000, indication: 'Symptoms on one side' }] },
+    cash_quote: { complete: false, selection: '', source: 'named-source.docx', message: 'Choose the matching package.' },
+    price_range: { ...result.price_range, mode: 'services', cash_complete: false, lines: [
+      { ...codes[0], benefits, issues: [], calculation: null }, { ...codes[2], benefits, issues: [], calculation: null }] } }
+  await openPatient()
+  section = await detail('Possible additional')
+  const packageButton = section.getByRole('button', { name: /One Hand Evaluation/ })
+  assert((await packageButton.innerText()).includes('Symptoms on one side'))
+  await packageButton.click()
+  assert.equal(await packageButton.getAttribute('aria-pressed'), 'true')
+  await section.getByRole('button', { name: 'Recalculate estimate' }).click()
+  await page.waitForFunction(() => document.querySelector('.visit-content')?.getAttribute('aria-busy') === 'false')
+  assert.equal(reviews.at(-1).cash_selection, 'named:onehand')
+  assert.deepEqual(reviews.at(-1).selected_ids, ['99203', '95910'], 'Package examples do not change planned CPTs')
+  result = beforePackage
+  await openPatient()
   await page.route('**/appointments/previsit', route => route.fulfill({ status: 503, json: { detail: 'Payer unavailable' } }))
   await page.getByRole('button', { name: 'Check again', exact: true }).click()
   await page.getByRole('alert').filter({ hasText: 'The saved visit details and estimate are retained below.' }).waitFor()

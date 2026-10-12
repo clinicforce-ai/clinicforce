@@ -46,16 +46,14 @@ export function ServicePlanner({ result, busy, save, viewEstimate }: { result: P
     update(ids)
   }
   const choosePackage = (id: string) => {
-    setCashSelection(id); setChanged(true)
-    const pack = result.cash_schedule?.packages.find(row => row.id === id)
-    const ncs = nerve.find(row => row.code === pack?.ncs_example), emg = muscle.find(row => row.code === pack?.emg_example)
-    if (pack && ncs && emg) { setSelected([ncs.id!, emg.id!]); setQuantities(current => ({ ...current, [ncs.id!]: 1, [emg.id!]: pack.limbs_example })) }
+    setCashSelection(current => current === id ? '' : id); setChanged(true); setEditError('')
   }
   const apply = async (continueToCollection: boolean) => {
     if (changed) {
       if (chosen.some(retired)) { setEditError('Remove retired procedure codes before updating this plan.'); return }
       if (!chosen.length) { setEditError('Select at least one service.'); return }
       if (chosen.some(row => !Number.isInteger(quantities[row.id!]) || quantities[row.id!] < 1 || quantities[row.id!] > 10000)) { setEditError('Choose the planned quantity using the + and − buttons.'); return }
+      if (cashSelection && !chosen.some(row => groupFor(row.code) === 'nerve')) { setEditError('Choose the planned nerve study before applying a cash package.'); return }
       if (chosen.filter(row => ['95885', '95886'].includes(row.code)).reduce((sum, row) => sum + quantities[row.id!], 0) > 4) { setEditError('EMG examinations can include at most four limbs in this scenario.'); return }
       if (busy || !result.check_id || !result.context_token) { setEditError('Wait for the current check before updating services.'); return }
       const saved = await save({ selected_ids: selected, confirmed_units: Object.fromEntries(selected.map(id => [id, quantities[id]])), ...(result.cash_schedule ? { cash_selection: cashSelection } : {}) })
@@ -84,13 +82,13 @@ export function ServicePlanner({ result, busy, save, viewEstimate }: { result: P
         const disable = busy || groupFor(row.code) === 'muscle' && !nerve.some(item => selected.includes(item.id!))
         return <article key={row.id} className={`procedure-choice${included ? ' is-selected' : ''}`}>
           <button className="procedure-pick" aria-pressed={included} disabled={disable} onClick={() => single ? pickOne(activeGroup.rows, row.id!) : update(included ? selected.filter(id => id !== row.id) : [...selected, row.id!])}><span className="procedure-check" aria-hidden="true">{included && <Check size={16} />}</span><span><strong>{clinicalName(row)}</strong><small>{row.code.startsWith('J') ? 'HCPCS' : 'CPT'} {row.code}</small></span></button>
-          <div className="procedure-price-note">{row.unit_allowed_cents != null ? `Contract / unit ${money(row.unit_allowed_cents)}` : row.unit_cash_cents != null ? `Cash / unit ${money(row.unit_cash_cents)}` : 'Price follows plan and clinic schedule'}</div>
+          <div className="procedure-price-note">{row.unit_allowed_cents != null && (result.benefits?.network_status !== 'out_of_network' || row.allowed_basis === 'payer_out_of_network') ? `${row.allowed_basis === 'payer_out_of_network' ? 'Payer allowed' : 'Contract'} / unit ${money(row.unit_allowed_cents)}` : row.unit_cash_cents != null ? `Cash / unit ${money(row.unit_cash_cents)}` : 'Price follows plan and clinic schedule'}</div>
           {included && !single && <div className="procedure-quantity"><span>{groupFor(row.code) === 'muscle' ? 'Limbs' : row.code.startsWith('J') ? 'Medication units' : 'Quantity'}</span><div className="quantity-stepper">{row.code.startsWith('J') && <button aria-label={`Decrease ${row.code} by 10 units`} disabled={busy || quantities[row.id!] <= 1} onClick={() => quantity(row, -10)}>−10</button>}<button aria-label={`Decrease ${row.code} quantity`} disabled={busy || quantities[row.id!] <= 1} onClick={() => quantity(row, -1)}><Minus size={16} /></button><output aria-label={`${row.code} quantity`} aria-live="polite">{quantities[row.id!] || '—'}</output><button aria-label={`Increase ${row.code} quantity`} disabled={busy || quantities[row.id!] >= (groupFor(row.code) === 'muscle' ? 4 : 10000)} onClick={() => quantity(row, 1)}><Plus size={16} /></button>{row.code.startsWith('J') && <button aria-label={`Increase ${row.code} by 10 units`} disabled={busy || quantities[row.id!] >= 10000} onClick={() => quantity(row, 10)}>+10</button>}</div></div>}
         </article>
       })}</div>
       {activeGroup.id === 'muscle' && !nerve.some(item => selected.includes(item.id!)) && <p className="visit-muted">Choose a nerve study first to add needle EMG.</p>}
     </>}
-    {result.payment_mode === 'cash' && result.cash_schedule && emgVisit && <section className="cash-package-options"><h3>Cash package</h3>{result.cash_schedule.packages.map(row => <button key={row.id} disabled={busy} aria-pressed={cashSelection === row.id} onClick={() => choosePackage(row.id)}>{row.label} · {money(row.amount_cents)}</button>)}</section>}
+    {result.payment_mode === 'cash' && result.cash_schedule && (emgVisit || chosen.some(row => groupFor(row.code) === 'nerve')) && <section className="cash-package-options"><h3>Cash package</h3><p className="visit-muted">Choose the package that matches the planned care. The focused visit is included. Final CPTs follow the services performed.</p>{result.cash_schedule.packages.map(row => <button key={row.id} disabled={busy} aria-pressed={cashSelection === row.id} onClick={() => choosePackage(row.id)}>{row.label} · {money(row.amount_cents)}{row.indication && <small>{row.indication}</small>}</button>)}</section>}
     {editError && <p className="visit-error" role="alert">{editError}</p>}
     <div className="visit-plan-footer"><span>{chosen.length} {chosen.length === 1 ? 'service' : 'services'}{changed ? ' · Changes not applied' : ' · Current estimate'}</span><button className="visit-primary" disabled={busy} onClick={() => void apply(true)}>{busy ? 'Updating estimate…' : 'Recalculate estimate'} <ArrowRight size={17} /></button></div>
   </section>
@@ -100,10 +98,16 @@ export default function VisitServices({ result }: { result: PrevisitEstimate }) 
   const lines = result.price_range?.lines || []
   if (!lines.length) return null
   const cash = result.payment_mode === 'cash'
+  const rateSource = (value?: string) => value?.startsWith('library:')
+    ? result.library_pricing?.find(document => document.document_id === value.slice(8))?.label || value
+    : value
   return <section className="visit-services"><div className="visit-section-heading"><h2>Planned services & patient amounts</h2></div>
     <div className="clinical-table-wrap"><table className="clinical-service-table"><thead><tr><th>Procedure</th><th>{cash ? 'Cash price' : 'Estimated patient share'}</th></tr></thead><tbody>{lines.map(row => {
       const estimate = result.collection_guidance?.services.find(item => item.id === row.id)
-      return <tr key={row.id}><th scope="row">{clinicalName(row)}<small>CPT {row.code}{Number(row.units) > 1 ? ` × ${row.units}` : ''}</small><small>{estimate?.benefit}</small></th><td>{cash ? row.cash_included ? 'Included' : row.cash_cents != null ? money(row.cash_cents) : 'Billed once priced' : estimate?.patient_cents != null ? money(estimate.patient_cents) : 'Billed after the claim'}</td></tr>
+      return <tr key={row.id}><th scope="row">{clinicalName(row)}<small>CPT {row.code}{Number(row.units) > 1 ? ` × ${row.units}` : ''} · Planned from {row.source || 'visit review'}</small><small>{estimate?.benefit}</small>
+        {cash ? (row.cash_cents != null || row.cash_included) && <small>Cash price source: {row.cash_source || result.cash_quote?.source || 'Clinic cash schedule'}{row.cash_rule?.locator ? ` · ${row.cash_rule.locator}` : ''}</small>
+          : <><small>Benefit source: {row.benefit_source || estimate?.benefit_source || result.benefit_source || 'Not confirmed'}</small>{row.allowed_cents != null && <small>Allowed price source: {row.allowed_basis === 'payer_out_of_network' ? 'Payer out-of-network amount' : 'Clinic contract'} · {rateSource(row.rate_source) || 'Source not retained'}{row.rate_row_number ? ` · row ${row.rate_row_number}` : ''}</small>}</>}
+      </th><td>{cash ? row.cash_included ? 'Included' : row.cash_cents != null ? money(row.cash_cents) : 'Billed once priced' : estimate?.patient_cents != null ? money(estimate.patient_cents) : 'Billed after the claim'}</td></tr>
     })}</tbody></table></div>
     {result.price_range?.mode === 'alternatives' && <p>One office consultation. These visit levels are alternatives, not separate charges.</p>}
     {cash && result.cash_quote?.complete && <p>{result.cash_quote.message}</p>}

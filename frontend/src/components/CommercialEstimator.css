@@ -34,8 +34,9 @@
 .visit-patient-bar > div { display: flex; gap: 14px; align-items: center; }
 .visit-patient-bar strong { font-size: 20px; }
 .patient-monogram { width: 44px; height: 44px; border-radius: 14px; display: grid; place-items: center; background: var(--ve-soft); color: var(--ve-teal); font-weight: 600; text-transform: uppercase; }
-.coverage-chip { display: inline-flex; align-items: center; gap: 7px; padding: 7px 12px; border-radius: 24px; font-size: 13px; color: var(--ve-teal); background: var(--ve-soft); }
-.coverage-chip.is-neutral { color: var(--ve-muted); background: var(--ve-canvas); }
+.coverage-chip { display: inline-flex; align-items: center; gap: 7px; padding: 7px 12px; border-radius: 24px; font-size: 13px; color: var(--ve-muted); background: var(--ve-canvas); }
+.coverage-chip.is-confirmed { color: var(--ve-teal); background: var(--ve-soft); }
+.coverage-chip.is-missing { color: var(--ve-error); background: #fcebed; }
 .visit-appointment-strip { display: flex; gap: 14px; align-items: center; padding: 12px 20px; background: var(--ve-canvas); border: 1px solid var(--ve-line); border-top: 0; border-radius: 0 0 16px 16px; }
 .visit-appointment-strip > svg { color: var(--ve-teal); }
 .visit-appointment-strip label { display: grid; gap: 4px; flex: 1; min-width: 0; font-size: 12px; color: var(--ve-muted); }
@@ -72,7 +73,7 @@
 .cash-comparison { margin-left: auto; text-align: right; }
 .visit-snapshots { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); margin: 18px 0 26px; gap: 14px; }
 .visit-snapshots > div { display: flex; align-items: center; gap: 12px; padding: 16px; border: 1px solid var(--ve-line); border-radius: 12px; background: white; }
-.visit-snapshots svg { color: var(--ve-teal); }
+.visit-snapshots svg { color: var(--ve-muted); }
 .visit-snapshots span { font-size: 12px; color: var(--ve-muted); }
 .visit-snapshots strong { display: block; font-size: 18px; color: var(--ve-ink); font-weight: 500; }
 .visit-care-summary .visit-section-heading { margin-bottom: 12px; }
@@ -144,6 +145,7 @@
 .visit-estimator .visit-primary { background: var(--ve-teal); color: white; }
 .visit-estimator .visit-primary:hover { background: #075e55; }
 .cash-package-options button { border: 1px solid var(--ve-line); margin: 8px 8px 0 0; }
+.cash-package-options button small { display: block; margin-top: 4px; }
 .cash-package-options button[aria-pressed=true] { background: var(--ve-soft); border-color: var(--ve-teal); }
 .visit-estimator .visit-delete-button { color: var(--ve-error); margin-top: 16px; }
 .visit-empty { display: grid; justify-items: center; padding: 64px 24px; text-align: center; background: white; border: 1px solid var(--ve-line); border-radius: 16px; gap: 12px; }
@@ -187,6 +189,12 @@
 .visit-context-facts dd { margin: 4px 0 0; overflow-wrap: anywhere; }
 .visit-overview .visit-snapshots { padding: 0 24px; margin: 0; gap: 10px; }
 .visit-overview .visit-snapshots > div { background: var(--ve-canvas); border: 0; align-items: flex-start; }
+.visit-overview .visit-snapshots > div.is-confirmed { background: var(--ve-soft); border: 1px solid #c8e2d9; }
+.visit-overview .visit-snapshots > div.is-missing { background: #fcebed; border: 1px solid #e7b9bf; }
+.visit-overview .visit-snapshots > div.is-review { background: #fff5e8; border: 1px solid #e9d3b4; }
+.visit-snapshots .is-confirmed svg { color: var(--ve-teal); }
+.visit-snapshots .is-missing svg, .visit-snapshots .is-missing strong { color: var(--ve-error); }
+.visit-snapshots .is-review svg { color: var(--ve-review); }
 .visit-overview .visit-snapshots strong { font-size: 16px; }
 .arrival-context { border-left: 1px solid var(--ve-line); padding-left: 24px; }
 .arrival-context h3 { margin: 8px 0; font-size: 18px; }
@@ -216,7 +224,7 @@
 .emg-option > label { display: flex; align-items: center; gap: 10px; font-weight: 650; cursor: pointer; }
 .emg-option input[type="checkbox"] { width: 20px; height: 20px; flex: 0 0 20px; accent-color: var(--ve-teal); }
 .emg-option > p { color: var(--ve-muted); margin: 12px 0; }
-.visit-snapshots small { display: block; margin-top: 5px; line-height: 1.4; }
+.visit-snapshots small { display: block; margin-top: 5px; line-height: 1.4; overflow-wrap: anywhere; }
 @media (max-width: 600px) {
   .visit-snapshots span { display: grid; grid-template-columns: auto minmax(0, 1fr); }
   .visit-snapshots strong { text-align: right; }
