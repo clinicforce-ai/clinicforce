@@ -73,7 +73,8 @@ def test_unknown_provider_network_qualifies_payer_office_copay():
     result = {'benefits': {'network_status': 'unknown'}, 'price_range': {'lines': [
         {'code': '99203', 'calculation': None, 'benefits': {'network_independent': False}}]}}
     explanation = amount_explanation.build(result, {'basis': 'office_copay', 'amount_cents': 3000})
-    assert 'provider participation is unverified' in explanation['sentence']
+    assert explanation['sentence'] == 'Collect $30.00 for the consultation: the plan office copay.'
+    assert explanation['network_tier'] == 'unknown'
 
 
 def test_procedure_specific_coinsurance_adds_to_office_copay():
@@ -193,7 +194,8 @@ def test_out_of_network_fixed_office_copay_is_only_a_known_partial_amount():
     assert guidance['amount_cents'] == 3000
     sentence = amount_explanation.build({'benefits': terms, 'price_range': priced,
         'payment_mode': 'insurance'}, guidance)['sentence']
-    assert sentence == 'This is the out-of-network office copay; any extra doctor charge is still unknown.'
+    assert sentence == ('Collect $30.00 for the consultation: the out-of-network plan office copay; '
+                        'the office deductible is already met; any extra doctor charge is unknown.')
 
 
 def test_short_explanation_says_which_amount_is_known_and_why_cash_was_used():
@@ -201,16 +203,18 @@ def test_short_explanation_says_which_amount_is_known_and_why_cash_was_used():
                'price_range': {'lines': [{'code': '99203', 'calculation': None},
                                          {'code': '95907', 'calculation': None}]}}
     sentence = amount_explanation.build(partial, {'amount_cents': 3000, 'basis': 'office_copay'})['sentence']
-    assert sentence == 'This is the office copay; the cost of nerve testing is still unknown.'
+    assert sentence == ('Collect $30.00 for the consultation: the plan office copay; '
+                        'nerve testing is excluded because its patient cost is unknown.')
     office_only = {**partial, 'price_range': {'lines': [{'code': '99203', 'calculation': None}]}}
-    assert amount_explanation.build(office_only, {'amount_cents': 3000, 'basis': 'office_copay'})['sentence'] == 'This is the office copay.'
+    assert amount_explanation.build(office_only, {'amount_cents': 3000, 'basis': 'office_copay'})['sentence'] == 'Collect $30.00 for the consultation: the plan office copay.'
     uncertain = {**office_only, 'price_range': {'lines': [{'code': '99203', 'calculation': None,
         'benefits': {'deductible_applicability': 'UNKNOWN', 'deductible_remaining_cents': 130000}}]}}
     assert amount_explanation.build(uncertain, {'amount_cents': 3000, 'basis': 'office_copay'})['sentence'] == (
-        'This is the office copay; the plan has not confirmed whether the deductible adds more.')
+        'Collect $30.00 for the consultation: the plan office copay; any office deductible is still unknown.')
     waived = deepcopy(uncertain)
     waived['price_range']['lines'][0]['benefits']['deductible_applicability'] = 'DOES_NOT_APPLY'
-    assert amount_explanation.build(waived, {'amount_cents': 3000, 'basis': 'office_copay'})['sentence'] == 'This is the office copay.'
+    assert amount_explanation.build(waived, {'amount_cents': 3000, 'basis': 'office_copay'})['sentence'] == (
+        'Collect $30.00 for the consultation: the plan office copay; the office deductible does not apply.')
     cash = {'payment_mode': 'cash', 'cash_fallback': {'reason': 'completed checks'},
             'benefits': {'network_status': 'out_of_network'}, 'price_range': {'lines': []}}
     explanation = amount_explanation.build(cash, {'amount_cents': 16000, 'basis': 'practice_cash_price'})

@@ -10,7 +10,7 @@ export const commercialReadiness = (appointment_id: string) => request<Commercia
 export type BillingNote = { kind: 'no_collection' | 'office_copay' | 'self_pay'; amount_cents?: number; source: string; updated_at: string; text: string };
 export type RequirementEvidence = { status: 'Required' | 'Not required' | 'Verification required'; reason: string; verify_url?: string;
   verification?: string; contact?: string; approval_status?: string; approval_reference?: string; approval_verified_at?: string;
-  sources: Array<{ label?: string; filename?: string; page?: number; document_id?: string }> };
+  sources: Array<{ label?: string; filename?: string; page?: number; document_id?: string; url?: string }> };
 export type CollectionGuidance = {
   billing_note?: BillingNote;
   amount_cents: number | null; range_min_cents?: number | null; range_max_cents?: number | null;
@@ -42,6 +42,7 @@ export type PrevisitEstimate = {
       coinsurance_cents: number | null }; unpriced_codes: string[]; complete: boolean; conditional: boolean };
   requirement_evidence?: { referral: RequirementEvidence; authorization: RequirementEvidence;
     procedures?: Array<{ id: string; code: string; referral: RequirementEvidence; authorization: RequirementEvidence }> };
+  candidate_requirements?: Array<{ id: string; code: string; referral: RequirementEvidence; authorization: RequirementEvidence }>;
   emg_option?: { requested: boolean; included: boolean; additional_min_cents: number | null; additional_max_cents: number | null;
     total_min_cents: number | null; total_max_cents: number | null; message: string; scenario_count: number };
   pricing_assumptions?: string[];
@@ -50,7 +51,8 @@ export type PrevisitEstimate = {
   insurance_fallback?: { payer?: string; member_id?: string };
   identity?: { status: 'matched' | 'warning' | 'review' | 'reconciled'; message?: string; binding: string; can_confirm: boolean; differences: Array<{ field: string; ecw: string; payer: string }>; evidence?: { reference: string; verified_at: string } };
   planning_estimate?: { amount_cents: number; collectable: false; basis?: 'out_of_pocket_limit' | 'conditional_services'; explanation: string; assumptions: string[] } | null;
-  mapping_candidate?: { network: string; products: string[]; reference: string };
+  mapping_candidate?: { network: string; products: string[]; reference: string;
+    contract?: { network_name?: string; document_id?: string; locator?: string; effective_from?: string; effective_to?: string } };
   coverage_records?: Array<{ id: string; status: string; order?: number; member_id?: string; group_number?: string; subscriber?: string; relationship?: string; payer?: string[]; period?: { start?: string; end?: string }; cost_to_beneficiary?: Array<{ type?: { text?: string }; valueMoney?: { value: number; currency?: string }; valueQuantity?: { value: number; unit?: string } }> }>;
   patient_details?: { ecw_account_number?: string | null; gender?: string; phone?: string; email?: string; address?: { address1?: string; address2?: string; city?: string; state?: string; postalCode?: string } };
   insurance_details?: { payer_patient?: { firstName?: string; lastName?: string; dateOfBirth?: string }; payer_relationship?: string; payer_coverage_period?: { start?: string; end?: string }; payer_subscriber?: { firstName?: string; lastName?: string; memberId?: string; dateOfBirth?: string }; member_id?: string; member_source?: string | null; group_number?: string; group_source?: string | null; subscriber_first?: string; subscriber_last?: string; subscriber_birth_date?: string; relationship?: string; record_status?: { status: string; updated_at?: string; message: string }; coverage_period?: { start?: string; end?: string } };
@@ -79,7 +81,7 @@ export type PrevisitEstimate = {
       source?: string; state?: string; verification_status?: string; reason_codes?: string[] }> };
   eligibility_failure?: { kind: string; codes: string[]; title: string; detail: string; action: string; attempted_at: string };
   eligibility_error?: string; context_token?: string; revision?: number; selected_ids?: string[]; available_codes?: VisitCode[];
-  plan_details?: { ecw: Record<string, string[]>; stedi: { names?: string[]; plan_number?: string; group_number?: string; source?: string } };
+  plan_details?: { ecw: Record<string, string[]>; stedi: { names?: string[]; network_names?: string[]; plan_number?: string; group_number?: string; source?: string } };
   calculated_at?: string; ecw_retrieved_at?: string; response_reference?: string; network_evidence?: { network_name?: string; product_source?: string; evidence_reference?: string; effective_from?: string; effective_to?: string; document_id?: string; document_label?: string; locator?: string };
   check_id?: string; appointment_id: string; service_date: string; payer?: string | null; plan?: string | null;
   visit_type?: string | null; reason?: string | null; checked_at?: string | null;

@@ -136,6 +136,8 @@
 .procedure-check { display: grid; place-items: center; width: 21px; height: 21px; flex-shrink: 0; border: 1px solid #7a929a; border-radius: 6px; margin-top: 2px; }
 .is-selected .procedure-check { color: white; background: var(--ve-teal); border-color: var(--ve-teal); }
 .procedure-price-note { margin: 2px 8px 8px 37px; font-size: 12px; color: var(--ve-muted); }
+.procedure-requirements { display: flex; flex-wrap: wrap; gap: 4px 14px; margin: 4px 8px 8px 37px; font-size: 12px; }
+.procedure-requirements details { margin-top: 3px; }
 .procedure-quantity { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px; align-items: center; margin: 10px 8px; font-size: 13px; }
 .quantity-stepper { display: flex; align-items: center; gap: 4px; }
 .visit-estimator .quantity-stepper button { border: 1px solid var(--ve-line); background: white; min-width: 44px; padding: 8px; }

@@ -252,9 +252,14 @@ def plan_details(payload: dict) -> dict:
     subscriber = payload.get("subscriber") or {}
     info = payload.get("planInformation") or {}
     additional = (payload.get('dependent') or subscriber).get("additionalInformation") or subscriber.get('additionalInformation') or {}
+    network_names = list(dict.fromkeys(str(network.get('name') or '').strip()
+                                        for person in (subscriber, payload.get('dependent') or {})
+                                        if isinstance(person, dict)
+                                        for network in [((person.get('additionalInformation') or {}).get('planNetwork') or {})]
+                                        if isinstance(network, dict) and network.get('name')))
     return {"names": names, "plan_number": subscriber.get("planNumber") or info.get("planNumber") or (additional.get('plan') or {}).get('number'),
             "group_number": subscriber.get("groupNumber") or info.get("groupNumber") or (additional.get("group") or {}).get("number"),
-            "source": "Stedi"}
+            "network_names": network_names, "source": "Stedi"}
 
 
 def reported_stedi_options(payload: dict[str, Any], service_type_code: str) -> list[dict[str, Any]]:

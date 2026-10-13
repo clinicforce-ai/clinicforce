@@ -31,6 +31,7 @@ def test_three_sheets_supply_exact_plan_rules_and_portals():
     assert 'Payer Plan Matrix, row 18' in hmo['referral']['sources'][0]['label']
     assert ppo['referral']['verify_url'] == 'https://availity.com'
     assert 'Portal & Contact Reference, row' in ppo['referral']['sources'][1]['label']
+    assert ppo['referral']['sources'][2]['url'].endswith('/ppo-secd-referral.pdf')
     assert ppo['referral']['contact']
     assert 'referral module' in ppo['referral']['verification']
     assert 'PCP' in hmo['referral']['reason']
@@ -129,7 +130,7 @@ def test_existing_plan_matrix_upload_can_replace_bundled_research():
     index = table['row_numbers'].index(17)
     table['rows'][index][7] = 'Yes'
     table['rows'][index][8] = 'This updated exact plan requires a PCP referral before the visit.'
-    uploaded = {'kind': 'plan_matrix', 'filename': 'updated-research.xlsx', 'sha256': 'new',
+    uploaded = {'id': 'synthetic-matrix', 'kind': 'plan_matrix', 'filename': 'updated-research.xlsx', 'sha256': 'new',
                 'extraction': {'sha256': 'new', 'tables': tables}}
     data = plan_matrix.uploaded([uploaded])
     evidence = plan_matrix.evaluate({'codes': [{'code': '99213'}], 'benefit_source': 'Stedi',
@@ -140,5 +141,6 @@ def test_existing_plan_matrix_upload_can_replace_bundled_research():
          'coverage_period': {'start': '2026-01-01'}}, data)
     assert evidence['referral']['status'] == 'Required'
     assert 'updated-research.xlsx' in evidence['referral']['sources'][0]['label']
+    assert evidence['referral']['sources'][0]['document_id'] == 'synthetic-matrix'
     assert plan_matrix.uploaded([uploaded | {'effective_from': '2027-01-01'}], '2026-10-12') is plan_matrix.bundled()
     assert plan_matrix.uploaded([uploaded | {'extraction': {'sha256': 'new', 'tables': tables[:2]}}], '2026-10-12') is plan_matrix.bundled()

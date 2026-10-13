@@ -356,6 +356,14 @@ try {
   assert(!(await page.locator('.arrival-total > strong').innerText()).includes('$'))
   result = beforeRecovery
   const withoutContract = structuredClone(result)
+  result = { ...result, benefits: { ...result.benefits, network_status: 'unknown', network_source: null },
+    mapping_candidate: { ...result.mapping_candidate,
+    contract: { document_id: 'signed-contract', network_name: 'Choice PPO', locator: 'Page 3, row 7' } } }
+  await openPatient()
+  assert.equal(await page.locator('.visit-snapshots > div').nth(1).getByRole('link', { name: 'Choice PPO contract' }).getAttribute('href'),
+    '/api/staff/library/signed-contract/document?preview=true#page=3')
+  assert(await page.locator('.visit-snapshots > div').nth(1).evaluate(el => el.classList.contains('is-review')),
+    'A contract candidate does not prove the member belongs to that network')
   result = { ...result, benefits: { ...result.benefits, network_status: 'in_network', network_source: 'clinic_record' },
     network_evidence: { document_id: 'signed-contract', document_label: 'Signed Choice PPO contract', locator: 'Page 3, row 7' },
     requirement_evidence: {
@@ -363,20 +371,20 @@ try {
       authorization: { status: 'Verification required', reason: 'Contract refers this requirement to payer policies.', verify_url: 'https://availity.com', approval_status: 'Unknown', sources: [{ filename: '2026_Example_Health_Choice_PPO_signed_professional_agreement.pdf', document_id: 'signed-contract', page: 6 }] },
     } }
   await openPatient()
-  const contractLink = page.locator('.visit-snapshots > div').nth(1).getByRole('link', { name: 'View contract evidence' })
+  const contractLink = page.locator('.visit-snapshots > div').nth(1).getByRole('link', { name: 'Payer plan contract' })
   assert.equal(await contractLink.getAttribute('href'), '/api/staff/library/signed-contract/document?preview=true#page=3')
   await page.locator('.visit-snapshots > div').nth(2).locator('summary').click()
   assert((await page.locator('.visit-snapshots > div').nth(2).innerText()).includes('Contract row marks CPT 99203 referral required.'))
-  assert((await page.locator('.visit-snapshots > div').nth(2).innerText()).includes('2026_Example_Health_Choice_PPO_signed_professional_agreement.pdf · page 3'))
+  assert((await page.locator('.visit-snapshots > div').nth(2).innerText()).includes('Clinic contract · p. 3'))
   assert(await page.locator('.visit-snapshots > div').nth(2).evaluate(el => el.classList.contains('is-review')), 'Required referral is a review state, not an error')
   assert((await page.locator('.visit-snapshots > div').nth(2).innerText()).includes('Check the member in Availity.'))
   assert.equal(await page.locator('.visit-snapshots > div').nth(2).getByRole('link', { name: 'Open payer portal' }).getAttribute('href'), 'https://availity.com')
-  assert.equal(await page.locator('.visit-snapshots > div').nth(2).getByRole('link', { name: /signed_professional_agreement/ }).getAttribute('href'), '/api/staff/library/signed-contract/document?preview=true#page=3')
+  assert.equal(await page.locator('.visit-snapshots > div').nth(2).getByRole('link', { name: 'Clinic contract · p. 3' }).getAttribute('href'), '/api/staff/library/signed-contract/document?preview=true#page=3')
   await page.locator('.visit-snapshots > div').nth(3).locator('summary').click()
-  assert((await page.locator('.visit-snapshots > div').nth(3).innerText()).includes('2026_Example_Health_Choice_PPO_signed_professional_agreement.pdf · page 6'))
+  assert((await page.locator('.visit-snapshots > div').nth(3).innerText()).includes('Clinic contract · p. 6'))
   assert((await page.locator('.visit-snapshots > div').nth(3).innerText()).includes('Approval: Unknown'))
   assert.equal(await page.locator('.visit-snapshots > div').nth(3).getByRole('link', { name: 'Open payer portal' }).getAttribute('href'), 'https://availity.com')
-  assert.equal(await page.locator('.visit-snapshots > div').nth(3).getByRole('link', { name: /signed_professional_agreement/ }).getAttribute('href'), '/api/staff/library/signed-contract/document?preview=true#page=6')
+  assert.equal(await page.locator('.visit-snapshots > div').nth(3).getByRole('link', { name: 'Clinic contract · p. 6' }).getAttribute('href'), '/api/staff/library/signed-contract/document?preview=true#page=6')
   result = { ...result, requirement_evidence: {
     referral: { status: 'Not required', reason: 'The applicable contract confirms no referral is needed.', sources: [] },
     authorization: { status: 'Not required', reason: 'The applicable contract confirms no authorization is needed.', sources: [] },
@@ -417,7 +425,10 @@ try {
   result.emg_option = { requested: true, included: false, total_min_cents: null, message: 'Testing needs an applicable rate.' }
   await openPatient()
   assert.equal(await page.locator('.arrival-total > strong').innerText(), '$47.35')
-  assert((await page.locator('.arrival-total').innerText()).includes('price of nerve testing is still unknown'))
+  assert((await page.locator('.arrival-total').innerText()).includes('nerve testing is excluded because its patient cost is unknown'))
+  assert.equal(await page.locator('#visit-estimate .arrival-breakdown').isVisible(), false)
+  await page.locator('#visit-estimate .summary-assumptions summary').click()
+  assert((await page.locator('#visit-estimate .summary-assumptions').innerText()).includes('Copay included'))
   const beforePackage = structuredClone(result)
   result = { ...result, payment_mode: 'cash', service_plan: { ...result.service_plan, kind: 'emg_ncs' },
     selected_ids: ['99203', '95910'], codes: [codes[0], codes[2]], available_codes: codes,
@@ -444,7 +455,7 @@ try {
   assert.equal(await page.locator('.arrival-total > strong').innerText(), '$47.35')
   assert.equal(await page.locator('.arrival-total > span').first().innerText(), 'Previous estimate · needs recheck')
   assert((await page.locator('.arrival-total').innerText()).includes('reconfirm this visit before collecting'))
-  assert((await page.locator('.arrival-total').innerText()).includes('price of nerve testing is still unknown'))
+  assert((await page.locator('.arrival-total').innerText()).includes('nerve testing is excluded because its patient cost is unknown'))
   await page.emulateMedia({ media: 'print' })
   assert(await page.locator('.visit-services').isVisible(), 'Selected CPT table prints')
   assert((await page.locator('.visit-services').innerText()).includes('CPT 99203'))
