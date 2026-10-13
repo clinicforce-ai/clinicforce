@@ -17,8 +17,8 @@ def test_ecw_followup_label_selects_an_editable_followup(label):
     with patch.object(cpt_suggester.boto3, 'client') as model:
         plan = cpt_suggester.recommend_visit_plan(inputs, {}, codes)
     model.assert_not_called()
-    assert [r['code'] for r in codes if r['id'] in plan['recommended_ids']] == ['99213']
-    assert 'final level' in plan['assumptions'][0]
+    assert plan['recommended_ids'] == []
+    assert 'alternatives' in plan['assumptions'][0]
 
 
 def test_biopsy_catalog_and_combined_visit_preserve_all_procedures_and_units():
@@ -26,7 +26,7 @@ def test_biopsy_catalog_and_combined_visit_preserve_all_procedures_and_units():
     available = [*api._previsit_codes(inputs), *[{'id': c, 'code': c, 'units': 1, 'source': 'CPT planning catalog'} for c in ('11104', '11105', '95907', '95910', '95886')]]
     plan = cpt_suggester.recommend_visit_plan(inputs, {}, available)
     rows = {r['id']: r for r in available}
-    assert [(rows[key]['code'], plan['recommended_units'][key]) for key in plan['recommended_ids']] == [('99213', 1), ('11104', 1), ('11105', 2)]
+    assert [(rows[key]['code'], plan['recommended_units'][key]) for key in plan['recommended_ids']] == [('11104', 1), ('11105', 2)]
     assert api._previsit_service_types(inputs) == ['2', '98', '30']
     inputs['reason'] = 'Skin punch biopsy; 2 sites'
     plan = cpt_suggester.recommend_visit_plan(inputs, {}, available)

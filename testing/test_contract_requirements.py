@@ -130,3 +130,38 @@ def test_conflicting_contract_rows_or_payer_response_require_verification():
     pdf['extraction']['tables'][0]['rows'].pop()
     conflicting_payer = estimate('99213', payer_signals={'referral': 'not_required'}) | {'benefit_source': 'Stedi'}
     assert rules.evaluate(conflicting_payer, context(), [pdf])['referral']['status'] == 'Verification required'
+
+
+def test_each_procedure_keeps_its_own_requirement_and_visit_flags_required():
+    pdf = contract([HEADERS, row('99213', 'Choice PPO', 'Not required', 'Not required'),
+                    row('95910', 'Choice PPO', 'Not required', 'Required')])
+    result = estimate('99213', '95910', '95886')
+    for index, item in enumerate(result['codes']):
+        item['id'] = f'line-{index}'
+        result['price_range']['lines'][index]['id'] = item['id']
+    evidence = rules.evaluate(result, context(), [pdf])
+    procedures = {item['code']: item for item in evidence['procedures']}
+    assert procedures['99213']['authorization']['status'] == 'Not required'
+    assert procedures['95910']['authorization']['status'] == 'Required'
+    assert procedures['95886']['authorization']['status'] == 'Verification required'
+    assert evidence['authorization']['status'] == 'Required'
+    assert '95886' in evidence['authorization']['reason']
+    assert evidence['referral']['status'] == 'Verification required'
+
+
+def test_verified_authorization_applies_to_the_required_cpt_only():
+    pdf = contract([HEADERS, row('99213', 'Choice PPO', 'Not required', 'Not required'),
+                    row('95910', 'Choice PPO', 'Not required', 'Required')])
+    result = estimate('99213', '95910')
+    result['price_range']['lines'][1]['benefits']['requirements']['authorization'] = {
+        'status': 'valid', 'required': 'required', 'cleared': True,
+        'reference': 'approval-123', 'verified_at': '2026-10-12T12:00:00Z'}
+    evidence = rules.evaluate(result, context(), [pdf])
+    assert evidence['authorization']['status'] == 'Required'
+    assert evidence['authorization']['approval_status'] == 'Verified'
+    assert evidence['procedures'][1]['authorization']['approval_status'] == 'Verified'
+    assert evidence['procedures'][1]['authorization']['approval_reference'] == 'approval-123'
+    result['price_range']['lines'][1]['benefits']['requirements']['authorization'].pop('reference')
+    unreferenced = rules.evaluate(result, context(), [pdf])
+    assert unreferenced['authorization']['approval_status'] == 'Not verified'
+    assert unreferenced['procedures'][1]['authorization']['approval_status'] == 'Not verified'

@@ -97,25 +97,6 @@ def service_type(code: str, rules: dict) -> str | None:
         return '73'  # Diagnostic medical benefits, not the office consultation copay.
     if code in {'11104', '11105', '62270', '62328'}:
         return '2'
-    # Stedi's documented neurology and office/telehealth mappings. Clinic overrides win.
-    if code in cpt_rules.NCS_CODES | cpt_rules.EMG_ADD_ONS:
-        return '73'
-    if code.isdigit() and 99202 <= int(code) <= 99215:
-        return '98'
-    return None
-
-
-def _workflow_condition(reason: str) -> bool:
-    return 'authorization' in reason.lower() or 'referral' in reason.lower()
-
-
-def service_type(code: str, rules: dict) -> str | None:
-    configured = (rules.get('service_type_by_code') or {}).get(code)
-    if configured:
-        return str(configured)
-    # Stedi's documented neurology and office/telehealth mappings. Clinic overrides win.
-    if code in cpt_rules.NCS_CODES | cpt_rules.EMG_ADD_ONS:
-        return '73'
     if code.isdigit() and 99202 <= int(code) <= 99215:
         return '98'
     return None
@@ -217,6 +198,8 @@ def price_lines(codes: list[dict], rates: list[dict], benefits: dict, rules: dic
                         and rate.get('place_of_service') == rules.get('place_of_service') and rules.get('place_of_service')
                         and rate.get('patient_binding') == rules.get('patient_binding') and rules.get('patient_binding'))]
         rate = matches[0] if len(matches) == 1 else {}
+        rate_status = ('RATE_CONFLICT' if len(matches) > 1 else 'RESOLVED'
+                       if rate.get('allowed_cents') is not None else 'RATE_UNAVAILABLE')
         line = {**code, 'id': line_id, 'units': units, 'benefits': applied,
                 'unit_cash_cents': rate.get('cash_cents'),
                 'cash_cents': rate['cash_cents'] * units if rate.get('cash_cents') is not None and units else None,
@@ -227,6 +210,10 @@ def price_lines(codes: list[dict], rates: list[dict], benefits: dict, rules: dic
                 'rate_source': rate.get('source_reference') or ('Payer out-of-network allowance needed' if out_of_network else 'Clinic contract'), 'rate_version': rate.get('version_id'),
                 'rate_row_number': rate.get('row_number'),
                 'rate_effective_from': rate.get('effective_from'),
+                'rate_resolution': {'status': rate_status,
+                                    'matched_candidate_count': len(matches),
+                                    'source_checked': 'payer_out_of_network_rate_candidates' if out_of_network else 'scoped_active_contract_rate_candidates',
+                                    'provider_network_verified': benefits.get('network_status') in {'in_network', 'out_of_network'}},
                 'benefit_source': benefits.get('benefit_source') or (payload or {}).get('benefit_source') or ('Stedi' if payload is not None else None),
                 'benefit_verification': selection if selection_valid else None,
                 'benefit_basis': applied.get('benefit_label') or f'Service category {stc}' if stc else 'Service category needs mapping',

@@ -314,8 +314,8 @@ class RecoveryTest(IsolatedAsyncioTestCase):
             await api._recover_previsit(case, session, provider)
         result = api._previsit_result(case)
         assert result['coverage_status'] == 'VERIFIED'
-        assert result['price_range']['lines'][0]['allowed_cents'] == 10000
-        assert result['collection_guidance']['amount_cents'] == 6000
+        assert next(row for row in result['price_range']['lines'] if row['code'] == '99203')['allowed_cents'] == 10000
+        assert result['collection_guidance']['amount_cents'] is None  # E/M level is not selected yet.
         assert client.post.await_count == 2
 
     async def test_completed_no_match_retries_only_a_distinct_recorded_address(self):

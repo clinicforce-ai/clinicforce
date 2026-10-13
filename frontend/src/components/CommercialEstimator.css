@@ -196,6 +196,19 @@
 .visit-snapshots .is-missing svg, .visit-snapshots .is-missing strong { color: var(--ve-error); }
 .visit-snapshots .is-review svg { color: var(--ve-review); }
 .visit-overview .visit-snapshots strong { font-size: 16px; }
+.arrival-breakdown { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1px; margin: 0 24px 18px; overflow: hidden; border: 1px solid var(--ve-line); border-radius: 12px; background: var(--ve-line); }
+.arrival-breakdown > div { min-width: 0; padding: 10px 14px; background: var(--ve-canvas); }
+.arrival-breakdown dt { font-size: 12px; color: var(--ve-muted); }
+.arrival-breakdown dd { margin: 3px 0 0; font-size: 15px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.visit-snapshots .requirement-content { min-width: 0; flex: 1; font-size: 12px; color: var(--ve-muted); }
+.requirement-evidence { margin-top: 5px; font-size: 12px; }
+.requirement-evidence summary { cursor: pointer; color: var(--ve-teal); }
+.requirement-evidence p { margin: 6px 0; overflow-wrap: anywhere; }
+.visit-services { margin: 20px 0; padding: 20px 24px; background: var(--ve-white); border: 1px solid var(--ve-line); border-radius: 14px; }
+.visit-services .clinical-service-table { min-width: 680px; }
+.service-requirement-detail { font-size: 12px; font-weight: 400; }
+.service-requirement-detail summary { cursor: pointer; color: var(--ve-teal); }
+.service-requirement-detail p, .service-requirement-detail a { display: block; margin: 5px 0; overflow-wrap: anywhere; }
 .arrival-context { border-left: 1px solid var(--ve-line); padding-left: 24px; }
 .arrival-context h3 { margin: 8px 0; font-size: 18px; }
 .arrival-context p { font-size: 14px; color: var(--ve-muted); }
@@ -211,6 +224,7 @@
 .visit-identity-notice svg { color: var(--ve-review); }
 @media (max-width: 800px) { .visit-context-facts { grid-template-columns: 1fr 1fr; } }
 @media (max-width: 600px) {
+  .arrival-breakdown { grid-template-columns: repeat(2, minmax(0, 1fr)); margin: 0 16px 16px; }
   .visit-context-facts { padding: 14px; gap: 12px; font-size: 14px; }
   .visit-context-facts > div:nth-child(2) { grid-column: 1 / -1; grid-row: 2; }
   .arrival-context { padding: 16px 0 0; border-left: 0; border-top: 1px solid var(--ve-line); }
@@ -219,6 +233,45 @@
   .visit-detail-section > summary { padding: 16px; }
 }
 @media print { .visit-detail-section { break-inside: avoid; } }
+@media print {
+  @page { size: letter; margin: 0.35in; }
+  body:has(.visit-estimator) .site-header .shell { min-height: 32px; }
+  body:has(.visit-estimator) .site-header img { width: 32px; height: auto; }
+  body:has(.visit-estimator) #main-content { padding-top: 0; padding-bottom: 0; }
+  body:has(.visit-estimator) #main-content + footer { display: none; }
+  .visit-estimator .visit-appointment-strip, .visit-estimator .visit-detail-sections,
+  .visit-estimator .visit-result-footer, .visit-estimator .arrival-sources,
+  .visit-estimator .summary-assumptions, .visit-estimator .requirement-evidence,
+  .visit-estimator .payment-toggle, .visit-estimator .visit-page-header,
+  .visit-estimator .arrival-context, .visit-estimator .visit-context-facts small,
+  .visit-estimator .arrival-total details, .visit-estimator .service-requirement-detail,
+  .visit-estimator .emg-option.is-unpriced { display: none !important; }
+  .visit-estimator { padding: 0; font-size: 12px; }
+  .visit-estimator .visit-content { padding: 4px 0; }
+  .visit-estimator .visit-notice { padding: 8px 12px; margin-bottom: 6px; }
+  .visit-estimator .visit-patient-bar { padding: 8px 12px; }
+  .visit-estimator .visit-context-facts { padding: 8px 12px; }
+  .visit-estimator .overview-heading { padding: 10px 14px 0; }
+  .visit-estimator .overview-amounts { display: block; padding: 10px 14px; }
+  .visit-estimator .arrival-total > strong { font-size: 36px; margin: 3px 0; }
+  .visit-estimator .arrival-total > p { margin: 3px 0; }
+  .visit-estimator .visit-overview { break-inside: auto; }
+  .visit-estimator .visit-snapshots { grid-template-columns: repeat(4, minmax(0, 1fr)); padding: 0 14px; margin: 0; gap: 6px; }
+  .visit-estimator .visit-snapshots > div { padding: 8px; }
+  .visit-estimator .arrival-breakdown { grid-template-columns: repeat(6, minmax(0, 1fr)); margin: 0 14px 6px; }
+  .visit-estimator .arrival-breakdown > div { padding: 5px; }
+  .visit-estimator .arrival-breakdown dt { font-size: 10px; }
+  .visit-estimator .arrival-breakdown dd { font-size: 11px; }
+  .visit-estimator .visit-snapshots > div { break-inside: avoid; }
+  .visit-estimator .emg-option { padding: 6px 12px; margin: 6px 0; }
+  .visit-estimator .emg-option p, .visit-estimator .visit-identity-notice { margin: 2px 0; }
+  .visit-estimator .visit-services { padding: 6px 0; margin: 6px 0; border: 0; break-before: auto; }
+  .visit-estimator .clinical-table-wrap { overflow: visible; }
+  .visit-estimator .visit-services .clinical-service-table { min-width: 0; font-size: 11px; }
+  .visit-estimator .visit-services .clinical-service-table :is(th,td) { padding: 6px; }
+  .visit-estimator .clinical-service-table tbody tr { break-inside: avoid; }
+  .visit-estimator .clinical-service-table tbody th small:not(:first-of-type) { display: none; }
+}
 
 .emg-option { padding: 20px 24px; margin-top: 16px; }
 .emg-option > label { display: flex; align-items: center; gap: 10px; font-weight: 650; cursor: pointer; }

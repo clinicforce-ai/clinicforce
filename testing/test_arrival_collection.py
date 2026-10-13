@@ -187,6 +187,6 @@ def test_uncoded_appointment_uses_em_alternatives_without_model_call():
             plan = cpt_suggester.recommend_visit_plan(inputs, {}, codes)
         model.assert_not_called()
         assert [row['code'] for row in codes] == list(map(str, expected))
-        assert plan['recommended_ids'] == [codes[1]['id']]
+        assert plan['recommended_ids'] == []
         assert plan['method'] == 'appointment'
     assert ecw_backend._display({'name': [{'use': 'official', 'text': 'Dr. Alex Example'}]}) == 'Dr. Alex Example'

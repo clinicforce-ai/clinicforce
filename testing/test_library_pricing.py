@@ -155,6 +155,23 @@ def test_referenced_schedule_exact_payer_scope_and_lesser_of_operands():
         ['CPT', 'Allowed Amount', 'Network', 'POS', 'Effective From'], ['99213', '200', 'Preferred', '11', '2026-01-01']])]), connection)['rates']
 
 
+def test_portal_fee_export_ignores_only_blank_and_metadata_footer_rows():
+    connection = [{'id': 'payer', 'display_name': 'Example Payer', 'stedi_payer_id': 'example'}]
+    network = [{'payer_connection_id': 'payer', 'status': 'verified', 'network_name': 'Preferred',
+                'effective_from': '2026-01-01', 'effective_to': None, 'place_of_service': '11',
+                'plan_matcher': 'Exact Product', 'rendering_npi': '1234567890', 'tin': '123456789'}]
+    csv_rows = [['Procedure Code', 'Description', 'Modifier', 'Network', 'Amount'],
+                ['99204', 'Office visit', '', 'Preferred', '$151.60'],
+                ['95886', 'Muscle examination', '', 'Preferred', '$89.18'], [],
+                ['State', 'TX'], ['Time Stamp', '08/24/2026 11:35 AM']]
+    compiled = rules.compile_document(document('fee_schedule'), extracted([table(csv_rows, locator='CSV')]), connection, network)
+    assert {row['code']: row['allowed_cents'] for row in compiled['rates']} == {'99204': 15160, '95886': 8918}
+    assert compiled['rates'][1]['source']['locator'] == 'CSV, row 3'
+    invalid = deepcopy(csv_rows)
+    invalid[2][0] = 'INVALID'
+    assert not rules.compile_document(document('fee_schedule'), extracted([table(invalid, locator='CSV')]), connection, network)['rates']
+
+
 def test_invalid_dates_do_not_activate_cash_and_bytes_are_bound_to_the_source():
     compiled = rules.compile_document(document(effective_from='2026-13-01'), extracted([table([['CPT', 'Cash Price'], ['99213', '150']])]), [])
     assert not compiled['cash']

@@ -147,6 +147,22 @@ def get_cases(case_ids: list[str], patient_id: str, share_manifest_id: str, **sc
     return [json.loads(row["workflow_json"]) for row in rows]
 
 
+def recent_missing_rate_inputs(practice_id: str, limit: int = 500) -> list[dict]:
+    """Read only price fields from recent practice cases, never patient details."""
+    with _connection() as connection:
+        rows = connection.execute(
+            """SELECT created_at,
+                workflow_json::jsonb #>> '{previsit_context,result,payer}' AS payer,
+                workflow_json::jsonb #>> '{previsit_context,result,calculated_at}' AS calculated_at,
+                workflow_json::jsonb #>> '{previsit_context,result,payment_mode}' AS payment_mode,
+                workflow_json::jsonb #>> '{previsit_context,result,price_range,mode}' AS mode,
+                workflow_json::jsonb #> '{previsit_context,result,price_range,lines}' AS lines
+               FROM insurance_cases WHERE practice_id=%s
+                 AND workflow_json::jsonb #> '{previsit_context,result,price_range,lines}' IS NOT NULL
+               ORDER BY created_at DESC,id DESC LIMIT %s""", (practice_id, limit)).fetchall()
+    return [dict(row) for row in rows]
+
+
 def save_case(case: dict[str, Any], patient_id: str, share_manifest_id: str, event: str, *, snapshot: dict | None = None, **scope) -> dict[str, Any] | None:
     now = _now()
     owner, values = _owner(patient_id, share_manifest_id, **scope)

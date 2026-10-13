@@ -9,7 +9,7 @@ export type CommercialReadiness = { ready: boolean; blockers: string[]; ecw: { p
 export const commercialReadiness = (appointment_id: string) => request<CommercialReadiness>(`${root}/appointments/readiness`, json({ appointment_id }))
 export type BillingNote = { kind: 'no_collection' | 'office_copay' | 'self_pay'; amount_cents?: number; source: string; updated_at: string; text: string };
 export type RequirementEvidence = { status: 'Required' | 'Not required' | 'Verification required'; reason: string; verify_url?: string;
-  verification?: string; contact?: string; approval_status?: string;
+  verification?: string; contact?: string; approval_status?: string; approval_reference?: string; approval_verified_at?: string;
   sources: Array<{ label?: string; filename?: string; page?: number; document_id?: string }> };
 export type CollectionGuidance = {
   billing_note?: BillingNote;
@@ -36,7 +36,12 @@ export type PrevisitEstimate = {
   payer_source?: string | null;
   eligibility_timing?: { status: string; appointment_date: string; check_from: string; message: string };
   collection_guidance?: CollectionGuidance;
-  requirement_evidence?: { referral: RequirementEvidence; authorization: RequirementEvidence };
+  encounter_summary?: { collect_today_cents: number | null; estimated_total_patient_min_cents: number | null;
+    estimated_total_patient_max_cents: number | null; estimated_later_balance_cents: number | null;
+    payments_verified_cents: number | null; components: { copay_cents: number | null; deductible_cents: number | null;
+      coinsurance_cents: number | null }; unpriced_codes: string[]; complete: boolean; conditional: boolean };
+  requirement_evidence?: { referral: RequirementEvidence; authorization: RequirementEvidence;
+    procedures?: Array<{ id: string; code: string; referral: RequirementEvidence; authorization: RequirementEvidence }> };
   emg_option?: { requested: boolean; included: boolean; additional_min_cents: number | null; additional_max_cents: number | null;
     total_min_cents: number | null; total_max_cents: number | null; message: string; scenario_count: number };
   pricing_assumptions?: string[];
@@ -80,7 +85,7 @@ export type PrevisitEstimate = {
   visit_type?: string | null; reason?: string | null; checked_at?: string | null;
   stedi_payer?: { name?: string; id: string };
   codes: VisitCode[];
-  benefits: null | { coverage_evidence?: { status: string; reported_status: string; start?: string | null; end?: string | null }; service_date_matches?: boolean | null; returned_service_dates?: { start?: string; end?: string }; active?: boolean | null; network_status?: string; network_source?: 'clinic_record' | 'payer_participation_message' | null; network_evidence_ids?: string[]; deductible_remaining_cents?: number | null;
+  benefits: null | { coverage_evidence?: { status: string; reported_status: string; start?: string | null; end?: string | null }; coverage_status_conflict?: boolean; service_date_matches?: boolean | null; returned_service_dates?: { start?: string; end?: string }; active?: boolean | null; network_status?: string; network_source?: 'clinic_record' | 'payer_participation_message' | null; network_evidence_ids?: string[]; deductible_remaining_cents?: number | null;
     oop_remaining_cents?: number | null; copay_cents?: number | null; copay_id?: string | null; coinsurance_percent?: string | null;
     authorization_basis?: string; authorization_signal?: string; referral_signal?: string; normalization_notes?: string[]; review_reasons?: string[]; requires_review?: boolean;
     reported_options?: Array<{ id?: string; procedure_code?: string; coverage_level?: string; plan_name?: string; kind: string; service_type_code: string; network: string; time_period: string;
@@ -114,7 +119,7 @@ export type VisitPricedLine = VisitCode & {
   id: string; allowed_cents?: number | null; unit_allowed_cents?: number | null; allowed_basis?: 'clinic_contract' | 'payer_out_of_network';
   cash_cents?: number | null; cash_source?: string; cash_rule?: { locator?: string; document_id?: string }; cash_included?: boolean;
   benefit_verification?: { reference: string; notes: string; verified_by: string; verified_at: string; valid_from: string; valid_to: string } | null;
-  rate_source: string; rate_version?: string; rate_row_number?: number | null; rate_effective_from?: string; benefit_source?: string | null; benefit_basis: string; issues: string[]; conditions?: string[];
+  rate_source: string; rate_version?: string; rate_row_number?: number | null; rate_effective_from?: string; rate_resolution?: { status: 'RESOLVED' | 'RATE_UNAVAILABLE' | 'RATE_CONFLICT'; matched_candidate_count: number; source_checked: string; provider_network_verified: boolean }; benefit_source?: string | null; benefit_basis: string; issues: string[]; conditions?: string[];
   benefits: NonNullable<PrevisitEstimate['benefits']> & { copay_period?: string; benefit_label?: string; benefit_summary?: string; visits_remaining?: number; deductible_applies?: boolean;
     copay_id?: string | null; coinsurance_id?: string | null; deductible_id?: string | null; deductible_annual_id?: string | null; oop_id?: string | null;
     deductible_applicability_ids?: string[]; policy_evidence?: { title: string; url: string; section: string }; requirements: { referral: VisitRequirement; authorization: VisitRequirement } };

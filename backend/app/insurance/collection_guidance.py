@@ -104,7 +104,7 @@ def build(result: dict, review: dict | None = None) -> dict:
                                       'message': 'Invalid financial evidence: calculation returned an invalid amount.'})
     safe = safe and not source_errors
     amount = None
-    if strict.get('amount_cents') is not None and safe:
+    if strict.get('amount_cents') is not None and safe and not price.get('conditional'):
         amount = strict['amount_cents']
         guidance.update(status='estimate', basis=strict.get('basis', 'patient_obligations'),
                         reason='Applicable copay, deductible and coinsurance for the anticipated services.' if strict.get('status') != 'copay_only' else
@@ -114,7 +114,7 @@ def build(result: dict, review: dict | None = None) -> dict:
         assumptions.extend(planning.get('assumptions') or [])
         guidance.update(status='estimated', basis='out_of_pocket_limit',
                         reason='The payer reports $0 remaining on the applicable in-network out-of-pocket limit for the selected covered services. No advance payment is needed.')
-    elif safe and price.get('complete') and price.get('mode') != 'options':
+    elif safe and price.get('complete') and not price.get('conditional') and price.get('mode') != 'options':
         amount = price.get('patient_min_cents')
         guidance.update(status='estimated', basis='anticipated_services',
                         reason=('Estimated patient share of the payer out-of-network allowed amount; possible additional doctor charges remain unknown.'
@@ -217,6 +217,8 @@ def build(result: dict, review: dict | None = None) -> dict:
             actions.append('Contact your insurer to correct your member details and bring the updated card.')
         elif adverse:
             guidance['reason'] = 'A referral or authorization issue affects the selected care. The collection amount depends on resolving that coverage requirement.'
+        elif price.get('conditional'):
+            guidance['reason'] = 'The visit estimate depends on unresolved coverage or approval conditions. Verify them before collecting.'
         elif benefits.get('has_secondary'):
             guidance['reason'] = 'More than one plan may pay for this visit. The collection amount depends on how those plans coordinate benefits.'
             if (result.get('eligibility_failure') or {}).get('kind') == 'provider_enrollment':

@@ -27,7 +27,7 @@ from app.api.routers.insurance import _response, _scope, _session as insurance_s
 from app.core import object_store, staff_store
 from app.insurance import identity as insurance_identity
 from app.insurance import commercial, commercial_store, cpt_rules, cpt_suggester, ecw_backend, golden, stedi_discovery, stedi_payers, store, visit_estimate, practice_prices
-from app.insurance import stedi_financial, collection_guidance, amount_explanation, contract_requirements, ecw_benefits, ecw_billing, library_pricing
+from app.insurance import stedi_financial, collection_guidance, encounter_summary, amount_explanation, contract_requirements, ecw_benefits, ecw_billing, library_pricing
 from app.insurance import provider_specialty
 from app.logs.collection_audit import collection_event
 from app.logs.logger import log_info, log_warning
@@ -734,7 +734,7 @@ def _finish_previsit(result: dict, case: dict, inputs: dict, source: dict, paylo
     plan_key = hashlib.sha256(json.dumps([token, source.get('recent_completed_appointments', []),
         [(row['id'], row.get('units')) for row in available]], sort_keys=True).encode()).hexdigest()
     prior_plan = case.get('previsit_plan') or {}
-    if prior_plan.get('key') != plan_key or prior_plan.get('plan', {}).get('version') != 5:
+    if prior_plan.get('key') != plan_key or prior_plan.get('plan', {}).get('version') != 6:
         prior_plan = {'key': plan_key, 'plan': cpt_suggester.recommend_visit_plan(inputs, source, available)}
         case['previsit_plan'] = prior_plan
     result['service_plan'] = {**prior_plan['plan'], 'selection_source': 'clinician' if review.get('selected_ids') else 'suggested'}
@@ -848,6 +848,7 @@ def _finish_previsit(result: dict, case: dict, inputs: dict, source: dict, paylo
         'location_id': source.get('location_id'),
         'pos': inputs.get('place_of_service'),
     }, [document for document in library_sources if document])
+    result['encounter_summary'] = encounter_summary.build(result, review)
     guidance = result['collection_guidance']
     emg = result.get('emg_option') or {}
     price = result.get('price_range') or {}
@@ -2401,6 +2402,9 @@ async def previsit_estimate(value: PrevisitInput, request: Request, background_t
     tier, pricing basis, unpriced CPTs and an optional resolved-mismatch note.
     insurance_diagnosis.pricingStatus is PARTIAL_AMOUNT when a known office
     copay is shown but a separately planned CPT remains unpriced.
+    An uncoded new or established consultation leaves the E/M level unselected
+    and prices its mutually exclusive code family as alternatives; a common
+    supported office copay is collected once, never once per alternative.
     Out-of-network benefit terms are retained; a percentage without a verified
     payer allowed amount never becomes a dollar total. Self-pay uses recorded cash mode or the terminal coverage-recovery fallback
     and configured cash prices, without built-in clinic prices or plan-name
@@ -2469,7 +2473,14 @@ async def previsit_estimate(value: PrevisitInput, request: Request, background_t
     requirement_evidence separately reports referral and authorization status,
     reason, source, workbook verification channel/contact and portal URL, and
     an applicable original contract PDF page. Authorization approval_status
-    is separate from the rule requiring approval.
+    is separate from the rule requiring approval. Its procedures array reports
+    the same conservative decision for each selected CPT; a visit with any
+    established required procedure remains Required while other CPTs can stay
+    unverified. encounter_summary separates collect_today_cents from the
+    complete patient total and later balance; unavailable amounts remain null.
+    Each price_range line reports a typed rate_resolution status and the exact
+    candidate rows supplied to the calculator, without claiming an unqueried
+    payer schedule was searched.
     Exact plan and CPT research comes from the bundled three-sheet NMCT matrix
     or a valid current Clinical Library plan_matrix upload; research is labeled
     and never implies a successful portal check or authorization approval.
@@ -2618,7 +2629,8 @@ async def previsit_estimate(value: PrevisitInput, request: Request, background_t
         guidance = candidate['collection_guidance']
         # Never skip a check just because an unsupported result has a numeric fallback.
         if (guidance['basis'] in {'office_copay', 'anticipated_services', 'patient_obligations'}
-                and (guidance['basis'] != 'office_copay' or len(candidate['codes']) == 1)
+                and (guidance['basis'] != 'office_copay' or len(candidate['codes']) == 1
+                     or candidate.get('price_range', {}).get('mode') == 'alternatives')
                 and not candidate.get('price_range', {}).get('service_issues')
                 and all((line.get('benefits') or {}).get('copay_cents') is not None
                         or line.get('calculation') is not None for line in candidate['price_range']['lines'])

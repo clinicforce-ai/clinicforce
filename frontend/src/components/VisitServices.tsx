@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { ArrowRight, Check, Minus, Plus } from 'lucide-react'
-import type { PrevisitEstimate, VisitCode, VisitReview } from '../services/api/commercial-estimator'
+import type { PrevisitEstimate, RequirementEvidence, VisitCode, VisitReview } from '../services/api/commercial-estimator'
 const money = (value?: number | null) => value == null ? '—' : new Intl.NumberFormat(undefined, { style: 'currency', currency: 'USD' }).format(value / 100)
 type Save = (review: VisitReview) => Promise<boolean>
 const groupFor = (code: string) => /^992(0[2-5]|1[2-5])$/.test(code) ? 'visit' : /^959(0[7-9]|1[0-3])$/.test(code) ? 'nerve' : /^9588[5-7]$/.test(code) ? 'muscle' : 'other'
@@ -19,6 +19,17 @@ const clinicalName = (row: VisitCode) => {
     J0585: 'Botox medication · per unit',
   }
   return injectionNames[row.code] || row.description || `Procedure ${row.code}`
+}
+
+function RequirementDecision({ evidence }: { evidence?: RequirementEvidence }) {
+  const label = evidence?.status === 'Not required' ? 'No' : evidence?.status === 'Required' ? 'Yes' : 'Unverified'
+  return <>{label}{evidence?.approval_status === 'Not verified' && <small>Approval unverified</small>}{evidence?.approval_status === 'Verified' && <small>Approval verified</small>}
+    {evidence && <details className="service-requirement-detail"><summary>Evidence</summary><p>{evidence.reason}</p>
+      {evidence.approval_reference && <p>Approval reference: {evidence.approval_reference}</p>}
+      {evidence.sources.map((source, index) => source.document_id
+        ? <a key={index} href={`/api/staff/library/${encodeURIComponent(source.document_id)}/document?preview=true${source.page ? `#page=${source.page}` : ''}`} target="_blank" rel="noopener noreferrer">{source.filename || 'Library source'}{source.page ? ` · page ${source.page}` : ''}</a>
+        : <small key={index}>{source.label || 'Source not retained'}</small>)}
+    </details>}</>
 }
 
 export function ServicePlanner({ result, busy, save, viewEstimate }: { result: PrevisitEstimate; busy: boolean; save: Save; viewEstimate: (message?: string) => void }) {
@@ -101,13 +112,15 @@ export default function VisitServices({ result }: { result: PrevisitEstimate }) 
   const rateSource = (value?: string) => value?.startsWith('library:')
     ? result.library_pricing?.find(document => document.document_id === value.slice(8))?.label || value
     : value
-  return <section className="visit-services"><div className="visit-section-heading"><h2>Planned services & patient amounts</h2></div>
-    <div className="clinical-table-wrap"><table className="clinical-service-table"><thead><tr><th>Procedure</th><th>{cash ? 'Cash price' : 'Estimated patient share'}</th></tr></thead><tbody>{lines.map(row => {
+  return <section className="visit-services"><div className="visit-section-heading"><h2>Planned services</h2></div>
+    <div className="clinical-table-wrap"><table className="clinical-service-table"><thead><tr><th>Procedure</th>{!cash && <><th>Coverage</th><th>Referral</th><th>Prior auth</th></>}<th>{cash ? 'Cash price' : 'Estimated patient share'}</th></tr></thead><tbody>{lines.map((row, index) => {
       const estimate = result.collection_guidance?.services.find(item => item.id === row.id)
+      const requirement = result.requirement_evidence?.procedures?.find(item => item.id === row.id || item.code === row.code)
+      const partialCopay = !cash && result.collection_guidance?.basis === 'office_copay' && index === lines.findIndex(item => /^992(?:0[2-5]|1[2-5])$/.test(item.code))
       return <tr key={row.id}><th scope="row">{clinicalName(row)}<small>CPT {row.code}{Number(row.units) > 1 ? ` × ${row.units}` : ''} · Planned from {row.source || 'visit review'}</small><small>{estimate?.benefit}</small>
         {cash ? (row.cash_cents != null || row.cash_included) && <small>Cash price source: {row.cash_source || result.cash_quote?.source || 'Clinic cash schedule'}{row.cash_rule?.locator ? ` · ${row.cash_rule.locator}` : ''}</small>
-          : <><small>Benefit source: {row.benefit_source || estimate?.benefit_source || result.benefit_source || 'Not confirmed'}</small>{row.allowed_cents != null && <small>Allowed price source: {row.allowed_basis === 'payer_out_of_network' ? 'Payer out-of-network amount' : 'Clinic contract'} · {rateSource(row.rate_source) || 'Source not retained'}{row.rate_row_number ? ` · row ${row.rate_row_number}` : ''}</small>}</>}
-      </th><td>{cash ? row.cash_included ? 'Included' : row.cash_cents != null ? money(row.cash_cents) : 'Billed once priced' : estimate?.patient_cents != null ? money(estimate.patient_cents) : 'Billed after the claim'}</td></tr>
+          : <><small>Benefit source: {row.benefit_source || estimate?.benefit_source || result.benefit_source || 'Not confirmed'}</small>{row.allowed_cents != null ? <small>Allowed price source: {row.allowed_basis === 'payer_out_of_network' ? 'Payer out-of-network amount' : 'Clinic contract'} · {rateSource(row.rate_source) || 'Source not retained'}{row.rate_row_number ? ` · row ${row.rate_row_number}` : ''}</small> : <small>Allowed rate: {row.rate_resolution?.status === 'RATE_CONFLICT' ? 'Conflicting matched rates' : 'Not established for this CPT and visit scope'}</small>}</>}
+      </th>{!cash && <><td>{row.benefits?.active === false ? 'Inactive' : row.benefits?.coverage_status_conflict ? 'Conflicting' : row.benefit_basis === 'Procedure-specific payer benefit' ? 'Procedure benefit returned' : 'CPT coverage unverified'}</td><td><RequirementDecision evidence={requirement?.referral} /></td><td><RequirementDecision evidence={requirement?.authorization} /></td></>}<td>{cash ? row.cash_included ? 'Included' : row.cash_cents != null ? money(row.cash_cents) : 'Price unavailable' : estimate?.patient_cents != null ? money(estimate.patient_cents) : partialCopay ? <>{money(result.collection_guidance!.amount_cents)}<small>Office copay only; remaining share unknown</small></> : 'Not calculated'}</td></tr>
     })}</tbody></table></div>
     {result.price_range?.mode === 'alternatives' && <p>One office consultation. These visit levels are alternatives, not separate charges.</p>}
     {cash && result.cash_quote?.complete && <p>{result.cash_quote.message}</p>}
