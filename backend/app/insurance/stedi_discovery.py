@@ -401,6 +401,33 @@ def candidates(payload: dict, inputs: dict, source: dict | None = None) -> list[
     return rows
 
 
+def one_active_policy(candidates: list[dict], items: list[dict], service_types: list[str] | None = None) -> dict | None:
+    """Pick one dated, verified policy, including duplicate discovery payer routes.
+
+    Two rows are one policy only when their returned evidence for the requested
+    services agrees apart from route identifiers. Unrelated service categories
+    cannot force a policy choice; different applicable benefits or identities do.
+    """
+    active = [row for row in candidates if row.get('active_medical')]
+    if not active or any(row.get('verification_status') != 'VERIFIED' for row in active):
+        return None
+    if len(active) == 1:
+        return active[0]
+    signatures = set()
+    for row in active:
+        item = dict(items[row['index']])
+        item.pop('payerId', None)
+        payer = dict(item.get('payer') or {})
+        payer.pop('payorIdentification', None)
+        item['payer'] = payer
+        if service_types is not None:
+            requested = set(service_types)
+            item['benefitsInformation'] = [benefit for benefit in item.get('benefitsInformation') or []
+                if not benefit.get('serviceTypeCodes') or requested.intersection(benefit['serviceTypeCodes'])]
+        signatures.add(json.dumps(item, sort_keys=True))
+    return sorted(active, key=lambda row: (row.get('payer_identifier') or '', row['id']))[0] if len(signatures) == 1 else None
+
+
 def patient_matches(item: dict, inputs: dict) -> bool:
     """Patient identity and address match, for either subscriber or dependent."""
     identity = candidate_identity(item, inputs)

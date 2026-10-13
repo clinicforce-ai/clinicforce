@@ -37,6 +37,17 @@ def test_three_sheets_supply_exact_plan_rules_and_portals():
     assert 'PCP' in hmo['referral']['reason']
 
 
+def test_scoped_clinic_network_name_can_select_the_referral_rule():
+    result = {'codes': [{'code': '99213'}], 'benefit_source': 'Stedi',
+              'benefits': {'active': True, 'service_date_matches': True, 'network_status': 'in_network',
+                           'identity': {'status': 'matched'}}}
+    context = {'service_date': '2026-10-12', 'payer_names': ['BCBSTX'],
+               'plans': ['Preferred Provider Option Plus Medical', 'Blue Choice PPO'],
+               'member_id': 'M-1', 'group_number': 'G-1', 'rendering_npi': '1234567890',
+               'coverage_period': {'start': '2026-01-01', 'end': '2026-12-31'}}
+    assert contract_requirements.evaluate(result, context, [])['referral']['status'] == 'Not required'
+
+
 def test_generic_bcbstx_ppo_label_shows_relevant_research_without_clearing_patient_rule():
     evidence = visit('BCBSTX', 'PREFERRED PROVIDER OPTION PLUS MEDICAL', '99203')
     named = visit('Blue Cross Blue Shield Tx', 'PREFERRED PROVIDER OPTION PLUS MEDICAL', '99203')
@@ -101,7 +112,7 @@ def test_rental_network_missing_plan_and_checklist_gaps_fail_closed():
 
 def test_payer_and_contract_conflicts_keep_both_sources():
     payer = visit('BCBSTX', 'Blue Choice PPO', '99213', signal='required')['referral']
-    assert payer['status'] == 'Verification required'
+    assert payer['status'] == 'Required'
     assert any('Payer Plan Matrix' in source.get('label', '') for source in payer['sources'])
     assert any('Stedi' in source.get('label', '') for source in payer['sources'])
     pdf = {'id': 'contract-1', 'kind': 'contract', 'content_type': 'application/pdf',

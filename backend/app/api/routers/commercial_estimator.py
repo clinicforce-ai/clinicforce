@@ -339,8 +339,12 @@ def _practice_path(practice_id: str, inputs: dict, source: dict) -> tuple[dict, 
 
 
 def _previsit_practice_path(practice_id: str, inputs: dict, source: dict) -> tuple[dict, dict, dict]:
-    """Only price the payer product verified for this visit."""
-    return _practice_path(practice_id, inputs, source)
+    """A generic PPO label cannot negate the scoped clinic contract."""
+    names = [insurance_identity.normalized(name) for name in source.get('payer_plan_names', [])]
+    generic = names and all(re.fullmatch(
+        r'(?:preferredprovider(?:option|organization)(?:plus)?|healthmaintenanceorganization)(?:medical)?',
+        name) for name in names)
+    return _practice_path(practice_id, inputs, {**source, 'payer_plan_names': [] if generic else source.get('payer_plan_names', [])})
 
 
 def _appointment_readiness(practice_id: str, session: dict, inputs: dict, source: dict) -> dict:
@@ -535,8 +539,8 @@ def _previsit_range(practice_id: str, inputs: dict, source: dict, payer_id: str,
     else:
         try:
             _, network, profile = _previsit_practice_path(practice_id, {**inputs, "payer_id": payer_id}, source)
-            if not network.get("plan_matcher") or not source.get("plan"):
-                raise commercial.CommercialError("Clinic pricing: verify the eCW plan against the contracted rate schedule.")
+            if network.get("plan_matcher") and not source.get("plan"):
+                raise commercial.CommercialError("Clinic pricing: eCW did not return the contract plan identifier.")
             if not inputs.get("place_of_service"):
                 raise commercial.CommercialError("Map the appointment location to its place of service.")
             rates = commercial_store.matching_rates(practice_id, profile, network, inputs["service_date"], selected)
@@ -602,6 +606,15 @@ def _network_contract_evidence(practice_id: str, network: dict, profile: dict) -
                 and document.get('sha256') == library_source.get('sha256')):
             evidence.update(document_id=document_id, document_label=document['label'],
                             locator=library_source.get('locator'))
+    if not evidence.get('document_id') and network.get('payer_connection_id'):
+        payer = commercial_store.connection(practice_id, network['payer_connection_id'])
+        if payer and payer.get('display_name'):
+            contracts = [document for document in staff_store.list_library(practice_id)
+                         if document.get('kind') == 'contract' and document.get('content_type') == 'application/pdf'
+                         and document.get('payer')
+                         and insurance_identity.normalized(document['payer']) == insurance_identity.normalized(payer['display_name'])]
+            if len(contracts) == 1:
+                evidence.update(related_document_id=contracts[0]['id'], related_document_label=contracts[0]['label'])
     return evidence
 
 
@@ -865,7 +878,9 @@ def _finish_previsit(result: dict, case: dict, inputs: dict, source: dict, paylo
                         connection.get('stedi_payer_id'), *(connection.get('aliases') or [])],
         'plans': [source.get('plan'), result.get('plan'),
                   *(name for names in (source.get('plan_details') or {}).values() for name in names),
-                  *(result['plan_details']['stedi'].get('names') or [])],
+                  *(result['plan_details']['stedi'].get('names') or []),
+                  *([(result.get('network_evidence') or {}).get('network_name')]
+                    if result.get('benefits', {}).get('network_status') == 'in_network' else [])],
         'network': (result.get('network_evidence') or {}).get('network_name'),
         'rendering_npi': (inputs.get('rendering_provider') or {}).get('npi'),
         'billing_npi': (source.get('billing_provider') or {}).get('npi'),
@@ -1378,15 +1393,16 @@ def _previsit_result(case: dict) -> dict:
             and recovery.get('exhausted') is not False
             and (case.get('visit_review') or {}).get('payment_mode') != 'insurance'):
         result['payment_mode'] = 'cash'
-        result['cash_fallback'] = {'reason': 'Automatic insurance recovery finished without usable coverage. Cash / self-pay pricing selected; insurance remains unverified.'}
+        result['cash_fallback'] = {}
         result.pop('emg_option', None)
     elif (not timing and (pricing_unavailable or (recovery.get('state') == 'complete' and recovery.get('outcome') == 'recovered'
             and insurance_guidance.get('amount_cents') is None))
             and (case.get('visit_review') or {}).get('payment_mode') != 'insurance'):
         result['payment_mode'] = 'cash'
-        result['cash_fallback'] = {'reason': 'An insurance amount could not be established: ' + insurance_guidance['reason'] +
-            ' Showing the separate clinic self-pay price; insurance status is unchanged.'}
+        result['cash_fallback'] = {}
         result.pop('emg_option', None)
+    if 'cash_fallback' in result:
+        result['cash_fallback']['reason'] = 'Clinic self-pay pricing is shown because ' + amount_explanation.fallback_cause(result) + '.'
     # Cash is a separate price path, never evidence of inactive insurance.
     result['collection_guidance'] = collection_guidance.build(result, case.get('visit_review'))
     result['payment_explanation'] = amount_explanation.build(result, result['collection_guidance'], case.get('visit_review'))
@@ -1898,10 +1914,11 @@ async def _recover_discovery(case: dict, session: dict, provider: dict) -> None:
                     case.update(await run_in_threadpool(_save, case, session, 'stedi-discovery-finished'))
                     return
                 matching = [row for row in candidates if row['verification_status'] == 'VERIFIED']
-                # Do not use a first match or infer payer primacy from discovery.
-                if (len(matching) == 1 and sum(row['active_medical'] for row in candidates) == 1
-                        and context['source'].get('active_coverages', 0) <= 1):
-                    candidate = matching[0]
+                # Identical discovery responses with different payer route IDs
+                # describe one policy; distinct active policies still need order.
+                candidate = (stedi_discovery.one_active_policy(candidates, items, _previsit_service_types(inputs))
+                             if context['source'].get('active_coverages', 0) <= 1 else None)
+                if candidate:
                     discovery.update(request_state='pending', stage='eligibility', selected_candidate_id=candidate['id'],
                                      evidence_source='stedi_discovery')
                     case.update(await run_in_threadpool(_save, case, session, 'stedi-recovered-member-pending'))
@@ -2531,9 +2548,10 @@ async def previsit_estimate(value: PrevisitInput, request: Request, background_t
     Exact plan and CPT research comes from the bundled three-sheet NMCT matrix
     or a valid current Clinical Library plan_matrix upload; research is labeled
     and never implies a successful portal check or authorization approval.
-    A generic PPO/HMO or explicit BlueCard description may identify a research
-    group while both requirement cards remain Verification required until the
-    exact member product and applicable service rule are confirmed.
+    A generic PPO/HMO description cannot defeat the unique scoped clinic
+    contract. A current, explicit payer requirement for a selected CPT is Yes
+    even when static research lacks the exact member product; absent payer
+    indicators do not establish No.
     Conflicting or incomplete evidence remains verification required. These
     card findings do not change the negotiated rate or collection calculation.
     """

@@ -63,6 +63,16 @@ def test_true_duplicates_resolve_but_hidden_restrictions_remain_distinct():
     assert commercial.normalize_stedi_271(raw, '98', True)['copay_cents'] is None
 
 
+def test_payer_policy_referral_sentence_is_a_required_signal():
+    raw = response()
+    raw['benefitsInformation'][-1]['additionalInformation'] = []
+    raw['benefitsInformation'].append({'code': 'D', 'serviceTypeCodes': ['98'],
+        'coverageLevelCode': 'IND',
+        'messages': ['This policy requires that services be referred by a primary care physician.']})
+    terms = commercial.normalize_stedi_271(raw, '98', True, procedure_code='99203', service_date=DAY)
+    assert terms['referral_signal'] == 'required'
+
+
 def test_office_service_hierarchy_respects_notes_and_dates():
     raw = response()
     base = raw['benefitsInformation'].pop()
@@ -169,6 +179,26 @@ def test_product_mapping_is_scoped_to_current_network_evidence_dates_and_plan(mo
     with pytest.raises(HTTPException): api._practice_path('clinic', inputs, source)
 
 
+def test_previsit_uses_the_unique_active_contract_when_payer_product_label_is_generic(monkeypatch):
+    payer = {'id': 'payer-a', 'category': 'commercial_medical', 'status': 'staff_guidance_enabled'}
+    network = {'id': 'network', 'payer_connection_id': 'payer-a', 'status': 'verified',
+               'network_name': 'Blue Choice PPO', 'billing_npi': '1', 'rendering_npi': '2',
+               'location_id': 'office', 'place_of_service': '11', 'plan_matcher': 'CI',
+               'effective_from': '2020-01-01', 'evidence_reference': 'contract-v1'}
+    profile = {'payer_connection_id': 'payer-a', 'provider_network_id': 'network',
+               'status': 'staff_guidance_enabled', 'plan_matcher': 'CI', 'rules': {}}
+    monkeypatch.setattr(api.commercial_store, 'connection', lambda *a: payer)
+    monkeypatch.setattr(api.commercial_store, 'list_networks', lambda *a: [network])
+    monkeypatch.setattr(api.commercial_store, 'list_profiles', lambda *a: [profile])
+    inputs = {'payer_id': 'payer-a', 'service_date': DAY,
+              'rendering_provider': {'npi': '2'}, 'place_of_service': '11'}
+    source = {'billing_provider': {'npi': '1'}, 'location_id': 'office', 'plan': 'CI',
+              'payer_plan_names': ['Preferred Provider Organization Plus Medical']}
+    assert api._previsit_practice_path('clinic', inputs, source)[1] == network
+    with pytest.raises(HTTPException):
+        api._practice_path('clinic', inputs, source)
+
+
 def test_network_pdf_points_only_to_its_uploaded_contract(monkeypatch):
     library_source = {'document_id': 'contract-a', 'reference': 'library:contract-a',
                       'sha256': 'source-hash', 'locator': 'Page 3, row 7'}
@@ -195,6 +225,19 @@ def test_network_pdf_points_only_to_its_uploaded_contract(monkeypatch):
     document['content_type'] = 'application/pdf'
     profile['rules']['library_source']['reference'] = 'library:other-contract'
     assert 'document_id' not in estimate()
+
+
+def test_payer_only_library_match_is_related_document_not_contract_rule(monkeypatch):
+    network = {'network_name': 'Choice PPO', 'payer_connection_id': 'payer-a',
+               'evidence_reference': 'contract-config'}
+    monkeypatch.setattr(api.commercial_store, 'connection', lambda *_: {
+        'id': 'payer-a', 'display_name': 'Example Health'})
+    monkeypatch.setattr(api.staff_store, 'list_library', lambda *_: [
+        {'id': 'payer-pdf', 'kind': 'contract', 'content_type': 'application/pdf',
+         'payer': 'Example Health', 'label': 'Example Health agreement'}])
+    evidence = api._network_contract_evidence('clinic', network, {'rules': {}})
+    assert evidence['related_document_id'] == 'payer-pdf'
+    assert 'document_id' not in evidence
 
 
 def test_requirement_candidates_include_suggested_cpts_without_expanding_the_selected_visit():

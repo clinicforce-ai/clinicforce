@@ -182,6 +182,14 @@ def _payer_evidence(result: dict, kind: str, codes: set[str], context: dict) -> 
     if (codes and result.get('benefit_source') and benefits.get('active') is True
             and benefits.get('service_date_matches') is True
             and identity.get('status') in {'matched', 'reconciled'}
+            and any(signals[code] == {'required'} for code in codes)
+            and all(len(signals[code]) <= 1 for code in codes)):
+        return {'status': 'Required',
+                'reason': 'The current payer response requires this for at least one planned service.',
+                'sources': [payer_source]}
+    if (codes and result.get('benefit_source') and benefits.get('active') is True
+            and benefits.get('service_date_matches') is True
+            and identity.get('status') in {'matched', 'reconciled'}
             and context.get('member_id') and context.get('rendering_npi')
             and (context.get('group_number') or 'traditionalmedicare' in context.get('payer_names', set()))
             and context.get('plans')
@@ -325,6 +333,18 @@ def evaluate(result: dict, context: dict, documents: list[dict], *, include_proc
             for field in ('verification', 'contact'):
                 if matrix.get(field):
                     output[kind][field] = matrix[field]
+    # An explicit current payer requirement is actionable even when a static
+    # matrix lacks the exact product or a contract has no CPT-level rule.
+    for kind in KINDS:
+        payer = _payer_evidence(result, kind, codes, context)
+        if payer['status'] == 'Required':
+            previous = output[kind]
+            sources = list({(source.get('document_id'), source.get('page'), source.get('url'), source.get('label')): source
+                            for source in [*payer['sources'], *previous.get('sources', [])]}.values())
+            reason = payer['reason']
+            if 'conflict' in previous.get('reason', '').casefold():
+                reason += ' A clinic document or plan matrix differs; the current payer requirement controls this visit.'
+            output[kind] = {**payer, 'reason': reason, 'sources': sources}
     check_id = str(result.get('response_reference') or '')
     if result.get('benefit_source') == 'Stedi' and re.fullmatch(r'ec_[A-Za-z0-9-]+', check_id):
         check_source = {'label': 'Stedi benefit check',

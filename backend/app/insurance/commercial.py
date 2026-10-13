@@ -503,8 +503,7 @@ def normalize_stedi_271(payload: dict[str, Any], service_type_code: str, provide
                          else {'Y', 'YES', 'IN_NETWORK', 'W', 'IN_AND_OUT_OF_NETWORK'})
     entries = [row for row in entries if relevant_service(row)
                and (_network_indicator(row) in accepted_networks or
-                    not _network_indicator(row) and (row.get('code') in {'status', '1', '2', '3', '4', '5', '6', '7', '8', 'I', 'R'}
-                                                       or row.get('code') == 'D' and _procedure(row) == procedure_code))]
+                    not _network_indicator(row) and row.get('code') in {'status', '1', '2', '3', '4', '5', '6', '7', '8', 'I', 'R', 'D'})]
     coverage = coverage_evidence(payload, service_date, entries)
     if coverage['status'] == 'UNKNOWN' and selected_tier == 'out_of_network':
         # A payer may return plan status only on its in-network schedule.
@@ -670,7 +669,11 @@ def normalize_stedi_271(payload: dict[str, Any], service_type_code: str, provide
         authorization_basis = 'Derived from absent indicator in applicable response (Stedi guidance)'
     # Contradictory terms must not be cleared by one "not required" message.
     no_referral = any("referral not required" in note or "no referral required" in note for note in descriptions)
-    referral_required = any(re.search(r"referral(?:s)? (?:is |are )?required", re.sub(r"no referral required|referral not required", "", note)) for note in descriptions)
+    referral_required = any(
+        re.search(r"referral(?:s)? (?:is |are )?required|\b(?:policy|plan) requires? (?:that )?services be referred by (?:a )?(?:primary care physician|pcp)",
+                  re.sub(r"no referral required|referral not required", "", note))
+        and not re.search(r'\bneurolog(?:ist|y)\b', note.split('except', 1)[-1] if 'except' in note else '')
+        for note in descriptions)
     referral_signal = "required" if referral_required else "not_required" if no_referral else "unknown"
     deductible_cents = _stedi_cents(deductible.get("benefitAmount")) if deductible else None
     oop_cents = _stedi_cents(oop.get("benefitAmount")) if oop else None

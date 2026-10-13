@@ -82,7 +82,7 @@ export type PrevisitEstimate = {
   eligibility_failure?: { kind: string; codes: string[]; title: string; detail: string; action: string; attempted_at: string };
   eligibility_error?: string; context_token?: string; revision?: number; selected_ids?: string[]; available_codes?: VisitCode[];
   plan_details?: { ecw: Record<string, string[]>; stedi: { names?: string[]; network_names?: string[]; plan_number?: string; group_number?: string; source?: string } };
-  calculated_at?: string; ecw_retrieved_at?: string; response_reference?: string; network_evidence?: { network_name?: string; product_source?: string; evidence_reference?: string; effective_from?: string; effective_to?: string; document_id?: string; document_label?: string; locator?: string };
+  calculated_at?: string; ecw_retrieved_at?: string; response_reference?: string; network_evidence?: { network_name?: string; product_source?: string; evidence_reference?: string; effective_from?: string; effective_to?: string; document_id?: string; document_label?: string; locator?: string; related_document_id?: string; related_document_label?: string };
   check_id?: string; appointment_id: string; service_date: string; payer?: string | null; plan?: string | null;
   visit_type?: string | null; reason?: string | null; checked_at?: string | null;
   stedi_payer?: { name?: string; id: string };

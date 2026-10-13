@@ -49,10 +49,19 @@
 .visit-estimator .payment-toggle button[aria-pressed=true] { background: var(--ve-teal); color: white; }
 .overview-amounts { display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr); padding: 24px; gap: 40px; align-items: center; }
 .arrival-total { border-left: 4px solid var(--ve-teal); padding-left: 22px; }
+.arrival-total.is-blocked { border-left-color: var(--ve-error); }
+.arrival-total.is-blocked > strong, .arrival-total.is-blocked > p { color: var(--ve-error); }
 .arrival-total > span:first-child { font-size: 14px; color: var(--ve-muted); }
 .arrival-total > strong { display: block; font-size: clamp(40px, 5vw, 64px); line-height: 1.15; letter-spacing: -.055em; margin: 8px 0 12px; font-variant-numeric: tabular-nums; font-weight: 600; }
 .arrival-total > strong.amount-pending { font-size: 30px; letter-spacing: -.03em; }
 .arrival-total > p { font-size: 15px; max-width: 49ch; }
+.arrival-money-picture { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); max-width: 590px; gap: 8px; margin: 16px 0 0; }
+.arrival-money-picture > div { min-width: 0; padding: 10px 12px; border-radius: 9px; background: var(--ve-canvas); border-top: 3px solid var(--ve-teal); }
+.arrival-money-picture > div:nth-child(2) { border-top-color: #6977a9; }
+.arrival-money-picture > div:nth-child(3) { border-top-color: #759a81; }
+.arrival-money-picture dt { color: var(--ve-muted); font-size: 12px; }
+.arrival-money-picture dd { margin: 3px 0 0; font-size: 15px; font-weight: 650; font-variant-numeric: tabular-nums; }
+.cash-package-shortcut { margin-top: 12px; border: 1px solid var(--ve-error); border-radius: 8px; padding: 9px 14px; color: var(--ve-error); background: white; font: inherit; font-weight: 600; cursor: pointer; }
 .arrival-total .estimate-condition { display: block; font-size: 12px; line-height: 1.6; color: var(--ve-review); max-width: 53ch; }
 .visit-estimator .visit-text-button { color: var(--ve-teal); font-size: 14px; padding-left: 0; }
 .cost-picture { min-width: 0; padding: 22px; background: var(--ve-canvas); border-radius: 14px; }
@@ -193,10 +202,9 @@
 .visit-overview .visit-snapshots > div { background: var(--ve-canvas); border: 0; align-items: flex-start; }
 .visit-overview .visit-snapshots > div.is-confirmed { background: var(--ve-soft); border: 1px solid #c8e2d9; }
 .visit-overview .visit-snapshots > div.is-missing { background: #fcebed; border: 1px solid #e7b9bf; }
-.visit-overview .visit-snapshots > div.is-review { background: #fff5e8; border: 1px solid #e9d3b4; }
 .visit-snapshots .is-confirmed svg { color: var(--ve-teal); }
 .visit-snapshots .is-missing svg, .visit-snapshots .is-missing strong { color: var(--ve-error); }
-.visit-snapshots .is-review svg { color: var(--ve-review); }
+@media (max-width: 600px) { .arrival-money-picture { grid-template-columns: 1fr; } }
 .visit-overview .visit-snapshots strong { font-size: 16px; }
 .arrival-breakdown { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1px; margin: 0 24px 18px; overflow: hidden; border: 1px solid var(--ve-line); border-radius: 12px; background: var(--ve-line); }
 .arrival-breakdown > div { min-width: 0; padding: 10px 14px; background: var(--ve-canvas); }

@@ -23,8 +23,8 @@ const clinicalName = (row: VisitCode) => {
 }
 
 function RequirementDecision({ evidence }: { evidence?: RequirementEvidence }) {
-  const label = evidence?.status === 'Not required' ? 'No' : evidence?.status === 'Required' ? 'Yes' : 'Unverified'
-  return <>{label}{evidence?.approval_status === 'Not verified' && <small>Approval unverified</small>}{evidence?.approval_status === 'Verified' && <small>Approval verified</small>}
+  const label = evidence?.status === 'Not required' ? 'No' : evidence?.status === 'Required' ? 'Yes' : 'Rule not stated'
+  return <>{label}{evidence?.approval_status === 'Not verified' && <small>Approval not recorded</small>}{evidence?.approval_status === 'Verified' && <small>Approval recorded</small>}
     {evidence && <details className="service-requirement-detail"><summary>Evidence</summary><p>{evidence.reason}</p>
       {evidence.approval_reference && <p>Approval reference: {evidence.approval_reference}</p>}
       {evidence.sources.map((source, index) => <RequirementSourceLink key={index} source={source} />)}
