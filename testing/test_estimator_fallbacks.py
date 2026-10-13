@@ -40,7 +40,8 @@ def test_specialist_wins_over_general_and_pcp_but_conflicting_specialists_stay_u
         {'code': '99203', 'units': 1, 'benefits': terms}]}}
     guidance = collection_guidance.build(r)
     assert guidance['amount_cents'] == 5000 and guidance['basis'] == 'office_copay'
-    assert 'unverified' in ' '.join(guidance['assumptions'])
+    assert 'member’s exact provider network' in ' '.join(guidance['assumptions'])
+    assert 'confirm it before care' not in ' '.join(guidance['assumptions'])
     b['coPayment'].append(benefit('coPayment', 70, 'PHY VISIT - SPECIALIST'))
     assert normalize(raw)['copay_cents'] is None
 
