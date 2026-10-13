@@ -1297,6 +1297,7 @@ async def fetch_inputs(profile: dict[str, Any], practice: dict[str, Any], appoin
               "recent_completed_appointments": recent_completed_appointments,
               "history_status": "timed_out" if history_timeout else "unavailable" if history_unavailable else "loaded",
               "payer": payer_name,
+              "payer_source": 'Coverage.payor' if _display(payer) else 'eCW appointment notes' if insurance_fallback.get('payer') else None,
               "payer_identifiers": [str(item["value"]) for item in (payer.get("identifier") or [])
                                     if isinstance(item, dict) and item.get("value") and
                                     ("payer" in str(item.get("system") or "").casefold() or

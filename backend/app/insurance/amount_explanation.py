@@ -80,6 +80,8 @@ def build(result: dict, guidance: dict, review: dict | None = None) -> dict:
                 sentence += '; the plan has not confirmed whether the deductible adds more'
             elif unpriced:
                 sentence += f'; the cost of {missing} is still unknown'
+            if network == 'unknown' and not all((line.get('benefits') or {}).get('network_independent') for line in lines):
+                sentence += '; this uses an in-network benefit while provider participation is unverified'
             code = 'office_copay_partial' if unpriced else 'office_copay'
         elif basis == 'out_of_pocket_limit':
             sentence, code = 'No payment is due now because the plan says the covered care has no remaining patient share', 'oop_limit_met'

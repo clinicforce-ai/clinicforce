@@ -69,6 +69,13 @@ def test_verified_office_copay_can_stand_beside_unpriced_testing_and_deduct_paym
     assert any(row['code'] == '93000' and row['patient_cents'] is None for row in guidance['services'])
 
 
+def test_unknown_provider_network_qualifies_payer_office_copay():
+    result = {'benefits': {'network_status': 'unknown'}, 'price_range': {'lines': [
+        {'code': '99203', 'calculation': None, 'benefits': {'network_independent': False}}]}}
+    explanation = amount_explanation.build(result, {'basis': 'office_copay', 'amount_cents': 3000})
+    assert 'provider participation is unverified' in explanation['sentence']
+
+
 def test_procedure_specific_coinsurance_adds_to_office_copay():
     raw = payload()
     raw['benefitsInformation'][1]['benefitAmount'] = '0'

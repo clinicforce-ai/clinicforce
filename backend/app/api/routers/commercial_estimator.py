@@ -654,7 +654,7 @@ def _finish_previsit(result: dict, case: dict, inputs: dict, source: dict, paylo
     result['library_pricing'] = session.get('library_pricing', case.get('library_pricing', []))
     case['library_pricing'] = result['library_pricing']
     result['benefit_source'] = (payload or {}).get('benefit_source') or ('Stedi' if result.get('checked_at') else None)
-    result['payer_source'] = source.get('payer_source')
+    result['payer_source'] = (pricing_source or source).get('payer_source')
     result['identity'] = comparison
     result['benefits']['identity'] = comparison
     result['eligibility_reconciliation'] = visit_estimate.reconcile_eligibility(
@@ -841,8 +841,8 @@ def _finish_previsit(result: dict, case: dict, inputs: dict, source: dict, paylo
         'rendering_npi': (inputs.get('rendering_provider') or {}).get('npi'),
         'billing_npi': (source.get('billing_provider') or {}).get('npi'),
         'tin': (source.get('billing_provider') or {}).get('tin'),
-        'group_number': result['insurance_details'].get('group_number') or inputs.get('group_number'),
-        'plan_number': inputs.get('plan_number'),
+        'group_number': result['insurance_details'].get('group_number') or result['plan_details']['stedi'].get('group_number') or inputs.get('group_number'),
+        'plan_number': inputs.get('plan_number') or result['plan_details']['stedi'].get('plan_number'),
         'member_id': result['insurance_details'].get('member_id') or inputs.get('member_id'),
         'coverage_period': source.get('coverage_period') or result['insurance_details'].get('payer_coverage_period'),
         'location_id': source.get('location_id'),
@@ -1960,6 +1960,7 @@ def _discovered_coverage(inputs: dict, source: dict, item: dict) -> dict:
 def _discovery_pricing_source(source: dict, item: dict, payer: dict) -> dict:
     details = commercial.plan_details(item)
     return {**source, 'payer': payer.get('displayName') or (item.get('payer') or {}).get('name'),
+            'payer_source': 'Stedi verified coverage',
             'payer_identifiers': [str((item.get('payer') or {}).get('payorIdentification') or '')],
             'plan': (details.get('names') or [None])[0],
             'plan_details': {'plan': details.get('names') or [],
@@ -2443,6 +2444,10 @@ async def previsit_estimate(value: PrevisitInput, request: Request, background_t
     document_label and locator only when the applied clinic network profile
     traces to the same practice's uploaded PDF contract. The document route
     requires a staff session and serves the original PDF.
+    payer_source identifies eCW Coverage.payor, appointment notes, card OCR or
+    verified Stedi discovery when that source is known. A stored clinic network
+    candidate remains separate from patient-specific participation; a broad PPO
+    description does not activate an exact contract product mapping.
 
     insurance_diagnosis separately reports identity, eligibility and pricing status,
     raw/retained/verified candidate counts, enrollment state and specific blockers.
@@ -2468,6 +2473,9 @@ async def previsit_estimate(value: PrevisitInput, request: Request, background_t
     Exact plan and CPT research comes from the bundled three-sheet NMCT matrix
     or a valid current Clinical Library plan_matrix upload; research is labeled
     and never implies a successful portal check or authorization approval.
+    A generic PPO/HMO or explicit BlueCard description may identify a research
+    group while both requirement cards remain Verification required until the
+    exact member product and applicable service rule are confirmed.
     Conflicting or incomplete evidence remains verification required. These
     card findings do not change the negotiated rate or collection calculation.
     """
