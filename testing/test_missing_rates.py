@@ -1,4 +1,5 @@
 """Saved-case pricing gap inventory stays practice-scoped and patient-free."""
+import asyncio
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -54,16 +55,15 @@ def test_missing_rate_query_reads_only_practice_scoped_price_fields():
     assert arguments == ('clinic-a', 25)
 
 
-@pytest.mark.asyncio
-async def test_missing_rate_inventory_is_admin_only_and_queries_the_staff_practice():
+def test_missing_rate_inventory_is_admin_only_and_queries_the_staff_practice():
     with patch.object(staff, 'require_staff', new=AsyncMock(return_value={'role': 'staff', 'practice_id': 'clinic-a'})):
         with pytest.raises(HTTPException) as exc:
-            await staff.library_missing_rates(object())
+            asyncio.run(staff.library_missing_rates(object()))
         assert exc.value.status_code == 403
     with patch.object(staff, 'require_staff', new=AsyncMock(return_value={'role': 'admin', 'practice_id': 'clinic-a'})), \
          patch.object(staff.store, 'recent_missing_rate_inputs', return_value=[]) as query, \
          patch.object(staff.commercial_store, 'list_connections', return_value=[]):
-        response = await staff.library_missing_rates(object())
+        response = asyncio.run(staff.library_missing_rates(object()))
     query.assert_called_once_with('clinic-a')
     assert response.status_code == 200
     assert response.headers['Cache-Control'] == 'no-store'
