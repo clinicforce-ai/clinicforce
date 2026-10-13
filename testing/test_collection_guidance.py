@@ -290,6 +290,15 @@ def test_source_statuses_are_not_replaced_with_calculation_assumptions():
     assert collection_guidance.build(result)['requirements']['referral'] == 'Referral record on file'
 
 
+def test_unmatched_patient_product_displays_scoped_contract_candidate_without_network_claim():
+    result = scenario()
+    result['benefits']['network_status'] = 'unknown'
+    result['mapping_candidate'] = {'network': 'Blue Choice PPO', 'products': ['Preferred Provider Option Plus Medical']}
+    value = collection_guidance.build(result)
+    assert value['network'] == 'Blue Choice PPO contract; patient network unverified'
+    assert 'exact product match not confirmed' in value['network_source']
+
+
 def test_missing_deductible_can_use_the_actual_copay_as_partial_advance_with_explanation():
     result = scenario()
     result['price_range'].update(complete=False)

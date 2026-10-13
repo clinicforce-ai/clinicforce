@@ -36,6 +36,32 @@ def test_three_sheets_supply_exact_plan_rules_and_portals():
     assert 'PCP' in hmo['referral']['reason']
 
 
+def test_generic_bcbstx_ppo_label_shows_relevant_research_without_clearing_patient_rule():
+    evidence = visit('BCBSTX', 'PREFERRED PROVIDER OPTION PLUS MEDICAL', '99203')
+    named = visit('Blue Cross Blue Shield Tx', 'PREFERRED PROVIDER OPTION PLUS MEDICAL', '99203')
+    assert named['referral']['sources'][0]['label'] == evidence['referral']['sources'][0]['label']
+    assert evidence['referral']['status'] == 'Verification required'
+    assert 'PPO' in evidence['referral']['reason']
+    assert 'no referral generally' in evidence['referral']['reason'].lower()
+    assert 'row 17' in evidence['referral']['sources'][0]['label']
+    assert evidence['authorization']['status'] == 'Verification required'
+    assert '99203' in evidence['authorization']['reason']
+    assert 'row 17' in evidence['authorization']['sources'][0]['label']
+    assert visit('BCBSTX', 'Unknown medical plan', '99203')['referral']['status'] == 'Verification required'
+    hmo = visit('BCBSTX', 'Health Maintenance Organization Medical', '99203')
+    assert hmo['referral']['status'] == 'Verification required'
+    assert 'row 18' in hmo['referral']['sources'][0]['label']
+    mixed = plan_matrix.evaluate({'codes': [{'code': '99203'}]},
+        {'service_date': '2026-10-12', 'payer_names': ['BCBSTX'], 'plans': ['PPO', 'HMO']}, plan_matrix.bundled())
+    assert 'rows 17, 18' in mixed['referral']['sources'][0]['label']
+
+
+def test_explicit_bluecard_label_uses_out_of_state_research():
+    evidence = visit('BCBSTX', 'Participating out-of-state BlueCard/BCBS networks', '99203')
+    assert evidence['referral']['status'] == 'Verification required'
+    assert 'row 19' in evidence['referral']['sources'][0]['label']
+
+
 def test_humana_plan_types_and_pending_participation_are_distinct():
     assert visit('Humana', 'Humana Medicare HMO', '99213')['referral']['status'] == 'Required'
     for plan in ('Humana Medicare PPO', 'Humana Medicare Network PFFS'):

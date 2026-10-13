@@ -21,7 +21,7 @@ PAYER_ALIASES = {
     'MultiPlan / PHCS (Claritev)': {'multiplan', 'phcs', 'claritev'},
     'Humana Medicare (Pending)': {'humana', 'humanamedicare'},
     'Blue Cross Blue Shield of Texas': {'bluecrossblueshieldoftexas', 'bluecrossandblueshieldoftexas',
-                                        'bcbstx', 'bcbstexas'},
+                                        'bluecrossblueshieldtx', 'bcbstx', 'bcbstexas'},
     'Blue Cross Blue Shield (out-of-state BlueCard)': {'bluecard', 'outofstatebluecard'},
 }
 CODE = re.compile(r'\b(?:\d{5}|[A-Z]\d{4}|\d{4}[A-Z])\b')
@@ -174,10 +174,41 @@ def evaluate(result: dict, context: dict, data: dict) -> dict | None:
     payer_rows = [(number, row) for number, row in data['rows'] if _payer(row, payer_names)]
     if not payer_rows:
         return None
-    plans = {_key(value) for value in context.get('plans') or [] if _key(value) not in {'', 'ci', 'commercial', 'ppo', 'hmo'}}
+    reported_plans = [str(value) for value in context.get('plans') or [] if value]
+    plans = {_key(value) for value in reported_plans if _key(value) not in {'', 'ci', 'commercial', 'ppo', 'hmo'}}
+    if any('bluecard' in _key(value) for value in reported_plans) and any(
+            row['Payer'] == 'Blue Cross Blue Shield of Texas' for _, row in payer_rows):
+        payer_rows += [(number, row) for number, row in data['rows']
+                       if row['Payer'] == 'Blue Cross Blue Shield (out-of-state BlueCard)']
     matched = [(number, row) for number, row in payer_rows
                if plans & _names(row["Specific Plan / Network Names on NMCT's Accepted List"])]
     if len(matched) != 1:
+        families = set()
+        if any('bluecard' in _key(value) for value in reported_plans):
+            families.add('BlueCard')
+        if any(re.search(r'\bHMO\b|health maintenance organization', value, re.I) for value in reported_plans):
+            families.add('HMO')
+        if any(re.search(r'\bPPO\b|preferred provider (?:option|organization)', value, re.I) for value in reported_plans):
+            families.add('PPO')
+        family = next(iter(families)) if len(families) == 1 else None
+        family_row = next(((number, row) for number, row in payer_rows
+                           if (row['Payer'] == 'Blue Cross Blue Shield (out-of-state BlueCard)' and family == 'BlueCard')
+                           or (row['Payer'] == 'Blue Cross Blue Shield of Texas' and family in {'PPO', 'HMO'}
+                               and row['Plan Group (shared rule set)'].startswith(family))), None)
+        if not matched and family_row:
+            number, row = family_row
+            label = f"{data['filename']} · Payer Plan Matrix, row {number} ({family} group research; product not matched)"
+            referral = (f'Reported {family} description; the matrix says no referral generally for its PPO group, '
+                        'but the exact patient product and member rule need payer confirmation.' if family == 'PPO' else
+                        f'Reported {family} description; the matrix says HMO referrals generally apply, '
+                        'but the exact patient product and member rule need payer confirmation.' if family == 'HMO' else
+                        'Reported BlueCard description; the home plan controls referrals and must be confirmed.')
+            codes = ', '.join(str(code.get('code')) for code in result.get('codes') or [] if code.get('code')) or 'planned services'
+            authorization = (f'The {family} matrix group does not establish authorization for CPT {codes}; '
+                             'check the member plan and current code rules with the payer.')
+            return {kind: {'status': 'Verification required', 'reason': reason, 'sources': [{'label': label}],
+                           'verify_url': _portal(data, row, '', kind), 'contact': None}
+                    for kind, reason in (('referral', referral), ('authorization', authorization))}
         row = payer_rows[0][1]
         label = f"{data['filename']} · Payer Plan Matrix, rows {', '.join(str(n) for n, _ in payer_rows)} (Excel research)"
         reason = ('Patient plan matches multiple matrix groups; confirm the exact product.' if matched else

@@ -12,15 +12,18 @@ def build(result: dict, review: dict | None = None) -> dict:
     assumptions = list(result.get('pricing_assumptions') or [])
     assumptions.extend(note for line in lines for note in line.get('benefits', {}).get('benefit_assumptions', []))
     actions = []
+    candidate_network = (result.get('mapping_candidate') or {}).get('network') if benefits.get('network_status') == 'unknown' else None
     guidance = {'amount_cents': None, 'status': 'unavailable', 'basis': 'insufficient_evidence',
                 'reason': 'The available benefits do not establish an advance collection amount.',
                 'patient_message': 'Your payment amount is not yet calculated. Missing information does not mean your patient responsibility is zero.',
                 'assumptions': assumptions, 'patient_actions': actions, 'services': [],
                 'network': 'In network' if benefits.get('network_status') == 'in_network' else
                            'Out of network' if benefits.get('network_status') == 'out_of_network' else
-                           (result.get('network_evidence') or {}).get('network_name') or 'Not reported',
+                           ((result.get('network_evidence') or {}).get('network_name') or
+                            (f'{candidate_network} contract; patient network unverified' if candidate_network else 'Not reported')),
                 'network_source': ('Payer statement about the requesting provider' if benefits.get('network_source') == 'payer_participation_message' else
                                    'Clinic provider-network record' if benefits.get('network_status') in {'in_network', 'out_of_network'} else
+                                   'Clinic provider-network record; exact product match not confirmed' if candidate_network else
                                    'Clinic contract; exact product match not confirmed' if (result.get('network_evidence') or {}).get('network_name') else
                                    'No provider participation result available'),
                 'requirements': {}, 'requirement_sources': {}}

@@ -181,12 +181,31 @@ def _payer_evidence(result: dict, kind: str, codes: set[str], context: dict) -> 
             and context.get('member_id') and context.get('rendering_npi')
             and (context.get('group_number') or 'traditionalmedicare' in context.get('payer_names', set()))
             and context.get('plans')
+            and (benefits.get('network_status') == 'in_network' or any('required' in signals[code] for code in codes))
             and all(len(signals[code]) == 1 for code in codes)):
         statuses = {next(iter(signals[code])) for code in codes}
         status = 'Required' if 'required' in statuses else 'Not required'
         reason = ('Payer response explicitly requires this for at least one planned service.' if status == 'Required' else
                   'Payer response explicitly marks every planned service not required.')
         return {'status': status, 'reason': reason, 'sources': [{'label': source + ' eligibility response'}]}
+    if (codes and result.get('benefit_source') and benefits.get('active') is True
+            and all(len(signals[code]) == 1 for code in codes)):
+        statuses = {next(iter(signals[code])) for code in codes}
+        gaps = []
+        if benefits.get('service_date_matches') is not True:
+            gaps.append('visit-date eligibility')
+        if benefits.get('network_status') != 'in_network' and 'not_required' in statuses:
+            gaps.append('provider network')
+        if identity.get('status') not in {'matched', 'reconciled'}:
+            gaps.append('patient identity')
+        if not context.get('group_number'):
+            gaps.append('group number')
+        if not context.get('plans'):
+            gaps.append('exact plan')
+        finding = 'required' if 'required' in statuses else 'not required'
+        return {'status': 'Verification required',
+                'reason': f'Payer response reports {kind} {finding} for the selected benefit, but {", ".join(gaps or ["other patient-specific checks"])} remain unverified.',
+                'sources': [{'label': source + ' eligibility response'}]}
     if kind == 'referral' and result.get('referral_evidence'):
         return {'status': 'Verification required',
                 'reason': 'An eCW referral record exists; its applicability to the planned services is unconfirmed.',
@@ -203,6 +222,7 @@ def _payer_evidence(result: dict, kind: str, codes: set[str], context: dict) -> 
 def evaluate(result: dict, context: dict, documents: list[dict]) -> dict:
     """Return card evidence for the exact visit; never modify financial inputs."""
     codes = {str(row.get('code') or '').upper() for row in result.get('codes') or [] if CODE.fullmatch(str(row.get('code') or '').upper())}
+    reported_plans = context.get('plans') or []
     context = {**context, 'codes': codes, 'plans': {_key(plan) for plan in context.get('plans') or []
                                                    if _key(plan) not in {'', 'ci', 'commercial', 'ppo', 'hmo'}}}
     payer_names = {_key(name) for name in context.get('payer_names') or [] if name}
@@ -270,7 +290,8 @@ def evaluate(result: dict, context: dict, documents: list[dict]) -> dict:
                             'sources': [_source(document) for document in matched if document['id'] == linked_id]}
         else:
             output[kind] = payer
-    research = plan_matrix.evaluate(result, context, plan_matrix.uploaded(documents, context['service_date']))
+    research = plan_matrix.evaluate(result, {**context, 'plans': reported_plans},
+                                    plan_matrix.uploaded(documents, context['service_date']))
     if research:
         for kind in KINDS:
             current, matrix = output[kind], research[kind]
@@ -292,7 +313,8 @@ def evaluate(result: dict, context: dict, documents: list[dict]) -> dict:
                     matrix['reason'].startswith('Matrix does not settle authorization'):
                 output[kind] = {**current, 'sources': sources, 'verify_url': verify_url}
             elif matrix['status'] == 'Verification required':
-                output[kind] = {**matrix, 'sources': sources}
+                output[kind] = {**matrix, 'sources': sources,
+                                'reason': matrix['reason'] + (' ' + current['reason'] if current['reason'].startswith('Payer response reports ') else '')}
             else:
                 output[kind] = {**current, 'sources': sources, 'verify_url': verify_url}
             for field in ('verification', 'contact'):

@@ -29,7 +29,7 @@ def row(code, plan, referral, authorization):
 def estimate(*codes, active=True, payer_signals=None):
     signals = payer_signals or {}
     return {'codes': [{'code': code} for code in codes], 'benefits': {'active': active,
-            'service_date_matches': True, 'identity': {'status': 'matched'}},
+            'service_date_matches': True, 'network_status': 'in_network', 'identity': {'status': 'matched'}},
             'price_range': {'lines': [{'code': code, 'benefits': {
                 'requirements': {kind: {'payer_signal': signal} for kind, signal in signals.items()},
                 'authorization_basis': 'Payer indicator'}} for code in codes]}}
@@ -103,6 +103,24 @@ def test_missing_contract_uses_only_explicit_payer_evidence():
     assert rules.evaluate(wrong_patient, context(), [])['referral']['status'] == 'Verification required'
     missing_group = context(); missing_group['group_number'] = ''
     assert rules.evaluate(explicit, missing_group, [])['authorization']['status'] == 'Verification required'
+
+
+def test_generic_ppo_research_retains_explicit_payer_auth_indicator_as_conditional_evidence():
+    result = estimate('99203', payer_signals={'authorization': 'not_required'})
+    result['benefit_source'] = 'Stedi'
+    result['benefits']['network_status'] = 'unknown'
+    result['benefits']['service_date_matches'] = None
+    result['price_range']['lines'][0]['benefits']['authorization_basis'] = 'Payer indicator'
+    visit_context = context(plan='PREFERRED PROVIDER OPTION PLUS MEDICAL', payer='BCBSTX')
+    visit_context['coverage_period'] = {'start': '2026-01-01'}
+    evidence = rules.evaluate(result, visit_context, [])['authorization']
+    assert evidence['status'] == 'Verification required'
+    assert 'not required' in evidence['reason'].lower()
+    assert 'provider network' in evidence['reason'].lower()
+    assert any('row 17' in source.get('label', '') for source in evidence['sources'])
+    assert any('Stedi' in source.get('label', '') for source in evidence['sources'])
+    result['benefits']['service_date_matches'] = True
+    assert rules.evaluate(result, visit_context, [])['authorization']['status'] == 'Verification required'
 
 
 def test_conflicting_contract_rows_or_payer_response_require_verification():
