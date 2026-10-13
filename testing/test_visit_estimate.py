@@ -14,6 +14,13 @@ from app.api.routers import commercial_estimator as api
 DAY = date.today().isoformat()
 
 
+def test_non_office_procedures_keep_their_configured_or_diagnostic_service_type():
+    assert visit_estimate.service_type('11104', {}) == '2'
+    assert visit_estimate.service_type('62270', {}) == '2'
+    assert visit_estimate.service_type('95886', {}) == '73'
+    assert visit_estimate.service_type('11104', {'service_type_by_code': {'11104': '98'}}) == '98'
+
+
 def payload():
     base = {'coverageLevelCode': 'IND', 'inPlanNetworkIndicatorCode': 'Y', 'serviceTypeCodes': ['30']}
     return {'subscriber': {'memberId': 'M123'}, 'benefitsInformation': [
@@ -230,6 +237,20 @@ def test_cash_prices_are_separate_and_available_even_when_insurance_fails():
     cash_rates[1]['cash_cents'] = 0
     zero = visit_estimate.price_lines(codes, cash_rates, {}, {}, alternatives=True)
     assert zero['cash_min_cents'] == 0 and zero['cash_max_cents'] == 7500
+
+
+def test_unavailable_allowed_rate_is_typed_and_does_not_use_cash_or_another_cpt():
+    selected = [{'id': 'office', 'code': '99204', 'units': 1}]
+    rate = {'code': '99203', 'allowed_cents': 14000, 'cash_cents': 9000}
+    result = visit_estimate.price_lines(selected, [rate], {'active': True, 'network_status': 'in_network'}, {})
+    line = result['lines'][0]
+    assert line['rate_resolution'] == {'status': 'RATE_UNAVAILABLE', 'matched_candidate_count': 0,
+                                       'source_checked': 'scoped_active_contract_rate_candidates',
+                                       'provider_network_verified': True}
+    assert line['allowed_cents'] is None and line['calculation'] is None
+    conflict = visit_estimate.price_lines(selected, [{**rate, 'code': '99204'}, {**rate, 'code': '99204'}],
+                                          {'active': True, 'network_status': 'in_network'}, {})
+    assert conflict['lines'][0]['rate_resolution']['status'] == 'RATE_CONFLICT'
 
 
 def test_procedure_groups_and_recommendations_are_grounded_in_comparable_ecw_visits():

@@ -63,6 +63,25 @@ def test_case_specific_amount_changes_and_payments_are_deducted_once():
     assert collection_guidance.build(result, {'payments': {'reference': 'receipt', 'amount_cents': 800}})['amount_cents'] == 3000
 
 
+def test_conditional_calculation_is_for_planning_and_does_not_authorize_collection():
+    result = scenario()
+    result['price_range']['conditional'] = True
+    value = collection_guidance.build(result)
+    assert value['amount_cents'] is None
+    assert 'unresolved' in value['reason']
+
+
+def test_conditional_total_can_preserve_independent_fixed_office_copay():
+    result = scenario(9000)
+    result['price_range']['conditional'] = True
+    result['price_range']['lines'][0]['benefits'].update(
+        copay_cents=3000, copay_period='DAY', deductible_applies=False,
+        oop_remaining_cents=100000, coinsurance_percent=None)
+    value = collection_guidance.build(result)
+    assert value['basis'] == 'office_copay'
+    assert value['amount_cents'] == 3000
+
+
 @pytest.mark.parametrize('change', [{'active': False}, {'has_secondary': True}, {'service_date_matches': False},
                                   {'network_status': 'out_of_network'}, {'review_reasons': ['Eligibility evidence conflicts']}])
 def test_contradictions_override_cached_numeric_amount(change):

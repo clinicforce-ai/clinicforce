@@ -219,8 +219,9 @@ def _payer_evidence(result: dict, kind: str, codes: set[str], context: dict) -> 
             'sources': []}
 
 
-def evaluate(result: dict, context: dict, documents: list[dict]) -> dict:
+def evaluate(result: dict, context: dict, documents: list[dict], *, include_procedures: bool = True) -> dict:
     """Return card evidence for the exact visit; never modify financial inputs."""
+    raw_context = context
     codes = {str(row.get('code') or '').upper() for row in result.get('codes') or [] if CODE.fullmatch(str(row.get('code') or '').upper())}
     reported_plans = context.get('plans') or []
     context = {**context, 'codes': codes, 'plans': {_key(plan) for plan in context.get('plans') or []
@@ -321,7 +322,52 @@ def evaluate(result: dict, context: dict, documents: list[dict]) -> dict:
                 if matrix.get(field):
                     output[kind][field] = matrix[field]
     authorization = output['authorization']
-    authorization['approval_status'] = 'Not verified' if authorization['status'] == 'Required' else 'Unknown' if authorization['status'] == 'Verification required' else 'Not needed under the stated rule'
-    if authorization['status'] == 'Required' and 'approval' not in authorization['reason'].lower():
+    approval_lines = [line for line in (result.get('price_range') or {}).get('lines') or []
+                      if str(line.get('code') or '').upper() in codes]
+    approval_verified = bool(approval_lines) and len(approval_lines) == len(result.get('codes') or []) and all(
+        (line.get('benefits') or {}).get('requirements', {}).get('authorization', {}).get('status') == 'valid'
+        and (line.get('benefits') or {}).get('requirements', {}).get('authorization', {}).get('cleared') is True
+        and (line.get('benefits') or {}).get('requirements', {}).get('authorization', {}).get('reference')
+        and (line.get('benefits') or {}).get('requirements', {}).get('authorization', {}).get('verified_at')
+        for line in approval_lines)
+    authorization['approval_status'] = ('Verified' if approval_verified else 'Not verified') if authorization['status'] == 'Required' else 'Unknown' if authorization['status'] == 'Verification required' else 'Not needed under the stated rule'
+    if approval_verified and len(approval_lines) == 1:
+        approval = approval_lines[0]['benefits']['requirements']['authorization']
+        authorization['approval_reference'] = approval['reference']
+        authorization['approval_verified_at'] = approval['verified_at']
+    if authorization['status'] == 'Required' and authorization['approval_status'] != 'Verified' and 'approval' not in authorization['reason'].lower():
         authorization['reason'] += ' Authorization approval is a separate check.'
+    if include_procedures:
+        price = result.get('price_range') or {}
+        procedures = []
+        for row in result.get('codes') or []:
+            code = str(row.get('code') or '').upper()
+            if not CODE.fullmatch(code):
+                continue
+            line_id = row.get('id')
+            lines = [line for line in price.get('lines') or []
+                     if (line.get('id') == line_id if line_id else str(line.get('code') or '').upper() == code)]
+            single = {**result, 'codes': [row], 'price_range': {**price, 'lines': lines}}
+            evidence = evaluate(single, raw_context, documents, include_procedures=False)
+            procedures.append({'id': line_id or code, 'code': code, **evidence})
+        output['procedures'] = procedures
+        for kind in KINDS:
+            required = [item for item in procedures if item[kind]['status'] == 'Required']
+            if required and output[kind]['status'] == 'Verification required':
+                unresolved = [item['code'] for item in procedures if item[kind]['status'] == 'Verification required']
+                sources = list({(source.get('document_id'), source.get('page'), source.get('label')): source
+                                for item in required for source in item[kind]['sources']}.values())
+                output[kind] = {'status': 'Required',
+                                'reason': f"Required for CPT {', '.join(item['code'] for item in required)}."
+                                          + (f" Still unverified for CPT {', '.join(unresolved)}." if unresolved else ''),
+                                'sources': sources,
+                                **({'approval_status': 'Not verified'} if kind == 'authorization' else {})}
+        required_auth = [item for item in procedures if item['authorization']['status'] == 'Required']
+        if required_auth and output['authorization']['status'] == 'Required':
+            output['authorization']['approval_status'] = ('Verified' if all(
+                item['authorization']['approval_status'] == 'Verified' for item in required_auth)
+                else 'Not verified')
+            if len(required_auth) == 1 and output['authorization']['approval_status'] == 'Verified':
+                output['authorization']['approval_reference'] = required_auth[0]['authorization']['approval_reference']
+                output['authorization']['approval_verified_at'] = required_auth[0]['authorization']['approval_verified_at']
     return output

@@ -3,7 +3,7 @@ from copy import deepcopy
 
 import pytest
 
-from app.insurance import commercial, collection_guidance, visit_estimate
+from app.insurance import commercial, collection_guidance, encounter_summary, visit_estimate
 
 DAY = '2026-10-08'
 
@@ -116,3 +116,36 @@ def test_waiver_for_different_service_or_out_of_network_is_not_applied():
     for other in (row('C', '0', stc='73'), {**row('C', '0'), 'inPlanNetworkIndicatorCode': 'N'}):
         raw = payload(); raw['benefitsInformation'].append(deepcopy(other))
         assert run(raw)[0]['deductible_applicability'] == 'UNKNOWN'
+
+
+def test_sanitized_neurology_visit_keeps_copay_when_testing_rates_are_missing():
+    raw = {'benefitsInformation': [
+        row('1', stc='30'),
+        row('B', '30', stc='98', period='27', message='Specialist'),
+        row('C', '300', stc='30', period='23'),
+        row('C', '223.78', stc='30', period='29'),
+        row('G', '2923.78', stc='30', period='29'),
+    ]}
+    raw['benefitsInformation'][1]['additionalInformation'].append({'description': 'Deductible does not apply'})
+    benefits = commercial.normalize_stedi_271(raw, '98', True, procedure_code='99204', service_date=DAY)
+    codes = [{'id': 'office', 'code': '99204', 'units': 1},
+             {'id': 'nerve', 'code': '95911', 'units': 1},
+             {'id': 'muscle', 'code': '95886', 'units': 1}]
+    rates = [{'code': '99204', 'allowed_cents': 15000, 'cash_cents': 25000}]
+    price = visit_estimate.price_lines(codes, rates, benefits, {'cost_share': 'payer_returned'},
+                                       payload=raw, service_date=DAY)
+    result = {'benefits': benefits, 'price_range': price}
+    result['collection_guidance'] = collection_guidance.build(result)
+    summary = encounter_summary.build(result)
+    assert benefits['deductible_annual_cents'] == 30000
+    assert benefits['deductible_remaining_cents'] == 22378
+    assert benefits['oop_remaining_cents'] == 292378
+    assert price['lines'][0]['calculation']['deductible_cents'] == 0
+    assert [line['rate_resolution']['status'] for line in price['lines']] == [
+        'RESOLVED', 'RATE_UNAVAILABLE', 'RATE_UNAVAILABLE']
+    assert result['collection_guidance']['amount_cents'] == 3000
+    assert result['collection_guidance']['basis'] == 'office_copay'
+    assert price['lines'][0]['cash_cents'] == 25000
+    assert summary['estimated_total_patient_min_cents'] is None
+    assert summary['estimated_later_balance_cents'] is None
+    assert summary['unpriced_codes'] == ['95911', '95886']

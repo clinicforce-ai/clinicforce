@@ -297,7 +297,10 @@ def compile_document(document: dict, extracted: dict, connections: list[dict], n
                 if set(headers) - supported or re.search(r'lesser of|subject to|\d\s*%|\blocality\b|\b(?:minimum|maximum)\b', terms, re.I):
                     compiled['issues'].append({'status': 'missing_dependency', 'reason': 'Allowance table contains additional scope or calculation conditions that are not represented by the supported rate fields.', 'locator': table['locator']})
                     continue
-                included = [(number, row) for number, row in enumerate(rows[1:], 2) if not PROVISIONAL.search(' '.join(str(cell or '') for cell in row))]
+                included = [(number, row) for number, row in enumerate(rows[1:], 2)
+                            if any(str(cell or '').strip() for cell in row)
+                            and not (export_table and len(row) == 2 and str(row[0]).strip().casefold() in {'state', 'time stamp'})
+                            and not PROVISIONAL.search(' '.join(str(cell or '') for cell in row))]
                 final = [list(rows[0]), *[list(row) for _, row in included]]
                 if export_table and not allowance_table:
                     final[0][headers.index('amount')] = 'Allowed Amount'

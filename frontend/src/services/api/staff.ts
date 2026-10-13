@@ -102,6 +102,14 @@ export interface StaffLibraryDocument {
   estimator_uses?: Array<{ id: string; type: 'contract_rates' | 'cash_rates'; status: string; payer: string; effective_from: string; effective_to?: string | null; note?: string }>
 }
 
+export interface MissingRateSummary {
+  gaps: Array<{ payer: string; code: string; kind: 'insured_allowed' | 'clinic_cash'; estimate_count: number; last_observed_at: string }>
+  group_count: number
+  scanned_case_count: number
+  scan_limit: number
+  scan_limit_reached: boolean
+}
+
 export interface Era835Summary {
   payment_cents: number
   payment_date: string
@@ -121,6 +129,7 @@ export interface Era835Summary {
 }
 
 export const getStaffLibrary = () => request<{ documents: StaffLibraryDocument[] }>('/api/staff/library')
+export const getStaffMissingRates = () => request<MissingRateSummary>('/api/staff/library/missing-rates')
 export const uploadStaffLibrary = (body: FormData) => request<StaffLibraryDocument>('/api/staff/library', { method: 'POST', body })
 export const retireStaffRateVersion = (id: string) => request<{ id: string; status: string }>(`/api/staff/library/rate-versions/${encodeURIComponent(id)}/retire`, json({}))
 export const getStaffEra835 = (documentId: string) => request<Era835Summary>(`/api/staff/library/${encodeURIComponent(documentId)}/era`)

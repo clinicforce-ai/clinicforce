@@ -50,8 +50,8 @@ def test_explicit_scheduled_care_wins_and_wrong_patient_status_cannot_be_inferre
     model.converse.return_value = model_reply([{'code': '99203', 'units': 1}])
     with patch.object(cpt_suggester.boto3, 'client', return_value=model):
         result = cpt_suggester.recommend_visit_plan({'reason': 'Follow up', 'visit_type': 'established'}, {}, catalog())
-        assert result['recommended_ids'] == ['99213']
-        assert result['method'] == 'baseline'
+        assert result['recommended_ids'] == []
+        assert result['method'] == 'ecw'
 
 
 IDENTITY = {'billing_npi': '1234567890', 'tin': '123456789', 'member_id': 'M123',

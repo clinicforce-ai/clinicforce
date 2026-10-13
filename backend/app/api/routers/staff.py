@@ -26,7 +26,7 @@ from app.api.settings import ALLOWED_ORIGINS, CLINICIAN_SHARE_COOKIE, MAX_INSURA
 from app.core import clinic_email, object_store, staff_store, staff_deletions, library_files
 from app.core.patient_store import get_patient_profile
 from app.core.request_address import request_address
-from app.insurance import commercial, commercial_store, ecw_backend, era835, golden, v1_sources
+from app.insurance import commercial, commercial_store, ecw_backend, era835, golden, missing_rates, store, v1_sources
 from app.logs.collection_audit import collection_event
 
 
@@ -37,6 +37,22 @@ NO_STORE = {"Cache-Control": "no-store", "Pragma": "no-cache", "Referrer-Policy"
 
 class Model(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+
+class MissingRateGap(Model):
+    payer: str
+    code: str
+    kind: Literal['insured_allowed', 'clinic_cash']
+    estimate_count: int = Field(ge=1)
+    last_observed_at: str
+
+
+class MissingRatesResponse(Model):
+    gaps: list[MissingRateGap]
+    group_count: int = Field(ge=0)
+    scanned_case_count: int = Field(ge=0)
+    scan_limit: int = Field(ge=1)
+    scan_limit_reached: bool
 
 
 class Login(Model):
@@ -590,6 +606,23 @@ async def library(request: Request, background_tasks: BackgroundTasks):
     background_tasks.add_task(library_pricing.prepare, staff["practice_id"])
     usage = await run_in_threadpool(library_files.estimator_links, staff['practice_id'], documents)
     return JSONResponse({"documents": [{**public_library(value), 'estimator_uses': usage['links'][value['id']]} for value in documents]}, headers=NO_STORE)
+
+
+@router.get("/library/missing-rates", response_model=MissingRatesResponse)
+async def library_missing_rates(request: Request):
+    """Admin-only recent CPT price gaps from saved estimates, without patient data.
+
+    These are case-backed observations, not proof that a rate does not exist.
+    Upload an approved scoped schedule, then recheck affected visits; historical
+    estimate snapshots are never rewritten by this inventory.
+    """
+    staff = await require_staff(request)
+    if staff['role'] != 'admin':
+        raise HTTPException(403, 'Only a clinic administrator can inspect pricing gaps.')
+    rows = await run_in_threadpool(store.recent_missing_rate_inputs, staff['practice_id'])
+    connections = await run_in_threadpool(commercial_store.list_connections, staff['practice_id'])
+    body = MissingRatesResponse.model_validate(missing_rates.summarize(rows, 500, connections))
+    return JSONResponse(body.model_dump(), headers=NO_STORE)
 
 
 @router.post("/library/rate-versions/{version_id}/retire")
