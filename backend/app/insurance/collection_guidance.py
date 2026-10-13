@@ -157,7 +157,7 @@ def build(result: dict, review: dict | None = None) -> dict:
             if any(not t.get('copay_period') for t in terms):
                 assumptions.append('The payer did not specify a copay period. This advance applies one copay to the single office consultation.')
             if benefits.get('network_status') not in {'in_network', 'out_of_network'} and not result.get('pricing_assumptions') and not all(t.get('network_independent') for t in terms):
-                assumptions.append('This provisional office advance uses the returned in-network specialist copay. Provider participation is unverified; confirm it before care. Final responsibility may differ.')
+                assumptions.append('This provisional office advance uses the returned in-network specialist copay. The payer did not establish the member’s exact provider network; final responsibility may differ.')
             if benefits.get('network_status') == 'out_of_network':
                 assumptions.append('This is only the verified out-of-network office copay. The payer allowed amount and possible additional charges are unknown.')
             guidance.update(status='estimated', basis='office_copay',
