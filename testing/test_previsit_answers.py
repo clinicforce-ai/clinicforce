@@ -21,6 +21,8 @@ def test_modern_plan_name_and_noncovered_service_are_not_lost():
         'nonCovered': [{'service': {'system': 'CPT', 'value': '95885'}}],
     }}]}
     assert commercial.plan_details(raw)['names'] == ['Example Focus Product']
+    raw['subscriber'] = {'additionalInformation': {'planNetwork': {'name': 'Example Preferred Network'}}}
+    assert commercial.plan_details(raw)['network_names'] == ['Example Preferred Network']
     assert commercial.normalize_stedi_271(raw, '98', True, procedure_code='95885')['active'] is False
     assert commercial.normalize_stedi_271(raw, '98', True, procedure_code='99203')['active'] is True
 

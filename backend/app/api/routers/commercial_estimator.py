@@ -317,6 +317,10 @@ def _practice_path(practice_id: str, inputs: dict, source: dict) -> tuple[dict, 
     if len(profiles) != 1:
         raise HTTPException(409, "This practice has no single enabled estimate profile for this provider and payer.")
     product_names = {re.sub(r'[^a-z0-9]', '', name.casefold()) for name in source.get('payer_plan_names', [])}
+    payer_networks = {re.sub(r'[^a-z0-9]', '', str(name).casefold()) for name in source.get('payer_network_names', []) if name}
+    expected_network = re.sub(r'[^a-z0-9]', '', str(networks[0].get('network_name') or '').casefold())
+    if payer_networks and payer_networks != {expected_network}:
+        raise HTTPException(409, 'The payer-reported member network does not match the clinic contract.')
     if product_names:
         aliases = {re.sub(r'[^a-z0-9]', '', str(name).casefold()) for name in
                    [networks[0].get('plan_matcher', ''), *(profiles[0].get('rules', {}).get('plan_product_names') or [])]} - {'', 'ci', 'commercial', 'ppo', 'hmo'}
@@ -327,7 +331,9 @@ def _practice_path(practice_id: str, inputs: dict, source: dict) -> tuple[dict, 
                     and mapping.get('network_reference') == networks[0].get('evidence_reference')
                     and mapping.get('plan_scope') == source.get('payer_plan_scope')):
                 aliases.update(insurance_identity.normalized(name) for name in mapping.get('products', []))
-        if not product_names <= aliases:
+        generic_names = all(re.fullmatch(r'(?:preferredprovider(?:option|organization)(?:plus)?|healthmaintenanceorganization)(?:medical)?', name)
+                            for name in product_names)
+        if not product_names <= aliases and not (payer_networks == {expected_network} and generic_names):
             raise HTTPException(409, 'The clinic fee schedule is not matched to the exact payer product.')
     return payer, networks[0], profiles[0]
 
@@ -586,6 +592,30 @@ def _previsit_benefits(payload: dict, coverage: dict, service_date: str | None =
     return benefits
 
 
+def _network_contract_evidence(practice_id: str, network: dict, profile: dict) -> dict:
+    evidence = {key: network.get(key) for key in ('network_name', 'evidence_reference', 'effective_from', 'effective_to')}
+    library_source = (profile.get('rules') or {}).get('library_source') or {}
+    document_id = library_source.get('document_id')
+    if document_id and network.get('evidence_reference') == library_source.get('reference') == f'library:{document_id}':
+        document = staff_store.get_library(document_id, practice_id)
+        if (document and document.get('kind') == 'contract' and document.get('content_type') == 'application/pdf'
+                and document.get('sha256') == library_source.get('sha256')):
+            evidence.update(document_id=document_id, document_label=document['label'],
+                            locator=library_source.get('locator'))
+    return evidence
+
+
+def _requirement_candidates(result: dict) -> list[dict]:
+    selected_ids = {row.get('id') for row in result.get('codes') or []}
+    suggested_codes = {str(candidate.get('code') or '').upper()
+                       for group in (result.get('suggestions') or {}).get('groups') or []
+                       for candidate in group.get('codes') or []}
+    recommended_ids = set((result.get('service_plan') or {}).get('recommended_ids') or [])
+    return [row for row in result.get('available_codes') or []
+            if row.get('id') not in selected_ids and
+            (row.get('id') in recommended_ids or row.get('code') in suggested_codes)]
+
+
 def _attach_previsit_pricing(result: dict, practice_id: str, inputs: dict, source: dict,
                              payer_id: str, benefits: dict, *, payload: dict | None = None,
                              review: dict | None = None) -> None:
@@ -610,15 +640,10 @@ def _attach_previsit_pricing(result: dict, practice_id: str, inputs: dict, sourc
         _, network, profile = _previsit_practice_path(practice_id, {**inputs, "payer_id": connection["id"]}, source)
         benefits["network_status"] = "in_network"
         benefits['network_source'] = 'clinic_record'
-        result['network_evidence'] = {key: network.get(key) for key in ('network_name', 'evidence_reference', 'effective_from', 'effective_to')}
-        library_source = (profile.get('rules') or {}).get('library_source') or {}
-        document_id = library_source.get('document_id')
-        if (document_id and network.get('evidence_reference') == library_source.get('reference') == f'library:{document_id}'):
-            document = staff_store.get_library(document_id, practice_id)
-            if (document and document.get('kind') == 'contract' and document.get('content_type') == 'application/pdf'
-                    and document.get('sha256') == library_source.get('sha256')):
-                result['network_evidence'].update(document_id=document_id, document_label=document['label'],
-                                                  locator=library_source.get('locator'))
+        result['network_evidence'] = _network_contract_evidence(practice_id, network, profile)
+        if source.get('payer_network_names'):
+            result['network_evidence']['payer_network_name'] = source['payer_network_names'][0]
+            result['network_evidence']['payer_network_source'] = 'Stedi planNetwork'
     except HTTPException:
         pass
     result["price_range"], issues = _previsit_range(practice_id, inputs, source, connection["id"], result["codes"], benefits,
@@ -664,6 +689,9 @@ def _finish_previsit(result: dict, case: dict, inputs: dict, source: dict, paylo
         result['benefits']['requires_review'] = True
     payer_plan = commercial.plan_details(payload or {})
     exact_source = {**(pricing_source or source), 'payer_plan_names': payer_plan['names'],
+                    'payer_network_names': (payer_plan['network_names'] if result['benefits'].get('active') is True
+                        and result['benefits'].get('service_date_matches') is True
+                        and comparison.get('status') in {'matched', 'reconciled'} else []),
                     'payer_plan_scope': {key: payer_plan.get(key) for key in ('plan_number', 'group_number')}}
     codes = _previsit_codes(inputs)
     available = list(codes)
@@ -805,7 +833,8 @@ def _finish_previsit(result: dict, case: dict, inputs: dict, source: dict, paylo
                                                 {**exact_source, 'payer_plan_names': []})
             if network.get('network_name') and network.get('evidence_reference'):
                 result['mapping_candidate'] = {'network': network['network_name'], 'products': exact_source['payer_plan_names'],
-                                               'reference': network['evidence_reference']}
+                                               'reference': network['evidence_reference'],
+                                               'contract': _network_contract_evidence(session['practice_id'], network, profile)}
         except HTTPException:
             result.pop('mapping_candidate', None)
     if uploaded_cash:
@@ -830,7 +859,7 @@ def _finish_previsit(result: dict, case: dict, inputs: dict, source: dict, paylo
     library_sources = [staff_store.get_library(document_id, session['practice_id']) for document_id in library_ids]
     payer_connections = [row for row in connections if row.get('stedi_payer_id') == payer_id]
     connection = payer_connections[0] if len(payer_connections) == 1 else {}
-    result['requirement_evidence'] = contract_requirements.evaluate(result, {
+    requirement_context = {
         'service_date': inputs['service_date'], 'payer_verified': bool(connection),
         'payer_names': [result.get('payer'), source.get('payer'), connection.get('display_name'),
                         connection.get('stedi_payer_id'), *(connection.get('aliases') or [])],
@@ -847,7 +876,18 @@ def _finish_previsit(result: dict, case: dict, inputs: dict, source: dict, paylo
         'coverage_period': source.get('coverage_period') or result['insurance_details'].get('payer_coverage_period'),
         'location_id': source.get('location_id'),
         'pos': inputs.get('place_of_service'),
-    }, [document for document in library_sources if document])
+    }
+    requirement_documents = [document for document in library_sources if document]
+    result['requirement_evidence'] = contract_requirements.evaluate(result, requirement_context, requirement_documents)
+    candidates = _requirement_candidates(result)
+    if candidates:
+        # Research the other suggested choices without changing the requirement
+        # summary for the services actually selected for this visit.
+        candidate_result = {**result, 'codes': candidates, 'price_range': {'lines': []}}
+        result['candidate_requirements'] = contract_requirements.evaluate(
+            candidate_result, requirement_context, requirement_documents)['procedures']
+    else:
+        result['candidate_requirements'] = []
     result['encounter_summary'] = encounter_summary.build(result, review)
     guidance = result['collection_guidance']
     emg = result.get('emg_option') or {}
@@ -2451,7 +2491,9 @@ async def previsit_estimate(value: PrevisitInput, request: Request, background_t
     payer_source identifies eCW Coverage.payor, appointment notes, card OCR or
     verified Stedi discovery when that source is known. A stored clinic network
     candidate remains separate from patient-specific participation; a broad PPO
-    description does not activate an exact contract product mapping.
+    description does not activate an exact contract product mapping. An explicit
+    Stedi planNetwork name can resolve a generic PPO/HMO label only when it
+    matches the dated provider contract and eligibility identity/date checks.
 
     insurance_diagnosis separately reports identity, eligibility and pricing status,
     raw/retained/verified candidate counts, enrollment state and specific blockers.
@@ -2476,7 +2518,12 @@ async def previsit_estimate(value: PrevisitInput, request: Request, background_t
     is separate from the rule requiring approval. Its procedures array reports
     the same conservative decision for each selected CPT; a visit with any
     established required procedure remains Required while other CPTs can stay
-    unverified. encounter_summary separates collect_today_cents from the
+    unverified. candidate_requirements reports each unselected suggested or recommended CPT
+    separately and does not affect the selected-visit summary. Source entries
+    include an original Library document ID or an official manual/retained
+    Stedi check URL when available. A link to a check that does not state a
+    requirement is context, not a yes/no rule. encounter_summary separates
+    collect_today_cents from the
     complete patient total and later balance; unavailable amounts remain null.
     Each price_range line reports a typed rate_resolution status and the exact
     candidate rows supplied to the calculator, without claiming an unqueried

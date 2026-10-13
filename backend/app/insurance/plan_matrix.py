@@ -105,7 +105,8 @@ def uploaded(documents: list[dict], service_date: str | None = None) -> dict:
         if document.get('effective_to') and str(document['effective_to']) < applicable_date:
             continue
         try:
-            return parse((document['extraction'] or {}).get('tables') or [], document['filename'])
+            return {**parse((document['extraction'] or {}).get('tables') or [], document['filename']),
+                    **({'document_id': document['id']} if document.get('id') else {})}
         except ValueError:
             continue
     return bundled()
@@ -137,6 +138,17 @@ def _portal(data: dict, row: dict, plan: str, kind: str) -> str | None:
     if 'wellmed' in plan and 'wellmed' in portal_name:
         return next((url for url in urls if 'wellmed' in urlparse(url).netloc), None)
     return urls[0] if urls else None
+
+
+def _research_source(data: dict, label: str) -> dict:
+    return {'label': label, **({'document_id': data['document_id']} if data.get('document_id') else {})}
+
+
+def _official_ppo_source(row: dict, family: str | None) -> list[dict]:
+    if row['Payer'] == 'Blue Cross Blue Shield of Texas' and family == 'PPO':
+        return [{'label': 'BCBS PPO manual',
+                 'url': 'https://www.bcbstx.com/docs/provider/tx/standards/manuals/ppo-provider-manual/ppo-secd-referral.pdf'}]
+    return []
 
 
 def _patient_evidence(result: dict, context: dict, steps: dict) -> list[str]:
@@ -206,18 +218,20 @@ def evaluate(result: dict, context: dict, data: dict) -> dict | None:
             codes = ', '.join(str(code.get('code')) for code in result.get('codes') or [] if code.get('code')) or 'planned services'
             authorization = (f'The {family} matrix group does not establish authorization for CPT {codes}; '
                              'check the member plan and current code rules with the payer.')
-            return {kind: {'status': 'Verification required', 'reason': reason, 'sources': [{'label': label}],
+            return {kind: {'status': 'Verification required', 'reason': reason,
+                           'sources': [_research_source(data, label), *_official_ppo_source(row, family)],
                            'verify_url': _portal(data, row, '', kind), 'contact': None}
                     for kind, reason in (('referral', referral), ('authorization', authorization))}
         row = payer_rows[0][1]
         label = f"{data['filename']} · Payer Plan Matrix, rows {', '.join(str(n) for n, _ in payer_rows)} (Excel research)"
         reason = ('Patient plan matches multiple matrix groups; confirm the exact product.' if matched else
                   'Exact patient plan/product is not identified in the matrix; confirm it with the payer.')
-        return {kind: {'status': 'Verification required', 'reason': reason, 'sources': [{'label': label}],
+        return {kind: {'status': 'Verification required', 'reason': reason,
+                       'sources': [_research_source(data, label)],
                        'verify_url': _portal(data, row, '', kind), 'contact': None} for kind in ('referral', 'authorization')}
     number, row = matched[0]
     plan = next((value for value in context.get('plans') or [] if _key(value) in _names(row["Specific Plan / Network Names on NMCT's Accepted List"])), '')
-    source = {'label': f"{data['filename']} · Payer Plan Matrix, row {number} · {plan} (Excel research)"}
+    source = _research_source(data, f"{data['filename']} · Payer Plan Matrix, row {number} · {plan} (Excel research)")
     gaps = _patient_evidence(result, {**context, 'payer': row['Payer']}, data['steps'])
     uncertain = any(code.get('needs_confirmation') or code.get('source') == 'conditional office E/M alternative'
                     for code in result.get('codes') or [])
@@ -283,14 +297,15 @@ def evaluate(result: dict, context: dict, data: dict) -> dict | None:
     if triggered and 'cpt codes actually performed' in claim_fields:
         auth_reason += ' Match final billed CPTs before claim submission.'
     reference = _portal_reference(data, row, _key(plan))
-    contact_source = ({'label': f"{data['filename']} · Portal & Contact Reference, row {reference['_row_number']}"}
+    contact_source = (_research_source(data, f"{data['filename']} · Portal & Contact Reference, row {reference['_row_number']}")
                       if reference.get('_row_number') else None)
     def evidence(kind: str, status: str, reason: str) -> dict:
         contact = str(reference.get('Precert / PA Phone' if kind == 'authorization' else 'Provider Phone') or '').strip()
         if contact.casefold().startswith('same number'):
             contact = f"{reference.get('Provider Phone') or ''} ({contact})".strip()
         return {'status': status, 'reason': reason,
-                'sources': [source, *([contact_source] if contact and contact_source else [])],
+                'sources': [source, *([contact_source] if contact and contact_source else []),
+                            *_official_ppo_source(row, 'PPO' if 'ppo' in _key(plan) or 'bluechoice' in _key(plan) else None)],
                 'verify_url': _portal(data, row, _key(plan), kind),
                 'verification': (str(row.get('Prior Auth Source / Submission Channel') or '').strip()
                                  if kind == 'authorization' else

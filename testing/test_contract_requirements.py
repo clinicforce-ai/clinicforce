@@ -105,6 +105,14 @@ def test_missing_contract_uses_only_explicit_payer_evidence():
     assert rules.evaluate(explicit, missing_group, [])['authorization']['status'] == 'Verification required'
 
 
+def test_requirement_sources_link_the_saved_live_stedi_check_without_clearing_an_unknown_rule():
+    result = estimate('99213') | {'benefit_source': 'Stedi', 'response_reference': 'ec_123e4567-e89b-12d3-a456-426614174000'}
+    evidence = rules.evaluate(result, context(), [])
+    for kind in ('referral', 'authorization'):
+        assert evidence[kind]['status'] == 'Verification required'
+        assert evidence[kind]['sources'][-1]['url'].endswith('/ec_123e4567-e89b-12d3-a456-426614174000')
+
+
 def test_generic_ppo_research_retains_explicit_payer_auth_indicator_as_conditional_evidence():
     result = estimate('99203', payer_signals={'authorization': 'not_required'})
     result['benefit_source'] = 'Stedi'

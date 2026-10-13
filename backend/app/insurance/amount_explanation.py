@@ -65,23 +65,34 @@ def build(result: dict, guidance: dict, review: dict | None = None) -> dict:
                     if amount is not None else f"NMCT’s cash price is not available because {cause}")
     elif amount is not None:
         if basis in {'office_copay', 'ecw_billing_note'} and (amount > 0 or basis == 'office_copay'):
+            office_terms = [(line.get('benefits') or {}) for line in lines
+                            if visit_estimate.clinical_group(line.get('code') or '') == 'visit']
             deductible_unknown = basis == 'office_copay' and any(
-                visit_estimate.clinical_group(line.get('code') or '') == 'visit'
-                and (terms := line.get('benefits') or {}).get('deductible_applicability') == 'UNKNOWN'
-                and terms.get('deductible_remaining_cents') != 0 for line in lines)
-            sentence = ("No payment is due now because the recorded payment covers the office copay" if amount == 0 and paid else
-                        "No payment is due now because the plan leaves no office copay to collect" if amount == 0 else
-                        f'This is the {"out-of-network " if network == "out_of_network" else ""}office copay{", after the recorded payment" if paid else ""}')
-            if network == 'out_of_network':
-                sentence += '; any extra doctor charge is still unknown'
-            elif deductible_unknown and unpriced:
-                sentence += f'; the deductible and cost of {missing} are still unconfirmed'
+                terms.get('deductible_applicability') == 'UNKNOWN'
+                and terms.get('deductible_remaining_cents') != 0 for terms in office_terms)
+            deductible_waived = bool(office_terms) and all(
+                terms.get('deductible_applicability') == 'DOES_NOT_APPLY' for terms in office_terms)
+            deductible_met = bool(office_terms) and all(
+                terms.get('deductible_applicability') == 'ALREADY_MET' for terms in office_terms)
+            if amount == 0 and paid:
+                sentence = 'Collect $0 now: the recorded payment covers the office copay'
+            elif amount == 0:
+                sentence = 'Collect $0 now: no office copay remains'
+            else:
+                source = 'plan' if basis == 'office_copay' else 'visit billing note'
+                sentence = f'Collect {_money(amount)} for the consultation: the {"out-of-network " if network == "out_of_network" else ""}{source} office copay'
+                if paid:
+                    sentence += ' after the recorded payment'
+            if deductible_waived:
+                sentence += '; the office deductible does not apply'
+            elif deductible_met:
+                sentence += '; the office deductible is already met'
             elif deductible_unknown:
-                sentence += '; the plan has not confirmed whether the deductible adds more'
-            elif unpriced:
-                sentence += f'; the cost of {missing} is still unknown'
-            if network == 'unknown' and not all((line.get('benefits') or {}).get('network_independent') for line in lines):
-                sentence += '; this uses an in-network benefit while provider participation is unverified'
+                sentence += '; any office deductible is still unknown'
+            if unpriced:
+                sentence += f'; {missing} is excluded because its patient cost is unknown'
+            elif network == 'out_of_network':
+                sentence += '; any extra doctor charge is unknown'
             code = 'office_copay_partial' if unpriced else 'office_copay'
         elif basis == 'out_of_pocket_limit':
             sentence, code = 'No payment is due now because the plan says the covered care has no remaining patient share', 'oop_limit_met'

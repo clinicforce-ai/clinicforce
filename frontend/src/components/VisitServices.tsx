@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { ArrowRight, Check, Minus, Plus } from 'lucide-react'
 import type { PrevisitEstimate, RequirementEvidence, VisitCode, VisitReview } from '../services/api/commercial-estimator'
+import RequirementSourceLink from './RequirementSourceLink'
 const money = (value?: number | null) => value == null ? '—' : new Intl.NumberFormat(undefined, { style: 'currency', currency: 'USD' }).format(value / 100)
 type Save = (review: VisitReview) => Promise<boolean>
 const groupFor = (code: string) => /^992(0[2-5]|1[2-5])$/.test(code) ? 'visit' : /^959(0[7-9]|1[0-3])$/.test(code) ? 'nerve' : /^9588[5-7]$/.test(code) ? 'muscle' : 'other'
@@ -26,9 +27,7 @@ function RequirementDecision({ evidence }: { evidence?: RequirementEvidence }) {
   return <>{label}{evidence?.approval_status === 'Not verified' && <small>Approval unverified</small>}{evidence?.approval_status === 'Verified' && <small>Approval verified</small>}
     {evidence && <details className="service-requirement-detail"><summary>Evidence</summary><p>{evidence.reason}</p>
       {evidence.approval_reference && <p>Approval reference: {evidence.approval_reference}</p>}
-      {evidence.sources.map((source, index) => source.document_id
-        ? <a key={index} href={`/api/staff/library/${encodeURIComponent(source.document_id)}/document?preview=true${source.page ? `#page=${source.page}` : ''}`} target="_blank" rel="noopener noreferrer">{source.filename || 'Library source'}{source.page ? ` · page ${source.page}` : ''}</a>
-        : <small key={index}>{source.label || 'Source not retained'}</small>)}
+      {evidence.sources.map((source, index) => <RequirementSourceLink key={index} source={source} />)}
     </details>}</>
 }
 
@@ -91,9 +90,12 @@ export function ServicePlanner({ result, busy, save, viewEstimate }: { result: P
       <div className="procedure-options">{activeGroup.rows.map(row => {
         const included = selected.includes(row.id!), single = activeGroup.single
         const disable = busy || groupFor(row.code) === 'muscle' && !nerve.some(item => selected.includes(item.id!))
+        const requirement = result.requirement_evidence?.procedures?.find(item => item.id === row.id || item.code === row.code)
+          || result.candidate_requirements?.find(item => item.id === row.id || item.code === row.code)
         return <article key={row.id} className={`procedure-choice${included ? ' is-selected' : ''}`}>
           <button className="procedure-pick" aria-pressed={included} disabled={disable} onClick={() => single ? pickOne(activeGroup.rows, row.id!) : update(included ? selected.filter(id => id !== row.id) : [...selected, row.id!])}><span className="procedure-check" aria-hidden="true">{included && <Check size={16} />}</span><span><strong>{clinicalName(row)}</strong><small>{row.code.startsWith('J') ? 'HCPCS' : 'CPT'} {row.code}</small></span></button>
           <div className="procedure-price-note">{row.unit_allowed_cents != null && (result.benefits?.network_status !== 'out_of_network' || row.allowed_basis === 'payer_out_of_network') ? `${row.allowed_basis === 'payer_out_of_network' ? 'Payer allowed' : 'Contract'} / unit ${money(row.unit_allowed_cents)}` : row.unit_cash_cents != null ? `Cash / unit ${money(row.unit_cash_cents)}` : 'Price follows plan and clinic schedule'}</div>
+          {result.payment_mode !== 'cash' && <div className="procedure-requirements"><div>Referral: <RequirementDecision evidence={requirement?.referral} /></div><div>Prior auth: <RequirementDecision evidence={requirement?.authorization} /></div></div>}
           {included && !single && <div className="procedure-quantity"><span>{groupFor(row.code) === 'muscle' ? 'Limbs' : row.code.startsWith('J') ? 'Medication units' : 'Quantity'}</span><div className="quantity-stepper">{row.code.startsWith('J') && <button aria-label={`Decrease ${row.code} by 10 units`} disabled={busy || quantities[row.id!] <= 1} onClick={() => quantity(row, -10)}>−10</button>}<button aria-label={`Decrease ${row.code} quantity`} disabled={busy || quantities[row.id!] <= 1} onClick={() => quantity(row, -1)}><Minus size={16} /></button><output aria-label={`${row.code} quantity`} aria-live="polite">{quantities[row.id!] || '—'}</output><button aria-label={`Increase ${row.code} quantity`} disabled={busy || quantities[row.id!] >= (groupFor(row.code) === 'muscle' ? 4 : 10000)} onClick={() => quantity(row, 1)}><Plus size={16} /></button>{row.code.startsWith('J') && <button aria-label={`Increase ${row.code} by 10 units`} disabled={busy || quantities[row.id!] >= 10000} onClick={() => quantity(row, 10)}>+10</button>}</div></div>}
         </article>
       })}</div>

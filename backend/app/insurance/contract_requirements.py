@@ -161,6 +161,10 @@ def _policy_page(document: dict, kind: str) -> int | None:
 def _payer_evidence(result: dict, kind: str, codes: set[str], context: dict) -> dict:
     benefits = result.get('benefits') or {}
     source = result.get('benefit_source') or 'Payer response source not retained'
+    check_id = str(result.get('response_reference') or '')
+    payer_source = {'label': source + ' eligibility response'}
+    if source == 'Stedi' and re.fullmatch(r'ec_[A-Za-z0-9-]+', check_id):
+        payer_source['url'] = f'https://portal.stedi.com/app/healthcare/eligibility/checks/{check_id}'
     lines = (result.get('price_range') or {}).get('lines') or []
     signals = {code: set() for code in codes}
     for line in lines:
@@ -187,7 +191,7 @@ def _payer_evidence(result: dict, kind: str, codes: set[str], context: dict) -> 
         status = 'Required' if 'required' in statuses else 'Not required'
         reason = ('Payer response explicitly requires this for at least one planned service.' if status == 'Required' else
                   'Payer response explicitly marks every planned service not required.')
-        return {'status': status, 'reason': reason, 'sources': [{'label': source + ' eligibility response'}]}
+        return {'status': status, 'reason': reason, 'sources': [payer_source]}
     if (codes and result.get('benefit_source') and benefits.get('active') is True
             and all(len(signals[code]) == 1 for code in codes)):
         statuses = {next(iter(signals[code])) for code in codes}
@@ -205,7 +209,7 @@ def _payer_evidence(result: dict, kind: str, codes: set[str], context: dict) -> 
         finding = 'required' if 'required' in statuses else 'not required'
         return {'status': 'Verification required',
                 'reason': f'Payer response reports {kind} {finding} for the selected benefit, but {", ".join(gaps or ["other patient-specific checks"])} remain unverified.',
-                'sources': [{'label': source + ' eligibility response'}]}
+                'sources': [payer_source]}
     if kind == 'referral' and result.get('referral_evidence'):
         return {'status': 'Verification required',
                 'reason': 'An eCW referral record exists; its applicability to the planned services is unconfirmed.',
@@ -213,7 +217,7 @@ def _payer_evidence(result: dict, kind: str, codes: set[str], context: dict) -> 
     if result.get('benefit_source'):
         return {'status': 'Verification required',
                 'reason': 'The payer eligibility response does not explicitly settle this requirement for every planned service.',
-                'sources': []}
+                'sources': [payer_source] if payer_source.get('url') else []}
     return {'status': 'Verification required',
             'reason': 'No matching contract rule or explicit payer requirement was confirmed for this visit.',
             'sources': []}
@@ -321,6 +325,13 @@ def evaluate(result: dict, context: dict, documents: list[dict], *, include_proc
             for field in ('verification', 'contact'):
                 if matrix.get(field):
                     output[kind][field] = matrix[field]
+    check_id = str(result.get('response_reference') or '')
+    if result.get('benefit_source') == 'Stedi' and re.fullmatch(r'ec_[A-Za-z0-9-]+', check_id):
+        check_source = {'label': 'Stedi benefit check',
+                        'url': f'https://portal.stedi.com/app/healthcare/eligibility/checks/{check_id}'}
+        for kind in KINDS:
+            if not any(source.get('url') == check_source['url'] for source in output[kind]['sources']):
+                output[kind]['sources'].append(check_source)
     authorization = output['authorization']
     approval_lines = [line for line in (result.get('price_range') or {}).get('lines') or []
                       if str(line.get('code') or '').upper() in codes]

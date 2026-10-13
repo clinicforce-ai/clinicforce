@@ -142,7 +142,7 @@ def test_general_notes_fill_only_missing_policy_fields_from_labeled_header():
 
 def test_product_mapping_is_scoped_to_current_network_evidence_dates_and_plan(monkeypatch):
     payer = {'id': 'payer-a', 'category': 'commercial_medical', 'status': 'staff_guidance_enabled'}
-    network = {'id': 'network', 'payer_connection_id': 'payer-a', 'status': 'verified', 'billing_npi': '1',
+    network = {'id': 'network', 'payer_connection_id': 'payer-a', 'status': 'verified', 'network_name': 'Choice PPO', 'billing_npi': '1',
                'rendering_npi': '2', 'location_id': 'office', 'place_of_service': '11', 'plan_matcher': 'CI',
                'effective_from': '2020-01-01', 'evidence_reference': 'contract-v1'}
     mapping = {'products': ['Choice Medical'], 'reference': 'Contract p2', 'actor_id': 'admin',
@@ -157,6 +157,12 @@ def test_product_mapping_is_scoped_to_current_network_evidence_dates_and_plan(mo
     source = {'billing_provider': {'npi': '1'}, 'location_id': 'office', 'plan': 'CI',
               'payer_plan_names': ['Choice Medical'], 'payer_plan_scope': mapping['plan_scope']}
     assert api._practice_path('clinic', inputs, source)[2] == profile
+    payer_network = {**source, 'payer_plan_names': ['Preferred Provider Option Plus Medical'],
+                     'payer_network_names': ['Choice PPO']}
+    assert api._practice_path('clinic', inputs, payer_network)[2] == profile
+    for changes in [{'payer_network_names': ['Other PPO']},
+                    {'payer_plan_names': ['A different named PPO']}]:
+        with pytest.raises(HTTPException): api._practice_path('clinic', inputs, {**payer_network, **changes})
     for changes in [{'payer_plan_scope': {'group_number': 'another'}}, {'payer_plan_names': ['Other Medical']}]:
         with pytest.raises(HTTPException): api._practice_path('clinic', inputs, {**source, **changes})
     network['evidence_reference'] = 'contract-v2'
@@ -189,6 +195,15 @@ def test_network_pdf_points_only_to_its_uploaded_contract(monkeypatch):
     document['content_type'] = 'application/pdf'
     profile['rules']['library_source']['reference'] = 'library:other-contract'
     assert 'document_id' not in estimate()
+
+
+def test_requirement_candidates_include_suggested_cpts_without_expanding_the_selected_visit():
+    rows = [{'id': 'office', 'code': '99204'}, {'id': 'test', 'code': '95911'},
+            {'id': 'alternative', 'code': '99205'}, {'id': 'catalog', 'code': '95886'}]
+    result = {'codes': [rows[0]], 'available_codes': rows,
+              'suggestions': {'groups': [{'codes': [{'code': '95911'}]}]},
+              'service_plan': {'recommended_ids': ['office', 'alternative']}}
+    assert [row['code'] for row in api._requirement_candidates(result)] == ['95911', '99205']
 
 
 def test_identity_review_persists_across_visits_and_rejects_stale_or_unauthorized_edits(monkeypatch):
