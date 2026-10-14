@@ -1,0 +1,85 @@
+.staff-workspace .staff-inline-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+}
+
+.staff-login .staff-login-links {
+  display: grid;
+  gap: 8px;
+  margin-top: 24px;
+  border-top: 1px solid var(--staff-line);
+  padding-top: 20px;
+}
+
+.staff-login .staff-login-links button {
+  margin: 0;
+  justify-content: flex-start;
+  text-align: left;
+}
+
+.staff-link-output {
+  overflow-wrap: anywhere;
+}
+
+.staff-workspace .staff-mail-link {
+  display: inline-flex;
+  gap: 8px;
+  align-items: center;
+  justify-content: center;
+  min-height: 44px;
+  padding: 10px 15px;
+  border: 1px solid var(--staff-line);
+  border-radius: 8px;
+  color: var(--staff-blue);
+  font-size: 14px;
+  font-weight: 650;
+  text-decoration: none;
+  background: #fff;
+}
+
+.staff-mail-link:focus-visible {
+  outline: 3px solid var(--staff-blue);
+  outline-offset: 3px;
+}
+
+.staff-link-output input {
+  font-size: 13px;
+}
+
+.staff-link-result {
+  border-top: 1px solid var(--staff-line);
+  padding-top: 20px;
+  margin-top: 20px;
+}
+
+.staff-workspace .staff-inbox-actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.onboarding-form {
+  max-width: 600px;
+}
+
+.staff-source-note {
+  margin: 12px 0;
+}
+
+.staff-upload-request-list {
+  margin-top: 24px;
+}
+
+@media (max-width: 780px) {
+  .staff-workspace .staff-inbox-actions {
+    width: 100%;
+  }
+  .staff-inbox-actions button {
+    flex: 1;
+  }
+  .onboarding-form {
+    padding: 24px 18px;
+  }
+}

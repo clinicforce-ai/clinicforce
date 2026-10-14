@@ -1,0 +1,257 @@
+.provider-logo-mychart {
+  height: 28px;
+  max-width: 134px;
+}
+
+.provider-logo-ecw {
+  height: 19px;
+  max-width: 120px;
+}
+
+.provider-logo-healow {
+  height: 22px;
+  max-width: 86px;
+}
+
+.provider-lockup {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  min-height: 34px;
+  padding: 5px 8px;
+}
+
+.provider-lockup-dual {
+  gap: 12px;
+}
+
+.google-signin-button {
+  border: 1px solid #747775;
+  background: #fff;
+  color: #1f1f1f;
+  box-shadow: none;
+}
+
+.google-signin-button:not(:disabled):hover {
+  border-color: #5f6368;
+  background: #f8faff;
+  color: #1f1f1f;
+}
+
+.epic-endpoint-options {
+  display: grid;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.epic-endpoint-option {
+  display: grid;
+  gap: 2px;
+  width: 100%;
+  min-height: 44px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  padding: 9px 11px;
+  color: var(--ink);
+  text-align: left;
+  transition:
+    border-color 0.2s ease,
+    background 0.2s ease;
+}
+
+.epic-endpoint-option:hover,
+.epic-endpoint-option[aria-selected='true'] {
+  border-color: var(--blue);
+  background: var(--blue-soft);
+}
+
+.epic-endpoint-option strong {
+  font-size: 0.84rem;
+}
+
+.epic-endpoint-option span {
+  color: var(--muted-ink);
+  font-size: 0.74rem;
+  font-weight: 600;
+  line-height: 1.35;
+}
+
+.record-form {
+  border-top: 1px solid var(--line);
+  margin-top: 23px;
+  padding-top: 23px;
+}
+
+.record-form fieldset {
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.record-form legend {
+  margin-bottom: 12px;
+  color: var(--ink);
+  font-size: 0.92rem;
+  font-weight: 700;
+}
+
+.category-picker {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 7px;
+  margin-bottom: 11px;
+}
+
+.category-picker button {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 42px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+  padding: 8px;
+  color: var(--muted-ink);
+  font-size: 0.76rem;
+  font-weight: 700;
+  text-align: left;
+  transition: all 0.2s ease;
+}
+
+.category-picker button:hover {
+  border-color: #8dbbc8;
+  color: var(--blue-deep);
+}
+
+.category-picker button.selected {
+  border-color: var(--blue);
+  background: var(--blue-soft);
+  color: var(--blue-deep);
+}
+
+.category-picker span {
+  font-family: ui-monospace, monospace;
+  font-size: 0.65rem;
+}
+
+.form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 15px;
+  margin-bottom: 18px;
+}
+
+.field {
+  min-width: 0;
+}
+
+.field.full {
+  grid-column: 1 / -1;
+}
+
+.field label {
+  display: block;
+  margin-bottom: 7px;
+}
+
+.field label em {
+  color: var(--danger);
+  font-size: 0.69rem;
+  font-style: normal;
+  text-transform: uppercase;
+}
+
+.field label span {
+  color: var(--muted-ink);
+  font-size: 0.72rem;
+  font-weight: 600;
+}
+
+.field textarea {
+  min-height: 92px;
+  resize: vertical;
+}
+
+.record-list {
+  display: grid;
+  gap: 9px;
+}
+
+.record-list li {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.record-number {
+  display: grid;
+  width: 26px;
+  height: 26px;
+  flex: 0 0 auto;
+  place-items: center;
+  border-radius: 7px;
+  background: var(--surface-soft);
+  color: var(--blue-deep);
+  font-family: ui-monospace, monospace;
+  font-size: 0.62rem;
+  font-weight: 700;
+}
+
+.record-list strong {
+  font-size: 0.9rem;
+}
+
+/* Epic grouped resource display */
+
+.epic-grouped-records {
+  display: grid;
+  gap: 12px;
+}
+
+.epic-resource-group {
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--surface);
+  overflow: hidden;
+}
+
+.epic-resource-group[open] {
+  box-shadow: var(--shadow-sm);
+}
+
+.epic-group-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 18px;
+  cursor: pointer;
+  user-select: none;
+  list-style: none;
+  font-size: 0.92rem;
+  font-weight: 700;
+  color: var(--ink);
+  transition: background 0.2s ease;
+}
+
+.epic-group-header::-webkit-details-marker {
+  display: none;
+}
+
+.epic-group-header::before {
+  content: '▸';
+  display: inline-block;
+  width: 16px;
+  margin-right: 8px;
+  color: var(--blue);
+  font-size: 0.8rem;
+  transition: transform 0.2s ease;
+}
+
+.epic-resource-group[open] > .epic-group-header::before {
+  transform: rotate(90deg);
+}
+
+.epic-group-header:hover {
+  background: var(--surface-soft);
+}

@@ -1,0 +1,213 @@
+.integration-diagnostics dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.summary-tabs {
+  margin-top: 18px;
+  margin-bottom: 0;
+}
+.summary-tab-panel {
+  margin-top: 18px;
+}
+.clinical-narrative {
+  display: grid;
+  grid-template-columns: 48px 1fr;
+  gap: 17px;
+  margin-top: 23px;
+  border: 1px solid #a9cdd7;
+  border-radius: 16px;
+  background: #eaf7fa;
+  padding: clamp(20px, 4vw, 29px);
+}
+.narrative-mark {
+  display: grid;
+  width: 48px;
+  height: 48px;
+  place-items: center;
+  border-radius: 14px;
+  background: var(--blue-deep);
+  color: #fff;
+}
+.narrative-mark svg {
+  width: 23px;
+}
+.clinical-narrative h2 {
+  margin: 3px 0 9px;
+  font-size: 1.4rem;
+}
+.clinical-narrative p:not(.section-kicker) {
+  max-width: 82ch;
+  margin-bottom: 0;
+  color: #31566a;
+  line-height: 1.68;
+  white-space: pre-line;
+}
+.summary-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0;
+  overflow: hidden;
+  margin-top: 18px;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  background: var(--surface);
+  box-shadow: var(--shadow-sm);
+}
+.summary-grid .summary-section {
+  overflow: hidden;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+}
+.summary-grid .summary-section + .summary-section {
+  border-top: 1px solid var(--line);
+}
+.summary-section-title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 18px 22px 13px;
+}
+.summary-section-title span {
+  display: grid;
+  width: 31px;
+  height: 31px;
+  place-items: center;
+  border-radius: 50%;
+  background: var(--surface-soft);
+  color: var(--blue-deep);
+}
+.summary-section-title svg {
+  width: 17px;
+}
+.summary-section-title h2 {
+  margin: 0;
+  font-size: 1.14rem;
+}
+.table-wrap {
+  overflow-x: auto;
+}
+table {
+  width: 100%;
+  min-width: 450px;
+  border-collapse: collapse;
+  color: var(--ink);
+  font-size: 0.83rem;
+  text-align: left;
+}
+th,
+td {
+  border-top: 1px solid var(--line);
+  padding: 11px 15px;
+  vertical-align: top;
+}
+th {
+  background: #f8fcfd;
+  color: var(--muted-ink);
+  font-size: 0.66rem;
+  font-weight: 700;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+}
+td {
+  line-height: 1.45;
+}
+.summary-empty {
+  margin: 0;
+  padding: 0 20px 20px;
+  color: var(--muted-ink);
+  font-size: 0.86rem;
+  line-height: 1.5;
+}
+.summary-list {
+  padding: 0 20px 18px;
+}
+.summary-list li {
+  border-top: 1px solid var(--line);
+  padding: 12px 0;
+  font-size: 0.88rem;
+}
+.summary-list li:last-child {
+  padding-bottom: 0;
+}
+.summary-list p {
+  margin: 3px 0 0;
+  color: var(--muted-ink);
+  font-size: 0.82rem;
+  line-height: 1.45;
+}
+.source-note {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 210px;
+  color: var(--blue-deep);
+  font-size: 0.72rem;
+  font-weight: 700;
+  line-height: 1.35;
+}
+.source-note svg {
+  width: 14px;
+  flex: 0 0 auto;
+}
+.source-note-manual {
+  color: var(--muted-ink);
+  font-style: italic;
+}
+.summary-list .source-note {
+  margin-top: 7px;
+}
+.source-assurance {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin-top: 16px;
+  border: 1px solid #b5d9c9;
+  border-radius: 10px;
+  background: #f2fbf7;
+  padding: 11px 13px;
+  color: var(--green-deep);
+  font-size: 0.82rem;
+  font-weight: 600;
+  line-height: 1.45;
+}
+.source-assurance svg {
+  width: 18px;
+  flex: 0 0 auto;
+}
+.trend-card {
+  margin-top: 18px;
+  border: 1px solid #a9cdd7;
+  border-radius: 16px;
+  background: #f9fdfe;
+  padding: clamp(20px, 4vw, 28px);
+}
+.trend-card h2 {
+  margin: 3px 0 7px;
+  font-size: 1.35rem;
+}
+.trend-card p:not(.section-kicker) {
+  margin: 0;
+  color: var(--muted-ink);
+  font-size: 0.86rem;
+  line-height: 1.5;
+}
+.trend-chart-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
+  margin-top: 18px;
+}
+.trend-chart {
+  min-width: 0;
+  border: 1px solid #d9e8eb;
+  border-radius: 12px;
+  background: #fff;
+  padding: 13px 10px 8px;
+}
+.trend-chart h3 {
+  margin: 0 8px 6px;
+  color: var(--ink);
+  font-size: 0.88rem;
+  line-height: 1.35;
+}

@@ -1,0 +1,276 @@
+.visit-estimator {
+  --ve-ink: #183b47;
+  --ve-muted: #526b75;
+  --ve-teal: #087568;
+  --ve-canvas: #f3f7f8;
+  --ve-white: #fff;
+  --ve-line: #d5e2e5;
+  --ve-soft: #eaf4f1;
+  --ve-review: #805313;
+  --ve-error: #a12d38;
+  color: var(--ve-ink);
+  font:
+    16px/1.5 'Fira Sans',
+    system-ui,
+    sans-serif;
+  padding: 16px 0 24px;
+  text-align: left;
+  max-width: 1180px;
+  margin: auto;
+}
+
+.visit-estimator * {
+  box-sizing: border-box;
+}
+
+.visit-estimator [hidden] {
+  display: none !important;
+}
+
+.visit-estimator :is(h1, h2, h3, h4) {
+  font-family: 'Fira Sans', system-ui, sans-serif;
+  color: var(--ve-ink);
+  letter-spacing: -0.025em;
+  max-width: none;
+  margin: 0;
+}
+
+.visit-estimator h1 {
+  font-size: clamp(25px, 3vw, 34px);
+  line-height: 1.2;
+  font-weight: 600;
+}
+
+.visit-estimator h2 {
+  font-size: 22px;
+  line-height: 1.3;
+  font-weight: 600;
+}
+
+.visit-estimator h3 {
+  font-size: 18px;
+  line-height: 1.4;
+}
+
+.visit-estimator p {
+  margin: 8px 0 12px;
+}
+
+.visit-estimator small,
+.visit-muted,
+.visit-label {
+  color: var(--ve-muted);
+  font-size: 13px;
+}
+
+.visit-estimator small {
+  display: block;
+  line-height: 1.5;
+}
+
+.visit-estimator ul {
+  padding-left: 22px;
+}
+
+.visit-estimator li + li {
+  margin-top: 8px;
+}
+
+.visit-estimator svg {
+  flex-shrink: 0;
+}
+
+.visit-estimator button {
+  font: inherit;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 44px;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  padding: 10px 14px;
+  background: transparent;
+  color: var(--ve-ink);
+  cursor: pointer;
+  transition:
+    background 0.18s,
+    color 0.18s,
+    border-color 0.18s;
+}
+
+.visit-estimator button:hover {
+  background: var(--ve-soft);
+}
+
+.visit-estimator button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.visit-estimator :is(button, select, a):focus-visible {
+  outline: 3px solid var(--ve-teal);
+  outline-offset: 3px;
+}
+
+.visit-estimator select {
+  min-width: 0;
+  width: 100%;
+  min-height: 44px;
+  border: 1px solid var(--ve-line);
+  border-radius: 8px;
+  background: white;
+  color: var(--ve-ink);
+  padding: 8px 12px;
+  font: inherit;
+}
+
+.visit-estimator .visit-back {
+  padding: 0;
+  font-size: 14px;
+  color: var(--ve-muted);
+}
+
+.visit-page-header,
+.visit-section-heading,
+.overview-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.visit-page-header {
+  margin-bottom: 20px;
+}
+
+.visit-practice {
+  max-width: 280px;
+  text-align: right;
+  font-size: 13px;
+  color: var(--ve-muted);
+}
+
+.visit-patient-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 16px 20px;
+  background: white;
+  border: 1px solid var(--ve-line);
+  border-radius: 16px 16px 0 0;
+}
+
+.visit-patient-bar > div {
+  display: flex;
+  gap: 14px;
+  align-items: center;
+}
+
+.visit-patient-bar strong {
+  font-size: 20px;
+}
+
+.patient-monogram {
+  width: 44px;
+  height: 44px;
+  border-radius: 14px;
+  display: grid;
+  place-items: center;
+  background: var(--ve-soft);
+  color: var(--ve-teal);
+  font-weight: 600;
+  text-transform: uppercase;
+}
+
+.coverage-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 7px 12px;
+  border-radius: 24px;
+  font-size: 13px;
+  color: var(--ve-muted);
+  background: var(--ve-canvas);
+}
+
+.coverage-chip.is-confirmed {
+  color: var(--ve-teal);
+  background: var(--ve-soft);
+}
+
+.coverage-chip.is-missing {
+  color: var(--ve-error);
+  background: #fcebed;
+}
+
+.visit-appointment-strip {
+  display: flex;
+  gap: 14px;
+  align-items: center;
+  padding: 12px 20px;
+  background: var(--ve-canvas);
+  border: 1px solid var(--ve-line);
+  border-top: 0;
+  border-radius: 0 0 16px 16px;
+}
+
+.visit-appointment-strip > svg {
+  color: var(--ve-teal);
+}
+
+.visit-appointment-strip label {
+  display: grid;
+  gap: 4px;
+  flex: 1;
+  min-width: 0;
+  font-size: 12px;
+  color: var(--ve-muted);
+}
+
+.visit-appointment-strip select {
+  font-size: 14px;
+}
+
+.visit-content {
+  padding-top: 20px;
+  min-width: 0;
+}
+
+.visit-overview {
+  border: 1px solid var(--ve-line);
+  border-radius: 18px;
+  overflow: hidden;
+  background: white;
+  box-shadow: 0 6px 24px #183b4705;
+}
+
+.overview-heading {
+  padding: 18px 24px 0;
+}
+
+.payment-toggle {
+  display: flex;
+  padding: 3px;
+  border-radius: 12px;
+  background: var(--ve-canvas);
+}
+
+.visit-estimator .payment-toggle button {
+  padding: 7px 12px;
+  font-size: 14px;
+}
+
+.visit-estimator .payment-toggle button[aria-pressed='true'] {
+  background: var(--ve-teal);
+  color: white;
+}
+
+.overview-amounts {
+  display: grid;
+  grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr);
+  padding: 24px;
+  gap: 40px;
+  align-items: center;
+}

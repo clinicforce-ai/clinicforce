@@ -1,0 +1,108 @@
+.landing-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.1fr) minmax(390px, 0.9fr);
+  align-items: center;
+  gap: clamp(40px, 8vw, 104px);
+  min-height: calc(100dvh - 212px);
+  padding-block: 56px;
+}
+.landing-copy {
+  padding-block: 30px;
+}
+.landing-copy .eyebrow {
+  margin-bottom: 20px;
+}
+.trust-list {
+  display: grid;
+  gap: 12px;
+  margin-top: 32px;
+  color: var(--muted-ink);
+  font-size: 0.92rem;
+}
+.trust-list p {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0;
+}
+.trust-list svg {
+  width: 19px;
+  color: var(--green);
+}
+.role-panel {
+  padding: clamp(24px, 4vw, 38px);
+  border: 1px solid var(--line);
+  border-radius: 24px;
+  background: var(--surface);
+  box-shadow: var(--shadow-lg);
+}
+.role-panel > .eyebrow {
+  margin-bottom: 16px;
+}
+.role-card {
+  display: grid;
+  grid-template-columns: 46px 1fr 22px;
+  align-items: center;
+  gap: 16px;
+  width: 100%;
+  margin-top: 12px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: var(--surface);
+  padding: 18px;
+  color: var(--ink);
+  text-align: left;
+  transition:
+    border-color 0.2s ease,
+    background 0.2s ease,
+    box-shadow 0.2s ease,
+    transform 0.2s ease;
+}
+.role-card:hover {
+  transform: translateY(-2px);
+  border-color: #9fc6d3;
+  background: #fbfeff;
+  box-shadow: var(--shadow-sm);
+}
+.role-card:active {
+  transform: translateY(0);
+}
+.role-card strong,
+.role-card small {
+  display: block;
+}
+.role-card strong {
+  margin-bottom: 5px;
+  font-size: 1rem;
+}
+.role-card small {
+  color: var(--muted-ink);
+  font-size: 0.84rem;
+  font-weight: 500;
+  line-height: 1.45;
+}
+.role-icon {
+  display: grid;
+  width: 46px;
+  height: 46px;
+  place-items: center;
+  border-radius: 13px;
+}
+.role-icon svg {
+  width: 22px;
+}
+.patient-icon {
+  background: var(--blue-soft);
+  color: var(--blue-deep);
+}
+.doctor-icon {
+  background: var(--green-soft);
+  color: var(--green-deep);
+}
+.role-arrow {
+  color: var(--blue);
+  transition: transform 0.2s ease;
+}
+.role-card:hover .role-arrow {
+  transform: translateX(3px);
+}

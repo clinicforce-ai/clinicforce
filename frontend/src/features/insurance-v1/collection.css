@@ -1,0 +1,162 @@
+.estimate-code-head {
+  background: #f6f8fb;
+  color: var(--muted-ink);
+  font-size: 0.68rem;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.estimate-code-row + .estimate-code-row {
+  border-top: 1px solid var(--line);
+}
+
+.estimate-code-row > div strong,
+.estimate-code-row > div span {
+  display: block;
+}
+
+.estimate-code-row > div strong,
+.estimate-code-row > strong {
+  color: var(--blue-deep);
+  font-family: 'Fira Code', monospace;
+}
+
+.estimate-code-row > div span,
+.estimate-code-row > span {
+  margin-top: 3px;
+  color: var(--muted-ink);
+  font-size: 0.76rem;
+  line-height: 1.45;
+}
+
+.estimate-code-row .authorization-result {
+  border-left: 3px solid #9aa9bd;
+  padding-left: 10px;
+  color: var(--ink);
+}
+
+.estimate-code-row .authorization-result.confirmed {
+  border-color: var(--green);
+}
+
+.estimate-code-row .authorization-result.required {
+  border-color: var(--warning);
+}
+
+.estimate-details {
+  margin: 0;
+  border: 0;
+  border-top: 1px solid var(--line);
+  background: var(--surface);
+}
+
+.estimate-details:last-of-type {
+  border-bottom: 1px solid var(--line);
+}
+
+.estimate-details summary {
+  display: flex;
+  min-height: 56px;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 4px;
+  color: var(--blue-deep);
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.estimate-details summary span {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.estimate-details summary svg {
+  width: 18px;
+}
+
+.estimate-details summary::after {
+  content: '+';
+  font-family: 'Fira Code', monospace;
+}
+
+.estimate-details[open] summary {
+  border-bottom: 1px solid var(--line);
+}
+
+.estimate-details[open] summary::after {
+  content: '−';
+}
+
+.estimate-calculation {
+  padding: 18px 4px 26px;
+}
+
+.estimate-calculation > p {
+  margin: 0 0 11px;
+  color: var(--muted-ink);
+  font-size: 0.8rem;
+  line-height: 1.5;
+}
+
+.estimate-calculation > dl {
+  border-block: 1px solid var(--line);
+}
+
+.estimate-calculation > dl > div {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 18px;
+  padding: 11px 4px;
+}
+
+.estimate-calculation > dl > div + div {
+  border-top: 1px solid var(--line);
+}
+
+.estimate-calculation > dl dt {
+  color: var(--muted-ink);
+}
+
+.estimate-calculation > dl dd {
+  color: var(--ink);
+  font-family: 'Fira Code', monospace;
+}
+
+.estimate-calculation > dl .calculation-total {
+  background: var(--green-soft);
+}
+
+.estimate-calculation > dl .calculation-total dt,
+.estimate-calculation > dl .calculation-total dd {
+  color: var(--green-deep);
+  font-weight: 800;
+}
+
+.estimate-calculation > dl .calculation-plan {
+  background: var(--blue-soft);
+}
+
+.estimate-calculation > dl .calculation-plan dt,
+.estimate-calculation > dl .calculation-plan dd {
+  color: var(--blue-deep);
+  font-weight: 800;
+}
+
+.decision-reasons {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+  padding: 17px 18px 17px 38px;
+  color: var(--muted-ink);
+  line-height: 1.55;
+}
+
+.decision-reasons strong {
+  color: var(--ink);
+}
+
+.estimate-certainty {
+  margin: 22px 0;
+}

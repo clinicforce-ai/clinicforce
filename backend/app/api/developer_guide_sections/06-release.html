@@ -1,0 +1,124 @@
+<section id="release-runbook" data-keywords="deploy deployment release production staging promote git github actions pipeline rollback" aria-labelledby="release-runbook-title"><h2 id="release-runbook-title">Release to staging, then production</h2><p class="section-intro">A merge to main deploys staging automatically. Verify the changed user workflow there, then promote that exact build to production.</p><figure class="learning-flow"><figcaption>Release checklist</figcaption><ol><li><span class="flow-step">1</span><strong>Review</strong><span>Test the change and review the pull request.</span></li><li><span class="flow-step">2</span><strong>Staging</strong><span>Merge, then verify the intended result.</span></li><li><span class="flow-step">3</span><strong>Production</strong><span>Promote the successful staging run.</span></li><li><span class="flow-step">4</span><strong>Verify</strong><span>Check the live workflow and documentation.</span></li></ol></figure><p class="callout"><strong>Stop if the affected workflow fails.</strong> Passing tests or health checks alone do not satisfy the release gate.</p><details class="reference-detail" id="release-runbook-detail-1"><summary>Details and source links</summary><div><p>Local means your computer. Staging is the shared rehearsal site at <a href="https://staging.clinicforce.ai">staging.clinicforce.ai</a>. Production is the patient/clinic site at <a href="https://app.clinicforce.ai">app.clinicforce.ai</a>. A Git <strong>commit</strong> records files, <strong>push</strong> uploads a branch, a <strong>pull request</strong> proposes merging it, and a GitHub Actions <strong>run ID</strong> identifies one pipeline execution. A container <strong>digest</strong> identifies exact built bytes. Main-branch merges deploy staging automatically; production requires a separate promotion.</p>
+<p><strong>Release gate:</strong> reproduce the affected failure and verify the intended user result with authorized representative cases before releasing a behavior change. Passing tests, a clearer error or a healthy API does not turn a failing eCW lookup into a successful workflow. If it remains broken or cannot be verified, keep the change local or on a non-deploying branch. Only explicit authorization for that specific release despite the unresolved failure can override the workspace gate. The commands below explain release operations; reading this guide is not authorization to run them.</p></div></details>
+<details class="reference-detail" id="release-runbook-detail-2"><summary>A. Make a change and push a review branch</summary><div><pre><code># Application repository. Start with no unexplained local changes.
+cd ~/clinicforce-workspace/clinicforce
+git status --short --branch
+git switch main
+git pull --ff-only
+git switch -c docs/beginner-engineering-guide
+
+# Edit files; for example, update the guide in your editor.
+# Run the local checks appropriate to your change, then inspect the diff.
+git diff --check
+git diff -- backend/app/api/developer_docs.html
+git add backend/app/api/developer_docs.html
+git diff --cached --stat
+git diff --cached
+git commit -m "docs: explain local setup and release operations"
+git push -u origin docs/beginner-engineering-guide
+
+# Opens the GitHub PR editor; describe the change and its validation.
+gh pr create --base main --fill --web</code></pre>
+<p>For an application feature, substitute your branch name and explicitly add its reviewed files. Include the relevant guide update. Do not use a blanket <code>git add .</code> for credentials, artifacts or patient files. PR creation and a feature-branch push do not deploy this workflow. Check the PR’s Actions checks and reviewer feedback before merging; <code>--fill --web</code> lets you review the description before submitting it.</p>
+<pre><code># Replace 123 with your actual PR number. These commands read status.
+gh pr checks 123 --watch
+gh pr view 123 --web
+
+# Release action: run only after review and the workflow-verification gate.
+gh pr merge 123 --squash --delete-branch
+
+# The merge triggers staging automatically; find its run and commit.
+gh run list --workflow deploy.yml --branch main --limit 10   --json databaseId,headSha,status,conclusion,displayTitle,url
+# Replace the numeric example with that run ID.
+gh run watch 123456789 --exit-status
+gh run view 123456789 --log-failed</code></pre>
+<p>Match <code>headSha</code> to the merged commit. A green PR verification run is not a staging release: the source run must contain successful <code>Deploy staging</code>. Run IDs from the infrastructure repo cannot promote an application artifact. The sample numbers in this guide are placeholders, not known releases.</p></div></details>
+<details class="reference-detail" id="release-runbook-detail-3"><summary>B. What staging uploads and how to use it</summary><div><p>The application workflow runs backend tests, deployment-script checks, frontend checks/build and secret scanning. On <code>main</code>, it builds backend and HAPI Docker images, pushes them to staging ECR, records their digests in <code>release/manifest.json</code>, and saves the frontend build in the same Actions artifact. It updates the stack’s image parameters, waits for ECS stability, verifies the selected images, uploads frontend assets to the staging static bucket, publishes <code>index.html</code> last, invalidates CloudFront, compares served HTML with the artifact, and runs smoke checks. The guide is uploaded inside the backend image; it is not a separately uploaded S3 document.</p>
+<pre><code># Optional manual rerun of the current remote main (not your local files).
+# Use this only if there is no suitable automatic staging run already running.
+./deploy staging
+
+# Read-only public checks after a completed staging release:
+curl --fail https://staging.clinicforce.ai/healthz
+curl --fail https://staging.clinicforce.ai/readyz
+curl --fail --silent --show-error --output /dev/null https://staging.clinicforce.ai/api/docs
+curl --fail --silent --show-error --output /dev/null https://staging.clinicforce.ai/api/openapi.json</code></pre>
+<p><code>./deploy staging</code> always dispatches <strong>remote main</strong>. It does not upload uncommitted files or deploy the feature branch in your terminal. Avoid hand-uploading a local <code>dist/</code> directory or pushing an ad hoc production image; those bytes would not be the verified release artifact.</p>
+<p>Open staging in the browser and use a <strong>designated staging staff account</strong> supplied by the administrator. The automated smoke account is <code>release-qa@clinicforce.invalid</code>, in practice <code>release-qa</code>. Bootstrap generates its password and stores it in the application repository’s staging environment secret <code>STAGING_SMOKE_PASSWORD</code>. GitHub does not reveal a stored secret back to you; do not assume the password is the production password or try to print it in CI. Ask the operator for an approved interactive staging account. Keep the smoke credential intact.</p>
+<p>For a document-upload change, upload a made-up card/PDF using the staging UI and verify receipt, review, storage and retrieval; this writes to staging’s document bucket. For an estimate change, run the offline synthetic tests first, then exercise an independently authorized test eCW practice and payer connection if configured. Staging starts with eCW credentials blank, Stedi <code>fixture</code> mode and live eligibility disabled, Availity demo, and ID.me sandbox disabled. These defaults make no successful real eCW-to-payer demonstration possible. They are not a built-in seed of appointments or payer benefits. A 503/unavailable response is a limitation to record, not a passing estimate test.</p>
+<p>Before promotion, record the staging run ID, commit, changed workflow, authorized synthetic/test case, expected result, observed result, UTC time, and limitations in <code>contextforcodex</code> in this workspace. Keep patient values and credentials out. Include failure-path checks (for example, an upstream timeout must not display “no patient” or a fabricated $0). A verification reference should identify that concrete record or a safe QA issue. The workflow validates that the reference is nonempty; it cannot verify the truth of the operator’s attestation.</p></div></details>
+<details class="reference-detail" id="release-runbook-detail-4"><summary>C. Promote the verified application release to production</summary><div><pre><code># Application repo, GitHub authenticated. This is a PRODUCTION write.
+# Replace these with the successful staging run and your real QA reference.
+./deploy production --staging-run 123456789   --verified 'QA-123: authorized representative workflow passed'
+
+# After the command succeeds, inspect the production site and guide.
+curl --fail https://app.clinicforce.ai/healthz
+curl --fail https://app.clinicforce.ai/readyz
+curl --fail --silent --show-error --output /dev/null https://app.clinicforce.ai/api/docs
+curl --fail --silent --show-error --output /dev/null https://app.clinicforce.ai/api/openapi.json</code></pre>
+<p>The pipeline verifies the selected run came from this repo’s <code>main</code> staging workflow and completed successfully, downloads its artifact, and deploys the same backend/HAPI digests and frontend bytes. Production does not rebuild the selected release. Open the guide at the edited section and verify the affected API reference; then check the intended authorized user workflow. Automated production smoke checks cover public readiness/docs and rejection of anonymous Swagger execution, not staff login or every provider interaction. Do not call a release successful solely because curl returned 200.</p></div></details>
+<details class="reference-detail" id="release-runbook-detail-5"><summary>D. Change infrastructure or public environment settings</summary><div><pre><code>cd ~/clinicforce-workspace/clinicforce-aws
+git status --short --branch
+git switch main
+git pull --ff-only
+git switch -c infra/example-reviewed-change
+
+# Use an isolated tool environment for local template validation.
+uv venv .venv
+uv pip install --python .venv/bin/python cfn-lint
+.venv/bin/cfn-lint stacks/clinicforce-production.yaml
+python3 -m unittest discover -s tests
+
+# After editing the relevant template/settings and the app's live guide:
+git diff --check
+git add stacks/clinicforce-production.yaml environments/staging.json environments/production.json
+git diff --cached
+git commit -m "infra: describe the reviewed change"
+git push -u origin infra/example-reviewed-change
+gh pr create --base main --fill --web
+
+# After checks, review and the release gate, merge YOUR infrastructure PR.
+gh pr checks 456 --watch
+gh pr merge 456 --squash --delete-branch
+gh run list --workflow deploy.yml --branch main --limit 10
+# Wait for the infrastructure staging run and verify its affected workflows.
+gh run watch 987654321 --exit-status
+
+# PRODUCTION write, using the INFRASTRUCTURE staging run ID:
+./deploy production --staging-run 987654321   --verified 'QA-456: infrastructure and affected workflow verified'</code></pre>
+<p>Use the <code>git add</code> paths you actually changed. Keep credentials out of both environment JSON files; use supported secret ARN parameters. Omitted production parameters retain existing deployed values. Infrastructure promotion compares the current template and reviewed <code>production.json</code> with the successful staging artifact, so changes after that staging run can block promotion and need a new staging run. Coordinate the guide change in the application repo and release it with the infrastructure change. Finish each stack operation before starting the other repo’s deployment: their queues are separate and a racing CloudFormation update fails.</p></div></details>
+<details class="reference-detail" id="release-runbook-detail-6"><summary>E. One-time staging bootstrap — infrastructure operator only</summary><div><details id="release-runbook-extra-1"><summary>Install AWS CLI v2 on a new Ubuntu operator machine</summary><div><p>Use the official AWS installation guide linked above, including its signature-verification instructions when required by your organization. Skip if <code>aws --version</code> already reports version 2; upgrades use the installer’s <code>--update</code> option.</p><pre><code># Ubuntu Linux x86_64 or aarch64; use the linked native installer on other OSes.
+curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-$(uname -m).zip" \
+  -o /tmp/clinicforce-awscliv2.zip
+mkdir -p /tmp/clinicforce-awscli
+unzip /tmp/clinicforce-awscliv2.zip -d /tmp/clinicforce-awscli
+sudo /tmp/clinicforce-awscli/aws/install
+aws --version</code></pre></div></details>
+<p>Skip this if <code>clinicforce-staging</code> already exists. Provisioning creates billable AWS resources. The script needs an authorized AWS operator, GitHub environment/secret permissions, access to the existing production stack’s image identities, the configured hosted zone/OIDC setup, and the reviewed staging template. It is not a fresh AWS-account bootstrap. Authenticate using the organization’s method; if IAM Identity Center is configured, use the following <a href="https://docs.aws.amazon.com/cli/latest/userguide/cli-configure-sso.html">SSO setup</a>.</p>
+<pre><code>aws configure sso --profile clinicforce-operator
+aws sso login --profile clinicforce-operator
+export AWS_PROFILE=clinicforce-operator
+export AWS_DEFAULT_REGION=us-east-1
+aws sts get-caller-identity
+gh auth status
+
+# Infrastructure repo, only when provisioning staging for the first time.
+cd ~/clinicforce-workspace/clinicforce-aws
+uv venv .venv
+uv pip install --python .venv/bin/python passlib
+.venv/bin/python scripts/bootstrap_staging.py</code></pre>
+<p>Bootstrap reads running production image digests, generates a new synthetic QA credential and provisions separate staging resources; it does not clone production patient data or provider credentials. If setup partly fails, inspect CloudFormation events and retain the generated credential; do not blindly rerun or delete the stack. Existing stacks are deliberately rejected by bootstrap. The first production infrastructure transition from the legacy deploy role requires an operator because that role cannot update itself. Only after a successful <em>infrastructure</em> staging run and workflow verification, the operator can run:</p>
+<pre><code># One-time legacy-role transition; this changes PRODUCTION infrastructure.
+VERIFIED_STAGING_RUN=987654321 VERIFICATION_REFERENCE='QA-456: infrastructure and affected workflow verified'   .venv/bin/python scripts/deploy_stack.py production</code></pre>
+<p>Thereafter use <code>./deploy</code>. See <a href="https://github.com/clinicforce-ai/clinicforce-aws/blob/main/README.md"><code>README.md</code></a> and <a href="https://github.com/clinicforce-ai/clinicforce-aws/blob/main/scripts/bootstrap_staging.py"><code>scripts/bootstrap_staging.py</code></a>. The inspected private-repository plan did not provide enforced environment reviewers or branch protection; do not rely on a nonexistent approval prompt. Main-only workflow checks, role trust and explicit promotion are the current controls.</p></div></details>
+<details class="reference-detail" id="release-runbook-detail-7"><summary>F. Watch failures and roll back carefully</summary><div><pre><code># From the repo whose deployment failed:
+gh run view 123456789 --log-failed
+aws cloudformation describe-stack-events --stack-name clinicforce-staging   --region us-east-1 --max-items 30
+aws ecs describe-services --cluster clinicforce-staging --services backend hapi   --region us-east-1 --query 'services[].{name:serviceName,events:events[:5]}'
+
+# Production rollback = promotion of a compatible, previously verified staging release.
+# Application repo; replace both values with real verified evidence.
+./deploy production --staging-run 111111111   --verified 'QA-rollback: prior artifact verified against current schema'</code></pre>
+<p>If the terminal times out or disconnects, inspect the Actions run and AWS state before dispatching again; the server-side deployment may still be running. An ECS circuit-breaker rollback or image mismatch stops frontend publication. A smoke failure after publication marks the run failed without restoring the database or frontend automatically. A previous image may not understand today’s schema; review compatibility before rollback. Expired artifacts cannot be promoted and missing ECR digests cannot run. Do not restore RDS or delete S3 data as an ordinary code rollback.</p>
+<p>Command implementations: <a href="https://github.com/clinicforce-ai/clinicforce/blob/main/deploy"><code>deploy</code></a> dispatches/watches Actions; <a href="https://github.com/clinicforce-ai/clinicforce/blob/main/.github/workflows/deploy.yml"><code>.github/workflows/deploy.yml</code></a> defines jobs; <a href="https://github.com/clinicforce-ai/clinicforce/blob/main/scripts/check_release.py"><code>scripts/check_release.py</code></a> validates staging provenance; <a href="https://github.com/clinicforce-ai/clinicforce/blob/main/scripts/release.py"><code>scripts/release.py</code></a> changes images and publishes static assets; <a href="https://github.com/clinicforce-ai/clinicforce/blob/main/scripts/smoke_release.py"><code>scripts/smoke_release.py</code></a> checks public routes and staging authentication. Infrastructure uses its own <a href="https://github.com/clinicforce-ai/clinicforce-aws/blob/main/scripts/deploy_stack.py"><code>scripts/deploy_stack.py</code></a>. Learn <a href="https://git-scm.com/book/en/v2/Git-Basics-Recording-Changes-to-the-Repository">Git changes</a>, <a href="https://cli.github.com/manual/gh_pr_create">pull requests</a>, and <a href="https://docs.github.com/en/actions">GitHub Actions</a>.</p></div></details>
+</section>

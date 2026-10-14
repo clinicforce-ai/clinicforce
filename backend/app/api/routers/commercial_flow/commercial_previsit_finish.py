@@ -1,0 +1,168 @@
+"""Commercial previsit finish workflow."""
+from __future__ import annotations
+
+from app.api.routers import commercial_estimator as _api
+from app.api.routers.commercial_flow.commercial_previsit_catalog import build_catalog
+from app.api.routers.commercial_flow.commercial_previsit_requirements import attach_requirements
+
+def _visit_context_token(inputs: dict, source: dict) -> str:
+    context = {'coverage': {k: v for k, v in _api._coverage_snapshot(inputs, source).items() if k != 'other_active_coverage'},
+               'codes': _api._previsit_codes(inputs),
+               'provider': inputs.get('rendering_provider'),
+               'provider_evidence': {key: (source.get('rendering_provider') or {}).get(key) for key in ('npi', 'roles')},
+               'diagnoses': inputs.get('diagnoses'), 'billing': source.get('billing_provider'),
+               'reason': inputs.get('reason'), 'location': source.get('location_id'), 'pos': inputs.get('place_of_service'), 'date': inputs.get('service_date')}
+    return _api.hashlib.sha256(_api.json.dumps(context, sort_keys=True).encode()).hexdigest()
+
+
+def _finish_previsit(result: dict, case: dict, inputs: dict, source: dict, payload: dict | None, session: dict, payer_id: str,
+                     *, pricing_source: dict | None = None) -> None:
+    token = _api._visit_context_token(inputs, source)
+    review = case.get('visit_review') or {}
+    if review.get('context_token') != token:
+        review = {'context_token': token}
+        case['visit_review'] = review
+    comparison = result['benefits'].get('identity') or {}
+    remembered = ((session.get('intake') or {}).get('patient') or {}).get('insurance_identities') or {}
+    evidence = review.get('identity_confirmation') or remembered.get(comparison.get('binding'))
+    if (comparison.get('can_confirm') and evidence and evidence.get('binding') == comparison.get('binding')
+            and evidence.get('reference') and evidence.get('actor_id') and evidence.get('verified_at')):
+        comparison = {**comparison, 'status': 'reconciled', 'evidence': evidence, 'message': ''}
+        result['benefits']['review_reasons'] = [r for r in result['benefits'].get('review_reasons', []) if 'identity' not in r]
+        result['benefits']['requires_review'] = bool(result['benefits']['review_reasons'])
+    result['library_pricing'] = session.get('library_pricing', case.get('library_pricing', []))
+    case['library_pricing'] = result['library_pricing']
+    result['benefit_source'] = (payload or {}).get('benefit_source') or ('Stedi' if result.get('checked_at') else None)
+    result['payer_source'] = (pricing_source or source).get('payer_source')
+    result['identity'] = comparison
+    result['benefits']['identity'] = comparison
+    result['eligibility_reconciliation'] = _api.visit_estimate.reconcile_eligibility(
+        source.get('saved_eligibility') or {}, result['benefits'], result.get('checked_at'))
+    if result['eligibility_reconciliation']['requires_review']:
+        result['benefits'].setdefault('review_reasons', []).append(result['eligibility_reconciliation']['message'])
+        result['benefits']['requires_review'] = True
+    payer_plan = _api.commercial.plan_details(payload or {})
+    exact_source = {**(pricing_source or source), 'payer_plan_names': payer_plan['names'],
+                    'payer_network_names': (payer_plan['network_names'] if result['benefits'].get('active') is True
+                        and result['benefits'].get('service_date_matches') is True
+                        and comparison.get('status') in {'matched', 'reconciled'} else []),
+                    'payer_plan_scope': {key: payer_plan.get(key) for key in ('plan_number', 'group_number')}}
+    payer_id, connections, codes, available, uploaded_cash = build_catalog(
+        _api, result, session, inputs, source, pricing_source, exact_source, payer_id, payload,
+    )
+    plan_key = _api.hashlib.sha256(_api.json.dumps([token, source.get('recent_completed_appointments', []),
+        [(row['id'], row.get('units')) for row in available]], sort_keys=True).encode()).hexdigest()
+    prior_plan = case.get('previsit_plan') or {}
+    if prior_plan.get('key') != plan_key or prior_plan.get('plan', {}).get('version') != 6:
+        prior_plan = {'key': plan_key, 'plan': _api.cpt_suggester.recommend_visit_plan(inputs, source, available)}
+        case['previsit_plan'] = prior_plan
+    result['service_plan'] = {**prior_plan['plan'], 'selection_source': 'clinician' if review.get('selected_ids') else 'suggested'}
+    auto_units = result['service_plan'].get('recommended_units') or {}
+    units = {**auto_units, **(review.get('confirmed_units') or {})}
+    result['available_codes'] = [{**row, 'units': units.get(row['id'], row.get('units'))} for row in available]
+    result['billing_note'] = _api.ecw_billing.collection_note(source.get('appointment_fields') or [])
+    note_self_pay = (result['billing_note'] or {}).get('kind') == 'self_pay'
+    result['payment_mode'] = review.get('payment_mode', 'cash' if source.get('self_pay_recorded') or note_self_pay else 'insurance')
+    result['ecw_saved_eligibility'] = {k: v for k, v in (source.get('saved_eligibility') or {}).items() if not k.startswith('_')}
+    labels = {'selected_ids': 'Services', 'confirmed_units': 'Service quantities', 'payment_mode': 'Payment method',
+              'cash_selection': 'Cash package', 'emg_required': 'EMG testing', 'insurance_check_from': 'Insurance checking date', 'verification': 'Benefit or approval evidence',
+              'identity_confirmation': 'Patient identity', 'product_mapping': 'Plan mapping',
+              'payments_received_cents': 'Recorded payments'}
+    result['audit_trail'] = [{'checked_at': entry.get('verified_at'), 'by': entry.get('verified_by') or 'Clinic staff',
+                            'changes': [label for key, label in labels.items() if key in entry.get('changes', {})]}
+                           for entry in case.get('visit_review_history', [])]
+    result['referral_evidence'] = source.get('referral_evidence', [])
+    result['appointment_context'] = {key: source.get(key) for key in ('location', 'rendering_provider', 'appointment_status')}
+    result['appointment_context'].update(appointment_type=inputs.get('appointment_type'), imported_fields=source.get('appointment_fields', []),
+                                         notes_status=source.get('appointment_notes_status', 'not_exposed'),
+                                         timezone=source.get('timezone') or _api.os.getenv('COMMERCIAL_PRACTICE_TIMEZONE', 'America/New_York'))
+    result['coverage_records'] = source.get('coverage_records', [])
+    result['insurance_fallback'] = {key: value for key, value in source.get('insurance_fallback', {}).items() if key != 'source'}
+    selected_ids = review.get('selected_ids') or result['service_plan']['recommended_ids']
+    if selected_ids:
+        by_id = {row['id']: row for row in available}
+        codes = [by_id[key] for key in selected_ids if key in by_id]
+    result['codes'] = [{**row, 'confirmed': bool(review.get('selected_ids')), 'units': units.get(row['id'], row.get('units'))} for row in codes]
+    if selected_ids:
+        for row in result['codes']:
+            if row.get('source') in {'conditional office E/M alternative', 'Contract service option'}:
+                row['source'] = 'Anticipated service from appointment'
+    result['patient_details'] = source.get('patient_details', {})
+    result['insurance_details'] = {**_api._coverage_snapshot(inputs, source), 'record_status': source.get('coverage_record_status'), 'coverage_period': source.get('coverage_period', {})}
+    result['insurance_details']['group_source'] = ('card_ocr' if 'group_number' in (result.get('card_check') or {}).get('fields_added', [])
+                                                   else 'eCW Coverage' if result['insurance_details'].get('group_number') else None)
+    recovered = case.get('previsit_discovery') or {}
+    if recovered.get('outcome') == 'recovered' and recovered.get('identity_binding') == _api._recovery_binding(inputs, source):
+        result['insurance_details'].update(recovered.get('verified_coverage') or {})
+        result['insurance_details'].update(ecw_member_id=inputs.get('member_id'),
+            member_source=recovered.get('evidence_source') or 'Stedi verified coverage',
+            group_source=(recovered.get('evidence_source') or 'Stedi verified coverage') if (recovered.get('verified_coverage') or {}).get('group_number') else result['insurance_details'].get('group_source'))
+    elif not inputs.get('member_id') and result['benefits'].get('active') is True:
+        returned_identity = _api.stedi_discovery.candidate_identity(payload or {}, inputs)
+        if returned_identity:
+            result['insurance_details'].update(member_id=returned_identity['member_id'], ecw_member_id=None, member_source='Stedi eligibility')
+    subscriber = (payload or {}).get('subscriber') or {}
+    dependent = (payload or {}).get('dependent') or {}
+    result['insurance_details'].update(payer_subscriber=_api.commercial.payer_person(subscriber),
+        payer_patient=_api.commercial.payer_person(dependent or subscriber),
+        payer_relationship=dependent.get('relationToSubscriber') or ('SELF' if subscriber else None),
+        payer_coverage_period=((dependent or subscriber).get('dates') or {}).get('plan') or {})
+    result.update(ecw_coverage_active=source.get('active_coverages', 0) > 0, calculated_at=_api._now(), context_token=token, revision=case.get('revision', 0), plan_details={
+        'ecw': source.get('plan_details') or {'plan': [source['plan']] if source.get('plan') else []},
+        'stedi': _api.commercial.plan_details(payload) if payload else {}}, ecw_retrieved_at=source.get('retrieved_at'),
+        response_reference=(payload or {}).get('id'), selected_ids=selected_ids)
+    result.pop('network_evidence', None)
+    result.pop('pricing_assumptions', None)
+    _api._attach_previsit_pricing(result, session['practice_id'], inputs, exact_source, payer_id, result['benefits'], payload=payload,
+                            review=review)
+    result['arrival_collection'] = _api.visit_estimate.arrival_collection(result.get('price_range') or {}, result['benefits'], review)
+    result['planning_estimate'] = (_api.visit_estimate.planning_estimate(result.get('price_range') or {}, result['benefits'], comparison)
+                                   if result['arrival_collection']['amount_cents'] is None else None)
+    if len(connections) == 1:
+        try:
+            _, network, profile = _api._previsit_practice_path(session['practice_id'], {**inputs, 'payer_id': connections[0]['id']},
+                                                {**exact_source, 'payer_plan_names': []})
+            contract = _api._network_contract_evidence(session['practice_id'], network, profile, inputs['service_date'])
+            if network.get('network_name') and (contract.get('document_id') or contract.get('related_document_id')):
+                result['mapping_candidate'] = {'network': network['network_name'], 'products': exact_source['payer_plan_names'],
+                                               'reference': network['evidence_reference'],
+                                               'contract': contract}
+            else:
+                result.pop('mapping_candidate', None)
+        except _api.HTTPException:
+            result.pop('mapping_candidate', None)
+    if uploaded_cash:
+        _api.practice_prices.apply(result, uploaded_cash, review)
+    result['collection_guidance'] = _api.collection_guidance.build(result, review)
+    result.pop('emg_option', None)
+    if inputs.get('visit_type') == 'new' and result['payment_mode'] == 'insurance':
+        emg_rates, emg_rules = [], {**_api._benefit_context(inputs, source),
+            'office_service_types': _api._office_service_types(session['practice_id'], source)}
+        if (review.get('emg_required') or any(row['code'] in _api.cpt_rules.NCS_CODES | _api.cpt_rules.EMG_ADD_ONS for row in result['codes'])) and len(connections) == 1:
+            try:
+                _, network, profile = _api._previsit_practice_path(session['practice_id'], {**inputs, 'payer_id': connections[0]['id']}, exact_source)
+                emg_rates = _api.commercial_store.matching_rates(session['practice_id'], profile, network, inputs['service_date'], None)
+                emg_rules.update(profile['rules'])
+            except (_api.HTTPException, _api.commercial.CommercialError):
+                pass
+        result['emg_option'] = _api.collection_guidance.emg_option(result, emg_rates, emg_rules, payload, inputs['service_date'], review)
+    attach_requirements(_api, result, case, inputs, source, session, connections, payer_id)
+    result['encounter_summary'] = _api.encounter_summary.build(result, review)
+    guidance = result['collection_guidance']
+    emg = result.get('emg_option') or {}
+    price = result.get('price_range') or {}
+    _api.collection_event('collection_calculated', practice_id=session['practice_id'], intake_id=(session.get('intake') or {}).get('id'),
+                     case_id=case.get('id'), stage='calculation',
+                     outcome='amount_available' if guidance.get('amount_cents') is not None else 'review_required',
+                     status=guidance.get('status'), basis=guidance.get('basis'), payment_mode=result.get('payment_mode'),
+                     source='ecw_saved' if str(result.get('benefit_source') or '').lower().startswith('ecw') else
+                     'stedi' if result.get('checked_at') else 'none',
+                     emg_state='separate' if emg.get('requested') and not emg.get('included') else
+                     'included' if emg.get('included') else 'none',
+                     amount_cents=guidance.get('amount_cents'), emg_min_cents=emg.get('total_min_cents'),
+                     emg_max_cents=emg.get('total_max_cents'), cash_min_cents=price.get('cash_min_cents'),
+                     cash_max_cents=price.get('cash_max_cents'), count=len(result.get('codes') or []))
+    if result.get('eligibility_timing', {}).get('status') == 'too_early':
+        case.setdefault('visit_review', {'context_token': token}).setdefault('insurance_check_from', result['eligibility_timing']['check_from'])
+    case['previsit_context'] = {'inputs': inputs, 'source': source, 'payer_id': payer_id,
+                              'result': result, 'context_token': token}

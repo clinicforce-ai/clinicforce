@@ -1,0 +1,158 @@
+.clinical-cohorts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(145px, 1fr));
+  gap: 12px;
+  margin-bottom: 24px;
+}
+
+.staff-workspace .clinical-cohorts button {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: flex-start;
+  text-align: left;
+  gap: 5px;
+  padding: 16px;
+}
+
+.clinical-cohorts strong {
+  font-size: 26px;
+  line-height: 1.2;
+}
+
+.clinical-cohorts span {
+  font-size: 12px;
+}
+
+.staff-workspace .clinical-cohorts button[aria-pressed='true'] {
+  background: #eaf1fc;
+  border-color: var(--staff-blue);
+  color: var(--staff-blue);
+}
+
+.clinical-patient-row {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  border-top: 1px solid var(--staff-line);
+  padding: 15px 0;
+}
+
+.staff-workspace .clinical-patient-open {
+  display: flex;
+  flex: 1;
+  gap: 18px;
+  justify-content: space-between;
+  border: 0;
+  text-align: left;
+  padding: 10px 0;
+  min-width: 0;
+}
+
+.clinical-patient-open > span:first-child {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.clinical-patient-open strong {
+  display: block;
+  font-size: 16px;
+}
+
+.clinical-patient-open small {
+  display: block;
+  font-size: 12px;
+  color: var(--staff-muted);
+  font-weight: 400;
+  margin-top: 5px;
+}
+
+.clinical-patient-row > button:last-child {
+  flex-shrink: 0;
+}
+
+.staff-workspace .clinical-patient-open:focus-visible {
+  outline-offset: 1px;
+}
+
+.clinical-contact-email {
+  margin-bottom: 16px;
+}
+
+@media (max-width: 780px) {
+  .clinical-patient-row {
+    align-items: stretch;
+    flex-direction: column;
+    gap: 10px;
+  }
+  .clinical-patient-row > button:last-child {
+    align-self: flex-start;
+  }
+  .clinical-patient-open > svg {
+    display: none;
+  }
+  .clinical-cohorts {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .clinical-patient-open {
+    flex-wrap: wrap;
+  }
+}
+
+@media (max-width: 780px) {
+  .staff-workspace .clinical-search {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.clinical-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+  border-top: 1px solid var(--staff-line);
+  padding-top: 16px;
+}
+
+.clinical-page-buttons {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.staff-workspace .clinical-page-buttons button {
+  min-width: 40px;
+  min-height: 40px;
+  padding: 8px;
+}
+
+.staff-workspace .clinical-page-buttons button[aria-current='page'] {
+  background: var(--staff-blue);
+  border-color: var(--staff-blue);
+  color: white;
+}
+
+.patient-appointment {
+  padding: 20px 0;
+  border-top: 1px solid var(--staff-border, #dbe3ea);
+  min-width: 0;
+}
+
+.patient-appointment > header {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 20px;
+  align-items: baseline;
+  justify-content: space-between;
+}
+
+.patient-appointment h3 {
+  margin: 0;
+}
+
+.patient-appointment .staff-saved-checks {
+  margin-top: 12px;
+}

@@ -1,0 +1,257 @@
+.visit-care-cards article {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 18px;
+  background: white;
+  border: 1px solid var(--ve-line);
+  border-radius: 12px;
+}
+
+.visit-care-cards strong {
+  font-size: 16px;
+  font-weight: 500;
+}
+
+.care-icon {
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  border-radius: 12px;
+  background: var(--ve-soft);
+  color: var(--ve-teal);
+  flex-shrink: 0;
+}
+
+.visit-detail-links {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 24px;
+}
+
+.visit-estimator .visit-detail-links button {
+  justify-content: flex-start;
+  text-align: left;
+  border: 1px solid var(--ve-line);
+  background: white;
+  padding: 16px;
+  gap: 12px;
+}
+
+.visit-detail-links button > svg:first-child {
+  color: var(--ve-teal);
+}
+
+.visit-detail-links span {
+  flex: 1;
+  font-size: 14px;
+}
+
+.visit-detail-links small {
+  font-size: 12px;
+  margin-top: 3px;
+}
+
+.visit-result-footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  margin-top: 16px;
+  font-size: 12px;
+  color: var(--ve-muted);
+}
+
+.visit-result-footer > span {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.visit-estimator .visit-result-footer button {
+  font-size: 13px;
+}
+
+.visit-detail-panel {
+  width: min(880px, calc(100vw - 32px));
+  max-height: calc(100dvh - 48px);
+  margin: auto;
+  padding: 0;
+  color: var(--ve-ink);
+  background: white;
+  border: 1px solid var(--ve-line);
+  border-radius: 20px;
+  box-shadow: 0 24px 90px #183b4733;
+}
+
+.visit-detail-panel::backdrop {
+  background: #15343dcc;
+}
+
+.visit-detail-header {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 18px 24px;
+  border-bottom: 1px solid var(--ve-line);
+  background: white;
+}
+
+.visit-detail-body {
+  padding: 24px;
+  overflow-wrap: anywhere;
+}
+
+.visit-detail-body section + section {
+  margin-top: 24px;
+}
+
+.visit-detail-body .visit-section-heading {
+  margin-bottom: 16px;
+}
+
+.policy-relationship {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 24px minmax(0, 1fr);
+  gap: 16px;
+  align-items: center;
+  background: var(--ve-soft);
+  border-radius: 12px;
+  padding: 20px;
+}
+
+.policy-relationship span {
+  display: block;
+  font-size: 12px;
+  color: var(--ve-muted);
+}
+
+.policy-relationship strong {
+  display: block;
+  margin-top: 4px;
+}
+
+.patient-policy dl,
+.visit-provenance dl,
+.service-evidence dl {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px 24px;
+  margin: 20px 0;
+}
+
+.visit-detail-body dt {
+  font-size: 13px;
+  color: var(--ve-muted);
+}
+
+.visit-detail-body dd {
+  margin: 4px 0;
+}
+
+.visit-detail-body .insurance-card-preview {
+  padding: 18px 0;
+  margin: 0;
+  border: 0;
+  border-top: 1px solid var(--ve-line);
+}
+
+.coverage-plan {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 16px;
+  background: var(--ve-canvas);
+  border-radius: 12px;
+}
+
+.coverage-plan strong,
+.coverage-plan span {
+  display: block;
+}
+
+.visit-audit-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.visit-check {
+  padding: 14px;
+  border: 1px solid var(--ve-line);
+  border-radius: 10px;
+  display: grid;
+  grid-template-columns: 20px 1fr;
+  gap: 6px 10px;
+}
+
+.visit-check dd {
+  grid-column: 2;
+  font-size: 14px;
+}
+
+.visit-check small {
+  font-size: 12px;
+}
+
+.visit-check-icon {
+  color: var(--ve-muted);
+}
+
+.visit-check-icon.is-confirmed {
+  color: var(--ve-teal);
+}
+
+.coverage-footnote {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  margin-top: 16px;
+  font-size: 12px;
+  color: var(--ve-muted);
+}
+
+.clinical-table-wrap {
+  overflow-x: auto;
+  margin: 16px 0;
+}
+
+.clinical-service-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
+  text-align: left;
+}
+
+.clinical-service-table :is(th, td) {
+  padding: 12px;
+  border-bottom: 1px solid var(--ve-line);
+  vertical-align: top;
+}
+
+.clinical-service-table thead th {
+  background: var(--ve-canvas);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.clinical-service-table tbody th {
+  font-weight: 500;
+}
+
+.clinical-service-table small {
+  font-size: 12px;
+  font-weight: 400;
+}
+
+.clinical-service-table .benefit-note {
+  min-width: 160px;
+  max-width: 44ch;
+  margin-top: 6px;
+}

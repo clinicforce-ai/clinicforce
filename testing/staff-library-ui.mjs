@@ -24,6 +24,7 @@ await context.route(url => url.pathname.startsWith('/api/'), async route => {
   if (url.pathname === '/api/staff/session') body = { staff: { id: 'test-staff', practice_id: 'test-clinic', practice_name: 'Example Clinic', display_name: 'Test Staff', role } }
   else if (url.pathname === '/api/staff/intakes/search') body = { intakes: [], has_more: false }
   else if (url.pathname === '/api/staff/patients/dashboard') body = { patients: [], counts: {} }
+  else if (url.pathname === '/api/staff/library/missing-rates') body = { gaps: [], group_count: 0, scanned_case_count: 0, scan_limit: 0, scan_limit_reached: false }
   else if (url.pathname === '/api/staff/library') {
     if (route.request().method() === 'POST') {
       const uploaded = { ...documents[0], id: 'new-document', label: 'New clinic contract' }

@@ -1,5 +1,3 @@
-import type { PatientSession } from './patient-models'
-
 export class ApiError extends Error {
   readonly status: number
   readonly requestId?: string
@@ -16,9 +14,9 @@ export class ApiError extends Error {
 
 export const REQUEST_TIMEOUT_MS = 45_000
 
-let staffIntakeId: string | null = null
-export function setStaffIntakeContext(id: string | null) { staffIntakeId = id }
-
+export interface RequestContext {
+  staffIntakeId?: string
+}
 
 export function detailFrom(body: unknown, fallback: string): string {
   if (!body || typeof body !== 'object' || !('detail' in body)) return fallback
@@ -36,17 +34,33 @@ export function detailFrom(body: unknown, fallback: string): string {
   return fallback
 }
 
-export async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
+export async function request<T>(
+  path: string,
+  init: RequestInit = {},
+  context: RequestContext = {},
+): Promise<T> {
   const controller = new AbortController()
   const timeout = window.setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS)
   try {
     const headers = new Headers(init.headers)
-    if (staffIntakeId && path.startsWith('/api/doctor/insurance')) headers.set('X-ClinicForce-Intake', staffIntakeId)
-    const response = await fetch(path, { ...init, headers, credentials: 'same-origin', signal: controller.signal })
+    if (context.staffIntakeId && path.startsWith('/api/doctor/insurance'))
+      headers.set('X-ClinicForce-Intake', context.staffIntakeId)
+    const response = await fetch(path, {
+      ...init,
+      headers,
+      credentials: 'same-origin',
+      signal: controller.signal,
+    })
     const body: unknown = await response.json().catch(() => null)
     if (!response.ok) {
-      throw new ApiError(response.status, detailFrom(body, `Request failed (${response.status}).`), response.headers.get('X-ClinicForce-Request-ID') || undefined,
-        body && typeof body === 'object' && 'code' in body && typeof body.code === 'string' ? body.code : undefined)
+      throw new ApiError(
+        response.status,
+        detailFrom(body, `Request failed (${response.status}).`),
+        response.headers.get('X-ClinicForce-Request-ID') || undefined,
+        body && typeof body === 'object' && 'code' in body && typeof body.code === 'string'
+          ? body.code
+          : undefined,
+      )
     }
     return body as T
   } catch (error) {
@@ -66,30 +80,4 @@ export function json(body: object): RequestInit {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
   }
-}
-
-export function assertWorkspace(value: unknown): PatientSession {
-  if (
-    !value ||
-    typeof value !== 'object' ||
-    !('patient_id' in value) ||
-    !('documents' in value) ||
-    !('records' in value) ||
-    !('storage_provider' in value) ||
-    !('drive_connected' in value) ||
-    !('drive_pending_import_count' in value) ||
-    !('drive_sync_message' in value) ||
-    !('drive_access_upgrade_required' in value) ||
-    typeof value.patient_id !== 'string' ||
-    !Array.isArray(value.documents) ||
-    !Array.isArray(value.records) ||
-    (value.storage_provider !== 's3' && value.storage_provider !== 'google_drive') ||
-    typeof value.drive_connected !== 'boolean' ||
-    typeof value.drive_pending_import_count !== 'number' ||
-    (value.drive_sync_message !== null && typeof value.drive_sync_message !== 'string') ||
-    typeof value.drive_access_upgrade_required !== 'boolean'
-  ) {
-    throw new ApiError(502, 'The server returned an invalid patient workspace. Please try again.')
-  }
-  return value as PatientSession
 }

@@ -1,0 +1,35 @@
+.staff-card-details {
+  margin-top: 0;
+}
+
+.staff-card-details legend {
+  padding: 0 6px;
+  color: var(--staff-ink);
+  font-size: 21px;
+  font-weight: 700;
+  line-height: 1.3;
+  letter-spacing: -0.3px;
+}
+
+.staff-card-details .staff-two-columns {
+  margin-top: 20px;
+}
+
+.staff-card-details .staff-field {
+  margin-bottom: 0;
+}
+
+.staff-card-details .staff-field:last-child {
+  grid-column: 1/-1;
+  max-width: calc(50% - 11px);
+}
+
+@media (max-width: 780px) {
+  .staff-card-details .staff-field:last-child {
+    max-width: none;
+  }
+}
+
+.staff-workspace .staff-delete-button {
+  color: var(--danger);
+}

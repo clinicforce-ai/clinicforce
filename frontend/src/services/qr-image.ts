@@ -1,6 +1,9 @@
 import type { Html5Qrcode } from 'html5-qrcode'
 
-export async function scanQrImage(reader: Pick<Html5Qrcode, 'scanFile'>, file: File): Promise<string> {
+export async function scanQrImage(
+  reader: Pick<Html5Qrcode, 'scanFile'>,
+  file: File,
+): Promise<string> {
   try {
     return await reader.scanFile(file, false)
   } catch (originalError) {
@@ -9,7 +12,9 @@ export async function scanQrImage(reader: Pick<Html5Qrcode, 'scanFile'>, file: F
     const { default: jsQR } = await import('jsqr')
     const image = await createImageBitmap(file)
     try {
-      const scales = new Set([1, 1.5].map(scale => Math.min(scale, 2000 / Math.max(image.width, image.height))))
+      const scales = new Set(
+        [1, 1.5].map((scale) => Math.min(scale, 2000 / Math.max(image.width, image.height))),
+      )
       for (const scale of scales) {
         const canvas = document.createElement('canvas')
         canvas.width = Math.ceil(image.width * scale)
@@ -25,10 +30,18 @@ export async function scanQrImage(reader: Pick<Html5Qrcode, 'scanFile'>, file: F
         const result = jsQR(pixels.data, pixels.width, pixels.height)
         if (result) return result.data
         if (scale !== 1) {
-          const blob = await new Promise<Blob | null>(resolve => canvas.toBlob(resolve, 'image/png'))
+          const blob = await new Promise<Blob | null>((resolve) =>
+            canvas.toBlob(resolve, 'image/png'),
+          )
           if (blob) {
-            try { return await reader.scanFile(new File([blob], 'qr-screenshot.png', { type: 'image/png' }), false) }
-            catch { /* Neither decoder could read this bounded image variant. */ }
+            try {
+              return await reader.scanFile(
+                new File([blob], 'qr-screenshot.png', { type: 'image/png' }),
+                false,
+              )
+            } catch {
+              /* Neither decoder could read this bounded image variant. */
+            }
           }
         }
       }

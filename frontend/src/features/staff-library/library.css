@@ -1,0 +1,139 @@
+.clinic-library {
+  max-width: 1120px;
+}
+
+.clinic-library-folders {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
+  margin-top: 22px;
+}
+
+.staff-workspace .clinic-library-folder {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  min-height: 176px;
+  width: 100%;
+  padding: 22px;
+  text-align: left;
+  justify-content: flex-start;
+  border: 1px solid var(--staff-line);
+  border-radius: 12px;
+  background: #f8faff;
+  transition:
+    background-color 0.2s,
+    border-color 0.2s;
+}
+
+.staff-workspace .clinic-library-folder:hover {
+  background: #edf3fc;
+  border-color: var(--staff-blue);
+}
+
+.clinic-library-folder-icon {
+  display: grid;
+  place-items: center;
+  width: 46px;
+  height: 46px;
+  flex: none;
+  border-radius: 10px;
+  background: #e4eefc;
+  color: var(--staff-blue);
+}
+
+.clinic-library-folder-copy {
+  display: grid;
+  gap: 7px;
+  min-width: 0;
+  flex: 1;
+}
+
+.clinic-library-folder-copy strong {
+  font-size: 17px;
+  line-height: 1.3;
+}
+
+.clinic-library-folder-copy small {
+  color: var(--staff-muted);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.clinic-library-folder-copy > span {
+  color: var(--staff-blue);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.clinic-library-folder > svg:last-child {
+  margin-top: 12px;
+  color: var(--staff-muted);
+}
+
+.clinic-library-breadcrumb {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: -6px 0 20px;
+  color: var(--staff-muted);
+  font-size: 14px;
+}
+
+.staff-workspace .clinic-library-breadcrumb button {
+  border: 0;
+  background: transparent;
+  color: var(--staff-blue);
+  padding: 8px 0;
+}
+
+.clinic-library-breadcrumb span[aria-current='page'] {
+  color: var(--staff-ink);
+  font-weight: 700;
+}
+
+.clinic-library-files .staff-document {
+  align-items: flex-start;
+}
+
+.clinic-library-files .staff-document > span {
+  align-items: flex-start;
+  flex: 1 1 320px;
+}
+
+.clinic-library-files .staff-document > span > svg {
+  margin-top: 2px;
+  color: var(--staff-blue);
+}
+
+.clinic-library-files .staff-inline-actions {
+  flex: 0 1 auto;
+}
+
+.clinic-library .staff-panel > .staff-small {
+  max-width: 760px;
+}
+
+@media (max-width: 1050px) {
+  .clinic-library-folders {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 650px) {
+  .clinic-library-folders {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .staff-workspace .clinic-library-folder {
+    min-height: 128px;
+  }
+  .clinic-library-files .staff-inline-actions {
+    width: 100%;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .staff-workspace .clinic-library-folder {
+    transition: none;
+  }
+}

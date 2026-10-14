@@ -1,10 +1,82 @@
-import { ArrowRight, CreditCard, HeartPulse, ShieldCheck, Stethoscope, UserRound } from 'lucide-react'
+import {
+  ArrowRight,
+  CreditCard,
+  HeartPulse,
+  ShieldCheck,
+  Stethoscope,
+  UserRound,
+} from 'lucide-react'
 
-interface LandingProps { onChoosePatient: () => void; onChooseUpload: () => void; onChooseStaff: () => void }
+interface LandingProps {
+  onChoosePatient: () => void
+  onChooseUpload: () => void
+  onChooseStaff: () => void
+}
 
 export function Landing({ onChoosePatient, onChooseUpload, onChooseStaff }: LandingProps) {
-  return <section className="landing-grid animate-enter" aria-labelledby="welcome-heading">
-    <div className="landing-copy"><p className="eyebrow"><HeartPulse aria-hidden="true" className="size-4" /> Your care, with less paperwork</p><h1 id="welcome-heading">A simpler start to your clinic visit.</h1><p className="lead">Send your insurance card to your clinic without creating an account. Clinic staff can review submissions, confirm patient details, and continue the insurance workflow in one place.</p><div className="trust-list" aria-label="How insurance intake works"><p><CreditCard aria-hidden="true" /> Scan a card or upload a photo or PDF</p><p><ShieldCheck aria-hidden="true" /> Confirm the clinic before sending your details</p></div></div>
-    <div className="role-panel" aria-label="Choose how to continue"><p className="eyebrow">How can we help?</p><button className="role-card" type="button" onClick={onChooseUpload}><span className="role-icon patient-icon"><CreditCard aria-hidden="true" /></span><span><strong>Upload insurance card</strong><small>For patients. Send your card to your clinic with its code or private upload link. No account needed.</small></span><ArrowRight aria-hidden="true" className="role-arrow" /></button><button className="role-card" type="button" onClick={onChooseStaff}><span className="role-icon doctor-icon"><Stethoscope aria-hidden="true" /></span><span><strong>Clinical access</strong><small>For doctors and staff. Sign in to review insurance, scan cards, request patient uploads, or set up your clinic.</small></span><ArrowRight aria-hidden="true" className="role-arrow" /></button><div className="mt-6 border-t border-[var(--line)] pt-5"><button className="flex min-h-11 items-center gap-3 text-left text-sm font-semibold text-[var(--blue)]" type="button" onClick={onChoosePatient}><UserRound size={19} aria-hidden="true" /> Open patient workspace <ArrowRight size={17} aria-hidden="true" /></button><p className="mt-2 text-sm leading-6 text-[var(--muted-ink)]">Optional account for your health reports and ClinicForce QR sharing.</p></div></div>
-  </section>
+  return (
+    <section className="landing-grid animate-enter" aria-labelledby="welcome-heading">
+      <div className="landing-copy">
+        <p className="eyebrow">
+          <HeartPulse aria-hidden="true" className="size-4" /> Your care, with less paperwork
+        </p>
+        <h1 id="welcome-heading">A simpler start to your clinic visit.</h1>
+        <p className="lead">
+          Send your insurance card to your clinic without creating an account. Clinic staff can
+          review submissions, confirm patient details, and continue the insurance workflow in one
+          place.
+        </p>
+        <div className="trust-list" aria-label="How insurance intake works">
+          <p>
+            <CreditCard aria-hidden="true" /> Scan a card or upload a photo or PDF
+          </p>
+          <p>
+            <ShieldCheck aria-hidden="true" /> Confirm the clinic before sending your details
+          </p>
+        </div>
+      </div>
+      <div className="role-panel" aria-label="Choose how to continue">
+        <p className="eyebrow">How can we help?</p>
+        <button className="role-card" type="button" onClick={onChooseUpload}>
+          <span className="role-icon patient-icon">
+            <CreditCard aria-hidden="true" />
+          </span>
+          <span>
+            <strong>Upload insurance card</strong>
+            <small>
+              For patients. Send your card to your clinic with its code or private upload link. No
+              account needed.
+            </small>
+          </span>
+          <ArrowRight aria-hidden="true" className="role-arrow" />
+        </button>
+        <button className="role-card" type="button" onClick={onChooseStaff}>
+          <span className="role-icon doctor-icon">
+            <Stethoscope aria-hidden="true" />
+          </span>
+          <span>
+            <strong>Clinical access</strong>
+            <small>
+              For doctors and staff. Sign in to review insurance, scan cards, request patient
+              uploads, or set up your clinic.
+            </small>
+          </span>
+          <ArrowRight aria-hidden="true" className="role-arrow" />
+        </button>
+        <div className="mt-6 border-t border-[var(--line)] pt-5">
+          <button
+            className="flex min-h-11 items-center gap-3 text-left text-sm font-semibold text-[var(--blue)]"
+            type="button"
+            onClick={onChoosePatient}
+          >
+            <UserRound size={19} aria-hidden="true" /> Open patient workspace{' '}
+            <ArrowRight size={17} aria-hidden="true" />
+          </button>
+          <p className="mt-2 text-sm leading-6 text-[var(--muted-ink)]">
+            Optional account for your health reports and ClinicForce QR sharing.
+          </p>
+        </div>
+      </div>
+    </section>
+  )
 }
