@@ -14,7 +14,7 @@ from datetime import datetime, timezone
 from decimal import Decimal, ROUND_HALF_UP
 from io import StringIO
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from app.insurance.golden import GoldenCaseError
 from app.insurance.cpt_suggester import suggest_cpt_codes, clinical_context_from_pages
@@ -114,14 +114,15 @@ def _procedure_rows(pages: list[tuple[int, str]]) -> list[dict[str, Any]]:
     return rows
 
 
-def inspect_pdf(content: bytes, filename: str, kind: str, member_id: str = "") -> dict[str, Any]:
+def inspect_pdf(content: bytes, filename: str, kind: str, member_id: str = "", *,
+                clinical_reader: Callable[[list[tuple[int, str]]], dict[str, Any]] | None = None) -> dict[str, Any]:
     if kind not in {"coverage", "clinical", "contract", "authorization", "self_pay"}:
         raise GoldenCaseError("Unsupported insurance evidence type")
     pages = _pdf_pages(content)
     text = "\n".join(value for _, value in pages)
     if kind == "clinical":
         try:
-            findings = clinical_context_from_pages(pages)
+            findings = (clinical_reader or clinical_context_from_pages)(pages)
         except Exception as exc:
             raise GoldenCaseError("Clinical text extraction is unavailable. Retry the upload or enter the visit details yourself.") from exc
         return {"id": kind, "filename": Path(filename).name, "sha256": hashlib.sha256(content).hexdigest(),

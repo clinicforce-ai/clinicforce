@@ -20,7 +20,12 @@ from app.insurance.golden import GoldenCaseError
 from app.insurance.cpt_suggester import suggest_cpt_codes, clinical_context_from_pages
 from app.insurance import cpt_rules, v1_requirements
 from app.insurance.v1_sources import MONEY, read_pages, individual_balance_cells, document_dates
-from app.insurance.v1_documents import MAX_EVIDENCE_PAGES, DOCUMENT_STAGES, _now, _citation, _fact, _money, _pdf_pages, _page_with, _coverage_fields, _authorization_rows, _procedure_rows, inspect_pdf, inspect_csv
+from app.insurance.v1_documents import MAX_EVIDENCE_PAGES, DOCUMENT_STAGES, _now, _citation, _fact, _money, _pdf_pages, _page_with, _coverage_fields, _authorization_rows, _procedure_rows, inspect_pdf as _inspect_pdf, inspect_csv
+
+
+def inspect_pdf(content: bytes, filename: str, kind: str, member_id: str = "") -> dict[str, Any]:
+    return _inspect_pdf(content, filename, kind, member_id,
+                        clinical_reader=clinical_context_from_pages)
 
 
 def pending_case(fields: dict[str, str]) -> dict[str, Any]:
