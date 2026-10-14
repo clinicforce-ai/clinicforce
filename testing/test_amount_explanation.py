@@ -77,6 +77,18 @@ def test_unknown_provider_network_qualifies_payer_office_copay():
     assert explanation['network_tier'] == 'unknown'
 
 
+def test_missing_clinic_contract_names_the_cash_fallback_cause():
+    result = {'benefits': {'active': True, 'network_status': 'out_of_network',
+                           'network_source': 'clinic_library_absent'},
+              'price_range': {'lines': [{'code': '99213', 'calculation': None}]},
+              'payment_mode': 'cash', 'cash_fallback': {'reason': 'Clinic price selected after insured pricing failed.'}}
+    assert amount_explanation.fallback_cause(result) == (
+        'the Clinical Library has no current contract for this payer, plan, provider and visit')
+    sentence = amount_explanation.build(result, {'basis': 'practice_cash_price',
+        'amount_cents': 15000})['sentence']
+    assert 'Clinical Library has no current contract' in sentence
+
+
 def test_procedure_specific_coinsurance_adds_to_office_copay():
     raw = payload()
     raw['benefitsInformation'][1]['benefitAmount'] = '0'

@@ -297,7 +297,7 @@ export default function CommercialEstimator({ onBack, onResolvePatient, intakeId
     : 'No verified coverage source'
   const contractEvidence = result?.network_evidence || result?.mapping_candidate?.contract
   const contractPage = contractEvidence?.locator?.match(/^Page (\d+)(?:,|$)/)?.[1]
-  const contractDocumentId = contractEvidence?.document_id || result?.network_evidence?.related_document_id
+  const contractDocumentId = contractEvidence?.document_id || contractEvidence?.related_document_id
   const contractUrl = result?.payment_mode !== 'cash' && contractDocumentId
     ? `/api/staff/library/${encodeURIComponent(contractDocumentId)}/document?preview=true${contractPage ? `#page=${contractPage}` : ''}`
     : null
@@ -308,11 +308,15 @@ export default function CommercialEstimator({ onBack, onResolvePatient, intakeId
   const calculating = (!!busy && busy !== 'delete') || recovering || (!!selected && !result && !error)
   const previousEstimate = !!error && !!result
   const guidance = result?.collection_guidance?.status !== 'deferred' ? result?.collection_guidance : undefined
-  const contractCandidate = !cash && benefits?.network_status === 'unknown' ? result?.mapping_candidate?.network : null
-  const networkLabel = contractCandidate ? 'Clinic contract on file' : guidance?.network || 'Not reported'
-  const networkSource = guidance?.network_source
-  const networkTone = cash || tooEarly || result?.recovery?.state === 'pending' ? ''
-    : benefits?.network_status === 'in_network' && !/not confirmed|unverified/i.test(networkSource || '') ? 'is-confirmed'
+  const contractCandidate = benefits?.network_status === 'unknown' ? result?.mapping_candidate?.network : null
+  const networkLabel = benefits?.network_status === 'in_network' ? 'In network'
+    : benefits?.network_status === 'out_of_network' ? 'Out of network'
+    : contractCandidate ? 'Contract match unavailable' : 'Not determined'
+  const networkSource = benefits?.network_source === 'clinic_library_contract' ? 'Current Clinical Library contract'
+    : benefits?.network_source === 'clinic_library_absent' ? 'No current matching Clinical Library contract'
+    : guidance?.network_source
+  const networkTone = tooEarly || result?.recovery?.state === 'pending' ? ''
+    : benefits?.network_status === 'in_network' ? 'is-confirmed'
     : benefits?.network_status === 'out_of_network' ? 'is-missing' : ''
   const unavailableReason = error ? 'Current benefits could not be loaded.' : failure?.detail || 'The payer did not return the patient share for the selected services.'
   const supportedAmount = guidance?.status !== 'deferred_billing' && guidance?.amount_cents != null && Number.isFinite(guidance.amount_cents) && guidance.amount_cents >= 0
@@ -379,7 +383,7 @@ export default function CommercialEstimator({ onBack, onResolvePatient, intakeId
           </div><div className="arrival-context"><span className="visit-label">Anticipated service</span><h3>{anticipatedService || result.reason || 'Service not established'}</h3>{result.reason && result.reason !== anticipatedService && <p>eCW visit reason: {result.reason}</p>}<p>{readOnly ? 'Service plan recorded for this appointment.' : 'Based on the scheduled appointment. Modify the services below if the planned care changes.'}</p></div></div>
           <div className="visit-snapshots" aria-label="Coverage summary">
             <div className={coverageTone}><ShieldCheck size={20} aria-hidden="true" /><span>Coverage<strong>{policyStatus}</strong><small>{result?.benefit_source ? `Checked via ${result.benefit_source}` : 'Payer result unavailable'}</small></span></div>
-            <div className={networkTone}><Network size={20} aria-hidden="true" /><span>Network<strong>{networkLabel}</strong>{contractCandidate && <small>{contractCandidate} clinic contract</small>}{contractUrl && <small><a href={contractUrl} target="_blank" rel="noopener noreferrer">{result?.network_evidence?.related_document_id ? 'Related payer contract document' : `${contractEvidence?.network_name || 'Payer plan'} contract`}</a></small>}</span></div>
+            <div className={networkTone}><Network size={20} aria-hidden="true" /><span>Network<strong>{networkLabel}</strong>{result?.network_evidence?.reason && <small>{result.network_evidence.reason}</small>}{contractCandidate && !result?.network_evidence?.reason && <small>{contractCandidate} contract could not be matched to this visit</small>}{contractUrl && <small><a href={contractUrl} target="_blank" rel="noopener noreferrer">{contractEvidence?.related_document_id ? 'Clinic Library contract' : `${contractEvidence?.network_name || 'Payer plan'} contract`}</a></small>}</span></div>
             <RequirementCard title="Referral" evidence={result.requirement_evidence?.referral} icon={<FileText size={20} aria-hidden="true" />} />
             <RequirementCard title="Prior authorization" evidence={result.requirement_evidence?.authorization} icon={<ShieldCheck size={20} aria-hidden="true" />} />
           </div>
@@ -453,7 +457,7 @@ export default function CommercialEstimator({ onBack, onResolvePatient, intakeId
             {calculationReasons.map(reason => <p key={reason}>{reason}</p>)}{emgScenario && <p>The service details above cover the consultation. The additional EMG scenario and combined total are shown above.</p>}
             <p className="visit-muted">The arrival amount is an advance collection. Final patient responsibility follows the insurer’s processed claim.</p>
           </section></div></details>
-          <details open={readOnly || undefined} id="visit-detail-sources" className="visit-detail-section" onToggle={event => { if (!readOnly && event.currentTarget.open) { setPanel('sources'); if (history === null && !historyBusy) void loadHistory() } }}><summary>Audit trail & history</summary><div className="visit-detail-body"><section className="visit-provenance"><dl><div><dt>Patient & appointment</dt><dd>eClinicalWorks<small>{result.ecw_retrieved_at && `${visitDate(result.ecw_retrieved_at)} · ${visitTime(result.ecw_retrieved_at)}`}</small></dd></div><div><dt>Payer benefits</dt><dd>{result.benefit_source || 'Not returned'}<small>{result.checked_at ? `${visitDate(result.checked_at)} · ${visitTime(result.checked_at)}` : 'Not returned'}</small></dd></div><div><dt>Clinic contract</dt><dd>{result.network_evidence?.network_name || 'No exact product mapping returned'}</dd></div><div><dt>Cash schedule</dt><dd>{result.cash_schedule?.source || result.practice_cash_source?.filename || 'Not returned'}</dd></div></dl>
+          <details open={readOnly || undefined} id="visit-detail-sources" className="visit-detail-section" onToggle={event => { if (!readOnly && event.currentTarget.open) { setPanel('sources'); if (history === null && !historyBusy) void loadHistory() } }}><summary>Audit trail & history</summary><div className="visit-detail-body"><section className="visit-provenance"><dl><div><dt>Patient & appointment</dt><dd>eClinicalWorks<small>{result.ecw_retrieved_at ? `${visitDate(result.ecw_retrieved_at)} · ${visitTime(result.ecw_retrieved_at)}` : 'Not returned'}</small></dd></div><div><dt>Payer benefits</dt><dd>{result.benefit_source || 'Not returned'}<small>{result.checked_at ? `${visitDate(result.checked_at)} · ${visitTime(result.checked_at)}` : 'Not returned'}</small></dd></div><div><dt>Clinical Library contract</dt><dd>{result.network_evidence?.network_name || result.network_evidence?.reason || 'Contract match not determined'}</dd></div><div><dt>Cash schedule</dt><dd>{result.cash_schedule?.source || result.practice_cash_source?.filename || 'Not returned'}</dd></div></dl>
             <p>{coverageSource}. {networkSource || 'Provider network source unavailable'}.</p>
             {guidance?.basis === 'office_copay' && copayEvidenceId && <p>Office copay: {copaySource} response, row {copayEvidenceId}. This is a payer benefit, not a Library price.</p>}
             {!!result.library_pricing?.length && <details className="library-diagnostics"><summary>Library pricing sources and extraction diagnostics</summary>{result.library_pricing.map(document => <div key={document.document_id}><a href={`/api/staff/library/${encodeURIComponent(document.document_id)}/text`} target="_blank" rel="noreferrer">{document.label}</a> · {document.summary?.status.replaceAll("_", " ") || "Processing"}{document.summary?.issues?.map((issue, index) => <p key={index}>{issue.locator ? `${issue.locator}: ` : ""}{issue.reason}</p>)}</div>)}</details>}

@@ -189,7 +189,8 @@ class VisitReviewTests(IsolatedAsyncioTestCase):
              patch.object(api.ecw_backend, 'fetch_inputs', AsyncMock(return_value=(inputs, [], source))), patch.object(api, '_ecw_practice_config', return_value={}), \
              patch.object(api.object_store, 'get_object_bytes', return_value=json.dumps(raw).encode()), \
              patch.object(api.commercial_store, 'list_connections', return_value=[{'id': 'payer', 'stedi_payer_id': 'payer-b', 'status': 'staff_guidance_enabled'}]), \
-             patch.object(api, '_practice_path', return_value=({}, {'plan_matcher': 'Choice'}, {'rules': {'cost_share': 'payer_returned', 'service_type_by_code': {'93000': '30'}}})), \
+             patch.object(api, '_practice_path', return_value=({}, {'plan_matcher': 'Choice', 'evidence_reference': 'library:synthetic-contract'}, {'rules': {'cost_share': 'payer_returned', 'service_type_by_code': {'93000': '30'}, 'library_source': {'document_id': 'synthetic-contract', 'reference': 'library:synthetic-contract', 'sha256': 'synthetic-hash'}}})), \
+             patch.object(api.staff_store, 'get_library', return_value={'kind': 'contract', 'content_type': 'application/pdf', 'sha256': 'synthetic-hash', 'label': 'Synthetic contract'}), \
              patch.object(api.commercial_store, 'matching_rates', return_value=rates()), patch.object(api, '_save', side_effect=lambda value, *_: {**value, 'revision': 5}) as save, \
              patch.object(api.httpx, 'AsyncClient', side_effect=AssertionError('No paid payer call during review')):
             updated = await api.update_visit_review('case', api.VisitReviewInput(context_token=token, revision=4, payments_received_cents=1500, payment_reference='Ledger #23'), MagicMock())

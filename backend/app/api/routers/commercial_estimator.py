@@ -309,7 +309,9 @@ def _practice_path(practice_id: str, inputs: dict, source: dict) -> tuple[dict, 
     if any(row['status'] == 'nonparticipating' for row in networks):
         raise HTTPException(409, 'A sourced nonparticipation rule applies to this provider, product, location and date.')
     networks = [row for row in networks if row['status'] == 'verified']
-    if len(networks) != 1:
+    if len(networks) > 1:
+        raise HTTPException(409, "Multiple provider-network records match this payer, provider and visit.")
+    if not networks:
         raise HTTPException(409, "This practice has no single verified provider-network record for this eCW provider and location.")
     profiles = [row for row in commercial_store.list_profiles(practice_id)
                 if row["payer_connection_id"] == payer["id"] and row["provider_network_id"] == networks[0]["id"]
@@ -596,13 +598,17 @@ def _previsit_benefits(payload: dict, coverage: dict, service_date: str | None =
     return benefits
 
 
-def _network_contract_evidence(practice_id: str, network: dict, profile: dict) -> dict:
+def _network_contract_evidence(practice_id: str, network: dict, profile: dict, service_date: str = '') -> dict:
     evidence = {key: network.get(key) for key in ('network_name', 'evidence_reference', 'effective_from', 'effective_to')}
+    def current(document: dict) -> bool:
+        return (document.get('kind') == 'contract' and document.get('content_type') == 'application/pdf'
+                and (not service_date or not document.get('effective_from') or document['effective_from'] <= service_date)
+                and (not service_date or not document.get('effective_to') or document['effective_to'] >= service_date))
     library_source = (profile.get('rules') or {}).get('library_source') or {}
     document_id = library_source.get('document_id')
     if document_id and network.get('evidence_reference') == library_source.get('reference') == f'library:{document_id}':
         document = staff_store.get_library(document_id, practice_id)
-        if (document and document.get('kind') == 'contract' and document.get('content_type') == 'application/pdf'
+        if (document and current(document)
                 and document.get('sha256') == library_source.get('sha256')):
             evidence.update(document_id=document_id, document_label=document['label'],
                             locator=library_source.get('locator'))
@@ -610,11 +616,13 @@ def _network_contract_evidence(practice_id: str, network: dict, profile: dict) -
         payer = commercial_store.connection(practice_id, network['payer_connection_id'])
         if payer and payer.get('display_name'):
             contracts = [document for document in staff_store.list_library(practice_id)
-                         if document.get('kind') == 'contract' and document.get('content_type') == 'application/pdf'
+                         if current(document)
                          and document.get('payer')
                          and insurance_identity.normalized(document['payer']) == insurance_identity.normalized(payer['display_name'])]
             if len(contracts) == 1:
                 evidence.update(related_document_id=contracts[0]['id'], related_document_label=contracts[0]['label'])
+            elif len(contracts) > 1:
+                evidence['reason'] = 'Multiple current payer contracts are in the Clinical Library; none is linked to this plan.'
     return evidence
 
 
@@ -647,18 +655,40 @@ def _attach_previsit_pricing(result: dict, practice_id: str, inputs: dict, sourc
             alternatives=not (review or {}).get('selected_ids') and bool(result['codes']) and all(row.get('source') == 'conditional office E/M alternative' for row in result['codes']))
         return
     connection = connections[0]
+    service_date = str(inputs.get('service_date') or '')
+    scope_complete = all((service_date, (inputs.get('rendering_provider') or {}).get('npi'),
+                          (source.get('billing_provider') or {}).get('npi'),
+                          source.get('location_id'), inputs.get('place_of_service'), source.get('plan')))
     try:
         if benefits.get('network_status') == 'out_of_network':
             raise HTTPException(422, 'Payer confirmed out-of-network participation; in-network contract prices do not apply.')
         _, network, profile = _previsit_practice_path(practice_id, {**inputs, "payer_id": connection["id"]}, source)
-        benefits["network_status"] = "in_network"
-        benefits['network_source'] = 'clinic_record'
-        result['network_evidence'] = _network_contract_evidence(practice_id, network, profile)
-        if source.get('payer_network_names'):
-            result['network_evidence']['payer_network_name'] = source['payer_network_names'][0]
-            result['network_evidence']['payer_network_source'] = 'Stedi planNetwork'
-    except HTTPException:
-        pass
+        evidence = _network_contract_evidence(practice_id, network, profile, service_date)
+        if evidence.get('document_id') or evidence.get('related_document_id'):
+            benefits['network_status'] = 'in_network'
+            benefits['network_source'] = 'clinic_library_contract'
+            result['network_evidence'] = evidence
+            if source.get('payer_network_names'):
+                evidence['payer_network_name'] = source['payer_network_names'][0]
+                evidence['payer_network_source'] = 'Stedi planNetwork'
+        elif scope_complete:
+            if evidence.get('reason'):
+                result['network_evidence'] = evidence
+            else:
+                benefits['network_status'] = 'out_of_network'
+                benefits['network_source'] = 'clinic_library_absent'
+                result['network_evidence'] = {'reason': 'No current matching contract in the Clinical Library.'}
+    except HTTPException as exc:
+        no_match = str(exc.detail) in {
+            'A sourced nonparticipation rule applies to this provider, product, location and date.',
+            'This practice has no single verified provider-network record for this eCW provider and location.',
+            'The payer-reported member network does not match the clinic contract.',
+            'The clinic fee schedule is not matched to the exact payer product.',
+        }
+        if scope_complete and no_match:
+            benefits['network_status'] = 'out_of_network'
+            benefits['network_source'] = 'clinic_library_absent'
+            result['network_evidence'] = {'reason': 'No current contract matches this payer, plan, provider and visit in the Clinical Library.'}
     result["price_range"], issues = _previsit_range(practice_id, inputs, source, connection["id"], result["codes"], benefits,
                                                   payload=payload, review=review)
     result["issues"].extend(issues)
@@ -844,10 +874,13 @@ def _finish_previsit(result: dict, case: dict, inputs: dict, source: dict, paylo
         try:
             _, network, profile = _previsit_practice_path(session['practice_id'], {**inputs, 'payer_id': connections[0]['id']},
                                                 {**exact_source, 'payer_plan_names': []})
-            if network.get('network_name') and network.get('evidence_reference'):
+            contract = _network_contract_evidence(session['practice_id'], network, profile, inputs['service_date'])
+            if network.get('network_name') and (contract.get('document_id') or contract.get('related_document_id')):
                 result['mapping_candidate'] = {'network': network['network_name'], 'products': exact_source['payer_plan_names'],
                                                'reference': network['evidence_reference'],
-                                               'contract': _network_contract_evidence(session['practice_id'], network, profile)}
+                                               'contract': contract}
+            else:
+                result.pop('mapping_candidate', None)
         except HTTPException:
             result.pop('mapping_candidate', None)
     if uploaded_cash:

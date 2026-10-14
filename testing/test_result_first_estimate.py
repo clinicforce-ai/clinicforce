@@ -215,7 +215,7 @@ def test_network_pdf_points_only_to_its_uploaded_contract(monkeypatch):
     def estimate():
         result = {'codes': [], 'issues': []}
         api._attach_previsit_pricing(result, 'clinic', {'service_date': DAY}, {}, 'route-a', {})
-        return result['network_evidence']
+        return result.get('network_evidence') or {}
 
     assert estimate()['document_id'] == 'contract-a'
     assert estimate()['locator'] == 'Page 3, row 7'
@@ -238,6 +238,53 @@ def test_payer_only_library_match_is_related_document_not_contract_rule(monkeypa
     evidence = api._network_contract_evidence('clinic', network, {'rules': {}})
     assert evidence['related_document_id'] == 'payer-pdf'
     assert 'document_id' not in evidence
+
+
+def test_current_library_contract_decides_network_independently_of_price(monkeypatch):
+    payer = {'id': 'payer-a', 'stedi_payer_id': 'route-a', 'display_name': 'Example Health',
+             'category': 'commercial_medical', 'status': 'staff_guidance_enabled'}
+    network = {'id': 'network-a', 'payer_connection_id': payer['id'], 'status': 'verified',
+               'network_name': 'Choice PPO', 'billing_npi': '1111111111', 'rendering_npi': '2222222222',
+               'location_id': 'office', 'place_of_service': '11', 'plan_matcher': 'CI',
+               'effective_from': '2020-01-01', 'evidence_reference': 'signed-scope'}
+    profile = {'payer_connection_id': payer['id'], 'provider_network_id': network['id'],
+               'status': 'staff_guidance_enabled', 'plan_matcher': 'CI', 'rules': {}}
+    inputs = {'service_date': DAY, 'rendering_provider': {'npi': '2222222222'}, 'place_of_service': '11'}
+    source = {'billing_provider': {'npi': '1111111111'}, 'location_id': 'office', 'plan': 'CI',
+              'payer_plan_names': ['Preferred Provider Organization Plus Medical']}
+    documents = [{'id': 'contract-a', 'kind': 'contract', 'content_type': 'application/pdf',
+                  'payer': 'Example Health', 'label': 'Synthetic current agreement',
+                  'effective_from': '2020-01-01'}]
+    monkeypatch.setattr(api.commercial_store, 'list_connections', lambda *_: [payer])
+    monkeypatch.setattr(api.commercial_store, 'connection', lambda *_: payer)
+    monkeypatch.setattr(api.commercial_store, 'list_networks', lambda *_: [network])
+    monkeypatch.setattr(api.commercial_store, 'list_profiles', lambda *_: [profile])
+    monkeypatch.setattr(api.staff_store, 'list_library', lambda *_: documents)
+    monkeypatch.setattr(api, '_previsit_range', lambda *_, **__: ({'lines': []}, []))
+
+    def estimate():
+        result, benefits = {'codes': [], 'issues': []}, {'network_status': 'unknown'}
+        api._attach_previsit_pricing(result, 'clinic', inputs, source, 'route-a', benefits)
+        return result, benefits
+
+    result, benefits = estimate()
+    assert benefits['network_status'] == 'in_network'
+    assert result['network_evidence']['related_document_id'] == 'contract-a'
+    documents[0]['effective_to'] = '2020-12-31'
+    result, benefits = estimate()
+    assert benefits['network_status'] == 'out_of_network'
+    assert result['network_evidence']['reason'] == 'No current matching contract in the Clinical Library.'
+    documents[0].pop('effective_to')
+    documents.append({**documents[0], 'id': 'second-contract'})
+    result, benefits = estimate()
+    assert benefits['network_status'] == 'unknown'
+    assert 'Multiple current payer contracts' in result['network_evidence']['reason']
+    documents.clear()
+    result, benefits = estimate()
+    assert benefits['network_status'] == 'out_of_network'
+    del source['location_id']
+    result, benefits = estimate()
+    assert benefits['network_status'] == 'unknown'
 
 
 def test_requirement_candidates_include_suggested_cpts_without_expanding_the_selected_visit():

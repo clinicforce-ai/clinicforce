@@ -22,6 +22,8 @@ def build(result: dict, review: dict | None = None) -> dict:
                            ((result.get('network_evidence') or {}).get('network_name') or
                             (f'{candidate_network} contract; patient network unverified' if candidate_network else 'Not reported')),
                 'network_source': ('Payer statement about the requesting provider' if benefits.get('network_source') == 'payer_participation_message' else
+                                   'Current Clinical Library contract and clinic provider-network record' if benefits.get('network_source') == 'clinic_library_contract' else
+                                   'No current matching Clinical Library contract for this visit' if benefits.get('network_source') == 'clinic_library_absent' else
                                    'Clinic provider-network record' if benefits.get('network_status') in {'in_network', 'out_of_network'} else
                                    'Clinic provider-network record; exact product match not confirmed' if candidate_network else
                                    'Clinic contract; exact product match not confirmed' if (result.get('network_evidence') or {}).get('network_name') else

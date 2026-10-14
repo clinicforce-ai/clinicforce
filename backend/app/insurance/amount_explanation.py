@@ -30,6 +30,8 @@ def _cash_cause(result: dict, failure: dict, recovery: dict, card: dict, network
         return 'the payer response did not match the patient and policyholder details in eCW', 'policy_identity_mismatch'
     if failure.get('codes') and set(failure['codes']) & {'65', '67', '71', '72', '73', '75', '76'}:
         return 'the payer rejected the submitted member details', 'member_identity_unverified'
+    if benefits.get('network_source') == 'clinic_library_absent':
+        return 'the Clinical Library has no current contract for this payer, plan, provider and visit', 'clinic_contract_missing'
     if network == 'out_of_network':
         return 'the plan did not give an allowed price for out-of-network care', 'out_of_network_allowance_missing'
     if unpriced and benefits.get('active') is True and network == 'in_network':
