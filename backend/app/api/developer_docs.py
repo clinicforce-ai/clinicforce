@@ -109,6 +109,10 @@ _SWAGGER_SCRIPT = Path(__file__).with_name("developer_docs.js").read_text(encodi
 
 _TEMPLATE = Path(__file__).with_name("developer_docs.html").read_text(encoding="utf-8")
 
+_GUIDE_SECTION_DIR = Path(__file__).with_name("developer_guide_sections")
+_GUIDE_SECTIONS = "".join((_GUIDE_SECTION_DIR / name).read_text(encoding="utf-8")
+                          for name in ('01-architecture-setup.html', '02-journeys-estimate.html', '03-data-insurance.html', '04-data-inspection.html', '05-debugging-infrastructure.html', '06-release.html'))
+
 
 _GUIDE_STYLE = Path(__file__).with_name("developer_guide.css").read_text(encoding="utf-8")
 _GUIDE_SCRIPT = Path(__file__).with_name("developer_guide.js").read_text(encoding="utf-8")
@@ -123,7 +127,8 @@ def render_docs() -> HTMLResponse:
 <div id="swagger-ui" aria-label="Swagger API reference"></div>
 <script src="https://cdn.jsdelivr.net/npm/swagger-ui-dist@5.32.0/swagger-ui-bundle.js"></script>
 <script>""" + _SWAGGER_SCRIPT + "</script>"
-    html = (_TEMPLATE.replace("{{VIEWER}}", viewer)
+    html = (_TEMPLATE.replace("{{GUIDE_SECTIONS}}", _GUIDE_SECTIONS)
+            .replace("{{VIEWER}}", viewer)
             .replace("{{GUIDE_STYLE}}", _GUIDE_STYLE)
             .replace("{{GUIDE_SCRIPT}}", _GUIDE_SCRIPT))
     return HTMLResponse(html, headers={"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff", "Referrer-Policy": "no-referrer"})

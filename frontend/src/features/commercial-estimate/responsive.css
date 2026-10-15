@@ -1,0 +1,244 @@
+.visit-spin {
+  animation: visit-spin 1.2s linear infinite;
+}
+
+@keyframes visit-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .visit-estimator *,
+  .visit-estimator *::before,
+  .visit-estimator *::after {
+    animation: none !important;
+    transition: none !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+@media (max-width: 800px) {
+  .overview-amounts {
+    gap: 20px;
+  }
+  .cost-limit {
+    padding: 18px;
+  }
+  .cost-emblem {
+    position: static;
+    width: 48px;
+    height: 48px;
+    margin-bottom: 12px;
+  }
+  .cost-emblem svg {
+    width: 28px;
+  }
+  .visit-detail-links {
+    gap: 8px;
+  }
+  .visit-estimator .visit-detail-links button {
+    padding: 12px;
+  }
+  .visit-detail-links button > svg:last-child {
+    display: none;
+  }
+  .visit-snapshots {
+    gap: 8px;
+  }
+  .visit-snapshots > div {
+    padding: 12px;
+    gap: 8px;
+  }
+  .visit-snapshots svg {
+    width: 18px;
+  }
+  .visit-snapshots strong {
+    font-size: 16px;
+  }
+}
+
+@media (max-width: 600px) {
+  .visit-estimator {
+    padding-top: 8px;
+  }
+  .visit-practice {
+    display: none;
+  }
+  .visit-page-header {
+    margin-bottom: 16px;
+  }
+  .visit-patient-bar {
+    flex-wrap: wrap;
+    padding: 14px;
+    gap: 10px;
+  }
+  .coverage-chip {
+    font-size: 12px;
+  }
+  .visit-patient-bar strong {
+    font-size: 18px;
+  }
+  .visit-appointment-strip {
+    gap: 8px;
+    padding: 12px;
+  }
+  .visit-appointment-strip > svg {
+    display: none;
+  }
+  .overview-heading {
+    padding: 16px 16px 0;
+    gap: 8px;
+  }
+  .overview-heading h2 {
+    font-size: 18px;
+  }
+  .visit-estimator .payment-toggle button {
+    padding: 6px 9px;
+    font-size: 13px;
+  }
+  .overview-amounts {
+    grid-template-columns: 1fr;
+    padding: 20px 16px;
+    gap: 20px;
+  }
+  .arrival-total {
+    padding-left: 16px;
+  }
+  .arrival-total > strong {
+    font-size: 48px;
+  }
+  .arrival-total > p {
+    font-size: 14px;
+  }
+  .cost-limit {
+    padding-left: 80px;
+    min-height: 104px;
+  }
+  .cost-emblem {
+    position: absolute;
+    top: 24px;
+    left: 16px;
+  }
+  .cost-picture h3 {
+    font-size: 16px;
+  }
+  .overview-plan-name {
+    flex-wrap: wrap;
+    padding: 12px 16px;
+  }
+  .overview-plan-name > span {
+    overflow-wrap: anywhere;
+  }
+  .cash-comparison {
+    margin-left: 24px;
+    text-align: left;
+  }
+  .visit-snapshots {
+    grid-template-columns: 1fr;
+    margin-bottom: 22px;
+  }
+  .visit-snapshots > div {
+    padding: 12px 16px;
+  }
+  .visit-snapshots span {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 12px;
+    flex: 1;
+  }
+  .visit-care-summary .visit-section-heading {
+    flex-wrap: wrap;
+  }
+  .visit-care-summary h2 {
+    font-size: 20px;
+  }
+  .visit-care-summary .visit-section-heading button {
+    padding: 8px 12px;
+  }
+  .visit-detail-links {
+    grid-template-columns: 1fr;
+    margin-top: 16px;
+  }
+  .visit-estimator .visit-detail-links button {
+    padding: 14px;
+  }
+  .visit-detail-links button > svg:last-child {
+    display: block;
+  }
+  .visit-result-footer {
+    align-items: flex-start;
+  }
+  .visit-result-footer > span {
+    max-width: 65%;
+  }
+  .visit-result-footer > span svg {
+    display: none;
+  }
+  .visit-detail-panel {
+    width: calc(100vw - 16px);
+    max-height: calc(100dvh - 16px);
+    border-radius: 14px;
+  }
+  .visit-detail-header {
+    padding: 12px 16px;
+  }
+  .visit-detail-header h2 {
+    font-size: 20px;
+  }
+  .visit-detail-body {
+    padding: 16px;
+  }
+  .policy-relationship {
+    grid-template-columns: 1fr;
+    gap: 10px;
+  }
+  .policy-relationship > svg {
+    transform: rotate(90deg);
+  }
+  .visit-audit-grid,
+  .procedure-options {
+    grid-template-columns: 1fr;
+  }
+  .patient-policy dl,
+  .visit-provenance dl,
+  .service-evidence dl {
+    gap: 12px;
+  }
+  .service-category-buttons {
+    gap: 4px;
+  }
+  .visit-estimator .service-category-buttons button {
+    font-size: 13px;
+    padding: 8px 10px;
+  }
+  .visit-plan-footer {
+    flex-wrap: wrap;
+  }
+  .visit-plan-footer .visit-primary {
+    width: 100%;
+  }
+  .clinical-service-table {
+    font-size: 13px;
+  }
+  .clinical-service-table :is(th, td) {
+    padding: 8px;
+  }
+}
+
+@media print {
+  .visit-estimator button,
+  .visit-detail-links,
+  .visit-detail-panel {
+    display: none !important;
+  }
+  .visit-overview,
+  .visit-care-summary {
+    break-inside: avoid;
+    box-shadow: none;
+  }
+  .visit-content {
+    padding: 12px 0;
+  }
+}

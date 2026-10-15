@@ -1,0 +1,353 @@
+.v2-price > span {
+  display: block;
+  color: #345276;
+  font-size: 0.84rem;
+}
+
+.v2-price > strong {
+  display: block;
+  margin-block: 10px;
+  font-size: clamp(2rem, 4vw, 2.9rem);
+  color: #12396b;
+  letter-spacing: -0.03em;
+}
+
+.v2-price > small {
+  color: var(--muted-ink);
+  font-size: 0.72rem;
+}
+
+.v2-capabilities {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 18px;
+}
+
+.v2-capabilities > div {
+  display: grid;
+  gap: 8px;
+  align-content: start;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  padding: 16px;
+  font-size: 0.8rem;
+}
+
+.v2-capabilities span,
+.v2-capabilities small {
+  color: var(--muted-ink);
+  line-height: 1.6;
+}
+
+.v2-review-line {
+  padding: 16px;
+  margin-block: 12px;
+  border: 1px solid var(--line);
+}
+
+.v2-history {
+  list-style: none;
+  margin-block: 20px;
+  padding-left: 0;
+}
+
+.v2-history li {
+  position: relative;
+  display: flex;
+  justify-content: space-between;
+  gap: 18px;
+  border-left: 1px solid #bbcee8;
+  padding: 0 0 20px 20px;
+  font-size: 0.76rem;
+}
+
+.v2-history li::before {
+  content: '';
+  position: absolute;
+  left: -4px;
+  top: 3px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #246bdb;
+}
+
+.v2-history time {
+  color: var(--muted-ink);
+  white-space: nowrap;
+  font-size: 0.68rem;
+}
+
+@media (max-width: 900px) {
+  .v2-layout {
+    display: block;
+  }
+  .v2-rail {
+    position: static;
+  }
+  .v2-rail ol {
+    grid-template-columns: repeat(3, 1fr);
+    margin-block: 18px;
+  }
+  .v2-rail > small,
+  .v2-rail > .v2-case-id,
+  .v2-rail > .section-kicker:not(:first-child) {
+    display: none;
+  }
+}
+
+@media (max-width: 560px) {
+  .insurance-v2 .insurance-beta-hero {
+    margin-inline: 0;
+  }
+  .v2-documents,
+  .v2-facts,
+  .v2-capabilities {
+    grid-template-columns: 1fr;
+  }
+  .v2-rail ol {
+    grid-template-columns: repeat(2, 1fr);
+  }
+  .v2-history li {
+    flex-direction: column;
+    gap: 5px;
+  }
+}
+
+/* Insurance V2 decision sheet: the scheduling answer stays visible above technical payer detail. */
+
+.v2-decision-sheet {
+  border: 1px solid var(--line);
+  border-top: 0;
+  background: #fff;
+  padding: 0 clamp(20px, 4vw, 48px) 44px;
+}
+
+.v2-decision-sheet h2 {
+  max-width: 28ch;
+}
+
+.v2-start {
+  min-height: 340px;
+  padding: clamp(36px, 7vw, 76px) 0;
+}
+
+.v2-start > p:not(.section-kicker) {
+  max-width: 62ch;
+  color: var(--muted-ink);
+  line-height: 1.65;
+}
+
+.v2-start .button {
+  margin-top: 18px;
+}
+
+.v2-appointment-choice {
+  display: grid;
+  gap: 7px;
+  max-width: 620px;
+  margin-top: 22px;
+  color: var(--ink);
+  font-size: 0.82rem;
+  font-weight: 700;
+}
+
+.v2-appointment-choice select {
+  min-height: 44px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #fff;
+  color: var(--ink);
+  font: inherit;
+  font-weight: 500;
+}
+
+.v2-decision {
+  margin: 28px 0 0;
+  border-top: 7px solid #d69b36;
+  background: #102e54;
+  padding: clamp(24px, 4vw, 40px);
+  color: #fff;
+  box-shadow: 0 16px 35px rgba(16, 46, 84, 0.16);
+}
+
+.v2-decision-collect {
+  border-top-color: #59ceb0;
+}
+
+.v2-decision-do_not_schedule,
+.v2-decision-self_pay {
+  border-top-color: #f3a66a;
+  background: #48291d;
+}
+
+.v2-decision > p {
+  margin: 0 0 8px;
+  color: #a8efe2;
+  font-size: 0.7rem;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.v2-decision h2 {
+  max-width: 25ch;
+  margin: 0 0 26px;
+  color: #fff;
+  font-size: clamp(2rem, 4.8vw, 3.7rem);
+  line-height: 1.02;
+}
+
+.v2-decision-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  border-top: 1px solid rgba(255, 255, 255, 0.22);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.22);
+}
+
+.v2-decision-grid > div {
+  min-width: 0;
+  padding: 18px 16px;
+}
+
+.v2-decision-grid > div:first-child {
+  padding-left: 0;
+}
+
+.v2-decision-grid > div + div {
+  border-left: 1px solid rgba(255, 255, 255, 0.2);
+}
+
+.v2-decision-grid span,
+.v2-decision-grid strong,
+.v2-decision-grid small {
+  display: block;
+}
+
+.v2-decision-grid span {
+  color: #b9cce2;
+  font-size: 0.65rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.v2-decision-grid strong {
+  margin: 6px 0;
+  color: #fff;
+  font-size: 0.88rem;
+  overflow-wrap: anywhere;
+}
+
+.v2-decision-grid small {
+  color: #c5d3e5;
+  font-size: 0.7rem;
+  line-height: 1.45;
+}
+
+.v2-summary-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 20px;
+}
+
+.v2-summary-actions .button {
+  border-color: rgba(255, 255, 255, 0.35);
+  background: rgba(255, 255, 255, 0.08);
+  color: #fff;
+}
+
+.v2-summary-actions .button:hover {
+  background: rgba(255, 255, 255, 0.16);
+}
+
+.v2-prices {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  margin: 28px 0 0;
+  border-block: 1px solid var(--line);
+}
+
+.v2-prices article {
+  min-width: 0;
+  padding: 26px 28px 24px 0;
+}
+
+.v2-prices article + article {
+  border-left: 1px solid var(--line);
+  padding-right: 0;
+  padding-left: 28px;
+}
+
+.v2-prices p {
+  margin: 0;
+  color: var(--blue-deep);
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.v2-prices h3 {
+  margin: 7px 0 2px;
+  color: var(--ink);
+  font:
+    600 clamp(2rem, 4vw, 3.15rem)/1 'Fira Code',
+    monospace;
+  letter-spacing: -0.06em;
+}
+
+.v2-prices > article > span,
+.v2-prices > article > small {
+  color: var(--muted-ink);
+  font-size: 0.72rem;
+}
+
+.v2-prices dl {
+  margin: 22px 0 14px;
+  border-top: 1px solid var(--line);
+}
+
+.v2-prices dl > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  border-bottom: 1px solid var(--line);
+  padding: 11px 0;
+}
+
+.v2-prices dt {
+  color: var(--muted-ink);
+  font-size: 0.76rem;
+}
+
+.v2-prices dd {
+  margin: 0;
+  color: var(--blue-deep);
+  font:
+    600 0.8rem 'Fira Code',
+    monospace;
+}
+
+.v2-price-explanation {
+  margin-top: 14px;
+  border-top: 1px solid var(--line);
+  padding-top: 8px;
+}
+
+.v2-price-explanation summary {
+  min-height: 38px;
+  align-content: center;
+  color: var(--blue-deep);
+  font-size: 0.75rem;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.v2-price-explanation > div {
+  padding: 9px 0;
+  border-top: 1px solid var(--line);
+}

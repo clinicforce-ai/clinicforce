@@ -1,0 +1,38 @@
+.patient-upload {
+  min-height: 0;
+  display: block;
+}
+
+.patient-upload-content {
+  max-width: 760px;
+  margin: 0 auto;
+}
+
+.patient-card-input {
+  margin-top: 24px;
+}
+
+.patient-file-list {
+  padding-left: 22px;
+  margin: 12px 0;
+  overflow-wrap: anywhere;
+  font-size: 14px;
+}
+
+.patient-expiry {
+  margin-top: 14px !important;
+}
+
+.patient-upload[hidden] {
+  display: none;
+}
+
+@media (max-width: 780px) {
+  .patient-upload-content {
+    width: 100%;
+  }
+
+  .patient-upload .staff-header {
+    margin-top: 20px;
+  }
+}

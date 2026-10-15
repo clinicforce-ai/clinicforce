@@ -62,6 +62,44 @@ def test_discovery_returns_safe_dependent_candidate_for_staff_selection():
     assert rows[0]['member_id'] == 'family-id'  # Authorized case response, never an audit event.
 
 
+def test_dependent_uses_the_only_active_policy_and_collapses_identical_route_copies():
+    case, _, _, item = setup()
+    inputs = case['previsit_context']['inputs']
+    source = case['previsit_context']['source']
+    dependent = deepcopy(item)
+    dependent['subscriber'] = {'firstName': 'Parent', 'lastName': 'Example', 'dateOfBirth': '19500101',
+                               'memberId': 'family-id'}
+    dependent['dependent'] = {'firstName': 'Pat', 'lastName': 'Example', 'dateOfBirth': '19800101',
+                              'address': inputs['patient']['address'], 'relationToSubscriberCode': '19'}
+    source['active_coverages'] = 0
+    inputs['relationship'] = 'unknown'
+    expired = deepcopy(dependent)
+    expired['benefitsInformation'] = [{'code': '6', 'serviceTypeCodes': ['30']}]
+    expired.pop('plans', None)
+    items = [expired, dependent]
+    rows = discovery.candidates({'items': items}, inputs, source)
+    assert discovery.one_active_policy(rows, items)['index'] == 1
+    duplicate = deepcopy(dependent)
+    duplicate['payerId'] = 'alternate-route'
+    duplicate['payer']['payorIdentification'] = 'alternate-route'
+    items = [dependent, duplicate]
+    rows = discovery.candidates({'items': items}, inputs, source)
+    assert discovery.one_active_policy(rows, items) is not None
+    duplicate['benefitsInformation'].append({'code': 'B', 'serviceTypeCodes': ['98'], 'benefitAmount': '50'})
+    items = [dependent, duplicate]
+    rows = discovery.candidates({'items': items}, inputs, source)
+    assert discovery.one_active_policy(rows, items) is None
+    duplicate = deepcopy(dependent)
+    duplicate['payerId'] = 'alternate-route'
+    duplicate['benefitsInformation'].append({'code': 'F', 'serviceTypeCodes': ['33'], 'benefitAmount': '25'})
+    items = [dependent, duplicate]
+    rows = discovery.candidates({'items': items}, inputs, source)
+    assert discovery.one_active_policy(rows, items, ['98', '30']) is not None
+    duplicate['benefitsInformation'].append({'code': 'B', 'serviceTypeCodes': ['98'], 'benefitAmount': '50'})
+    rows = discovery.candidates({'items': items}, inputs, source)
+    assert discovery.one_active_policy(rows, items, ['98', '30']) is None
+
+
 def test_automatic_payer_recovery_requires_same_active_ecw_policy():
     case, _, _, item = setup()
     inputs, source = case['previsit_context']['inputs'], case['previsit_context']['source']

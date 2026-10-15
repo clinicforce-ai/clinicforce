@@ -1,0 +1,262 @@
+.arrival-total {
+  border-left: 4px solid var(--ve-teal);
+  padding-left: 22px;
+}
+
+.arrival-total.is-blocked {
+  border-left-color: var(--ve-error);
+}
+
+.arrival-total.is-blocked > strong,
+.arrival-total.is-blocked > p {
+  color: var(--ve-error);
+}
+
+.arrival-total > span:first-child {
+  font-size: 14px;
+  color: var(--ve-muted);
+}
+
+.arrival-total > strong {
+  display: block;
+  font-size: clamp(40px, 5vw, 64px);
+  line-height: 1.15;
+  letter-spacing: -0.055em;
+  margin: 8px 0 12px;
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}
+
+.arrival-total > strong.amount-pending {
+  font-size: 30px;
+  letter-spacing: -0.03em;
+}
+
+.arrival-total > p {
+  font-size: 15px;
+  max-width: 49ch;
+}
+
+.arrival-money-picture {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  max-width: 590px;
+  gap: 8px;
+  margin: 16px 0 0;
+}
+
+.arrival-money-picture > div {
+  min-width: 0;
+  padding: 10px 12px;
+  border-radius: 9px;
+  background: var(--ve-canvas);
+  border-top: 3px solid var(--ve-teal);
+}
+
+.arrival-money-picture > div:nth-child(2) {
+  border-top-color: #6977a9;
+}
+
+.arrival-money-picture > div:nth-child(3) {
+  border-top-color: #759a81;
+}
+
+.arrival-money-picture dt {
+  color: var(--ve-muted);
+  font-size: 12px;
+}
+
+.arrival-money-picture dd {
+  margin: 3px 0 0;
+  font-size: 15px;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+}
+
+.cash-package-shortcut {
+  margin-top: 12px;
+  border: 1px solid var(--ve-error);
+  border-radius: 8px;
+  padding: 9px 14px;
+  color: var(--ve-error);
+  background: white;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.arrival-total .estimate-condition {
+  display: block;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--ve-review);
+  max-width: 53ch;
+}
+
+.visit-estimator .visit-text-button {
+  color: var(--ve-teal);
+  font-size: 14px;
+  padding-left: 0;
+}
+
+.cost-picture {
+  min-width: 0;
+  padding: 22px;
+  background: var(--ve-canvas);
+  border-radius: 14px;
+}
+
+.cost-picture > svg {
+  color: var(--ve-teal);
+  margin-bottom: 10px;
+}
+
+.cost-picture p {
+  font-size: 14px;
+  color: var(--ve-muted);
+  margin-bottom: 0;
+}
+
+.cost-limit {
+  position: relative;
+  padding-left: 98px;
+  min-height: 144px;
+}
+
+.cost-emblem {
+  position: absolute;
+  top: 28px;
+  left: 20px;
+  width: 60px;
+  height: 72px;
+  display: grid;
+  place-items: center;
+  color: var(--ve-teal);
+  border: 1px solid #bcdacf;
+  border-radius: 22px 22px 30px 30px;
+  background: var(--ve-soft);
+}
+
+.cost-picture > span:last-child {
+  display: block;
+  font-size: 12px;
+  color: var(--ve-muted);
+  margin-top: 12px;
+}
+
+.cost-share-bar {
+  display: flex;
+  width: 100%;
+  height: 20px;
+  overflow: hidden;
+  border-radius: 6px;
+  margin: 18px 0;
+  gap: 3px;
+}
+
+.cost-share-bar span:first-child {
+  background: var(--ve-ink);
+}
+
+.cost-share-bar span:last-child {
+  background: var(--ve-teal);
+}
+
+.cost-share-legend {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  margin: 0;
+}
+
+.cost-share-legend dt {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+}
+
+.cost-share-legend i {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--ve-ink);
+}
+
+.cost-share-legend > div:last-child i {
+  background: var(--ve-teal);
+}
+
+.cost-share-legend dd {
+  margin: 5px 0;
+  font:
+    500 20px 'Fira Code',
+    monospace;
+  letter-spacing: -0.05em;
+}
+
+.overview-plan-name {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--ve-canvas);
+  border-top: 1px solid var(--ve-line);
+  padding: 12px 24px;
+  font-size: 13px;
+  color: var(--ve-muted);
+}
+
+.cash-comparison {
+  margin-left: auto;
+  text-align: right;
+}
+
+.visit-snapshots {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  margin: 18px 0 26px;
+  gap: 14px;
+}
+
+.visit-snapshots > div {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 16px;
+  border: 1px solid var(--ve-line);
+  border-radius: 12px;
+  background: white;
+}
+
+.visit-snapshots svg {
+  color: var(--ve-muted);
+}
+
+.visit-snapshots span {
+  font-size: 12px;
+  color: var(--ve-muted);
+}
+
+.visit-snapshots strong {
+  display: block;
+  font-size: 18px;
+  color: var(--ve-ink);
+  font-weight: 500;
+}
+
+.visit-care-summary .visit-section-heading {
+  margin-bottom: 12px;
+}
+
+.visit-care-summary .visit-section-heading button {
+  font-size: 14px;
+  border-color: var(--ve-line);
+  background: white;
+  flex-shrink: 0;
+}
+
+.visit-care-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(260px, 100%), 1fr));
+  gap: 12px;
+}

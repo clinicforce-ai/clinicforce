@@ -1,0 +1,162 @@
+<section id="architecture" data-keywords="architecture request backend frontend react fastapi route server how works" aria-labelledby="arch-title"><h2 id="arch-title">How a request works</h2><p class="section-intro">An API is how the screen asks the server to do something. The server checks permission, runs the rules and returns a result.</p><figure class="learning-flow"><figcaption>Example: staff click a button to check a visit</figcaption><ol><li><span class="flow-step">1</span><strong>Screen</strong><span>React captures the click.</span></li><li><span class="flow-step">2</span><strong>API</strong><span>FastAPI checks the request and login.</span></li><li><span class="flow-step">3</span><strong>Rules</strong><span>A service reads data or calls a provider.</span></li><li><span class="flow-step">4</span><strong>Result</strong><span>The screen shows the returned answer.</span></li></ol></figure><details class="reference-detail" id="architecture-detail-1"><summary>Details and source links</summary><div><p class="section-intro">Every feature crosses the same boundary: the browser collects intent, FastAPI decides what is allowed, and a store or integration carries out the work. A screen never writes directly to PostgreSQL, HAPI, or an insurer.</p>
+<figure><div class="trail"><div><strong>React screen</strong><small>AppShell chooses a view and captures a user action.</small></div><div><strong>API adapter</strong><small>Typed fetch wrapper sends same-origin cookies; Staff insurance workflows pass the selected intake ID with each request.</small></div><div><strong>FastAPI route</strong><small>Validates input, session, clinic ownership, and workflow state.</small></div><div><strong>Domain service</strong><small>FHIR, OCR, payer, or estimate rules interpret the request.</small></div><div><strong>Saved result</strong><small>PostgreSQL, S3/Drive, HAPI, or an external response.</small></div></div><figcaption>Trace a bug in this order from the visible button to the returned field.</figcaption></figure>
+<div class="table-wrap"><table><thead><tr><th>Layer</th><th>Code or service</th><th>Responsibility</th></tr></thead><tbody><tr><td>Browser</td><td><code>features/application/AppShell.tsx</code>, <code>features/&lt;workflow&gt;/</code>, <code>services/api/</code></td><td>Navigation, forms, display state, typed request adapters; same-origin session cookies.</td></tr><tr><td>HTTP</td><td><code>api/application.py</code>, <code>api/routers/</code>, Pydantic schemas</td><td>Route matching, input validation, authorization, response shaping.</td></tr><tr><td>Rules</td><td><code>domain/fhir/</code>, <code>ingestion/</code>, <code>insurance/</code>, <code>reports/</code></td><td>FHIR conversion, EHR/PDF input, payer interpretation, estimates, clinical reports.</td></tr><tr><td>Persistence</td><td><code>core/*_store.py</code>, <code>insurance/store.py</code>, HAPI, S3/Drive</td><td>Accounts, cases, event history, structured resources, original file bytes.</td></tr></tbody></table></div></div></details>
+</section>
+<section id="local-setup" data-keywords="install setup docker python npm vite localhost environment env start computer" aria-labelledby="local-setup-title"><h2 id="local-setup-title">Run it on your computer</h2><p class="section-intro">Use three pieces: a database, the Python API and the React website. Start the database first, then keep the API and website running in separate terminals.</p><figure class="learning-flow"><figcaption>Local development: start from left to right</figcaption><ol><li><span class="flow-step">1</span><strong>Database</strong><span>Docker starts PostgreSQL and HAPI.</span></li><li><span class="flow-step">2</span><strong>API · :8000</strong><span>Python runs the backend.</span></li><li><span class="flow-step">3</span><strong>Website · :5173</strong><span>Vite serves the UI and forwards API calls.</span></li></ol></figure><p class="callout"><strong>Before you start:</strong> get repository access and use an ignored local <code>.env</code>. The commands below target Ubuntu or Ubuntu in WSL2; they identify macOS alternatives.</p><details class="reference-detail" id="local-setup-detail-1"><summary>Details and source links</summary><div><p>Start here on a new computer. Commands use <strong>Bash on Ubuntu 24.04 or Ubuntu in WSL2</strong>. On Windows, install <a href="https://learn.microsoft.com/en-us/windows/wsl/install">WSL2</a> and enable Docker Desktop’s WSL integration; run the commands inside Ubuntu, not PowerShell. On macOS use Docker Desktop and the linked native installers; the <code>apt-get</code> commands below are Ubuntu-only. A terminal command runs in the folder shown by <code>pwd</code>. A new terminal needs its own <code>cd</code> and Python environment activation.</p>
+<div class="table-wrap"><table><thead><tr><th>Install / account</th><th>Why it is needed</th><th>Version or official instructions</th></tr></thead><tbody><tr><td>Git and GitHub access</td><td>Git tracks code. GitHub hosts the two private repositories; ask an organization administrator for access.</td><td><a href="https://git-scm.com/book/en/v2/Getting-Started-Installing-Git">Install Git</a>; <a href="https://cli.github.com/">GitHub CLI</a> (<code>gh</code>) authenticates cloning and releases.</td></tr><tr><td>Python + uv</td><td>Python runs FastAPI; uv installs the interpreter and an isolated virtual environment.</td><td>Use Python <code>3.11.11</code> to match <a href="https://github.com/clinicforce-ai/clinicforce/blob/main/backend/Dockerfile"><code>backend/Dockerfile</code></a>. <a href="https://docs.astral.sh/uv/getting-started/installation/">Install uv</a>.</td></tr><tr><td>Node.js + npm</td><td>Build and run the React frontend. npm installs the locked JavaScript dependencies.</td><td>Use Node <code>24.11.0</code>, matching CI. <a href="https://github.com/nvm-sh/nvm#installing-and-updating">Install nvm</a> to select it.</td></tr><tr><td>Docker Engine/Desktop + Compose v2</td><td>Runs the PostgreSQL database and HAPI FHIR server. Compose starts multiple containers from one YAML file.</td><td><a href="https://docs.docker.com/engine/install/ubuntu/">Ubuntu Docker installation</a> or <a href="https://docs.docker.com/desktop/">Docker Desktop</a>. Use <code>docker compose</code> (with a space).</td></tr><tr><td>Tesseract and PDF libraries</td><td>Local card OCR and WeasyPrint reports require native libraries, in addition to pip packages.</td><td>Install the Ubuntu packages below; the production image declares the equivalent dependencies.</td></tr><tr><td>AWS CLI v2 — operators only</td><td>Inspect deployments, CloudWatch and authorized development storage. Local login/UI development does not need AWS.</td><td><a href="https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html">Install AWS CLI</a>; obtain an assigned AWS role/profile from the administrator.</td></tr></tbody></table></div></div></details>
+<details class="reference-detail" id="local-setup-detail-2"><summary>1. Install the local tools</summary><div><pre><code># Ubuntu / WSL Ubuntu
+sudo apt-get update
+sudo apt-get install -y git curl ca-certificates unzip gh   libpango-1.0-0 libharfbuzz0b libpangoft2-1.0-0 libglib2.0-0   libffi-dev shared-mime-info tesseract-ocr
+
+# Download, inspect, then run the uv installer.
+curl -LsSf https://astral.sh/uv/install.sh -o /tmp/clinicforce-uv-install.sh
+less /tmp/clinicforce-uv-install.sh
+sh /tmp/clinicforce-uv-install.sh
+source "$HOME/.local/bin/env"
+uv python install 3.11.11
+
+# Install nvm using its pinned official installer, then load it in this shell.
+curl -fsSL https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.8/install.sh \
+  -o /tmp/clinicforce-nvm-install.sh
+less /tmp/clinicforce-nvm-install.sh
+bash /tmp/clinicforce-nvm-install.sh
+source "$HOME/.nvm/nvm.sh"
+nvm install 24.11.0
+nvm use 24.11.0
+node --version
+npm --version
+uv --version
+git --version
+gh --version
+tesseract --version
+
+# After installing Docker with the official OS instructions:
+docker version
+docker compose version
+docker run --rm hello-world</code></pre>
+<p>In <code>less</code>, press <code>q</code> to exit. Docker must report both client and server versions. If it says permission denied for the Docker socket, complete Docker’s <a href="https://docs.docker.com/engine/install/linux-postinstall/">Linux post-install steps</a> and reopen the session, or use the administrator-approved Docker setup. Do not loosen socket permissions. These commands install software on your computer; they do not deploy ClinicForce.</p>
+<details id="local-setup-extra-1"><summary>Native Ubuntu: Docker installation commands</summary><div><p>Docker group membership grants powerful access to the host. Use the installation method approved for your development computer. These are Ubuntu apt-repository commands; WSL with Docker Desktop uses Desktop’s integration instead.</p><pre><code># Native Ubuntu only. Skip this block if Docker Desktop already supplies Docker.
+# Follow the official guide first if an older/conflicting Docker install exists.
+sudo install -m 0755 -d /etc/apt/keyrings
+sudo curl -fsSL https://download.docker.com/linux/ubuntu/gpg \
+  -o /etc/apt/keyrings/docker.asc
+sudo chmod a+r /etc/apt/keyrings/docker.asc
+. /etc/os-release
+printf 'deb [arch=%s signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu %s stable\n' \
+  "$(dpkg --print-architecture)" "$VERSION_CODENAME" \
+  | sudo tee /etc/apt/sources.list.d/docker.list &gt; /dev/null
+sudo apt-get update
+sudo apt-get install -y docker-ce docker-ce-cli containerd.io \
+  docker-buildx-plugin docker-compose-plugin
+sudo systemctl enable --now docker
+sudo docker run --rm hello-world
+# On an approved single-user development machine, to run without sudo:
+sudo usermod -aG docker "$(id -un)"
+# Log out and back in before continuing with unprivileged docker commands.</code></pre></div></details></div></details>
+<details class="reference-detail" id="local-setup-detail-3"><summary>2. Sign in to GitHub and get the code</summary><div><pre><code>gh auth login
+gh auth setup-git
+mkdir -p ~/clinicforce-workspace
+cd ~/clinicforce-workspace
+gh repo clone clinicforce-ai/clinicforce
+gh repo clone clinicforce-ai/clinicforce-aws
+cd clinicforce
+pwd
+git status --short --branch
+uv venv --python 3.11.11 .venv
+source .venv/bin/activate
+uv pip install --python .venv/bin/python -r backend/requirements.txt pytest</code></pre>
+<p>Skip cloning repositories that already exist. The application root is the folder containing <code>backend/</code>, <code>frontend/</code>, <code>docker-compose.yml</code> and <code>deploy</code>. In the existing workspace it is <code>/home/mustansir/clinicforce/clinicforce</code>, not its parent. The infrastructure repo is its sibling <code>clinicforce-aws</code>. Keep terminal commands in the correct repo. Never run <code>./deploy</code> merely to start your laptop copy.</p></div></details>
+<details class="reference-detail" id="local-setup-detail-4"><summary>3. Start the database and create the application database</summary><div><pre><code># Application root; Docker must already be running.
+docker compose up -d postgres
+docker compose exec postgres pg_isready -U hapi -d hapi
+
+# Run once on a new local database. Wait for "accepting connections" first.
+docker compose exec postgres createdb -U hapi clinicforce
+
+docker compose up -d fhir
+docker compose ps
+curl --fail --silent --show-error --output /dev/null   http://localhost:8080/fhir/metadata</code></pre>
+<p>Compose creates a PostgreSQL 15 container and its <code>hapi</code> database. The extra <code>clinicforce</code> database above holds application accounts and cases; both use the Compose role for this local-only recipe. If <code>createdb</code> says the database already exists, keep it and continue. The backend creates its application tables through store initialization; there is no separate Alembic migration command in this repository. HAPI can take several minutes to initialize. Inspect <code>docker compose logs --tail=80 fhir</code> if its metadata endpoint is not ready. The local Compose image uses <code>hapiproject/hapi:latest</code>; this is not a reproduction of a pinned production image. Use staging for release verification.</p></div></details>
+<details class="reference-detail" id="local-setup-detail-5"><summary>4. Create an ignored local configuration and administrator</summary><div><p>Run this from the application root with the virtual environment active. It creates a <strong>new</strong> root <code>.env</code>, reads the local database password from Compose without printing it, and prompts for a local-only staff password (at least 12 characters). It refuses to overwrite an existing file. If you already have a <code>.env</code>, edit it privately using this key list; do not replace existing configuration blindly. The password is stored as a one-way hash. Use only synthetic data in this local setup.</p>
+<pre><code>umask 077
+python - &lt;&lt;'PYENV'
+import getpass, json, secrets, subprocess
+from pathlib import Path
+from urllib.parse import quote
+from passlib.hash import pbkdf2_sha256
+path = Path(".env")
+if path.exists():
+    raise SystemExit(".env already exists; review and update it privately.")
+config = json.loads(subprocess.check_output(
+    ["docker", "compose", "config", "--format", "json"]))
+db = config["services"]["postgres"]["environment"]
+password = getpass.getpass("Choose a local staff password (12+ characters): ")
+if not 12 &lt;= len(password) &lt;= 256:
+    raise SystemExit("Choose a password between 12 and 256 characters.")
+bootstrap = {"username": "local-admin@clinicforce.invalid",
+    "password_hash": pbkdf2_sha256.using(rounds=29000, salt_size=16).hash(password),
+    "practice_id": "local-demo", "practice_name": "Synthetic Local Clinic",
+    "display_name": "Local Administrator"}
+values = {
+    "DATABASE_URL": "postgresql://" + quote(db["POSTGRES_USER"], safe="") + ":"
+        + quote(db["POSTGRES_PASSWORD"], safe="") + "@localhost:5432/clinicforce",
+    "HAPI_FHIR_URL": "http://localhost:8080",
+    "PUBLIC_BASE_URL": "http://localhost:5173",
+    "CORS_ALLOW_ORIGINS": "http://localhost:5173",
+    "STAFF_BOOTSTRAP_CREDENTIALS": json.dumps(bootstrap),
+    "SOURCE_LINK_SECRET": secrets.token_urlsafe(48),
+    "EPIC_OAUTH_STATE_SECRET": secrets.token_urlsafe(48),
+    "COMMERCIAL_EVIDENCE_HMAC_KEY": secrets.token_urlsafe(48),
+    "INSURANCE_BETA_ENABLED": "true",
+    "STAFF_INTEGRATION_PRACTICE_IDS": "local-demo",
+    "STEDI_EXECUTION_MODE": "fixture", "STEDI_LIVE_ELIGIBILITY_ENABLED": "false",
+    "STEDI_FALLBACK_ENABLED": "false", "STEDI_API_KEY": "",
+    "STEDI_TEST_API_KEY": "", "STEDI_PRACTICE_API_KEYS": "",
+    "AVAILITY_ENVIRONMENT": "demo", "AVAILITY_CLIENT_ID": "",
+    "AVAILITY_CLIENT_SECRET": "", "AVAILITY_PRACTICE_CONFIG": "{}",
+    "ECW_BACKEND_CLIENT_ID": "", "ECW_BACKEND_ISSUER": "",
+    "ECW_CLIENT_ID": "", "ECW_CLIENT_JWK": "", "ECW_KMS_KEY_ID": "",
+    "S3_BUCKET": "", "IDME_ENABLED": "false",
+    "EPIC_ENDPOINT_SYNC_ENABLED": "false", "AWS_EC2_METADATA_DISABLED": "true",
+}
+with path.open("x") as output:
+    for key, value in values.items():
+        output.write(key + "=" + json.dumps(value) + "\n")
+path.chmod(0o600)
+print("Created private local .env; values withheld.")
+PYENV
+git check-ignore .env</code></pre>
+<p>Important: <a href="https://github.com/clinicforce-ai/clinicforce/blob/main/backend/app/__init__.py"><code>backend/app/__init__.py</code></a> currently loads <code>backend/.env</code> implicitly, despite its “repository .env” comment. The startup command below explicitly loads the <strong>root</strong> file with <code>--env-file .env</code>. Already-exported shell variables take precedence; use a clean development terminal without production integration variables or AWS credentials. Avoid keeping a second conflicting <code>backend/.env</code>. Nothing secret belongs in <code>frontend/.env</code> or a <code>VITE_*</code> variable: frontend build values are delivered to browsers.</p></div></details>
+<details class="reference-detail" id="local-setup-detail-6"><summary>5. Run the API and frontend in separate terminals</summary><div><pre><code># Terminal A — leave this running.
+cd ~/clinicforce-workspace/clinicforce
+source .venv/bin/activate
+python -m uvicorn app.main:app --app-dir backend --env-file .env   --host 127.0.0.1 --port 8000 --reload</code></pre>
+<pre><code># Terminal B — leave this running.
+cd ~/clinicforce-workspace/clinicforce/frontend
+nvm use 24.11.0
+npm ci
+npm run dev -- --host 127.0.0.1 --port 5173 --strictPort</code></pre>
+<p>Open <a href="http://localhost:5173">http://localhost:5173</a>, choose the clinic/staff sign-in screen, and use <code>local-admin@clinicforce.invalid</code> with the password you entered. Use <code>localhost</code> consistently in the browser; <code>127.0.0.1</code> is a different origin. Vite forwards <code>/api</code> and <code>/manifest</code> to FastAPI at port 8000, so the browser uses one origin and keeps its staff cookie. <code>--strictPort</code> prevents Vite silently moving to a port that the backend would reject. Staff bootstrap creates the administrator on first login and does not reset an existing account when the variable changes.</p>
+<pre><code># Terminal C — application root.
+curl --fail http://localhost:8000/healthz
+curl --fail http://localhost:8000/readyz
+curl --fail --silent --show-error --output /dev/null http://localhost:8000/api/docs
+curl --fail --silent --show-error --output /dev/null http://localhost:8000/api/openapi.json</code></pre>
+<p>Expected: the health endpoints return HTTP 200; <code>/healthz</code> returns <code>{"status":"ok"}</code>. Read the local guide at <a href="http://localhost:8000/api/docs">port 8000 /api/docs</a> or through Vite at port 5173. Health checks prove process/database readiness only. This minimal setup can exercise staff sign-in and basic screens; card/file storage needs S3, PDF extraction may need Bedrock, and real eCW/Stedi requests need the independent setup below. An unconfigured eCW lookup returning 503 is expected here and is not an end-to-end pass.</p></div></details>
+<details class="reference-detail" id="local-setup-detail-7"><summary>6. Test, stop, and restart</summary><div><pre><code># Application root, virtual environment active. Mocked workflow checks:
+python -m pytest -q -c testing/pytest.ini   testing/test_ecw_diagnostics.py testing/test_commercial_previsit.py   testing/test_collection_guidance.py testing/test_collection_audit.py
+
+# Wider backend checks; database-gated tests can skip without their test DB URL.
+python -m pytest -q -c testing/pytest.ini testing
+python3 -m unittest discover -s scripts -p 'test_*.py'
+
+# Frontend checks (subshell returns you to the application root).
+(cd frontend &amp;&amp; npm ci &amp;&amp; node ../testing/test-card-capture.mjs &amp;&amp;   node ../testing/test-healow-review.mjs &amp;&amp; node ../testing/test-insurance-request-context.mjs &amp;&amp; npm run format:check &amp;&amp; npm run check:size &amp;&amp; npm run lint &amp;&amp; npm run build)
+
+# Ctrl+C in each server terminal stops Vite/Uvicorn.
+docker compose stop
+# On your next session:
+docker compose start</code></pre>
+<p>The database persists under the ignored <code>postgres-data/</code> directory. <code>stop</code> preserves it; do not delete that directory as a routine restart. HAPI resources, local users and application cases survive. For database integration checks, create a <strong>disposable</strong> <code>stafftest</code> database and set <code>STAFF_TEST_DATABASE_URL</code> to that database only; tests can clear tables. Never point tests at <code>clinicforce</code>, staging RDS, or production RDS. CI creates its own test PostgreSQL service automatically. See <a href="https://github.com/clinicforce-ai/clinicforce/blob/main/.github/workflows/deploy.yml"><code>.github/workflows/deploy.yml</code></a> for the exact release checks.</p>
+<div class="table-wrap"><table><thead><tr><th>Symptom</th><th>Check</th></tr></thead><tbody><tr><td>Port already in use</td><td>Use <code>docker compose ps</code> and <code>ss -ltn</code>. The recipe needs 5432, 8080, 8000 and 5173. Stop your conflicting local process; changing a port also requires updating its URL.</td></tr><tr><td>403 on staff login/save</td><td>Confirm browser origin is <code>http://localhost:5173</code>, <code>PUBLIC_BASE_URL</code> and <code>CORS_ALLOW_ORIGINS</code> match, and the API loaded the root env file. Restart after changing configuration.</td></tr><tr><td>401 / cannot keep session</td><td>Check the chosen account, browser cookies and frontend origin. A local <code>https://</code> public URL makes the API set a Secure cookie that is unsuitable for this HTTP recipe.</td></tr><tr><td>503 readiness or staff sign-in</td><td>Confirm PostgreSQL is healthy, <code>clinicforce</code> exists and <code>DATABASE_URL</code> is loaded. Startup alone does not prove database connectivity.</td></tr><tr><td>Uploads or estimates unavailable</td><td>Configure the required test storage/provider path. Fixture mode is a safety setting; it does not seed a complete interactive eCW/Stedi demo.</td></tr><tr><td>OCR/PDF import fails</td><td>Check Tesseract/native libraries and the relevant AWS extraction permissions. A pip install alone does not supply OS libraries.</td></tr></tbody></table></div></div></details>
+</section>

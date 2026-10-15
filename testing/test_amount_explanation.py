@@ -77,6 +77,18 @@ def test_unknown_provider_network_qualifies_payer_office_copay():
     assert explanation['network_tier'] == 'unknown'
 
 
+def test_missing_clinic_contract_names_the_cash_fallback_cause():
+    result = {'benefits': {'active': True, 'network_status': 'out_of_network',
+                           'network_source': 'clinic_library_absent'},
+              'price_range': {'lines': [{'code': '99213', 'calculation': None}]},
+              'payment_mode': 'cash', 'cash_fallback': {'reason': 'Clinic price selected after insured pricing failed.'}}
+    assert amount_explanation.fallback_cause(result) == (
+        'the Clinical Library has no current contract for this payer, plan, provider and visit')
+    sentence = amount_explanation.build(result, {'basis': 'practice_cash_price',
+        'amount_cents': 15000})['sentence']
+    assert 'Clinical Library has no current contract' in sentence
+
+
 def test_procedure_specific_coinsurance_adds_to_office_copay():
     raw = payload()
     raw['benefitsInformation'][1]['benefitAmount'] = '0'
@@ -223,6 +235,24 @@ def test_short_explanation_says_which_amount_is_known_and_why_cash_was_used():
     cigna = {**partial, 'identity': {'reconciliation_rule': 'cigna_member_suffix'},
              'benefits': {'active': True, 'network_status': 'in_network'}}
     assert 'two-digit suffix' in amount_explanation.build(cigna, {'amount_cents': 3000, 'basis': 'office_copay'})['notice']
+
+
+def test_cash_fallback_names_the_actual_policy_or_clinic_price_blocker():
+    base = {'payment_mode': 'cash', 'cash_fallback': {'reason': 'completed checks'},
+            'benefits': {}, 'price_range': {'lines': []}}
+    multiple = {**base, 'recovery': {'reason_code': 'multiple_active_policies'}}
+    message = amount_explanation.build(multiple, {'amount_cents': 25000, 'basis': 'practice_cash_price'})
+    assert message['reason_code'] == 'multiple_active_policies'
+    assert 'more than one active policy' in message['sentence']
+    missing_rate = {**base, 'price_range': {'lines': [
+        {'code': '95907', 'calculation': None}, {'code': '95886', 'calculation': None}]}}
+    message = amount_explanation.build(missing_rate, {'amount_cents': None, 'basis': 'practice_cash_price'})
+    assert 'no cash rate for 95907, 95886' in message['sentence']
+    assert 'evidence could not support' not in message['sentence']
+    referral = {**base, 'benefits': {'referral_signal': 'required'}}
+    assert amount_explanation.build(referral, {'amount_cents': 25000, 'basis': 'practice_cash_price'})['reason_code'] == 'referral_required'
+    enrollment = {**multiple, 'eligibility_failure': {'kind': 'provider_enrollment'}}
+    assert amount_explanation.build(enrollment, {'amount_cents': 25000, 'basis': 'practice_cash_price'})['reason_code'] == 'provider_enrollment'
 
 
 def test_doctor_diagnosis_marks_copay_with_unpriced_testing_as_partial():

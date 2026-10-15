@@ -8,7 +8,7 @@ registerHooks({ resolve(specifier, context, nextResolve) {
   }
 } })
 const { healowDetail, reviewResources } = await import('../frontend/src/features/patient-workspace/healow-review.ts')
-const { dateLabel } = await import('../frontend/src/features/patient-workspace/metadata.ts')
+const { dateLabel } = await import('../frontend/src/features/patient-workspace/display-text.ts')
 
 process.env.TZ = 'America/Los_Angeles'
 assert.equal(dateLabel('1986-11-23'), 'Nov 23, 1986', 'A date-only birthday must not shift to yesterday')

@@ -1,0 +1,26 @@
+.summary-page {
+  padding-block: 24px 54px;
+}
+.summary-hero {
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  gap: 20px;
+  border-bottom: 1px solid var(--line);
+  padding-bottom: 24px;
+}
+.summary-hero h1 {
+  max-width: none;
+  margin: 4px 0 6px;
+  font-size: clamp(2.2rem, 4.2vw, 3.6rem);
+}
+.summary-hero p:not(.eyebrow) {
+  margin: 0;
+  color: var(--muted-ink);
+}
+.summary-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 10px;
+}

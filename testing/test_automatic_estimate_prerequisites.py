@@ -11,7 +11,7 @@ from test_result_first_estimate import response
 @pytest.fixture
 def appointment(monkeypatch):
     day = date.today().isoformat()
-    payer = {'id': 'connection-a', 'stedi_payer_id': 'route-a', 'category': 'commercial_medical',
+    payer = {'id': 'connection-a', 'stedi_payer_id': 'route-a', 'display_name': 'Example Health', 'category': 'commercial_medical',
              'status': 'staff_guidance_enabled', 'rules': {'service_type_code': '98'}}
     network = {'id': 'network-a', 'payer_connection_id': payer['id'], 'status': 'verified',
                'billing_npi': '1111111111', 'rendering_npi': '2222222222', 'location_id': 'office',
@@ -36,6 +36,10 @@ def appointment(monkeypatch):
     monkeypatch.setattr(api.commercial_store, 'list_rate_versions', lambda practice: [
         {'payer_connection_id': payer['id'], 'status': 'active', 'effective_from': '2020-01-01'}])
     monkeypatch.setattr(api.commercial_store, 'matching_rates', lambda *args: rates)
+    monkeypatch.setattr(api.staff_store, 'list_library', lambda practice: [{
+        'id': 'signed-contract', 'kind': 'contract', 'content_type': 'application/pdf',
+        'payer': 'Example Health', 'label': 'Synthetic signed contract', 'effective_from': '2020-01-01',
+    }] if practice == 'clinic-a' else [])
     monkeypatch.setattr(api.practice_prices, 'current', lambda *args: None)
     monkeypatch.setattr(api.stedi_financial, 'credentials', lambda *args: 'synthetic-key')
     monkeypatch.setattr(api.object_store, 'enabled', lambda: True)
@@ -90,11 +94,10 @@ def test_estimate_uses_existing_mapping_without_staff_confirmation(appointment, 
     else:
         assert all(row['allowed_cents'] is None for row in result['price_range']['lines'])
         assert result['issues']
-    if mode in {'verified', 'wrong_product'}:
+    if mode == 'verified':
         assert result['collection_guidance']['amount_cents'] == 4000
-        if mode == 'wrong_product':
-            # Existing fixed-copay planning can stand alone without a contract rate.
-            assert result['collection_guidance']['basis'] == 'office_copay'
-            assert result['collection_guidance']['assumptions']
+    elif mode == 'wrong_product':
+        assert result['benefits']['network_status'] == 'out_of_network'
+        assert result['collection_guidance']['amount_cents'] is None
     else:
         assert result['collection_guidance']['amount_cents'] is None

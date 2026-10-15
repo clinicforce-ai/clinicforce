@@ -162,6 +162,7 @@ try {
   await openPatient()
   assert.equal(await page.locator('.arrival-total > strong').innerText(), '$40.00')
   assert(await page.locator('.visit-snapshots > div').nth(1).evaluate(el => el.classList.contains('is-review')), 'Unconfirmed product match is amber even when a network name is shown')
+  assert((await page.locator('.visit-snapshots > div').nth(1).innerText()).includes('In-network status unverified'))
   assert(await page.locator('.arrival-total').getByText(/Specialist\/office-visit copay/).isVisible())
   section = await detail('Patient estimate')
   assert(/Benefit source:\s*Stedi/i.test(await page.locator('.visit-services').innerText()))

@@ -13,6 +13,7 @@ from uuid import uuid4
 from passlib.hash import pbkdf2_sha256
 
 from app.core.patient_store import _connection as patient_connection
+from app.core.staff_schema import initialize as initialize_staff_schema
 from app.core.shl import hash_password, verify_password
 
 
@@ -36,62 +37,7 @@ def _connection():
         if not _schema_initialized:
             with _schema_lock:
                 if not _schema_initialized:
-                    connection.execute("SELECT pg_advisory_xact_lock(%s)", (8_240_715_302,))
-                    connection.execute("""CREATE TABLE IF NOT EXISTS staff_members (
-                        id TEXT PRIMARY KEY, username TEXT NOT NULL UNIQUE, display_name TEXT NOT NULL,
-                        practice_id TEXT NOT NULL, practice_name TEXT NOT NULL,
-                        role TEXT NOT NULL CHECK (role IN ('staff', 'admin')), password_hash TEXT NOT NULL,
-                        disabled_at TEXT, created_at TEXT NOT NULL
-                    )""")
-                    connection.execute("""CREATE TABLE IF NOT EXISTS staff_sessions (
-                        session_hash TEXT PRIMARY KEY, staff_id TEXT NOT NULL REFERENCES staff_members(id),
-                        created_at TEXT NOT NULL, expires_at TEXT NOT NULL
-                    )""")
-                    connection.execute("""CREATE TABLE IF NOT EXISTS staff_login_attempts (
-                        key_hash TEXT PRIMARY KEY, attempts INTEGER NOT NULL, window_started TEXT NOT NULL
-                    )""")
-                    connection.execute("""CREATE TABLE IF NOT EXISTS staff_patients (
-                        id TEXT PRIMARY KEY, practice_id TEXT NOT NULL, given_name TEXT NOT NULL,
-                        family_name TEXT NOT NULL, birth_date TEXT NOT NULL,
-                        administrative_gender TEXT NOT NULL DEFAULT 'unknown', created_at TEXT NOT NULL
-                    )""")
-                    connection.execute("CREATE INDEX IF NOT EXISTS staff_patients_practice_idx ON staff_patients (practice_id, family_name, given_name, birth_date)")
-                    connection.execute("ALTER TABLE staff_patients ADD COLUMN IF NOT EXISTS email TEXT")
-                    connection.execute("ALTER TABLE staff_patients ADD COLUMN IF NOT EXISTS identity_status TEXT NOT NULL DEFAULT 'confirmed'")
-                    connection.execute("ALTER TABLE staff_patients ADD COLUMN IF NOT EXISTS ecw_patient_id TEXT")
-                    connection.execute("ALTER TABLE staff_patients ADD COLUMN IF NOT EXISTS ecw_account_number TEXT")
-                    connection.execute("ALTER TABLE staff_patients ADD COLUMN IF NOT EXISTS insurance_identities JSONB NOT NULL DEFAULT '{}'")
-                    connection.execute("""CREATE TABLE IF NOT EXISTS staff_intakes (
-                        id TEXT PRIMARY KEY, practice_id TEXT NOT NULL, created_by TEXT NOT NULL REFERENCES staff_members(id),
-                        patient_id TEXT REFERENCES staff_patients(id), status TEXT NOT NULL,
-                        fields JSONB NOT NULL DEFAULT '{}', ocr_fields JSONB NOT NULL DEFAULT '{}',
-                        ocr_evidence JSONB NOT NULL DEFAULT '{}', field_sources JSONB NOT NULL DEFAULT '{}',
-                        documents JSONB NOT NULL DEFAULT '[]', workflows JSONB NOT NULL DEFAULT '{}',
-                        events JSONB NOT NULL DEFAULT '[]', warning TEXT,
-                        created_at TEXT NOT NULL, updated_at TEXT NOT NULL
-                    )""")
-                    connection.execute("CREATE INDEX IF NOT EXISTS staff_intakes_practice_idx ON staff_intakes (practice_id, updated_at DESC)")
-                    connection.execute("ALTER TABLE staff_intakes ADD COLUMN IF NOT EXISTS source TEXT NOT NULL DEFAULT 'insurance_card'")
-                    connection.execute("ALTER TABLE staff_intakes ADD COLUMN IF NOT EXISTS source_portal_patient_id TEXT")
-                    connection.execute("ALTER TABLE staff_intakes ALTER COLUMN created_by DROP NOT NULL")
-                    connection.execute("ALTER TABLE staff_intakes ADD COLUMN IF NOT EXISTS upload_link_id TEXT")
-                    connection.execute("ALTER TABLE staff_intakes ADD COLUMN IF NOT EXISTS expected_patient_id TEXT REFERENCES staff_patients(id)")
-                    connection.execute("ALTER TABLE staff_intakes ADD COLUMN IF NOT EXISTS auto_patient_id TEXT REFERENCES staff_patients(id)")
-                    connection.execute("""CREATE TABLE IF NOT EXISTS staff_library (
-                        id TEXT PRIMARY KEY, practice_id TEXT NOT NULL, kind TEXT NOT NULL,
-                        label TEXT NOT NULL, payer TEXT NOT NULL, filename TEXT NOT NULL,
-                        content_type TEXT NOT NULL, object_key TEXT NOT NULL, created_at TEXT NOT NULL,
-                        effective_from TEXT, effective_to TEXT, created_by TEXT NOT NULL REFERENCES staff_members(id)
-                    )""")
-                    connection.execute("ALTER TABLE staff_library ADD COLUMN IF NOT EXISTS sha256 TEXT")
-                    connection.execute("ALTER TABLE staff_library ADD COLUMN IF NOT EXISTS extraction JSONB")
-                    connection.execute("""CREATE TABLE IF NOT EXISTS staff_deletions (
-                        practice_id TEXT NOT NULL, kind TEXT NOT NULL, record_id TEXT NOT NULL,
-                        intake_id TEXT, actor_id TEXT NOT NULL, created_at TEXT NOT NULL,
-                        object_keys JSONB NOT NULL DEFAULT '[]',
-                        PRIMARY KEY (practice_id,kind,record_id)
-                    )""")
-                    connection.commit()
+                    initialize_staff_schema(connection)
                     _schema_initialized = True
     except Exception:
         connection.close()
@@ -336,59 +282,12 @@ def save_ecw_account_number(patient_id: str, practice_id: str, ecw_patient_id: s
                            (account_number, patient_id, practice_id, ecw_patient_id))
 
 
+from app.core.staff_dashboard import patient_dashboard as _patient_dashboard
+
+
 def patient_dashboard(practice_id: str) -> dict:
-    """Only explicit practice records/shares; never enumerate the portal patient table."""
-    with _connection() as connection:
-        patients = connection.execute("SELECT * FROM staff_patients WHERE practice_id=%s", (practice_id,)).fetchall()
-        pending_cleanup = connection.execute("SELECT count(*) AS count FROM staff_deletions WHERE practice_id=%s AND object_keys <> '[]'::jsonb", (practice_id,)).fetchone()["count"]
-        intakes = connection.execute("""SELECT id,patient_id,auto_patient_id,source_portal_patient_id,fields,status,source,created_at,updated_at,
-            jsonb_array_length(documents)>0 AS has_card FROM staff_intakes WHERE practice_id=%s ORDER BY updated_at DESC,id DESC""", (practice_id,)).fetchall()
-    patient_map = {row["id"]: row for row in patients}
-    def matches_snapshot(row, patient_id):
-        return all(str(patient_map[patient_id][name]).strip().casefold() == str(row["fields"].get(name, "")).strip().casefold() for name in ("given_name", "family_name", "birth_date"))
-    # Explicit shared portal IDs connect a patient's intake history; names/email never do.
-    portal_for_patient = {}
-    for row in intakes:
-        if row["source_portal_patient_id"]:
-            for key in ("patient_id", "auto_patient_id"):
-                if row[key] in patient_map and matches_snapshot(row, row[key]):
-                    portal_for_patient.setdefault(row[key], row["source_portal_patient_id"])
-    groups = {}
-    def group(key):
-        return groups.setdefault(key, {"records": {}, "intakes": []})
-    for patient in patients:
-        portal = portal_for_patient.get(patient["id"])
-        group("portal:" + portal if portal else patient["id"])["records"][patient["id"]] = patient
-    for intake in intakes:
-        patient_id = intake["patient_id"] if intake["patient_id"] in patient_map else None
-        if not patient_id and intake["auto_patient_id"] in patient_map and matches_snapshot(intake, intake["auto_patient_id"]):
-            patient_id = intake["auto_patient_id"]
-        portal = portal_for_patient.get(patient_id) or (intake["source_portal_patient_id"] if not patient_id or matches_snapshot(intake, patient_id) else None)
-        key = "portal:" + portal if portal else patient_id or "intake:" + intake["id"]
-        group(key)["intakes"].append(intake)
-    rows, counts = [], {"all": 0, "accounts_with_cards": 0, "accounts_without_cards": 0, "card_only": 0, "other": 0}
-    for key, value in groups.items():
-        history = value["intakes"]
-        records = list(value["records"].values())
-        records.sort(key=lambda item: (item["identity_status"] != "confirmed", item["created_at"]))
-        patient = records[0] if records else {}
-        latest = history[0] if history else {}
-        fields = latest.get("fields", {})
-        has_card = any(item["has_card"] for item in history)
-        account = "portal" if key.startswith("portal:") else "automatic" if any(item["source"] == "patient_upload" for item in history) or patient.get("identity_status") == "unverified" or not patient else "clinic"
-        bucket = "accounts_with_cards" if account == "portal" and has_card else "accounts_without_cards" if account == "portal" else "card_only" if has_card else "other"
-        counts["all"] += 1; counts[bucket] += 1
-        public_id = "portal:" + _hash(practice_id + ":" + key)[:24] if key.startswith("portal:") else key
-        rows.append({"id": public_id, "clinic_patient_id": patient.get("id"), "identity_status": patient.get("identity_status", "unverified"),
-            **{name: patient.get(name) or fields.get(name) or "" for name in ("given_name", "family_name", "birth_date")},
-            "email": patient.get("email") or next((item["fields"].get("email") for item in history if item["fields"].get("email")), None),
-            "ecw_account_number": patient.get("ecw_account_number"),
-            "account_status": account, "card_status": "received" if has_card else "missing", "latest_intake_id": latest.get("id"),
-            "intake_ids": [item["id"] for item in history], "intake_count": len(history),
-            "updated_at": latest.get("updated_at") or patient["created_at"],
-            "intakes": [{name: item[name] for name in ("id", "status", "created_at", "updated_at", "source")} for item in history]})
-    rows.sort(key=lambda item: (item["updated_at"], item["id"]), reverse=True)
-    return {"patients": rows, "counts": counts, "pending_file_cleanup": pending_cleanup}
+    """Build the clinic dashboard with this store's connection and identity hash."""
+    return _patient_dashboard(practice_id, connection=_connection, hash_value=_hash)
 
 
 def list_intakes(practice_id: str, query: str = "", status: str = "", offset: int = 0) -> list[dict]:

@@ -1,0 +1,356 @@
+.estimate-certainty h3 {
+  margin-bottom: 10px;
+  font-size: 1rem;
+}
+
+.estimate-certainty > div {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  border-block: 1px solid var(--line);
+}
+
+.estimate-certainty > div > div {
+  padding: 15px;
+}
+
+.estimate-certainty > div > div + div {
+  border-left: 1px solid var(--line);
+}
+
+.estimate-certainty ul {
+  margin: 9px 0 0;
+  padding-left: 18px;
+  color: var(--muted-ink);
+  font-size: 0.8rem;
+  line-height: 1.6;
+}
+
+.evidence-details .evidence-reasoning {
+  margin: 0;
+  padding: 22px 4px;
+}
+
+.estimate-explanation {
+  margin: 20px 0 24px;
+  border-left: 4px solid var(--blue);
+  background: var(--blue-soft);
+  padding: 16px 18px;
+  color: var(--blue-deep);
+}
+
+.estimate-explanation h3 {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.estimate-explanation p {
+  margin: 7px 0;
+  line-height: 1.6;
+}
+
+.estimate-explanation small {
+  color: var(--muted-ink);
+}
+
+.estimate-lines,
+.cash-prices {
+  margin: 22px 0;
+}
+
+.estimate-lines > h3,
+.cash-prices h3 {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.estimate-lines > p,
+.cash-prices > div > p:not(.section-kicker) {
+  margin: 5px 0 11px;
+  color: var(--muted-ink);
+  font-size: 0.8rem;
+  line-height: 1.5;
+}
+
+.estimate-lines dl,
+.cash-prices dl {
+  margin: 0;
+  border-block: 1px solid var(--line);
+}
+
+.estimate-lines dl > div,
+.cash-prices dl > div {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  gap: 18px;
+  padding: 11px 13px;
+}
+
+.estimate-lines dl > div + div,
+.cash-prices dl > div + div {
+  border-top: 1px solid var(--line);
+}
+
+.estimate-lines dt strong,
+.estimate-lines dt span,
+.cash-prices dt strong,
+.cash-prices dt span {
+  display: block;
+}
+
+.estimate-lines dt strong {
+  color: var(--blue-deep);
+  font-family: 'Fira Code', monospace;
+}
+
+.estimate-lines dt span,
+.cash-prices dt span {
+  margin-top: 2px;
+  color: var(--muted-ink);
+  font-size: 0.74rem;
+}
+
+.estimate-lines dd,
+.cash-prices dd {
+  margin: 0;
+  font-family: 'Fira Code', monospace;
+  font-weight: 700;
+}
+
+.cash-prices {
+  border-block: 1px solid #9bcfbd;
+  background: #f5fbf8;
+  padding: 18px 4px;
+}
+
+.cash-prices dl {
+  background: var(--surface);
+}
+
+.cash-prices dl > .recommended {
+  background: var(--green-soft);
+  color: var(--green-deep);
+}
+
+.cash-prices > small {
+  display: block;
+  margin-top: 9px;
+  color: var(--muted-ink);
+  font-size: 0.7rem;
+  line-height: 1.45;
+}
+
+.calculation-line {
+  border-left: 3px solid var(--blue);
+  background: var(--blue-soft);
+  padding: 13px 15px;
+  color: var(--blue-deep);
+  font-family: 'Fira Code', monospace;
+  font-size: 0.82rem;
+  line-height: 1.55;
+}
+
+.estimate-disclaimer {
+  color: var(--muted-ink);
+  font-size: 0.8rem;
+  line-height: 1.5;
+}
+
+.insurance-appointment {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  margin-top: 0;
+  border: 1px solid var(--line);
+  border-top: 0;
+  background: #f8fafd;
+  padding: 15px 18px;
+  color: var(--muted-ink);
+  font-size: 0.82rem;
+}
+
+.insurance-appointment strong {
+  color: var(--ink);
+}
+
+@media (max-width: 980px) {
+  .insurance-beta-hero {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+  .beta-session {
+    width: 100%;
+    border-top: 1px solid rgba(255, 255, 255, 0.25);
+    border-left: 0;
+    padding: 16px 0 0;
+  }
+  .insurance-workspace {
+    display: block;
+  }
+  .insurance-stepper {
+    position: static;
+    display: flex;
+    overflow-x: auto;
+    border-bottom: 1px solid var(--line);
+    padding: 10px;
+    scrollbar-width: thin;
+  }
+  .insurance-stepper::before {
+    display: none;
+  }
+  .insurance-stepper button {
+    min-width: 156px;
+    flex: 1 0 156px;
+  }
+  .insurance-stepper button::after {
+    top: auto;
+    right: 8px;
+    bottom: -10px;
+    left: 8px;
+    width: auto;
+    height: 3px;
+  }
+  .insurance-layout {
+    border-left: 0;
+  }
+  .collection-decision > dl {
+    grid-template-columns: 1fr 1fr;
+    row-gap: 16px;
+  }
+  .collection-decision > dl > div:nth-child(3) {
+    border-left: 0;
+    padding-left: 0;
+  }
+  .estimate-code-head,
+  .estimate-code-row {
+    grid-template-columns: minmax(190px, 1.2fr) 100px 90px minmax(180px, 1fr);
+  }
+}
+
+@media (max-width: 640px) {
+  .insurance-beta-hero {
+    margin-inline: -20px;
+    border-radius: 0;
+    padding-inline: 20px;
+  }
+  .insurance-workspace,
+  .insurance-appointment {
+    margin-inline: -20px;
+    border-inline: 0;
+  }
+  .insurance-stage-card {
+    --stage-pad: 20px;
+  }
+  .insurance-stage-toolbar {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 9px;
+  }
+  .insurance-status {
+    justify-content: flex-start;
+    text-align: left;
+  }
+  .ocr-grid,
+  .evidence-form {
+    grid-template-columns: 1fr;
+  }
+  .evidence-upload-grid {
+    grid-template-columns: 1fr;
+  }
+  .evidence-upload-grid .evidence-upload + .evidence-upload {
+    border-top: 1px solid var(--line);
+    border-left: 0;
+  }
+  .ocr-grid label:first-child {
+    grid-column: auto;
+  }
+  .card-actions,
+  .card-actions .button {
+    width: 100%;
+  }
+  .self-pay-choice {
+    align-items: stretch;
+    flex-direction: column;
+  }
+  .self-pay-choice .button {
+    width: 100%;
+  }
+  .insurance-facts div {
+    grid-template-columns: 1fr;
+    gap: 4px;
+  }
+  .estimate-lines dl > div,
+  .cash-prices dl > div {
+    align-items: start;
+    grid-template-columns: 1fr;
+    gap: 5px;
+  }
+  .insurance-appointment {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+  .authorization-list article > div {
+    grid-template-columns: 1fr;
+    gap: 2px;
+  }
+  .referral-workflow dl {
+    grid-template-columns: 1fr;
+  }
+  .referral-workflow dl > div,
+  .referral-workflow dl > div:nth-child(even) {
+    grid-template-columns: 94px 1fr;
+    border-top: 1px solid #e7d4b5;
+    padding: 12px 0;
+  }
+  .authorization-list article > header,
+  .elected-estimate {
+    align-items: flex-start;
+    grid-template-columns: 1fr;
+    flex-direction: column;
+  }
+  .authorization-list article > header small,
+  .elected-estimate > div:last-child {
+    text-align: left;
+  }
+  .authorization-list .authorization-code small {
+    grid-column: 1;
+  }
+  .decision-amounts,
+  .collection-decision > dl,
+  .estimate-certainty > div {
+    grid-template-columns: 1fr;
+  }
+  .decision-amounts > div {
+    padding: 0 0 20px;
+  }
+  .decision-amounts > div + div {
+    border-top: 1px solid rgba(255, 255, 255, 0.22);
+    border-left: 0;
+    padding: 20px 0 0;
+  }
+  .collection-decision > dl > div {
+    padding: 10px 0;
+  }
+  .collection-decision > dl > div + div {
+    border-top: 1px solid color-mix(in srgb, currentColor 22%, transparent);
+    border-left: 0;
+  }
+  .estimate-certainty > div > div + div {
+    border-top: 1px solid var(--line);
+    border-left: 0;
+  }
+  .estimate-code-head {
+    display: none;
+  }
+  .estimate-code-row {
+    grid-template-columns: 1fr auto;
+    gap: 10px 16px;
+    padding: 16px 4px;
+  }
+  .estimate-code-row > div {
+    grid-column: 1 / -1;
+  }
+  .estimate-code-row > span:last-child {
+    grid-column: 1 / -1;
+  }
+}

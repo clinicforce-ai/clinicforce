@@ -21,7 +21,7 @@ def pdf(text):
 class SourceTests(unittest.TestCase):
     def setUp(self):
         mock = patch("app.insurance.documented.clinical_context_from_pages", side_effect=lambda pages: {"clinical_context": pages[0][1], "clinical_excerpts": [{"page": pages[0][0], "quote": pages[0][1], "category": "symptoms"}], "visit_type": None})
-        mock.start()
+        self.clinical_reader = mock.start()
         self.addCleanup(mock.stop)
 
     def test_card_without_benefits_does_not_get_defaults(self):
@@ -190,6 +190,7 @@ class SourceTests(unittest.TestCase):
 
     def test_short_clinical_pdf_is_accepted_and_not_authorization(self):
         source = documented.inspect_pdf(pdf("Patient reports foot numbness."), "note.pdf", "clinical")
+        self.clinical_reader.assert_called_once()
         self.assertIn("foot numbness", source["findings"]["clinical_context"])
         self.assertNotIn("authorizations", source["findings"])
 

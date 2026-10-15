@@ -83,7 +83,7 @@ def test_cash_only_after_all_applicable_checks_finish(recovery):
     assert result['collection_guidance']['amount_cents'] == 16000
     assert all(row['payment_mode'] == 'insurance' for row in snapshots[:-1])
     assert all(row['recovery']['state'] == 'pending' for row in snapshots[:-1])
-    assert 'unverified' in result['cash_fallback']['reason']
+    assert 'completed insurance search returned no policy' in result['cash_fallback']['reason']
     case['previsit_context']['result']['price_range'] = {}
     assert api._previsit_result(case)['collection_guidance']['amount_cents'] is None
 

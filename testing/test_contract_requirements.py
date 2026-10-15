@@ -105,6 +105,14 @@ def test_missing_contract_uses_only_explicit_payer_evidence():
     assert rules.evaluate(explicit, missing_group, [])['authorization']['status'] == 'Verification required'
 
 
+def test_current_payer_required_signal_stays_yes_with_a_missing_group_or_static_rule():
+    required = estimate('99213', payer_signals={'referral': 'required'}) | {'benefit_source': 'Stedi'}
+    missing_group = context(); missing_group['group_number'] = ''
+    assert rules.evaluate(required, missing_group, [])['referral']['status'] == 'Required'
+    pdf = contract([HEADERS, row('99213', 'Choice PPO', 'Not required', 'Not required')])
+    assert rules.evaluate(required, context(), [pdf])['referral']['status'] == 'Required'
+
+
 def test_requirement_sources_link_the_saved_live_stedi_check_without_clearing_an_unknown_rule():
     result = estimate('99213') | {'benefit_source': 'Stedi', 'response_reference': 'ec_123e4567-e89b-12d3-a456-426614174000'}
     evidence = rules.evaluate(result, context(), [])

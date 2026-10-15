@@ -1,0 +1,259 @@
+.visit-imported article,
+.visit-records article,
+.service-evidence {
+  padding: 16px 0;
+  border-bottom: 1px solid var(--ve-line);
+}
+
+.visit-imported article p {
+  white-space: pre-wrap;
+}
+
+.calculation-summary {
+  display: flex;
+  gap: 14px;
+  background: var(--ve-soft);
+  padding: 18px;
+  border-radius: 12px;
+  margin-bottom: 24px;
+}
+
+.collection-components > div {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 16px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--ve-line);
+}
+
+.collection-components dd {
+  text-align: right;
+}
+
+.selected-service-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 16px 0;
+}
+
+.selected-service-chips > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  border-radius: 20px;
+  background: var(--ve-soft);
+  color: var(--ve-teal);
+  font-size: 13px;
+}
+
+.service-category-buttons {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  border-bottom: 1px solid var(--ve-line);
+  padding-bottom: 12px;
+  margin-bottom: 16px;
+}
+
+.visit-estimator .service-category-buttons button[aria-pressed='true'] {
+  background: var(--ve-teal);
+  color: white;
+}
+
+.procedure-group-tools {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+}
+
+.procedure-group-tools button {
+  font-size: 13px;
+}
+
+.procedure-options {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin: 12px 0 20px;
+}
+
+.procedure-choice {
+  border: 1px solid var(--ve-line);
+  border-radius: 12px;
+  min-width: 0;
+  padding: 8px;
+}
+
+.procedure-choice.is-selected {
+  border-color: var(--ve-teal);
+  background: var(--ve-soft);
+}
+
+.visit-estimator .procedure-pick {
+  width: 100%;
+  text-align: left;
+  justify-content: flex-start;
+  align-items: flex-start;
+  padding: 8px;
+}
+
+.procedure-pick strong {
+  font-size: 15px;
+  font-weight: 500;
+}
+
+.procedure-check {
+  display: grid;
+  place-items: center;
+  width: 21px;
+  height: 21px;
+  flex-shrink: 0;
+  border: 1px solid #7a929a;
+  border-radius: 6px;
+  margin-top: 2px;
+}
+
+.is-selected .procedure-check {
+  color: white;
+  background: var(--ve-teal);
+  border-color: var(--ve-teal);
+}
+
+.procedure-price-note {
+  margin: 2px 8px 8px 37px;
+  font-size: 12px;
+  color: var(--ve-muted);
+}
+
+.procedure-requirements {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  margin: 4px 8px 8px 37px;
+  font-size: 12px;
+}
+
+.procedure-requirements details {
+  margin-top: 3px;
+}
+
+.procedure-quantity {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 8px;
+  align-items: center;
+  margin: 10px 8px;
+  font-size: 13px;
+}
+
+.quantity-stepper {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.visit-estimator .quantity-stepper button {
+  border: 1px solid var(--ve-line);
+  background: white;
+  min-width: 44px;
+  padding: 8px;
+}
+
+.quantity-stepper output {
+  min-width: 24px;
+  text-align: center;
+  font-weight: 600;
+}
+
+.visit-plan-footer {
+  display: flex;
+  gap: 16px;
+  justify-content: space-between;
+  align-items: center;
+  border-top: 1px solid var(--ve-line);
+  padding-top: 16px;
+  margin-top: 24px;
+}
+
+.visit-plan-footer > span {
+  font-size: 13px;
+  color: var(--ve-muted);
+}
+
+.visit-estimator .visit-primary {
+  background: var(--ve-teal);
+  color: white;
+}
+
+.visit-estimator .visit-primary:hover {
+  background: #075e55;
+}
+
+.cash-package-options button {
+  border: 1px solid var(--ve-line);
+  margin: 8px 8px 0 0;
+}
+
+.cash-package-options button small {
+  display: block;
+  margin-top: 4px;
+}
+
+.cash-package-options button[aria-pressed='true'] {
+  background: var(--ve-soft);
+  border-color: var(--ve-teal);
+}
+
+.visit-estimator .visit-delete-button {
+  color: var(--ve-error);
+  margin-top: 16px;
+}
+
+.visit-empty {
+  display: grid;
+  justify-items: center;
+  padding: 64px 24px;
+  text-align: center;
+  background: white;
+  border: 1px solid var(--ve-line);
+  border-radius: 16px;
+  gap: 12px;
+}
+
+.visit-empty > svg {
+  color: var(--ve-teal);
+}
+
+.visit-empty p {
+  color: var(--ve-muted);
+  margin: 0;
+}
+
+.visit-error,
+.visit-notice {
+  padding: 16px;
+  border-radius: 10px;
+  background: #fff6e9;
+  color: var(--ve-review);
+  margin-bottom: 16px;
+}
+
+.visit-error {
+  display: flex;
+  gap: 12px;
+}
+
+.visit-error p {
+  color: inherit;
+}
+
+.financial-history h3 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}

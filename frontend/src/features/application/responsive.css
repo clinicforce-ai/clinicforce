@@ -1,0 +1,229 @@
+@media (max-width: 1100px) {
+  .workspace-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 900px) {
+  .landing-grid,
+  .auth-layout {
+    grid-template-columns: 1fr;
+    min-height: auto;
+    padding-block: 35px 50px;
+  }
+  .landing-grid {
+    gap: 25px;
+  }
+  .landing-copy {
+    padding-top: 0;
+  }
+  .auth-layout > .back-control {
+    grid-column: 1;
+    order: -1;
+    margin-top: 0;
+  }
+  .auth-aside {
+    padding-block: 0;
+  }
+  .auth-panel {
+    max-width: 580px;
+  }
+  .workspace-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .workspace-tabs {
+    position: static;
+    display: flex;
+    overflow-x: auto;
+    margin-bottom: 0;
+  }
+  .storage-choice {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+  .storage-actions {
+    justify-content: flex-start;
+  }
+  .share-card {
+    position: static;
+  }
+  .insurance-hero {
+    grid-template-columns: 1fr;
+    align-items: start;
+  }
+  .insurance-standards {
+    width: min(100%, 360px);
+  }
+  .insurance-upload {
+    grid-template-columns: 1fr 1fr;
+  }
+  .insurance-upload .button {
+    grid-column: 1 / -1;
+    justify-self: start;
+  }
+  .workbench-layout {
+    grid-template-columns: 1fr;
+  }
+  .workbench-progress {
+    position: static;
+  }
+  .workbench-progress ol {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .estimate-heading {
+    align-items: start;
+    flex-direction: column;
+  }
+}
+@media (max-width: 680px) {
+  .shell {
+    width: min(100% - 28px, 1180px);
+  }
+  .brand img {
+    width: 142px;
+  }
+  .workspace-banner {
+    align-items: flex-start;
+    flex-wrap: wrap;
+  }
+  .signout-button {
+    margin-left: 65px;
+  }
+  .workspace-stats {
+    grid-template-columns: 1fr;
+  }
+  .workspace .section-heading {
+    flex-wrap: wrap;
+  }
+  .workspace-stats > div + div {
+    border-top: 1px solid var(--line);
+    border-left: 0;
+  }
+  .category-picker {
+    grid-template-columns: repeat(2, 1fr);
+  }
+  .summary-hero {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+  .summary-actions {
+    width: 100%;
+    justify-content: stretch;
+  }
+  .summary-actions .button {
+    flex: 1;
+  }
+  .summary-grid {
+    grid-template-columns: 1fr;
+  }
+  .trend-chart-grid {
+    grid-template-columns: 1fr;
+  }
+  .insurance-upload,
+  .insurance-grid {
+    grid-template-columns: 1fr;
+  }
+  .insurance-upload .button {
+    width: 100%;
+  }
+  .workbench-progress ol,
+  .stage-form,
+  .result-facts {
+    grid-template-columns: 1fr;
+  }
+  .workbench-stage {
+    grid-template-columns: 1fr auto;
+  }
+  .insurance-file-picker {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+  .insurance-file-picker input {
+    max-width: 100%;
+  }
+  .insurance-card dl div {
+    grid-template-columns: 1fr;
+    gap: 3px;
+  }
+  .estimate-form {
+    grid-template-columns: 1fr;
+  }
+  .estimate-total {
+    grid-template-columns: 1fr;
+    gap: 9px;
+  }
+  .document-selection-toolbar {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+  .document-bulk-actions {
+    justify-content: flex-start;
+  }
+}
+@media (max-width: 480px) {
+  .site-header .shell {
+    min-height: 66px;
+  }
+  .role-panel {
+    border-radius: 17px;
+    padding: 20px;
+  }
+  .role-card {
+    grid-template-columns: 42px 1fr 18px;
+    gap: 11px;
+    padding: 14px;
+  }
+  .role-icon {
+    width: 42px;
+    height: 42px;
+  }
+  .panel,
+  .section-card {
+    border-radius: 14px;
+    padding: 20px;
+  }
+  .form-grid {
+    grid-template-columns: 1fr;
+  }
+  .field.full {
+    grid-column: auto;
+  }
+  .selected-files {
+    align-items: stretch;
+    flex-direction: column;
+  }
+  .selected-files .button {
+    width: 100%;
+  }
+  .signout-button {
+    margin-left: 0;
+  }
+  .workspace-banner > div:nth-child(2) {
+    flex: 1;
+    min-width: 0;
+  }
+  .workspace-banner h1 {
+    font-size: 1.78rem;
+  }
+  .clinical-narrative {
+    grid-template-columns: 1fr;
+  }
+  .narrative-mark {
+    width: 40px;
+    height: 40px;
+  }
+  .dialog-content {
+    padding: 28px 20px 20px;
+  }
+}
+
+.sr-status,
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
