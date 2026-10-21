@@ -85,7 +85,7 @@ def recheck_saved_network_evidence(result: dict, case: dict, practice_id: str, p
               or context.get('source') or {})
     identity = result.get('identity') or benefits.get('identity') or {}
     exact = {**source, 'payer_plan_bound': benefits.get('active') is True
-             and benefits.get('service_date_matches') is not False and patient_benefits_bound(identity),
+             and benefits.get('service_date_matches') is True and patient_benefits_bound(identity),
              'payer_plan_names': names, 'payer_network_names': plan.get('network_names') or []}
     supported = group_contract_support.resolve(practice_id, payer, context.get('inputs') or {},
                                                exact, result, benefits)

@@ -5,7 +5,7 @@ requirement decisions. It never turns a suggestion into an approved fact.
 """
 from __future__ import annotations
 
-from app.insurance.identity import patient_benefits_bound
+from app.insurance.identity import generic_plan_label, patient_benefits_bound
 from app.insurance import network_participation
 
 
@@ -40,8 +40,9 @@ def build(result: dict, source: dict) -> list[dict]:
     ], 'Member-bound exact insurance product',
         'Find a payer-confirmed enrollment or network identifier that distinguishes this product from similarly named plans.')
     matched_network = benefits.get('network_status') in {'in_network', 'out_of_network'}
-    product_linked = bool(network.get('document_id') and network.get('decision') in {
-        'confirmed_participating', 'in_network_contract_supported'})
+    product_linked = bool(network.get('document_id') and (network.get('decision') == 'confirmed_participating'
+        or network.get('decision') == 'in_network_contract_supported'
+        and network.get('product') and not generic_plan_label(network['product'])))
     record('product_mapping', product_linked, [
         ('eCW Coverage', 'plan label returned' if source.get('plan') else 'plan label not returned'),
         ('saved payer response', 'product label returned' if payer_names else 'exact product not returned' if checked else 'not checked'),

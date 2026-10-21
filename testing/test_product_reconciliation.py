@@ -245,7 +245,7 @@ def test_saved_result_reuses_current_group_contract_without_payer_transaction(mo
             'previsit_raw_sha256': hashlib.sha256(raw).hexdigest()}
     result = {'plan_details': {'stedi': {'names': ['BASIC']}},
               'identity': {'status': 'matched', 'binding': 'synthetic', 'match_version': 2},
-              'benefits': {'active': True, 'network_status': 'unknown'},
+              'benefits': {'active': True, 'service_date_matches': True, 'network_status': 'unknown'},
               'network_evidence': {'decision': 'lacking_applicable_network_evidence'}}
     recheck_saved_network_evidence(result, case, 'clinic', payer)
     assert result['network_evidence']['decision'] == 'in_network_contract_supported'
@@ -254,7 +254,7 @@ def test_saved_result_reuses_current_group_contract_without_payer_transaction(mo
     changed = {**case, 'previsit_context': {**case['previsit_context'], 'inputs': {
         **inputs, 'rendering_provider': {'npi': '3333333333'}}}}
     stale = {'plan_details': result['plan_details'], 'identity': result['identity'],
-             'benefits': {'active': True, 'network_status': 'unknown'},
+             'benefits': {'active': True, 'service_date_matches': True, 'network_status': 'unknown'},
              'network_evidence': {'decision': 'lacking_applicable_network_evidence'}}
     recheck_saved_network_evidence(stale, changed, 'clinic', payer)
     assert stale['network_evidence']['decision'] == 'lacking_applicable_network_evidence'
