@@ -333,6 +333,7 @@ export function ServicePlanner({
                             kind="referral"
                             payerName={result.payer}
                             needsCodeSelection={
+                              !included &&
                               result.price_range?.mode === 'alternatives' &&
                               ['visit', 'nerve'].includes(groupOf(row))
                             }
@@ -346,6 +347,7 @@ export function ServicePlanner({
                             kind="prior authorization"
                             payerName={result.payer}
                             needsCodeSelection={
+                              !included &&
                               result.price_range?.mode === 'alternatives' &&
                               ['visit', 'nerve'].includes(groupOf(row))
                             }

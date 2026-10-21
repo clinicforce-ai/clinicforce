@@ -192,7 +192,7 @@ try {
         evidence: { status, reason: 'Synthetic payer evidence', sources: [] },
       }),
     )
-  assert(requirement('Verification required').includes('Select E/M CPT'))
+  assert(requirement('Verification required').includes('Choose CPT level'))
   assert(requirement('Required').includes('<strong>Yes</strong>'))
   assert(requirement('Not required').includes('<strong>No</strong>'))
   const noAuthorization = renderToStaticMarkup(
@@ -239,7 +239,7 @@ try {
     }),
   )
   assert(
-    unselectedCpt.includes('Select E/M CPT') && !unselectedCpt.includes('Ask United Healthcare'),
+    unselectedCpt.includes('Select CPT level') && !unselectedCpt.includes('Ask United Healthcare'),
   )
   const conditionalRequired = renderToStaticMarkup(
     React.createElement(RequirementDecision, {

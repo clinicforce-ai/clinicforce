@@ -431,7 +431,7 @@ try {
       )
       const requirementAction =
         result.price_range.mode === 'alternatives'
-          ? '<strong>Select E/M CPT</strong>'
+          ? '<strong>Choose CPT level</strong>'
           : '<strong>Document the planned CPT in eCW</strong>'
       assert(
         referral.includes(requirementAction) && authorization.includes(requirementAction),
@@ -445,13 +445,13 @@ try {
       assert(!result.payment_explanation.sentence.includes(';'), `${name}: one-line reason`)
       const sharedRequirement =
         result.price_range.mode === 'alternatives'
-          ? 'Select the clinician-documented CPT'
+          ? 'Choose an anticipated CPT level to narrow these rules'
           : 'Document the planned CPT in eCW'
       assert(
         overview.includes(`Referral and prior authorization<strong>${sharedRequirement}</strong>`),
         `${name}: one combined requirement status`,
       )
-      assert(!overview.includes('<strong>Select E/M CPT</strong>'))
+      assert(!overview.includes('<strong>Choose CPT level</strong>'))
       assert.equal(
         (overview.match(/<strong>Document the planned CPT in eCW<\/strong>/g) || []).length,
         result.price_range.mode === 'alternatives' ? 0 : 1,
