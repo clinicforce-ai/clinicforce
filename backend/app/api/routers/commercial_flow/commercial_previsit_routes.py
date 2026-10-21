@@ -20,6 +20,9 @@ async def saved_previsit(case_id: str, request: _api.Request) -> dict:
     Coverage verification does not imply that a price is available.
     evidence_resolution reports each field's source findings and precise
     remaining action after the shared estimator evaluates saved evidence.
+    A saved read also projects a current dated group-network contract finding
+    from the protected visit context. This projection makes no payer call or write
+    and does not upgrade the rendering clinician's participation or old pricing.
     If the protected raw payer response cannot be reopened, same-context saved
     benefit terms may remain with benefits.historical_only and a source error;
     they cannot authorize an insured collection. A changed policy context does

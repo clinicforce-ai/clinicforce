@@ -58,6 +58,11 @@ const results = {
   'visit-a': makeResult(visits[0], [office], ['office']),
   'visit-b': makeResult(visits[1], [drug, procedure, office], []),
 }
+results['visit-a'].network_evidence = {
+  decision: 'in_network_contract_supported', outcome: 'IN_NETWORK_CONTRACT_SUPPORTED',
+  network_name: 'Blue Choice PPO', document_id: 'synthetic-contract',
+  reason: "NMCT has a Blue Choice PPO contract, but this doctor's participation isn't established in the available records.",
+}
 page.on('requestfailed', request => errors.push(`${request.method()} ${request.url()} ${request.failure()?.errorText}`))
 await page.route(url => url.pathname.startsWith('/api/'), async route => {
   const path = new URL(route.request().url()).pathname
@@ -117,6 +122,8 @@ const openServices = async () => {
 }
 try {
   await openPatient()
+  assert(await page.getByText('Contract indicates in network').isVisible())
+  assert(await page.getByText(results['visit-a'].network_evidence.reason).isVisible())
   let section = await openServices()
   assert.equal(await section.locator('.selected-service-chips').innerText(), 'No services selected',
     'Suggested office code stays separate from clinician selection')

@@ -12,6 +12,7 @@ import type {
 } from './commercial-visit-types'
 import type { PrevisitBenefits } from './commercial-benefits'
 import type { PaymentExplanation } from './commercial-explanation'
+import type { CommercialNetworkEvidence } from './commercial-network-evidence'
 
 export type PrevisitEstimate = {
   botox_review?: BotoxReview
@@ -399,43 +400,7 @@ export type PrevisitEstimate = {
   calculated_at?: string
   ecw_retrieved_at?: string
   response_reference?: string
-  network_evidence?: {
-    decision?:
-      | 'confirmed_participating'
-      | 'confirmed_nonparticipating'
-      | 'excluded_under_available_agreement'
-      | 'lacking_applicable_network_evidence'
-      | 'out_of_network_by_clinic_contract_inventory'
-      | 'conflicting_network_evidence'
-    source?: string
-    evidence_ids?: string[]
-    product_kind?: string
-    page?: number
-    passage?: string
-    network_name?: string
-    product_source?: string
-    product_mapping_approval?: {
-      reference?: string
-      actor_id?: string
-      verified_at?: string
-      valid_from?: string
-      valid_to?: string
-    }
-    evidence_reference?: string
-    effective_from?: string
-    effective_to?: string
-    document_id?: string
-    document_label?: string
-    locator?: string
-    related_document_id?: string
-    related_document_label?: string
-    reason?: string
-    approved_by?: string
-    approved_at?: string
-    reference?: string
-    document_hashes?: Record<string, string>
-    scope?: Record<string, string | null>
-  }
+  network_evidence?: CommercialNetworkEvidence
   agreement_exclusion?: {
     decision: 'excluded_under_available_agreement'
     document_id: string

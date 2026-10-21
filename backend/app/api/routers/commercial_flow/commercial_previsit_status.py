@@ -6,7 +6,7 @@ from app.insurance.identity import patient_benefits_bound, payer_identity_verifi
 from app.insurance.network_participation import verified_in_network, verified_out_of_network
 from app.insurance import evidence_resolution
 from app.api.routers.commercial_flow.commercial_previsit_finish import _payer_plan_pricing_source
-from app.api.routers.commercial_flow.commercial_previsit_network_guard import recheck_saved_inventory, recheck_saved_payer_message
+from app.api.routers.commercial_flow.commercial_previsit_network_guard import recheck_saved_network_evidence, recheck_saved_payer_message
 from app.api.routers.commercial_flow.commercial_previsit_requirements import refresh_saved_requirements
 from app.api.routers.commercial_flow.commercial_previsit_enrollment import _enrollment_failure
 @_api.router.get("/configuration")
@@ -348,8 +348,8 @@ def _previsit_result(case: dict, practice_id: str | None = None) -> dict:
                 if (isinstance(policy, dict) and policy.get('mode') in {'defer_to_claim', 'collect_verified_copay'} and policy.get('approved_by')
                         and policy.get('approved_at') and policy.get('reference')):
                     result['collection_policy'] = policy
-        recheck_saved_inventory(result, case, practice_id, route_payer)
         _recheck_saved_clinic_pricing(result, case, practice_id)
+        recheck_saved_network_evidence(result, case, practice_id, route_payer)
         _recheck_saved_payer_allowance(result, case, practice_id)
         refresh_saved_requirements(_api, result, case, practice_id)
     result['revision'] = case.get('revision', 0)

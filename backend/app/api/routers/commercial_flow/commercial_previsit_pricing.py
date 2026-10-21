@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from app.api.routers import commercial_estimator as _api
-from app.insurance import botox_review, cms_locality, cms_pfs, cpt_rules, insurance_product, inventory_certification, library_network_exclusions
+from app.insurance import botox_review, cms_locality, cms_pfs, cpt_rules, insurance_product, inventory_certification, library_network_exclusions, group_contract_support
 
 def _ecw_case_data(inputs: dict, source: dict, conflicts: list[str]) -> dict[str, _api.Any]:
     return {"appointment_id": source.get("appointment_id"), "appointment_date": source.get("appointment_date"),
@@ -260,6 +260,7 @@ def _network_contract_evidence(practice_id: str, network: dict, profile: dict, s
     return evidence
 
 
+
 def _product_mapping_evidence(profile: dict, network: dict, source: dict, service_date: str) -> dict | None:
     """Retain the administrator record used to alias a payer product."""
     payer_names = source.get('payer_plan_names') or []
@@ -412,6 +413,11 @@ def _attach_previsit_pricing(result: dict, practice_id: str, inputs: dict, sourc
                 'reason_code': 'product_link_missing' if str(exc.detail) == 'The clinic fee schedule is not matched to the exact payer product.'
                 else 'payer_network_unmatched' if str(exc.detail) == 'The payer-reported member network does not match the clinic contract.'
                 else 'contract_scope_unresolved', 'reason': str(exc.detail)}
+    if ((result.get('network_evidence') or {}).get('decision') == 'lacking_applicable_network_evidence'
+            and not exclusion and not _api.network_participation.verified_out_of_network(benefits)):
+        supported = group_contract_support.resolve(practice_id, connection, inputs, source, result, benefits)
+        if supported:
+            result['network_evidence'] = supported
     if (inventory and benefits.get('network_source') != 'clinic_library_contract'
             and not _api.network_participation.verified_out_of_network(benefits)):
         _apply_inventory_tier(result, benefits, inventory, exclusion)

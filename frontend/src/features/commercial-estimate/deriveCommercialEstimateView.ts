@@ -202,6 +202,9 @@ export function deriveCommercialEstimateView({
       ? 'Out of network for estimation · clinic inventory'
       : result?.network_evidence?.decision === 'excluded_under_available_agreement'
         ? 'Excluded under uploaded agreement'
+        : result?.network_evidence?.decision === 'in_network_contract_supported' &&
+            patientBenefitsBound
+          ? 'Contract indicates in network'
         : benefits?.active === true &&
             !patientBenefitsBound &&
             ['in_network', 'out_of_network'].includes(benefits.network_status || '')
@@ -218,7 +221,9 @@ export function deriveCommercialEstimateView({
                 ? 'Contract match unavailable'
                 : 'Not determined'
   const networkSource =
-    benefits?.network_source === 'clinic_library_contract'
+    result?.network_evidence?.decision === 'in_network_contract_supported'
+      ? 'Dated group agreement and product-network rule · clinician participation pending'
+      : benefits?.network_source === 'clinic_library_contract'
       ? 'Current Clinical Library contract'
       : benefits?.network_source === 'clinic_library_absent'
         ? 'No contract linked to this exact payer product and provider'

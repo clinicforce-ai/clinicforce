@@ -6,11 +6,13 @@ requirement decisions. It never turns a suggestion into an approved fact.
 from __future__ import annotations
 
 from app.insurance.identity import patient_benefits_bound
+from app.insurance import network_participation
 
 
 def build(result: dict, source: dict) -> list[dict]:
     benefits = result.get('benefits') or {}
-    network = result.get('network_evidence') or {}
+    network = result.setdefault('network_evidence', {})
+    network['outcome'] = network_participation.outcome(benefits, network)
     requirements = result.get('requirement_evidence') or {}
     lines = (result.get('price_range') or {}).get('lines') or []
     identity = result.get('identity') or {}
@@ -38,12 +40,15 @@ def build(result: dict, source: dict) -> list[dict]:
     ], 'Member-bound exact insurance product',
         'Find a payer-confirmed enrollment or network identifier that distinguishes this product from similarly named plans.')
     matched_network = benefits.get('network_status') in {'in_network', 'out_of_network'}
-    product_linked = bool(network.get('document_id') and network.get('decision') == 'confirmed_participating')
+    product_linked = bool(network.get('document_id') and network.get('decision') in {
+        'confirmed_participating', 'in_network_contract_supported'})
     record('product_mapping', product_linked, [
         ('eCW Coverage', 'plan label returned' if source.get('plan') else 'plan label not returned'),
         ('saved payer response', 'product label returned' if payer_names else 'exact product not returned' if checked else 'not checked'),
         ('clinic network configuration', network.get('decision') or 'no applicable decision'),
-        ('Clinical Library contract', 'exact linked document' if network.get('document_id') else
+        ('Clinical Library contract', 'dated group network attachment and product relationship'
+         if network.get('decision') == 'in_network_contract_supported' else
+         'exact linked document' if network.get('document_id') else
          'related document only' if network.get('related_document_id') else 'no exact linked document'),
     ], 'Exact member product linked to the clinic agreement',
         'Match the member product or network identifier to the signed agreement and exact provider, location and date scope.')
@@ -51,6 +56,8 @@ def build(result: dict, source: dict) -> list[dict]:
         ('saved payer response', benefits.get('network_source') or 'no provider-specific participation statement'),
         ('clinic network configuration', network.get('decision') or 'no applicable decision'),
     ], 'Provider participation tier for this member and visit',
+        'Confirm this rendering clinician participates in the contracted network for the visit date and office.'
+        if network.get('decision') == 'in_network_contract_supported' else
         'Resolve the exact payer product against the scoped clinic agreement or obtain a provider-specific payer decision.')
 
     approved = result.get('service_selection_status') == 'approved'

@@ -1,13 +1,17 @@
 """Synthetic product and network evidence must not invent participation."""
 
 import pytest
+import hashlib
+import json
 from types import SimpleNamespace
 
 from app.api.routers import commercial_estimator as api
 from app.api.routers.commercial_flow import commercial_previsit_pricing as pricing
 from app.api.routers.commercial_flow import commercial_previsit_requirements as requirements
+from app.api.routers.commercial_flow.commercial_previsit_network_guard import recheck_saved_network_evidence
 from app.insurance import amount_explanation
 from app.insurance import contract_requirements
+from app.insurance import network_participation
 
 
 DAY = '2026-10-21'
@@ -137,6 +141,123 @@ def test_identified_fep_basic_cannot_use_blue_choice_basic_ci_contract(monkeypat
     source['payer_plan_scope'] = {'plan_number': None, 'group_number': '33A'}
     with pytest.raises(api.HTTPException, match='exact payer product'):
         api._practice_path('clinic', inputs, source)
+
+
+@pytest.mark.parametrize('invalid', [None, 'product', 'reported_network', 'rendering', 'tin',
+                                     'location', 'date', 'document_hash', 'attachment'])
+def test_fep_group_agreement_is_visible_without_claiming_clinician_participation(monkeypatch, invalid):
+    payer, network, profile, inputs, source = setup_path(monkeypatch)
+    payer['display_name'] = 'Blue Cross Blue Shield of Texas'
+    network['evidence_reference'] = 's3://synthetic/clinic-setup.json'
+    profile['rules']['library_source'] = {}
+    source['payer_plan_names'] = ['FEP Blue Basic PSHB']
+    source['payer_plan_scope'] = {'plan_number': None, 'group_number': '33A'}
+    document = {'id': 'signed-group-contract', 'kind': 'contract', 'content_type': 'application/pdf',
+                'label': 'Signed professional provider agreement', 'payer': payer['display_name'],
+                'effective_from': '2026-06-16', 'effective_to': None, 'sha256': 'synthetic-digest'}
+    extracted = {'sha256': 'synthetic-digest', 'pages': [
+        {'text': 'Executed group professional provider agreement. Attachment A: Blue Choice PPO network. '
+                 'Group provider arrangement and individual credentialing requirements.'}]}
+    if invalid == 'product':
+        source['payer_plan_names'] = ['Different Basic Product']
+    elif invalid == 'reported_network':
+        source['payer_network_names'] = ['Other PPO']
+    elif invalid == 'rendering':
+        inputs['rendering_provider']['npi'] = '3333333333'
+    elif invalid == 'tin':
+        source['billing_provider']['tin'] = '000000000'
+    elif invalid == 'location':
+        source['location_id'] = 'other-office'
+    elif invalid == 'date':
+        document['effective_to'] = '2026-10-20'
+    elif invalid == 'document_hash':
+        extracted['sha256'] = 'changed'
+    elif invalid == 'attachment':
+        extracted['pages'][0]['text'] = 'Executed agreement. Attachment A: Another PPO network.'
+    monkeypatch.setattr(api.staff_store, 'list_library', lambda *_: [document])
+    monkeypatch.setattr(api.staff_store, 'get_library', lambda *_: {**document, 'extraction': extracted})
+    monkeypatch.setattr(pricing.library_network_exclusions, 'applicable_exclusion', lambda *_: None)
+    monkeypatch.setattr(pricing.inventory_certification, 'applicable', lambda *_: None)
+    monkeypatch.setattr(api, '_previsit_range', lambda *_args, **_kwargs: ({'lines': [], 'complete': False}, []))
+    result = {'payer': payer['display_name'], 'plan_details': {'stedi': {
+                  'identified_product': source['payer_plan_names'][0]}},
+              'codes': [], 'issues': [], 'service_selection_status': 'preview',
+              'identity': {'status': 'matched', 'binding': 'synthetic', 'match_version': 2}}
+    benefits = {'active': True, 'service_date_matches': True, 'network_status': 'unknown',
+                'network_conflict': False}
+    api._attach_previsit_pricing(result, 'clinic', inputs, source, 'payer-route', benefits)
+    if invalid:
+        assert result['network_evidence']['decision'] != 'in_network_contract_supported'
+        assert network_participation.outcome(benefits, result['network_evidence']) == 'UNRESOLVED'
+    else:
+        assert result['network_evidence']['decision'] == 'in_network_contract_supported'
+        assert result['network_evidence']['network_name'] == 'Blue Choice PPO'
+        assert result['network_evidence']['document_id'] == document['id']
+        assert network_participation.outcome(benefits, result['network_evidence']) == 'IN_NETWORK_CONTRACT_SUPPORTED'
+    assert benefits['network_status'] == 'unknown'
+    assert benefits.get('network_source') != 'clinic_library_contract'
+
+
+def test_patient_bound_network_name_supports_group_contract_without_rate_match(monkeypatch):
+    payer, network, profile, inputs, source = setup_path(monkeypatch)
+    network['evidence_reference'] = 's3://synthetic/group-setup.json'
+    profile['rules']['library_source'] = {}
+    source['payer_plan_names'] = ['Example PPO Gold']
+    source['payer_network_names'] = ['Blue Choice PPO']
+    document = {'id': 'group-document', 'kind': 'contract', 'content_type': 'application/pdf',
+                'label': 'Example group agreement', 'payer': payer['display_name'],
+                'effective_from': '2026-01-01', 'sha256': 'digest'}
+    monkeypatch.setattr(api.staff_store, 'list_library', lambda *_: [document])
+    monkeypatch.setattr(api.staff_store, 'get_library', lambda *_: {**document, 'extraction': {
+        'sha256': 'digest', 'pages': [{'text': 'Signed group agreement. Attachment A: Blue Choice PPO.'}]}})
+    monkeypatch.setattr(pricing.library_network_exclusions, 'applicable_exclusion', lambda *_: None)
+    monkeypatch.setattr(pricing.inventory_certification, 'applicable', lambda *_: None)
+    monkeypatch.setattr(api, '_previsit_range', lambda *_args, **_kwargs: ({'lines': [], 'complete': False}, []))
+    result = {'payer': payer['display_name'], 'codes': [], 'issues': [],
+              'identity': {'status': 'matched', 'binding': 'synthetic', 'match_version': 2}}
+    benefits = {'active': True, 'network_status': 'unknown'}
+    api._attach_previsit_pricing(result, 'clinic', inputs, source, 'payer-route', benefits)
+    assert result['network_evidence']['decision'] == 'in_network_contract_supported'
+    assert result['network_evidence']['product_network_source'] == 'patient_bound_payer_network'
+    assert benefits['network_status'] == 'unknown'
+    result['benefits'] = benefits
+    explanation = amount_explanation.build(result, {'amount_cents': None, 'basis': 'missing_collection_inputs'})
+    assert explanation['reason_code'] == 'provider_credentialing_unresolved'
+
+
+def test_saved_result_reuses_current_group_contract_without_payer_transaction(monkeypatch):
+    payer, network, _, inputs, source = setup_path(monkeypatch)
+    payer['display_name'] = 'BCBS Texas'
+    network['evidence_reference'] = 's3://synthetic/setup.json'
+    document = {'id': 'group-document', 'kind': 'contract', 'content_type': 'application/pdf',
+                'label': 'Signed group agreement', 'payer': payer['display_name'],
+                'effective_from': '2026-01-01', 'sha256': 'digest'}
+    monkeypatch.setattr(api.staff_store, 'list_library', lambda *_: [document])
+    monkeypatch.setattr(api.staff_store, 'get_library', lambda *_: {**document, 'extraction': {
+        'sha256': 'digest', 'pages': [{'text': 'Executed agreement. Attachment A: Blue Choice PPO.'}]}})
+    raw = json.dumps({'plans': [{'name': 'BASIC'}],
+                      'subscriber': {'memberId': 'R-SYNTHETIC', 'groupNumber': '33A'},
+                      'x12': 'fepblue.org'}).encode()
+    monkeypatch.setattr('app.api.routers.commercial_flow.commercial_previsit_network_guard.object_store.get_object_bytes',
+                        lambda *_: raw)
+    case = {'previsit_context': {'inputs': inputs, 'source': source},
+            'previsit_raw_object_key': 'synthetic-protected-object',
+            'previsit_raw_sha256': hashlib.sha256(raw).hexdigest()}
+    result = {'plan_details': {'stedi': {'names': ['BASIC']}},
+              'identity': {'status': 'matched', 'binding': 'synthetic', 'match_version': 2},
+              'benefits': {'active': True, 'network_status': 'unknown'},
+              'network_evidence': {'decision': 'lacking_applicable_network_evidence'}}
+    recheck_saved_network_evidence(result, case, 'clinic', payer)
+    assert result['network_evidence']['decision'] == 'in_network_contract_supported'
+    assert result['plan_details']['stedi']['identified_product'] == 'FEP Blue Basic PSHB'
+    assert result['benefits']['network_status'] == 'unknown'
+    changed = {**case, 'previsit_context': {**case['previsit_context'], 'inputs': {
+        **inputs, 'rendering_provider': {'npi': '3333333333'}}}}
+    stale = {'plan_details': result['plan_details'], 'identity': result['identity'],
+             'benefits': {'active': True, 'network_status': 'unknown'},
+             'network_evidence': {'decision': 'lacking_applicable_network_evidence'}}
+    recheck_saved_network_evidence(stale, changed, 'clinic', payer)
+    assert stale['network_evidence']['decision'] == 'lacking_applicable_network_evidence'
 
 
 def test_requirement_context_uses_only_approved_contract_product():
