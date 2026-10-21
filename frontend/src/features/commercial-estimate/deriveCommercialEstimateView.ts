@@ -330,6 +330,24 @@ export function deriveCommercialEstimateView({
         : supportedAmount
           ? money(guidance!.amount_cents!)
           : null
+  const provisionalAmount =
+    !readOnly &&
+    !cash &&
+    !previousEstimate &&
+    !calculating &&
+    !supportedAmount &&
+    result?.service_selection_status === 'preview' &&
+    !!result.selected_ids?.length &&
+    currentPayerAmount &&
+    !requirementIssue &&
+    !result.encounter_summary?.integrity_error &&
+    price?.mode === 'services' &&
+    price.complete &&
+    price.patient_min_cents != null &&
+    price.patient_min_cents === price.patient_max_cents &&
+    price.patient_min_cents === result.planning_estimate?.amount_cents
+      ? price.patient_min_cents
+      : null
   const deferred = !cash && guidance?.basis === 'claim_after_service' && !!amount
   const amountText =
     readOnly && !result?.collection_guidance && !cash
@@ -337,6 +355,7 @@ export function deriveCommercialEstimateView({
       : calculating
         ? 'Calculating…'
         : (amount ??
+          (provisionalAmount != null ? money(provisionalAmount) : null) ??
           (error
             ? 'Check visit details'
             : tooEarly
@@ -352,9 +371,11 @@ export function deriveCommercialEstimateView({
         ? 'Visit needs review'
         : result?.cash_fallback
           ? 'Self-pay option for this visit'
-          : !amount && !cash
-            ? 'Collection decision needed'
-            : 'Amount to collect now'
+          : provisionalAmount != null
+            ? 'Provisional patient estimate · do not collect'
+            : !amount && !cash
+              ? 'Collection decision needed'
+              : 'Amount to collect now'
   const amountParts = result?.encounter_summary?.components
   const officeDeductible = guidance?.services.find(
     (service) => service.code === officeCopayLine?.code,
@@ -403,7 +424,10 @@ export function deriveCommercialEstimateView({
     emgScenario && !calculating && !/nerve testing/i.test(baseExplanation)
       ? `${baseExplanation} ${emg.total_min_cents != null ? 'The nerve-testing total below is for planning only' : 'Nerve testing is excluded because its patient cost is unknown'}.`
       : baseExplanation
-  const summaryExplanation = explanation
+  const summaryExplanation =
+    provisionalAmount != null
+      ? 'Estimated patient share for the provisional CPT scenario. Review the services and requirements before collecting.'
+      : explanation
   const provider = result?.appointment_context?.rendering_provider?.name
   const anticipatedService = visitServiceLabel(result)
   return {
@@ -453,6 +477,7 @@ export function deriveCommercialEstimateView({
     emgScenario,
     cashAmount,
     amount,
+    provisionalAmount,
     deferred,
     amountText,
     amountLabel,

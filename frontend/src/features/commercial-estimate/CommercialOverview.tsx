@@ -40,6 +40,7 @@ export default function CommercialOverview({
     networkLabel,
     networkTone,
     amount,
+    provisionalAmount,
     amountText,
     amountLabel,
     requirementIssue,
@@ -103,6 +104,7 @@ export default function CommercialOverview({
     amount ||
     (!staleInsuredGuidance && (guidance?.patient_actions.length || guidance?.assumptions.length)),
   )
+  const visibleAmount = Boolean(amount) || provisionalAmount != null
   const patientBenefitsBound = hasPatientBinding(result.identity)
   const applicablePlanLimits =
     !cash &&
@@ -168,10 +170,10 @@ export default function CommercialOverview({
       </div>
       <div className="overview-amounts">
         <div
-          className={`arrival-total${!amount && !calculating && !tooEarly ? ' is-blocked' : ''}`}
+          className={`arrival-total${!visibleAmount && !calculating && !tooEarly ? ' is-blocked' : ''}`}
         >
           <span>{amountLabel}</span>
-          <strong className={!amount ? 'amount-pending' : undefined} role="status">
+          <strong className={!visibleAmount ? 'amount-pending' : undefined} role="status">
             {amountText}
           </strong>
           <p>{overviewExplanation(model, result, Boolean(fullBreakdown))}</p>
