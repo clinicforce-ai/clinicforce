@@ -30,6 +30,13 @@ def build(result: dict, source: dict) -> list[dict]:
         'Reconcile only the fields named in the identity comparison against the patient-linked policy.')
 
     payer_names = ((result.get('plan_details') or {}).get('stedi') or {}).get('names') or []
+    identified = ((result.get('plan_details') or {}).get('stedi') or {}).get('identified_product')
+    record('exact_product', bool(identified and patient_benefits_bound(identity)), [
+        ('saved payer response', 'correlated plan, enrollment and FEP source markers' if identified else
+         'no corroborated exact product'),
+        ('published plan reference', '2026 OPM PSHB brochure 71-020' if identified else 'no exact rule selected'),
+    ], 'Member-bound exact insurance product',
+        'Find a payer-confirmed enrollment or network identifier that distinguishes this product from similarly named plans.')
     matched_network = benefits.get('network_status') in {'in_network', 'out_of_network'}
     product_linked = bool(network.get('document_id') and network.get('decision') == 'confirmed_participating')
     record('product_mapping', product_linked, [
@@ -68,6 +75,8 @@ def build(result: dict, source: dict) -> list[dict]:
         ('saved payer benefit rows', f'{len(selected)} applicable row(s); {len(excluded)} restricted row(s) excluded'
          if checked else 'no saved payer benefit response'),
         ('service-specific pricing', 'applicable copay or coinsurance selected' if cost_share else 'no applicable office term selected'),
+        ('published plan benefit', 'Preferred specialist copay applies only after FEP Preferred participation is established'
+         if benefits.get('published_preferred_office_copay_cents') is not None else 'no exact-product published office rule'),
     ], 'In-person office copay or coinsurance for the selected service',
         'Obtain an applicable member and service-specific office cost-share decision; restricted benefit rows cannot be substituted.')
 
@@ -78,6 +87,8 @@ def build(result: dict, source: dict) -> list[dict]:
         ('saved payer benefit rows', f'applicability {deductible or "not returned"}'),
         ('individual accumulator', 'remaining balance returned' if benefits.get('deductible_remaining_cents') is not None
          else 'applicable remaining balance not returned'),
+        ('published plan rule', '2026 FEP Basic has no annual medical deductible'
+         if benefits.get('published_plan_rule') else 'no exact-product rule applied'),
     ], 'Deductible applicability and remaining individual balance for this service',
         'Resolve the service-specific deductible rule and current individual balance with the payer.')
 

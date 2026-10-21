@@ -95,6 +95,12 @@ BCBSTX_2026_PA_SOURCE = {
     'source_version': '2026 code list, updated October 2026', 'verified_at': '2026-10-21',
     'effective_from': '2026-01-01', 'effective_to': '2026-12-31',
 }
+FEP_PSHB_2026_SOURCE = {
+    'label': '2026 OPM PSHB Service Benefit Plan brochure, Sections 3 and 5(a)',
+    'url': 'https://www.opm.gov/healthcare-insurance/healthcare/plan-information/plans/BrochureJson?brochureNumber=71-020&year=2026',
+    'source_version': '2026 brochure 71-020', 'verified_at': '2026-10-21',
+    'effective_from': '2026-01-01', 'effective_to': '2026-12-31',
+}
 
 
 def _published_rule(kind: str, result: dict, context: dict, plans: list[str], codes: set[str]) -> dict | None:
@@ -129,6 +135,13 @@ def _published_rule(kind: str, result: dict, context: dict, plans: list[str], co
                                      'location_id': context.get('location_id'),
                                      'place_of_service': context.get('pos'),
                                      'service_date': day}}
+    if product == 'fepbluebasicpshb':
+        if kind == 'referral':
+            return rule('Not required', 'The 2026 PSHB Service Benefit Plan does not require a PCP referral to see a specialist.', FEP_PSHB_2026_SOURCE)
+        if kind == 'authorization' and office and codes <= {'99212', '99213', '99214', '99215'} and str(context.get('pos') or '') == '11':
+            return rule('Not required', 'The 2026 PSHB brochure lists services requiring prior approval; a routine office E/M visit alone is outside those listed categories. Additional services require their own decision.', FEP_PSHB_2026_SOURCE)
+        if kind == 'authorization':
+            return rule('Verification required', 'The 2026 PSHB brochure requires prior approval for selected services and drugs. Match each planned code and indication to its rule.', FEP_PSHB_2026_SOURCE, check=True)
     if {'unitedhealthcare', 'uhc'} & names:
         if 'wellmed' in names or any('wellmed' in _key(plan) for plan in plans):
             return None

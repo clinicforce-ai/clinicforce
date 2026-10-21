@@ -70,6 +70,23 @@ export default function CommercialSourcesDetail({
                 </small>
               </dd>
             </div>
+            {result.benefits?.published_plan_rule && (
+              <div>
+                <dt>Published plan rule</dt>
+                <dd>
+                  <a
+                    href={result.benefits.published_plan_rule.url}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    {result.benefits.published_plan_rule.label}
+                  </a>
+                  <small>
+                    {result.plan_details?.stedi.identified_product || 'Product not identified'}
+                  </small>
+                </dd>
+              </div>
+            )}
             <div>
               <dt>Clinical Library contract</dt>
               <dd>

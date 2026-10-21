@@ -35,7 +35,7 @@ class ConnectionAliasInput(BaseModel):
 class CollectionPolicyInput(BaseModel):
     """Clinic administrator's payer-specific check-in collection decision."""
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
-    mode: Literal["defer_to_claim", "disabled"]
+    mode: Literal["defer_to_claim", "collect_verified_copay", "disabled"]
     reference: str = Field(min_length=10, max_length=500)
     allow_supported_oon_advance: bool = False
     allow_cms_based_advance: bool = False

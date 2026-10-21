@@ -166,6 +166,13 @@ def build(result: dict, review: dict | None = None) -> dict:
     if positive_policy_missing:
         amount = None
         guidance['positive_advance_policy_missing'] = True
+    published_copay = any((line.get('benefits') or {}).get('published_plan_rule') for line in lines)
+    if amount is not None and amount > 0 and published_copay:
+        policy = result.get('collection_policy') or {}
+        if not (policy.get('mode') == 'collect_verified_copay' and policy.get('approved_by')
+                and policy.get('approved_at') and policy.get('reference')):
+            amount = None
+            guidance['published_copay_policy_missing'] = True
     failure_codes = set((result.get('eligibility_failure') or {}).get('codes') or [])
     if not active_payer_benefits and failure_codes & {'72', '73', '65', '67', '71', '75', '76'}:
         actions.append('Contact your insurer to confirm the member ID, policyholder name and date of birth. Bring the corrected insurance details.')
@@ -184,7 +191,9 @@ def build(result: dict, review: dict | None = None) -> dict:
             guidance['reason'] += ' Recorded payments have been deducted.'
     else:
         guidance.update(status='action_required', basis='missing_collection_inputs')
-        if source_errors:
+        if guidance.get('published_copay_policy_missing'):
+            guidance['reason'] = 'The published plan specialist copay is supported, but this payer route has no administrator-approved fixed-copay collection policy.'
+        elif source_errors:
             guidance['reason'] = (
                 'The protected saved payer response could not be reopened. Rerun the payer check before collecting.'
                 if any(error.get('kind') == 'saved_raw_unavailable' for error in source_errors) else

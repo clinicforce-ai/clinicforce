@@ -389,6 +389,8 @@ export type PrevisitEstimate = {
       names?: string[]
       supplementary_names?: string[]
       network_names?: string[]
+      identified_product?: string | null
+      product_evidence?: Record<string, string> | null
       plan_number?: string
       group_number?: string
       source?: string

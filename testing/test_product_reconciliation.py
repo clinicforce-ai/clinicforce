@@ -131,6 +131,14 @@ def test_alias_does_not_bypass_contract_tin(monkeypatch):
         api._practice_path('clinic', inputs, source)
 
 
+def test_identified_fep_basic_cannot_use_blue_choice_basic_ci_contract(monkeypatch):
+    _, _, _, inputs, source = setup_path(monkeypatch, [approved_mapping()])
+    source['payer_plan_names'] = ['FEP Blue Basic PSHB']
+    source['payer_plan_scope'] = {'plan_number': None, 'group_number': '33A'}
+    with pytest.raises(api.HTTPException, match='exact payer product'):
+        api._practice_path('clinic', inputs, source)
+
+
 def test_requirement_context_uses_only_approved_contract_product():
     result = {'payer': 'BCBS Texas', 'benefit_source': 'Stedi',
               'codes': [{'id': 'office', 'code': '99213', 'units': 1}],

@@ -55,7 +55,7 @@ async def add_connection_aliases(connection_id: str, value: _api.ConnectionAlias
 
 @_api.router.put("/connections/{connection_id}/collection-policy")
 async def set_collection_policy(connection_id: str, value: _api.CollectionPolicyInput, request: _api.Request) -> dict:
-    """Clinic-admin approval or removal of $0 check-in deferral for one payer route."""
+    """Clinic-admin approval of $0 deferral or a verified fixed-copay advance for one payer route."""
     session = await _api._session(request)
     _api._admin(session)
     try:

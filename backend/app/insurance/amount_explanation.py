@@ -71,6 +71,10 @@ def _cash_cause(result: dict, failure: dict, recovery: dict, card: dict, network
         return 'the payer returned both active and inactive or noncovered status for the planned service', 'coverage_status_conflict'
     if benefits.get('coverage_dates_invalid'):
         return 'the payer returned a coverage date that cannot be interpreted for this visit', 'coverage_date_invalid'
+    if (((result.get('plan_details') or {}).get('stedi') or {}).get('identified_product') == 'FEP Blue Basic PSHB'
+            and active_benefits and network == 'unknown'):
+        return ('FEP Blue Basic PSHB is identified, but this rendering provider has no verified FEP Preferred participation for the visit',
+                'fep_preferred_unresolved')
     if reason in {'no_coverage_found', 'upstream_no_policies'} and not active_benefits:
         return 'the completed insurance search returned no policy for this patient', 'no_policy_returned'
     line_blocker = selected_service_blocker(network, identity, lines)
@@ -225,6 +229,7 @@ def build(result: dict, guidance: dict, review: dict | None = None) -> dict:
     basis = guidance.get('basis') or 'insufficient_evidence'
     amount = guidance.get('amount_cents')
     medical_names = (((result.get('plan_details') or {}).get('stedi') or {}).get('names') or [])
+    identified_product = (((result.get('plan_details') or {}).get('stedi') or {}).get('identified_product'))
     ma_ppo = is_medicare_advantage(medical_names)
     if result.get('payment_mode') == 'cash':
         named_package = (result.get('cash_quote') or {}).get('selection') and (result.get('cash_quote') or {}).get('complete')
@@ -283,6 +288,9 @@ def build(result: dict, guidance: dict, review: dict | None = None) -> dict:
             elif network == 'out_of_network' and not ma_ppo:
                 sentence += ', while any extra doctor charge remains unknown'
             code = 'office_copay_partial' if unpriced else 'office_copay'
+            if basis == 'office_copay' and identified_product == 'FEP Blue Basic PSHB' and amount > 0:
+                sentence = (f'Collect {_money(amount)} as the 2026 FEP Blue Basic PSHB Preferred specialist office copay; '
+                            'the final E/M level and any additional services follow the documented care and claim')
         elif basis == 'out_of_pocket_limit':
             sentence, code = 'No payment is due now because the plan says the covered care has no remaining patient share', 'oop_limit_met'
         elif basis == 'qmb_protection':
@@ -362,7 +370,13 @@ def build(result: dict, guidance: dict, review: dict | None = None) -> dict:
     else:
         cause, cause_code = _cash_cause(result, failure, recovery, card, network, benefits, unpriced, missing,
                                         guidance.get('source_errors'))
-        if guidance.get('positive_advance_policy_missing'):
+        if guidance.get('published_copay_policy_missing'):
+            sentence, code = ('The 2026 FEP Blue Basic PSHB Preferred specialist copay is supported, but no approved clinic policy authorizes its collection at check-in',
+                              'collection_policy_approval_required')
+        elif identified_product == 'FEP Blue Basic PSHB' and network == 'unknown' and benefits.get('active') is True:
+            sentence, code = ('FEP Blue Basic PSHB coverage is active, but the rendering provider’s FEP Preferred status is not established for this visit, so no insured amount is ready',
+                              'fep_preferred_unresolved')
+        elif guidance.get('positive_advance_policy_missing'):
             sentence, code = ('The calculated out-of-network share is not approved for advance collection, so a clinic administrator must approve this payer’s collection policy before requesting payment',
                               'collection_policy_approval_required')
         elif basis == 'calculation_conflict':
@@ -452,7 +466,7 @@ def build(result: dict, guidance: dict, review: dict | None = None) -> dict:
     summary = result.get('encounter_summary') or {}
     return {'sentence': sentence + '.', 'reason_code': code, 'network_tier': network,
             'pricing_basis': basis, 'unpriced_codes': unpriced,
-            'plan_name': medical_names[0] if len(medical_names) == 1 else None,
+            'plan_name': identified_product or (medical_names[0] if len(medical_names) == 1 else None),
             'network_decision': inventory.get('decision'),
             'network_source': benefits.get('network_source'),
             'contract_evidence': {key: inventory.get(key) for key in
