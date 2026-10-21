@@ -12,6 +12,7 @@ import TemporaryRateReference from './TemporaryRateReference'
 import EstimateSources from './EstimateSources'
 import { openServiceDetails } from './openServiceDetails'
 import { overviewExplanation } from './overviewExplanation'
+import PublishedPlanBenefit from './PublishedPlanBenefit'
 
 export default function CommercialOverview({
   model,
@@ -177,6 +178,7 @@ export default function CommercialOverview({
             {amountText}
           </strong>
           <p>{overviewExplanation(model, result, Boolean(fullBreakdown))}</p>
+          {!cash && <PublishedPlanBenefit result={result} />}
           {!readOnly && guidance?.policy_setup_required && (
             <p>
               Clinic administrator: approve a payer collection policy before instructing $0
