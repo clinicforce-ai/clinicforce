@@ -47,6 +47,13 @@ export type PrevisitEstimate = {
     lines: Array<{ code: string; unit_reference_cents: number; source_reference: string }>
   }
   payment_explanation?: PaymentExplanation
+  evidence_resolution?: Array<{
+    field: string
+    status: 'resolved' | 'unresolved'
+    sources: Array<{ name: string; finding: string }>
+    missing_fact: string
+    next_action: string
+  }>
   insurance_hints?: Array<{ payer?: string | null; member_id?: string | null; sources: string[] }>
   insurance_diagnosis?: {
     coverageSource: string

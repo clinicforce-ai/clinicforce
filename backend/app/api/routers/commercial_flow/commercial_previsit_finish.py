@@ -5,7 +5,7 @@ from app.api.routers import commercial_estimator as _api
 from app.api.routers.commercial_flow.commercial_previsit_catalog import build_catalog
 from app.api.routers.commercial_flow.commercial_previsit_requirements import attach_requirements
 from app.insurance.identity import patient_benefits_bound
-from app.insurance import botox_review
+from app.insurance import botox_review, evidence_resolution
 
 def _visit_context_token(inputs: dict, source: dict) -> str:
     context = {'coverage': {k: v for k, v in _api._coverage_snapshot(inputs, source).items() if k != 'other_active_coverage'},
@@ -213,6 +213,7 @@ def _finish_previsit(result: dict, case: dict, inputs: dict, source: dict, paylo
                 pass
         result['emg_option'] = _api.collection_guidance.emg_option(result, emg_rates, emg_rules, payload, inputs['service_date'], review)
     result['encounter_summary'] = _api.encounter_summary.build(result, review)
+    result['evidence_resolution'] = evidence_resolution.build(result, source)
     guidance = result['collection_guidance']
     emg = result.get('emg_option') or {}
     price = result.get('price_range') or {}

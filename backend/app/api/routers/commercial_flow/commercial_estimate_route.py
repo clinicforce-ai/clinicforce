@@ -6,7 +6,10 @@ from app.api.routers.commercial_flow.commercial_previsit_saved import reuse_save
 from app.api.routers.commercial_flow.commercial_previsit_reuse import reuse_previsit_case
 from app.api.routers.commercial_flow.commercial_previsit_submit import submit_previsit_eligibility
 
-@_api.router.post("/appointments/previsit")
+@_api.router.post("/appointments/previsit", description=(
+    "Estimate a patient-bound eCW visit. Compatible saved payer evidence is reused without another "
+    "eligibility request; evidence_resolution reports the source findings and exact unresolved facts."
+))
 async def previsit_estimate(value: _api.PrevisitInput, request: _api.Request, background_tasks: _api.BackgroundTasks = None) -> dict:
     """Estimate selected visit CPTs from current eligibility and clinic prices.
 

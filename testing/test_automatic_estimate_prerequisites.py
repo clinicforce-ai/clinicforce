@@ -121,3 +121,68 @@ def test_estimate_uses_existing_mapping_without_staff_confirmation(appointment, 
         assert result['collection_guidance']['amount_cents'] is None
     else:
         assert result['collection_guidance']['amount_cents'] is None
+
+
+def test_saved_payer_evidence_reprices_when_existing_contract_link_is_resolved(appointment):
+    inputs, source, payer, network = appointment
+    payload = response()
+    case = {}
+
+    def calculate():
+        result = {'issues': [], 'service_date': inputs['service_date'],
+                  'checked_at': datetime.now(timezone.utc).isoformat(),
+                  'benefits': api._previsit_benefits(payload, api._coverage_snapshot(inputs, source), inputs['service_date'])}
+        api._finish_previsit(result, case, inputs, source, payload,
+                             {'practice_id': 'clinic-a'}, payer['stedi_payer_id'])
+        return result
+
+    network['plan_matcher'] = 'Unrelated Product'
+    unresolved = calculate()
+    assert unresolved['collection_guidance']['amount_cents'] is None
+    assert next(row for row in unresolved['evidence_resolution'] if row['field'] == 'product_mapping')['status'] == 'unresolved'
+
+    network['plan_matcher'] = 'Choice Medical'
+    resolved = calculate()  # Same saved response; no new eligibility transaction.
+    assert resolved['collection_guidance']['amount_cents'] == 4000
+    assert next(row for row in resolved['evidence_resolution'] if row['field'] == 'product_mapping')['status'] == 'resolved'
+    assert next(row for row in resolved['evidence_resolution'] if row['field'] == 'collection_amount')['status'] == 'resolved'
+    assert any(line['allowed_cents'] == 20000 for line in resolved['price_range']['lines'])
+
+
+def test_saved_ambiguous_product_reconciles_through_scoped_mapping_and_rates(appointment):
+    inputs, source, payer, network = appointment
+    profile = api.commercial_store.list_profiles('clinic-a')[0]
+    source['plan'] = network['plan_matcher'] = profile['plan_matcher'] = 'CI'
+    payload = deepcopy(response())
+    payload['subscriber']['groupNumber'] = 'SYNTHETIC-GROUP'
+    payload['planDateInformation'] = {'service': {'start': inputs['service_date'], 'end': inputs['service_date']}}
+    inputs['group_number'] = 'SYNTHETIC-GROUP'
+    payload['benefitsInformation'][0]['planCoverageDescription'] = 'BASIC'
+    profile['rules']['plan_product_names'] = ['Blue Choice PPO Basic']
+    case = {}
+
+    def calculate():
+        result = {'issues': [], 'service_date': inputs['service_date'],
+                  'checked_at': datetime.now(timezone.utc).isoformat(),
+                  'benefits': api._previsit_benefits(payload, api._coverage_snapshot(inputs, source), inputs['service_date'])}
+        api._finish_previsit(result, case, inputs, source, payload,
+                             {'practice_id': 'clinic-a'}, payer['stedi_payer_id'])
+        return result
+
+    unlinked = calculate()
+    assert unlinked['collection_guidance']['amount_cents'] is None
+    assert next(row for row in unlinked['evidence_resolution'] if row['field'] == 'product_mapping')['status'] == 'unresolved'
+
+    profile['rules']['product_mappings'] = [{
+        'products': ['BASIC'], 'contract_product': 'Blue Choice PPO Basic',
+        'rate_plan_matcher': 'CI', 'network_id': network['id'],
+        'network_reference': network['evidence_reference'],
+        'reference': 'Synthetic contract and payer evidence', 'actor_id': 'synthetic-admin',
+        'valid_from': '2020-01-01', 'valid_to': '2099-12-31',
+        'plan_scope': {'plan_number': None, 'group_number': 'SYNTHETIC-GROUP'},
+    }]
+    priced = calculate()
+    assert priced['network_evidence']['product_mapping_approval']['contract_product'] == 'Blue Choice PPO Basic'
+    assert priced['collection_guidance']['amount_cents'] == 4000
+    assert all(line['allowed_cents'] == 20000 for line in priced['price_range']['lines'])
+    assert next(row for row in priced['evidence_resolution'] if row['field'] == 'product_mapping')['status'] == 'resolved'

@@ -18,6 +18,8 @@ async def saved_previsit(case_id: str, request: _api.Request) -> dict:
     empty follow-up search is REVIEW_REQUIRED, never an uninsured conclusion.
     recovery.state separately reports pending/indeterminate transport state.
     Coverage verification does not imply that a price is available.
+    evidence_resolution reports each field's source findings and precise
+    remaining action after the shared estimator evaluates saved evidence.
     If the protected raw payer response cannot be reopened, same-context saved
     benefit terms may remain with benefits.historical_only and a source error;
     they cannot authorize an insured collection. A changed policy context does

@@ -118,6 +118,30 @@ export default function CommercialSourcesDetail({
           <p>
             {coverageSource}. {networkSource || 'Provider network source unavailable'}.
           </p>
+          {!!result.evidence_resolution?.length && (
+            <details className="library-diagnostics">
+              <summary>Evidence checked for this estimate</summary>
+              {result.evidence_resolution.map((item) => (
+                <div key={item.field}>
+                  <strong>
+                    {item.field.replaceAll('_', ' ')}: {item.status}
+                  </strong>
+                  <ul>
+                    {item.sources.map((source) => (
+                      <li key={source.name}>
+                        {source.name}: {source.finding}
+                      </li>
+                    ))}
+                  </ul>
+                  {item.status === 'unresolved' && (
+                    <p>
+                      Missing: {item.missing_fact}. Next: {item.next_action}
+                    </p>
+                  )}
+                </div>
+              ))}
+            </details>
+          )}
           {guidance?.basis === 'office_copay' && copayEvidenceId && (
             <p>
               Office copay: {copaySource} response, row {copayEvidenceId}. This is a payer benefit,
