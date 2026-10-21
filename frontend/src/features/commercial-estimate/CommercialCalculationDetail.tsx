@@ -1,6 +1,6 @@
 import type { CommercialEstimateModel } from './useCommercialEstimateModel'
 import { CostPicture } from './EstimatePanels'
-import { money, range } from './format'
+import { range } from './format'
 import { patientBenefitsBound } from './identityBinding'
 
 export default function CommercialCalculationDetail({
@@ -90,8 +90,13 @@ export default function CommercialCalculationDetail({
                           ? range(emg.total_min_cents, emg.total_max_cents)
                           : deferred || !amount
                             ? 'Not yet calculated'
-                            : insuredTotalSupported && result.planning_estimate
-                              ? money(result.planning_estimate.amount_cents)
+                            : insuredTotalSupported &&
+                                result.planning_estimate?.min_cents != null &&
+                                result.planning_estimate?.max_cents != null
+                              ? range(
+                                  result.planning_estimate.min_cents,
+                                  result.planning_estimate.max_cents,
+                                )
                               : patientPrice || 'Applicable advance amount shown above'}
             </h3>
             {amount &&

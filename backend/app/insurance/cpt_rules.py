@@ -6,6 +6,21 @@ from app.insurance.golden import GoldenCaseError
 
 EMG_ADD_ONS = {'95885', '95886', '95887'}
 NCS_CODES = {str(code) for code in range(95907, 95914)}
+NCS_STUDY_RANGES = {
+    '95907': '1–2', '95908': '3–4', '95909': '5–6', '95910': '7–8',
+    '95911': '9–10', '95912': '11–12', '95913': '13 or more',
+}
+
+
+def documented_ncs_code(reason: str) -> str | None:
+    """Use only an explicit current study count, never an anatomical guess."""
+    match = re.search(r'\b(\d{1,2})\s+(?:nerve[ -]?conduction|ncs)\s+stud(?:y|ies)\b', reason, re.I)
+    if not match or re.search(r'\b(?:possible|consider|history|prior|previous)\b', reason[:match.start()].split(';')[-1], re.I):
+        return None
+    count = int(match[1])
+    if count < 1:
+        return None
+    return str(95907 + min((count - 1) // 2, 6))
 
 # Versioned clinical planning metadata. This classifies services; it never
 # supplies a payer benefit, covered status, allowance, or billable quantity.

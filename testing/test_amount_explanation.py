@@ -635,13 +635,13 @@ def test_uncoded_office_alternatives_name_the_missing_clinical_selection():
                   {'code': code, 'calculation': None} for code in ('99202', '99203', '99204', '99205')]}}
     unresolved = amount_explanation.build(result, {'amount_cents': None, 'basis': 'deferred_billing'})
     assert unresolved['reason_code'] == 'planned_cpt_unselected'
-    assert 'no clinician-selected code' in unresolved['sentence']
+    assert 'alternative E/M CPT levels' in unresolved['sentence']
     result['collection_policy'] = {'mode': 'defer_to_claim', 'reference': 'clinic policy 2026',
                                    'approved_by': 'administrator', 'approved_at': '2026-10-15T12:00:00Z'}
     guidance = collection_guidance.build(result)
     deferred = amount_explanation.build(result, guidance)
     assert deferred['sentence'].startswith('Collect $0 today:')
-    assert 'select the clinician-documented E/M CPT, then rerun the insured estimate' in deferred['sentence']
+    assert 'price the booked service alternatives' in deferred['sentence']
 
 
 def test_zero_advance_identity_line_names_only_mismatched_fields():

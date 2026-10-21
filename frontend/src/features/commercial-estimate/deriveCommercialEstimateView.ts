@@ -5,7 +5,6 @@ import { firstSelectedCptIssue } from './selectedCptIssue'
 import { selectedRequirementIssue } from './selectedRequirementIssue'
 import { visitServiceLabel } from './visitServiceLabel'
 import type { CommercialEstimateActions } from './useCommercialEstimateActions'
-
 export function deriveCommercialEstimateView({
   result,
   appointments,
@@ -337,17 +336,23 @@ export function deriveCommercialEstimateView({
     !calculating &&
     !supportedAmount &&
     result?.service_selection_status === 'preview' &&
-    !!result.selected_ids?.length &&
+    (!!result.selected_ids?.length || result.provisional_scenario?.count === 1) &&
     currentPayerAmount &&
-    !requirementIssue &&
     !result.encounter_summary?.integrity_error &&
-    price?.mode === 'services' &&
+    (price?.mode === 'services' || price?.mode === 'alternatives') &&
     price.complete &&
     price.patient_min_cents != null &&
-    price.patient_min_cents === price.patient_max_cents &&
-    price.patient_min_cents === result.planning_estimate?.amount_cents
+    price.patient_max_cents != null &&
+    price.patient_min_cents === result.planning_estimate?.min_cents &&
+    price.patient_max_cents === result.planning_estimate?.max_cents
       ? price.patient_min_cents
       : null
+  const provisionalAmountText =
+    provisionalAmount == null
+      ? null
+      : price?.patient_max_cents != null && price.patient_max_cents !== provisionalAmount
+        ? range(provisionalAmount, price.patient_max_cents)
+        : money(provisionalAmount)
   const deferred = !cash && guidance?.basis === 'claim_after_service' && !!amount
   const amountText =
     readOnly && !result?.collection_guidance && !cash
@@ -355,7 +360,7 @@ export function deriveCommercialEstimateView({
       : calculating
         ? 'Calculating…'
         : (amount ??
-          (provisionalAmount != null ? money(provisionalAmount) : null) ??
+          provisionalAmountText ??
           (error
             ? 'Check visit details'
             : tooEarly
@@ -426,7 +431,9 @@ export function deriveCommercialEstimateView({
       : baseExplanation
   const summaryExplanation =
     provisionalAmount != null
-      ? 'Estimated patient share for the provisional CPT scenario. Review the services and requirements before collecting.'
+      ? result?.provisional_scenario?.kind === 'ncs_study_count'
+        ? 'Estimated patient share across alternative NCS study counts. Muscle testing is excluded unless documented. Do not collect this planning range.'
+        : 'Estimated patient share for the provisional CPT scenario. Review the services and requirements before collecting.'
       : explanation
   const provider = result?.appointment_context?.rendering_provider?.name
   const anticipatedService = visitServiceLabel(result)

@@ -21,6 +21,30 @@ def test_non_office_procedures_keep_their_configured_or_diagnostic_service_type(
     assert visit_estimate.service_type('11104', {'service_type_by_code': {'11104': '98'}}) == '98'
 
 
+def test_booked_ncs_alternatives_price_independently_from_diagnostic_terms():
+    raw = payload()
+    raw['benefitsInformation'][-1]['serviceTypeCodes'] = ['73']
+    raw['benefitsInformation'].append({'code': 'B', 'serviceTypeCodes': ['98'],
+        'coverageLevelCode': 'IND', 'inPlanNetworkIndicatorCode': 'Y',
+        'timeQualifierCode': '7', 'benefitAmount': '90'})
+    identity = {'status': 'matched', 'binding': 'synthetic-member', 'match_version': 2}
+    benefits = {**commercial.normalize_stedi_271(raw, '73', True), 'identity': identity,
+                'network_status': 'in_network', 'network_source': 'clinic_library_contract'}
+    choices = api._previsit_codes({'reason': 'EMG/NCS booked', 'lines': []})
+    rates = [{'code': row['code'], 'allowed_cents': 10000 + index * 2000}
+             for index, row in enumerate(choices)]
+    priced = visit_estimate.price_lines(choices, rates, benefits, {'cost_share': 'payer_returned'},
+        payload=raw, service_date=DAY, alternatives=True)
+    assert priced['mode'] == 'alternatives'
+    assert len(priced['lines']) == 7
+    assert all(line['benefits']['copay_cents'] is None for line in priced['lines'])
+    assert all(line['benefit_basis'] == 'Service category 73' for line in priced['lines'])
+    assert priced['allowed_min_cents'] == 10000 and priced['allowed_max_cents'] == 22000
+    planning = visit_estimate.planning_estimate(priced, benefits, identity)
+    assert priced['complete'] and planning['min_cents'] == 6000 and planning['max_cents'] == 8000
+    assert planning['amount_cents'] is None and planning['collectable'] is False
+
+
 def payload():
     base = {'coverageLevelCode': 'IND', 'inPlanNetworkIndicatorCode': 'Y', 'serviceTypeCodes': ['30']}
     return {'subscriber': {'memberId': 'M123', 'firstName': 'Pat', 'lastName': 'Example',
@@ -327,7 +351,12 @@ def test_procedure_groups_and_recommendations_are_grounded_in_comparable_ecw_vis
     assert '95909' not in visit_estimate.service_plan(codes, {'reason': 'EMG'}, {'recent_completed_appointments': history})['recommended_ids']
     codes[1]['source'] = 'eCW scheduled service'
     assert visit_estimate.service_plan(codes, {'reason': 'EMG'}, {})['recommended_ids'] == ['95907']
-    assert api._previsit_codes({'reason': 'New patient EMG', 'visit_type': 'new', 'lines': []}) == []
+    alternatives = api._previsit_codes({'reason': 'New patient EMG', 'visit_type': 'new', 'lines': []})
+    assert [row['code'] for row in alternatives] == [str(code) for code in range(95907, 95914)]
+    assert all(row['source'] == 'conditional NCS alternative' for row in alternatives)
+    assert not any(row['code'] in {'95885', '95886', '95887'} for row in alternatives)
+    assert api._previsit_codes({'reason': 'EMG, 3 nerve conduction studies planned', 'lines': []})[0]['code'] == '95908'
+    assert len(api._previsit_codes({'reason': 'EMG; 3 sleep studies on file', 'lines': []})) == 7
 
 
 def test_saved_ecw_verification_requires_matching_policy_date_and_fresh_success():

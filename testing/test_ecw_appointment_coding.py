@@ -40,6 +40,14 @@ def test_single_structured_encounter_office_cpt_supplies_one_unit():
         ("99203", 1, "eCW Encounter.serviceType")]
 
 
+def test_finished_encounter_office_cpt_is_a_provisional_one_unit_source():
+    visit = {"resourceType": "Encounter", "id": "visit", "status": "finished",
+             "serviceType": {"coding": [{"system": "http://www.ama-assn.org/go/cpt", "code": "99214"}]}}
+    lines = coded_visit(visit, [], [], [], [], "Encounter/visit", set())[2]
+    assert [(line["code"], line["units"], line.get("source")) for line in lines] == [
+        ("99214", 1, "eCW Encounter.serviceType")]
+
+
 def test_encounter_office_cpt_requires_one_explicit_compatible_service_code():
     visit = {"resourceType": "Encounter", "id": "visit", "status": "planned",
              "serviceType": {"coding": [{"system": "http://www.ama-assn.org/go/cpt", "code": "99203"}]}}

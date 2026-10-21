@@ -63,7 +63,7 @@ def test_certified_regional_inventory_does_not_request_another_agreement(monkeyp
     explanation = amount_explanation.build(result, collection_guidance(result))
     assert explanation['reason_code'] == 'planned_cpt_unselected'
     assert 'separate agreement' not in explanation['sentence']
-    assert 'select the clinician-documented E/M CPT' in explanation['sentence']
+    assert 'service alternatives from the applicable plan and clinic evidence' in explanation['sentence']
     for reason in ('clinic_agreement_exclusion', 'clinic_contract_missing'):
         assert 'separate agreement' not in _collection_action(reason, result)
 

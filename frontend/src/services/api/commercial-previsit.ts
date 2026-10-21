@@ -135,7 +135,9 @@ export type PrevisitEstimate = {
   insurance_fallback?: { payer?: string; member_id?: string }
   identity?: PrevisitIdentity
   planning_estimate?: {
-    amount_cents: number
+    amount_cents: number | null
+    min_cents?: number
+    max_cents?: number
     collectable: false
     basis?: 'out_of_pocket_limit' | 'conditional_services'
     explanation: string
@@ -382,6 +384,13 @@ export type PrevisitEstimate = {
   context_token?: string
   revision?: number
   selected_ids?: string[]
+  selected_service_count?: number
+  provisional_scenario?: {
+    kind: 'office_level' | 'ncs_study_count'
+    count: number
+    candidate_ids: string[]
+    basis: string
+  }
   service_selection_status?: 'preview' | 'approved'
   available_codes?: VisitCode[]
   plan_details?: {

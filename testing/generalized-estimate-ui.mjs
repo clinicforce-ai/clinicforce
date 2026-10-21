@@ -14,6 +14,7 @@ const patient = { id: 'sample', given_name: 'Alex', family_name: 'Morgan', birth
 const visits = [
   { id: 'visit-a', start: '2026-10-21T09:00:00-04:00', status: 'planned', reason: 'Office consultation' },
   { id: 'visit-b', start: '2026-10-22T10:00:00-04:00', status: 'planned', reason: 'Botox injection' },
+  { id: 'visit-c', start: '2026-10-23T10:00:00-04:00', status: 'planned', reason: 'EMG/NCS testing' },
 ]
 const intake = { id: 'sample-intake', source: 'ecw_lookup', status: 'ready', patient,
   fields: { ...patient, ecw_patient_id: 'synthetic-ecw' }, documents: [],
@@ -58,6 +59,30 @@ const results = {
   'visit-a': makeResult(visits[0], [office], ['office']),
   'visit-b': makeResult(visits[1], [drug, procedure, office], []),
 }
+const ncsChoices = Array.from({ length: 7 }, (_, index) => ({
+  id: `ncs-option:${95907 + index}`, code: String(95907 + index), units: 1,
+  source: 'conditional NCS alternative', service_group: 'nerve',
+}))
+const ncsBenefits = { ...baseBenefits, network_status: 'in_network',
+  network_source: 'clinic_library_contract', requires_review: false,
+  service_date_matches: true, has_secondary: false, reported_options: [] }
+results['visit-c'] = {
+  ...makeResult(visits[2], ncsChoices, []), codes: ncsChoices,
+  selected_service_count: 1,
+  provisional_scenario: { kind: 'ncs_study_count', count: 1,
+    candidate_ids: ncsChoices.map(row => row.id), basis: 'eCW booked EMG/NCS visit' },
+  service_plan: { kind: 'emg_ncs', recommended_ids: [], selection_source: 'suggested', groups: [] },
+  benefits: ncsBenefits,
+  price_range: { mode: 'alternatives', complete: true, conditional: false,
+    patient_min_cents: 6000, patient_max_cents: 8000, service_issues: [],
+    lines: ncsChoices.map((row, index) => ({ ...row, benefits: ncsBenefits,
+      allowed_cents: 10000 + index * 2000, issues: [], calculation: { patient_cents: 6000 + index * 333 } })) },
+  planning_estimate: { amount_cents: null, min_cents: 6000, max_cents: 8000,
+    collectable: false, basis: 'conditional_services', explanation: 'Alternative study-count range', assumptions: [] },
+  requirement_evidence: { procedures: ncsChoices.map(row => ({ id: row.id, code: row.code,
+    referral: { status: 'Verification required', reason: 'Exact product unknown', sources: [] },
+    authorization: { status: 'Verification required', reason: 'Exact product unknown', sources: [] } })) },
+}
 results['visit-a'].network_evidence = {
   decision: 'in_network_contract_supported', outcome: 'IN_NETWORK_CONTRACT_SUPPORTED',
   network_name: 'Blue Choice PPO', document_id: 'synthetic-contract',
@@ -83,7 +108,7 @@ await page.route(url => url.pathname.startsWith('/api/'), async route => {
   } else if (path.endsWith('/visit-review')) {
     const review = route.request().postDataJSON()
     reviews.push(review)
-    const id = path.includes('check-visit-a') ? 'visit-a' : 'visit-b'
+    const id = path.includes('check-visit-a') ? 'visit-a' : path.includes('check-visit-c') ? 'visit-c' : 'visit-b'
     const previous = results[id]
     const chosen = review.selected_ids || previous.selected_ids
     body = results[id] = { ...previous, revision: previous.revision + 1,
@@ -93,6 +118,10 @@ await page.route(url => url.pathname.startsWith('/api/'), async route => {
       }), service_selection_status: 'approved',
       service_plan: { ...previous.service_plan, selection_source: 'clinician' },
       ...(review.botox ? { botox_review: review.botox } : {}),
+      ...(id === 'visit-c' ? { price_range: { ...previous.price_range, mode: 'services',
+        patient_min_cents: 7000, patient_max_cents: 7000,
+        lines: chosen.map(key => ({ ...previous.price_range.lines.find(line => line.id === key),
+          calculation: { patient_cents: 7000 } })) } } : {}),
     }
   } else if (path.endsWith('/checks')) body = { checks: [] }
   else if (path.endsWith('/cards')) body = { cards: [] }
@@ -186,6 +215,20 @@ try {
   assert.equal(reviews.at(-1).verification.line_id, 'drug')
   assert.equal(reviews.at(-1).verification.service_type_code, '1',
     'Only a clinically compatible payer category is offered for this drug')
+  await page.locator('.visit-appointment-strip select').selectOption('visit-c')
+  assert((await page.locator('#visit-estimate strong[role="status"]').innerText()).includes('US$60.00 – US$80.00'),
+    'A complete source-backed NCS range appears as the provisional headline')
+  section = await openServices()
+  assert((await section.locator('.selected-service-chips').innerText()).includes('One NCS scenario'))
+  assert.equal(await section.locator('.procedure-requirements').count(), 0,
+    'Alternative CPT cards do not repeat unresolved requirements seven times')
+  const ncsSaved = page.waitForResponse(response => response.url().endsWith('/visit-review'))
+  await section.getByRole('button', { name: /Nerve conduction.*95908/ }).click()
+  await ncsSaved
+  await page.waitForFunction(() => document.querySelector('#visit-detail-services .selected-service-chips')?.textContent.includes('95908'))
+  assert.deepEqual(reviews.at(-1).selected_ids, ['ncs-option:95908'])
+  assert.deepEqual(results['visit-c'].codes.map(row => row.code), ['95908'])
+  assert.deepEqual(results['visit-c'].price_range.lines.map(row => row.code), ['95908'])
   assert.equal(errors.length, 0, errors.join('\n'))
   assert(previsitRequests.length >= 2)
   console.log('Generalized estimate browser workflow: passed')

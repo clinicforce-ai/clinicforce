@@ -75,7 +75,18 @@ def _previsit_codes(inputs: dict) -> list[dict[str, _api.Any]]:
                  "description": row.get("description"), "modifiers": row.get("modifiers") or [], "units": row.get("units")}
                 for index, row in enumerate(scheduled)]
     if _api.visit_estimate.is_emg_visit(inputs):
-        return []  # An EMG appointment is not an office E/M just because the patient is new.
+        documented = cpt_rules.documented_ncs_code(str(inputs.get('reason') or ''))
+        if documented:
+            return [{"id": f"ecw-count:{documented}", "code": documented,
+                     "source": "eCW documented study count", "units": 1,
+                     "description": f"Nerve conduction, {cpt_rules.NCS_STUDY_RANGES[documented]} studies"}]
+        # The booking supports an NCS planning scenario, but says nothing about
+        # the number of studies or whether needle muscle work will be done.
+        # Price these levels independently; none is a performed or chosen CPT.
+        return [{"id": f"ncs-option:{code}", "code": str(code),
+                 "source": "conditional NCS alternative", "units": 1,
+                 "description": f"Nerve conduction, {cpt_rules.NCS_STUDY_RANGES[str(code)]} studies"}
+                for code in range(95907, 95914)]
     # The appointment's explicit new/established label supports a code family;
     # it cannot establish the eventual MDM/time level or that an office visit occurs.
     family = {"new": range(99202, 99206), "established": range(99212, 99216)}.get(inputs.get("visit_type"))
@@ -108,7 +119,9 @@ def _previsit_range(practice_id: str, inputs: dict, source: dict, payer_id: str,
                     review: dict | None = None, payer_route_id: str | None = None) -> tuple[dict | None, list[str]]:
     review = review or {}
     options = bool(codes) and all(row.get('source') == 'Contract service option' for row in codes) and not review.get('selected_ids')
-    alternatives = options or (bool(codes) and all(row.get("source") == "conditional office E/M alternative" for row in codes) and not review.get("selected_ids"))
+    alternatives = options or (bool(codes) and all(row.get("source") in {
+        "conditional office E/M alternative", "conditional NCS alternative"} for row in codes)
+        and not review.get("selected_ids"))
     selected = [row for row in codes if not review.get("selected_ids") or row.get("id") in review['selected_ids']]
     office_types = _api._office_service_types(practice_id, source)
     rates, rules, issues = [], {'office_service_types': office_types, **_api._benefit_context(inputs, source)}, []
@@ -371,7 +384,8 @@ def _attach_previsit_pricing(result: dict, practice_id: str, inputs: dict, sourc
             'office_service_types': _api._office_service_types(practice_id, source),
             **_api._benefit_context(inputs, source)}, payload=payload,
             service_date=inputs.get('service_date', ''), reviews=(review or {}).get('lines'),
-            alternatives=not (review or {}).get('selected_ids') and bool(result['codes']) and all(row.get('source') == 'conditional office E/M alternative' for row in result['codes']))
+            alternatives=not (review or {}).get('selected_ids') and bool(result['codes']) and all(row.get('source') in {
+                'conditional office E/M alternative', 'conditional NCS alternative'} for row in result['codes']))
         return
     connection = connections[0]
     scope_complete = all((service_date, (inputs.get('rendering_provider') or {}).get('npi'),

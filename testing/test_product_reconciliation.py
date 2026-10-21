@@ -143,7 +143,8 @@ def test_identified_fep_basic_cannot_use_blue_choice_basic_ci_contract(monkeypat
         api._practice_path('clinic', inputs, source)
 
 
-@pytest.mark.parametrize('invalid', [None, 'product', 'reported_network', 'rendering', 'tin',
+@pytest.mark.parametrize('invalid', [None, 'missing_ecw_tin', 'missing_library_date', 'conflicting_library_date',
+                                     'product', 'reported_network', 'rendering', 'tin',
                                      'location', 'date', 'rule_expired', 'document_hash', 'attachment'])
 def test_fep_group_agreement_is_visible_without_claiming_clinician_participation(monkeypatch, invalid):
     payer, network, profile, inputs, source = setup_path(monkeypatch)
@@ -166,6 +167,17 @@ def test_fep_group_agreement_is_visible_without_claiming_clinician_participation
         inputs['rendering_provider']['npi'] = '3333333333'
     elif invalid == 'tin':
         source['billing_provider']['tin'] = '000000000'
+    elif invalid == 'missing_ecw_tin':
+        source['billing_provider'].pop('tin', None)
+        payer['display_name'] = 'Blue Cross Blue Shield Tx'
+        document['payer'] = payer['display_name']
+    elif invalid == 'missing_library_date':
+        document.pop('effective_from')
+        extracted['pages'][0]['text'] = r'Executed professional agreement. Effective Date of Agreement: \ed2\ \ed3\06/16/2026.'
+        extracted['pages'].append({'text': 'ATTACHMENT A TEXAS PROVIDER NETWORKS. '
+            'Authorized Signature: Blue Choice PPOSM Provider Network.'})
+    elif invalid == 'conflicting_library_date':
+        extracted['pages'][0]['text'] += ' Effective Date of Agreement: 06/17/2026.'
     elif invalid == 'location':
         source['location_id'] = 'other-office'
     elif invalid == 'date':
@@ -188,13 +200,19 @@ def test_fep_group_agreement_is_visible_without_claiming_clinician_participation
     benefits = {'active': True, 'service_date_matches': True, 'network_status': 'unknown',
                 'network_conflict': False}
     api._attach_previsit_pricing(result, 'clinic', inputs, source, 'payer-route', benefits)
-    if invalid:
+    if invalid and invalid not in {'missing_ecw_tin', 'missing_library_date'}:
         assert result['network_evidence']['decision'] != 'in_network_contract_supported'
         assert network_participation.outcome(benefits, result['network_evidence']) == 'UNRESOLVED'
     else:
         assert result['network_evidence']['decision'] == 'in_network_contract_supported'
         assert result['network_evidence']['network_name'] == 'Blue Choice PPO'
         assert result['network_evidence']['document_id'] == document['id']
+        if invalid == 'missing_ecw_tin':
+            assert result['network_evidence']['tin_source'] == 'scoped clinic network record'
+        if invalid == 'missing_library_date':
+            assert result['network_evidence']['agreement_effective_from'] == '2026-06-16'
+            assert result['network_evidence']['agreement_effective_source'] == 'signed agreement text'
+            assert result['network_evidence']['network_attachment_source'] == 'signed network page'
         assert network_participation.outcome(benefits, result['network_evidence']) == 'IN_NETWORK_CONTRACT_SUPPORTED'
     assert benefits['network_status'] == 'unknown'
     assert benefits.get('network_source') != 'clinic_library_contract'

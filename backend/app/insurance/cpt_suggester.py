@@ -123,6 +123,13 @@ def recommend_visit_plan(inputs: dict, source: dict, available: list[dict]) -> d
                 'recommendation_basis': 'One office consultation; E/M level awaits documented medical decision making or time.',
                 'assumptions': ['The displayed E/M levels are alternatives for one consultation, not separate charges.'],
                 'method': 'appointment', 'version': 7}
+    documented_ncs = [row for row in available if row.get('source') == 'eCW documented study count']
+    if emg and not scheduled and len(documented_ncs) == 1:
+        row = documented_ncs[0]
+        return {**baseline, 'recommended_ids': [row['id']], 'recommended_units': {row['id']: 1},
+                'recommendation_basis': 'The current eCW visit reason states the nerve-study count.',
+                'assumptions': ['Needle muscle work is excluded unless separately documented.'],
+                'method': 'appointment', 'version': 7}
     if emg and not scheduled:
         return {**baseline, 'recommended_ids': [], 'recommended_units': {},
                 'recommendation_basis': 'The appointment does not document the planned nerve-study count or muscle work.',

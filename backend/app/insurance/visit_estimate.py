@@ -197,8 +197,14 @@ def planning_estimate(price: dict, benefits: dict, comparison: dict) -> dict | N
         return {'amount_cents': 0, 'collectable': False, 'basis': 'out_of_pocket_limit',
                 'explanation': 'The payer reports $0 remaining on the applicable in-network out-of-pocket limit. Under the assumptions below, the selected covered services have an estimated patient cost of $0.',
                 'assumptions': assumptions}
-    if price.get('complete') and price.get('patient_min_cents') == price.get('patient_max_cents'):
-        return {'amount_cents': price['patient_max_cents'], 'collectable': False, 'basis': 'conditional_services',
-                'explanation': 'Estimated patient responsibility for the selected services, before payments and credits.',
+    if (price.get('complete') and price.get('patient_min_cents') is not None
+            and price.get('patient_max_cents') is not None):
+        minimum, maximum = price['patient_min_cents'], price['patient_max_cents']
+        return {'amount_cents': minimum if minimum == maximum else None,
+                'min_cents': minimum, 'max_cents': maximum,
+                'collectable': False, 'basis': 'conditional_services',
+                'explanation': ('Estimated patient responsibility across mutually exclusive service alternatives.'
+                                if price.get('mode') == 'alternatives' else
+                                'Estimated patient responsibility for the selected services, before payments and credits.'),
                 'assumptions': assumptions}
     return None

@@ -8,7 +8,9 @@ from app.api.routers.commercial_flow.commercial_previsit_submit import submit_pr
 
 @_api.router.post("/appointments/previsit", description=(
     "Estimate a patient-bound eCW visit. Compatible saved payer evidence is reused without another "
-    "eligibility request; evidence_resolution reports the source findings and exact unresolved facts."
+    "eligibility request. A booked EMG/NCS visit without a study count returns one provisional "
+    "scenario with mutually exclusive CPT levels; selected_service_count is one while selected_ids "
+    "remains empty until an exact CPT is supported. evidence_resolution reports unresolved facts."
 ))
 async def previsit_estimate(value: _api.PrevisitInput, request: _api.Request, background_tasks: _api.BackgroundTasks = None) -> dict:
     """Estimate selected visit CPTs from current eligibility and clinic prices.

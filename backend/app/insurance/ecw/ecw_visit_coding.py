@@ -70,7 +70,7 @@ def coded_visit(visit: dict, relevant_orders: list[dict],
             and encounter_line["code"].isdigit()
             and ((99202 <= int(service_codes[0]) <= 99205 and visit_type != "established")
                  or (99212 <= int(service_codes[0]) <= 99215 and visit_type != "new"))
-            and str(visit.get("status") or "").lower() not in {"cancelled", "entered-in-error", "finished", "completed"}
+            and str(visit.get("status") or "").lower() not in {"cancelled", "entered-in-error"}
             and any(isinstance(concept, dict) and any(
                 isinstance(coding, dict) and str(coding.get("code") or "").upper() == service_codes[0]
                 and any(term in str(coding.get("system") or "").lower() for term in ("cpt", "hcpcs"))

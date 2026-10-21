@@ -94,7 +94,7 @@ def _cash_cause(result: dict, failure: dict, recovery: dict, card: dict, network
         return 'provider participation evidence conflicts for this plan and provider', 'provider_network_conflict'
     if result.get('service_selection_status') == 'preview':
         return ('the selected service scenario is provisional and must be reviewed before collection'
-                if result.get('selected_ids') else
+                if result.get('selected_ids') or result.get('provisional_scenario') else
                 'the appointment does not yet support a specific selected CPT scenario'), 'planned_cpt_unselected'
     exclusion = result.get('network_evidence') or {}
     if network == 'unknown' and (exclusion.get('status') == 'excluded_under_available_agreement'
@@ -140,7 +140,9 @@ def _cash_cause(result: dict, failure: dict, recovery: dict, card: dict, network
     if network != 'out_of_network' and benefits.get('network_source') == 'clinic_library_absent':
         return 'the Clinical Library contract is not linked to this plan and provider', 'clinic_contract_missing'
     if (result.get('price_range') or {}).get('mode') == 'alternatives':
-        return 'the office visit still has multiple possible E/M CPT levels and no clinician-selected code', 'planned_cpt_unselected'
+        return ('the booked NCS service has alternative CPT levels because its study count is undocumented'
+                if (result.get('provisional_scenario') or {}).get('kind') == 'ncs_study_count' else
+                'the office visit has alternative E/M CPT levels'), 'planned_cpt_unselected'
     if (benefits.get('active') is True
             and not (result.get('service_plan') or {}).get('selected_codes')
             and not (result.get('service_plan') or {}).get('alternatives')
