@@ -55,6 +55,10 @@ async def previsit_estimate(value: _api.PrevisitInput, request: _api.Request, ba
     same-scope payer row paths when those individual amounts conflict.
     insurance_diagnosis.pricingStatus is PARTIAL_AMOUNT when a known office
     copay is shown but a separately planned CPT remains unpriced.
+    A source-backed provisional service appears in selected_ids and the priced
+    code list together; final clinician coding approval is separate from this
+    previsit selection and remains required before collection. A generic EMG
+    booking does not select a nerve-study count or muscle examination.
     An uncoded new or established consultation leaves the E/M level unselected
     and prices its mutually exclusive code family as alternatives; a common
     supported office copay is collected once, never once per alternative.

@@ -93,7 +93,9 @@ def _cash_cause(result: dict, failure: dict, recovery: dict, card: dict, network
     if participation_conflict(benefits):
         return 'provider participation evidence conflicts for this plan and provider', 'provider_network_conflict'
     if result.get('service_selection_status') == 'preview':
-        return 'the planned CPTs have not been approved by the doctor for this visit', 'planned_cpt_unselected'
+        return ('the selected service scenario is provisional and must be reviewed before collection'
+                if result.get('selected_ids') else
+                'the appointment does not yet support a specific selected CPT scenario'), 'planned_cpt_unselected'
     exclusion = result.get('network_evidence') or {}
     if network == 'unknown' and (exclusion.get('status') == 'excluded_under_available_agreement'
                                  or exclusion.get('decision') == 'excluded_under_available_agreement'):

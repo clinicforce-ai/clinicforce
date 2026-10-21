@@ -114,10 +114,10 @@ def test_diagnostic_only_response_keeps_active_coverage_at_case_level():
     assert result['coinsurance_percent'] == '5.00'
 
 
-def test_generic_emg_selects_an_editable_pair_without_inventing_an_anatomical_diagnosis():
+def test_generic_emg_does_not_select_a_study_count_or_muscle_work():
     with patch.object(cpt_suggester.boto3, 'client') as model:
         plan = cpt_suggester.recommend_visit_plan({'reason': 'Visit type: EMG Visit'}, {}, [{'id': c, 'code': c, 'units': 1, 'source': 'CPT planning catalog'} for c in ('11104', '11105', '95907', '95910', '95886')])
     model.assert_not_called()
-    assert plan['recommended_ids'] == ['95907', '95886']
+    assert plan['recommended_ids'] == []
     assert 'cash_selection' not in plan
-    assert len(plan['assumptions']) == 1 and 'Initial planning scope' in plan['assumptions'][0]
+    assert 'study count or muscle work' in plan['recommendation_basis']

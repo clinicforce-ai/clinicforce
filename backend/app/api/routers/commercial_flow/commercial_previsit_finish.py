@@ -124,10 +124,11 @@ def _finish_previsit(result: dict, case: dict, inputs: dict, source: dict, paylo
                                          timezone=source.get('timezone') or _api.os.getenv('COMMERCIAL_PRACTICE_TIMEZONE', 'America/New_York'))
     result['coverage_records'] = source.get('coverage_records', [])
     result['insurance_fallback'] = {key: value for key, value in source.get('insurance_fallback', {}).items() if key != 'source'}
-    selected_ids = review.get('selected_ids') or result['service_plan']['recommended_ids']
+    by_id = {row['id']: row for row in available}
+    selected_ids = [key for key in (review.get('selected_ids') or result['service_plan']['recommended_ids'])
+                    if key in by_id]
     if selected_ids:
-        by_id = {row['id']: row for row in available}
-        codes = [by_id[key] for key in selected_ids if key in by_id]
+        codes = [by_id[key] for key in selected_ids]
     result['codes'] = [{**row, 'confirmed': bool(review.get('selected_ids')), 'units': units.get(row['id'], row.get('units')),
                         'modifiers': (review.get('confirmed_modifiers') or {}).get(row['id'], row.get('modifiers') or [])} for row in codes]
     if botox_review.is_botox_visit(inputs) or any(row['code'] in botox_review.SELECTABLE_CODES for row in result['codes']):
@@ -163,7 +164,7 @@ def _finish_previsit(result: dict, case: dict, inputs: dict, source: dict, paylo
     result.update(ecw_coverage_active=source.get('active_coverages', 0) > 0, calculated_at=_api._now(), context_token=token, revision=case.get('revision', 0), plan_details={
         'ecw': source.get('plan_details') or {'plan': [source['plan']] if source.get('plan') else []},
         'stedi': _api.commercial.plan_details(payload) if payload else {}}, ecw_retrieved_at=source.get('retrieved_at'),
-        response_reference=(payload or {}).get('id'), selected_ids=review.get('selected_ids') or [])
+        response_reference=(payload or {}).get('id'), selected_ids=selected_ids or [])
     result.pop('network_evidence', None)
     result.pop('agreement_exclusion', None)
     result.pop('temporary_rate_reference', None)
