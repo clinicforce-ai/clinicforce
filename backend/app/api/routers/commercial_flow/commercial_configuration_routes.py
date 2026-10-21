@@ -198,9 +198,10 @@ async def stedi_eligibility(case_id: str, request: _api.Request) -> _api.Any:
         rendering = current_source.get("rendering_provider") or {}
         stedi_network = {**network, "rendering_first": rendering.get("first_name"),
                          "rendering_last": rendering.get("last_name")}
-        body = _api.stedi_request_body(payer, stedi_network, case["ecw_coverage"], data["service_date"], stc)
+        body = _api.stedi_request_body(payer, stedi_network, case["ecw_coverage"], data["service_date"], stc,
+                                       place_of_service=network.get('place_of_service'))
         basic_body = _api.stedi_request_body(payer, stedi_network, case["ecw_coverage"], data["service_date"], stc,
-                                        include_identity_hints=False)
+                                        include_identity_hints=False, place_of_service=network.get('place_of_service'))
     except _api.commercial.CommercialError as exc:
         raise _api.HTTPException(409, str(exc)) from exc
     data["request_state"] = "pending"; case = await _api.run_in_threadpool(_api._save, case, session, "stedi-request-pending")

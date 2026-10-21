@@ -303,8 +303,9 @@ class CommercialRulesTest(unittest.TestCase):
             session["intake"]["fields"]["relationship"] = "self"
             self.assertEqual(_ecw_conflicts(case, session, inputs, source), [])
             self.assertTrue(_ecw_conflicts(case, session, inputs, {**source, "active_coverages": 2}))
-        body = stedi_request_body({"stedi_payer_id": "payer"}, {"rendering_npi": "1234567890", "rendering_first": "Ada", "rendering_last": "Clinician", "billing_npi": "1811853260", "organization_name": "Clinic"}, coverage, "2026-10-01", "98")
+        body = stedi_request_body({"stedi_payer_id": "payer"}, {"rendering_npi": "1234567890", "rendering_first": "Ada", "rendering_last": "Clinician", "billing_npi": "1811853260", "organization_name": "Clinic"}, coverage, "2026-10-01", "98", place_of_service="11")
         self.assertEqual(body["encounter"]["dates"], {"service": {"start": "2026-10-01"}})
+        self.assertEqual(body["encounter"]["placeOfService"], {"code": "11"})
         self.assertEqual(body["provider"], {"npi": "1234567890", "name": {"person": {"firstName": "Ada", "lastName": "Clinician"}}})
         self.assertEqual(body["subscriber"]["dateOfBirth"], "1950-01-01")
         self.assertEqual(body["dependent"]["dateOfBirth"], "1980-01-01")
@@ -325,6 +326,9 @@ class CommercialRulesTest(unittest.TestCase):
         assert 'planNumber' not in basic_body['subscriber']
         assert 'address' not in basic_body['dependent']
         assert 'gender' not in basic_body['dependent']
+        invalid_pos = stedi_request_body({'stedi_payer_id': 'payer'}, {'rendering_npi': '1234567890', 'rendering_first': 'Ada',
+                                         'rendering_last': 'Clinician'}, enriched, '2026-10-01', '98', place_of_service='office')
+        assert 'placeOfService' not in invalid_pos['encounter']
 
     def test_stedi_provider_fallback_keeps_organization_name_with_organization_npi(self):
         coverage = {"member_id": "M123", "relationship": "18", "subscriber_first": "Ada", "subscriber_last": "Lovelace",

@@ -362,9 +362,10 @@ async def previsit_estimate(value: _api.PrevisitInput, request: _api.Request, ba
     result['requested_service_types'] = requested_stc
     result["stedi_payer"] = {"name": payer.get("displayName"), "id": payer_id}
     try:
-        body = _api.stedi_request_body({"stedi_payer_id": payer_id}, provider, coverage, inputs["service_date"], requested_stc, allow_demographic=not coverage.get('member_id'))
+        body = _api.stedi_request_body({"stedi_payer_id": payer_id}, provider, coverage, inputs["service_date"], requested_stc, allow_demographic=not coverage.get('member_id'), place_of_service=inputs.get('place_of_service'))
         basic_body = _api.stedi_request_body({"stedi_payer_id": payer_id}, provider, coverage, inputs["service_date"], requested_stc,
-                                        include_identity_hints=False, allow_demographic=not coverage.get('member_id'))
+                                        include_identity_hints=False, allow_demographic=not coverage.get('member_id'),
+                                        place_of_service=inputs.get('place_of_service'))
     except _api.commercial.CommercialError as exc:
         result["issues"].append(str(exc))
         return await incomplete_result()
