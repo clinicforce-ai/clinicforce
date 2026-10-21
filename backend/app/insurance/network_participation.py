@@ -18,9 +18,10 @@ def product_network_relationship(payer: str, product: str, reported_networks: li
         return {'source': 'patient_bound_payer_network', 'network_name': contract_network}
     if (network == 'bluechoiceppo' and normalized(product) == 'fepbluebasicpshb'
             and re.search(r'blue\s+cross.*(?:blue\s+shield|bcbs).*texas|bcbs\s*(?:of\s*)?texas|bcbstx', payer, re.I)
-            and service_date >= '2026-01-01' and not reported):
+            and '2026-01-01' <= service_date <= '2026-12-31' and not reported):
         return {'source': 'official_payer_provider_manual', 'reference': FEP_BLUE_CHOICE_SOURCE,
-                'network_name': contract_network, 'effective_from': '2026-01-01'}
+                'network_name': contract_network, 'effective_from': '2026-01-01',
+                'effective_to': '2026-12-31'}
     return None
 
 

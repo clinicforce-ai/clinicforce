@@ -144,7 +144,7 @@ def test_identified_fep_basic_cannot_use_blue_choice_basic_ci_contract(monkeypat
 
 
 @pytest.mark.parametrize('invalid', [None, 'product', 'reported_network', 'rendering', 'tin',
-                                     'location', 'date', 'document_hash', 'attachment'])
+                                     'location', 'date', 'rule_expired', 'document_hash', 'attachment'])
 def test_fep_group_agreement_is_visible_without_claiming_clinician_participation(monkeypatch, invalid):
     payer, network, profile, inputs, source = setup_path(monkeypatch)
     payer['display_name'] = 'Blue Cross Blue Shield of Texas'
@@ -170,6 +170,8 @@ def test_fep_group_agreement_is_visible_without_claiming_clinician_participation
         source['location_id'] = 'other-office'
     elif invalid == 'date':
         document['effective_to'] = '2026-10-20'
+    elif invalid == 'rule_expired':
+        inputs['service_date'] = '2027-01-01'
     elif invalid == 'document_hash':
         extracted['sha256'] = 'changed'
     elif invalid == 'attachment':
