@@ -48,10 +48,15 @@ def build(result: dict, source: dict) -> list[dict]:
 
     approved = result.get('service_selection_status') == 'approved'
     candidates = result.get('codes') or []
+    suggestions = result.get('suggestions')
+    model_count = sum(len(group.get('codes') or []) for group in suggestions.get('groups') or []) if isinstance(suggestions, dict) else 0
     record('service_code', approved, [
         ('eCW visit', 'scheduled service returned' if any(row.get('source') == 'eCW scheduled service' for row in candidates)
-         else 'visit context returned; no selected billable code'),
-        ('coding support', f'{len(candidates)} conditional service candidate(s)' if candidates else 'no supported candidate'),
+         else 'visit context returned; no selected billable code; appointment notes ' +
+         str(source.get('appointment_notes_status') or 'not recorded')),
+        ('service planner', f'{len(candidates)} conditional service candidate(s)' if candidates else 'no supported candidate'),
+        ('Bedrock preliminary suggestions', f'{model_count} candidate(s)' if isinstance(suggestions, dict)
+         else 'no suggestion retained for this result'),
     ], 'Clinician-approved service code and units',
         'Review the documented service and approve its CPT and units; conditional E/M levels are alternatives.')
 
@@ -90,8 +95,10 @@ def build(result: dict, source: dict) -> list[dict]:
         status = decision.get('status') or 'not evaluated'
         sources = decision.get('sources') or []
         record(field + '_requirement', status in {'Required', 'Not required'}, [
-            ('NMCT payer matrix, Clinical Library and published payer rules',
-             f'{len(sources)} matching source(s); {status}'),
+            ('NMCT payer matrix and published payer rules', f'{len(sources)} applicable source(s); {status}'),
+            ('Clinical Library research',
+             f'{len(result.get("requirement_sources") or [])} recorded document(s)' if 'requirement_sources' in result
+             else 'document inventory not retained in this result'),
             ('saved payer response and eCW', 'member-specific signal evaluated' if checked else 'no saved payer response'),
         ], f'{field.capitalize()} rule for the exact product and selected CPT',
             'Check the date-effective payer rule for this member and CPT only if no applicable saved rule resolves it.')
