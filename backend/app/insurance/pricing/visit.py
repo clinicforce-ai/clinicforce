@@ -5,6 +5,7 @@ from copy import deepcopy
 from datetime import date
 
 from app.insurance import commercial, cpt_rules, identity
+from app.insurance.network_participation import verified_out_of_network
 
 
 def _workflow_condition(reason: str) -> bool:
@@ -15,13 +16,7 @@ def service_type(code: str, rules: dict) -> str | None:
     configured = (rules.get('service_type_by_code') or {}).get(code)
     if configured:
         return str(configured)
-    if code in cpt_rules.NCS_CODES | cpt_rules.EMG_ADD_ONS:
-        return '73'  # Diagnostic medical benefits, not the office consultation copay.
-    if code in {'11104', '11105', '62270', '62328'}:
-        return '2'
-    if code.isdigit() and 99202 <= int(code) <= 99215:
-        return '98'
-    return None
+    return cpt_rules.service_definition(code)['service_type']
 
 
 
@@ -77,10 +72,27 @@ def price_lines(codes: list[dict], rates: list[dict], benefits: dict, rules: dic
             units = commercial._integer(code.get('units'), 'Service units')
         except commercial.CommercialError:
             units = None
-        selection_valid = review_valid(selection, service_date, units)
         stc = service_type(code['code'], rules)
-        raw_benefits = commercial.normalize_stedi_271(payload, stc or '98', benefits.get('network_status') == 'in_network',
+        clinical_role = cpt_rules.service_definition(code['code'])['role']
+        medical_line = clinical_role in {'drug', 'administration'} or cpt_rules.service_definition(code['code'])['family'] == 'chemodenervation'
+        selection_valid = review_valid(selection, service_date, units)
+        invalid_category = False
+        if medical_line and selection_valid:
+            category = str(selection.get('service_type_code') or '')
+            options = {row['id']: row for row in commercial.reported_stedi_options(payload or {}, category)}
+            picked = [options.get(key) for key in selection.get('selected_ids') or []]
+            rows_match = bool(picked) and all(row and category in
+                str(row.get('service_type_code') or '').replace(' ', '').split(',')
+                and row.get('procedure_code') in {None, '', code['code']} for row in picked)
+            exact = rows_match and all(row.get('procedure_code') == code['code'] for row in picked)
+            invalid_category = not (rows_match and cpt_rules.benefit_category_compatible(
+                code['code'], category, procedure_specific=exact))
+            selection_valid = not invalid_category
+        if medical_line and selection_valid:
+            stc = selection.get('service_type_code') or stc
+        raw_benefits = commercial.normalize_stedi_271(payload, stc or ('30' if medical_line else '98'), benefits.get('network_status') == 'in_network',
             benefits.get('has_secondary', False), procedure_code=code['code'], service_date=service_date,
+            provider_out_of_network_verified=verified_out_of_network(benefits),
             selected_ids=selection.get('selected_ids') if selection_valid else None,
             office_service_types=rules.get('office_service_types'), place_of_service=rules.get('place_of_service'),
             visit_context=rules.get('visit_context'), provider_npi=rules.get('provider_npi')) if payload is not None else deepcopy(benefits)
@@ -93,6 +105,12 @@ def price_lines(codes: list[dict], rates: list[dict], benefits: dict, rules: dic
         integrity = [reason for reason in benefits.get('review_reasons', []) if 'evidence' in reason or ('identity' in reason and not name_difference)]
         if name_difference:
             raw_benefits['review_reasons'] = [reason for reason in raw_benefits.get('review_reasons', []) if 'identity' not in reason]
+        direct = any(commercial._procedure(row) == code['code'] and row.get('code') in {'A', 'B'}
+                     for row in commercial._stedi_entries(payload or {}))
+        if medical_line:
+            raw_benefits['authorization_signal'] = 'unknown'
+            raw_benefits.setdefault('review_reasons', []).append(
+                'Confirm member-specific authorization requirement and decision for this medical service line.')
         raw_benefits['review_reasons'] = list(dict.fromkeys([*raw_benefits.get('review_reasons', []), *integrity]))
         raw_benefits['requires_review'] = bool(raw_benefits['review_reasons'])
         applied = resolve_requirements(raw_benefits, review, service_date, units)
@@ -112,9 +130,19 @@ def price_lines(codes: list[dict], rates: list[dict], benefits: dict, rules: dic
         out_of_network = benefits.get('network_status') == 'out_of_network'
         matches = [rate for rate in rates if rate['code'] == code['code']
                    and (rate.get('modifier') or '') == ','.join(code.get('modifiers') or [])
+                   and (not rate.get('line_id') or rate['line_id'] == line_id)
+                   and (rate.get('line_id') or rate.get('basis') not in
+                        {'payer_out_of_network', 'cms_original_medicare_estimate'})
+                   and (rate.get('units') is None or rate['units'] == units)
+                   and (not rate.get('product_binding') or rate['product_binding'] == rules.get('product_binding'))
+                   and (not rate.get('cms_locality') or rate['cms_locality'] == rules.get('cms_locality'))
+                   and (not rate.get('cms_qp_status') or rate['cms_qp_status'] == rules.get('cms_qp_status'))
                    and (not out_of_network or
-                        rate.get('basis') == 'payer_out_of_network' and rate.get('id') and rate.get('source_reference')
-                        and rate.get('verified_at') and rate.get('service_date') == service_date
+                        rate.get('basis') in {'payer_out_of_network', 'cms_original_medicare_estimate'}
+                        and rate.get('id') and rate.get('source_reference')
+                        and (rate.get('verified_at') if rate.get('basis') == 'payer_out_of_network'
+                             else rate.get('source_sha256') and rate.get('effective_from') <= service_date <= rate.get('effective_to'))
+                        and rate.get('service_date') == service_date
                         and rate.get('provider_npi') == rules.get('provider_npi') and rules.get('provider_npi')
                         and rate.get('place_of_service') == rules.get('place_of_service') and rules.get('place_of_service')
                         and rate.get('patient_binding') == rules.get('patient_binding') and rules.get('patient_binding'))]
@@ -129,6 +157,8 @@ def price_lines(codes: list[dict], rates: list[dict], benefits: dict, rules: dic
                 'allowed_cents': rate['allowed_cents'] * units if rate.get('allowed_cents') is not None and units else None,
                 'allowed_basis': rate.get('basis') or 'clinic_contract',
                 'rate_source': rate.get('source_reference') or ('Payer out-of-network allowance needed' if out_of_network else 'Clinic contract'), 'rate_version': rate.get('version_id'),
+                'rate_source_sha256': rate.get('source_sha256'),
+                'cms_locality': rate.get('cms_locality'), 'cms_qp_status': rate.get('cms_qp_status'),
                 'rate_row_number': rate.get('row_number'),
                 'rate_effective_from': rate.get('effective_from'),
                 'rate_resolution': {'status': rate_status,
@@ -142,15 +172,20 @@ def price_lines(codes: list[dict], rates: list[dict], benefits: dict, rules: dic
                 'issues': [reason for reason in applied.get('review_reasons', []) if not _workflow_condition(reason)], 'calculation': None}
         if name_difference:
             line['conditions'].append('Estimated using the returned policy; patient names differ between eCW and the payer.')
-        direct = any(commercial._procedure(row) == code['code'] and row.get('code') in {'A', 'B'} for row in commercial._stedi_entries(payload or {}))
         if direct:
             line['benefit_basis'] = 'Procedure-specific payer benefit'
+        if medical_line and not direct and not selection_valid:
+            line['issues'].append('Verify a medical-benefit cost-share row for this exact drug or procedure; office-visit terms do not apply.')
+        if invalid_category:
+            line['issues'].append('The selected payer benefit category or source row does not apply to this drug or procedure.')
         if not stc and not direct and payload is not None:
             line['issues'].append('Map this service to a payer-supported benefit category in the clinic estimate profile.')
         if code.get('needs_confirmation') and not code.get('confirmed'):
             line['issues'].append('This CPT appears in multiple eCW records. Confirm which represent separate planned services.')
         if not units:
             line['issues'].append('Confirm the number of units for this service.')
+        if rules.get('provider_npi_conflict'):
+            line['issues'].append('Resolve the conflicting eCW rendering provider NPI before using this price.')
         if line['allowed_cents'] is None:
             line['issues'].append('Get the payer allowed amount for this out-of-network CPT and visit.' if out_of_network else
                                   'Add an active clinic contract rate matching this code, modifier and visit.')
@@ -191,7 +226,7 @@ def price_lines(codes: list[dict], rates: list[dict], benefits: dict, rules: dic
                     calculation_benefits['copay_cents'] = 0
             try:
                 if out_of_network:
-                    line_rules['allowed_basis'] = 'payer_out_of_network'
+                    line_rules['allowed_basis'] = rate['basis']
                 calc = commercial.estimate([{'code': code['code'], 'units': units,
                     'allowed_cents': rate['allowed_cents'], 'rate_id': rate.get('id'),
                     'allowed_source': rate.get('basis')}], calculation_benefits, line_rules)

@@ -5,7 +5,7 @@ from app.api.routers import commercial_estimator as _api
 
 @_api.router.post("/ecw/saved-eligibility-probe")
 async def saved_eligibility_probe(request: _api.Request) -> dict:
-    """Administrator-only, read-only proof of saved TriZetto/eCW evidence access."""
+    """Administrator-only eCW saved-evidence check; returns safe OAuth reason codes and card availability, never image bytes."""
     session = await _api._session(request)
     _api._admin(session)
     if not _api.ecw_backend.configured():
@@ -19,9 +19,71 @@ async def saved_eligibility_probe(request: _api.Request) -> dict:
 
 @_api.router.post("/connections")
 async def create_connection(value: _api.ConnectionInput, request: _api.Request) -> dict:
+    """Create a draft payer route; activation needs verified scoped participation."""
     session = await _api._session(request); _api._admin(session)
     try: return _api.commercial_store.create_connection(session["practice_id"], value.model_dump())
     except _api.commercial.CommercialError as exc: raise _api.HTTPException(422, str(exc)) from exc
+
+
+@_api.router.post("/connections/{connection_id}/activate")
+async def activate_connection(connection_id: str, value: _api.ConnectionActivationInput,
+                              request: _api.Request) -> dict:
+    """Enable one draft payer route after scoped participation and profile review."""
+    session = await _api._session(request)
+    _api._admin(session)
+    try:
+        return _api.commercial_store.activate_connection(
+            session['practice_id'], connection_id, value.service_type_code,
+            value.reference, str(session['staff']['id']), aliases=value.aliases)
+    except _api.commercial.CommercialError as exc:
+        raise _api.HTTPException(422, str(exc)) from exc
+
+
+@_api.router.post("/connections/{connection_id}/aliases")
+async def add_connection_aliases(connection_id: str, value: _api.ConnectionAliasInput,
+                                 request: _api.Request) -> dict:
+    """Add approved eCW payer names to an enabled route; product scopes stay separate."""
+    session = await _api._session(request)
+    _api._admin(session)
+    try:
+        return _api.commercial_store.add_connection_aliases(
+            session['practice_id'], connection_id, value.aliases,
+            value.reference, str(session['staff']['id']))
+    except _api.commercial.CommercialError as exc:
+        raise _api.HTTPException(422, str(exc)) from exc
+
+
+@_api.router.put("/connections/{connection_id}/collection-policy")
+async def set_collection_policy(connection_id: str, value: _api.CollectionPolicyInput, request: _api.Request) -> dict:
+    """Clinic-admin approval or removal of $0 check-in deferral for one payer route."""
+    session = await _api._session(request)
+    _api._admin(session)
+    try:
+        return _api.commercial_store.set_collection_policy(
+            session['practice_id'], connection_id, value.mode, value.reference,
+            str(session['staff']['id']),
+            allow_supported_oon_advance=value.allow_supported_oon_advance,
+            allow_cms_based_advance=value.allow_cms_based_advance)
+    except _api.commercial.CommercialError as exc:
+        raise _api.HTTPException(422, str(exc)) from exc
+
+
+@_api.router.put("/connections/{connection_id}/agreement-inventory")
+async def set_agreement_inventory(connection_id: str, value: _api.AgreementInventoryInput,
+                                  request: _api.Request) -> dict:
+    """Administrator certifies or revokes complete UHC agreement inventory for scoped visits.
+
+    This does not establish payer-confirmed nonparticipation. New or changed
+    Clinical Library agreements invalidate the certification automatically.
+    """
+    session = await _api._session(request)
+    _api._admin(session)
+    try:
+        return _api.commercial_store.set_agreement_inventory(
+            session['practice_id'], connection_id, value.mode, value.reference,
+            [scope.model_dump(mode='json') for scope in value.scopes], str(session['staff']['id']))
+    except _api.commercial.CommercialError as exc:
+        raise _api.HTTPException(422, str(exc)) from exc
 
 
 @_api.router.post("/networks")

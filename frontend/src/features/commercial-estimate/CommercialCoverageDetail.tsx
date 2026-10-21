@@ -10,11 +10,7 @@ export default function CommercialCoverageDetail({
   result: NonNullable<CommercialEstimateModel['result']>
 }) {
   return (
-    <details
-      open={model.readOnly || undefined}
-      id="visit-detail-coverage"
-      className="visit-detail-section"
-    >
+    <details id="visit-detail-coverage" className="visit-detail-section">
       <summary>Detailed benefits, insurance & card</summary>
       <div className="visit-detail-body">
         <CoverageRecovery model={model} result={result} />

@@ -10,11 +10,38 @@ from fastapi import HTTPException
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "backend"))
 
 from app.api.routers import insurance_v2 as v2
+from app.api.routers.v2_flow.insurance_v2_eligibility import stedi_patient_binding
 from app.insurance.availity import DEMO_SCOPE, Settings
 from app.insurance import stedi, stedi_results
 
 
 class StediTests(unittest.IsolatedAsyncioTestCase):
+    async def test_availity_fallback_retains_benefits_without_using_demo_network_matrix(self):
+        case = {"id": "synthetic", "inputs": {"payer_id": "TEST", "provider": {"npi": "1234567893"},
+                 "place_of_service": "11", "service_date": "2026-10-15", "member_id": "MEM-1",
+                 "relationship": "18", "patient": {"patient_first_name": "Pat", "patient_last_name": "Example",
+                                                  "patient_birth_date": "1980-01-01"},
+                 "subscriber": {"firstName": "Pat", "lastName": "Example"}},
+                "sources": {}, "transactions": {}, "events": []}
+        practice = {"stedi_provider_networks": [{"payer_id": "TEST", "provider_npi": "1234567893",
+                    "place_of_service": "11", "plan_name": "Example PPO", "status": "in_network"}]}
+        payload = {"subscriber": {"firstName": "Pat", "lastName": "Example", "dateOfBirth": "1980-01-01",
+                                  "memberId": "MEM-1"},
+                   "plans": [{"benefits": {"statuses": [{"status": "Active Coverage",
+                    "planCoverageDescription": "Example PPO"}]}}]}
+        with patch.object(v2.stedi, "request_body", return_value=({}, None)), \
+             patch.object(v2.stedi.Settings, "read", return_value=stedi.Settings("test", "synthetic-key")), \
+             patch.object(v2.stedi, "Client") as client, \
+             patch.object(v2, "save", new=AsyncMock(side_effect=lambda value, *_: value)), \
+             patch.object(v2, "public", side_effect=lambda value: value):
+            client.return_value.check = AsyncMock(return_value={"outcome": "complete", "payload": payload})
+            await v2.stedi_coverage(case, {}, practice, [], "Availity unavailable.")
+        result = case["transactions"]["coverage"]["result"]
+        self.assertTrue(result["active"])
+        self.assertEqual(result["identity"]["status"], "matched")
+        self.assertEqual(result["provider_network_status"], "unconfirmed")
+        self.assertIn("location and tax-ID contract match", result["provider_network"])
+
     async def test_client_uses_server_authorization_and_returns_check_id(self):
         def handler(request):
             self.assertEqual(request.url, httpx.URL(stedi.ELIGIBILITY_URL))
@@ -42,6 +69,39 @@ class StediTests(unittest.IsolatedAsyncioTestCase):
 
 
 class StediResultTests(unittest.TestCase):
+    def test_v2_patient_binding_names_mismatched_fields_without_exposing_names(self):
+        case = {"inputs": {"member_id": "MEM-1", "relationship": "18", "payer_id": "TEST",
+                           "patient": {"patient_first_name": "Pat", "patient_last_name": "Example",
+                                       "patient_birth_date": "1980-01-01"},
+                           "subscriber": {"firstName": "Pat", "lastName": "Example"}}}
+        payload = {"subscriber": {"firstName": "Other", "lastName": "Person",
+                                   "dateOfBirth": "1980-01-01", "memberId": "MEM-1"}}
+        decision = stedi_patient_binding(case, payload)
+        self.assertEqual(decision["status"], "review")
+        self.assertIsNone(decision["binding"])
+        self.assertIn("first_name", decision["differences"])
+        self.assertIn("subscriber_last", decision["policy_differences"])
+        self.assertNotIn("Other", str(decision))
+
+    def test_network_matrix_requires_one_plan_and_nonconflicting_rows(self):
+        case = {"inputs": {"payer_id": "TEST", "provider": {"npi": "1234567893"},
+                           "place_of_service": "11", "service_date": "2026-10-15"}}
+        coverage = {"plans": [{"name": "Example PPO"}]}
+        entry = {"payer_id": "TEST", "provider_npi": "1234567893", "place_of_service": "11",
+                 "plan_name": "Example PPO", "status": "in_network"}
+        other = {**entry, "status": "out_of_network"}
+        self.assertEqual(v2.stedi_network(case, {"stedi_provider_networks": [entry]}, coverage)["provider_network_status"], "in_network")
+        for rows in ([entry, other], [other, entry]):
+            result = v2.stedi_network(case, {"stedi_provider_networks": rows}, coverage)
+            self.assertEqual(result["provider_network_status"], "unconfirmed")
+            self.assertIn("rows conflict", result["provider_network"])
+        multiple = {"plans": [{"name": "Example PPO"}, {"name": "Another PPO"}]}
+        result = v2.stedi_network(case, {"stedi_provider_networks": [entry]}, multiple)
+        self.assertEqual(result["provider_network_status"], "unconfirmed")
+        self.assertIn("different plan names", result["provider_network"])
+        result = v2.stedi_network(case, {"stedi_provider_networks": []}, coverage)
+        self.assertIn("No clinic network row matches", result["provider_network"])
+
     def test_normalizes_benefits_but_keeps_network_unconfirmed_and_price_unavailable(self):
         result = stedi_results.coverage({"id": "ec_123", "payer": {"name": {"organization": "Test Payer"}}, "plans": [{"benefits": {
             "statuses": [{"status": "Active Coverage", "network": {"code": "Y", "definition": "In Network"}, "planCoverageDescription": "Test plan"}],

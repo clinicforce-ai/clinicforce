@@ -10,7 +10,7 @@ def emg_option(result: dict, rates: list[dict], rules: dict, payload: dict | Non
     from itertools import product
     from app.insurance import cpt_rules, visit_estimate
 
-    option = {'requested': bool(review.get('emg_required')), 'additional_min_cents': None,
+    option = {'calculation_version': 2, 'requested': bool(review.get('emg_required')), 'additional_min_cents': None,
               'additional_max_cents': None, 'total_min_cents': None, 'total_max_cents': None,
               'message': 'Select EMG / nerve testing to calculate its additional patient cost.', 'scenario_count': 0}
     codes = result.get('codes') or []
@@ -48,7 +48,18 @@ def emg_option(result: dict, rates: list[dict], rules: dict, payload: dict | Non
             'arrival_collection': visit_estimate.arrival_collection(priced, result['benefits'], review),
             'planning_estimate': visit_estimate.planning_estimate(priced, result['benefits'], result.get('identity') or {})}
         guidance = build_collection(candidate, review)
-        return guidance['amount_cents'] if guidance['status'] != 'deferred_billing' and (priced.get('complete') or guidance['basis'] == 'out_of_pocket_limit') else None
+        # This is a patient-cost scenario, not the check-in advance. A clinic
+        # deferral, eCW no-collection note, or prior payment may change today's
+        # collection without changing the cost of the planned services.
+        if guidance['basis'] == 'out_of_pocket_limit':
+            return 0
+        if guidance['basis'] not in {'patient_obligations', 'anticipated_services'}:
+            return None
+        minimum, maximum = priced.get('patient_min_cents'), priced.get('patient_max_cents')
+        if (priced.get('complete') and not priced.get('conditional') and type(minimum) is int
+                and minimum == maximum and minimum >= 0):
+            return minimum
+        return None
     differences, totals = [], []
     for office in baselines:
         base_amount = amount_for(office)

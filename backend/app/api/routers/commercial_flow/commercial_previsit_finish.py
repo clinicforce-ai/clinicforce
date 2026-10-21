@@ -4,6 +4,8 @@ from __future__ import annotations
 from app.api.routers import commercial_estimator as _api
 from app.api.routers.commercial_flow.commercial_previsit_catalog import build_catalog
 from app.api.routers.commercial_flow.commercial_previsit_requirements import attach_requirements
+from app.insurance.identity import patient_benefits_bound
+from app.insurance import botox_review
 
 def _visit_context_token(inputs: dict, source: dict) -> str:
     context = {'coverage': {k: v for k, v in _api._coverage_snapshot(inputs, source).items() if k != 'other_active_coverage'},
@@ -13,6 +15,22 @@ def _visit_context_token(inputs: dict, source: dict) -> str:
                'diagnoses': inputs.get('diagnoses'), 'billing': source.get('billing_provider'),
                'reason': inputs.get('reason'), 'location': source.get('location_id'), 'pos': inputs.get('place_of_service'), 'date': inputs.get('service_date')}
     return _api.hashlib.sha256(_api.json.dumps(context, sort_keys=True).encode()).hexdigest()
+
+
+def _payer_plan_pricing_source(source: dict, payer_plan: dict, benefits: dict, comparison: dict) -> dict:
+    """Use one matched 271 product when eCW has no product-specific plan label."""
+    if (not _api.insurance_identity.generic_plan_label(source.get('plan')) or benefits.get('active') is not True
+            or benefits.get('service_date_matches') is not True
+            or not patient_benefits_bound(comparison)):
+        return source
+    names = {}
+    for name in payer_plan.get('names') or []:
+        if isinstance(name, str) and name.strip() and not _api.insurance_identity.generic_plan_label(name):
+            names.setdefault(_api.insurance_identity.normalized(name), name.strip())
+    if len(names) != 1:
+        return source
+    name = next(iter(names.values()))
+    return {**source, 'plan': name, 'pricing_plan_source': 'Stedi eligibility plan name'}
 
 
 def _finish_previsit(result: dict, case: dict, inputs: dict, source: dict, payload: dict | None, session: dict, payer_id: str,
@@ -42,19 +60,31 @@ def _finish_previsit(result: dict, case: dict, inputs: dict, source: dict, paylo
         result['benefits'].setdefault('review_reasons', []).append(result['eligibility_reconciliation']['message'])
         result['benefits']['requires_review'] = True
     payer_plan = _api.commercial.plan_details(payload or {})
-    exact_source = {**(pricing_source or source), 'payer_plan_names': payer_plan['names'],
-                    'payer_network_names': (payer_plan['network_names'] if result['benefits'].get('active') is True
-                        and result['benefits'].get('service_date_matches') is True
-                        and comparison.get('status') in {'matched', 'reconciled'} else []),
+    payer_plan_bound = (result['benefits'].get('active') is True
+        and result['benefits'].get('service_date_matches') is True
+        and patient_benefits_bound(comparison))
+    protection = review.get('billing_protection') or {}
+    product_binding = _api.payer_allowance.product_binding(payer_plan)
+    result['billing_protection'] = protection if (payer_plan_bound
+        and protection.get('identity_binding') == comparison.get('binding')
+        and protection.get('product_binding') == product_binding
+        and protection.get('payer_id') == payer_id
+        and protection.get('service_date') == inputs.get('service_date')) else {}
+    exact_source = {**_payer_plan_pricing_source(pricing_source or source, payer_plan, result['benefits'], comparison),
+                    'payer_plan_names': payer_plan['names'],
+                    'payer_plan_bound': payer_plan_bound,
+                    'payer_network_names': payer_plan['network_names'] if payer_plan_bound else [],
                     'payer_plan_scope': {key: payer_plan.get(key) for key in ('plan_number', 'group_number')}}
     payer_id, connections, codes, available, uploaded_cash = build_catalog(
         _api, result, session, inputs, source, pricing_source, exact_source, payer_id, payload,
     )
-    plan_key = _api.hashlib.sha256(_api.json.dumps([token, source.get('recent_completed_appointments', []),
+    _api.commercial.discard_stale_directory_payer(result, payer_id)
+    plan_key = _api.hashlib.sha256(_api.json.dumps([token, review.get('emg_required'), source.get('recent_completed_appointments', []),
         [(row['id'], row.get('units')) for row in available]], sort_keys=True).encode()).hexdigest()
     prior_plan = case.get('previsit_plan') or {}
-    if prior_plan.get('key') != plan_key or prior_plan.get('plan', {}).get('version') != 6:
-        prior_plan = {'key': plan_key, 'plan': _api.cpt_suggester.recommend_visit_plan(inputs, source, available)}
+    if prior_plan.get('key') != plan_key or prior_plan.get('plan', {}).get('version') != 7:
+        prior_plan = {'key': plan_key, 'plan': _api.cpt_suggester.recommend_visit_plan(
+            {**inputs, 'emg_required': review.get('emg_required')}, source, available)}
         case['previsit_plan'] = prior_plan
     result['service_plan'] = {**prior_plan['plan'], 'selection_source': 'clinician' if review.get('selected_ids') else 'suggested'}
     auto_units = result['service_plan'].get('recommended_units') or {}
@@ -62,12 +92,24 @@ def _finish_previsit(result: dict, case: dict, inputs: dict, source: dict, paylo
     result['available_codes'] = [{**row, 'units': units.get(row['id'], row.get('units'))} for row in available]
     result['billing_note'] = _api.ecw_billing.collection_note(source.get('appointment_fields') or [])
     note_self_pay = (result['billing_note'] or {}).get('kind') == 'self_pay'
-    result['payment_mode'] = review.get('payment_mode', 'cash' if source.get('self_pay_recorded') or note_self_pay else 'insurance')
+    route_connections = [row for row in _api.commercial_store.list_connections(session['practice_id'])
+                         if row.get('stedi_payer_id') == payer_id]
+    route_payer = route_connections[0] if len(route_connections) == 1 else None
+    united_healthcare = _api.commercial.is_united_healthcare_payer(
+        result, {'displayName': route_payer.get('display_name')} if route_payer else None)
+    # eCW self-pay fields do not authorize an automatic UHC insurance-to-cash switch.
+    result['payment_mode'] = review.get('payment_mode',
+        'insurance' if united_healthcare else
+        'cash' if source.get('self_pay_recorded') or note_self_pay else 'insurance')
     result['ecw_saved_eligibility'] = {k: v for k, v in (source.get('saved_eligibility') or {}).items() if not k.startswith('_')}
     labels = {'selected_ids': 'Services', 'confirmed_units': 'Service quantities', 'payment_mode': 'Payment method',
               'cash_selection': 'Cash package', 'emg_required': 'EMG testing', 'insurance_check_from': 'Insurance checking date', 'verification': 'Benefit or approval evidence',
               'identity_confirmation': 'Patient identity', 'product_mapping': 'Plan mapping',
+              'payer_allowance': 'Payer allowed amount',
+              'billing_protection': 'Medicare billing protection',
+              'clear_payer_allowance_line_id': 'Payer allowed amount removed',
               'payments_received_cents': 'Recorded payments'}
+    labels['botox'] = 'Botox clinical review'
     result['audit_trail'] = [{'checked_at': entry.get('verified_at'), 'by': entry.get('verified_by') or 'Clinic staff',
                             'changes': [label for key, label in labels.items() if key in entry.get('changes', {})]}
                            for entry in case.get('visit_review_history', [])]
@@ -82,7 +124,14 @@ def _finish_previsit(result: dict, case: dict, inputs: dict, source: dict, paylo
     if selected_ids:
         by_id = {row['id']: row for row in available}
         codes = [by_id[key] for key in selected_ids if key in by_id]
-    result['codes'] = [{**row, 'confirmed': bool(review.get('selected_ids')), 'units': units.get(row['id'], row.get('units'))} for row in codes]
+    result['codes'] = [{**row, 'confirmed': bool(review.get('selected_ids')), 'units': units.get(row['id'], row.get('units')),
+                        'modifiers': (review.get('confirmed_modifiers') or {}).get(row['id'], row.get('modifiers') or [])} for row in codes]
+    if botox_review.is_botox_visit(inputs) or any(row['code'] in botox_review.SELECTABLE_CODES for row in result['codes']):
+        result['botox_review'] = review.get('botox') or {}
+    result['service_selection_status'] = 'approved' if review.get('selected_ids') else 'preview'
+    result['payer_allowances'] = {key: {field: quote.get(field) for field in
+        ('unit_allowed_cents', 'channel', 'reference', 'valid_through', 'verified_at')}
+        for key, quote in (review.get('payer_allowances') or {}).items() if isinstance(quote, dict)}
     if selected_ids:
         for row in result['codes']:
             if row.get('source') in {'conditional office E/M alternative', 'Contract service option'}:
@@ -110,12 +159,28 @@ def _finish_previsit(result: dict, case: dict, inputs: dict, source: dict, paylo
     result.update(ecw_coverage_active=source.get('active_coverages', 0) > 0, calculated_at=_api._now(), context_token=token, revision=case.get('revision', 0), plan_details={
         'ecw': source.get('plan_details') or {'plan': [source['plan']] if source.get('plan') else []},
         'stedi': _api.commercial.plan_details(payload) if payload else {}}, ecw_retrieved_at=source.get('retrieved_at'),
-        response_reference=(payload or {}).get('id'), selected_ids=selected_ids)
+        response_reference=(payload or {}).get('id'), selected_ids=review.get('selected_ids') or [])
     result.pop('network_evidence', None)
+    result.pop('agreement_exclusion', None)
+    result.pop('temporary_rate_reference', None)
     result.pop('pricing_assumptions', None)
     _api._attach_previsit_pricing(result, session['practice_id'], inputs, exact_source, payer_id, result['benefits'], payload=payload,
                             review=review)
+    clinical_issues = botox_review.clinical_issues(
+        result['codes'], review, botox_visit=botox_review.is_botox_visit(inputs),
+        completed=str(source.get('appointment_status') or '').lower() in {'finished', 'completed'},
+    )
+    if clinical_issues:
+        price = result.get('price_range') or {}
+        price['service_issues'] = list(dict.fromkeys([*(price.get('service_issues') or []), *clinical_issues]))
+        price['complete'] = False
+        price['patient_min_cents'] = price['patient_max_cents'] = None
+        result['price_range'] = price
+        result['issues'].extend(clinical_issues)
     result['arrival_collection'] = _api.visit_estimate.arrival_collection(result.get('price_range') or {}, result['benefits'], review)
+    if result['service_selection_status'] != 'approved':
+        result['arrival_collection'].update(amount_cents=None, status='verify',
+            reason='The clinician must approve the planned service lines before collection.')
     result['planning_estimate'] = (_api.visit_estimate.planning_estimate(result.get('price_range') or {}, result['benefits'], comparison)
                                    if result['arrival_collection']['amount_cents'] is None else None)
     if len(connections) == 1:
@@ -123,7 +188,7 @@ def _finish_previsit(result: dict, case: dict, inputs: dict, source: dict, paylo
             _, network, profile = _api._previsit_practice_path(session['practice_id'], {**inputs, 'payer_id': connections[0]['id']},
                                                 {**exact_source, 'payer_plan_names': []})
             contract = _api._network_contract_evidence(session['practice_id'], network, profile, inputs['service_date'])
-            if network.get('network_name') and (contract.get('document_id') or contract.get('related_document_id')):
+            if network.get('network_name') and contract.get('document_id'):
                 result['mapping_candidate'] = {'network': network['network_name'], 'products': exact_source['payer_plan_names'],
                                                'reference': network['evidence_reference'],
                                                'contract': contract}
@@ -133,6 +198,7 @@ def _finish_previsit(result: dict, case: dict, inputs: dict, source: dict, paylo
             result.pop('mapping_candidate', None)
     if uploaded_cash:
         _api.practice_prices.apply(result, uploaded_cash, review)
+    attach_requirements(_api, result, case, inputs, source, session, connections, payer_id)
     result['collection_guidance'] = _api.collection_guidance.build(result, review)
     result.pop('emg_option', None)
     if inputs.get('visit_type') == 'new' and result['payment_mode'] == 'insurance':
@@ -146,7 +212,6 @@ def _finish_previsit(result: dict, case: dict, inputs: dict, source: dict, paylo
             except (_api.HTTPException, _api.commercial.CommercialError):
                 pass
         result['emg_option'] = _api.collection_guidance.emg_option(result, emg_rates, emg_rules, payload, inputs['service_date'], review)
-    attach_requirements(_api, result, case, inputs, source, session, connections, payer_id)
     result['encounter_summary'] = _api.encounter_summary.build(result, review)
     guidance = result['collection_guidance']
     emg = result.get('emg_option') or {}

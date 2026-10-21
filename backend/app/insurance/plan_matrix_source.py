@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import re
+import hashlib
 from datetime import date
 from functools import lru_cache
 from pathlib import Path
@@ -74,7 +75,9 @@ def parse(tables: list[dict], filename: str) -> dict:
         raise ValueError('Incomplete payer workbook')
     required = {'Payer', 'Plan Group (shared rule set)', "Specific Plan / Network Names on NMCT's Accepted List",
                 'Referral Required Before NMCT Visit', 'Referral Rule Detail (which CPT/services trigger it)',
-                'Prior Authorization Needed For', 'Eligibility Portal URL'}
+                'Referral Rule Source', 'Prior Authorization Needed For',
+                'Prior Auth Source / Submission Channel', 'Verification Notes',
+                'Eligibility Portal URL'}
     if any(not required <= row.keys() for _, row in matrix):
         raise ValueError('Unsupported payer matrix columns')
     steps = {row['Workflow Step'].split('. ', 1)[-1]: row for _, row in checklist}
@@ -90,8 +93,10 @@ def parse(tables: list[dict], filename: str) -> dict:
 
 @lru_cache(maxsize=1)
 def bundled() -> dict:
-    _, tables = structured_content(WORKBOOK.read_bytes(), WORKBOOK.name)
-    return parse(tables, WORKBOOK.name)
+    raw = WORKBOOK.read_bytes()
+    _, tables = structured_content(raw, WORKBOOK.name)
+    return {**parse(tables, WORKBOOK.name), 'sha256': hashlib.sha256(raw).hexdigest(),
+            'source_type': 'bundled_research'}
 
 
 def uploaded(documents: list[dict], service_date: str | None = None) -> dict:
@@ -106,6 +111,7 @@ def uploaded(documents: list[dict], service_date: str | None = None) -> dict:
             continue
         try:
             return {**parse((document['extraction'] or {}).get('tables') or [], document['filename']),
+                    'sha256': document['sha256'], 'source_type': 'clinical_library_research',
                     **({'document_id': document['id']} if document.get('id') else {})}
         except ValueError:
             continue

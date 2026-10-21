@@ -3,11 +3,14 @@ import asyncio
 from copy import deepcopy
 from datetime import date, datetime, timezone
 import json
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import HTTPException
 from app.api.routers import commercial_estimator as api, staff
+from app.api.routers.commercial_flow.commercial_previsit_catalog import build_catalog
+from app.api.routers.commercial_flow.commercial_previsit_finish import _payer_plan_pricing_source
+from app.api.routers.commercial_flow.commercial_previsit_pricing import _previsit_range
 from app.insurance import commercial, ecw_backend, identity, visit_estimate
 
 DAY = date.today().isoformat()
@@ -37,6 +40,31 @@ def test_dependent_patient_is_compared_separately_from_policyholder():
     raw = response('Mór-gan')
     raw['dependent']['dateOfBirth'] = '20010203'
     assert identity.compare(raw, policy())['status'] == 'matched'
+
+
+def test_missing_payer_member_or_patient_anchors_cannot_bind_benefits():
+    raw = response()
+    raw['subscriber'].pop('memberId')
+    check = identity.compare(raw, policy())
+    assert check['status'] == 'review' and check['missing_fields'] == ['member_id']
+    raw = response()
+    raw['dependent'].pop('firstName')
+    raw['dependent'].pop('dateOfBirth')
+    check = identity.compare(raw, policy())
+    assert check['status'] == 'review' and check['missing_fields'] == ['patient_demographics']
+    raw = response()
+    raw['dependent'].pop('relationToSubscriber')
+    check = identity.compare(raw, policy())
+    assert check['status'] == 'review' and check['missing_fields'] == ['relationship']
+
+
+def test_validated_ecw_saved_benefits_bind_by_patient_and_coverage_reference():
+    from test_ecw_benefits import saved_response
+    raw = {'_ecw_response': saved_response()}
+    coverage = {'patient_id': 'p', 'coverage_id': 'coverage-1'}
+    assert identity.compare(raw, coverage)['status'] == 'matched'
+    assert identity.compare(raw, {**coverage, 'patient_id': 'other'})['status'] == 'review'
+    assert identity.compare(raw, {**coverage, 'coverage_id': 'other'})['status'] == 'review'
 
 
 def test_name_resolution_is_bound_to_patient_policy_and_payer_not_visit():
@@ -106,15 +134,17 @@ def test_zero_oop_gives_conditional_result_without_clearing_identity_or_collecti
     raw['benefitsInformation'][2]['benefitAmount'] = '0'
     benefits = api._previsit_benefits(raw, policy(), DAY)
     price = visit_estimate.price_lines([{'id': 'office', 'code': '99204', 'units': 1}], [], benefits, {}, payload=raw, service_date=DAY)
-    planning = visit_estimate.planning_estimate(price, benefits, benefits['identity'])
+    assert visit_estimate.planning_estimate(price, benefits, benefits['identity']) is None
+    confirmed = {**benefits, 'network_status': 'in_network'}  # Synthetic provider participation.
+    planning = visit_estimate.planning_estimate(price, confirmed, benefits['identity'])
     assert planning['amount_cents'] == 0 and not planning['collectable']
-    assert len(planning['assumptions']) == 2
+    assert len(planning['assumptions']) == 1
     assert visit_estimate.arrival_collection(price, benefits, {})['amount_cents'] is None
     for changes in [{'active': False}, {'network_status': 'out_of_network'}, {'has_secondary': True}, {'service_date_matches': False}, {'review_reasons': ['Verify payer dates']}]:
-        assert visit_estimate.planning_estimate(price, {**benefits, **changes}, benefits['identity']) is None
-    assert visit_estimate.planning_estimate(price, benefits, {'status': 'review', 'can_confirm': False}) is None
+        assert visit_estimate.planning_estimate(price, {**confirmed, **changes}, benefits['identity']) is None
+    assert visit_estimate.planning_estimate(price, confirmed, {'status': 'review', 'can_confirm': False}) is None
     price['lines'][0]['benefits']['requirements']['authorization']['status'] = 'denied'
-    assert visit_estimate.planning_estimate(price, benefits, benefits['identity']) is None
+    assert visit_estimate.planning_estimate(price, confirmed, benefits['identity']) is None
 
 
 def test_ecw_context_preserves_comments_and_financial_fields_without_coding_them():
@@ -159,7 +189,9 @@ def test_product_mapping_is_scoped_to_current_network_evidence_dates_and_plan(mo
                'valid_from': DAY, 'valid_to': DAY, 'network_id': 'network', 'network_reference': 'contract-v1',
                'plan_scope': {'group_number': 'group-a', 'plan_number': None}}
     profile = {'payer_connection_id': 'payer-a', 'provider_network_id': 'network', 'status': 'staff_guidance_enabled',
-               'plan_matcher': 'CI', 'rules': {'product_mappings': [mapping]}}
+               'plan_matcher': 'CI', 'rules': {'product_mappings': [mapping],
+                   'plan_product_names': ['Choice Medical'],
+                   'library_source': {'document_id': 'synthetic-contract', 'reference': 'contract-v1'}}}
     monkeypatch.setattr(api.commercial_store, 'connection', lambda *a: payer)
     monkeypatch.setattr(api.commercial_store, 'list_networks', lambda *a: [network])
     monkeypatch.setattr(api.commercial_store, 'list_profiles', lambda *a: [profile])
@@ -177,6 +209,271 @@ def test_product_mapping_is_scoped_to_current_network_evidence_dates_and_plan(mo
         with pytest.raises(HTTPException): api._practice_path('clinic', inputs, {**source, **changes})
     network['evidence_reference'] = 'contract-v2'
     with pytest.raises(HTTPException): api._practice_path('clinic', inputs, source)
+
+
+def test_regional_ppo_cannot_inherit_a_general_uhc_contract_through_product_mapping(monkeypatch):
+    product = 'UHC Complete Regional PPO Medicare Advantage'
+    payer = {'id': 'uhc', 'category': 'commercial_medical', 'status': 'staff_guidance_enabled'}
+    general = {'id': 'general', 'payer_connection_id': 'uhc', 'status': 'verified',
+               'network_name': 'Choice Plus', 'billing_npi': '1', 'rendering_npi': '2',
+               'location_id': 'office', 'place_of_service': '11', 'plan_matcher': 'Choice Plus',
+               'effective_from': '2020-01-01', 'evidence_reference': 'library:general'}
+    mapping = {'products': [product], 'reference': 'Admin claim', 'actor_id': 'admin',
+               'valid_from': DAY, 'valid_to': DAY, 'network_id': 'general',
+               'network_reference': 'library:general',
+               'plan_scope': {'plan_number': 'plan-a', 'group_number': None}}
+    general_profile = {'payer_connection_id': 'uhc', 'provider_network_id': 'general',
+                       'status': 'staff_guidance_enabled', 'plan_matcher': 'Choice Plus',
+                       'rules': {'product_mappings': [mapping]}}
+    monkeypatch.setattr(api.commercial_store, 'connection', lambda *_: payer)
+    monkeypatch.setattr(api.commercial_store, 'list_networks', lambda *_: [general])
+    monkeypatch.setattr(api.commercial_store, 'list_profiles', lambda *_: [general_profile])
+    inputs = {'payer_id': 'uhc', 'service_date': DAY, 'rendering_provider': {'npi': '2'},
+              'place_of_service': '11'}
+    source = {'billing_provider': {'npi': '1'}, 'location_id': 'office', 'plan': 'Choice Plus',
+              'payer_plan_names': [product], 'payer_plan_scope': mapping['plan_scope']}
+    with pytest.raises(HTTPException, match='own exact-product provider contract'):
+        api._practice_path('clinic', inputs, source)
+
+    regional = {**general, 'id': 'regional', 'plan_matcher': product,
+                'network_name': 'Regional PPO', 'evidence_reference': 'library:regional'}
+    regional_profile = {**general_profile, 'provider_network_id': 'regional',
+                        'plan_matcher': product, 'rules': {'plan_product_names': [product]}}
+    monkeypatch.setattr(api.commercial_store, 'list_networks', lambda *_: [general, regional])
+    monkeypatch.setattr(api.commercial_store, 'list_profiles', lambda *_: [general_profile, regional_profile])
+    assert api._practice_path('clinic', inputs, {**source, 'plan': product})[1] == regional
+
+
+@pytest.mark.parametrize('product', [
+    'UHC Complete Regional PPO Medicare Advantage',
+    'UHC Regional Medicare Advantage PPO',
+    'UHC Complete Local PPO Medicare Advantage',
+    'UnitedHealthcare Local Medicare Advantage PPO',
+])
+def test_excluded_medicare_advantage_ppo_names_require_their_own_network(product):
+    payer = {'display_name': 'UnitedHealthcare'}
+    assert api._excluded_ma_ppo_contract_mismatch([product], {'plan_matcher': 'Choice Plus'}, payer)
+    assert not api._excluded_ma_ppo_contract_mismatch([product], {'plan_matcher': product}, payer)
+
+
+def test_general_medicare_advantage_ppo_does_not_inherit_a_local_regional_exclusion():
+    assert not api._excluded_ma_ppo_contract_mismatch(
+        ['UnitedHealthcare Group Medicare Advantage (PPO)'], {'plan_matcher': 'Group PPO'},
+        {'display_name': 'UnitedHealthcare'})
+
+
+def test_renamed_uhc_connection_cannot_hide_a_payer_named_local_ppo():
+    assert api._excluded_ma_ppo_contract_mismatch(
+        ['UHC Complete Local PPO'], {'plan_matcher': 'Choice Plus'},
+        {'id': 'opaque-connection', 'display_name': 'Choice Plus'})
+
+
+def test_renamed_uhc_connection_alias_keeps_generic_local_ppo_out_of_general_contract():
+    assert api._excluded_ma_ppo_contract_mismatch(
+        ['Local PPO'], {'plan_matcher': 'Choice Plus'},
+        {'id': 'opaque-connection', 'display_name': 'Choice Plus', 'aliases': ['United Healthcare']})
+
+
+def test_uhc_local_ppo_appendix_does_not_set_another_payers_contract_scope():
+    assert not api._excluded_ma_ppo_contract_mismatch(
+        ['Blue Cross Local Medicare Advantage PPO'], {'plan_matcher': 'General PPO'},
+        {'display_name': 'Blue Cross Blue Shield'})
+
+
+def test_other_payer_can_use_its_sourced_local_ppo_product_mapping(monkeypatch):
+    product = 'Blue Cross Local Medicare Advantage PPO'
+    payer = {'id': 'bcbs', 'display_name': 'Blue Cross Blue Shield',
+             'category': 'commercial_medical', 'status': 'staff_guidance_enabled'}
+    network = {'id': 'bcbs-network', 'payer_connection_id': 'bcbs', 'status': 'verified',
+               'network_name': 'General PPO', 'billing_npi': '1', 'rendering_npi': '2',
+               'location_id': 'office', 'place_of_service': '11', 'plan_matcher': 'General PPO',
+               'effective_from': '2020-01-01', 'evidence_reference': 'library:bcbs-contract'}
+    scope = {'group_number': 'GROUP-A', 'plan_number': None}
+    mapping = {'products': [product], 'reference': 'BCBS contract appendix', 'actor_id': 'admin',
+               'valid_from': DAY, 'valid_to': DAY, 'network_id': 'bcbs-network',
+               'network_reference': 'library:bcbs-contract', 'plan_scope': scope}
+    profile = {'payer_connection_id': 'bcbs', 'provider_network_id': 'bcbs-network',
+               'status': 'staff_guidance_enabled', 'plan_matcher': 'General PPO',
+               'rules': {'product_mappings': [mapping], 'plan_product_names': [product],
+                         'library_source': {'document_id': 'bcbs-contract',
+                                            'reference': 'library:bcbs-contract'}}}
+    monkeypatch.setattr(api.commercial_store, 'connection', lambda *_: payer)
+    monkeypatch.setattr(api.commercial_store, 'list_networks', lambda *_: [network])
+    monkeypatch.setattr(api.commercial_store, 'list_profiles', lambda *_: [profile])
+    inputs = {'payer_id': 'bcbs', 'service_date': DAY, 'rendering_provider': {'npi': '2'},
+              'place_of_service': '11'}
+    source = {'billing_provider': {'npi': '1'}, 'location_id': 'office',
+              'plan': product, 'payer_plan_names': [product], 'payer_plan_scope': scope}
+    assert api._practice_path('clinic', inputs, source)[1] == network
+
+
+def test_scoped_product_alias_can_select_the_network_before_product_validation(monkeypatch):
+    payer = {'id': 'uhc', 'category': 'commercial_medical', 'status': 'staff_guidance_enabled'}
+    network = {'id': 'choice', 'payer_connection_id': 'uhc', 'status': 'verified',
+               'network_name': 'Choice Plus', 'billing_npi': '1', 'rendering_npi': '2',
+               'location_id': 'office', 'place_of_service': '11', 'plan_matcher': 'Choice Plus',
+               'effective_from': '2020-01-01', 'evidence_reference': 'library:choice-contract'}
+    scope = {'group_number': 'GROUP-A', 'plan_number': None}
+    mapping = {'products': ['POS CHOICE PLUS'], 'reference': 'Contract product appendix',
+               'actor_id': 'clinic-admin', 'valid_from': DAY, 'valid_to': DAY,
+               'network_id': 'choice', 'network_reference': 'library:choice-contract',
+               'plan_scope': scope}
+    profile = {'payer_connection_id': 'uhc', 'provider_network_id': 'choice',
+               'status': 'staff_guidance_enabled', 'plan_matcher': 'Choice Plus',
+               'rules': {'product_mappings': [mapping], 'plan_product_names': ['POS CHOICE PLUS'],
+                         'library_source': {'document_id': 'choice-contract',
+                                            'reference': 'library:choice-contract'}}}
+    monkeypatch.setattr(api.commercial_store, 'connection', lambda *a: payer)
+    monkeypatch.setattr(api.commercial_store, 'list_networks', lambda *a: [network])
+    monkeypatch.setattr(api.commercial_store, 'list_profiles', lambda *a: [profile])
+    inputs = {'payer_id': 'uhc', 'service_date': DAY,
+              'rendering_provider': {'npi': '2'}, 'place_of_service': '11'}
+    source = {'billing_provider': {'npi': '1'}, 'location_id': 'office',
+              'plan': 'POS CHOICE PLUS', 'payer_plan_names': ['POS CHOICE PLUS'],
+              'payer_plan_scope': scope}
+    _, selected_network, selected_profile = api._practice_path('clinic', inputs, source)
+    assert selected_network == network
+    assert selected_profile['rate_plan_matcher'] == 'POS CHOICE PLUS'
+    assert selected_profile['require_exact_rate_plan'] is True
+    payer_named = {**source, 'plan': 'Choice Plus', 'payer_plan_bound': True}
+    assert api._practice_path('clinic', inputs, payer_named)[2]['rate_plan_matcher'] == 'POS CHOICE PLUS'
+    same_product_repeated = {**payer_named, 'payer_plan_names': ['POS CHOICE PLUS', 'pos choice plus']}
+    assert api._practice_path('clinic', inputs, same_product_repeated)[2]['require_exact_rate_plan'] is True
+    not_bound = {**payer_named, 'payer_plan_bound': False}
+    assert 'rate_plan_matcher' not in api._practice_path('clinic', inputs, not_bound)[2]
+    rate_profiles = []
+    monkeypatch.setattr(api.commercial_store, 'matching_rates',
+                        lambda _practice, rate_profile, *_: rate_profiles.append(rate_profile) or [])
+    monkeypatch.setattr(api, '_network_contract_evidence', lambda *_: {'document_id': 'synthetic-contract'})
+    api._previsit_range('clinic', inputs, source, 'uhc',
+                        [{'id': 'office', 'code': '99203', 'source': 'eCW scheduled service', 'units': 1}],
+                        {'active': True, 'network_status': 'in_network',
+                         'network_source': 'clinic_library_contract'})
+    assert rate_profiles[0]['rate_plan_matcher'] == 'POS CHOICE PLUS'
+    profile['rules']['plan_product_names'] = ['Choice Plus']
+    with pytest.raises(HTTPException):
+        api._practice_path('clinic', inputs, source)
+    profile['rules']['plan_product_names'] = ['POS CHOICE PLUS']
+    for changed in ({'payer_plan_scope': {'group_number': 'OTHER', 'plan_number': None}},
+                    {'plan': 'OTHER PRODUCT'},
+                    {'payer_plan_names': ['OTHER PRODUCT']}):
+        with pytest.raises(HTTPException):
+            api._practice_path('clinic', inputs, {**source, **changed})
+    network['evidence_reference'] = 'library:replacement'
+    with pytest.raises(HTTPException):
+        api._practice_path('clinic', inputs, source)
+
+
+def test_single_matched_stedi_plan_can_supply_missing_ecw_contract_label(monkeypatch):
+    payer = {'id': 'payer-a', 'category': 'commercial_medical', 'status': 'staff_guidance_enabled',
+             'stedi_payer_id': 'uhc-route', 'display_name': 'United Healthcare'}
+    network = {'id': 'network-a', 'payer_connection_id': 'payer-a', 'status': 'verified',
+               'network_name': 'Choice Plus', 'billing_npi': '1', 'rendering_npi': '2',
+               'location_id': 'office', 'place_of_service': '11', 'plan_matcher': 'Choice Plus',
+               'effective_from': '2020-01-01', 'evidence_reference': 'library:synthetic-contract'}
+    profile = {'payer_connection_id': 'payer-a', 'provider_network_id': 'network-a',
+               'status': 'staff_guidance_enabled', 'plan_matcher': 'Choice Plus',
+               'rules': {'plan_product_names': ['Choice Plus'], 'library_source': {
+                   'document_id': 'synthetic-contract', 'reference': 'library:synthetic-contract',
+                   'sha256': 'synthetic-hash'}}}
+    monkeypatch.setattr(api.commercial_store, 'connection', lambda *_: payer)
+    monkeypatch.setattr(api.commercial_store, 'list_networks', lambda *_: [network])
+    monkeypatch.setattr(api.commercial_store, 'list_profiles', lambda *_: [profile])
+    monkeypatch.setattr(api.commercial_store, 'list_connections', lambda *_: [payer])
+    monkeypatch.setattr(api.staff_store, 'get_library', lambda *_: {
+        'id': 'synthetic-contract', 'kind': 'contract', 'content_type': 'application/pdf',
+        'sha256': 'synthetic-hash', 'label': 'Synthetic Choice Plus agreement'})
+    monkeypatch.setattr(api, '_previsit_range', lambda *_, **__: ({'lines': []}, []))
+    inputs = {'payer_id': 'payer-a', 'service_date': DAY,
+              'rendering_provider': {'npi': '2'}, 'place_of_service': '11'}
+    source = {'billing_provider': {'npi': '1'}, 'location_id': 'office',
+              'payer_plan_names': ['Choice Plus']}
+    benefits = {'active': True, 'service_date_matches': True}
+    comparison = {'status': 'matched', 'binding': 'synthetic-current-binding', 'match_version': 2}
+    with pytest.raises(HTTPException):
+        api._previsit_practice_path('clinic', inputs, source)
+    filled = _payer_plan_pricing_source(source, {'names': ['Choice Plus']}, benefits, comparison)
+    assert filled['plan'] == 'Choice Plus'
+    assert filled['pricing_plan_source'] == 'Stedi eligibility plan name'
+    generic_ecw = {**source, 'plan': 'United Healthcare'}
+    exact_payer_product = _payer_plan_pricing_source(generic_ecw, {'names': ['Choice Plus']}, benefits, comparison)
+    assert exact_payer_product['plan'] == 'Choice Plus'
+    assert exact_payer_product['pricing_plan_source'] == 'Stedi eligibility plan name'
+    assert _payer_plan_pricing_source({**source, 'plan': 'PPO'}, {'names': ['Choice Plus']},
+                                      benefits, comparison)['plan'] == 'Choice Plus'
+    assert _payer_plan_pricing_source(generic_ecw, {'names': ['Choice Plus', 'choice plus']},
+                                      benefits, comparison)['plan'] == 'Choice Plus'
+    assert _payer_plan_pricing_source(generic_ecw, {'names': ['United Healthcare', 'Choice Plus']},
+                                      benefits, comparison)['plan'] == 'Choice Plus'
+    assert api._previsit_practice_path('clinic', inputs, filled)[1] == network
+    assert api._previsit_practice_path('clinic', inputs, exact_payer_product)[1] == network
+    monkeypatch.setattr(api.commercial_store, 'matching_rates', lambda *_: [
+        {'code': '99203', 'modifier': '', 'allowed_cents': 12000,
+         'source_reference': 'library:synthetic-rate'}])
+    monkeypatch.setattr(api.practice_prices, 'current', lambda *_: None)
+    _, _, _, available, _ = build_catalog(api, {}, {'practice_id': 'clinic'}, inputs,
+                                           source, None, {**filled, 'payer_plan_names': ['Choice Plus']},
+                                           'uhc-route', {})
+    assert any(row['code'] == '99203' and row.get('unit_allowed_cents') == 12000 for row in available)
+    with monkeypatch.context() as missing_rates:
+        missing_rates.setattr(api.commercial_store, 'matching_rates', lambda *_: [])
+        missing_rates.setattr(api, '_previsit_range', _previsit_range)
+        network_only = {'payer': 'United Healthcare',
+                        'codes': [{'id': 'office', 'code': '99203', 'units': 1}], 'issues': []}
+        network_benefits = {'active': True, 'service_date_matches': True, 'identity': comparison}
+        api._attach_previsit_pricing(network_only, 'clinic', inputs, filled,
+                                     'uhc-route', network_benefits, payload={})
+        assert network_benefits['network_status'] == 'in_network'
+        assert network_benefits['network_source'] == 'clinic_library_contract'
+        assert network_only['network_evidence']['document_id'] == 'synthetic-contract'
+        assert network_only['price_range']['lines'][0]['allowed_cents'] is None
+    with monkeypatch.context() as no_contract:
+        no_contract.setattr(api.staff_store, 'get_library', lambda *_: None)
+        no_contract.setattr(api.staff_store, 'list_library', lambda *_: [])
+        _, _, _, unlinked, _ = build_catalog(api, {}, {'practice_id': 'clinic'}, inputs,
+                                               source, None, {**filled, 'payer_plan_names': ['Choice Plus']},
+                                               'uhc-route', {})
+        assert not any(row.get('unit_allowed_cents') is not None for row in unlinked)
+        priced, issues = _previsit_range('clinic', inputs,
+            {**filled, 'payer_plan_names': ['Choice Plus']}, 'payer-a',
+            [{'id': 'office', 'code': '99203', 'units': 1}],
+            {'active': True, 'network_status': 'unknown'}, payload={})
+        assert priced['lines'][0]['allowed_cents'] is None
+        assert any('contract linked' in issue.lower() for issue in issues)
+    mixed_names = {**exact_payer_product, 'payer_plan_names': ['United Healthcare', 'Choice Plus'],
+                   'payer_plan_bound': True}
+    assert api._previsit_practice_path('clinic', inputs, mixed_names)[1] == network
+    assert api._previsit_practice_path('clinic', inputs, mixed_names)[2].get('require_exact_rate_plan') is not True
+    with pytest.raises(HTTPException):
+        api._previsit_practice_path('clinic', inputs, {**mixed_names,
+            'payer_plan_names': ['Choice Plus', 'Regional PPO']})
+    assert _payer_plan_pricing_source(generic_ecw, {'names': ['Choice Plus', 'Regional PPO']},
+                                      benefits, comparison) is generic_ecw
+    assert _payer_plan_pricing_source(generic_ecw, {'names': ['Choice Plus']},
+                                      benefits, {'status': 'review'}) is generic_ecw
+    result = {'payer': 'United Healthcare', 'codes': [], 'issues': []}
+    pricing_benefits = {**benefits, 'network_status': 'unknown'}
+    api._attach_previsit_pricing(result, 'clinic', inputs, filled, 'uhc-route', pricing_benefits)
+    assert pricing_benefits['network_status'] == 'in_network'
+    assert result['network_evidence']['document_id'] == 'synthetic-contract'
+    assert result['network_evidence']['product_source'] == 'Stedi eligibility plan name'
+    assert _payer_plan_pricing_source(source, {'names': ['Choice Plus']}, benefits,
+                                      {'status': 'matched', 'binding': 'legacy-binding'}) is source
+    warned = _payer_plan_pricing_source(source, {'names': ['Choice Plus']}, benefits,
+                                        {'status': 'warning', 'binding': 'corroborated-binding',
+                                         'match_version': 2})
+    assert warned['plan'] == 'Choice Plus'
+    for plan, terms, identity_status in [
+        ({'names': ['Choice Plus', 'Regional PPO']}, benefits, 'matched'),
+        ({'names': ['Choice Plus']}, benefits, 'review'),
+        ({'names': ['Choice Plus']}, {**benefits, 'service_date_matches': False}, 'matched'),
+        ({'names': ['Choice Plus']}, {**benefits, 'active': False}, 'matched'),
+        ({'names': ['PPO']}, benefits, 'matched'),
+        ({'names': ['Preferred Provider Organization Plus Medical']}, benefits, 'matched'),
+    ]:
+        assert _payer_plan_pricing_source(source, plan, terms, {'status': identity_status}) is source
+    assert _payer_plan_pricing_source({**source, 'plan': 'eCW product'},
+                                      {'names': ['Choice Plus']}, benefits, comparison)['plan'] == 'eCW product'
 
 
 def test_previsit_uses_the_unique_active_contract_when_payer_product_label_is_generic(monkeypatch):
@@ -212,13 +509,14 @@ def test_network_pdf_points_only_to_its_uploaded_contract(monkeypatch):
     lookup = MagicMock(return_value=document)
     monkeypatch.setattr(api.staff_store, 'get_library', lookup)
 
-    def estimate():
+    def estimate(source=None):
         result = {'codes': [], 'issues': []}
-        api._attach_previsit_pricing(result, 'clinic', {'service_date': DAY}, {}, 'route-a', {})
+        api._attach_previsit_pricing(result, 'clinic', {'service_date': DAY}, source or {}, 'route-a', {})
         return result.get('network_evidence') or {}
 
     assert estimate()['document_id'] == 'contract-a'
     assert estimate()['locator'] == 'Page 3, row 7'
+    assert estimate({'pricing_plan_source': 'Stedi eligibility plan name'})['product_source'] == 'Stedi eligibility plan name'
     lookup.assert_called_with('contract-a', 'clinic')
     document['content_type'] = 'text/csv'
     assert 'document_id' not in estimate()
@@ -268,12 +566,12 @@ def test_current_library_contract_decides_network_independently_of_price(monkeyp
         return result, benefits
 
     result, benefits = estimate()
-    assert benefits['network_status'] == 'in_network'
+    assert benefits['network_status'] == 'unknown'
     assert result['network_evidence']['related_document_id'] == 'contract-a'
     documents[0]['effective_to'] = '2020-12-31'
     result, benefits = estimate()
-    assert benefits['network_status'] == 'out_of_network'
-    assert result['network_evidence']['reason'] == 'No current matching contract in the Clinical Library.'
+    assert benefits['network_status'] == 'unknown'
+    assert result['network_evidence']['reason'] == 'The Clinical Library has no contract linked to this exact payer product and provider.'
     documents[0].pop('effective_to')
     documents.append({**documents[0], 'id': 'second-contract'})
     result, benefits = estimate()
@@ -281,10 +579,47 @@ def test_current_library_contract_decides_network_independently_of_price(monkeyp
     assert 'Multiple current payer contracts' in result['network_evidence']['reason']
     documents.clear()
     result, benefits = estimate()
+    assert benefits['network_status'] == 'unknown'
+    network['status'] = 'nonparticipating'
+    result, benefits = estimate()
     assert benefits['network_status'] == 'out_of_network'
+    assert benefits['network_source'] == 'clinic_nonparticipation_rule'
+    network['status'] = 'verified'
     del source['location_id']
     result, benefits = estimate()
     assert benefits['network_status'] == 'unknown'
+
+
+@pytest.mark.parametrize('payer_label', ['United Healthcare', 'United Health Care'])
+def test_uhc_uses_scoped_blue_cross_library_rate_only_as_temporary_reference(monkeypatch, payer_label):
+    payer = {'id': 'bcbs', 'display_name': 'Blue Cross and Blue Shield of Texas',
+             'stedi_payer_id': 'bcbs-route', 'status': 'staff_guidance_enabled'}
+    network = {'id': 'bcbs-network', 'payer_connection_id': 'bcbs', 'status': 'verified',
+               'billing_npi': '1111111111', 'rendering_npi': '2222222222',
+               'location_id': 'office', 'place_of_service': '11', 'plan_matcher': 'CI',
+               'effective_from': '2020-01-01', 'effective_to': None}
+    profile = {'payer_connection_id': 'bcbs', 'provider_network_id': 'bcbs-network',
+               'status': 'staff_guidance_enabled', 'plan_matcher': 'CI'}
+    inputs = {'service_date': DAY, 'rendering_provider': {'npi': '2222222222'},
+              'place_of_service': '11'}
+    source = {'billing_provider': {'npi': '1111111111'}, 'location_id': 'office'}
+    monkeypatch.setattr(api.commercial_store, 'list_connections', lambda *_: [payer])
+    monkeypatch.setattr(api.commercial_store, 'list_networks', lambda *_: [network])
+    monkeypatch.setattr(api.commercial_store, 'list_profiles', lambda *_: [profile])
+    monkeypatch.setattr(api.commercial_store, 'matching_rates', lambda *_, **__: [
+        {'code': '99203', 'modifier': '', 'allowed_cents': 10117,
+         'source_reference': 'library:synthetic-fee-schedule'}])
+    result = {'payer': payer_label, 'codes': [{'code': '99203', 'units': 1}], 'issues': []}
+    benefits = {'active': True, 'network_status': 'unknown'}
+    api._attach_previsit_pricing(result, 'clinic', inputs, source, 'uhc-route', benefits)
+    assert result['temporary_rate_reference']['lines'][0]['unit_reference_cents'] == 10117
+    assert result['temporary_rate_reference']['complete'] is True
+    assert result['price_range']['lines'][0]['allowed_cents'] is None
+    assert benefits['network_status'] == 'unknown'
+    source['location_id'] = 'different-office'
+    result = {'payer': payer_label, 'codes': [{'code': '99203', 'units': 1}], 'issues': []}
+    api._attach_previsit_pricing(result, 'clinic', inputs, source, 'uhc-route', benefits)
+    assert 'temporary_rate_reference' not in result
 
 
 def test_requirement_candidates_include_suggested_cpts_without_expanding_the_selected_visit():
@@ -304,6 +639,7 @@ def test_identity_review_persists_across_visits_and_rejects_stale_or_unauthorize
                             'text': 'Provider will comply with all Referral and Preauthorization requirements set forth in the Policies and Procedures.'}],
                             'tables': []}}
     monkeypatch.setattr(api.library_pricing, 'prepare', lambda practice: [library_document])
+    monkeypatch.setattr(api.staff_store, 'list_library', lambda practice: [library_document])
     monkeypatch.setattr(api.staff_store, 'get_library', lambda document_id, practice: library_document)
     inputs = {'service_date': DAY, 'payer_id': 'payer-a', 'member_id': 'ABC123', 'relationship': '19',
               'subscriber': {'firstName': 'Sam', 'lastName': 'Other'},
@@ -356,6 +692,27 @@ def test_identity_review_persists_across_visits_and_rejects_stale_or_unauthorize
         asyncio.run(api.update_visit_review('case', api.VisitReviewInput(context_token=token, revision=1, product_mapping={
             'reference': 'Contract', 'notes': 'Verified contract', 'valid_from': DAY, 'valid_to': DAY}), None))
     assert unauthorized.value.status_code == 403
+    session['staff']['role'] = 'admin'
+    with patch.object(api.commercial, 'plan_details', return_value={
+            'names': ['UHC Complete Regional PPO Medicare Advantage']}), \
+         patch.object(api, '_practice_path', return_value=({}, {'plan_matcher': 'Choice Plus'}, {'id': 'general'})), \
+         patch.object(api.commercial_store, 'save_product_mapping') as saved_mapping:
+        with pytest.raises(HTTPException, match='separate exact-product local or regional PPO agreement') as excluded:
+            asyncio.run(api.update_visit_review('case', api.VisitReviewInput(context_token=token, revision=1,
+                product_mapping={'reference': 'General UHC agreement', 'notes': 'This is only a general PPO agreement.',
+                                 'valid_from': DAY, 'valid_to': DAY}), None))
+        assert excluded.value.status_code == 422
+        saved_mapping.assert_not_called()
+    with patch.object(api.commercial, 'plan_details', return_value={'names': ['UHC Charter']}), \
+         patch.object(api, '_practice_path', return_value=({}, {'plan_matcher': 'Choice Plus'},
+             {'id': 'general', 'rules': {'plan_product_names': ['Choice Plus']}})), \
+         patch.object(api.commercial_store, 'save_product_mapping') as saved_mapping:
+        with pytest.raises(HTTPException, match='sourced exact-product profile') as excluded:
+            asyncio.run(api.update_visit_review('case', api.VisitReviewInput(context_token=token, revision=1,
+                product_mapping={'reference': 'General UHC agreement', 'notes': 'The member uses another product.',
+                                 'valid_from': DAY, 'valid_to': DAY}), None))
+        assert excluded.value.status_code == 422
+        saved_mapping.assert_not_called()
     with pytest.raises(HTTPException) as mismatch:
         asyncio.run(api.update_visit_review('case', api.VisitReviewInput(context_token=token, revision=1, identity_confirmation={**confirm, 'binding': 'f' * 64}), None))
     assert mismatch.value.status_code == 409 and persist.call_count == 1
@@ -365,6 +722,7 @@ def test_name_difference_does_not_block_calculating_the_returned_policy():
     raw = response('Former')
     benefits = api._previsit_benefits(raw, policy(), DAY)
     benefits['network_status'] = 'in_network'
+    benefits['network_source'] = 'clinic_library_contract'
     price = visit_estimate.price_lines([{'id': 'office', 'code': '99204', 'units': 1}],
         [{'code': '99204', 'allowed_cents': 15000}], benefits, {'cost_share': 'payer_returned'}, payload=raw, service_date=DAY)
     assert price['complete'] and not price['conditional']
@@ -445,7 +803,9 @@ def test_shared_accumulator_with_office_and_injection_labels_is_not_discarded():
     terms = priced['lines'][0]['benefits']
     assert terms['copay_cents'] == 4000 and terms['oop_remaining_cents'] == 0
     assert terms['resolved_service_type'] == '98'
-    assert visit_estimate.planning_estimate(priced, benefits, benefits['identity'])['amount_cents'] == 0
+    assert visit_estimate.planning_estimate(priced, benefits, benefits['identity']) is None
+    confirmed = {**benefits, 'network_status': 'in_network'}  # Synthetic provider participation.
+    assert visit_estimate.planning_estimate(priced, confirmed, benefits['identity'])['amount_cents'] == 0
     # Mentioning injections within an office benefit must not remove it either.
     raw['plans'][0]['benefits']['coPayment'][1]['messages'] = ['Office visit including injections']
     assert commercial.normalize_stedi_271(raw, '98', True, procedure_code='99203', service_date=DAY)['copay_cents'] == 4000

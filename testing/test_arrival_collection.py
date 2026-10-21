@@ -13,7 +13,8 @@ def line(copay=2500, cost_share='copay'):
 
 
 def test_collection_includes_all_visit_obligations_and_subtracts_verified_payments():
-    benefits = {'active': True, 'network_status': 'in_network'}
+    benefits = {'active': True, 'network_status': 'in_network', 'network_source': 'clinic_library_contract',
+                'identity': {'status': 'matched', 'binding': 'synthetic-current-binding', 'match_version': 2}}
     price = {'complete': True, 'lines': [line()], 'patient_max_cents': 13000}
     assert visit_estimate.arrival_collection(price, benefits, {})['amount_cents'] == 13000
     result = visit_estimate.arrival_collection(price, benefits, {'payments': {'reference': 'receipt', 'amount_cents': 1000}})
@@ -21,6 +22,7 @@ def test_collection_includes_all_visit_obligations_and_subtracts_verified_paymen
     assert result['prior_balance_cents'] is None  # Not silently treated as a zero balance.
     assert visit_estimate.arrival_collection(price, {**benefits, 'active': None}, {})['amount_cents'] is None
     assert visit_estimate.arrival_collection(price, {**benefits, 'network_status': 'unknown'}, {})['amount_cents'] is None
+    assert visit_estimate.arrival_collection(price, {**benefits, 'network_conflict': True}, {})['amount_cents'] is None
     result = visit_estimate.arrival_collection({**price, 'conditional': True}, benefits, {})
     assert result['amount_cents'] is None and result['estimated_cents'] == 13000
 
@@ -84,7 +86,8 @@ class AsyncEvidenceTests(IsolatedAsyncioTestCase):
 
 
 def test_verified_office_copay_is_separate_from_an_unavailable_total():
-    benefits = {'active': True, 'network_status': 'in_network'}
+    benefits = {'active': True, 'network_status': 'in_network', 'network_source': 'clinic_library_contract',
+                'identity': {'status': 'matched', 'binding': 'synthetic-current-binding', 'match_version': 2}}
     office = {'code': '99204', 'units': 1, 'benefits': {'copay_cents': 5000, 'copay_period': 'VISIT',
         'cost_share': 'copay', 'deductible_applies': False, 'oop_remaining_cents': 100000, 'requires_review': False}}
     price = {'complete': False, 'lines': [office]}
@@ -104,6 +107,7 @@ def test_ceo_deductible_then_coinsurance_examples_use_allowed_amount():
     lines = [{'code': '99204', 'units': 1, 'allowed_cents': 24078}]
     result = estimate(lines, benefits, {'cost_share': 'coinsurance'})
     assert result['patient_cents'] == 12816 and result['deductible_cents'] == 10000 and result['coinsurance_cents'] == 2816
+    assert result['coinsurance_percent'] == '20' and result['coinsurance_base_cents'] == 14078
     result = estimate(lines, {**benefits, 'deductible_remaining_cents': 50000}, {'cost_share': 'coinsurance'})
     assert result['patient_cents'] == 24078 and result['coinsurance_cents'] == 0
 
@@ -139,7 +143,8 @@ def test_returned_service_date_does_not_verify_a_different_appointment():
 
 
 def test_alternative_office_levels_collect_one_common_verified_copay():
-    benefits = {'active': True, 'network_status': 'in_network'}
+    benefits = {'active': True, 'network_status': 'in_network', 'network_source': 'clinic_library_contract',
+                'identity': {'status': 'matched', 'binding': 'synthetic-current-binding', 'match_version': 2}}
     lines = [{'code': str(code), 'units': 1, 'benefits': {
         'copay_cents': 4000, 'copay_period': 'VISIT', 'cost_share': 'copay',
         'deductible_applies': False, 'oop_remaining_cents': 100000,

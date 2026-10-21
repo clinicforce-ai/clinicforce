@@ -82,6 +82,9 @@ jobs:
           node ../testing/test-card-capture.mjs
           node ../testing/test-healow-review.mjs
           node ../testing/test-insurance-request-context.mjs
+          node testing/member-benefits-ui.mjs
+          node testing/uhc-saved-projection-ui.mjs
+          node testing/historical-replay-ui.mjs
           npm run format:check
           npm run check:size
           npm run lint

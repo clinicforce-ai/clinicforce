@@ -70,7 +70,8 @@ def test_empty_coverage_can_query_note_payer_without_inventing_policyholder(reco
     result = api._previsit_result(case)
     assert result['coverage_status'] == 'VERIFIED'
     assert result['insurance_details']['member_id'] == 'new-id'
-    assert result['payment_mode'] == 'cash'  # Separate price fallback preserves verified coverage.
+    assert result['payment_mode'] == 'insurance'
+    assert result['collection_guidance']['amount_cents'] is None
 
 
 def test_cash_only_after_all_applicable_checks_finish(recovery):
@@ -180,7 +181,8 @@ def test_mbi_lookup_after_discovery_recovers_identifier_without_ssn(recovery):
     result = api._previsit_result(case)
     assert result['insurance_details']['member_id'] == '1EG4TE5MK73'
     assert result['insurance_details']['member_source'] == 'medicare_mbi_lookup'
-    assert result['payment_mode'] == 'cash'  # Separate price fallback preserves verified coverage.
+    assert result['payment_mode'] == 'insurance'
+    assert result['collection_guidance']['amount_cents'] is None
     assert all(row['payment_mode'] != 'cash' for row in snapshots if row.get('coverage_status') != 'VERIFIED')
     assert case['previsit']['requested_service_types'] == ['30']
 
@@ -250,6 +252,10 @@ def test_mbi_never_uses_age_or_unknown_plan_as_evidence(recovery):
     for plan in (None, 'CI', 'Medicare Advantage'):
         assert discovery.mbi_request_body(inputs, {**source, 'plan': plan}, provider) is None
     assert discovery.mbi_request_body(inputs, {**source, 'plan': 'MB', 'active_coverages': 2}, provider) is None
+    assert discovery.mbi_request_body(inputs, {**source, 'plan': 'MB',
+        'payer': 'UnitedHealthcare', 'active_coverages': 1}, provider) is None
+    assert discovery.mbi_request_body(inputs, {**source, 'plan': 'MB',
+        'payer': 'UHC Medicare Advantage Regional PPO', 'active_coverages': 1}, provider) is None
 
 
 def test_missing_request_trace_skips_mbi_without_fabricating_an_origin(recovery):

@@ -68,6 +68,10 @@ class EcwPatientSelectionRequired(EcwBackendError):
 class EcwResourceUnavailable(EcwBackendError):
     """A resource is not available to this activated eCW app."""
 
+    def __init__(self, resource: str, *, reason_code: str | None = None, http_status: int | None = None):
+        super().__init__(resource, reason_code=reason_code)
+        self.http_status = http_status
+
 
 def _failure_reason(exc: BaseException) -> str:
     # Exception strings and URLs can contain patient data or credentials.
@@ -186,7 +190,7 @@ async def _response_json(response: httpx.Response, message: str) -> dict[str, An
 
 
 async def _access_token(client: httpx.AsyncClient, client_id: str, issuer: str,
-                        scopes: tuple[str, ...] = SCOPES) -> str:
+                        scopes: tuple[str, ...] = SCOPES, *, required_resource: str | None = None) -> str:
     try:
         with _stage("metadata") as facts:
             metadata_response = await asyncio.wait_for(
@@ -197,6 +201,11 @@ async def _access_token(client: httpx.AsyncClient, client_id: str, issuer: str,
     except asyncio.TimeoutError as exc:
         raise EcwBackendError("eClinicalWorks metadata timed out. Retry the connection.",
                               reason_code="stage_timeout", stage="metadata") from exc
+    if required_resource and not any(
+            row.get('type') == required_resource for rest in metadata.get('rest', []) if isinstance(rest, dict)
+            for row in rest.get('resource', []) if isinstance(row, dict)):
+        raise EcwBackendError('eClinicalWorks does not advertise the requested saved resource on this FHIR endpoint.',
+                              reason_code='ecw_resource_not_advertised')
     endpoint = _token_endpoint(metadata)
     try:
         with _stage("assertion_signing"):
@@ -210,6 +219,15 @@ async def _access_token(client: httpx.AsyncClient, client_id: str, issuer: str,
                 "client_assertion": assertion,
             }, headers={"Accept": "application/json"}), TOKEN_STAGE_TIMEOUT_SECONDS)
             facts["http_status"] = token_response.status_code
+            if token_response.is_error:
+                try:
+                    oauth_error = token_response.json().get('error')
+                except (ValueError, AttributeError):
+                    oauth_error = None
+                if isinstance(oauth_error, str) and oauth_error in {'invalid_scope', 'unauthorized_client', 'invalid_client',
+                                   'invalid_grant', 'unsupported_grant_type', 'invalid_request'}:
+                    raise EcwBackendError('eClinicalWorks rejected the requested backend scope or app credentials.',
+                                          reason_code='oauth_' + oauth_error)
             token = await _response_json(
                 token_response,
                 "eClinicalWorks rejected the backend app. Confirm that this practice activated the app and that its client ID, issuer, scopes and JWKS match.",
@@ -251,7 +269,8 @@ async def _search(client: httpx.AsyncClient, issuer: str, token: str, resource: 
                                         headers={"Authorization": f"Bearer {token}", "Accept": "application/fhir+json"})
             facts["http_status"] = response.status_code
             if response.status_code in {403, 404}:
-                raise EcwResourceUnavailable(resource, reason_code="resource_unavailable")
+                raise EcwResourceUnavailable(resource, reason_code="resource_unavailable",
+                                             http_status=response.status_code)
             bundle = await _response_json(response, f"eClinicalWorks could not return {resource} data for this patient.")
             entries = _entries(bundle)
             facts["count"] = len(entries)

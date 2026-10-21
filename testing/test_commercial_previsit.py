@@ -1,5 +1,6 @@
 import json
 import unittest
+from contextlib import ExitStack
 from datetime import date, datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -13,6 +14,9 @@ class PrevisitFlowTest(unittest.IsolatedAsyncioTestCase):
         self.library_patch = patch('app.api.routers.commercial_estimator.library_pricing.prepare', return_value=[])
         self.library_patch.start()
         self.addCleanup(self.library_patch.stop)
+        self.library_list_patch = patch('app.api.routers.commercial_estimator.staff_store.list_library', return_value=[])
+        self.library_list_patch.start()
+        self.addCleanup(self.library_list_patch.stop)
         self.model_patch = patch('app.insurance.cpt_suggester.boto3.client', side_effect=RuntimeError('offline synthetic test'))
         self.model_patch.start()
         self.addCleanup(self.model_patch.stop)
@@ -115,7 +119,7 @@ class PrevisitFlowTest(unittest.IsolatedAsyncioTestCase):
                   "subscriber": {"firstName": "Pat", "lastName": "Example", "birthDate": "1980-01-01"},
                   "patient": {"patient_first_name": "Pat", "patient_last_name": "Example", "patient_birth_date": "1980-01-01"},
                   "rendering_provider": {"npi": "1234567890"}}
-        source = {"appointment_id": "visit-1", "coverage_id": "coverage-1", "active_coverages": 1,
+        source = {"appointment_id": "visit-1", "_patient_id": "p", "coverage_id": "coverage-1", "active_coverages": 1,
                   "payer": "Blue Cross Blue Shield Tx", "plan": "CI", "rendering_provider": {"npi": "1234567890", "first_name": "Ada", "last_name": "Clinician"},
                   "billing_provider": {"name": "Clinic", "npi": "1811853260"}, "location_id": "office"}
         saved_ecw = {'status': 'check_with_stedi'}
@@ -131,6 +135,12 @@ class PrevisitFlowTest(unittest.IsolatedAsyncioTestCase):
         if retry_basic:
             inputs.update(group_number='GROUP-9', plan_number='PLAN-2')
             inputs['patient'].update(gender='F', address={'address1': '1 Main St', 'city': 'Austin', 'state': 'TX', 'postalCode': '78701'})
+        scoped_ecw_contract = ecw_saved and not ecw_incomplete
+        connection = {'id': 'payer-a', 'stedi_payer_id': 'QDTRP', 'status': 'staff_guidance_enabled',
+                      'category': 'commercial_medical', 'display_name': 'Blue Cross Blue Shield Tx', 'aliases': []}
+        network = {'id': 'network-a', 'network_name': 'Blue Choice PPO', 'plan_matcher': 'CI',
+                   'evidence_reference': 'library:synthetic-contract'}
+        profile = {'rules': {}, 'plan_matcher': 'CI'}
         case = {"id": "case-1", "source_mode": "commercial_previsit", "previsit": {"request_state": "not_requested"}}
         source['self_pay_recorded'] = self_pay
         if billing_note:
@@ -169,11 +179,19 @@ class PrevisitFlowTest(unittest.IsolatedAsyncioTestCase):
              patch("app.api.routers.commercial_estimator._save", side_effect=lambda value, *_: value), \
              patch("app.api.routers.commercial_estimator.object_store.enabled", return_value=True), \
              patch("app.api.routers.commercial_estimator.object_store.put_staff_document", return_value="protected-key"), \
-             patch("app.api.routers.commercial_estimator.commercial_store.list_connections", return_value=[]), \
+             ExitStack() as scoped_patches, \
              patch("app.api.routers.commercial_estimator.httpx.AsyncClient", return_value=client), \
              patch.dict("app.api.routers.commercial_estimator.os.environ", {
                  "STEDI_API_KEY": "production-key", "STEDI_EXECUTION_MODE": "commercial_pilot",
                  "STEDI_LIVE_ELIGIBILITY_ENABLED": "true"}):
+            scoped_patches.enter_context(patch("app.api.routers.commercial_estimator.commercial_store.list_connections",
+                                               return_value=[connection] if scoped_ecw_contract else []))
+            scoped_patches.enter_context(patch("app.api.routers.commercial_estimator._previsit_practice_path",
+                                               return_value=(connection, network, profile)))
+            scoped_patches.enter_context(patch("app.api.routers.commercial_estimator._network_contract_evidence",
+                                               return_value={'document_id': 'synthetic-contract'}))
+            scoped_patches.enter_context(patch("app.api.routers.commercial_estimator.commercial_store.matching_rates",
+                                               return_value=[]))
             result = await previsit_estimate(PrevisitInput(appointment_id="visit-1", refresh_benefits=refresh if too_early else False), MagicMock())
             if card_conflict:
                 self.assertEqual(result['card_check']['status'], 'conflict')
@@ -194,6 +212,9 @@ class PrevisitFlowTest(unittest.IsolatedAsyncioTestCase):
                 return
             if ecw_saved and not ecw_incomplete:
                 self.assertEqual(result['collection_guidance']['amount_cents'], 4000)
+                self.assertEqual(result['collection_guidance']['basis'], 'office_copay')
+                self.assertEqual(result['service_selection_status'], 'preview')
+                self.assertEqual(result['selected_ids'], [])
                 self.assertEqual(result['benefit_source'], 'eCW saved eligibility')
                 self.assertNotIn('_response', result['ecw_saved_eligibility'])
                 self.assertIn('no Stedi check', result['eligibility_reconciliation']['message'])
@@ -204,6 +225,7 @@ class PrevisitFlowTest(unittest.IsolatedAsyncioTestCase):
                     edited = await update_visit_review('case-1', VisitReviewInput(
                         context_token=result['context_token'], revision=0, selected_ids=[next(row['id'] for row in result['available_codes'] if row['code'] == '99204')]), MagicMock())
                 self.assertEqual(edited['collection_guidance']['amount_cents'], 4000)
+                self.assertEqual(edited['service_selection_status'], 'approved')
                 self.assertEqual(edited['benefit_source'], 'eCW saved eligibility')
                 client.post.assert_not_awaited()
                 return
@@ -300,7 +322,12 @@ class PrevisitFlowTest(unittest.IsolatedAsyncioTestCase):
             with patch("app.api.routers.commercial_estimator.object_store.get_object_bytes", side_effect=RuntimeError("unavailable")):
                 unavailable = await previsit_estimate(PrevisitInput(appointment_id="visit-1"), MagicMock())
             self.assertTrue(unavailable["benefits"]["requires_review"])
-            self.assertTrue(any("Saved benefit evidence" in item for item in unavailable["issues"]))
+            self.assertTrue(any('protected saved payer response could not be reopened' in item
+                                for item in unavailable['issues']))
+            self.assertTrue(unavailable['benefits']['historical_only'])
+            self.assertTrue(any(error['kind'] == 'saved_raw_unavailable'
+                                for error in unavailable['benefits']['source_errors']))
+            self.assertIsNone(unavailable['collection_guidance']['amount_cents'])
             self.assertEqual(client.post.await_count, 2 if retry_basic else 1)
             if refresh:
                 case['previsit_discovery'] = {'request_state': 'complete', 'outcome': 'no_match'}

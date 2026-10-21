@@ -1,3 +1,4 @@
+import asyncio
 import json
 from copy import deepcopy
 from datetime import date, datetime, timedelta, timezone
@@ -5,10 +6,18 @@ from unittest import IsolatedAsyncioTestCase
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
+import pytest
 from fastapi import BackgroundTasks, HTTPException
 from app.api.routers import commercial_estimator as api
 from app.insurance import stedi_discovery as discovery
 from test_visit_estimate import payload
+
+
+@pytest.fixture(autouse=True)
+def isolated_payer_connections():
+    """Recovery tests use synthetic cases and must not read a live practice DB."""
+    with patch.object(api.commercial_store, 'list_connections', return_value=[]):
+        yield
 
 
 def setup():
@@ -36,6 +45,21 @@ def setup():
     return case, session, provider, item
 
 
+def test_recovered_route_replaces_stale_directory_payer_identity():
+    case, session, _, item = setup()
+    case['previsit_context']['result']['stedi_payer'] = {'name': 'UnitedHealthcare', 'id': 'old-route'}
+    case['previsit_discovery']['eligibility_object_key'] = 'synthetic-protected-key'
+    recovered = {'stediId': 'new-route', 'displayName': 'Example Payer'}
+    with patch.object(api, '_case_benefits', return_value={}), \
+         patch.object(api, '_finish_previsit') as finish, \
+         patch.object(api, '_save', side_effect=lambda value, *_: value), \
+         patch.object(api, '_recovery_event'):
+        asyncio.run(api._accept_recovered_coverage(case, session, item, recovered, {}))
+    result = finish.call_args.args[0]
+    assert result['stedi_payer'] == {'name': 'Example Payer', 'id': 'new-route'}
+    assert not api.commercial.is_united_healthcare_payer(result)
+
+
 def test_discovery_identity_and_address_are_verified_before_adoption():
     case, _, provider, item = setup(); inputs = case['previsit_context']['inputs']
     assert discovery.request_body(inputs, provider)['encounter']['serviceTypeCodes'] == ['30']
@@ -48,6 +72,24 @@ def test_discovery_identity_and_address_are_verified_before_adoption():
     assert not discovery.patient_matches({**item, 'dependent': {'firstName': 'Pat'}}, inputs)
     assert discovery.request_body({**inputs, 'relationship': '19'}, provider)
     assert not discovery.patient_address({'address': [{'state': 'TX', 'postalCode': '78701'}, {'state': 'NY', 'postalCode': '10001'}]})
+
+
+def test_discovery_request_names_only_missing_patient_and_provider_fields():
+    case, _, provider, _ = setup()
+    inputs = deepcopy(case['previsit_context']['inputs'])
+    inputs['patient']['patient_first_name'] = ''
+    provider['rendering_npi'] = ''
+    assert discovery.request_body(inputs, provider) is None
+    assert discovery.missing_request_fields(inputs, provider) == [
+        'patient first name', '10-digit rendering or billing NPI']
+
+
+def test_discovery_uses_valid_billing_npi_when_rendering_npi_is_unusable():
+    case, _, provider, _ = setup()
+    provider.update(rendering_npi='invalid', billing_npi='0987654321')
+    inputs = case['previsit_context']['inputs']
+    assert discovery.missing_request_fields(inputs, provider) == []
+    assert discovery.request_body(inputs, provider)['provider']['npi'] == '0987654321'
 
 
 def test_discovery_returns_safe_dependent_candidate_for_staff_selection():
@@ -85,6 +127,8 @@ def test_dependent_uses_the_only_active_policy_and_collapses_identical_route_cop
     items = [dependent, duplicate]
     rows = discovery.candidates({'items': items}, inputs, source)
     assert discovery.one_active_policy(rows, items) is not None
+    assert rows[0]['policy_group_id'] == rows[1]['policy_group_id']
+    assert [row['policy_response_count'] for row in rows] == [2, 2]
     duplicate['benefitsInformation'].append({'code': 'B', 'serviceTypeCodes': ['98'], 'benefitAmount': '50'})
     items = [dependent, duplicate]
     rows = discovery.candidates({'items': items}, inputs, source)
@@ -98,6 +142,133 @@ def test_dependent_uses_the_only_active_policy_and_collapses_identical_route_cop
     duplicate['benefitsInformation'].append({'code': 'B', 'serviceTypeCodes': ['98'], 'benefitAmount': '50'})
     rows = discovery.candidates({'items': items}, inputs, source)
     assert discovery.one_active_policy(rows, items, ['98', '30']) is None
+
+
+def test_distinct_active_policy_count_ignores_duplicate_routes_and_inactive_hits():
+    case, _, _, item = setup()
+    inputs = case['previsit_context']['inputs']
+    duplicate = deepcopy(item)
+    duplicate['payerId'] = 'alternate-route'
+    duplicate['payer']['payorIdentification'] = 'alternate-route'
+    other = deepcopy(item)
+    other['subscriber']['memberId'] = 'another-policy'
+    inactive = deepcopy(item)
+    inactive['subscriber']['memberId'] = 'expired-policy'
+    inactive['benefitsInformation'] = [{'code': '6', 'serviceTypeCodes': ['30']}]
+    inactive.pop('plans', None)
+    items = [item, duplicate, other, inactive]
+    rows = discovery.candidates({'items': items}, inputs)
+    assert discovery.active_policy_count(rows, items, ['98', '30']) == 2
+    assert discovery.one_active_policy(rows, items, ['98', '30']) is None
+
+
+def test_one_policy_with_conflicting_office_terms_needs_benefit_review_not_payer_order():
+    case, _, _, item = setup()
+    inputs = case['previsit_context']['inputs']
+    duplicate = deepcopy(item)
+    duplicate['payerId'] = 'alternate-route'
+    duplicate['payer']['payorIdentification'] = 'alternate-route'
+    duplicate['benefitsInformation'].append({'code': 'B', 'serviceTypeCodes': ['98'],
+                                             'benefitAmount': '45'})
+    items = [item, duplicate]
+    rows = discovery.candidates({'items': items}, inputs)
+    assert discovery.active_policy_count(rows, items, ['30', '98']) == 1
+    assert discovery.active_policy_evidence_conflict(rows, items, ['30', '98'])
+    assert discovery.one_active_policy(rows, items, ['30', '98']) is None
+    assert not discovery.active_policy_evidence_conflict(rows, items, ['30'])
+    assert discovery.one_active_policy(rows, items, ['30'])['source_indices'] == [0, 1]
+
+
+def test_verified_copy_can_supply_one_policy_when_other_route_is_incomplete():
+    case, _, _, item = setup()
+    inputs = case['previsit_context']['inputs']
+    complete = deepcopy(item)
+    complete['subscriber']['memberId'] = inputs['member_id']
+    incomplete = deepcopy(complete)
+    incomplete['payer'].pop('payorIdentification')
+    incomplete['benefitsInformation'] = [incomplete['benefitsInformation'][0],
+                                         incomplete['benefitsInformation'][2]]
+    items = [incomplete, complete]
+    rows = discovery.candidates({'items': items}, inputs, case['previsit_context']['source'])
+    assert rows[0]['verification_status'] != 'VERIFIED'
+    assert rows[1]['verification_status'] == 'VERIFIED'
+    assert discovery.active_policy_count(rows, items, ['30', '98']) == 1
+    assert not discovery.active_policy_evidence_conflict(rows, items, ['30', '98'])
+    chosen = discovery.one_active_policy(rows, items, ['30', '98'])
+    assert chosen['index'] == 1
+    assert chosen['source_indices'] == [0, 1]
+    incomplete['subscriber'].pop('dateOfBirth')
+    incomplete.pop('planDateInformation')
+    rows = discovery.candidates({'items': items}, inputs, case['previsit_context']['source'])
+    assert discovery.one_active_policy(rows, items, ['30', '98'])['index'] == 1
+    incomplete['subscriber']['address'] = {'address1': '200 Other St', 'city': 'Austin',
+                                            'state': 'TX', 'postalCode': '78701'}
+    rows = discovery.candidates({'items': items}, inputs, case['previsit_context']['source'])
+    assert discovery.one_active_policy(rows, items, ['30', '98']) is None
+
+
+def test_active_bound_271_survives_inconclusive_saved_discovery_without_new_search():
+    case, session, provider, item = setup()
+    case['previsit']['request_state'] = 'complete'
+    result = case['previsit_context']['result']
+    result.pop('eligibility_error')
+    result.pop('eligibility_failure')
+    result.update(payment_mode='insurance', benefit_source='Stedi', checked_at=api._now(),
+                  identity={'status': 'matched', 'binding': 'synthetic-binding', 'match_version': 2},
+                  benefits={'active': True, 'service_date_matches': True, 'network_status': 'unknown',
+                            'identity': {'status': 'matched', 'binding': 'synthetic-binding', 'match_version': 2}},
+                  price_range={'complete': False, 'cash_complete': True,
+                               'cash_min_cents': 25000, 'cash_max_cents': 25000, 'lines': []})
+    case['previsit_discovery'].update(request_state='complete', outcome='review_needed',
+                                      raw_object_key='saved', candidate_version=4,
+                                      recovery_requested=True)
+    tasks = BackgroundTasks()
+    asyncio.run(api._start_previsit_recovery(case, session, provider, tasks))
+    assert not tasks.tasks
+    with patch.object(api.object_store, 'get_object_bytes', return_value=json.dumps(
+            {'status': 'COMPLETE', 'coveragesFound': 0, 'items': []}).encode()), \
+         patch.object(api, '_save', side_effect=lambda value, *_: value), \
+         patch.object(api, '_recover_discovery', new=AsyncMock(side_effect=AssertionError('paid search'))):
+        asyncio.run(api._reconcile_saved_discovery(case, session))
+        asyncio.run(api._recover_previsit(case, session, provider))
+    assert 'eligibility_failure' not in result
+    public = api._previsit_result(case)
+    assert public['benefits']['active'] is True
+    assert public['coverage_status'] == 'VERIFIED'
+    assert public['insurance_diagnosis']['eligibilityStatus'] == 'BENEFITS_VERIFIED'
+    assert public['payment_mode'] == 'insurance'
+    assert public['collection_guidance']['amount_cents'] is None
+    assert public['payment_explanation']['sentence'] == (
+        'No insured amount is ready because the exact plan and provider have no current clinic network link for this visit, '
+        'so link the exact plan and rendering provider to the current clinic network agreement, then rerun the insured estimate.')
+
+
+def test_unrelated_benefit_metadata_does_not_create_another_medical_policy():
+    case, _, _, item = setup()
+    inputs = case['previsit_context']['inputs']
+    duplicate = deepcopy(item)
+    duplicate['payerId'] = 'alternate-route'
+    duplicate['benefitsInformation'].append({'code': 'F', 'serviceTypeCodes': ['33'],
+                                             'benefitAmount': '25'})
+    duplicate['meta'] = {'traceId': 'different-transport-trace'}
+    items = [item, duplicate]
+    rows = discovery.candidates({'items': items}, inputs)
+    assert discovery.active_policy_count(rows, items, ['30', '98']) == 1
+    selected = discovery.one_active_policy(rows, items, ['30', '98'])
+    assert selected is not None
+    assert selected['source_indices'] == [0, 1]
+
+
+def test_same_member_with_conflicting_subscriber_identity_needs_review_not_cob():
+    case, _, _, item = setup()
+    duplicate = deepcopy(item)
+    duplicate['payerId'] = 'alternate-route'
+    duplicate['subscriber']['firstName'] = 'Different'
+    items = [item, duplicate]
+    rows = discovery.candidates({'items': items}, case['previsit_context']['inputs'])
+    assert discovery.active_policy_count(rows, items, ['30', '98']) == 1
+    assert discovery.active_policy_evidence_conflict(rows, items, ['30', '98'])
+    assert discovery.one_active_policy(rows, items, ['30', '98']) is None
 
 
 def test_automatic_payer_recovery_requires_same_active_ecw_policy():
@@ -200,6 +371,25 @@ def test_completed_recovery_falls_back_to_cash_without_inventing_price_or_covera
     assert api._previsit_result(case)['payment_mode'] == 'cash'
 
 
+def test_united_healthcare_missing_insured_price_does_not_switch_to_cash():
+    case, _, _, _ = setup()
+    case['previsit_context']['result'].update(payer='United Healthcare', payment_mode='insurance',
+        benefits={'active': True, 'service_date_matches': True, 'network_status': 'unknown',
+                  'identity': {'status': 'matched', 'binding': 'synthetic-current-binding', 'match_version': 2}},
+        price_range={'lines': [{'code': '99203', 'calculation': None}]},
+        issues=['Clinic pricing: no single approved plan and provider contract is linked to this Stedi payer.'])
+    case['previsit_discovery'].update(request_state='complete', outcome='no_match',
+        reason_code='no_coverage_found', exhausted=True)
+    result = api._previsit_result(case)
+    assert result['payment_mode'] == 'insurance'
+    assert 'cash_fallback' not in result
+    assert result['collection_guidance']['amount_cents'] is None
+    assert result['payment_explanation']['reason_code'] == 'clinic_contract_missing'
+    assert 'clinic pricing is not linked to this plan and provider' in result['payment_explanation']['sentence']
+    assert not any('Contact your insurer to confirm the member ID' in action
+                   for action in result['collection_guidance']['patient_actions'])
+
+
 class RecoveryTest(IsolatedAsyncioTestCase):
     async def test_card_ocr_recovers_missing_policy_but_missing_rates_never_invent_price(self):
         from app.api.routers import staff
@@ -284,6 +474,7 @@ class RecoveryTest(IsolatedAsyncioTestCase):
         ]:
             result = discovery.public_status(record)
             assert 'Searching Stedi' not in result['message']
+            assert 'unverified' not in result['message'].lower()
             assert result['coverage_status'] == 'REVIEW_REQUIRED'
         assert discovery.public_status({'request_state': 'pending', 'outcome': 'no_match'})['coverage_status'] == 'REVIEW_REQUIRED'
 
@@ -338,7 +529,8 @@ class RecoveryTest(IsolatedAsyncioTestCase):
         client.post = AsyncMock(side_effect=[httpx.Response(200, json={'status': 'COMPLETE', 'coveragesFound': 1, 'items': [item]}),
                                               httpx.Response(200, json=item)])
         connection = {'id': 'connection', 'stedi_payer_id': 'EXAMPLE', 'status': 'staff_guidance_enabled'}
-        network = {'plan_matcher': 'Choice', 'network_name': 'Synthetic contracted network'}
+        network = {'plan_matcher': 'Choice', 'network_name': 'Synthetic contracted network',
+                   'evidence_reference': 'library:synthetic-contract'}
         profile = {'rules': {'cost_share': 'coinsurance'}}
         def rates(*args):
             return [{'code': '99203', 'allowed_cents': 10000, 'source_reference': 'Synthetic contract'}]
@@ -348,6 +540,7 @@ class RecoveryTest(IsolatedAsyncioTestCase):
              patch.object(api.stedi_payers, 'search_payer', AsyncMock(return_value={'stediId': 'EXAMPLE', 'displayName': 'Example Payer'})), \
              patch.object(api.commercial_store, 'list_connections', return_value=[connection]), \
              patch.object(api, '_previsit_practice_path', return_value=(connection, network, profile)), \
+             patch.object(api, '_network_contract_evidence', return_value={'document_id': 'synthetic-contract'}), \
              patch.object(api.commercial_store, 'matching_rates', side_effect=rates):
             await api._recover_previsit(case, session, provider)
         result = api._previsit_result(case)
@@ -437,6 +630,16 @@ class RecoveryTest(IsolatedAsyncioTestCase):
         ocr.assert_not_called()
         assert case['previsit_discovery']['card_status'] == 'multiple_cards'
 
+    async def test_empty_ecw_card_search_names_the_missing_document(self):
+        _, session, _, _ = setup()
+        with patch.object(api.staff_store, 'patient_card_intakes', return_value=[]), \
+             patch.object(api.ecw_backend, 'insurance_cards', AsyncMock(return_value=[])) as cards:
+            result = await api._read_card_hints(session, 'synthetic-patient')
+        cards.assert_awaited_once_with('synthetic-patient')
+        assert result['status'] == 'not_found'
+        assert result['failure_reason'] == 'ecw_no_matching_card_document'
+        assert api._compare_card_hints(result, {}, {})['failure_reason'] == result['failure_reason']
+
     async def test_followup_timeout_remains_indeterminate_without_another_post(self):
         case, session, provider, item = setup()
         recovery = case['previsit_discovery']
@@ -448,6 +651,7 @@ class RecoveryTest(IsolatedAsyncioTestCase):
              patch.object(api, '_save', side_effect=lambda value, *_: value):
             await api._recheck_discovery_candidate(case, session, provider, discovery_payload={'items': [item]})
         assert recovery['request_state'] == 'indeterminate'
+        assert 'Check Stedi activity before another payer request' in recovery['selection_error']
         tasks = BackgroundTasks()
         await api._start_previsit_recovery(case, session, provider, tasks)
         assert not tasks.tasks
@@ -466,6 +670,42 @@ class RecoveryTest(IsolatedAsyncioTestCase):
         assert recovery['outcome'] == 'review_needed'
         assert discovery.public_status(recovery)['coverage_status'] == 'REVIEW_REQUIRED'
         assert case['previsit']['request_state'] == 'rejected'
+        assert recovery['reason_code'] == 'returned_identity_or_coverage_mismatch'
+        assert 'subscriber date of birth' in recovery['selection_error'].lower()
+        assert 'payer rejected' not in recovery['selection_error'].lower()
+        assert recovery['eligibility_object_key'] == 'protected'
+        recovery['exhausted'] = True
+        assert 'subscriber date of birth' in discovery.public_status(recovery)['message'].lower()
+
+    async def test_followup_response_without_active_service_is_not_called_a_payer_rejection(self):
+        case, session, provider, item = setup()
+        recovery = case['previsit_discovery']
+        recovery.update(candidates=discovery.candidates({'items': [item]}, case['previsit_context']['inputs']))
+        recovery['selected_candidate_id'] = recovery['candidates'][0]['id']
+        with patch.object(api.stedi_payers, 'search_payer', AsyncMock(return_value={'stediId': 'EXAMPLE'})), \
+             patch.object(api, '_post_stedi_eligibility', AsyncMock(return_value=(httpx.Response(200), item, False))), \
+             patch.object(api.stedi_discovery, 'active_medical', return_value=False), \
+             patch.object(api.object_store, 'put_staff_document', return_value='protected'), \
+             patch.object(api, '_save', side_effect=lambda value, *_: value):
+            await api._recheck_discovery_candidate(case, session, provider, discovery_payload={'items': [item]})
+        assert recovery['reason_code'] == 'returned_coverage_not_established'
+        assert 'requested service' in recovery['selection_error']
+        assert recovery['eligibility_object_key'] == 'protected'
+
+    async def test_followup_payer_error_has_its_own_rejection_reason(self):
+        case, session, provider, item = setup()
+        recovery = case['previsit_discovery']
+        recovery.update(candidates=discovery.candidates({'items': [item]}, case['previsit_context']['inputs']))
+        recovery['selected_candidate_id'] = recovery['candidates'][0]['id']
+        rejected = {**item, 'status': 'REJECTED'}
+        with patch.object(api.stedi_payers, 'search_payer', AsyncMock(return_value={'stediId': 'EXAMPLE'})), \
+             patch.object(api, '_post_stedi_eligibility', AsyncMock(return_value=(httpx.Response(200), rejected, False))), \
+             patch.object(api.object_store, 'put_staff_document', return_value='protected'), \
+             patch.object(api, '_save', side_effect=lambda value, *_: value):
+            await api._recheck_discovery_candidate(case, session, provider, discovery_payload={'items': [item]})
+        assert recovery['reason_code'] == 'eligibility_rejected'
+        assert 'returned an error' in recovery['selection_error']
+        assert recovery['eligibility_object_key'] == 'protected'
 
     async def test_unroutable_ecw_payer_starts_discovery_automatically(self):
         case, session, provider, _ = setup()
@@ -476,13 +716,74 @@ class RecoveryTest(IsolatedAsyncioTestCase):
         inputs['patient']['address'] = {'address1': '100 Test St', 'city': 'Austin', 'state': 'TX', 'postalCode': '78701'}
         tasks = BackgroundTasks()
         with patch.object(api.store, 'create_case', return_value=case), \
-             patch.object(api, '_finish_previsit', side_effect=lambda result, saved, *_: saved['previsit_context'].update(result=result)), \
+             patch.object(api, '_finish_previsit', side_effect=lambda result, saved, *_, **kwargs: saved['previsit_context'].update(result=result)), \
              patch.object(api, '_save', side_effect=lambda value, *_: value):
             result = await api._begin_coverage_discovery({'service_date': inputs['service_date'], 'issues': [], 'codes': []}, session, inputs, source, provider, tasks,
                 'The eCW payer name and ID did not identify one Stedi route.')
         assert result['eligibility_error'] == 'payer_routing_unresolved'
         assert result['recovery']['state'] == 'pending'
         assert len(tasks.tasks) == 1
+
+    async def test_saved_discovery_reopen_retains_benefit_terms_when_raw_response_is_unavailable(self):
+        case, session, provider, _ = setup()
+        session['intake']['updated_at'] = 'version'
+        inputs, source = case['previsit_context']['inputs'], case['previsit_context']['source']
+        saved_terms = {'active': True, 'service_date_matches': True, 'copay_cents': 2500,
+                       'identity': {'status': 'matched', 'binding': 'synthetic-current-binding', 'match_version': 2}}
+        case['previsit_context']['result']['benefits'] = saved_terms
+        case['previsit'].update(request_state='complete', checked_at=datetime.now(timezone.utc).isoformat())
+        case['previsit_raw_object_key'] = 'protected-unavailable'
+        case.pop('previsit_discovery')
+        with patch.object(api.store, 'create_case', return_value=case), \
+             patch.object(api.object_store, 'get_object_bytes', side_effect=RuntimeError('protected source unavailable')), \
+             patch.object(api, '_finish_previsit', side_effect=lambda result, saved, *_, **kwargs: saved['previsit_context'].update(result=result)), \
+             patch.object(api, '_save', side_effect=lambda value, *_: value), \
+             patch.object(api, '_previsit_result', side_effect=lambda saved, *_: saved['previsit_context']['result']):
+            reopened = await api._begin_coverage_discovery({'service_date': inputs['service_date'], 'issues': [], 'codes': []},
+                session, inputs, source, provider, BackgroundTasks(),
+                'The eCW payer name and ID did not identify one Stedi route.')
+        assert reopened['benefits']['active'] is True
+        assert reopened['benefits']['copay_cents'] == 2500
+        assert reopened['benefits']['source_errors'][0]['kind'] == 'saved_raw_unavailable'
+        assert saved_terms.get('source_errors') is None
+
+    async def test_saved_discovery_does_not_show_old_terms_for_changed_policy_context(self):
+        case, session, provider, _ = setup()
+        session['intake']['updated_at'] = 'version'
+        inputs, source = case['previsit_context']['inputs'], case['previsit_context']['source']
+        case['previsit_context']['result']['benefits'] = {'active': True, 'copay_cents': 2500}
+        case['previsit'].update(request_state='complete', checked_at=datetime.now(timezone.utc).isoformat())
+        case['previsit_raw_object_key'] = 'protected-unavailable'
+        case.pop('previsit_discovery')
+        inputs['member_id'] = 'changed-policy-member'
+        with patch.object(api.store, 'create_case', return_value=case), \
+             patch.object(api.object_store, 'get_object_bytes', side_effect=RuntimeError('protected source unavailable')), \
+             patch.object(api, '_finish_previsit', side_effect=lambda result, saved, *_, **kwargs: saved['previsit_context'].update(result=result)), \
+             patch.object(api, '_save', side_effect=lambda value, *_: value), \
+             patch.object(api, '_previsit_result', side_effect=lambda saved, *_: saved['previsit_context']['result']):
+            reopened = await api._begin_coverage_discovery({'service_date': inputs['service_date'], 'issues': [], 'codes': []},
+                session, inputs, source, provider, BackgroundTasks(),
+                'The eCW payer name and ID did not identify one Stedi route.')
+        assert reopened['benefits']['active'] is None
+        assert reopened['benefits'].get('copay_cents') is None
+
+    async def test_discovery_start_names_missing_ecw_request_fields(self):
+        case, session, provider, _ = setup()
+        case.pop('previsit_discovery')
+        session['intake']['updated_at'] = 'version'
+        inputs, source = case['previsit_context']['inputs'], case['previsit_context']['source']
+        inputs['patient']['patient_first_name'] = ''
+        provider['rendering_npi'] = ''
+        tasks = BackgroundTasks()
+        with patch.object(api.store, 'create_case', return_value=case), \
+             patch.object(api, '_finish_previsit', side_effect=lambda result, saved, *_: saved['previsit_context'].update(result=result)), \
+             patch.object(api, '_save', side_effect=lambda value, *_: value):
+            result = await api._begin_coverage_discovery({'service_date': inputs['service_date'], 'issues': [], 'codes': []},
+                session, inputs, source, provider, tasks, 'The eCW payer name and ID did not identify one Stedi route.')
+        detail = result['eligibility_failure']['detail']
+        assert 'patient first name' in detail
+        assert '10-digit rendering or billing NPI' in detail
+        assert 'unverified' not in detail
 
     async def test_unroutable_ecw_payer_is_recovered_without_staff_selection(self):
         case, session, provider, item = setup()
@@ -623,9 +924,9 @@ class RecoveryTest(IsolatedAsyncioTestCase):
         assert 'eligibility_object_key' not in json.dumps(result)
         context = case['previsit_context']
         raw = {'subscriber': {'memberId': 'new-id'}}
-        assert not any('identity' in reason for reason in api._case_benefits(raw, context['inputs'], context['source'], case)['review_reasons'])
+        assert api._case_benefits(raw, context['inputs'], context['source'], case)['identity']['status'] == 'review'
         planned = {**context['inputs'], 'reason': 'Updated visit reason', 'lines': [{'code': '95907', 'units': 1}]}
-        assert not any('identity' in reason for reason in api._case_benefits(raw, planned, context['source'], case)['review_reasons'])
+        assert any('identity' in reason for reason in api._case_benefits(raw, planned, context['source'], case)['review_reasons'])
         changed = {**context['inputs'], 'service_date': '2099-01-01'}
         assert any('identity' in reason for reason in api._case_benefits(raw, changed, context['source'], case)['review_reasons'])
 
@@ -634,12 +935,35 @@ class RecoveryTest(IsolatedAsyncioTestCase):
         item['payer']['name'] = 'UnitedHealthcare Group Medicare Advantage PPO'
         other = deepcopy(item)
         other['subscriber']['memberId'] = 'another-member'
-        case, client, _ = await self.exercise(
-            {'status': 'COMPLETE', 'coveragesFound': 2, 'items': [other, item]},
-            unroutable=True, matching_ecw=True)
+        with patch.object(api, '_check_previsit_cob', new=AsyncMock()) as cob:
+            case, client, _ = await self.exercise(
+                {'status': 'COMPLETE', 'coveragesFound': 2, 'items': [other, item]},
+                unroutable=True, matching_ecw=True)
+            cob.assert_awaited_once()
         assert case['previsit_discovery']['outcome'] == 'review_needed'
+        assert case['previsit_discovery']['reason_code'] == 'multiple_active_policies'
+        assert case['previsit_discovery']['active_policy_count'] == 2
+        assert 'establish payer order' in discovery.public_status(case['previsit_discovery'])['message']
         assert client.post.await_count == 1
         assert case['previsit_context']['result']['benefits'] is None
+
+    async def test_same_policy_conflicting_visit_benefits_do_not_trigger_cob(self):
+        _, _, _, item = setup()
+        duplicate = deepcopy(item)
+        duplicate['payerId'] = 'alternate-route'
+        duplicate['payer']['payorIdentification'] = 'alternate-route'
+        duplicate['benefitsInformation'].append({'code': 'B', 'serviceTypeCodes': ['98'],
+                                                 'benefitAmount': '45'})
+        with patch.object(api, '_check_previsit_cob', new=AsyncMock()) as cob:
+            case, client, _ = await self.exercise(
+                {'status': 'COMPLETE', 'coveragesFound': 2, 'items': [item, duplicate]},
+                unroutable=True)
+            cob.assert_not_awaited()
+        recovery = case['previsit_discovery']
+        assert recovery['active_policy_count'] == 1
+        assert recovery['reason_code'] == 'same_policy_evidence_conflict'
+        assert 'conflicting' in discovery.public_status(recovery)['message']
+        assert client.post.await_count == 1
 
     async def test_unresolved_route_only_offers_matching_ecw_policy_for_selection(self):
         _, _, _, item = setup()
@@ -778,6 +1102,7 @@ class RecoveryTest(IsolatedAsyncioTestCase):
         context = case['previsit_context']; inputs, source = context['inputs'], context['source']
         with patch.object(api, '_session', AsyncMock(return_value=session)), patch.object(api.store, 'get_case', return_value=case), \
              patch.object(api.library_pricing, 'prepare', return_value=[]), \
+             patch.object(api.staff_store, 'list_library', return_value=[]), \
              patch.object(api.ecw_backend, 'fetch_inputs', AsyncMock(return_value=(inputs, [], source))), \
              patch.object(api, '_ecw_practice_config', return_value={}), \
              patch.object(api.object_store, 'get_object_bytes', return_value=b'{"errors":[{"code":"72"}]}'), \

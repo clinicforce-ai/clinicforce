@@ -29,8 +29,9 @@ def test_subscriber_conflict_cannot_be_reported_as_matched():
 
 def test_saved_eligibility_requests_only_its_own_entitlement(monkeypatch):
     requested = []
-    async def token(client, client_id, issuer, scopes):
+    async def token(client, client_id, issuer, scopes, *, required_resource=None):
         requested.append(scopes)
+        assert required_resource == 'CoverageEligibilityResponse'
         if scopes != ('system/CoverageEligibilityResponse.read',):
             raise ecw_backend.EcwBackendError('Synthetic combined-scope rejection')
         return 'synthetic'

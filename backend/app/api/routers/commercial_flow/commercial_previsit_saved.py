@@ -27,7 +27,21 @@ async def reuse_saved_eligibility(api: ModuleType, result: dict, session: dict,
         await api.run_in_threadpool(api._finish_previsit, candidate, ecw_case, inputs, source, ecw_payload, session, ecw_payer_id)
         guidance = candidate['collection_guidance']
         # Never skip a check just because an unsupported result has a numeric fallback.
-        if (guidance['basis'] in {'office_copay', 'anticipated_services', 'patient_obligations'}
+        preview_lines = (candidate.get('price_range') or {}).get('lines') or []
+        common_office_copay = (candidate.get('price_range', {}).get('mode') == 'alternatives'
+            and bool(preview_lines) and all(line.get('code') in
+                {str(n) for n in (*range(99202, 99206), *range(99212, 99216))} for line in preview_lines)
+            and all((line.get('benefits') or {}).get('copay_cents') is not None for line in preview_lines)
+            and len({line['benefits']['copay_cents'] for line in preview_lines}) == 1)
+        reusable_preview = (candidate.get('service_selection_status') == 'preview'
+            and (candidate.get('price_range', {}).get('complete')
+                 or common_office_copay)
+            and candidate['benefits'].get('active') is True
+            and candidate['benefits'].get('service_date_matches') is not False
+            and not candidate['benefits'].get('has_secondary')
+            and api.insurance_identity.patient_benefits_bound(candidate.get('identity'))
+            and candidate['benefits'].get('network_status') == 'in_network')
+        if ((guidance['basis'] in {'office_copay', 'anticipated_services', 'patient_obligations'} or reusable_preview)
                 and (guidance['basis'] != 'office_copay' or len(candidate['codes']) == 1
                      or candidate.get('price_range', {}).get('mode') == 'alternatives')
                 and not candidate.get('price_range', {}).get('service_issues')
@@ -40,9 +54,10 @@ async def reuse_saved_eligibility(api: ModuleType, result: dict, session: dict,
                 'checked_at': candidate['checked_at'], 'benefit_source': 'eCW saved eligibility',
                 'requested_service_types': api._previsit_service_types(inputs)}
             ecw_case['previsit_raw_object_key'] = raw_key
-            candidate['ecw_saved_eligibility']['message'] = 'Current eCW benefits support this advance estimate. No Stedi eligibility request was needed.'
+            candidate['ecw_saved_eligibility']['message'] = ('Current eCW benefits support a planning estimate. Clinician approval is still needed before collection.'
+                if reusable_preview else 'Current eCW benefits support this advance estimate. No Stedi eligibility request was needed.')
             api.collection_event('eligibility_reused', practice_id=session['practice_id'], intake_id=(session.get('intake') or {}).get('id'),
                              case_id=ecw_case['id'], stage='eligibility', source='ecw_saved')
-            return api._previsit_result(await api.run_in_threadpool(api._save, ecw_case, session, 'previsit-ecw-benefits-reused'))
+            return api._previsit_result(await api.run_in_threadpool(api._save, ecw_case, session, 'previsit-ecw-benefits-reused'), session['practice_id'])
 
     return None

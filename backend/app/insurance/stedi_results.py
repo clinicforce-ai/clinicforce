@@ -107,6 +107,6 @@ def coverage(payload: dict) -> dict:
     payer = payload.get("payer") if isinstance(payload.get("payer"), dict) else {}
     return {"source": "stedi", "check_id": payload.get("id"), "payer": text(payer.get("name")) or text(payload.get("payerId")),
             "status": "Eligibility benefits returned by Stedi", "active": active, "plans": plans, "pce_available": False,
-            "provider_network": "Unverified — eligibility benefit schedules do not establish provider network status",
+            "provider_network": "Stedi returned benefit tiers; use an exact clinic product, provider, location and tax-ID contract match to determine participation.",
             "provider_network_status": "unconfirmed", "notes": messages(payload.get("errors")),
             "disclaimer": "Eligibility and benefits support a pre-visit estimate only; they are not a guarantee of payment, authorization, or a final bill."}

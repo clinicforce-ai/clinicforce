@@ -1,0 +1,75 @@
+"""Recheck saved payer participation against the rendering provider binding."""
+from __future__ import annotations
+
+import re
+
+from app.insurance import inventory_certification, library_network_exclusions
+from app.insurance.identity import patient_benefits_bound
+
+
+def _clear_saved_tier(result: dict, reason: str) -> None:
+    benefits = result.get('benefits') or {}
+    result.setdefault('issues', []).append(reason)
+    benefits.update(network_status='unknown', network_source=None, network_evidence_ids=[])
+    result['network_evidence'] = {'reason': reason}
+    price = result.get('price_range') or {}
+    price.update(complete=False, patient_min_cents=None, patient_max_cents=None,
+                 allowed_min_cents=None, allowed_max_cents=None,
+                 plan_min_cents=None, plan_max_cents=None,
+                 collection={'action': 'rerun', 'amount_cents': None, 'reason': reason})
+    for line in price.get('lines') or []:
+        line.update(allowed_cents=None, unit_allowed_cents=None, calculation=None)
+        if line.get('benefits'):
+            line['benefits'].update(network_status='unknown', network_source=None,
+                                    network_evidence_ids=[], network_provider_npi=None)
+    result.pop('arrival_collection', None)
+    result.pop('planning_estimate', None)
+
+
+def recheck_saved_inventory(result: dict, case: dict, practice_id: str, payer: dict | None) -> None:
+    """A revoked or changed certification cannot revive a saved OON collection."""
+    benefits = result.get('benefits') or {}
+    if benefits.get('network_source') != 'clinic_contract_inventory':
+        return
+    context = case.get('previsit_context') or {}
+    inputs = context.get('inputs') or {}
+    source = ((case.get('previsit_discovery') or {}).get('pricing_source')
+              or context.get('source') or {})
+    plan = ((result.get('plan_details') or {}).get('stedi') or {})
+    identity = result.get('identity') or benefits.get('identity') or {}
+    names = plan.get('names') or []
+    exact = {**source, 'payer_plan_bound': benefits.get('active') is True
+             and benefits.get('service_date_matches') is True and patient_benefits_bound(identity),
+             'payer_plan_names': names}
+    exclusion = library_network_exclusions.applicable_exclusion(
+        practice_id, str((payer or {}).get('display_name') or ''), names,
+        str(inputs.get('service_date') or '')) if len(names) == 1 else None
+    current = inventory_certification.applicable(practice_id, payer or {}, inputs, exact, exclusion)
+    saved = result.get('network_evidence') or {}
+    if (current and current.get('approved_at') == saved.get('approved_at')
+            and current.get('document_hashes') == saved.get('document_hashes')
+            and current.get('scope') == saved.get('scope')):
+        return
+    _clear_saved_tier(result, 'The clinic’s certified UHC agreement inventory changed or no longer covers this provider and visit. Recalculate network status before collecting.')
+    if result.get('agreement_exclusion'):
+        result['network_evidence'] = {**result['agreement_exclusion'],
+            'reason': 'The product remains excluded under the uploaded agreement, but the inventory certification no longer applies to this visit.'}
+
+
+def recheck_saved_payer_message(result: dict, case: dict) -> None:
+    benefits = result.get('benefits') or {}
+    if benefits.get('network_source') != 'payer_participation_message':
+        return
+    context = case.get('previsit_context') or {}
+    source = ((case.get('previsit_discovery') or {}).get('pricing_source')
+              or context.get('source') or {})
+    rendering = source.get('rendering_provider') or {}
+    npi = str(rendering.get('npi') or '')
+    saved_npi = str(benefits.get('network_provider_npi') or '')
+    input_npi = str(((context.get('inputs') or {}).get('rendering_provider') or {}).get('npi') or '')
+    if (re.fullmatch(r'\d{10}', npi) and saved_npi == npi
+            and rendering.get('first_name') and rendering.get('last_name')
+            and (not input_npi or input_npi == npi)):
+        return
+    _clear_saved_tier(result, 'The saved payer network statement is not bound to this rendering provider NPI. Rerun the payer check for this provider before collecting.')
+    benefits['network_provider_npi'] = None

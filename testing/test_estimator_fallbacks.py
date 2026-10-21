@@ -36,12 +36,14 @@ def test_specialist_wins_over_general_and_pcp_but_conflicting_specialists_stay_u
     terms = normalize(raw)
     assert terms['copay_cents'] == 5000
     assert not any('conditional benefit' in r for r in terms['review_reasons'])
-    r = {'benefits': {'active': True}, 'price_range': {'mode': 'services', 'lines': [
+    r = {'identity': {'status': 'matched', 'binding': 'synthetic-current-binding', 'match_version': 2}, 'benefits': {'active': True}, 'price_range': {'mode': 'services', 'lines': [
         {'code': '99203', 'units': 1, 'benefits': terms}]}}
     guidance = collection_guidance.build(r)
+    assert guidance['amount_cents'] is None
+    r['benefits']['network_status'] = 'in_network'
+    r['benefits']['network_source'] = 'clinic_library_contract'
+    guidance = collection_guidance.build(r)
     assert guidance['amount_cents'] == 5000 and guidance['basis'] == 'office_copay'
-    assert 'member’s exact provider network' in ' '.join(guidance['assumptions'])
-    assert 'confirm it before care' not in ' '.join(guidance['assumptions'])
     b['coPayment'].append(benefit('coPayment', 70, 'PHY VISIT - SPECIALIST'))
     assert normalize(raw)['copay_cents'] is None
 
@@ -97,7 +99,7 @@ def test_secondary_policy_can_be_queried_without_claiming_it_is_only_coverage():
         api.stedi_request_body({'stedi_payer_id': 'payer'}, provider, coverage, '2026-10-01', '98')
     r = {'benefits': {'active': True, 'has_secondary': True}, 'arrival_collection': {'amount_cents': 10000}}
     g = collection_guidance.build(r)
-    assert g['amount_cents'] is None and g['basis'] == 'deferred_billing'
+    assert g['amount_cents'] is None and g['basis'] == 'missing_collection_inputs'
     assert 'estimate is not available yet' in g['patient_message']
 
 

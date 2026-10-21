@@ -1,7 +1,10 @@
 """Commercial review routes workflow."""
 from __future__ import annotations
 
+from uuid import uuid4
+
 from app.api.routers import commercial_estimator as _api
+from app.insurance import botox_review, cpt_rules
 
 @_api.router.post("/cases/{case_id}/visit-review")
 async def update_visit_review(case_id: str, value: _api.VisitReviewInput, request: _api.Request) -> dict:
@@ -11,7 +14,18 @@ async def update_visit_review(case_id: str, value: _api.VisitReviewInput, reques
     included care is priced once and source CPT examples are never auto-selected.
     A verified payment is deducted once from the displayed cash or insured
     amount. The returned and saved payment_explanation describes only the
-    known amount; unpriced CPTs stay unresolved.
+    known amount; unpriced CPTs stay unresolved. An administrator can record
+    or remove a payer-supplied out-of-network allowance for one selected CPT.
+    The quote needs its payer channel, reference and validity date, and is
+    bound to this visit's patient, payer product, rendering NPI, place and units.
+    Product mappings for local or regional Medicare Advantage PPO products
+    require their own exact-product provider-network record and applicable
+    Clinical Library agreement; a general UHC PPO agreement is insufficient.
+    An administrator can record current, patient-bound QMB evidence for an
+    identified Medicare Advantage PPO product. Unknown QMB status never
+    authorizes a positive Medicare cost-sharing advance.
+    Benefit verification requires saved payer rows for a compatible service
+    category or the exact procedure; unrelated broad categories are rejected.
     """
     session = await _api._session(request)
     case = await _api.run_in_threadpool(_api.store.get_case, case_id, session['patient_id'], session['share_manifest_id'], **_api._scope(session))
@@ -24,7 +38,9 @@ async def update_visit_review(case_id: str, value: _api.VisitReviewInput, reques
     failed = not_requested or case.get('previsit', {}).get('request_state') == 'rejected'
     if case.get('previsit_discovery', {}).get('request_state') in {'pending', 'indeterminate'}:
         raise _api.HTTPException(409, 'Coverage recovery is still in progress. Wait for the result before changing the estimate.')
-    if failed and (value.verification or value.payments_received_cents is not None or value.identity_confirmation or value.product_mapping):
+    if failed and (value.verification or value.payments_received_cents is not None or value.identity_confirmation
+                   or value.billing_protection
+                   or value.product_mapping or value.payer_allowance or value.clear_payer_allowance_line_id):
         raise _api.HTTPException(409, 'Complete the eligibility check before verifying benefits or recording payments against an insurance estimate.')
     try:
         checked = _api.datetime.now(_api.timezone.utc) if failed else _api.datetime.fromisoformat(case['previsit']['checked_at'])
@@ -60,7 +76,31 @@ async def update_visit_review(case_id: str, value: _api.VisitReviewInput, reques
             raise _api.HTTPException(409, 'Patient identity evidence changed, or the birth date/member identity needs correction at its source.')
         review['identity_confirmation'] = {**value.identity_confirmation.model_dump(), 'verified_at': _api._now(),
                                            'actor_id': session['staff']['id'], 'verified_by': session['staff'].get('display_name')}
+    if value.billing_protection:
+        _api._admin(session)
+        current = _api._case_benefits(payload, inputs, source, case)
+        identity = current.get('identity') or {}
+        plan = _api.commercial.plan_details(payload)
+        product = _api.payer_allowance.product_binding(plan)
+        from app.insurance.library_network_exclusions import product_kind
+        if (current.get('active') is not True or current.get('service_date_matches') is False
+                or not _api.insurance_identity.patient_benefits_bound(identity)
+                or len(plan['names']) != 1 or not product_kind(plan['names'][0]) or not product):
+            raise _api.HTTPException(422, 'Bind one active Medicare Advantage PPO medical product and this patient before recording QMB status.')
+        review['billing_protection'] = {**value.billing_protection.model_dump(),
+            'identity_binding': identity['binding'], 'product_binding': product,
+            'payer_id': context['payer_id'], 'service_date': inputs['service_date'],
+            'verified_at': _api._now(), 'actor_id': session['staff']['id']}
     available = {row['id']: row for row in result.get('available_codes', result['codes'])}
+    if value.botox is not None:
+        if not botox_review.is_botox_visit(inputs) and not any(
+                row['code'] in botox_review.SELECTABLE_CODES for row in available.values()):
+            raise _api.HTTPException(422, 'This visit has no Botox procedure or drug candidates to review.')
+        if review.get('botox') != value.botox.model_dump(mode='json', exclude_none=True):
+            review['botox'] = value.botox.model_dump(mode='json', exclude_none=True)
+            review.pop('lines', None)
+            review.pop('payer_allowances', None)
+            review.pop('payments', None)
     if value.selected_ids is not None:
         if not value.selected_ids or len(set(value.selected_ids)) != len(value.selected_ids) or set(value.selected_ids) - available.keys():
             raise _api.HTTPException(422, 'Select valid planned services from this visit.')
@@ -74,9 +114,25 @@ async def update_visit_review(case_id: str, value: _api.VisitReviewInput, reques
         # billing order. Preserve source order within each procedure group.
         group_order = [group['id'] for group in _api.visit_estimate.service_plan(list(available.values()), inputs, source)['groups']]
         review['selected_ids'] = sorted(value.selected_ids, key=lambda key: (group_order.index(_api.visit_estimate.clinical_group(available[key]['code'])), list(available).index(key)))
+        review['confirmed_modifiers'] = {key: codes for key, codes in (review.get('confirmed_modifiers') or {}).items()
+                                         if key in review['selected_ids']}
+        for line_id in list(review.get('payer_allowances') or {}):
+            if line_id not in review['selected_ids']:
+                review['payer_allowances'].pop(line_id, None)
         review.pop('payments', None)
     if value.emg_required is not None:
         review['emg_required'] = value.emg_required
+        if value.emg_required is False and review.get('selected_ids'):
+            keep = [line_id for line_id in review['selected_ids']
+                    if _api.visit_estimate.clinical_group(available[line_id]['code']) not in {'nerve', 'muscle'}]
+            if keep:
+                review['selected_ids'] = keep
+            else:
+                review.pop('selected_ids', None)
+            for key in ('payer_allowances', 'confirmed_units'):
+                review[key] = {line_id: stored for line_id, stored in (review.get(key) or {}).items()
+                               if line_id in keep}
+            review.pop('payments', None)
     if value.insurance_check_from is not None:
         review['insurance_check_from'] = value.insurance_check_from.isoformat()
     if value.payment_mode is not None:
@@ -96,8 +152,62 @@ async def update_visit_review(case_id: str, value: _api.VisitReviewInput, reques
         for key, units in value.confirmed_units.items():
             if previous.get(key, available[key].get('units')) != units:
                 review.setdefault('lines', {}).pop(key, None)
+                (review.get('payer_allowances') or {}).pop(key, None)
         review['confirmed_units'] = {**previous, **value.confirmed_units}
         review.pop('payments', None)
+    if value.confirmed_modifiers is not None:
+        selected = set(review.get('selected_ids') or [])
+        if any(key not in selected
+               or len(modifiers) > 3 or any(not _api.re.fullmatch(r'[A-Z0-9]{2}', code) for code in modifiers)
+               or len(set(modifiers)) != len(modifiers)
+               for key, modifiers in value.confirmed_modifiers.items()):
+            raise _api.HTTPException(422, 'Confirm up to three distinct two-character modifiers on each selected service line.')
+        previous = review.get('confirmed_modifiers') or {}
+        for key, modifiers in value.confirmed_modifiers.items():
+            if previous.get(key, available[key].get('modifiers') or []) != modifiers:
+                review.setdefault('lines', {}).pop(key, None)
+                (review.get('payer_allowances') or {}).pop(key, None)
+        review['confirmed_modifiers'] = {**previous, **value.confirmed_modifiers}
+        review.pop('payments', None)
+    if value.payer_allowance or value.clear_payer_allowance_line_id:
+        _api._admin(session)
+        if value.payer_allowance and value.clear_payer_allowance_line_id:
+            raise _api.HTTPException(422, 'Record or remove one payer allowance at a time.')
+        if value.clear_payer_allowance_line_id:
+            if value.clear_payer_allowance_line_id not in available:
+                raise _api.HTTPException(422, 'Choose a CPT from this visit.')
+            (review.get('payer_allowances') or {}).pop(value.clear_payer_allowance_line_id, None)
+        else:
+            quote = value.payer_allowance
+            line = available.get(quote.line_id)
+            if not line or quote.line_id not in (review.get('selected_ids') or []):
+                raise _api.HTTPException(422, 'Select this clinician-documented CPT before recording its payer allowance.')
+            benefits = result.get('benefits') or {}
+            identity = result.get('identity') or benefits.get('identity') or {}
+            if (benefits.get('active') is not True or not _api.insurance_identity.patient_benefits_bound(identity)
+                    or not _api.network_participation.verified_out_of_network(benefits)):
+                raise _api.HTTPException(409, 'Match the member and establish this provider as out of network before recording its payer allowance.')
+            scope = _api._benefit_context(inputs, source)
+            provider_npi = str(scope.get('provider_npi') or '')
+            pos = str(scope.get('place_of_service') or '')
+            product_binding = _api.payer_allowance.product_binding(benefits.get('plan_details'))
+            units = (review.get('confirmed_units') or {}).get(quote.line_id, line.get('units'))
+            if not provider_npi or not pos or not context.get('payer_id') or not product_binding or type(units) is not int or units < 1:
+                raise _api.HTTPException(422, 'Link the payer product, rendering provider NPI, place of service and CPT units first.')
+            if quote.valid_through < _api.date.fromisoformat(inputs['service_date']):
+                raise _api.HTTPException(422, 'The payer quote must cover the appointment date.')
+            entry = {**quote.model_dump(mode='json'), 'id': 'payer-allowance:' + uuid4().hex,
+                     'code': line['code'], 'modifiers': ','.join(line.get('modifiers') or []),
+                     'units': units, 'payer_id': context['payer_id'],
+                     'service_date': inputs['service_date'], 'provider_npi': provider_npi,
+                     'place_of_service': pos, 'patient_binding': identity['binding'],
+                     'product_binding': product_binding,
+                     'verified_at': _api._now(), 'actor_id': session['staff']['id']}
+            allowances = review.get('payer_allowances')
+            if not isinstance(allowances, dict):
+                allowances = {}
+                review['payer_allowances'] = allowances
+            allowances[quote.line_id] = entry
     if value.verification:
         item = value.verification
         if item.line_id not in available or not item.valid_from <= _api.date.fromisoformat(inputs['service_date']) <= item.valid_to:
@@ -111,11 +221,25 @@ async def update_visit_review(case_id: str, value: _api.VisitReviewInput, reques
             raise _api.HTTPException(422, 'Verification must cover the confirmed number of service units.')
         evidence = item.model_dump(mode='json')
         if item.kind == 'benefits':
-            options = {row['id']: row for row in _api.commercial.reported_stedi_options(payload, '98')}
+            line_code = available[item.line_id]['code']
+            definition = cpt_rules.service_definition(line_code)
+            medical_line = definition['role'] == 'drug' or definition['family'] == 'chemodenervation'
+            category = item.service_type_code or definition['service_type'] or '98'
+            if medical_line and (not item.service_type_code or item.service_type_code in {'98', 'BQ', 'BY'}):
+                raise _api.HTTPException(422, 'Choose a payer-confirmed medical benefit category; office-only terms cannot price a drug or injection procedure.')
+            options = {row['id']: row for row in _api.commercial.reported_stedi_options(payload, category)}
             wanted = {'copay'} if item.cost_share == 'copay' else {'coinsurance'} if item.cost_share == 'coinsurance' else {'copay', 'coinsurance'}
             picked = [options[key] for key in item.selected_ids if key in options]
             if len(picked) != len(wanted) or {row['kind'] for row in picked} != wanted:
                 raise _api.HTTPException(422, 'Select exactly the returned payer terms needed for this cost-share method.')
+            if any(row.get('procedure_code') not in {None, '', line_code}
+                    or category not in
+                    str(row.get('service_type_code') or '').replace(' ', '').split(',') for row in picked):
+                raise _api.HTTPException(422, 'The selected payer terms do not describe this service line and benefit category.')
+            if medical_line and not cpt_rules.benefit_category_compatible(
+                    line_code, category,
+                    procedure_specific=bool(picked) and all(row.get('procedure_code') == line_code for row in picked)):
+                raise _api.HTTPException(422, 'The selected payer category does not describe this drug or procedure. Verify its medical benefit or an exact procedure row.')
             if len(set(item.selected_ids)) != len(item.selected_ids):
                 raise _api.HTTPException(422, 'Select each benefit term once.')
             if item.status != 'valid':
@@ -136,7 +260,12 @@ async def update_visit_review(case_id: str, value: _api.VisitReviewInput, reques
         products = _api.commercial.plan_details(payload)['names']
         if not products:
             raise _api.HTTPException(422, 'The payer did not return a product to map.')
-        _, network, profile = _api._practice_path(session['practice_id'], inputs, {**source, 'payer_plan_names': []})
+        payer_connection, network, profile = _api._practice_path(session['practice_id'], inputs, {**source, 'payer_plan_names': []})
+        if _api._excluded_ma_ppo_contract_mismatch(products, network, payer_connection):
+            raise _api.HTTPException(422, 'Link a separate exact-product local or regional PPO agreement before mapping this payer product.')
+        if (not _api._mapped_products_in_contract_scope(products, network, profile)
+                or not _api._network_contract_evidence(session['practice_id'], network, profile, inputs['service_date']).get('document_id')):
+            raise _api.HTTPException(422, 'Link a current signed Library agreement and its sourced exact-product profile before mapping this label.')
         await _api.run_in_threadpool(_api.commercial_store.save_product_mapping, session['practice_id'], profile['id'], products,
             {**item.model_dump(mode='json'), 'verified_at': _api._now(), 'actor_id': session['staff']['id'],
              'plan_scope': {key: _api.commercial.plan_details(payload).get(key) for key in ('plan_number', 'group_number')},
@@ -154,7 +283,7 @@ async def update_visit_review(case_id: str, value: _api.VisitReviewInput, reques
     saved = await _api.run_in_threadpool(_api._save, case, session, 'visit-evidence-verified')
     if value.identity_confirmation:
         await _api.run_in_threadpool(_api.staff_store.save_insurance_identity, session['patient_id'], session['practice_id'], review['identity_confirmation'])
-    return _api._previsit_result(saved)
+    return _api._previsit_result(saved, session['practice_id'])
 
 
 @_api.router.get('/cases/{case_id}/financials')

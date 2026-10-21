@@ -18,6 +18,40 @@ from app.logs.collection_audit import logger, request_id
 from app.main import app
 
 
+@pytest.mark.parametrize('oauth_reason,expected', [
+    ('oauth_invalid_scope', 'grant CoverageEligibilityResponse read access'),
+    ('oauth_unauthorized_client', 'check app activation and credentials'),
+    ('ecw_resource_not_advertised', 'does not advertise saved eligibility responses'),
+])
+def test_saved_ecw_eligibility_names_the_rejected_optional_scope_without_erasing_stedi(oauth_reason, expected):
+    source = {'_patient_id': 'synthetic-patient', 'coverage_id': 'synthetic-coverage'}
+    with patch.object(ecw, 'settings', return_value=('synthetic-client', 'https://ehr.example.test/fhir')), \
+         patch.object(ecw, '_access_token', new=AsyncMock(side_effect=ecw.EcwBackendError(
+             'Synthetic OAuth rejection', reason_code=oauth_reason))):
+        saved = asyncio.run(ecw.fetch_saved_eligibility(source, '2026-10-15'))
+    assert saved['status'] == 'check_with_stedi'
+    assert saved['reason_code'] == oauth_reason
+    assert expected in saved['message']
+    assert 'Stedi benefits already returned' in saved['message']
+
+
+def test_unadvertised_saved_eligibility_resource_stops_before_signing_or_token_request():
+    def handler(request):
+        assert request.url.path == '/fhir/metadata'
+        return httpx.Response(200, json={'resourceType': 'CapabilityStatement',
+            'rest': [{'resource': [{'type': 'Patient'}, {'type': 'DocumentReference'}]}]})
+
+    async def run():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            with patch.object(ecw.ecw, '_client_assertion', side_effect=AssertionError('token request started')):
+                with pytest.raises(ecw.EcwBackendError) as error:
+                    await ecw._access_token(client, 'synthetic-client', 'https://ehr.example.test/fhir',
+                                            ('system/CoverageEligibilityResponse.read',),
+                                            required_resource='CoverageEligibilityResponse')
+        assert error.value.reason_code == 'ecw_resource_not_advertised'
+    asyncio.run(run())
+
+
 def test_inline_insurance_card_does_not_request_binary_scope():
     async def run():
         document = {'resourceType': 'DocumentReference', 'id': 'card', 'status': 'current',
@@ -83,6 +117,70 @@ def test_card_lookup_uses_ecw_type_search_and_patient_bound_included_binary():
             assert all('system/Binary.read' not in call.args[3] for call in token.call_args_list)
             document['subject']['reference'] = 'Patient/someone-else'
             assert not await ecw.insurance_cards('synthetic', transport=httpx.MockTransport(handler))
+    asyncio.run(run())
+
+
+def test_card_lookup_checks_untyped_patient_view_after_unrelated_patient_documents():
+    async def run():
+        clinical_note = {'resourceType': 'DocumentReference', 'id': 'note', 'status': 'current',
+            'subject': {'reference': 'Patient/synthetic'}, 'description': 'Clinical note',
+            'content': [{'attachment': {'contentType': 'application/pdf', 'data': base64.b64encode(b'note').decode()}}]}
+        card = {'resourceType': 'DocumentReference', 'id': 'untyped-card', 'status': 'current',
+            'subject': {'reference': 'Patient/synthetic'}, 'description': 'Health insurance card',
+            'content': [{'attachment': {'contentType': 'image/png', 'data': base64.b64encode(b'card').decode()}}]}
+        queries = []
+        def handler(request):
+            queries.append(request.url.params.get('type'))
+            rows = [] if request.url.params.get('type') == '64290-0' else [clinical_note] if request.url.params.get('type') == '103140-0' else [clinical_note, card]
+            return httpx.Response(200, json={'resourceType': 'Bundle', 'entry': [{'resource': row} for row in rows]})
+        with patch.object(ecw, 'settings', return_value=('client', 'https://ehr.example.test/fhir')), \
+             patch.object(ecw, '_access_token', AsyncMock(return_value='synthetic-token')):
+            cards = await ecw.insurance_cards('synthetic', transport=httpx.MockTransport(handler))
+            data, mime = await ecw.insurance_cards('synthetic', document_id=cards[0]['id'], transport=httpx.MockTransport(handler))
+        assert [row['id'] for row in cards] == ['untyped-card:0']
+        assert (data, mime) == (b'card', 'image/png')
+        assert queries == ['64290-0', '103140-0', None] * 2
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize('filter_status', [400, 404])
+def test_card_lookup_recovers_from_rejected_type_filter_using_patient_view(filter_status):
+    async def run():
+        card = {'resourceType': 'DocumentReference', 'id': 'patient-view-card', 'status': 'current',
+            'subject': {'reference': 'Patient/synthetic'}, 'description': 'Insurance card',
+            'content': [{'attachment': {'contentType': 'image/png',
+                'data': base64.b64encode(b'synthetic-card').decode()}}]}
+        queries = []
+        def handler(request):
+            document_type = request.url.params.get('type')
+            queries.append(document_type)
+            if document_type == '64290-0':
+                return httpx.Response(filter_status, json={'resourceType': 'OperationOutcome'})
+            rows = [] if document_type == '103140-0' else [card]
+            return httpx.Response(200, json={'resourceType': 'Bundle',
+                'entry': [{'resource': row} for row in rows]})
+        with patch.object(ecw, 'settings', return_value=('client', 'https://ehr.example.test/fhir')), \
+             patch.object(ecw, '_access_token', AsyncMock(return_value='synthetic-token')):
+            cards = await ecw.insurance_cards('synthetic', transport=httpx.MockTransport(handler))
+            data, mime = await ecw.insurance_cards('synthetic', document_id=cards[0]['id'],
+                                                   transport=httpx.MockTransport(handler))
+        assert [row['id'] for row in cards] == ['patient-view-card:0']
+        assert (data, mime) == (b'synthetic-card', 'image/png')
+        assert queries == ['64290-0', '103140-0', None] * 2
+    asyncio.run(run())
+
+
+def test_card_lookup_preserves_denied_primary_document_access():
+    async def run():
+        queries = []
+        def handler(request):
+            queries.append(request.url.params.get('type'))
+            return httpx.Response(403)
+        with patch.object(ecw, 'settings', return_value=('client', 'https://ehr.example.test/fhir')), \
+             patch.object(ecw, '_access_token', AsyncMock(return_value='synthetic-token')):
+            with pytest.raises(ecw.EcwBackendError):
+                await ecw.insurance_cards('synthetic', transport=httpx.MockTransport(handler))
+        assert queries == ['64290-0']
     asyncio.run(run())
 
 
@@ -236,6 +334,34 @@ def test_resource_failures_record_cause_and_query_shape_without_values(failure, 
     assert failed["request_id"] == events[0]["request_id"]
     for value in ("Pat", "Example", "1990-01-01", "secret-token", "https://"):
         assert value not in stream.getvalue()
+
+
+@pytest.mark.parametrize('body,expected', [
+    ({'error': 'invalid_scope', 'error_description': 'private patient and token details'}, 'oauth_invalid_scope'),
+    ({'error': 'arbitrary-provider-secret', 'error_description': 'private patient and token details'}, 'upstream_http_error'),
+])
+def test_token_failure_logs_only_an_allowlisted_oauth_reason(body, expected):
+    metadata = {'rest': [{'security': {'extension': [{'url': 'oauth-uris', 'extension': [
+        {'url': 'token', 'valueUri': 'https://ehr.example.test/token'}]}]}}]}
+
+    async def handler(request):
+        return (httpx.Response(200, json=metadata) if request.url.path.endswith('/metadata') else
+                httpx.Response(400, json=body))
+
+    async def run():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            with patch.object(ecw.ecw, '_client_assertion', return_value='synthetic'):
+                with pytest.raises(ecw.EcwBackendError):
+                    await ecw._access_token(client, 'client', 'https://ehr.example.test/fhir',
+                                             ('system/CoverageEligibilityResponse.read',))
+
+    with captured() as stream:
+        asyncio.run(run())
+    failed = [json.loads(line) for line in stream.getvalue().splitlines() if 'ecw_stage_failed' in line]
+    assert len(failed) == 1
+    assert failed[0]['reason_code'] == expected and failed[0]['http_status'] == 400
+    assert 'private patient' not in stream.getvalue()
+    assert 'arbitrary-provider-secret' not in stream.getvalue()
 
 
 def test_overall_deadline_identifies_patient_stage_after_successful_authorization():

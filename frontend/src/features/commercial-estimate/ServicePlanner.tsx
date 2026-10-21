@@ -1,4 +1,7 @@
 import { RequirementDecision } from './RequirementDecision'
+import { BotoxClinicalReview } from './BotoxClinicalReview'
+import { LineEvidenceReview } from './LineEvidenceReview'
+import { requirementForLine } from './requirementForLine'
 import { useState } from 'react'
 import { ArrowRight, Check, Minus, Plus } from 'lucide-react'
 import type {
@@ -6,9 +9,11 @@ import type {
   VisitCode,
   VisitReview,
 } from '../../services/api/commercial-estimator'
+import type { BotoxReview } from '../../services/api/commercial-visit-types'
 import { clinicalName, groupFor, money } from './service-code'
 
 type Save = (review: VisitReview) => Promise<boolean>
+const groupOf = (row: VisitCode) => row.service_group || groupFor(row.code)
 
 export function ServicePlanner({
   result,
@@ -22,9 +27,7 @@ export function ServicePlanner({
   viewEstimate: (message?: string) => void
 }) {
   const available = result.available_codes || result.codes
-  const defaults = result.selected_ids?.length
-    ? result.selected_ids
-    : result.service_plan?.recommended_ids || []
+  const defaults = result.service_selection_status === 'approved' ? result.selected_ids || [] : []
   const [selected, setSelected] = useState<string[]>(defaults)
   const [quantities, setQuantities] = useState<Record<string, number>>(() =>
     Object.fromEntries(
@@ -33,18 +36,29 @@ export function ServicePlanner({
   )
   const [cashSelection, setCashSelection] = useState(result.cash_quote?.selection || '')
   const [changed, setChanged] = useState(false)
+  const [botox, setBotox] = useState<BotoxReview>(result.botox_review || {})
+  const [modifiers, setModifiers] = useState<Record<string, string>>(() =>
+    Object.fromEntries(available.map((row) => [row.id!, (row.modifiers || []).join(', ')])),
+  )
   const [editError, setEditError] = useState('')
   const emgVisit = result.service_plan?.kind === 'emg_ncs'
-  const [category, setCategory] = useState(emgVisit ? 'nerve' : 'visit')
+  const botoxVisit =
+    result.service_plan?.kind === 'botox' ||
+    available.some(
+      (row) =>
+        selected.includes(row.id!) &&
+        ['botulinum_drug', 'chemodenervation'].includes(row.service_family || ''),
+    )
+  const [category, setCategory] = useState(emgVisit ? 'nerve' : botoxVisit ? 'other' : 'visit')
   const chosen = available.filter((row) => selected.includes(row.id!))
   const nerve = available
-    .filter((row) => groupFor(row.code) === 'nerve')
+    .filter((row) => groupOf(row) === 'nerve')
     .sort((a, b) => a.code.localeCompare(b.code))
   const muscle = available.filter((row) => ['95885', '95886'].includes(row.code))
   const office = available
     .filter(
       (row) =>
-        groupFor(row.code) === 'visit' &&
+        groupOf(row) === 'visit' &&
         (result.visit_type === 'new'
           ? Number(row.code) < 99210
           : result.visit_type === 'established'
@@ -57,7 +71,7 @@ export function ServicePlanner({
     result.service_date >= '2014-01-01' && ['64613', '64614'].includes(row.code)
   const other = available.filter(
     (row) =>
-      (groupFor(row.code) === 'other' || row.code === '95887') &&
+      (groupOf(row) === 'other' || row.code === '95887') &&
       (!retired(row) || selected.includes(row.id!)),
   )
   const update = (ids: string[]) => {
@@ -70,7 +84,7 @@ export function ServicePlanner({
     let ids = selected.filter((key) => !rows.some((row) => row.id === key))
     if (rows === nerve && !id)
       ids = ids.filter(
-        (key) => !available.some((row) => row.id === key && groupFor(row.code) === 'muscle'),
+        (key) => !available.some((row) => row.id === key && groupOf(row) === 'muscle'),
       )
     if (id) ids.push(id)
     update(ids)
@@ -101,8 +115,28 @@ export function ServicePlanner({
         setEditError('Choose the planned quantity using the + and − buttons.')
         return
       }
-      if (cashSelection && !chosen.some((row) => groupFor(row.code) === 'nerve')) {
+      if (cashSelection && !chosen.some((row) => groupOf(row) === 'nerve')) {
         setEditError('Choose the planned nerve study before applying a cash package.')
+        return
+      }
+      const reviewedModifiers = Object.fromEntries(
+        chosen.map((row) => [
+          row.id!,
+          modifiers[row.id!]
+            .split(',')
+            .map((item) => item.trim().toUpperCase())
+            .filter(Boolean),
+        ]),
+      )
+      if (
+        Object.values(reviewedModifiers).some(
+          (codes) =>
+            codes.length > 3 ||
+            new Set(codes).size !== codes.length ||
+            codes.some((code) => !/^[A-Z0-9]{2}$/.test(code)),
+        )
+      ) {
+        setEditError('Review up to three distinct two-character modifiers per service line.')
         return
       }
       if (
@@ -120,6 +154,8 @@ export function ServicePlanner({
       const saved = await save({
         selected_ids: selected,
         confirmed_units: Object.fromEntries(selected.map((id) => [id, quantities[id]])),
+        ...(chosen.length ? { confirmed_modifiers: reviewedModifiers } : {}),
+        ...(botoxVisit ? { botox } : {}),
         ...(result.cash_schedule ? { cash_selection: cashSelection } : {}),
       })
       if (!saved) return
@@ -130,14 +166,19 @@ export function ServicePlanner({
     { id: 'visit', label: 'Office visit', rows: office, single: true },
     { id: 'nerve', label: 'Nerve study', rows: nerve, single: true },
     { id: 'muscle', label: 'Muscle EMG', rows: muscle, single: false },
-    { id: 'other', label: 'Other care', rows: other, single: false },
+    {
+      id: 'other',
+      label: botoxVisit ? 'Injection and medication' : 'Other care',
+      rows: other,
+      single: false,
+    },
   ].filter((group) => group.rows.length)
   const activeGroup = groups.find((group) => group.id === category) || groups[0]
   const quantity = (row: VisitCode, change: number) => {
     setQuantities((current) => ({
       ...current,
       [row.id!]: Math.min(
-        groupFor(row.code) === 'muscle' ? 4 : 10000,
+        groupOf(row) === 'muscle' ? 4 : 10000,
         Math.max(1, (current[row.id!] || 0) + change),
       ),
     }))
@@ -196,15 +237,15 @@ export function ServicePlanner({
                 single = activeGroup.single
               const disable =
                 busy ||
-                (groupFor(row.code) === 'muscle' &&
-                  !nerve.some((item) => selected.includes(item.id!)))
-              const requirement =
-                result.requirement_evidence?.procedures?.find(
-                  (item) => item.id === row.id || item.code === row.code,
-                ) ||
-                result.candidate_requirements?.find(
-                  (item) => item.id === row.id || item.code === row.code,
-                )
+                (groupOf(row) === 'muscle' && !nerve.some((item) => selected.includes(item.id!)))
+              const requirement = requirementForLine(
+                [
+                  ...(result.requirement_evidence?.procedures || []),
+                  ...(result.candidate_requirements || []),
+                ],
+                row.id,
+                row.code,
+              )
               return (
                 <article
                   key={row.id}
@@ -237,8 +278,10 @@ export function ServicePlanner({
                   <div className="procedure-price-note">
                     {row.unit_allowed_cents != null &&
                     (result.benefits?.network_status !== 'out_of_network' ||
-                      row.allowed_basis === 'payer_out_of_network')
-                      ? `${row.allowed_basis === 'payer_out_of_network' ? 'Payer allowed' : 'Contract'} / unit ${money(row.unit_allowed_cents)}`
+                      ['payer_out_of_network', 'cms_original_medicare_estimate'].includes(
+                        row.allowed_basis || '',
+                      ))
+                      ? `${row.allowed_basis === 'cms_original_medicare_estimate' ? 'CMS benchmark' : row.allowed_basis === 'payer_out_of_network' ? 'Payer allowed' : 'Contract'} / unit ${money(row.unit_allowed_cents)}`
                       : row.unit_cash_cents != null
                         ? `Cash / unit ${money(row.unit_cash_cents)}`
                         : 'Price follows plan and clinic schedule'}
@@ -246,17 +289,35 @@ export function ServicePlanner({
                   {result.payment_mode !== 'cash' && (
                     <div className="procedure-requirements">
                       <div>
-                        Referral: <RequirementDecision evidence={requirement?.referral} />
+                        Referral:{' '}
+                        <RequirementDecision
+                          evidence={requirement?.referral}
+                          code={row.code}
+                          kind="referral"
+                          payerName={result.payer}
+                          needsCodeSelection={
+                            result.price_range?.mode === 'alternatives' && groupOf(row) === 'visit'
+                          }
+                        />
                       </div>
                       <div>
-                        Prior auth: <RequirementDecision evidence={requirement?.authorization} />
+                        Prior auth:{' '}
+                        <RequirementDecision
+                          evidence={requirement?.authorization}
+                          code={row.code}
+                          kind="prior authorization"
+                          payerName={result.payer}
+                          needsCodeSelection={
+                            result.price_range?.mode === 'alternatives' && groupOf(row) === 'visit'
+                          }
+                        />
                       </div>
                     </div>
                   )}
                   {included && !single && (
                     <div className="procedure-quantity">
                       <span>
-                        {groupFor(row.code) === 'muscle'
+                        {groupOf(row) === 'muscle'
                           ? 'Limbs'
                           : row.code.startsWith('J')
                             ? 'Medication units'
@@ -285,8 +346,7 @@ export function ServicePlanner({
                         <button
                           aria-label={`Increase ${row.code} quantity`}
                           disabled={
-                            busy ||
-                            quantities[row.id!] >= (groupFor(row.code) === 'muscle' ? 4 : 10000)
+                            busy || quantities[row.id!] >= (groupOf(row) === 'muscle' ? 4 : 10000)
                           }
                           onClick={() => quantity(row, 1)}
                         >
@@ -304,6 +364,20 @@ export function ServicePlanner({
                       </div>
                     </div>
                   )}
+                  {included && (
+                    <label>
+                      {row.code} modifiers (comma separated; leave blank if none)
+                      <input
+                        value={modifiers[row.id!] || ''}
+                        maxLength={12}
+                        disabled={busy}
+                        onChange={(event) => {
+                          setModifiers((current) => ({ ...current, [row.id!]: event.target.value }))
+                          setChanged(true)
+                        }}
+                      />
+                    </label>
+                  )}
                 </article>
               )
             })}
@@ -315,7 +389,7 @@ export function ServicePlanner({
       )}
       {result.payment_mode === 'cash' &&
         result.cash_schedule &&
-        (emgVisit || chosen.some((row) => groupFor(row.code) === 'nerve')) && (
+        (emgVisit || chosen.some((row) => groupOf(row) === 'nerve')) && (
           <section className="cash-package-options">
             <h3>Cash package</h3>
             <p className="visit-muted">
@@ -335,6 +409,21 @@ export function ServicePlanner({
             ))}
           </section>
         )}
+      {botoxVisit && (
+        <BotoxClinicalReview
+          value={botox}
+          onChange={(next) => {
+            setBotox(next)
+            setChanged(true)
+            setEditError('')
+          }}
+          drugSelected={chosen.some((row) => row.code === 'J0585')}
+          officeSelected={chosen.some((row) => groupOf(row) === 'visit')}
+        />
+      )}
+      {!changed && result.selected_ids?.length && result.payment_mode !== 'cash' && (
+        <LineEvidenceReview result={result} busy={busy} save={save} />
+      )}
       {editError && (
         <p className="visit-error" role="alert">
           {editError}

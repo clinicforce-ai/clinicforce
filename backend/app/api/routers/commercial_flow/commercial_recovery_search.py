@@ -100,7 +100,9 @@ async def _recover_mbi(case: dict, session: dict, provider: dict) -> None:
 
 async def _recover_previsit(case: dict, session: dict, provider: dict) -> None:
     """Finish every applicable automatic route before choosing cash pricing."""
-    if _api._previsit_result(case).get('eligibility_timing'):
+    if _api._original_medical_policy_established(case):
+        return
+    if _api._previsit_result(case, session['practice_id']).get('eligibility_timing'):
         return
     recovery = case['previsit_discovery']
     recovery['exhausted'] = False
@@ -138,9 +140,11 @@ async def _recover_previsit(case: dict, session: dict, provider: dict) -> None:
 
 async def _recover_discovery(case: dict, session: dict, provider: dict) -> None:
     """Discovery with distinct documented addresses; never replay an unknown POST."""
+    if _api._original_medical_policy_established(case):
+        return
     context = case['previsit_context']
     inputs = context['inputs']
-    if _api._previsit_result(case).get('eligibility_timing'):
+    if _api._previsit_result(case, session['practice_id']).get('eligibility_timing'):
         return
     discovery = case['previsit_discovery']
     api_key = _api.stedi_financial.credentials(session['practice_id'])
@@ -230,21 +234,23 @@ async def _recover_discovery(case: dict, session: dict, provider: dict) -> None:
                                 reason='candidates_retained' if candidates else 'all_candidates_filtered' if items else 'no_upstream_candidates')
                 for row in candidates:
                     row['matches_ecw_policy'] = _api.stedi_discovery.matches_ecw_policy(items[row['index']], inputs, context['source'])
-                discovery.update(request_state='complete', candidates=candidates, raw_candidate_count=len(items), candidate_version=4,
-                                 outcome='no_match' if not items else 'review_needed')
+                active_count = _api.stedi_discovery.active_policy_count(
+                    candidates, items, _api._previsit_service_types(inputs))
+                discovery.update(request_state='complete', candidates=candidates, raw_candidate_count=len(items), candidate_version=5,
+                                 active_policy_count=active_count, outcome='no_match' if not items else 'review_needed')
                 if payload.get('status') != 'COMPLETE' or payload.get('errors'):
                     discovery.update(request_state='rejected', outcome='rejected', stage='discovery_rejected',
                                      reason_code='discovery_request_rejected')
                     _api._recovery_event(case, session, 'discovery', 'rejected', reason='discovery_request_rejected')
                     case.update(await _api.run_in_threadpool(_api._save, case, session, 'stedi-discovery-finished'))
                     return
-                matching = [row for row in candidates if row['verification_status'] == 'VERIFIED']
                 # Identical discovery responses with different payer route IDs
                 # describe one policy; distinct active policies still need order.
                 candidate = (_api.stedi_discovery.one_active_policy(candidates, items, _api._previsit_service_types(inputs))
                              if context['source'].get('active_coverages', 0) <= 1 else None)
                 if candidate:
                     discovery.update(request_state='pending', stage='eligibility', selected_candidate_id=candidate['id'],
+                                     selected_candidate_source_ids=candidate.get('source_candidate_ids', [candidate['id']]),
                                      evidence_source='stedi_discovery')
                     case.update(await _api.run_in_threadpool(_api._save, case, session, 'stedi-recovered-member-pending'))
                     _api._recovery_event(case, session, 'candidate_match', 'matched', count=1)
@@ -256,13 +262,20 @@ async def _recover_discovery(case: dict, session: dict, provider: dict) -> None:
                     case.update(await _api.run_in_threadpool(_api._save, case, session, 'stedi-candidate-inquiry-pending'))
                     await _api._recheck_discovery_candidate(case, session, provider, discovery_payload=payload, inquiry_only=True)
                     return
-                reason = 'no_coverage_found' if not items else 'multiple_active_policies' if len(matching) > 1 else 'identity_or_coverage_review'
+                conflict = _api.stedi_discovery.active_policy_evidence_conflict(
+                    candidates, items, _api._previsit_service_types(inputs))
+                reason = ('no_coverage_found' if not items else 'multiple_active_policies' if active_count > 1
+                          else 'same_policy_evidence_conflict' if conflict else 'identity_or_coverage_review')
                 detail = ('No coverage was returned by the completed insurance search. This does not establish that the patient is uninsured.'
-                          if not items else 'Returned coverage requires identity, service-date or payer-order reconciliation before it can supply an insured estimate.')
+                          if not items else 'The same medical policy returned conflicting subscriber, date or visit-benefit evidence; reconcile the payer rows before pricing.'
+                          if conflict else 'Returned coverage requires identity, service-date or policy review before it can supply an insured estimate.')
                 discovery.update(stage='candidate_match_review', reason_code=reason, selection_error=detail)
-                context['result'].setdefault('eligibility_failure', {})['detail'] = detail
+                if not _api._original_medical_policy_established(case):
+                    context['result'].setdefault('eligibility_failure', {})['detail'] = detail
                 _api._recovery_event(case, session, 'candidate_match', discovery['outcome'], reason=reason, count=len(candidates))
                 case.update(await _api.run_in_threadpool(_api._save, case, session, 'stedi-discovery-finished'))
+                if reason == 'multiple_active_policies':
+                    await _api._check_previsit_cob(case, session, provider, api_key=api_key)
                 if items or address_index + 1 >= len(addresses):
                     return
                 # Retry only a completed no-match with a different recorded address.

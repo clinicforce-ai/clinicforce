@@ -32,7 +32,7 @@ class CommercialRulesTest(unittest.TestCase):
              patch.object(commercial_store, "list_networks", return_value=networks), \
              patch.object(commercial_store, "list_profiles", return_value=profiles):
             self.assertEqual(_previsit_practice_path("clinic", inputs, source)[1]["id"], "uhc-network")
-            with self.assertRaisesRegex(HTTPException, "exact payer product"):
+            with self.assertRaisesRegex(HTTPException, "own exact-product provider contract"):
                 _previsit_practice_path("clinic", inputs, {**source, "payer_plan_names": ["Regional PPO"]})
 
     def test_activating_another_schedule_does_not_supersede_all_payer_contracts(self):
@@ -180,6 +180,7 @@ class CommercialRulesTest(unittest.TestCase):
                     "deductible_remaining_cents": 0, "oop_remaining_cents": 100000,
                     "copay_cents": 3000, "has_secondary": False, "requires_review": False}
         with patch("app.api.routers.commercial_estimator._practice_path", return_value=(payer, network, profile)), \
+             patch("app.api.routers.commercial_estimator._network_contract_evidence", return_value={"document_id": "synthetic-contract"}), \
              patch("app.api.routers.commercial_estimator.commercial_store.matching_rates", return_value=rates):
             priced, issues = _previsit_range("clinic", inputs, source, "payer", codes, benefits)
             self.assertEqual((priced["allowed_min_cents"], priced["allowed_max_cents"]), (6400, 20000))
@@ -193,6 +194,20 @@ class CommercialRulesTest(unittest.TestCase):
         result = estimate([{"code": "99204", "units": 1, "allowed_cents": 25000}], {"active": True, "coverage_level": "individual", "network_status": "in_network", "deductible_remaining_cents": 10000, "oop_remaining_cents": 20000, "copay_cents": 2500, "coinsurance_percent": 20, "has_secondary": False, "requires_review": False}, {"cost_share": "cumulative"})
         self.assertEqual(result["patient_cents"], 15500)
         self.assertEqual(result["plan_cents"], 9500)
+
+    def test_allowed_cap_and_out_of_pocket_cap_are_distinct(self):
+        benefits = {"active": True, "coverage_level": "individual", "network_status": "in_network",
+                    "deductible_remaining_cents": 0, "oop_remaining_cents": 100000,
+                    "copay_cents": 3000, "has_secondary": False, "requires_review": False}
+        line = [{"code": "99203", "units": 1, "allowed_cents": 2000}]
+        capped_by_allowance = estimate(line, benefits, {"cost_share": "copay"})
+        self.assertEqual(capped_by_allowance["patient_cents"], 2000)
+        self.assertEqual(capped_by_allowance["allowed_cap_adjustment_cents"], 1000)
+        self.assertEqual(capped_by_allowance["oop_adjustment_cents"], 0)
+        capped_by_oop = estimate(line, {**benefits, "oop_remaining_cents": 1500}, {"cost_share": "copay"})
+        self.assertEqual(capped_by_oop["patient_cents"], 1500)
+        self.assertEqual(capped_by_oop["allowed_cap_adjustment_cents"], 1000)
+        self.assertEqual(capped_by_oop["oop_adjustment_cents"], 500)
 
     def test_unknown_benefit_never_becomes_zero(self):
         with self.assertRaisesRegex(CommercialError, "deductible"):
@@ -339,7 +354,7 @@ class CommercialRulesTest(unittest.TestCase):
 
     def test_practice_path_uses_ecw_payer_provider_location_and_pos(self):
         payer = {"id": "example-health", "category": "commercial_medical", "status": "staff_guidance_enabled"}
-        network = {"id": "network", "payer_connection_id": "example-health", "status": "verified", "billing_npi": "1111111111", "rendering_npi": "1234567893", "location_id": "north", "place_of_service": "11", "effective_from": "2026-01-01", "effective_to": None}
+        network = {"id": "network", "payer_connection_id": "example-health", "status": "verified", "billing_npi": "1111111111", "rendering_npi": "1234567893", "tin": "123456789", "location_id": "north", "place_of_service": "11", "effective_from": "2026-01-01", "effective_to": None}
         profile = {"id": "office", "payer_connection_id": "example-health", "provider_network_id": "network", "status": "staff_guidance_enabled"}
         with patch("app.api.routers.commercial_estimator.commercial_store.connection", return_value=payer), \
              patch("app.api.routers.commercial_estimator.commercial_store.list_networks", return_value=[network]), \
@@ -348,6 +363,11 @@ class CommercialRulesTest(unittest.TestCase):
             selected = _practice_path("lakeside", inputs, {"location_id": "north", "billing_provider": {"npi": "1111111111"}})
             with self.assertRaisesRegex(Exception, "verified provider-network"):
                 _practice_path("lakeside", inputs, {"location_id": "north", "billing_provider": {"npi": "2222222222"}})
+            with self.assertRaisesRegex(Exception, "verified provider-network"):
+                _practice_path("lakeside", inputs, {"location_id": "north", "billing_provider": {"npi": "1111111111", "tin": "987654321"}})
+            with self.assertRaisesRegex(Exception, "conflicting billing TIN"):
+                _practice_path("lakeside", inputs, {"location_id": "north", "billing_provider": {"npi": "1111111111", "tin_conflict": True}})
+            self.assertEqual(_practice_path("lakeside", inputs, {"location_id": "north", "billing_provider": {"npi": "1111111111", "tin": "123456789"}})[1], network)
         self.assertEqual(selected, (payer, network, profile))
 
     def test_readiness_reports_independent_real_data_gaps_without_stedi(self):
@@ -366,10 +386,10 @@ class CommercialRulesTest(unittest.TestCase):
             result = _appointment_readiness("nmct", {"practice_id": "nmct", "intake": {"fields": {}}}, inputs, source)
         self.assertFalse(result["ready"])
         self.assertEqual(result["ecw"]["payer"], "Real eCW payer")
-        self.assertTrue(any("Stedi payer ID" in item for item in result["blockers"]))
-        self.assertTrue(any("provider-network" in item for item in result["blockers"]))
+        self.assertTrue(any("enabled clinic estimator connection" in item for item in result["pricing_followups"]))
+        self.assertTrue(any("provider-network" in item for item in result["pricing_followups"]))
         self.assertFalse(any("contracted CPT" in item for item in result["blockers"]))
-        self.assertTrue(any("CPT/HCPCS-coded" in item for item in result["blockers"]))
+        self.assertTrue(any("CPT/HCPCS-coded" in item for item in result["pricing_followups"]))
         self.assertFalse(any("rendering provider NPI" in item for item in result["blockers"]))
 
     def test_readiness_allows_real_configured_appointment_to_continue(self):
@@ -386,17 +406,34 @@ class CommercialRulesTest(unittest.TestCase):
                   "member_id": "real-member", "relationship": "18"}
         source = {"payer": "BCBS", "location_id": "north", "billing_provider": {"npi": "1234567893"},
                   "active_coverages": 1, "coverage_id": "real-coverage"}
-        with patch("app.api.routers.commercial_estimator.commercial_store.list_connections", return_value=[payer]), \
+        with patch("app.api.routers.commercial_estimator.commercial_store.list_connections", return_value=[payer]) as connections, \
              patch("app.api.routers.commercial_estimator.commercial_store.list_networks", return_value=[network]), \
              patch("app.api.routers.commercial_estimator.commercial_store.list_profiles", return_value=[profile]), \
              patch("app.api.routers.commercial_estimator.commercial_store.list_rate_versions", return_value=[
                  {"payer_connection_id": "another-payer", "status": "active", "effective_from": "2026-01-01"},
-                 {"payer_connection_id": "bcbs", "status": "active", "effective_from": "2026-01-01"}]), \
+                 {"payer_connection_id": "bcbs", "status": "active", "effective_from": "2026-01-01"}]) as rates, \
              patch("app.api.routers.commercial_estimator._ecw_coded_lines", return_value=([{"code": "99204", "units": 1, "allowed_cents": 25000}], [])), \
              patch("app.api.routers.commercial_estimator.object_store.enabled", return_value=True), \
              patch.dict("app.api.routers.commercial_estimator.os.environ", {"STEDI_EXECUTION_MODE": "commercial_pilot", "STEDI_LIVE_ELIGIBILITY_ENABLED": "true", "STEDI_API_KEY": "test-only-key"}):
             result = _appointment_readiness("nmct", {"practice_id": "nmct", "intake": {"fields": {}}}, inputs, source)
-        self.assertTrue(result["ready"], result["blockers"])
+            self.assertTrue(result["ready"], result["blockers"])
+            self.assertEqual(result["pricing_followups"], [])
+            rates.return_value = []
+            no_rates = _appointment_readiness("nmct", {"practice_id": "nmct", "intake": {"fields": {}}}, inputs, source)
+            with_modifier = _appointment_readiness("nmct", {"practice_id": "nmct", "intake": {"fields": {}}},
+                {**inputs, "lines": [{**inputs["lines"][0], "modifiers": ["25"]}]}, source)
+            connections.return_value = [{**payer, "status": "draft"}]
+            draft_connection = _appointment_readiness("nmct", {"practice_id": "nmct", "intake": {"fields": {}}}, inputs, source)
+        self.assertTrue(no_rates["ready"], no_rates["blockers"])
+        self.assertEqual(no_rates["blockers"], [])
+        self.assertIn('load a rate if the returned benefits require an allowed amount', no_rates["pricing_followups"][0])
+        self.assertTrue(with_modifier["ready"], with_modifier["blockers"])
+        self.assertTrue(any('exact matching contracted rate may be needed' in item
+                            for item in with_modifier["pricing_followups"]))
+        self.assertTrue(draft_connection["ready"], draft_connection["blockers"])
+        self.assertTrue(any('mapped payer connection is draft' in item
+                            for item in draft_connection["pricing_followups"]))
+        self.assertFalse(any('Stedi payer ID' in item for item in draft_connection["blockers"]))
 
     def test_history_only_shows_an_estimate_saved_for_the_same_ecw_visit(self):
         visit = {"id": "encounter-1", "date": "2026-09-22", "status": "finished", "coded_services": ["99204"]}

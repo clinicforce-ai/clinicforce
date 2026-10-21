@@ -15,6 +15,25 @@ _STATE_ABBREVIATIONS = dict(zip(
 ))
 
 
+def original_medicare_route(payer: dict | None) -> bool:
+    """HETS attestation follows the actual CMS eligibility route, not a plan label."""
+    return str((payer or {}).get('stediId') or '').upper() == 'CMS'
+
+
+def enrollment_required(payer: dict | None) -> bool:
+    return original_medicare_route(payer) or (
+        ((payer or {}).get('transactionSupport') or {}).get('eligibilityCheck') == 'ENROLLMENT_REQUIRED')
+
+
+def original_medicare_routing_conflict(payer: dict | None, *, product: str = '', issuer: str = '') -> bool:
+    """Do not submit a known issuer or MA product to HETS because of a stale Part B code."""
+    if not original_medicare_route(payer):
+        return False
+    from app.insurance.insurance_product import is_medicare_advantage
+    return (is_medicare_advantage([product]) or bool(re.search(
+        r'\b(?:united\s*healthcare|uhc|bcbs|blue\s*cross|aetna|humana|cigna)\b', issuer, re.I)))
+
+
 def _words(value: str) -> list[str]:
     return [word for word in re.findall(r"[a-z0-9]+", value.casefold()) if word not in _FILLER]
 
@@ -58,7 +77,9 @@ async def search_payer(name: str, identifiers: list[str], api_key: str,
         return None
     # Original Medicare Part B uses CMS/HETS for eligibility, including state
     # MAC labels. Never route Medicare Advantage or a supplement to CMS.
-    if plan == 'MB' and re.fullmatch(r'Medicare(?: of)? (?:Texas|TX)(?: Part B)?', name, re.I):
+    identifiers = [value for value in identifiers if isinstance(value, str)]
+    if (plan == 'MB' and re.fullmatch(r'Medicare(?: of)? (?:Texas|TX)(?: Part B)?', name, re.I)
+            and not any(value.strip().upper() not in {'CMS', 'CMSMED', 'MB'} for value in identifiers)):
         name, identifiers = 'CMS', ['CMSMED']
     async with httpx.AsyncClient(timeout=httpx.Timeout(10, connect=5), transport=transport) as client:
         # Search exact eCW payer IDs first; a name search may omit their record.

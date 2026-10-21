@@ -1,7 +1,10 @@
 """Pre-service answers: synthetic payer terms and two independent clinic catalogs."""
+import json
+from datetime import date
 from unittest.mock import patch
 
 from app.api.routers import commercial_estimator as api
+from app.api.routers.commercial_flow.commercial_previsit_requirements import attach_requirements
 from app.insurance import commercial, stedi, visit_estimate
 from test_visit_estimate import DAY, payload, priced
 
@@ -71,6 +74,12 @@ def test_exhausted_oop_produces_zero_without_inventing_missing_benefits():
 
 
 def test_contract_options_come_from_scoped_clinic_configuration():
+    original_guidance = api.collection_guidance.build
+
+    def guidance_after_requirements(result, *args):
+        assert 'requirement_evidence' in result
+        return original_guidance(result, *args)
+
     for clinic, payer, code, amount in [('clinic-a', 'payer-a', '95907', 8440), ('clinic-b', 'payer-b', '93000', 6123)]:
         inputs = {'service_date': DAY, 'reason': 'Planned procedure', 'lines': [], 'member_id': 'M123', 'place_of_service': '11'}
         source = {'plan': 'Choice', 'active_coverages': 1}
@@ -78,7 +87,9 @@ def test_contract_options_come_from_scoped_clinic_configuration():
         rates = [{'code': code, 'allowed_cents': amount, 'description': 'Clinic procedure'}]
         with patch.object(api.cpt_suggester.boto3, 'client', side_effect=RuntimeError('offline test')), patch.object(api.practice_prices, 'current', return_value=None), patch.object(api.commercial_store, 'list_connections', return_value=[{'id': payer, 'stedi_payer_id': payer, 'status': 'staff_guidance_enabled'}]), \
              patch.object(api, '_practice_path', return_value=({}, {'plan_matcher': 'Choice'}, {'rules': {'cost_share': 'payer_returned', 'service_type_by_code': {code: '30'}}})), \
-             patch.object(api.commercial_store, 'matching_rates', return_value=rates) as matched:
+             patch.object(api, '_network_contract_evidence', return_value={'document_id': 'synthetic-contract'}), \
+             patch.object(api.commercial_store, 'matching_rates', return_value=rates) as matched, \
+             patch.object(api.collection_guidance, 'build', side_effect=guidance_after_requirements):
             api._finish_previsit(result, {}, inputs, source, payload(), {'practice_id': clinic}, payer)
         assert all(call.args[0] == clinic for call in matched.call_args_list)
         assert matched.call_args_list[0].args[-1] is None
@@ -86,6 +97,24 @@ def test_contract_options_come_from_scoped_clinic_configuration():
         assert result['price_range']['mode'] == 'options'
         assert result['price_range']['lines'][0]['allowed_cents'] == amount
         assert result['price_range']['collection']['action'] == 'choose_services'
+
+
+def test_background_result_tracks_current_library_requirement_sources():
+    document = {'id': 'synthetic-matrix', 'kind': 'plan_matrix', 'sha256': 'synthetic-hash',
+                'effective_from': date(2026, 10, 1), 'extraction_summary': {'status': 'usable'}}
+    result = {'payer': 'UnitedHealthcare', 'codes': [],
+              'benefits': {'active': True}, 'insurance_details': {},
+              'plan_details': {'stedi': {'names': []}}}
+    case = {'library_pricing': [{'document_id': document['id']}]}
+    with patch.object(api.staff_store, 'list_library', return_value=[document]), \
+         patch.object(api.staff_store, 'get_library', return_value=document), \
+         patch.object(api.contract_requirements, 'evaluate', return_value={}) as evaluate, \
+         patch.object(api, '_requirement_candidates', return_value=[]):
+        attach_requirements(api, result, case, {'service_date': DAY}, {}, {'practice_id': 'clinic'}, [], '')
+    assert result['requirement_sources'][0]['id'] == document['id']
+    assert result['requirement_sources'][0]['effective_from'] == '2026-10-01'
+    json.dumps(result['requirement_sources'])
+    assert evaluate.call_args.args[2] == [document]
 
 
 def test_modern_out_of_network_noncoverage_and_named_pa_do_not_override_visit():

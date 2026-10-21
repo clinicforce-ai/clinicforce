@@ -39,7 +39,8 @@ async def fetch_saved_eligibility(backend: ModuleType, source: dict, service_dat
     try:
         client_id, issuer = backend.settings()
         async with httpx.AsyncClient(timeout=backend.SEARCH_TIMEOUT_SECONDS, follow_redirects=False, transport=transport) as client:
-            token = await backend._access_token(client, client_id, issuer, ('system/CoverageEligibilityResponse.read',))
+            token = await backend._access_token(client, client_id, issuer, ('system/CoverageEligibilityResponse.read',),
+                                                required_resource='CoverageEligibilityResponse')
             rows = await backend._search(client, issuer, token, 'CoverageEligibilityResponse', {'patient': source['_patient_id']})
         primary = saved_eligibility_summary(rows, source['_patient_id'], source['coverage_id'], service_date)
         primary['other_coverages'] = {row['id']: {k: v for k, v in
@@ -47,8 +48,20 @@ async def fetch_saved_eligibility(backend: ModuleType, source: dict, service_dat
             if not k.startswith('_')}
             for row in source.get('coverage_records', []) if row.get('id') and row['id'] != source['coverage_id']}
         return primary
-    except (backend.EcwBackendError, httpx.HTTPError):
-        return fallback
+    except backend.EcwBackendError as exc:
+        reason = exc.reason_code
+        if reason == 'ecw_resource_not_advertised':
+            return {**fallback, 'reason_code': reason,
+                    'message': 'This eCW FHIR endpoint does not advertise saved eligibility responses. Ask the eCW administrator whether CoverageEligibilityResponse access can be enabled; use the separate Stedi benefits already returned.'}
+        if reason == 'oauth_invalid_scope':
+            return {**fallback, 'reason_code': reason,
+                    'message': 'eCW rejected the saved-eligibility read scope. Ask the eCW administrator to grant CoverageEligibilityResponse read access; use the separate Stedi benefits already returned.'}
+        if reason in {'oauth_unauthorized_client', 'oauth_invalid_client'}:
+            return {**fallback, 'reason_code': reason,
+                    'message': 'eCW rejected this backend app for saved eligibility. Ask the eCW administrator to check app activation and credentials; use the separate Stedi benefits already returned.'}
+        return {**fallback, 'reason_code': reason or 'ecw_saved_eligibility_unavailable'}
+    except httpx.HTTPError:
+        return {**fallback, 'reason_code': 'ecw_saved_eligibility_transport_error'}
 
 async def probe_saved_eligibility(backend: ModuleType, profile: dict[str, Any], *, transport: httpx.AsyncBaseTransport | None = None) -> dict[str, Any]:
     """Read-only proof that eCW exposes saved eligibility evidence.
@@ -59,7 +72,7 @@ async def probe_saved_eligibility(backend: ModuleType, profile: dict[str, Any], 
     client_id, issuer = backend.settings()
     try:
         async with httpx.AsyncClient(timeout=30, follow_redirects=False, transport=transport) as client:
-            token = await backend._access_token(client, client_id, issuer)
+            token = await backend._access_token(client, client_id, issuer, ('system/Patient.read',))
             metadata = await backend._response_json(
                 await client.get(f"{issuer}/metadata", params={"_format": "json"}, headers={"Accept": "application/fhir+json"}),
                 "The eClinicalWorks capability statement is unavailable.",
@@ -85,11 +98,18 @@ async def probe_saved_eligibility(backend: ModuleType, profile: dict[str, Any], 
             for resource in ("CoverageEligibilityResponse", "DocumentReference"):
                 # One unsupported optional scope must not hide other authorized
                 # evidence resources or report that the working app is rejected.
+                if resource not in resources:
+                    result['resources'][resource] = {'status': 'not_advertised', 'count': None}
+                    continue
                 try:
                     scopes = (f'system/{resource}.read',)
                     evidence_token = await backend._access_token(client, client_id, issuer, scopes)
-                except backend.EcwBackendError:
-                    result['resources'][resource] = {'status': 'scope_denied_or_unavailable', 'count': None}
+                except backend.EcwBackendError as exc:
+                    denied = {'status': 'scope_denied_or_unavailable', 'count': None}
+                    if exc.reason_code in {'oauth_invalid_scope', 'oauth_unauthorized_client', 'oauth_invalid_client',
+                                           'oauth_invalid_grant', 'oauth_unsupported_grant_type', 'oauth_invalid_request'}:
+                        denied['reason_code'] = exc.reason_code
+                    result['resources'][resource] = denied
                     continue
                 response = await client.get(f"{issuer}/{resource}", params={"patient": patient_id},
                                             headers={"Authorization": f"Bearer {evidence_token}", "Accept": "application/fhir+json"})
@@ -102,6 +122,48 @@ async def probe_saved_eligibility(backend: ModuleType, profile: dict[str, Any], 
                 else:
                     bundle = await backend._response_json(response, f"eClinicalWorks could not return {resource} evidence.")
                     result["resources"][resource] = {"status": "available", "count": sum(row.get('resourceType') == resource for row in backend._entries(bundle))}
+                    if resource == 'DocumentReference':
+                        card_result = result['resources'][resource]
+                        try:
+                            card_response = await client.get(f"{issuer}/DocumentReference",
+                                params={"patient": patient_id, "type": "64290-0"},
+                                headers={"Authorization": f"Bearer {evidence_token}", "Accept": "application/fhir+json"})
+                            if card_response.status_code in {401, 403}:
+                                card_result['insurance_card_status'] = 'forbidden'
+                            elif card_response.status_code == 404:
+                                card_result['insurance_card_status'] = 'not_supported_or_not_found'
+                            elif card_response.is_error:
+                                card_result['insurance_card_status'] = 'search_unavailable'
+                            else:
+                                card_bundle = await backend._response_json(card_response, 'eClinicalWorks insurance-card search failed.')
+                                typed_cards = [row for row in backend._entries(card_bundle)
+                                               if row.get('resourceType') == 'DocumentReference' and row.get('status') == 'current'
+                                               and _reference(row.get('subject')) == f'Patient/{patient_id}'
+                                               and isinstance(row.get('type'), dict)
+                                               and any(isinstance(code, dict) and code.get('system') == 'http://loinc.org'
+                                                       and code.get('code') == '64290-0'
+                                                       for code in (row['type'].get('coding') or []))]
+                                cards = [row for row in typed_cards
+                                         if any(isinstance(item, dict) and isinstance(item.get('attachment'), dict)
+                                                and item['attachment'].get('contentType') in
+                                                {'image/png', 'image/jpeg', 'application/pdf'}
+                                                and (item['attachment'].get('data') or item['attachment'].get('url'))
+                                                for item in (row.get('content') or []))]
+                                card_result.update(insurance_card_status=('available' if cards else
+                                                   'no_readable_image' if typed_cards else 'not_returned'),
+                                                   insurance_card_count=len(cards))
+                        except (backend.EcwBackendError, httpx.HTTPError, TypeError):
+                            card_result['insurance_card_status'] = 'search_unavailable'
+                        if card_result.get('insurance_card_status') not in {'available', 'forbidden'}:
+                            try:
+                                discovered = await insurance_cards(backend, patient_id, transport=transport)
+                            except (backend.EcwBackendError, httpx.HTTPError):
+                                if card_result.get('insurance_card_status') == 'not_returned':
+                                    card_result['insurance_card_status'] = 'search_unavailable'
+                            else:
+                                if discovered:
+                                    card_result.update(insurance_card_status='available',
+                                                       insurance_card_count=len(discovered))
     except httpx.HTTPError as exc:
         raise backend.EcwBackendError("eClinicalWorks is temporarily unavailable.") from exc
     return result
@@ -109,6 +171,19 @@ async def probe_saved_eligibility(backend: ModuleType, profile: dict[str, Any], 
 async def insurance_cards(backend: ModuleType, patient_id: str, *, document_id: str | None = None,
                           transport: httpx.AsyncBaseTransport | None = None):
     """Read only explicitly labeled insurance cards belonging to this patient."""
+    def card_content(row: dict, content: dict) -> bool:
+        if (row.get('resourceType') != 'DocumentReference' or row.get('status') != 'current'
+                or _reference(row.get('subject')) != 'Patient/' + patient_id
+                or any(c.get('code') == '53245-7' for c in row.get('type', {}).get('coding', []))):
+            return False
+        attachment = content.get('attachment') or {}
+        label = ' '.join([str(row.get('description') or ''), *_concept_labels(row.get('type')),
+                          str(attachment.get('title') or '')])
+        card_type = any(c.get('code') == '64290-0' and c.get('system') == 'http://loinc.org'
+                        for c in row.get('type', {}).get('coding', []))
+        return (card_type or bool(re.search(r'\b(?:insurance|payer|member|health plan)\s*(?:id\s*)?card\b', label, re.I))) \
+            and attachment.get('contentType') in {'image/png', 'image/jpeg', 'application/pdf'}
+
     client_id, issuer = backend.settings()
     async with httpx.AsyncClient(timeout=10, follow_redirects=False, transport=transport) as client:
         # Listing and inline cards need only DocumentReference. A denied Binary
@@ -120,14 +195,24 @@ async def insurance_cards(backend: ModuleType, patient_id: str, *, document_id: 
         for document_type in ('64290-0', '103140-0'):
             try:
                 groups.append(await backend._search(client, issuer, token, 'DocumentReference', {'patient': patient_id, 'type': document_type}))
-            except (backend.EcwBackendError, httpx.HTTPError):
+            except (backend.EcwBackendError, httpx.HTTPError) as exc:
+                cause = exc.__cause__
+                if ((isinstance(exc, backend.EcwResourceUnavailable) and exc.http_status == 404)
+                        or (isinstance(cause, httpx.HTTPStatusError)
+                            and cause.response.status_code in {400, 404, 422})):
+                    # Some eCW endpoints reject a typed filter while the
+                    # patient-only DocumentReference view remains available.
+                    continue
                 if not groups or document_type == '64290-0':
                     raise
                 # Optional patient-document access must not hide a returned insurance card.
         rows = [row for group in groups for row in group]
-        if not any(row.get('resourceType') == 'DocumentReference' for row in rows):
-            groups = [await backend._search(client, issuer, token, 'DocumentReference', {'patient': patient_id})]
-            rows = groups[0]
+        # Patient documents can contain unrelated clinical records. Search the
+        # untyped patient view when neither typed query found a usable card.
+        if not any(card_content(row, content) for row in rows for content in row.get('content', [])):
+            fallback = await backend._search(client, issuer, token, 'DocumentReference', {'patient': patient_id})
+            groups.append(fallback)
+            rows.extend(fallback)
         binaries = {row.get('id'): row for row in rows if row.get('resourceType') == 'Binary' and row.get('id')}
         unique_included = {}
         for group in groups:
@@ -138,17 +223,10 @@ async def insurance_cards(backend: ModuleType, patient_id: str, *, document_id: 
         cards = []
         seen = set()
         for row in rows:
-            if (row.get('resourceType') != 'DocumentReference' or row.get('status') != 'current'
-                    or _reference(row.get('subject')) != 'Patient/' + patient_id):
-                continue
-            if any(c.get('code') == '53245-7' for c in row.get('type', {}).get('coding', [])):
-                continue
             for index, content in enumerate(row.get('content', [])):
                 attachment = content.get('attachment') or {}
-                label = ' '.join([str(row.get('description') or ''), *_concept_labels(row.get('type')), str(attachment.get('title') or '')])
                 mime = attachment.get('contentType')
-                card_type = any(c.get('code') == '64290-0' and c.get('system') == 'http://loinc.org' for c in row.get('type', {}).get('coding', []))
-                if (not card_type and not re.search(r'\b(?:insurance|payer|member|health plan)\s*(?:id\s*)?card\b', label, re.I)) or mime not in {'image/png', 'image/jpeg', 'application/pdf'}:
+                if not card_content(row, content):
                     continue
                 key = str(row.get('id')) + ':' + str(index)
                 if key in seen:

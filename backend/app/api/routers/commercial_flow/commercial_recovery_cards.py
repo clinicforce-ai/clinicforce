@@ -6,7 +6,8 @@ from app.api.routers import commercial_estimator as _api
 def _compare_card_hints(card: dict, inputs: dict, source: dict) -> dict:
     """Fill absent eCW inquiry fields only when OCR names the linked patient/policy."""
     status = card['status']
-    result = {'status': status, 'source': card.get('source'), 'fields_added': [], 'conflicts': [],
+    result = {'status': status, 'source': card.get('source'),
+              'failure_reason': card.get('failure_reason'), 'fields_added': [], 'conflicts': [],
               'differences': [], 'alternative_supported': False}
     if status != 'read':
         return result

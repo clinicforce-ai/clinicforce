@@ -277,13 +277,15 @@ async def get_document(intake_id: str, document_id: str, request: Request):
 async def patient_cards(intake_id: str, request: Request):
     """List patient-bound ClinicForce cards and eCW health insurance card previews.
 
-    eCW DocumentReference type 64290-0 is required for its cards; government ID
-    documents are excluded. An empty result explains the separate eCW grant.
+    Prefer eCW DocumentReference type 64290-0, then patient documents explicitly
+    labeled as insurance cards; government ID documents are excluded. Each card names its upload or current eCW source;
+    the eCW preview may have changed since a saved estimate. A missing eCW card
+    is reported even when a ClinicForce upload is also available.
     """
     staff = await require_staff(request)
     intake = await owned_intake(intake_id, staff)
     sources = await run_in_threadpool(staff_store.patient_card_intakes, staff['practice_id'], intake['patient']['id']) if intake.get('patient') else [intake]
-    cards = [{"id": item['id'], "title": item['filename'], "content_type": item['content_type'],
+    cards = [{"id": item['id'], "title": item['filename'], "content_type": item['content_type'], "source": "clinicforce_upload",
               "url": f"/api/staff/intakes/{quote(source['id'], safe='')}/documents/{quote(item['id'], safe='')}"}
              for source in sources for item in source['documents']]
     patient_id = (intake.get('patient') or {}).get('ecw_patient_id') or intake.get('fields', {}).get('ecw_patient_id')
@@ -291,9 +293,12 @@ async def patient_cards(intake_id: str, request: Request):
     if patient_id:
         try:
             rows = await ecw_backend.insurance_cards(str(patient_id))
-            cards.extend({**item, 'url': f"/api/staff/intakes/{quote(intake_id, safe='')}/ecw-card?document_id={quote(item['id'], safe='')}"} for item in rows)
-            if not cards:
-                message = 'eCW returned no health insurance card for this patient. Ask eCW to verify DocumentReference type 64290-0 for this practice; government ID access is separate.'
+            cards.extend({**item, 'source': 'ecw_current', 'url': f"/api/staff/intakes/{quote(intake_id, safe='')}/ecw-card?document_id={quote(item['id'], safe='')}"} for item in rows)
+            if not rows:
+                message = ('This eCW FHIR connection returned no patient-bound insurance-card image or PDF. '
+                           + ('Use the saved ClinicForce card below. ' if cards else
+                              'Check eCW registration and upload its front and back here, or obtain the card from the patient. ')
+                           + 'Ask the eCW administrator why card DocumentReference was not returned.')
         except Exception:
             message = 'The eCW card connection is unavailable. Any saved ClinicForce cards appear below. Card previews are optional for estimates.'
     return JSONResponse({'cards': cards, 'message': message}, headers=NO_STORE)

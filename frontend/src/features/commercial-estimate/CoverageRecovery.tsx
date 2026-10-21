@@ -1,5 +1,27 @@
 import type { CommercialEstimateModel } from './useCommercialEstimateModel'
 
+const candidateReasonText: Record<string, string> = {
+  MEMBER_ID_MISSING: 'Subscriber member ID missing',
+  SUBSCRIBER_NAME_MISSING: 'Subscriber name missing',
+  SUBSCRIBER_DOB_MISSING: 'Subscriber birth date missing',
+  PATIENT_NAME_MISSING: 'Patient name missing',
+  PATIENT_NAME_MISMATCH: 'Patient name differs from eCW',
+  PATIENT_DOB_MISSING: 'Patient birth date missing',
+  PATIENT_DOB_MISMATCH: 'Patient birth date differs from eCW',
+  PATIENT_ADDRESS_MISMATCH: 'Patient address differs from eCW',
+  PAYER_REJECTED: 'Payer rejected the member inquiry',
+  PAYER_ROUTE_MISSING: 'Exact payer route missing',
+  RELATIONSHIP_CONFLICT: 'Subscriber relationship differs from eCW',
+  MULTIPLE_COVERAGES: 'Multiple policies need payer order',
+  ACTIVE_MEDICAL_COVERAGE_NOT_VERIFIED: 'No active medical benefit for this visit date',
+  COVERAGE_DATE_NOT_VERIFIED: 'No service-date coverage evidence',
+  COVERAGE_EVIDENCE_INVALID: 'Payer coverage fields could not be read',
+  ADDITIONAL_IDENTITY_EVIDENCE_REQUIRED: 'No matching eCW policy or address link',
+  MALFORMED_RESPONSE: 'Payer response fields could not be read',
+}
+const candidateReason = (code: string) =>
+  candidateReasonText[code] || code.replaceAll('_', ' ').toLowerCase()
+
 export default function CoverageRecovery({
   model,
   result,
@@ -21,6 +43,19 @@ export default function CoverageRecovery({
     guidance,
     unavailableReason,
   } = model
+  const shownGroups = new Set<string>()
+  const policySuggestions = (result.recovery?.candidates || []).filter((candidate) => {
+    const group = candidate.policy_group_id
+    if (
+      !group ||
+      candidate.verification_status !== 'VERIFIED' ||
+      result.recovery?.reason_code === 'same_policy_evidence_conflict'
+    )
+      return true
+    if (shownGroups.has(group)) return false
+    shownGroups.add(group)
+    return true
+  })
   return (
     <>
       {!!result.recovery?.payer_routes?.length && (
@@ -66,7 +101,8 @@ export default function CoverageRecovery({
                   {route.match_basis === 'directory_suggestion'
                     ? 'Suggested name match — review against the card'
                     : 'Matches the recorded payer name or ID'}
-                  {route.eligibility === 'ENROLLMENT_REQUIRED'
+                  {route.eligibility === 'ENROLLMENT_REQUIRED' &&
+                  (result.benefits?.active !== true || result.benefits.historical_only)
                     ? ' · Provider enrollment required'
                     : ''}
                 </p>
@@ -91,8 +127,16 @@ export default function CoverageRecovery({
                 ? 'Automatic insurance checks finished'
                 : failure?.title || 'Coverage check incomplete'}
           </h3>
-          <p>{guidance?.reason || unavailableReason}</p>
-          {result.recovery?.message && <p>{result.recovery.message}</p>}
+          <p>{result.recovery?.message || guidance?.reason || unavailableReason}</p>
+          {!!result.coordination?.payer_roles?.length && (
+            <p>
+              Stedi COB reported{' '}
+              {result.coordination.payer_roles
+                .map((row) => `${row.role}: ${row.payer_name}`)
+                .join(', ')}
+              . Match these names to the patient’s policies before using payer order.
+            </p>
+          )}
           {result.recovery && (result.recovery.reason_code || result.recovery.reference) && (
             <small className="visit-muted">
               {result.recovery.reason_code?.replaceAll('_', ' ')}
@@ -102,135 +146,166 @@ export default function CoverageRecovery({
           )}
         </section>
       )}
-      {!!result.recovery?.candidates?.length && (
+      {!!policySuggestions.length && (
         <section className="visit-recovery" aria-label="Returned insurance candidates">
           <h3>Returned insurance candidates</h3>
           <p>
             Returned policies are retained, including inactive policies. Suggestions are optional;
             automatic estimation does not wait for selection.
           </p>
-          {result.recovery.candidates.length >= 2 && (
+          {policySuggestions.length >= 2 && (
             <label>
               Insurance policy suggestions
               <select
                 value={
-                  result.recovery.candidates.some((row) => row.id === candidateSuggestion)
+                  policySuggestions.some((row) => row.id === candidateSuggestion)
                     ? candidateSuggestion
                     : ''
                 }
                 onChange={(event) => setCandidateSuggestion(event.target.value)}
               >
                 <option value="">View a policy suggestion</option>
-                {result.recovery.candidates.map((candidate) => (
-                  <option key={candidate.id} value={candidate.id}>
-                    {candidate.payer || 'Unknown payer'} ·{' '}
-                    {candidate.member_id || 'Member ID not returned'} ·{' '}
-                    {candidate.coverage_evidence?.status.toLowerCase() || 'Status unknown'}
-                  </option>
-                ))}
+                {policySuggestions
+                  .filter((candidate) => candidate.id)
+                  .map((candidate) => (
+                    <option key={candidate.id} value={candidate.id}>
+                      {candidate.payer || 'Unknown payer'} ·{' '}
+                      {candidate.member_id || 'Member ID not returned'} ·{' '}
+                      {candidate.coverage_evidence?.status?.toLowerCase() || 'Status unknown'}
+                    </option>
+                  ))}
               </select>
             </label>
           )}
-          {result.recovery.candidates
+          {policySuggestions
             .filter(
               (candidate) =>
-                result.recovery!.candidates!.length < 2 || candidate.id === candidateSuggestion,
+                policySuggestions.length < 2 ||
+                !candidate.id ||
+                candidate.id === candidateSuggestion,
             )
-            .map((candidate) => (
-              <article key={candidate.id}>
-                <strong>
-                  {candidate.payer || 'Payer not returned'} ·{' '}
-                  {candidate.coverage_evidence &&
-                  ['INACTIVE', 'EXPIRED', 'FUTURE', 'CONFLICT'].includes(
-                    candidate.coverage_evidence.status,
-                  )
-                    ? candidate.coverage_evidence.status.toLowerCase()
-                    : candidate.verification_status === 'VERIFIED'
-                      ? 'Identity and coverage evidence matched'
-                      : 'Coverage not verified'}
-                </strong>
-                <p>{candidate.plans.join(' · ')}</p>
-                <dl>
-                  <div>
-                    <dt>Candidate member ID</dt>
-                    <dd>{candidate.member_id || 'Not returned'}</dd>
-                  </div>
-                  <div>
-                    <dt>Group</dt>
-                    <dd>{candidate.group_number || 'Not returned'}</dd>
-                  </div>
-                  {candidate.coverage_evidence && (
-                    <div>
-                      <dt>Coverage dates</dt>
-                      <dd>
-                        {candidate.coverage_evidence.start || 'Start not returned'} –{' '}
-                        {candidate.coverage_evidence.end || 'End not returned'}
-                      </dd>
-                    </div>
+            .map((candidate, index) => {
+              const coverageState = candidate.coverage_evidence?.status
+              const statusHeadline =
+                !!coverageState &&
+                ['INACTIVE', 'EXPIRED', 'FUTURE', 'CONFLICT'].includes(coverageState)
+              const firstReasonInHeadline =
+                !statusHeadline && candidate.verification_status !== 'VERIFIED'
+              return (
+                <article key={candidate.id || `saved-candidate-${index}`}>
+                  <strong>
+                    {candidate.payer || 'Payer not returned'} ·{' '}
+                    {statusHeadline
+                      ? coverageState?.toLowerCase()
+                      : candidate.verification_status === 'VERIFIED'
+                        ? 'Identity and coverage evidence matched'
+                        : candidate.reason_codes?.[0]
+                          ? candidateReason(candidate.reason_codes[0])
+                          : 'Returned policy has no patient match'}
+                  </strong>
+                  <p>
+                    {candidate.plans?.length
+                      ? candidate.plans.join(' · ')
+                      : 'Plan name not returned'}
+                  </p>
+                  {(candidate.policy_response_count || 0) > 1 && (
+                    <p>
+                      {candidate.policy_response_count} saved payer responses describe this policy.
+                    </p>
                   )}
-                  <div>
-                    <dt>Policyholder</dt>
-                    <dd>
-                      {[candidate.subscriber?.firstName, candidate.subscriber?.lastName]
-                        .filter(Boolean)
-                        .join(' ') || 'Not returned'}
-                    </dd>
-                  </div>
-                  <div>
-                    <dt>Policyholder DOB</dt>
-                    <dd>{candidate.subscriber?.dateOfBirth || 'Unknown'}</dd>
-                  </div>
-                  {candidate.dependent && (
+                  <dl>
                     <div>
-                      <dt>Dependent</dt>
+                      <dt>Candidate member ID</dt>
+                      <dd>{candidate.member_id || 'Not returned'}</dd>
+                    </div>
+                    <div>
+                      <dt>Group</dt>
+                      <dd>{candidate.group_number || 'Not returned'}</dd>
+                    </div>
+                    {candidate.coverage_evidence && (
+                      <div>
+                        <dt>Coverage dates</dt>
+                        <dd>
+                          {candidate.coverage_evidence.start || 'Start not returned'} –{' '}
+                          {candidate.coverage_evidence.end || 'End not returned'}
+                        </dd>
+                      </div>
+                    )}
+                    <div>
+                      <dt>Policyholder</dt>
                       <dd>
-                        {[candidate.dependent.firstName, candidate.dependent.lastName]
+                        {[candidate.subscriber?.firstName, candidate.subscriber?.lastName]
                           .filter(Boolean)
-                          .join(' ')}{' '}
-                        · DOB {candidate.dependent.dateOfBirth || 'Unknown'}
+                          .join(' ') || 'Not returned'}
                       </dd>
                     </div>
+                    <div>
+                      <dt>Policyholder DOB</dt>
+                      <dd>{candidate.subscriber?.dateOfBirth || 'Unknown'}</dd>
+                    </div>
+                    {candidate.dependent && (
+                      <div>
+                        <dt>Dependent</dt>
+                        <dd>
+                          {[candidate.dependent.firstName, candidate.dependent.lastName]
+                            .filter(Boolean)
+                            .join(' ')}{' '}
+                          · DOB {candidate.dependent.dateOfBirth || 'Unknown'}
+                        </dd>
+                      </div>
+                    )}
+                    <div>
+                      <dt>Source</dt>
+                      <dd>
+                        {candidate.source?.replaceAll('_', ' ') || 'Saved insurance discovery'}
+                      </dd>
+                    </div>
+                  </dl>
+                  {!!candidate.reason_codes?.length &&
+                    candidate.reason_codes.length > (firstReasonInHeadline ? 1 : 0) && (
+                      <ul>
+                        {candidate.reason_codes
+                          .slice(firstReasonInHeadline ? 1 : 0)
+                          .map((reason) => (
+                            <li key={reason}>{candidateReason(reason)}</li>
+                          ))}
+                      </ul>
+                    )}
+                  {!readOnly && !candidate.id && (
+                    <p>
+                      Saved discovery has no candidate ID. Rerun policy discovery before checking
+                      this policy.
+                    </p>
                   )}
-                  <div>
-                    <dt>Source</dt>
-                    <dd>{candidate.source?.replaceAll('_', ' ') || 'Saved insurance discovery'}</dd>
-                  </div>
-                </dl>
-                {!!candidate.reason_codes?.length && (
-                  <ul>
-                    {candidate.reason_codes.map((reason) => (
-                      <li key={reason}>{reason.replaceAll('_', ' ').toLowerCase()}</li>
-                    ))}
-                  </ul>
-                )}
-                {!readOnly && (
-                  <button
-                    disabled={
-                      !!busy ||
-                      recovering ||
-                      result.recovery?.state === 'indeterminate' ||
-                      candidate.reason_codes?.some((reason) =>
-                        [
-                          'PATIENT_NAME_MISMATCH',
-                          'PATIENT_DOB_MISMATCH',
-                          'PATIENT_DOB_MISSING',
-                          'RELATIONSHIP_CONFLICT',
-                        ].includes(reason),
-                      )
-                    }
-                    onClick={() => void selectCoverage(candidate.id)}
-                  >
-                    Check this policy
-                  </button>
-                )}
-              </article>
-            ))}
+                  {!readOnly && !!candidate.id && (
+                    <button
+                      disabled={
+                        !!busy ||
+                        recovering ||
+                        result.recovery?.state === 'indeterminate' ||
+                        candidate.reason_codes?.some((reason) =>
+                          [
+                            'PATIENT_NAME_MISMATCH',
+                            'PATIENT_DOB_MISMATCH',
+                            'PATIENT_DOB_MISSING',
+                            'RELATIONSHIP_CONFLICT',
+                          ].includes(reason),
+                        )
+                      }
+                      onClick={() => candidate.id && void selectCoverage(candidate.id)}
+                    >
+                      Check this policy
+                    </button>
+                  )}
+                </article>
+              )
+            })}
         </section>
       )}
       {!!result.insurance_hints?.length && (
         <section className="visit-recovery">
           <h3>Recorded insurance clues</h3>
-          <p>These details can support an inquiry; they do not verify active coverage.</p>
+          <p>These details can support an inquiry. They do not verify active coverage.</p>
           {result.insurance_hints.map((hint, index) => (
             <p key={index}>
               {hint.payer || 'Payer unknown'} · Member ID {hint.member_id || 'unknown'} ·{' '}
@@ -249,19 +324,27 @@ export default function CoverageRecovery({
             Insurance estimate:{' '}
             {result.insurance_diagnosis.pricingStatus.replaceAll('_', ' ').toLowerCase()}
           </p>
+          {result.insurance_diagnosis.activePolicyCount != null && (
+            <p>
+              {result.insurance_diagnosis.activePolicyCount} distinct active medical{' '}
+              {result.insurance_diagnosis.activePolicyCount === 1 ? 'policy' : 'policies'} found.
+              Returned responses may include copies of one policy and other benefit categories.
+            </p>
+          )}
           {result.insurance_diagnosis.rawCandidateCount != null && (
             <p>
-              {result.insurance_diagnosis.rawCandidateCount} returned ·{' '}
+              {result.insurance_diagnosis.rawCandidateCount} payer responses ·{' '}
               {result.insurance_diagnosis.retainedCandidateCount} retained ·{' '}
-              {result.insurance_diagnosis.verifiedCandidateCount} matched candidates
+              {result.insurance_diagnosis.verifiedCandidateCount} identity and coverage matches
             </p>
           )}
-          {result.insurance_diagnosis.enrollment && (
-            <p>
-              Provider enrollment:{' '}
-              {result.insurance_diagnosis.enrollment.status.replaceAll('_', ' ').toLowerCase()}
-            </p>
-          )}
+          {result.insurance_diagnosis.enrollment &&
+            (result.benefits?.active !== true || result.benefits?.historical_only) && (
+              <p>
+                Provider enrollment:{' '}
+                {result.insurance_diagnosis.enrollment.status.replaceAll('_', ' ').toLowerCase()}
+              </p>
+            )}
           {!!result.insurance_diagnosis.pricingReasons.length && (
             <ul>
               {result.insurance_diagnosis.pricingReasons.map((reason) => (

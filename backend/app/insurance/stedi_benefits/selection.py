@@ -7,7 +7,7 @@ from typing import Any
 
 from app.insurance.stedi_benefits.fields import (
     _benefit_notes, _dates_apply, _network_indicator, _procedure,
-    _provider_participation, _stedi_entries,
+    _provider_participation, _stedi_entries, coverage_kind,
 )
 
 
@@ -26,13 +26,15 @@ class BenefitRows:
 
 
 def select_benefit_rows(payload: dict[str, Any], service_type_code: str,
-                        provider_network_verified: bool, *, procedure_code: str | None,
+                        provider_network_verified: bool, *, provider_out_of_network_verified: bool = False,
+                        procedure_code: str | None,
+                        office_visit: bool = False,
                         service_date: str | None, selected_ids: list[str] | None,
                         office_service_types: list[str] | None,
                         place_of_service: str | None, visit_context: dict | None,
                         provider_npi: str | None) -> BenefitRows:
     """Apply service, location, date and provider-specific network evidence."""
-    entries = _stedi_entries(payload)
+    entries = [row for row in _stedi_entries(payload) if coverage_kind(row, payload) != 'supplementary']
     priorities = office_service_types or ['98', 'BY', '1']
     excluded_service_ids = []
     if place_of_service:
@@ -55,7 +57,7 @@ def select_benefit_rows(payload: dict[str, Any], service_type_code: str,
         if diagnostic_rows:
             service_type_code = '98'
             entries = [row for row in entries if '98' not in (row.get('serviceTypeCodes') or []) or row in diagnostic_rows]
-    office = procedure_code in {str(n) for n in (*range(99202, 99206), *range(99212, 99216))}
+    office = office_visit or procedure_code in {str(n) for n in (*range(99202, 99206), *range(99212, 99216))}
     if office and selected_ids is None:
         # Diagnosis context must establish an unrelated visit. Unknown/TMJ/jaw
         # context retains the exclusion; an office CPT alone cannot disprove TMJ.
@@ -120,15 +122,17 @@ def select_benefit_rows(payload: dict[str, Any], service_type_code: str,
             return all(_dates_apply(bound, service_date) for bound in bounds)
         except (ValueError, TypeError):
             return False
-    provider_rows = [row for row in _stedi_entries(payload) if relevant_service(row) and provider_row_in_date(row)]
-    negative_provider_ids = [row['evidence_path'] for row in provider_rows if any(
+    provider_rows = [row for row in _stedi_entries(payload) if coverage_kind(row, payload) != 'supplementary'
+                     and relevant_service(row) and provider_row_in_date(row)]
+    negative_provider_ids = [row['evidence_path'] for row in provider_rows if provider_npi and any(
         re.search(r'\bprovider(?: ID you entered)? is (?:not participating|not in[ -]network|non[- ]participating|out[- ]of[- ]network)\b', note, re.I)
         for note in _benefit_notes([row.get('messages'), row.get('additionalInformation')]))]
     positive_provider_ids = [row['evidence_path'] for row in provider_rows if any(
         _provider_participation(note, provider_npi)
         for note in _benefit_notes([row.get('messages'), row.get('additionalInformation')]))]
-    network_conflict = bool(negative_provider_ids and (positive_provider_ids or provider_network_verified))
-    selected_tier = 'out_of_network' if negative_provider_ids and not network_conflict else 'in_network'
+    network_conflict = bool((negative_provider_ids and (positive_provider_ids or provider_network_verified))
+                            or (provider_out_of_network_verified and positive_provider_ids))
+    selected_tier = 'out_of_network' if (negative_provider_ids or provider_out_of_network_verified) and not network_conflict else 'in_network'
     accepted_networks = ({'N', 'NO', 'OUT_OF_NETWORK', 'W', 'IN_AND_OUT_OF_NETWORK'} if selected_tier == 'out_of_network'
                          else {'Y', 'YES', 'IN_NETWORK', 'W', 'IN_AND_OUT_OF_NETWORK'})
     entries = [row for row in entries if relevant_service(row)

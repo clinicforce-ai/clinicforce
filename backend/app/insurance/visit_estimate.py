@@ -7,20 +7,17 @@ import re
 from datetime import date, datetime
 
 from app.insurance import commercial, cpt_rules, identity
+from app.insurance.network_participation import verified_in_network
 from app.insurance.pricing.visit import _workflow_condition, service_type, review_valid, resolve_requirements, price_lines
 
 
 def clinical_group(code: str) -> str:
-    if code.isdigit() and 99202 <= int(code) <= 99215:
-        return 'visit'
-    if code in cpt_rules.NCS_CODES:
-        return 'nerve'
-    if code in cpt_rules.EMG_ADD_ONS:
-        return 'muscle'
-    return 'other'
+    return cpt_rules.service_definition(code)['group']
 
 
 def is_emg_visit(inputs: dict) -> bool:
+    if type(inputs.get('emg_required')) is bool:
+        return inputs['emg_required']
     if any(row.get('service_status') == 'scheduled' and row.get('code') in cpt_rules.NCS_CODES | cpt_rules.EMG_ADD_ONS
            for row in inputs.get('lines', [])):
         return True
@@ -119,7 +116,9 @@ def arrival_collection(price: dict, benefits: dict, review: dict) -> dict:
     result = {'amount_cents': None, 'estimated_cents': None, 'verified_copay_cents': None, 'status': 'verify', 'basis': 'patient_obligations',
               'prior_balance_cents': None, 'noncovered_cents': None, 'payments_received_cents': None,
               'reason': 'Verify coverage, planned services, benefits and approval requirements before collecting.'}
-    if benefits.get('active') is not True or benefits.get('network_status') != 'in_network' or benefits.get('has_secondary') or benefits.get('service_date_matches') is False or any('identity' in reason.lower() or 'evidence' in reason.lower() for reason in benefits.get('review_reasons', [])):
+    if price.get('service_issues'):
+        return result
+    if benefits.get('active') is not True or not verified_in_network(benefits) or benefits.get('has_secondary') or benefits.get('service_date_matches') is False or not identity.patient_benefits_bound(benefits.get('identity')) or any('identity' in reason.lower() or 'evidence' in reason.lower() for reason in benefits.get('review_reasons', [])):
         return result
     same_alternative_total = (price.get('mode') == 'alternatives' and price.get('complete')
                               and price.get('patient_min_cents') is not None
@@ -170,7 +169,8 @@ def planning_estimate(price: dict, benefits: dict, comparison: dict) -> dict | N
     if (not lines or benefits.get('active') is not True or benefits.get('has_secondary')
             or benefits.get('network_status') == 'out_of_network'
             or benefits.get('service_date_matches') is False or price.get('service_issues')
-            or (comparison.get('status') == 'review' and not identity.name_difference_only(comparison))
+            or (not identity.patient_benefits_bound(comparison) and not
+                (comparison.get('status') == 'review' and identity.name_difference_only(comparison)))
             or any('evidence' in r.lower() or 'date' in r.lower() for r in benefits.get('review_reasons', []))
             or any('needs mapping' in line.get('benefit_basis', '') for line in lines)
             or any(requirement.get('status') in {'denied', 'expired', 'pending'}
@@ -182,7 +182,7 @@ def planning_estimate(price: dict, benefits: dict, comparison: dict) -> dict | N
     if benefits.get('network_status') != 'in_network':
         assumptions.append('The provider and visit location participate in this plan’s network.')
     assumptions.append('The selected services are covered and any required referral or authorization is in place.')
-    if all(line.get('units') and line['benefits'].get('active') is True
+    if benefits.get('network_status') == 'in_network' and all(line.get('units') and line['benefits'].get('active') is True
            and line['benefits'].get('network_status') != 'out_of_network'
            and (line['benefits'].get('oop_remaining_cents') == 0 or
                 line['benefits'].get('family_oop_zero_applies'))

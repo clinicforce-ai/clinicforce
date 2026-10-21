@@ -35,7 +35,6 @@ export default function CommercialSourcesDetail({
   } = model
   return (
     <details
-      open={readOnly || undefined}
       id="visit-detail-sources"
       className="visit-detail-section"
       onToggle={(event) => {
@@ -79,6 +78,34 @@ export default function CommercialSourcesDetail({
                   'Contract match not determined'}
               </dd>
             </div>
+            {result.agreement_exclusion && (
+              <div>
+                <dt>Excluded agreement</dt>
+                <dd>
+                  <a
+                    href={`/api/staff/library/${encodeURIComponent(result.agreement_exclusion.document_id)}/text`}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    Clinical Library page {result.agreement_exclusion.page}
+                  </a>
+                  <small>{result.agreement_exclusion.passage}</small>
+                </dd>
+              </div>
+            )}
+            {result.network_evidence?.product_mapping_approval && (
+              <div>
+                <dt>Product mapping approval</dt>
+                <dd>
+                  {result.network_evidence.product_mapping_approval.reference}
+                  <small>
+                    Verified{' '}
+                    {result.network_evidence.product_mapping_approval.verified_at ||
+                      'date not returned'}
+                  </small>
+                </dd>
+              </div>
+            )}
             <div>
               <dt>Cash schedule</dt>
               <dd>
@@ -98,7 +125,7 @@ export default function CommercialSourcesDetail({
             </p>
           )}
           {!!result.library_pricing?.length && (
-            <details className="library-diagnostics" open={readOnly || undefined}>
+            <details className="library-diagnostics">
               <summary>Library pricing sources and extraction diagnostics</summary>
               {result.library_pricing.map((document) => (
                 <div key={document.document_id}>
@@ -144,7 +171,7 @@ export default function CommercialSourcesDetail({
             <p>
               {price?.conditional
                 ? 'Conditional patient share if unresolved requirements are cleared'
-                : 'Estimated patient share after the claim'}
+                : 'Estimated patient responsibility'}
               : {patientPrice}.
             </p>
           )}

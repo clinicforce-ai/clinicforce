@@ -16,9 +16,11 @@ def appointment(monkeypatch):
     network = {'id': 'network-a', 'payer_connection_id': payer['id'], 'status': 'verified',
                'billing_npi': '1111111111', 'rendering_npi': '2222222222', 'location_id': 'office',
                'place_of_service': '11', 'plan_matcher': 'Choice Medical', 'effective_from': '2020-01-01',
-               'evidence_reference': 'Synthetic approved contract', 'network_name': 'Example network'}
+               'evidence_reference': 'library:signed-contract', 'network_name': 'Example network'}
     profile = {'id': 'profile-a', 'payer_connection_id': payer['id'], 'provider_network_id': network['id'],
-               'status': 'staff_guidance_enabled', 'plan_matcher': 'Choice Medical', 'rules': {}}
+               'status': 'staff_guidance_enabled', 'plan_matcher': 'Choice Medical', 'rules': {
+                   'library_source': {'document_id': 'signed-contract', 'reference': 'library:signed-contract',
+                                      'sha256': 'synthetic-hash', 'locator': 'Page 1'}}}
     rates = [{'code': str(code), 'allowed_cents': 20000, 'modifier': '', 'source_reference': 'Synthetic rate'}
              for code in range(99212, 99216)]
     inputs = {'payer_id': payer['id'], 'service_date': day, 'visit_type': 'established',
@@ -40,6 +42,9 @@ def appointment(monkeypatch):
         'id': 'signed-contract', 'kind': 'contract', 'content_type': 'application/pdf',
         'payer': 'Example Health', 'label': 'Synthetic signed contract', 'effective_from': '2020-01-01',
     }] if practice == 'clinic-a' else [])
+    monkeypatch.setattr(api.staff_store, 'get_library', lambda key, practice: {
+        'id': key, 'kind': 'contract', 'content_type': 'application/pdf', 'sha256': 'synthetic-hash',
+        'label': 'Synthetic signed contract', 'effective_from': '2020-01-01'} if practice == 'clinic-a' else None)
     monkeypatch.setattr(api.practice_prices, 'current', lambda *args: None)
     monkeypatch.setattr(api.stedi_financial, 'credentials', lambda *args: 'synthetic-key')
     monkeypatch.setattr(api.object_store, 'enabled', lambda: True)
@@ -53,6 +58,21 @@ def test_uncoded_followup_is_ready_for_automatic_planning(appointment):
     result = api._appointment_readiness('clinic-a', {'practice_id': 'clinic-a', 'intake': {'fields': {}}}, inputs, source)
     assert result['ready'], result['blockers']
     assert result['ecw']['scheduled_codes'] == []  # No invented EHR coding.
+
+
+def test_multiple_active_policies_allow_selected_coverage_inquiry_but_require_cob(appointment):
+    inputs, source, _, _ = appointment
+    source['active_coverages'] = 3
+    session = {'practice_id': 'clinic-a', 'intake': {'fields': {}}}
+    result = api._appointment_readiness('clinic-a', session, inputs, source)
+    assert result['ready'], result['blockers']
+    assert result['blockers'] == []
+    assert any('coordination of benefits' in action.lower() for action in result['coverage_followups'])
+
+    source['coverage_id'] = None  # Tied eCW order leaves no safe policy to inquire about.
+    ambiguous = api._appointment_readiness('clinic-a', session, inputs, source)
+    assert not ambiguous['ready']
+    assert any('active coverage' in reason.lower() for reason in ambiguous['blockers'])
 
 
 @pytest.mark.parametrize('mode', ['deferred', 'verified', 'wrong_route', 'other_clinic', 'expired_network', 'unknown_mapping', 'wrong_product'])
@@ -97,7 +117,7 @@ def test_estimate_uses_existing_mapping_without_staff_confirmation(appointment, 
     if mode == 'verified':
         assert result['collection_guidance']['amount_cents'] == 4000
     elif mode == 'wrong_product':
-        assert result['benefits']['network_status'] == 'out_of_network'
+        assert result['benefits']['network_status'] == 'unknown'
         assert result['collection_guidance']['amount_cents'] is None
     else:
         assert result['collection_guidance']['amount_cents'] is None

@@ -28,6 +28,8 @@ def payload():
 
 def run(raw, codes=None, rates=None):
     benefits = commercial.normalize_stedi_271(raw, '98', True, procedure_code='99214', service_date=DAY)
+    benefits['identity'] = {'status': 'matched', 'binding': 'synthetic-current-binding', 'match_version': 2}  # Synthetic member match; tests isolate cost sharing.
+    benefits['network_source'] = 'clinic_library_contract'
     price = visit_estimate.price_lines(codes or [{'id': 'office', 'code': '99214', 'units': 1}],
         rates if rates is not None else [{'code': '99214', 'allowed_cents': 20000}], benefits,
         {'cost_share': 'payer_returned'}, payload=raw, service_date=DAY)
@@ -128,6 +130,8 @@ def test_sanitized_neurology_visit_keeps_copay_when_testing_rates_are_missing():
     ]}
     raw['benefitsInformation'][1]['additionalInformation'].append({'description': 'Deductible does not apply'})
     benefits = commercial.normalize_stedi_271(raw, '98', True, procedure_code='99204', service_date=DAY)
+    benefits['identity'] = {'status': 'matched', 'binding': 'synthetic-current-binding', 'match_version': 2}
+    benefits['network_source'] = 'clinic_library_contract'
     codes = [{'id': 'office', 'code': '99204', 'units': 1},
              {'id': 'nerve', 'code': '95911', 'units': 1},
              {'id': 'muscle', 'code': '95886', 'units': 1}]

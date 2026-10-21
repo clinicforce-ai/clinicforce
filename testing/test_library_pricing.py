@@ -4,7 +4,7 @@ import json
 import os
 from copy import deepcopy
 from uuid import uuid4
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import psycopg
 from psycopg import sql
@@ -104,6 +104,55 @@ def test_plan_matrix_cannot_publish_price_network_or_payer_rules():
     save.assert_called_once()
     assert evidence['summary']['status'] == 'missing_dependency'
     assert evidence['summary']['estimator_version'] is None
+
+
+def test_payer_only_library_table_cannot_enable_a_new_uhc_route():
+    source = document('contract', payer='UnitedHealthcare')
+    evidence = extracted([table([['Payer Name', 'Stedi Payer ID', 'Payer Category'],
+                                 ['UnitedHealthcare', 'synthetic-route', 'commercial_medical']])])
+    compiled = rules.compile_document(source, evidence, [])
+    assert compiled.get('connection') and not compiled['networks']
+    db = MagicMock(spec=['execute', '__enter__', '__exit__'])
+    db.__enter__.return_value = db
+    with patch.object(staff_store, '_connection', return_value=db):
+        rules.publish(source, evidence, compiled)
+    insert = next(call for call in db.execute.call_args_list
+                  if 'INSERT INTO commercial_payer_connections' in call.args[0])
+    assert "'draft'" in insert.args[0] or 'draft' in insert.args[1]
+
+
+def test_generic_uhc_ppo_row_is_not_executable_participation():
+    source = document('contract', payer='UnitedHealthcare')
+    evidence = extracted([table([
+        ['Payer Name', 'Stedi Payer ID', 'Payer Category', 'Billing NPI', 'Rendering NPI',
+         'Organization Name', 'TIN', 'Location ID', 'POS', 'Network', 'Plan', 'Effective From',
+         'Participation', 'Execution Status'],
+        ['UnitedHealthcare', 'synthetic-route', 'commercial_medical', '1111111111', '2222222222',
+         'Example Clinic', '123456789', 'office', '11', 'UHC', 'PPO', '2026-01-01',
+         'participating', 'executed']])])
+    compiled = rules.compile_document(source, evidence, [])
+    assert not compiled['networks']
+    assert any('exact UHC product' in issue['reason'] for issue in compiled['issues'])
+
+
+def test_specific_executed_uhc_product_can_publish_a_scoped_route():
+    source = document('contract', payer='UnitedHealthcare')
+    evidence = extracted([table([
+        ['Payer Name', 'Stedi Payer ID', 'Payer Category', 'Billing NPI', 'Rendering NPI',
+         'Organization Name', 'TIN', 'Location ID', 'POS', 'Network', 'Plan', 'Effective From',
+         'Participation', 'Execution Status'],
+        ['UnitedHealthcare', 'synthetic-route', 'commercial_medical', '1111111111', '2222222222',
+         'Example Clinic', '123456789', 'office', '11', 'Choice Plus Network', 'Choice Plus',
+         '2026-01-01', 'participating', 'executed']])])
+    compiled = rules.compile_document(source, evidence, [])
+    assert len(compiled['networks']) == 1
+    db = MagicMock(spec=['execute', '__enter__', '__exit__'])
+    db.__enter__.return_value = db
+    with patch.object(staff_store, '_connection', return_value=db):
+        rules.publish(source, evidence, compiled)
+    insert = next(call for call in db.execute.call_args_list
+                  if 'INSERT INTO commercial_payer_connections' in call.args[0])
+    assert 'staff_guidance_enabled' in insert.args[1]
 
 
 def test_formulas_packages_and_alternatives_never_double_charge():
@@ -237,6 +286,23 @@ def test_automatic_publish_backfill_duplicate_retry_and_tenant_scope():
             source = {'billing_provider': {'npi': '1234567890'}, 'location_id': 'office', 'plan': 'Example Product'}
             _, network, profile = api._practice_path('practice', inputs, source)
             assert commercial_store.matching_rates('practice', profile, network, '2026-10-08', [{'code': '99213'}])[0]['allowed_cents'] == 20000
+            alias_profile = {**profile, 'rate_plan_matcher': 'POS CHOICE PLUS', 'require_exact_rate_plan': True}
+            assert commercial_store.matching_rates('practice', alias_profile, network, '2026-10-08', [{'code': '99213'}]) == []
+            version = commercial_store.list_rate_versions('practice')[0]['id']
+            for offset, product, allowance in ((1, '', 24000), (2, 'pos choice plus', 25000)):
+                with staff_store._connection() as db:
+                    db.execute("""INSERT INTO commercial_rate_lines
+                        (version_id,row_number,code,description,modifier,unit_rule,allowed_cents,cash_cents,
+                         network_name,plan_matcher,place_of_service,provider_npi,tin,effective_from,effective_to)
+                        SELECT version_id,row_number+%s,code,description,modifier,unit_rule,%s,cash_cents,
+                               network_name,%s,place_of_service,provider_npi,tin,effective_from,effective_to
+                        FROM commercial_rate_lines WHERE version_id=%s AND plan_matcher='Example Product'""",
+                               (offset, allowance, product, version))
+                if not product:
+                    assert commercial_store.matching_rates('practice', alias_profile, network, '2026-10-08',
+                                                           [{'code': '99213'}]) == []
+            assert commercial_store.matching_rates('practice', alias_profile, network, '2026-10-08',
+                                                   [{'code': '99213'}])[0]['allowed_cents'] == 25000
             negative = {**contract, 'id': 'negative', 'sha256': 'negative-hash'}
             staff_store.create_library(staff, negative)
             neg_evidence = extracted([deepcopy(scope)]); neg_evidence['sha256'] = 'negative-hash'

@@ -9,10 +9,30 @@ from datetime import datetime, timezone
 from fastapi import HTTPException
 
 from app.api.routers.insurance import _response
-from app.insurance import availity_results as results, stedi, stedi_estimate, stedi_results
+from app.insurance import availity_results as results, identity, stedi, stedi_estimate, stedi_results
 from app.insurance.v2_decisions import canonical, service_lines, request_missing
 
 from app.api.routers import insurance_v2 as _v2
+
+
+def stedi_patient_binding(case: dict, payload: dict) -> dict:
+    """Keep the identity decision without exposing returned member demographics."""
+    inputs = case.get("inputs") or {}
+    patient, subscriber = inputs.get("patient") or {}, inputs.get("subscriber") or {}
+    expected = {"patient_first": patient.get("patient_first_name"),
+                "patient_last": patient.get("patient_last_name"),
+                "patient_birth_date": patient.get("patient_birth_date"),
+                "member_id": inputs.get("member_id") or subscriber.get("memberId"),
+                "subscriber_first": subscriber.get("firstName"),
+                "subscriber_last": subscriber.get("lastName"),
+                "relationship": inputs.get("relationship"),
+                "payer_id": inputs.get("payer_id")}
+    comparison = identity.compare(payload, expected)
+    return {"status": comparison["status"], "match_version": comparison["match_version"],
+            "binding": comparison["binding"] if identity.patient_benefits_bound(comparison) else None,
+            "differences": [row["field"] for row in comparison.get("differences") or []],
+            "policy_differences": [row["field"] for row in comparison.get("policy_differences") or []],
+            "missing_fields": comparison.get("missing_fields") or []}
 
 
 def request_body(case: dict, resource: str) -> dict:
@@ -102,8 +122,10 @@ async def submit_stedi(case: dict, session: dict, resource: str, practice: dict)
         response = await stedi.Client(stedi.Settings.read()).check(body)
         value = {**case["transactions"][resource], **response, "source": "stedi", "resource_id": response.get("check_id"),
                  "checked_at": datetime.now(timezone.utc).isoformat(), "next_poll_at": time.time()}
-        result = stedi_results.coverage(results.obj(response.get("payload"))) if response.get("outcome") == "complete" else {}
+        payload = results.obj(response.get("payload"))
+        result = stedi_results.coverage(payload) if response.get("outcome") == "complete" else {}
         if result:
+            result["identity"] = stedi_patient_binding(case, payload)
             result.update(_v2.stedi_network(case, practice, result))
         value["result"] = result
         value["message"] = "Stedi returned eligibility and benefits." if response.get("outcome") == "complete" else response.get("message")
@@ -156,7 +178,10 @@ async def stedi_coverage(case: dict, session: dict, practice: dict, attempts: li
     response = await stedi.Client(settings).check(body)
     value = {**case["transactions"]["coverage"], **response, "source": "stedi", "resource_id": response.get("check_id"),
              "checked_at": datetime.now(timezone.utc).isoformat(), "next_poll_at": time.time()}
-    value["result"] = stedi_results.coverage(results.obj(response.get("payload"))) if response.get("outcome") == "complete" else {}
+    payload = results.obj(response.get("payload"))
+    value["result"] = stedi_results.coverage(payload) if response.get("outcome") == "complete" else {}
+    if value["result"]:
+        value["result"]["identity"] = stedi_patient_binding(case, payload)
     if response.get("outcome") == "complete":
         value["message"] = "Stedi returned eligibility and benefits after Availity did not return a usable coverage response."
     case["transactions"]["coverage"] = value

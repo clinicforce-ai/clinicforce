@@ -63,6 +63,33 @@ def _npi(resource: dict[str, Any]) -> str | None:
             return value
     return None
 
+
+def _tin_values(resource: dict[str, Any]) -> set[str]:
+    """Read billing TINs only from specifically labelled FHIR identifiers."""
+    values = set()
+    for identifier in resource.get('identifier') or []:
+        if not isinstance(identifier, dict):
+            continue
+        value = re.sub(r'\D', '', str(identifier.get('value') or ''))
+        kind = identifier.get('type') or {}
+        codings = kind.get('coding') or [] if isinstance(kind, dict) else []
+        label = ' '.join((str(identifier.get('system') or ''), str(kind.get('text') or '')
+                          if isinstance(kind, dict) else str(kind),
+                          *(str(code.get('code') or '') + ' ' + str(code.get('display') or '')
+                            for code in codings if isinstance(code, dict)))).casefold()
+        if len(value) == 9 and re.search(r'\b(?:tin|ein|tax(?:payer)?[ -]?(?:id|identification))\b', label):
+            values.add(value)
+    return values
+
+
+def _tin(resource: dict[str, Any]) -> str | None:
+    values = _tin_values(resource)
+    return next(iter(values)) if len(values) == 1 else None
+
+
+def _tin_conflict(resource: dict[str, Any]) -> bool:
+    return len(_tin_values(resource)) > 1
+
 def _display(resource: dict[str, Any]) -> str | None:
     if resource.get("name") and isinstance(resource.get("name"), str):
         return resource["name"]

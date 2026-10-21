@@ -1,4 +1,9 @@
+import { coveragePolicyStatus } from './coveragePolicyStatus'
 import { money, range, visitDate, visitTime } from './format'
+import { patientBenefitsBound as hasPatientBinding } from './identityBinding'
+import { firstSelectedCptIssue } from './selectedCptIssue'
+import { selectedRequirementIssue } from './selectedRequirementIssue'
+import { visitServiceLabel } from './visitServiceLabel'
 import type { CommercialEstimateActions } from './useCommercialEstimateActions'
 
 export function deriveCommercialEstimateView({
@@ -12,18 +17,80 @@ export function deriveCommercialEstimateView({
 }: CommercialEstimateActions) {
   const selected = appointments.find((visit) => visit.id === selectedVisit)
   const benefits = result?.benefits
+  const patientBenefitsBound = hasPatientBinding(result?.identity)
+  const participationConflict =
+    benefits?.network_conflict === true ||
+    benefits?.review_reasons?.some((reason) =>
+      reason.toLowerCase().includes('provider-network evidence reports nonparticipation'),
+    ) === true
+  const networkConfirmed =
+    benefits?.network_status === 'in_network' &&
+    !participationConflict &&
+    ['clinic_library_contract', 'payer_participation_message'].includes(
+      benefits.network_source || '',
+    )
   const price = result?.price_range
+  const outOfNetworkConfirmed =
+    benefits?.network_status === 'out_of_network' &&
+    [
+      'payer_participation_message',
+      'clinic_nonparticipation_rule',
+      'clinic_contract_inventory',
+    ].includes(benefits.network_source || '') &&
+    !participationConflict
+  const outOfNetworkAllowance =
+    outOfNetworkConfirmed &&
+    price?.mode === 'services' &&
+    price.complete === true &&
+    !!price.lines?.length &&
+    price.lines.every(
+      (line) =>
+        ['payer_out_of_network', 'cms_original_medicare_estimate'].includes(
+          line.allowed_basis || '',
+        ) &&
+        Number.isInteger(line.allowed_cents) &&
+        line.allowed_cents! >= 0 &&
+        line.rate_resolution?.status === 'RESOLVED' &&
+        !!line.calculation,
+    )
+  const selectedCptIssue = firstSelectedCptIssue(result)
+  const servicePlanIssue = price?.service_issues?.find((issue) => issue.trim())
+  const servicePlanAction = servicePlanIssue
+    ? `${servicePlanIssue.replaceAll(';', ',').replace(/\.$/, '')}. Correct the selected service plan and rerun the insured estimate.`
+    : null
+  const topCoverageIssue =
+    benefits?.coverage_status_conflict === true
+      ? 'The payer returned conflicting active and inactive coverage for this visit. Ask which status applies before collecting.'
+      : benefits?.coverage_dates_invalid === true
+        ? 'The payer coverage date could not be read. Obtain visit-date eligibility before collecting.'
+        : null
+  const payerEvidenceSafe = !topCoverageIssue && !selectedCptIssue && !servicePlanAction
+  const financialSourceValid =
+    benefits?.historical_only !== true &&
+    !result?.encounter_summary?.integrity_error &&
+    !benefits?.source_errors?.length &&
+    !price?.lines?.some((line) => line.benefits.source_errors?.length)
   const officeCopayLine = price?.lines?.find(
     (line) => /^992(?:0[2-5]|1[2-5])$/.test(line.code) && line.benefits.copay_id,
   )
   const copayEvidenceId = officeCopayLine?.benefits.copay_id || benefits?.copay_id
   const copaySource =
     officeCopayLine?.benefit_source || result?.benefit_source || 'payer eligibility'
-  const failed = !!result?.eligibility_error
-  const failure = result?.eligibility_failure
+  const staleEnrollmentFailure =
+    benefits?.active === true &&
+    !benefits.historical_only &&
+    result?.eligibility_failure?.kind === 'provider_enrollment'
+  const failure = staleEnrollmentFailure ? undefined : result?.eligibility_failure
   const patientPrice =
     benefits?.active === true &&
-    benefits.network_status === 'in_network' &&
+    benefits.service_date_matches !== false &&
+    payerEvidenceSafe &&
+    financialSourceValid &&
+    networkConfirmed &&
+    result?.encounter_summary?.complete !== false &&
+    patientBenefitsBound &&
+    !benefits.has_secondary &&
+    result?.recovery?.reason_code !== 'multiple_active_policies' &&
     price?.complete &&
     price?.patient_min_cents != null &&
     price.patient_max_cents != null
@@ -82,53 +149,15 @@ export function deriveCommercialEstimateView({
     ),
   ]
   const candidateStatus = candidateStates.length === 1 ? candidateStates[0] : undefined
-  const policyStatus = tooEarly
-    ? 'Check closer to visit'
-    : result?.recovery?.state === 'pending'
-      ? readOnly
-        ? 'Coverage check was pending'
-        : 'Coverage check in progress'
-      : result?.recovery?.state === 'indeterminate'
-        ? 'Coverage check outcome unknown'
-        : result?.payment_mode === 'cash' && result.cash_fallback
-          ? 'Coverage unverified · cash pricing'
-          : benefits?.service_date_matches === false
-            ? 'Coverage returned · verify appointment date'
-            : benefits?.active === true
-              ? 'Coverage active'
-              : benefits?.coverage_evidence?.status === 'EXPIRED'
-                ? 'Returned policy expired'
-                : benefits?.coverage_evidence?.status === 'FUTURE'
-                  ? 'Coverage starts after this visit'
-                  : benefits?.active === false
-                    ? 'Coverage inactive'
-                    : candidateStatus === 'EXPIRED'
-                      ? 'Returned policy expired'
-                      : candidateStatus === 'INACTIVE'
-                        ? 'Returned policy inactive'
-                        : candidateStatus === 'FUTURE'
-                          ? 'Returned coverage starts after this visit'
-                          : result?.coverage_status === 'NOT_FOUND'
-                            ? 'Coverage not found electronically'
-                            : result?.recovery?.state === 'rejected'
-                              ? 'Coverage check could not complete'
-                              : result?.coverage_status === 'REVIEW_REQUIRED'
-                                ? 'Coverage unverified · review required'
-                                : result?.ecw_coverage_active
-                                  ? 'Policy in eCW · verify benefits'
-                                  : result?.recovery?.reason_code === 'multiple_active_policies'
-                                    ? 'Two active policies found'
-                                    : failure?.kind === 'provider_enrollment'
-                                      ? 'Clinic payer access missing'
-                                      : result?.identity?.status === 'review'
-                                        ? 'Policy details differ'
-                                        : result?.cash_fallback
-                                          ? 'Insurance amount unavailable'
-                                          : result
-                                            ? 'Payer check incomplete'
-                                            : busy === 'estimate'
-                                              ? 'Coverage check in progress'
-                                              : 'Coverage not checked'
+  const policyStatus = coveragePolicyStatus({
+    result,
+    tooEarly,
+    readOnly,
+    busy,
+    failureKind: failure?.kind,
+    candidateStatus,
+    patientBenefitsBound,
+  })
   const coverageSource =
     benefits?.active != null || benefits?.coverage_evidence
       ? result?.benefit_source
@@ -136,10 +165,10 @@ export function deriveCommercialEstimateView({
         : 'Payer eligibility source not retained'
       : result?.recovery?.state
         ? result.insurance_diagnosis?.coverageSource === 'stedi_discovery'
-          ? 'Stedi coverage discovery · eligibility not confirmed'
-          : 'Coverage discovery · eligibility not confirmed'
+          ? 'Stedi coverage discovery · payer benefits unavailable'
+          : 'Coverage discovery · payer benefits unavailable'
         : result?.ecw_coverage_active
-          ? 'eCW policy record · payer benefits not confirmed'
+          ? 'eCW policy record · payer benefits unavailable'
           : 'No verified coverage source'
   const contractEvidence = result?.network_evidence || result?.mapping_candidate?.contract
   const contractPage = contractEvidence?.locator?.match(/^Page (\d+)(?:,|$)/)?.[1]
@@ -151,7 +180,8 @@ export function deriveCommercialEstimateView({
 
   const cash = result?.payment_mode === 'cash'
   const coverageTone =
-    policyStatus === 'Coverage active'
+    policyStatus === 'Coverage active' ||
+    policyStatus === 'Coverage active · insured price unavailable'
       ? 'is-confirmed'
       : !result ||
           tooEarly ||
@@ -167,46 +197,118 @@ export function deriveCommercialEstimateView({
     result?.collection_guidance?.status !== 'deferred' ? result?.collection_guidance : undefined
   const contractCandidate =
     benefits?.network_status === 'unknown' ? result?.mapping_candidate?.network : null
-  const networkConfirmed =
-    benefits?.network_status === 'in_network' &&
-    ['clinic_library_contract', 'payer_participation_message'].includes(
-      benefits.network_source || '',
-    )
   const networkLabel =
-    benefits?.network_status === 'in_network'
-      ? networkConfirmed
-        ? 'In network'
-        : 'In-network status unverified'
-      : benefits?.network_status === 'out_of_network'
-        ? 'Out of network'
-        : contractCandidate
-          ? 'Contract match unavailable'
-          : 'Not determined'
+    result?.network_evidence?.decision === 'out_of_network_by_clinic_contract_inventory'
+      ? 'Out of network for estimation · clinic inventory'
+      : result?.network_evidence?.decision === 'excluded_under_available_agreement'
+        ? 'Excluded under uploaded agreement'
+        : benefits?.active === true &&
+            !patientBenefitsBound &&
+            ['in_network', 'out_of_network'].includes(benefits.network_status || '')
+          ? 'Patient plan not matched'
+          : benefits?.network_status === 'in_network'
+            ? networkConfirmed
+              ? 'In network'
+              : 'Network not determined'
+            : benefits?.network_status === 'out_of_network'
+              ? outOfNetworkConfirmed
+                ? 'Out of network'
+                : 'Network not determined'
+              : contractCandidate
+                ? 'Contract match unavailable'
+                : 'Not determined'
   const networkSource =
     benefits?.network_source === 'clinic_library_contract'
       ? 'Current Clinical Library contract'
       : benefits?.network_source === 'clinic_library_absent'
-        ? 'No current matching Clinical Library contract'
-        : guidance?.network_source
+        ? 'No contract linked to this exact payer product and provider'
+        : benefits?.network_source === 'clinic_nonparticipation_rule'
+          ? 'Current scoped clinic nonparticipation rule'
+          : benefits?.network_source === 'clinic_contract_inventory'
+            ? 'Certified clinic contract inventory · not payer-confirmed'
+            : guidance?.network_source
   const networkTone =
     !result || tooEarly || result.recovery?.state === 'pending'
       ? ''
-      : benefits?.network_status === 'in_network'
-        ? networkConfirmed
-          ? 'is-confirmed'
-          : 'is-review'
-        : benefits?.network_status === 'out_of_network'
-          ? 'is-missing'
-          : 'is-review'
+      : benefits?.active === true && !patientBenefitsBound
+        ? 'is-review'
+        : benefits?.network_status === 'in_network'
+          ? networkConfirmed
+            ? 'is-confirmed'
+            : 'is-review'
+          : benefits?.network_status === 'out_of_network'
+            ? outOfNetworkConfirmed
+              ? 'is-missing'
+              : 'is-review'
+            : 'is-review'
   const unavailableReason = error
     ? 'Current benefits could not be loaded.'
-    : failure?.detail || 'The payer did not return the patient share for the selected services.'
+    : failure?.detail || 'The insured advance has not been calculated for the selected services.'
+  const independentOfficeCopay =
+    guidance?.basis === 'office_copay' &&
+    (price?.lines || []).some(
+      (line) => /^992(?:0[2-5]|1[2-5])$/.test(line.code) && line.benefits.network_independent,
+    ) &&
+    (price?.lines || [])
+      .filter((line) => /^992(?:0[2-5]|1[2-5])$/.test(line.code))
+      .every((line) => line.benefits.network_independent)
+  const outOfNetworkCollection =
+    outOfNetworkConfirmed && (outOfNetworkAllowance || guidance?.basis === 'office_copay')
+  const currentPayerAmount =
+    benefits?.active === true &&
+    benefits.service_date_matches !== false &&
+    payerEvidenceSafe &&
+    financialSourceValid &&
+    !participationConflict &&
+    patientBenefitsBound &&
+    !benefits.has_secondary &&
+    result?.recovery?.reason_code !== 'multiple_active_policies' &&
+    (networkConfirmed || outOfNetworkCollection || independentOfficeCopay)
+  const clinicInstructionAmount =
+    guidance?.basis === 'claim_after_service' ||
+    (guidance?.basis === 'ecw_billing_note' &&
+      (guidance.amount_cents === 0 || benefits?.active !== true))
+  const requirementIssue = !cash ? selectedRequirementIssue(result) : null
   const supportedAmount =
-    guidance?.status !== 'deferred_billing' &&
+    !previousEstimate &&
+    !['deferred_billing', 'action_required'].includes(guidance?.status || '') &&
     guidance?.amount_cents != null &&
     Number.isFinite(guidance.amount_cents) &&
-    guidance.amount_cents >= 0
-  const emg = result?.emg_option
+    guidance.amount_cents >= 0 &&
+    (!requirementIssue || clinicInstructionAmount) &&
+    (cash || clinicInstructionAmount || currentPayerAmount) &&
+    (result?.encounter_summary?.collect_today_cents === undefined ||
+      result.encounter_summary.collect_today_cents === guidance.amount_cents)
+  const emgBase = result?.emg_option
+  const emgCostSupported =
+    emgBase?.calculation_version === 2 &&
+    !previousEstimate &&
+    benefits?.active === true &&
+    benefits.service_date_matches !== false &&
+    payerEvidenceSafe &&
+    financialSourceValid &&
+    !participationConflict &&
+    !requirementIssue &&
+    patientBenefitsBound &&
+    !benefits.has_secondary &&
+    result?.recovery?.reason_code !== 'multiple_active_policies' &&
+    (networkConfirmed || outOfNetworkAllowance) &&
+    !result?.encounter_summary?.integrity_error &&
+    ['patient_obligations', 'anticipated_services', 'out_of_pocket_limit'].includes(
+      guidance?.basis || '',
+    )
+  const emg =
+    emgBase && !emgCostSupported
+      ? {
+          ...emgBase,
+          additional_min_cents: null,
+          additional_max_cents: null,
+          total_min_cents: null,
+          total_max_cents: null,
+          message:
+            'Recalculate the testing scenario after resolving the payer or visit issue above.',
+        }
+      : emgBase
   const billingInstruction = guidance?.billing_note?.kind === 'no_collection'
   const emgScenario = !billingInstruction && !cash && emg?.requested && !emg.included
   const cashAmount =
@@ -215,15 +317,15 @@ export function deriveCommercialEstimateView({
         ? range(guidance.range_min_cents, guidance.range_max_cents)
         : money(guidance.amount_cents!)
       : cashPrice
-  const amount = calculating
-    ? null
-    : cash
-      ? cashAmount
-      : supportedAmount
-        ? money(guidance!.amount_cents!)
-        : null
-  const deferred =
-    !calculating && !tooEarly && ((!cash && guidance?.status === 'deferred_billing') || !amount)
+  const amount =
+    calculating || previousEstimate
+      ? null
+      : cash
+        ? cashAmount
+        : supportedAmount
+          ? money(guidance!.amount_cents!)
+          : null
+  const deferred = !cash && guidance?.basis === 'claim_after_service' && !!amount
   const amountText =
     readOnly && !result?.collection_guidance && !cash
       ? 'Not retained'
@@ -236,51 +338,69 @@ export function deriveCommercialEstimateView({
               ? 'Too early to check'
               : cash
                 ? 'Confirm clinic price'
-                : 'Review billing details'))
+                : 'Insured amount unavailable'))
   const amountLabel = previousEstimate
     ? 'Previous estimate · needs recheck'
-    : error
-      ? 'Visit needs review'
-      : result?.cash_fallback
-        ? 'Self-pay option for this visit'
-        : deferred && !cash
-          ? 'Insurance advance today'
-          : readOnly
-            ? 'Suggested collection at this visit'
-            : 'Collect at arrival'
+    : readOnly
+      ? 'Recorded recommendation at this visit'
+      : error
+        ? 'Visit needs review'
+        : result?.cash_fallback
+          ? 'Self-pay option for this visit'
+          : !amount && !cash
+            ? 'Collection decision needed'
+            : 'Amount to collect now'
   const amountParts = result?.encounter_summary?.components
   const officeDeductible = guidance?.services.find(
     (service) => service.code === officeCopayLine?.code,
   )?.deductible_applicability
   const cashExplanation = `${result?.cash_fallback?.reason ? `${result.cash_fallback.reason} ` : ''}${result?.eligibility_error === 'payer_routing_unresolved' && failure?.detail ? `${failure.detail} ` : ''}${result?.cash_quote?.message || 'The cash price is not established.'}`
+  const staleInsuredAmount = !cash && guidance?.amount_cents != null && !supportedAmount
+  const integrityError = result?.encounter_summary?.integrity_error
+  const integrityAction =
+    integrityError === 'patient_total_mismatch'
+      ? 'The saved patient total differs from its selected CPT calculations. Rerun the insured estimate before collecting.'
+      : integrityError === 'line_amount_mismatch'
+        ? 'A saved CPT patient share differs from its copay, deductible and coinsurance calculation. Rerun the insured estimate before collecting.'
+        : integrityError === 'collection_amount_mismatch'
+          ? 'The saved collection differs from the selected CPT patient share after recorded payment. Rerun the insured estimate before collecting.'
+          : null
   const baseExplanation = previousEstimate
-    ? `The last saved result${result?.calculated_at ? ` from ${visitDate(result.calculated_at)} · ${visitTime(result.calculated_at)}` : ''} is shown. The update failed; reconfirm this visit before collecting.`
+    ? `The last saved result${result?.calculated_at ? ` from ${visitDate(result.calculated_at)} · ${visitTime(result.calculated_at)}` : ''} is shown. The update failed. Recheck this visit before collecting.`
     : calculating
       ? 'Reading the visit, insurance and applicable benefits to calculate the amount.'
-      : result?.payment_explanation?.sentence ||
-        (readOnly && !result?.collection_guidance && !cash
-          ? 'The original collection recommendation was not retained. The saved benefit and calculation details are shown below.'
-          : deferred
-            ? cash
-              ? cashExplanation
-              : error
-                ? 'The appointment or current benefits could not be loaded. No insured collection amount is available.'
-                : `${guidance?.reason || unavailableReason} Collect no insurance advance today; bill any patient responsibility after the claim.`
-            : cash
-              ? cashPrice && !error
-                ? cashExplanation
-                : 'The clinic cash price could not be calculated for this service plan.'
-              : guidance?.reason || unavailableReason)
+      : staleInsuredAmount
+        ? integrityAction ||
+          requirementIssue ||
+          topCoverageIssue ||
+          selectedCptIssue ||
+          servicePlanAction ||
+          (benefits?.historical_only
+            ? 'The protected saved payer response could not be reopened. Rerun the payer check before collecting.'
+            : null) ||
+          (participationConflict
+            ? 'Provider participation evidence conflicts for this plan. Ask the payer which network tier applies to the rendering provider.'
+            : null) ||
+          (networkConfirmed
+            ? 'The saved advance conflicts with current patient or collection evidence, so rerun the insured estimate before collecting.'
+            : 'The saved advance lacks a current plan and provider participation source, so link the exact plan and rendering provider and rerun the insured estimate.')
+        : result?.payment_explanation?.sentence ||
+          (readOnly && !result?.collection_guidance && !cash
+            ? 'The original collection recommendation was not retained. The saved benefit and calculation details are shown below.'
+            : deferred
+              ? `${guidance?.reason || unavailableReason} No insurance advance is due today under the clinic policy. Any patient responsibility follows the claim.`
+              : cash
+                ? cashPrice && !error
+                  ? cashExplanation
+                  : 'The clinic cash price could not be calculated for this service plan.'
+                : guidance?.reason || unavailableReason)
   const explanation =
     emgScenario && !calculating && !/nerve testing/i.test(baseExplanation)
-      ? `${baseExplanation.replace(/\.$/, '')}; ${emg.total_min_cents != null ? 'the nerve-testing total below is for planning only' : 'nerve testing is excluded because its patient cost is unknown'}.`
+      ? `${baseExplanation} ${emg.total_min_cents != null ? 'The nerve-testing total below is for planning only' : 'Nerve testing is excluded because its patient cost is unknown'}.`
       : baseExplanation
   const summaryExplanation = explanation
   const provider = result?.appointment_context?.rendering_provider?.name
-  const anticipatedService =
-    result?.price_range?.mode === 'alternatives'
-      ? `${result.visit_type === 'new' ? 'New patient' : 'Established patient'} office consultation · E/M alternatives ${result.codes.map((row) => row.code).join(', ')}`
-      : result?.service_plan?.recommendation_basis
+  const anticipatedService = visitServiceLabel(result)
   return {
     selected,
     benefits,
@@ -288,7 +408,7 @@ export function deriveCommercialEstimateView({
     officeCopayLine,
     copayEvidenceId,
     copaySource,
-    failed,
+    failed: !!result?.eligibility_error && !staleEnrollmentFailure,
     failure,
     patientPrice,
     calculationReasons,
@@ -321,6 +441,7 @@ export function deriveCommercialEstimateView({
     networkSource,
     networkTone,
     unavailableReason,
+    requirementIssue,
     supportedAmount,
     emg,
     billingInstruction,

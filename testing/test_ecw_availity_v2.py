@@ -127,11 +127,12 @@ class EcwBackendSourceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((rows, timed_out, unavailable), ([], None, "ChargeItem"))
 
     async def test_saved_eligibility_probe_preserves_forbidden_status(self):
+        card_enabled = 'valid'
+        saved_advertised = True
         def handler(request: httpx.Request) -> httpx.Response:
             if request.url.path == "/fhir/metadata":
-                return httpx.Response(200, json={"resourceType": "CapabilityStatement", "rest": [{"resource": [
-                    {"type": "CoverageEligibilityResponse"}, {"type": "DocumentReference"},
-                ]}]})
+                resources = ([{"type": "CoverageEligibilityResponse"}] if saved_advertised else []) + [{"type": "DocumentReference"}]
+                return httpx.Response(200, json={"resourceType": "CapabilityStatement", "rest": [{"resource": resources}]})
             if request.url.path == "/fhir/Patient":
                 return httpx.Response(200, json={"resourceType": "Bundle", "entry": [{"resource": {
                     "resourceType": "Patient", "id": "patient-1", "name": [{"given": ["Pat"], "family": "Example"}],
@@ -140,6 +141,14 @@ class EcwBackendSourceTests(unittest.IsolatedAsyncioTestCase):
             if request.url.path == "/fhir/CoverageEligibilityResponse":
                 return httpx.Response(403, json={"resourceType": "OperationOutcome"})
             if request.url.path == "/fhir/DocumentReference":
+                if request.url.params.get('type') == '64290-0':
+                    return httpx.Response(200, json={"resourceType": "Bundle", "entry": ([{"resource": {
+                        "resourceType": "DocumentReference", "id": "card-1", "status": "current",
+                        "subject": {"reference": "Patient/patient-1"},
+                        "type": {"coding": [{"system": "http://loinc.org", "code": "64290-0"}]},
+                        "content": ([] if card_enabled == 'no_image' else
+                                    [{"attachment": {"contentType": "image/jpeg", "url": "Binary/card-1"}}]),
+                    }}] if card_enabled else [])})
                 return httpx.Response(200, json={"resourceType": "Bundle", "entry": [{"resource": {
                     "resourceType": "DocumentReference", "id": "document-1",
                 }}, {"resource": {"resourceType": "OperationOutcome"}}]})
@@ -153,16 +162,21 @@ class EcwBackendSourceTests(unittest.IsolatedAsyncioTestCase):
             )
         self.assertEqual(result["resources"], {
             "CoverageEligibilityResponse": {"status": "forbidden", "count": None},
-            "DocumentReference": {"status": "available", "count": 1},
+            "DocumentReference": {"status": "available", "count": 1,
+                                  "insurance_card_status": "available", "insurance_card_count": 1},
         })
+        self.assertEqual(access_token.await_args_list[0].args[3:], (('system/Patient.read',),))
         self.assertEqual(access_token.await_args.args[3], ('system/DocumentReference.read',))
         self.assertEqual(access_token.await_count, 3)
 
         async def scoped_token(client, client_id, issuer, scopes=ecw_backend.SCOPES):
-            if 'system/CoverageEligibilityResponse.read' in scopes:
-                raise ecw_backend.EcwBackendError('Optional scope denied')
-            return 'document-token'
+            if scopes == ('system/CoverageEligibilityResponse.read',):
+                raise ecw_backend.EcwBackendError('Optional scope denied', reason_code='oauth_invalid_scope')
+            if scopes in {('system/Patient.read',), ('system/DocumentReference.read',)}:
+                return 'patient-or-document-token'
+            raise ecw_backend.EcwBackendError('Broad scope rejected')
 
+        card_enabled = False
         with patch.object(ecw_backend, 'settings', return_value=('client', 'https://ehr.example.test/fhir')), \
                 patch.object(ecw_backend, '_access_token', side_effect=scoped_token):
             result = await ecw_backend.probe_saved_eligibility(
@@ -170,7 +184,61 @@ class EcwBackendSourceTests(unittest.IsolatedAsyncioTestCase):
                 transport=httpx.MockTransport(handler),
             )
         self.assertEqual(result['resources']['CoverageEligibilityResponse']['status'], 'scope_denied_or_unavailable')
-        self.assertEqual(result['resources']['DocumentReference'], {'status': 'available', 'count': 1})
+        self.assertEqual(result['resources']['CoverageEligibilityResponse']['reason_code'], 'oauth_invalid_scope')
+        self.assertEqual(result['resources']['DocumentReference'], {'status': 'available', 'count': 1,
+                         'insurance_card_status': 'not_returned', 'insurance_card_count': 0})
+
+        card_enabled = 'no_image'
+        with patch.object(ecw_backend, 'settings', return_value=('client', 'https://ehr.example.test/fhir')), \
+                patch.object(ecw_backend, '_access_token', side_effect=scoped_token):
+            result = await ecw_backend.probe_saved_eligibility(
+                {'patient_first_name': 'Pat', 'patient_last_name': 'Example', 'patient_birth_date': '1980-01-01'},
+                transport=httpx.MockTransport(handler),
+            )
+        self.assertEqual(result['resources']['DocumentReference']['insurance_card_status'], 'no_readable_image')
+
+        saved_advertised = False
+        with patch.object(ecw_backend, 'settings', return_value=('client', 'https://ehr.example.test/fhir')), \
+                patch.object(ecw_backend, '_access_token', side_effect=scoped_token) as token:
+            result = await ecw_backend.probe_saved_eligibility(
+                {'patient_first_name': 'Pat', 'patient_last_name': 'Example', 'patient_birth_date': '1980-01-01'},
+                transport=httpx.MockTransport(handler))
+        self.assertEqual(result['resources']['CoverageEligibilityResponse'], {'status': 'not_advertised', 'count': None})
+        self.assertFalse(any(call.args[3] == ('system/CoverageEligibilityResponse.read',)
+                             for call in token.await_args_list))
+        self.assertEqual(result['resources']['DocumentReference']['status'], 'available')
+
+    async def test_saved_evidence_probe_finds_patient_card_outside_insurance_type_filter(self):
+        card = {'resourceType': 'DocumentReference', 'id': 'untyped-card', 'status': 'current',
+                'subject': {'reference': 'Patient/patient-1'}, 'description': 'Insurance card',
+                'content': [{'attachment': {'contentType': 'image/png', 'url': 'Binary/card-image'}}]}
+        queries = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            if request.url.path == '/fhir/metadata':
+                return httpx.Response(200, json={'resourceType': 'CapabilityStatement',
+                    'rest': [{'resource': [{'type': 'Patient'}, {'type': 'DocumentReference'}]}]})
+            if request.url.path == '/fhir/Patient':
+                return httpx.Response(200, json={'resourceType': 'Bundle', 'entry': [{'resource': {
+                    'resourceType': 'Patient', 'id': 'patient-1',
+                    'name': [{'given': ['Pat'], 'family': 'Example'}], 'birthDate': '1980-01-01'}}]})
+            if request.url.path == '/fhir/DocumentReference':
+                queries.append(request.url.params.get('type'))
+                rows = [] if request.url.params.get('type') else [card]
+                return httpx.Response(200, json={'resourceType': 'Bundle',
+                    'entry': [{'resource': row} for row in rows]})
+            return httpx.Response(404)
+
+        with patch.object(ecw_backend, 'settings', return_value=('client', 'https://ehr.example.test/fhir')), \
+             patch.object(ecw_backend, '_access_token', new=AsyncMock(return_value='token')):
+            result = await ecw_backend.probe_saved_eligibility(
+                {'patient_first_name': 'Pat', 'patient_last_name': 'Example',
+                 'patient_birth_date': '1980-01-01'}, transport=httpx.MockTransport(handler))
+        documents = result['resources']['DocumentReference']
+        self.assertEqual(documents['status'], 'available')
+        self.assertEqual(documents['insurance_card_status'], 'available')
+        self.assertEqual(documents['insurance_card_count'], 1)
+        self.assertEqual(queries, [None, '64290-0', '64290-0', '103140-0', None])
 
     async def test_backend_ignores_foreign_policy_and_reads_contained_subscriber(self):
         await self._backend_inputs(contained=True)

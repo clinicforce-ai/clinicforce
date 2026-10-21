@@ -16,12 +16,28 @@ async def submit_previsit_eligibility(api: ModuleType, *, payer: dict, provider:
     rendering_first = provider['rendering_first']
     rendering_last = provider['rendering_last']
     billing_npi = provider['billing_npi']
-    if payer.get('transactionSupport', {}).get('eligibilityCheck') == 'ENROLLMENT_REQUIRED':
-        npi = rendering_npi if rendering_first and rendering_last and rendering_npi else billing_npi
+    if api.stedi_payers.original_medicare_routing_conflict(payer,
+            product=str(source.get('plan') or ''), issuer=str(source.get('payer') or '')):
+        result['eligibility_failure'] = {'kind': 'payer_routing_unresolved',
+            'title': 'Medicare Advantage payer route needed',
+            'detail': 'This policy identifies a plan issuer or Medicare Advantage product, but the selected route is CMS HETS.',
+            'action': 'Select the actual insurer’s supported Stedi eligibility route before requesting benefits.',
+            'codes': []}
+        result['issues'].append(result['eligibility_failure']['action'])
+        case['previsit'] = {'request_state': 'not_requested'}
+        result['benefits'] = api._previsit_benefits({}, coverage, inputs['service_date'])
+        await api.run_in_threadpool(api._finish_previsit, result, case, inputs, source, None, session, payer_id)
+        await api.run_in_threadpool(api._save, case, session, 'previsit-payer-route-review')
+        return result
+    if api.stedi_payers.enrollment_required(payer):
+        npi = billing_npi if api.stedi_payers.original_medicare_route(payer) else (
+            rendering_npi if rendering_first and rendering_last and rendering_npi else billing_npi)
         enrollment = await api.stedi_payers.eligibility_enrollment(payer_id, npi, api_key)
-        result['enrollment'] = enrollment
+        result['enrollment'] = {**enrollment, 'payer_id': payer_id, 'provider_npi': npi,
+                                'route': 'original_medicare_hets' if api.stedi_payers.original_medicare_route(payer)
+                                else 'payer_specific_eligibility'}
         if enrollment['status'] != 'LIVE':
-            result['eligibility_failure'] = api._enrollment_failure(enrollment)
+            result['eligibility_failure'] = api._enrollment_failure(result['enrollment'])
             result['issues'].append(result['eligibility_failure']['action'])
             case['previsit'] = {'request_state': 'not_requested'}
             result['benefits'] = api._previsit_benefits({}, coverage, inputs['service_date'])
@@ -30,6 +46,7 @@ async def submit_previsit_eligibility(api: ModuleType, *, payer: dict, provider:
             case = await api.run_in_threadpool(api._save, case, session, 'previsit-enrollment-required')
             return await api._start_previsit_recovery(case, session, provider, background_tasks)
     case.pop('previsit_discovery', None)
+    case.pop('previsit_cob', None)
     case["previsit"] = {"request_state": "pending"}
     case = await api.run_in_threadpool(api._save, case, session, "previsit-stedi-pending")
     api.collection_event('eligibility_requested', practice_id=session['practice_id'], intake_id=(session.get('intake') or {}).get('id'),
@@ -50,9 +67,11 @@ async def submit_previsit_eligibility(api: ModuleType, *, payer: dict, provider:
     if response.is_error or not isinstance(payload, dict) or str(payload.get("status", "")).upper() in {"ERROR", "FAILED", "REJECTED"} or api.commercial.eligibility_errors(payload) or demographic_unresolved:
         case["previsit"] = {"request_state": "rejected", "identity_retry_version": 1}
         if isinstance(payload, dict):
+            raw_bytes = api.json.dumps(payload).encode()
             case["previsit_raw_object_key"] = await api.run_in_threadpool(
                 api.object_store.put_staff_document, session["practice_id"], case["id"],
-                "previsit-stedi-error.json", api.json.dumps(payload).encode(), "application/json")
+                "previsit-stedi-error.json", raw_bytes, "application/json")
+            case["previsit_raw_sha256"] = api.hashlib.sha256(raw_bytes).hexdigest()
         failure = api.commercial.eligibility_failure(payload if isinstance(payload, dict) else {})
         if demographic_unresolved and not api.commercial.eligibility_errors(payload):
             failure = {'kind': 'member_identity_unresolved', 'title': 'Demographic lookup needs recovery',
@@ -73,8 +92,9 @@ async def submit_previsit_eligibility(api: ModuleType, *, payer: dict, provider:
         # Planned services remain editable; failed benefits cannot be verified away.
         case = await api.run_in_threadpool(api._save, case, session, "previsit-stedi-rejected")
         return await api._start_previsit_recovery(case, session, provider, background_tasks)
+    raw_bytes = api.json.dumps(payload).encode()
     raw_key = await api.run_in_threadpool(api.object_store.put_staff_document, session["practice_id"], case["id"],
-                                      "previsit-stedi-271.json", api.json.dumps(payload).encode(), "application/json")
+                                      "previsit-stedi-271.json", raw_bytes, "application/json")
     benefits = api._previsit_benefits(payload, coverage, inputs["service_date"], requested_stc[0], inputs=inputs, source=source)
     result["benefits"] = benefits
     result["checked_at"] = api._now()
@@ -84,6 +104,7 @@ async def submit_previsit_eligibility(api: ModuleType, *, payer: dict, provider:
     case["previsit"] = {"request_state": "complete", "benefits": benefits,
                         "checked_at": result["checked_at"], "requested_service_types": requested_stc}
     case["previsit_raw_object_key"] = raw_key
+    case["previsit_raw_sha256"] = api.hashlib.sha256(raw_bytes).hexdigest()
     saved_case = await api.run_in_threadpool(api._save, case, session, "previsit-stedi-complete")
     if (benefits.get('identity') or {}).get('policy_differences'):
         saved_case['previsit_discovery'] = {'request_state': 'not_requested', 'recovery_requested': True}
@@ -95,5 +116,9 @@ async def submit_previsit_eligibility(api: ModuleType, *, payer: dict, provider:
             'detail': 'The known policy returned inactive coverage. Continuing through insurance recovery.',
             'action': 'Searching for active medical coverage for this appointment.', 'codes': []})
         return await api._start_previsit_recovery(saved_case, session, provider, background_tasks)
+    if benefits.get('has_secondary'):
+        await api._check_previsit_cob(saved_case, session, provider, payer=payer,
+                                      payload=payload, api_key=api_key)
+        return api._previsit_result(saved_case, session['practice_id'])
     result["revision"] = saved_case.get("revision", 0)
     return result

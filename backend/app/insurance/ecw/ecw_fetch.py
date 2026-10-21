@@ -19,6 +19,8 @@ from app.insurance.ecw.ecw_fields import (
     _reference,
     _period_contains,
     _npi,
+    _tin,
+    _tin_conflict,
     _display,
     _concept_labels,
 )
@@ -142,7 +144,7 @@ async def fetch_inputs(backend: ModuleType, profile: dict[str, Any], practice: d
             recent_completed_appointments = [_history_summary(row, procedures, orders) for row in completed_history]
             (relevant_charges, diagnoses, coded_lines, relevant_conditions) = coded_visit(
                  visit, relevant_orders, relevant_procedures, charges,
-                 conditions, encounter_ref, visit_refs,
+                 conditions, encounter_ref, visit_refs, linked_appointments,
              )
             imported_fields = appointment_fields(visit, linked_appointments)
             insurance_candidates = appointment_insurance_candidates(imported_fields)
@@ -240,7 +242,7 @@ async def fetch_inputs(backend: ModuleType, profile: dict[str, Any], practice: d
     if visit and not inputs["reason"]:
         ecw_missing.append("The eClinicalWorks encounter has no reason, visit type, service, order, procedure, or linked condition.")
     if visit and not inputs["lines"]:
-        ecw_missing.append("No CPT/HCPCS-coded ServiceRequest, Procedure, ChargeItem, or Encounter service is linked to this appointment in eClinicalWorks.")
+        ecw_missing.append("No single CPT/HCPCS-coded ServiceRequest, Procedure, ChargeItem, Encounter service, or readable linked Appointment service is available in eClinicalWorks.")
     if visit and not diagnoses:
         ecw_missing.append("No ICD-10 diagnosis is linked to this eClinicalWorks appointment, order, or procedure.")
     if "Patient" not in reference_timeouts and not inputs["patient_phone"]:
@@ -325,7 +327,13 @@ async def fetch_inputs(backend: ModuleType, profile: dict[str, Any], practice: d
                                     ("payer" in str(item.get("system") or "").casefold() or
                                      "x12" in str(item.get("system") or "").casefold())],
               "location": location.get("name"), "location_id": str(location.get("id") or location_ref or ""),
-              "billing_provider": {"name": _display(billing_resource), "npi": ecw_billing_npi},
+              "cms_service_zip": ((location.get('address') or {}).get('postalCode')
+                                  if isinstance(location.get('address'), dict) else None),
+              "cms_locality": location_config.get("cms_locality"),
+              "cms_qp_status": rendering.get("cms_qp_status"),
+              "billing_provider": {"name": _display(billing_resource), "npi": ecw_billing_npi,
+                                   "tin": _tin(billing_resource),
+                                   "tin_conflict": _tin_conflict(billing_resource)},
               "rendering_provider": {"name": _display(rendering_resource), "npi": ecw_rendering_npi,
                                      "first_name": _name(rendering_resource)[0],
                                      "last_name": _name(rendering_resource)[1],

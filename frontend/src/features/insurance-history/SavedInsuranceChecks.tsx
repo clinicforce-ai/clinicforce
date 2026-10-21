@@ -114,8 +114,8 @@ export default function SavedInsuranceChecks({
       <summary>{checksForVisit ? 'View saved estimate results' : 'Saved insurance checks'}</summary>
       <p className="staff-muted">
         {checksForVisit
-          ? 'Recommendations recorded for this appointment, with the benefits, services, and assumptions used at the time.'
-          : 'Patient history across visits and confirmed intakes. Open a visit to review the saved recommendation, benefits, services, and assumptions.'}
+          ? 'Historical recommendations for this appointment. Reopen the current visit to calculate an amount to collect today.'
+          : 'Historical recommendations across visits. Reopen the current visit to calculate an amount to collect today.'}
       </p>
       {notice && <p role="status">{notice}</p>}
       {error && (

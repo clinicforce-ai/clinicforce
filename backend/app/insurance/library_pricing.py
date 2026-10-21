@@ -15,9 +15,9 @@ from decimal import Decimal, ROUND_HALF_UP
 from uuid import NAMESPACE_URL, uuid5
 
 from app.core import library_files, staff_store
-from app.insurance import commercial, commercial_store, plan_matrix
+from app.insurance import commercial, commercial_store, plan_matrix, library_network_exclusions
 
-VERSION = 'library-rules-2'
+VERSION = 'library-rules-3'
 from app.insurance.pricing.library_cash_tables import (
     PROVISIONAL,
     CODE,
@@ -33,13 +33,15 @@ from app.insurance.pricing.library_cash_tables import (
 def compile_document(document: dict, extracted: dict, connections: list[dict], networks: list[dict] | None = None) -> dict:
     source = {'document_id': document['id'], 'sha256': extracted['sha256'],
               'effective_to': document.get('effective_to'), 'reference': 'library:' + document['id']}
-    compiled = {'version': VERSION, 'source': source, 'cash': [], 'rates': [], 'networks': [], 'issues': [], 'schedule_terms': []}
+    compiled = {'version': VERSION, 'source': source, 'cash': [], 'rates': [], 'networks': [],
+                'exclusions': [], 'issues': [], 'schedule_terms': []}
     if document['kind'] == 'plan_matrix':
         # This workbook supplies referral/auth research only. Its tables must
         # never become payer connections, participation, or price rules.
         return compiled
     tables = extracted.get('tables') or []
     text = '\n'.join(page['text'] for page in extracted['pages'])
+    compiled['exclusions'] = library_network_exclusions.compile_exclusions(document, extracted)
     effective = document.get('effective_from')
     if not effective:
         matches = set(re.findall(r'(?i)effective(?:\s+(?:date|from))?\s*[:\-]?\s*(\d{4}-\d{2}-\d{2})', text))
@@ -94,6 +96,14 @@ def compile_document(document: dict, extracted: dict, connections: list[dict], n
                     compiled['schedule_terms'].append({'values': values, 'source': {**source, 'locator': locator}})
                 if 'participation' in values:
                     required = ('billingnpi', 'renderingnpi', 'organizationname', 'tin', 'locationid', 'pos', 'network', 'plan', 'effectivefrom')
+                    uhc = commercial.is_united_healthcare_payer({'payer': document.get('payer')}) or (
+                        len(matches) == 1 and commercial.is_united_healthcare_payer({'payer': matches[0].get('display_name')}))
+                    if uhc and commercial._key(values.get('plan')) in {
+                            '', 'uhc', 'unitedhealthcare', 'ppo', 'hmo', 'commercial', 'medicareadvantage'}:
+                        compiled['issues'].append({'status': 'missing_dependency',
+                            'reason': 'Participation needs the exact UHC product, not a generic payer or PPO label.',
+                            'locator': locator})
+                        continue
                     if (len(matches) == 1 and values['participation'].lower() in {'participating', 'nonparticipating'}
                             and all(values.get(key) for key in required)
                             and all(re.fullmatch(r'\d{10}', values[key]) for key in ('billingnpi', 'renderingnpi'))
@@ -181,10 +191,21 @@ def compile_document(document: dict, extracted: dict, connections: list[dict], n
             if effective and source['effective_to'] < effective:
                 raise ValueError('reversed dates')
     except ValueError:
-        compiled['cash'] = []; compiled['rates'] = []; compiled['networks'] = []; compiled['schedule_terms'] = []
+        compiled['cash'] = []; compiled['rates'] = []; compiled['networks'] = []; compiled['exclusions'] = []; compiled['schedule_terms'] = []
         compiled.pop('connection', None)
         compiled['issues'].append({'status': 'missing_dependency', 'reason': 'Document effective dates are invalid.'})
-    if not compiled['cash'] and not compiled['rates'] and not compiled['networks'] and not compiled['schedule_terms'] and not compiled['issues']:
+    excluded_kinds = {row['product_kind'] for row in compiled['exclusions']}
+    if excluded_kinds:
+        participating = [row for row in compiled['networks'] if row['values']['participation'].lower() == 'participating'
+                         and library_network_exclusions.product_kind(row['values'].get('plan', '')) in excluded_kinds]
+        if participating:
+            compiled['networks'] = [row for row in compiled['networks'] if row not in participating]
+            compiled['issues'].append({'status': 'conflict', 'reason':
+                'An explicit product exclusion in this agreement overrides its participation rows.',
+                'locator': participating[0]['source']['locator']})
+        compiled['rates'] = [row for row in compiled['rates']
+                             if library_network_exclusions.product_kind(row.get('plan_matcher', '')) not in excluded_kinds]
+    if not compiled['cash'] and not compiled['rates'] and not compiled['networks'] and not compiled['exclusions'] and not compiled['schedule_terms'] and not compiled['issues']:
         compiled['issues'].append({'status': 'missing_dependency', 'reason': 'No explicit supported price table with complete service and pricing scope was found. This source remains reference evidence.'})
     return compiled
 
@@ -282,7 +303,8 @@ def publish(document: dict, extracted: dict, compiled: dict) -> None:
     timestamp = staff_store.now()
     issues = compiled['issues']
     conflicting = {issue.get('code') for issue in issues if issue['status'] == 'conflict'}
-    usable_count = sum(row['code'] not in conflicting for row in compiled['cash'] + compiled['rates']) + len(compiled['networks'])
+    usable_count = (sum(row['code'] not in conflicting for row in compiled['cash'] + compiled['rates'])
+                    + len(compiled['networks']) + len(compiled['exclusions']))
     usable = bool(usable_count)
     status = 'partial' if usable and issues else 'usable' if usable else 'conflict' if any(i['status'] == 'conflict' for i in issues) else 'provisional' if all(i['status'] == 'provisional' for i in issues) else 'missing_dependency'
     extracted['compiled'] = compiled
@@ -298,9 +320,12 @@ def publish(document: dict, extracted: dict, compiled: dict) -> None:
             db.execute("UPDATE practice_cash_schedules SET status='superseded' WHERE id=%s AND practice_id=%s AND status='active' AND actor_id='system:library'", (previous, practice))
         if compiled.get('connection'):
             connection = compiled['connection']
+            connection_status = ('staff_guidance_enabled' if any(
+                row['values']['participation'].lower() == 'participating' for row in compiled['networks']) else 'draft')
             db.execute('''INSERT INTO commercial_payer_connections (id,practice_id,display_name,stedi_payer_id,category,status,aliases_json,rules_json,created_at,updated_at)
-                VALUES (%s,%s,%s,%s,'commercial_medical','staff_guidance_enabled','[]',%s,%s,%s) ON CONFLICT (practice_id,stedi_payer_id) DO NOTHING''',
-                (connection['id'], practice, connection['display_name'], connection['stedi_payer_id'], json.dumps({'library_source': compiled['source']}), timestamp, timestamp))
+                VALUES (%s,%s,%s,%s,'commercial_medical',%s,'[]',%s,%s,%s) ON CONFLICT (practice_id,stedi_payer_id) DO NOTHING''',
+                (connection['id'], practice, connection['display_name'], connection['stedi_payer_id'], connection_status,
+                 json.dumps({'library_source': compiled['source']}), timestamp, timestamp))
         for network in compiled['networks']:
             values = network['values']
             connection = compiled['payer_connection_id']

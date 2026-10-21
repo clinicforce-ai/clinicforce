@@ -28,7 +28,7 @@ from app.api.routers.insurance import _response, _scope, _session as insurance_s
 from app.core import object_store, staff_store
 from app.insurance import identity as insurance_identity
 from app.insurance import commercial, commercial_store, cpt_rules, cpt_suggester, ecw_backend, golden, stedi_discovery, stedi_payers, store, visit_estimate, practice_prices
-from app.insurance import stedi_financial, collection_guidance, encounter_summary, amount_explanation, contract_requirements, ecw_benefits, ecw_billing, library_pricing
+from app.insurance import stedi_financial, stedi_cob, collection_guidance, encounter_summary, amount_explanation, contract_requirements, ecw_benefits, ecw_billing, library_pricing, payer_allowance, network_participation
 from app.insurance import provider_specialty
 from app.logs.collection_audit import collection_event
 from app.logs.logger import log_info, log_warning
@@ -40,6 +40,10 @@ STEDI_URL = "https://healthcare.us.stedi.com/2026-06-01/eligibility-check"
 
 from app.api.schemas.commercial import (
     ConnectionInput,
+    ConnectionActivationInput,
+    ConnectionAliasInput,
+    CollectionPolicyInput,
+    AgreementInventoryInput,
     NetworkInput,
     ProfileInput,
     StartInput,
@@ -48,6 +52,7 @@ from app.api.schemas.commercial import (
     ServiceLine,
     ServicesInput,
     VisitVerification,
+    BillingProtectionInput,
     IdentityConfirmation,
     ProductMapping,
     VisitReviewInput,
@@ -81,6 +86,8 @@ from app.api.routers.commercial_flow.commercial_practice import (
     _config,
     _ecw_practice,
     _ecw_practice_config,
+    _excluded_ma_ppo_contract_mismatch,
+    _mapped_products_in_contract_scope,
     _practice_path,
     _previsit_practice_path,
     _appointment_readiness,
@@ -158,6 +165,7 @@ from app.api.routers.commercial_flow.commercial_recovery_search import (
 
 
 from app.api.routers.commercial_flow.commercial_recovery_flow import (
+    _original_medical_policy_established,
     _run_coverage_recovery,
     _reconcile_saved_discovery,
     _discovered_coverage,
@@ -166,6 +174,9 @@ from app.api.routers.commercial_flow.commercial_recovery_flow import (
     _recheck_discovery_candidate,
     _start_previsit_recovery,
 )
+
+
+from app.api.routers.commercial_flow.commercial_cob_flow import _check_previsit_cob
 
 
 from app.api.routers.commercial_flow.commercial_previsit_routes import (
@@ -195,6 +206,10 @@ from app.api.routers.commercial_flow.commercial_review_routes import (
 from app.api.routers.commercial_flow.commercial_configuration_routes import (
     saved_eligibility_probe,
     create_connection,
+    activate_connection,
+    add_connection_aliases,
+    set_collection_policy,
+    set_agreement_inventory,
     create_network,
     create_profile,
     import_rates,

@@ -153,8 +153,9 @@ def test_verified_coverage_without_rate_has_explicit_diagnosis_and_separate_cash
     case['previsit']['request_state'] = 'complete'
     result = case['previsit_context']['result']
     result.pop('eligibility_error'); result.pop('eligibility_failure')
-    result.update(payment_mode='insurance', identity={'status': 'matched'},
-        benefits={'active': True, 'network_status': 'in_network', 'service_date_matches': True},
+    result.update(payment_mode='insurance', identity={'status': 'matched', 'binding': 'synthetic-current-binding', 'match_version': 2},
+        benefits={'active': True, 'network_status': 'in_network',
+                  'network_source': 'clinic_library_contract', 'service_date_matches': True},
         price_range={'complete': False, 'lines': [{'code': '99213', 'allowed_cents': None, 'issues': ['No contracted rate for 99213']}],
                      'cash_complete': True, 'cash_min_cents': 16000, 'cash_max_cents': 16000})
     public = api._previsit_result(case)
@@ -162,7 +163,7 @@ def test_verified_coverage_without_rate_has_explicit_diagnosis_and_separate_cash
     assert diagnosis['identityStatus'] == 'VERIFIED' and diagnosis['eligibilityStatus'] == 'BENEFITS_VERIFIED'
     assert diagnosis['pricingStatus'] == 'NOT_CALCULATED' and 'CONTRACTED_RATE_MISSING' in diagnosis['reasonCodes']
     assert 'No contracted rate for 99213' in diagnosis['pricingReasons']
-    assert public['payment_mode'] == 'cash' and public['collection_guidance']['amount_cents'] == 16000
+    assert public['payment_mode'] == 'insurance' and public['collection_guidance']['amount_cents'] is None
     result['arrival_collection'] = {'amount_cents': 2500, 'status': 'estimate'}
     result['price_range'].update(complete=True)
     public = api._previsit_result(case)

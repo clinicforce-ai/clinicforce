@@ -20,7 +20,11 @@ from app.api.routers import insurance_v2 as _v2
 router = _v2.router
 Resource = _v2.Resource
 
-@router.post("/cases/{case_id}/transactions/{resource}")
+@router.post("/cases/{case_id}/transactions/{resource}", description=(
+    "Submit a V2 payer transaction. A completed Stedi eligibility result includes active benefit rows "
+    "and a patient-identity decision with mismatch field names. The production Stedi fallback does "
+    "not infer provider participation from benefit network indicators or the demo network matrix."
+))
 async def submit(case_id: str, resource: Resource, request: Request):
     session = await _v2._session(request)
     settings, practice, binding = _v2.configuration()

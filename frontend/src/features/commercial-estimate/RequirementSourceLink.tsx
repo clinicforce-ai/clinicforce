@@ -20,10 +20,14 @@ export default function RequirementSourceLink({
     : source.url
   const label = sourceName(source)
   return href ? (
-    <a href={href} target="_blank" rel="noopener noreferrer">
-      {label}
-      {source.page ? ` · p. ${source.page}` : ''}
-    </a>
+    <>
+      <a href={href} target="_blank" rel="noopener noreferrer">
+        {label}
+        {source.page ? ` · p. ${source.page}` : ''}
+      </a>
+      {source.effective_from && <small> · effective {source.effective_from}</small>}
+      {source.verified_at && <small> · checked {source.verified_at}</small>}
+    </>
   ) : (
     <small>{label}</small>
   )

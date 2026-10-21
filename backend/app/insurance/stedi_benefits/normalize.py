@@ -1,6 +1,7 @@
 """Normalize a Stedi 271 response without losing source or unknown states."""
 from __future__ import annotations
 
+import json
 import re
 from decimal import Decimal
 
@@ -20,8 +21,42 @@ from app.insurance.stedi_benefits.fields import (
 )
 
 
+def _oop_conflict_reason(payload: dict, wanted: list[tuple[int, dict]], ids: list[str],
+                         *, annual: bool) -> str:
+    label = ('a conflicting annual individual out-of-pocket maximum' if annual
+             else 'conflicting remaining individual out-of-pocket balances')
+    rows = [row for _, row in wanted if row.get('evidence_path') in ids]
+    plans = payload.get('plans') or []
+    def varied(value) -> bool:
+        return len({json.dumps(value(row), sort_keys=True, default=str) for row in rows}) > 1
+    differences = []
+    if varied(lambda row: (row.get('plan_index'), row.get('planCoverage'))):
+        differences.append('payer plans')
+    if varied(_network_indicator):
+        differences.append('benefit network tiers')
+    if varied(lambda row: (row.get('serviceTypeCodes'), _procedure(row), row.get('placesOfService'))):
+        differences.append('service scopes')
+    if varied(lambda row: row.get('coverageLevel') or row.get('coverageLevelCode')):
+        differences.append('coverage levels')
+    def date_scope(row: dict) -> dict:
+        index = row.get('plan_index')
+        plan = plans[index] if type(index) is int and 0 <= index < len(plans) else {}
+        return {'plan': plan.get('dates'), 'plan_information': plan.get('planDateInformation'),
+                'benefit': row.get('dates'), 'benefit_information': row.get('benefitsDateInformation')}
+    if varied(date_scope):
+        differences.append('effective periods')
+    if differences:
+        return (f'The payer returned {label} across {", ".join(differences)}. '
+                'Match the applicable plan, service scope, network tier, coverage level and effective dates with the payer.')
+    suffix = ('limit' if annual else 'balance')
+    return (f'The payer returned {label} for the same plan and network tier. '
+            f'Ask the payer which {suffix} applies on this service date.')
+
+
 def normalize_stedi_271(payload: dict[str, Any], service_type_code: str, provider_network_verified: bool,
                         other_active_coverage: bool = False, *, procedure_code: str | None = None,
+                        provider_out_of_network_verified: bool = False,
+                        office_visit: bool = False,
                         service_date: str | None = None, selected_ids: list[str] | None = None,
                         office_service_types: list[str] | None = None, place_of_service: str | None = None,
                         visit_context: dict | None = None, provider_npi: str | None = None) -> dict[str, Any]:
@@ -34,7 +69,8 @@ def normalize_stedi_271(payload: dict[str, Any], service_type_code: str, provide
     provider_npi = provider_npi if re.fullmatch(r'\d{10}', provider_npi or '') and (not echoed_npi or echoed_npi == provider_npi) else None
     selected = select_benefit_rows(
         payload, service_type_code, provider_network_verified,
-        procedure_code=procedure_code, service_date=service_date,
+        provider_out_of_network_verified=provider_out_of_network_verified,
+        procedure_code=procedure_code, office_visit=office_visit, service_date=service_date,
         selected_ids=selected_ids, office_service_types=office_service_types,
         place_of_service=place_of_service, visit_context=visit_context,
         provider_npi=provider_npi,
@@ -71,6 +107,7 @@ def normalize_stedi_271(payload: dict[str, Any], service_type_code: str, provide
     deductible = cost_share.deductible
     oop = cost_share.oop
     annual_deductible = cost_share.annual_deductible
+    annual_oop = cost_share.annual_oop
     copay = cost_share.copay
     coinsurance = cost_share.coinsurance
     relevant = [row for row in entries if not row.get("serviceTypeCodes") or
@@ -149,6 +186,10 @@ def normalize_stedi_271(payload: dict[str, Any], service_type_code: str, provide
     except Exception:
         coinsurance_percent = None
     other_active_coverage = other_active_coverage or any(row.get('code') == 'R' for row in relevant)
+    qmb_ids = [row['evidence_path'] for row in entries if any(
+        re.search(r'\b(?:qualified medicare beneficiary|QMB)\b', note, re.I)
+        and not re.search(r'\b(?:not|no|non[- ]?)\s+(?:a\s+)?(?:qualified medicare beneficiary|QMB)\b', note, re.I)
+        for note in notes([row.get('messages'), row.get('additionalInformation')]))]
     multiple_plans = len({row["plan_index"] for row in entries if "plan_index" in row and row.get("code") in {"status", "A", "B", "C", "G"}}) > 1
     # Some plans track office copays separately from the general OOP balance.
     # Retain both buckets: a met general maximum must not erase that copay.
@@ -219,6 +260,12 @@ def normalize_stedi_271(payload: dict[str, Any], service_type_code: str, provide
                     'kind': 'invalid_financial_value',
                     'message': 'Invalid financial evidence: the payer returned an invalid amount or percentage. Verify the source before collection.'})
     review_reasons = list(dict.fromkeys(error['message'] for error in source_errors))
+    if cost_share.conflicts.get('oop_annual'):
+        review_reasons.append(_oop_conflict_reason(payload, wanted, cost_share.conflicts['oop_annual'], annual=True))
+    if cost_share.conflicts.get('oop_remaining'):
+        review_reasons.append(_oop_conflict_reason(payload, wanted, cost_share.conflicts['oop_remaining'], annual=False))
+    if cost_share.oop_medical_candidate_ids or cost_share.oop_quarantined_ids:
+        review_reasons.append('Separate medical and supplementary coverage was returned; unassigned out-of-pocket rows are retained but cannot set this medical visit’s limit.')
     if inactive and has_active:
         review_reasons.append('The payer returned both active coverage and inactive or noncovered benefits for the selected service scope. Verify which coverage restriction applies before estimating.')
     if invalid_dates:
@@ -256,9 +303,10 @@ def normalize_stedi_271(payload: dict[str, Any], service_type_code: str, provide
         for row in provider_rows for note in notes([row.get('messages'), row.get('additionalInformation')]))
     if network_conflict:
         review_reasons.append('Provider-network evidence reports nonparticipation or contradicts the in-network assertion. Verify participation before estimating.')
-    payer_network_verified = bool(participation and not conflicting_network and active is True
+    payer_network_verified = bool(participation and not conflicting_network and not network_conflict and active is True
         and not multiple_plans and not invalid_dates and date_matches is not False and not source_errors)
-    out_of_network_verified = bool(negative_provider_ids and not network_conflict and active is True
+    out_of_network_verified = bool((negative_provider_ids or provider_out_of_network_verified)
+        and not network_conflict and active is True
         and not multiple_plans and not invalid_dates and date_matches is not False and not source_errors)
     return {"active": active, "coverage_evidence": coverage,
             "excluded_service_evidence_ids": excluded_service_ids,
@@ -266,11 +314,22 @@ def normalize_stedi_271(payload: dict[str, Any], service_type_code: str, provide
             "coverage_dates_invalid": invalid_dates,
             "source_errors": source_errors, "service_date_matches": date_matches, "returned_service_dates": returned_service,
             "coverage_level": "individual" if wanted else "unknown",
-            "network_status": "out_of_network" if out_of_network_verified else "in_network" if provider_network_verified and not network_conflict or payer_network_verified else "unknown",
-            "network_source": 'payer_participation_message' if out_of_network_verified or payer_network_verified else 'clinic_record' if provider_network_verified and not network_conflict else None,
+            "network_status": "out_of_network" if out_of_network_verified else "in_network" if (provider_network_verified and not network_conflict) or payer_network_verified else "unknown",
+            "network_conflict": network_conflict,
+            "network_source": 'payer_participation_message' if (negative_provider_ids and out_of_network_verified) or payer_network_verified
+                else 'clinic_nonparticipation_rule' if out_of_network_verified and provider_out_of_network_verified
+                else 'clinic_record' if provider_network_verified and not network_conflict else None,
             "network_evidence_ids": negative_provider_ids if out_of_network_verified else participation if payer_network_verified else [],
+            "network_provider_npi": provider_npi if out_of_network_verified or payer_network_verified else None,
+            "qmb_status": "protected" if qmb_ids else "unknown",
+            "qmb_evidence_ids": qmb_ids,
             "deductible_remaining_cents": deductible_cents, "oop_remaining_cents": oop_cents,
             "deductible_annual_cents": _stedi_cents(annual_deductible.get('benefitAmount')) if annual_deductible else None,
+            "oop_annual_cents": _stedi_cents(annual_oop.get('benefitAmount')) if annual_oop else None,
+            "oop_annual_conflict_ids": cost_share.conflicts.get('oop_annual', []),
+            "oop_medical_candidate_ids": cost_share.oop_medical_candidate_ids,
+            "oop_quarantined_ids": cost_share.oop_quarantined_ids,
+            "oop_remaining_conflict_ids": cost_share.conflicts.get('oop_remaining', []),
             "deductible_applicability": deductible_applicability,
             "deductible_applicability_ids": list(dict.fromkeys(row['evidence_path'] for _, row in deductible_signals)),
             "family_oop_remaining_cents": family_oop_cents,
@@ -281,6 +340,7 @@ def normalize_stedi_271(payload: dict[str, Any], service_type_code: str, provide
             "selected_benefit_ids": [path for row in (copay, coinsurance) if row for path in row.get('evidence_paths', [row['evidence_path']])],
             "deductible_id": deductible.get("evidence_path") if deductible else None,
             "deductible_annual_id": annual_deductible.get("evidence_path") if annual_deductible else None,
+            "oop_annual_id": annual_oop.get("evidence_path") if annual_oop else None,
             "oop_id": oop.get("evidence_path") if oop else None,
             "copay_id": copay.get("evidence_path") if copay else None,
             "coinsurance_id": coinsurance.get("evidence_path") if coinsurance else None,

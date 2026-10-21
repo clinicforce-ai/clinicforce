@@ -21,11 +21,27 @@ export type VisitCode = {
   description?: string
   units?: number | string | null
   modifiers?: string[]
+  service_family?: string
+  service_role?: string
+  benefit_service_types?: string[]
+  service_group?: 'visit' | 'nerve' | 'muscle' | 'other'
+  catalogue_version?: number
   unit_allowed_cents?: number | null
   unit_cash_cents?: number | null
-  allowed_basis?: 'clinic_contract' | 'payer_out_of_network'
+  allowed_basis?: 'clinic_contract' | 'payer_out_of_network' | 'cms_original_medicare_estimate'
   rate_source?: string
 }
+
+export type PayerAllowanceSummary = Record<
+  string,
+  {
+    unit_allowed_cents?: number
+    channel?: string
+    reference?: string
+    valid_through?: string
+    verified_at?: string
+  }
+>
 
 type VisitRequirement = {
   required: string
@@ -41,7 +57,7 @@ export type VisitPricedLine = VisitCode & {
   id: string
   allowed_cents?: number | null
   unit_allowed_cents?: number | null
-  allowed_basis?: 'clinic_contract' | 'payer_out_of_network'
+  allowed_basis?: 'clinic_contract' | 'payer_out_of_network' | 'cms_original_medicare_estimate'
   cash_cents?: number | null
   cash_source?: string
   cash_rule?: { locator?: string; document_id?: string }
@@ -90,12 +106,21 @@ export type VisitPricedLine = VisitCode & {
     plan_cents: number
     deductible_cents: number
     copay_cents: number
+    coinsurance_base_cents?: number
+    coinsurance_percent?: string
     coinsurance_cents: number
+    allowed_cap_adjustment_cents?: number
     oop_adjustment_cents: number
   }
 }
 
 export type VisitReview = {
+  botox?: BotoxReview
+  billing_protection?: {
+    status: 'qmb' | 'not_qmb'
+    reference: string
+    notes: string
+  }
   emg_required?: boolean
   identity_confirmation?: { binding: string; reference: string; notes: string }
   product_mapping?: { reference: string; notes: string; valid_from: string; valid_to: string }
@@ -103,6 +128,15 @@ export type VisitReview = {
   cash_selection?: string
   selected_ids?: string[]
   confirmed_units?: Record<string, number>
+  confirmed_modifiers?: Record<string, string[]>
+  payer_allowance?: {
+    line_id: string
+    unit_allowed_cents: number
+    channel: 'payer_portal' | 'payer_phone' | 'payer_document'
+    reference: string
+    valid_through: string
+  }
+  clear_payer_allowance_line_id?: string
   payments_received_cents?: number
   payment_reference?: string
   verification?: {
@@ -115,9 +149,24 @@ export type VisitReview = {
     valid_to: string
     units: number
     selected_ids?: string[]
+    service_type_code?: string
     cost_share?: string
     deductible_applies?: boolean
   }
+}
+
+export type BotoxReview = {
+  evidence_reference?: string
+  modifier_reference?: string
+  indication?: string
+  anatomical_region?: string
+  encounter_status?: 'planned' | 'performed'
+  brand?: 'Botox' | 'other' | 'unknown'
+  supply_source?: 'clinic' | 'specialty_pharmacy' | 'unknown'
+  planned_units?: number
+  administered_units?: number
+  discarded_units?: number
+  separate_em_documented?: boolean
 }
 
 export type VisitFinancials = {

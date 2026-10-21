@@ -214,7 +214,12 @@ def _normalized(value: object) -> str:
 def stedi_network(case: dict, practice: dict, coverage: dict) -> dict:
     inputs = case["inputs"]
     plans = {_normalized(plan.get("name") or plan.get("planName")) for plan in coverage.get("plans", [])}
+    plans.discard("")
+    if len(plans) > 1:
+        return {"provider_network_status": "unconfirmed",
+                "provider_network": "Stedi returned different plan names; identify the applicable medical product before using the clinic network matrix."}
     service_date = str(inputs.get("service_date") or "")
+    matched = []
     for entry in practice.get("stedi_provider_networks", []):
         if (entry.get("payer_id") != inputs.get("payer_id") or entry.get("provider_npi") != (inputs.get("provider") or {}).get("npi") or
                 entry.get("place_of_service") != inputs.get("place_of_service") or _normalized(entry.get("plan_name")) not in plans):
@@ -223,10 +228,17 @@ def stedi_network(case: dict, practice: dict, coverage: dict) -> dict:
             continue
         if entry.get("effective_to") and str(entry["effective_to"]) < service_date:
             continue
-        status = entry["status"]
+        matched.append(entry)
+    statuses = {entry["status"] for entry in matched}
+    if len(statuses) > 1:
+        return {"provider_network_status": "unconfirmed",
+                "provider_network": "Clinic network rows conflict for this payer, plan, provider, place of service and date; correct the matrix before quoting."}
+    if statuses:
+        status = statuses.pop()
         return {"provider_network_status": status,
                 "provider_network": "Confirmed by clinic contract matrix" if status == "in_network" else "Confirmed out-of-network by clinic contract matrix"}
-    return {"provider_network_status": "unconfirmed", "provider_network": "Unverified — add a matching clinic provider-network contract before quoting."}
+    return {"provider_network_status": "unconfirmed",
+            "provider_network": "No clinic network row matches this payer, plan, provider, place of service and date."}
 
 
 def public(case: dict) -> dict:
@@ -419,7 +431,10 @@ async def create(body: Start, request: Request):
     return _response(public(case))
 
 
-@router.get("/cases/{case_id}")
+@router.get("/cases/{case_id}", description=(
+    "Read the saved V2 case and payer results. Completed Stedi coverage keeps benefit rows and a "
+    "patient-identity decision containing mismatch field names, without payer demographic values."
+))
 async def get_case(case_id: str, request: Request):
     session = await _session(request)
     _, _, binding = configuration()

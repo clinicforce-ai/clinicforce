@@ -67,7 +67,8 @@ def _coverage_snapshot(inputs: dict, source: dict) -> dict:
     return snapshot
 
 
-def _ecw_conflicts(case: dict, session: dict, inputs: dict, source: dict) -> list[str]:
+def _ecw_conflicts(case: dict, session: dict, inputs: dict, source: dict, *,
+                   allow_cob_inquiry: bool = False) -> list[str]:
     data, fields = case["commercial"], session["intake"]["fields"]
     network = _api._network(session["practice_id"], data["provider_network_id"])
     checks = (("service date", inputs.get("service_date"), data["service_date"]),
@@ -82,7 +83,8 @@ def _ecw_conflicts(case: dict, session: dict, inputs: dict, source: dict) -> lis
     coverage = _api._coverage_snapshot(inputs, source)
     if not coverage["coverage_id"] or not coverage["member_id"] or not coverage["relationship"]:
         conflicts.append("eClinicalWorks did not return one identifiable coverage with member and relationship details.")
-    if coverage["active_coverages"] != 1:
+    if coverage["active_coverages"] != 1 and not (allow_cob_inquiry and coverage["active_coverages"] > 1
+                                                  and coverage["coverage_id"]):
         conflicts.append("Multiple or no active eClinicalWorks coverages require coordination-of-benefits review.")
     if not all(coverage.get(key) for key in ("subscriber_first", "subscriber_last")):
         conflicts.append("eClinicalWorks did not return the policyholder identity needed for Stedi.")

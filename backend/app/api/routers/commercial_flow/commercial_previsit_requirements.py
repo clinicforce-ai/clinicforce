@@ -4,11 +4,25 @@ from __future__ import annotations
 from types import ModuleType
 
 
+def requirement_sources(documents: list[dict]) -> list[dict]:
+    return sorted(({'id': row['id'], 'sha256': row.get('sha256'),
+                    'effective_from': str(row['effective_from']) if row.get('effective_from') else None,
+                    'effective_to': str(row['effective_to']) if row.get('effective_to') else None,
+                    'status': (row.get('extraction_summary') or {}).get('status')}
+                   for row in documents if row.get('kind') == 'plan_matrix' or
+                   row.get('kind') == 'contract' and row.get('content_type') == 'application/pdf'),
+                  key=lambda row: row['id'])
+
+
 def attach_requirements(api: ModuleType, result: dict, case: dict, inputs: dict,
                         source: dict, session: dict, connections: list[dict], payer_id: str) -> None:
-    library_ids = ([row['id'] for row in session['_library_documents']
+    documents = (session.get('_library_documents') if '_library_documents' in session else
+                 api.staff_store.list_library(session['practice_id']) if case.get('library_pricing') else None)
+    if documents is not None:
+        result['requirement_sources'] = requirement_sources(documents)
+    library_ids = ([row['id'] for row in documents
                     if row.get('kind') == 'plan_matrix' or row.get('kind') == 'contract' and row.get('content_type') == 'application/pdf']
-                   if '_library_documents' in session else
+                   if documents is not None else
                    [row['document_id'] for row in case.get('library_pricing', []) if row.get('document_id')])
     library_sources = [api.staff_store.get_library(document_id, session['practice_id']) for document_id in library_ids]
     payer_connections = [row for row in connections if row.get('stedi_payer_id') == payer_id]
@@ -32,6 +46,7 @@ def attach_requirements(api: ModuleType, result: dict, case: dict, inputs: dict,
         'coverage_period': source.get('coverage_period') or result['insurance_details'].get('payer_coverage_period'),
         'location_id': source.get('location_id'),
         'pos': inputs.get('place_of_service'),
+        'diagnoses': inputs.get('diagnoses'),
     }
     requirement_documents = [document for document in library_sources if document]
     result['requirement_evidence'] = api.contract_requirements.evaluate(result, requirement_context, requirement_documents)
@@ -44,3 +59,16 @@ def attach_requirements(api: ModuleType, result: dict, case: dict, inputs: dict,
             candidate_result, requirement_context, requirement_documents)['procedures']
     else:
         result['candidate_requirements'] = []
+
+
+def refresh_saved_requirements(api: ModuleType, result: dict, case: dict, practice_id: str) -> None:
+    """Recheck new saves when contract or plan-matrix evidence changes."""
+    if 'requirement_sources' not in result:
+        return
+    documents = api.staff_store.list_library(practice_id)
+    if result['requirement_sources'] == requirement_sources(documents):
+        return
+    context = case['previsit_context']
+    attach_requirements(api, result, case, context['inputs'], context['source'],
+                        {'practice_id': practice_id, '_library_documents': documents},
+                        api.commercial_store.list_connections(practice_id), context.get('payer_id') or '')

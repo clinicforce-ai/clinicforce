@@ -3,6 +3,17 @@ import type { CommercialEstimateModel } from './useCommercialEstimateModel'
 import InsuranceCards from '../insurance-card/InsuranceCards'
 import { ApplicableBenefits, AppointmentNotes } from './EstimatePanels'
 import { memberSource, visitDate } from './format'
+import BillingProtectionEntry from './BillingProtectionEntry'
+
+const identityFieldLabels: Record<string, string> = {
+  first_name: 'patient first name',
+  last_name: 'patient surname',
+  birth_date: 'patient date of birth',
+  member_id: 'member ID',
+  subscriber_first: 'subscriber first name',
+  subscriber_last: 'subscriber surname',
+  relationship: 'subscriber relationship',
+}
 
 export default function PatientPolicy({
   model,
@@ -11,7 +22,24 @@ export default function PatientPolicy({
   model: CommercialEstimateModel
   result: NonNullable<CommercialEstimateModel['result']>
 }) {
-  const { intakeId, readOnly, patient, payerSubscriber, payerPatient, policyDates } = model
+  const {
+    intakeId,
+    readOnly,
+    patient,
+    payerSubscriber,
+    payerPatient,
+    policyDates,
+    session,
+    busy,
+    saveReview,
+  } = model
+  const mismatchFields = [
+    ...(result.identity?.differences || []),
+    ...(result.identity?.policy_differences || []),
+  ].map((row) => identityFieldLabels[row.field] || row.field.replaceAll('_', ' '))
+  const uhcCard = /\b(?:UHC|United\s*Health\s*Care)\b/i.test(
+    result.stedi_payer?.name || result.payer || '',
+  )
   return (
     <>
       <section className="patient-policy">
@@ -57,6 +85,18 @@ export default function PatientPolicy({
           </div>
         </div>
         <dl>
+          {!!result.plan_details?.stedi.names?.length && (
+            <div>
+              <dt>Medical product</dt>
+              <dd>{result.plan_details.stedi.names.join(' · ')}</dd>
+            </div>
+          )}
+          {!!result.plan_details?.stedi.supplementary_names?.length && (
+            <div>
+              <dt>Separate supplementary coverage</dt>
+              <dd>{result.plan_details.stedi.supplementary_names.join(' · ')}</dd>
+            </div>
+          )}
           <div>
             <dt>Member ID</dt>
             <dd>
@@ -111,14 +151,23 @@ export default function PatientPolicy({
             </dd>
           </div>
         </dl>
-        {!!result.identity?.differences.length && (
+        {result.identity?.status === 'review' && (
+          <p className="visit-muted" role="status">
+            eCW and payer differ on{' '}
+            {mismatchFields.length
+              ? [...new Set(mismatchFields)].join(', ')
+              : 'patient or subscriber identity'}
+            . Reconcile these fields with the payer before using member balances.
+          </p>
+        )}
+        {result.identity?.status !== 'review' && !!result.identity?.differences.length && (
           <p className="visit-muted">
             Both names are retained with their source.{' '}
             {result.identity.status === 'reconciled'
               ? 'A verified relationship is on file.'
               : result.identity.status === 'warning'
                 ? result.identity.message
-                : 'The patient details need reconciliation before collection.'}
+                : ''}
           </p>
         )}
         {intakeId && (
@@ -127,7 +176,7 @@ export default function PatientPolicy({
             intakeId={intakeId}
             background
             inline
-            savedOnly={readOnly}
+            historicalEstimate={readOnly}
           />
         )}
         {result.card_check && (
@@ -135,23 +184,34 @@ export default function PatientPolicy({
             {
               (
                 {
-                  filled_missing: `Card OCR filled missing ${result.card_check.fields_added.map((field) => field.replaceAll('_', ' ')).join(', ')} before the payer check.`,
+                  filled_missing: result.card_check.fields_added?.length
+                    ? `Card OCR filled missing ${result.card_check.fields_added.map((field) => field.replaceAll('_', ' ')).join(', ')} before the payer check.`
+                    : 'Card OCR supplied policy details before the payer check.',
                   matched:
                     'Card OCR matched the available eCW policy details before the payer check.',
                   conflict:
                     result.recovery?.outcome === 'recovered'
-                      ? 'The payer confirmed the card-based check; eCW was not changed.'
+                      ? 'The payer confirmed the card-based check. eCW was not changed.'
                       : result.recovery?.state === 'pending'
                         ? 'The card and eCW differ. A single card-based payer check is in progress.'
                         : result.card_check.alternative_supported
-                          ? 'The card and eCW differ. The card-based check did not confirm this policy; review both sources.'
+                          ? 'The card and eCW differ. The card-based check did not confirm this policy. Review both sources.'
                           : 'The card and eCW differ. There was not enough matching evidence to send a card-based check.',
                   unverified:
                     'The card text could not be matched to the eCW patient or policy. No card fields were added.',
                   not_found:
-                    'No insurance card was available to compare with eCW before the payer check.',
+                    result.card_check.failure_reason === 'ecw_no_matching_card_document'
+                      ? uhcCard
+                        ? 'eCW returned no insurance-card image. If your clinic has UHC Provider Portal access, open this member’s Eligibility record for the digital ID card, upload it here, and ask eCW to expose type 64290-0.'
+                        : 'At this estimate check, eCW returned no insurance-card document or image. Check the card in eCW and ask eCW to expose type 64290-0, or upload the card here and rerun the estimate.'
+                      : result.card_check.failure_reason === 'ecw_patient_unlinked'
+                        ? 'No eCW patient was linked for card lookup. Link the patient or upload the card here.'
+                        : 'No insurance card was available to compare with eCW before the payer check.',
                   multiple_cards: 'Multiple card sets need review. No new Stedi check was sent.',
-                  unavailable: 'The insurance card could not be read before the payer check.',
+                  unavailable:
+                    result.card_check.failure_reason === 'card_read_timeout'
+                      ? 'The insurance-card read timed out. Retry the card preview or upload the card here.'
+                      : 'The insurance card could not be read. Retry the card preview or upload the card here.',
                   read: 'The insurance card was read before the payer check.',
                 } as Record<string, string>
               )[result.card_check.status]
@@ -160,11 +220,17 @@ export default function PatientPolicy({
         )}
         {result.card_check?.payer_comparison && (
           <p className="visit-muted">
-            Insurer comparison: eCW says {result.card_check.payer_comparison.ecw}; card says{' '}
+            Insurer comparison: eCW says {result.card_check.payer_comparison.ecw}. Card says{' '}
             {result.card_check.payer_comparison.card}. Confirm which route covers this visit.
           </p>
         )}
       </section>
+      {!readOnly &&
+        session?.role === 'admin' &&
+        result.plan_details?.stedi.names?.length === 1 &&
+        /\b(?:rppo|lppo|regional ppo|local ppo)\b/i.test(result.plan_details.stedi.names[0]) && (
+          <BillingProtectionEntry result={result} busy={!!busy} save={saveReview} />
+        )}
       <ApplicableBenefits result={result} readOnly={readOnly} />
       <AppointmentNotes result={result} />
     </>

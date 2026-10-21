@@ -5,7 +5,7 @@ import json
 from dataclasses import dataclass
 from typing import Any
 
-from app.insurance.stedi_benefits.fields import _procedure, _stedi_cents
+from app.insurance.stedi_benefits.fields import _procedure, _stedi_cents, _stedi_entries, oop_plan_association, coverage_kind
 
 
 @dataclass
@@ -14,8 +14,12 @@ class CostShareRows:
     deductible: dict[str, Any] | None
     oop: dict[str, Any] | None
     annual_deductible: dict[str, Any] | None
+    annual_oop: dict[str, Any] | None
     copay: dict[str, Any] | None
     coinsurance: dict[str, Any] | None
+    conflicts: dict[str, list[str]]
+    oop_medical_candidate_ids: list[str]
+    oop_quarantined_ids: list[str]
 
 
 def select_cost_share_rows(entries: list[dict[str, Any]], payload: dict[str, Any],
@@ -45,11 +49,25 @@ def select_cost_share_rows(entries: list[dict[str, Any]], payload: dict[str, Any
     cost_share_scope = max((score for score, row in wanted if row.get('code') in {'A', 'B'}), default=0)
     wanted = [(score, row) for score, row in wanted
               if row.get('code') not in {'A', 'B'} or score == cost_share_scope]
-    def pick(code: str, remaining: bool = False, periods: set[str] | None = None, *, plan_wide: bool = False) -> dict[str, Any] | None:
+    conflicts: dict[str, list[str]] = {}
+    supplementary_present = any(coverage_kind(row, payload) == 'supplementary'
+                                for row in _stedi_entries(payload)) or any(
+        coverage_kind({'planCoverage': plan.get('name')}, payload) == 'supplementary'
+        for plan in payload.get('plans') or [] if isinstance(plan, dict))
+    oop_rows = [row for _, row in wanted if row.get('code') == 'G']
+    oop_medical_candidate_ids = [row['evidence_path'] for row in oop_rows
+                                 if oop_plan_association(row, payload) == 'medical_candidate']
+    oop_quarantined_ids = [row['evidence_path'] for row in oop_rows
+                           if supplementary_present and oop_plan_association(row, payload) == 'unassigned']
+    def pick(code: str, remaining: bool = False, periods: set[str] | None = None, *,
+             plan_wide: bool = False, label: str) -> dict[str, Any] | None:
         periods = {'29', 'REMAINING'} if remaining else periods
         matches = [(specificity, row) for specificity, row in wanted if str(row.get("code") or "").upper() == code and (periods is None or str(row.get("timeQualifierCode") or row.get("timeQualifier") or "").upper() in periods)]
         if plan_wide:
             matches = [(score, row) for score, row in matches if not _procedure(row) and '30' in (row.get('serviceTypeCodes') or [])]
+        if label in {'oop_annual', 'oop_remaining'} and supplementary_present:
+            matches = [(score, row) for score, row in matches
+                       if oop_plan_association(row, payload) == 'medical']
         if not matches:
             return None
         if selected_ids is not None and code in {"A", "B"}:
@@ -62,8 +80,17 @@ def select_cost_share_rows(entries: list[dict[str, Any]], payload: dict[str, Any
         # evidence location differs for an actual duplicate.
         signatures = {json.dumps({k: v for k, v in row.items() if k != 'evidence_path'}, sort_keys=True)
                       for row in selected}
-        return {**selected[0], 'evidence_paths': [row['evidence_path'] for row in selected]} if len(signatures) == 1 else None
-    deductible, oop = pick("C", True), pick("G", True)
-    annual_deductible = pick('C', periods={'23', 'CALENDAR_YEAR', '22', 'SERVICE_YEAR'}, plan_wide=True)
-    copay, coinsurance = pick("B"), pick("A")
-    return CostShareRows(wanted, deductible, oop, annual_deductible, copay, coinsurance)
+        if len(signatures) != 1:
+            conflicts[label] = [row['evidence_path'] for row in selected]
+            return None
+        return {**selected[0], 'evidence_paths': [row['evidence_path'] for row in selected]}
+    deductible = pick("C", True, label='deductible_remaining')
+    oop = pick("G", True, label='oop_remaining')
+    annual_deductible = pick('C', periods={'23', 'CALENDAR_YEAR', '22', 'SERVICE_YEAR'},
+                             plan_wide=True, label='deductible_annual')
+    annual_oop = pick('G', periods={'23', 'CALENDAR_YEAR', '22', 'SERVICE_YEAR', 'CONTRACT'},
+                      plan_wide=True, label='oop_annual')
+    copay = pick("B", label='copay')
+    coinsurance = pick("A", label='coinsurance')
+    return CostShareRows(wanted, deductible, oop, annual_deductible, annual_oop, copay, coinsurance,
+                         conflicts, oop_medical_candidate_ids, oop_quarantined_ids)

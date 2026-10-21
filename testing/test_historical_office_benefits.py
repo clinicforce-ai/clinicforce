@@ -37,11 +37,16 @@ def uhc():
         'outOfPocket': [row('4276.46', stc='30', period='REMAINING')]}}]}
 
 
-def replay(raw):
+def replay(raw, *, confirmed_network=True):
     benefits = commercial.normalize_stedi_271(raw, '98', False, service_date=DAY)
+    benefits['identity'] = {'status': 'matched', 'binding': 'synthetic-current-binding', 'match_version': 2}  # De-identified saved terms have no patient fields.
     price = visit_estimate.price_lines([{'id': 'visit', 'code': '99203', 'units': 1}], [], benefits, RULES, payload=raw, service_date=DAY)
+    if confirmed_network:
+        # Synthetic clinic participation keeps these tests focused on payer copay selection.
+        benefits['network_status'] = 'in_network'
+        benefits['network_source'] = 'clinic_library_contract'
     result = {'benefits': benefits, 'price_range': price,
-              'planning_estimate': visit_estimate.planning_estimate(price, benefits, {})}
+              'planning_estimate': visit_estimate.planning_estimate(price, benefits, benefits['identity'])}
     return collection_guidance.build(result), price['lines'][0]['benefits']
 
 
@@ -82,6 +87,10 @@ def test_provider_other_role_resolves_specialist_copay_and_discloses_remaining_d
     raw = uhc()
     raw['plans'][0]['benefits']['coPayment'][2]['messages'] = []
     assert replay(raw)[0]['amount_cents'] is None  # Neither smallest nor largest wins by default.
+
+
+def test_historical_in_network_copay_waits_for_product_participation():
+    assert replay(uhc(), confirmed_network=False)[0]['amount_cents'] is None
 
 
 def test_unknown_service_limit_or_conflicting_specialist_term_still_blocks_advance():

@@ -133,7 +133,7 @@ export function useCommercialEstimateActions({
           timer = window.setTimeout(() => void poll(), 3000)
         else if (updated.recovery?.state === 'pending')
           setNotice(
-            'Recovery is taking longer than expected. The request is saved; reopen this visit to check its status.',
+            'Recovery is taking longer than expected. The request is saved. Reopen this visit to check its status.',
           )
       } catch (caught) {
         if (!stopped && current === requestId.current)

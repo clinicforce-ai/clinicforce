@@ -23,13 +23,45 @@ def test_non_office_procedures_keep_their_configured_or_diagnostic_service_type(
 
 def payload():
     base = {'coverageLevelCode': 'IND', 'inPlanNetworkIndicatorCode': 'Y', 'serviceTypeCodes': ['30']}
-    return {'subscriber': {'memberId': 'M123'}, 'benefitsInformation': [
+    return {'subscriber': {'memberId': 'M123', 'firstName': 'Pat', 'lastName': 'Example',
+                           'dateOfBirth': '1980-01-01'}, 'benefitsInformation': [
         {**base, 'code': '1', 'planCoverageDescription': 'Choice Medical'},
         {**base, 'code': 'C', 'timeQualifierCode': '29', 'benefitAmount': '50'},
         {**base, 'code': 'G', 'timeQualifierCode': '29', 'benefitAmount': '80'},
         {**base, 'code': 'A', 'benefitPercent': '.20', 'authOrCertIndicator': 'N',
          'additionalInformation': [{'description': 'No referral required'}]},
     ]}
+
+
+def test_out_of_pocket_maximum_is_reported_only_from_a_unique_plan_wide_limit():
+    raw = payload()
+    annual = {'coverageLevelCode': 'IND', 'inPlanNetworkIndicatorCode': 'Y',
+              'serviceTypeCodes': ['30'], 'code': 'G', 'timeQualifierCode': '23',
+              'benefitAmount': '1000'}
+    raw['benefitsInformation'].append(annual)
+    terms = commercial.normalize_stedi_271(raw, '98', True)
+    assert terms['oop_annual_cents'] == 100000
+    assert terms['oop_annual_id'] == 'benefitsInformation[4]'
+    raw['benefitsInformation'].append({**annual, 'benefitAmount': '2000'})
+    assert commercial.normalize_stedi_271(raw, '98', True)['oop_annual_cents'] is None
+
+
+def test_network_specific_oop_zero_is_not_a_zero_price_without_participation():
+    benefit = {'active': True, 'network_status': 'unknown', 'oop_remaining_cents': 0,
+               'identity': {'status': 'matched', 'binding': 'synthetic-current-binding', 'match_version': 2}}
+    price = {'lines': [{'code': '99203', 'units': 1, 'benefits': benefit}], 'complete': False}
+    assert visit_estimate.planning_estimate(price, benefit, {}) is None
+    benefit['network_status'] = 'in_network'
+    assert visit_estimate.planning_estimate(price, benefit, benefit['identity'])['basis'] == 'out_of_pocket_limit'
+
+
+def test_nested_stedi_plan_out_of_pocket_maximum_uses_contract_period():
+    row = {'amount': '3000', 'timePeriod': 'CONTRACT', 'coverageLevel': 'INDIVIDUAL',
+           'network': {'indicator': 'IN_NETWORK'}, 'service': {'system': 'STC', 'value': '30'}}
+    raw = {'plans': [{'benefits': {'outOfPocket': [row]}}]}
+    terms = commercial.normalize_stedi_271(raw, '98', True)
+    assert terms['oop_annual_cents'] == 300000
+    assert terms['oop_annual_id'] == 'plans[0].benefits.outOfPocket[0]'
 
 
 def lines():
@@ -123,6 +155,28 @@ def test_procedure_scope_missing_level_family_and_unrelated_dental_are_preserved
     assert ecw_backend._plan({'class': [{'type': {'coding': [{'code': kind}]}, 'value': value} for kind, value in [('plan', 'Exact Plan'), ('subplan', 'Gold'), ('network', 'PPO')]]}) == 'Exact Plan'
 
 
+def test_unselected_office_cpt_alternatives_do_not_adopt_99202_only_benefits():
+    raw = payload()
+    base = {'coverageLevelCode': 'IND', 'inPlanNetworkIndicatorCode': 'Y', 'serviceTypeCodes': ['98']}
+    raw['benefitsInformation'] += [
+        {**base, 'code': 'B', 'benefitAmount': '30'},
+        {**base, 'code': 'B', 'benefitAmount': '10',
+         'compositeMedicalProcedureIdentifier': {'procedureCode': '99202'}},
+        {**base, 'code': 'B', 'benefitAmount': '20',
+         'compositeMedicalProcedureIdentifier': {'procedureCode': '99203'}},
+    ]
+    inputs = {'visit_type': 'new', 'reason': 'New patient office visit', 'lines': [],
+              'place_of_service': '11', 'service_date': DAY}
+    source = {'rendering_provider': {'roles': ['neurology']}}
+    coverage = {'active_coverages': 1, 'member_id': 'M123'}
+    alternatives = api._previsit_benefits(raw, coverage, DAY, inputs=inputs, source=source)
+    assert alternatives['copay_cents'] == 3000  # The shared office term, not the 99202-only term.
+    assert commercial.normalize_stedi_271(raw, '98', True, procedure_code='99203')['copay_cents'] == 2000
+    inputs['lines'] = [{'code': '99203', 'service_status': 'scheduled', 'units': 1}]
+    scheduled = api._previsit_benefits(raw, coverage, DAY, inputs=inputs, source=source)
+    assert scheduled['copay_cents'] == 2000
+
+
 def test_approval_is_separate_from_requirement_and_must_be_valid_for_visit():
     raw = payload(); raw['benefitsInformation'][3]['authOrCertIndicator'] = 'Y'
     pending = priced(raw)
@@ -178,6 +232,7 @@ class VisitReviewTests(IsolatedAsyncioTestCase):
         session = {'practice_id': 'clinic-b', 'intake_id': 'intake-b', 'patient_id': 'patient-b', 'share_manifest_id': '',
                    'staff': {'id': 'staff-b', 'display_name': 'Staff B'}, 'intake': {'updated_at': 'v', 'patient': {'given_name': 'Pat', 'family_name': 'Example', 'birth_date': '1980-01-01'}, 'fields': {}}}
         inputs = {'service_date': DAY, 'member_id': 'M123', 'relationship': '18', 'subscriber': {'firstName': 'Pat', 'lastName': 'Example', 'birthDate': '1980-01-01'},
+                  'patient': {'patient_first_name': 'Pat', 'patient_last_name': 'Example', 'patient_birth_date': '1980-01-01'},
                   'visit_type': 'new', 'lines': [{**row, 'service_status': 'scheduled'} for row in lines()], 'place_of_service': '11', 'rendering_provider': {'npi': '1234567890'}}
         source = {'appointment_id': 'visit', 'active_coverages': 1, 'plan': 'Choice', 'coverage_id': 'coverage', 'location_id': 'office'}
         token = api._visit_context_token(inputs, source)
@@ -187,11 +242,12 @@ class VisitReviewTests(IsolatedAsyncioTestCase):
                 'previsit_context': {'result': result, 'context_token': token, 'inputs': inputs, 'source': source, 'payer_id': 'payer-b'}}
         with patch.object(api, '_session', AsyncMock(return_value=session)), patch.object(api.store, 'get_case', return_value=case) as get_case, \
              patch.object(api.ecw_backend, 'fetch_inputs', AsyncMock(return_value=(inputs, [], source))), patch.object(api, '_ecw_practice_config', return_value={}), \
+             patch.object(api.staff_store, 'list_library', return_value=[]), \
              patch.object(api.object_store, 'get_object_bytes', return_value=json.dumps(raw).encode()), \
              patch.object(api.commercial_store, 'list_connections', return_value=[{'id': 'payer', 'stedi_payer_id': 'payer-b', 'status': 'staff_guidance_enabled'}]), \
              patch.object(api, '_practice_path', return_value=({}, {'plan_matcher': 'Choice', 'evidence_reference': 'library:synthetic-contract'}, {'rules': {'cost_share': 'payer_returned', 'service_type_by_code': {'93000': '30'}, 'library_source': {'document_id': 'synthetic-contract', 'reference': 'library:synthetic-contract', 'sha256': 'synthetic-hash'}}})), \
              patch.object(api.staff_store, 'get_library', return_value={'kind': 'contract', 'content_type': 'application/pdf', 'sha256': 'synthetic-hash', 'label': 'Synthetic contract'}), \
-             patch.object(api.commercial_store, 'matching_rates', return_value=rates()), patch.object(api, '_save', side_effect=lambda value, *_: {**value, 'revision': 5}) as save, \
+             patch.object(api.commercial_store, 'matching_rates', return_value=[{**row, 'version_id': 'synthetic-rate'} for row in rates()]), patch.object(api, '_save', side_effect=lambda value, *_: {**value, 'revision': 5}) as save, \
              patch.object(api.httpx, 'AsyncClient', side_effect=AssertionError('No paid payer call during review')):
             updated = await api.update_visit_review('case', api.VisitReviewInput(context_token=token, revision=4, payments_received_cents=1500, payment_reference='Ledger #23'), MagicMock())
             assert updated['price_range']['collection']['amount_cents'] == 6500

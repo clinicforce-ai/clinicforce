@@ -1,41 +1,28 @@
 import { useCallback, useEffect, useState } from 'react'
 import './InsuranceCards.css'
 import { request } from '../../services/api/client'
-import { getStaffIntake } from '../../services/api/staff-intake'
 
 type Cards = {
-  cards: Array<{ id: string; title: string; content_type: string; url: string }>
+  cards: Array<{ id: string; title: string; content_type: string; url: string; source?: string }>
   message: string
 }
 export default function InsuranceCards({
   intakeId,
   background = false,
   inline = false,
-  savedOnly = false,
+  historicalEstimate = false,
 }: {
   intakeId: string
   background?: boolean
   inline?: boolean
-  savedOnly?: boolean
+  historicalEstimate?: boolean
 }) {
   const [data, setData] = useState<Cards | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const read = useCallback(async (): Promise<Cards> => {
-    if (!savedOnly)
-      return request<Cards>(`/api/staff/intakes/${encodeURIComponent(intakeId)}/cards`)
-    const intake = await getStaffIntake(intakeId)
-    return {
-      cards: intake.documents.map((doc) => ({
-        id: doc.id,
-        title: doc.filename,
-        content_type: doc.content_type,
-        url: `/api/staff/intakes/${encodeURIComponent(intakeId)}/documents/${encodeURIComponent(doc.id)}`,
-      })),
-      message:
-        'Original card files saved with this intake. eCW card previews are not archived with the estimate.',
-    }
-  }, [intakeId, savedOnly])
+    return request<Cards>(`/api/staff/intakes/${encodeURIComponent(intakeId)}/cards`)
+  }, [intakeId])
   const load = useCallback(async () => {
     setBusy(true)
     setError('')
@@ -67,7 +54,7 @@ export default function InsuranceCards({
       {busy && <p role="status">Reading saved cards and eCW card attachments…</p>}
       {error && (
         <p role="alert">
-          {error} {!savedOnly && <button onClick={() => void load()}>Retry</button>}
+          {error} <button onClick={() => void load()}>Retry</button>
         </p>
       )}
       {data && !data.cards.length && (
@@ -77,9 +64,18 @@ export default function InsuranceCards({
         </p>
       )}
       {data && !!data.cards.length && data.message && <p>{data.message}</p>}
+      {historicalEstimate && data?.cards.some((card) => card.source === 'ecw_current') && (
+        <p>
+          Current eCW card preview; it may have changed since this estimate and was not used to
+          recalculate it.
+        </p>
+      )}
       {data?.cards.map((card) => (
-        <figure key={card.id}>
-          <figcaption>{card.title}</figcaption>
+        <figure key={`${card.source || 'card'}:${card.id}`}>
+          <figcaption>
+            {card.title} ·{' '}
+            {card.source === 'ecw_current' ? 'Current eCW card' : 'ClinicForce upload'}
+          </figcaption>
           {card.content_type === 'application/pdf' ? (
             <iframe title={card.title} src={card.url} />
           ) : (

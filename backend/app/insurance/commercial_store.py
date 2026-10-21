@@ -2,12 +2,13 @@
 from __future__ import annotations
 
 import json
+import re
 from datetime import datetime, timezone
 from typing import Any
 from uuid import uuid4
 
 from app.core.patient_store import _connection
-from app.insurance.commercial import CommercialError, RATE_SOURCE_TYPES, SERVICE_CATEGORIES
+from app.insurance.commercial import CommercialError, RATE_SOURCE_TYPES, SERVICE_CATEGORIES, is_united_healthcare_payer
 
 
 def _now() -> str:
@@ -46,17 +47,163 @@ def create_connection(practice_id: str, data: dict[str, Any]) -> dict:
         raise CommercialError("Choose a supported payer category.")
     if category != "commercial_medical" and data.get("status") == "staff_guidance_enabled":
         raise CommercialError("Only commercial medical may be enabled in this release.")
+    if data.get('status') == 'staff_guidance_enabled':
+        raise CommercialError('Create the payer connection as draft, then activate it after scoped network and profile review.')
     required = ("display_name", "stedi_payer_id")
     if any(not isinstance(data.get(key), str) or not data[key].strip() for key in required):
         raise CommercialError("Payer name and immutable Stedi payer ID are required.")
     now, record_id = _now(), str(uuid4())
+    rules = dict(data.get('rules') or {})
+    rules.pop('collection_policy', None)
     with _connection() as db:
         db.execute("""INSERT INTO commercial_payer_connections
             (id,practice_id,display_name,stedi_payer_id,category,status,aliases_json,rules_json,created_at,updated_at)
             VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
             (record_id, practice_id, data["display_name"].strip(), data["stedi_payer_id"].strip(), category,
-             data.get("status", "draft"), _json(data.get("aliases", [])), _json(data.get("rules", {})), now, now))
+             data.get("status", "draft"), _json(data.get("aliases", [])), _json(rules), now, now))
     return connection(practice_id, record_id) or {}
+
+
+def _merged_aliases(db: Any, practice_id: str, connection_id: str,
+                    payer: dict, requested: list[str]) -> list[str]:
+    """Validate an eCW route name against every other enabled route in this clinic."""
+    normalize = lambda value: re.sub(r'[^a-z0-9]', '', value.casefold())
+    if any(not isinstance(alias, str) or not alias.strip() or len(alias.strip()) > 160
+           or not normalize(alias) for alias in requested):
+        raise CommercialError('Payer aliases must be eCW payer names with letters or numbers and at most 160 characters.')
+    # Serialize changes across different connections so simultaneous approvals cannot claim one name.
+    db.execute('SELECT pg_advisory_xact_lock(hashtext(%s))', (practice_id,))
+    unique = {normalize(payer['display_name'])}
+    merged = []
+    for alias in [*json.loads(payer.get('aliases_json') or '[]'), *requested]:
+        key = normalize(alias.strip())
+        if key and key not in unique:
+            unique.add(key)
+            merged.append(alias.strip())
+    others = db.execute('''SELECT display_name,aliases_json FROM commercial_payer_connections
+        WHERE practice_id=%s AND id<>%s AND status='staff_guidance_enabled' ''',
+        (practice_id, connection_id)).fetchall()
+    if any(unique & {normalize(value) for value in [row['display_name'],
+            *json.loads(row['aliases_json'])]} for row in others):
+        raise CommercialError('An eCW payer name or alias already belongs to another enabled payer route.')
+    return merged
+
+
+def activate_connection(practice_id: str, connection_id: str, service_type_code: str,
+                        reference: str, actor_id: str, *, aliases: list[str] | None = None) -> dict:
+    """Enable an existing route only after its verified product scopes are usable."""
+    if not re.fullmatch(r'[A-Za-z0-9]{1,4}', service_type_code or '') or len(reference.strip()) < 10 or not actor_id:
+        raise CommercialError('Stedi service type, approval reference and administrator are required.')
+    now = _now()
+    with _connection() as db:
+        payer = db.execute('''SELECT status,category,display_name,aliases_json,rules_json
+            FROM commercial_payer_connections WHERE id=%s AND practice_id=%s FOR UPDATE''',
+            (connection_id, practice_id)).fetchone()
+        if not payer or payer['category'] != 'commercial_medical' or payer['status'] not in {
+                'draft', 'enrollment', 'fixture_validated', 'shadow'}:
+            raise CommercialError('An existing draft commercial-medical payer connection is required.')
+        links = db.execute('''SELECT n.plan_matcher,n.evidence_reference,p.plan_matcher AS profile_plan_matcher
+            FROM commercial_provider_networks n JOIN commercial_estimation_profiles p
+              ON p.provider_network_id=n.id AND p.practice_id=n.practice_id
+            WHERE n.practice_id=%s AND n.payer_connection_id=%s AND n.status='verified'
+              AND p.payer_connection_id=n.payer_connection_id AND p.status='staff_guidance_enabled' ''',
+            (practice_id, connection_id)).fetchall()
+        if not links or any(not str(link['evidence_reference'] or '').strip() for link in links):
+            raise CommercialError('Link a verified provider-network record and enabled estimate profile with participation evidence first.')
+        if is_united_healthcare_payer({'payer': payer['display_name']}):
+            generic = {'', 'uhc', 'unitedhealthcare', 'ppo', 'hmo', 'commercial', 'medicareadvantage'}
+            if any(re.sub(r'[^a-z0-9]', '', str(link['plan_matcher'] or '').casefold()) in generic
+                   or link['plan_matcher'] != link['profile_plan_matcher'] for link in links):
+                raise CommercialError('Scope each enabled UHC network and profile to the same exact payer product before activation.')
+        merged_aliases = _merged_aliases(db, practice_id, connection_id, payer, aliases or [])
+        rules = json.loads(payer['rules_json'])
+        rules['service_type_code'] = service_type_code
+        rules['activation'] = {'reference': reference.strip(), 'approved_by': actor_id, 'approved_at': now}
+        db.execute('''UPDATE commercial_payer_connections SET status='staff_guidance_enabled',
+            rules_json=%s,aliases_json=%s,updated_at=%s WHERE id=%s AND practice_id=%s''',
+            (_json(rules), _json(merged_aliases), now, connection_id, practice_id))
+    return connection(practice_id, connection_id) or {}
+
+
+def add_connection_aliases(practice_id: str, connection_id: str, aliases: list[str],
+                           reference: str, actor_id: str) -> dict:
+    """Add later eCW payer labels without changing participation or activation."""
+    if not aliases or len(reference.strip()) < 10 or not actor_id:
+        raise CommercialError('Payer aliases, approval reference and administrator are required.')
+    now = _now()
+    with _connection() as db:
+        payer = db.execute('''SELECT status,category,display_name,aliases_json,rules_json
+            FROM commercial_payer_connections WHERE id=%s AND practice_id=%s FOR UPDATE''',
+            (connection_id, practice_id)).fetchone()
+        if not payer or payer['category'] != 'commercial_medical' or payer['status'] != 'staff_guidance_enabled':
+            raise CommercialError('An enabled commercial-medical payer connection is required.')
+        merged = _merged_aliases(db, practice_id, connection_id, payer, aliases)
+        rules = json.loads(payer['rules_json'])
+        rules['alias_update'] = {'reference': reference.strip(), 'approved_by': actor_id,
+                                 'approved_at': now}
+        db.execute('''UPDATE commercial_payer_connections SET aliases_json=%s,
+            rules_json=%s,updated_at=%s WHERE id=%s AND practice_id=%s''',
+            (_json(merged), _json(rules), now, connection_id, practice_id))
+    return connection(practice_id, connection_id) or {}
+
+
+def set_collection_policy(practice_id: str, connection_id: str, mode: str,
+                          reference: str, actor_id: str, *, allow_supported_oon_advance: bool = False,
+                          allow_cms_based_advance: bool = False) -> dict:
+    """Set a practice-scoped payer policy with an administrator and source reference."""
+    if mode not in {'defer_to_claim', 'disabled'} or not reference.strip() or not actor_id:
+        raise CommercialError('A collection policy mode, approval reference and administrator are required.')
+    now = _now()
+    with _connection() as db:
+        row = db.execute('SELECT rules_json FROM commercial_payer_connections WHERE id=%s AND practice_id=%s FOR UPDATE',
+                         (connection_id, practice_id)).fetchone()
+        if not row:
+            raise CommercialError('The payer connection is not in this practice.')
+        rules = json.loads(row['rules_json'])
+        if mode == 'disabled':
+            rules.pop('collection_policy', None)
+        else:
+            rules['collection_policy'] = {'mode': mode, 'reference': reference.strip(),
+                                          'approved_by': actor_id, 'approved_at': now,
+                                          'allow_supported_oon_advance': allow_supported_oon_advance,
+                                          'allow_cms_based_advance': allow_cms_based_advance}
+        db.execute('UPDATE commercial_payer_connections SET rules_json=%s,updated_at=%s WHERE id=%s AND practice_id=%s',
+                   (_json(rules), now, connection_id, practice_id))
+    return connection(practice_id, connection_id) or {}
+
+
+def set_agreement_inventory(practice_id: str, connection_id: str, mode: str,
+                            reference: str, scopes: list[dict], actor_id: str) -> dict:
+    """Record or revoke a practice-scoped UHC inventory attestation."""
+    from app.insurance.inventory_certification import agreement_hashes
+
+    if mode not in {'certify', 'revoke'} or not reference.strip() or not actor_id:
+        raise CommercialError('An inventory decision, reference and administrator are required.')
+    now = _now()
+    with _connection() as db:
+        row = db.execute('''SELECT display_name,rules_json FROM commercial_payer_connections
+            WHERE id=%s AND practice_id=%s FOR UPDATE''', (connection_id, practice_id)).fetchone()
+        if not row or not is_united_healthcare_payer({'payer': row['display_name']}):
+            raise CommercialError('Select the UnitedHealthcare payer route in this practice.')
+        rules = json.loads(row['rules_json'])
+        if mode == 'revoke':
+            rules.pop('agreement_inventory', None)
+        else:
+            hashes = agreement_hashes(practice_id, row['display_name'])
+            if not hashes or not scopes:
+                raise CommercialError('Upload the payer agreements and provide at least one covered provider and location scope.')
+            if any(scope.get('effective_to') and scope['effective_to'] < scope['effective_from'] for scope in scopes):
+                raise CommercialError('An inventory scope ends before its effective date.')
+            if any(any(scope.get(key) for key in ('cms_locality', 'cms_qp_status', 'cms_payment_reference'))
+                   and not all(scope.get(key) for key in ('cms_locality', 'cms_qp_status', 'cms_payment_reference'))
+                   for scope in scopes):
+                raise CommercialError('CMS pricing requires locality, QP status and a payment-scope evidence reference together.')
+            rules['agreement_inventory'] = {'reference': reference.strip(),
+                'approved_by': actor_id, 'approved_at': now,
+                'document_hashes': hashes, 'scopes': scopes}
+        db.execute('UPDATE commercial_payer_connections SET rules_json=%s,updated_at=%s WHERE id=%s AND practice_id=%s',
+                   (_json(rules), now, connection_id, practice_id))
+    return connection(practice_id, connection_id) or {}
 
 
 def list_networks(practice_id: str) -> list[dict]:
@@ -173,18 +320,20 @@ def retire_rates(practice_id: str, version_id: str) -> dict:
 def matching_rates(practice_id: str, profile: dict, network: dict, service_date: str, lines: list[dict] | None) -> list[dict]:
     """Match selected lines, or list the same scoped contract for a previsit catalog."""
     codes = [str(line.get("code") or "").upper() for line in lines] if lines is not None else None
+    rate_plan = profile.get('rate_plan_matcher', profile.get('plan_matcher', ''))
+    exact_product = bool(profile.get('require_exact_rate_plan'))
     with _connection() as db:
         rows = db.execute("""SELECT l.*, v.source_reference, v.activated_at,
-          (CASE WHEN l.provider_npi=%s THEN 1 ELSE 0 END + CASE WHEN l.tin=%s THEN 1 ELSE 0 END + CASE WHEN l.plan_matcher=%s THEN 1 ELSE 0 END) AS match_rank
+          (CASE WHEN l.provider_npi=%s THEN 1 ELSE 0 END + CASE WHEN l.tin=%s THEN 1 ELSE 0 END + CASE WHEN lower(l.plan_matcher)=lower(%s) THEN 1 ELSE 0 END) AS match_rank
           FROM commercial_rate_lines l JOIN commercial_rate_versions v ON v.id=l.version_id
           WHERE v.practice_id=%s AND v.payer_connection_id=%s AND v.status='active' AND (%s::text[] IS NULL OR l.code = ANY(%s))
           AND v.effective_from<=%s AND (v.effective_to IS NULL OR v.effective_to>=%s)
           AND l.network_name=%s AND l.place_of_service=%s AND l.effective_from<=%s AND (l.effective_to IS NULL OR l.effective_to>=%s)
           AND l.unit_rule='per_unit' AND (l.provider_npi='' OR l.provider_npi=%s) AND (l.tin='' OR l.tin=%s)
-          AND (l.plan_matcher='' OR l.plan_matcher=%s)
-          ORDER BY l.code, match_rank DESC, l.id DESC""", (network["rendering_npi"], network["tin"], profile.get("plan_matcher", ""),
+          AND (l.plan_matcher='' OR lower(l.plan_matcher)=lower(%s)) AND (NOT %s OR l.plan_matcher<>'')
+          ORDER BY l.code, match_rank DESC, l.id DESC""", (network["rendering_npi"], network["tin"], rate_plan,
                                                                practice_id, profile["payer_connection_id"], codes, codes, service_date, service_date, network["network_name"], network["place_of_service"], service_date, service_date,
-                                                               network["rendering_npi"], network["tin"], profile.get("plan_matcher", ""))).fetchall()
+                                                               network["rendering_npi"], network["tin"], rate_plan, exact_product)).fetchall()
     requested = {(str(line.get("code") or "").upper(), ",".join(line.get("modifiers") or [])) for line in lines or []}
     selected: dict[tuple[str, str], dict] = {}
     for row in rows:

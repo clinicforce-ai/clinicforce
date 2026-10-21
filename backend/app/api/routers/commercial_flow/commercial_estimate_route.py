@@ -12,8 +12,11 @@ async def previsit_estimate(value: _api.PrevisitInput, request: _api.Request, ba
 
     Uses applicable saved eCW or Stedi benefits, verified network mappings and
     active clinic rate schedules. A disclosed clinic-price reference may support
-    a provisional advance when no contracted allowance is available. Missing
-    eligibility or secondary-benefit coordination does not imply zero liability.
+    a provisional advance when no contracted allowance is available. The optional
+    eCW saved-eligibility read reports an allowlisted OAuth reason code when its
+    separate scope is rejected; a successful Stedi 271 remains valid benefit
+    evidence. Missing eligibility or secondary-benefit coordination does not
+    imply zero liability.
     Explicit visit-linked eCW billing notes can supply a collection instruction
     or a fallback office copay; their source and timestamp accompany the result.
     They do not establish payer eligibility.
@@ -22,14 +25,38 @@ async def previsit_estimate(value: _api.PrevisitInput, request: _api.Request, ba
     matching patient identity can use one uniquely supported card payer route;
     its response must verify identity and active coverage before use. Other
     conflicts and multiple card sets hold the request for review. Neither path
-    edits eCW or repeats an indeterminate paid request. card_check excludes image bytes.
+    edits eCW or repeats an indeterminate paid request. card_check excludes image bytes
+    and reports ecw_no_matching_card_document when the eCW card search returns
+    no qualifying patient-bound insurance card.
     payment_explanation gives one doctor-only sentence, a reason code, network
     tier, pricing basis, unpriced CPTs and an optional resolved-mismatch note.
+    encounter_summary.coinsurance_rounded_per_line is true when individual CPT
+    rounding prevents one accurate percentage-of-combined-base explanation.
+    An inconsistent saved CPT coinsurance formula withholds a positive advance.
+    A cash fallback names an exact product or clinic contract mapping blocker
+    when that blocker prevented an insured amount. For UnitedHealthcare, an
+    unresolved insured amount stays in insurance mode and gives a short reason.
+    Without an approved collection policy, missing collection inputs return a
+    null amount with status action_required and basis missing_collection_inputs.
+    If no supported copay or patient-share estimate exists, an administrator-
+    approved payer collection policy can give a $0 check-in advance with basis
+    claim_after_service. This does not waive later adjudicated patient charges.
+    A scoped Blue Cross Clinical Library CPT price can appear in
+    temporary_rate_reference as a disclosed planning reference only; it does
+    not establish UnitedHealthcare participation or a collection amount.
+    UnitedHealthcare Medicare Advantage is checked through the UHC payer route;
+    the separate Original Medicare integration is outside this workflow.
+    benefits.oop_annual_cents reports only a unique individual plan-wide
+    out-of-pocket maximum, separate from the remaining balance.
+    benefits.oop_annual_conflict_ids and oop_remaining_conflict_ids retain
+    same-scope payer row paths when those individual amounts conflict.
     insurance_diagnosis.pricingStatus is PARTIAL_AMOUNT when a known office
     copay is shown but a separately planned CPT remains unpriced.
     An uncoded new or established consultation leaves the E/M level unselected
     and prices its mutually exclusive code family as alternatives; a common
     supported office copay is collected once, never once per alternative.
+    A single explicit office E/M CPT in the selected eCW Encounter.serviceType
+    can supply one planned unit when no other visit-linked coded line exists.
     Out-of-network benefit terms are retained; a percentage without a verified
     payer allowed amount never becomes a dollar total. Self-pay uses recorded cash mode or the terminal coverage-recovery fallback
     and configured cash prices, without built-in clinic prices or plan-name
@@ -41,11 +68,23 @@ async def previsit_estimate(value: _api.PrevisitInput, request: _api.Request, ba
     Applicable saved/discovered 271 benefits are reused before another request.
     A unique patient/address/active medical match continues automatically;
     multiple active policies never select a primary without evidence.
+    For a matched active UHC member with reported overlapping coverage, a
+    COB-supported route may send one separate Stedi COB check. The request uses
+    the returned 271 member identity and only a current or past supported
+    service date. A future appointment keeps the precise date blocker; reopening
+    it on the visit date retries COB from a fresh saved 271 without another 270.
+    A missing 271 birth date may use the corresponding matched
+    eCW Coverage or Patient date, with its source retained. Its payer roles
+    come only from medical other-payer rows and are evidence, not automatic policy ordering
+    or proof of the secondary plan's payment. A mismatched identity, unsupported
+    route or indeterminate prior COB submission never triggers a paid retry.
     Recovery may try up to two recorded prior addresses
     after completed no-match responses, never guessing identifiers or replaying
     an indeterminate submission. Pending results are read from /cases/{id}/previsit.
     recovery.coverage_status is VERIFIED, REVIEW_REQUIRED, or NOT_FOUND;
-    NOT_FOUND describes a completed empty electronic search, not uninsured.
+    NOT_FOUND describes a completed empty electronic search with no earlier
+    active payer response, not uninsured. An earlier active 271 with an empty
+    follow-up search remains REVIEW_REQUIRED until identity is reconciled.
     Returned policies rejected by identity filtering remain REVIEW_REQUIRED.
     Labeled appointment-note payer/member candidates are retained without a
     Coverage record; they never supply an inferred subscriber or eligibility.
@@ -58,7 +97,8 @@ async def previsit_estimate(value: _api.PrevisitInput, request: _api.Request, ba
     recovery.steps records safe outcomes and unavailable prerequisites.
     Completed recovery without usable coverage, or completed insurance processing
     without a supported insurance amount, falls back to configured cash pricing
-    unless staff explicitly retained insurance mode. Missing cash rates leave
+    unless staff explicitly retained insurance mode or the payer is UnitedHealthcare.
+    Missing cash rates leave
     collection_guidance.amount_cents null; no price is invented.
     Office estimates reconcile corroborated Cigna base/suffix identifiers, use the
     rendering provider specialty and visit setting, scope named TMJ exclusions to
@@ -73,6 +113,10 @@ async def previsit_estimate(value: _api.PrevisitInput, request: _api.Request, ba
     document_label and locator only when the applied clinic network profile
     traces to the same practice's uploaded PDF contract. The document route
     requires a staff session and serves the original PDF.
+    Its decision distinguishes participating, nonparticipating, exclusion from
+    the available agreement, and lack of applicable evidence. A separate
+    agreement_exclusion retains the source-linked excluded agreement when
+    another source establishes the provider tier.
     payer_source identifies eCW Coverage.payor, appointment notes, card OCR or
     verified Stedi discovery when that source is known. A stored clinic network
     candidate remains separate from patient-specific participation; a broad PPO
@@ -82,6 +126,9 @@ async def previsit_estimate(value: _api.PrevisitInput, request: _api.Request, ba
 
     insurance_diagnosis separately reports identity, eligibility and pricing status,
     raw/retained/verified candidate counts, enrollment state and specific blockers.
+    A missing out-of-network payer allowance is separate from a missing
+    in-network contract rate and an unsourced provider network label.
+    A prior enrollment failure does not block a current active Stedi 271.
     eCW Coverage.subscriber references are resolved to patient-linked identities.
     Dated payer evidence can automatically reconcile a stale subscriber/relationship
     using the same full member ID and corroborating patient, address or policy
@@ -99,17 +146,37 @@ async def previsit_estimate(value: _api.PrevisitInput, request: _api.Request, ba
     does not submit eligibility or postpone terminal automatic cash fallback.
     requirement_evidence separately reports referral and authorization status,
     reason, source, workbook verification channel/contact and portal URL, and
-    an applicable original contract PDF page. Authorization approval_status
-    is separate from the rule requiring approval. Its procedures array reports
-    the same conservative decision for each selected CPT; a visit with any
-    established required procedure remains Required while other CPTs can stay
-    unverified. candidate_requirements reports each unselected suggested or recommended CPT
-    separately and does not affect the selected-visit summary. Source entries
-    include an original Library document ID or an official manual/retained
-    Stedi check URL when available. A link to a check that does not state a
+    an applicable original contract PDF page. Referral referral_obtained and
+    authorization pa_approval report member-specific clearance separately from
+    the published requirement; legacy approval_status remains for older clients.
+    Official rule sources include URL, version, effective dates, verification
+    date and applied product/CPT scope. Its procedures array reports
+    the same conservative decision for each returned planned or conditional CPT; a visit with any
+    established required selected procedure remains Required while other CPTs can lack
+    a sourced rule. candidate_requirements reports each unselected suggested or recommended CPT
+    separately and does not affect the selected-visit summary. An unselected
+    E/M alternative may show a conditional exact-CPT rule; differing or missing
+    alternatives do not become a visit-wide Yes or No. The current case identity
+    takes precedence over older nested benefit identity before contract, matrix
+    or payer rules establish an applicable answer. A generic payer label such as
+    United Healthcare cannot match an exact-product rule. The Texas Choice Plus
+    no-referral rule requires all specific product labels to identify Choice Plus.
+    Source entries include an
+    original Library document ID or an official manual/retained Stedi check URL
+    when available. A link to a check that does not state a
     requirement is context, not a yes/no rule. encounter_summary separates
     collect_today_cents from the
     complete patient total and later balance; unavailable amounts remain null.
+    Its complete component breakdown includes the coinsurance percentage and
+    post-deductible base. allowed_cap_adjustment_cents reports the reduction to
+    the payer allowed amount separately from oop_adjustment_cents, which reports
+    the reduction under the applicable remaining out-of-pocket limit. The saved
+    amount card itemizes these values only when they reconcile to collection.
+    encounter_summary.integrity_error names a detectable mismatch between
+    selected-CPT shares, their component amounts, and the saved collection after
+    recorded payment; the unsafe positive advance is withheld in both collection
+    guidance and encounter summary, with payment_explanation.reason_code set to
+    calculation_conflict for a one-line staff action.
     Each price_range line reports a typed rate_resolution status and the exact
     candidate rows supplied to the calculator, without claiming an unqueried
     payer schedule was searched.
@@ -175,7 +242,7 @@ async def previsit_estimate(value: _api.PrevisitInput, request: _api.Request, ba
                     held = _api.deepcopy(prior)
                     held['previsit_discovery'] = {**held.get('previsit_discovery', {}),
                         'request_state': 'indeterminate', 'outcome': None, 'exhausted': False}
-                    return _api._previsit_result(held)
+                    return _api._previsit_result(held, session['practice_id'])
         binding = _api._visit_context_token(inputs, source)
         case = await _api.run_in_threadpool(_api.store.create_case, session['patient_id'], '', binding,
             {'source_mode': 'commercial_previsit', 'previsit': {'request_state': 'not_requested'}},
@@ -191,7 +258,7 @@ async def previsit_estimate(value: _api.PrevisitInput, request: _api.Request, ba
             if terminal_reason == 'stedi_unavailable' and _api.object_store.enabled():
                 case['previsit_discovery']['identity_binding'] = _api._recovery_binding(inputs, source)
                 await _api._recover_saved_policy(case, session, provider, allow_query=False)
-        return _api._previsit_result(await _api.run_in_threadpool(_api._save, case, session, 'previsit-awaiting-coverage'))
+        return _api._previsit_result(await _api.run_in_threadpool(_api._save, case, session, 'previsit-awaiting-coverage'), session['practice_id'])
 
     check_from = ((source.get('coverage_period') or {}).get('start') or '')[:10] or None
     workflows = list(session['intake'].get('workflows', {}).values())

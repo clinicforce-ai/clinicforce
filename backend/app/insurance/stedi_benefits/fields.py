@@ -70,6 +70,35 @@ def _stedi_entries(payload: dict[str, Any]) -> list[dict[str, Any]]:
     return entries
 
 
+def coverage_kind(row: dict, payload: dict) -> str:
+    """Use an explicit coverage name; benefit network labels are not products."""
+    plans = payload.get('plans') or []
+    index = row.get('plan_index')
+    plan = plans[index] if type(index) is int and 0 <= index < len(plans) and isinstance(plans[index], dict) else {}
+    name = str(row.get('planCoverage') or row.get('planCoverageDescription') or plan.get('name') or '').casefold()
+    if re.search(r'\b(?:vision|spectera|dental|pharmacy|prescription|drug|hearing)\b', name):
+        return 'supplementary'
+    # An explicitly nonmedical service category is not an office benefit even
+    # when the payer leaves its plan name blank or reuses the medical name.
+    service_codes = {str(code).upper() for code in row.get('serviceTypeCodes') or []}
+    if service_codes and service_codes <= {'35', '88', '89', '90', '91', '92', 'B2', 'B3',
+                                           'AL', 'AM', 'AO'}:
+        return 'supplementary'
+    return 'medical' if name else 'unassigned'
+
+
+def oop_plan_association(row: dict, payload: dict) -> str:
+    kind = coverage_kind(row, payload)
+    if kind != 'unassigned':
+        return kind
+    insurance_type = str(row.get('insuranceType') or row.get('insuranceTypeCode') or '').upper()
+    notes = ' '.join(_benefit_notes([row.get('messages'), row.get('additionalInformation')])).upper()
+    if insurance_type in {'PPO', 'PREFERRED_PROVIDER_ORGANIZATION',
+                          'PREFERRED_PROVIDER_ORGANIZATION_PPO'} and 'COMBINED' in notes:
+        return 'medical_candidate'
+    return 'unassigned'
+
+
 
 def _procedure(row: dict) -> str:
     service = row.get("service") or {}
@@ -99,6 +128,8 @@ def plan_details(payload: dict) -> dict:
                               for row in rows if not row.get("serviceTypeCodes") or "30" in row["serviceTypeCodes"]))
     names = list(dict.fromkeys([str(plan['name']).strip() for plan in payload.get('plans', [])
                                if isinstance(plan, dict) and plan.get('name')] + [name for name in names if name]))
+    supplementary = [name for name in names if coverage_kind({'planCoverage': name}, payload) == 'supplementary']
+    names = [name for name in names if name not in supplementary]
     subscriber = payload.get("subscriber") or {}
     info = payload.get("planInformation") or {}
     additional = (payload.get('dependent') or subscriber).get("additionalInformation") or subscriber.get('additionalInformation') or {}
@@ -107,7 +138,8 @@ def plan_details(payload: dict) -> dict:
                                         if isinstance(person, dict)
                                         for network in [((person.get('additionalInformation') or {}).get('planNetwork') or {})]
                                         if isinstance(network, dict) and network.get('name')))
-    return {"names": names, "plan_number": subscriber.get("planNumber") or info.get("planNumber") or (additional.get('plan') or {}).get('number'),
+    return {"names": names, "supplementary_names": supplementary,
+            "plan_number": subscriber.get("planNumber") or info.get("planNumber") or (additional.get('plan') or {}).get('number'),
             "group_number": subscriber.get("groupNumber") or info.get("groupNumber") or (additional.get("group") or {}).get("number"),
             "network_names": network_names, "source": "Stedi"}
 
@@ -117,6 +149,18 @@ def reported_stedi_options(payload: dict[str, Any], service_type_code: str) -> l
     """Preserve distinct payer terms without selecting one for a price calculation."""
     kinds = {"A": "coinsurance", "B": "copay", "C": "deductible", "G": "out_of_pocket", "F": "limit"}
     result = []
+    def dated_fields(value: Any, source: str) -> dict[str, str]:
+        if not isinstance(value, dict):
+            return {}
+        fields = {}
+        for key, item in value.items():
+            if isinstance(item, str):
+                fields[f"{source}.{key}"] = item
+            elif isinstance(item, dict):
+                start, end = item.get('start'), item.get('end')
+                if isinstance(start, str) or isinstance(end, str):
+                    fields[f"{source}.{key}"] = f"{start or 'start not returned'} to {end or 'end not returned'}"
+        return fields
     for row in _stedi_entries(payload):
         code = str(row.get("code") or "").upper()
         service_types = [str(value) for value in row.get("serviceTypeCodes") or []]
@@ -140,10 +184,22 @@ def reported_stedi_options(payload: dict[str, Any], service_type_code: str) -> l
             if isinstance(value, dict):
                 return " ".join(filter(None, (note_text(value.get(key)) for key in ("description", "message", "text", "messages"))))
             return ""
+        plans = payload.get('plans') or []
+        index = row.get('plan_index')
+        plan = plans[index] if isinstance(index, int) and 0 <= index < len(plans) and isinstance(plans[index], dict) else {}
+        effective_dates = {
+            **dated_fields(plan.get('dates'), 'plan'),
+            **dated_fields(plan.get('planDateInformation'), 'plan date information'),
+            **dated_fields(row.get('benefitsDateInformation'), 'benefit schedule'),
+            **dated_fields(row.get('dates'), 'benefit row'),
+        }
         result.append({"id": row["evidence_path"], "kind": kinds[code], "service_type_code": ", ".join(service_types),
                        "procedure_code": _procedure(row), "coverage_level": row.get("coverageLevel") or row.get("coverageLevelCode"),
                        "plan_index": row.get("plan_index"), "plan_name": row.get("planCoverage") or row.get("planCoverageDescription"),
+                       "plan_association": oop_plan_association(row, payload) if code == 'G' else coverage_kind(row, payload),
+                       "insurance_type": row.get('insuranceType') or row.get('insuranceTypeCode'),
                        "network": indicator, "time_period": str(row.get("timeQualifierCode") or row.get("timeQualifier") or ""),
+                       "effective_dates": effective_dates,
                        "amount_cents": _stedi_cents(row.get("benefitAmount")),
                        "quantity": row.get('quantity') if isinstance(row.get('quantity'), dict) else None,
                        "percent": str(percent) if percent is not None else None,
@@ -241,5 +297,6 @@ def coverage_evidence(payload: dict, service_date: str | None, entries: list[dic
 
 
 def _provider_participation(note: str, provider_npi: str | None = None) -> bool:
-    return bool(re.search(r"(?:^|[.!?]\s+)Our records indicate the provider ID you entered is participating in this patient's network\.(?:\s|$)", note, re.I)
-        or provider_npi and re.fullmatch(r'Provider is in[ -]network based on NPI ID provided in request\.?', note.strip(), re.I))
+    return bool(provider_npi and (
+        re.search(r"(?:^|[.!?]\s+)Our records indicate the provider ID you entered is participating in this patient's network\.(?:\s|$)", note, re.I)
+        or re.fullmatch(r'Provider is in[ -]network based on NPI ID provided in request\.?', note.strip(), re.I)))

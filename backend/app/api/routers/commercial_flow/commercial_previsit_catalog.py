@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from types import ModuleType
+from app.insurance import botox_review, cpt_rules
 
 
 def build_catalog(api: ModuleType, result: dict, session: dict, inputs: dict, source: dict,
@@ -9,7 +10,15 @@ def build_catalog(api: ModuleType, result: dict, session: dict, inputs: dict, so
                   payload: dict | None) -> tuple[str, list[dict], list[dict], list[dict], dict | None]:
     codes = api._previsit_codes(inputs)
     available = list(codes)
-    known = {row['code'] for row in codes}
+    botox_visit = botox_review.is_botox_visit(inputs)
+    if botox_visit:
+        available.extend({'id': row.get('id') or f"ecw:{index}:{row['code']}",
+                          'code': row['code'], 'source': 'eCW service candidate',
+                          'description': row.get('description'), 'units': row.get('units'),
+                          'modifiers': row.get('modifiers') or []}
+                         for index, row in enumerate(inputs.get('lines') or [])
+                         if row.get('service_status') == 'scheduled' and row.get('code'))
+    known = {row['code'] for row in available}
     # A clinic-scoped catalog is useful before final coding exists. Prices and
     # descriptions come from its active contract, never from AI or example defaults.
     configured_connections = api.commercial_store.list_connections(session['practice_id'])
@@ -26,7 +35,8 @@ def build_catalog(api: ModuleType, result: dict, session: dict, inputs: dict, so
     if len(connections) == 1:
         try:
             _, network, profile = api._previsit_practice_path(session['practice_id'], {**inputs, 'payer_id': connections[0]['id']}, exact_source)
-            if network.get('plan_matcher') and (pricing_source or source).get('plan'):
+            contract = api._network_contract_evidence(session['practice_id'], network, profile, inputs['service_date'])
+            if network.get('plan_matcher') and exact_source.get('plan') and contract.get('document_id'):
                 catalog = api.commercial_store.matching_rates(session['practice_id'], profile, network, inputs['service_date'], None)
         except (api.HTTPException, api.commercial.CommercialError):
             pass
@@ -39,7 +49,7 @@ def build_catalog(api: ModuleType, result: dict, session: dict, inputs: dict, so
         available.append(row)
         catalog_codes.append(row)
         known.add(rate['code'])
-    if not codes and catalog_codes:
+    if not codes and catalog_codes and not botox_visit:
         matches = {row['code'] for row in api.cpt_suggester._matching_candidate_rates(str(inputs.get('reason') or ''), catalog)}
         if matches & api.cpt_rules.EMG_ADD_ONS:
             matches |= api.cpt_rules.NCS_CODES
@@ -53,6 +63,12 @@ def build_catalog(api: ModuleType, result: dict, session: dict, inputs: dict, so
                 known.add(code)
     for key in ('cash_schedule', 'cash_quote', 'practice_cash_source', 'collection_policy'):
         result.pop(key, None)
+    policy_connections = [row for row in configured_connections if row.get('stedi_payer_id') == payer_id]
+    if len(policy_connections) == 1:
+        policy = (policy_connections[0].get('rules') or {}).get('collection_policy') or {}
+        if (isinstance(policy, dict) and policy.get('mode') == 'defer_to_claim' and policy.get('approved_by')
+                and policy.get('approved_at') and policy.get('reference')):
+            result['collection_policy'] = policy
     uploaded_cash = api.practice_prices.current(session['practice_id'], inputs['service_date'])
     if uploaded_cash:
         known_codes = {row['code'] for row in available}
@@ -65,10 +81,18 @@ def build_catalog(api: ModuleType, result: dict, session: dict, inputs: dict, so
                     '62270': 'Diagnostic spinal tap · without imaging', '62328': 'Diagnostic spinal tap · with imaging',
                     **{str(n): 'Office consultation' for n in range(99202, 99206)},
                     **{str(n): 'Office consultation' for n in range(99212, 99216)}}
+    if botox_visit:
+        descriptions.update({code: description for family in ('botulinum_drug', 'chemodenervation')
+                             for code, description in cpt_rules.SERVICE_FAMILIES[family]['candidate_descriptions'].items()})
     available.extend({'id': 'planning:' + code, 'code': code, 'description': description,
-                      'source': 'CPT planning catalog', 'units': 1, 'modifiers': []}
+                      'source': 'CPT planning catalog',
+                      'units': None if code == 'J0585' else 1, 'modifiers': []}
                      for code, description in descriptions.items() if code not in known_codes)
     for row in available:
+        definition = cpt_rules.service_definition(row['code'])
+        row.update(service_family=definition['family'], service_role=definition['role'],
+                   service_group=definition['group'], catalogue_version=definition['catalogue_version'],
+                   benefit_service_types=list(definition.get('benefit_service_types') or []))
         matches = [rate for rate in catalog if rate['code'] == row['code'] and (rate.get('modifier') or '') == ','.join(row.get('modifiers') or [])]
         if len(matches) == 1:
             row.update(unit_allowed_cents=matches[0]['allowed_cents'], unit_cash_cents=matches[0].get('cash_cents'),

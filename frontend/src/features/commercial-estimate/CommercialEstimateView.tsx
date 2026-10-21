@@ -205,7 +205,7 @@ export default function CommercialEstimateView({ model }: { model: CommercialEst
                 <small>
                   Member home plan:{' '}
                   {blueCard
-                    ? 'BlueCard indicated; confirm the issuing state'
+                    ? 'BlueCard indicated. Confirm the issuing state'
                     : 'In-state or out-of-state not established by eCW or Stedi'}
                 </small>
               )}
@@ -341,7 +341,11 @@ export default function CommercialEstimateView({ model }: { model: CommercialEst
                 An additional coverage search was pending when this version was saved.
               </p>
             )}
-            <VisitServices result={result} readOnly={readOnly} />
+            <VisitServices
+              result={result}
+              readOnly={readOnly}
+              insuredAmountSupported={Boolean(model.amount)}
+            />
             <div className="visit-detail-sections">
               <CommercialServicesDetail model={model} result={result} />
               <CommercialCoverageDetail model={model} result={result} />

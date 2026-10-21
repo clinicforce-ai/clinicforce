@@ -33,10 +33,31 @@ from app.insurance.stedi_271_fields import (
     _provider_participation,
 )
 from app.insurance.stedi_271 import normalize_stedi_271
+from app.insurance.network_participation import verified_out_of_network
 
 
 class CommercialError(ValueError):
     pass
+
+
+_UHC_NAME = re.compile(r'\bunited\s*health(?:care)?\b|\buhc\b', re.I)
+
+
+def discard_stale_directory_payer(result: dict, current_payer_id: str | None) -> None:
+    """A recovered policy must not inherit the earlier route's payer name."""
+    saved = result.get('stedi_payer')
+    if isinstance(saved, dict) and saved.get('id') and str(saved['id']) != str(current_payer_id or ''):
+        result.pop('stedi_payer', None)
+
+
+def is_united_healthcare_payer(result: dict, directory_payer: dict | None = None) -> bool:
+    """Use the resolved payer route before an eCW product label."""
+    saved_payer = result.get('stedi_payer') or {}
+    saved_payer = saved_payer if isinstance(saved_payer, dict) else {}
+    directory_payer = directory_payer if isinstance(directory_payer, dict) else {}
+    label = (directory_payer.get('displayName') or directory_payer.get('name')
+             or saved_payer.get('name') or saved_payer.get('displayName') or result.get('payer'))
+    return bool(label and _UHC_NAME.search(str(label)))
 
 
 def eligibility_failure(payload: dict) -> dict:
@@ -190,10 +211,10 @@ def estimate(lines: list[dict[str, Any]], benefits: dict[str, Any], rules: dict[
         raise CommercialError("A compatible individual benefit level is required for an automatic estimate.")
     out_of_network = benefits.get('network_status') == 'out_of_network'
     if out_of_network:
-        if (benefits.get('network_source') != 'payer_participation_message' or
-                rules.get('allowed_basis') != 'payer_out_of_network' or
-                any(line.get('allowed_source') != 'payer_out_of_network' or not line.get('rate_id') for line in lines)):
-            raise CommercialError('A verified payer out-of-network allowed amount is required for every selected CPT.')
+        supported = {'payer_out_of_network', 'cms_original_medicare_estimate'}
+        if (not verified_out_of_network(benefits) or rules.get('allowed_basis') not in supported or
+                any(line.get('allowed_source') != rules['allowed_basis'] or not line.get('rate_id') for line in lines)):
+            raise CommercialError('A sourced out-of-network payer allowance or applicable CMS estimate is required for every selected CPT.')
     elif benefits.get("network_status") != "in_network":
         raise CommercialError("Confirmed in-network provider participation is required for an automatic estimate.")
     if benefits.get("has_secondary"):
@@ -259,13 +280,18 @@ def estimate(lines: list[dict[str, Any]], benefits: dict[str, Any], rules: dict[
     coinsurance_cents = int((Decimal(remainder) * coinsurance / 100).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
     copay = copay_cents if cost_share in {"copay", "cumulative"} else 0
     raw_patient = deductible + coinsurance_cents + copay
-    patient = min(allowed, raw_patient, oop_remaining)
+    allowed_share = min(allowed, raw_patient)
+    patient = min(allowed_share, oop_remaining)
     return {
-        "allowed_cents": allowed, "deductible_cents": deductible, "coinsurance_cents": coinsurance_cents,
-        "copay_cents": copay, "oop_adjustment_cents": raw_patient - patient,
+        "allowed_cents": allowed, "deductible_cents": deductible, "coinsurance_base_cents": remainder,
+        "coinsurance_percent": str(coinsurance), "coinsurance_cents": coinsurance_cents,
+        "copay_cents": copay, "allowed_cap_adjustment_cents": raw_patient - allowed_share,
+        "oop_adjustment_cents": allowed_share - patient,
         "patient_cents": patient, "plan_cents": allowed - patient, "lines": explanation,
         "cost_share": cost_share, "network_tier": 'out_of_network' if out_of_network else 'in_network',
         "possible_additional_out_of_network_charges_cents": None if out_of_network else 0,
         "calculation_version": "commercial-v1", "disclaimer": "Pre-service estimate only; final responsibility depends on services performed and payer adjudication." +
-            (' Out-of-network balance billing may add charges above the payer allowed amount.' if out_of_network else ''),
+            (' For covered Medicare Advantage care, collect only plan-allowed cost sharing and apply member billing protections.'
+             if out_of_network and rules.get('medicare_advantage') else
+             ' Out-of-network balance billing may add charges above the payer allowed amount.' if out_of_network else ''),
     }

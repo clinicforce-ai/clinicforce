@@ -5,9 +5,10 @@ Run the complete suite with STAFF_TEST_DATABASE_URL pointing at a disposable dat
 
 import json
 import os
+import asyncio
 import unittest
 from io import BytesIO
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 from uuid import uuid4
 
 import fitz
@@ -31,6 +32,42 @@ def card_pdf(text="Member Name: PAT EXAMPLE\nMember ID: MEM123\nGroup Number: GR
 
 
 class FileBoundaryTests(unittest.TestCase):
+    def test_saved_card_and_current_ecw_card_are_labeled_separately(self):
+        intake = {'id': 'synthetic-intake', 'patient': {'id': 'synthetic-patient',
+            'ecw_patient_id': 'synthetic-ecw'}, 'fields': {}, 'documents': []}
+        uploaded = {'id': 'saved-intake', 'documents': [{'id': 'saved-card',
+            'filename': 'card.png', 'content_type': 'image/png'}]}
+        staff_user = {'practice_id': 'synthetic-practice'}
+        with patch.object(staff, 'require_staff', AsyncMock(return_value=staff_user)), \
+             patch.object(staff, 'owned_intake', AsyncMock(return_value=intake)), \
+             patch.object(staff.staff_store, 'patient_card_intakes', return_value=[uploaded]), \
+             patch.object(staff.ecw_backend, 'insurance_cards', AsyncMock(return_value=[
+                 {'id': 'ecw-card:0', 'title': 'Insurance card', 'content_type': 'image/png'}])):
+            response = asyncio.run(staff.patient_cards('synthetic-intake', None))
+        data = json.loads(response.body)
+        self.assertEqual([row['source'] for row in data['cards']], ['clinicforce_upload', 'ecw_current'])
+        self.assertIn('/ecw-card?', data['cards'][1]['url'])
+
+        with patch.object(staff, 'require_staff', AsyncMock(return_value=staff_user)), \
+             patch.object(staff, 'owned_intake', AsyncMock(return_value=intake)), \
+             patch.object(staff.staff_store, 'patient_card_intakes', return_value=[uploaded]), \
+             patch.object(staff.ecw_backend, 'insurance_cards', AsyncMock(return_value=[])):
+            response = asyncio.run(staff.patient_cards('synthetic-intake', None))
+        data = json.loads(response.body)
+        self.assertEqual(len(data['cards']), 1)
+        self.assertIn('eCW FHIR connection returned no patient-bound insurance-card image or PDF', data['message'])
+        self.assertIn('Use the saved ClinicForce card below', data['message'])
+
+        with patch.object(staff, 'require_staff', AsyncMock(return_value=staff_user)), \
+             patch.object(staff, 'owned_intake', AsyncMock(return_value=intake)), \
+             patch.object(staff.staff_store, 'patient_card_intakes', return_value=[]), \
+             patch.object(staff.ecw_backend, 'insurance_cards', AsyncMock(return_value=[])):
+            response = asyncio.run(staff.patient_cards('synthetic-intake', None))
+        data = json.loads(response.body)
+        self.assertEqual(data['cards'], [])
+        self.assertIn('Check eCW registration', data['message'])
+        self.assertIn('upload its front and back', data['message'])
+
     def test_bytes_are_validated_before_ocr_and_object_keys_exclude_names(self):
         self.assertEqual(staff.inspect_file(card_pdf()), ("application/pdf", 1))
         with self.assertRaises(Exception):

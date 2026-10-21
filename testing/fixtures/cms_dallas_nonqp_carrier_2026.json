@@ -1,0 +1,12 @@
+{
+  "source_url": "https://www.cms.gov/files/zip/cy2026-carrier-files-nonqp-updated-12-29-2025.zip",
+  "source_sha256": "657b4fec2310951c2122a8b9358bfeb21cfdbddcfe68ba05a6253d1644619e1e",
+  "source_member": "PFTX26A.TXT",
+  "source_scope": "CMS 2026 Dallas locality 04412-11 non-QP carrier fees, office/nonfacility column",
+  "release_note": "Published 2025-12-29; corroborates the independent 2026 carrier fee, while RVU26D controls October 2026 inputs.",
+  "fees_cents": {
+    "99204": 17667,
+    "95907": 9401,
+    "95886": 9970
+  }
+}

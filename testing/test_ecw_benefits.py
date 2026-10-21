@@ -75,7 +75,7 @@ def test_invalid_payer_financial_value_is_an_explicit_error_not_a_missing_benefi
     terms = commercial.normalize_stedi_271(payload, '98', True)
     assert terms['source_errors'][0]['path'] == 'benefitsInformation[1].benefitAmount'
     result = collection_guidance.build({'benefits': terms, 'arrival_collection': {'amount_cents': 5000}})
-    assert result['amount_cents'] is None and result['status'] == 'deferred_billing'
+    assert result['amount_cents'] is None and result['status'] == 'action_required'
     assert 'Calculation/source error' in result['reason']
 
 
@@ -93,9 +93,10 @@ def test_other_payer_reported_only_by_stedi_still_requires_coordination():
         {'code': 'R', 'serviceTypeCodes': ['98']},
         {'code': 'B', 'serviceTypeCodes': ['98'], 'inPlanNetworkIndicatorCode': 'Y', 'benefitAmount': '40'}]}
     terms = commercial.normalize_stedi_271(payload, '98', True, other_active_coverage=False)
+    terms['identity'] = {'status': 'matched', 'binding': 'synthetic-current-binding', 'match_version': 2}
     assert terms['has_secondary'] is True
     result = collection_guidance.build({'benefits': terms, 'arrival_collection': {'amount_cents': 4000}})
-    assert result['status'] == 'deferred_billing'
+    assert result['status'] == 'action_required'
     assert 'coordinate benefits' in result['reason']
     payload['benefitsInformation'][1]['serviceTypeCodes'] = ['35']
     assert commercial.normalize_stedi_271(payload, '98', True)['has_secondary'] is False

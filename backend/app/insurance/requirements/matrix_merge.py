@@ -20,8 +20,7 @@ def merge_matrix_research(output: dict, research: dict | None, rules: dict, link
                     output[kind] = {**current, 'sources': sources, 'verify_url': verify_url}
             elif current['status'] == 'Verification required' and matrix['status'] != 'Verification required' and not rules[kind]:
                 output[kind] = {**matrix, 'sources': sources}
-            elif matrix['status'] == 'Verification required' and current['status'] != 'Verification required' and \
-                    matrix['reason'].startswith('Matrix does not settle authorization'):
+            elif matrix['status'] == 'Verification required' and current['status'] != 'Verification required':
                 output[kind] = {**current, 'sources': sources, 'verify_url': verify_url}
             elif matrix['status'] == 'Verification required':
                 output[kind] = {**matrix, 'sources': sources,

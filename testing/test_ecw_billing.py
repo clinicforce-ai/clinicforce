@@ -67,7 +67,8 @@ def test_no_collection_directive_handles_secondary_but_copay_does_not_assume_coo
 
 def test_note_copay_does_not_override_stedi_or_cover_extra_services():
     value = result('Active, $47 copay, ded met')
-    value['benefits'] = {'active': True, 'network_status': 'in_network'}
+    value['benefits'] = {'active': True, 'network_status': 'in_network',
+                         'network_source': 'clinic_library_contract', 'identity': {'status': 'matched', 'binding': 'synthetic-current-binding', 'match_version': 2}}
     value['arrival_collection'] = {'amount_cents': 7200}
     assert collection_guidance.build(value)['amount_cents'] == 7200
     value.pop('arrival_collection')
@@ -78,6 +79,17 @@ def test_note_copay_does_not_override_stedi_or_cover_extra_services():
     extra['price_range']['lines'].append({'code': '95910', 'units': 1, 'benefits': {}})
     assert collection_guidance.build(extra)['amount_cents'] is None
     assert collection_guidance.build(value, {'payments': {'reference': 'receipt', 'amount_cents': 1200}})['amount_cents'] == 3500
+
+
+def test_visit_note_copay_cannot_replace_unknown_network_for_active_payer_benefits():
+    value = result('Active, $47 copay, ded met')
+    value['benefits'] = {'active': True, 'network_status': 'unknown', 'identity': {'status': 'matched', 'binding': 'synthetic-current-binding', 'match_version': 2}}
+    assert collection_guidance.build(value)['amount_cents'] is None
+    value['benefits']['network_status'] = 'in_network'
+    value['benefits']['network_source'] = 'clinic_library_contract'
+    assert collection_guidance.build(value)['amount_cents'] == 4700
+    value['recovery'] = {'reason_code': 'multiple_active_policies'}
+    assert collection_guidance.build(value)['amount_cents'] is None
 
 
 def test_ehr_self_pay_note_uses_the_active_schedule_and_explicit_staff_selection_wins():
@@ -95,8 +107,55 @@ def test_ehr_self_pay_note_uses_the_active_schedule_and_explicit_staff_selection
         assert value['payment_mode'] == 'insurance'
 
 
+@pytest.mark.parametrize('self_pay_source', ['registration', 'billing_note'])
+def test_active_uhc_benefits_do_not_automatically_follow_ecw_self_pay(self_pay_source):
+    inputs = {'service_date': '2026-10-07', 'visit_type': 'new', 'lines': []}
+    source = {'active_coverages': 1, 'self_pay_recorded': self_pay_source == 'registration',
+              'appointment_fields': fields('Self Pay') if self_pay_source == 'billing_note' else []}
+    route = {'id': 'clinic-route', 'stedi_payer_id': 'uhc-route', 'status': 'draft',
+             'display_name': 'UnitedHealthcare Group Medicare Advantage (PPO)', 'rules': {}}
+    case = {}
+    value = {'payer': 'AARP Regional PPO', 'benefits': {'active': True,
+             'service_date_matches': True}, 'issues': []}
+    with patch.object(api.commercial_store, 'list_connections', return_value=[route]), \
+         patch.object(api.practice_prices, 'current', return_value=None), \
+         patch.object(api.cpt_suggester.boto3, 'client', side_effect=RuntimeError('offline test')):
+        api._finish_previsit(value, case, inputs, source, None, {'practice_id': 'clinic'}, 'uhc-route')
+        assert value['payment_mode'] == 'insurance'
+        case['visit_review']['payment_mode'] = 'cash'
+        api._finish_previsit(value, case, inputs, source, None, {'practice_id': 'clinic'}, 'uhc-route')
+        assert value['payment_mode'] == 'cash'
+
+
 @pytest.mark.parametrize('payer_terms', [{'deductible_remaining_cents': 10000}, {'active': False}, {'copay_cents': 6000}])
 def test_conflicting_payer_terms_prevent_a_note_copay_fallback(payer_terms):
     value = result('Active, $47 copay, ded met')
     value['price_range']['lines'][0]['benefits'] = payer_terms
     assert collection_guidance.build(value)['amount_cents'] is None
+
+
+@pytest.mark.parametrize('line_change', [
+    {'service_date_matches': False}, {'network_conflict': True},
+    {'has_secondary': True}, {'historical_only': True},
+    {'identity': {'status': 'review'}}, {'network_status': 'out_of_network'},
+])
+def test_visit_note_copay_cannot_bypass_selected_cpt_conflict(line_change):
+    value = result('Active, $47 copay, ded met')
+    value['benefits'] = {'active': True, 'network_status': 'in_network',
+                         'network_source': 'clinic_library_contract',
+                         'identity': {'status': 'matched', 'binding': 'synthetic-current-binding',
+                                      'match_version': 2}}
+    value['price_range']['lines'][0]['benefits'] = line_change
+    assert collection_guidance.build(value)['amount_cents'] is None
+
+
+@pytest.mark.parametrize('field', ['coverage_status_conflict', 'coverage_dates_invalid'])
+def test_visit_note_copay_cannot_bypass_plan_coverage_conflict(field):
+    value = result('Active, $47 copay, ded met')
+    value['benefits'] = {'active': True, 'network_status': 'in_network',
+                         'network_source': 'clinic_library_contract',
+                         'identity': {'status': 'matched', 'binding': 'synthetic-current-binding',
+                                      'match_version': 2}, field: True}
+    assert collection_guidance.build(value)['amount_cents'] is None
+    value['billing_note'] = ecw_billing.collection_note(fields('No need to collect money from the patient'))
+    assert collection_guidance.build(value)['amount_cents'] == 0

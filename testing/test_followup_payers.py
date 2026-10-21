@@ -80,18 +80,18 @@ def test_diagnostic_percentage_without_payer_allowance_stays_unknown():
     result = diagnostic_result(diagnostic_payload())
     value = collection_guidance.build(result)
     assert value['amount_cents'] is None
-    assert value['basis'] == 'deferred_billing'
+    assert value['basis'] == 'missing_collection_inputs'
     assert all(row['benefits']['resolved_service_type'] == '73' for row in result['price_range']['lines'])
     paid = collection_guidance.build(result, {'payments': {'reference': 'receipt', 'amount_cents': 500}})
     assert paid['amount_cents'] is None
     for change in [{'active': False}, {'has_secondary': True}]:
         invalid = deepcopy(result);invalid['benefits'].update(change)
-        assert collection_guidance.build(invalid)['basis'] == 'deferred_billing'
+        assert collection_guidance.build(invalid)['basis'] == 'missing_collection_inputs'
     invalid = deepcopy(result);invalid['identity']['status'] = 'review'
-    assert collection_guidance.build(invalid)['basis'] == 'deferred_billing'
+    assert collection_guidance.build(invalid)['basis'] == 'missing_collection_inputs'
     raw = diagnostic_payload()
     raw['plans'][0]['benefits']['coInsurance'][0]['network']['indicator'] = 'IN_NETWORK'
-    assert collection_guidance.build(diagnostic_result(raw))['basis'] == 'deferred_billing'
+    assert collection_guidance.build(diagnostic_result(raw))['basis'] == 'missing_collection_inputs'
     raw = diagnostic_payload();raw['plans'][0]['benefits']['coInsurance'][0]['percent'] = '.20'
     assert collection_guidance.build(diagnostic_result(raw))['amount_cents'] is None
 

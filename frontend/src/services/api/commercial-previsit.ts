@@ -1,7 +1,26 @@
-import type { BillingNote, RequirementEvidence, CollectionGuidance } from './commercial-common'
-import type { VisitCode, VisitPricedLine } from './commercial-visit-types'
+import type {
+  BillingNote,
+  RequirementEvidence,
+  CollectionGuidance,
+  PrevisitIdentity,
+} from './commercial-common'
+import type {
+  BotoxReview,
+  PayerAllowanceSummary,
+  VisitCode,
+  VisitPricedLine,
+} from './commercial-visit-types'
+import type { PrevisitBenefits } from './commercial-benefits'
+import type { PaymentExplanation } from './commercial-explanation'
 
 export type PrevisitEstimate = {
+  botox_review?: BotoxReview
+  billing_protection?: {
+    status?: 'qmb' | 'not_qmb'
+    reference?: string
+    verified_at?: string
+  }
+  payer_allowances?: PayerAllowanceSummary
   card_check?: {
     status:
       | 'read'
@@ -13,28 +32,28 @@ export type PrevisitEstimate = {
       | 'multiple_cards'
       | 'unavailable'
     source?: string | null
-    fields_added: string[]
+    failure_reason?: string | null
+    fields_added?: string[]
     conflicts: string[]
     differences: string[]
     alternative_supported?: boolean
     payer_comparison?: { ecw: string; card: string }
   }
   cash_fallback?: { reason: string }
-  payment_explanation?: {
-    sentence: string
-    reason_code: string
-    network_tier: string
-    pricing_basis: string
-    unpriced_codes: string[]
-    known_amount_only: boolean
-    notice?: string | null
+  temporary_rate_reference?: {
+    source: string
+    message: string
+    complete: boolean
+    lines: Array<{ code: string; unit_reference_cents: number; source_reference: string }>
   }
+  payment_explanation?: PaymentExplanation
   insurance_hints?: Array<{ payer?: string | null; member_id?: string | null; sources: string[] }>
   insurance_diagnosis?: {
     coverageSource: string
     rawCandidateCount: number | null
     retainedCandidateCount: number
     verifiedCandidateCount: number
+    activePolicyCount?: number | null
     identityStatus: string
     eligibilityStatus: string
     pricingStatus: string
@@ -63,10 +82,17 @@ export type PrevisitEstimate = {
       copay_cents: number | null
       deductible_cents: number | null
       coinsurance_cents: number | null
+      allowed_cap_adjustment_cents?: number | null
+      oop_adjustment_cents?: number | null
     }
+    coinsurance_base_cents?: number | null
+    coinsurance_percent?: string | null
+    coinsurance_rounded_per_line?: boolean
     unpriced_codes: string[]
     complete: boolean
     conditional: boolean
+    integrity_error?:
+      'patient_total_mismatch' | 'line_amount_mismatch' | 'collection_amount_mismatch' | null
   }
   requirement_evidence?: {
     referral: RequirementEvidence
@@ -85,6 +111,7 @@ export type PrevisitEstimate = {
     authorization: RequirementEvidence
   }>
   emg_option?: {
+    calculation_version?: number
     requested: boolean
     included: boolean
     additional_min_cents: number | null
@@ -98,14 +125,7 @@ export type PrevisitEstimate = {
   eligibility_reconciliation?: { requires_review: boolean; message: string }
   audit_trail?: Array<{ checked_at?: string; by: string; changes: string[] }>
   insurance_fallback?: { payer?: string; member_id?: string }
-  identity?: {
-    status: 'matched' | 'warning' | 'review' | 'reconciled'
-    message?: string
-    binding: string
-    can_confirm: boolean
-    differences: Array<{ field: string; ecw: string; payer: string }>
-    evidence?: { reference: string; verified_at: string }
-  }
+  identity?: PrevisitIdentity
   planning_estimate?: {
     amount_cents: number
     collectable: false
@@ -239,6 +259,7 @@ export type PrevisitEstimate = {
   }
   ecw_saved_eligibility?: {
     status: string
+    reason_code?: string
     active?: boolean
     message: string
     checked_at?: string
@@ -290,13 +311,16 @@ export type PrevisitEstimate = {
       eligibility?: string
     }>
     raw_candidate_count?: number
+    active_policy_count?: number | null
     retained_candidate_count?: number
     verified_candidate_count?: number
     candidates?: Array<{
-      id: string
+      id?: string
+      policy_group_id?: string
+      policy_response_count?: number
       payer: string
       payer_identifier?: string
-      plans: string[]
+      plans?: string[]
       relationship: string
       address_matches: boolean
       matches_ecw_policy?: boolean
@@ -326,6 +350,18 @@ export type PrevisitEstimate = {
       reason_codes?: string[]
     }>
   }
+  coordination?: {
+    state?: string
+    status?: string
+    reason_code?: string
+    missing_fields?: string[]
+    source_fields?: string[]
+    checked_at?: string
+    primacy_determined?: boolean
+    coverage_overlap?: boolean
+    classification?: string
+    payer_roles?: Array<{ role: string; payer_name: string }>
+  }
   eligibility_failure?: {
     kind: string
     codes: string[]
@@ -338,11 +374,13 @@ export type PrevisitEstimate = {
   context_token?: string
   revision?: number
   selected_ids?: string[]
+  service_selection_status?: 'preview' | 'approved'
   available_codes?: VisitCode[]
   plan_details?: {
     ecw: Record<string, string[]>
     stedi: {
       names?: string[]
+      supplementary_names?: string[]
       network_names?: string[]
       plan_number?: string
       group_number?: string
@@ -353,8 +391,27 @@ export type PrevisitEstimate = {
   ecw_retrieved_at?: string
   response_reference?: string
   network_evidence?: {
+    decision?:
+      | 'confirmed_participating'
+      | 'confirmed_nonparticipating'
+      | 'excluded_under_available_agreement'
+      | 'lacking_applicable_network_evidence'
+      | 'out_of_network_by_clinic_contract_inventory'
+      | 'conflicting_network_evidence'
+    source?: string
+    evidence_ids?: string[]
+    product_kind?: string
+    page?: number
+    passage?: string
     network_name?: string
     product_source?: string
+    product_mapping_approval?: {
+      reference?: string
+      actor_id?: string
+      verified_at?: string
+      valid_from?: string
+      valid_to?: string
+    }
     evidence_reference?: string
     effective_from?: string
     effective_to?: string
@@ -364,6 +421,19 @@ export type PrevisitEstimate = {
     related_document_id?: string
     related_document_label?: string
     reason?: string
+    approved_by?: string
+    approved_at?: string
+    reference?: string
+    document_hashes?: Record<string, string>
+    scope?: Record<string, string | null>
+  }
+  agreement_exclusion?: {
+    decision: 'excluded_under_available_agreement'
+    document_id: string
+    page: number
+    passage: string
+    effective_from?: string
+    effective_to?: string
   }
   check_id?: string
   appointment_id: string
@@ -375,51 +445,7 @@ export type PrevisitEstimate = {
   checked_at?: string | null
   stedi_payer?: { name?: string; id: string }
   codes: VisitCode[]
-  benefits: null | {
-    coverage_evidence?: {
-      status: string
-      reported_status: string
-      start?: string | null
-      end?: string | null
-    }
-    coverage_status_conflict?: boolean
-    service_date_matches?: boolean | null
-    returned_service_dates?: { start?: string; end?: string }
-    active?: boolean | null
-    network_status?: string
-    network_source?:
-      | 'clinic_record'
-      | 'clinic_library_contract'
-      | 'clinic_library_absent'
-      | 'payer_participation_message'
-      | null
-    network_evidence_ids?: string[]
-    deductible_remaining_cents?: number | null
-    oop_remaining_cents?: number | null
-    copay_cents?: number | null
-    copay_id?: string | null
-    coinsurance_percent?: string | null
-    authorization_basis?: string
-    authorization_signal?: string
-    referral_signal?: string
-    normalization_notes?: string[]
-    review_reasons?: string[]
-    requires_review?: boolean
-    reported_options?: Array<{
-      id?: string
-      procedure_code?: string
-      coverage_level?: string
-      plan_name?: string
-      kind: string
-      service_type_code: string
-      network: string
-      time_period: string
-      amount_cents?: number | null
-      percent?: string | null
-      quantity?: { value?: string; qualifier?: string } | null
-      payer_note?: string
-    }>
-  }
+  benefits: PrevisitBenefits
   price_range: null | {
     cash_complete?: boolean
     cash_min_cents?: number

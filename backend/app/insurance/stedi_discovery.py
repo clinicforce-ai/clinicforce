@@ -19,6 +19,10 @@ from app.insurance.discovery_requests import (
     previous_addresses,
     patient_address,
     request_body,
+    missing_request_fields,
+)
+from app.insurance.stedi_discovery_policies import (
+    _policy_identity, one_active_policy, active_policy_evidence_conflict, active_policy_count,
 )
 
 
@@ -321,34 +325,16 @@ def candidates(payload: dict, inputs: dict, source: dict | None = None) -> list[
                      'address_matches': bool(identity and identity['address_matches']), 'active_medical': active,
                      'verification_status': verification['status'], 'verification': verification,
                      'reason_codes': list(dict.fromkeys(parsed['reason_codes'] + verification['reason_codes']))})
+    groups = {}
+    for row in rows:
+        identity = _policy_identity((payload.get('items') or [])[row['index']]) if row['active_medical'] else None
+        if identity:
+            row['policy_group_id'] = hashlib.sha256(identity.encode()).hexdigest()[:20]
+            groups[row['policy_group_id']] = groups.get(row['policy_group_id'], 0) + 1
+    for row in rows:
+        if row.get('policy_group_id'):
+            row['policy_response_count'] = groups[row['policy_group_id']]
     return rows
-
-
-def one_active_policy(candidates: list[dict], items: list[dict], service_types: list[str] | None = None) -> dict | None:
-    """Pick one dated, verified policy, including duplicate discovery payer routes.
-
-    Two rows are one policy only when their returned evidence for the requested
-    services agrees apart from route identifiers. Unrelated service categories
-    cannot force a policy choice; different applicable benefits or identities do.
-    """
-    active = [row for row in candidates if row.get('active_medical')]
-    if not active or any(row.get('verification_status') != 'VERIFIED' for row in active):
-        return None
-    if len(active) == 1:
-        return active[0]
-    signatures = set()
-    for row in active:
-        item = dict(items[row['index']])
-        item.pop('payerId', None)
-        payer = dict(item.get('payer') or {})
-        payer.pop('payorIdentification', None)
-        item['payer'] = payer
-        if service_types is not None:
-            requested = set(service_types)
-            item['benefitsInformation'] = [benefit for benefit in item.get('benefitsInformation') or []
-                if not benefit.get('serviceTypeCodes') or requested.intersection(benefit['serviceTypeCodes'])]
-        signatures.add(json.dumps(item, sort_keys=True))
-    return sorted(active, key=lambda row: (row.get('payer_identifier') or '', row['id']))[0] if len(signatures) == 1 else None
 
 
 def patient_matches(item: dict, inputs: dict) -> bool:
@@ -409,17 +395,28 @@ def public_status(discovery: dict) -> dict:
         'no_match': 'The additional Stedi search did not find a matching policy. Saved eCW insurance details are retained below. This search does not establish that coverage is inactive.',
         'review_needed': 'Returned insurance information requires identity, coverage-date or policy-order review before it can verify coverage.',
         'rejected': 'Stedi could not complete insurance discovery. The original payer response and clinic rates are retained.',
-        'not_available': 'Coverage recovery could not start from the available information. Coverage remains unverified.',
+        'not_available': 'Insurance discovery did not start. Open the saved recovery steps to correct the missing patient, provider or payer details.',
     }.get(outcome, 'Searching Stedi using the patient details from eCW. This usually takes a few seconds and can take several minutes.'
-          if state == 'pending' else 'Coverage remains unverified. Review the available insurance information.')
+          if state == 'pending' else 'No payer coverage decision is recorded. Open the saved recovery steps before collecting.')
     if filtered_legacy_result:
         message = 'The saved search returned policies, but no usable match was established. Coverage requires review, not an uninsured classification.'
     if state == 'indeterminate':
         message = 'The recovery request outcome is unknown. Check Stedi activity before submitting another search.'
     elif discovery.get('exhausted') is False and state == 'pending':
         message = 'Continuing automatic insurance recovery using the available records and payer interfaces.'
-    elif discovery.get('exhausted') and outcome != 'recovered':
-        message = 'Available automatic insurance checks have finished. Coverage remains unverified; this does not establish that the patient is uninsured.'
+    elif (discovery.get('exhausted') and outcome != 'recovered'
+          and (not discovery.get('selection_error') or discovery.get('reason_code') not in {
+              'returned_identity_or_coverage_mismatch', 'returned_coverage_not_established',
+              'eligibility_rejected', 'selected_policy_check_failed'})):
+        if discovery.get('reason_code') == 'multiple_active_policies':
+            message = 'Multiple active medical policies were returned. Reconcile the subscriber details and establish payer order before collecting.'
+        elif discovery.get('reason_code') == 'same_policy_evidence_conflict':
+            message = 'One active medical policy has conflicting subscriber, date or visit-benefit evidence. Reconcile the payer responses before collecting.'
+        elif discovery.get('reason_code') in {'identity_or_coverage_review', 'subscriber_relationship_conflict',
+                                              'returned_identity_or_coverage_mismatch'}:
+            message = 'The returned policy and eCW identity or coverage details differ. Reconcile the flagged fields before using the payer benefits.'
+        elif not discovery.get('selection_error'):
+            message = 'The automatic checks finished without a patient-matched policy. Review the payer response and exact missing input before collecting.'
     candidates = [{key: value for key, value in row.items() if key != 'index'} for row in discovery.get('candidates', [])]
     return {'state': state, 'outcome': outcome, 'message': message,
             'coverage_status': 'VERIFIED' if state == 'complete' and outcome == 'recovered' else
@@ -436,6 +433,7 @@ def public_status(discovery: dict) -> dict:
             'started_at': discovery.get('started_at'), 'checked_at': discovery.get('checked_at'),
             'reference': discovery.get('discovery_id'), 'coverage_count': discovery.get('coverage_count'),
             'raw_candidate_count': discovery.get('raw_candidate_count', discovery.get('coverage_count')),
+            'active_policy_count': discovery.get('active_policy_count'),
             'retained_candidate_count': len(candidates),
             'verified_candidate_count': sum(row.get('verification_status') == 'VERIFIED' for row in candidates),
             'stage': discovery.get('stage'), 'reason_code': 'identity_or_coverage_review' if filtered_legacy_result else discovery.get('reason_code'),

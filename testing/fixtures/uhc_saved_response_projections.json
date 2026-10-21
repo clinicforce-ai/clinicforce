@@ -1,0 +1,53 @@
+{
+  "regional_ppo": {
+    "product": "RPPO-UHC COMPLETE CARE SUPPORT TX-1A (REGIONAL PPO",
+    "identity": {"status": "matched", "match_version": 2, "binding": "synthetic-current-binding", "differences": [], "policy_differences": []},
+    "recovery": {},
+    "service_plan": {"kind": "office", "selected_codes": [], "alternatives": ["99202", "99203", "99204", "99205"]},
+    "payer_response": {"plans": [{"benefits": {
+      "statuses": [{"status": "Active Coverage"}],
+      "coPayment": [{"service": {"system": "STC", "value": "98"}, "amount": "0", "timePeriod": "DAY", "coverageLevel": "INDIVIDUAL", "network": {"indicator": "IN_AND_OUT_OF_NETWORK"}}],
+      "coInsurance": [{"service": {"system": "STC", "value": "98"}, "percent": ".20", "coverageLevel": "INDIVIDUAL", "network": {"indicator": "IN_AND_OUT_OF_NETWORK"}}],
+      "deductible": [{"service": {"system": "STC", "value": "30"}, "amount": "0", "timePeriod": "REMAINING", "coverageLevel": "INDIVIDUAL", "network": {"indicator": "IN_AND_OUT_OF_NETWORK"}}],
+      "outOfPocket": [
+        {"service": {"system": "STC", "value": "30"}, "amount": "9000", "timePeriod": "CALENDAR_YEAR", "coverageLevel": "INDIVIDUAL", "network": {"indicator": "IN_AND_OUT_OF_NETWORK"}},
+        {"service": {"system": "STC", "value": "30"}, "amount": "0", "timePeriod": "CALENDAR_YEAR", "coverageLevel": "INDIVIDUAL", "network": {"indicator": "IN_AND_OUT_OF_NETWORK"}},
+        {"service": {"system": "STC", "value": "30"}, "amount": "8500", "timePeriod": "REMAINING", "coverageLevel": "INDIVIDUAL", "network": {"indicator": "IN_AND_OUT_OF_NETWORK"}}
+      ]
+    }}]}
+  },
+  "multiple_policies": {
+    "product": "POS CHOICE PLUS",
+    "identity": {"status": "review", "differences": [], "policy_differences": [{"field": "subscriber_first"}, {"field": "relationship"}]},
+    "recovery": {"reason_code": "multiple_active_policies", "raw_candidate_count": 3, "candidates": [
+      {"active_medical": true, "identity_status": "MATCHED", "verification_status": "VERIFIED", "priority": null},
+      {"active_medical": true, "identity_status": "MATCHED", "verification_status": "REVIEW_REQUIRED", "priority": null},
+      {"active_medical": true, "identity_status": "MATCHED", "verification_status": "VERIFIED", "priority": null}
+    ]},
+    "service_plan": {"kind": "office", "selected_codes": [], "alternatives": ["99202", "99203", "99204", "99205"]},
+    "payer_response": {"plans": [{"benefits": {
+      "statuses": [{"status": "Active Coverage"}],
+      "coInsurance": [{"service": {"system": "STC", "value": "98"}, "percent": ".20", "coverageLevel": "INDIVIDUAL", "network": {"indicator": "IN_NETWORK"}}],
+      "deductible": [{"service": {"system": "STC", "value": "30"}, "amount": "0", "timePeriod": "REMAINING", "coverageLevel": "FAMILY", "network": {"indicator": "IN_AND_OUT_OF_NETWORK"}}],
+      "outOfPocket": [
+        {"service": {"system": "STC", "value": "30"}, "amount": "4800", "timePeriod": "CALENDAR_YEAR", "coverageLevel": "INDIVIDUAL", "network": {"indicator": "IN_NETWORK"}},
+        {"service": {"system": "STC", "value": "30"}, "amount": "4700", "timePeriod": "REMAINING", "coverageLevel": "INDIVIDUAL", "network": {"indicator": "IN_NETWORK"}}
+      ]
+    }}]}
+  },
+  "identity_mismatch": {
+    "product": "Choice Plus",
+    "identity": {"status": "review", "differences": [{"field": "first_name"}, {"field": "last_name"}], "policy_differences": [{"field": "subscriber_first"}, {"field": "subscriber_last"}]},
+    "recovery": {"reason_code": "no_coverage_found", "raw_candidate_count": 0},
+    "service_plan": {"kind": "other", "selected_codes": [], "alternatives": []},
+    "payer_response": {"plans": [{"benefits": {
+      "statuses": [{"status": "Active Coverage"}],
+      "coPayment": [
+        {"service": {"system": "STC", "value": "98"}, "amount": "25", "coverageLevel": "INDIVIDUAL", "network": {"indicator": "IN_NETWORK"}, "placesOfService": [{"code": "02"}, {"code": "10"}, {"code": "11"}, {"code": "12"}, {"code": "81"}]},
+        {"service": {"system": "STC", "value": "98"}, "amount": "0", "coverageLevel": "INDIVIDUAL", "network": {"indicator": "IN_NETWORK"}}
+      ],
+      "deductible": [{"service": {"system": "STC", "value": "30"}, "amount": "2200", "timePeriod": "REMAINING", "coverageLevel": "INDIVIDUAL", "network": {"indicator": "IN_NETWORK"}}],
+      "outOfPocket": [{"service": {"system": "STC", "value": "30"}, "amount": "2100", "timePeriod": "REMAINING", "coverageLevel": "INDIVIDUAL", "network": {"indicator": "IN_NETWORK"}}]
+    }}]}
+  }
+}

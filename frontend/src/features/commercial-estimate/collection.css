@@ -45,6 +45,46 @@
   margin: 16px 0 0;
 }
 
+.plan-limit-summary {
+  margin-top: 16px;
+}
+
+.plan-limit-summary > small {
+  color: var(--ve-muted);
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.plan-limit-summary .arrival-money-picture {
+  margin-top: 6px;
+}
+
+.selected-cpt-requirements {
+  margin-top: 16px;
+}
+
+.selected-cpt-requirements > small {
+  color: var(--ve-muted);
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.selected-cpt-requirements ul {
+  margin: 6px 0 0;
+  padding-left: 20px;
+  line-height: 1.5;
+}
+
+.payer-reported-terms {
+  margin-top: 16px;
+}
+
+.payer-reported-terms > summary {
+  color: var(--ve-muted);
+  font-size: 12px;
+  font-weight: 650;
+}
+
 .arrival-money-picture > div {
   min-width: 0;
   padding: 10px 12px;
@@ -71,6 +111,13 @@
   font-size: 15px;
   font-weight: 650;
   font-variant-numeric: tabular-nums;
+}
+
+.arrival-money-picture .coinsurance-formula {
+  display: block;
+  color: var(--ve-muted);
+  font-size: 11px;
+  font-weight: 400;
 }
 
 .cash-package-shortcut {

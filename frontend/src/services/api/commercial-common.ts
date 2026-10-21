@@ -1,5 +1,17 @@
 export type CommercialAppointment = { id: string; start: string; status: string; reason: string }
 
+export type PrevisitIdentity = {
+  status: 'matched' | 'warning' | 'review' | 'reconciled'
+  match_version?: number
+  missing_fields?: string[]
+  message?: string
+  binding: string | null
+  can_confirm: boolean
+  differences: Array<{ field: string; ecw: string; payer: string }>
+  policy_differences?: Array<{ field: string; ecw: string; payer: string }>
+  evidence?: { reference: string; verified_at: string }
+}
+
 export type BillingNote = {
   kind: 'no_collection' | 'office_copay' | 'self_pay'
   amount_cents?: number
@@ -15,6 +27,24 @@ export type RequirementEvidence = {
   verification?: string
   contact?: string
   approval_status?: string
+  referral_obtained?: 'YES' | 'NO' | 'UNKNOWN' | 'NOT APPLICABLE'
+  pa_approval?: 'APPROVED' | 'PENDING' | 'DENIED' | 'EXPIRED' | 'UNVERIFIED' | 'NOT APPLICABLE'
+  member_specific_check?: boolean
+  applicable_scope?: {
+    payer_product?: string
+    codes?: string[]
+    service_categories?: string[]
+    units_by_code?: Record<string, number | null | undefined>
+    indication?: string | null
+    diagnoses?: unknown
+    network_tier?: string
+    rendering_npi?: string
+    billing_npi?: string
+    tin?: string
+    location_id?: string
+    place_of_service?: string
+    service_date?: string
+  }
   approval_reference?: string
   approval_verified_at?: string
   sources: Array<{
@@ -23,6 +53,11 @@ export type RequirementEvidence = {
     page?: number
     document_id?: string
     url?: string
+    source_type?: string
+    source_version?: string
+    effective_from?: string
+    effective_to?: string
+    verified_at?: string
   }>
 }
 
@@ -33,10 +68,12 @@ export type CollectionGuidance = {
   range_max_cents?: number | null
   status: string
   basis: string
+  integrity_error?: 'patient_total_mismatch' | 'line_amount_mismatch' | 'collection_amount_mismatch'
   reason: string
   patient_message: string
   assumptions: string[]
   patient_actions: string[]
+  policy_setup_required?: boolean
   network: string
   network_source?: string
   requirement_sources?: { referral?: string; authorization?: string }

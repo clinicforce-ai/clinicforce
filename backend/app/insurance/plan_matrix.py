@@ -5,6 +5,7 @@ import re
 from urllib.parse import urlparse
 
 from app.insurance import cpt_rules
+from app.insurance.identity import generic_plan_label, payer_identity_verified
 
 from app.insurance.plan_matrix_source import (
     WORKBOOK,
@@ -50,7 +51,9 @@ def _portal(data: dict, row: dict, plan: str, kind: str) -> str | None:
 
 
 def _research_source(data: dict, label: str) -> dict:
-    return {'label': label, **({'document_id': data['document_id']} if data.get('document_id') else {})}
+    return {'label': label, 'source_type': data.get('source_type', 'excel_research'),
+            'source_version': data.get('sha256'),
+            **({'document_id': data['document_id']} if data.get('document_id') else {})}
 
 
 def _official_ppo_source(row: dict, family: str | None) -> list[dict]:
@@ -63,7 +66,7 @@ def _official_ppo_source(row: dict, family: str | None) -> list[dict]:
 def _patient_evidence(result: dict, context: dict, steps: dict) -> list[str]:
     description = steps['Eligibility check']['Exact Fields ClinicForce Must Pull'].casefold()
     benefits = result.get('benefits') or {}
-    identity = benefits.get('identity') or result.get('identity') or {}
+    identity = result.get('identity') or benefits.get('identity') or {}
     gaps = []
     if 'coverage status' in description and benefits.get('active') is not True:
         gaps.append('active coverage')
@@ -82,7 +85,7 @@ def _patient_evidence(result: dict, context: dict, steps: dict) -> list[str]:
         gaps.append('rendering provider NPI')
     if context.get('payer') != 'Traditional Medicare' and benefits.get('network_status') != 'in_network':
         gaps.append('provider network')
-    if identity.get('status') not in {'matched', 'reconciled'}:
+    if not payer_identity_verified(identity):
         gaps.append('patient identity')
     if not result.get('benefit_source'):
         gaps.append('current payer eligibility source')
@@ -96,7 +99,7 @@ def evaluate(result: dict, context: dict, data: dict) -> dict | None:
     if not payer_rows:
         return None
     reported_plans = [str(value) for value in context.get('plans') or [] if value]
-    plans = {_key(value) for value in reported_plans if _key(value) not in {'', 'ci', 'commercial', 'ppo', 'hmo'}}
+    plans = {_key(value) for value in reported_plans if not generic_plan_label(value)}
     if any('bluecard' in _key(value) for value in reported_plans) and any(
             row['Payer'] == 'Blue Cross Blue Shield of Texas' for _, row in payer_rows):
         payer_rows += [(number, row) for number, row in data['rows']
@@ -118,23 +121,23 @@ def evaluate(result: dict, context: dict, data: dict) -> dict | None:
                                and row['Plan Group (shared rule set)'].startswith(family))), None)
         if not matched and family_row:
             number, row = family_row
-            label = f"{data['filename']} · Payer Plan Matrix, row {number} ({family} group research; product not matched)"
-            referral = (f'Reported {family} description; the matrix says no referral generally for its PPO group, '
+            label = f"{data['filename']} · Payer Plan Matrix, row {number} ({family} group research, product not matched)"
+            referral = (f'Reported {family} description. The matrix says no referral generally for its PPO group, '
                         'but the exact patient product and member rule need payer confirmation.' if family == 'PPO' else
-                        f'Reported {family} description; the matrix says HMO referrals generally apply, '
+                        f'Reported {family} description. The matrix says HMO referrals generally apply, '
                         'but the exact patient product and member rule need payer confirmation.' if family == 'HMO' else
-                        'Reported BlueCard description; the home plan controls referrals and must be confirmed.')
+                        'Reported BlueCard description. The home plan controls referrals and must be checked.')
             codes = ', '.join(str(code.get('code')) for code in result.get('codes') or [] if code.get('code')) or 'planned services'
-            authorization = (f'The {family} matrix group does not establish authorization for CPT {codes}; '
-                             'check the member plan and current code rules with the payer.')
+            authorization = (f'The {family} matrix group does not establish authorization for CPT {codes}. '
+                             'Check the member plan and current code rules with the payer.')
             return {kind: {'status': 'Verification required', 'reason': reason,
                            'sources': [_research_source(data, label), *_official_ppo_source(row, family)],
                            'verify_url': _portal(data, row, '', kind), 'contact': None}
                     for kind, reason in (('referral', referral), ('authorization', authorization))}
         row = payer_rows[0][1]
         label = f"{data['filename']} · Payer Plan Matrix, rows {', '.join(str(n) for n, _ in payer_rows)} (Excel research)"
-        reason = ('Patient plan matches multiple matrix groups; confirm the exact product.' if matched else
-                  'Exact patient plan/product is not identified in the matrix; confirm it with the payer.')
+        reason = ('Patient plan matches multiple matrix groups. Ask the payer to identify the exact product.' if matched else
+                  'Exact patient plan/product is not identified in the matrix. Ask the payer to identify it.')
         return {kind: {'status': 'Verification required', 'reason': reason,
                        'sources': [_research_source(data, label)],
                        'verify_url': _portal(data, row, '', kind), 'contact': None} for kind in ('referral', 'authorization')}
@@ -148,7 +151,9 @@ def evaluate(result: dict, context: dict, data: dict) -> dict | None:
     referral = str(row['Referral Required Before NMCT Visit'] or '').strip().casefold()
     if referral.startswith('yes for hmo'):
         referral = 'yes' if 'hmo' in _key(plan) else 'no' if any(term in _key(plan) for term in ('ppo', 'pffs')) else 'varies'
-    referral_status = 'Required' if referral == 'yes' else 'Not required' if referral == 'no' else 'Verification required'
+    # Workbook cells are research leads, not independently verified payer rules.
+    # The shared evaluator can promote a scoped official rule separately.
+    referral_status = 'Verification required'
     conditional_hmo = row['Payer'] == 'Blue Cross Blue Shield of Texas' and _key(plan) in {'blueessentials', 'blueadvantageplus'}
     pending_contract = 'pending' in str(row['Plan Group (shared rule set)']).casefold()
     if rental or gaps or uncertain or conditional_hmo or not result.get('codes') or pending_contract and referral == 'no':
@@ -159,20 +164,26 @@ def evaluate(result: dict, context: dict, data: dict) -> dict | None:
         (referral == 'yes' and any(term in detail_key for term in ('no referral', 'without a referral')) or
          referral == 'no' and re.search(r'(?:requires?|must submit).{0,35}referral', detail_key)))
     if rental:
-        referral_reason = 'The underlying payer or employer plan, not this rental network, controls referrals.'
+        referral_reason = ('The underlying BlueCard home plan controls referrals; identify its payer and administrator.'
+                           if row['Payer'] == 'Blue Cross Blue Shield (out-of-state BlueCard)' else
+                           'The underlying payer or employer plan, not this rental network, controls referrals.')
     elif contradictory_referral:
         referral_status = 'Verification required'
-        referral_reason = 'The matrix referral answer conflicts with its explanation; confirm with the payer.'
+        referral_reason = 'The matrix referral answer conflicts with its explanation. Ask the payer which rule applies.'
     elif conditional_hmo:
         referral_reason = 'This HMO usually needs a PCP referral, but its same-group or self-directed exception needs patient-specific review.'
     elif pending_contract and referral == 'no':
         referral_reason = 'This plan type usually lets members self-refer, but NMCT must confirm its contract is active and the patient’s network.'
     elif gaps:
-        referral_reason = f"Matrix says {'referral required' if referral == 'yes' else 'no referral generally' if referral == 'no' else 'plan-dependent referral'}; verify {', '.join(gaps)} for this patient."
+        referral_reason = f"Matrix says {'referral required' if referral == 'yes' else 'no referral generally' if referral == 'no' else 'plan-dependent referral'}. Check {', '.join(gaps)} for this patient."
     elif uncertain:
         referral_reason = 'Confirm the planned service before applying this plan’s referral rule.'
     else:
-        referral_reason = detail.split(';')[0][:160] or 'Confirm this plan’s referral rule.'
+        referral_reason = ('Workbook research suggests ' +
+                           ('a PCP referral' if referral == 'yes' else
+                            'no specialist referral' if referral == 'no' else
+                            'a plan-dependent referral') +
+                           '. Confirm the current exact-product rule with the payer.')
     referral_fields = data['steps']['Referral check']['Exact Fields ClinicForce Must Pull'].casefold()
     if referral_status == 'Required' and all(field in referral_fields for field in ('referring pcp', 'number of visits', 'start and end date')):
         referral_reason += ' Referral on file, PCP, visit count and dates still need confirmation.'
@@ -184,11 +195,11 @@ def evaluate(result: dict, context: dict, data: dict) -> dict | None:
     triggered = codes & explicit_codes
     emg_codes = codes & (cpt_rules.NCS_CODES | cpt_rules.EMG_ADD_ONS) if 'EMG/NCS' in trigger_text else set()
     auth_status = 'Verification required'
-    if triggered and not (rental or gaps or uncertain):
-        # Research names these CPTs directly; approval remains a separate payer check.
-        auth_status = 'Required' if row['Payer'] in {'Aetna', 'Blue Cross Blue Shield of Texas'} else 'Verification required'
+    # A CPT mentioned in the workbook does not prove its current payer PA status.
     if rental:
-        auth_reason = 'The underlying payer or employer plan controls authorization; check its ID card and plan document.'
+        auth_reason = ('The BlueCard home plan controls authorization. Identify its payer and use the home-plan member lookup.'
+                       if row['Payer'] == 'Blue Cross Blue Shield (out-of-state BlueCard)' else
+                       'The underlying payer or employer plan controls authorization. Check its ID card and plan document.')
     elif not codes or uncertain:
         auth_reason = 'Confirm the planned CPT codes before checking authorization.'
     elif gaps:
@@ -196,9 +207,9 @@ def evaluate(result: dict, context: dict, data: dict) -> dict | None:
     elif triggered:
         auth_reason = f"Matrix flags CPT {', '.join(sorted(triggered))} for authorization review."
     elif emg_codes:
-        auth_reason = f"Matrix flags EMG/NCS code {', '.join(sorted(emg_codes))} for a current payer lookup; the exact requirement is unconfirmed."
+        auth_reason = f"Matrix flags EMG/NCS code {', '.join(sorted(emg_codes))} for a current payer lookup. Ask the payer for the exact requirement."
     else:
-        auth_reason = 'Matrix does not settle authorization for every planned CPT; check the payer’s current code lookup.'
+        auth_reason = 'Matrix does not settle authorization for every planned CPT. Check the payer’s current code lookup.'
     auth_fields = data['steps']['Prior authorization check']['Exact Fields ClinicForce Must Pull'].casefold()
     claim_fields = data['steps']['Claim-ready confirmation']['Exact Fields ClinicForce Must Pull'].casefold()
     if triggered and all(field in auth_fields for field in ('pa status', 'tracking number', 'approved unit', 'expiration date')):
@@ -208,17 +219,20 @@ def evaluate(result: dict, context: dict, data: dict) -> dict | None:
     reference = _portal_reference(data, row, _key(plan))
     contact_source = (_research_source(data, f"{data['filename']} · Portal & Contact Reference, row {reference['_row_number']}")
                       if reference.get('_row_number') else None)
+    def display_text(value: object) -> str:
+        return re.sub(r'\s*;\s*', '. ', str(value or '').strip()).strip()
+
     def evidence(kind: str, status: str, reason: str) -> dict:
-        contact = str(reference.get('Precert / PA Phone' if kind == 'authorization' else 'Provider Phone') or '').strip()
+        contact = display_text(reference.get('Precert / PA Phone' if kind == 'authorization' else 'Provider Phone'))
         if contact.casefold().startswith('same number'):
-            contact = f"{reference.get('Provider Phone') or ''} ({contact})".strip()
+            contact = f"{display_text(reference.get('Provider Phone'))} ({contact})".strip()
         return {'status': status, 'reason': reason,
                 'sources': [source, *([contact_source] if contact and contact_source else []),
                             *_official_ppo_source(row, 'PPO' if 'ppo' in _key(plan) or 'bluechoice' in _key(plan) else None)],
                 'verify_url': _portal(data, row, _key(plan), kind),
-                'verification': (str(row.get('Prior Auth Source / Submission Channel') or '').strip()
+                'verification': (display_text(row.get('Prior Auth Source / Submission Channel'))
                                  if kind == 'authorization' else
-                                 str(data['steps']['Referral check'].get('Where It Comes From') or '').strip()),
+                                 display_text(data['steps']['Referral check'].get('Where It Comes From'))),
                 'contact': contact or None}
     return {
         'referral': evidence('referral', referral_status, referral_reason),

@@ -1,4 +1,4 @@
-"""Validate case-specific suggested groups, with optional unpriced clinician review."""
+"""Classify planned services and validate clinician-selected code groups."""
 import re
 
 from app.insurance.golden import GoldenCaseError
@@ -6,6 +6,44 @@ from app.insurance.golden import GoldenCaseError
 
 EMG_ADD_ONS = {'95885', '95886', '95887'}
 NCS_CODES = {str(code) for code in range(95907, 95914)}
+
+# Versioned clinical planning metadata. This classifies services; it never
+# supplies a payer benefit, covered status, allowance, or billable quantity.
+SERVICE_CATALOGUE_VERSION = 1
+SERVICE_FAMILIES = {
+    'office_consultation': {'codes': {str(n) for n in (*range(99202, 99206), *range(99212, 99216))},
+                            'group': 'visit', 'role': 'consultation', 'service_type': '98'},
+    'nerve_conduction': {'codes': NCS_CODES, 'group': 'nerve', 'role': 'diagnostic_test', 'service_type': '73'},
+    'needle_emg': {'codes': EMG_ADD_ONS, 'group': 'muscle', 'role': 'diagnostic_test', 'service_type': '73'},
+    'diagnostic_procedure': {'codes': {'11104', '11105', '62270', '62328'},
+                             'group': 'other', 'role': 'procedure', 'service_type': '2'},
+    'botulinum_drug': {'codes': {'J0585'}, 'group': 'other', 'role': 'drug',
+                       'service_type': None, 'associated_families': ('chemodenervation',),
+                       'brand': 'Botox', 'eligibility_service_types': ('1',),
+                       'benefit_service_types': ('1',),
+                       'candidate_descriptions': {'J0585': 'Botox drug · proposed HCPCS units; confirm dose and supply'}},
+    'chemodenervation': {'codes': {'64612', '64615'}, 'group': 'other', 'role': 'procedure',
+                         'service_type': None, 'eligibility_service_types': ('2',),
+                         'benefit_service_types': ('1', '2'),
+                         'candidate_descriptions': {
+                             '64612': 'Facial chemodenervation candidate · confirm anatomy',
+                             '64615': 'Head and neck chemodenervation candidate · confirm anatomy'}},
+}
+
+
+def service_definition(code: str) -> dict:
+    """Return catalogue classification without inferring clinical approval."""
+    for family, definition in SERVICE_FAMILIES.items():
+        if code in definition['codes']:
+            return {**definition, 'family': family, 'catalogue_version': SERVICE_CATALOGUE_VERSION}
+    return {'family': 'uncategorized', 'group': 'other', 'role': 'procedure',
+            'service_type': None, 'catalogue_version': SERVICE_CATALOGUE_VERSION}
+
+
+def benefit_category_compatible(code: str, category: str, *, procedure_specific: bool = False) -> bool:
+    """A broad STC must describe this service; an exact procedure row can be narrower."""
+    allowed = service_definition(code).get('benefit_service_types')
+    return bool(category) and (procedure_specific or not allowed or category in allowed)
 
 
 def service_selection_issues(codes: list[str]) -> list[str]:

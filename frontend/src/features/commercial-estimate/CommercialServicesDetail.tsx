@@ -1,5 +1,6 @@
 import type { CommercialEstimateModel } from './useCommercialEstimateModel'
 import { ServicePlanner } from './ServicePlanner'
+import { PayerAllowanceEntry } from './PayerAllowanceEntry'
 
 export default function CommercialServicesDetail({
   model,
@@ -10,11 +11,7 @@ export default function CommercialServicesDetail({
 }) {
   const { readOnly, busy, setNotice, recovering, saveReview, anticipatedService } = model
   return (
-    <details
-      open={readOnly || undefined}
-      id="visit-detail-services"
-      className="visit-detail-section"
-    >
+    <details id="visit-detail-services" className="visit-detail-section">
       <summary>
         {readOnly ? 'Saved service plan' : 'Possible additional services / modify inputs'}
       </summary>
@@ -36,16 +33,37 @@ export default function CommercialServicesDetail({
             ))}
           </ul>
         ) : (
-          <ServicePlanner
-            key={`${result.check_id}:${result.revision}`}
-            result={result}
-            busy={!!busy || recovering}
-            save={saveReview}
-            viewEstimate={(message) => {
-              setNotice(message || 'Estimate updated.')
-              document.getElementById('visit-estimate')?.scrollIntoView({ block: 'start' })
-            }}
-          />
+          <>
+            <ServicePlanner
+              key={`${result.appointment_id}:${result.check_id}:${result.context_token}:${result.revision}:${(result.selected_ids || []).join(',')}`}
+              result={result}
+              busy={!!busy || recovering}
+              save={saveReview}
+              viewEstimate={(message) => {
+                setNotice(message || 'Estimate updated.')
+                document.getElementById('visit-estimate')?.scrollIntoView({ block: 'start' })
+              }}
+            />
+            {model.session?.role === 'admin' &&
+              result.payment_mode === 'insurance' &&
+              result.benefits?.network_status === 'out_of_network' &&
+              [
+                'clinic_nonparticipation_rule',
+                'payer_participation_message',
+                'clinic_contract_inventory',
+              ].includes(result.benefits.network_source || '') && (
+                <PayerAllowanceEntry
+                  key={`${result.check_id}:${result.revision}`}
+                  result={result}
+                  busy={!!busy || recovering}
+                  save={saveReview}
+                  viewEstimate={() => {
+                    setNotice('Payer allowance updated.')
+                    document.getElementById('visit-estimate')?.scrollIntoView({ block: 'start' })
+                  }}
+                />
+              )}
+          </>
         )}
       </div>
     </details>
