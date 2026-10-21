@@ -102,6 +102,12 @@ def build(result: dict, source: dict) -> list[dict]:
             ('saved payer response and eCW', 'member-specific signal evaluated' if checked else 'no saved payer response'),
         ], f'{field.capitalize()} rule for the exact product and selected CPT',
             'Check the date-effective payer rule for this member and CPT only if no applicable saved rule resolves it.')
+    referral = requirements.get('referral') or {}
+    if referral.get('status') == 'Required':
+        record('referral_obtained', referral.get('referral_obtained') == 'YES', [
+            ('eCW and saved review', referral.get('referral_obtained') or 'no matching referral recorded'),
+        ], 'Member and CPT-specific referral clearance',
+            'Record the referral reference and validity for the selected service.')
     auth = requirements.get('authorization') or {}
     if auth.get('status') == 'Required':
         record('authorization_approval', auth.get('approval_status') == 'Verified', [
