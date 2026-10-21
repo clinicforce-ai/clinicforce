@@ -173,7 +173,7 @@ def _collection_action(code: str, result: dict, source_errors: list[dict] | None
             return f'choose the applicable {payer} contract rate for {codes}{product_scope}, the rendering provider, visit date and location'
         return f'load the active {payer} contract rate for {codes}{product_scope}, the rendering provider, visit date and location'
     if code == 'planned_cpt_unselected':
-        return 'select the clinician-documented E/M CPT, then rerun the insured estimate'
+        return 'price the booked service alternatives from the applicable plan and clinic evidence; narrow the CPT level when current care supports it'
     if code == 'planned_cpt_missing':
         return ('document the performed injection, drug units and any separate E/M service, then rerun the insured estimate'
                 if botox else 'document the planned CPT in eCW and rerun the insured estimate')
@@ -201,7 +201,7 @@ def _collection_action(code: str, result: dict, source_errors: list[dict] | None
         next_step = (f'ask {payer} for the CPT-specific out-of-network allowed amount for this member, '
                      'rendering provider, place and visit date, then have a clinic administrator record the payer reference under Services')
         if (result.get('price_range') or {}).get('mode') == 'alternatives':
-            return f'select the clinician-documented E/M CPT, then {next_step}'
+            return f'{next_step} for each booked service alternative'
         return next_step
     if code == 'no_policy_returned':
         return 'reconcile the member and policy details with the payer before filing the claim'

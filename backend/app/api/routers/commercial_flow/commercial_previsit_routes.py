@@ -20,6 +20,9 @@ async def saved_previsit(case_id: str, request: _api.Request) -> dict:
     Coverage verification does not imply that a price is available.
     evidence_resolution reports each field's source findings and precise
     remaining action after the shared estimator evaluates saved evidence.
+    A saved read also projects a current dated group-network contract finding
+    from the protected visit context. This projection makes no payer call or write
+    and does not upgrade the rendering clinician's participation or old pricing.
     If the protected raw payer response cannot be reopened, same-context saved
     benefit terms may remain with benefits.historical_only and a source error;
     they cannot authorize an insured collection. A changed policy context does
@@ -72,6 +75,9 @@ async def saved_previsit(case_id: str, request: _api.Request) -> dict:
     must rerun against current configuration.
     New saved checks also re-evaluate CPT referral and authorization decisions
     when their Clinical Library contract or plan-matrix sources change.
+    selected_ids includes source-backed provisional CPTs as well as reviewed
+    CPTs; service_selection_status distinguishes preview from approval. The
+    selected IDs and priced code list refer to the same service scenario.
     emg_option.calculation_version identifies the full patient-cost method.
     Older or newly invalid scenarios retain the testing request but return null
     numeric totals until staff recalculates with current visit evidence.

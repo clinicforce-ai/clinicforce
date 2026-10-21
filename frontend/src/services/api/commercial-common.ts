@@ -74,6 +74,10 @@ export type CollectionGuidance = {
   assumptions: string[]
   patient_actions: string[]
   policy_setup_required?: boolean
+  positive_advance_policy_missing?: boolean
+  published_copay_policy_missing?: boolean
+  deferred_supported_share?: boolean
+  collection_rule?: { mode: string; reference: string; approved_at: string }
   network: string
   network_source?: string
   requirement_sources?: { referral?: string; authorization?: string }

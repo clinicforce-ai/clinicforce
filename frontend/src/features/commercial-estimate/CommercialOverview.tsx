@@ -12,6 +12,8 @@ import TemporaryRateReference from './TemporaryRateReference'
 import EstimateSources from './EstimateSources'
 import { openServiceDetails } from './openServiceDetails'
 import { overviewExplanation } from './overviewExplanation'
+import PolicyAndShareNotice from './PolicyAndShareNotice'
+import PublishedPlanBenefit from './PublishedPlanBenefit'
 
 export default function CommercialOverview({
   model,
@@ -40,6 +42,7 @@ export default function CommercialOverview({
     networkLabel,
     networkTone,
     amount,
+    provisionalAmount,
     amountText,
     amountLabel,
     requirementIssue,
@@ -103,6 +106,7 @@ export default function CommercialOverview({
     amount ||
     (!staleInsuredGuidance && (guidance?.patient_actions.length || guidance?.assumptions.length)),
   )
+  const visibleAmount = Boolean(amount) || provisionalAmount != null || !!model.estimatedShare
   const patientBenefitsBound = hasPatientBinding(result.identity)
   const applicablePlanLimits =
     !cash &&
@@ -168,19 +172,15 @@ export default function CommercialOverview({
       </div>
       <div className="overview-amounts">
         <div
-          className={`arrival-total${!amount && !calculating && !tooEarly ? ' is-blocked' : ''}`}
+          className={`arrival-total${!visibleAmount && !calculating && !tooEarly ? ' is-blocked' : ''}`}
         >
           <span>{amountLabel}</span>
-          <strong className={!amount ? 'amount-pending' : undefined} role="status">
+          <strong className={!visibleAmount ? 'amount-pending' : undefined} role="status">
             {amountText}
           </strong>
           <p>{overviewExplanation(model, result, Boolean(fullBreakdown))}</p>
-          {!readOnly && guidance?.policy_setup_required && (
-            <p>
-              Clinic administrator: approve a payer collection policy before instructing $0
-              deferral.
-            </p>
-          )}
+          <PolicyAndShareNotice model={model} />
+          {!cash && <PublishedPlanBenefit result={result} />}
           {(chooseServices || enterAllowance) && (
             <button type="button" className="cash-package-shortcut" onClick={openServiceDetails}>
               {chooseServices

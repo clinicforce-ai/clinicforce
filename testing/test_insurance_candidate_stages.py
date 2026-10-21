@@ -165,6 +165,9 @@ def test_verified_coverage_without_rate_has_explicit_diagnosis_and_separate_cash
     assert 'No contracted rate for 99213' in diagnosis['pricingReasons']
     assert public['payment_mode'] == 'insurance' and public['collection_guidance']['amount_cents'] is None
     result['arrival_collection'] = {'amount_cents': 2500, 'status': 'estimate'}
+    result['collection_policy'] = {'mode': 'collect_supported_advance',
+                                   'approved_by': 'synthetic-admin', 'approved_at': '2026-10-01T12:00:00Z',
+                                   'reference': 'Synthetic advance collection policy'}
     result['price_range'].update(complete=True)
     public = api._previsit_result(case)
     assert public['payment_mode'] == 'insurance' and public['collection_guidance']['amount_cents'] == 2500

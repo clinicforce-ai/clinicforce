@@ -38,7 +38,7 @@ export function RequirementDecision({
           ? 'Yes if selected'
           : 'Yes'
         : needsCodeSelection
-          ? 'Select E/M CPT'
+          ? 'Select CPT level'
           : `Ask ${payerName || 'the payer'} whether CPT ${code} needs ${kind}`
   return (
     <>

@@ -19,24 +19,17 @@ def model_reply(services):
                   'assumptions': ['Anticipated study range; editable before the visit.']}}}]}}}
 
 
-def test_model_selects_one_scenario_with_history_and_rejects_unsupported_combinations():
+def test_emg_history_and_model_do_not_invent_today_study_count_or_muscle_work():
     model = MagicMock()
     model.converse.return_value = model_reply([{'code': '95909', 'units': 1}, {'code': '95886', 'units': 2}])
     history = [{'date': '2026-09-01', 'reason': 'Similar arm symptoms', 'coded_services': ['95909', '95886']}] * 5
     with patch.object(cpt_suggester.boto3, 'client', return_value=model):
         plan = cpt_suggester.recommend_visit_plan({'reason': 'EMG both arms'}, {'recent_completed_appointments': history}, catalog())
-        assert plan['method'] == 'llm'
-        assert plan['recommended_ids'] == ['95909', '95886']
-        assert plan['recommended_units']['95886'] == 2
+        assert plan['method'] == 'appointment'
+        assert plan['recommended_ids'] == []
+        assert plan['recommended_units'] == {}
         assert plan['history_count'] == 5
-        for invalid in ([{'code': '99999', 'units': 1}], [{'code': '95886', 'units': 2}],
-                        [{'code': '95909', 'units': 2}], [{'code': '95909', 'units': 1}, {'code': '95886', 'units': 5}],
-                        [{'code': '95909', 'units': 1}, {'code': '95886', 'units': 3}, {'code': '95885', 'units': 2}],
-                        [{'code': 'J0585', 'units': 100}]):
-            model.converse.return_value = model_reply(invalid)
-            fallback = cpt_suggester.recommend_visit_plan({'reason': 'EMG both arms'}, {}, catalog())
-            assert fallback['method'] == 'baseline'
-            assert fallback['recommended_ids'] == ['95907', '95886']
+        model.converse.assert_not_called()
 
 
 def test_explicit_scheduled_care_wins_and_wrong_patient_status_cannot_be_inferred():
@@ -45,6 +38,17 @@ def test_explicit_scheduled_care_wins_and_wrong_patient_status_cannot_be_inferre
     with patch.object(cpt_suggester.boto3, 'client') as model:
         result = cpt_suggester.recommend_visit_plan({'reason': 'EMG'}, {}, available)
         assert result['recommended_ids'] == ['95909']
+        model.assert_not_called()
+    available[1] = {**available[1], 'id': 'documented-95908', 'code': '95908'}
+    with patch.object(cpt_suggester.boto3, 'client') as model:
+        result = cpt_suggester.recommend_visit_plan({'reason': 'EMG'}, {}, available)
+        assert result['recommended_ids'] == ['documented-95908']
+        model.assert_not_called()
+    unknown_muscle = [*available, {'id': 'muscle-unknown', 'code': '95886',
+        'source': 'eCW scheduled service', 'units': None}]
+    with patch.object(cpt_suggester.boto3, 'client') as model:
+        result = cpt_suggester.recommend_visit_plan({'reason': 'EMG'}, {}, unknown_muscle)
+        assert result['recommended_ids'] == ['documented-95908']
         model.assert_not_called()
     model = MagicMock()
     model.converse.return_value = model_reply([{'code': '99203', 'units': 1}])

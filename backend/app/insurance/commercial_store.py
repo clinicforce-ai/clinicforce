@@ -151,7 +151,7 @@ def set_collection_policy(practice_id: str, connection_id: str, mode: str,
                           reference: str, actor_id: str, *, allow_supported_oon_advance: bool = False,
                           allow_cms_based_advance: bool = False) -> dict:
     """Set a practice-scoped payer policy with an administrator and source reference."""
-    if mode not in {'defer_to_claim', 'collect_verified_copay', 'disabled'} or not reference.strip() or not actor_id:
+    if mode not in {'defer_to_claim', 'collect_verified_copay', 'collect_supported_advance', 'disabled'} or not reference.strip() or not actor_id:
         raise CommercialError('A collection policy mode, approval reference and administrator are required.')
     now = _now()
     with _connection() as db:

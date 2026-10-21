@@ -8,6 +8,7 @@ from app.insurance import commercial, collection_guidance, visit_estimate, amoun
 from app.api.routers import commercial_estimator as api
 from app.api.routers.commercial_estimator import _compare_card_hints
 from test_visit_estimate import DAY, payload
+from testing.synthetic_policy import ADVANCE_POLICY, COPAY_POLICY
 
 
 def matched_terms(*args, **kwargs):
@@ -72,7 +73,7 @@ def test_verified_office_copay_can_stand_beside_unpriced_testing_and_deduct_paym
     priced = visit_estimate.price_lines(codes, [], terms,
         {'cost_share': 'payer_returned', 'service_type_by_code': {'93000': '30'}}, payload=raw, service_date=DAY)
     result = {'benefits': terms, 'price_range': priced,
-              'payment_mode': 'insurance', 'arrival_collection': {}}
+              'payment_mode': 'insurance', 'arrival_collection': {}, 'collection_policy': COPAY_POLICY}
     guidance = collection_guidance.build(result, {'payments': {'reference': 'synthetic receipt', 'amount_cents': 1000}})
     assert guidance['amount_cents'] == 2000
     assert guidance['basis'] == 'office_copay'
@@ -338,7 +339,7 @@ def test_procedure_specific_coinsurance_adds_to_office_copay():
     assert priced['complete']
     assert [row['calculation']['patient_cents'] for row in priced['lines']] == [3000, 2000]
     guidance = collection_guidance.build({'benefits': terms, 'price_range': priced,
-        'payment_mode': 'insurance', 'arrival_collection': {}}, {})
+        'payment_mode': 'insurance', 'arrival_collection': {}, 'collection_policy': ADVANCE_POLICY}, {})
     assert guidance['amount_cents'] == 5000
     assert amount_explanation.build({'benefits': terms, 'price_range': priced,
         'payment_mode': 'insurance', 'encounter_summary': {
@@ -635,13 +636,13 @@ def test_uncoded_office_alternatives_name_the_missing_clinical_selection():
                   {'code': code, 'calculation': None} for code in ('99202', '99203', '99204', '99205')]}}
     unresolved = amount_explanation.build(result, {'amount_cents': None, 'basis': 'deferred_billing'})
     assert unresolved['reason_code'] == 'planned_cpt_unselected'
-    assert 'no clinician-selected code' in unresolved['sentence']
+    assert 'alternative E/M CPT levels' in unresolved['sentence']
     result['collection_policy'] = {'mode': 'defer_to_claim', 'reference': 'clinic policy 2026',
                                    'approved_by': 'administrator', 'approved_at': '2026-10-15T12:00:00Z'}
     guidance = collection_guidance.build(result)
     deferred = amount_explanation.build(result, guidance)
     assert deferred['sentence'].startswith('Collect $0 today:')
-    assert 'select the clinician-documented E/M CPT, then rerun the insured estimate' in deferred['sentence']
+    assert 'price the booked service alternatives' in deferred['sentence']
 
 
 def test_zero_advance_identity_line_names_only_mismatched_fields():

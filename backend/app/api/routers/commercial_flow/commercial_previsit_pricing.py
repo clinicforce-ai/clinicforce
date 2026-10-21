@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from app.api.routers import commercial_estimator as _api
-from app.insurance import botox_review, cms_locality, cms_pfs, cpt_rules, insurance_product, inventory_certification, library_network_exclusions
+from app.insurance import botox_review, cms_locality, cms_pfs, cpt_rules, insurance_product, inventory_certification, library_network_exclusions, group_contract_support
 
 def _ecw_case_data(inputs: dict, source: dict, conflicts: list[str]) -> dict[str, _api.Any]:
     return {"appointment_id": source.get("appointment_id"), "appointment_date": source.get("appointment_date"),
@@ -75,7 +75,18 @@ def _previsit_codes(inputs: dict) -> list[dict[str, _api.Any]]:
                  "description": row.get("description"), "modifiers": row.get("modifiers") or [], "units": row.get("units")}
                 for index, row in enumerate(scheduled)]
     if _api.visit_estimate.is_emg_visit(inputs):
-        return []  # An EMG appointment is not an office E/M just because the patient is new.
+        documented = cpt_rules.documented_ncs_code(str(inputs.get('reason') or ''))
+        if documented:
+            return [{"id": f"ecw-count:{documented}", "code": documented,
+                     "source": "eCW documented study count", "units": 1,
+                     "description": f"Nerve conduction, {cpt_rules.NCS_STUDY_RANGES[documented]} studies"}]
+        # The booking supports an NCS planning scenario, but says nothing about
+        # the number of studies or whether needle muscle work will be done.
+        # Price these levels independently; none is a performed or chosen CPT.
+        return [{"id": f"ncs-option:{code}", "code": str(code),
+                 "source": "conditional NCS alternative", "units": 1,
+                 "description": f"Nerve conduction, {cpt_rules.NCS_STUDY_RANGES[str(code)]} studies"}
+                for code in range(95907, 95914)]
     # The appointment's explicit new/established label supports a code family;
     # it cannot establish the eventual MDM/time level or that an office visit occurs.
     family = {"new": range(99202, 99206), "established": range(99212, 99216)}.get(inputs.get("visit_type"))
@@ -108,7 +119,9 @@ def _previsit_range(practice_id: str, inputs: dict, source: dict, payer_id: str,
                     review: dict | None = None, payer_route_id: str | None = None) -> tuple[dict | None, list[str]]:
     review = review or {}
     options = bool(codes) and all(row.get('source') == 'Contract service option' for row in codes) and not review.get('selected_ids')
-    alternatives = options or (bool(codes) and all(row.get("source") == "conditional office E/M alternative" for row in codes) and not review.get("selected_ids"))
+    alternatives = options or (bool(codes) and all(row.get("source") in {
+        "conditional office E/M alternative", "conditional NCS alternative"} for row in codes)
+        and not review.get("selected_ids"))
     selected = [row for row in codes if not review.get("selected_ids") or row.get("id") in review['selected_ids']]
     office_types = _api._office_service_types(practice_id, source)
     rates, rules, issues = [], {'office_service_types': office_types, **_api._benefit_context(inputs, source)}, []
@@ -260,6 +273,7 @@ def _network_contract_evidence(practice_id: str, network: dict, profile: dict, s
     return evidence
 
 
+
 def _product_mapping_evidence(profile: dict, network: dict, source: dict, service_date: str) -> dict | None:
     """Retain the administrator record used to alias a payer product."""
     payer_names = source.get('payer_plan_names') or []
@@ -370,7 +384,8 @@ def _attach_previsit_pricing(result: dict, practice_id: str, inputs: dict, sourc
             'office_service_types': _api._office_service_types(practice_id, source),
             **_api._benefit_context(inputs, source)}, payload=payload,
             service_date=inputs.get('service_date', ''), reviews=(review or {}).get('lines'),
-            alternatives=not (review or {}).get('selected_ids') and bool(result['codes']) and all(row.get('source') == 'conditional office E/M alternative' for row in result['codes']))
+            alternatives=not (review or {}).get('selected_ids') and bool(result['codes']) and all(row.get('source') in {
+                'conditional office E/M alternative', 'conditional NCS alternative'} for row in result['codes']))
         return
     connection = connections[0]
     scope_complete = all((service_date, (inputs.get('rendering_provider') or {}).get('npi'),
@@ -412,6 +427,11 @@ def _attach_previsit_pricing(result: dict, practice_id: str, inputs: dict, sourc
                 'reason_code': 'product_link_missing' if str(exc.detail) == 'The clinic fee schedule is not matched to the exact payer product.'
                 else 'payer_network_unmatched' if str(exc.detail) == 'The payer-reported member network does not match the clinic contract.'
                 else 'contract_scope_unresolved', 'reason': str(exc.detail)}
+    if ((result.get('network_evidence') or {}).get('decision') == 'lacking_applicable_network_evidence'
+            and not exclusion and not _api.network_participation.verified_out_of_network(benefits)):
+        supported = group_contract_support.resolve(practice_id, connection, inputs, source, result, benefits)
+        if supported:
+            result['network_evidence'] = supported
     if (inventory and benefits.get('network_source') != 'clinic_library_contract'
             and not _api.network_participation.verified_out_of_network(benefits)):
         _apply_inventory_tier(result, benefits, inventory, exclusion)

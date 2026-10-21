@@ -6,13 +6,15 @@ import pytest
 
 from app.api.routers import commercial_estimator as api
 from test_result_first_estimate import response
+from testing.synthetic_policy import COPAY_POLICY
 
 
 @pytest.fixture
 def appointment(monkeypatch):
     day = date.today().isoformat()
     payer = {'id': 'connection-a', 'stedi_payer_id': 'route-a', 'display_name': 'Example Health', 'category': 'commercial_medical',
-             'status': 'staff_guidance_enabled', 'rules': {'service_type_code': '98'}}
+             'status': 'staff_guidance_enabled', 'rules': {'service_type_code': '98',
+                                                         'collection_policy': COPAY_POLICY}}
     network = {'id': 'network-a', 'payer_connection_id': payer['id'], 'status': 'verified',
                'billing_npi': '1111111111', 'rendering_npi': '2222222222', 'location_id': 'office',
                'place_of_service': '11', 'plan_matcher': 'Choice Medical', 'effective_from': '2020-01-01',

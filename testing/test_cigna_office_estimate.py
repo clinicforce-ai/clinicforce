@@ -9,6 +9,7 @@ import pytest
 
 from app.api.routers import commercial_estimator as api
 from app.insurance import commercial, ecw_backend, identity, provider_specialty
+from testing.synthetic_policy import COPAY_POLICY
 
 
 DAY = '2026-10-09'
@@ -49,7 +50,8 @@ def finish(payload, inputs, source, review=None):
     if review:
         case['visit_review'] = {'context_token': api._visit_context_token(inputs, source), **review}
     result = {'benefits': api._case_benefits(payload, inputs, source, case), 'issues': [], 'checked_at': DAY + 'T12:00:00+00:00'}
-    with patch.object(api.commercial_store, 'list_connections', return_value=[]), \
+    route = {'stedi_payer_id': '62308', 'rules': {'collection_policy': COPAY_POLICY}}
+    with patch.object(api.commercial_store, 'list_connections', return_value=[route]), \
          patch.object(api.practice_prices, 'current', return_value=None), \
          patch.object(api.cpt_suggester.boto3, 'client', side_effect=RuntimeError('offline')):
         api._finish_previsit(result, case, inputs, source, payload, {'practice_id': 'synthetic-clinic'}, '62308')

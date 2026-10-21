@@ -5,12 +5,14 @@ requirement decisions. It never turns a suggestion into an approved fact.
 """
 from __future__ import annotations
 
-from app.insurance.identity import patient_benefits_bound
+from app.insurance.identity import generic_plan_label, patient_benefits_bound
+from app.insurance import network_participation
 
 
 def build(result: dict, source: dict) -> list[dict]:
     benefits = result.get('benefits') or {}
-    network = result.get('network_evidence') or {}
+    network = result.setdefault('network_evidence', {})
+    network['outcome'] = network_participation.outcome(benefits, network)
     requirements = result.get('requirement_evidence') or {}
     lines = (result.get('price_range') or {}).get('lines') or []
     identity = result.get('identity') or {}
@@ -38,12 +40,16 @@ def build(result: dict, source: dict) -> list[dict]:
     ], 'Member-bound exact insurance product',
         'Find a payer-confirmed enrollment or network identifier that distinguishes this product from similarly named plans.')
     matched_network = benefits.get('network_status') in {'in_network', 'out_of_network'}
-    product_linked = bool(network.get('document_id') and network.get('decision') == 'confirmed_participating')
+    product_linked = bool(network.get('document_id') and (network.get('decision') == 'confirmed_participating'
+        or network.get('decision') == 'in_network_contract_supported'
+        and network.get('product') and not generic_plan_label(network['product'])))
     record('product_mapping', product_linked, [
         ('eCW Coverage', 'plan label returned' if source.get('plan') else 'plan label not returned'),
         ('saved payer response', 'product label returned' if payer_names else 'exact product not returned' if checked else 'not checked'),
         ('clinic network configuration', network.get('decision') or 'no applicable decision'),
-        ('Clinical Library contract', 'exact linked document' if network.get('document_id') else
+        ('Clinical Library contract', 'dated group network attachment and product relationship'
+         if network.get('decision') == 'in_network_contract_supported' else
+         'exact linked document' if network.get('document_id') else
          'related document only' if network.get('related_document_id') else 'no exact linked document'),
     ], 'Exact member product linked to the clinic agreement',
         'Match the member product or network identifier to the signed agreement and exact provider, location and date scope.')
@@ -51,6 +57,8 @@ def build(result: dict, source: dict) -> list[dict]:
         ('saved payer response', benefits.get('network_source') or 'no provider-specific participation statement'),
         ('clinic network configuration', network.get('decision') or 'no applicable decision'),
     ], 'Provider participation tier for this member and visit',
+        'Confirm this rendering clinician participates in the contracted network for the visit date and office.'
+        if network.get('decision') == 'in_network_contract_supported' else
         'Resolve the exact payer product against the scoped clinic agreement or obtain a provider-specific payer decision.')
 
     approved = result.get('service_selection_status') == 'approved'
@@ -127,9 +135,21 @@ def build(result: dict, source: dict) -> list[dict]:
             'Record the payer approval reference and validity for the selected service.')
 
     guidance = result.get('collection_guidance') or {}
+    summary = result.get('encounter_summary') or {}
+    record('patient_share', summary.get('complete') is True and
+           summary.get('estimated_total_patient_min_cents') is not None and
+           summary.get('estimated_total_patient_max_cents') is not None, [
+        ('shared estimator', 'complete priced patient share' if summary.get('complete') else 'no complete patient share'),
+        ('referral and authorization', 'conditional estimate' if summary.get('conditional') else 'no open restriction recorded'),
+    ], 'Supported patient share for the planned services',
+        'Resolve the remaining product, network, benefit or allowance evidence; clinic collection policy is separate.')
     record('collection_amount', guidance.get('amount_cents') is not None, [
         ('shared estimator', guidance.get('basis') or 'no supported basis'),
-        ('clinic collection policy', 'approved decision applied' if result.get('collection_policy') else 'no approved policy applied'),
+        ('clinic collection rule', 'approved route decision applied' if guidance.get('collection_rule') else
+         'member QMB protection' if guidance.get('basis') == 'qmb_protection' else
+         'payer out-of-pocket limit' if guidance.get('basis') == 'out_of_pocket_limit' else
+         'visit-linked eCW billing instruction' if guidance.get('basis') == 'ecw_billing_note' else
+         'no applicable approved route decision'),
     ], 'Supported check-in instruction after service, benefits and clinic policy',
-        'Resolve the specific unresolved fields above, then recalculate this saved visit without another payer transaction.')
+        'Approve the applicable payer-route collection rule if the patient share is supported; otherwise resolve the specific unresolved fields above and recalculate without another payer transaction.')
     return rows

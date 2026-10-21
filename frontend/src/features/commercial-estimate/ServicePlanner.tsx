@@ -2,7 +2,7 @@ import { RequirementDecision } from './RequirementDecision'
 import { BotoxClinicalReview } from './BotoxClinicalReview'
 import { LineEvidenceReview } from './LineEvidenceReview'
 import { requirementForLine } from './requirementForLine'
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { ArrowRight, Check, Minus, Plus } from 'lucide-react'
 import type {
   PrevisitEstimate,
@@ -27,7 +27,7 @@ export function ServicePlanner({
   viewEstimate: (message?: string) => void
 }) {
   const available = result.available_codes || result.codes
-  const defaults = result.service_selection_status === 'approved' ? result.selected_ids || [] : []
+  const defaults = result.selected_ids || []
   const [selected, setSelected] = useState<string[]>(defaults)
   const [quantities, setQuantities] = useState<Record<string, number>>(() =>
     Object.fromEntries(
@@ -41,6 +41,8 @@ export function ServicePlanner({
     Object.fromEntries(available.map((row) => [row.id!, (row.modifiers || []).join(', ')])),
   )
   const [editError, setEditError] = useState('')
+  const autoSave = useRef<(continueToCollection: boolean) => Promise<void>>(async () => {})
+  const lastAutoAttempt = useRef('')
   const emgVisit = result.service_plan?.kind === 'emg_ncs'
   const botoxVisit =
     result.service_plan?.kind === 'botox' ||
@@ -51,6 +53,19 @@ export function ServicePlanner({
     )
   const [category, setCategory] = useState(emgVisit ? 'nerve' : botoxVisit ? 'other' : 'visit')
   const chosen = available.filter((row) => selected.includes(row.id!))
+  const scenarioAlternatives = result.provisional_scenario?.candidate_ids || []
+  const scenarioRules = scenarioAlternatives.map((id) => {
+    const row = available.find((candidate) => candidate.id === id)
+    return row && requirementForLine(result.requirement_evidence?.procedures || [], id, row.code)
+  })
+  const scenarioRule = (kind: 'referral' | 'authorization') => {
+    const statuses = scenarioRules.map((rule) => rule?.[kind]?.status)
+    return statuses.length &&
+      statuses.every((status) => status === statuses[0]) &&
+      statuses[0] !== 'Verification required'
+      ? statuses[0]
+      : 'Plan-specific rule not established for all alternatives'
+  }
   const nerve = available
     .filter((row) => groupOf(row) === 'nerve')
     .sort((a, b) => a.code.localeCompare(b.code))
@@ -162,6 +177,19 @@ export function ServicePlanner({
     }
     if (continueToCollection) viewEstimate()
   }
+  useEffect(() => {
+    autoSave.current = apply
+  })
+  useEffect(() => {
+    if (!changed || busy) return
+    const version = JSON.stringify({ selected, quantities, modifiers, botox, cashSelection })
+    if (lastAutoAttempt.current === version) return
+    const timer = window.setTimeout(() => {
+      lastAutoAttempt.current = version
+      void autoSave.current(false)
+    }, 500)
+    return () => window.clearTimeout(timer)
+  }, [changed, busy, selected, quantities, modifiers, botox, cashSelection])
   const groups = [
     { id: 'visit', label: 'Office visit', rows: office, single: true },
     { id: 'nerve', label: 'Nerve study', rows: nerve, single: true },
@@ -201,12 +229,20 @@ export function ServicePlanner({
         ))}
         {!chosen.length && (
           <span>
-            {result.price_range?.mode === 'alternatives'
-              ? 'Office consultation · final E/M level pending'
-              : 'No services selected'}
+            {result.provisional_scenario?.kind === 'ncs_study_count'
+              ? 'One NCS scenario · study count pending · CPT levels are alternatives'
+              : result.price_range?.mode === 'alternatives'
+                ? 'One office consultation · E/M level pending'
+                : 'No services selected'}
           </span>
         )}
       </div>
+      {scenarioAlternatives.length > 1 && !chosen.length && result.payment_mode !== 'cash' && (
+        <p className="visit-muted">
+          Referral: {scenarioRule('referral')}. Prior authorization: {scenarioRule('authorization')}
+          . Choose a CPT level to see its own rule and update the estimate.
+        </p>
+      )}
       <div className="service-category-buttons" aria-label="Service categories">
         {groups.map((group) => (
           <button
@@ -286,34 +322,39 @@ export function ServicePlanner({
                         ? `Cash / unit ${money(row.unit_cash_cents)}`
                         : 'Price follows plan and clinic schedule'}
                   </div>
-                  {result.payment_mode !== 'cash' && (
-                    <div className="procedure-requirements">
-                      <div>
-                        Referral:{' '}
-                        <RequirementDecision
-                          evidence={requirement?.referral}
-                          code={row.code}
-                          kind="referral"
-                          payerName={result.payer}
-                          needsCodeSelection={
-                            result.price_range?.mode === 'alternatives' && groupOf(row) === 'visit'
-                          }
-                        />
+                  {result.payment_mode !== 'cash' &&
+                    (included || result.price_range?.mode !== 'alternatives') && (
+                      <div className="procedure-requirements">
+                        <div>
+                          Referral:{' '}
+                          <RequirementDecision
+                            evidence={requirement?.referral}
+                            code={row.code}
+                            kind="referral"
+                            payerName={result.payer}
+                            needsCodeSelection={
+                              !included &&
+                              result.price_range?.mode === 'alternatives' &&
+                              ['visit', 'nerve'].includes(groupOf(row))
+                            }
+                          />
+                        </div>
+                        <div>
+                          Prior auth:{' '}
+                          <RequirementDecision
+                            evidence={requirement?.authorization}
+                            code={row.code}
+                            kind="prior authorization"
+                            payerName={result.payer}
+                            needsCodeSelection={
+                              !included &&
+                              result.price_range?.mode === 'alternatives' &&
+                              ['visit', 'nerve'].includes(groupOf(row))
+                            }
+                          />
+                        </div>
                       </div>
-                      <div>
-                        Prior auth:{' '}
-                        <RequirementDecision
-                          evidence={requirement?.authorization}
-                          code={row.code}
-                          kind="prior authorization"
-                          payerName={result.payer}
-                          needsCodeSelection={
-                            result.price_range?.mode === 'alternatives' && groupOf(row) === 'visit'
-                          }
-                        />
-                      </div>
-                    </div>
-                  )}
+                    )}
                   {included && !single && (
                     <div className="procedure-quantity">
                       <span>
@@ -432,7 +473,7 @@ export function ServicePlanner({
       <div className="visit-plan-footer">
         <span>
           {chosen.length} {chosen.length === 1 ? 'service' : 'services'}
-          {changed ? ' · Changes not applied' : ' · Current estimate'}
+          {changed ? ' · Saving and recalculating…' : ' · Current estimate'}
         </span>
         <button className="visit-primary" disabled={busy} onClick={() => void apply(true)}>
           {busy ? 'Updating estimate…' : 'Recalculate estimate'} <ArrowRight size={17} />

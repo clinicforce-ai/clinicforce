@@ -3,6 +3,7 @@ from datetime import date
 
 from app.api.schemas.commercial import VisitVerification
 from app.insurance import amount_explanation, collection_guidance, commercial, visit_estimate
+from testing.synthetic_policy import ADVANCE_POLICY
 
 
 def test_blue_plan_consultation_plus_nerve_study_uses_shared_pipeline():
@@ -43,6 +44,7 @@ def test_blue_plan_consultation_plus_nerve_study_uses_shared_pipeline():
     assert sum(line['calculation']['patient_cents'] + line['calculation']['plan_cents']
                for line in price['lines']) == price['allowed_max_cents'] == 20000
     result = {'payment_mode': 'insurance', 'payer': 'Synthetic Blue Plan',
+              'collection_policy': ADVANCE_POLICY,
               'service_selection_status': 'approved', 'selected_ids': [row['id'] for row in codes],
               'codes': codes, 'benefits': benefits, 'identity': identity, 'price_range': price,
               'plan_details': {'stedi': {'names': ['Synthetic Blue PPO']}}}

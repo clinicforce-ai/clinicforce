@@ -4,8 +4,8 @@ import { patientBenefitsBound as hasPatientBinding } from './identityBinding'
 import { firstSelectedCptIssue } from './selectedCptIssue'
 import { selectedRequirementIssue } from './selectedRequirementIssue'
 import { visitServiceLabel } from './visitServiceLabel'
+import { benefitPresentation } from './benefitPresentation'
 import type { CommercialEstimateActions } from './useCommercialEstimateActions'
-
 export function deriveCommercialEstimateView({
   result,
   appointments,
@@ -81,31 +81,12 @@ export function deriveCommercialEstimateView({
     !benefits.historical_only &&
     result?.eligibility_failure?.kind === 'provider_enrollment'
   const failure = staleEnrollmentFailure ? undefined : result?.eligibility_failure
-  const patientPrice =
-    benefits?.active === true &&
-    benefits.service_date_matches !== false &&
-    payerEvidenceSafe &&
-    financialSourceValid &&
-    networkConfirmed &&
-    result?.encounter_summary?.complete !== false &&
-    patientBenefitsBound &&
-    !benefits.has_secondary &&
-    result?.recovery?.reason_code !== 'multiple_active_policies' &&
-    price?.complete &&
-    price?.patient_min_cents != null &&
-    price.patient_max_cents != null
-      ? range(price.patient_min_cents, price.patient_max_cents)
-      : null
-  const calculationReasons = [
-    ...new Set((price?.lines || []).map((line) => line.benefits.benefit_summary).filter(Boolean)),
-  ]
-  const policySources = [
-    ...new Map(
-      (price?.lines || [])
-        .filter((line) => line.benefits.policy_evidence)
-        .map((line) => [line.benefits.policy_evidence!.url, line.benefits.policy_evidence!]),
-    ).values(),
-  ]
+  const { patientPrice, calculationReasons, policySources } = benefitPresentation(result, {
+    networkConfirmed,
+    payerEvidenceSafe,
+    financialSourceValid,
+    patientBenefitsBound,
+  })
   const cashPrice =
     price?.cash_complete && price.cash_min_cents != null && price.cash_max_cents != null
       ? range(price.cash_min_cents, price.cash_max_cents)
@@ -202,31 +183,36 @@ export function deriveCommercialEstimateView({
       ? 'Out of network for estimation · clinic inventory'
       : result?.network_evidence?.decision === 'excluded_under_available_agreement'
         ? 'Excluded under uploaded agreement'
-        : benefits?.active === true &&
-            !patientBenefitsBound &&
-            ['in_network', 'out_of_network'].includes(benefits.network_status || '')
-          ? 'Patient plan not matched'
-          : benefits?.network_status === 'in_network'
-            ? networkConfirmed
-              ? 'In network'
-              : 'Network not determined'
-            : benefits?.network_status === 'out_of_network'
-              ? outOfNetworkConfirmed
-                ? 'Out of network'
+        : result?.network_evidence?.decision === 'in_network_contract_supported' &&
+            patientBenefitsBound
+          ? 'Contract indicates in network'
+          : benefits?.active === true &&
+              !patientBenefitsBound &&
+              ['in_network', 'out_of_network'].includes(benefits.network_status || '')
+            ? 'Patient plan not matched'
+            : benefits?.network_status === 'in_network'
+              ? networkConfirmed
+                ? 'In network'
                 : 'Network not determined'
-              : contractCandidate
-                ? 'Contract match unavailable'
-                : 'Not determined'
+              : benefits?.network_status === 'out_of_network'
+                ? outOfNetworkConfirmed
+                  ? 'Out of network'
+                  : 'Network not determined'
+                : contractCandidate
+                  ? 'Contract match unavailable'
+                  : 'Not determined'
   const networkSource =
-    benefits?.network_source === 'clinic_library_contract'
-      ? 'Current Clinical Library contract'
-      : benefits?.network_source === 'clinic_library_absent'
-        ? 'No contract linked to this exact payer product and provider'
-        : benefits?.network_source === 'clinic_nonparticipation_rule'
-          ? 'Current scoped clinic nonparticipation rule'
-          : benefits?.network_source === 'clinic_contract_inventory'
-            ? 'Certified clinic contract inventory · not payer-confirmed'
-            : guidance?.network_source
+    result?.network_evidence?.decision === 'in_network_contract_supported'
+      ? 'Dated group agreement and product-network rule · clinician participation pending'
+      : benefits?.network_source === 'clinic_library_contract'
+        ? 'Current Clinical Library contract'
+        : benefits?.network_source === 'clinic_library_absent'
+          ? 'No contract linked to this exact payer product and provider'
+          : benefits?.network_source === 'clinic_nonparticipation_rule'
+            ? 'Current scoped clinic nonparticipation rule'
+            : benefits?.network_source === 'clinic_contract_inventory'
+              ? 'Certified clinic contract inventory · not payer-confirmed'
+              : guidance?.network_source
   const networkTone =
     !result || tooEarly || result.recovery?.state === 'pending'
       ? ''
@@ -325,6 +311,39 @@ export function deriveCommercialEstimateView({
         : supportedAmount
           ? money(guidance!.amount_cents!)
           : null
+  const provisionalAmount =
+    !readOnly &&
+    !cash &&
+    !previousEstimate &&
+    !calculating &&
+    !supportedAmount &&
+    result?.service_selection_status === 'preview' &&
+    (!!result.selected_ids?.length || result.provisional_scenario?.count === 1) &&
+    currentPayerAmount &&
+    !result.encounter_summary?.integrity_error &&
+    (price?.mode === 'services' || price?.mode === 'alternatives') &&
+    price.complete &&
+    price.patient_min_cents != null &&
+    price.patient_max_cents != null &&
+    price.patient_min_cents === result.planning_estimate?.min_cents &&
+    price.patient_max_cents === result.planning_estimate?.max_cents
+      ? price.patient_min_cents
+      : null
+  const provisionalAmountText =
+    provisionalAmount == null
+      ? null
+      : price?.patient_max_cents != null && price.patient_max_cents !== provisionalAmount
+        ? range(provisionalAmount, price.patient_max_cents)
+        : money(provisionalAmount)
+  const estimatedShare =
+    !cash &&
+    !calculating &&
+    !previousEstimate &&
+    !supportedAmount &&
+    provisionalAmount == null &&
+    price?.mode === 'services'
+      ? patientPrice
+      : null
   const deferred = !cash && guidance?.basis === 'claim_after_service' && !!amount
   const amountText =
     readOnly && !result?.collection_guidance && !cash
@@ -332,6 +351,8 @@ export function deriveCommercialEstimateView({
       : calculating
         ? 'Calculating…'
         : (amount ??
+          provisionalAmountText ??
+          estimatedShare ??
           (error
             ? 'Check visit details'
             : tooEarly
@@ -342,14 +363,20 @@ export function deriveCommercialEstimateView({
   const amountLabel = previousEstimate
     ? 'Previous estimate · needs recheck'
     : readOnly
-      ? 'Recorded recommendation at this visit'
+      ? estimatedShare
+        ? 'Recorded estimated patient share · do not collect'
+        : 'Recorded recommendation at this visit'
       : error
         ? 'Visit needs review'
         : result?.cash_fallback
           ? 'Self-pay option for this visit'
-          : !amount && !cash
-            ? 'Collection decision needed'
-            : 'Amount to collect now'
+          : provisionalAmount != null
+            ? 'Provisional patient estimate · do not collect'
+            : estimatedShare
+              ? 'Estimated patient share · do not collect'
+              : !amount && !cash
+                ? 'Collection decision needed'
+                : 'Amount to collect now'
   const amountParts = result?.encounter_summary?.components
   const officeDeductible = guidance?.services.find(
     (service) => service.code === officeCopayLine?.code,
@@ -398,7 +425,12 @@ export function deriveCommercialEstimateView({
     emgScenario && !calculating && !/nerve testing/i.test(baseExplanation)
       ? `${baseExplanation} ${emg.total_min_cents != null ? 'The nerve-testing total below is for planning only' : 'Nerve testing is excluded because its patient cost is unknown'}.`
       : baseExplanation
-  const summaryExplanation = explanation
+  const summaryExplanation =
+    provisionalAmount != null
+      ? result?.provisional_scenario?.kind === 'ncs_study_count'
+        ? 'Estimated patient share across alternative NCS study counts. Muscle testing is excluded unless documented. Do not collect this planning range.'
+        : 'Estimated patient share for the provisional CPT scenario. Review the services and requirements before collecting.'
+      : explanation
   const provider = result?.appointment_context?.rendering_provider?.name
   const anticipatedService = visitServiceLabel(result)
   return {
@@ -448,6 +480,8 @@ export function deriveCommercialEstimateView({
     emgScenario,
     cashAmount,
     amount,
+    provisionalAmount,
+    estimatedShare,
     deferred,
     amountText,
     amountLabel,

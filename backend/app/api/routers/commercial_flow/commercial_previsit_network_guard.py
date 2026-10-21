@@ -2,8 +2,11 @@
 from __future__ import annotations
 
 import re
+import hashlib
+import json
 
-from app.insurance import inventory_certification, library_network_exclusions
+from app.core import object_store
+from app.insurance import commercial, group_contract_support, inventory_certification, library_network_exclusions
 from app.insurance.identity import patient_benefits_bound
 
 
@@ -54,6 +57,40 @@ def recheck_saved_inventory(result: dict, case: dict, practice_id: str, payer: d
     if result.get('agreement_exclusion'):
         result['network_evidence'] = {**result['agreement_exclusion'],
             'reason': 'The product remains excluded under the uploaded agreement, but the inventory certification no longer applies to this visit.'}
+
+
+def recheck_saved_network_evidence(result: dict, case: dict, practice_id: str, payer: dict | None) -> None:
+    """Project current contract support from saved case context without a payer call or write."""
+    recheck_saved_inventory(result, case, practice_id, payer)
+    benefits = result.get('benefits') or {}
+    if (not payer or payer.get('status') != 'staff_guidance_enabled'
+            or benefits.get('network_status') != 'unknown' or result.get('agreement_exclusion')
+            or (result.get('network_evidence') or {}).get('decision') not in
+               {None, 'lacking_applicable_network_evidence'}):
+        return
+    context = case.get('previsit_context') or {}
+    plan = ((result.get('plan_details') or {}).get('stedi') or {})
+    if not plan.get('identified_product') and case.get('previsit_raw_sha256') and case.get('previsit_raw_object_key'):
+        try:
+            raw = object_store.get_object_bytes(case['previsit_raw_object_key'])
+            if hashlib.sha256(raw).hexdigest() == case['previsit_raw_sha256']:
+                parsed = commercial.plan_details(json.loads(raw))
+                if parsed.get('identified_product') and parsed.get('names') == plan.get('names'):
+                    plan = parsed
+                    result.setdefault('plan_details', {})['stedi'] = parsed
+        except Exception:
+            pass  # Keep the frozen projection when its protected raw response cannot be reopened.
+    names = [plan['identified_product']] if plan.get('identified_product') else plan.get('names') or []
+    source = ((case.get('previsit_discovery') or {}).get('pricing_source')
+              or context.get('source') or {})
+    identity = result.get('identity') or benefits.get('identity') or {}
+    exact = {**source, 'payer_plan_bound': benefits.get('active') is True
+             and benefits.get('service_date_matches') is True and patient_benefits_bound(identity),
+             'payer_plan_names': names, 'payer_network_names': plan.get('network_names') or []}
+    supported = group_contract_support.resolve(practice_id, payer, context.get('inputs') or {},
+                                               exact, result, benefits)
+    if supported:
+        result['network_evidence'] = supported
 
 
 def recheck_saved_payer_message(result: dict, case: dict) -> None:

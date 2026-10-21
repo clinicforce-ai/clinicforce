@@ -43,7 +43,9 @@ def build(result: dict, review: dict | None = None) -> dict:
                            'Out of network' if verified_out_of_network(benefits) else
                            ('Network not established' if candidate_network or
                             (result.get('network_evidence') or {}).get('network_name') else 'Not reported'),
-                'network_source': ('Payer statement about the requesting provider' if verified_in_network(benefits) and benefits.get('network_source') == 'payer_participation_message' else
+                'network_source': ('Dated Clinical Library group agreement and product-network rule; clinician participation unresolved'
+                                   if (result.get('network_evidence') or {}).get('decision') == 'in_network_contract_supported' else
+                                   'Payer statement about the requesting provider' if verified_in_network(benefits) and benefits.get('network_source') == 'payer_participation_message' else
                                    'Current Clinical Library contract and clinic provider-network record' if verified_in_network(benefits) and benefits.get('network_source') == 'clinic_library_contract' else
                                    'No contract linked to this exact payer product and provider' if benefits.get('network_source') == 'clinic_library_absent' else
                                    'Payer and clinic provider participation evidence conflict' if participation_conflict(benefits) else
@@ -156,23 +158,26 @@ def build(result: dict, review: dict | None = None) -> dict:
         guidance.update(status='zero_advance', basis='qmb_protection',
             reason='Confirmed member-bound QMB protection prohibits collecting Medicare cost sharing at check-in.')
     policy = result.get('collection_policy') if isinstance(result.get('collection_policy'), dict) else {}
-    positive_policy_missing = (amount is not None and amount > 0
-        and verified_out_of_network(benefits)
-        and not (policy.get('mode') == 'defer_to_claim' and policy.get('approved_by')
-                 and policy.get('approved_at') and policy.get('reference')
-                 and policy.get('allow_supported_oon_advance') is True
-                 and (not any(line.get('allowed_basis') == 'cms_original_medicare_estimate' for line in lines)
-                      or policy.get('allow_cms_based_advance') is True)))
-    if positive_policy_missing:
-        amount = None
-        guidance['positive_advance_policy_missing'] = True
+    policy_approved = bool(policy.get('approved_by') and policy.get('approved_at') and policy.get('reference'))
+    policy_mode = policy.get('mode') if policy_approved else None
+    oon_advance = (not verified_out_of_network(benefits) or
+        policy.get('allow_supported_oon_advance') is True and
+        (not any(line.get('allowed_basis') == 'cms_original_medicare_estimate' for line in lines)
+         or policy.get('allow_cms_based_advance') is True))
+    fixed_copay = guidance['basis'] == 'office_copay' or strict.get('status') == 'copay_only'
     published_copay = any((line.get('benefits') or {}).get('published_plan_rule') for line in lines)
-    if amount is not None and amount > 0 and published_copay:
-        policy = result.get('collection_policy') or {}
-        if not (policy.get('mode') == 'collect_verified_copay' and policy.get('approved_by')
-                and policy.get('approved_at') and policy.get('reference')):
-            amount = None
-            guidance['published_copay_policy_missing'] = True
+    policy_allows_advance = (policy_mode == 'collect_verified_copay' if published_copay else
+        policy_mode == 'collect_supported_advance' or
+        fixed_copay and policy_mode == 'collect_verified_copay' or
+        verified_out_of_network(benefits) and policy_mode == 'defer_to_claim'
+        and policy.get('allow_supported_oon_advance') is True)
+    if (amount is not None and amount > 0 and guidance['basis'] != 'ecw_billing_note'
+            and not (oon_advance and policy_allows_advance)):
+        amount = None
+        guidance['published_copay_policy_missing' if published_copay else 'positive_advance_policy_missing'] = True
+    if amount is not None and amount > 0 and policy_approved and guidance['basis'] != 'ecw_billing_note':
+        guidance['collection_rule'] = {'mode': policy_mode, 'reference': policy['reference'],
+                                       'approved_at': policy['approved_at']}
     failure_codes = set((result.get('eligibility_failure') or {}).get('codes') or [])
     if not active_payer_benefits and failure_codes & {'72', '73', '65', '67', '71', '75', '76'}:
         actions.append('Contact your insurer to confirm the member ID, policyholder name and date of birth. Bring the corrected insurance details.')
@@ -193,6 +198,8 @@ def build(result: dict, review: dict | None = None) -> dict:
         guidance.update(status='action_required', basis='missing_collection_inputs')
         if guidance.get('published_copay_policy_missing'):
             guidance['reason'] = 'The published plan specialist copay is supported, but this payer route has no administrator-approved fixed-copay collection policy.'
+        elif guidance.get('positive_advance_policy_missing'):
+            guidance['reason'] = 'The patient share can be estimated, but this payer route has no approved policy for this check-in advance.'
         elif source_errors:
             guidance['reason'] = (
                 'The protected saved payer response could not be reopened. Rerun the payer check before collecting.'
@@ -248,8 +255,6 @@ def build(result: dict, review: dict | None = None) -> dict:
             guidance['reason'] = failure.get('detail') or next((issue for issue in result.get('issues', []) if issue), None) or 'Current payer benefits are unavailable, and the remaining information does not establish a collection amount.'
         elif benefits.get('service_date_matches') is False:
             guidance['reason'] = 'The payer response covers a different date. Benefits for this appointment are needed to calculate its collection amount.'
-        elif positive_policy_missing:
-            guidance['reason'] = 'The calculated out-of-network advance is not authorized by the clinic collection policy. An administrator must approve positive collection for this payer route.'
         elif unapproved_services:
             guidance['reason'] = 'The planned CPTs are a provisional preview. The doctor must approve the intended services before a service-based advance is requested.'
         elif price.get('service_issues'):
@@ -269,6 +274,10 @@ def build(result: dict, review: dict | None = None) -> dict:
             guidance.update(amount_cents=0, status='zero_advance', basis='claim_after_service',
                 patient_message=('Collect $0 today under the clinic deferral policy. Submit the insurance claim. '
                                  'bill a later patient share only if the processed claim and member protections permit it.'))
+            guidance['collection_rule'] = {'mode': policy['mode'], 'reference': policy['reference'],
+                                           'approved_at': policy['approved_at']}
+            guidance['deferred_supported_share'] = encounter_summary.build(
+                {**result, 'collection_guidance': guidance}, review)['complete']
         elif active_payer_benefits:
             guidance['policy_setup_required'] = True
     for line in lines:

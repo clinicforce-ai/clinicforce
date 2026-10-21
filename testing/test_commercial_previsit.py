@@ -77,6 +77,12 @@ class PrevisitFlowTest(unittest.IsolatedAsyncioTestCase):
     async def test_uncoded_new_visit_requests_real_office_benefits_before_pricing(self):
         await self._flow(date.today().isoformat())
 
+    async def test_documented_95908_is_the_same_provisional_code_in_ui_and_pricing(self):
+        await self._flow(date.today().isoformat(), scheduled_code='95908')
+
+    async def test_emg_review_creates_one_ncs_range_without_muscle_work(self):
+        await self._flow(date.today().isoformat(), emg_review=True)
+
     async def test_far_future_visit_does_not_query_stedi_even_on_refresh(self):
         for offset in (8, 56):
             await self._flow((date.today() + timedelta(days=offset)).isoformat(), refresh=True, too_early=True)
@@ -109,7 +115,7 @@ class PrevisitFlowTest(unittest.IsolatedAsyncioTestCase):
     async def test_newer_conflicting_ecw_check_refreshes_cached_stedi_evidence(self):
         await self._flow(date.today().isoformat(), newer_ecw=True)
 
-    async def _flow(self, service_date, reject=False, retry_basic=False, payer_missing=False, refresh=False, newer_ecw=False, too_early=False, self_pay=False, coverage_start=None, saved_hold=False, enrollment_missing=False, ecw_saved=False, ecw_incomplete=False, medicare_secondary=False, billing_note=None, member_id_missing=False, card_fields=None, card_conflict=False, card_status=None, pos=None):
+    async def _flow(self, service_date, reject=False, retry_basic=False, payer_missing=False, refresh=False, newer_ecw=False, too_early=False, self_pay=False, coverage_start=None, saved_hold=False, enrollment_missing=False, ecw_saved=False, ecw_incomplete=False, medicare_secondary=False, billing_note=None, member_id_missing=False, card_fields=None, card_conflict=False, card_status=None, pos=None, scheduled_code=None, emg_review=False):
         session = {"practice_id": "clinic", "intake_id": "intake", "patient_id": "patient",
                    "share_manifest_id": "", "staff": {"id": "staff", "display_name": "Staff", "practice_name": "Clinic"},
                    "intake": {"updated_at": "version", "patient": {"given_name": "Pat", "family_name": "Example",
@@ -121,6 +127,10 @@ class PrevisitFlowTest(unittest.IsolatedAsyncioTestCase):
                   "rendering_provider": {"npi": "1234567890"}}
         if pos:
             inputs['place_of_service'] = pos
+        if scheduled_code:
+            inputs['lines'] = [{'id': 'documented-service', 'code': scheduled_code,
+                                'service_status': 'scheduled', 'units': 1,
+                                'source': 'eCW ServiceRequest'}]
         source = {"appointment_id": "visit-1", "_patient_id": "p", "coverage_id": "coverage-1", "active_coverages": 1,
                   "payer": "Blue Cross Blue Shield Tx", "plan": "CI", "rendering_provider": {"npi": "1234567890", "first_name": "Ada", "last_name": "Clinician"},
                   "billing_provider": {"name": "Clinic", "npi": "1811853260"}, "location_id": "office"}
@@ -139,7 +149,10 @@ class PrevisitFlowTest(unittest.IsolatedAsyncioTestCase):
             inputs['patient'].update(gender='F', address={'address1': '1 Main St', 'city': 'Austin', 'state': 'TX', 'postalCode': '78701'})
         scoped_ecw_contract = ecw_saved and not ecw_incomplete
         connection = {'id': 'payer-a', 'stedi_payer_id': 'QDTRP', 'status': 'staff_guidance_enabled',
-                      'category': 'commercial_medical', 'display_name': 'Blue Cross Blue Shield Tx', 'aliases': []}
+                      'category': 'commercial_medical', 'display_name': 'Blue Cross Blue Shield Tx', 'aliases': [],
+                      'rules': {'collection_policy': {'mode': 'collect_verified_copay',
+                          'approved_by': 'synthetic-admin', 'approved_at': '2026-10-01T12:00:00Z',
+                          'reference': 'Synthetic fixed copay policy'}}}
         network = {'id': 'network-a', 'network_name': 'Blue Choice PPO', 'plan_matcher': 'CI',
                    'evidence_reference': 'library:synthetic-contract'}
         profile = {'rules': {}, 'plan_matcher': 'CI'}
@@ -150,6 +163,10 @@ class PrevisitFlowTest(unittest.IsolatedAsyncioTestCase):
                 'updated_at': (datetime.now(timezone.utc) - timedelta(minutes=1)).isoformat()}]
         if coverage_start:
             source['coverage_period'] = {'start': coverage_start}
+        if emg_review:
+            from app.api.routers.commercial_flow.commercial_previsit_finish import _visit_context_token
+            case['visit_review'] = {'emg_required': True,
+                                    'context_token': _visit_context_token(inputs, source)}
         if saved_hold:
             session['intake']['workflows'] = {'saved': 'held-case'}
         held_cases = [{'previsit_context': {'source': {'appointment_id': 'visit-1'}},
@@ -195,6 +212,26 @@ class PrevisitFlowTest(unittest.IsolatedAsyncioTestCase):
             scoped_patches.enter_context(patch("app.api.routers.commercial_estimator.commercial_store.matching_rates",
                                                return_value=[]))
             result = await previsit_estimate(PrevisitInput(appointment_id="visit-1", refresh_benefits=refresh if too_early else False), MagicMock())
+            if emg_review:
+                self.assertEqual(result['service_selection_status'], 'preview')
+                self.assertEqual(result['selected_service_count'], 1)
+                self.assertEqual(result['provisional_scenario']['kind'], 'ncs_study_count')
+                self.assertEqual(result['price_range']['mode'], 'alternatives')
+                self.assertEqual([row['code'] for row in result['codes']],
+                                 [str(code) for code in range(95907, 95914)])
+                self.assertEqual([row['code'] for row in result['price_range']['lines']],
+                                 [str(code) for code in range(95907, 95914)])
+                self.assertFalse(any(row['code'] in {'95885', '95886'} for row in result['codes']))
+                self.assertIsNone(result['collection_guidance']['amount_cents'])
+                return
+            if scheduled_code:
+                self.assertEqual(result['service_selection_status'], 'preview')
+                self.assertEqual(result['selected_ids'], ['documented-service'])
+                self.assertEqual([row['code'] for row in result['codes']], [scheduled_code])
+                self.assertEqual([row['id'] for row in result['codes']], result['selected_ids'])
+                self.assertEqual([row['code'] for row in result['price_range']['lines']], [scheduled_code])
+                self.assertIsNone(result['collection_guidance']['amount_cents'])
+                return
             if card_conflict:
                 self.assertEqual(result['card_check']['status'], 'conflict')
                 self.assertEqual(result['eligibility_failure']['kind'], 'card_conflict')

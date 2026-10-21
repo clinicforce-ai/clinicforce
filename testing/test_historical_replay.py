@@ -202,7 +202,7 @@ def test_synthetic_bedrock_plan_requires_doctor_selection_and_emg_only_has_no_em
         {'reason': 'Consultation and nerve testing', 'visit_type': 'new',
          'emg_required': True}, {}, available)
     assert proposal['method'] == 'llm'
-    assert proposal['recommended_ids'] == ['ncs', 'emg', 'office']
+    assert proposal['recommended_ids'] == ['office']
     # The model proposes; only the explicitly selected subset reaches replay.
     lines = [{'id': row['id'], 'code': row['code'], 'units': 1, 'modifiers': []}
              for row in available if row['id'] in {'ncs', 'emg'}]

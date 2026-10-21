@@ -4,6 +4,7 @@ from copy import deepcopy
 import pytest
 
 from app.insurance import collection_guidance, commercial, visit_estimate
+from testing.synthetic_policy import COPAY_POLICY
 
 DAY = '2026-10-01'
 RULES = {'cost_share': 'payer_returned', 'office_service_types': ['BQ', 'BY', '98'], 'place_of_service': '11'}
@@ -47,6 +48,7 @@ def replay(raw, *, confirmed_network=True, place_of_service=None):
         benefits['network_status'] = 'in_network'
         benefits['network_source'] = 'clinic_library_contract'
     result = {'benefits': benefits, 'price_range': price,
+              'collection_policy': COPAY_POLICY,
               'planning_estimate': visit_estimate.planning_estimate(price, benefits, benefits['identity'])}
     return collection_guidance.build(result), price['lines'][0]['benefits']
 

@@ -9,6 +9,7 @@ import pytest
 
 from app.api.routers import commercial_estimator as api
 from app.insurance import commercial, collection_guidance, cpt_suggester, stedi_payers, visit_estimate
+from testing.synthetic_policy import COPAY_POLICY
 
 
 def benefit(kind, amount, label, stc='98', pos='11'):
@@ -36,7 +37,7 @@ def test_specialist_wins_over_general_and_pcp_but_conflicting_specialists_stay_u
     terms = normalize(raw)
     assert terms['copay_cents'] == 5000
     assert not any('conditional benefit' in r for r in terms['review_reasons'])
-    r = {'identity': {'status': 'matched', 'binding': 'synthetic-current-binding', 'match_version': 2}, 'benefits': {'active': True}, 'price_range': {'mode': 'services', 'lines': [
+    r = {'collection_policy': COPAY_POLICY, 'identity': {'status': 'matched', 'binding': 'synthetic-current-binding', 'match_version': 2}, 'benefits': {'active': True}, 'price_range': {'mode': 'services', 'lines': [
         {'code': '99203', 'units': 1, 'benefits': terms}]}}
     guidance = collection_guidance.build(r)
     assert guidance['amount_cents'] is None
@@ -71,7 +72,7 @@ def test_combined_booking_survives_without_llm_and_sp_abbreviation_is_clinic_sco
         assert [rows[key] for key in plan['recommended_ids']] == ['62270']
         inputs.update(reason='Follow up; skin biopsy; 3 sites; EMG', appointment_reason='')
         plan = cpt_suggester.recommend_visit_plan(inputs, {}, available)
-        assert set(rows[key] for key in plan['recommended_ids']) == {'11104', '11105', '95907', '95886'}
+        assert set(rows[key] for key in plan['recommended_ids']) == {'11104', '11105'}
         assert plan['recommended_units'][next(k for k in plan['recommended_ids'] if rows[k] == '11105')] == 2
     assert not visit_estimate.is_spinal_tap({'appointment_reason': 'SP'})
     assert not visit_estimate.is_spinal_tap({'reason': 'Review spinal tap results'})

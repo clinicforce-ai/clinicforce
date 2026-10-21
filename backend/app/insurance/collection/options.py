@@ -15,12 +15,14 @@ def emg_option(result: dict, rates: list[dict], rules: dict, payload: dict | Non
               'message': 'Select EMG / nerve testing to calculate its additional patient cost.', 'scenario_count': 0}
     codes = result.get('codes') or []
     testing = [row for row in codes if row['code'] in cpt_rules.NCS_CODES | cpt_rules.EMG_ADD_ONS]
-    option['included'] = any(row['code'] in cpt_rules.EMG_ADD_ONS for row in testing)
+    option['included'] = bool(testing)
     if not option['requested'] and not option['included']:
         return option
     baseline = [row for row in codes if row not in testing]
     if not baseline:
-        option['message'] = 'An office consultation is needed as the comparison for additional testing cost.'
+        option['message'] = ('The booked NCS service is already in the visit estimate. '
+                             'Needle muscle work is excluded unless documented.' if testing else
+                             'An office consultation is needed as the comparison for additional testing cost.')
         return option
     alternatives = result.get('price_range', {}).get('mode') == 'alternatives'
     baselines = [[row] for row in baseline] if alternatives else [baseline]

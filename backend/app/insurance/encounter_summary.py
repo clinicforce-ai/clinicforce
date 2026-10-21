@@ -42,7 +42,6 @@ def build(result: dict, review: dict | None = None) -> dict:
         or benefits.get('coverage_status_conflict') or benefits.get('coverage_dates_invalid')
         or selected_service_blocker(benefits.get('network_status') or 'unknown', identity, lines) is not None
         or participation_conflict(benefits) or benefits.get('historical_only') or benefits.get('source_errors')
-        or requirement_blocker(result) is not None
         or any((line.get('benefits') or {}).get('source_errors') for line in lines))
     priced = bool(price.get('cash_complete') if cash else price.get('complete'))
     priced = priced and not price.get('service_issues') and not unsupported_insurance
@@ -123,7 +122,7 @@ def build(result: dict, review: dict | None = None) -> dict:
     if (integrity_error and guidance.get('basis') in {'patient_obligations', 'anticipated_services',
                                                       'calculation_conflict'} and not clinic_zero_instruction):
         collect = None
-    if unsupported_insurance and collect is not None and not clinic_zero_instruction:
+    if (unsupported_insurance or requirement_blocker(result) is not None) and collect is not None and not clinic_zero_instruction:
         collect = None
     office = [line for line in lines if str(line.get('code') or '').isdigit() and
               (99202 <= int(line['code']) <= 99205 or 99212 <= int(line['code']) <= 99215)]

@@ -396,7 +396,7 @@ export function RequirementCard({
             : status === 'Not required'
               ? 'No'
               : needsCodeSelection
-                ? 'Select E/M CPT'
+                ? 'Choose CPT level'
                 : missingRuleAction}
         </strong>
         {evidence && (
@@ -462,7 +462,9 @@ export function RequirementCards({
           Referral and prior authorization
           <strong>
             {needsCodeSelection
-              ? 'Select the clinician-documented CPT'
+              ? result.provisional_scenario?.kind === 'ncs_study_count'
+                ? 'Choose a planning study-count level to narrow these rules'
+                : 'Choose an anticipated CPT level to narrow these rules'
               : 'Document the planned CPT in eCW'}
           </strong>
         </div>

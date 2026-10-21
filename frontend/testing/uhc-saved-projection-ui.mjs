@@ -431,7 +431,7 @@ try {
       )
       const requirementAction =
         result.price_range.mode === 'alternatives'
-          ? '<strong>Select E/M CPT</strong>'
+          ? '<strong>Choose CPT level</strong>'
           : '<strong>Document the planned CPT in eCW</strong>'
       assert(
         referral.includes(requirementAction) && authorization.includes(requirementAction),
@@ -445,13 +445,13 @@ try {
       assert(!result.payment_explanation.sentence.includes(';'), `${name}: one-line reason`)
       const sharedRequirement =
         result.price_range.mode === 'alternatives'
-          ? 'Select the clinician-documented CPT'
+          ? 'Choose an anticipated CPT level to narrow these rules'
           : 'Document the planned CPT in eCW'
       assert(
         overview.includes(`Referral and prior authorization<strong>${sharedRequirement}</strong>`),
         `${name}: one combined requirement status`,
       )
-      assert(!overview.includes('<strong>Select E/M CPT</strong>'))
+      assert(!overview.includes('<strong>Choose CPT level</strong>'))
       assert.equal(
         (overview.match(/<strong>Document the planned CPT in eCW<\/strong>/g) || []).length,
         result.price_range.mode === 'alternatives' ? 0 : 1,
@@ -999,8 +999,10 @@ try {
       result: requiredAuthorization,
     }),
   )
-  assert.equal(requiredModel.amountText, 'Insured amount unavailable')
-  assert.equal(requiredAuthorization.encounter_summary.estimated_total_patient_min_cents, null)
+  assert.equal(requiredModel.amountText, '$80.00')
+  assert.equal(requiredModel.amountLabel, 'Recorded estimated patient share · do not collect')
+  assert.equal(requiredAuthorization.encounter_summary.estimated_total_patient_min_cents, 8000)
+  assert.equal(requiredAuthorization.collection_guidance.amount_cents, null)
   assert(requiredOverview.includes('approval and record its reference for CPT 93000'))
   assert(!requiredOverview.includes('What the arrival amount includes'))
   console.log(

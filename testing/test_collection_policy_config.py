@@ -14,6 +14,9 @@ from app.insurance import commercial_store
 def test_admin_route_requires_a_policy_reference_and_admin_role(monkeypatch):
     with pytest.raises(ValidationError):
         api.CollectionPolicyInput(mode='defer_to_claim', reference='')
+    assert api.CollectionPolicyInput(mode='collect_supported_advance',
+        reference='Clinic policy approved 2026').mode == 'collect_supported_advance'
+    assert 'collect_supported_advance' in api.CollectionPolicyInput.model_json_schema()['properties']['mode']['enum']
     value = api.CollectionPolicyInput(mode='defer_to_claim', reference='Clinic policy approved 2026')
     monkeypatch.setattr(api, '_session', AsyncMock(return_value={
         'practice_id': 'clinic', 'staff': {'id': 'clinician', 'role': 'staff'}}))

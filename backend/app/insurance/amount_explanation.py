@@ -75,6 +75,10 @@ def _cash_cause(result: dict, failure: dict, recovery: dict, card: dict, network
             and active_benefits and network == 'unknown'):
         return ('FEP Blue Basic PSHB is identified, but this rendering provider has no verified FEP Preferred participation for the visit',
                 'fep_preferred_unresolved')
+    if (result.get('network_evidence') or {}).get('decision') == 'in_network_contract_supported':
+        name = result['network_evidence']['network_name']
+        return (f'NMCT has a {name} group contract, but this rendering clinician’s participation is not established for this visit',
+                'provider_credentialing_unresolved')
     if reason in {'no_coverage_found', 'upstream_no_policies'} and not active_benefits:
         return 'the completed insurance search returned no policy for this patient', 'no_policy_returned'
     line_blocker = selected_service_blocker(network, identity, lines)
@@ -89,7 +93,9 @@ def _cash_cause(result: dict, failure: dict, recovery: dict, card: dict, network
     if participation_conflict(benefits):
         return 'provider participation evidence conflicts for this plan and provider', 'provider_network_conflict'
     if result.get('service_selection_status') == 'preview':
-        return 'the planned CPTs have not been approved by the doctor for this visit', 'planned_cpt_unselected'
+        return ('the selected service scenario is provisional and must be reviewed before collection'
+                if result.get('selected_ids') or result.get('provisional_scenario') else
+                'the appointment does not yet support a specific selected CPT scenario'), 'planned_cpt_unselected'
     exclusion = result.get('network_evidence') or {}
     if network == 'unknown' and (exclusion.get('status') == 'excluded_under_available_agreement'
                                  or exclusion.get('decision') == 'excluded_under_available_agreement'):
@@ -134,7 +140,9 @@ def _cash_cause(result: dict, failure: dict, recovery: dict, card: dict, network
     if network != 'out_of_network' and benefits.get('network_source') == 'clinic_library_absent':
         return 'the Clinical Library contract is not linked to this plan and provider', 'clinic_contract_missing'
     if (result.get('price_range') or {}).get('mode') == 'alternatives':
-        return 'the office visit still has multiple possible E/M CPT levels and no clinician-selected code', 'planned_cpt_unselected'
+        return ('the booked NCS service has alternative CPT levels because its study count is undocumented'
+                if (result.get('provisional_scenario') or {}).get('kind') == 'ncs_study_count' else
+                'the office visit has alternative E/M CPT levels'), 'planned_cpt_unselected'
     if (benefits.get('active') is True
             and not (result.get('service_plan') or {}).get('selected_codes')
             and not (result.get('service_plan') or {}).get('alternatives')
@@ -249,10 +257,14 @@ def build(result: dict, guidance: dict, review: dict | None = None) -> dict:
         if basis == 'claim_after_service':
             cause, code = _cash_cause(result, failure, recovery, card, network, benefits, unpriced, missing,
                                       guidance.get('source_errors'))
-            if guidance.get('positive_advance_policy_missing'):
-                sentence = ('Collect $0 today under NMCT’s approved defer-to-claim policy because positive '
-                            'out-of-network advance collection is not approved; final patient liability follows the processed claim')
-                code = 'collection_policy_approval_required'
+            if guidance.get('deferred_supported_share'):
+                sentence = ('Collect $0 today under NMCT’s approved defer-to-claim policy; '
+                            'the estimated patient share is separate and final liability follows the processed claim')
+                code = 'collection_deferred'
+            elif guidance.get('positive_advance_policy_missing'):
+                sentence = ('Collect $0 today under NMCT’s approved defer-to-claim policy; '
+                            'a positive advance is not authorized and final liability follows the processed claim')
+                code = 'collection_deferred'
             elif code == 'clinic_agreement_exclusion':
                 sentence = (f'Collect $0 today under NMCT’s approved defer-to-claim policy because {cause}; '
                             'final patient liability follows the processed claim')
@@ -377,7 +389,7 @@ def build(result: dict, guidance: dict, review: dict | None = None) -> dict:
             sentence, code = ('FEP Blue Basic PSHB coverage is active, but the rendering provider’s FEP Preferred status is not established for this visit, so no insured amount is ready',
                               'fep_preferred_unresolved')
         elif guidance.get('positive_advance_policy_missing'):
-            sentence, code = ('The calculated out-of-network share is not approved for advance collection, so a clinic administrator must approve this payer’s collection policy before requesting payment',
+            sentence, code = ('The patient share is estimated, but this payer route has no approved policy for that check-in advance',
                               'collection_policy_approval_required')
         elif basis == 'calculation_conflict':
             sentence, code = guidance.get('reason', 'Recalculate the insured estimate before collecting').rstrip('.'), 'calculation_conflict'
