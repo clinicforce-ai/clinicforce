@@ -4,6 +4,7 @@ from copy import deepcopy
 import pytest
 
 from app.insurance import commercial, collection_guidance, encounter_summary, visit_estimate
+from testing.synthetic_policy import ADVANCE_POLICY
 
 DAY = '2026-10-08'
 
@@ -33,7 +34,8 @@ def run(raw, codes=None, rates=None):
     price = visit_estimate.price_lines(codes or [{'id': 'office', 'code': '99214', 'units': 1}],
         rates if rates is not None else [{'code': '99214', 'allowed_cents': 20000}], benefits,
         {'cost_share': 'payer_returned'}, payload=raw, service_date=DAY)
-    guidance = collection_guidance.build({'benefits': benefits, 'price_range': price})
+    guidance = collection_guidance.build({'benefits': benefits, 'price_range': price,
+                                          'collection_policy': ADVANCE_POLICY})
     return benefits, price, guidance
 
 
@@ -138,7 +140,7 @@ def test_sanitized_neurology_visit_keeps_copay_when_testing_rates_are_missing():
     rates = [{'code': '99204', 'allowed_cents': 15000, 'cash_cents': 25000}]
     price = visit_estimate.price_lines(codes, rates, benefits, {'cost_share': 'payer_returned'},
                                        payload=raw, service_date=DAY)
-    result = {'benefits': benefits, 'price_range': price}
+    result = {'benefits': benefits, 'price_range': price, 'collection_policy': ADVANCE_POLICY}
     result['collection_guidance'] = collection_guidance.build(result)
     summary = encounter_summary.build(result)
     assert benefits['deductible_annual_cents'] == 30000

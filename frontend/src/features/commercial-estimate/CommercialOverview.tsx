@@ -12,6 +12,7 @@ import TemporaryRateReference from './TemporaryRateReference'
 import EstimateSources from './EstimateSources'
 import { openServiceDetails } from './openServiceDetails'
 import { overviewExplanation } from './overviewExplanation'
+import PolicyAndShareNotice from './PolicyAndShareNotice'
 import PublishedPlanBenefit from './PublishedPlanBenefit'
 
 export default function CommercialOverview({
@@ -105,7 +106,7 @@ export default function CommercialOverview({
     amount ||
     (!staleInsuredGuidance && (guidance?.patient_actions.length || guidance?.assumptions.length)),
   )
-  const visibleAmount = Boolean(amount) || provisionalAmount != null
+  const visibleAmount = Boolean(amount) || provisionalAmount != null || !!model.estimatedShare
   const patientBenefitsBound = hasPatientBinding(result.identity)
   const applicablePlanLimits =
     !cash &&
@@ -178,13 +179,8 @@ export default function CommercialOverview({
             {amountText}
           </strong>
           <p>{overviewExplanation(model, result, Boolean(fullBreakdown))}</p>
+          <PolicyAndShareNotice model={model} />
           {!cash && <PublishedPlanBenefit result={result} />}
-          {!readOnly && guidance?.policy_setup_required && (
-            <p>
-              Clinic administrator: approve a payer collection policy before instructing $0
-              deferral.
-            </p>
-          )}
           {(chooseServices || enterAllowance) && (
             <button type="button" className="cash-package-shortcut" onClick={openServiceDetails}>
               {chooseServices

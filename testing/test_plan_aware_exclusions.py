@@ -1,6 +1,7 @@
 """Synthetic contract and payer rows; no patient or private document content."""
 import pytest
 from app.insurance import amount_explanation, collection_guidance, library_network_exclusions, library_pricing
+from testing.synthetic_policy import ADVANCE_POLICY
 from app.insurance.stedi_benefits.normalize import normalize_stedi_271
 from app.insurance.ecw.ecw_fields import _tin
 from app.api.routers import commercial_estimator  # Load route module before its workflow helpers.
@@ -220,6 +221,7 @@ def test_ma_out_of_network_explanation_does_not_suggest_balance_billing():
 ])
 def test_ma_advance_requires_patient_bound_qmb_clearance(name):
     result = {'payment_mode': 'insurance',
+              'collection_policy': ADVANCE_POLICY,
               'plan_details': {'stedi': {'names': [name]}},
               'benefits': {'active': True, 'service_date_matches': True,
                            'network_status': 'in_network', 'network_source': 'clinic_library_contract'},

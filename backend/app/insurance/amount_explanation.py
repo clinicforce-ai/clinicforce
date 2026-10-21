@@ -257,10 +257,14 @@ def build(result: dict, guidance: dict, review: dict | None = None) -> dict:
         if basis == 'claim_after_service':
             cause, code = _cash_cause(result, failure, recovery, card, network, benefits, unpriced, missing,
                                       guidance.get('source_errors'))
-            if guidance.get('positive_advance_policy_missing'):
-                sentence = ('Collect $0 today under NMCT’s approved defer-to-claim policy because positive '
-                            'out-of-network advance collection is not approved; final patient liability follows the processed claim')
-                code = 'collection_policy_approval_required'
+            if guidance.get('deferred_supported_share'):
+                sentence = ('Collect $0 today under NMCT’s approved defer-to-claim policy; '
+                            'the estimated patient share is separate and final liability follows the processed claim')
+                code = 'collection_deferred'
+            elif guidance.get('positive_advance_policy_missing'):
+                sentence = ('Collect $0 today under NMCT’s approved defer-to-claim policy; '
+                            'a positive advance is not authorized and final liability follows the processed claim')
+                code = 'collection_deferred'
             elif code == 'clinic_agreement_exclusion':
                 sentence = (f'Collect $0 today under NMCT’s approved defer-to-claim policy because {cause}; '
                             'final patient liability follows the processed claim')
@@ -385,7 +389,7 @@ def build(result: dict, guidance: dict, review: dict | None = None) -> dict:
             sentence, code = ('FEP Blue Basic PSHB coverage is active, but the rendering provider’s FEP Preferred status is not established for this visit, so no insured amount is ready',
                               'fep_preferred_unresolved')
         elif guidance.get('positive_advance_policy_missing'):
-            sentence, code = ('The calculated out-of-network share is not approved for advance collection, so a clinic administrator must approve this payer’s collection policy before requesting payment',
+            sentence, code = ('The patient share is estimated, but this payer route has no approved policy for that check-in advance',
                               'collection_policy_approval_required')
         elif basis == 'calculation_conflict':
             sentence, code = guidance.get('reason', 'Recalculate the insured estimate before collecting').rstrip('.'), 'calculation_conflict'

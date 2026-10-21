@@ -345,7 +345,7 @@ def _previsit_result(case: dict, practice_id: str | None = None) -> dict:
             if len(matches) == 1:
                 route_payer = matches[0]
                 policy = (matches[0].get('rules') or {}).get('collection_policy') or {}
-                if (isinstance(policy, dict) and policy.get('mode') in {'defer_to_claim', 'collect_verified_copay'} and policy.get('approved_by')
+                if (isinstance(policy, dict) and policy.get('mode') in {'defer_to_claim', 'collect_verified_copay', 'collect_supported_advance'} and policy.get('approved_by')
                         and policy.get('approved_at') and policy.get('reference')):
                     result['collection_policy'] = policy
         _recheck_saved_clinic_pricing(result, case, practice_id)

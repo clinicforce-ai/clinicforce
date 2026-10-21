@@ -4,6 +4,7 @@ import { patientBenefitsBound as hasPatientBinding } from './identityBinding'
 import { firstSelectedCptIssue } from './selectedCptIssue'
 import { selectedRequirementIssue } from './selectedRequirementIssue'
 import { visitServiceLabel } from './visitServiceLabel'
+import { benefitPresentation } from './benefitPresentation'
 import type { CommercialEstimateActions } from './useCommercialEstimateActions'
 export function deriveCommercialEstimateView({
   result,
@@ -80,31 +81,12 @@ export function deriveCommercialEstimateView({
     !benefits.historical_only &&
     result?.eligibility_failure?.kind === 'provider_enrollment'
   const failure = staleEnrollmentFailure ? undefined : result?.eligibility_failure
-  const patientPrice =
-    benefits?.active === true &&
-    benefits.service_date_matches !== false &&
-    payerEvidenceSafe &&
-    financialSourceValid &&
-    networkConfirmed &&
-    result?.encounter_summary?.complete !== false &&
-    patientBenefitsBound &&
-    !benefits.has_secondary &&
-    result?.recovery?.reason_code !== 'multiple_active_policies' &&
-    price?.complete &&
-    price?.patient_min_cents != null &&
-    price.patient_max_cents != null
-      ? range(price.patient_min_cents, price.patient_max_cents)
-      : null
-  const calculationReasons = [
-    ...new Set((price?.lines || []).map((line) => line.benefits.benefit_summary).filter(Boolean)),
-  ]
-  const policySources = [
-    ...new Map(
-      (price?.lines || [])
-        .filter((line) => line.benefits.policy_evidence)
-        .map((line) => [line.benefits.policy_evidence!.url, line.benefits.policy_evidence!]),
-    ).values(),
-  ]
+  const { patientPrice, calculationReasons, policySources } = benefitPresentation(result, {
+    networkConfirmed,
+    payerEvidenceSafe,
+    financialSourceValid,
+    patientBenefitsBound,
+  })
   const cashPrice =
     price?.cash_complete && price.cash_min_cents != null && price.cash_max_cents != null
       ? range(price.cash_min_cents, price.cash_max_cents)
@@ -353,6 +335,16 @@ export function deriveCommercialEstimateView({
       : price?.patient_max_cents != null && price.patient_max_cents !== provisionalAmount
         ? range(provisionalAmount, price.patient_max_cents)
         : money(provisionalAmount)
+  const estimatedShare =
+    !cash &&
+    !readOnly &&
+    !calculating &&
+    !previousEstimate &&
+    !supportedAmount &&
+    provisionalAmount == null &&
+    price?.mode === 'services'
+      ? patientPrice
+      : null
   const deferred = !cash && guidance?.basis === 'claim_after_service' && !!amount
   const amountText =
     readOnly && !result?.collection_guidance && !cash
@@ -361,6 +353,7 @@ export function deriveCommercialEstimateView({
         ? 'Calculating…'
         : (amount ??
           provisionalAmountText ??
+          estimatedShare ??
           (error
             ? 'Check visit details'
             : tooEarly
@@ -378,9 +371,11 @@ export function deriveCommercialEstimateView({
           ? 'Self-pay option for this visit'
           : provisionalAmount != null
             ? 'Provisional patient estimate · do not collect'
-            : !amount && !cash
-              ? 'Collection decision needed'
-              : 'Amount to collect now'
+            : estimatedShare
+              ? 'Estimated patient share · do not collect'
+              : !amount && !cash
+                ? 'Collection decision needed'
+                : 'Amount to collect now'
   const amountParts = result?.encounter_summary?.components
   const officeDeductible = guidance?.services.find(
     (service) => service.code === officeCopayLine?.code,
@@ -485,6 +480,7 @@ export function deriveCommercialEstimateView({
     cashAmount,
     amount,
     provisionalAmount,
+    estimatedShare,
     deferred,
     amountText,
     amountLabel,

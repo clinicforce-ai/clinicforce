@@ -121,7 +121,11 @@ await page.route(url => url.pathname.startsWith('/api/'), async route => {
       ...(id === 'visit-c' ? { price_range: { ...previous.price_range, mode: 'services',
         patient_min_cents: 7000, patient_max_cents: 7000,
         lines: chosen.map(key => ({ ...previous.price_range.lines.find(line => line.id === key),
-          calculation: { patient_cents: 7000 } })) } } : {}),
+          calculation: { patient_cents: 7000 } })) },
+        encounter_summary: { complete: true, conditional: true,
+          collect_today_cents: null, estimated_total_patient_min_cents: 7000,
+          estimated_total_patient_max_cents: 7000 },
+        payment_explanation: { sentence: 'Patient share is estimated; collection awaits an approved clinic policy.' } } : {}),
     }
   } else if (path.endsWith('/checks')) body = { checks: [] }
   else if (path.endsWith('/cards')) body = { cards: [] }
@@ -229,6 +233,9 @@ try {
   assert.deepEqual(reviews.at(-1).selected_ids, ['ncs-option:95908'])
   assert.deepEqual(results['visit-c'].codes.map(row => row.code), ['95908'])
   assert.deepEqual(results['visit-c'].price_range.lines.map(row => row.code), ['95908'])
+  assert((await page.locator('#visit-estimate strong[role="status"]').innerText()).includes('US$70.00'))
+  assert(await page.getByText('Estimated patient share · do not collect').isVisible())
+  assert(await page.getByText('Patient share is estimated; collection awaits an approved clinic policy.').isVisible())
   assert.equal(errors.length, 0, errors.join('\n'))
   assert(previsitRequests.length >= 2)
   console.log('Generalized estimate browser workflow: passed')

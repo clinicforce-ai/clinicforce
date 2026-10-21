@@ -6,6 +6,7 @@ from unittest.mock import patch
 import pytest
 from app.insurance import ecw_backend, ecw_billing, collection_guidance
 from app.api.routers import commercial_estimator as api
+from testing.synthetic_policy import ADVANCE_POLICY
 
 
 def fields(text):
@@ -67,6 +68,7 @@ def test_no_collection_directive_handles_secondary_but_copay_does_not_assume_coo
 
 def test_note_copay_does_not_override_stedi_or_cover_extra_services():
     value = result('Active, $47 copay, ded met')
+    value['collection_policy'] = ADVANCE_POLICY
     value['benefits'] = {'active': True, 'network_status': 'in_network',
                          'network_source': 'clinic_library_contract', 'identity': {'status': 'matched', 'binding': 'synthetic-current-binding', 'match_version': 2}}
     value['arrival_collection'] = {'amount_cents': 7200}

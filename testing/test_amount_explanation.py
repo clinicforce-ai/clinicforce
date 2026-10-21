@@ -8,6 +8,7 @@ from app.insurance import commercial, collection_guidance, visit_estimate, amoun
 from app.api.routers import commercial_estimator as api
 from app.api.routers.commercial_estimator import _compare_card_hints
 from test_visit_estimate import DAY, payload
+from testing.synthetic_policy import ADVANCE_POLICY, COPAY_POLICY
 
 
 def matched_terms(*args, **kwargs):
@@ -72,7 +73,7 @@ def test_verified_office_copay_can_stand_beside_unpriced_testing_and_deduct_paym
     priced = visit_estimate.price_lines(codes, [], terms,
         {'cost_share': 'payer_returned', 'service_type_by_code': {'93000': '30'}}, payload=raw, service_date=DAY)
     result = {'benefits': terms, 'price_range': priced,
-              'payment_mode': 'insurance', 'arrival_collection': {}}
+              'payment_mode': 'insurance', 'arrival_collection': {}, 'collection_policy': COPAY_POLICY}
     guidance = collection_guidance.build(result, {'payments': {'reference': 'synthetic receipt', 'amount_cents': 1000}})
     assert guidance['amount_cents'] == 2000
     assert guidance['basis'] == 'office_copay'
@@ -338,7 +339,7 @@ def test_procedure_specific_coinsurance_adds_to_office_copay():
     assert priced['complete']
     assert [row['calculation']['patient_cents'] for row in priced['lines']] == [3000, 2000]
     guidance = collection_guidance.build({'benefits': terms, 'price_range': priced,
-        'payment_mode': 'insurance', 'arrival_collection': {}}, {})
+        'payment_mode': 'insurance', 'arrival_collection': {}, 'collection_policy': ADVANCE_POLICY}, {})
     assert guidance['amount_cents'] == 5000
     assert amount_explanation.build({'benefits': terms, 'price_range': priced,
         'payment_mode': 'insurance', 'encounter_summary': {

@@ -149,7 +149,10 @@ class PrevisitFlowTest(unittest.IsolatedAsyncioTestCase):
             inputs['patient'].update(gender='F', address={'address1': '1 Main St', 'city': 'Austin', 'state': 'TX', 'postalCode': '78701'})
         scoped_ecw_contract = ecw_saved and not ecw_incomplete
         connection = {'id': 'payer-a', 'stedi_payer_id': 'QDTRP', 'status': 'staff_guidance_enabled',
-                      'category': 'commercial_medical', 'display_name': 'Blue Cross Blue Shield Tx', 'aliases': []}
+                      'category': 'commercial_medical', 'display_name': 'Blue Cross Blue Shield Tx', 'aliases': [],
+                      'rules': {'collection_policy': {'mode': 'collect_verified_copay',
+                          'approved_by': 'synthetic-admin', 'approved_at': '2026-10-01T12:00:00Z',
+                          'reference': 'Synthetic fixed copay policy'}}}
         network = {'id': 'network-a', 'network_name': 'Blue Choice PPO', 'plan_matcher': 'CI',
                    'evidence_reference': 'library:synthetic-contract'}
         profile = {'rules': {}, 'plan_matcher': 'CI'}

@@ -3,20 +3,45 @@ from unittest.mock import patch
 
 import pytest
 from fastapi import HTTPException
-from app.insurance import amount_explanation, collection_guidance, commercial, encounter_summary, identity, visit_estimate
+from app.insurance import amount_explanation, collection_guidance, commercial, encounter_summary, evidence_resolution, identity, visit_estimate
 from app.api.routers import commercial_estimator as api
 from app.api.routers.commercial_flow.commercial_previsit_reuse import saved_benefits_for_review
 from test_visit_estimate import DAY, payload as synthetic_271
+from testing.synthetic_policy import ADVANCE_POLICY, COPAY_POLICY
 
 
 def scenario(amount=3800):
-    return {'benefits': {'active': True, 'network_status': 'in_network',
+    return {'collection_policy': ADVANCE_POLICY,
+            'benefits': {'active': True, 'network_status': 'in_network',
                          'network_source': 'clinic_library_contract'},
             'identity': {'status': 'warning', 'binding': 'synthetic-current-binding', 'match_version': 2},
             'price_range': {'complete': True, 'mode': 'services', 'patient_min_cents': amount, 'patient_max_cents': amount,
                 'lines': [{'id': 'office', 'code': '99203', 'units': 1,
                     'calculation': {'patient_cents': amount}, 'benefits': {'active': True,
                     'requirements': {kind: {'required': 'unknown', 'cleared': False} for kind in ('referral', 'authorization')}}}]}}
+
+
+def test_patient_share_and_collection_policy_are_independent():
+    result = scenario()
+    result.pop('collection_policy')
+    guidance = collection_guidance.build(result)
+    summary = encounter_summary.build({**result, 'collection_guidance': guidance})
+    assert summary['estimated_total_patient_min_cents'] == 3800
+    assert summary['collect_today_cents'] is None
+    assert guidance['positive_advance_policy_missing'] is True
+    trace = evidence_resolution.build({**result, 'collection_guidance': guidance,
+                                       'encounter_summary': summary}, {})
+    assert next(row for row in trace if row['field'] == 'patient_share')['status'] == 'resolved'
+    assert next(row for row in trace if row['field'] == 'collection_amount')['status'] == 'unresolved'
+    result['collection_policy'] = {'mode': 'collect_verified_copay',
+        'approved_by': 'synthetic-admin', 'approved_at': '2026-10-01T12:00:00Z',
+        'reference': 'Synthetic copay-only policy'}
+    assert collection_guidance.build(result)['amount_cents'] is None
+    result['collection_policy']['mode'] = 'defer_to_claim'
+    deferred = collection_guidance.build(result)
+    assert deferred['amount_cents'] == 0
+    assert deferred['deferred_supported_share'] is True
+    assert encounter_summary.build({**result, 'collection_guidance': deferred})['estimated_total_patient_min_cents'] == 3800
 
 
 @pytest.mark.parametrize('result', [{}, {'eligibility_failure': {'title': 'Timeout'}},
@@ -587,7 +612,7 @@ def test_conflicting_annual_oop_maximum_does_not_erase_independent_office_copay(
     price = visit_estimate.price_lines(codes, [], benefits, {'cost_share': 'payer_returned'},
                                        payload=raw, service_date=DAY)
     result = {'benefits': benefits, 'identity': identity, 'price_range': price,
-              'codes': codes, 'payment_mode': 'insurance'}
+              'codes': codes, 'payment_mode': 'insurance', 'collection_policy': COPAY_POLICY}
     assert benefits['oop_annual_cents'] is None and benefits['oop_annual_conflict_ids']
     guidance = collection_guidance.build(result)
     assert guidance['amount_cents'] == 4700
@@ -637,6 +662,7 @@ def test_unknown_network_does_not_collect_a_tier_specific_office_copay():
              'network_independent': False}
     result = {'payment_mode': 'insurance', 'identity': {'status': 'matched', 'binding': 'synthetic-current-binding', 'match_version': 2},
               'benefits': {'active': True, 'network_status': 'unknown'},
+              'collection_policy': COPAY_POLICY,
               'price_range': {'complete': False, 'mode': 'services', 'lines': [
                   {'code': '99203', 'units': 1, 'benefits': terms, 'calculation': None}]}}
     assert collection_guidance.build(result)['amount_cents'] is None
@@ -699,7 +725,7 @@ def test_office_collection_uses_actual_cost_share_and_active_schedule(copay, coi
     benefits = commercial.normalize_stedi_271(payload, '98', False, service_date='2026-10-07',
                                               provider_npi='1234567890')
     result = {'identity': {'status': 'matched', 'binding': 'synthetic-current-binding', 'match_version': 2}, 'benefits': benefits, 'issues': [],
-              'codes': [{'id': 'office', 'code': '99203', 'units': 1}]}
+              'codes': [{'id': 'office', 'code': '99203', 'units': 1}], 'collection_policy': COPAY_POLICY}
     with patch.object(api.commercial_store, 'list_connections', return_value=[]):
         api._attach_previsit_pricing(result, 'synthetic-clinic', {'service_date': '2026-10-07', 'place_of_service': '11'},
             {'rendering_provider': {'npi': '1234567890', 'first_name': 'Synthetic',
@@ -895,7 +921,8 @@ def test_reopening_saved_estimate_rechecks_current_clinic_pricing(change):
                                             unit_allowed_cents=10000, rate_version='original-rate')
     context = {'result': result, 'payer_id': 'uhc-route',
                'inputs': {'service_date': '2026-10-15'}, 'source': {}}
-    connection = {'id': 'clinic-uhc', 'stedi_payer_id': 'uhc-route', 'status': 'staff_guidance_enabled'}
+    connection = {'id': 'clinic-uhc', 'stedi_payer_id': 'uhc-route',
+                  'status': 'staff_guidance_enabled', 'rules': {'collection_policy': ADVANCE_POLICY}}
     contract_id = 'replacement-contract' if change == 'contract_removed' else 'original-contract'
     rate_id = 'replacement-rate' if change == 'rate_replaced' else 'original-rate'
     with patch.object(api.commercial_store, 'list_connections', return_value=[connection]), \
@@ -933,7 +960,8 @@ def test_saved_contract_recheck_uses_the_same_patient_bound_payer_product_as_ini
     case = {'previsit_context': {'result': result, 'payer_id': 'uhc-route',
             'inputs': {'service_date': '2026-10-15'},
             'source': {'plan': 'United Healthcare'}}}
-    connection = {'id': 'clinic-uhc', 'stedi_payer_id': 'uhc-route', 'status': 'staff_guidance_enabled'}
+    connection = {'id': 'clinic-uhc', 'stedi_payer_id': 'uhc-route',
+                  'status': 'staff_guidance_enabled', 'rules': {'collection_policy': ADVANCE_POLICY}}
     with patch.object(api.commercial_store, 'list_connections', return_value=[connection]), \
          patch.object(api, '_previsit_practice_path', return_value=({}, {}, {})) as path, \
          patch.object(api, '_network_contract_evidence', return_value={'document_id': 'regional-contract'}), \
@@ -978,7 +1006,8 @@ def test_emg_comparison_uses_shared_balances_and_never_adds_a_second_visit_copay
     codes = [{'id': 'office', 'code': '99203', 'units': 1}]
     rates = [{'code': code, 'allowed_cents': 10000} for code in ['99203', *cpt_rules.NCS_CODES, '95885', '95886']]
     result = {'codes': codes, 'benefits': commercial.normalize_stedi_271(raw, '98', True),
-              'identity': {'status': 'warning', 'binding': 'synthetic-current-binding', 'match_version': 2}}
+              'identity': {'status': 'warning', 'binding': 'synthetic-current-binding', 'match_version': 2},
+              'collection_policy': ADVANCE_POLICY}
     result['benefits']['network_source'] = 'clinic_library_contract'
     result['price_range'] = visit_estimate.price_lines(codes, rates, result['benefits'], {}, payload=raw, service_date=DAY)
     option = collection_guidance.emg_option(result, rates, {'cost_share': 'payer_returned'}, raw, DAY, {'emg_required': True})

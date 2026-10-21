@@ -9,6 +9,7 @@ import pytest
 
 from app.api.routers import commercial_estimator as api
 from app.insurance import commercial, collection_guidance, cpt_suggester, stedi_payers, visit_estimate
+from testing.synthetic_policy import COPAY_POLICY
 
 
 def benefit(kind, amount, label, stc='98', pos='11'):
@@ -36,7 +37,7 @@ def test_specialist_wins_over_general_and_pcp_but_conflicting_specialists_stay_u
     terms = normalize(raw)
     assert terms['copay_cents'] == 5000
     assert not any('conditional benefit' in r for r in terms['review_reasons'])
-    r = {'identity': {'status': 'matched', 'binding': 'synthetic-current-binding', 'match_version': 2}, 'benefits': {'active': True}, 'price_range': {'mode': 'services', 'lines': [
+    r = {'collection_policy': COPAY_POLICY, 'identity': {'status': 'matched', 'binding': 'synthetic-current-binding', 'match_version': 2}, 'benefits': {'active': True}, 'price_range': {'mode': 'services', 'lines': [
         {'code': '99203', 'units': 1, 'benefits': terms}]}}
     guidance = collection_guidance.build(r)
     assert guidance['amount_cents'] is None

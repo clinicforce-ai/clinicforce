@@ -135,9 +135,21 @@ def build(result: dict, source: dict) -> list[dict]:
             'Record the payer approval reference and validity for the selected service.')
 
     guidance = result.get('collection_guidance') or {}
+    summary = result.get('encounter_summary') or {}
+    record('patient_share', summary.get('complete') is True and
+           summary.get('estimated_total_patient_min_cents') is not None and
+           summary.get('estimated_total_patient_max_cents') is not None, [
+        ('shared estimator', 'complete priced patient share' if summary.get('complete') else 'no complete patient share'),
+        ('referral and authorization', 'conditional estimate' if summary.get('conditional') else 'no open restriction recorded'),
+    ], 'Supported patient share for the planned services',
+        'Resolve the remaining product, network, benefit or allowance evidence; clinic collection policy is separate.')
     record('collection_amount', guidance.get('amount_cents') is not None, [
         ('shared estimator', guidance.get('basis') or 'no supported basis'),
-        ('clinic collection policy', 'approved decision applied' if result.get('collection_policy') else 'no approved policy applied'),
+        ('clinic collection rule', 'approved route decision applied' if guidance.get('collection_rule') else
+         'member QMB protection' if guidance.get('basis') == 'qmb_protection' else
+         'payer out-of-pocket limit' if guidance.get('basis') == 'out_of_pocket_limit' else
+         'visit-linked eCW billing instruction' if guidance.get('basis') == 'ecw_billing_note' else
+         'no applicable approved route decision'),
     ], 'Supported check-in instruction after service, benefits and clinic policy',
-        'Resolve the specific unresolved fields above, then recalculate this saved visit without another payer transaction.')
+        'Approve the applicable payer-route collection rule if the patient share is supported; otherwise resolve the specific unresolved fields above and recalculate without another payer transaction.')
     return rows

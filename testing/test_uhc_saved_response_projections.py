@@ -17,6 +17,7 @@ from app.api.routers.commercial_flow import commercial_previsit_pricing as prici
 from app.api.routers.commercial_flow import commercial_previsit_status as status
 from app.insurance import amount_explanation, collection_guidance, commercial, encounter_summary, visit_estimate
 from app.insurance.collection.requirements import requirement_blocker
+from testing.synthetic_policy import ADVANCE_POLICY
 
 
 FIXTURES = json.loads((Path(__file__).parent / 'fixtures' / 'uhc_saved_response_projections.json').read_text())
@@ -72,6 +73,7 @@ def test_choice_plus_zero_copay_and_tier_specific_coinsurance_need_sourced_input
         price = visit_estimate.price_lines([{'id': 'office', 'code': '99203', 'units': 1}],
             rates, benefits, rules, payload=raw, service_date=day)
         result = {'payer': 'United Healthcare', 'payment_mode': 'insurance',
+                  'collection_policy': ADVANCE_POLICY if tier == 'in_network' else {},
                   'identity': identity, 'benefits': benefits, 'price_range': price,
                   'arrival_collection': visit_estimate.arrival_collection(price, benefits, {}),
                   'plan_details': {'stedi': {'names': ['POS CHOICE PLUS']}},
@@ -171,6 +173,7 @@ def supported_result() -> dict:
         'cost_share': 'payer_returned', 'service_type_by_code': {'93000': '30'},
     }, payload=raw, service_date=DAY)
     result = {'payer': 'United Healthcare', 'payment_mode': 'insurance',
+              'collection_policy': ADVANCE_POLICY,
               'appointment_id': 'synthetic-visit', 'service_date': DAY,
               'checked_at': f'{DAY}T12:00:00Z', 'identity': identity,
               'benefits': benefits, 'codes': codes, 'selected_ids': ['office', 'test'],
@@ -422,7 +425,7 @@ def test_saved_get_retains_a_supported_synthetic_uhc_collection_and_breakdown():
     app = FastAPI()
     app.include_router(api.router)
     connection = {'id': 'synthetic-connection', 'stedi_payer_id': 'synthetic-route',
-                  'status': 'staff_guidance_enabled', 'rules': {}}
+                  'status': 'staff_guidance_enabled', 'rules': {'collection_policy': ADVANCE_POLICY}}
     network = {'id': 'synthetic-network'}
     profile = {'id': 'synthetic-profile'}
     rates = [{'code': line['code'], 'modifier': '', 'allowed_cents': line['unit_allowed_cents'],
