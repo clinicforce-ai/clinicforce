@@ -76,6 +76,12 @@ def _cash_cause(result: dict, failure: dict, recovery: dict, card: dict, network
     line_blocker = selected_service_blocker(network, identity, lines)
     if line_blocker:
         return selected_service_detail(line_blocker)[0], line_blocker[0]
+    issues = result.get('issues') or []
+    evidence = result.get('network_evidence') or {}
+    if (network != 'out_of_network' and
+            (evidence.get('reason_code') == 'product_link_missing'
+             or 'The clinic fee schedule is not matched to the exact payer product.' in issues)):
+        return 'the exact payer product has no approved link to the clinic agreement', 'clinic_product_mismatch'
     if participation_conflict(benefits):
         return 'provider participation evidence conflicts for this plan and provider', 'provider_network_conflict'
     if result.get('service_selection_status') == 'preview':
@@ -363,6 +369,16 @@ def build(result: dict, guidance: dict, review: dict | None = None) -> dict:
             sentence, code = guidance.get('reason', 'Recalculate the insured estimate before collecting').rstrip('.'), 'calculation_conflict'
         elif recovery.get('state') in {'pending', 'indeterminate'}:
             sentence, code = 'No amount is ready because the insurance check has not finished', 'check_pending'
+        elif cause_code == 'clinic_product_mismatch' and benefits.get('active') is True:
+            payer = _payer_label(result, 'The payer')
+            payer_key = ''.join(char for char in payer.casefold() if char.isalnum())
+            if payer_key in {'bcbstexas', 'bluecrossblueshieldoftexas', 'bluecrossandblueshieldoftexas'}:
+                payer = 'BCBS Texas'
+            clinic = "NMCT's" if payer == 'BCBS Texas' else "the clinic's"
+            sentence = (f"{payer} coverage is active, but ClinicForce has not yet linked this member's exact plan "
+                        f"to {clinic} verified provider network. The insurance amount cannot be finalized until "
+                        'the plan/network match and applicable service benefits are established')
+            code = cause_code
         elif cause_code in {'provider_enrollment', 'multiple_active_policies', 'policy_identity_mismatch',
                             'payer_identity_match_missing',
                             'coverage_status_conflict', 'coverage_date_invalid',

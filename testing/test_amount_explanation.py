@@ -543,7 +543,7 @@ def test_cash_fallback_names_verified_benefits_without_matching_clinic_prices():
     product = {**base, 'issues': ['The clinic fee schedule is not matched to the exact payer product.']}
     explanation = amount_explanation.build(product, {'amount_cents': 25000, 'basis': 'practice_cash_price'})
     assert explanation['reason_code'] == 'clinic_product_mismatch'
-    assert 'clinic fee schedule is not matched to the exact payer product' in explanation['sentence']
+    assert 'exact payer product has no approved link to the clinic agreement' in explanation['sentence']
     contract = {**base, 'issues': ['Clinic pricing: no single approved plan and provider contract is linked to this Stedi payer.']}
     explanation = amount_explanation.build(contract, {'amount_cents': 25000, 'basis': 'practice_cash_price'})
     assert explanation['reason_code'] == 'clinic_contract_missing'

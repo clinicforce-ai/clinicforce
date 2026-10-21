@@ -148,6 +148,9 @@ class ProductMapping(BaseModel):
     notes: str = Field(min_length=10, max_length=2000)
     valid_from: date
     valid_to: date
+    contract_product: str | None = Field(default=None, min_length=3, max_length=200, description='Exact product named in the linked signed clinic agreement; required when the payer label is an alias.')
+    rate_plan_matcher: str | None = Field(default=None, min_length=1, max_length=100, description='Exact contracted rate plan; currently must match the verified network plan matcher.')
+    network_identifiers: list[str] = Field(default_factory=list, max_length=10, description='Payer network identifiers confirmed by the same scoped agreement and administrator evidence.')
 
 
 class PayerAllowanceInput(BaseModel):

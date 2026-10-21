@@ -134,6 +134,40 @@ def _mapped_products_in_contract_scope(products: list[str], network: dict, profi
             and all(_api.insurance_identity.normalized(name) in included for name in products))
 
 
+def _applicable_product_mapping(network: dict, profile: dict, source: dict,
+                                service_date: str, payer: dict | None = None) -> dict | None:
+    """Resolve one approved payer label to one product in this linked contract."""
+    payer_names = _contract_product_names(source.get('payer_plan_names') or [])
+    if not payer_names and source.get('payer_plan_bound'):
+        payer_names = [source.get('plan')]
+    names = {_api.insurance_identity.normalized(name) for name in payer_names if name}
+    if not names:
+        return None
+    candidates = []
+    for row in (profile.get('rules') or {}).get('product_mappings') or []:
+        products = {_api.insurance_identity.normalized(name) for name in row.get('products') or []}
+        contract_product = row.get('contract_product') or next(iter(row.get('products') or []), '')
+        if (names <= products and row.get('reference') and row.get('actor_id')
+                and row.get('valid_from', '') <= service_date <= row.get('valid_to', '')
+                and row.get('network_id') == network.get('id')
+                and row.get('network_reference') == network.get('evidence_reference')
+                and row.get('plan_scope') == source.get('payer_plan_scope')
+                and any((row.get('plan_scope') or {}).values())
+                and (not network.get('tin') or
+                     str((source.get('billing_provider') or {}).get('tin') or '').replace('-', '') == str(network['tin']).replace('-', ''))
+                and (not row.get('contract_product') or
+                     _api.insurance_identity.normalized(row['contract_product']) in names
+                     or source.get('payer_plan_bound') is True)
+                and (not row.get('rate_plan_matcher') or
+                     _api.insurance_identity.normalized(row['rate_plan_matcher']) ==
+                     _api.insurance_identity.normalized(network.get('plan_matcher')))
+                and _mapped_products_in_contract_scope([contract_product], network, profile)
+                and not _excluded_ma_ppo_contract_mismatch(list(names), network, payer)):
+            candidates.append(row)
+    # Two approvals for the same short label must never select a product arbitrarily.
+    return candidates[0] if len(candidates) == 1 else None
+
+
 def _scoped_product_aliases(network: dict, profiles: list[dict], source: dict, service_date: str,
                             payer: dict | None = None) -> set[str]:
     """Only dated, administrator-sourced aliases tied to this contract path."""
@@ -144,24 +178,21 @@ def _scoped_product_aliases(network: dict, profiles: list[dict], source: dict, s
                 or profile.get('status') != 'staff_guidance_enabled'
                 or profile.get('plan_matcher', '') != network.get('plan_matcher', '')):
             continue
-        for mapping in (profile.get('rules') or {}).get('product_mappings', []):
-            if (mapping.get('reference') and mapping.get('actor_id')
-                    and mapping.get('valid_from', '') <= service_date <= mapping.get('valid_to', '')
-                    and mapping.get('network_id') == network.get('id')
-                    and mapping.get('network_reference') == network.get('evidence_reference')
-                    and mapping.get('plan_scope') == source.get('payer_plan_scope')):
-                for name in mapping.get('products', []):
-                    product = _api.insurance_identity.normalized(name)
-                    if (_excluded_ma_ppo_contract_mismatch([name], network, payer)
-                            or not _mapped_products_in_contract_scope([name], network, profile)):
-                        continue
-                    aliases.add(product)
+        mapping = _applicable_product_mapping(network, profile, source, service_date, payer)
+        if mapping:
+            aliases.update(_api.insurance_identity.normalized(name) for name in mapping.get('products') or [])
     return aliases
 
 
-def _pricing_profile(profile: dict, network: dict, source: dict) -> dict:
-    """An aliased product needs its own CPT rate rows, not the base plan's rates."""
+def _pricing_profile(profile: dict, network: dict, source: dict, service_date: str = '',
+                     payer: dict | None = None) -> dict:
+    """Select the exact approved rate plan for a bound payer product."""
     plan = str(source.get('plan') or '').strip()
+    mapping = _applicable_product_mapping(network, profile, source, service_date, payer)
+    if mapping and mapping.get('contract_product'):
+        matcher = str(mapping.get('rate_plan_matcher') or network.get('plan_matcher') or '').strip()
+        if matcher and _api.insurance_identity.normalized(matcher) == _api.insurance_identity.normalized(network.get('plan_matcher')):
+            return {**profile, 'rate_plan_matcher': matcher, 'require_exact_rate_plan': True}
     if source.get('payer_plan_bound') and source.get('payer_plan_names'):
         payer_names = {_api.insurance_identity.normalized(name): str(name).strip()
                        for name in _contract_product_names(source['payer_plan_names']) if str(name).strip()}
@@ -218,7 +249,13 @@ def _practice_path(practice_id: str, inputs: dict, source: dict) -> tuple[dict, 
                      for name in _contract_product_names(source.get('payer_plan_names', []))}
     payer_networks = {_api.re.sub(r'[^a-z0-9]', '', str(name).casefold()) for name in source.get('payer_network_names', []) if name}
     expected_network = _api.re.sub(r'[^a-z0-9]', '', str(networks[0].get('network_name') or '').casefold())
-    if payer_networks and payer_networks != {expected_network}:
+    if (any('bluecard' in name or 'outofstate' in name for name in product_names | payer_networks)
+            and 'bluecard' not in expected_network):
+        raise _api.HTTPException(409, 'An out-of-state BlueCard member needs a separately verified home-plan network scope.')
+    mapping = _applicable_product_mapping(networks[0], profiles[0], source, service_date, payer)
+    mapped_networks = {_api.insurance_identity.normalized(name)
+                       for name in (mapping or {}).get('network_identifiers') or []}
+    if payer_networks and not payer_networks <= ({expected_network} | mapped_networks):
         raise _api.HTTPException(409, 'The payer-reported member network does not match the clinic contract.')
     if product_names:
         # A local or regional MA PPO is a distinct contracted product, not an
@@ -239,7 +276,7 @@ def _practice_path(practice_id: str, inputs: dict, source: dict) -> tuple[dict, 
                             for name in product_names)
         if not product_names <= aliases and not (payer_networks == {expected_network} and generic_names):
             raise _api.HTTPException(409, 'The clinic fee schedule is not matched to the exact payer product.')
-    return payer, networks[0], _pricing_profile(profiles[0], networks[0], source)
+    return payer, networks[0], _pricing_profile(profiles[0], networks[0], source, service_date, payer)
 
 
 def _previsit_practice_path(practice_id: str, inputs: dict, source: dict) -> tuple[dict, dict, dict]:

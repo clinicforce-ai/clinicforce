@@ -97,7 +97,9 @@ def test_applied_product_alias_retains_administrator_approval():
                 'plan_scope': source['payer_plan_scope'], 'valid_from': '2026-01-01',
                 'valid_to': '2026-12-31', 'actor_id': 'synthetic-admin',
                 'reference': 'synthetic-review', 'verified_at': '2026-01-02T12:00:00Z'}
-    profile = {'rules': {'product_mappings': [approval]}}
+    profile = {'rules': {'product_mappings': [approval], 'plan_product_names': ['Choice Plus'],
+                        'library_source': {'document_id': 'synthetic-contract',
+                                           'reference': 'library:synthetic-contract'}}}
     assert commercial_previsit_pricing._product_mapping_evidence(
         profile, network, source, '2026-10-14')['reference'] == 'synthetic-review'
     assert commercial_previsit_pricing._product_mapping_evidence(

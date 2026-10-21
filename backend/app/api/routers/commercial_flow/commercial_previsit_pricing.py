@@ -248,20 +248,18 @@ def _network_contract_evidence(practice_id: str, network: dict, profile: dict, s
 
 def _product_mapping_evidence(profile: dict, network: dict, source: dict, service_date: str) -> dict | None:
     """Retain the administrator record used to alias a payer product."""
-    product = _api.insurance_identity.normalized(source.get('plan'))
+    payer_names = source.get('payer_plan_names') or []
+    if not payer_names and source.get('payer_plan_bound'):
+        payer_names = [source.get('plan')]
+    product = _api.insurance_identity.normalized(payer_names[0]) if len(payer_names) == 1 else ''
     if (not source.get('payer_plan_bound') or not product
             or product == _api.insurance_identity.normalized(network.get('plan_matcher'))):
         return None
-    for row in (profile.get('rules') or {}).get('product_mappings') or []:
-        if (row.get('actor_id') and row.get('reference')
-                and row.get('network_id') == network.get('id')
-                and row.get('network_reference') == network.get('evidence_reference')
-                and row.get('plan_scope') == source.get('payer_plan_scope')
-                and row.get('valid_from', '') <= service_date <= row.get('valid_to', '')
-                and product in {_api.insurance_identity.normalized(name)
-                                for name in row.get('products') or []}):
-            return {key: row.get(key) for key in ('reference', 'actor_id', 'verified_at',
-                                                  'valid_from', 'valid_to')}
+    row = _api._applicable_product_mapping(network, profile, source, service_date)
+    if row and product in {_api.insurance_identity.normalized(name) for name in row.get('products') or []}:
+        return {key: row.get(key) for key in ('reference', 'actor_id', 'verified_at',
+                                              'valid_from', 'valid_to', 'contract_product',
+                                              'rate_plan_matcher', 'network_identifiers')}
     return None
 
 
@@ -388,18 +386,18 @@ def _attach_previsit_pricing(result: dict, practice_id: str, inputs: dict, sourc
                 'reason': evidence.get('reason') or
                 'The Clinical Library has no contract linked to this exact payer product and provider.'}
     except _api.HTTPException as exc:
-        if str(exc.detail) in {
-            'The payer-reported member network does not match the clinic contract.',
-            'The clinic fee schedule is not matched to the exact payer product.',
-        }:
-            benefits['network_conflict'] = True
+        if str(exc.detail) == 'The clinic fee schedule is not matched to the exact payer product.':
+            result['issues'].append(str(exc.detail))
         if scope_complete and str(exc.detail) == 'A sourced nonparticipation rule applies to this provider, product, location and date.':
             benefits['network_status'] = 'out_of_network'
             benefits['network_source'] = 'clinic_nonparticipation_rule'
         if scope_complete and not exclusion:
             result['network_evidence'] = {'decision': 'out_of_network_confirmed_by_scoped_nonparticipation_record'
                 if benefits.get('network_source') == 'clinic_nonparticipation_rule'
-                else 'lacking_applicable_network_evidence', 'reason': str(exc.detail)}
+                else 'lacking_applicable_network_evidence',
+                'reason_code': 'product_link_missing' if str(exc.detail) == 'The clinic fee schedule is not matched to the exact payer product.'
+                else 'payer_network_unmatched' if str(exc.detail) == 'The payer-reported member network does not match the clinic contract.'
+                else 'contract_scope_unresolved', 'reason': str(exc.detail)}
     if (inventory and benefits.get('network_source') != 'clinic_library_contract'
             and not _api.network_participation.verified_out_of_network(benefits)):
         _apply_inventory_tier(result, benefits, inventory, exclusion)

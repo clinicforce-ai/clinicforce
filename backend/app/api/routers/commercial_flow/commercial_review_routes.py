@@ -263,9 +263,14 @@ async def update_visit_review(case_id: str, value: _api.VisitReviewInput, reques
         payer_connection, network, profile = _api._practice_path(session['practice_id'], inputs, {**source, 'payer_plan_names': []})
         if _api._excluded_ma_ppo_contract_mismatch(products, network, payer_connection):
             raise _api.HTTPException(422, 'Link a separate exact-product local or regional PPO agreement before mapping this payer product.')
-        if (not _api._mapped_products_in_contract_scope(products, network, profile)
+        contract_product = item.contract_product or (products[0] if len(products) == 1 else '')
+        if (not contract_product or not any(_api.commercial.plan_details(payload).get(key)
+                                          for key in ('plan_number', 'group_number'))
+                or (item.rate_plan_matcher and _api.insurance_identity.normalized(item.rate_plan_matcher) !=
+                    _api.insurance_identity.normalized(network.get('plan_matcher')))
+                or not _api._mapped_products_in_contract_scope([contract_product], network, profile)
                 or not _api._network_contract_evidence(session['practice_id'], network, profile, inputs['service_date']).get('document_id')):
-            raise _api.HTTPException(422, 'Link a current signed Library agreement and its sourced exact-product profile before mapping this label.')
+            raise _api.HTTPException(422, 'Confirm the member plan scope, contract rate plan and sourced exact-product profile in a current signed Library agreement before mapping this label.')
         await _api.run_in_threadpool(_api.commercial_store.save_product_mapping, session['practice_id'], profile['id'], products,
             {**item.model_dump(mode='json'), 'verified_at': _api._now(), 'actor_id': session['staff']['id'],
              'plan_scope': {key: _api.commercial.plan_details(payload).get(key) for key in ('plan_number', 'group_number')},

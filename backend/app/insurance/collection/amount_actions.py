@@ -150,7 +150,8 @@ def _collection_action(code: str, result: dict, source_errors: list[dict] | None
         if code == 'clinic_payer_connection_draft':
             return ('clinic administrator: link an applicable agreement and verified network for this exact UHC '
                     'product and provider, enable its payer connection and estimate profile, then rerun the insured estimate')
-        return 'check this product and rendering provider in UHC, then select the clinician-documented CPT'
+        return (f"confirm this exact product and rendering provider with {_payer_label(result, 'the payer')}, "
+                'then select the clinician-documented CPT')
     if code == 'provider_network_unresolved':
         return 'link the exact plan and rendering provider to the current clinic network agreement, then rerun the insured estimate'
     if code == 'coverage_status_conflict':

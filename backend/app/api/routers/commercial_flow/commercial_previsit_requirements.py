@@ -27,11 +27,12 @@ def attach_requirements(api: ModuleType, result: dict, case: dict, inputs: dict,
     library_sources = [api.staff_store.get_library(document_id, session['practice_id']) for document_id in library_ids]
     payer_connections = [row for row in connections if row.get('stedi_payer_id') == payer_id]
     connection = payer_connections[0] if len(payer_connections) == 1 else {}
+    approved_product = ((result.get('network_evidence') or {}).get('product_mapping_approval') or {}).get('contract_product')
     requirement_context = {
         'service_date': inputs['service_date'], 'payer_verified': bool(connection),
         'payer_names': [result.get('payer'), source.get('payer'), connection.get('display_name'),
                         connection.get('stedi_payer_id'), *(connection.get('aliases') or [])],
-        'plans': [source.get('plan'), result.get('plan'),
+        'plans': [approved_product] if approved_product else [source.get('plan'), result.get('plan'),
                   *(name for names in (source.get('plan_details') or {}).values() for name in names),
                   *(result['plan_details']['stedi'].get('names') or []),
                   *([(result.get('network_evidence') or {}).get('network_name')]
