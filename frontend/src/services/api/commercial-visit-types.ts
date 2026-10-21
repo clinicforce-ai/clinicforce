@@ -123,7 +123,15 @@ export type VisitReview = {
   }
   emg_required?: boolean
   identity_confirmation?: { binding: string; reference: string; notes: string }
-  product_mapping?: { reference: string; notes: string; valid_from: string; valid_to: string }
+  product_mapping?: {
+    reference: string
+    notes: string
+    valid_from: string
+    valid_to: string
+    contract_product?: string
+    rate_plan_matcher?: string
+    network_identifiers?: string[]
+  }
   payment_mode?: 'cash' | 'insurance'
   cash_selection?: string
   selected_ids?: string[]

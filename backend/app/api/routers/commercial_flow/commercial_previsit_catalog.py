@@ -66,7 +66,7 @@ def build_catalog(api: ModuleType, result: dict, session: dict, inputs: dict, so
     policy_connections = [row for row in configured_connections if row.get('stedi_payer_id') == payer_id]
     if len(policy_connections) == 1:
         policy = (policy_connections[0].get('rules') or {}).get('collection_policy') or {}
-        if (isinstance(policy, dict) and policy.get('mode') == 'defer_to_claim' and policy.get('approved_by')
+        if (isinstance(policy, dict) and policy.get('mode') in {'defer_to_claim', 'collect_verified_copay'} and policy.get('approved_by')
                 and policy.get('approved_at') and policy.get('reference')):
             result['collection_policy'] = policy
     uploaded_cash = api.practice_prices.current(session['practice_id'], inputs['service_date'])

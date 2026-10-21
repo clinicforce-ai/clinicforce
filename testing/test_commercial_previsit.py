@@ -28,7 +28,7 @@ class PrevisitFlowTest(unittest.IsolatedAsyncioTestCase):
         await self._flow(date.today().isoformat(), ecw_saved=True)
 
     async def test_incomplete_ecw_benefits_fall_through_to_stedi(self):
-        await self._flow(date.today().isoformat(), ecw_saved=True, ecw_incomplete=True)
+        await self._flow(date.today().isoformat(), ecw_saved=True, ecw_incomplete=True, pos='11')
 
     async def test_card_ocr_fills_missing_member_before_first_stedi_request(self):
         await self._flow(date.today().isoformat(), member_id_missing=True,
@@ -109,7 +109,7 @@ class PrevisitFlowTest(unittest.IsolatedAsyncioTestCase):
     async def test_newer_conflicting_ecw_check_refreshes_cached_stedi_evidence(self):
         await self._flow(date.today().isoformat(), newer_ecw=True)
 
-    async def _flow(self, service_date, reject=False, retry_basic=False, payer_missing=False, refresh=False, newer_ecw=False, too_early=False, self_pay=False, coverage_start=None, saved_hold=False, enrollment_missing=False, ecw_saved=False, ecw_incomplete=False, medicare_secondary=False, billing_note=None, member_id_missing=False, card_fields=None, card_conflict=False, card_status=None):
+    async def _flow(self, service_date, reject=False, retry_basic=False, payer_missing=False, refresh=False, newer_ecw=False, too_early=False, self_pay=False, coverage_start=None, saved_hold=False, enrollment_missing=False, ecw_saved=False, ecw_incomplete=False, medicare_secondary=False, billing_note=None, member_id_missing=False, card_fields=None, card_conflict=False, card_status=None, pos=None):
         session = {"practice_id": "clinic", "intake_id": "intake", "patient_id": "patient",
                    "share_manifest_id": "", "staff": {"id": "staff", "display_name": "Staff", "practice_name": "Clinic"},
                    "intake": {"updated_at": "version", "patient": {"given_name": "Pat", "family_name": "Example",
@@ -119,6 +119,8 @@ class PrevisitFlowTest(unittest.IsolatedAsyncioTestCase):
                   "subscriber": {"firstName": "Pat", "lastName": "Example", "birthDate": "1980-01-01"},
                   "patient": {"patient_first_name": "Pat", "patient_last_name": "Example", "patient_birth_date": "1980-01-01"},
                   "rendering_provider": {"npi": "1234567890"}}
+        if pos:
+            inputs['place_of_service'] = pos
         source = {"appointment_id": "visit-1", "_patient_id": "p", "coverage_id": "coverage-1", "active_coverages": 1,
                   "payer": "Blue Cross Blue Shield Tx", "plan": "CI", "rendering_provider": {"npi": "1234567890", "first_name": "Ada", "last_name": "Clinician"},
                   "billing_provider": {"name": "Clinic", "npi": "1811853260"}, "location_id": "office"}
@@ -353,6 +355,8 @@ class PrevisitFlowTest(unittest.IsolatedAsyncioTestCase):
                          ['99202', '99203', '99204', '99205'])
         sent = client.post.await_args.kwargs["json"]
         self.assertEqual(sent["encounter"]["services"], [{"system": "STC", "value": "98"}, {"system": "STC", "value": "30"}])
+        if pos:
+            self.assertEqual(sent['encounter']['placeOfService'], {'code': pos})
         if service_date == date.today().isoformat():
             self.assertNotIn("dates", sent["encounter"])
         else:

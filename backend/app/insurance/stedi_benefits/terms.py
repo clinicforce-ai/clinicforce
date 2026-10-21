@@ -78,7 +78,11 @@ def select_cost_share_rows(entries: list[dict[str, Any]], payload: dict[str, Any
         selected = [row for score, row in matches if score == best]
         # Compare every source field, including unmodelled restrictions. Only
         # evidence location differs for an actual duplicate.
-        signatures = {json.dumps({k: v for k, v in row.items() if k != 'evidence_path'}, sort_keys=True)
+        # Authorization metadata is evaluated separately for the selected
+        # service; it does not change an otherwise identical copay or share.
+        nonfinancial = {'authOrCertIndicator', 'priorAuthIndicator'} if code in {'A', 'B'} else set()
+        signatures = {json.dumps({k: v for k, v in row.items()
+                                  if k != 'evidence_path' and k not in nonfinancial}, sort_keys=True)
                       for row in selected}
         if len(signatures) != 1:
             conflicts[label] = [row['evidence_path'] for row in selected]

@@ -35,7 +35,7 @@ class ConnectionAliasInput(BaseModel):
 class CollectionPolicyInput(BaseModel):
     """Clinic administrator's payer-specific check-in collection decision."""
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
-    mode: Literal["defer_to_claim", "disabled"]
+    mode: Literal["defer_to_claim", "collect_verified_copay", "disabled"]
     reference: str = Field(min_length=10, max_length=500)
     allow_supported_oon_advance: bool = False
     allow_cms_based_advance: bool = False
@@ -148,6 +148,9 @@ class ProductMapping(BaseModel):
     notes: str = Field(min_length=10, max_length=2000)
     valid_from: date
     valid_to: date
+    contract_product: str | None = Field(default=None, min_length=3, max_length=200, description='Exact product named in the linked signed clinic agreement; required when the payer label is an alias.')
+    rate_plan_matcher: str | None = Field(default=None, min_length=1, max_length=100, description='Exact contracted rate plan; currently must match the verified network plan matcher.')
+    network_identifiers: list[str] = Field(default_factory=list, max_length=10, description='Payer network identifiers confirmed by the same scoped agreement and administrator evidence.')
 
 
 class PayerAllowanceInput(BaseModel):

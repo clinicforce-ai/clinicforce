@@ -58,6 +58,22 @@ def select_benefit_rows(payload: dict[str, Any], service_type_code: str,
             service_type_code = '98'
             entries = [row for row in entries if '98' not in (row.get('serviceTypeCodes') or []) or row in diagnostic_rows]
     office = office_visit or procedure_code in {str(n) for n in (*range(99202, 99206), *range(99212, 99216))}
+    if office and place_of_service == '11':
+        # STC 98 is broad: a specialist telemedicine or ABA copay is not the
+        # in-person office copay, even when the payer omits POS on that row.
+        def other_office_service(row: dict) -> bool:
+            if _procedure(row):
+                return False
+            clauses = [part.strip() for note in _benefit_notes([row.get('messages'), row.get('additionalInformation')])
+                       for part in note.split(';') if part.strip()]
+            unrelated = [bool(re.fullmatch(r'(?:telemedicine|telehealth)\b.*|applied behavior analysis\b.*|agents, drugs and/or supplies administered or obtained in connection with care',
+                                           clause, re.I)) for clause in clauses]
+            return bool(clauses and any(unrelated) and all(
+                unrelated[index] or re.fullmatch(r'(?:specialist|primary care|PCP|provider role other)', clause, re.I)
+                for index, clause in enumerate(clauses)))
+        rejected = [row for row in entries if other_office_service(row)]
+        excluded_service_ids.extend(row['evidence_path'] for row in rejected)
+        entries = [row for row in entries if row not in rejected]
     if office and selected_ids is None:
         # Diagnosis context must establish an unrelated visit. Unknown/TMJ/jaw
         # context retains the exclusion; an office CPT alone cannot disprove TMJ.
@@ -71,8 +87,9 @@ def select_benefit_rows(payload: dict[str, Any], service_type_code: str,
             labels = _benefit_notes([row.get('messages'), row.get('additionalInformation')])
             return bool(unrelated_tmj and row.get('code') == 'I' and not _procedure(row) and labels
                 and all(re.fullmatch(r'TMJ (?:PCP AND TMJ Specialist|Specialist|PCP)', label.strip(), re.I) for label in labels))
-        excluded_service_ids = [row['evidence_path'] for row in entries if unrelated_exclusion(row)]
-        entries = [row for row in entries if row['evidence_path'] not in excluded_service_ids]
+        excluded_tmj_ids = [row['evidence_path'] for row in entries if unrelated_exclusion(row)]
+        excluded_service_ids.extend(excluded_tmj_ids)
+        entries = [row for row in entries if row['evidence_path'] not in excluded_tmj_ids]
         # Explicitly different services sometimes share an office STC. Retain
         # every raw row in reported_options, but exclude these from office math.
         unrelated = r'(?:injections?|diagnostic lab(?:oratory)?|laboratory|(?:diagnostic )?x[ -]?ray|acupuncture|applied behavior analysis|chemotherapy)(?:\s*-\s*professional)?'

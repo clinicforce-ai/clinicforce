@@ -88,6 +88,7 @@ from app.api.routers.commercial_flow.commercial_practice import (
     _ecw_practice_config,
     _excluded_ma_ppo_contract_mismatch,
     _mapped_products_in_contract_scope,
+    _applicable_product_mapping,
     _practice_path,
     _previsit_practice_path,
     _appointment_readiness,

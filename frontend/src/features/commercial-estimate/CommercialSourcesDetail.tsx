@@ -70,6 +70,23 @@ export default function CommercialSourcesDetail({
                 </small>
               </dd>
             </div>
+            {result.benefits?.published_plan_rule && (
+              <div>
+                <dt>Published plan rule</dt>
+                <dd>
+                  <a
+                    href={result.benefits.published_plan_rule.url}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    {result.benefits.published_plan_rule.label}
+                  </a>
+                  <small>
+                    {result.plan_details?.stedi.identified_product || 'Product not identified'}
+                  </small>
+                </dd>
+              </div>
+            )}
             <div>
               <dt>Clinical Library contract</dt>
               <dd>
@@ -118,6 +135,30 @@ export default function CommercialSourcesDetail({
           <p>
             {coverageSource}. {networkSource || 'Provider network source unavailable'}.
           </p>
+          {!!result.evidence_resolution?.length && (
+            <details className="library-diagnostics">
+              <summary>Evidence checked for this estimate</summary>
+              {result.evidence_resolution.map((item) => (
+                <div key={item.field}>
+                  <strong>
+                    {item.field.replaceAll('_', ' ')}: {item.status}
+                  </strong>
+                  <ul>
+                    {item.sources.map((source) => (
+                      <li key={source.name}>
+                        {source.name}: {source.finding}
+                      </li>
+                    ))}
+                  </ul>
+                  {item.status === 'unresolved' && (
+                    <p>
+                      Missing: {item.missing_fact}. Next: {item.next_action}
+                    </p>
+                  )}
+                </div>
+              ))}
+            </details>
+          )}
           {guidance?.basis === 'office_copay' && copayEvidenceId && (
             <p>
               Office copay: {copaySource} response, row {copayEvidenceId}. This is a payer benefit,

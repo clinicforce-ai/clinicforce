@@ -205,9 +205,10 @@ async def _recheck_discovery_candidate(case: dict, session: dict, provider: dict
                 case.update(await _api.run_in_threadpool(_api._save, case, session, 'stedi-discovery-enrollment-required'))
                 _api._recovery_event(case, session, 'eligibility', 'unavailable', reason=enrollment['reason_code'])
                 return
-        body = _api.stedi_request_body({'stedi_payer_id': payer['stediId']}, provider, coverage, inputs['service_date'], _api._previsit_service_types(inputs), allow_demographic=not coverage.get('member_id'), inquiry_only=inquiry_only)
+        body = _api.stedi_request_body({'stedi_payer_id': payer['stediId']}, provider, coverage, inputs['service_date'], _api._previsit_service_types(inputs), allow_demographic=not coverage.get('member_id'), inquiry_only=inquiry_only, place_of_service=inputs.get('place_of_service'))
         basic_body = _api.stedi_request_body({'stedi_payer_id': payer['stediId']}, provider, coverage, inputs['service_date'], _api._previsit_service_types(inputs),
-                                        include_identity_hints=False, allow_demographic=not coverage.get('member_id'), inquiry_only=inquiry_only)
+                                        include_identity_hints=False, allow_demographic=not coverage.get('member_id'), inquiry_only=inquiry_only,
+                                        place_of_service=inputs.get('place_of_service'))
         if inputs['service_date'] == _api.date.today().isoformat():
             body['encounter'].pop('dates', None)
             basic_body['encounter'].pop('dates', None)

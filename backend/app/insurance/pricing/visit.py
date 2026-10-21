@@ -5,6 +5,7 @@ from copy import deepcopy
 from datetime import date
 
 from app.insurance import commercial, cpt_rules, identity
+from app.insurance import published_plan_benefits
 from app.insurance.network_participation import verified_out_of_network
 
 
@@ -99,6 +100,8 @@ def price_lines(codes: list[dict], rates: list[dict], benefits: dict, rules: dic
         if benefits.get('network_status') in {'in_network', 'out_of_network'} and benefits.get('network_source'):
             raw_benefits['network_source'] = benefits['network_source']
             raw_benefits['network_evidence_ids'] = benefits.get('network_evidence_ids', [])
+        raw_benefits = published_plan_benefits.apply_office_terms(
+            raw_benefits, benefits, rules, service_date, code['code'])
         stc = (raw_benefits.get('resolved_service_type') or stc) if stc else None
         # Name differences remain on the case for billing. They do not stop
         # arithmetic for an explicitly conditional estimate of this policy.
@@ -165,7 +168,8 @@ def price_lines(codes: list[dict], rates: list[dict], benefits: dict, rules: dic
                                     'matched_candidate_count': len(matches),
                                     'source_checked': 'payer_out_of_network_rate_candidates' if out_of_network else 'scoped_active_contract_rate_candidates',
                                     'provider_network_verified': benefits.get('network_status') in {'in_network', 'out_of_network'}},
-                'benefit_source': benefits.get('benefit_source') or (payload or {}).get('benefit_source') or ('Stedi' if payload is not None else None),
+                'benefit_source': '2026 OPM PSHB brochure' if applied.get('published_plan_rule') else
+                                  benefits.get('benefit_source') or (payload or {}).get('benefit_source') or ('Stedi' if payload is not None else None),
                 'benefit_verification': selection if selection_valid else None,
                 'benefit_basis': applied.get('benefit_label') or f'Service category {stc}' if stc else 'Service category needs mapping',
                 'conditions': [reason for reason in applied.get('review_reasons', []) if _workflow_condition(reason)],

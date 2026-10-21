@@ -36,6 +36,8 @@ def case(payer, product, *codes, pos='11', day='2026-10-14', indication=None):
     ('Cigna', 'Cigna PPO', 'J0585', 'Not required', 'Required'),
     ('Cigna', 'Cigna PPO', '64612', 'Not required', 'Required'),
     ('BCBSTX', 'Blue Choice PPO', '99203', 'Not required', 'Verification required'),
+    ('BCBSTX', 'Blue Choice PPO Basic', '99213', 'Not required', 'Verification required'),
+    ('BCBSTX', 'BASIC', '99213', 'Verification required', 'Verification required'),
     ('BCBSTX', 'Blue Advantage HMO', '99203', 'Required', 'Verification required'),
     ('BCBSTX', 'Blue Choice PPO', 'J0585', 'Not required', 'Verification required'),
     ('BCBSTX', 'Participating out-of-state BlueCard/BCBS networks', '99203', 'Verification required', 'Verification required'),

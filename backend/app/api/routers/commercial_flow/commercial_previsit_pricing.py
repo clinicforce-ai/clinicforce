@@ -99,6 +99,7 @@ def _benefit_context(inputs: dict, source: dict) -> dict:
     npi = npi if npi and len(npi) == 10 and npi.isdigit() else None
     return {'place_of_service': inputs.get('place_of_service'),
             'visit_context': {key: inputs.get(key) for key in ('reason', 'diagnoses')},
+            'provider_office_role': _api.provider_specialty.office_role(rendering.get('roles') or []),
             'provider_npi': npi, 'provider_npi_conflict': conflict}
 
 
@@ -111,6 +112,13 @@ def _previsit_range(practice_id: str, inputs: dict, source: dict, payer_id: str,
     selected = [row for row in codes if not review.get("selected_ids") or row.get("id") in review['selected_ids']]
     office_types = _api._office_service_types(practice_id, source)
     rates, rules, issues = [], {'office_service_types': office_types, **_api._benefit_context(inputs, source)}, []
+    fep_product = ((benefits.get('plan_details') or {}).get('identified_product') == 'FEP Blue Basic PSHB'
+                   and source.get('payer_plan_bound') is True
+                   and source.get('payer_plan_names') == ['FEP Blue Basic PSHB'])
+    rules['fep_preferred_verified'] = bool(fep_product and
+        benefits.get('network_source') == 'payer_participation_message' and
+        _api.network_participation.verified_in_network(benefits) and
+        benefits.get('network_provider_npi') == rules.get('provider_npi') and rules.get('provider_npi'))
     if rules['provider_npi_conflict']:
         issues.append('The eCW rendering NPI conflicts with the selected visit provider; resolve it before pricing.')
     medical_names = (benefits.get('plan_details') or {}).get('names') or []
@@ -152,9 +160,14 @@ def _previsit_range(practice_id: str, inputs: dict, source: dict, payer_id: str,
             _, network, profile = _api._previsit_practice_path(practice_id, {**inputs, "payer_id": payer_id}, source)
             if network.get("plan_matcher") and not source.get("plan"):
                 raise _api.commercial.CommercialError("Clinic pricing: eCW did not return the contract plan identifier.")
-            if not _api._network_contract_evidence(practice_id, network, profile, inputs['service_date']).get('document_id'):
+            contract = _api._network_contract_evidence(practice_id, network, profile, inputs['service_date'])
+            if not contract.get('document_id'):
                 raise _api.commercial.CommercialError(
                     'The Clinical Library has no contract linked to this exact payer product and provider.')
+            if (fep_product and 'fep' in str(network.get('network_name') or '').casefold()
+                    and 'preferred' in str(network.get('network_name') or '').casefold()
+                    and _api.network_participation.verified_in_network(benefits)):
+                rules['fep_preferred_verified'] = True
             if not inputs.get("place_of_service"):
                 raise _api.commercial.CommercialError("Map the appointment location to its place of service.")
             rates = _api.commercial_store.matching_rates(practice_id, profile, network, inputs["service_date"], selected)
@@ -182,6 +195,7 @@ def _previsit_benefits(payload: dict, coverage: dict, service_date: str | None =
                        *, inputs: dict | None = None, source: dict | None = None) -> dict:
     context = _api._benefit_context(inputs, source or {}) if inputs else {}
     context.pop('provider_npi_conflict', None)  # Pricing-only guard, not a Stedi normalization field.
+    context.pop('provider_office_role', None)  # Published plan pricing only.
     rendering = (source or {}).get('rendering_provider') or {}
     if not rendering.get('first_name') or not rendering.get('last_name'):
         context['provider_npi'] = None  # Do not bind a payer participation statement to an unnamed request provider.
@@ -248,20 +262,18 @@ def _network_contract_evidence(practice_id: str, network: dict, profile: dict, s
 
 def _product_mapping_evidence(profile: dict, network: dict, source: dict, service_date: str) -> dict | None:
     """Retain the administrator record used to alias a payer product."""
-    product = _api.insurance_identity.normalized(source.get('plan'))
+    payer_names = source.get('payer_plan_names') or []
+    if not payer_names and source.get('payer_plan_bound'):
+        payer_names = [source.get('plan')]
+    product = _api.insurance_identity.normalized(payer_names[0]) if len(payer_names) == 1 else ''
     if (not source.get('payer_plan_bound') or not product
             or product == _api.insurance_identity.normalized(network.get('plan_matcher'))):
         return None
-    for row in (profile.get('rules') or {}).get('product_mappings') or []:
-        if (row.get('actor_id') and row.get('reference')
-                and row.get('network_id') == network.get('id')
-                and row.get('network_reference') == network.get('evidence_reference')
-                and row.get('plan_scope') == source.get('payer_plan_scope')
-                and row.get('valid_from', '') <= service_date <= row.get('valid_to', '')
-                and product in {_api.insurance_identity.normalized(name)
-                                for name in row.get('products') or []}):
-            return {key: row.get(key) for key in ('reference', 'actor_id', 'verified_at',
-                                                  'valid_from', 'valid_to')}
+    row = _api._applicable_product_mapping(network, profile, source, service_date)
+    if row and product in {_api.insurance_identity.normalized(name) for name in row.get('products') or []}:
+        return {key: row.get(key) for key in ('reference', 'actor_id', 'verified_at',
+                                              'valid_from', 'valid_to', 'contract_product',
+                                              'rate_plan_matcher', 'network_identifiers')}
     return None
 
 
@@ -388,18 +400,18 @@ def _attach_previsit_pricing(result: dict, practice_id: str, inputs: dict, sourc
                 'reason': evidence.get('reason') or
                 'The Clinical Library has no contract linked to this exact payer product and provider.'}
     except _api.HTTPException as exc:
-        if str(exc.detail) in {
-            'The payer-reported member network does not match the clinic contract.',
-            'The clinic fee schedule is not matched to the exact payer product.',
-        }:
-            benefits['network_conflict'] = True
+        if str(exc.detail) == 'The clinic fee schedule is not matched to the exact payer product.':
+            result['issues'].append(str(exc.detail))
         if scope_complete and str(exc.detail) == 'A sourced nonparticipation rule applies to this provider, product, location and date.':
             benefits['network_status'] = 'out_of_network'
             benefits['network_source'] = 'clinic_nonparticipation_rule'
         if scope_complete and not exclusion:
             result['network_evidence'] = {'decision': 'out_of_network_confirmed_by_scoped_nonparticipation_record'
                 if benefits.get('network_source') == 'clinic_nonparticipation_rule'
-                else 'lacking_applicable_network_evidence', 'reason': str(exc.detail)}
+                else 'lacking_applicable_network_evidence',
+                'reason_code': 'product_link_missing' if str(exc.detail) == 'The clinic fee schedule is not matched to the exact payer product.'
+                else 'payer_network_unmatched' if str(exc.detail) == 'The payer-reported member network does not match the clinic contract.'
+                else 'contract_scope_unresolved', 'reason': str(exc.detail)}
     if (inventory and benefits.get('network_source') != 'clinic_library_contract'
             and not _api.network_participation.verified_out_of_network(benefits)):
         _apply_inventory_tier(result, benefits, inventory, exclusion)

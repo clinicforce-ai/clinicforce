@@ -138,10 +138,28 @@ def plan_details(payload: dict) -> dict:
                                         if isinstance(person, dict)
                                         for network in [((person.get('additionalInformation') or {}).get('planNetwork') or {})]
                                         if isinstance(network, dict) and network.get('name')))
+    group = subscriber.get("groupNumber") or info.get("groupNumber") or (additional.get("group") or {}).get("number")
+    # A short display label cannot identify a federal product by itself. The
+    # member-bound enrollment code and an FEP source marker must agree.
+    fep_paths = [row['evidence_path'] for row in rows if any(
+        'fepblue.org' in note.casefold() for field in ('messages', 'additionalInformation')
+        for note in _benefit_notes(row.get(field)))]
+    if 'fepblue.org' in str(payload.get('x12') or '').casefold():
+        fep_paths.append('x12')
+    fep_basic = (len(names) == 1 and names[0].strip().casefold() == 'basic'
+                 and str(group or '').strip().upper() == '33A' and bool(fep_paths)
+                 and str(subscriber.get('memberId') or '').upper().startswith('R'))
     return {"names": names, "supplementary_names": supplementary,
             "plan_number": subscriber.get("planNumber") or info.get("planNumber") or (additional.get('plan') or {}).get('number'),
-            "group_number": subscriber.get("groupNumber") or info.get("groupNumber") or (additional.get("group") or {}).get("number"),
-            "network_names": network_names, "source": "Stedi"}
+            "group_number": group,
+            "network_names": network_names, "source": "Stedi",
+            "identified_product": 'FEP Blue Basic PSHB' if fep_basic else None,
+            "product_evidence": ({'plan': 'plans[0].name',
+                                  'enrollment': 'subscriber.additionalInformation.group.number'
+                                  if not subscriber.get('groupNumber') and not info.get('groupNumber') else
+                                  'subscriber.groupNumber' if subscriber.get('groupNumber') else 'planInformation.groupNumber',
+                                  'fep_reference': fep_paths[0],
+                                  'published_rule': '2026 OPM PSHB brochure 71-020'} if fep_basic else None)}
 
 
 

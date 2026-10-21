@@ -53,8 +53,8 @@ CIGNA_REFERRAL_SOURCE = {
 }
 BCBSTX_2026_REFERRAL_SOURCE = {
     'label': 'BCBSTX 2026 Blue Choice PPO and Blue Essentials specialist referral comparison',
-    'url': 'https://www.bcbstx.com/producer/mid-market-group-insurance',
-    'source_version': '2026 mid-market portfolio, July 2026 to June 2027',
+    'url': 'https://www.bcbstx.com/docs/provider/tx/standards/manuals/ppo-provider-manual/ppo-secd-referral.pdf',
+    'source_version': 'Blue Choice PPO provider manual referral section, checked 2026-10-21',
     'verified_at': '2026-10-21', 'effective_from': '2026-07-01',
     'effective_to': '2027-06-30',
 }
@@ -95,6 +95,12 @@ BCBSTX_2026_PA_SOURCE = {
     'source_version': '2026 code list, updated October 2026', 'verified_at': '2026-10-21',
     'effective_from': '2026-01-01', 'effective_to': '2026-12-31',
 }
+FEP_PSHB_2026_SOURCE = {
+    'label': '2026 OPM PSHB Service Benefit Plan brochure, Sections 3 and 5(a)',
+    'url': 'https://www.opm.gov/healthcare-insurance/healthcare/plan-information/plans/BrochureJson?brochureNumber=71-020&year=2026',
+    'source_version': '2026 brochure 71-020', 'verified_at': '2026-10-21',
+    'effective_from': '2026-01-01', 'effective_to': '2026-12-31',
+}
 
 
 def _published_rule(kind: str, result: dict, context: dict, plans: list[str], codes: set[str]) -> dict | None:
@@ -129,6 +135,13 @@ def _published_rule(kind: str, result: dict, context: dict, plans: list[str], co
                                      'location_id': context.get('location_id'),
                                      'place_of_service': context.get('pos'),
                                      'service_date': day}}
+    if product == 'fepbluebasicpshb':
+        if kind == 'referral':
+            return rule('Not required', 'The 2026 PSHB Service Benefit Plan does not require a PCP referral to see a specialist.', FEP_PSHB_2026_SOURCE)
+        if kind == 'authorization' and office and codes <= {'99212', '99213', '99214', '99215'} and str(context.get('pos') or '') == '11':
+            return rule('Not required', 'The 2026 PSHB brochure lists services requiring prior approval; a routine office E/M visit alone is outside those listed categories. Additional services require their own decision.', FEP_PSHB_2026_SOURCE)
+        if kind == 'authorization':
+            return rule('Verification required', 'The 2026 PSHB brochure requires prior approval for selected services and drugs. Match each planned code and indication to its rule.', FEP_PSHB_2026_SOURCE, check=True)
     if {'unitedhealthcare', 'uhc'} & names:
         if 'wellmed' in names or any('wellmed' in _key(plan) for plan in plans):
             return None
@@ -171,7 +184,7 @@ def _published_rule(kind: str, result: dict, context: dict, plans: list[str], co
             return rule('Required', 'Cigna lists this selected drug or chemodenervation code separately for precertification. Confirm this member’s applicable care management rules and obtain approval.', CIGNA_2026_PA_SOURCE, check=True)
         return rule('Verification required', 'The Cigna list does not establish authorization for this selected service under the member’s exact plan. Check the member-specific precertification tool.', CIGNA_2026_PA_SOURCE, check=True)
     if (kind == 'authorization' and 'bluecard' not in product
-            and names & {'bcbstx', 'bluecrossblueshieldoftexas', 'bluecrossandblueshieldoftexas'}):
+            and names & {'bcbstx', 'bcbstexas', 'bluecrossblueshieldoftexas', 'bluecrossandblueshieldoftexas'}):
         if codes & {'J0585', '64612', '64615'}:
             return rule('Verification required', 'BCBSTX lists J0585 for some 2026 products, but the list has product and ASO exceptions and does not establish authorization for this member or the separate injection code.', BCBSTX_2026_PA_SOURCE, check=True)
         return rule('Verification required', 'The BCBSTX published list does not establish authorization for this member and selected code; product and ASO exceptions require a member-specific check.', BCBSTX_2026_PA_SOURCE, check=True)
@@ -182,9 +195,9 @@ def _published_rule(kind: str, result: dict, context: dict, plans: list[str], co
             return rule('Not required', 'Cigna PPO/Open Access Plus permits in-network specialist visits without a PCP referral.', CIGNA_REFERRAL_SOURCE)
         if product == 'cignahmo':
             return rule('Required', 'Cigna HMO requires a PCP specialist referral for this neurology office visit; verify the member and referral record.', CIGNA_REFERRAL_SOURCE, check=True)
-    if names & {'bcbstx', 'bluecrossblueshieldoftexas', 'bluecrossandblueshieldoftexas'} and day >= '2026-07-01':
-        if product == 'bluechoiceppo':
-            return rule('Not required', 'BCBSTX Blue Choice PPO does not require an in-network specialist referral.', BCBSTX_2026_REFERRAL_SOURCE)
+    if names & {'bcbstx', 'bcbstexas', 'bluecrossblueshieldoftexas', 'bluecrossandblueshieldoftexas'} and day >= '2026-07-01':
+        if product in {'bluechoiceppo', 'bluechoiceppobasic'}:
+            return rule('Not required', 'BCBSTX Blue Choice PPO does not require an in-network specialist referral; confirm the member uses this network.', BCBSTX_2026_REFERRAL_SOURCE)
         if product in {'blueessentials', 'blueadvantagehmo'}:
             return rule('Required', 'This BCBSTX HMO product requires a PCP specialist referral; verify the member and referral record.', BCBSTX_2026_REFERRAL_SOURCE, check=True)
     return None

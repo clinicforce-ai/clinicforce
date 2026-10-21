@@ -37,8 +37,9 @@ def uhc():
         'outOfPocket': [row('4276.46', stc='30', period='REMAINING')]}}]}
 
 
-def replay(raw, *, confirmed_network=True):
-    benefits = commercial.normalize_stedi_271(raw, '98', False, service_date=DAY)
+def replay(raw, *, confirmed_network=True, place_of_service=None):
+    benefits = commercial.normalize_stedi_271(raw, '98', False, service_date=DAY,
+                                               place_of_service=place_of_service)
     benefits['identity'] = {'status': 'matched', 'binding': 'synthetic-current-binding', 'match_version': 2}  # De-identified saved terms have no patient fields.
     price = visit_estimate.price_lines([{'id': 'visit', 'code': '99203', 'units': 1}], [], benefits, RULES, payload=raw, service_date=DAY)
     if confirmed_network:
@@ -102,6 +103,50 @@ def test_unknown_service_limit_or_conflicting_specialist_term_still_blocks_advan
     conflicting['amount'] = '50'
     raw['plans'][0]['benefits']['coPayment'].append(conflicting)
     assert replay(raw)[0]['amount_cents'] is None
+
+
+@pytest.mark.parametrize('other_office_label', ['Office Visit', 'Primary Care Visit or Evaluation'])
+def test_qualified_specialist_copay_beats_other_office_row_without_a_rate(other_office_label):
+    raw = {'plans': [{'benefits': {'statuses': [{'status': 'Active'}],
+        'coPayment': [row('35', messages=[other_office_label], placesOfService=[{'code': '11'}]),
+                      row('50', messages=['Specialist'], placesOfService=[{'code': '11'}])],
+        'deductible': [row('0', stc='30', period='REMAINING')]}}]}
+    guidance, terms = replay(raw)
+    assert terms['copay_cents'] == 5000
+    assert guidance['basis'] == 'office_copay'
+    assert guidance['amount_cents'] == 5000
+
+
+def test_auth_metadata_does_not_make_equal_specialist_copays_conflict():
+    raw = {'plans': [{'benefits': {'statuses': [{'status': 'Active'}],
+        'coPayment': [row('35', messages=['Office Visit'], placesOfService=[{'code': '11'}]),
+                      row('50', messages=['Specialist'], placesOfService=[{'code': '11'}]),
+                      row('50', messages=['Specialist'], placesOfService=[{'code': '11'}],
+                          priorAuthIndicator='REQUIRED')]}}]}
+    guidance, terms = replay(raw)
+    assert terms['copay_cents'] == 5000
+    assert terms['authorization_signal'] == 'unknown'
+    assert set(terms['selected_benefit_ids']) == {
+        'plans[0].benefits.coPayment[1]', 'plans[0].benefits.coPayment[2]'}
+
+
+def test_telemedicine_and_aba_copays_do_not_price_in_person_office():
+    raw = {'plans': [{'benefits': {'statuses': [{'status': 'Active'}],
+        'coPayment': [
+            row('35', messages=['TELEMEDICINE EXCEPT WHEN PREVENTIVE'], period='VISIT'),
+            row('50', messages=['SPECIALIST; TELEMEDICINE EXCEPT WHEN PREVENTIVE'], period='VISIT'),
+            row('35', messages=['APPLIED BEHAVIOR ANALYSIS FOR AUTISM SPECTRUM DISORDER'],
+                period='VISIT', priorAuthIndicator='REQUIRED'),
+            row('50', messages=['SPECIALIST; APPLIED BEHAVIOR ANALYSIS FOR AUTISM SPECTRUM DISORDER'],
+                period='VISIT', priorAuthIndicator='REQUIRED')],
+        'coInsurance': [row(stc='98', percent='.2',
+            messages=['AGENTS, DRUGS AND/OR SUPPLIES ADMINISTERED OR OBTAINED IN CONNECTION WITH CARE'])]}}]}
+    guidance, terms = replay(raw, place_of_service='11')
+    assert terms['copay_cents'] is None
+    assert terms['coinsurance_percent'] is None
+    assert guidance['amount_cents'] is None
+    assert len(terms['excluded_service_evidence_ids']) == 5
+    assert len([option for option in terms['reported_options'] if option['kind'] == 'copay']) == 4
 
 
 def test_met_family_oop_supports_zero_advance_without_copying_family_balances_to_individual():

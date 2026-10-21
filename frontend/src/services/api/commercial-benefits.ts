@@ -28,6 +28,8 @@ export type PrevisitBenefits = null | {
   qmb_evidence_ids?: string[]
   network_provider_npi?: string | null
   deductible_remaining_cents?: number | null
+  published_plan_rule?: { label: string; url: string; effective_from: string; effective_to: string }
+  published_preferred_office_copay_cents?: number
   deductible_annual_cents?: number | null
   oop_remaining_cents?: number | null
   oop_annual_cents?: number | null

@@ -4,6 +4,7 @@ from __future__ import annotations
 from app.api.routers import commercial_estimator as _api
 from app.insurance.identity import patient_benefits_bound, payer_identity_verified
 from app.insurance.network_participation import verified_in_network, verified_out_of_network
+from app.insurance import evidence_resolution
 from app.api.routers.commercial_flow.commercial_previsit_finish import _payer_plan_pricing_source
 from app.api.routers.commercial_flow.commercial_previsit_network_guard import recheck_saved_inventory, recheck_saved_payer_message
 from app.api.routers.commercial_flow.commercial_previsit_requirements import refresh_saved_requirements
@@ -213,10 +214,10 @@ def _recheck_saved_clinic_pricing(result: dict, case: dict, practice_id: str) ->
         plan = ((result.get('plan_details') or {}).get('stedi') or {})
         identity = result.get('identity') or benefits.get('identity') or {}
         exact_source = {**_payer_plan_pricing_source(source, plan, benefits, identity),
-                        'payer_plan_names': plan.get('names', source.get('payer_plan_names', [])),
+                        'payer_plan_names': ([plan['identified_product']] if plan.get('identified_product') and patient_benefits_bound(identity)
+                                             else plan.get('names', source.get('payer_plan_names', []))),
                         'payer_network_names': (plan.get('network_names', source.get('payer_network_names', []))
-                            if benefits.get('active') is True and benefits.get('service_date_matches') is True
-                            and patient_benefits_bound(identity) else []),
+                            if benefits.get('active') is True and benefits.get('service_date_matches') is True and patient_benefits_bound(identity) else []),
                         'payer_plan_scope': {key: plan.get(key) for key in ('plan_number', 'group_number')}}
         try:
             _, network, profile = _api._previsit_practice_path(
@@ -335,8 +336,7 @@ def _previsit_result(case: dict, practice_id: str | None = None) -> dict:
     _api.commercial.discard_stale_directory_payer(result, case['previsit_context'].get('payer_id'))
     route_payer = None
     if practice_id:
-        # Saved cases use the current clinic decision; disabling deferral must
-        # not leave an old $0 policy attached to a historical result.
+        # Use current clinic policy so disabled deferral cannot retain an old $0 decision.
         result.pop('collection_policy', None)
         payer_id = case['previsit_context'].get('payer_id')
         if payer_id:
@@ -345,7 +345,7 @@ def _previsit_result(case: dict, practice_id: str | None = None) -> dict:
             if len(matches) == 1:
                 route_payer = matches[0]
                 policy = (matches[0].get('rules') or {}).get('collection_policy') or {}
-                if (isinstance(policy, dict) and policy.get('mode') == 'defer_to_claim' and policy.get('approved_by')
+                if (isinstance(policy, dict) and policy.get('mode') in {'defer_to_claim', 'collect_verified_copay'} and policy.get('approved_by')
                         and policy.get('approved_at') and policy.get('reference')):
                     result['collection_policy'] = policy
         recheck_saved_inventory(result, case, practice_id, route_payer)
@@ -445,6 +445,7 @@ def _previsit_result(case: dict, practice_id: str | None = None) -> dict:
                       message='Recalculate the testing scenario with current payer and visit evidence.')
     result['encounter_summary'] = _api.encounter_summary.build(result, case.get('visit_review'))
     result['payment_explanation'] = _api.amount_explanation.build(result, result['collection_guidance'], case.get('visit_review'))
+    result['evidence_resolution'] = evidence_resolution.build(result, source)
     return result
 
 

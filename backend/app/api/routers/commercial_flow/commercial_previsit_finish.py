@@ -5,7 +5,7 @@ from app.api.routers import commercial_estimator as _api
 from app.api.routers.commercial_flow.commercial_previsit_catalog import build_catalog
 from app.api.routers.commercial_flow.commercial_previsit_requirements import attach_requirements
 from app.insurance.identity import patient_benefits_bound
-from app.insurance import botox_review
+from app.insurance import botox_review, evidence_resolution, published_plan_benefits
 
 def _visit_context_token(inputs: dict, source: dict) -> str:
     context = {'coverage': {k: v for k, v in _api._coverage_snapshot(inputs, source).items() if k != 'other_active_coverage'},
@@ -63,6 +63,8 @@ def _finish_previsit(result: dict, case: dict, inputs: dict, source: dict, paylo
     payer_plan_bound = (result['benefits'].get('active') is True
         and result['benefits'].get('service_date_matches') is True
         and patient_benefits_bound(comparison))
+    published_plan_benefits.apply_plan_terms(result['benefits'], payer_plan,
+                                             inputs['service_date'], payer_plan_bound)
     protection = review.get('billing_protection') or {}
     product_binding = _api.payer_allowance.product_binding(payer_plan)
     result['billing_protection'] = protection if (payer_plan_bound
@@ -70,8 +72,10 @@ def _finish_previsit(result: dict, case: dict, inputs: dict, source: dict, paylo
         and protection.get('product_binding') == product_binding
         and protection.get('payer_id') == payer_id
         and protection.get('service_date') == inputs.get('service_date')) else {}
+    product_names = ([payer_plan['identified_product']] if payer_plan_bound and payer_plan.get('identified_product')
+                     else payer_plan['names'])
     exact_source = {**_payer_plan_pricing_source(pricing_source or source, payer_plan, result['benefits'], comparison),
-                    'payer_plan_names': payer_plan['names'],
+                    'payer_plan_names': product_names,
                     'payer_plan_bound': payer_plan_bound,
                     'payer_network_names': payer_plan['network_names'] if payer_plan_bound else [],
                     'payer_plan_scope': {key: payer_plan.get(key) for key in ('plan_number', 'group_number')}}
@@ -188,7 +192,9 @@ def _finish_previsit(result: dict, case: dict, inputs: dict, source: dict, paylo
             _, network, profile = _api._previsit_practice_path(session['practice_id'], {**inputs, 'payer_id': connections[0]['id']},
                                                 {**exact_source, 'payer_plan_names': []})
             contract = _api._network_contract_evidence(session['practice_id'], network, profile, inputs['service_date'])
-            if network.get('network_name') and contract.get('document_id'):
+            if (network.get('network_name') and contract.get('document_id')
+                    and not (payer_plan.get('identified_product') == 'FEP Blue Basic PSHB'
+                             and 'fep' not in network['network_name'].casefold())):
                 result['mapping_candidate'] = {'network': network['network_name'], 'products': exact_source['payer_plan_names'],
                                                'reference': network['evidence_reference'],
                                                'contract': contract}
@@ -213,6 +219,7 @@ def _finish_previsit(result: dict, case: dict, inputs: dict, source: dict, paylo
                 pass
         result['emg_option'] = _api.collection_guidance.emg_option(result, emg_rates, emg_rules, payload, inputs['service_date'], review)
     result['encounter_summary'] = _api.encounter_summary.build(result, review)
+    result['evidence_resolution'] = evidence_resolution.build(result, source)
     guidance = result['collection_guidance']
     emg = result.get('emg_option') or {}
     price = result.get('price_range') or {}

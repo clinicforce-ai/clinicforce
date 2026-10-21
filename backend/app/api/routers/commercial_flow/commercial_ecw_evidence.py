@@ -148,7 +148,7 @@ def _stedi_address(value: object) -> dict[str, str] | None:
 
 def stedi_request_body(payer: dict, network: dict, coverage: dict, service_date: str, stc: str | list[str],
                        *, include_identity_hints: bool = True, allow_demographic: bool = False,
-                       inquiry_only: bool = False) -> dict:
+                       inquiry_only: bool = False, place_of_service: str | None = None) -> dict:
     if (coverage.get('subscriber_patient_linked') and coverage.get('relationship') in {'18', 'self'}
             and coverage.get('subscriber_first') and coverage.get('patient_first')
             and _api.insurance_identity.normalized(coverage['subscriber_first']) != _api.insurance_identity.normalized(coverage['patient_first'])):
@@ -179,6 +179,11 @@ def stedi_request_body(payer: dict, network: dict, coverage: dict, service_date:
             "subscriber": {"memberId": coverage.get("member_id"), "dateOfBirth": coverage.get("subscriber_birth_date"),
                            "name": {"person": {"firstName": coverage["subscriber_first"], "lastName": coverage["subscriber_last"]}}},
             "encounter": {"dates": {"service": {"start": service_date}}, "services": [{"system": "STC", "value": code} for code in ([stc] if isinstance(stc, str) else stc)]}}
+    # The eCW visit's mapped setting can narrow payer benefit rows. An absent or
+    # malformed mapping must not be represented as a confirmed office visit.
+    pos = str(place_of_service or '').strip()
+    if _api.re.fullmatch(r'\d{2}', pos):
+        body['encounter']['placeOfService'] = {'code': pos}
     body['subscriber'] = {key: value for key, value in body['subscriber'].items() if value}
     if coverage["relationship"] not in {"18", "self"}:
         body["dependent"] = {"dateOfBirth": coverage["patient_birth_date"],
