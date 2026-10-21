@@ -205,33 +205,33 @@ export function deriveCommercialEstimateView({
         : result?.network_evidence?.decision === 'in_network_contract_supported' &&
             patientBenefitsBound
           ? 'Contract indicates in network'
-        : benefits?.active === true &&
-            !patientBenefitsBound &&
-            ['in_network', 'out_of_network'].includes(benefits.network_status || '')
-          ? 'Patient plan not matched'
-          : benefits?.network_status === 'in_network'
-            ? networkConfirmed
-              ? 'In network'
-              : 'Network not determined'
-            : benefits?.network_status === 'out_of_network'
-              ? outOfNetworkConfirmed
-                ? 'Out of network'
+          : benefits?.active === true &&
+              !patientBenefitsBound &&
+              ['in_network', 'out_of_network'].includes(benefits.network_status || '')
+            ? 'Patient plan not matched'
+            : benefits?.network_status === 'in_network'
+              ? networkConfirmed
+                ? 'In network'
                 : 'Network not determined'
-              : contractCandidate
-                ? 'Contract match unavailable'
-                : 'Not determined'
+              : benefits?.network_status === 'out_of_network'
+                ? outOfNetworkConfirmed
+                  ? 'Out of network'
+                  : 'Network not determined'
+                : contractCandidate
+                  ? 'Contract match unavailable'
+                  : 'Not determined'
   const networkSource =
     result?.network_evidence?.decision === 'in_network_contract_supported'
       ? 'Dated group agreement and product-network rule · clinician participation pending'
       : benefits?.network_source === 'clinic_library_contract'
-      ? 'Current Clinical Library contract'
-      : benefits?.network_source === 'clinic_library_absent'
-        ? 'No contract linked to this exact payer product and provider'
-        : benefits?.network_source === 'clinic_nonparticipation_rule'
-          ? 'Current scoped clinic nonparticipation rule'
-          : benefits?.network_source === 'clinic_contract_inventory'
-            ? 'Certified clinic contract inventory · not payer-confirmed'
-            : guidance?.network_source
+        ? 'Current Clinical Library contract'
+        : benefits?.network_source === 'clinic_library_absent'
+          ? 'No contract linked to this exact payer product and provider'
+          : benefits?.network_source === 'clinic_nonparticipation_rule'
+            ? 'Current scoped clinic nonparticipation rule'
+            : benefits?.network_source === 'clinic_contract_inventory'
+              ? 'Certified clinic contract inventory · not payer-confirmed'
+              : guidance?.network_source
   const networkTone =
     !result || tooEarly || result.recovery?.state === 'pending'
       ? ''
