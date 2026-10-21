@@ -337,7 +337,6 @@ export function deriveCommercialEstimateView({
         : money(provisionalAmount)
   const estimatedShare =
     !cash &&
-    !readOnly &&
     !calculating &&
     !previousEstimate &&
     !supportedAmount &&
@@ -364,7 +363,9 @@ export function deriveCommercialEstimateView({
   const amountLabel = previousEstimate
     ? 'Previous estimate · needs recheck'
     : readOnly
-      ? 'Recorded recommendation at this visit'
+      ? estimatedShare
+        ? 'Recorded estimated patient share · do not collect'
+        : 'Recorded recommendation at this visit'
       : error
         ? 'Visit needs review'
         : result?.cash_fallback

@@ -999,8 +999,10 @@ try {
       result: requiredAuthorization,
     }),
   )
-  assert.equal(requiredModel.amountText, 'Insured amount unavailable')
-  assert.equal(requiredAuthorization.encounter_summary.estimated_total_patient_min_cents, null)
+  assert.equal(requiredModel.amountText, '$80.00')
+  assert.equal(requiredModel.amountLabel, 'Recorded estimated patient share · do not collect')
+  assert.equal(requiredAuthorization.encounter_summary.estimated_total_patient_min_cents, 8000)
+  assert.equal(requiredAuthorization.collection_guidance.amount_cents, null)
   assert(requiredOverview.includes('approval and record its reference for CPT 93000'))
   assert(!requiredOverview.includes('What the arrival amount includes'))
   console.log(
