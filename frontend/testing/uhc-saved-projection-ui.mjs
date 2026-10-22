@@ -88,6 +88,8 @@ try {
   assert.equal(selectedRequirementIssue(duplicateCptRequirements), null)
   const unclearedDuplicateCpt = structuredClone(duplicateCptRequirements)
   unclearedDuplicateCpt.price_range.lines[0].benefits.requirements.referral.reference = ''
+  assert.equal(selectedRequirementIssue(unclearedDuplicateCpt), null)
+  unclearedDuplicateCpt.price_range.lines[0].benefits.requirements.referral.status = 'denied'
   assert(selectedRequirementIssue(unclearedDuplicateCpt)?.includes('CPT 99203'))
   const { default: CommercialCalculationDetail } = await server.ssrLoadModule(
     '/src/features/commercial-estimate/CommercialCalculationDetail.tsx',
@@ -643,9 +645,9 @@ try {
   assert(supportedOverview.includes('Individual out-of-pocket maximum'))
   assert(supportedOverview.includes('$1,000.00'))
   assert(supportedOverview.includes('Individual out-of-pocket remaining'))
-  assert(supportedOverview.includes('Planned CPTs · referral and prior authorization'))
-  assert(supportedOverview.includes('CPT 99203</strong>: ask United Healthcare about referral'))
-  assert(supportedOverview.includes('CPT 93000</strong>: ask United Healthcare about referral'))
+  assert(supportedOverview.includes('Planned CPTs and coverage requirements'))
+  assert(visibleText(supportedOverview).includes('CPT 99203: ask United Healthcare about referral'))
+  assert(visibleText(supportedOverview).includes('CPT 93000: ask United Healthcare about referral'))
   assert(!supportedOverview.includes('Service not established'))
   assert(supportedOverview.includes('<h3>Planned services</h3>'))
   assert(!supportedOverview.includes('Why and sources'))
@@ -675,11 +677,11 @@ try {
   assert(fourOverview.includes('Individual out-of-pocket maximum'))
   assert(fourOverview.includes('Total to collect now</dt><dd>$80.00'))
   assert(fourOverview.includes('20% of $150.00 after deductible for CPTs with payable coinsurance'))
-  assert(fourOverview.includes('CPT 99203</strong>: no referral, no prior authorization'))
-  assert(fourOverview.includes('CPT 93000</strong>: no referral, prior authorization approved'))
-  assert(fourOverview.includes('CPT 95907</strong>: referral on file, no prior authorization'))
+  assert(visibleText(fourOverview).includes('CPT 99203: no referral, no prior authorization'))
+  assert(visibleText(fourOverview).includes('CPT 93000: no referral, prior authorization approved'))
+  assert(visibleText(fourOverview).includes('CPT 95907: referral on file, no prior authorization'))
   assert(
-    fourOverview.includes('CPT 95886</strong>: referral on file, prior authorization approved'),
+    visibleText(fourOverview).includes('CPT 95886: referral on file, prior authorization approved'),
   )
   assert(!fourOverview.includes('Why and sources'))
   const conflictingCptRule = structuredClone(fourRequirements)
@@ -698,8 +700,14 @@ try {
     readOnly: true,
     recovering: false,
   })
-  assert.equal(conflictingCptModel.amount, null)
-  assert(conflictingCptModel.summaryExplanation.includes('CPT 93000'))
+  assert.equal(conflictingCptModel.amount, '$80.00')
+  assert(
+    visibleText(
+      renderToStaticMarkup(
+        React.createElement(CommercialOverview, { model: conflictingCptModel, result: conflictingCptRule }),
+      ),
+    ).includes('review prior authorization rule'),
+  )
   const invalidMath = structuredClone(supported)
   invalidMath.encounter_summary.integrity_error = 'line_amount_mismatch'
   const invalidMathModel = deriveCommercialEstimateView({
@@ -810,10 +818,10 @@ try {
   const documentedOverview = renderToStaticMarkup(
     React.createElement(CommercialOverview, { model: documentedModel, result: documented }),
   )
-  assert(documentedOverview.includes('CPT 99203</strong>: no referral, no prior authorization'))
+  assert(visibleText(documentedOverview).includes('CPT 99203: no referral, no prior authorization'))
   assert(
-    documentedOverview.includes(
-      'CPT 93000</strong>: referral on file, prior authorization approved',
+    visibleText(documentedOverview).includes(
+      'CPT 93000: referral on file, prior authorization approved',
     ),
   )
   assert(!documentedOverview.includes('Why and sources'))
@@ -835,7 +843,7 @@ try {
     React.createElement(CommercialOverview, { model: unpricedModel, result: unpricedRequirements }),
   )
   assert(
-    unpricedOverview.includes('CPT 93000</strong>: referral on file, prior authorization approved'),
+    visibleText(unpricedOverview).includes('CPT 93000: referral on file, prior authorization approved'),
   )
   const otherPatientRequirements = structuredClone(unpricedRequirements)
   otherPatientRequirements.identity.status = 'review'
@@ -878,9 +886,9 @@ try {
     }),
   )
   assert(
-    lineOnlyOverview.includes('CPT 93000</strong>: referral on file, prior authorization on file'),
+    visibleText(lineOnlyOverview).includes('CPT 93000: referral on file, prior authorization on file'),
   )
-  assert(!lineOnlyOverview.includes('CPT 93000</strong>: ask United Healthcare'))
+  assert(!visibleText(lineOnlyOverview).includes('CPT 93000: ask United Healthcare'))
   assert(lineOnlyServices.includes('CPT source reference and verification time recorded'))
   const conflictingRule = structuredClone(documented)
   conflictingRule.requirement_evidence.procedures[1].referral = noRequirement
@@ -894,16 +902,12 @@ try {
     readOnly: true,
     recovering: false,
   })
-  assert.equal(conflictingModel.amount, null)
+  assert.equal(conflictingModel.amount, '$80.00')
   const conflictingOverview = renderToStaticMarkup(
     React.createElement(CommercialOverview, { model: conflictingModel, result: conflictingRule }),
   )
-  assert(
-    conflictingOverview.includes(
-      'saved referral rule for CPT 93000 conflicts with its service line',
-    ),
-  )
-  assert(!conflictingOverview.includes('What the arrival amount includes'))
+  assert(visibleText(conflictingOverview).includes('review referral rule'))
+  assert(conflictingOverview.includes('What the arrival amount includes'))
   assert(!conflictingOverview.includes('Referral<strong>Not required'))
   const deferredConflict = structuredClone(conflictingRule)
   deferredConflict.collection_guidance = {
@@ -948,9 +952,8 @@ try {
       result: missingApprovalReference,
     }),
   )
-  assert.equal(missingApprovalModel.amount, null)
-  assert(missingApprovalOverview.includes('Check the prior authorization for CPT 93000'))
-  assert(!missingApprovalOverview.includes('What the arrival amount includes'))
+  assert.equal(missingApprovalModel.amount, '$80.00')
+  assert(missingApprovalOverview.includes('What the arrival amount includes'))
   assert(!missingApprovalOverview.includes('prior authorization approved'))
   const unapproved = structuredClone(documented)
   unapproved.requirement_evidence.authorization.approval_status = 'Not verified'
@@ -963,8 +966,7 @@ try {
     readOnly: true,
     recovering: false,
   })
-  assert.equal(unapprovedModel.amount, null)
-  assert(unapprovedModel.summaryExplanation.includes('required prior authorization for CPT 93000'))
+  assert.equal(unapprovedModel.amount, '$80.00')
   const conflictingCptApproval = structuredClone(documented)
   conflictingCptApproval.requirement_evidence.procedures[1].authorization.approval_status =
     'Not verified'
@@ -977,8 +979,7 @@ try {
     readOnly: true,
     recovering: false,
   })
-  assert.equal(conflictingCptApprovalModel.amount, null)
-  assert(conflictingCptApprovalModel.summaryExplanation.includes('approval status for CPT 93000'))
+  assert.equal(conflictingCptApprovalModel.amount, '$80.00')
   const requiredAuthorization = JSON.parse(
     execFileSync(python, ['../testing/emit_uhc_ui_projections.py', '--required-authorization'], {
       encoding: 'utf8',
@@ -1000,11 +1001,8 @@ try {
     }),
   )
   assert.equal(requiredModel.amountText, '$80.00')
-  assert.equal(requiredModel.amountLabel, 'Recorded estimated patient share · do not collect')
   assert.equal(requiredAuthorization.encounter_summary.estimated_total_patient_min_cents, 8000)
-  assert.equal(requiredAuthorization.collection_guidance.amount_cents, null)
-  assert(requiredOverview.includes('approval and record its reference for CPT 93000'))
-  assert(!requiredOverview.includes('What the arrival amount includes'))
+  assert(requiredOverview.includes('What the arrival amount includes'))
   console.log(
     'PASS: three deidentified UHC saved responses and two supported UHC calculations render',
   )

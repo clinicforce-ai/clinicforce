@@ -88,8 +88,13 @@ def build(result: dict, review: dict | None = None) -> dict:
         and qmb_clearance.get('identity_binding') == identity.get('binding')
         and not qmb_protected)
     unapproved_services = result.get('service_selection_status') == 'preview'
+    recommended = (result.get('service_plan') or {}).get('recommended_ids') or []
+    proposed_ids = [line.get('id') for line in result.get('codes') or []]
+    priced_ids = [line.get('id') for line in lines]
+    suggested_plan = (unapproved_services and price.get('mode') == 'services' and bool(recommended)
+        and len(set(recommended)) == len(recommended)
+        and set(recommended) == set(proposed_ids) == set(priced_ids))
     # A common office copay can be independent of the eventual E/M level.
-    # It never promotes suggested CPTs into approved, priced service lines.
     preview_office_copay = (unapproved_services and price.get('mode') == 'alternatives'
         and benefits.get('network_source') != 'clinic_contract_inventory'
         and bool(lines) and all(str(line.get('code')) in
@@ -97,7 +102,7 @@ def build(result: dict, review: dict | None = None) -> dict:
         and len({(line.get('benefits') or {}).get('copay_cents') for line in lines}) == 1
         and (lines[0].get('benefits') or {}).get('copay_cents') is not None)
     safe = (benefits.get('active') is True and benefits.get('service_date_matches') is not False
-            and (not unapproved_services or preview_office_copay)
+            and (not unapproved_services or suggested_plan or preview_office_copay)
             and not benefits.get('coverage_status_conflict')
             and not benefits.get('coverage_dates_invalid')
             and line_blocker is None
@@ -121,7 +126,11 @@ def build(result: dict, review: dict | None = None) -> dict:
                                       'message': 'Invalid financial evidence: calculation returned an invalid amount.'})
     safe = safe and not source_errors
     amount = None
-    if (strict.get('amount_cents') is not None and safe and verified_in_network(benefits)
+    office_copay = (office_copay_amount(result, collection_benefits, price, lines, guidance, assumptions)
+                    if safe and lines and price.get('mode') != 'options' else None)
+    if office_copay is not None:
+        amount = office_copay
+    elif (strict.get('amount_cents') is not None and safe and verified_in_network(benefits)
             and not price.get('conditional')):
         amount = strict['amount_cents']
         guidance.update(status='estimate', basis=strict.get('basis', 'patient_obligations'),
@@ -134,7 +143,7 @@ def build(result: dict, review: dict | None = None) -> dict:
                         reason='The payer reports $0 remaining on the applicable in-network out-of-pocket limit for the selected covered services. No advance payment is needed.')
     elif (safe and (verified_in_network(benefits) or benefits.get('network_status') == 'out_of_network')
           and price.get('complete') and not price.get('conditional') and price.get('mode') != 'options'
-          and not unapproved_services):
+          and (not unapproved_services or suggested_plan)):
         amount = price.get('patient_min_cents')
         cms_based = any(line.get('allowed_basis') == 'cms_original_medicare_estimate' for line in lines)
         guidance.update(status='estimated', basis='anticipated_services',
@@ -150,8 +159,6 @@ def build(result: dict, review: dict | None = None) -> dict:
         if benefits.get('network_status') == 'out_of_network' and not all(
                 line.get('allowed_basis') in {'payer_out_of_network', 'cms_original_medicare_estimate'} for line in lines):
             amount = None
-    elif safe and lines and price.get('mode') != 'options':
-        amount = office_copay_amount(result, collection_benefits, price, lines, guidance, assumptions)
     amount, note = apply_billing_note(result, collection_benefits, price, lines, guidance, assumptions, amount, identity, source_errors, adverse)
     if (ma_ppo and qmb_protected and active_payer_benefits and not benefits.get('has_secondary')
             and not benefits.get('network_conflict') and not source_errors):
@@ -256,8 +263,10 @@ def build(result: dict, review: dict | None = None) -> dict:
             guidance['reason'] = failure.get('detail') or next((issue for issue in result.get('issues', []) if issue), None) or 'Current payer benefits are unavailable, and the remaining information does not establish a collection amount.'
         elif benefits.get('service_date_matches') is False:
             guidance['reason'] = 'The payer response covers a different date. Benefits for this appointment are needed to calculate its collection amount.'
-        elif unapproved_services:
-            guidance['reason'] = 'The planned CPTs are a provisional preview. The doctor must approve the intended services before a service-based advance is requested.'
+        elif positive_policy_missing:
+            guidance['reason'] = 'The calculated out-of-network advance is not authorized by the clinic collection policy. An administrator must approve positive collection for this payer route.'
+        elif unapproved_services and not (suggested_plan or preview_office_copay):
+            guidance['reason'] = 'No single supported CPT scenario is available to price this visit.'
         elif price.get('service_issues'):
             guidance['reason'] = (str(price['service_issues'][0]) if result.get('botox_review') is not None else
                 'The selected services do not form a complete billable plan. A collection amount cannot be calculated for this selection.')

@@ -9,15 +9,15 @@ from app.api.routers.commercial_flow.commercial_previsit_submit import submit_pr
 @_api.router.post("/appointments/previsit", description=(
     "Estimate a patient-bound eCW visit. Compatible saved payer evidence is reused without another "
     "eligibility request. A booked EMG/NCS visit without a study count returns one provisional "
-    "scenario with mutually exclusive CPT levels; selected_service_count is one while selected_ids "
-    "remains empty until an exact CPT is supported. A current signed same-payer clinic agreement "
-    "may set benefits.network_source to clinic_group_agreement and return mismatch_warnings for "
-    "differing product or provider details while using the in-network tier. Suggested CPTs from "
-    "the visit reason and comparable completed visits remain editable. evidence_resolution reports "
+    "scenario with mutually exclusive CPT levels; an exact suggested CPT plan is priced immediately "
+    "from patient-bound benefits and clinic rates, and clinician edits recalculate it. A supported "
+    "fixed office copay is the visit-time amount, with later costs estimated separately. A signed "
+    "same-payer clinic agreement may set benefits.network_source to clinic_group_agreement and "
+    "return mismatch_warnings for differing product or provider details. evidence_resolution reports "
     "unresolved facts; an in-network tier alone does not establish an amount to collect."
 ))
 async def previsit_estimate(value: _api.PrevisitInput, request: _api.Request, background_tasks: _api.BackgroundTasks = None) -> dict:
-    """Estimate selected visit CPTs from current eligibility and clinic prices.
+    """Estimate suggested or edited visit CPTs from current eligibility and clinic prices.
 
     Uses applicable saved eCW or Stedi benefits, verified network mappings and
     active clinic rate schedules. A disclosed clinic-price reference may support
@@ -41,6 +41,8 @@ async def previsit_estimate(value: _api.PrevisitInput, request: _api.Request, ba
     tier, pricing basis, unpriced CPTs and an optional resolved-mismatch note.
     encounter_summary.coinsurance_rounded_per_line is true when individual CPT
     rounding prevents one accurate percentage-of-combined-base explanation.
+    A supported fixed office copay is the visit-time collection amount; the
+    complete estimated patient share may include later deductible and coinsurance.
     An inconsistent saved CPT coinsurance formula withholds a positive advance.
     A cash fallback names an exact product or clinic contract mapping blocker
     when that blocker prevented an insured amount. For UnitedHealthcare, an

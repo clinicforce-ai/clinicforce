@@ -54,7 +54,7 @@ async def reuse_saved_eligibility(api: ModuleType, result: dict, session: dict,
                 'checked_at': candidate['checked_at'], 'benefit_source': 'eCW saved eligibility',
                 'requested_service_types': api._previsit_service_types(inputs)}
             ecw_case['previsit_raw_object_key'] = raw_key
-            candidate['ecw_saved_eligibility']['message'] = ('Current eCW benefits support a planning estimate. Clinician approval is still needed before collection.'
+            candidate['ecw_saved_eligibility']['message'] = ('Current eCW benefits support this suggested-service estimate. Apply the collection guidance before requesting payment.'
                 if reusable_preview else 'Current eCW benefits support this advance estimate. No Stedi eligibility request was needed.')
             api.collection_event('eligibility_reused', practice_id=session['practice_id'], intake_id=(session.get('intake') or {}).get('id'),
                              case_id=ecw_case['id'], stage='eligibility', source='ecw_saved')

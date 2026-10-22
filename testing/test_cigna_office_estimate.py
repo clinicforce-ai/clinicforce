@@ -88,14 +88,15 @@ def test_uses_returned_amount_even_with_a_remaining_plan_deductible(amount, cent
 
 
 @pytest.mark.parametrize('restriction', ['coinsurance', 'referral', 'authorization'])
-def test_additional_cost_share_and_approval_requirements_still_block(restriction):
+def test_requirement_status_does_not_hide_supported_office_copay(restriction):
     payload, inputs, source = example()
     terms = payload['plans'][0]['benefits']
     row = terms['coPayment'][1]
     if restriction == 'coinsurance': terms['coInsurance'] = [{**row, 'percent': '0.20'}]
     if restriction == 'referral': row['messages'].append('Referral required')
     if restriction == 'authorization': row['priorAuthIndicator'] = 'REQUIRED'; row.pop('messages')
-    assert finish(payload, inputs, source)['collection_guidance']['amount_cents'] is None
+    assert finish(payload, inputs, source)['collection_guidance']['amount_cents'] == (
+        None if restriction == 'coinsurance' else 5500)
 
 
 @pytest.mark.parametrize('change', ['patient', 'group', 'missing_group', 'payer', 'base', 'suffix', 'subscriber', 'relationship', 'multiple'])

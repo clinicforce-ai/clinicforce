@@ -41,12 +41,31 @@
 .selected-service-chips > span {
   display: inline-flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 6px;
   padding: 5px 10px;
   border-radius: 20px;
   background: var(--ve-soft);
   color: var(--ve-teal);
   font-size: 13px;
+}
+
+.service-requirement-tag {
+  border-radius: 12px;
+  padding: 2px 6px;
+  background: #edf2f4;
+  color: #3d5260;
+  font-size: 11px;
+}
+
+.service-requirement-tag.is-required {
+  background: #fff0e8;
+  color: #9c401c;
+}
+
+.service-requirement-tag.is-clear {
+  background: #dcefe9;
+  color: #0d6558;
 }
 
 .service-category-buttons {

@@ -75,6 +75,26 @@
   line-height: 1.5;
 }
 
+.selected-cpt-requirements .requirement-tag {
+  display: inline-block;
+  margin: 2px 4px 2px 0;
+  padding: 2px 7px;
+  border-radius: 12px;
+  background: #edf2f4;
+  color: #3d5260;
+  font-size: 12px;
+}
+
+.selected-cpt-requirements .requirement-tag.is-required {
+  background: #fff0e8;
+  color: #9c401c;
+}
+
+.selected-cpt-requirements .requirement-tag.is-clear {
+  background: #dcefe9;
+  color: #0d6558;
+}
+
 .payer-reported-terms {
   margin-top: 16px;
 }

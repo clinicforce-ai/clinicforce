@@ -68,7 +68,7 @@ def test_exhausted_oop_produces_zero_without_inventing_missing_benefits():
     assert result['complete'] and result['patient_max_cents'] == 0
     assert result['plan_max_cents'] == result['allowed_max_cents'] == 20000
     assert result['lines'][0]['benefits']['deductible_remaining_cents'] is None
-    assert result['conditional'] and result['collection']['amount_cents'] is None  # referral unknown
+    assert not result['conditional'] and result['collection']['amount_cents'] == 0
     raw['benefitsInformation'].append({'code': 'I', 'serviceTypeCodes': ['98']})
     assert not priced(raw)['complete']
 

@@ -201,11 +201,10 @@ def test_unselected_office_cpt_alternatives_do_not_adopt_99202_only_benefits():
     assert scheduled['copay_cents'] == 2000
 
 
-def test_approval_is_separate_from_requirement_and_must_be_valid_for_visit():
+def test_approval_status_is_reported_without_making_the_cpt_price_conditional():
     raw = payload(); raw['benefitsInformation'][3]['authOrCertIndicator'] = 'Y'
     pending = priced(raw)
-    assert pending['complete'] and pending['conditional']
-    assert pending['collection']['amount_cents'] is None
+    assert pending['complete'] and not pending['conditional']
     reviews = {row['id']: {'authorization': evidence()} for row in lines()}
     result = priced(raw, reviews=reviews)
     assert result['complete']
@@ -213,8 +212,8 @@ def test_approval_is_separate_from_requirement_and_must_be_valid_for_visit():
     for change in ({'status': 'pending'}, {'status': 'denied'}, {'status': 'not_required'}, {'valid_to': '2000-01-01'}, {'units': 0}):
         reviews['a']['authorization'] = evidence(**change)
         pending = priced(raw, reviews=reviews)
-        assert pending['complete'] and pending['conditional']
-        assert pending['collection']['action'] == 'verify_before_collecting'
+        assert pending['complete'] and not pending['conditional']
+        assert pending['collection']['action'] == 'confirm_payments'
 
 
 def test_conditional_benefits_need_evidence_and_waiver_is_explicit():

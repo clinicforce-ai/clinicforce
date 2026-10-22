@@ -182,7 +182,7 @@ def test_provisional_service_price_cannot_become_a_positive_advance():
     guidance = collection_guidance(result)
     assert guidance['amount_cents'] is None
     assert guidance['status'] == 'action_required'
-    assert 'doctor must approve' in guidance['reason']
+    assert 'No single supported CPT scenario' in guidance['reason']
 
 
 def test_certified_inventory_positive_advance_requires_separate_collection_approval():
