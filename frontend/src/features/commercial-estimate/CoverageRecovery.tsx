@@ -45,9 +45,9 @@ export default function CoverageRecovery({
     unavailableReason,
   } = model
   const verifiedCoverage = result.benefits?.active === true && patientBenefitsBound(result.identity)
+  const payerRoutes = result.recovery?.payer_routes || []
   const showPayerRoutes =
-    !!result.recovery?.payer_routes?.length &&
-    !['pending', 'indeterminate'].includes(result.recovery.state || '')
+    payerRoutes.length > 0 && !['pending', 'indeterminate'].includes(result.recovery?.state || '')
   const shownGroups = new Set<string>()
   const policySuggestions = (result.recovery?.candidates || []).filter((candidate) => {
     const group = candidate.policy_group_id
@@ -70,19 +70,19 @@ export default function CoverageRecovery({
             Optional suggestions from the payer directory. A selected route still needs a successful
             eligibility response.
           </p>
-          {result.recovery.payer_routes.length >= 2 && (
+          {payerRoutes.length >= 2 && (
             <label>
               Payer suggestions
               <select
                 value={
-                  result.recovery.payer_routes.some((row) => row.id === payerSuggestion)
+                  payerRoutes.some((row) => row.id === payerSuggestion)
                     ? payerSuggestion
                     : ''
                 }
                 onChange={(event) => setPayerSuggestion(event.target.value)}
               >
                 <option value="">View a payer suggestion</option>
-                {result.recovery.payer_routes.map((route) => (
+                {payerRoutes.map((route) => (
                   <option key={route.id} value={route.id}>
                     {route.name} · {route.payer_id || route.id}
                   </option>
@@ -90,10 +90,8 @@ export default function CoverageRecovery({
               </select>
             </label>
           )}
-          {result.recovery.payer_routes
-            .filter(
-              (route) => result.recovery!.payer_routes!.length < 2 || route.id === payerSuggestion,
-            )
+          {payerRoutes
+            .filter((route) => payerRoutes.length < 2 || route.id === payerSuggestion)
             .map((route) => (
               <article key={route.id}>
                 <strong>{route.name}</strong>
