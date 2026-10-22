@@ -100,6 +100,7 @@ from app.api.routers.commercial_flow.commercial_previsit_pricing import (
     _past_visit_with_saved_estimate,
     _commercial_slot,
     _previsit_service_types,
+    _reviewed_service_types,
     _eligibility_timing,
     _previsit_codes,
     _office_service_types,

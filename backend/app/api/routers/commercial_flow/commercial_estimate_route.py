@@ -290,6 +290,9 @@ async def previsit_estimate(value: _api.PrevisitInput, request: _api.Request, ba
                  and row.get('visit_review', {}).get('insurance_check_from')]
         if holds:
             check_from = max([*holds, *([check_from] if check_from else [])])
+    inputs['_selected_service_types'] = _api._reviewed_service_types(
+        prior_cases, value.appointment_id, inputs['service_date'],
+        _api._visit_context_token(inputs, source))
     timing = _api._eligibility_timing(inputs['service_date'], check_from)
     if timing:
         result['eligibility_timing'] = timing
