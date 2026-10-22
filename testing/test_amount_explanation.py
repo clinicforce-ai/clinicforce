@@ -620,6 +620,9 @@ def test_unchecked_cpt_placeholder_is_not_a_patient_mismatch():
     identity = {'status': 'review', 'missing_fields': ['member_id']}
     line = {'code': '95908', 'benefits': {'active': None, 'identity': identity}}
     assert selected_service_blocker('unknown', identity, [line]) is None
+    line['calculation'] = {'patient_cents': 1000}
+    assert selected_service_blocker('unknown', identity, [line]) == ('service_identity_mismatch', '95908')
+    line.pop('calculation')
     line['benefits']['active'] = True
     assert selected_service_blocker('unknown', identity, [line]) == ('service_identity_mismatch', '95908')
 

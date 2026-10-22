@@ -145,8 +145,10 @@ from app.api.routers.commercial_flow.commercial_previsit_status import (
     _insurance_diagnosis,
     _previsit_result,
     _recovery_event,
-    _read_card_hints,
 )
+
+
+from app.api.routers.commercial_flow.commercial_previsit_card_hints import _read_card_hints
 
 
 from app.api.routers.commercial_flow.commercial_recovery_cards import (
