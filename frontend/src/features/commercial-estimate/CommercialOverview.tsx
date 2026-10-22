@@ -11,7 +11,8 @@ import FinancialLineItems from './FinancialLineItems'
 import TemporaryRateReference from './TemporaryRateReference'
 import EstimateSources from './EstimateSources'
 import { openServiceDetails } from './openServiceDetails'
-import { overviewExplanation } from './overviewExplanation'
+import ArrivalAmountSummary from './ArrivalAmountSummary'
+import { payerReportedPartialCopay } from './payerReportedPartialCopay'
 import PolicyAndShareNotice from './PolicyAndShareNotice'
 import PublishedPlanBenefit from './PublishedPlanBenefit'
 export default function CommercialOverview({
@@ -42,8 +43,6 @@ export default function CommercialOverview({
     networkTone,
     amount,
     provisionalAmount,
-    amountText,
-    amountLabel,
     requirementIssue,
     amountParts,
     officeDeductible,
@@ -56,6 +55,7 @@ export default function CommercialOverview({
       ? [...new Set(result.price_range.lines?.map((line) => line.code).filter(Boolean) || [])]
       : []
   const plannedCodeLabel = plannedCodes.map((code) => `CPT ${code}`).join(', ')
+  const payerReportedPartialCents = payerReportedPartialCopay(result, model)
   const showSelectedRequirements =
     !cash &&
     !previousEstimate &&
@@ -105,7 +105,11 @@ export default function CommercialOverview({
     amount ||
     (!staleInsuredGuidance && (guidance?.patient_actions.length || guidance?.assumptions.length)),
   )
-  const visibleAmount = Boolean(amount) || provisionalAmount != null || !!model.estimatedShare
+  const visibleAmount =
+    Boolean(amount) ||
+    provisionalAmount != null ||
+    !!model.estimatedShare ||
+    payerReportedPartialCents != null
   const patientBenefitsBound = hasPatientBinding(result.identity)
   const networkWarnings = (result.network_evidence?.mismatch_warnings || []).filter(
     (warning) => !warning.toLowerCase().includes('billing tin is missing from the visit'),
@@ -179,11 +183,13 @@ export default function CommercialOverview({
         <div
           className={`arrival-total${!visibleAmount && !calculating && !tooEarly ? ' is-blocked' : ''}`}
         >
-          <span>{amountLabel}</span>
-          <strong className={!visibleAmount ? 'amount-pending' : undefined} role="status">
-            {amountText}
-          </strong>
-          <p>{overviewExplanation(model, result, Boolean(fullBreakdown))}</p>
+          <ArrivalAmountSummary
+            model={model}
+            result={result}
+            partialCopay={payerReportedPartialCents}
+            visibleAmount={visibleAmount}
+            fullBreakdown={Boolean(fullBreakdown)}
+          />
           <PolicyAndShareNotice model={model} />
           {!cash && <PublishedPlanBenefit result={result} />}
           {!cash &&

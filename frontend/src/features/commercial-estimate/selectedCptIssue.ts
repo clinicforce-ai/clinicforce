@@ -23,7 +23,6 @@ export function firstSelectedCptIssue(result?: PrevisitEstimate | null): string 
           return `${code} has other coverage. Establish payer order and secondary benefits before collecting.`
         if (
           (terms.active !== null || line.calculation != null) &&
-
           lineIdentity != null &&
           (!patientBenefitsBound(lineIdentity) ||
             lineIdentity.binding !== result?.identity?.binding)

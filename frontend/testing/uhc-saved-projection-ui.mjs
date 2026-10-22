@@ -226,6 +226,39 @@ try {
   assert(choicePlusOverview.includes('20.00% in-network and 40.00% out-of-network coinsurance'))
   assert(choicePlusOverview.includes('individual deductible balance for CPT 99203 is unresolved'))
   assert(!choicePlusOverview.includes('Self-pay estimate'))
+  const localPpo = structuredClone(projections.regional_ppo.unapproved)
+  const officeLine = localPpo.price_range.lines.find((line) => line.code === '99203')
+  officeLine.benefits.copay_cents = 500
+  localPpo.price_range = {
+    ...localPpo.price_range,
+    mode: 'services',
+    complete: false,
+    lines: [officeLine, {
+      ...structuredClone(officeLine), id: 'synthetic-emg', code: '95908',
+      benefits: { ...structuredClone(officeLine.benefits), copay_cents: 0,
+        coinsurance_percent: '5.00', copay_id: null },
+    }],
+  }
+  localPpo.agreement_exclusion = {
+    decision: 'excluded_under_available_agreement', document_id: 'synthetic-uhc',
+    product_kind: 'local_medicare_advantage_ppo', page: 5, passage: 'Synthetic exclusion',
+  }
+  localPpo.collection_guidance = {
+    ...localPpo.collection_guidance, amount_cents: null, status: 'action_required',
+    basis: 'missing_collection_inputs',
+  }
+  const localPpoModel = deriveCommercialEstimateView({
+    result: localPpo, appointments: [], selectedVisit: '', busy: null,
+    error: '', readOnly: false, recovering: false,
+  })
+  const localPpoOverview = renderToStaticMarkup(
+    React.createElement(CommercialOverview, { model: localPpoModel, result: localPpo }),
+  )
+  assert.equal(localPpoModel.amountText, 'Insured amount unavailable')
+  assert(localPpoOverview.includes('Payer-reported office copay · collection pending'))
+  assert(localPpoOverview.includes('<strong role="status">$5.00</strong>'))
+  assert(localPpoOverview.includes('The EMG balance remains pending the claim.'))
+  assert(localPpoOverview.includes('This is not yet approved for collection.'))
   const { ApplicableBenefits } = await server.ssrLoadModule(
     '/src/features/commercial-estimate/EstimatePanels.tsx',
   )
