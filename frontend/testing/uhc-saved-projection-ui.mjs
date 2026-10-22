@@ -259,6 +259,17 @@ try {
   assert(localPpoOverview.includes('<strong role="status">$5.00</strong>'))
   assert(localPpoOverview.includes('The EMG balance remains pending the claim.'))
   assert(localPpoOverview.includes('This is not yet approved for collection.'))
+  const regionalPpo = structuredClone(localPpo)
+  regionalPpo.agreement_exclusion.product_kind = 'regional_medicare_advantage_ppo'
+  const regionalPpoModel = deriveCommercialEstimateView({
+    result: regionalPpo, appointments: [], selectedVisit: '', busy: null,
+    error: '', readOnly: false, recovering: false,
+  })
+  const regionalPpoOverview = renderToStaticMarkup(
+    React.createElement(CommercialOverview, { model: regionalPpoModel, result: regionalPpo }),
+  )
+  assert(regionalPpoOverview.includes('Payer-reported office copay · collection pending'))
+  assert(regionalPpoOverview.includes('<strong role="status">$5.00</strong>'))
   const { ApplicableBenefits } = await server.ssrLoadModule(
     '/src/features/commercial-estimate/EstimatePanels.tsx',
   )

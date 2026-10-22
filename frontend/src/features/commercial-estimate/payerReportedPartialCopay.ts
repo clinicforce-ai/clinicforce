@@ -16,7 +16,9 @@ export function payerReportedPartialCopay(
     model.amount ||
     model.estimatedShare ||
     model.provisionalAmount != null ||
-    result.agreement_exclusion?.product_kind !== 'local_medicare_advantage_ppo' ||
+    !['local_medicare_advantage_ppo', 'regional_medicare_advantage_ppo'].includes(
+      result.agreement_exclusion?.product_kind || '',
+    ) ||
     result.price_range?.mode !== 'services' ||
     result.price_range.service_issues?.length ||
     benefits?.active !== true ||
