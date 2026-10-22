@@ -25,6 +25,7 @@ def office_copay_amount(result: dict, benefits: dict, price: dict, lines: list[d
                     and t.get('coinsurance_percent') in {None, '0', '0.0', '0.00'}
                     and t.get('cost_share') not in {'coinsurance', 'cumulative'}
                     and not any(not annual_oop_conflict_with_known_remaining(r, t)
+                                and 'unassigned out-of-pocket rows are retained' not in r.lower()
                                 and any(word in r.lower() for word in ('conditional', 'limit', 'date', 'identity', 'evidence'))
                                 for r in t.get('review_reasons', [])) for t in terms)
             and len({t['copay_cents'] for t in terms}) == 1):

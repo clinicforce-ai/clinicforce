@@ -92,7 +92,7 @@ def select_benefit_rows(payload: dict[str, Any], service_type_code: str,
         entries = [row for row in entries if row['evidence_path'] not in excluded_tmj_ids]
         # Explicitly different services sometimes share an office STC. Retain
         # every raw row in reported_options, but exclude these from office math.
-        unrelated = r'(?:injections?|diagnostic lab(?:oratory)?|laboratory|(?:diagnostic )?x[ -]?ray|acupuncture|applied behavior analysis|chemotherapy)(?:\s*-\s*professional)?'
+        unrelated = r'(?:injections?|diagnostic medical procedure|diagnostic lab(?:oratory)?|laboratory|(?:diagnostic )?x[ -]?ray|acupuncture|applied behavior analysis|chemotherapy)(?:\s*-\s*professional)?'
         def other_services_only(row: dict) -> bool:
             # A shared accumulator can list office visits alongside injections
             # and lab work. Discard only a list entirely naming other services.

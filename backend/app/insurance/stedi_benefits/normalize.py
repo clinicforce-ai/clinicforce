@@ -242,7 +242,7 @@ def normalize_stedi_271(payload: dict[str, Any], service_type_code: str, provide
         return True
     limitations = any(unresolved_limit(row) for row in relevant)
     conditional_terms = selected_ids is None and any(re.search(r"\b(first|after|before|beginning|visits?|waived|unless|only|limit|specialist|primary care)\b", note, re.IGNORECASE) for row in (copay, coinsurance) if row for note in notes([row.get("messages"), row.get("additionalInformation")])
-        if not all(_deductible_message(label) is not None or re.fullmatch(r"(?:All Other In-Network Providers\s+)?(?:(?:specialist |physician )?office visits?(?: (?:specialist|primary care(?: prov(?:ider)?)?))?|Specialist(?: AND PCP)?|PCP AND Specialist|per visit|(?:Specialist|Primary Care) Visit or Evaluation|GYN Visit|Walk In Clinic Visit|Telemedicine (?:General Medicine|Specialist) Visit|phy visit\s*-\s*specialist|(?:PCP AND )?BenefitTier Non Tier 1 Specialist|diagnostic medical procedure)(?:\s*-\s*professional)?(?:\s*,\s*COINS APPLIES TO OUT OF POCKET)?", label.strip(), re.I)
+        if not all(_deductible_message(label) is not None or re.fullmatch(r"(?:All Other In-Network Providers\s+)?(?:(?:specialist |physician )?office visits?(?: (?:specialist|primary care(?: prov(?:ider)?)?|with (?:labs|xray)))?|Specialist(?: AND PCP)?|PCP AND Specialist|per visit|(?:Specialist|Primary Care) Visit or Evaluation|GYN Visit|Walk In Clinic Visit|Telemedicine (?:General Medicine|Specialist) Visit|phy visit\s*-\s*specialist|(?:PCP AND )?BenefitTier Non Tier 1 Specialist|diagnostic medical procedure)(?:\s*-\s*professional)?(?:\s*,\s*COINS APPLIES TO OUT OF POCKET)?", label.strip(), re.I)
                    for label in note.split(';') if label.strip()))
     source_errors = []
     for _, row in wanted:
