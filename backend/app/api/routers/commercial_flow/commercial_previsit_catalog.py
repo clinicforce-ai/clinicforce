@@ -72,7 +72,13 @@ def build_catalog(api: ModuleType, result: dict, session: dict, inputs: dict, so
     uploaded_cash = api.practice_prices.current(session['practice_id'], inputs['service_date'])
     if uploaded_cash:
         known_codes = {row['code'] for row in available}
-        available.extend({'id': 'cash:' + row['code'], 'code': row['code'], 'description': row['description'], 'source': 'Practice cash schedule', 'units': 1, 'modifiers': []} for row in uploaded_cash['rows'] if row['code'] not in known_codes and row.get('price_kind') not in {'package', 'named_package'})
+        for row in uploaded_cash['rows']:
+            if row['code'] in known_codes or row.get('price_kind') in {'package', 'named_package'}:
+                continue
+            available.append({'id': 'cash:' + row['code'], 'code': row['code'],
+                              'description': row['description'], 'source': 'Practice cash schedule',
+                              'units': 1, 'modifiers': []})
+            known_codes.add(row['code'])
     # Clinical options work for every practice, even before its prices arrive.
     # This catalog supplies no prices or coverage assumptions.
     known_codes = {row['code'] for row in available}

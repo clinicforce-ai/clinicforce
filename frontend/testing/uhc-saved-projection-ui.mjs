@@ -643,7 +643,7 @@ try {
   assert(supportedOverview.includes('Individual out-of-pocket maximum'))
   assert(supportedOverview.includes('$1,000.00'))
   assert(supportedOverview.includes('Individual out-of-pocket remaining'))
-  assert(supportedOverview.includes('Planned CPTs and coverage requirements'))
+  assert(supportedOverview.includes('Planned CPTs · referral and prior authorization'))
   assert(supportedOverview.includes('CPT 99203</strong>: ask United Healthcare about referral'))
   assert(supportedOverview.includes('CPT 93000</strong>: ask United Healthcare about referral'))
   assert(!supportedOverview.includes('Service not established'))

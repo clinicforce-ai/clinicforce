@@ -9,7 +9,8 @@ import json
 
 from app.insurance import (amount_explanation, cms_locality, cms_pfs, collection_guidance,
                            commercial, encounter_summary, insurance_product, inventory_certification,
-                           library_network_exclusions, payer_allowance, visit_estimate)
+                           library_network_exclusions, payer_allowance, stedi_discovery,
+                           visit_estimate)
 from app.insurance.identity import compare as compare_identity, patient_benefits_bound
 
 
@@ -95,6 +96,13 @@ def replay(bundle: dict) -> dict:
     identity = deepcopy((original.get('identity') or (original.get('benefits') or {}).get('identity') or {}))
     saved_coverage = original.get('insurance_details') or {}
     if saved_coverage.get('member_id') and saved_coverage.get('patient_first'):
+        policy_match = ((original.get('benefits') or {}).get('policy_match') or {})
+        if policy_match.get('source') == 'payer_response' and policy_match.get('status') == 'verified':
+            if not (stedi_discovery.corroborates_patient_policy(payload, inputs, source)
+                    and stedi_discovery.automatic_match(payload, inputs, source)):
+                return {'status': 'unlinked_saved_response', 'mode': 'evidence_review',
+                        'reason': 'The saved dependent-policy match cannot be verified from the linked evidence.'}
+            saved_coverage = stedi_discovery.discovered_coverage(saved_coverage, inputs, payload)
         reconstructed = compare_identity(payload, saved_coverage, identity.get('evidence'))
         if identity.get('binding') and reconstructed.get('binding') != identity['binding']:
             return {'status': 'unlinked_saved_response', 'mode': 'evidence_review',

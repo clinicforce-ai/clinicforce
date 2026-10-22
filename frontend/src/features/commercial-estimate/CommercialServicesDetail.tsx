@@ -13,7 +13,7 @@ export default function CommercialServicesDetail({
   return (
     <details id="visit-detail-services" className="visit-detail-section">
       <summary>
-        {readOnly ? 'Saved service plan' : 'Possible additional services / modify inputs'}
+        {readOnly ? 'Saved service plan' : 'Review planned CPTs and additional care'}
       </summary>
       <div className="visit-detail-body">
         <p>{anticipatedService}</p>

@@ -1,4 +1,5 @@
 import type { CommercialEstimateModel } from './useCommercialEstimateModel'
+import { patientBenefitsBound } from './identityBinding'
 
 const candidateReasonText: Record<string, string> = {
   MEMBER_ID_MISSING: 'Subscriber member ID missing',
@@ -43,6 +44,7 @@ export default function CoverageRecovery({
     guidance,
     unavailableReason,
   } = model
+  const verifiedCoverage = result.benefits?.active === true && patientBenefitsBound(result.identity)
   const shownGroups = new Set<string>()
   const policySuggestions = (result.recovery?.candidates || []).filter((candidate) => {
     const group = candidate.policy_group_id
@@ -302,7 +304,7 @@ export default function CoverageRecovery({
             })}
         </section>
       )}
-      {!!result.insurance_hints?.length && (
+      {!verifiedCoverage && !!result.insurance_hints?.length && (
         <section className="visit-recovery">
           <h3>Recorded insurance clues</h3>
           <p>These details can support an inquiry. They do not verify active coverage.</p>
@@ -315,8 +317,8 @@ export default function CoverageRecovery({
         </section>
       )}
       {result.insurance_diagnosis && (
-        <section className="visit-recovery" aria-label="Insurance check diagnosis">
-          <h3>Insurance check status</h3>
+        <details className="visit-recovery" open={!verifiedCoverage || undefined}>
+          <summary>Insurance check details</summary>
           <p>
             Identity: {result.insurance_diagnosis.identityStatus.replaceAll('_', ' ').toLowerCase()}{' '}
             · Eligibility:{' '}
@@ -353,7 +355,7 @@ export default function CoverageRecovery({
             </ul>
           )}
           {result.cash_fallback && <p>{result.cash_fallback.reason}</p>}
-        </section>
+        </details>
       )}
     </>
   )

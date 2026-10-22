@@ -330,12 +330,6 @@ export default function CommercialOverview({
                     </dl>
                   </div>
                 )}
-                {showSelectedRequirements && (
-                  <SelectedServiceRequirements
-                    result={result}
-                    payerName={payerForAction || 'the payer'}
-                  />
-                )}
               </details>
             )}
           {cash && !amount && !!result.cash_schedule?.packages.length && !readOnly && (
@@ -436,11 +430,11 @@ export default function CommercialOverview({
           {result.reason && result.reason !== anticipatedService && (
             <p>eCW visit reason: {result.reason}</p>
           )}
-          <p>
-            {readOnly
-              ? 'Service plan recorded for this appointment.'
-              : 'Based on the scheduled appointment. Modify the services below if the planned care changes.'}
-          </p>
+          {!readOnly && (
+            <button type="button" className="cash-package-shortcut" onClick={openServiceDetails}>
+              Review planned CPTs
+            </button>
+          )}
         </div>
       </div>
       <div className="visit-snapshots" aria-label="Coverage summary">
@@ -483,6 +477,9 @@ export default function CommercialOverview({
           <RequirementCards result={result} readOnly={readOnly} payerName={payerForAction} />
         )}
       </div>
+      {showSelectedRequirements && (
+        <SelectedServiceRequirements result={result} payerName={payerForAction || 'the payer'} />
+      )}
       <EstimateSources result={result} tooEarly={!!tooEarly} />
       <div className="overview-plan-name">
         <ShieldCheck size={16} aria-hidden="true" />

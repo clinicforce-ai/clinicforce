@@ -26,7 +26,10 @@ export function ServicePlanner({
   save: Save
   viewEstimate: (message?: string) => void
 }) {
-  const available = result.available_codes || result.codes
+  const available = (result.available_codes || result.codes).filter(
+    (row, index, rows) =>
+      !row.id || rows.findIndex((candidate) => candidate.id === row.id) === index,
+  )
   const defaults = result.selected_ids || []
   const [selected, setSelected] = useState<string[]>(defaults)
   const [quantities, setQuantities] = useState<Record<string, number>>(() =>
@@ -43,7 +46,9 @@ export function ServicePlanner({
   const [editError, setEditError] = useState('')
   const autoSave = useRef<(continueToCollection: boolean) => Promise<void>>(async () => {})
   const lastAutoAttempt = useRef('')
-  const emgVisit = result.service_plan?.kind === 'emg_ncs'
+  const emgVisit =
+    result.service_plan?.kind === 'emg_ncs' ||
+    result.provisional_scenario?.kind === 'ncs_study_count'
   const botoxVisit =
     result.service_plan?.kind === 'botox' ||
     available.some(
@@ -218,7 +223,9 @@ export function ServicePlanner({
     <section className="visit-planner" aria-labelledby="service-plan-title">
       <h3 id="service-plan-title">Choose care for this estimate</h3>
       <p className="visit-muted">
-        Selections update the estimate. Final coding follows the care provided.
+        {emgVisit && !chosen.length
+          ? 'Nerve testing is planned from this booking. Choose the study-count CPT when its scope is documented; final coding follows the care provided.'
+          : 'Selections update the estimate. Final coding follows the care provided.'}
       </p>
       <div className="selected-service-chips" aria-label="Selected services">
         {chosen.map((row) => (

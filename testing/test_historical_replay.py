@@ -10,7 +10,9 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from app.insurance import cms_pfs, cpt_suggester, historical_replay
+from app.insurance import cms_pfs, cpt_suggester, historical_replay, identity, stedi_discovery
+from app.api.routers import commercial_estimator as api
+from testing.test_stedi_discovery import setup as discovery_setup
 from testing.test_inventory_certification import CERTIFICATE, DOC, INPUTS, PAYER, SCOPE, SOURCE
 
 
@@ -70,6 +72,38 @@ def _positive_policy() -> dict:
     return {'mode': 'defer_to_claim', 'approved_by': 'synthetic-admin',
             'approved_at': '2026-10-01T12:00:00Z', 'reference': 'Synthetic approval',
             'allow_supported_oon_advance': True, 'allow_cms_based_advance': True}
+
+
+def test_replay_preserves_verified_dependent_policy_reconciliation():
+    source_case, _, _, payload = discovery_setup()
+    inputs = source_case['previsit_context']['inputs']
+    source = source_case['previsit_context']['source']
+    inputs['service_date'] = DAY
+    inputs['member_id'] = 'FAMILY-123'
+    payload['planDateInformation']['planBegin'] = DAY.replace('-', '')
+    payload['dependent'] = {**payload['subscriber'], 'relationToSubscriberCode': '01'}
+    payload['subscriber'] = {'firstName': 'Sam', 'lastName': 'Example',
+                             'memberId': 'FAMILY-123'}
+    source['payer_identifiers'] = ['example']
+    assert stedi_discovery.corroborates_patient_policy(payload, inputs, source)
+    assert stedi_discovery.automatic_match(payload, inputs, source)
+    recorded = api._coverage_snapshot(inputs, source)
+    reconciled = api._discovered_coverage(inputs, source, payload)
+    saved_identity = identity.compare(payload, reconciled)
+    assert saved_identity['status'] == 'matched'
+    bundle = _bundle([_row('B', 40, note='Deductible does not apply')])
+    bundle['raw_response'] = payload
+    bundle['case']['previsit_context'].update(inputs=inputs, source=source)
+    bundle['case']['previsit_context']['result'].update(
+        identity=saved_identity,
+        insurance_details=recorded,
+        benefits={'policy_match': {'source': 'payer_response', 'status': 'verified'}},
+    )
+    report = historical_replay.replay(bundle)
+    assert report['status'] != 'unlinked_saved_response'
+    altered = deepcopy(bundle)
+    altered['raw_response']['dependent']['firstName'] = 'Different'
+    assert historical_replay.replay(altered)['status'] == 'unlinked_saved_response'
 
 
 def test_cms_dallas_office_rate_is_dated_and_scope_bound():

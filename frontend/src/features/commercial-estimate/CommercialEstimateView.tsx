@@ -13,7 +13,6 @@ import {
   ShieldCheck,
 } from 'lucide-react'
 import type { CommercialEstimateModel } from './useCommercialEstimateModel'
-import VisitServices from './VisitServices'
 import { range, memberSource, visitDate, visitTime } from './format'
 
 export default function CommercialEstimateView({ model }: { model: CommercialEstimateModel }) {
@@ -341,11 +340,6 @@ export default function CommercialEstimateView({ model }: { model: CommercialEst
                 An additional coverage search was pending when this version was saved.
               </p>
             )}
-            <VisitServices
-              result={result}
-              readOnly={readOnly}
-              insuredAmountSupported={Boolean(model.amount)}
-            />
             <div className="visit-detail-sections">
               <CommercialServicesDetail model={model} result={result} />
               <CommercialCoverageDetail model={model} result={result} />
