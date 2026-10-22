@@ -149,7 +149,13 @@ def _insurance_diagnosis(case: dict, result: dict, guidance: dict) -> dict:
         if not payer_identity_available and benefits.get('active') is None:
             # Old saved placeholders may say "Stedi" and carry many derived review
             # reasons. There is no payer benefit to reconcile or price yet.
-            details = [guidance.get('reason') or '', *(price.get('service_issues') or [])]
+            state = recovery.get('state')
+            details = [
+                'The payer check outcome is unknown. Check Stedi activity before retrying.' if state == 'indeterminate' else
+                'The payer check is still in progress.' if state == 'pending' else
+                failure.get('action') or 'No payer eligibility benefits are available for this visit yet.',
+                *(price.get('service_issues') or []),
+            ]
         else:
             details = list(dict.fromkeys([guidance.get('reason') or '', *benefits.get('review_reasons', []), *result.get('issues', []),
                 *price.get('issues', []), *price.get('service_issues', []),

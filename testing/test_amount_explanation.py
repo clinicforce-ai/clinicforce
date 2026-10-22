@@ -657,7 +657,7 @@ def test_empty_payer_placeholder_does_not_report_payer_verification_gaps():
     old_diagnosis = api._insurance_diagnosis({'previsit_context': {'source': {}}}, old_result,
         {'amount_cents': None, 'reason': 'Eligibility has not completed.'})
     assert old_diagnosis['identityStatus'] == 'PAYER_RESPONSE_MISSING'
-    assert old_diagnosis['pricingReasons'] == ['Eligibility has not completed.']
+    assert old_diagnosis['pricingReasons'] == ['No payer eligibility benefits are available for this visit yet.']
 
 
 def test_current_patient_mismatch_precedes_stale_benefit_identity_in_staff_line():
