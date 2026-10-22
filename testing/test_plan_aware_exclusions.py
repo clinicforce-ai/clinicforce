@@ -30,6 +30,21 @@ def test_regional_exclusion_is_compiled_with_page_and_cannot_publish_same_docume
     assert library_network_exclusions.compile_exclusions(document, included) == []
 
 
+def test_legacy_uhc_upload_compiles_cross_page_network_appendix_exclusion():
+    document = {'id': 'legacy-uhc', 'kind': 'contract', 'payer': '',
+                'label': 'United Healthcare contract', 'created_at': '2026-01-01T00:00:00Z'}
+    extracted = {'sha256': 'synthetic-digest', 'pages': [
+        {'number': 4, 'text': 'Section 2. Notwithstanding the above section 1, this Agreement will not apply '
+                              'to the Benefit Plan types described in the following line items:'},
+        {'number': 5, 'text': 'Regional PPO Medicare Advantage Benefit Plans.\n\n'
+                              'Local PPO Medicare Advantage Benefit Plans.\n\n'
+                              'Section 3. Definitions: PPO Medicare Advantage Benefit Plans.'}]}
+    rows = library_network_exclusions.compile_exclusions(document, extracted)
+    assert {(row['product_kind'], row['page']) for row in rows} == {
+        ('regional_medicare_advantage_ppo', 5), ('local_medicare_advantage_ppo', 5)}
+    assert library_network_exclusions.is_uhc_contract({**document, 'label': 'Unrelated contract'}) is False
+
+
 def test_exact_product_exclusion_does_not_establish_nonparticipation(monkeypatch):
     row = {'product_kind': 'regional_medicare_advantage_ppo',
            'decision': 'excluded_under_available_agreement', 'document_id': 'first-agreement',

@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from app.core import staff_store
 from app.insurance import commercial
-from app.insurance.library_network_exclusions import product_kind
+from app.insurance.library_network_exclusions import is_uhc_contract, product_kind
 
 
 def agreement_hashes(practice_id: str, payer: str, *, documents: list[dict] | None = None) -> dict[str, str]:
@@ -12,7 +12,7 @@ def agreement_hashes(practice_id: str, payer: str, *, documents: list[dict] | No
         return {}
     documents = [row for row in (documents if documents is not None else staff_store.list_library(practice_id))
                  if row.get('kind') == 'contract'
-                 and commercial.is_united_healthcare_payer({'payer': row.get('payer') or ''})]
+                 and is_uhc_contract(row)]
     if any(not row.get('sha256') for row in documents):
         return {}
     return {row['id']: row['sha256'] for row in documents}

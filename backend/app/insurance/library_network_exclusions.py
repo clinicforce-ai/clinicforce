@@ -9,6 +9,17 @@ from app.insurance import commercial
 
 _MA_PPO = re.compile(r"\b(?:regional|local)\s+(?:medicare\s+advantage\s+)?ppo\b|\b(?:regional|local)\s+ppo\s+medicare\s+advantage\b", re.I)
 _EXCLUDES = re.compile(r"\b(?:exclud(?:e|es|ed|ing)|not\s+included|does\s+not\s+include|not\s+applicable|except)\b", re.I)
+_SECTION_TWO = re.compile(r'Section\s+2\.\s+Notwithstanding\b.*?this\s+Agreement\s+will\s+not\s+apply\b', re.I | re.S)
+_SECTION_THREE = re.compile(r'Section\s+3\.\s+Definitions\b', re.I)
+
+
+def is_uhc_contract(document: dict) -> bool:
+    """Recognize the older UHC upload whose payer field was left blank."""
+    if document.get('kind') != 'contract':
+        return False
+    payer = document.get('payer') or ''
+    return commercial.is_united_healthcare_payer({'payer': payer}) if payer else bool(
+        re.fullmatch(r'United\s*Health(?:care)?\s+contract', str(document.get('label') or ''), re.I))
 
 
 def product_kind(name: str) -> str | None:
@@ -24,18 +35,24 @@ def product_kind(name: str) -> str | None:
 
 def compile_exclusions(document: dict, extracted: dict) -> list[dict]:
     """Only explicit exclusion clauses become rules; keep the entire source passage."""
-    if document.get("kind") != "contract" or not commercial.is_united_healthcare_payer(
-        {"payer": document.get("payer") or ""}
-    ):
+    if not is_uhc_contract(document):
         return []
     records = []
+    section_two = False
     for page in extracted.get("pages") or []:
         text = str(page.get("text") or "")
+        heading = _SECTION_TWO.search(text)
+        if heading:
+            section_two = True
+        end = _SECTION_THREE.search(text)
+        section_text = text[heading.end() if heading else 0:end.start() if end else len(text)] if section_two else ''
         for passage in re.split(r"\n\s*\n", text):
             for match in _MA_PPO.finditer(passage):
                 nearby = passage[max(0, match.start() - 250):match.end() + 250]
-                if (not _EXCLUDES.search(nearby) or not re.search(r'\bmedicare\s+advantage\b', nearby, re.I)
-                        or re.search(r"\b(?:does\s+not|do\s+not|not)\s+(?:specifically\s+)?exclud(?:e|es|ed|ing)\b", nearby, re.I)):
+                listed_in_section = bool(section_text and passage.strip() in section_text)
+                if (not listed_in_section and not _EXCLUDES.search(nearby)
+                        or not re.search(r'\bmedicare\s+advantage\b', nearby, re.I)
+                        or not listed_in_section and re.search(r"\b(?:does\s+not|do\s+not|not)\s+(?:specifically\s+)?exclud(?:e|es|ed|ing)\b", nearby, re.I)):
                     continue
                 label = re.search(r"\b(regional|local)\b", match.group(), re.I)
                 if not label:
@@ -48,8 +65,11 @@ def compile_exclusions(document: dict, extracted: dict) -> list[dict]:
                                 "uploaded_by": document.get("created_by"),
                                 "uploaded_at": document.get("created_at"),
                                 "page": page["number"], "locator": f"Page {page['number']}",
-                                "passage": nearby.strip(), "effective_from": document.get("effective_from"),
+                                "passage": ('Section 2: Agreement does not apply. ' if listed_in_section else '') + nearby.strip(),
+                                "effective_from": document.get("effective_from"),
                                 "effective_to": document.get("effective_to")})
+        if end:
+            section_two = False
     return records
 
 
@@ -66,7 +86,7 @@ def applicable_exclusion(practice_id: str, payer: str, products: list[str], serv
         if metadata.get("kind") != "contract":
             continue
         document = metadata if documents is not None else staff_store.get_library(metadata["id"], practice_id)
-        if not document or not commercial.is_united_healthcare_payer({"payer": document.get("payer") or ""}):
+        if not document or not is_uhc_contract(document):
             continue
         extracted = document.get("extraction") or {}
         compiled = extracted.get("compiled") or {}
