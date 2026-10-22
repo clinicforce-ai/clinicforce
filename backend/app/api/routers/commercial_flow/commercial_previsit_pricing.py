@@ -51,9 +51,12 @@ def _previsit_service_types(inputs: dict) -> list[str]:
         if (not categories and not botox_review.is_botox_visit(inputs)
                 or _api.re.search(r'\b(?:f/u|fu|follow[ -]?up)\b', reason, _api.re.I)):
             categories.append('98')
-    # General medical benefits carry deductible and out-of-pocket accumulators
-    # that a service-specific response may omit. Keep the booked service first.
-    return list(dict.fromkeys([*(code for code in categories if code), '30']))
+    # Some payers return the office copay only when office care leads a combined inquiry.
+    ordered = list(dict.fromkeys(code for code in categories if code))
+    if '98' in ordered and '73' in ordered:
+        ordered.remove('98')
+        ordered.insert(0, '98')
+    return list(dict.fromkeys([*ordered, '30']))
 
 
 def _reviewed_service_types(cases: list[dict], appointment_id: str, service_date: str,

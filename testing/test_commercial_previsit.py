@@ -24,7 +24,7 @@ class PrevisitFlowTest(unittest.IsolatedAsyncioTestCase):
         categories = _reviewed_service_types([case], 'appointment-1', '2026-10-22', 'same-visit')
         self.assertEqual(categories, ['73', '98'])
         self.assertEqual(_previsit_service_types({'lines': [], 'reason': '',
-            '_selected_service_types': categories}), ['73', '98', '30'])
+            '_selected_service_types': categories}), ['98', '73', '30'])
         case['previsit_context']['result']['selected_ids'] = ['nerve', 'muscle', 'office']
         case['visit_review'].pop('selected_ids')
         self.assertEqual(_reviewed_service_types([case], 'appointment-1', '2026-10-22', 'same-visit'), ['73', '98'])
