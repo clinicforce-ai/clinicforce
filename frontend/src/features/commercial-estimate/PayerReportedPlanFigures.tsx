@@ -12,12 +12,18 @@ export default function PayerReportedPlanFigures({ result }: { result: PrevisitE
     const label = `${Number(percent).toLocaleString()}%`
     coinsuranceGroups.set(label, [...(coinsuranceGroups.get(label) || []), line.code])
   }
-  const deductibleAnnual =
-    lines.find((line) => line.benefits?.deductible_annual_cents != null)?.benefits
-      ?.deductible_annual_cents ?? benefits.deductible_annual_cents
-  const deductibleRemaining =
-    lines.find((line) => line.benefits?.deductible_remaining_cents != null)?.benefits
-      ?.deductible_remaining_cents ?? benefits.deductible_remaining_cents
+  const deductibleGroups = new Map<string, string[]>()
+  for (const line of lines) {
+    const terms = line.benefits
+    if (!terms) continue
+    const annual = terms.deductible_annual_cents ?? benefits.deductible_annual_cents
+    const remaining = terms.deductible_remaining_cents ?? benefits.deductible_remaining_cents
+    const label =
+      terms.deductible_applies === false
+        ? 'Does not apply'
+        : `${remaining != null ? `${money(remaining)} remaining` : 'Remaining balance not returned'}${annual != null ? ` · ${money(annual)} annual` : ''}`
+    deductibleGroups.set(label, [...(deductibleGroups.get(label) || []), line.code])
+  }
   const providerTierEstablished =
     (benefits.network_status === 'in_network' &&
       ['clinic_library_contract', 'clinic_group_agreement', 'payer_participation_message'].includes(
@@ -45,17 +51,25 @@ export default function PayerReportedPlanFigures({ result }: { result: PrevisitE
             <dd>{money(benefits.copay_cents)}</dd>
           </div>
         )}
-        {(deductibleAnnual != null || deductibleRemaining != null || lines.length > 0) && (
-          <div>
-            <dt>Individual deductible</dt>
-            <dd>
-              {deductibleRemaining != null
-                ? `${money(deductibleRemaining)} remaining`
-                : 'Remaining balance not returned'}
-              {deductibleAnnual != null && ` · ${money(deductibleAnnual)} annual`}
-            </dd>
+        {[...deductibleGroups].map(([label, codes]) => (
+          <div key={label}>
+            <dt>Individual deductible · {codes.map((code) => `CPT ${code}`).join(', ')}</dt>
+            <dd>{label}</dd>
           </div>
-        )}
+        ))}
+        {!deductibleGroups.size &&
+          (benefits.deductible_annual_cents != null || benefits.deductible_remaining_cents != null) && (
+            <div>
+              <dt>Individual deductible</dt>
+              <dd>
+                {benefits.deductible_remaining_cents != null
+                  ? `${money(benefits.deductible_remaining_cents)} remaining`
+                  : 'Remaining balance not returned'}
+                {benefits.deductible_annual_cents != null &&
+                  ` · ${money(benefits.deductible_annual_cents)} annual`}
+              </dd>
+            </div>
+          )}
         {coinsuranceGroups.size > 0 ? (
           [...coinsuranceGroups].map(([percent, codes]) => (
             <div key={percent}>

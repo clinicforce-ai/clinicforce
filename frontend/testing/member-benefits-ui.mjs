@@ -657,7 +657,10 @@ try {
         },
         price_range: {
           mode: 'services',
-          lines: [{ code: '95908', benefits: { coinsurance_percent: '20', deductible_annual_cents: 35000 } }],
+          lines: [
+            { code: '95908', benefits: { coinsurance_percent: '20', deductible_annual_cents: 35000 } },
+            { code: '99204', benefits: { copay_cents: 3000, deductible_applies: false } },
+          ],
         },
       },
     }),
@@ -666,6 +669,8 @@ try {
   assert(topBenefitTerms.includes('20%'))
   assert(topBenefitTerms.includes('Remaining balance not returned'))
   assert(topBenefitTerms.includes('$350.00 annual'))
+  assert(topBenefitTerms.includes('Individual deductible · CPT 99204'))
+  assert(topBenefitTerms.includes('Does not apply'))
   assert(!topBenefitTerms.includes('Match this plan and rendering provider'))
   const { default: CommercialCalculationDetail } = await server.ssrLoadModule(
     '/src/features/commercial-estimate/CommercialCalculationDetail.tsx',
