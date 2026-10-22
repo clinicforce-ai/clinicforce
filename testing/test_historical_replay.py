@@ -218,7 +218,7 @@ def test_scenario_c_consultation_ncs_and_emg_are_distinct_lines():
     assert report['result']['encounter_summary']['integrity_error'] is None
 
 
-def test_synthetic_bedrock_plan_requires_doctor_selection_and_emg_only_has_no_em(monkeypatch):
+def test_synthetic_bedrock_plan_preselects_editable_emg_and_replay_uses_explicit_lines(monkeypatch):
     available = [{'id': key, 'code': code, 'units': 1, 'source': source}
                  for key, code, source in [('office', '99204', 'eCW scheduled service'),
                                            ('ncs', '95907', 'Contract service option'),
@@ -236,8 +236,8 @@ def test_synthetic_bedrock_plan_requires_doctor_selection_and_emg_only_has_no_em
         {'reason': 'Consultation and nerve testing', 'visit_type': 'new',
          'emg_required': True}, {}, available)
     assert proposal['method'] == 'llm'
-    assert proposal['recommended_ids'] == ['office']
-    # The model proposes; only the explicitly selected subset reaches replay.
+    assert proposal['recommended_ids'] == ['ncs', 'emg', 'office']
+    # The model proposes; replay still uses only the explicitly selected subset.
     lines = [{'id': row['id'], 'code': row['code'], 'units': 1, 'modifiers': []}
              for row in available if row['id'] in {'ncs', 'emg'}]
     bundle = _bundle([_row('C', 50, '30'), _row('G', 500, '30'),
