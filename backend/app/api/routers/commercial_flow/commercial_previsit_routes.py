@@ -23,6 +23,10 @@ async def saved_previsit(case_id: str, request: _api.Request) -> dict:
     A saved read also projects a current dated group-network contract finding
     from the protected visit context. This projection makes no payer call or write
     and does not upgrade the rendering clinician's participation or old pricing.
+    A supported signed agreement may report benefits.network_source as
+    clinic_group_agreement with mismatch_warnings for differing product or
+    provider details. The in-network tier alone does not establish a collectible
+    amount.
     If the protected raw payer response cannot be reopened, same-context saved
     benefit terms may remain with benefits.historical_only and a source error;
     they cannot authorize an insured collection. A changed policy context does

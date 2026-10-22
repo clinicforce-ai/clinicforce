@@ -10,7 +10,11 @@ from app.api.routers.commercial_flow.commercial_previsit_submit import submit_pr
     "Estimate a patient-bound eCW visit. Compatible saved payer evidence is reused without another "
     "eligibility request. A booked EMG/NCS visit without a study count returns one provisional "
     "scenario with mutually exclusive CPT levels; selected_service_count is one while selected_ids "
-    "remains empty until an exact CPT is supported. evidence_resolution reports unresolved facts."
+    "remains empty until an exact CPT is supported. A current signed same-payer clinic agreement "
+    "may set benefits.network_source to clinic_group_agreement and return mismatch_warnings for "
+    "differing product or provider details while using the in-network tier. Suggested CPTs from "
+    "the visit reason and comparable completed visits remain editable. evidence_resolution reports "
+    "unresolved facts; an in-network tier alone does not establish an amount to collect."
 ))
 async def previsit_estimate(value: _api.PrevisitInput, request: _api.Request, background_tasks: _api.BackgroundTasks = None) -> dict:
     """Estimate selected visit CPTs from current eligibility and clinic prices.
