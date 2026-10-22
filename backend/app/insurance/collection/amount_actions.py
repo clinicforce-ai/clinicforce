@@ -132,6 +132,8 @@ def _collection_action(code: str, result: dict, source_errors: list[dict] | None
         fields = ', '.join(labels.get(field, field) for field in missing)
         return (f'confirm {fields} with UHC and eCW, then rerun the insured estimate' if fields else
                 'compare the saved payer patient, subscriber and member ID with eCW, then rerun the insured estimate')
+    if code == 'payer_route_ambiguous':
+        return 'select the matching insurer route and complete the eligibility check before using its benefits'
     if code in {'clinic_contract_missing', 'clinic_product_mismatch', 'clinic_payer_connection_draft'}:
         products = (((result.get('plan_details') or {}).get('stedi') or {}).get('names') or [])
         if any('REGIONAL PPO' in str(name).upper() for name in products):

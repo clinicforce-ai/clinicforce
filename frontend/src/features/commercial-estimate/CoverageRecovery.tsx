@@ -97,8 +97,6 @@ export default function CoverageRecovery({
                 <p>
                   Payer ID: {route.payer_id || route.id} · Stedi route: {route.id}
                 </p>
-                {!!route.names.length && <p>Also known as: {route.names.join(', ')}</p>}
-                {!!route.aliases.length && <p>Payer ID aliases: {route.aliases.join(', ')}</p>}
                 <p>
                   {route.match_basis === 'directory_suggestion'
                     ? 'Suggested name match — review against the card'

@@ -482,9 +482,7 @@ export default function CommercialOverview({
           <RequirementCards result={result} readOnly={readOnly} payerName={payerForAction} />
         )}
       </div>
-      {showSelectedRequirements && (
-        <SelectedServiceRequirements result={result} payerName={payerForAction || 'the payer'} />
-      )}
+      {showSelectedRequirements && <SelectedServiceRequirements result={result} />}
       <EstimateSources result={result} tooEarly={!!tooEarly} />
       <div className="overview-plan-name">
         <ShieldCheck size={16} aria-hidden="true" />

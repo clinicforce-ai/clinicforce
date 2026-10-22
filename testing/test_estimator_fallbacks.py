@@ -138,6 +138,22 @@ def test_ecw_payer_id_is_searched_before_an_ambiguous_name():
     assert len(suggestions) == 2 and all(row['match_basis'] == 'directory_suggestion' for row in suggestions)
 
 
+def test_discovery_issuer_name_resolves_shared_identifier_to_uhc_route():
+    support = {'coverageTypes': ['medical'], 'transactionSupport': {'eligibilityCheck': 'SUPPORTED'}}
+    uhc = {**support, 'stediId': 'KMQTZ', 'primaryPayerId': '87726', 'displayName': 'UnitedHealthcare'}
+    surest = {**support, 'stediId': 'QSOCK', 'primaryPayerId': '25463', 'displayName': 'Surest', 'aliases': ['87726']}
+    transport = httpx.MockTransport(lambda _: httpx.Response(200, json={'items': [{'payer': surest}, {'payer': uhc}]}))
+    routes = []
+    selected = asyncio.run(stedi_payers.search_payer('UNITEDHEALTHCARE', ['87726'], 'synthetic',
+                                                      transport=transport, candidates=routes))
+    assert selected == uhc
+    assert {row['stediId'] for row in routes} == {'KMQTZ', 'QSOCK'}
+    duplicate_name = httpx.MockTransport(lambda _: httpx.Response(200, json={'items': [
+        {'payer': uhc}, {'payer': {**surest, 'displayName': 'UnitedHealthcare'}}]}))
+    assert asyncio.run(stedi_payers.search_payer('UNITEDHEALTHCARE', ['87726'], 'synthetic',
+                                                 transport=duplicate_name)) is None
+
+
 def test_enrollment_must_be_live_for_exact_provider_payer_and_transaction():
     row = {'status': 'LIVE', 'payer': {'stediPayerId': 'cms'}, 'provider': {'npi': '1234567890'},
            'transactions': {'eligibilityCheck': {'enroll': True}}}

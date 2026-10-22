@@ -601,6 +601,20 @@ def test_identity_mismatch_precedes_empty_follow_up_discovery():
     assert 'returned no policy' not in explanation['sentence']
 
 
+@pytest.mark.parametrize(('state', 'expected'), [
+    ('pending', 'check_pending'), ('complete', 'payer_route_ambiguous'),
+])
+def test_unchecked_uhc_route_does_not_claim_ecw_and_payer_identifiers_are_missing(state, expected):
+    result = {'payer': 'UHC Medicare', 'payment_mode': 'insurance',
+              'identity': {'status': 'review', 'missing_fields': ['member_id', 'patient_demographics']},
+              'benefits': {'active': None, 'network_status': 'unknown'},
+              'recovery': {'state': state, 'reason_code': 'discovered_payer_not_routable'},
+              'price_range': {'mode': 'services', 'lines': []}}
+    explanation = amount_explanation.build(result, {'amount_cents': None, 'basis': 'missing_collection_inputs'})
+    assert explanation['reason_code'] == expected
+    assert 'identifiers' not in explanation['sentence']
+
+
 def test_current_patient_mismatch_precedes_stale_benefit_identity_in_staff_line():
     result = {'payer': 'United Healthcare', 'payment_mode': 'insurance',
               'identity': {'status': 'review', 'differences': [{'field': 'first_name'}],

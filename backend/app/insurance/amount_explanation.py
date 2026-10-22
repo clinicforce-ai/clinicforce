@@ -60,6 +60,8 @@ def _cash_cause(result: dict, failure: dict, recovery: dict, card: dict, network
                 'and did not identify which pays first'), 'multiple_active_policies'
     if reason in {'identity_or_coverage_review', 'subscriber_relationship_conflict', 'returned_identity_or_coverage_mismatch'}:
         return 'the returned policy did not match the patient and subscriber details for this visit', 'policy_identity_mismatch'
+    if reason == 'discovered_payer_not_routable' and not active_benefits:
+        return 'the payer directory returned more than one supported route for the reported insurer', 'payer_route_ambiguous'
     if identity.get('missing_fields') and not (identity.get('differences') or identity.get('policy_differences')):
         return 'the payer and eCW records lack enough matching identifiers to bind these benefits to this patient', 'payer_identity_match_missing'
     if identity.get('status') == 'review':
