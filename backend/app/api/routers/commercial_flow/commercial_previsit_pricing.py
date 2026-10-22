@@ -220,7 +220,7 @@ def _previsit_benefits(payload: dict, coverage: dict, service_date: str | None =
         procedure_code=codes[0]['code'] if office_only and len(codes) == 1 else None,
         office_visit=office_only,
         office_service_types=_api._office_service_types('', source or {}), **context)
-    benefits['benefit_source'] = payload.get('benefit_source') or 'Stedi'
+    benefits['benefit_source'] = (payload.get('benefit_source') or 'Stedi') if payload else None
     if (inputs and source and not coverage.get('other_active_coverage')
             and _api.stedi_discovery.corroborates_patient_policy(payload, inputs, source)
             and _api.stedi_discovery.automatic_match(payload, inputs, source)):
@@ -233,6 +233,11 @@ def _previsit_benefits(payload: dict, coverage: dict, service_date: str | None =
                 'The payer linked this patient to the recorded member policy as a dependent. Subscriber details were matched automatically; eCW was not changed.')
     comparison = _api.insurance_identity.compare(payload, coverage)
     benefits['identity'] = comparison
+    if not payload:
+        # Normalization of an empty response is a safe pricing placeholder, not payer evidence.
+        benefits['review_reasons'] = []
+        benefits['requires_review'] = False
+        return benefits
     if comparison['status'] == 'review':
         benefits['requires_review'] = True
         benefits['review_reasons'].append('Confirm the member identity: the payer response differs from eCW.'

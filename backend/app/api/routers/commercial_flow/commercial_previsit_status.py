@@ -92,6 +92,8 @@ def _insurance_diagnosis(case: dict, result: dict, guidance: dict) -> dict:
         (recovery.get('outcome') == 'recovered' and recovery.get('state') == 'complete')
         or payer_identity_verified(identity))
     payer_benefits_returned = benefits.get('active') is not None and bool(result.get('benefit_source') or result.get('checked_at'))
+    payer_identity_available = bool(result.get('checked_at') or benefits.get('coverage_status_conflict') or
+        (benefits.get('active') is not None and (benefits.get('benefit_source') or result.get('benefit_source'))))
     # A discovered candidate match cannot overrule an explicit mismatch in
     # the member-specific payer response. With no payer identity decision, a
     # single candidate may still establish the patient match for diagnosis.
@@ -121,7 +123,8 @@ def _insurance_diagnosis(case: dict, result: dict, guidance: dict) -> dict:
     if (active_policy_count if type(active_policy_count) is int else
             sum(row.get('active_medical') is True for row in candidates)) > 1:
         reasons.append('MULTIPLE_COVERAGES'); states.append('MULTIPLE_COVERAGES')
-    states.append('IDENTITY_VERIFIED' if identity_verified else 'IDENTITY_REVIEW_REQUIRED')
+    states.append('IDENTITY_VERIFIED' if identity_verified else
+                  'IDENTITY_REVIEW_REQUIRED' if payer_identity_available else 'PAYER_RESPONSE_MISSING')
     enrollment = raw_recovery.get('enrollment') or result.get('enrollment')
     if enrollment and enrollment.get('status') != 'LIVE' and (benefits.get('active') is not True or historical_only):
         if enrollment.get('reason_code'):
@@ -143,15 +146,20 @@ def _insurance_diagnosis(case: dict, result: dict, guidance: dict) -> dict:
         for line in price.get('lines', [])))
     details = []
     if not available:
-        details = list(dict.fromkeys([guidance.get('reason') or '', *benefits.get('review_reasons', []), *result.get('issues', []),
-            *price.get('issues', []), *price.get('service_issues', []),
-            *(issue for row in price.get('lines', []) for issue in row.get('issues', []))]))
+        if not payer_identity_available and benefits.get('active') is None:
+            # Old saved placeholders may say "Stedi" and carry many derived review
+            # reasons. There is no payer benefit to reconcile or price yet.
+            details = [guidance.get('reason') or '', *(price.get('service_issues') or [])]
+        else:
+            details = list(dict.fromkeys([guidance.get('reason') or '', *benefits.get('review_reasons', []), *result.get('issues', []),
+                *price.get('issues', []), *price.get('service_issues', []),
+                *(issue for row in price.get('lines', []) for issue in row.get('issues', []))]))
         details = [value for value in details if value]
         if benefits.get('active') is not True:
             reasons.append('APPLICABLE_BENEFITS_MISSING')
         if benefits.get('coverage_status_conflict'):
             reasons.append('COVERAGE_STATUS_CONFLICT')
-        if identity.get('status') == 'review':
+        if payer_identity_available and identity.get('status') == 'review':
             reasons.append('PATIENT_IDENTITY_REVIEW_REQUIRED')
         if benefits.get('service_date_matches') is False:
             reasons.append('COVERAGE_DATE_MISMATCH')
@@ -179,7 +187,8 @@ def _insurance_diagnosis(case: dict, result: dict, guidance: dict) -> dict:
             'rawCandidateCount': raw_count, 'retainedCandidateCount': len(candidates),
             'verifiedCandidateCount': recovery.get('verified_candidate_count', 0),
             'activePolicyCount': active_policy_count if type(active_policy_count) is int else None,
-            'identityStatus': 'VERIFIED' if identity_verified else 'REVIEW_REQUIRED',
+            'identityStatus': 'VERIFIED' if identity_verified else
+                'REVIEW_REQUIRED' if payer_identity_available else 'PAYER_RESPONSE_MISSING',
             'eligibilityStatus': 'BENEFITS_VERIFIED' if verified and benefits.get('active') is True else
                 'PAYER_BENEFITS_RETURNED' if payer_benefits_returned else
                 eligibility_state if eligibility_state in {'INACTIVE', 'EXPIRED', 'FUTURE', 'CONFLICT'} else 'NOT_VERIFIED',

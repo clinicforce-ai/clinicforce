@@ -34,7 +34,7 @@ def generic_plan_label(value: object) -> bool:
     return (label in {'', 'ci', 'commercial', 'ppo', 'hmo', 'uhc', 'unitedhealthcare',
                       'medicare', 'medicareadvantage', 'uhcmedicareadvantage',
                       'unitedhealthcaremedicareadvantage'} or bool(re.fullmatch(
-                          r'(?:preferredprovider(?:option|organization)(?:plus)?|healthmaintenanceorganization)(?:medical)?', label)))
+                          r'(?:ci)?(?:preferredprovider(?:option|organization)(?:plus)?|healthmaintenanceorganization)(?:medical)?', label)))
 
 
 def birth_date(value: object) -> str:

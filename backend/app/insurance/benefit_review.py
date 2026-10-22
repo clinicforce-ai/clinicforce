@@ -28,7 +28,7 @@ def selected_service_blocker(network: str, patient_identity: dict, lines: list[d
         if terms.get('has_secondary'):
             return 'service_secondary_coverage', code
         line_identity = terms.get('identity')
-        if line_identity and (not patient_benefits_bound(line_identity)
+        if terms.get('active') is True and line_identity and (not patient_benefits_bound(line_identity)
                 or line_identity.get('binding') != patient_identity.get('binding')):
             return 'service_identity_mismatch', code
         line_network = terms.get('network_status')

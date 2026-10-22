@@ -31,6 +31,17 @@ try {
   const { selectedRequirementIssue } = await server.ssrLoadModule(
     '/src/features/commercial-estimate/selectedRequirementIssue.ts',
   )
+  const { firstSelectedCptIssue } = await server.ssrLoadModule(
+    '/src/features/commercial-estimate/selectedCptIssue.ts',
+  )
+  const uncheckedCpt = {
+    identity: { status: 'review', missing_fields: ['member_id'] },
+    price_range: { lines: [{ code: '95908', benefits: { active: null,
+      identity: { status: 'review', missing_fields: ['member_id'] } } }] },
+  }
+  assert.equal(firstSelectedCptIssue(uncheckedCpt), null)
+  uncheckedCpt.price_range.lines[0].benefits.active = true
+  assert(firstSelectedCptIssue(uncheckedCpt)?.includes('do not match this patient'))
   assert.equal(
     coinsuranceFormula({
       encounter_summary: {

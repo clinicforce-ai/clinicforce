@@ -151,7 +151,7 @@ export default function PatientPolicy({
             </dd>
           </div>
         </dl>
-        {result.identity?.status === 'review' && (
+        {result.benefits?.active != null && result.identity?.status === 'review' && (
           <p className="visit-muted" role="status">
             eCW and payer differ on{' '}
             {mismatchFields.length

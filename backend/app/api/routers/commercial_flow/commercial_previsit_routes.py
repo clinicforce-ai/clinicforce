@@ -44,7 +44,8 @@ async def saved_previsit(case_id: str, request: _api.Request) -> dict:
     same_policy_evidence_conflict for review, without asserting COB.
     The diagnosis also separates
     identityStatus, eligibilityStatus, pricingStatus, reasonCodes, states,
-    pricingReasons and enrollment status. reasonCodes distinguishes an unverified
+    pricingReasons and enrollment status. identityStatus is PAYER_RESPONSE_MISSING
+    before a dated payer benefit response exists. reasonCodes distinguishes an unverified
     provider network from an in-network contract-rate gap and an out-of-network
     payer-allowance gap. A prior enrollment failure is retained for audit but
     is not a current blocker after a current active Stedi 271. An active,

@@ -108,8 +108,17 @@ def _published_rule(kind: str, result: dict, context: dict, plans: list[str], co
     benefits = result.get('benefits') or {}
     identity = result.get('identity') or benefits.get('identity') or {}
     day = str(context.get('service_date') or '')
+    payer_names = context.get('payer_names') or set()
+    same_day_bcbstx_referral = (
+        kind == 'referral' and benefits.get('service_date_matches') is None
+        and benefits.get('network_status') == 'in_network'
+        and str(result.get('checked_at') or '')[:10] == day
+        and bool(payer_names & {'bcbstx', 'bcbstexas', 'bluecrossblueshieldoftexas',
+                                'bluecrossandblueshieldoftexas'})
+    )
     if (not codes or not '2026-01-01' <= day <= '2026-12-31'
-            or benefits.get('active') is not True or benefits.get('service_date_matches') is not True
+            or benefits.get('active') is not True
+            or benefits.get('service_date_matches') is not True and not same_day_bcbstx_referral
             or not payer_identity_verified(identity) or not result.get('benefit_source')
             or not context.get('member_id')):
         return None

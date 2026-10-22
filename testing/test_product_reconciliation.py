@@ -18,6 +18,22 @@ from app.insurance import network_participation
 DAY = '2026-10-21'
 
 
+def test_saved_requirements_refresh_when_network_projection_changes(monkeypatch):
+    """A saved PPO decision must follow the newly supported signed network."""
+    called = []
+    monkeypatch.setattr(requirements, 'attach_requirements', lambda *args: called.append(args))
+    api_stub = SimpleNamespace(staff_store=SimpleNamespace(list_library=lambda *_: []),
+                               commercial_store=SimpleNamespace(list_connections=lambda *_: []))
+    saved = {'benefits': {'network_status': 'unknown', 'network_source': None},
+             'network_evidence': {'decision': 'lacking_applicable_network_evidence'}}
+    result = {'requirement_sources': [],
+              'benefits': {'network_status': 'in_network', 'network_source': 'clinic_group_agreement'},
+              'network_evidence': {'network_name': 'Blue Choice PPO'}}
+    case = {'previsit_context': {'result': saved, 'inputs': {}, 'source': {}, 'payer_id': ''}}
+    requirements.refresh_saved_requirements(api_stub, result, case, 'synthetic-practice')
+    assert len(called) == 1
+
+
 def setup_path(monkeypatch, mappings=None):
     payer = {'id': 'payer', 'display_name': 'Example Blue', 'category': 'commercial_medical',
              'status': 'staff_guidance_enabled', 'stedi_payer_id': 'payer-route'}

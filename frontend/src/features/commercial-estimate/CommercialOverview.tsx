@@ -107,6 +107,12 @@ export default function CommercialOverview({
   )
   const visibleAmount = Boolean(amount) || provisionalAmount != null || !!model.estimatedShare
   const patientBenefitsBound = hasPatientBinding(result.identity)
+  const networkWarnings = (result.network_evidence?.mismatch_warnings || []).filter(
+    (warning) => !warning.toLowerCase().includes('billing tin is missing from the visit'),
+  )
+  const networkReason = result.network_evidence?.reason
+    ?.replace(/billing TIN is missing from the visit\.?/i, '')
+    .trim()
   const applicablePlanLimits =
     !cash &&
     amount &&
@@ -180,6 +186,12 @@ export default function CommercialOverview({
           <p>{overviewExplanation(model, result, Boolean(fullBreakdown))}</p>
           <PolicyAndShareNotice model={model} />
           {!cash && <PublishedPlanBenefit result={result} />}
+          {!cash &&
+            !previousEstimate &&
+            result.benefits?.active === true &&
+            patientBenefitsBound &&
+            !result.benefits.historical_only &&
+            !result.benefits.source_errors?.length && <PayerReportedPlanFigures result={result} />}
           {(chooseServices || enterAllowance) && (
             <button type="button" className="cash-package-shortcut" onClick={openServiceDetails}>
               {chooseServices
@@ -187,31 +199,6 @@ export default function CommercialOverview({
                 : 'Record payer allowed amount for selected CPT'}
             </button>
           )}
-          {!cash &&
-            (!amount || guidance?.basis === 'claim_after_service') &&
-            !calculating &&
-            result.benefits?.active &&
-            result.benefits.service_date_matches !== false &&
-            result.benefits.coverage_status_conflict !== true &&
-            result.benefits.coverage_dates_invalid !== true &&
-            result.benefits.network_conflict !== true &&
-            !result.benefits.review_reasons?.some((reason) =>
-              reason.toLowerCase().includes('provider-network evidence reports nonparticipation'),
-            ) &&
-            !result.benefits.has_secondary &&
-            result.benefits.historical_only !== true &&
-            !result.benefits.source_errors?.length &&
-            patientBenefitsBound &&
-            result.recovery?.reason_code !== 'multiple_active_policies' &&
-            [
-              result.benefits.copay_cents,
-              result.benefits.deductible_remaining_cents,
-              result.benefits.coinsurance_percent,
-              result.benefits.oop_remaining_cents,
-              result.benefits.oop_annual_cents,
-            ].some((value) => value != null) && (
-              <PayerReportedPlanFigures benefits={result.benefits} />
-            )}
           {!amount && <TemporaryRateReference result={result} />}
           {!cash &&
             !previousEstimate &&
@@ -454,12 +441,12 @@ export default function CommercialOverview({
           <Network size={20} aria-hidden="true" />
           <span>
             Network<strong>{networkLabel}</strong>
-            {result?.network_evidence?.mismatch_warnings?.length ? (
+            {networkWarnings.length ? (
               <small className="network-mismatch-warning" role="note">
-                Agreement mismatch: {result.network_evidence.mismatch_warnings.join(' ')}
+                Agreement mismatch: {networkWarnings.join(' ')}
               </small>
             ) : (
-              result?.network_evidence?.reason && <small>{result.network_evidence.reason}</small>
+              networkReason && <small>{networkReason}</small>
             )}
             {result?.network_evidence?.product_source && (
               <small>Contract plan lookup: {result.network_evidence.product_source}</small>

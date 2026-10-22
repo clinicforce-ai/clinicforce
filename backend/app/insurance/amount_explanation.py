@@ -40,6 +40,7 @@ def _cash_cause(result: dict, failure: dict, recovery: dict, card: dict, network
     reason = recovery.get('reason_code')
     identity = result.get('identity') or benefits.get('identity') or {}
     active_benefits = benefits.get('active') is True and benefits.get('service_date_matches') is not False
+    payer_response_present = bool(result.get('checked_at') or benefits.get('active') is not None)
     if reason == 'same_policy_evidence_conflict':
         return 'the same medical policy returned conflicting subscriber, date or office benefit evidence', 'same_policy_evidence_conflict'
     if not active_benefits and (failure.get('kind') == 'provider_enrollment' or reason in {'provider_enrollment_missing', 'enrollment_required'}):
@@ -62,9 +63,9 @@ def _cash_cause(result: dict, failure: dict, recovery: dict, card: dict, network
         return 'the returned policy did not match the patient and subscriber details for this visit', 'policy_identity_mismatch'
     if reason == 'discovered_payer_not_routable' and not active_benefits:
         return 'the payer directory returned more than one supported route for the reported insurer', 'payer_route_ambiguous'
-    if identity.get('missing_fields') and not (identity.get('differences') or identity.get('policy_differences')):
+    if payer_response_present and identity.get('missing_fields') and not (identity.get('differences') or identity.get('policy_differences')):
         return 'the payer and eCW records lack enough matching identifiers to bind these benefits to this patient', 'payer_identity_match_missing'
-    if identity.get('status') == 'review':
+    if payer_response_present and identity.get('status') == 'review':
         return 'the payer response did not match the patient and policyholder details in eCW', 'policy_identity_mismatch'
     if benefits.get('active') is True and not patient_benefits_bound(identity):
         return 'the saved payer response has no retained patient identity match for this visit', 'payer_identity_match_missing'

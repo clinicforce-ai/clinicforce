@@ -99,7 +99,8 @@
   margin-top: 16px;
 }
 
-.payer-reported-terms > summary {
+.payer-reported-terms > h3 {
+  margin: 0 0 8px;
   color: var(--ve-muted);
   font-size: 12px;
   font-weight: 650;

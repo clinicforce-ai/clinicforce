@@ -314,7 +314,7 @@ export default function CoverageRecovery({
           ))}
         </section>
       )}
-      {result.insurance_diagnosis && (
+      {result.insurance_diagnosis && !verifiedCoverage && (
         <details className="visit-recovery" open={!verifiedCoverage || undefined}>
           <summary>Insurance check details</summary>
           <p>

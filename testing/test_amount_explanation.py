@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from app.insurance import commercial, collection_guidance, visit_estimate, amount_explanation
+from app.insurance.benefit_review import selected_service_blocker
 from app.api.routers import commercial_estimator as api
 from app.api.routers.commercial_estimator import _compare_card_hints
 from test_visit_estimate import DAY, payload
@@ -613,6 +614,50 @@ def test_unchecked_uhc_route_does_not_claim_ecw_and_payer_identifiers_are_missin
     explanation = amount_explanation.build(result, {'amount_cents': None, 'basis': 'missing_collection_inputs'})
     assert explanation['reason_code'] == expected
     assert 'identifiers' not in explanation['sentence']
+
+
+def test_unchecked_cpt_placeholder_is_not_a_patient_mismatch():
+    identity = {'status': 'review', 'missing_fields': ['member_id']}
+    line = {'code': '95908', 'benefits': {'active': None, 'identity': identity}}
+    assert selected_service_blocker('unknown', identity, [line]) is None
+    line['benefits']['active'] = True
+    assert selected_service_blocker('unknown', identity, [line]) == ('service_identity_mismatch', '95908')
+
+
+def test_pending_payer_request_does_not_blame_placeholder_identity():
+    result = {'payment_mode': 'insurance', 'previsit': {'request_state': 'pending'},
+              'identity': {'status': 'review', 'missing_fields': ['member_id']},
+              'benefits': {'active': None, 'network_status': 'unknown'},
+              'price_range': {'mode': 'services', 'lines': []}}
+    explanation = amount_explanation.build(result, {'amount_cents': None, 'basis': 'missing_collection_inputs'})
+    assert explanation['reason_code'] == 'check_pending'
+    assert 'identity' not in explanation['sentence'].lower()
+
+
+def test_empty_payer_placeholder_does_not_report_payer_verification_gaps():
+    coverage = {'active_coverages': 1, 'member_id': 'SYNTHETIC', 'patient_first': 'Pat',
+                'patient_last': 'Example', 'patient_birth_date': '1980-01-01'}
+    benefits = api._previsit_benefits({}, coverage, '2026-10-22')
+    assert benefits['active'] is None
+    assert benefits.get('benefit_source') is None
+    assert benefits['review_reasons'] == []
+    assert benefits['identity']['status'] == 'review'  # Cannot bind absent payer benefits.
+    diagnosis = api._insurance_diagnosis({'previsit_context': {'source': {}}},
+        {'benefits': benefits, 'identity': benefits['identity'], 'price_range': {'lines': []}},
+        {'amount_cents': None, 'reason': 'Eligibility has not completed.'})
+    assert diagnosis['identityStatus'] == 'PAYER_RESPONSE_MISSING'
+    assert 'PATIENT_IDENTITY_REVIEW_REQUIRED' not in diagnosis['reasonCodes']
+    assert not any('Confirm patient identity' in reason for reason in diagnosis['pricingReasons'])
+    old_placeholder = dict(benefits, benefit_source='Stedi', review_reasons=[
+        'Confirm patient identity: the payer and eCW records lack enough matching identifiers.'])
+    old_result = {'benefits': old_placeholder, 'identity': benefits['identity'],
+                  'price_range': {'lines': [{'code': '95908', 'issues': [
+                      'Confirm the remaining individual deductible that applies to this visit.']}],
+                                  'service_issues': []}}
+    old_diagnosis = api._insurance_diagnosis({'previsit_context': {'source': {}}}, old_result,
+        {'amount_cents': None, 'reason': 'Eligibility has not completed.'})
+    assert old_diagnosis['identityStatus'] == 'PAYER_RESPONSE_MISSING'
+    assert old_diagnosis['pricingReasons'] == ['Eligibility has not completed.']
 
 
 def test_current_patient_mismatch_precedes_stale_benefit_identity_in_staff_line():
