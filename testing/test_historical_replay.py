@@ -286,6 +286,16 @@ def test_uncertified_historical_inventory_stays_separate_from_simulated_approval
     assert simulated['network_evidence']['decision'] == 'out_of_network_by_clinic_contract_inventory'
 
 
+def test_replay_marks_saved_clinic_agreement_as_outside_its_network_reconstruction():
+    bundle = _bundle([])
+    bundle['payer_route']['rules'].pop('agreement_inventory')
+    bundle['case']['previsit_context']['result']['benefits'] = {
+        'network_status': 'in_network', 'network_source': 'clinic_group_agreement'}
+    report = historical_replay.replay(bundle)
+    assert report['result']['benefits']['network_status'] == 'unknown'
+    assert 'does not reconstruct the saved clinic agreement' in report['network_replay_limitation']
+
+
 def test_wrong_intake_or_response_object_is_rejected():
     bundle = _bundle([])
     bundle['intake_id'] = 'different-intake'
