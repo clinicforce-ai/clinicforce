@@ -157,7 +157,10 @@ export default function PatientPolicy({
             {mismatchFields.length
               ? [...new Set(mismatchFields)].join(', ')
               : 'patient or subscriber identity'}
-            . Reconcile these fields with the payer before using member balances.
+            .{' '}
+            {result.identity.policy_differences?.length
+              ? 'The policyholder shown above comes from the payer response. Reconcile the eCW policy record with the payer before using member balances.'
+              : 'Reconcile these fields with the payer before using member balances.'}
           </p>
         )}
         {result.identity?.status !== 'review' && !!result.identity?.differences.length && (

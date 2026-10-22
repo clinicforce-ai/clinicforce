@@ -84,6 +84,8 @@ def build_catalog(api: ModuleType, result: dict, session: dict, inputs: dict, so
     known_codes = {row['code'] for row in available}
     descriptions = {**{str(n): 'Nerve conduction studies' for n in range(95907, 95914)},
                     '95885': 'Limited needle EMG', '95886': 'Complete needle EMG',
+                    '11104': 'Skin punch biopsy · first site',
+                    '11105': 'Skin punch biopsy · each additional site',
                     '62270': 'Diagnostic spinal tap · without imaging', '62328': 'Diagnostic spinal tap · with imaging',
                     **{str(n): 'Office consultation' for n in range(99202, 99206)},
                     **{str(n): 'Office consultation' for n in range(99212, 99216)}}

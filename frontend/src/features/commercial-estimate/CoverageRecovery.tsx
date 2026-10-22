@@ -145,14 +145,16 @@ export default function CoverageRecovery({
       )}
       {!!policySuggestions.length && (
         <section className="visit-recovery" aria-label="Returned insurance candidates">
-          <h3>Returned insurance candidates</h3>
+          <h3>Policy search results</h3>
           <p>
-            Returned policies are retained, including inactive policies. Suggestions are optional;
-            automatic estimation does not wait for selection.
+            {result.benefits?.active === true
+              ? `${result.payer || 'The current payer'} returned active benefits${verifiedCoverage ? ' matched to this patient' : '; the patient match needs review'}. The entries below are separate saved policy search results.`
+              : 'These are saved policy search results, including inactive policies. They do not establish current benefits.'}{' '}
+            Selecting a suggestion is optional.
           </p>
           {policySuggestions.length >= 2 && (
             <label>
-              Insurance policy suggestions
+              Policy search results
               <select
                 value={
                   policySuggestions.some((row) => row.id === candidateSuggestion)

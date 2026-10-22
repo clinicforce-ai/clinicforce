@@ -57,7 +57,9 @@ export function ServicePlanner({
         selected.includes(row.id!) &&
         ['botulinum_drug', 'chemodenervation'].includes(row.service_family || ''),
     )
-  const [category, setCategory] = useState(emgVisit ? 'nerve' : botoxVisit ? 'other' : 'visit')
+  const [category, setCategory] = useState(
+    emgVisit ? 'nerve' : botoxVisit || result.service_plan?.kind === 'biopsy' ? 'other' : 'visit',
+  )
   const chosen = available.filter((row) => selected.includes(row.id!))
   const scenarioAlternatives = result.provisional_scenario?.candidate_ids || []
   const scenarioRules = scenarioAlternatives.map((id) => {

@@ -31,7 +31,8 @@ def credentials(practice_id: str) -> str:
             return key.strip() if isinstance(key, str) else ''
         except ValueError:
             return ''
-    return os.getenv('STEDI_API_KEY', '').strip()
+    return (os.getenv('STEDI_API_KEY', '').strip()
+            or os.getenv('STEDI_PROD_API_KEY', '').strip())
 
 
 def _normal(value: object) -> str:
