@@ -40,6 +40,9 @@ try {
       identity: { status: 'review', missing_fields: ['member_id'] } } }] },
   }
   assert.equal(firstSelectedCptIssue(uncheckedCpt), null)
+  uncheckedCpt.price_range.lines[0].calculation = { patient_cents: 1000 }
+  assert(firstSelectedCptIssue(uncheckedCpt)?.includes('do not match this patient'))
+  delete uncheckedCpt.price_range.lines[0].calculation
   uncheckedCpt.price_range.lines[0].benefits.active = true
   assert(firstSelectedCptIssue(uncheckedCpt)?.includes('do not match this patient'))
   assert.equal(
