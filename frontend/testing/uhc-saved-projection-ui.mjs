@@ -268,11 +268,11 @@ try {
   futurePpo.benefits.oop_remaining_cents = null
   futurePpo.benefits.reported_options = [
     { kind: 'out_of_pocket', service_type_code: '30', coverage_level: 'INDIVIDUAL',
-      plan_association: 'unassigned', time_period: 'CALENDAR_YEAR', amount_cents: 350000 },
+      plan_association: 'medical_candidate', time_period: 'CALENDAR_YEAR', amount_cents: 350000 },
     { kind: 'out_of_pocket', service_type_code: '30', coverage_level: 'INDIVIDUAL',
-      plan_association: 'unassigned', time_period: 'YEAR_TO_DATE', amount_cents: 79570 },
+      plan_association: 'medical_candidate', time_period: 'YEAR_TO_DATE', amount_cents: 79570 },
     { kind: 'out_of_pocket', service_type_code: '30', coverage_level: 'INDIVIDUAL',
-      plan_association: 'unassigned', time_period: 'REMAINING', amount_cents: 270430 },
+      plan_association: 'medical_candidate', time_period: 'REMAINING', amount_cents: 270430 },
   ]
   futurePpo.price_range.lines[0].benefits.deductible_applies = false
   futurePpo.price_range.lines[0].benefits.coinsurance_percent = '0'
