@@ -88,10 +88,6 @@ def _cash_cause(result: dict, failure: dict, recovery: dict, card: dict, network
         return 'the exact payer product has no approved link to the clinic agreement', 'clinic_product_mismatch'
     if participation_conflict(benefits):
         return 'provider participation evidence conflicts for this plan and provider', 'provider_network_conflict'
-    if result.get('service_selection_status') == 'preview':
-        return ('the selected service scenario is provisional and must be reviewed before collection'
-                if result.get('selected_ids') or result.get('provisional_scenario') else
-                'the appointment does not yet support a specific selected CPT scenario'), 'planned_cpt_unselected'
     exclusion = result.get('network_evidence') or {}
     if network == 'unknown' and (exclusion.get('status') == 'excluded_under_available_agreement'
                                  or exclusion.get('decision') == 'excluded_under_available_agreement'):
@@ -293,6 +289,8 @@ def build(result: dict, guidance: dict, review: dict | None = None) -> dict:
                 sentence += ', while the office deductible remains unknown'
             if unpriced:
                 sentence += f', while {missing} is excluded because its patient cost is unknown'
+            elif basis == 'office_copay' and price.get('complete') and price.get('patient_min_cents') is not None and price['patient_min_cents'] > amount:
+                sentence += '; other estimated patient costs follow the claim'
             elif network == 'out_of_network' and not ma_ppo:
                 sentence += ', while any extra doctor charge remains unknown'
             code = 'office_copay_partial' if unpriced else 'office_copay'
@@ -375,6 +373,8 @@ def build(result: dict, guidance: dict, review: dict | None = None) -> dict:
                 if paid:
                     sentence += ', after the recorded payment'
             code = 'insured_services'
+        if result.get('service_selection_status') == 'preview' and (result.get('service_plan') or {}).get('recommended_ids'):
+            sentence += '. This estimate uses suggested CPTs; update the service plan if the intended care changes'
     else:
         cause, cause_code = _cash_cause(result, failure, recovery, card, network, benefits, unpriced, missing,
                                         guidance.get('source_errors'))

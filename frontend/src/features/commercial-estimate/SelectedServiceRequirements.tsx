@@ -28,59 +28,93 @@ export default function SelectedServiceRequirements({
           const authorizationRequired =
             decision?.authorization?.status === 'Required' ||
             authorizationLine?.required === 'required'
-          const referral = referralRequired
-            ? referralLine?.status === 'valid' &&
-              referralLine.cleared &&
-              referralLine.reference &&
-              referralLine.verified_at
-              ? 'referral on file'
-              : 'referral needed'
-            : decision?.referral?.status === 'Not required'
-              ? 'no referral'
-              : `ask ${payerName} about referral`
-          const authorization = authorizationRequired
-            ? authorizationLine?.status === 'valid' &&
-              authorizationLine.cleared &&
-              authorizationLine.reference &&
-              authorizationLine.verified_at
-              ? decision?.authorization?.approval_status === 'Verified' ||
-                (!decision &&
-                  result.requirement_evidence?.authorization?.approval_status === 'Verified')
+          const referralConflict =
+            (decision?.referral?.status === 'Required' &&
+              referralLine?.required === 'not_required') ||
+            (decision?.referral?.status === 'Not required' && referralLine?.required === 'required')
+          const authorizationConflict =
+            (decision?.authorization?.status === 'Required' &&
+              authorizationLine?.required === 'not_required') ||
+            (decision?.authorization?.status === 'Not required' &&
+              authorizationLine?.required === 'required')
+          const referralCleared =
+            referralLine?.status === 'valid' &&
+            referralLine.cleared &&
+            referralLine.reference &&
+            referralLine.verified_at
+          const authorizationCleared =
+            authorizationLine?.status === 'valid' &&
+            authorizationLine.cleared &&
+            authorizationLine.reference &&
+            authorizationLine.verified_at &&
+            (decision?.authorization?.approval_status ??
+              result.requirement_evidence?.authorization?.approval_status) === 'Verified'
+          const authorizationReferenceOnFile =
+            authorizationLine?.status === 'valid' &&
+            authorizationLine.cleared &&
+            authorizationLine.reference &&
+            authorizationLine.verified_at &&
+            !(
+              decision?.authorization?.approval_status ??
+              result.requirement_evidence?.authorization?.approval_status
+            )
+          const referral = referralConflict
+            ? 'review referral rule'
+            : referralRequired
+              ? referralCleared
+                ? 'referral on file'
+                : 'referral required'
+              : decision?.referral?.status === 'Not required'
+                ? 'no referral'
+                : `ask ${payerName} about referral`
+          const authorization = authorizationConflict
+            ? 'review prior authorization rule'
+            : authorizationRequired
+              ? authorizationCleared
                 ? 'prior authorization approved'
-                : 'prior authorization on file'
-              : 'prior authorization needed'
-            : decision?.authorization?.status === 'Not required'
-              ? 'no prior authorization'
-              : `ask ${payerName} about prior authorization`
+                : authorizationReferenceOnFile
+                  ? 'prior authorization on file'
+                  : 'prior authorization required'
+              : decision?.authorization?.status === 'Not required'
+                ? 'no prior authorization'
+                : `ask ${payerName} about prior authorization`
           return (
             <li key={line.id}>
               <strong>CPT {line.code}</strong>
-              {Number(line.units) > 1 ? ` × ${line.units}` : ''}: {referral}, {authorization}.
-              {(!!decision?.referral?.sources?.length ||
-                !!decision?.authorization?.sources?.length) && (
-                <details>
-                  <summary>Rule sources</summary>
-                  {!!decision?.referral?.sources?.length && (
-                    <small>
-                      Referral:{' '}
-                      {decision.referral.sources.map((source, index) => (
-                        <span key={index}>
-                          <RequirementSourceLink source={source} />{' '}
-                        </span>
-                      ))}
-                    </small>
-                  )}
-                  {!!decision?.authorization?.sources?.length && (
-                    <small>
-                      Authorization:{' '}
-                      {decision.authorization.sources.map((source, index) => (
-                        <span key={index}>
-                          <RequirementSourceLink source={source} />{' '}
-                        </span>
-                      ))}
-                    </small>
-                  )}
-                </details>
+              {Number(line.units) > 1 ? ` × ${line.units}` : ''}:{' '}
+              <span
+                className={`requirement-tag ${referralConflict ? 'is-unknown' : referralRequired ? (referralCleared ? 'is-clear' : 'is-required') : decision?.referral?.status === 'Not required' ? 'is-clear' : 'is-unknown'}`}
+              >
+                {referral}
+              </span>
+              ,{' '}
+              <span
+                className={`requirement-tag ${authorizationConflict ? 'is-unknown' : authorizationRequired ? (authorizationCleared ? 'is-clear' : authorizationReferenceOnFile ? 'is-unknown' : 'is-required') : decision?.authorization?.status === 'Not required' ? 'is-clear' : 'is-unknown'}`}
+              >
+                {authorization}
+              </span>
+              .
+              {!!decision?.referral?.sources?.length && (
+                <small>
+                  {' '}
+                  Referral:{' '}
+                  {decision.referral.sources.map((source, index) => (
+                    <span key={index}>
+                      <RequirementSourceLink source={source} />{' '}
+                    </span>
+                  ))}
+                </small>
+              )}
+              {!!decision?.authorization?.sources?.length && (
+                <small>
+                  {' '}
+                  Authorization:{' '}
+                  {decision.authorization.sources.map((source, index) => (
+                    <span key={index}>
+                      <RequirementSourceLink source={source} />{' '}
+                    </span>
+                  ))}
+                </small>
               )}
             </li>
           )

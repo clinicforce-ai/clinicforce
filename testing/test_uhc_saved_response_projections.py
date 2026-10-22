@@ -253,7 +253,7 @@ def test_four_selected_cpts_keep_distinct_sourced_requirement_decisions():
                 ('95886', 'Required', 'Required')]
 
 
-def test_cpt_authorization_rule_conflicting_with_saved_line_withholds_amount():
+def test_cpt_authorization_rule_conflict_keeps_priced_amount():
     result = supported_four_requirement_result()
     result['requirement_evidence']['authorization'] = {}
     result['price_range']['lines'][1]['benefits']['requirements']['authorization'] = {
@@ -262,14 +262,11 @@ def test_cpt_authorization_rule_conflicting_with_saved_line_withholds_amount():
     guidance = collection_guidance.build(result)
     result['collection_guidance'] = guidance
     summary = encounter_summary.build(result)
-    explanation = amount_explanation.build(result, guidance)
-    assert guidance['amount_cents'] is None
-    assert summary['collect_today_cents'] is None
-    assert explanation['reason_code'] == 'authorization_required'
-    assert 'CPT 93000' in explanation['sentence']
+    assert guidance['amount_cents'] == 8000
+    assert summary['collect_today_cents'] == 8000
 
 
-def test_cpt_no_referral_rule_conflicting_with_saved_required_line_withholds_amount():
+def test_cpt_no_referral_rule_conflict_keeps_priced_amount():
     result = supported_four_requirement_result()
     result['price_range']['lines'][0]['benefits']['requirements']['referral'] = {
         'required': 'required', 'status': 'valid', 'cleared': True,
@@ -277,11 +274,8 @@ def test_cpt_no_referral_rule_conflicting_with_saved_required_line_withholds_amo
     }
     guidance = collection_guidance.build(result)
     result['collection_guidance'] = guidance
-    assert guidance['amount_cents'] is None
-    assert encounter_summary.build(result)['collect_today_cents'] is None
-    explanation = amount_explanation.build(result, guidance)
-    assert explanation['reason_code'] == 'referral_required'
-    assert 'CPT 99203' in explanation['sentence']
+    assert guidance['amount_cents'] == 8000
+    assert encounter_summary.build(result)['collect_today_cents'] == 8000
 
 
 def test_same_cpt_on_two_lines_uses_each_lines_requirement_decision():
@@ -306,13 +300,13 @@ def test_same_cpt_on_two_lines_uses_each_lines_requirement_decision():
     }
     assert requirement_blocker(result) is None
     result['price_range']['lines'][0]['benefits']['requirements']['referral'] = no_rule
-    assert requirement_blocker(result)[1] == 'referral_required'
+    assert requirement_blocker(result) is None
     result['price_range']['lines'][0]['id'] = '99203'
     result['price_range']['lines'][0]['benefits']['requirements']['referral'] = cleared
     result['requirement_evidence']['procedures'] = [
         {'id': '99203', 'code': '99203', 'referral': {'status': 'Required'}},
     ]
-    assert requirement_blocker(result)[1] == 'referral_required'
+    assert requirement_blocker(result) is None
 
 
 def test_two_priced_lines_sharing_cpt_keep_supported_collection_when_one_needs_referral():
@@ -349,7 +343,7 @@ def test_two_priced_lines_sharing_cpt_keep_supported_collection_when_one_needs_r
     assert guidance['amount_cents'] == result['price_range']['patient_min_cents'] == 8000
     assert encounter_summary.build(result)['collect_today_cents'] == 8000
     result['price_range']['lines'][0]['benefits']['requirements']['referral']['reference'] = ''
-    assert collection_guidance.build(result)['amount_cents'] is None
+    assert collection_guidance.build(result)['amount_cents'] == 8000
 
 
 @pytest.mark.parametrize('name,reason_code', [

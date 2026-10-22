@@ -193,9 +193,6 @@ def _finish_previsit(result: dict, case: dict, inputs: dict, source: dict, paylo
         result['price_range'] = price
         result['issues'].extend(clinical_issues)
     result['arrival_collection'] = _api.visit_estimate.arrival_collection(result.get('price_range') or {}, result['benefits'], review)
-    if result['service_selection_status'] != 'approved':
-        result['arrival_collection'].update(amount_cents=None, status='verify',
-            reason='The planned service scenario is provisional; collection follows verified terms and clinic policy.')
     result['planning_estimate'] = (_api.visit_estimate.planning_estimate(result.get('price_range') or {}, result['benefits'], comparison)
                                    if result['arrival_collection']['amount_cents'] is None else None)
     if len(connections) == 1:

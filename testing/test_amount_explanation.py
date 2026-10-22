@@ -340,11 +340,12 @@ def test_procedure_specific_coinsurance_adds_to_office_copay():
     assert [row['calculation']['patient_cents'] for row in priced['lines']] == [3000, 2000]
     guidance = collection_guidance.build({'benefits': terms, 'price_range': priced,
         'payment_mode': 'insurance', 'arrival_collection': {}, 'collection_policy': ADVANCE_POLICY}, {})
-    assert guidance['amount_cents'] == 5000
-    assert amount_explanation.build({'benefits': terms, 'price_range': priced,
+    assert guidance['amount_cents'] == 3000
+    sentence = amount_explanation.build({'benefits': terms, 'price_range': priced,
         'payment_mode': 'insurance', 'encounter_summary': {
-            'coinsurance_percent': '20', 'coinsurance_base_cents': 10000}}, guidance)['sentence'] == (
-            'Collect $50.00 now: the patient owes $30.00 copay and $20.00 coinsurance, calculated as 20% of $100.00 based on the clinic’s contracted CPT prices.')
+            'coinsurance_percent': '20', 'coinsurance_base_cents': 10000}}, guidance)['sentence']
+    assert 'Collect $30.00 for the consultation' in sentence
+    assert 'other estimated patient costs follow the claim' in sentence
 
 
 def test_saved_ecw_benefits_are_not_labelled_stedi_on_each_service():

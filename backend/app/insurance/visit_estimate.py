@@ -150,15 +150,16 @@ def arrival_collection(price: dict, benefits: dict, review: dict) -> dict:
         return result
     payments = review.get('payments') or {}
     result['estimated_cents'] = price.get('patient_max_cents') if price.get('complete') else None
-    amount = result['estimated_cents'] if price.get('complete') else result['verified_copay_cents']
+    amount = (result['verified_copay_cents'] if result['verified_copay_cents'] is not None
+              else result['estimated_cents'])
     if payments.get('reference'):
         result['payments_received_cents'] = payments['amount_cents']
         amount = max(0, amount - payments['amount_cents'])
     result.update(amount_cents=amount, status='estimate', reason=(
         'Copay, applicable deductible and coinsurance for this visit, less verified payments. Prior balances and non-covered charges are not included unless separately verified.' if payments.get('reference') else
         'Copay, applicable deductible and coinsurance for this visit, before payments or credits. Check the clinic ledger for prior balances and amounts already collected; those values were not returned.'))
-    if not price.get('complete'):
-        result.update(status='copay_only', reason='Only the verified office copay is included. Additional deductible and coinsurance remain for estimation or post-adjudication billing. ' +
+    if result['verified_copay_cents'] is not None:
+        result.update(status='copay_only', basis='office_copay', reason='Only the verified office copay is included. Additional deductible and coinsurance remain for estimation or post-adjudication billing. ' +
                       ('Verified payments have been subtracted.' if payments.get('reference') else 'Before payments or credits; check the clinic ledger.'))
     return result
 

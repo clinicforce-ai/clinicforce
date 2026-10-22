@@ -110,7 +110,7 @@ def test_unsourced_in_network_label_cannot_restore_a_saved_collection_or_total()
     assert supported['estimated_total_patient_min_cents'] == 3800
 
 
-def test_uncleared_authorization_blocks_collection_but_preserves_conditional_patient_share():
+def test_uncleared_documented_authorization_does_not_hide_priced_total():
     result = {'payment_mode': 'insurance',
               'identity': {'status': 'matched', 'binding': 'synthetic-current-binding', 'match_version': 2},
               'benefits': {'active': True, 'network_status': 'in_network',
@@ -123,9 +123,9 @@ def test_uncleared_authorization_blocks_collection_but_preserves_conditional_pat
                                       'copay_cents': 3800, 'deductible_cents': 0,
                                       'coinsurance_cents': 0, 'oop_adjustment_cents': 0}}]}}
     summary = encounter_summary.build(result)
-    assert summary['collect_today_cents'] is None
+    assert summary['collect_today_cents'] == 3800
     assert summary['estimated_total_patient_min_cents'] == 3800
-    assert summary['complete'] is True and summary['conditional'] is True
+    assert summary['complete'] is True and summary['conditional'] is False
 
 
 @pytest.mark.parametrize('field', ['coverage_status_conflict', 'coverage_dates_invalid'])

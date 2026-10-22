@@ -7,26 +7,6 @@ def _cleared_with_source(item: dict) -> bool:
             and bool(item.get('reference') and item.get('verified_at')))
 
 
-def _required_cleared(result: dict, kind: str, requirements: list[dict]) -> bool:
-    procedures = (result.get('requirement_evidence') or {}).get('procedures') or []
-    required_rows = [row for row in procedures if (row.get(kind) or {}).get('status') == 'Required']
-    if required_rows:
-        lines = (result.get('price_range') or {}).get('lines') or []
-        for row in required_rows:
-            row_id, code = str(row.get('id') or ''), str(row.get('code') or '')
-            if row_id and row_id != code:
-                exact = [line for line in lines if str(line.get('id') or '') == row_id]
-                targets = exact if len(exact) == 1 and str(exact[0].get('code') or '') == code else []
-            else:
-                targets = [line for line in lines if code and str(line.get('code') or '') == code]
-            if not targets or any(not _cleared_with_source(
-                    ((line.get('benefits') or {}).get('requirements') or {}).get(kind, {}))
-                    for line in targets):
-                return False
-        return True
-    return bool(requirements) and all(_cleared_with_source(item) for item in requirements)
-
-
 def _cpt_rule_conflicts(result: dict, kind: str) -> list[str]:
     procedures = (result.get('requirement_evidence') or {}).get('procedures') or []
     lines = (result.get('price_range') or {}).get('lines') or []
@@ -67,26 +47,20 @@ def _cpt_approval_conflicts(result: dict) -> list[str]:
 
 
 def _unresolved(result: dict, kind: str, requirements: list[dict]) -> bool:
+    """Only an explicit adverse payer decision prevents collection.
+
+    Missing or pending verification remains visible in the CPT status, but it
+    does not change the arithmetic or withhold the suggested visit amount.
+    """
     procedures = (result.get('requirement_evidence') or {}).get('procedures') or []
-    if (_cpt_rule_conflicts(result, kind)
-            or kind == 'authorization' and _cpt_approval_conflicts(result)
-            or any((row.get(kind) or {}).get('status') == 'Required' for row in procedures)
-            and not _required_cleared(result, kind, requirements)):
+    if any(str(item.get('status') or '').lower() in {'denied', 'expired'} for item in requirements):
         return True
-    if any(item.get('status') in {'denied', 'expired', 'pending'} or
-           item.get('required') == 'required' and not _cleared_with_source(item) for item in requirements):
+    if kind == 'authorization' and any(
+            str((row.get(kind) or {}).get('pa_approval') or '').upper() in {'DENIED', 'EXPIRED'}
+            for row in procedures):
         return True
     documented = ((result.get('requirement_evidence') or {}).get(kind) or {})
-    if documented.get('status') == 'Not required' and any(
-            item.get('required') == 'required' for item in requirements):
-        return True
-    if documented.get('status') != 'Required':
-        return bool(kind == 'referral' and (result.get('benefits') or {}).get('referral_signal') == 'required'
-                    and (result.get('price_range') or {}).get('mode') == 'services'
-                    and not _required_cleared(result, kind, requirements))
-    if kind == 'authorization':
-        return documented.get('approval_status') != 'Verified' or not _required_cleared(result, kind, requirements)
-    return not _required_cleared(result, kind, requirements)
+    return kind == 'authorization' and str(documented.get('pa_approval') or '').upper() in {'DENIED', 'EXPIRED'}
 
 
 def requirement_blocker(result: dict) -> tuple[str, str, str] | None:
@@ -176,18 +150,22 @@ def summarize_requirements(result: dict, lines: list[dict], guidance: dict, acti
         guidance['requirement_sources'][kind] = (result.get('benefit_source') or 'Stedi') + ' / clinic evidence'
         if (((result.get('requirement_evidence') or {}).get(kind) or {}).get('status') == 'Not required'
                 and any(item.get('required') == 'required' for item in requirements)):
-            adverse = True
-            guidance['requirements'][kind] = 'Conflicting CPT rule · clinic action in amount reason'
+            guidance['requirements'][kind] = 'Conflicting CPT rule · shown per CPT'
         elif _unresolved(result, kind, requirements):
             adverse = True
-            guidance['requirements'][kind] = 'Required · patient action below'
-            actions.append('Ask your referring doctor to send the referral for this visit.' if kind == 'referral' else
-                           'Contact your plan about the authorization requirement before the service; the treating office may need to submit clinical information.')
+            guidance['requirements'][kind] = 'Denied or expired · shown per CPT'
+            actions.append('Contact the payer about the denied or expired referral for this service.' if kind == 'referral' else
+                           'Contact the payer about the denied or expired authorization for this service.')
         elif requirements and all(item.get('cleared') for item in requirements):
             guidance['requirements'][kind] = 'On file' if any(item.get('required') == 'required' for item in requirements) else 'Not required'
             if kind == 'authorization' and any('absent indicator' in line.get('benefits', {}).get('authorization_basis', '') for line in lines):
                 guidance['requirements'][kind] = 'No requirement indicated'
                 guidance['requirement_sources'][kind] = 'Stedi: no authorization indicator'
+        elif (any(item.get('required') == 'required' for item in requirements)
+              or any((row.get(kind) or {}).get('status') == 'Required'
+                     for row in (result.get('requirement_evidence') or {}).get('procedures') or [])
+              or ((result.get('requirement_evidence') or {}).get(kind) or {}).get('status') == 'Required'):
+            guidance['requirements'][kind] = 'Required · status shown per CPT'
         else:
             explicit_unknown = kind == 'authorization' and any(line.get('benefits', {}).get('authorization_basis') == 'Payer indicator' for line in lines)
             guidance['requirements'][kind] = 'Unknown in payer response' if explicit_unknown else 'No requirement reported'

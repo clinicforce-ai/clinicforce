@@ -2,7 +2,7 @@
 from datetime import date
 
 from app.api.schemas.commercial import VisitVerification
-from app.insurance import amount_explanation, collection_guidance, commercial, visit_estimate
+from app.insurance import amount_explanation, collection_guidance, commercial, encounter_summary, visit_estimate
 from testing.synthetic_policy import ADVANCE_POLICY
 
 
@@ -49,17 +49,32 @@ def test_blue_plan_consultation_plus_nerve_study_uses_shared_pipeline():
               'codes': codes, 'benefits': benefits, 'identity': identity, 'price_range': price,
               'plan_details': {'stedi': {'names': ['Synthetic Blue PPO']}}}
     result['arrival_collection'] = visit_estimate.arrival_collection(price, benefits, {})
+    assert result['arrival_collection']['amount_cents'] == 3000
+    assert result['arrival_collection']['status'] == 'copay_only'
     guidance = collection_guidance.build(result)
-    assert guidance['amount_cents'] == 8600
+    assert guidance['amount_cents'] == 3000
+    assert guidance['basis'] == 'office_copay'
     sentence = amount_explanation.build(result, guidance)['sentence']
-    assert '$30.00 copay' in sentence and '$50.00 deductible' in sentence
-    assert '$6.00 coinsurance' in sentence and 'contracted CPT prices' in sentence
+    assert '$30.00' in sentence and 'office copay' in sentence
+    summary = encounter_summary.build({**result, 'collection_guidance': guidance})
+    assert summary['collect_today_cents'] == 3000
+    assert summary['estimated_total_patient_min_cents'] == 8600
 
-    # Suggestions may be priced for preview, but cannot authorize collection.
-    result.update(service_selection_status='preview', selected_ids=[])
+    # The suggested plan is the initial estimate; editing it recalculates the same pipeline.
+    result.update(service_selection_status='preview', selected_ids=[],
+                  service_plan={'recommended_ids': [row['id'] for row in codes]})
     preview = collection_guidance.build(result)
-    assert preview['amount_cents'] is None
-    assert 'approve the intended services' in preview['reason']
+    assert preview['amount_cents'] == 3000
+    assert preview['basis'] == 'office_copay'
+    assert 'suggested CPTs' in amount_explanation.build(result, preview)['sentence']
+    unverified = {**result, 'requirement_evidence': {'procedures': [{
+        'id': 'study', 'code': '95907',
+        'authorization': {'status': 'Required', 'approval_status': 'UNVERIFIED'}}]}}
+    assert collection_guidance.build(unverified)['amount_cents'] == 3000
+    result['price_range'] = {**price, 'complete': False, 'patient_min_cents': None,
+                             'patient_max_cents': None, 'lines': [{**price['lines'][0], 'calculation': None}]}
+    result['arrival_collection'] = visit_estimate.arrival_collection(result['price_range'], benefits, {})
+    assert collection_guidance.build(result)['amount_cents'] is None
 
 
 def test_drug_benefit_rejects_unrelated_category_even_when_row_is_selected():

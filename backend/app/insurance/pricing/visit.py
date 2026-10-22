@@ -112,8 +112,6 @@ def price_lines(codes: list[dict], rates: list[dict], benefits: dict, rules: dic
                      for row in commercial._stedi_entries(payload or {}))
         if medical_line:
             raw_benefits['authorization_signal'] = 'unknown'
-            raw_benefits.setdefault('review_reasons', []).append(
-                'Confirm member-specific authorization requirement and decision for this medical service line.')
         raw_benefits['review_reasons'] = list(dict.fromkeys([*raw_benefits.get('review_reasons', []), *integrity]))
         raw_benefits['requires_review'] = bool(raw_benefits['review_reasons'])
         applied = resolve_requirements(raw_benefits, review, service_date, units)
@@ -172,7 +170,7 @@ def price_lines(codes: list[dict], rates: list[dict], benefits: dict, rules: dic
                                   benefits.get('benefit_source') or (payload or {}).get('benefit_source') or ('Stedi' if payload is not None else None),
                 'benefit_verification': selection if selection_valid else None,
                 'benefit_basis': applied.get('benefit_label') or f'Service category {stc}' if stc else 'Service category needs mapping',
-                'conditions': [reason for reason in applied.get('review_reasons', []) if _workflow_condition(reason)],
+                'conditions': [],
                 'issues': [reason for reason in applied.get('review_reasons', []) if not _workflow_condition(reason)], 'calculation': None}
         if name_difference:
             line['conditions'].append('Estimated using the returned policy; patient names differ between eCW and the payer.')
@@ -277,7 +275,7 @@ def price_lines(codes: list[dict], rates: list[dict], benefits: dict, rules: dic
             result['collection'] = {'action': 'no_collection', 'amount_cents': 0, 'reason': 'No estimated patient responsibility for these covered services.'}
         if result['conditional']:
             result['collection'] = {'action': 'verify_before_collecting', 'amount_cents': None,
-                                    'reason': 'Use this conditional estimate for planning. Resolve the benefit and approval conditions before collecting.'}
+                                    'reason': 'Use this conditional estimate for planning. Resolve the benefit conditions before collecting.'}
     result['scenarios'] = [{'code': line['code'], 'allowed_cents': line['allowed_cents'], **(line['calculation'] or {})} for line in lines]
     if service_issues:
         result['collection'] = {'action': 'complete_services', 'amount_cents': None, 'reason': service_issues[0]}

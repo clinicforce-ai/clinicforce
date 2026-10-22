@@ -286,29 +286,36 @@ def test_contradictions_override_cached_numeric_amount(change):
 
 
 @pytest.mark.parametrize('kind', ['referral', 'authorization'])
-@pytest.mark.parametrize('requirement', [{'required': 'required', 'cleared': False}, {'status': 'denied'}, {'status': 'expired'}, {'status': 'pending'}])
-def test_required_or_adverse_approval_does_not_become_an_assumed_approval(kind, requirement):
+@pytest.mark.parametrize('status', ['not_verified', 'pending'])
+def test_unverified_requirement_stays_visible_without_hiding_collection(kind, status):
     result = scenario()
-    result['price_range']['lines'][0]['benefits']['requirements'][kind] = requirement
+    result['price_range']['lines'][0]['benefits']['requirements'][kind] = {
+        'required': 'required', 'status': status, 'cleared': False}
     value = collection_guidance.build(result)
-    assert value['amount_cents'] is None and value['status'] == 'action_required'
+    assert value['amount_cents'] == 3800
+    assert value['requirements'][kind] == 'Required · status shown per CPT'
+    assert not value['patient_actions']
+
+
+@pytest.mark.parametrize('kind', ['referral', 'authorization'])
+@pytest.mark.parametrize('status', ['denied', 'expired'])
+def test_explicit_adverse_requirement_still_blocks_collection(kind, status):
+    result = scenario()
+    result['price_range']['lines'][0]['benefits']['requirements'][kind] = {
+        'required': 'required', 'status': status, 'cleared': False}
+    value = collection_guidance.build(result)
+    assert value['amount_cents'] is None
+    assert value['requirements'][kind] == 'Denied or expired · shown per CPT'
     assert value['patient_actions']
 
 
-@pytest.mark.parametrize('kind,reason_code,action', [
-    ('referral', 'referral_required', 'obtain the referring clinician’s referral for CPT 99203'),
-    ('authorization', 'authorization_required', 'obtain payer authorization approval and record its reference for CPT 99203'),
-])
-def test_documented_cpt_requirement_blocks_collection_until_cleared(kind, reason_code, action):
+@pytest.mark.parametrize('kind', ['referral', 'authorization'])
+def test_documented_required_decision_does_not_hide_priced_amount(kind):
     result = scenario()
-    result['payer'] = 'United Healthcare'
     result['requirement_evidence'] = {kind: {'status': 'Required', 'approval_status': 'Not verified'}}
-    guidance = collection_guidance.build(result)
-    explanation = amount_explanation.build(result, guidance)
-    assert guidance['amount_cents'] is None
-    assert guidance['status'] == 'action_required'
-    assert explanation['reason_code'] == reason_code
-    assert action in explanation['sentence']
+    value = collection_guidance.build(result)
+    assert value['amount_cents'] == 3800
+    assert value['requirements'][kind] == 'Required · status shown per CPT'
 
 
 def test_documented_approved_authorization_keeps_supported_collection():
@@ -320,47 +327,8 @@ def test_documented_approved_authorization_keeps_supported_collection():
     assert collection_guidance.build(result)['amount_cents'] == 3800
 
 
-def test_cleared_referral_for_one_cpt_does_not_block_an_unrelated_cpt():
+def test_unverified_cpt_approval_reference_is_informational():
     result = scenario()
-    result['service_plan'] = {'selected_codes': ['99203', '93000']}
-    result['price_range']['lines'].append({'id': 'ecg', 'code': '93000', 'units': 1,
-                                           'calculation': {'patient_cents': 0},
-                                           'benefits': {'requirements': {'referral': {'required': 'not_required', 'cleared': True}}}})
-    result['requirement_evidence'] = {
-        'referral': {'status': 'Required'},
-        'procedures': [{'code': '99203', 'referral': {'status': 'Required'}},
-                       {'code': '93000', 'referral': {'status': 'Not required'}}]}
-    office = result['price_range']['lines'][0]['benefits']['requirements']['referral']
-    office.update(required='required', status='valid', cleared=True,
-                  reference='synthetic-referral', verified_at='2026-10-15T12:00:00Z')
-    assert collection_guidance.build(result)['amount_cents'] == 3800
-    office['cleared'] = False
-    assert collection_guidance.build(result)['amount_cents'] is None
-
-
-def test_uncorroborated_authorization_clearance_cannot_override_unverified_approval():
-    result = scenario()
-    result['requirement_evidence'] = {'authorization': {'status': 'Required', 'approval_status': 'Not verified'}}
-    result['price_range']['lines'][0]['benefits']['requirements']['authorization'] = {
-        'required': 'required', 'status': 'valid', 'cleared': True}
-    assert collection_guidance.build(result)['amount_cents'] is None
-
-
-def test_saved_verified_authorization_needs_the_cpt_approval_reference_and_time():
-    result = scenario()
-    result['requirement_evidence'] = {'authorization': {'status': 'Required', 'approval_status': 'Verified'}}
-    approval = result['price_range']['lines'][0]['benefits']['requirements']['authorization']
-    approval.update(required='required', status='valid', cleared=True)
-    assert collection_guidance.build(result)['amount_cents'] is None
-    approval['reference'] = 'synthetic-approval'
-    assert collection_guidance.build(result)['amount_cents'] is None
-    approval['verified_at'] = '2026-10-15T12:00:00Z'
-    assert collection_guidance.build(result)['amount_cents'] == 3800
-
-
-def test_conflicting_cpt_approval_status_cannot_restore_saved_advance():
-    result = scenario()
-    result['payer'] = 'United Healthcare'
     result['requirement_evidence'] = {
         'authorization': {'status': 'Required', 'approval_status': 'Verified'},
         'procedures': [{'id': result['price_range']['lines'][0]['id'], 'code': '99203',
@@ -369,99 +337,39 @@ def test_conflicting_cpt_approval_status_cannot_restore_saved_advance():
     approval = result['price_range']['lines'][0]['benefits']['requirements']['authorization']
     approval.update(required='required', status='valid', cleared=True,
                     reference='synthetic-approval', verified_at='2026-10-15T12:00:00Z')
-    guidance = collection_guidance.build(result)
-    explanation = amount_explanation.build(result, guidance)
-    assert guidance['amount_cents'] is None
-    assert explanation['reason_code'] == 'authorization_required'
-    assert 'CPT 99203' in explanation['sentence']
-    assert 'approval status' in explanation['sentence']
-
-
-def test_saved_cleared_referral_needs_its_cpt_reference_and_time():
-    result = scenario()
-    result['requirement_evidence'] = {'referral': {'status': 'Required'}}
-    referral = result['price_range']['lines'][0]['benefits']['requirements']['referral']
-    referral.update(required='required', status='valid', cleared=True)
-    assert collection_guidance.build(result)['amount_cents'] is None
-    referral.update(reference='synthetic-referral', verified_at='2026-10-15T12:00:00Z')
     assert collection_guidance.build(result)['amount_cents'] == 3800
 
 
 @pytest.mark.parametrize('kind', ['referral', 'authorization'])
-def test_cpt_requirement_without_sourced_clearance_blocks_even_when_visit_summary_omits_it(kind):
+def test_cpt_rule_conflict_remains_visible_without_hiding_amount(kind):
     result = scenario()
-    result['payer'] = 'United Healthcare'
-    result['service_plan'] = {'selected_codes': ['99203', '93000']}
-    result['price_range']['lines'].append({'id': 'ecg', 'code': '93000', 'units': 1,
-                                           'calculation': {'patient_cents': 0}, 'benefits': {}})
-    result['requirement_evidence'] = {}
-    requirement = result['price_range']['lines'][0]['benefits']['requirements'][kind]
-    requirement.update(required='required', status='valid', cleared=True)
-    for missing in ('reference', 'verified_at'):
-        requirement.update(reference='synthetic-reference', verified_at='2026-10-15T12:00:00Z')
-        requirement.pop(missing)
-        guidance = collection_guidance.build(result)
-        explanation = amount_explanation.build(result, guidance)
-        assert guidance['amount_cents'] is None
-        assert guidance['status'] == 'action_required'
-        assert explanation['reason_code'] == f'{kind}_required'
-        assert 'CPT 99203' in explanation['sentence']
-        assert 'CPT 93000' not in explanation['sentence']
-        assert 'lacks a valid reference or verification time' in explanation['sentence']
-        assert 'record its reference and verification time' in explanation['sentence']
-
-
-@pytest.mark.parametrize('kind', ['referral', 'authorization'])
-def test_conflicting_visit_and_cpt_requirement_does_not_show_positive_amount(kind):
-    result = scenario()
-    result['payer'] = 'United Healthcare'
     result['requirement_evidence'] = {kind: {'status': 'Not required'}}
     result['price_range']['lines'][0]['benefits']['requirements'][kind] = {
         'required': 'required', 'status': 'valid', 'cleared': True,
         'reference': 'synthetic-reference', 'verified_at': '2026-10-15T12:00:00Z'}
-    guidance = collection_guidance.build(result)
-    explanation = amount_explanation.build(result, guidance)
-    assert guidance['amount_cents'] is None
-    assert guidance['requirements'][kind] == 'Conflicting CPT rule · clinic action in amount reason'
-    assert not guidance['patient_actions']
-    assert explanation['reason_code'] == f'{kind}_required'
-    assert 'conflicts with the CPT-level' in explanation['sentence']
-    assert 'CPT 99203' in explanation['sentence']
-    assert 'ask United Healthcare which' in explanation['sentence']
+    value = collection_guidance.build(result)
+    assert value['amount_cents'] == 3800
+    assert value['requirements'][kind] == 'Conflicting CPT rule · shown per CPT'
 
 
-def test_selected_specialist_visit_with_payer_referral_signal_waits_for_referral():
+def test_payer_referral_signal_is_informational_for_visit_amount():
     result = scenario()
     result['benefits']['referral_signal'] = 'required'
-    guidance = collection_guidance.build(result)
-    explanation = amount_explanation.build(result, guidance)
-    assert guidance['amount_cents'] is None
-    assert explanation['reason_code'] == 'referral_required'
-    assert 'CPT 99203' in explanation['sentence']
+    assert collection_guidance.build(result)['amount_cents'] == 3800
 
 
-def test_documented_authorization_action_names_only_the_affected_selected_cpt():
+def test_selected_cpt_requirement_does_not_apply_to_another_cpt():
     result = scenario()
     result['service_plan'] = {'selected_codes': ['99203', '93000']}
-    result['price_range']['lines'].append({'id': 'test', 'code': '93000', 'units': 1,
+    result['price_range']['lines'].append({'id': 'ecg', 'code': '93000', 'units': 1,
                                            'calculation': {'patient_cents': 0}, 'benefits': {}})
     result['requirement_evidence'] = {
         'authorization': {'status': 'Required', 'approval_status': 'Not verified'},
         'procedures': [{'code': '99203', 'authorization': {'status': 'Not required'}},
                        {'code': '93000', 'authorization': {'status': 'Required'}}]}
-    explanation = amount_explanation.build(result, collection_guidance.build(result))
-    assert explanation['reason_code'] == 'authorization_required'
-    assert 'approval and record its reference for CPT 93000' in explanation['sentence']
-    assert 'CPT 99203' not in explanation['sentence']
-
-
-def test_both_documented_requirements_name_both_actions():
-    result = scenario()
-    result['requirement_evidence'] = {kind: {'status': 'Required', 'approval_status': 'Not verified'}
-                                      for kind in ('referral', 'authorization')}
-    explanation = amount_explanation.build(result, collection_guidance.build(result))
-    assert explanation['reason_code'] == 'referral_authorization_required'
-    assert 'obtain the referral and payer authorization approval for CPT 99203' in explanation['sentence']
+    value = collection_guidance.build(result)
+    assert value['amount_cents'] == 3800
+    assert value['requirements']['authorization'] == 'Required · status shown per CPT'
 
 
 def test_missing_network_defers_positive_amount_even_with_a_pricing_assumption():
@@ -809,7 +717,7 @@ def test_ppo_label_does_not_invent_a_member_referral_requirement():
     result['plan_details'] = {'stedi': {'names': ['PREFERRED PROVIDER OPTION MEDICAL']}}
     assert collection_guidance.build(result)['requirements']['referral'] == 'No requirement reported'
     result['price_range']['lines'][0]['benefits']['requirements']['referral']['required'] = 'required'
-    assert collection_guidance.build(result)['status'] == 'action_required'
+    assert collection_guidance.build(result)['amount_cents'] == 3800
 
 
 def test_source_statuses_are_not_replaced_with_calculation_assumptions():
@@ -889,16 +797,16 @@ def test_saved_collection_rechecks_new_library_requirement_before_display(legacy
     with patch('app.api.routers.commercial_flow.commercial_previsit_status._recheck_saved_clinic_pricing'), \
          patch.object(api.staff_store, 'list_library', return_value=[document]), \
          patch.object(api.staff_store, 'get_library', return_value=document), \
-         patch.object(api.commercial_store, 'list_connections', return_value=[]), \
+         patch.object(api.commercial_store, 'list_connections', return_value=[
+             {'stedi_payer_id': 'synthetic-payer', 'rules': {'collection_policy': ADVANCE_POLICY}}]), \
          patch.object(api.contract_requirements, 'evaluate', return_value=decision) as evaluate, \
          patch.object(api, '_requirement_candidates', return_value=[]):
         reopened = api._previsit_result(case, 'clinic')
     assert evaluate.called
     assert reopened.get('payment_mode') != 'cash'
     assert reopened['benefits']['active'] is True
-    assert reopened['collection_guidance']['amount_cents'] is None
-    assert reopened['payment_explanation']['reason_code'] == 'referral_required'
-    assert 'CPT 99203' in reopened['payment_explanation']['sentence']
+    assert reopened['collection_guidance']['amount_cents'] == 3800
+    assert reopened['requirement_evidence']['referral']['status'] == 'Required'
     assert 'requirement_evidence' not in result
 
 

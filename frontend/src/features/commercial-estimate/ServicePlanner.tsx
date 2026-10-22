@@ -1,7 +1,7 @@
 import { RequirementDecision } from './RequirementDecision'
 import { BotoxClinicalReview } from './BotoxClinicalReview'
-import { LineEvidenceReview } from './LineEvidenceReview'
 import { requirementForLine } from './requirementForLine'
+import { requirementTag } from './plannerRequirementTag'
 import { useEffect, useRef, useState } from 'react'
 import { ArrowRight, Check, Minus, Plus } from 'lucide-react'
 import type {
@@ -30,7 +30,11 @@ export function ServicePlanner({
     (row, index, rows) =>
       !row.id || rows.findIndex((candidate) => candidate.id === row.id) === index,
   )
-  const defaults = result.selected_ids || []
+  const defaults = result.selected_ids?.length
+    ? result.selected_ids
+    : result.service_selection_status === 'approved'
+      ? []
+      : result.service_plan?.recommended_ids || []
   const [selected, setSelected] = useState<string[]>(defaults)
   const [quantities, setQuantities] = useState<Record<string, number>>(() =>
     Object.fromEntries(
@@ -40,9 +44,6 @@ export function ServicePlanner({
   const [cashSelection, setCashSelection] = useState(result.cash_quote?.selection || '')
   const [changed, setChanged] = useState(false)
   const [botox, setBotox] = useState<BotoxReview>(result.botox_review || {})
-  const [modifiers, setModifiers] = useState<Record<string, string>>(() =>
-    Object.fromEntries(available.map((row) => [row.id!, (row.modifiers || []).join(', ')])),
-  )
   const [editError, setEditError] = useState('')
   const autoSave = useRef<(continueToCollection: boolean) => Promise<void>>(async () => {})
   const lastAutoAttempt = useRef('')
@@ -139,26 +140,6 @@ export function ServicePlanner({
         setEditError('Choose the planned nerve study before applying a cash package.')
         return
       }
-      const reviewedModifiers = Object.fromEntries(
-        chosen.map((row) => [
-          row.id!,
-          modifiers[row.id!]
-            .split(',')
-            .map((item) => item.trim().toUpperCase())
-            .filter(Boolean),
-        ]),
-      )
-      if (
-        Object.values(reviewedModifiers).some(
-          (codes) =>
-            codes.length > 3 ||
-            new Set(codes).size !== codes.length ||
-            codes.some((code) => !/^[A-Z0-9]{2}$/.test(code)),
-        )
-      ) {
-        setEditError('Review up to three distinct two-character modifiers per service line.')
-        return
-      }
       if (
         chosen
           .filter((row) => ['95885', '95886'].includes(row.code))
@@ -174,7 +155,6 @@ export function ServicePlanner({
       const saved = await save({
         selected_ids: selected,
         confirmed_units: Object.fromEntries(selected.map((id) => [id, quantities[id]])),
-        ...(chosen.length ? { confirmed_modifiers: reviewedModifiers } : {}),
         ...(botoxVisit ? { botox } : {}),
         ...(result.cash_schedule ? { cash_selection: cashSelection } : {}),
       })
@@ -187,14 +167,14 @@ export function ServicePlanner({
   })
   useEffect(() => {
     if (!changed || busy) return
-    const version = JSON.stringify({ selected, quantities, modifiers, botox, cashSelection })
+    const version = JSON.stringify({ selected, quantities, botox, cashSelection })
     if (lastAutoAttempt.current === version) return
     const timer = window.setTimeout(() => {
       lastAutoAttempt.current = version
       void autoSave.current(false)
     }, 500)
     return () => window.clearTimeout(timer)
-  }, [changed, busy, selected, quantities, modifiers, botox, cashSelection])
+  }, [changed, busy, selected, quantities, botox, cashSelection])
   const groups = [
     { id: 'visit', label: 'Office visit', rows: office, single: true },
     { id: 'nerve', label: 'Nerve study', rows: nerve, single: true },
@@ -225,15 +205,31 @@ export function ServicePlanner({
       <p className="visit-muted">
         {emgVisit && !chosen.length
           ? 'Nerve testing is planned from this booking. Choose the study-count CPT when its scope is documented; final coding follows the care provided.'
-          : 'Selections update the estimate. Final coding follows the care provided.'}
+          : 'The suggested services are included in the estimate. Remove or change them if planned care differs. Final coding follows the care provided.'}
       </p>
       <div className="selected-service-chips" aria-label="Selected services">
-        {chosen.map((row) => (
-          <span key={row.id}>
-            <Check size={14} aria-hidden="true" />
-            {row.code} × {quantities[row.id!] || '—'}
-          </span>
-        ))}
+        {chosen.map((row) => {
+          const referral = requirementTag(result, row, 'referral')
+          const authorization = requirementTag(result, row, 'authorization')
+          return (
+            <span key={row.id}>
+              <Check size={14} aria-hidden="true" />
+              <strong>
+                {row.code} × {quantities[row.id!] || '—'}
+              </strong>
+              {result.payment_mode !== 'cash' && (
+                <>
+                  <small className={`service-requirement-tag is-${referral.tone}`}>
+                    {referral.label}
+                  </small>
+                  <small className={`service-requirement-tag is-${authorization.tone}`}>
+                    {authorization.label}
+                  </small>
+                </>
+              )}
+            </span>
+          )
+        })}
         {!chosen.length && (
           <span>
             {result.provisional_scenario?.kind === 'ncs_study_count'
@@ -281,6 +277,10 @@ export function ServicePlanner({
               const disable =
                 busy ||
                 (groupOf(row) === 'muscle' && !nerve.some((item) => selected.includes(item.id!)))
+              const needsCodeSelection =
+                !included &&
+                result.price_range?.mode === 'alternatives' &&
+                ['visit', 'nerve'].includes(groupOf(row))
               const requirement = requirementForLine(
                 [
                   ...(result.requirement_evidence?.procedures || []),
@@ -339,11 +339,7 @@ export function ServicePlanner({
                             code={row.code}
                             kind="referral"
                             payerName={result.payer}
-                            needsCodeSelection={
-                              !included &&
-                              result.price_range?.mode === 'alternatives' &&
-                              ['visit', 'nerve'].includes(groupOf(row))
-                            }
+                            needsCodeSelection={needsCodeSelection}
                           />
                         </div>
                         <div>
@@ -353,11 +349,7 @@ export function ServicePlanner({
                             code={row.code}
                             kind="prior authorization"
                             payerName={result.payer}
-                            needsCodeSelection={
-                              !included &&
-                              result.price_range?.mode === 'alternatives' &&
-                              ['visit', 'nerve'].includes(groupOf(row))
-                            }
+                            needsCodeSelection={needsCodeSelection}
                           />
                         </div>
                       </div>
@@ -412,20 +404,6 @@ export function ServicePlanner({
                       </div>
                     </div>
                   )}
-                  {included && (
-                    <label>
-                      {row.code} modifiers (comma separated; leave blank if none)
-                      <input
-                        value={modifiers[row.id!] || ''}
-                        maxLength={12}
-                        disabled={busy}
-                        onChange={(event) => {
-                          setModifiers((current) => ({ ...current, [row.id!]: event.target.value }))
-                          setChanged(true)
-                        }}
-                      />
-                    </label>
-                  )}
                 </article>
               )
             })}
@@ -468,9 +446,6 @@ export function ServicePlanner({
           drugSelected={chosen.some((row) => row.code === 'J0585')}
           officeSelected={chosen.some((row) => groupOf(row) === 'visit')}
         />
-      )}
-      {!changed && result.selected_ids?.length && result.payment_mode !== 'cash' && (
-        <LineEvidenceReview result={result} busy={busy} save={save} />
       )}
       {editError && (
         <p className="visit-error" role="alert">
