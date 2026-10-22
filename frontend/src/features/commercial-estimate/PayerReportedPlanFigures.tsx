@@ -58,7 +58,8 @@ export default function PayerReportedPlanFigures({ result }: { result: PrevisitE
           </div>
         ))}
         {!deductibleGroups.size &&
-          (benefits.deductible_annual_cents != null || benefits.deductible_remaining_cents != null) && (
+          (benefits.deductible_annual_cents != null ||
+            benefits.deductible_remaining_cents != null) && (
             <div>
               <dt>Individual deductible</dt>
               <dd>

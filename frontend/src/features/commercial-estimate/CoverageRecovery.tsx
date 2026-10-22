@@ -74,11 +74,7 @@ export default function CoverageRecovery({
             <label>
               Payer suggestions
               <select
-                value={
-                  payerRoutes.some((row) => row.id === payerSuggestion)
-                    ? payerSuggestion
-                    : ''
-                }
+                value={payerRoutes.some((row) => row.id === payerSuggestion) ? payerSuggestion : ''}
                 onChange={(event) => setPayerSuggestion(event.target.value)}
               >
                 <option value="">View a payer suggestion</option>
