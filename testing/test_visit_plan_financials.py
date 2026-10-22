@@ -140,6 +140,16 @@ def test_live_client_pages_and_never_posts_or_exposes_another_practice():
         assert result['status'] == 'not_connected' and not calls
 
 
+def test_production_key_alias_is_used_only_without_a_practice_or_standard_key():
+    with patch.dict('os.environ', {'STEDI_PROD_API_KEY': 'production-key'}, clear=True):
+        assert stedi_financial.credentials('practice-a') == 'production-key'
+        with patch.dict('os.environ', {'STEDI_API_KEY': 'standard-key'}):
+            assert stedi_financial.credentials('practice-a') == 'standard-key'
+        with patch.dict('os.environ', {'STEDI_PRACTICE_API_KEYS': '{"practice-b":"practice-key"}'}):
+            assert stedi_financial.credentials('practice-b') == 'practice-key'
+            assert stedi_financial.credentials('practice-a') == ''
+
+
 def test_financial_failures_are_not_reported_as_zero_patient_responsibility():
     with patch.dict('os.environ', {'STEDI_PRACTICE_API_KEYS': '', 'STEDI_API_KEY': 'platform-key'}):
         result = asyncio.run(stedi_financial.fetch_patient_financials('practice', IDENTITY,

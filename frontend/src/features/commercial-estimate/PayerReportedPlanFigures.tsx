@@ -5,6 +5,14 @@ export default function PayerReportedPlanFigures({ result }: { result: PrevisitE
   const benefits = result.benefits!
   const oopRows = (benefits.reported_options || []).filter((row) => row.kind === 'out_of_pocket')
   const lines = result.price_range?.mode === 'services' ? result.price_range.lines || [] : []
+  const officeLines = lines.filter((line) => /^992(?:0[2-5]|1[2-5])$/.test(line.code))
+  const officeCopays = officeLines.map((line) =>
+    line.benefits?.active === true ? line.benefits.copay_cents : null,
+  )
+  const officeCopay =
+    officeLines.length && officeCopays.every((value) => value != null && value === officeCopays[0])
+      ? officeCopays[0]
+      : null
   const coinsuranceGroups = new Map<string, string[]>()
   for (const line of lines) {
     const percent = line.benefits?.coinsurance_percent
@@ -45,10 +53,10 @@ export default function PayerReportedPlanFigures({ result }: { result: PrevisitE
         </p>
       )}
       <dl className="arrival-money-picture" aria-label="Payer-reported benefit terms">
-        {benefits.copay_cents != null && (
+        {(officeLines.length ? officeCopay != null : benefits.copay_cents != null) && (
           <div>
-            <dt>Copay</dt>
-            <dd>{money(benefits.copay_cents)}</dd>
+            <dt>{officeLines.length ? 'Office visit copay' : 'Copay'}</dt>
+            <dd>{money(officeLines.length ? officeCopay! : benefits.copay_cents!)}</dd>
           </div>
         )}
         {[...deductibleGroups].map(([label, codes]) => (

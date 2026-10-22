@@ -240,6 +240,16 @@ def test_formulas_packages_and_alternatives_never_double_charge():
     assert not quote(conflicting, [{'code': '99213', 'units': 1}])['cash_quote']['complete']
 
 
+def test_approved_three_site_biopsy_schedule_prices_only_the_complete_bundle():
+    approved = (b'Service,CPT Reference,Cash Price\n'
+                b'Approved three-site skin punch biopsy,11104 + 11105 x2,$450\n')
+    rows = practice_prices.read_rows(approved, 'approved-biopsy.csv')
+    complete = quote(rows, [{'code': '11104', 'units': 1}, {'code': '11105', 'units': 2}])
+    assert complete['cash_quote']['min_cents'] == complete['cash_quote']['max_cents'] == 45000
+    assert not quote(rows, [{'code': '11104', 'units': 1}])['cash_quote']['complete']
+    assert not quote(rows, [{'code': '11104', 'units': 1}, {'code': '11105', 'units': 1}])['cash_quote']['complete']
+
+
 def test_package_overlap_and_ambiguous_codes_cannot_supply_cash():
     rows, issues = rules.cash_tables([table([['CPT', 'Description', 'Cash Price'],
         ['95910 + 95886', 'Package one', '$500'], ['95910 + 95885', 'Package two', '$400'],

@@ -121,7 +121,9 @@ async def historical_replay_bundle(case_id: str, request: _api.Request) -> dict:
     response contains PHI and raw payer evidence; keep it in protected local
     storage and do not place it in repository notes or test fixtures. Current
     Library records are returned with dates for the replay's historical cutoff;
-    missing historical versions cannot be reconstructed by this export.
+    missing historical versions cannot be reconstructed by this export. The
+    replay reports when a saved clinic agreement cannot be reconstructed, so
+    its unknown network tier is not mistaken for the saved network decision.
     """
     session = await _api._session(request)
     if (session.get('staff') or {}).get('role') != 'admin':

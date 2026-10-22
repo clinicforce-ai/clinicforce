@@ -19,7 +19,7 @@ from app.insurance import (commercial, commercial_store, group_contract_support,
                            library_network_exclusions, plan_matrix)
 from app.insurance.identity import normalized
 
-VERSION = 'library-rules-3'
+VERSION = 'library-rules-4'
 from app.insurance.pricing.library_cash_tables import (
     PROVISIONAL,
     CODE,

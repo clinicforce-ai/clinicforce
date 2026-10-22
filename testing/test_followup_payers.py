@@ -37,6 +37,19 @@ def test_biopsy_catalog_and_combined_visit_preserve_all_procedures_and_units():
     assert not any(rows[key]['code'] in {'11104', '11105'} for key in plan['recommended_ids'])
 
 
+def test_unsized_skin_biopsy_starts_with_editable_three_site_plan():
+    inputs = {'visit_type': 'established', 'reason': 'Skin Biopsy'}
+    available = [*api._previsit_codes(inputs),
+                 *[{'id': 'planning:' + code, 'code': code, 'units': 1,
+                    'source': 'CPT planning catalog'} for code in ('11104', '11105')]]
+    with patch.object(cpt_suggester.boto3, 'client', side_effect=RuntimeError('offline')):
+        plan = cpt_suggester.recommend_visit_plan(inputs, {}, available)
+    assert plan['kind'] == 'biopsy'
+    assert plan['recommended_ids'] == ['planning:11104', 'planning:11105']
+    assert plan['recommended_units'] == {'planning:11104': 1, 'planning:11105': 2}
+    assert 'confirm' in plan['assumptions'][0].lower()
+
+
 def test_eligibility_window_boundary_and_service_categories():
     today = datetime.now(ZoneInfo('America/New_York')).date()
     assert api._eligibility_timing((today + timedelta(days=7)).isoformat()) is None

@@ -413,6 +413,7 @@ export type PrevisitEstimate = {
   agreement_exclusion?: {
     decision: 'excluded_under_available_agreement'
     document_id: string
+    product_kind?: 'local_medicare_advantage_ppo' | 'regional_medicare_advantage_ppo'
     page: number
     passage: string
     effective_from?: string

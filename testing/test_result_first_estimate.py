@@ -35,6 +35,18 @@ def test_repeated_cash_schedule_rows_offer_one_choice_per_cpt(monkeypatch):
     assert [row['code'] for row in available].count('99203') == 1
 
 
+def test_skin_biopsy_catalog_offers_first_and_additional_site_codes(monkeypatch):
+    monkeypatch.setattr(api.commercial_store, 'list_connections', lambda *_: [])
+    monkeypatch.setattr(api.practice_prices, 'current', lambda *_: None)
+    _, _, _, available, _ = build_catalog(
+        api, {}, {'practice_id': 'synthetic-clinic'},
+        {'service_date': DAY, 'reason': 'Skin Biopsy', 'visit_type': 'established'},
+        {}, None, {}, '', None,
+    )
+    assert {row['code'] for row in available} >= {'11104', '11105'}
+    assert next(row for row in available if row['code'] == '11105')['service_group'] == 'other'
+
+
 def response(last='Morgan'):
     base = {'coverageLevelCode': 'IND', 'inPlanNetworkIndicatorCode': 'Y', 'serviceTypeCodes': ['30']}
     return {'subscriber': {'memberId': 'ABC123', 'firstName': 'Sam', 'lastName': 'Other'},

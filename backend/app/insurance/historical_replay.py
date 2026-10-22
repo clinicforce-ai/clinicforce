@@ -39,6 +39,7 @@ def replay(bundle: dict) -> dict:
     if not service_date or date.fromisoformat(service_date).isoformat() != str(inputs.get('service_date')):
         raise ValueError('The replay date must equal the saved encounter service date.')
     original = deepcopy(context.get('result') or {})
+    saved_network = (original.get('benefits') or {}).get('network_source')
     raw_reference = str(bundle.get('raw_reference') or '')
     if not raw_reference or raw_reference != str(case.get('previsit_raw_object_key') or ''):
         return {'status': 'unlinked_saved_response', 'mode': 'evidence_review',
@@ -130,6 +131,13 @@ def replay(bundle: dict) -> dict:
                         network_evidence_ids=[exclusion['document_id']])
     else:
         benefits.update(network_status='unknown', network_source=None)
+    network_replay_limitation = (
+        'This replay does not reconstruct the saved clinic agreement. '
+        'An unknown replay network tier does not override the saved in-network finding; '
+        'review its dated agreement evidence separately.'
+        if (original.get('benefits') or {}).get('network_status') == 'in_network'
+        and saved_network in {'clinic_group_agreement', 'clinic_library_contract'}
+        and benefits['network_status'] == 'unknown' else None)
     review = case.get('visit_review') or {}
     policy = (bundle.get('simulated_policy') if bundle.get('simulated_policy') else
               _as_of((payer.get('rules') or {}).get('collection_policy'), cutoff))
@@ -197,6 +205,7 @@ def replay(bundle: dict) -> dict:
             'mode': 'counterfactual_simulation' if simulated else 'historical_as_recorded',
             'retrospective_headline': headline,
             'source_binding': 'saved_case_raw_digest' if expected_digest else 'saved_case_raw_object_key_only',
+            'network_replay_limitation': network_replay_limitation,
             'raw_digest': raw_digest, 'historical_cutoff': cutoff, 'service_date': service_date,
             'service_origin': origin, 'product': product, 'exclusion': exclusion,
             'network_evidence': inventory, 'selected_lines': codes,

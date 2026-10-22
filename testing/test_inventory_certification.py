@@ -53,6 +53,12 @@ def test_certification_matches_exact_scope_and_invalidates_when_inventory_change
     assert inventory_certification.applicable('synthetic-clinic', PAYER, INPUTS, SOURCE, EXCLUSION) is None
 
 
+def test_legacy_unlabeled_uhc_contract_is_included_in_certified_inventory():
+    legacy = {**DOC, 'payer': '', 'label': 'United Healthcare contract'}
+    assert inventory_certification.agreement_hashes('synthetic-clinic', 'UnitedHealthcare',
+        documents=[legacy]) == {legacy['id']: legacy['sha256']}
+
+
 def test_certified_regional_inventory_does_not_request_another_agreement(monkeypatch):
     monkeypatch.setattr(inventory_certification.staff_store, 'list_library', lambda _: [DOC])
     certified = inventory_certification.applicable('synthetic-clinic', PAYER, INPUTS, SOURCE, EXCLUSION)
