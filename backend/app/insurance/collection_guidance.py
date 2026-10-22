@@ -263,8 +263,6 @@ def build(result: dict, review: dict | None = None) -> dict:
             guidance['reason'] = failure.get('detail') or next((issue for issue in result.get('issues', []) if issue), None) or 'Current payer benefits are unavailable, and the remaining information does not establish a collection amount.'
         elif benefits.get('service_date_matches') is False:
             guidance['reason'] = 'The payer response covers a different date. Benefits for this appointment are needed to calculate its collection amount.'
-        elif positive_policy_missing:
-            guidance['reason'] = 'The calculated out-of-network advance is not authorized by the clinic collection policy. An administrator must approve positive collection for this payer route.'
         elif unapproved_services and not (suggested_plan or preview_office_copay):
             guidance['reason'] = 'No single supported CPT scenario is available to price this visit.'
         elif price.get('service_issues'):

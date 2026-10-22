@@ -1,6 +1,7 @@
 import { RequirementDecision } from './RequirementDecision'
 import { BotoxClinicalReview } from './BotoxClinicalReview'
 import { requirementForLine } from './requirementForLine'
+import { requirementTag } from './plannerRequirementTag'
 import { useEffect, useRef, useState } from 'react'
 import { ArrowRight, Check, Minus, Plus } from 'lucide-react'
 import type {
@@ -69,46 +70,6 @@ export function ServicePlanner({
       statuses[0] !== 'Verification required'
       ? statuses[0]
       : 'Plan-specific rule not established for all alternatives'
-  }
-  const requirementTag = (row: VisitCode, kind: 'referral' | 'authorization') => {
-    const evidence = requirementForLine(
-      [
-        ...(result.requirement_evidence?.procedures || []),
-        ...(result.candidate_requirements || []),
-      ],
-      row.id,
-      row.code,
-    )?.[kind]
-    const line = result.price_range?.lines?.find((item) => item.id === row.id)
-    const recorded = line?.benefits?.requirements?.[kind]
-    const name = kind === 'referral' ? 'Referral' : 'Prior auth'
-    if (
-      (evidence?.status === 'Required' && recorded?.required === 'not_required') ||
-      (evidence?.status === 'Not required' && recorded?.required === 'required')
-    )
-      return { label: `${name}: review rule`, tone: 'unknown' }
-    if (evidence?.status === 'Required' || recorded?.required === 'required') {
-      const recordedClearance =
-        recorded?.cleared &&
-        recorded.status === 'valid' &&
-        recorded.reference &&
-        recorded.verified_at
-      const approvalStatus =
-        evidence?.approval_status ?? result.requirement_evidence?.authorization?.approval_status
-      const verified = recordedClearance && (kind === 'referral' || approvalStatus === 'Verified')
-      const authorizationOnFile = kind === 'authorization' && recordedClearance && !approvalStatus
-      return {
-        label: verified
-          ? `${name} on file`
-          : authorizationOnFile
-            ? `${name} reference on file`
-            : `${name} required`,
-        tone: verified ? 'clear' : authorizationOnFile ? 'unknown' : 'required',
-      }
-    }
-    if (evidence?.status === 'Not required' || recorded?.required === 'not_required')
-      return { label: `No ${name.toLowerCase()}`, tone: 'clear' }
-    return { label: `${name}: ask payer`, tone: 'unknown' }
   }
   const nerve = available
     .filter((row) => groupOf(row) === 'nerve')
@@ -205,14 +166,14 @@ export function ServicePlanner({
   })
   useEffect(() => {
     if (!changed || busy) return
-    const version = JSON.stringify({ selected, quantities, modifiers, botox, cashSelection })
+    const version = JSON.stringify({ selected, quantities, botox, cashSelection })
     if (lastAutoAttempt.current === version) return
     const timer = window.setTimeout(() => {
       lastAutoAttempt.current = version
       void autoSave.current(false)
     }, 500)
     return () => window.clearTimeout(timer)
-  }, [changed, busy, selected, quantities, modifiers, botox, cashSelection])
+  }, [changed, busy, selected, quantities, botox, cashSelection])
   const groups = [
     { id: 'visit', label: 'Office visit', rows: office, single: true },
     { id: 'nerve', label: 'Nerve study', rows: nerve, single: true },
@@ -247,8 +208,8 @@ export function ServicePlanner({
       </p>
       <div className="selected-service-chips" aria-label="Selected services">
         {chosen.map((row) => {
-          const referral = requirementTag(row, 'referral')
-          const authorization = requirementTag(row, 'authorization')
+          const referral = requirementTag(result, row, 'referral')
+          const authorization = requirementTag(result, row, 'authorization')
           return (
             <span key={row.id}>
               <Check size={14} aria-hidden="true" />
@@ -315,6 +276,10 @@ export function ServicePlanner({
               const disable =
                 busy ||
                 (groupOf(row) === 'muscle' && !nerve.some((item) => selected.includes(item.id!)))
+              const needsCodeSelection =
+                !included &&
+                result.price_range?.mode === 'alternatives' &&
+                ['visit', 'nerve'].includes(groupOf(row))
               const requirement = requirementForLine(
                 [
                   ...(result.requirement_evidence?.procedures || []),
@@ -373,11 +338,7 @@ export function ServicePlanner({
                             code={row.code}
                             kind="referral"
                             payerName={result.payer}
-                            needsCodeSelection={
-                              !included &&
-                              result.price_range?.mode === 'alternatives' &&
-                              ['visit', 'nerve'].includes(groupOf(row))
-                            }
+                            needsCodeSelection={needsCodeSelection}
                           />
                         </div>
                         <div>
@@ -387,11 +348,7 @@ export function ServicePlanner({
                             code={row.code}
                             kind="prior authorization"
                             payerName={result.payer}
-                            needsCodeSelection={
-                              !included &&
-                              result.price_range?.mode === 'alternatives' &&
-                              ['visit', 'nerve'].includes(groupOf(row))
-                            }
+                            needsCodeSelection={needsCodeSelection}
                           />
                         </div>
                       </div>

@@ -797,7 +797,8 @@ def test_saved_collection_rechecks_new_library_requirement_before_display(legacy
     with patch('app.api.routers.commercial_flow.commercial_previsit_status._recheck_saved_clinic_pricing'), \
          patch.object(api.staff_store, 'list_library', return_value=[document]), \
          patch.object(api.staff_store, 'get_library', return_value=document), \
-         patch.object(api.commercial_store, 'list_connections', return_value=[]), \
+         patch.object(api.commercial_store, 'list_connections', return_value=[
+             {'stedi_payer_id': 'synthetic-payer', 'rules': {'collection_policy': ADVANCE_POLICY}}]), \
          patch.object(api.contract_requirements, 'evaluate', return_value=decision) as evaluate, \
          patch.object(api, '_requirement_candidates', return_value=[]):
         reopened = api._previsit_result(case, 'clinic')

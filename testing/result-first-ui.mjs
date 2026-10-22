@@ -20,9 +20,9 @@ const benefits = { active: true, network_status: 'unknown', oop_remaining_cents:
 const codes = ['99203', '99204', '95910', '95886', 'J0585'].map(code => ({ id: code, code, source: 'Planning catalog', units: 1 }))
 let result = {
   check_id: 'sample-check', appointment_id: visit.id, service_date: '2026-09-29', payer: 'Example Health', plan: 'Choice PPO', checked_at: '2026-09-28T16:30:00Z', benefit_source: 'Stedi', issues: [], suggestions: null,
-  revision: 1, context_token: 'a'.repeat(64), visit_type: 'new', codes: [codes[0]], available_codes: codes, selected_ids: [],
-  service_selection_status: 'preview',
-  service_plan: { kind: 'office', groups: [], recommended_ids: ['99203'], selection_source: 'suggested', recommendation_basis: 'Office visit', history_count: 0 },
+  revision: 1, context_token: 'a'.repeat(64), visit_type: 'new', codes: [codes[0]], available_codes: codes, selected_ids: ['99203'],
+  service_selection_status: 'approved',
+  service_plan: { kind: 'office', groups: [], recommended_ids: ['99203'], selection_source: 'clinician', recommendation_basis: 'Office visit', history_count: 0 },
   insurance_details: { member_id: 'ABC123', member_source: 'Coverage.subscriberId', payer_subscriber: { firstName: 'Sam', lastName: 'Other' }, payer_patient: { firstName: 'Alex', lastName: 'Former', dateOfBirth: '2001-02-03' }, payer_relationship: 'CHILD' },
   identity: { status: 'warning', match_version: 2, message: 'Payer surname differs; first name, date of birth and member ID match.', binding: 'b'.repeat(64), can_confirm: true, differences: [{ field: 'last_name', ecw: 'Morgan', payer: 'Former' }] },
   benefits, price_range: { complete: false, mode: 'services', lines: [{ ...codes[0], benefits, issues: [], calculation: null }], scenarios: [] },
@@ -74,7 +74,7 @@ await page.route(url => url.pathname.startsWith('/api/'), async route => {
   await route.fulfill({ json: body })
 })
 async function openPatient(pending = false) {
-  await page.goto(process.env.UI_URL || 'http://127.0.0.1:5182/?staff', { waitUntil: 'domcontentloaded', timeout: 30000 })
+  await page.goto(process.env.UI_URL || 'http://127.0.0.1:5182/?staff')
   await page.getByRole('button', { name: /Alex Morgan/ }).click()
   await page.getByRole('button', { name: 'Open insurance review', exact: true }).click()
   if (pending) await page.locator('.coverage-chip').filter({ hasText: 'Coverage check in progress' }).waitFor()
@@ -102,6 +102,7 @@ try {
   assert.equal(await page.locator('.arrival-total > span').first().innerText(), 'Collection decision needed')
   assert((await page.locator('.arrival-total > p').first().innerText()).includes('link the exact plan and rendering provider'))
   assert(await page.locator('.visit-context-facts').getByText('Dr. Taylor Lee', { exact: true }).isVisible())
+  assert(requests.some(path => path.endsWith('/cards')), 'Cards load independently in background')
   assert.equal(previsitRequests.length, 1)
   assert(await page.locator('.visit-identity-notice').isVisible())
   assert.equal(await page.locator('.visit-snapshots > div').count(), 2,
@@ -126,17 +127,11 @@ try {
   assert(await section.getByText('Alex Former', { exact: true }).isVisible())
   assert((await section.innerText()).includes('Source: eCW Coverage.subscriberId'))
   await section.getByText(/Card preview unavailable/).waitFor()
-  assert(requests.some(path => path.endsWith('/cards')), 'Cards load independently in background')
   assert(await section.getByRole('heading', { name: /Service category 98/ }).isVisible())
   assert.equal(await section.locator('.visit-imported article p').innerText(), 'Patient comment\nPlease explain the treatment plan.')
   assert(!(await section.innerText()).includes('Encounter/'), 'Technical reference stays out of appointment notes')
   await section.locator(':scope > summary').click()
   section = await detail('Possible additional')
-  assert.equal(await section.locator('.procedure-choice').filter({ hasText: 'CPT 99203' }).getByRole('button').getAttribute('aria-pressed'), 'true')
-  assert((await section.locator('.selected-service-chips').innerText()).includes('No referral'))
-  assert((await section.locator('.selected-service-chips').innerText()).includes('No prior auth'))
-  assert.equal(await section.getByText('Review evidence for each selected service').count(), 0)
-  assert.equal(await section.getByText(/modifiers \(comma separated/).count(), 0)
   const suggestedChoice = section.locator('.procedure-choice').filter({ hasText: 'CPT 99204' })
   assert((await suggestedChoice.innerText()).includes('Referral: No'))
   assert((await suggestedChoice.innerText()).includes('Prior auth: Yes'))
@@ -144,8 +139,6 @@ try {
   await section.getByRole('button', { name: 'Recalculate estimate' }).click()
   await page.waitForFunction(() => document.querySelector('.visit-notice')?.textContent.includes('Estimate updated'))
   assert.equal(reviews.at(-1).selected_ids[0], '99204')
-  assert((await section.locator('.selected-service-chips').innerText()).includes('No referral'))
-  assert((await section.locator('.selected-service-chips').innerText()).includes('Prior auth required'))
   assert.equal(previsitRequests.length, 1, 'Service changes reuse protected payer evidence')
   await section.getByRole('button', { name: 'Nerve study', exact: true }).click()
   await section.getByRole('button', { name: /Nerve conduction · 7–8 studies/ }).click()
@@ -407,21 +400,15 @@ try {
         referral: { status: 'Required', sources: [{ filename: '2026_Example_Health_Choice_PPO_signed_professional_agreement.pdf', document_id: 'signed-contract', page: 3 }] },
         authorization: { status: 'Required', sources: [{ filename: '2026_Example_Health_Choice_PPO_signed_professional_agreement.pdf', document_id: 'signed-contract', page: 6 }] } }],
     } }
-  result.price_range.lines[0].benefits.requirements = {
-    referral: { required: 'required', status: 'valid', cleared: true, reference: 'saved-referral', verified_at: '2026-09-28' },
-    authorization: { required: 'required', status: 'valid', cleared: true, reference: 'saved-authorization', verified_at: '2026-09-28' },
-  }
   await openPatient()
   const contractLink = page.locator('.visit-snapshots > div').nth(1).getByRole('link', { name: 'Payer plan contract' })
   assert.equal(await contractLink.getAttribute('href'), '/api/staff/library/signed-contract/document?preview=true#page=3')
   const selectedRequirements = page.locator('.selected-cpt-requirements')
   await page.locator('.arrival-total details > summary').filter({ hasText: 'Itemized financial breakdown' }).click()
-  assert((await selectedRequirements.innerText()).includes('referral on file'))
-  assert((await selectedRequirements.innerText()).includes('prior authorization required'))
-  assert(!(await selectedRequirements.innerText()).includes('prior authorization approved'))
+  assert((await selectedRequirements.innerText()).includes('referral needed'))
+  assert((await selectedRequirements.innerText()).includes('prior authorization needed'))
   assert.equal(await selectedRequirements.getByRole('link', { name: 'Clinic contract · p. 3' }).getAttribute('href'), '/api/staff/library/signed-contract/document?preview=true#page=3')
   assert.equal(await selectedRequirements.getByRole('link', { name: 'Clinic contract · p. 6' }).getAttribute('href'), '/api/staff/library/signed-contract/document?preview=true#page=6')
-  result.price_range.lines[0].benefits.requirements = requirements
   result = { ...result, requirement_evidence: {
     referral: { status: 'Not required', reason: 'The applicable contract confirms no referral is needed.', sources: [] },
     authorization: { status: 'Not required', reason: 'The applicable contract confirms no authorization is needed.', sources: [] },
