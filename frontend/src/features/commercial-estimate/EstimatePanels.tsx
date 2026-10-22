@@ -22,19 +22,23 @@ export function ApplicableBenefits({
   const payerOrderMissing = result.recovery?.reason_code === 'multiple_active_policies'
   const historicalOnly = result.benefits?.historical_only === true
   const alternatives = result.price_range?.lines || []
-  const sharedOfficeTerms =
+  const sharedAlternativeTerms =
     result.price_range?.mode === 'alternatives' &&
     services.length > 1 &&
     alternatives.length === services.length &&
     services.every(
       (row, index) =>
-        /^992(?:0[2-5]|1[2-5])$/.test(row.code) && alternatives[index].code === row.code,
+        (/^992(?:0[2-5]|1[2-5])$/.test(row.code) || /^959(?:0[7-9]|1[0-3])$/.test(row.code)) &&
+        alternatives[index].code === row.code,
+    ) &&
+    services.every((row) =>
+      /^959/.test(services[0].code) ? /^959/.test(row.code) : /^992/.test(row.code),
     ) &&
     !alternatives.some((line) => line.benefit_basis === 'Procedure-specific payer benefit') &&
     new Set(services.map((row) => JSON.stringify({ ...row, id: undefined, code: undefined })))
       .size === 1 &&
     new Set(alternatives.map((line) => JSON.stringify(line.benefits))).size === 1
-  const displayedServices = sharedOfficeTerms ? services.slice(0, 1) : services
+  const displayedServices = sharedAlternativeTerms ? services.slice(0, 1) : services
   const responseRow = (id?: string | null) => id && <small>Response row: {id}</small>
   const oopConflictReason = (annual: boolean) =>
     result.benefits?.review_reasons?.find((reason) =>
@@ -93,11 +97,11 @@ export function ApplicableBenefits({
           return (
             <article className="service-evidence" key={row.id}>
               <h4>
-                {sharedOfficeTerms
-                  ? 'Shared office-visit terms for CPT alternatives'
+                {sharedAlternativeTerms
+                  ? `Shared ${/^959/.test(row.code) ? 'nerve-study' : 'office-visit'} terms for CPT alternatives`
                   : `CPT ${row.code} · ${row.benefit}`}
               </h4>
-              {sharedOfficeTerms && (
+              {sharedAlternativeTerms && (
                 <p>
                   {row.benefit} for CPTs {services.map((service) => service.code).join(', ')}.
                 </p>

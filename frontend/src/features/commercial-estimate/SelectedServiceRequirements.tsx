@@ -13,7 +13,7 @@ export default function SelectedServiceRequirements({
   if (!lines.length || result.price_range?.mode !== 'services') return null
   return (
     <div className="selected-cpt-requirements">
-      <small>Planned CPTs and coverage requirements</small>
+      <small>Planned CPTs · referral and prior authorization</small>
       <ul>
         {lines.map((line) => {
           const decision = requirementForLine(
@@ -56,27 +56,31 @@ export default function SelectedServiceRequirements({
             <li key={line.id}>
               <strong>CPT {line.code}</strong>
               {Number(line.units) > 1 ? ` × ${line.units}` : ''}: {referral}, {authorization}.
-              {!!decision?.referral?.sources?.length && (
-                <small>
-                  {' '}
-                  Referral:{' '}
-                  {decision.referral.sources.map((source, index) => (
-                    <span key={index}>
-                      <RequirementSourceLink source={source} />{' '}
-                    </span>
-                  ))}
-                </small>
-              )}
-              {!!decision?.authorization?.sources?.length && (
-                <small>
-                  {' '}
-                  Authorization:{' '}
-                  {decision.authorization.sources.map((source, index) => (
-                    <span key={index}>
-                      <RequirementSourceLink source={source} />{' '}
-                    </span>
-                  ))}
-                </small>
+              {(!!decision?.referral?.sources?.length ||
+                !!decision?.authorization?.sources?.length) && (
+                <details>
+                  <summary>Rule sources</summary>
+                  {!!decision?.referral?.sources?.length && (
+                    <small>
+                      Referral:{' '}
+                      {decision.referral.sources.map((source, index) => (
+                        <span key={index}>
+                          <RequirementSourceLink source={source} />{' '}
+                        </span>
+                      ))}
+                    </small>
+                  )}
+                  {!!decision?.authorization?.sources?.length && (
+                    <small>
+                      Authorization:{' '}
+                      {decision.authorization.sources.map((source, index) => (
+                        <span key={index}>
+                          <RequirementSourceLink source={source} />{' '}
+                        </span>
+                      ))}
+                    </small>
+                  )}
+                </details>
               )}
             </li>
           )

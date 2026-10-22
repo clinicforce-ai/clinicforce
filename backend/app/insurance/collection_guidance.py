@@ -39,11 +39,12 @@ def build(result: dict, review: dict | None = None) -> dict:
                 'reason': 'The available benefits do not establish an advance collection amount.',
                 'patient_message': 'Your payment amount is not yet calculated. Missing information does not mean your patient responsibility is zero.',
                 'assumptions': assumptions, 'patient_actions': actions, 'services': [],
-                'network': 'In network' if verified_in_network(benefits) else
+                'network': 'In network · clinic agreement' if benefits.get('network_source') == 'clinic_group_agreement' else
+                           'In network' if verified_in_network(benefits) else
                            'Out of network' if verified_out_of_network(benefits) else
                            ('Network not established' if candidate_network or
                             (result.get('network_evidence') or {}).get('network_name') else 'Not reported'),
-                'network_source': ('Dated Clinical Library group agreement and product-network rule; clinician participation unresolved'
+                'network_source': ('Current signed clinic agreement; review member product and clinician tier'
                                    if (result.get('network_evidence') or {}).get('decision') == 'in_network_contract_supported' else
                                    'Payer statement about the requesting provider' if verified_in_network(benefits) and benefits.get('network_source') == 'payer_participation_message' else
                                    'Current Clinical Library contract and clinic provider-network record' if verified_in_network(benefits) and benefits.get('network_source') == 'clinic_library_contract' else

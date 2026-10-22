@@ -256,9 +256,12 @@ def _network_contract_evidence(practice_id: str, network: dict, profile: dict, s
     if document_id and network.get('evidence_reference') == library_source.get('reference') == f'library:{document_id}':
         document = _api.staff_store.get_library(document_id, practice_id)
         if (document and current(document)
+                and (not service_date or not library_source.get('effective_from')
+                     or library_source['effective_from'] <= service_date)
                 and document.get('sha256') == library_source.get('sha256')):
             evidence.update(document_id=document_id, document_label=document['label'],
-                            locator=library_source.get('locator'))
+                            locator=library_source.get('locator'),
+                            origin=library_source.get('origin'))
     if not evidence.get('document_id') and network.get('payer_connection_id'):
         payer = _api.commercial_store.connection(practice_id, network['payer_connection_id'])
         if payer and payer.get('display_name'):
@@ -405,8 +408,13 @@ def _attach_previsit_pricing(result: dict, practice_id: str, inputs: dict, sourc
             evidence['product_mapping_approval'] = mapping
         if evidence.get('document_id'):
             benefits['network_status'] = 'in_network'
-            benefits['network_source'] = 'clinic_library_contract'
-            result['network_evidence'] = {**evidence, 'decision': 'confirmed_participating'}
+            group_agreement = evidence.get('origin') == 'signed_group_agreement'
+            benefits['network_source'] = ('clinic_group_agreement' if group_agreement
+                                          else 'clinic_library_contract')
+            result['network_evidence'] = {**evidence,
+                'decision': 'in_network_contract_supported' if group_agreement else 'confirmed_participating',
+                'reason': ('The signed clinic agreement names this network and is linked to the current Library document.'
+                           if group_agreement else evidence.get('reason'))}
             if source.get('payer_network_names'):
                 evidence['payer_network_name'] = source['payer_network_names'][0]
                 evidence['payer_network_source'] = 'Stedi planNetwork'
@@ -420,7 +428,7 @@ def _attach_previsit_pricing(result: dict, practice_id: str, inputs: dict, sourc
         if scope_complete and str(exc.detail) == 'A sourced nonparticipation rule applies to this provider, product, location and date.':
             benefits['network_status'] = 'out_of_network'
             benefits['network_source'] = 'clinic_nonparticipation_rule'
-        if scope_complete and not exclusion:
+        if not exclusion:
             result['network_evidence'] = {'decision': 'out_of_network_confirmed_by_scoped_nonparticipation_record'
                 if benefits.get('network_source') == 'clinic_nonparticipation_rule'
                 else 'lacking_applicable_network_evidence',
@@ -432,6 +440,8 @@ def _attach_previsit_pricing(result: dict, practice_id: str, inputs: dict, sourc
         supported = group_contract_support.resolve(practice_id, connection, inputs, source, result, benefits)
         if supported:
             result['network_evidence'] = supported
+            benefits['network_status'] = 'in_network'
+            benefits['network_source'] = 'clinic_group_agreement'
     if (inventory and benefits.get('network_source') != 'clinic_library_contract'
             and not _api.network_participation.verified_out_of_network(benefits)):
         _apply_inventory_tier(result, benefits, inventory, exclusion)

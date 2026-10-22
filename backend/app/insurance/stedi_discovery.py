@@ -167,6 +167,17 @@ def automatic_match(item: dict, inputs: dict, source: dict) -> bool:
     return verify_candidate(item, inputs, source)['status'] == 'VERIFIED'
 
 
+def discovered_coverage(recorded: dict, inputs: dict, item: dict) -> dict:
+    """Bind a verified dependent response to the recorded patient and policy."""
+    matched = candidate_identity(item, inputs)
+    if not matched:
+        raise ValueError('Discovery candidate no longer matches the eCW patient.')
+    coverage = {**recorded, **matched, 'active_coverages': 1}
+    coverage['coverage_id'] = recorded.get('coverage_id') or 'stedi-discovery'
+    coverage['relationship'] = matched['relationship_code']
+    return coverage
+
+
 def verify_candidate(item: dict, inputs: dict, source: dict | None = None) -> dict:
     """Separate patient identity, policy corroboration and dated payer evidence."""
     source = source or {}

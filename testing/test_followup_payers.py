@@ -117,7 +117,7 @@ def test_diagnostic_only_response_keeps_active_coverage_at_case_level():
 def test_generic_emg_does_not_select_a_study_count_or_muscle_work():
     with patch.object(cpt_suggester.boto3, 'client') as model:
         plan = cpt_suggester.recommend_visit_plan({'reason': 'Visit type: EMG Visit'}, {}, [{'id': c, 'code': c, 'units': 1, 'source': 'CPT planning catalog'} for c in ('11104', '11105', '95907', '95910', '95886')])
-    model.assert_not_called()
+    model.return_value.converse.assert_called_once()
     assert plan['recommended_ids'] == []
     assert 'cash_selection' not in plan
-    assert 'study count or muscle work' in plan['recommendation_basis']
+    assert 'No supported CPT suggestion' in plan['recommendation_basis']

@@ -14,7 +14,6 @@ import { openServiceDetails } from './openServiceDetails'
 import { overviewExplanation } from './overviewExplanation'
 import PolicyAndShareNotice from './PolicyAndShareNotice'
 import PublishedPlanBenefit from './PublishedPlanBenefit'
-
 export default function CommercialOverview({
   model,
   result,
@@ -330,12 +329,6 @@ export default function CommercialOverview({
                     </dl>
                   </div>
                 )}
-                {showSelectedRequirements && (
-                  <SelectedServiceRequirements
-                    result={result}
-                    payerName={payerForAction || 'the payer'}
-                  />
-                )}
               </details>
             )}
           {cash && !amount && !!result.cash_schedule?.packages.length && !readOnly && (
@@ -436,11 +429,11 @@ export default function CommercialOverview({
           {result.reason && result.reason !== anticipatedService && (
             <p>eCW visit reason: {result.reason}</p>
           )}
-          <p>
-            {readOnly
-              ? 'Service plan recorded for this appointment.'
-              : 'Based on the scheduled appointment. Modify the services below if the planned care changes.'}
-          </p>
+          {!readOnly && (
+            <button type="button" className="cash-package-shortcut" onClick={openServiceDetails}>
+              Review planned CPTs
+            </button>
+          )}
         </div>
       </div>
       <div className="visit-snapshots" aria-label="Coverage summary">
@@ -461,7 +454,13 @@ export default function CommercialOverview({
           <Network size={20} aria-hidden="true" />
           <span>
             Network<strong>{networkLabel}</strong>
-            {result?.network_evidence?.reason && <small>{result.network_evidence.reason}</small>}
+            {result?.network_evidence?.mismatch_warnings?.length ? (
+              <small className="network-mismatch-warning" role="note">
+                Agreement mismatch: {result.network_evidence.mismatch_warnings.join(' ')}
+              </small>
+            ) : (
+              result?.network_evidence?.reason && <small>{result.network_evidence.reason}</small>
+            )}
             {result?.network_evidence?.product_source && (
               <small>Contract plan lookup: {result.network_evidence.product_source}</small>
             )}
@@ -483,6 +482,9 @@ export default function CommercialOverview({
           <RequirementCards result={result} readOnly={readOnly} payerName={payerForAction} />
         )}
       </div>
+      {showSelectedRequirements && (
+        <SelectedServiceRequirements result={result} payerName={payerForAction || 'the payer'} />
+      )}
       <EstimateSources result={result} tooEarly={!!tooEarly} />
       <div className="overview-plan-name">
         <ShieldCheck size={16} aria-hidden="true" />

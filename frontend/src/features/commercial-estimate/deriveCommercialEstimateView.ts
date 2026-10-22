@@ -26,7 +26,7 @@ export function deriveCommercialEstimateView({
   const networkConfirmed =
     benefits?.network_status === 'in_network' &&
     !participationConflict &&
-    ['clinic_library_contract', 'payer_participation_message'].includes(
+    ['clinic_library_contract', 'clinic_group_agreement', 'payer_participation_message'].includes(
       benefits.network_source || '',
     )
   const price = result?.price_range
@@ -185,7 +185,7 @@ export function deriveCommercialEstimateView({
         ? 'Excluded under uploaded agreement'
         : result?.network_evidence?.decision === 'in_network_contract_supported' &&
             patientBenefitsBound
-          ? 'Contract indicates in network'
+          ? 'In network · clinic agreement'
           : benefits?.active === true &&
               !patientBenefitsBound &&
               ['in_network', 'out_of_network'].includes(benefits.network_status || '')
@@ -203,7 +203,7 @@ export function deriveCommercialEstimateView({
                   : 'Not determined'
   const networkSource =
     result?.network_evidence?.decision === 'in_network_contract_supported'
-      ? 'Dated group agreement and product-network rule · clinician participation pending'
+      ? 'Current signed clinic agreement · review member product and clinician tier'
       : benefits?.network_source === 'clinic_library_contract'
         ? 'Current Clinical Library contract'
         : benefits?.network_source === 'clinic_library_absent'

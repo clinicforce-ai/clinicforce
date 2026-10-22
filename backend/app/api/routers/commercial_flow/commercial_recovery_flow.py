@@ -74,13 +74,7 @@ async def _reconcile_saved_discovery(case: dict, session: dict) -> None:
 
 
 def _discovered_coverage(inputs: dict, source: dict, item: dict) -> dict:
-    identity = _api.stedi_discovery.candidate_identity(item, inputs)
-    if not identity:
-        raise ValueError('Discovery candidate no longer matches the eCW patient.')
-    coverage = _api._coverage_snapshot(inputs, source)
-    coverage.update(identity, active_coverages=1, coverage_id=coverage.get('coverage_id') or 'stedi-discovery')
-    coverage['relationship'] = identity['relationship_code']
-    return coverage
+    return _api.stedi_discovery.discovered_coverage(_api._coverage_snapshot(inputs, source), inputs, item)
 
 
 def _discovery_pricing_source(source: dict, item: dict, payer: dict) -> dict:

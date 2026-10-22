@@ -22,6 +22,19 @@ def policy():
             'subscriber_first': 'Sam', 'subscriber_last': 'Other', 'relationship': '19'}
 
 
+def test_repeated_cash_schedule_rows_offer_one_choice_per_cpt(monkeypatch):
+    monkeypatch.setattr(api.commercial_store, 'list_connections', lambda *_: [])
+    monkeypatch.setattr(api.practice_prices, 'current', lambda *_: {'rows': [
+        {'code': '99203', 'description': 'Office visit', 'price_kind': 'unit'},
+        {'code': '99203', 'description': 'Office visit', 'price_kind': 'unit'},
+    ]})
+    _, _, _, available, _ = build_catalog(
+        api, {}, {'practice_id': 'synthetic-clinic'},
+        {'service_date': DAY, 'reason': 'consultation'}, {}, None, {}, '', None,
+    )
+    assert [row['code'] for row in available].count('99203') == 1
+
+
 def response(last='Morgan'):
     base = {'coverageLevelCode': 'IND', 'inPlanNetworkIndicatorCode': 'Y', 'serviceTypeCodes': ['30']}
     return {'subscriber': {'memberId': 'ABC123', 'firstName': 'Sam', 'lastName': 'Other'},

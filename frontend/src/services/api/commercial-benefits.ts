@@ -17,6 +17,7 @@ export type PrevisitBenefits = null | {
   network_source?:
     | 'clinic_record'
     | 'clinic_library_contract'
+    | 'clinic_group_agreement'
     | 'clinic_library_absent'
     | 'payer_participation_message'
     | 'clinic_nonparticipation_rule'

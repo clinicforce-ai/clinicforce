@@ -122,6 +122,30 @@ try {
   )
   assert.equal((perCptView.match(/Applicable copay/g) || []).length, 2)
   assert(!perCptView.includes('Shared office-visit terms for CPT alternatives'))
+  const ncsCodes = ['95907', '95908', '95909']
+  const sharedNcs = renderToStaticMarkup(
+    React.createElement(ApplicableBenefits, {
+      result: {
+        ...base,
+        identity: currentIdentity,
+        price_range: {
+          mode: 'alternatives',
+          lines: ncsCodes.map((code) => ({ id: code, code, benefits: { copay_id: 'shared-row' } })),
+        },
+        collection_guidance: {
+          services: ncsCodes.map((code) => ({
+            id: code,
+            code,
+            benefit: 'Nerve study',
+            copay_cents: 4000,
+            selected_benefit_ids: ['shared-row'],
+          })),
+        },
+      },
+    }),
+  )
+  assert.equal((sharedNcs.match(/Applicable copay/g) || []).length, 1)
+  assert(sharedNcs.includes('Shared nerve-study terms for CPT alternatives'))
   const equalAmountsDifferentRows = renderToStaticMarkup(
     React.createElement(ApplicableBenefits, {
       result: {
@@ -303,6 +327,51 @@ try {
   )
   assert(testingPlanner.includes('Ask United Healthcare whether CPT 95910 needs referral'))
   assert(!testingPlanner.includes('Select E/M CPT'))
+  const pendingNcs = renderToStaticMarkup(
+    React.createElement(ServicePlanner, {
+      result: {
+        payment_mode: 'insurance',
+        payer: 'Synthetic payer',
+        service_date: '2026-10-22',
+        reason: 'EMG Visit',
+        codes: [],
+        available_codes: [
+          { id: 'ncs', code: '95907', units: 1 },
+          { id: 'cash:99203', code: '99203', units: 1 },
+          { id: 'cash:99203', code: '99203', units: 1 },
+        ],
+        selected_ids: [],
+        provisional_scenario: { kind: 'ncs_study_count', candidate_ids: ['ncs'] },
+        price_range: { mode: 'alternatives', lines: [] },
+      },
+      busy: false,
+      save: async () => true,
+      viewEstimate: () => {},
+    }),
+  )
+  assert(pendingNcs.includes('aria-pressed="true">Nerve study'))
+  assert(!pendingNcs.includes('New patient'))
+  assert.equal((pendingNcs.match(/CPT 99203/g) || []).length, 0)
+  const duplicateSavedCatalog = renderToStaticMarkup(
+    React.createElement(ServicePlanner, {
+      result: {
+        payment_mode: 'insurance',
+        service_date: '2026-10-22',
+        visit_type: 'new',
+        codes: [],
+        available_codes: [
+          { id: 'cash:99203', code: '99203', units: 1 },
+          { id: 'cash:99203', code: '99203', units: 1 },
+        ],
+        selected_ids: [],
+        price_range: { mode: 'alternatives', lines: [] },
+      },
+      busy: false,
+      save: async () => true,
+      viewEstimate: () => {},
+    }),
+  )
+  assert.equal((duplicateSavedCatalog.match(/CPT 99203/g) || []).length, 1)
 
   const { default: VisitServices } = await server.ssrLoadModule(
     '/src/features/commercial-estimate/VisitServices.tsx',
@@ -549,6 +618,27 @@ try {
   )
   assert(recoveryView.includes('Patient name differs from eCW'))
   assert.equal((recoveryView.match(/Patient name differs from eCW/g) || []).length, 1)
+  const verifiedSpouse = renderToStaticMarkup(
+    React.createElement(CoverageRecovery, {
+      model: { readOnly: true, failed: false, busy: null, recovering: false },
+      result: {
+        ...base,
+        identity: currentIdentity,
+        insurance_hints: [
+          { payer: 'Synthetic payer', member_id: 'SYNTHETIC', sources: ['eCW Coverage'] },
+        ],
+        insurance_diagnosis: {
+          identityStatus: 'VERIFIED',
+          eligibilityStatus: 'VERIFIED',
+          pricingStatus: 'NOT_CALCULATED',
+          pricingReasons: ['Contract rate missing'],
+        },
+      },
+    }),
+  )
+  assert(!verifiedSpouse.includes('Recorded insurance clues'))
+  assert(verifiedSpouse.includes('<summary>Insurance check details</summary>'))
+  assert(!verifiedSpouse.includes('<details class="visit-recovery" open=""'))
   assert(!recoveryView.includes('Coverage not verified'))
 
   const { default: CommercialOverview } = await server.ssrLoadModule(

@@ -10,6 +10,7 @@ from app.api.routers.commercial_flow import commercial_previsit_pricing as prici
 from app.api.routers.commercial_flow import commercial_previsit_requirements as requirements
 from app.api.routers.commercial_flow.commercial_previsit_network_guard import recheck_saved_network_evidence
 from app.insurance import amount_explanation
+from app.insurance import collection_guidance
 from app.insurance import contract_requirements
 from app.insurance import network_participation
 
@@ -56,6 +57,7 @@ def approved_mapping(**changes):
 
 def test_unmapped_basic_keeps_coverage_without_false_participation_conflict(monkeypatch):
     _, _, _, inputs, source = setup_path(monkeypatch)
+    monkeypatch.setattr(api.staff_store, 'list_library', lambda *_: [])
     monkeypatch.setattr(pricing.library_network_exclusions, 'applicable_exclusion', lambda *_: None)
     monkeypatch.setattr(pricing.inventory_certification, 'applicable', lambda *_: None)
     monkeypatch.setattr(api, '_previsit_range', lambda *_args, **_kwargs: ({'lines': [], 'complete': False}, []))
@@ -144,9 +146,9 @@ def test_identified_fep_basic_cannot_use_blue_choice_basic_ci_contract(monkeypat
 
 
 @pytest.mark.parametrize('invalid', [None, 'missing_ecw_tin', 'missing_library_date', 'conflicting_library_date',
-                                     'product', 'reported_network', 'rendering', 'tin',
+                                     'product', 'reported_network', 'rendering', 'missing_rendering', 'tin',
                                      'location', 'date', 'rule_expired', 'document_hash', 'attachment'])
-def test_fep_group_agreement_is_visible_without_claiming_clinician_participation(monkeypatch, invalid):
+def test_signed_group_agreement_warns_on_mismatch_and_requires_current_document(monkeypatch, invalid):
     payer, network, profile, inputs, source = setup_path(monkeypatch)
     payer['display_name'] = 'Blue Cross Blue Shield of Texas'
     network['evidence_reference'] = 's3://synthetic/clinic-setup.json'
@@ -165,6 +167,8 @@ def test_fep_group_agreement_is_visible_without_claiming_clinician_participation
         source['payer_network_names'] = ['Other PPO']
     elif invalid == 'rendering':
         inputs['rendering_provider']['npi'] = '3333333333'
+    elif invalid == 'missing_rendering':
+        inputs['rendering_provider'].pop('npi')
     elif invalid == 'tin':
         source['billing_provider']['tin'] = '000000000'
     elif invalid == 'missing_ecw_tin':
@@ -200,7 +204,7 @@ def test_fep_group_agreement_is_visible_without_claiming_clinician_participation
     benefits = {'active': True, 'service_date_matches': True, 'network_status': 'unknown',
                 'network_conflict': False}
     api._attach_previsit_pricing(result, 'clinic', inputs, source, 'payer-route', benefits)
-    if invalid and invalid not in {'missing_ecw_tin', 'missing_library_date'}:
+    if invalid in {'conflicting_library_date', 'date', 'document_hash', 'attachment'}:
         assert result['network_evidence']['decision'] != 'in_network_contract_supported'
         assert network_participation.outcome(benefits, result['network_evidence']) == 'UNRESOLVED'
     else:
@@ -213,9 +217,15 @@ def test_fep_group_agreement_is_visible_without_claiming_clinician_participation
             assert result['network_evidence']['agreement_effective_from'] == '2026-06-16'
             assert result['network_evidence']['agreement_effective_source'] == 'signed agreement text'
             assert result['network_evidence']['network_attachment_source'] == 'signed network page'
+        if invalid in {'product', 'reported_network', 'rendering', 'missing_rendering', 'tin', 'location', 'rule_expired'}:
+            assert result['network_evidence']['mismatch_warnings']
         assert network_participation.outcome(benefits, result['network_evidence']) == 'IN_NETWORK_CONTRACT_SUPPORTED'
-    assert benefits['network_status'] == 'unknown'
-    assert benefits.get('network_source') != 'clinic_library_contract'
+    if result['network_evidence']['decision'] == 'in_network_contract_supported':
+        assert benefits['network_status'] == 'in_network'
+        assert benefits['network_source'] == 'clinic_group_agreement'
+        assert network_participation.verified_in_network(benefits)
+    else:
+        assert benefits['network_status'] == 'unknown'
 
 
 def test_patient_bound_network_name_supports_group_contract_without_rate_match(monkeypatch):
@@ -239,10 +249,62 @@ def test_patient_bound_network_name_supports_group_contract_without_rate_match(m
     api._attach_previsit_pricing(result, 'clinic', inputs, source, 'payer-route', benefits)
     assert result['network_evidence']['decision'] == 'in_network_contract_supported'
     assert result['network_evidence']['product_network_source'] == 'patient_bound_payer_network'
-    assert benefits['network_status'] == 'unknown'
+    assert benefits['network_status'] == 'in_network'
+    assert network_participation.verified_in_network(benefits)
     result['benefits'] = benefits
     explanation = amount_explanation.build(result, {'amount_cents': None, 'basis': 'missing_collection_inputs'})
-    assert explanation['reason_code'] == 'provider_credentialing_unresolved'
+    assert explanation['reason_code'] != 'provider_credentialing_unresolved'
+
+
+def test_reconciled_group_agreement_supplies_in_network_tier(monkeypatch):
+    payer, network, profile, inputs, source = setup_path(monkeypatch)
+    source['payer_plan_names'] = ['Preferred Provider Option Medical']
+    network['evidence_reference'] = 'library:signed-group-contract'
+    profile['rules']['library_source'] = {
+        'document_id': 'signed-group-contract', 'reference': network['evidence_reference'],
+        'sha256': 'synthetic-digest', 'effective_from': '2026-06-16',
+        'origin': 'signed_group_agreement', 'locator': 'Page 2, signed network attachment'}
+    document = {'id': 'signed-group-contract', 'kind': 'contract', 'content_type': 'application/pdf',
+                'label': 'Signed group agreement', 'payer': payer['display_name'],
+                'sha256': 'synthetic-digest'}
+    monkeypatch.setattr(api.staff_store, 'get_library', lambda *_: document)
+    monkeypatch.setattr(api.staff_store, 'list_library', lambda *_: [document])
+    monkeypatch.setattr(pricing.library_network_exclusions, 'applicable_exclusion', lambda *_: None)
+    monkeypatch.setattr(pricing.inventory_certification, 'applicable', lambda *_: None)
+    monkeypatch.setattr(api, '_previsit_range', lambda *_args, **_kwargs: ({'lines': [], 'complete': False}, []))
+    result = {'payer': payer['display_name'], 'codes': [], 'issues': [],
+              'identity': {'status': 'matched', 'binding': 'synthetic', 'match_version': 2}}
+    benefits = {'active': True, 'network_status': 'unknown'}
+    api._attach_previsit_pricing(result, 'clinic', inputs, source, 'payer-route', benefits)
+    assert benefits['network_status'] == 'in_network'
+    assert benefits['network_source'] == 'clinic_group_agreement'
+    assert result['network_evidence']['decision'] == 'in_network_contract_supported'
+    assert network_participation.outcome(benefits, result['network_evidence']) == 'IN_NETWORK_CONTRACT_SUPPORTED'
+    assert network_participation.verified_in_network(benefits)
+    inputs['service_date'] = '2026-06-15'
+    assert not pricing._network_contract_evidence('clinic', network, profile, inputs['service_date']).get('document_id')
+
+
+def test_group_agreement_allows_approved_copay_advance():
+    benefits = {'active': True, 'service_date_matches': True, 'network_status': 'in_network',
+                'network_source': 'clinic_group_agreement',
+                'identity': {'status': 'matched', 'binding': 'synthetic', 'match_version': 2}}
+    result = {'benefits': benefits, 'identity': benefits['identity'],
+              'network_evidence': {'decision': 'in_network_contract_supported'},
+              'service_selection_status': 'selected',
+              'price_range': {'complete': True, 'patient_min_cents': 4000, 'patient_max_cents': 4000,
+                              'lines': [{'code': '99213', 'units': 1,
+                                         'benefits': {'active': True, 'copay_cents': 4000,
+                                                      'copay_period': 'VISIT', 'deductible_applies': False,
+                                                      'coinsurance_percent': '0'}}]},
+              'arrival_collection': {'amount_cents': 4000, 'status': 'copay_only'},
+              'collection_policy': {'mode': 'collect_verified_copay', 'reference': 'synthetic-rule',
+                                    'approved_at': '2026-01-01', 'approved_by': 'synthetic-admin'}}
+    guidance = collection_guidance.build(result)
+    assert guidance['network'] == 'In network · clinic agreement'
+    assert guidance['amount_cents'] == 4000
+    result['collection_policy'] = {}
+    assert collection_guidance.build(result)['amount_cents'] is None
 
 
 def test_saved_result_reuses_current_group_contract_without_payer_transaction(monkeypatch):
@@ -265,19 +327,22 @@ def test_saved_result_reuses_current_group_contract_without_payer_transaction(mo
             'previsit_raw_sha256': hashlib.sha256(raw).hexdigest()}
     result = {'plan_details': {'stedi': {'names': ['BASIC']}},
               'identity': {'status': 'matched', 'binding': 'synthetic', 'match_version': 2},
-              'benefits': {'active': True, 'service_date_matches': True, 'network_status': 'unknown'},
+              'benefits': {'active': True, 'service_date_matches': None, 'network_status': 'unknown',
+                           'coverage_evidence': {'status': 'ACTIVE', 'start': '2026-01-01'}},
               'network_evidence': {'decision': 'lacking_applicable_network_evidence'}}
     recheck_saved_network_evidence(result, case, 'clinic', payer)
     assert result['network_evidence']['decision'] == 'in_network_contract_supported'
     assert result['plan_details']['stedi']['identified_product'] == 'FEP Blue Basic PSHB'
-    assert result['benefits']['network_status'] == 'unknown'
+    assert result['benefits']['network_status'] == 'in_network'
+    assert network_participation.verified_in_network(result['benefits'])
     changed = {**case, 'previsit_context': {**case['previsit_context'], 'inputs': {
         **inputs, 'rendering_provider': {'npi': '3333333333'}}}}
     stale = {'plan_details': result['plan_details'], 'identity': result['identity'],
              'benefits': {'active': True, 'service_date_matches': True, 'network_status': 'unknown'},
              'network_evidence': {'decision': 'lacking_applicable_network_evidence'}}
     recheck_saved_network_evidence(stale, changed, 'clinic', payer)
-    assert stale['network_evidence']['decision'] == 'lacking_applicable_network_evidence'
+    assert stale['network_evidence']['decision'] == 'in_network_contract_supported'
+    assert any('rendering NPI' in warning for warning in stale['network_evidence']['mismatch_warnings'])
 
 
 def test_requirement_context_uses_only_approved_contract_product():

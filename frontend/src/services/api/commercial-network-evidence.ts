@@ -22,7 +22,8 @@ export type CommercialNetworkEvidence = {
   product?: string
   product_network_source?: string
   product_network_reference?: string
-  provider_participation?: 'unresolved'
+  provider_participation?: 'unresolved' | 'clinic_agreement'
+  mismatch_warnings?: string[]
   billing_npi?: string
   rendering_npi?: string
   tin?: string
@@ -30,6 +31,7 @@ export type CommercialNetworkEvidence = {
   place_of_service?: string
   service_date?: string
   document_sha256?: string
+  origin?: 'signed_group_agreement'
   product_source?: string
   product_mapping_approval?: {
     reference?: string
