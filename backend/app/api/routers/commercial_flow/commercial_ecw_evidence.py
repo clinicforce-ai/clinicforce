@@ -168,6 +168,18 @@ def stedi_request_body(payer: dict, network: dict, coverage: dict, service_date:
             or (not coverage.get('member_id') and not allow_demographic)
             or (coverage["active_coverages"] > 1 and not coverage.get("coverage_id"))):
         raise _api.commercial.CommercialError("eClinicalWorks did not return one usable primary coverage with member and policyholder details.")
+    def iso_birth_date(value: str | None) -> str | None:
+        if not value:
+            return None
+        normalized = _api.insurance_identity.birth_date(value)
+        try:
+            if _api.date.fromisoformat(normalized).isoformat() == normalized:
+                return normalized
+        except ValueError:
+            pass
+        raise _api.commercial.CommercialError("eClinicalWorks returned an invalid birth date for Stedi eligibility.")
+    subscriber_birth_date = iso_birth_date(coverage.get('subscriber_birth_date'))
+    patient_birth_date = iso_birth_date(coverage['patient_birth_date'])
     if network.get("rendering_first") and network.get("rendering_last") and network.get("rendering_npi"):
         provider = {"npi": network["rendering_npi"], "name": {"person": {
             "firstName": network["rendering_first"], "lastName": network["rendering_last"]}}}
@@ -176,7 +188,7 @@ def stedi_request_body(payer: dict, network: dict, coverage: dict, service_date:
     else:
         raise _api.commercial.CommercialError("eClinicalWorks did not return one matching provider name and NPI for the Stedi inquiry.")
     body = {"payerId": payer["stedi_payer_id"], "provider": provider,
-            "subscriber": {"memberId": coverage.get("member_id"), "dateOfBirth": coverage.get("subscriber_birth_date"),
+            "subscriber": {"memberId": coverage.get("member_id"), "dateOfBirth": subscriber_birth_date,
                            "name": {"person": {"firstName": coverage["subscriber_first"], "lastName": coverage["subscriber_last"]}}},
             "encounter": {"dates": {"service": {"start": service_date}}, "services": [{"system": "STC", "value": code} for code in ([stc] if isinstance(stc, str) else stc)]}}
     # The eCW visit's mapped setting can narrow payer benefit rows. An absent or
@@ -186,7 +198,7 @@ def stedi_request_body(payer: dict, network: dict, coverage: dict, service_date:
         body['encounter']['placeOfService'] = {'code': pos}
     body['subscriber'] = {key: value for key, value in body['subscriber'].items() if value}
     if coverage["relationship"] not in {"18", "self"}:
-        body["dependent"] = {"dateOfBirth": coverage["patient_birth_date"],
+        body["dependent"] = {"dateOfBirth": patient_birth_date,
                              "name": {"person": {"firstName": coverage["patient_first"], "lastName": coverage["patient_last"]}}}
     # Stedi recommends beginning with its small, documented eligibility request.
     # eCW's group/plan/address/gender can improve a few payer matches, but must

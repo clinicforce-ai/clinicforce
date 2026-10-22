@@ -92,7 +92,8 @@ def test_pending_coverage_and_appointment_window_use_later_opening_date():
 def test_secondary_policy_can_be_queried_without_claiming_it_is_only_coverage():
     coverage = {k: 'value' for k in ('member_id', 'subscriber_first', 'subscriber_last',
         'subscriber_birth_date', 'patient_first', 'patient_last', 'patient_birth_date', 'coverage_id')}
-    coverage.update(relationship='18', active_coverages=2)
+    coverage.update(relationship='18', active_coverages=2,
+                    subscriber_birth_date='1980-01-01', patient_birth_date='1980-01-01')
     provider = {'billing_npi': '1234567890', 'organization_name': 'Clinic'}
     assert api.stedi_request_body({'stedi_payer_id': 'payer'}, provider, coverage, '2026-10-01', '98')['subscriber']['memberId'] == 'value'
     coverage['coverage_id'] = ''
