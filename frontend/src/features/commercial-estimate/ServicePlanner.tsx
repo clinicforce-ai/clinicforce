@@ -30,9 +30,10 @@ export function ServicePlanner({
     (row, index, rows) =>
       !row.id || rows.findIndex((candidate) => candidate.id === row.id) === index,
   )
-  const defaults =
-    result.service_selection_status === 'approved'
-      ? result.selected_ids || []
+  const defaults = result.selected_ids?.length
+    ? result.selected_ids
+    : result.service_selection_status === 'approved'
+      ? []
       : result.service_plan?.recommended_ids || []
   const [selected, setSelected] = useState<string[]>(defaults)
   const [quantities, setQuantities] = useState<Record<string, number>>(() =>
