@@ -15,7 +15,9 @@ from decimal import Decimal, ROUND_HALF_UP
 from uuid import NAMESPACE_URL, uuid5
 
 from app.core import library_files, staff_store
-from app.insurance import commercial, commercial_store, plan_matrix, library_network_exclusions
+from app.insurance import (commercial, commercial_store, group_contract_support,
+                           library_network_exclusions, plan_matrix)
+from app.insurance.identity import normalized
 
 VERSION = 'library-rules-3'
 from app.insurance.pricing.library_cash_tables import (
@@ -359,6 +361,74 @@ def publish(document: dict, extracted: dict, compiled: dict) -> None:
                    (json.dumps(extracted), extracted['sha256'], document['id'], practice))
 
 
+def link_signed_group_agreements(practice_id: str, documents: list[dict],
+                                 connections: list[dict], networks: list[dict]) -> None:
+    """Replace a setup-manifest reference with one current signed Library network attachment."""
+    payers = {row['id']: row for row in connections}
+    profiles = commercial_store.list_profiles(practice_id)
+    contracts = []
+    for metadata in documents:
+        if metadata.get('kind') != 'contract' or metadata.get('content_type') != 'application/pdf':
+            continue
+        document = staff_store.get_library(metadata['id'], practice_id)
+        extracted = (document or {}).get('extraction') or {}
+        if not document or not document.get('sha256') or extracted.get('sha256') != document['sha256']:
+            continue
+        text = '\n'.join(str(page.get('text') or '') for page in extracted.get('pages') or [])
+        signed_date = group_contract_support._signed_agreement_effective_date(text)
+        metadata_date = document.get('effective_from') or ''
+        if (not signed_date and not metadata_date) or (signed_date and metadata_date and signed_date != metadata_date):
+            continue
+        if not re.search(r'\b(?:executed|signed|signature)\b', text, re.I):
+            continue
+        contracts.append((document, extracted, metadata_date or signed_date))
+    for network in networks:
+        if network.get('status') != 'verified' or not str(network.get('evidence_reference') or '').startswith('s3://'):
+            continue
+        payer = payers.get(network.get('payer_connection_id'))
+        matching_profiles = [row for row in profiles if row.get('provider_network_id') == network.get('id')
+                             and row.get('payer_connection_id') == network.get('payer_connection_id')
+                             and row.get('status') == 'staff_guidance_enabled'
+                             and row.get('plan_matcher') == network.get('plan_matcher')
+                             and not (row.get('rules') or {}).get('library_source')]
+        if not payer or len(matching_profiles) != 1:
+            continue
+        matches = []
+        for document, extracted, effective in contracts:
+            if (normalized(document.get('payer')) != normalized(payer.get('display_name'))
+                    or not effective or network.get('effective_to') and effective > network['effective_to']
+                    or document.get('effective_to') and document['effective_to'] < network.get('effective_from', '')):
+                continue
+            locator = group_contract_support.signed_network_attachment(
+                extracted, str(network.get('network_name') or ''))
+            if locator:
+                matches.append((document, effective, locator))
+        if len(matches) != 1:
+            continue
+        document, effective, locator = matches[0]
+        reference = 'library:' + document['id']
+        rules = {**matching_profiles[0]['rules'], 'library_source': {
+            'document_id': document['id'], 'sha256': document['sha256'], 'reference': reference,
+            'effective_from': effective, 'locator': locator, 'origin': 'signed_group_agreement'}}
+        timestamp = staff_store.now()
+        with staff_store._connection() as db:
+            current_network = db.execute('''SELECT evidence_reference,status FROM commercial_provider_networks
+                WHERE id=%s AND practice_id=%s FOR UPDATE''', (network['id'], practice_id)).fetchone()
+            current_profile = db.execute('''SELECT rules_json,status FROM commercial_estimation_profiles
+                WHERE id=%s AND practice_id=%s FOR UPDATE''',
+                (matching_profiles[0]['id'], practice_id)).fetchone()
+            if (not current_network or current_network['status'] != 'verified'
+                    or current_network['evidence_reference'] != network['evidence_reference']
+                    or not current_profile or current_profile['status'] != 'staff_guidance_enabled'
+                    or json.loads(current_profile['rules_json']) != matching_profiles[0]['rules']):
+                continue
+            db.execute('''UPDATE commercial_provider_networks SET evidence_reference=%s,updated_at=%s
+                WHERE id=%s AND practice_id=%s''', (reference, timestamp, network['id'], practice_id))
+            db.execute('''UPDATE commercial_estimation_profiles SET rules_json=%s,updated_at=%s
+                WHERE id=%s AND practice_id=%s''',
+                (json.dumps(rules), timestamp, matching_profiles[0]['id'], practice_id))
+
+
 def prepare(practice_id: str) -> list[dict]:
     """Backfill/retry on use; serialize per practice, cache unchanged sources."""
     documents = staff_store.list_library(practice_id)
@@ -376,6 +446,7 @@ def prepare(practice_id: str) -> list[dict]:
         }, sort_keys=True).encode()).hexdigest()
         if all(row['kind'] == 'era_835' or ((row.get('extraction_summary') or {}).get('compiler_version') == VERSION
                 and (row.get('extraction_summary') or {}).get('dependency_fingerprint') == fingerprint) for row in documents):
+            link_signed_group_agreements(practice_id, documents, connections, networks)
             return documents
         prepared = []
         for metadata in documents:
@@ -400,4 +471,6 @@ def prepare(practice_id: str) -> list[dict]:
                 publish(document, extracted, compiled)
             except Exception:
                 staff_store.save_library_extraction(document['id'], practice_id, {**extracted, 'summary': {'status': 'needs_retry', 'reason': 'Rule publication did not complete; it will retry automatically.'}})
+        link_signed_group_agreements(practice_id, staff_store.list_library(practice_id),
+                                     connections, commercial_store.list_networks(practice_id))
     return staff_store.list_library(practice_id)

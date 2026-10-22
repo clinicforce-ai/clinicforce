@@ -75,10 +75,6 @@ def _cash_cause(result: dict, failure: dict, recovery: dict, card: dict, network
             and active_benefits and network == 'unknown'):
         return ('FEP Blue Basic PSHB is identified, but this rendering provider has no verified FEP Preferred participation for the visit',
                 'fep_preferred_unresolved')
-    if (result.get('network_evidence') or {}).get('decision') == 'in_network_contract_supported':
-        name = result['network_evidence']['network_name']
-        return (f'NMCT has a {name} group contract, but this rendering clinician’s participation is not established for this visit',
-                'provider_credentialing_unresolved')
     if reason in {'no_coverage_found', 'upstream_no_policies'} and not active_benefits:
         return 'the completed insurance search returned no policy for this patient', 'no_policy_returned'
     line_blocker = selected_service_blocker(network, identity, lines)

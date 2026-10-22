@@ -33,7 +33,8 @@ def participation_conflict(benefits: dict) -> bool:
 
 def verified_in_network(benefits: dict) -> bool:
     return (benefits.get('network_status') == 'in_network'
-            and benefits.get('network_source') in {'clinic_library_contract', 'payer_participation_message'}
+            and benefits.get('network_source') in {'clinic_library_contract', 'clinic_group_agreement',
+                                                   'payer_participation_message'}
             and not participation_conflict(benefits))
 
 
@@ -48,12 +49,12 @@ def outcome(benefits: dict, evidence: dict) -> str:
     """Keep group contract support distinct from a priced provider network tier."""
     if participation_conflict(benefits):
         return 'UNRESOLVED'
+    if evidence.get('decision') == 'in_network_contract_supported':
+        return 'IN_NETWORK_CONTRACT_SUPPORTED'
     if verified_in_network(benefits):
         return 'IN_NETWORK_VERIFIED'
     if verified_out_of_network(benefits):
         return ('OUT_OF_NETWORK_CONTRACT_SUPPORTED'
                 if benefits.get('network_source') == 'clinic_contract_inventory'
                 else 'OUT_OF_NETWORK_VERIFIED')
-    if evidence.get('decision') == 'in_network_contract_supported':
-        return 'IN_NETWORK_CONTRACT_SUPPORTED'
     return 'UNRESOLVED'

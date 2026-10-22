@@ -19,17 +19,41 @@ def model_reply(services):
                   'assumptions': ['Anticipated study range; editable before the visit.']}}}]}}}
 
 
-def test_emg_history_and_model_do_not_invent_today_study_count_or_muscle_work():
+def test_emg_history_and_model_select_editable_study_scenario():
     model = MagicMock()
     model.converse.return_value = model_reply([{'code': '95909', 'units': 1}, {'code': '95886', 'units': 2}])
     history = [{'date': '2026-09-01', 'reason': 'Similar arm symptoms', 'coded_services': ['95909', '95886']}] * 5
     with patch.object(cpt_suggester.boto3, 'client', return_value=model):
         plan = cpt_suggester.recommend_visit_plan({'reason': 'EMG both arms'}, {'recent_completed_appointments': history}, catalog())
-        assert plan['method'] == 'appointment'
-        assert plan['recommended_ids'] == []
-        assert plan['recommended_units'] == {}
+        assert plan['method'] == 'llm'
+        assert plan['recommended_ids'] == ['95909', '95886']
+        assert plan['recommended_units'] == {'95909': 1, '95886': 2}
         assert plan['history_count'] == 5
-        model.converse.assert_not_called()
+        assert any('previsit estimate' in text for text in plan['assumptions'])
+        model.converse.assert_called_once()
+
+
+def test_emg_prior_completed_cpts_are_selected_when_model_unavailable():
+    history = [{'date': '2026-09-01', 'reason': 'Similar arm symptoms',
+                'coded_services': ['95909', '95886']}]
+    with patch.object(cpt_suggester.boto3, 'client', side_effect=RuntimeError('offline')):
+        plan = cpt_suggester.recommend_visit_plan(
+            {'reason': 'EMG for arm numbness'}, {'recent_completed_appointments': history}, catalog())
+    assert plan['method'] == 'history'
+    assert plan['recommended_ids'] == ['95909', '95886']
+
+
+def test_emg_with_scheduled_office_still_suggests_testing_and_keeps_office():
+    available = catalog()
+    office = next(row for row in available if row['code'] == '99213')
+    office['source'] = 'eCW scheduled service'
+    model = MagicMock()
+    model.converse.return_value = model_reply([{'code': '95909', 'units': 1},
+                                                {'code': '99203', 'units': 1}])
+    with patch.object(cpt_suggester.boto3, 'client', return_value=model):
+        plan = cpt_suggester.recommend_visit_plan({'reason': 'EMG both arms'}, {}, available)
+    assert plan['recommended_ids'] == ['95909', '99213']
+    model.converse.assert_called_once()
 
 
 def test_explicit_scheduled_care_wins_and_wrong_patient_status_cannot_be_inferred():

@@ -14,7 +14,6 @@ import { openServiceDetails } from './openServiceDetails'
 import { overviewExplanation } from './overviewExplanation'
 import PolicyAndShareNotice from './PolicyAndShareNotice'
 import PublishedPlanBenefit from './PublishedPlanBenefit'
-
 export default function CommercialOverview({
   model,
   result,
@@ -455,7 +454,13 @@ export default function CommercialOverview({
           <Network size={20} aria-hidden="true" />
           <span>
             Network<strong>{networkLabel}</strong>
-            {result?.network_evidence?.reason && <small>{result.network_evidence.reason}</small>}
+            {result?.network_evidence?.mismatch_warnings?.length ? (
+              <small className="network-mismatch-warning" role="note">
+                Agreement mismatch: {result.network_evidence.mismatch_warnings.join(' ')}
+              </small>
+            ) : (
+              result?.network_evidence?.reason && <small>{result.network_evidence.reason}</small>
+            )}
             {result?.network_evidence?.product_source && (
               <small>Contract plan lookup: {result.network_evidence.product_source}</small>
             )}

@@ -82,6 +82,15 @@
   color: #8a5a10;
 }
 
+.visit-snapshots .network-mismatch-warning {
+  display: block;
+  padding: 7px 9px;
+  border: 1px solid #e8cf91;
+  border-radius: 6px;
+  background: #fff7e6;
+  color: #79510d;
+}
+
 @media (max-width: 600px) {
   .arrival-money-picture {
     grid-template-columns: 1fr;

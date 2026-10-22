@@ -63,10 +63,16 @@ def recheck_saved_network_evidence(result: dict, case: dict, practice_id: str, p
     """Project current contract support from saved case context without a payer call or write."""
     recheck_saved_inventory(result, case, practice_id, payer)
     benefits = result.get('benefits') or {}
+    prior_group = benefits.get('network_source') == 'clinic_group_agreement'
+    if prior_group:
+        benefits.update(network_status='unknown', network_source=None)
+        result['network_evidence'] = {'decision': 'lacking_applicable_network_evidence'}
     if (not payer or payer.get('status') != 'staff_guidance_enabled'
             or benefits.get('network_status') != 'unknown' or result.get('agreement_exclusion')
             or (result.get('network_evidence') or {}).get('decision') not in
                {None, 'lacking_applicable_network_evidence'}):
+        if prior_group:
+            _clear_saved_tier(result, 'The signed clinic agreement no longer supports this network and visit.')
         return
     context = case.get('previsit_context') or {}
     plan = ((result.get('plan_details') or {}).get('stedi') or {})
@@ -84,13 +90,24 @@ def recheck_saved_network_evidence(result: dict, case: dict, practice_id: str, p
     source = ((case.get('previsit_discovery') or {}).get('pricing_source')
               or context.get('source') or {})
     identity = result.get('identity') or benefits.get('identity') or {}
+    service_date = str((context.get('inputs') or {}).get('service_date') or '')
+    coverage = benefits.get('coverage_evidence') or {}
+    dated_coverage = (coverage.get('status') == 'ACTIVE' and service_date
+                      and coverage.get('start') and coverage['start'] <= service_date
+                      and (not coverage.get('end') or coverage['end'] >= service_date))
     exact = {**source, 'payer_plan_bound': benefits.get('active') is True
-             and benefits.get('service_date_matches') is True and patient_benefits_bound(identity),
+             and (benefits.get('service_date_matches') is True
+                  or benefits.get('service_date_matches') is None and dated_coverage)
+             and patient_benefits_bound(identity),
              'payer_plan_names': names, 'payer_network_names': plan.get('network_names') or []}
     supported = group_contract_support.resolve(practice_id, payer, context.get('inputs') or {},
                                                exact, result, benefits)
     if supported:
         result['network_evidence'] = supported
+        benefits['network_status'] = 'in_network'
+        benefits['network_source'] = 'clinic_group_agreement'
+    elif prior_group:
+        _clear_saved_tier(result, 'The signed clinic agreement no longer supports this network and visit.')
 
 
 def recheck_saved_payer_message(result: dict, case: dict) -> None:

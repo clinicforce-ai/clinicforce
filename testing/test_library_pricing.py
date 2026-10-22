@@ -3,8 +3,10 @@ import hashlib
 import json
 import os
 from copy import deepcopy
+from contextlib import contextmanager
 from uuid import uuid4
 from unittest.mock import MagicMock, patch
+from types import SimpleNamespace
 
 import psycopg
 from psycopg import sql
@@ -27,6 +29,70 @@ def extracted(tables, text=''):
 
 def table(rows, context='', locator='Section 1'):
     return {'rows': rows, 'context': context, 'locator': locator}
+
+
+def test_signed_library_agreement_replaces_only_one_matching_manifest_link(monkeypatch):
+    contract = document('contract', id='signed-agreement', content_type='application/pdf',
+                        sha256='signed-digest')
+    contract['extraction'] = extracted([], text=(
+        'Executed agreement. Effective Date of Agreement: 01/01/2026. '
+        'ATTACHMENT A TEXAS PROVIDER NETWORKS. Authorized Signature: Example PPO'))
+    contract['extraction']['sha256'] = 'signed-digest'
+    payer = {'id': 'payer', 'display_name': 'Example Payer'}
+    network = {'id': 'network', 'payer_connection_id': 'payer', 'status': 'verified',
+               'network_name': 'Example PPO', 'plan_matcher': 'LOCAL',
+               'effective_from': '2026-01-01', 'evidence_reference': 's3://synthetic/setup'}
+    profile = {'id': 'profile', 'payer_connection_id': 'payer', 'provider_network_id': 'network',
+               'status': 'staff_guidance_enabled', 'plan_matcher': 'LOCAL',
+               'rules': {'cost_share': 'payer_returned'}}
+    monkeypatch.setattr(rules.staff_store, 'get_library', lambda *_: contract)
+    monkeypatch.setattr(rules.staff_store, 'now', lambda: '2026-10-22T12:00:00Z')
+    monkeypatch.setattr(rules.commercial_store, 'list_profiles', lambda *_: [profile])
+    db = MagicMock()
+    current = [
+        {'evidence_reference': network['evidence_reference'], 'status': 'verified'},
+        {'rules_json': json.dumps(profile['rules']), 'status': 'staff_guidance_enabled'},
+    ]
+    db.execute.side_effect = lambda *_: SimpleNamespace(fetchone=lambda: current.pop(0)) if current else None
+    @contextmanager
+    def connection():
+        yield db
+    monkeypatch.setattr(rules.staff_store, '_connection', connection)
+    rules.link_signed_group_agreements('practice', [contract], [payer], [network])
+    assert db.execute.call_count == 4
+    assert db.execute.call_args_list[2].args[1][0] == 'library:signed-agreement'
+    saved_rules = json.loads(db.execute.call_args_list[3].args[1][0])
+    assert saved_rules['library_source']['origin'] == 'signed_group_agreement'
+    assert saved_rules['library_source']['effective_from'] == '2026-01-01'
+    contract['extraction']['pages'][0]['text'] = 'Executed agreement. Attachment A: Other Network.'
+    db.reset_mock()
+    rules.link_signed_group_agreements('practice', [contract], [payer], [network])
+    db.execute.assert_not_called()
+
+
+def test_signed_agreement_link_does_not_overwrite_changed_profile(monkeypatch):
+    contract = document('contract', id='signed-agreement', content_type='application/pdf', sha256='digest')
+    contract['extraction'] = extracted([], text=(
+        'Executed agreement. Effective Date of Agreement: 01/01/2026. '
+        'Attachment A: Example PPO.'))
+    network = {'id': 'network', 'payer_connection_id': 'payer', 'status': 'verified',
+               'network_name': 'Example PPO', 'plan_matcher': 'LOCAL',
+               'effective_from': '2026-01-01', 'evidence_reference': 's3://synthetic/setup'}
+    profile = {'id': 'profile', 'payer_connection_id': 'payer', 'provider_network_id': 'network',
+               'status': 'staff_guidance_enabled', 'plan_matcher': 'LOCAL', 'rules': {'cost_share': 'payer_returned'}}
+    monkeypatch.setattr(rules.staff_store, 'get_library', lambda *_: contract)
+    monkeypatch.setattr(rules.commercial_store, 'list_profiles', lambda *_: [profile])
+    db = MagicMock()
+    rows = [{'evidence_reference': network['evidence_reference'], 'status': 'verified'},
+            {'rules_json': json.dumps({'cost_share': 'changed_by_admin'}), 'status': 'staff_guidance_enabled'}]
+    db.execute.side_effect = lambda *_: SimpleNamespace(fetchone=lambda: rows.pop(0))
+    @contextmanager
+    def connection():
+        yield db
+    monkeypatch.setattr(rules.staff_store, '_connection', connection)
+    rules.link_signed_group_agreements('practice', [contract],
+                                       [{'id': 'payer', 'display_name': 'Example Payer'}], [network])
+    assert db.execute.call_count == 2
 
 
 def quote(rows, codes, mode='services', review=None):

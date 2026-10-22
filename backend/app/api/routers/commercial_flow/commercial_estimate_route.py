@@ -122,6 +122,10 @@ async def previsit_estimate(value: _api.PrevisitInput, request: _api.Request, ba
     document_label and locator only when the applied clinic network profile
     traces to the same practice's uploaded PDF contract. The document route
     requires a staff session and serves the original PDF.
+    A current signed same-payer agreement may set network_source to
+    clinic_group_agreement. mismatch_warnings lists patient/product or provider
+    details that differ from that agreement while the estimate uses its in-network
+    tier. A selected provisional CPT suggestion remains editable and is not final coding.
     Its decision distinguishes participating, nonparticipating, exclusion from
     the available agreement, and lack of applicable evidence. A separate
     agreement_exclusion retains the source-linked excluded agreement when
