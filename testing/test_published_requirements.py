@@ -64,6 +64,17 @@ def test_original_medicare_opd_pa_does_not_leak_to_physician_office():
     assert all(line['authorization']['status'] == 'Verification required' for line in office['procedures'])
 
 
+def test_same_day_bcbstx_active_271_can_show_network_referral_rule_without_dates():
+    result, context = case('BCBSTX', 'Blue Choice PPO', '95908')
+    result['benefits']['service_date_matches'] = None
+    result['checked_at'] = context['service_date'] + 'T15:00:00Z'
+    decisions = evaluate(result, context, [])
+    assert decisions['referral']['status'] == 'Not required'
+    assert decisions['authorization']['status'] == 'Verification required'
+    result['checked_at'] = '2026-10-13T15:00:00Z'
+    assert evaluate(result, context, [])['referral']['status'] == 'Verification required'
+
+
 def test_99205_transplant_rule_requires_confirmed_indication():
     result, context = case('UnitedHealthcare', 'Choice Plus', '99205')
     ordinary = evaluate(result, context, [])['authorization']

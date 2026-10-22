@@ -7,9 +7,29 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 
 from app.api.routers.commercial_estimator import PrevisitInput, VisitReviewInput, _compare_card_hints, _previsit_benefits, previsit_estimate, update_visit_review
+from app.api.routers.commercial_flow.commercial_previsit_pricing import _previsit_service_types, _reviewed_service_types
 
 
 class PrevisitFlowTest(unittest.IsolatedAsyncioTestCase):
+    def test_refresh_requests_selected_diagnostic_and_office_categories(self):
+        case = {'previsit_context': {'context_token': 'same-visit',
+            'source': {'appointment_id': 'appointment-1'},
+            'inputs': {'service_date': '2026-10-22'},
+            'result': {'codes': [
+                {'id': 'nerve', 'code': '95908'},
+                {'id': 'muscle', 'code': '95886'},
+                {'id': 'office', 'code': '99204'}]}},
+            'visit_review': {'context_token': 'same-visit',
+                'selected_ids': ['nerve', 'muscle', 'office']}}
+        categories = _reviewed_service_types([case], 'appointment-1', '2026-10-22', 'same-visit')
+        self.assertEqual(categories, ['73', '98'])
+        self.assertEqual(_previsit_service_types({'lines': [], 'reason': '',
+            '_selected_service_types': categories}), ['98', '73', '30'])
+        case['previsit_context']['result']['selected_ids'] = ['nerve', 'muscle', 'office']
+        case['visit_review'].pop('selected_ids')
+        self.assertEqual(_reviewed_service_types([case], 'appointment-1', '2026-10-22', 'same-visit'), ['73', '98'])
+        self.assertEqual(_reviewed_service_types([case], 'another-appointment', '2026-10-22', 'same-visit'), [])
+
     def setUp(self):
         self.library_patch = patch('app.api.routers.commercial_estimator.library_pricing.prepare', return_value=[])
         self.library_patch.start()

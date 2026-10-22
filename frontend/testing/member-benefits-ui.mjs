@@ -637,13 +637,41 @@ try {
     }),
   )
   assert(!verifiedSpouse.includes('Recorded insurance clues'))
-  assert(verifiedSpouse.includes('<summary>Insurance check details</summary>'))
-  assert(!verifiedSpouse.includes('<details class="visit-recovery" open=""'))
+  assert(!verifiedSpouse.includes('Insurance check details'))
   assert(!recoveryView.includes('Coverage not verified'))
 
   const { default: CommercialOverview } = await server.ssrLoadModule(
     '/src/features/commercial-estimate/CommercialOverview.tsx',
   )
+  const { default: PayerReportedPlanFigures } = await server.ssrLoadModule(
+    '/src/features/commercial-estimate/PayerReportedPlanFigures.tsx',
+  )
+  const topBenefitTerms = renderToStaticMarkup(
+    React.createElement(PayerReportedPlanFigures, {
+      result: {
+        benefits: {
+          active: true,
+          network_status: 'in_network',
+          network_source: 'clinic_group_agreement',
+          copay_cents: 3000,
+        },
+        price_range: {
+          mode: 'services',
+          lines: [
+            { code: '95908', benefits: { coinsurance_percent: '20', deductible_annual_cents: 35000 } },
+            { code: '99204', benefits: { copay_cents: 3000, deductible_applies: false } },
+          ],
+        },
+      },
+    }),
+  )
+  assert(topBenefitTerms.includes('Coinsurance · CPT 95908'))
+  assert(topBenefitTerms.includes('20%'))
+  assert(topBenefitTerms.includes('Remaining balance not returned'))
+  assert(topBenefitTerms.includes('$350.00 annual'))
+  assert(topBenefitTerms.includes('Individual deductible · CPT 99204'))
+  assert(topBenefitTerms.includes('Does not apply'))
+  assert(!topBenefitTerms.includes('Match this plan and rendering provider'))
   const { default: CommercialCalculationDetail } = await server.ssrLoadModule(
     '/src/features/commercial-estimate/CommercialCalculationDetail.tsx',
   )
@@ -1315,7 +1343,7 @@ try {
         {
           id: 'office',
           code: '99203',
-          benefits: { network_independent: true, copay_cents: 5000 },
+          benefits: { active: true, network_independent: true, copay_cents: 5000 },
           calculation: null,
         },
       ],

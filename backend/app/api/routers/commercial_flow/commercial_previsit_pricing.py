@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from app.api.routers import commercial_estimator as _api
+from app.api.routers.commercial_flow.commercial_previsit_rate_reference import _attach_temporary_uhc_rates
 from app.insurance import botox_review, cms_locality, cms_pfs, cpt_rules, insurance_product, inventory_certification, library_network_exclusions, group_contract_support
 
 def _ecw_case_data(inputs: dict, source: dict, conflicts: list[str]) -> dict[str, _api.Any]:
@@ -35,6 +36,7 @@ def _previsit_service_types(inputs: dict) -> list[str]:
     """Ask for the booked categories, including explicitly combined care."""
     scheduled = [row['code'] for row in inputs.get('lines', []) if row.get('service_status') == 'scheduled' and row.get('code')]
     categories = [_api.visit_estimate.service_type(code, {}) for code in scheduled]
+    categories.extend(inputs.get('_selected_service_types') or [])
     if botox_review.is_botox_visit(inputs):
         categories.extend(category for family in ('botulinum_drug', 'chemodenervation')
                           for category in cpt_rules.SERVICE_FAMILIES[family]['eligibility_service_types'])
@@ -49,9 +51,35 @@ def _previsit_service_types(inputs: dict) -> list[str]:
         if (not categories and not botox_review.is_botox_visit(inputs)
                 or _api.re.search(r'\b(?:f/u|fu|follow[ -]?up)\b', reason, _api.re.I)):
             categories.append('98')
-    # General medical benefits carry deductible and out-of-pocket accumulators
-    # that a service-specific response may omit. Keep the booked service first.
-    return list(dict.fromkeys([*(code for code in categories if code), '30']))
+    # Some payers return the office copay only when office care leads a combined inquiry.
+    ordered = list(dict.fromkeys(code for code in categories if code))
+    if '98' in ordered and '73' in ordered:
+        ordered.remove('98')
+        ordered.insert(0, '98')
+    return list(dict.fromkeys([*ordered, '30']))
+
+
+def _reviewed_service_types(cases: list[dict], appointment_id: str, service_date: str,
+                            context_token: str) -> list[str]:
+    """Carry selected visit CPT categories into a fresh payer inquiry."""
+    for case in reversed(cases):
+        context = case.get('previsit_context') or {}
+        source = context.get('source') or {}
+        prior_inputs = context.get('inputs') or {}
+        review = case.get('visit_review') or {}
+        if (source.get('appointment_id') != appointment_id
+                or prior_inputs.get('service_date') != service_date
+                or review.get('context_token') != context_token):
+            continue
+        saved_result = context.get('result') or {}
+        selected = set(review.get('selected_ids') or saved_result.get('selected_ids') or [])
+        rows = [row for row in saved_result.get('codes') or []
+                if row.get('id') in selected]
+        if selected and len(rows) == len(selected):
+            return list(dict.fromkeys(
+                category for row in rows
+                if (category := _api.visit_estimate.service_type(str(row.get('code') or ''), {}))))
+    return []
 
 
 def _eligibility_timing(service_date: str, check_from_date: str | None = None) -> dict | None:
@@ -220,7 +248,7 @@ def _previsit_benefits(payload: dict, coverage: dict, service_date: str | None =
         procedure_code=codes[0]['code'] if office_only and len(codes) == 1 else None,
         office_visit=office_only,
         office_service_types=_api._office_service_types('', source or {}), **context)
-    benefits['benefit_source'] = payload.get('benefit_source') or 'Stedi'
+    benefits['benefit_source'] = (payload.get('benefit_source') or 'Stedi') if payload else None
     if (inputs and source and not coverage.get('other_active_coverage')
             and _api.stedi_discovery.corroborates_patient_policy(payload, inputs, source)
             and _api.stedi_discovery.automatic_match(payload, inputs, source)):
@@ -233,6 +261,11 @@ def _previsit_benefits(payload: dict, coverage: dict, service_date: str | None =
                 'The payer linked this patient to the recorded member policy as a dependent. Subscriber details were matched automatically; eCW was not changed.')
     comparison = _api.insurance_identity.compare(payload, coverage)
     benefits['identity'] = comparison
+    if not payload:
+        # Normalization of an empty response is a safe pricing placeholder, not payer evidence.
+        benefits['review_reasons'] = []
+        benefits['requires_review'] = False
+        return benefits
     if comparison['status'] == 'review':
         benefits['requires_review'] = True
         benefits['review_reasons'].append('Confirm the member identity: the payer response differs from eCW.'
@@ -451,48 +484,3 @@ def _attach_previsit_pricing(result: dict, practice_id: str, inputs: dict, sourc
     result["price_range"], issues = _api._previsit_range(practice_id, inputs, priced_source, connection["id"], result["codes"], benefits,
                                                   payload=payload, review=review, payer_route_id=payer_id)
     result["issues"].extend(issues)
-
-
-def _attach_temporary_uhc_rates(result: dict, practice_id: str, inputs: dict, source: dict) -> None:
-    """Expose the clinic's scoped BCBS rates as a UHC planning reference, never an insured allowance."""
-    rendering_npi = str((inputs.get('rendering_provider') or {}).get('npi') or '')
-    billing_npi = str((source.get('billing_provider') or {}).get('npi') or '')
-    location_id = str(source.get('location_id') or '')
-    pos = str(inputs.get('place_of_service') or '')
-    date = str(inputs.get('service_date') or '')
-    codes = result.get('codes') or []
-    if not all((rendering_npi, billing_npi, location_id, pos, date, codes)):
-        return
-    payers = [row for row in _api.commercial_store.list_connections(practice_id)
-              if row.get('status') == 'staff_guidance_enabled' and
-              _api.re.search(r'blue cross.*(?:blue shield|bcbs).*texas|bcbstx', str(row.get('display_name') or ''), _api.re.I)]
-    if len(payers) != 1:
-        return
-    networks = [row for row in _api.commercial_store.list_networks(practice_id)
-                if row.get('payer_connection_id') == payers[0]['id'] and row.get('status') == 'verified'
-                and row.get('rendering_npi') == rendering_npi and row.get('billing_npi') == billing_npi
-                and row.get('location_id') == location_id and row.get('place_of_service') == pos
-                and row.get('effective_from', '') <= date <= (row.get('effective_to') or '9999-12-31')]
-    if len(networks) != 1:
-        return
-    profiles = [row for row in _api.commercial_store.list_profiles(practice_id)
-                if row.get('payer_connection_id') == payers[0]['id'] and row.get('provider_network_id') == networks[0]['id']
-                and row.get('status') == 'staff_guidance_enabled']
-    if len(profiles) != 1:
-        return
-    try:
-        rates = _api.commercial_store.matching_rates(practice_id, profiles[0], networks[0], date, codes)
-    except _api.commercial.CommercialError:
-        return
-    by_code = {(row['code'], row.get('modifier') or ''): row for row in rates
-               if str(row.get('source_reference') or '').startswith('library:')}
-    lines = []
-    for code in codes:
-        rate = by_code.get((code['code'], ','.join(code.get('modifiers') or [])))
-        if rate and rate.get('allowed_cents') is not None:
-            lines.append({'code': code['code'], 'unit_reference_cents': rate['allowed_cents'],
-                          'source_reference': rate['source_reference']})
-    if lines:
-        result['temporary_rate_reference'] = {'source': 'NMCT Clinical Library Blue Cross fee schedule',
-            'lines': lines, 'complete': len(lines) == len(codes),
-            'message': 'Temporary CPT price reference only. These are Blue Cross rates, not UnitedHealthcare contracted allowances or a patient amount to collect.'}

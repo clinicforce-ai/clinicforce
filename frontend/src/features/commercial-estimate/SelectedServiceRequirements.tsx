@@ -2,13 +2,7 @@ import type { PrevisitEstimate } from '../../services/api/commercial-estimator'
 import { requirementForLine } from './requirementForLine'
 import RequirementSourceLink from './RequirementSourceLink'
 
-export default function SelectedServiceRequirements({
-  result,
-  payerName,
-}: {
-  result: PrevisitEstimate
-  payerName: string
-}) {
+export default function SelectedServiceRequirements({ result }: { result: PrevisitEstimate }) {
   const lines = (result.price_range?.lines || []).filter((line) => line.code)
   if (!lines.length || result.price_range?.mode !== 'services') return null
   return (
@@ -66,7 +60,7 @@ export default function SelectedServiceRequirements({
                 : 'referral required'
               : decision?.referral?.status === 'Not required'
                 ? 'no referral'
-                : `ask ${payerName} about referral`
+                : 'referral status not verified'
           const authorization = authorizationConflict
             ? 'review prior authorization rule'
             : authorizationRequired
@@ -77,7 +71,7 @@ export default function SelectedServiceRequirements({
                   : 'prior authorization required'
               : decision?.authorization?.status === 'Not required'
                 ? 'no prior authorization'
-                : `ask ${payerName} about prior authorization`
+                : 'prior authorization status not verified'
           return (
             <li key={line.id}>
               <strong>CPT {line.code}</strong>

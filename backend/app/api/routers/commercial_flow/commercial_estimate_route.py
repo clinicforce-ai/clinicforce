@@ -11,7 +11,8 @@ from app.api.routers.commercial_flow.commercial_previsit_submit import submit_pr
     "eligibility request. A booked EMG/NCS visit without a study count returns one provisional "
     "scenario with mutually exclusive CPT levels; an exact suggested CPT plan is priced immediately "
     "from patient-bound benefits and clinic rates, and clinician edits recalculate it. A supported "
-    "fixed office copay is the visit-time amount, with later costs estimated separately. A signed "
+    "fixed office copay is the visit-time amount, with later costs estimated separately. A "
+    "fresh payer check includes service categories from saved selected CPTs. A signed "
     "same-payer clinic agreement may set benefits.network_source to clinic_group_agreement and "
     "return mismatch_warnings for differing product or provider details. evidence_resolution reports "
     "unresolved facts; an in-network tier alone does not establish an amount to collect."
@@ -290,6 +291,9 @@ async def previsit_estimate(value: _api.PrevisitInput, request: _api.Request, ba
                  and row.get('visit_review', {}).get('insurance_check_from')]
         if holds:
             check_from = max([*holds, *([check_from] if check_from else [])])
+    inputs['_selected_service_types'] = _api._reviewed_service_types(
+        prior_cases, value.appointment_id, inputs['service_date'],
+        _api._visit_context_token(inputs, source))
     timing = _api._eligibility_timing(inputs['service_date'], check_from)
     if timing:
         result['eligibility_timing'] = timing

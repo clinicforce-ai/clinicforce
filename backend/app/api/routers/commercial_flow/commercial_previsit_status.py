@@ -92,6 +92,8 @@ def _insurance_diagnosis(case: dict, result: dict, guidance: dict) -> dict:
         (recovery.get('outcome') == 'recovered' and recovery.get('state') == 'complete')
         or payer_identity_verified(identity))
     payer_benefits_returned = benefits.get('active') is not None and bool(result.get('benefit_source') or result.get('checked_at'))
+    payer_identity_available = bool(result.get('checked_at') or benefits.get('coverage_status_conflict') or
+        (benefits.get('active') is not None and (benefits.get('benefit_source') or result.get('benefit_source'))))
     # A discovered candidate match cannot overrule an explicit mismatch in
     # the member-specific payer response. With no payer identity decision, a
     # single candidate may still establish the patient match for diagnosis.
@@ -121,7 +123,8 @@ def _insurance_diagnosis(case: dict, result: dict, guidance: dict) -> dict:
     if (active_policy_count if type(active_policy_count) is int else
             sum(row.get('active_medical') is True for row in candidates)) > 1:
         reasons.append('MULTIPLE_COVERAGES'); states.append('MULTIPLE_COVERAGES')
-    states.append('IDENTITY_VERIFIED' if identity_verified else 'IDENTITY_REVIEW_REQUIRED')
+    states.append('IDENTITY_VERIFIED' if identity_verified else
+                  'IDENTITY_REVIEW_REQUIRED' if payer_identity_available else 'PAYER_RESPONSE_MISSING')
     enrollment = raw_recovery.get('enrollment') or result.get('enrollment')
     if enrollment and enrollment.get('status') != 'LIVE' and (benefits.get('active') is not True or historical_only):
         if enrollment.get('reason_code'):
@@ -143,15 +146,26 @@ def _insurance_diagnosis(case: dict, result: dict, guidance: dict) -> dict:
         for line in price.get('lines', [])))
     details = []
     if not available:
-        details = list(dict.fromkeys([guidance.get('reason') or '', *benefits.get('review_reasons', []), *result.get('issues', []),
-            *price.get('issues', []), *price.get('service_issues', []),
-            *(issue for row in price.get('lines', []) for issue in row.get('issues', []))]))
+        if not payer_identity_available and benefits.get('active') is None:
+            # Old saved placeholders may say "Stedi" and carry many derived review
+            # reasons. There is no payer benefit to reconcile or price yet.
+            state = recovery.get('state')
+            details = [
+                'The payer check outcome is unknown. Check Stedi activity before retrying.' if state == 'indeterminate' else
+                'The payer check is still in progress.' if state == 'pending' else
+                failure.get('action') or 'No payer eligibility benefits are available for this visit yet.',
+                *(price.get('service_issues') or []),
+            ]
+        else:
+            details = list(dict.fromkeys([guidance.get('reason') or '', *benefits.get('review_reasons', []), *result.get('issues', []),
+                *price.get('issues', []), *price.get('service_issues', []),
+                *(issue for row in price.get('lines', []) for issue in row.get('issues', []))]))
         details = [value for value in details if value]
         if benefits.get('active') is not True:
             reasons.append('APPLICABLE_BENEFITS_MISSING')
         if benefits.get('coverage_status_conflict'):
             reasons.append('COVERAGE_STATUS_CONFLICT')
-        if identity.get('status') == 'review':
+        if payer_identity_available and identity.get('status') == 'review':
             reasons.append('PATIENT_IDENTITY_REVIEW_REQUIRED')
         if benefits.get('service_date_matches') is False:
             reasons.append('COVERAGE_DATE_MISMATCH')
@@ -179,7 +193,8 @@ def _insurance_diagnosis(case: dict, result: dict, guidance: dict) -> dict:
             'rawCandidateCount': raw_count, 'retainedCandidateCount': len(candidates),
             'verifiedCandidateCount': recovery.get('verified_candidate_count', 0),
             'activePolicyCount': active_policy_count if type(active_policy_count) is int else None,
-            'identityStatus': 'VERIFIED' if identity_verified else 'REVIEW_REQUIRED',
+            'identityStatus': 'VERIFIED' if identity_verified else
+                'REVIEW_REQUIRED' if payer_identity_available else 'PAYER_RESPONSE_MISSING',
             'eligibilityStatus': 'BENEFITS_VERIFIED' if verified and benefits.get('active') is True else
                 'PAYER_BENEFITS_RETURNED' if payer_benefits_returned else
                 eligibility_state if eligibility_state in {'INACTIVE', 'EXPIRED', 'FUTURE', 'CONFLICT'} else 'NOT_VERIFIED',
@@ -454,47 +469,3 @@ def _recovery_event(case: dict, session: dict, stage: str, outcome: str, *, reas
     _api.collection_event('coverage_recovery', practice_id=session['practice_id'],
         intake_id=(session.get('intake') or {}).get('id'), case_id=case['id'], stage=stage,
         outcome=outcome, reason_code=reason, count=count, http_status=http_status)
-
-
-async def _read_card_hints(session: dict, patient_id: str | None) -> dict:
-    """Read one patient-bound card set; OCR fields are inquiry hints, not benefits."""
-    from app.insurance import v1_sources
-    from app.api.routers.staff import inspect_file
-    contents = []
-    source = None
-    try:
-        intakes = await _api.run_in_threadpool(_api.staff_store.patient_card_intakes, session['practice_id'], session['patient_id'])
-        card_intakes = [intake for intake in intakes if intake.get('documents')]
-        if len(card_intakes) > 1:
-            return {'status': 'multiple_cards', 'fields': {}, 'count': 0}
-        docs = card_intakes[0]['documents'] if card_intakes else []
-        if len(docs) > 2:
-            return {'status': 'multiple_cards', 'fields': {}, 'count': 0}
-        for doc in docs:
-            if doc.get('size_bytes', 0) <= 10_000_000 and doc.get('object_key'):
-                contents.append(await _api.run_in_threadpool(_api.object_store.get_object_bytes, doc['object_key']))
-        if contents:
-            source = 'clinicforce_card'
-        elif patient_id:
-            source = 'ecw_card'
-            cards = await _api.asyncio.wait_for(_api.ecw_backend.insurance_cards(patient_id), timeout=24)
-            if len(cards) > 2:
-                return {'status': 'multiple_cards', 'fields': {}, 'count': 0}
-            for card in cards:
-                data, _ = await _api.asyncio.wait_for(_api.ecw_backend.insurance_cards(patient_id, document_id=card['id']), timeout=24)
-                contents.append(data)
-            if contents:
-                source = 'ecw_card'
-        if not contents:
-            return {'status': 'not_found', 'fields': {}, 'count': 0, 'source': source,
-                    'failure_reason': 'ecw_no_matching_card_document' if patient_id else 'ecw_patient_unlinked'}
-        if any(len(content) > 10_000_000 for content in contents):
-            return {'status': 'unavailable', 'fields': {}, 'count': len(contents), 'failure_reason': 'card_too_large'}
-        for content in contents:
-            await _api.run_in_threadpool(inspect_file, content)
-        fields, evidence, _ = await _api.asyncio.wait_for(_api.asyncio.to_thread(v1_sources.read_card_fields, contents), timeout=20)
-        return {'status': 'read', 'fields': fields, 'evidence': evidence, 'count': len(contents), 'source': source}
-    except (_api.ecw_backend.EcwBackendError, _api.httpx.HTTPError, TimeoutError, ValueError, _api.HTTPException,
-            _api.golden.OCRServiceError, _api.golden.GoldenCaseError) as exc:
-        return {'status': 'unavailable', 'fields': {}, 'count': len(contents),
-                'failure_reason': 'card_read_timeout' if isinstance(exc, (TimeoutError, _api.httpx.TimeoutException)) else 'card_unavailable'}

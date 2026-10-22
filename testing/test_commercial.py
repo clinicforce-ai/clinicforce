@@ -337,6 +337,18 @@ class CommercialRulesTest(unittest.TestCase):
         body = stedi_request_body({"stedi_payer_id": "payer"}, {"rendering_npi": "1720615453", "billing_npi": "1811853260", "organization_name": "Clinic"}, coverage, "2026-10-01", "98")
         self.assertEqual(body["provider"], {"npi": "1811853260", "name": {"organization": "Clinic"}})
 
+    def test_stedi_eligibility_dates_use_iso_format_from_ecw_compact_dates(self):
+        coverage = {"member_id": "M123", "relationship": "19", "subscriber_first": "Parent", "subscriber_last": "Example",
+                    "subscriber_birth_date": "19500512", "patient_first": "Pat", "patient_last": "Example",
+                    "patient_birth_date": "19800101", "active_coverages": 1}
+        provider = {"rendering_npi": "1234567890", "rendering_first": "Ada", "rendering_last": "Clinician"}
+        body = stedi_request_body({"stedi_payer_id": "KMQTZ"}, provider, coverage, "2026-10-22", "98")
+        self.assertEqual(body["subscriber"]["dateOfBirth"], "1950-05-12")
+        self.assertEqual(body["dependent"]["dateOfBirth"], "1980-01-01")
+        coverage["subscriber_birth_date"] = "19501312"
+        with self.assertRaisesRegex(Exception, "invalid birth date"):
+            stedi_request_body({"stedi_payer_id": "KMQTZ"}, provider, coverage, "2026-10-22", "98")
+
     def test_stedi_fractional_coinsurance_and_authorization_are_not_mispriced(self):
         payload = {"plans": [{"benefits": {"statuses": [{"status": "Active"}]}}], "benefitsInformation": [
             {"code": "C", "coverageLevel": "Individual", "serviceTypeCodes": ["98"], "timeQualifierCode": "29", "benefitAmount": "500", "inPlanNetworkIndicatorCode": "Y"},

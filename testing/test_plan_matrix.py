@@ -46,6 +46,8 @@ def test_scoped_clinic_network_name_can_select_the_referral_rule():
                'member_id': 'M-1', 'group_number': 'G-1', 'rendering_npi': '1234567890',
                'coverage_period': {'start': '2026-01-01', 'end': '2026-12-31'}}
     assert contract_requirements.evaluate(result, context, [])['referral']['status'] == 'Not required'
+    context['plans'][0] = 'CI Preferred Provider Option Medical'
+    assert contract_requirements.evaluate(result, context, [])['referral']['status'] == 'Not required'
 
 
 def test_current_identity_mismatch_blocks_stale_matched_matrix_rule():

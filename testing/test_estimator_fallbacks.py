@@ -61,6 +61,30 @@ def test_diagnostic_terms_are_not_blocked_by_sleep_and_xray_in_same_category():
     assert normalize(raw, '95907')['coinsurance_percent'] is None
 
 
+def test_office_copay_stands_alone_when_diagnostic_terms_share_office_stc():
+    raw = payload(); benefits = raw['plans'][0]['benefits']
+    office = 'OFFICE VISIT - PROFESSIONAL;OFFICE VISIT WITH LABS - PROFESSIONAL;OFFICE VISIT WITH XRAY - PROFESSIONAL'
+    benefits['coPayment'] = [benefit('coPayment', 55, office)]
+    benefits['coInsurance'] = [benefit('coInsurance', '.2', 'DIAGNOSTIC MEDICAL PROCEDURE - PROFESSIONAL'),
+                                benefit('coInsurance', '0', office)]
+    terms = normalize(raw)
+    assert terms['copay_cents'] == 5500
+    assert terms['coinsurance_percent'] == '0'
+    assert not any('conditional benefit' in reason for reason in terms['review_reasons'])
+    terms['review_reasons'].append('Separate medical and supplementary coverage was returned; unassigned out-of-pocket rows are retained but cannot set this medical visit’s limit.')
+    result = {'collection_policy': COPAY_POLICY,
+              'identity': {'status': 'matched', 'binding': 'synthetic-current-binding', 'match_version': 2},
+              'benefits': {'active': True, 'network_status': 'in_network', 'network_source': 'clinic_group_agreement'},
+              'price_range': {'mode': 'services', 'complete': False, 'lines': [
+                  {'id': 'diagnostic', 'code': '95908', 'units': 1, 'calculation': None,
+                   'benefits': {'active': True, 'coinsurance_percent': '20.0'}},
+                  {'id': 'office', 'code': '99203', 'units': 1, 'allowed_cents': 15000,
+                   'calculation': None, 'benefits': terms}]}}
+    guidance = collection_guidance.build(result)
+    assert guidance['amount_cents'] == 5500
+    assert guidance['basis'] == 'office_copay'
+
+
 def test_combined_booking_survives_without_llm_and_sp_abbreviation_is_clinic_scoped():
     inputs = {'visit_type': 'established', 'appointment_reason': 'SP',
               'reason': 'Reason: SP; Visit type: Follow Up'}
@@ -92,7 +116,8 @@ def test_pending_coverage_and_appointment_window_use_later_opening_date():
 def test_secondary_policy_can_be_queried_without_claiming_it_is_only_coverage():
     coverage = {k: 'value' for k in ('member_id', 'subscriber_first', 'subscriber_last',
         'subscriber_birth_date', 'patient_first', 'patient_last', 'patient_birth_date', 'coverage_id')}
-    coverage.update(relationship='18', active_coverages=2)
+    coverage.update(relationship='18', active_coverages=2,
+                    subscriber_birth_date='1980-01-01', patient_birth_date='1980-01-01')
     provider = {'billing_npi': '1234567890', 'organization_name': 'Clinic'}
     assert api.stedi_request_body({'stedi_payer_id': 'payer'}, provider, coverage, '2026-10-01', '98')['subscriber']['memberId'] == 'value'
     coverage['coverage_id'] = ''
@@ -136,6 +161,22 @@ def test_ecw_payer_id_is_searched_before_an_ambiguous_name():
     suggestions = []
     assert asyncio.run(stedi_payers.search_payer('Hummana typo', [], 'test', transport=ambiguous, candidates=suggestions)) is None
     assert len(suggestions) == 2 and all(row['match_basis'] == 'directory_suggestion' for row in suggestions)
+
+
+def test_discovery_issuer_name_resolves_shared_identifier_to_uhc_route():
+    support = {'coverageTypes': ['medical'], 'transactionSupport': {'eligibilityCheck': 'SUPPORTED'}}
+    uhc = {**support, 'stediId': 'KMQTZ', 'primaryPayerId': '87726', 'displayName': 'UnitedHealthcare'}
+    surest = {**support, 'stediId': 'QSOCK', 'primaryPayerId': '25463', 'displayName': 'Surest', 'aliases': ['87726']}
+    transport = httpx.MockTransport(lambda _: httpx.Response(200, json={'items': [{'payer': surest}, {'payer': uhc}]}))
+    routes = []
+    selected = asyncio.run(stedi_payers.search_payer('UNITEDHEALTHCARE', ['87726'], 'synthetic',
+                                                      transport=transport, candidates=routes))
+    assert selected == uhc
+    assert {row['stediId'] for row in routes} == {'KMQTZ', 'QSOCK'}
+    duplicate_name = httpx.MockTransport(lambda _: httpx.Response(200, json={'items': [
+        {'payer': uhc}, {'payer': {**surest, 'displayName': 'UnitedHealthcare'}}]}))
+    assert asyncio.run(stedi_payers.search_payer('UNITEDHEALTHCARE', ['87726'], 'synthetic',
+                                                 transport=duplicate_name)) is None
 
 
 def test_enrollment_must_be_live_for_exact_provider_payer_and_transaction():

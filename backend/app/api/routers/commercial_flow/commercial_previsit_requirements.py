@@ -65,11 +65,16 @@ def attach_requirements(api: ModuleType, result: dict, case: dict, inputs: dict,
 
 
 def refresh_saved_requirements(api: ModuleType, result: dict, case: dict, practice_id: str) -> None:
-    """Recheck new saves when contract or plan-matrix evidence changes."""
+    """Recheck new saves when source documents or the projected network changes."""
     if 'requirement_sources' not in result:
         return
     documents = api.staff_store.list_library(practice_id)
-    if result['requirement_sources'] == requirement_sources(documents):
+    saved_result = (case.get('previsit_context') or {}).get('result') or {}
+    network_changed = any(
+        (result.get('benefits') or {}).get(field) != (saved_result.get('benefits') or {}).get(field)
+        for field in ('network_status', 'network_source')
+    ) or (result.get('network_evidence') or {}).get('network_name') != (saved_result.get('network_evidence') or {}).get('network_name')
+    if result['requirement_sources'] == requirement_sources(documents) and not network_changed:
         return
     context = case['previsit_context']
     attach_requirements(api, result, case, context['inputs'], context['source'],

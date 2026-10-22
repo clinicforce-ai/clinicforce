@@ -45,6 +45,9 @@ export default function CoverageRecovery({
     unavailableReason,
   } = model
   const verifiedCoverage = result.benefits?.active === true && patientBenefitsBound(result.identity)
+  const payerRoutes = result.recovery?.payer_routes || []
+  const showPayerRoutes =
+    payerRoutes.length > 0 && !['pending', 'indeterminate'].includes(result.recovery?.state || '')
   const shownGroups = new Set<string>()
   const policySuggestions = (result.recovery?.candidates || []).filter((candidate) => {
     const group = candidate.policy_group_id
@@ -60,26 +63,22 @@ export default function CoverageRecovery({
   })
   return (
     <>
-      {!!result.recovery?.payer_routes?.length && (
+      {showPayerRoutes && (
         <section className="visit-recovery">
           <h3>Payer suggestions</h3>
           <p>
             Optional suggestions from the payer directory. A selected route still needs a successful
             eligibility response.
           </p>
-          {result.recovery.payer_routes.length >= 2 && (
+          {payerRoutes.length >= 2 && (
             <label>
               Payer suggestions
               <select
-                value={
-                  result.recovery.payer_routes.some((row) => row.id === payerSuggestion)
-                    ? payerSuggestion
-                    : ''
-                }
+                value={payerRoutes.some((row) => row.id === payerSuggestion) ? payerSuggestion : ''}
                 onChange={(event) => setPayerSuggestion(event.target.value)}
               >
                 <option value="">View a payer suggestion</option>
-                {result.recovery.payer_routes.map((route) => (
+                {payerRoutes.map((route) => (
                   <option key={route.id} value={route.id}>
                     {route.name} · {route.payer_id || route.id}
                   </option>
@@ -87,18 +86,14 @@ export default function CoverageRecovery({
               </select>
             </label>
           )}
-          {result.recovery.payer_routes
-            .filter(
-              (route) => result.recovery!.payer_routes!.length < 2 || route.id === payerSuggestion,
-            )
+          {payerRoutes
+            .filter((route) => payerRoutes.length < 2 || route.id === payerSuggestion)
             .map((route) => (
               <article key={route.id}>
                 <strong>{route.name}</strong>
                 <p>
                   Payer ID: {route.payer_id || route.id} · Stedi route: {route.id}
                 </p>
-                {!!route.names.length && <p>Also known as: {route.names.join(', ')}</p>}
-                {!!route.aliases.length && <p>Payer ID aliases: {route.aliases.join(', ')}</p>}
                 <p>
                   {route.match_basis === 'directory_suggestion'
                     ? 'Suggested name match — review against the card'
@@ -316,7 +311,7 @@ export default function CoverageRecovery({
           ))}
         </section>
       )}
-      {result.insurance_diagnosis && (
+      {result.insurance_diagnosis && !verifiedCoverage && (
         <details className="visit-recovery" open={!verifiedCoverage || undefined}>
           <summary>Insurance check details</summary>
           <p>

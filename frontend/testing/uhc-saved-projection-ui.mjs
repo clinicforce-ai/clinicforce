@@ -31,6 +31,17 @@ try {
   const { selectedRequirementIssue } = await server.ssrLoadModule(
     '/src/features/commercial-estimate/selectedRequirementIssue.ts',
   )
+  const { firstSelectedCptIssue } = await server.ssrLoadModule(
+    '/src/features/commercial-estimate/selectedCptIssue.ts',
+  )
+  const uncheckedCpt = {
+    identity: { status: 'review', missing_fields: ['member_id'] },
+    price_range: { lines: [{ code: '95908', benefits: { active: null,
+      identity: { status: 'review', missing_fields: ['member_id'] } } }] },
+  }
+  assert.equal(firstSelectedCptIssue(uncheckedCpt), null)
+  uncheckedCpt.price_range.lines[0].benefits.active = true
+  assert(firstSelectedCptIssue(uncheckedCpt)?.includes('do not match this patient'))
   assert.equal(
     coinsuranceFormula({
       encounter_summary: {
@@ -119,6 +130,15 @@ try {
   )
   assert(groupedResponse.includes('1 distinct active medical policy found'))
   assert(groupedResponse.includes('3 payer responses'))
+  const routeInProgress = renderToStaticMarkup(
+    React.createElement(CoverageRecovery, {
+      model: { readOnly: true, failed: false, recovering: false },
+      result: { recovery: { state: 'indeterminate', payer_routes: [
+        { id: 'synthetic-route', name: 'Synthetic Payer' },
+      ] } },
+    }),
+  )
+  assert(!routeInProgress.includes('Payer suggestions'))
   assert(groupedResponse.includes('2 identity and coverage matches'))
   const duplicateChoices = renderToStaticMarkup(
     React.createElement(CoverageRecovery, {
@@ -646,8 +666,8 @@ try {
   assert(supportedOverview.includes('$1,000.00'))
   assert(supportedOverview.includes('Individual out-of-pocket remaining'))
   assert(supportedOverview.includes('Planned CPTs · referral and prior authorization'))
-  assert(visibleText(supportedOverview).includes('CPT 99203: ask United Healthcare about referral'))
-  assert(visibleText(supportedOverview).includes('CPT 93000: ask United Healthcare about referral'))
+  assert(visibleText(supportedOverview).includes('CPT 99203: referral status not verified'))
+  assert(visibleText(supportedOverview).includes('CPT 93000: referral status not verified'))
   assert(!supportedOverview.includes('Service not established'))
   assert(supportedOverview.includes('<h3>Planned services</h3>'))
   assert(!supportedOverview.includes('Why and sources'))

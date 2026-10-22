@@ -96,7 +96,10 @@ async def search_payer(name: str, identifiers: list[str], api_key: str,
         if len(by_id) != 0:
             if candidates is not None:
                 candidates.extend({**row, 'match_basis': 'identifier'} for row in by_id)
-            return by_id[0] if len(by_id) == 1 else None
+            if len(by_id) == 1:
+                return by_id[0]
+            exact_name = [row for row in by_id if _words(name) and _words(name) == _words(row.get('displayName', ''))]
+            return exact_name[0] if len(exact_name) == 1 else None
         if not name:
             return None
         response = await client.get(SEARCH_URL, params={"query": name[:200], "pageSize": 100},

@@ -1,15 +1,32 @@
 import type { PrevisitEstimate } from '../../services/api/commercial-estimator'
 import { money } from './format'
 
-export default function PayerReportedPlanFigures({
-  benefits,
-}: {
-  benefits: NonNullable<PrevisitEstimate['benefits']>
-}) {
+export default function PayerReportedPlanFigures({ result }: { result: PrevisitEstimate }) {
+  const benefits = result.benefits!
   const oopRows = (benefits.reported_options || []).filter((row) => row.kind === 'out_of_pocket')
+  const lines = result.price_range?.mode === 'services' ? result.price_range.lines || [] : []
+  const coinsuranceGroups = new Map<string, string[]>()
+  for (const line of lines) {
+    const percent = line.benefits?.coinsurance_percent
+    if (percent == null || !Number.isFinite(Number(percent))) continue
+    const label = `${Number(percent).toLocaleString()}%`
+    coinsuranceGroups.set(label, [...(coinsuranceGroups.get(label) || []), line.code])
+  }
+  const deductibleGroups = new Map<string, string[]>()
+  for (const line of lines) {
+    const terms = line.benefits
+    if (!terms) continue
+    const annual = terms.deductible_annual_cents ?? benefits.deductible_annual_cents
+    const remaining = terms.deductible_remaining_cents ?? benefits.deductible_remaining_cents
+    const label =
+      terms.deductible_applies === false
+        ? 'Does not apply'
+        : `${remaining != null ? `${money(remaining)} remaining` : 'Remaining balance not returned'}${annual != null ? ` · ${money(annual)} annual` : ''}`
+    deductibleGroups.set(label, [...(deductibleGroups.get(label) || []), line.code])
+  }
   const providerTierEstablished =
     (benefits.network_status === 'in_network' &&
-      ['clinic_library_contract', 'payer_participation_message'].includes(
+      ['clinic_library_contract', 'clinic_group_agreement', 'payer_participation_message'].includes(
         benefits.network_source || '',
       )) ||
     (benefits.network_status === 'out_of_network' &&
@@ -19,8 +36,8 @@ export default function PayerReportedPlanFigures({
         'clinic_contract_inventory',
       ].includes(benefits.network_source || ''))
   return (
-    <details className="payer-reported-terms">
-      <summary>Payer-reported benefit terms</summary>
+    <section className="payer-reported-terms" aria-label="Payer-reported benefit terms">
+      <h3>Payer-reported benefit terms</h3>
       {!providerTierEstablished && (
         <p>
           Match this plan and rendering provider’s network tier before using these figures for
@@ -34,19 +51,40 @@ export default function PayerReportedPlanFigures({
             <dd>{money(benefits.copay_cents)}</dd>
           </div>
         )}
-        {benefits.deductible_remaining_cents != null && (
-          <div>
-            <dt>Deductible remaining</dt>
-            <dd>{money(benefits.deductible_remaining_cents)}</dd>
+        {[...deductibleGroups].map(([label, codes]) => (
+          <div key={label}>
+            <dt>Individual deductible · {codes.map((code) => `CPT ${code}`).join(', ')}</dt>
+            <dd>{label}</dd>
           </div>
-        )}
-        {benefits.coinsurance_percent != null &&
-          Number.isFinite(Number(benefits.coinsurance_percent)) && (
+        ))}
+        {!deductibleGroups.size &&
+          (benefits.deductible_annual_cents != null ||
+            benefits.deductible_remaining_cents != null) && (
             <div>
-              <dt>Coinsurance</dt>
-              <dd>{Number(benefits.coinsurance_percent).toLocaleString()}%</dd>
+              <dt>Individual deductible</dt>
+              <dd>
+                {benefits.deductible_remaining_cents != null
+                  ? `${money(benefits.deductible_remaining_cents)} remaining`
+                  : 'Remaining balance not returned'}
+                {benefits.deductible_annual_cents != null &&
+                  ` · ${money(benefits.deductible_annual_cents)} annual`}
+              </dd>
             </div>
           )}
+        {coinsuranceGroups.size > 0 ? (
+          [...coinsuranceGroups].map(([percent, codes]) => (
+            <div key={percent}>
+              <dt>Coinsurance · {codes.map((code) => `CPT ${code}`).join(', ')}</dt>
+              <dd>{percent}</dd>
+            </div>
+          ))
+        ) : benefits.coinsurance_percent != null &&
+          Number.isFinite(Number(benefits.coinsurance_percent)) ? (
+          <div>
+            <dt>Coinsurance</dt>
+            <dd>{Number(benefits.coinsurance_percent).toLocaleString()}%</dd>
+          </div>
+        ) : null}
         {benefits.oop_remaining_cents != null && (
           <div>
             <dt>Individual out-of-pocket remaining</dt>
@@ -109,6 +147,6 @@ export default function PayerReportedPlanFigures({
           </ul>
         </details>
       )}
-    </details>
+    </section>
   )
 }
