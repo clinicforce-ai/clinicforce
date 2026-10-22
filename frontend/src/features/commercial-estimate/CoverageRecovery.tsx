@@ -45,6 +45,9 @@ export default function CoverageRecovery({
     unavailableReason,
   } = model
   const verifiedCoverage = result.benefits?.active === true && patientBenefitsBound(result.identity)
+  const showPayerRoutes =
+    !!result.recovery?.payer_routes?.length &&
+    !['pending', 'indeterminate'].includes(result.recovery.state || '')
   const shownGroups = new Set<string>()
   const policySuggestions = (result.recovery?.candidates || []).filter((candidate) => {
     const group = candidate.policy_group_id
@@ -60,7 +63,7 @@ export default function CoverageRecovery({
   })
   return (
     <>
-      {!!result.recovery?.payer_routes?.length && (
+      {showPayerRoutes && (
         <section className="visit-recovery">
           <h3>Payer suggestions</h3>
           <p>

@@ -130,6 +130,15 @@ try {
   )
   assert(groupedResponse.includes('1 distinct active medical policy found'))
   assert(groupedResponse.includes('3 payer responses'))
+  const routeInProgress = renderToStaticMarkup(
+    React.createElement(CoverageRecovery, {
+      model: { readOnly: true, failed: false, recovering: false },
+      result: { recovery: { state: 'indeterminate', payer_routes: [
+        { id: 'synthetic-route', name: 'Synthetic Payer' },
+      ] } },
+    }),
+  )
+  assert(!routeInProgress.includes('Payer suggestions'))
   assert(groupedResponse.includes('2 identity and coverage matches'))
   const duplicateChoices = renderToStaticMarkup(
     React.createElement(CoverageRecovery, {
