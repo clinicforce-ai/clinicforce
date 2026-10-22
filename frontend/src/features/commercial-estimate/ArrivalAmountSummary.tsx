@@ -16,8 +16,8 @@ export default function ArrivalAmountSummary({
   visibleAmount: boolean
   fullBreakdown: boolean
 }) {
-  const emgPending = result.price_range?.lines?.some((line) =>
-    ['95908', '95886'].includes(line.code),
+  const additionalServicesPending = result.price_range?.lines?.some(
+    (line) => !/^992(?:0[2-5]|1[2-5])$/.test(line.code),
   )
   return (
     <>
@@ -31,7 +31,7 @@ export default function ArrivalAmountSummary({
       </strong>
       <p>
         {partialCopay != null
-          ? `The payer reports this office copay. ${emgPending ? 'The EMG balance remains pending the claim. ' : ''}This is not yet approved for collection.`
+          ? `The payer reports this office copay. ${additionalServicesPending ? 'Additional service balances remain pending the claim. ' : ''}This is not yet approved for collection.`
           : overviewExplanation(model, result, fullBreakdown)}
       </p>
     </>

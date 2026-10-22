@@ -257,8 +257,65 @@ try {
   assert.equal(localPpoModel.amountText, 'Insured amount unavailable')
   assert(localPpoOverview.includes('Payer-reported office copay · collection pending'))
   assert(localPpoOverview.includes('<strong role="status">$5.00</strong>'))
-  assert(localPpoOverview.includes('The EMG balance remains pending the claim.'))
+  assert(localPpoOverview.includes('Additional service balances remain pending the claim.'))
   assert(localPpoOverview.includes('This is not yet approved for collection.'))
+  const futurePpo = structuredClone(localPpo)
+  delete futurePpo.agreement_exclusion
+  futurePpo.plan_details.stedi.names = ['UnitedHealthcare Local Medicare Advantage PPO']
+  futurePpo.benefits.deductible_annual_cents = 40000
+  futurePpo.benefits.deductible_remaining_cents = 0
+  futurePpo.benefits.oop_annual_cents = null
+  futurePpo.benefits.oop_remaining_cents = null
+  futurePpo.benefits.reported_options = [
+    { kind: 'out_of_pocket', service_type_code: '30', coverage_level: 'INDIVIDUAL',
+      plan_association: 'unassigned', time_period: 'CALENDAR_YEAR', amount_cents: 350000 },
+    { kind: 'out_of_pocket', service_type_code: '30', coverage_level: 'INDIVIDUAL',
+      plan_association: 'unassigned', time_period: 'YEAR_TO_DATE', amount_cents: 79570 },
+    { kind: 'out_of_pocket', service_type_code: '30', coverage_level: 'INDIVIDUAL',
+      plan_association: 'unassigned', time_period: 'REMAINING', amount_cents: 270430 },
+  ]
+  futurePpo.price_range.lines[0].benefits.deductible_applies = false
+  futurePpo.price_range.lines[0].benefits.coinsurance_percent = '0'
+  futurePpo.requirement_evidence = {
+    procedures: futurePpo.price_range.lines.map((line) => ({
+      id: line.id, code: line.code,
+      referral: { status: 'Not required' },
+      authorization: { status: 'Verification required' },
+    })),
+  }
+  const futurePpoModel = deriveCommercialEstimateView({
+    result: futurePpo, appointments: [], selectedVisit: '', busy: null,
+    error: '', readOnly: false, recovering: false,
+  })
+  const futurePpoOverview = renderToStaticMarkup(
+    React.createElement(CommercialOverview, { model: futurePpoModel, result: futurePpo }),
+  )
+  assert(futurePpoOverview.includes('Payer-reported office copay · collection pending'))
+  assert(futurePpoOverview.includes('<strong role="status">$5.00</strong>'))
+  assert(futurePpoOverview.includes('Insurance details for this visit'))
+  assert(futurePpoOverview.indexOf('<strong role="status">$5.00</strong>') < futurePpoOverview.indexOf('Insurance details for this visit'))
+  assert(futurePpoOverview.includes('$400.00 annual; $0.00 remaining'))
+  assert(futurePpoOverview.includes('CPT 99203: $5.00; CPT 95908: $0.00'))
+  assert(futurePpoOverview.includes('CPT 99203: 0%; CPT 95908: 5%'))
+  assert(futurePpoOverview.includes('$3,500.00 annual; $795.70 used; $2,704.30 remaining'))
+  assert(futurePpoOverview.includes('medical-plan association not confirmed'))
+  assert(futurePpoOverview.includes('CPT 95908: not determined'))
+  const unmatchedPpo = structuredClone(futurePpo)
+  unmatchedPpo.identity = { status: 'review', match_version: 2 }
+  const unmatchedPpoModel = deriveCommercialEstimateView({
+    result: unmatchedPpo, appointments: [], selectedVisit: '', busy: null,
+    error: '', readOnly: false, recovering: false,
+  })
+  const unmatchedPpoOverview = renderToStaticMarkup(
+    React.createElement(CommercialOverview, { model: unmatchedPpoModel, result: unmatchedPpo }),
+  )
+  assert(!unmatchedPpoOverview.includes('Payer-reported office copay · collection pending'))
+  const futureHmo = structuredClone(futurePpo)
+  futureHmo.plan_details.stedi.names = ['UnitedHealthcare Medicare Advantage HMO']
+  const futureHmoOverview = renderToStaticMarkup(
+    React.createElement(CommercialOverview, { model: futurePpoModel, result: futureHmo }),
+  )
+  assert(!futureHmoOverview.includes('Payer-reported office copay · collection pending'))
   const regionalPpo = structuredClone(localPpo)
   regionalPpo.agreement_exclusion.product_kind = 'regional_medicare_advantage_ppo'
   const regionalPpoModel = deriveCommercialEstimateView({

@@ -37,6 +37,38 @@
   max-width: 49ch;
 }
 
+.uhc-ppo-benefit-table {
+  margin-top: 18px;
+  max-width: 760px;
+  overflow-x: auto;
+}
+
+.uhc-ppo-benefit-table h3 {
+  margin: 0 0 8px;
+  font-size: 15px;
+}
+
+.uhc-ppo-benefit-table table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.uhc-ppo-benefit-table th,
+.uhc-ppo-benefit-table td {
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--ve-line);
+  text-align: left;
+  vertical-align: top;
+}
+
+.uhc-ppo-benefit-table th {
+  width: 160px;
+  color: var(--ve-muted);
+  font-weight: 650;
+}
+
 .arrival-money-picture {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));

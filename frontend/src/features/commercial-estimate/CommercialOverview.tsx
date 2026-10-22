@@ -15,6 +15,7 @@ import ArrivalAmountSummary from './ArrivalAmountSummary'
 import { payerReportedPartialCopay } from './payerReportedPartialCopay'
 import PolicyAndShareNotice from './PolicyAndShareNotice'
 import PublishedPlanBenefit from './PublishedPlanBenefit'
+import UhcMedicarePpoBenefitTable from './UhcMedicarePpoBenefitTable'
 export default function CommercialOverview({
   model,
   result,
@@ -190,6 +191,7 @@ export default function CommercialOverview({
             visibleAmount={visibleAmount}
             fullBreakdown={Boolean(fullBreakdown)}
           />
+          {payerReportedPartialCents != null && <UhcMedicarePpoBenefitTable result={result} />}
           <PolicyAndShareNotice model={model} />
           {!cash && <PublishedPlanBenefit result={result} />}
           {!cash &&
@@ -197,7 +199,8 @@ export default function CommercialOverview({
             result.benefits?.active === true &&
             patientBenefitsBound &&
             !result.benefits.historical_only &&
-            !result.benefits.source_errors?.length && <PayerReportedPlanFigures result={result} />}
+            !result.benefits.source_errors?.length &&
+            payerReportedPartialCents == null && <PayerReportedPlanFigures result={result} />}
           {(chooseServices || enterAllowance) && (
             <button type="button" className="cash-package-shortcut" onClick={openServiceDetails}>
               {chooseServices

@@ -9,6 +9,11 @@ export function payerReportedPartialCopay(
 ) {
   const benefits = result.benefits
   const line = model.officeCopayLine
+  const payer = [result.stedi_payer?.name, result.payer].filter(Boolean).join(' ')
+  const plans = result.plan_details?.stedi.names || []
+  const officeLines = result.price_range?.lines?.filter((item) =>
+    /^992(?:0[2-5]|1[2-5])$/.test(item.code),
+  )
   if (
     model.cash ||
     model.calculating ||
@@ -16,15 +21,17 @@ export function payerReportedPartialCopay(
     model.amount ||
     model.estimatedShare ||
     model.provisionalAmount != null ||
-    !['local_medicare_advantage_ppo', 'regional_medicare_advantage_ppo'].includes(
-      result.agreement_exclusion?.product_kind || '',
-    ) ||
+    !/\b(?:uhc|united\s*health(?:care)?)\b/i.test(payer) ||
+    plans.length !== 1 ||
+    !/(?:\bmedicare(?:\s+advantage)?\s+ppo\b|\b(?:rppo|lppo)\b)/i.test(plans[0]) ||
     result.price_range?.mode !== 'services' ||
     result.price_range.service_issues?.length ||
+    officeLines?.length !== 1 ||
     benefits?.active !== true ||
     benefits.service_date_matches === false ||
     benefits.coverage_status_conflict ||
     benefits.coverage_dates_invalid ||
+    benefits.network_conflict ||
     benefits.historical_only ||
     benefits.source_errors?.length ||
     benefits.has_secondary ||
@@ -34,7 +41,11 @@ export function payerReportedPartialCopay(
     !patientBenefitsBound(result.identity) ||
     firstSelectedCptIssue(result) ||
     line?.benefits.active !== true ||
+    Number(line.units) !== 1 ||
     line.benefits.source_errors?.length ||
+    !['', 'VISIT', '27', 'DAY', '7', 'SERVICE', 'PROCEDURE'].includes(
+      line.benefits.copay_period || '',
+    ) ||
     !line.benefits.network_independent
   )
     return null
