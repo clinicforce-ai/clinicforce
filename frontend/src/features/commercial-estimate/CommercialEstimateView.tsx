@@ -236,12 +236,20 @@ export default function CommercialEstimateView({ model }: { model: CommercialEst
         {error && !(patientResolutionNeeded && onResolvePatient) && (
           <p className="visit-notice" role="alert">
             The estimate could not be updated: {error}{' '}
-            {previousEstimate
-              ? 'The saved visit details and estimate are retained below. Reconfirm before collecting.'
-              : 'Check the eCW visit and billing details, then retry the benefits check.'}
-            <button disabled={!!busy} onClick={() => void (selected ? estimate() : load())}>
-              Try again <ArrowRight size={15} />
-            </button>
+            {error.includes('Refresh saved visit details')
+              ? 'Review the updated CPTs before collecting.'
+              : previousEstimate
+                ? 'The saved visit details and estimate are retained below. Reconfirm before collecting.'
+                : 'Check the eCW visit and billing details, then retry the benefits check.'}
+            {error.includes('Refresh saved visit details') && result && !readOnly ? (
+              <button disabled={!!busy} onClick={() => void saveReview({ refresh_context: true })}>
+                Refresh visit details <ArrowRight size={15} />
+              </button>
+            ) : (
+              <button disabled={!!busy} onClick={() => void (selected ? estimate() : load())}>
+                Try again <ArrowRight size={15} />
+              </button>
+            )}
           </p>
         )}
         {(!result || busy === 'estimate' || busy === 'visits') && (

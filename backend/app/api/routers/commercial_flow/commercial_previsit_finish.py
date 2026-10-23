@@ -21,6 +21,10 @@ def _visit_context_changes(saved_inputs: dict, saved_source: dict, current_input
     return [key for key in saved if saved[key] != current[key]]
 
 
+def _clinical_context_refreshable(changed: list[str]) -> bool:
+    return bool(changed) and set(changed) <= {'codes', 'diagnoses', 'reason'}
+
+
 def _visit_context_token(inputs: dict, source: dict) -> str:
     context = _visit_context_parts(inputs, source)
     return _api.hashlib.sha256(_api.json.dumps(context, sort_keys=True).encode()).hexdigest()
@@ -116,7 +120,7 @@ def _finish_previsit(result: dict, case: dict, inputs: dict, source: dict, paylo
         'insurance' if united_healthcare else
         'cash' if source.get('self_pay_recorded') or note_self_pay else 'insurance')
     result['ecw_saved_eligibility'] = {k: v for k, v in (source.get('saved_eligibility') or {}).items() if not k.startswith('_')}
-    labels = {'selected_ids': 'Services', 'confirmed_units': 'Service quantities', 'payment_mode': 'Payment method',
+    labels = {'refresh_context': 'Visit details', 'selected_ids': 'Services', 'confirmed_units': 'Service quantities', 'payment_mode': 'Payment method',
               'cash_selection': 'Cash package', 'emg_required': 'EMG testing', 'insurance_check_from': 'Insurance checking date', 'verification': 'Benefit or approval evidence',
               'identity_confirmation': 'Patient identity', 'product_mapping': 'Plan mapping',
               'payer_allowance': 'Payer allowed amount',

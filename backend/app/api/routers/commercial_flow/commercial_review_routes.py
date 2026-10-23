@@ -28,6 +28,9 @@ async def update_visit_review(case_id: str, value: _api.VisitReviewInput, reques
     category or the exact procedure; unrelated broad categories are rejected.
     A changed eCW visit returns only the changed context category names, never
     patient or coverage values.
+    Changed clinical details may be refreshed explicitly when all patient,
+    coverage, provider, location and date context remains identical. The
+    refreshed CPT plan requires a new clinician selection before collection.
     """
     session = await _api._session(request)
     case = await _api.run_in_threadpool(_api.store.get_case, case_id, session['patient_id'], session['share_manifest_id'], **_api._scope(session))
@@ -61,10 +64,16 @@ async def update_visit_review(case_id: str, value: _api.VisitReviewInput, reques
     session['library_pricing'] = [{'document_id': row['id'], 'label': row['label'], 'payer': row.get('payer'), 'summary': row.get('extraction_summary')} for row in library_documents]
     if value.context_token != context['context_token']:
         raise _api.HTTPException(409, 'The appointment, coverage or services changed in eCW. Check the visit again.')
-    if _api._visit_context_token(inputs, source) != value.context_token:
-        changed = _api._visit_context_changes(context['inputs'], context['source'], inputs, source)
+    changed = _api._visit_context_changes(context['inputs'], context['source'], inputs, source)
+    refreshable = _api._clinical_context_refreshable(changed)
+    refreshing = bool(value.refresh_context and refreshable)
+    if changed and not refreshing:
         categories = ', '.join(changed) if changed else 'visit context'
-        raise _api.HTTPException(409, f'The eCW visit changed ({categories}). Check the visit again.')
+        action = ('Refresh saved visit details and confirm the planned services.'
+                  if refreshable else 'Check the visit again.')
+        raise _api.HTTPException(409, f'The eCW visit changed ({categories}). {action}')
+    if refreshing and value.model_fields_set - {'context_token', 'revision', 'refresh_context'}:
+        raise _api.HTTPException(422, 'Refresh the changed visit details before selecting or verifying services.')
     saved_eligibility = (context.get('source') or {}).get('saved_eligibility')
     if saved_eligibility:
         source['saved_eligibility'] = saved_eligibility
@@ -76,7 +85,16 @@ async def update_visit_review(case_id: str, value: _api.VisitReviewInput, reques
         raise _api.HTTPException(503, 'Protected payer evidence could not be read. Retry before saving verification.') from None
     import copy
     result = copy.deepcopy(context['result'])
-    review = copy.deepcopy(case.get('visit_review') or {'context_token': value.context_token})
+    review = {'context_token': _api._visit_context_token(inputs, source)} if refreshing else copy.deepcopy(case.get('visit_review') or {'context_token': value.context_token})
+    if refreshing:
+        case['visit_review'] = review
+        result.pop('suggestions', None)
+        if inputs.get('reason') and not (inputs.get('visit_type') or _api.visit_estimate.is_emg_visit(inputs)):
+            result['suggestions'] = await _api.run_in_threadpool(
+                _api.cpt_suggester.suggest_preliminary_cpt_codes,
+                str(inputs['reason'])[:8000] + f"\nPatient visit status from eCW: {inputs.get('visit_type') or 'unknown'}.",
+                source.get('recent_completed_appointments'))
+        result['refresh_requires_selection'] = True
     if value.identity_confirmation:
         current_identity = _api._case_benefits(payload, inputs, source, case).get('identity') or {}
         if not current_identity.get('can_confirm') or current_identity.get('binding') != value.identity_confirmation.binding:
@@ -109,6 +127,7 @@ async def update_visit_review(case_id: str, value: _api.VisitReviewInput, reques
             review.pop('payer_allowances', None)
             review.pop('payments', None)
     if value.selected_ids is not None:
+        result.pop('refresh_requires_selection', None)
         if not value.selected_ids or len(set(value.selected_ids)) != len(value.selected_ids) or set(value.selected_ids) - available.keys():
             raise _api.HTTPException(422, 'Select valid planned services from this visit.')
         visit_levels = [available[key] for key in value.selected_ids if available[key]['code'].isdigit() and 99202 <= int(available[key]['code']) <= 99215]
@@ -282,7 +301,7 @@ async def update_visit_review(case_id: str, value: _api.VisitReviewInput, reques
             {**item.model_dump(mode='json'), 'verified_at': _api._now(), 'actor_id': session['staff']['id'],
              'plan_scope': {key: _api.commercial.plan_details(payload).get(key) for key in ('plan_number', 'group_number')},
              'network_id': network['id'], 'network_reference': network['evidence_reference']})
-    case.setdefault('visit_review_history', []).append({'revision': value.revision, 'context_token': value.context_token, 'changes': value.model_dump(mode='json', exclude_none=True), 'actor_id': session['staff']['id'], 'verified_by': session['staff'].get('display_name'), 'verified_at': _api._now()})
+    case.setdefault('visit_review_history', []).append({'revision': value.revision, 'context_token': value.context_token, 'changes': value.model_dump(mode='json', exclude_none=True, exclude={'refresh_context'} if not value.refresh_context else None), 'actor_id': session['staff']['id'], 'verified_by': session['staff'].get('display_name'), 'verified_at': _api._now()})
     case['visit_review'] = review
     if not failed:
         result['issues'] = []

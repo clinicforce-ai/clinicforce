@@ -143,7 +143,10 @@ def test_secondary_benefit_evidence_does_not_change_the_ecw_visit_identity_token
 
 
 def test_visit_context_change_reports_categories_without_values():
-    from app.api.routers.commercial_estimator import _visit_context_changes
+    from app.api.routers.commercial_estimator import _clinical_context_refreshable, _visit_context_changes
     saved_inputs = {'member_id': 'SYNTHETIC-OLD', 'reason': 'Synthetic review'}
     current_inputs = {'member_id': 'SYNTHETIC-NEW', 'reason': 'Synthetic procedure'}
     assert _visit_context_changes(saved_inputs, {}, current_inputs, {}) == ['coverage', 'reason']
+    assert _clinical_context_refreshable(['codes', 'diagnoses', 'reason'])
+    assert not _clinical_context_refreshable(['coverage', 'reason'])
+    assert not _clinical_context_refreshable([])

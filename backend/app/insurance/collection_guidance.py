@@ -102,6 +102,7 @@ def build(result: dict, review: dict | None = None) -> dict:
         and len({(line.get('benefits') or {}).get('copay_cents') for line in lines}) == 1
         and (lines[0].get('benefits') or {}).get('copay_cents') is not None)
     safe = (benefits.get('active') is True and benefits.get('service_date_matches') is not False
+            and result.get('refresh_requires_selection') is not True
             and (not unapproved_services or suggested_plan or preview_office_copay)
             and not benefits.get('coverage_status_conflict')
             and not benefits.get('coverage_dates_invalid')
