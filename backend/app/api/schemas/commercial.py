@@ -188,6 +188,7 @@ class VisitReviewInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
     context_token: str = Field(min_length=64, max_length=64)
     revision: int = Field(ge=0)
+    refresh_context: bool = Field(default=False, description='Re-read changed eCW reason, diagnoses, or planned services for the same saved patient, coverage, provider, location, and visit date. The clinician must select services again before collection.')
     selected_ids: list[str] | None = Field(default=None, max_length=20)
     payment_mode: Literal["insurance", "cash"] | None = None
     emg_required: bool | None = None

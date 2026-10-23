@@ -115,6 +115,7 @@ export type VisitPricedLine = VisitCode & {
 }
 
 export type VisitReview = {
+  refresh_context?: boolean
   botox?: BotoxReview
   billing_protection?: {
     status: 'qmb' | 'not_qmb'

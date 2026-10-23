@@ -54,6 +54,9 @@ def test_complete_contract_priced_in_network_visit_collects_calculated_share():
     guidance = collection_guidance.build(result)
     assert guidance['amount_cents'] == 22910
     assert guidance['collection_rule']['mode'] == 'calculated_in_network_advance'
+    result['refresh_requires_selection'] = True
+    assert collection_guidance.build(result)['amount_cents'] is None
+    result.pop('refresh_requires_selection')
     line['rate_resolution']['status'] = 'MISSING'
     assert collection_guidance.build(result)['amount_cents'] is None
 
