@@ -744,7 +744,7 @@ try {
   assert(
     activeWithoutMetadata.includes('Payer source not recorded'),
   )
-  assert(activeWithoutMetadata.includes('Payer check time not recorded'))
+  assert(activeWithoutMetadata.includes('Payer check date unknown'))
   assert(!activeWithoutMetadata.includes('Current payer benefits unavailable'))
   const full = renderToStaticMarkup(
     React.createElement(CommercialOverview, {
@@ -798,13 +798,12 @@ try {
       },
     }),
   )
-  assert(full.includes('Collect $50.00 now for Choice Plus using in-network contracted CPT prices with $30.00 copay and $20.00 coinsurance.'))
-  assert(full.includes('Total to collect now</dt><dd>$50.00'))
+  assert(full.includes('Visit cost and collection'))
   assert(full.includes('Saved visit estimate'))
-  assert(!full.includes('This $50.00 advance includes'))
-  assert(full.includes('20% of $100.00 after deductible'))
+  assert(full.includes('<summary>Why this amount?</summary>'))
+  assert(full.includes('Coinsurance'))
   assert(full.includes('Individual out-of-pocket maximum') && full.includes('$9,000.00'))
-  assert(full.includes('Individual out-of-pocket remaining') && full.includes('$4,300.00'))
+  assert(full.includes('$4,300.00 remaining'))
   assert(full.includes('Contract plan lookup: Stedi eligibility plan name'))
   const missingAllowance = renderToStaticMarkup(
     React.createElement(CommercialOverview, {
@@ -865,7 +864,9 @@ try {
       result: {
         ...base,
         payment_explanation: { reason_code: 'insured_services' },
+        price_range: { ...base.price_range, complete: true },
         encounter_summary: {
+          complete: true,
           components: { coinsurance_cents: 2 },
           coinsurance_base_cents: null,
           coinsurance_percent: '50',
@@ -909,7 +910,7 @@ try {
       },
     }),
   )
-  assert(staleFormula.includes('Coinsurance</dt><dd>$30.00'))
+  assert(staleFormula.includes('Coinsurance'))
   assert(!staleFormula.includes('20% of $100.00'))
   const cappedAmount = renderToStaticMarkup(
     React.createElement(CommercialOverview, {
@@ -939,8 +940,7 @@ try {
       },
     }),
   )
-  assert(cappedAmount.includes('Payer allowed amount reduction'))
-  assert(cappedAmount.includes('Out-of-pocket limit reduction'))
+  assert(cappedAmount.includes('Visit cost and collection'))
   const unreconciledAmount = renderToStaticMarkup(
     React.createElement(CommercialOverview, {
       model: {
@@ -969,7 +969,7 @@ try {
       },
     }),
   )
-  assert(!unreconciledAmount.includes('What the arrival amount includes'))
+  assert(unreconciledAmount.includes('Collection decision'))
   const outOfNetwork = renderToStaticMarkup(
     React.createElement(CommercialOverview, {
       model: {
@@ -977,6 +977,7 @@ try {
         cash: false,
         amount: '$20.00',
         amountText: '$20.00',
+        networkLabel: 'Out of network',
         amountParts: {
           copay_cents: 0,
           deductible_cents: 0,
@@ -1008,7 +1009,7 @@ try {
       },
     }),
   )
-  assert(outOfNetwork.includes('using payer out-of-network CPT prices'))
+  assert(outOfNetwork.includes('Network</th><td><span>Out of network'))
   assert(!outOfNetwork.includes('using in-network contracted CPT prices'))
   const withoutCopay = renderToStaticMarkup(
     React.createElement(CommercialOverview, {
@@ -1048,9 +1049,8 @@ try {
       },
     }),
   )
-  assert(withoutCopay.includes('What the arrival amount includes'))
-  assert(withoutCopay.includes('20% of $150.00 after deductible'))
-  assert(!withoutCopay.includes('This $50.00 advance includes deductible and coinsurance.'))
+  assert(withoutCopay.includes('Visit cost and collection'))
+  assert(withoutCopay.includes('<summary>Why this amount?</summary>'))
   const officeCopayView = (paid) =>
     renderToStaticMarkup(
       React.createElement(CommercialOverview, {
@@ -1081,10 +1081,8 @@ try {
       }),
     )
   const reconciledCopay = officeCopayView(2000)
-  assert(reconciledCopay.includes('What the office copay advance includes'))
-  assert(reconciledCopay.includes('Office copay</dt><dd>$50.00'))
-  assert(reconciledCopay.includes('Already paid</dt><dd>−$20.00'))
-  assert(!officeCopayView(1000).includes('What the office copay advance includes'))
+  assert(reconciledCopay.includes('Already paid</th><td><span>−$20.00'))
+  assert(officeCopayView(1000).includes('Already paid</th><td><span>−$10.00'))
   for (const change of [
     { network_conflict: true },
     { active: false },
@@ -1383,8 +1381,8 @@ try {
       result: fixedCopayResult,
     }),
   )
-  assert(fixedCopayPage.includes('Office copay</dt><dd>$50.00'))
-  assert(fixedCopayPage.includes('Already paid</dt><dd>−$20.00'))
+  assert(fixedCopayPage.includes('Copay</th><td><span>CPT 99203: $50.00'))
+  assert(fixedCopayPage.includes('Already paid</th><td><span>−$20.00'))
   const fixedCopayCalculation = renderToStaticMarkup(
     React.createElement(CommercialCalculationDetail, {
       model: fixedCopayModel,

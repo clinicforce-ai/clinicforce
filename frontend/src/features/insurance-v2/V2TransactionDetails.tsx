@@ -1,6 +1,6 @@
 import { AlertTriangle, CheckCircle2 } from 'lucide-react'
 import { type V2Transaction } from '../../services/api/insurance-v2-types'
-import { money, readable, dateTime } from './v2-display'
+import { readable, dateTime } from './v2-display'
 
 export function TransactionStatus({ transaction }: { transaction: V2Transaction }) {
   const complete = transaction.outcome === 'complete'
@@ -31,30 +31,5 @@ export function TransactionStatus({ transaction }: { transaction: V2Transaction 
         </div>
       </dl>
     </div>
-  )
-}
-
-export function PriceExplanation({ transaction }: { transaction?: V2Transaction }) {
-  const lines = transaction?.result?.lines
-  if (!lines?.length) return null
-  return (
-    <details className="v2-price-explanation">
-      <summary>
-        {transaction?.source === 'stedi_local'
-          ? 'How the Stedi estimate was calculated'
-          : 'Why Availity returned this amount'}
-      </summary>
-      {lines.map((line, index) => (
-        <div key={`${line.code}-${index}`}>
-          <strong>
-            {line.code || 'Service'} · patient {money(line.patient_cents)}
-          </strong>
-          <small>
-            Allowed {money(line.allowed_cents)} · deductible {money(line.deductible_cents)} · copay{' '}
-            {money(line.copay_cents)} · coinsurance {money(line.coinsurance_cents)}
-          </small>
-        </div>
-      ))}
-    </details>
   )
 }

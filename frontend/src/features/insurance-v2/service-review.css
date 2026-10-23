@@ -1,20 +1,3 @@
-.v2-price-explanation strong,
-.v2-price-explanation small {
-  display: block;
-}
-
-.v2-price-explanation strong {
-  color: var(--ink);
-  font:
-    600 0.72rem 'Fira Code',
-    monospace;
-}
-
-.v2-price-explanation small {
-  margin-top: 4px;
-  line-height: 1.5;
-}
-
 .v2-manual-review {
   padding: 38px 0;
   border-bottom: 1px solid var(--line);

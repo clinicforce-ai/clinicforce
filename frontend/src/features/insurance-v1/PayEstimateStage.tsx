@@ -1,6 +1,8 @@
 import type { InsuranceV1Model } from './useInsuranceV1Model'
 import { SourceDates, SourcePages, FactList } from './InsuranceV1Details'
 import { money, timestamp } from './v1-display'
+import CostBreakdownTable, { type CostBreakdownRow } from '../insurance-estimate/CostBreakdownTable'
+import { serviceRowLabel } from '../insurance-estimate/serviceRowLabel'
 
 export default function PayEstimateStage({
   model,
@@ -10,6 +12,52 @@ export default function PayEstimateStage({
   estimate: NonNullable<InsuranceV1Model['estimate']>
 }) {
   const { insuranceCase, facts, documents } = model
+  const rows: CostBreakdownRow[] = [
+    ...((estimate.line_items || []).map((item) => ({
+      label: serviceRowLabel({ description: item.description, code: item.code, units: item.units }),
+      value: money(item.allowed_cents),
+      detail:
+        item.unit_allowed_cents != null
+          ? `${money(item.unit_allowed_cents)} per unit × ${item.units ?? 1} · patient share ${money(item.patient_cents)}`
+          : `Patient share ${money(item.patient_cents)}`,
+    })) || []),
+    { label: 'Total allowed', value: money(estimate.allowed_cents) },
+    { label: 'Copay applied', value: money(estimate.copay_cents) },
+    {
+      label: 'Individual deductible',
+      value: `${money(estimate.individual_deductible_remaining_cents)} remaining`,
+      detail: `${money(estimate.deductible_applied_cents)} applied to this visit`,
+    },
+    { label: 'Coinsurance after deductible', value: money(estimate.nominal_coinsurance_cents) },
+    {
+      label: 'Individual out-of-pocket remaining',
+      value: money(estimate.individual_oop_remaining_cents),
+      detail: `${money(estimate.oop_cap_adjustment_cents)} reduction applied to this visit`,
+    },
+    {
+      label: 'Estimated patient share',
+      value: money(estimate.patient_cents),
+      detail: 'Copay + deductible + coinsurance − out-of-pocket adjustment',
+    },
+    { label: 'Estimated plan payment', value: money(estimate.plan_cents) },
+    {
+      label: 'Cash alternative',
+      value: estimate.self_pay?.available ? money(estimate.self_pay.total_cents) : 'Not quoted',
+    },
+    {
+      label:
+        estimate.collection_action === 'collect'
+          ? 'Amount to collect at visit'
+          : 'Collection decision',
+      value:
+        estimate.collection_action === 'collect' && estimate.collect_today_cents != null
+          ? money(estimate.collect_today_cents)
+          : estimate.collection_action === 'do_not_collect'
+            ? '$0.00 under the recorded collection decision'
+            : 'Verify before collecting',
+      emphasis: true,
+    },
+  ]
   return (
     <>
       <p className="section-kicker">6 · Pre-visit pay estimate</p>
@@ -24,140 +72,31 @@ export default function PayEstimateStage({
                 ? 'Out of network · review with patient'
                 : 'Verify before collecting'}
         </h2>
-        <p>{estimate.collection_reason}</p>
-        {estimate.verification_reasons?.length ? (
-          <ul>
-            {estimate.verification_reasons.map((reason) => (
-              <li key={reason}>{reason}</li>
-            ))}
-          </ul>
-        ) : null}
-        <dl className="insurance-facts">
-          <div>
-            <dt>Estimated patient share</dt>
-            <dd>{money(estimate.patient_cents)}</dd>
-          </div>
-          <div>
-            <dt>Estimated insurance payment</dt>
-            <dd>{money(estimate.plan_cents)}</dd>
-          </div>
-        </dl>
-        <p className="missing-source">
-          Estimate confidence: {estimate.confidence ?? 'Not assessed'} ·{' '}
-          {estimate.confidence_reason}
-        </p>
         <small>Calculated: {timestamp(estimate.calculated_at)} (your local time)</small>
+        <CostBreakdownTable rows={rows} />
+        <details className="source-excerpt">
+          <summary>Why this decision?</summary>
+          <p>{estimate.collection_reason}</p>
+          {estimate.verification_reasons?.length ? (
+            <ul>
+              {estimate.verification_reasons.map((reason) => (
+                <li key={reason}>{reason}</li>
+              ))}
+            </ul>
+          ) : null}
+          <p>
+            Estimate confidence: {estimate.confidence ?? 'Not assessed'} ·{' '}
+            {estimate.confidence_reason}
+          </p>
+        </details>
       </section>
-      <details className="source-excerpt v1-calculation">
-        <summary>See calculation · normal share and benefit-limit adjustment</summary>
-        <dl className="insurance-facts">
-          <div>
-            <dt>Selected allowed amounts</dt>
-            <dd>{money(estimate.allowed_cents)}</dd>
-          </div>
-          <div>
-            <dt>Deductible applied</dt>
-            <dd>{money(estimate.deductible_applied_cents)}</dd>
-          </div>
-          <div>
-            <dt>Normal coinsurance</dt>
-            <dd>{money(estimate.nominal_coinsurance_cents)}</dd>
-          </div>
-          <div>
-            <dt>Patient share before benefit limits</dt>
-            <dd>{money(estimate.normal_patient_share_cents)}</dd>
-          </div>
-          <div>
-            <dt>Individual out-of-pocket remaining</dt>
-            <dd>{money(estimate.individual_oop_remaining_cents)}</dd>
-          </div>
-          <div>
-            <dt>Out-of-pocket adjustment</dt>
-            <dd>{money(estimate.oop_cap_adjustment_cents)}</dd>
-          </div>
-          <div>
-            <dt>Patient estimate after limits</dt>
-            <dd>{money(estimate.patient_cents)}</dd>
-          </div>
-        </dl>
-        <p>
-          The patient estimate applies to eligible covered services. An unresolved requirement means
-          staff should verify before deciding what to collect.
-        </p>
-      </details>
-      <h3>Your selected codes, item by item</h3>
-      <p>
-        Allowed prices come from {documents.fee_schedule?.filename}. Patient and plan shares are
-        calculated from {documents.coverage?.filename}.
-      </p>
       {estimate.estimate_available === false && (
         <p className="form-error" role="status">
           {estimate.unavailable_reason}
         </p>
       )}
-      <section className="v1-estimate-items" aria-label="Selected CPT and HCPCS code estimates">
-        {estimate.line_items?.map((item, index) => (
-          <article key={item.code}>
-            <header>
-              <span>
-                Item {index + 1} · CPT/HCPCS {item.code}
-              </span>
-              <h3>{item.description}</h3>
-            </header>
-            <dl className="insurance-facts">
-              <div>
-                <dt>Allowed price</dt>
-                <dd>{money(item.allowed_cents)}</dd>
-              </div>
-              <div>
-                <dt>Rate and quantity</dt>
-                <dd>
-                  {money(item.unit_allowed_cents ?? item.allowed_cents)} × {item.units ?? 1}
-                </dd>
-              </div>
-              <div>
-                <dt>Estimated patient share</dt>
-                <dd>{money(item.patient_cents)}</dd>
-              </div>
-              <div>
-                <dt>Estimated plan share</dt>
-                <dd>{money(item.plan_cents)}</dd>
-              </div>
-            </dl>
-            {item.patient_cents != null && (
-              <details className="source-excerpt">
-                <summary>Calculation details</summary>
-                <p>
-                  Deductible applied: {money(item.deductible_applied_cents)}. Coinsurance before the
-                  out-of-pocket cap: {money(item.coinsurance_cents)}. Balances are applied in the
-                  selected code order.
-                </p>
-              </details>
-            )}
-          </article>
-        ))}
-      </section>
-      {estimate.estimate_available !== false && (
-        <section className="v1-estimate-total" aria-label="Estimate totals">
-          <h3>Estimated total</h3>
-          <dl className="insurance-facts">
-            <div>
-              <dt>All selected allowed prices</dt>
-              <dd>{money(estimate.allowed_cents)}</dd>
-            </div>
-            <div>
-              <dt>Patient responsibility</dt>
-              <dd>{money(estimate.patient_cents)}</dd>
-            </div>
-            <div>
-              <dt>Plan responsibility</dt>
-              <dd>{money(estimate.plan_cents)}</dd>
-            </div>
-          </dl>
-        </section>
-      )}
-      <section className="v1-estimate-total" aria-label="Self-pay comparison">
-        <h3>Self-pay option</h3>
+      <details className="source-excerpt" aria-label="Self-pay comparison">
+        <summary>Cash price details</summary>
         {estimate.self_pay?.available ? (
           <>
             <p>
@@ -184,7 +123,7 @@ export default function PayEstimateStage({
           </p>
         )}
         {documents.self_pay?.findings?.pages && <SourcePages source={documents.self_pay} />}
-      </section>
+      </details>
       <details className="source-excerpt">
         <summary>What we know · what could change</summary>
         <FactList facts={facts.filter((fact) => fact.stage === 'network')} />
@@ -207,8 +146,8 @@ export default function PayEstimateStage({
           </section>
         ))}
         <FactList facts={facts.filter((fact) => fact.stage !== 'intake')} />
+        <p>{estimate.disclaimer}</p>
       </details>
-      <p className="estimate-disclaimer">{estimate.disclaimer}</p>
     </>
   )
 }

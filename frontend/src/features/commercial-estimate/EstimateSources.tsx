@@ -12,12 +12,12 @@ export default function EstimateSources({
     <p className="arrival-sources">
       Sources: eCW
       {tooEarly
-        ? ' · Payer check deferred until closer to the visit'
+        ? ' · Payer check later'
         : result.checked_at
-          ? ` + ${result.benefit_source || 'payer source not retained'} · benefits checked ${visitDate(result.checked_at)} · ${visitTime(result.checked_at)}`
+          ? ` + ${result.benefit_source || 'payer'} · ${visitDate(result.checked_at)} ${visitTime(result.checked_at)}`
           : result.benefits?.active
-            ? ' · Payer check time not recorded'
-            : ' · Current payer benefits unavailable'}
+            ? ' · Payer check date unknown'
+            : ' · Payer check needed'}
     </p>
   )
 }

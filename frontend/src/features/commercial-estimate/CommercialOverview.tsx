@@ -5,17 +5,14 @@ import { money, range, visitDate } from './format'
 import { patientBenefitsBound as hasPatientBinding } from './identityBinding'
 import PayerReportedPlanFigures from './PayerReportedPlanFigures'
 import SelectedServiceRequirements from './SelectedServiceRequirements'
-import VisitPatientTotals from './VisitPatientTotals'
-import { coinsuranceFormula } from './coinsuranceFormula'
-import FinancialLineItems from './FinancialLineItems'
 import TemporaryRateReference from './TemporaryRateReference'
 import EstimateSources from './EstimateSources'
 import { openServiceDetails } from './openServiceDetails'
 import ArrivalAmountSummary from './ArrivalAmountSummary'
 import { payerReportedPartialCopay } from './payerReportedPartialCopay'
-import PolicyAndShareNotice from './PolicyAndShareNotice'
 import PublishedPlanBenefit from './PublishedPlanBenefit'
 import UhcMedicarePpoBenefitTable from './UhcMedicarePpoBenefitTable'
+import CommercialCostBreakdown from './CommercialCostBreakdown'
 export default function CommercialOverview({
   model,
   result,
@@ -45,8 +42,6 @@ export default function CommercialOverview({
     amount,
     provisionalAmount,
     requirementIssue,
-    amountParts,
-    officeDeductible,
     anticipatedService,
     session,
   } = model
@@ -71,36 +66,6 @@ export default function CommercialOverview({
     !result.benefits.has_secondary &&
     result.recovery?.reason_code !== 'multiple_active_policies' &&
     hasPatientBinding(result.identity)
-  const fullBreakdown =
-    !cash &&
-    amount &&
-    !previousEstimate &&
-    result.payment_explanation?.reason_code === 'insured_services' &&
-    amountParts &&
-    guidance?.amount_cents != null &&
-    amountParts.copay_cents != null &&
-    amountParts.deductible_cents != null &&
-    amountParts.coinsurance_cents != null &&
-    amountParts.oop_adjustment_cents != null &&
-    amountParts.copay_cents +
-      amountParts.deductible_cents +
-      amountParts.coinsurance_cents -
-      (amountParts.allowed_cap_adjustment_cents ?? 0) -
-      amountParts.oop_adjustment_cents -
-      (result.encounter_summary?.payments_verified_cents ?? 0) ===
-      guidance.amount_cents
-  const paid = result.encounter_summary?.payments_verified_cents ?? 0
-  const coinsuranceDetail = coinsuranceFormula(result)
-  const officeCopayBreakdown =
-    !cash &&
-    amount &&
-    !previousEstimate &&
-    guidance?.basis === 'office_copay' &&
-    amountParts?.copay_cents != null &&
-    guidance.amount_cents != null &&
-    amountParts.copay_cents >= paid &&
-    amountParts.copay_cents - paid === guidance.amount_cents
-  const benefitTerms = result.benefits
   const staleInsuredGuidance = !cash && guidance?.amount_cents != null && !amount
   const showAssumptions = Boolean(
     amount ||
@@ -118,28 +83,6 @@ export default function CommercialOverview({
   const networkReason = result.network_evidence?.reason
     ?.replace(/billing TIN is missing from the visit\.?/i, '')
     .trim()
-  const applicablePlanLimits =
-    !cash &&
-    amount &&
-    !previousEstimate &&
-    !['claim_after_service', 'ecw_billing_note'].includes(guidance?.basis || '') &&
-    benefitTerms?.active === true &&
-    benefitTerms.service_date_matches !== false &&
-    benefitTerms.coverage_status_conflict !== true &&
-    benefitTerms.network_conflict !== true &&
-    benefitTerms.historical_only !== true &&
-    !benefitTerms.source_errors?.length &&
-    !benefitTerms.review_reasons?.some((reason) =>
-      reason.toLowerCase().includes('provider-network evidence reports nonparticipation'),
-    ) &&
-    benefitTerms?.network_status === 'in_network' &&
-    ['clinic_library_contract', 'payer_participation_message'].includes(
-      benefitTerms.network_source || '',
-    ) &&
-    patientBenefitsBound &&
-    !benefitTerms.has_secondary &&
-    result.recovery?.reason_code !== 'multiple_active_policies' &&
-    (benefitTerms.oop_annual_cents != null || benefitTerms.oop_remaining_cents != null)
   const chooseServices =
     !readOnly &&
     result.service_selection_status === 'preview' &&
@@ -189,18 +132,35 @@ export default function CommercialOverview({
             result={result}
             partialCopay={payerReportedPartialCents}
             visibleAmount={visibleAmount}
-            fullBreakdown={Boolean(fullBreakdown)}
           />
-          {payerReportedPartialCents != null && <UhcMedicarePpoBenefitTable result={result} />}
-          <PolicyAndShareNotice model={model} />
-          {!cash && <PublishedPlanBenefit result={result} />}
+          {payerReportedPartialCents != null && (
+            <details className="financial-breakdown">
+              <summary>Additional payer response details</summary>
+              <UhcMedicarePpoBenefitTable result={result} />
+            </details>
+          )}
+          {!cash &&
+            result.plan_details?.stedi?.identified_product === 'FEP Blue Basic PSHB' &&
+            result.benefits?.active === true &&
+            result.benefits.published_plan_rule &&
+            result.benefits.published_preferred_office_copay_cents != null && (
+              <details className="financial-breakdown">
+                <summary>Published plan rule</summary>
+                <PublishedPlanBenefit result={result} />
+              </details>
+            )}
           {!cash &&
             !previousEstimate &&
             result.benefits?.active === true &&
             patientBenefitsBound &&
             !result.benefits.historical_only &&
             !result.benefits.source_errors?.length &&
-            payerReportedPartialCents == null && <PayerReportedPlanFigures result={result} />}
+            payerReportedPartialCents == null && (
+              <details className="financial-breakdown">
+                <summary>Payer response source rows</summary>
+                <PayerReportedPlanFigures result={result} />
+              </details>
+            )}
           {(chooseServices || enterAllowance) && (
             <button type="button" className="cash-package-shortcut" onClick={openServiceDetails}>
               {chooseServices
@@ -209,124 +169,6 @@ export default function CommercialOverview({
             </button>
           )}
           {!amount && <TemporaryRateReference result={result} />}
-          {!cash &&
-            !previousEstimate &&
-            (fullBreakdown ||
-              officeCopayBreakdown ||
-              showSelectedRequirements ||
-              (result.price_range?.mode === 'services' && !!result.price_range.lines?.length)) && (
-              <details className="financial-breakdown">
-                <summary>Itemized financial breakdown</summary>
-                <FinancialLineItems result={result} />
-                {fullBreakdown && (
-                  <dl
-                    className="arrival-money-picture"
-                    aria-label="What the arrival amount includes"
-                  >
-                    <div>
-                      <dt>Copay</dt>
-                      <dd>
-                        {amountParts?.copay_cents != null
-                          ? money(amountParts.copay_cents)
-                          : guidance?.basis === 'office_copay' && guidance.amount_cents != null
-                            ? money(guidance.amount_cents)
-                            : '—'}
-                      </dd>
-                    </div>
-                    <div>
-                      <dt>Deductible</dt>
-                      <dd>
-                        {amountParts?.deductible_cents != null
-                          ? money(amountParts.deductible_cents)
-                          : officeDeductible === 'DOES_NOT_APPLY'
-                            ? 'Does not apply'
-                            : officeDeductible === 'ALREADY_MET'
-                              ? 'Already met'
-                              : 'See assumptions'}
-                      </dd>
-                    </div>
-                    <div>
-                      <dt>Coinsurance</dt>
-                      <dd>
-                        {amountParts?.coinsurance_cents != null
-                          ? money(amountParts.coinsurance_cents)
-                          : 'See assumptions'}
-                        {coinsuranceDetail && (
-                          <small className="coinsurance-formula">{coinsuranceDetail}</small>
-                        )}
-                      </dd>
-                    </div>
-                    {amountParts?.allowed_cap_adjustment_cents != null &&
-                      amountParts.allowed_cap_adjustment_cents > 0 && (
-                        <div>
-                          <dt>Payer allowed amount reduction</dt>
-                          <dd>−{money(amountParts.allowed_cap_adjustment_cents)}</dd>
-                        </div>
-                      )}
-                    {amountParts?.oop_adjustment_cents != null &&
-                      amountParts.oop_adjustment_cents > 0 && (
-                        <div>
-                          <dt>
-                            {amountParts.allowed_cap_adjustment_cents != null
-                              ? 'Out-of-pocket limit reduction'
-                              : 'Plan limit reduction'}
-                          </dt>
-                          <dd>−{money(amountParts.oop_adjustment_cents)}</dd>
-                        </div>
-                      )}
-                    {result.encounter_summary?.payments_verified_cents != null &&
-                      result.encounter_summary.payments_verified_cents > 0 && (
-                        <div>
-                          <dt>Already paid</dt>
-                          <dd>−{money(result.encounter_summary.payments_verified_cents)}</dd>
-                        </div>
-                      )}
-                  </dl>
-                )}
-                {officeCopayBreakdown && (
-                  <dl
-                    className="arrival-money-picture"
-                    aria-label="What the office copay advance includes"
-                  >
-                    <div>
-                      <dt>Office copay</dt>
-                      <dd>{money(amountParts.copay_cents!)}</dd>
-                    </div>
-                    {paid > 0 && (
-                      <div>
-                        <dt>Already paid</dt>
-                        <dd>−{money(paid)}</dd>
-                      </div>
-                    )}
-                  </dl>
-                )}
-                {(fullBreakdown || officeCopayBreakdown) && (
-                  <VisitPatientTotals result={result} officeOnly={Boolean(officeCopayBreakdown)} />
-                )}
-                {applicablePlanLimits && (
-                  <div className="plan-limit-summary">
-                    <small>Applicable in-network plan limits</small>
-                    <dl
-                      className="arrival-money-picture"
-                      aria-label="Applicable in-network plan limits"
-                    >
-                      {benefitTerms?.oop_annual_cents != null && (
-                        <div>
-                          <dt>Individual out-of-pocket maximum</dt>
-                          <dd>{money(benefitTerms.oop_annual_cents)}</dd>
-                        </div>
-                      )}
-                      {benefitTerms?.oop_remaining_cents != null && (
-                        <div>
-                          <dt>Individual out-of-pocket remaining</dt>
-                          <dd>{money(benefitTerms.oop_remaining_cents)}</dd>
-                        </div>
-                      )}
-                    </dl>
-                  </div>
-                )}
-              </details>
-            )}
           {cash && !amount && !!result.cash_schedule?.packages.length && !readOnly && (
             <button
               className="cash-package-shortcut"
@@ -342,7 +184,10 @@ export default function CommercialOverview({
             </button>
           )}
           {result.payment_explanation?.notice && !previousEstimate && (
-            <p className="visit-identity-notice">{result.payment_explanation.notice}</p>
+            <details className="financial-breakdown">
+              <summary>Estimate notice</summary>
+              <p className="visit-identity-notice">{result.payment_explanation.notice}</p>
+            </details>
           )}
           {guidance?.billing_note && (
             <details open={readOnly || undefined}>
@@ -413,6 +258,15 @@ export default function CommercialOverview({
             </details>
           )}
         </div>
+        <div className="visit-cost-table">
+          <CommercialCostBreakdown model={model} result={result} />
+          {!cash && !calculating && model.summaryExplanation && (
+            <details className="financial-breakdown">
+              <summary>{amount ? 'Why this amount?' : 'Why this needs review'}</summary>
+              <p>{model.summaryExplanation}</p>
+            </details>
+          )}
+        </div>
         <div className="arrival-context">
           <span className="visit-label">Anticipated service</span>
           <h3>
@@ -442,7 +296,7 @@ export default function CommercialOverview({
                 ? `Checked via ${result.benefit_source}`
                 : result?.benefits?.active
                   ? 'Payer source not recorded'
-                  : 'Payer result unavailable'}
+                  : 'Payer check needed'}
             </small>
           </span>
         </div>

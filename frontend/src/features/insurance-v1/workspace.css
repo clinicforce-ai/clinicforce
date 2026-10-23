@@ -248,33 +248,6 @@
   font-size: 0.82rem;
   line-height: 1.6;
 }
-.insurance-v1 .v1-estimate-items {
-  display: grid;
-  gap: 24px;
-  margin: 24px 0;
-}
-.insurance-v1 .v1-estimate-items article {
-  min-width: 0;
-  border: 1px solid var(--line);
-  padding: 20px;
-}
-.insurance-v1 .v1-estimate-items header {
-  margin-bottom: 14px;
-}
-.insurance-v1 .v1-estimate-items header span {
-  color: var(--blue-deep);
-  font-size: 0.8rem;
-  font-weight: 700;
-}
-.insurance-v1 .v1-estimate-items h3 {
-  margin: 8px 0;
-  font-size: 1.15rem;
-}
-.insurance-v1 .v1-estimate-total {
-  border-top: 3px solid var(--blue);
-  background: #f3f7fc;
-  padding: 20px;
-}
 .insurance-v1 .insurance-facts dd {
   min-width: 0;
   overflow-wrap: anywhere;
@@ -338,10 +311,6 @@
 .insurance-v1 .v1-collection li {
   margin: 8px 0;
 }
-.insurance-v1 .v1-calculation {
-  border-bottom: 1px solid var(--line);
-  padding-bottom: 16px;
-}
 .insurance-v1 .v1-source-dates {
   display: block;
   overflow-wrap: anywhere;
@@ -351,9 +320,6 @@
   margin-top: 4px;
   color: var(--muted-ink);
   font-weight: 400;
-}
-.insurance-v1 .v1-estimate-total + .v1-estimate-total {
-  margin-top: 24px;
 }
 @media (max-width: 600px) {
   .insurance-v1 .evidence-upload-grid {

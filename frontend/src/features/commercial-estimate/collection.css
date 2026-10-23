@@ -37,6 +37,21 @@
   max-width: 49ch;
 }
 
+.visit-cost-table {
+  grid-column: 1 / -1;
+  grid-row: 2;
+}
+
+.visit-cost-table .cost-breakdown {
+  max-width: none;
+  margin-top: 0;
+}
+
+.overview-amounts .arrival-context {
+  grid-column: 2;
+  grid-row: 1;
+}
+
 .uhc-ppo-benefit-table {
   margin-top: 18px;
   max-width: 760px;
@@ -75,20 +90,6 @@
   max-width: 590px;
   gap: 8px;
   margin: 16px 0 0;
-}
-
-.plan-limit-summary {
-  margin-top: 16px;
-}
-
-.plan-limit-summary > small {
-  color: var(--ve-muted);
-  font-size: 12px;
-  font-weight: 650;
-}
-
-.plan-limit-summary .arrival-money-picture {
-  margin-top: 6px;
 }
 
 .selected-cpt-requirements {
@@ -164,13 +165,6 @@
   font-size: 15px;
   font-weight: 650;
   font-variant-numeric: tabular-nums;
-}
-
-.arrival-money-picture .coinsurance-formula {
-  display: block;
-  color: var(--ve-muted);
-  font-size: 11px;
-  font-weight: 400;
 }
 
 .cash-package-shortcut {

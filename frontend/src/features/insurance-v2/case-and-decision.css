@@ -331,23 +331,3 @@
     600 0.8rem 'Fira Code',
     monospace;
 }
-
-.v2-price-explanation {
-  margin-top: 14px;
-  border-top: 1px solid var(--line);
-  padding-top: 8px;
-}
-
-.v2-price-explanation summary {
-  min-height: 38px;
-  align-content: center;
-  color: var(--blue-deep);
-  font-size: 0.75rem;
-  font-weight: 800;
-  cursor: pointer;
-}
-
-.v2-price-explanation > div {
-  padding: 9px 0;
-  border-top: 1px solid var(--line);
-}

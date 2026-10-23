@@ -161,8 +161,7 @@ export function deriveCommercialEstimateView({
 
   const cash = result?.payment_mode === 'cash'
   const coverageTone =
-    policyStatus === 'Coverage active' ||
-    policyStatus === 'Coverage active · insured price unavailable'
+    policyStatus === 'Coverage active'
       ? 'is-confirmed'
       : !result ||
           tooEarly ||
