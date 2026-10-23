@@ -210,6 +210,9 @@ async def previsit_estimate(value: _api.PrevisitInput, request: _api.Request, ba
     contract. A current, explicit payer requirement for a selected CPT is Yes
     even when static research lacks the exact member product; absent payer
     indicators do not establish No.
+    A second automatic Stedi inquiry can supply exact selected-CPT and
+    place-of-service authorization terms for the same bound member. Its
+    matched terms take precedence over broad matrix research.
     Conflicting or incomplete evidence remains verification required. These
     card findings do not change the negotiated rate or collection calculation.
     """

@@ -5,6 +5,7 @@ from uuid import uuid4
 
 from app.api.routers import commercial_estimator as _api
 from app.insurance import botox_review, cpt_rules
+from app.api.routers.commercial_flow.commercial_previsit_requirements import check_cpt_authorization
 
 @_api.router.post("/cases/{case_id}/visit-review")
 async def update_visit_review(case_id: str, value: _api.VisitReviewInput, request: _api.Request) -> dict:
@@ -26,6 +27,8 @@ async def update_visit_review(case_id: str, value: _api.VisitReviewInput, reques
     authorizes a positive Medicare cost-sharing advance.
     Benefit verification requires saved payer rows for a compatible service
     category or the exact procedure; unrelated broad categories are rejected.
+    Selected CPTs also receive one automatic Stedi CPT and place-of-service
+    authorization inquiry when the active member and network are bound.
     A changed eCW visit returns only the changed context category names, never
     patient or coverage values.
     Changed clinical details may be refreshed explicitly when all patient,
@@ -309,6 +312,12 @@ async def update_visit_review(case_id: str, value: _api.VisitReviewInput, reques
     recovery = case.get('previsit_discovery') or {}
     pricing_source = recovery.get('pricing_source') if recovery.get('outcome') == 'recovered' else None
     await _api.run_in_threadpool(_api._finish_previsit, result, case, inputs, source, None if failed else payload, session, context['payer_id'], pricing_source=pricing_source)
+    if not failed:
+        case = await check_cpt_authorization(_api, result, case, payload, inputs, session,
+                                             _api.stedi_financial.credentials(session['practice_id']))
+        if (case.get('cpt_authorization') or {}).get('state') == 'complete':
+            await _api.run_in_threadpool(_api._finish_previsit, result, case, inputs, source, payload, session,
+                                         context['payer_id'], pricing_source=pricing_source)
     if failed:
         result['response_reference'] = context['result'].get('response_reference')
     saved = await _api.run_in_threadpool(_api._save, case, session, 'visit-evidence-verified')

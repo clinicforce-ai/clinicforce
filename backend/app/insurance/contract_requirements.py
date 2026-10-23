@@ -24,6 +24,24 @@ from app.insurance.requirements.evidence import (
 
 def _payer_evidence(result: dict, kind: str, codes: set[str], context: dict) -> dict:
     benefits = result.get('benefits') or {}
+    exact = result.get('cpt_authorization') or {}
+    decisions = exact.get('decisions') or {}
+    identity = result.get('identity') or benefits.get('identity') or {}
+    if (kind == 'authorization' and codes and exact.get('state') == 'complete'
+            and codes <= decisions.keys() and exact.get('service_date') == context.get('service_date')
+            and exact.get('pos') == str(context.get('pos') or '')
+            and exact.get('network') == benefits.get('network_status')
+            and exact.get('patient_binding') == identity.get('binding')
+            and payer_identity_verified(identity)):
+        statuses = {decisions[code] for code in codes}
+        if statuses <= {'Required', 'Not required'}:
+            check_id = str(exact.get('check_id') or '')
+            source = {'label': 'Stedi CPT and place-of-service eligibility check'}
+            if re.fullmatch(r'ec_[A-Za-z0-9-]+', check_id):
+                source['url'] = f'https://portal.stedi.com/app/healthcare/eligibility/checks/{check_id}'
+            status = 'Required' if 'Required' in statuses else 'Not required'
+            return {'status': status, 'reason': 'Current Stedi response explicitly reports the authorization requirement for each selected CPT and this visit setting.',
+                    'sources': [source], 'cpt_specific': True}
     source = result.get('benefit_source') or 'Payer response source not retained'
     check_id = str(result.get('response_reference') or '')
     payer_source = {'label': source + ' eligibility response'}
@@ -214,7 +232,7 @@ def evaluate(result: dict, context: dict, documents: list[dict], *, include_proc
     # matrix lacks the exact product or a contract has no CPT-level rule.
     for kind in KINDS:
         payer = _payer_evidence(result, kind, codes, context)
-        if payer['status'] == 'Required' and (conditional_candidate or not unconfirmed_codes):
+        if (payer['status'] == 'Required' or payer.get('cpt_specific') and payer['status'] == 'Not required') and (conditional_candidate or not unconfirmed_codes):
             previous = output[kind]
             sources = list({(source.get('document_id'), source.get('page'), source.get('url'), source.get('label')): source
                             for source in [*payer['sources'], *previous.get('sources', [])]}.values())

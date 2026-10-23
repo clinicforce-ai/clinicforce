@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from types import ModuleType
 from app.insurance.identity import patient_benefits_bound
+from app.insurance import stedi_cpt_authorization
 
 
 def requirement_sources(documents: list[dict]) -> list[dict]:
@@ -13,6 +14,81 @@ def requirement_sources(documents: list[dict]) -> list[dict]:
                    for row in documents if row.get('kind') == 'plan_matrix' or
                    row.get('kind') == 'contract' and row.get('content_type') == 'application/pdf'),
                   key=lambda row: row['id'])
+
+
+async def check_cpt_authorization(api: ModuleType, result: dict, case: dict, payload: dict,
+                                  inputs: dict, session: dict, api_key: str | None) -> dict:
+    """Check selected CPTs once for this member, date, network and office setting."""
+    codes = sorted({str(row.get('code') or '') for row in result.get('codes') or []
+                    if api.re.fullmatch(r'\d{5}', str(row.get('code') or ''))})
+    benefits = result.get('benefits') or {}
+    identity = result.get('identity') or benefits.get('identity') or {}
+    pos = str(inputs.get('place_of_service') or '')
+    if (not codes or not api_key or benefits.get('active') is not True
+            or benefits.get('service_date_matches') is not True
+            or not patient_benefits_bound(identity)
+            or benefits.get('network_status') not in {'in_network', 'out_of_network'}
+            or not api.re.fullmatch(r'\d{2}', pos)):
+        return case
+    provider, subscriber = payload.get('provider') or {}, payload.get('subscriber') or {}
+    if not (payload.get('payerId') and provider.get('npi') and provider.get('name')
+            and subscriber.get('memberId') and subscriber.get('name')):
+        return case
+    scope = api.hashlib.sha256(api.json.dumps([payload.get('id'), payload['payerId'], provider['npi'],
+        subscriber['memberId'], identity.get('binding'), inputs['service_date'], pos,
+        benefits['network_status'], codes], sort_keys=True).encode()).hexdigest()
+    prior = case.get('cpt_authorization') or {}
+    if prior.get('scope') == scope:
+        return case
+    case['cpt_authorization'] = {'scope': scope, 'state': 'pending', 'codes': codes,
+                                 'service_date': inputs['service_date'], 'pos': pos,
+                                 'network': benefits['network_status'], 'patient_binding': identity.get('binding')}
+    case = await api.run_in_threadpool(api._save, case, session, 'cpt-authorization-pending')
+    body = {'payerId': payload['payerId'],
+            'provider': {key: provider[key] for key in ('name', 'npi')},
+            'subscriber': {key: subscriber[key] for key in ('memberId', 'dateOfBirth', 'name') if subscriber.get(key)},
+            'encounter': {'services': [{'system': 'CPT', 'value': code} for code in codes],
+                          'placeOfService': {'code': pos}}}
+    dependent = payload.get('dependent') or {}
+    if dependent:
+        body['dependent'] = {key: dependent[key] for key in ('dateOfBirth', 'name') if dependent.get(key)}
+    if inputs['service_date'] != api.date.today().isoformat():
+        body['encounter']['dates'] = {'service': {'start': inputs['service_date']}}
+    try:
+        async with api.httpx.AsyncClient(timeout=api.httpx.Timeout(30, connect=5)) as client:
+            response = await client.post(api.STEDI_URL,
+                headers={'Authorization': api_key, 'Content-Type': 'application/json'}, json=body)
+            checked = response.json()
+    except (api.httpx.HTTPError, ValueError):
+        case['cpt_authorization']['state'] = 'indeterminate'
+        return await api.run_in_threadpool(api._save, case, session, 'cpt-authorization-indeterminate')
+    def same_name(left: dict, right: dict) -> bool:
+        first = (left.get('name') or {}).get('person') or {}
+        second = (right.get('name') or {}).get('person') or {}
+        normalize = lambda value: api.re.sub(r'[^A-Z0-9]', '', str(value or '').upper())
+        return all(normalize(first.get(field)) and normalize(first.get(field)) == normalize(second.get(field))
+                   for field in ('firstName', 'lastName'))
+    returned_subscriber = (checked.get('subscriber') or {}) if isinstance(checked, dict) else {}
+    returned_dependent = (checked.get('dependent') or {}) if isinstance(checked, dict) else {}
+    normalize_id = lambda value: api.re.sub(r'[^A-Z0-9]', '', str(value or '').upper())
+    if (response.is_error or not isinstance(checked, dict)
+            or checked.get('payerId') != payload['payerId']
+            or normalize_id(returned_subscriber.get('memberId')) != normalize_id(subscriber['memberId'])
+            or returned_subscriber.get('dateOfBirth') != subscriber.get('dateOfBirth')
+            or not same_name(subscriber, returned_subscriber)
+            or bool(dependent) != bool(returned_dependent)
+            or dependent and (returned_dependent.get('dateOfBirth') != dependent.get('dateOfBirth')
+                              or not same_name(dependent, returned_dependent))
+            or str((checked.get('provider') or {}).get('npi') or '') != str(provider['npi'])):
+        case['cpt_authorization']['state'] = 'unavailable'
+    else:
+        raw = api.json.dumps(checked).encode()
+        case['cpt_authorization'].update(state='complete',
+            check_id=checked.get('id'),
+            decisions=stedi_cpt_authorization.decisions(checked, codes, pos, benefits['network_status']),
+            raw_object_key=await api.run_in_threadpool(api.object_store.put_staff_document,
+                session['practice_id'], case['id'], 'cpt-authorization-stedi-271.json', raw, 'application/json'))
+    return await api.run_in_threadpool(api._save, case, session, 'cpt-authorization-complete')
 
 
 def attach_requirements(api: ModuleType, result: dict, case: dict, inputs: dict,
