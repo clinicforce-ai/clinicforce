@@ -114,6 +114,7 @@ from app.api.routers.commercial_flow.commercial_previsit_pricing import (
 
 
 from app.api.routers.commercial_flow.commercial_previsit_finish import (
+    _visit_context_changes,
     _visit_context_token,
     _finish_previsit,
 )

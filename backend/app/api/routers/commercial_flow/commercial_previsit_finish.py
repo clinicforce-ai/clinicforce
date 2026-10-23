@@ -7,13 +7,22 @@ from app.api.routers.commercial_flow.commercial_previsit_requirements import att
 from app.insurance.identity import patient_benefits_bound
 from app.insurance import botox_review, evidence_resolution, published_plan_benefits
 
-def _visit_context_token(inputs: dict, source: dict) -> str:
-    context = {'coverage': {k: v for k, v in _api._coverage_snapshot(inputs, source).items() if k != 'other_active_coverage'},
+def _visit_context_parts(inputs: dict, source: dict) -> dict:
+    return {'coverage': {k: v for k, v in _api._coverage_snapshot(inputs, source).items() if k != 'other_active_coverage'},
                'codes': _api._previsit_codes(inputs),
                'provider': inputs.get('rendering_provider'),
                'provider_evidence': {key: (source.get('rendering_provider') or {}).get(key) for key in ('npi', 'roles')},
                'diagnoses': inputs.get('diagnoses'), 'billing': source.get('billing_provider'),
                'reason': inputs.get('reason'), 'location': source.get('location_id'), 'pos': inputs.get('place_of_service'), 'date': inputs.get('service_date')}
+
+
+def _visit_context_changes(saved_inputs: dict, saved_source: dict, current_inputs: dict, current_source: dict) -> list[str]:
+    saved, current = _visit_context_parts(saved_inputs, saved_source), _visit_context_parts(current_inputs, current_source)
+    return [key for key in saved if saved[key] != current[key]]
+
+
+def _visit_context_token(inputs: dict, source: dict) -> str:
+    context = _visit_context_parts(inputs, source)
     return _api.hashlib.sha256(_api.json.dumps(context, sort_keys=True).encode()).hexdigest()
 
 
