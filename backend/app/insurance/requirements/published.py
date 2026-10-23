@@ -71,6 +71,12 @@ CIGNA_2026_PA_SOURCE = {
     'source_version': 'July 2026 Master Precertification List', 'verified_at': '2026-10-21',
     'effective_from': '2026-07-01', 'effective_to': '2026-12-31',
 }
+AETNA_OPEN_ACCESS_SOURCE = {
+    'label': 'Aetna benefits product guide, Open Access Managed Choice POS referrals',
+    'url': 'https://www.aetna.com/document-library/healthcare-professionals/documents-forms/benefits-product-guide.pdf',
+    'source_version': 'Product guide dated September 2025, checked 2026-10-23',
+    'verified_at': '2026-10-23', 'effective_from': '2026-10-01', 'effective_to': '2026-12-31',
+}
 MEDICARE_REFERRAL_SOURCE = {
     'label': 'Medicare.gov Original Medicare specialist access',
     'url': 'https://www.medicare.gov/basics/get-started-with-medicare/get-more-coverage/your-coverage-options/compare-original-medicare-medicare-advantage',
@@ -151,6 +157,11 @@ def _published_rule(kind: str, result: dict, context: dict, plans: list[str], co
             return rule('Not required', 'The 2026 PSHB brochure lists services requiring prior approval; a routine office E/M visit alone is outside those listed categories. Additional services require their own decision.', FEP_PSHB_2026_SOURCE)
         if kind == 'authorization':
             return rule('Verification required', 'The 2026 PSHB brochure requires prior approval for selected services and drugs. Match each planned code and indication to its rule.', FEP_PSHB_2026_SOURCE, check=True)
+    if 'aetna' in names and in_network and day >= '2026-10-01' and product in {
+            'openaccessmc', 'openaccessmanagedchoice', 'aetnaopenaccessmanagedchoice',
+            'aetnaopenaccessmanagedchoicepos'}:
+        if kind == 'referral' and family <= {'office_consultation', 'nerve_conduction'}:
+            return rule('Not required', 'Aetna Open Access Managed Choice permits in-network specialist care without a PCP referral.', AETNA_OPEN_ACCESS_SOURCE)
     if {'unitedhealthcare', 'uhc'} & names:
         if 'wellmed' in names or any('wellmed' in _key(plan) for plan in plans):
             return None

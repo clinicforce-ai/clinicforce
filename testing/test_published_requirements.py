@@ -64,6 +64,20 @@ def test_original_medicare_opd_pa_does_not_leak_to_physician_office():
     assert all(line['authorization']['status'] == 'Verification required' for line in office['procedures'])
 
 
+def test_aetna_open_access_managed_choice_selected_office_and_ncs_rules():
+    result, context = case('Aetna', 'Open Access MC', '99203', '95908')
+    context['plans'].insert(0, 'CI')
+    decisions = evaluate(result, context, [])
+    assert [row['referral']['status'] for row in decisions['procedures']] == ['Not required'] * 2
+    assert all(row['authorization']['status'] != 'Not required'
+               for row in decisions['procedures'])
+
+    # The open-access rule cannot clear a different product or a listed drug.
+    assert evaluate(result, {**context, 'plans': ['Managed Choice POS']}, [])['referral']['status'] == 'Verification required'
+    botox, botox_context = case('Aetna', 'Open Access MC', '64615')
+    assert evaluate(botox, botox_context, [])['authorization']['status'] == 'Verification required'
+
+
 def test_same_day_bcbstx_active_271_can_show_network_referral_rule_without_dates():
     result, context = case('BCBSTX', 'Blue Choice PPO', '95908')
     result['benefits']['service_date_matches'] = None

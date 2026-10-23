@@ -45,9 +45,12 @@ def select_benefit_rows(payload: dict[str, Any], service_type_code: str,
     if diagnostic:
         # Sleep studies and radiology share STC 73 with EMG. Their presence
         # must not prevent use of an explicitly labelled diagnostic benefit.
-        entries = [row for row in entries if _procedure(row) or not any(
-            re.fullmatch(r'(?:sleep study|x[ -]?ray)(?:\s*-\s*professional)?', note.strip(), re.I)
-            for note in _benefit_notes([row.get('messages'), row.get('additionalInformation')]))]
+        entries = [row for row in entries if _procedure(row) or not (
+            (labels := _benefit_notes([row.get('messages'), row.get('additionalInformation')]))
+            and any(re.search(r'\b(?:sleep stud(?:y|ies)|x[ -]?ray|imaging|radiology|laboratory|lab)\b', note, re.I)
+                    for note in labels)
+            and not any(re.search(r'\b(?:nerve conduction|electrodiagnostic|diagnostic medical(?: procedure)?|EMG|NCS)\b', note, re.I)
+                        for note in labels))]
     if diagnostic and service_type_code == '73' and not any('73' in (row.get('serviceTypeCodes') or []) and row.get('code') in {'A', 'B'} for row in entries):
         # Some plans return diagnostic procedure terms under 98. Require that
         # description; an office-only copay is not an EMG benefit.

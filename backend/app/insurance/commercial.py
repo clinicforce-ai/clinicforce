@@ -133,7 +133,7 @@ def context_fingerprint(secret: str, context: dict[str, object]) -> str:
     return hmac.new(secret.encode(), canonical.encode(), hashlib.sha256).hexdigest()
 
 
-def parse_rate_csv(content: bytes, filename: str) -> list[dict[str, object]]:
+def parse_rate_csv(content: bytes, filename: str, *, default_effective_from: str | None = None) -> list[dict[str, object]]:
     """Parse a governed CSV, never a patient or payer response file."""
     if not filename.lower().endswith(".csv"):
         raise CommercialError("Rate imports must be UTF-8 CSV files.")
@@ -154,9 +154,12 @@ def parse_rate_csv(content: bytes, filename: str) -> list[dict[str, object]]:
         "effectiveto": "effective_to",
     }
     mapped = {_key(name): aliases.get(_key(name)) for name in reader.fieldnames or []}
-    required = {"code", "allowed", "network", "pos", "effective_from"}
+    required = {"code", "allowed", "network", "pos"}
+    if not default_effective_from:
+        required.add("effective_from")
     if not required.issubset(set(mapped.values())):
-        raise CommercialError("Rate CSV requires CPT/HCPCS, Allowed Amount, Network, POS, and Effective From columns.")
+        raise CommercialError("Rate CSV requires CPT/HCPCS, Allowed Amount, Network, POS"
+                              + (", and Effective From" if not default_effective_from else "") + " columns.")
     parsed: list[dict[str, object]] = []
     seen: set[tuple[str, str, str, str, str, str]] = set()
     for row_number, raw in enumerate(rows, 2):
@@ -165,6 +168,7 @@ def parse_rate_csv(content: bytes, filename: str) -> list[dict[str, object]]:
         code = row.get("code", "").replace(".", "").upper()
         if not re.fullmatch(r"(?:\d{5}|[A-Z]\d{4}|\d{4}[A-Z])", code):
             raise CommercialError(f"Rate CSV row {row_number} has an invalid CPT/HCPCS code.")
+        row['effective_from'] = row.get('effective_from') or default_effective_from or ''
         for field in ("network", "pos", "effective_from"):
             if not row.get(field):
                 raise CommercialError(f"Rate CSV row {row_number} is missing {field.replace('_', ' ')}.")

@@ -292,7 +292,9 @@ def normalize_stedi_271(payload: dict[str, Any], service_type_code: str, provide
         review_reasons.append("Review the payer's benefit limits before estimating patient cost.")
     if multiple_plans or other_active_coverage:
         review_reasons.append("Confirm which plan pays first and how additional coverage applies.")
-    participation = [row['evidence_path'] for row in relevant if any(
+    # Provider-specific messages can have no benefit-network indicator. They
+    # remain valid participation evidence even when excluded from cost sharing.
+    participation = [row['evidence_path'] for row in provider_rows if any(
         _provider_participation(note, provider_npi)
         for note in notes([row.get('messages'), row.get('additionalInformation')]))]
     conflicting_network = any(re.search(r'\b(?:not participating|not in[ -]network|non[- ]participating|out[- ]of[- ]network)\b', note, re.I)

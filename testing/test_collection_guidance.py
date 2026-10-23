@@ -665,6 +665,22 @@ def office_coinsurance_payload():
             "Our records indicate the provider ID you entered is participating in this patient's network."]}]}}]}
 
 
+def test_provider_participation_message_without_benefit_network_indicator():
+    payload = office_coinsurance_payload()
+    message = payload['plans'][0]['benefits']['limitations'][0]
+    message['service'] = {'system': 'STC', 'value': '30'}
+    message.pop('network')
+
+    for service_type, code in [('98', '99203'), ('73', '95908')]:
+        benefits = commercial.normalize_stedi_271(
+            payload, service_type, False, procedure_code=code,
+            service_date='2026-10-07', provider_npi='1234567890',
+        )
+        assert benefits['network_status'] == 'in_network'
+        assert benefits['network_source'] == 'payer_participation_message'
+        assert benefits['network_evidence_ids'] == ['plans[0].benefits.limitations[0]']
+
+
 @pytest.mark.parametrize(('copay', 'coinsurance', 'fee', 'deductible', 'expected'), [
     ('0', '0.20', 25000, '0', None), ('0', '0.20', 17321, '0', None),
     ('0', '0.20', 17321, '20', None), ('0', '0', 25000, '0', 0),

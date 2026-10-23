@@ -82,6 +82,30 @@ def test_employee_terms_cannot_be_applied_to_a_dependent_or_unrelated_services()
     assert terms['copay_cents'] is None
 
 
+def test_employee_and_children_specialist_terms_apply_to_office_but_xray_terms_do_not_price_ncs():
+    raw = {'plans': [{'name': 'Open Access MC', 'benefits': {
+        'statuses': [{'status': 'Active', 'service': {'system': 'STC', 'value': '30'}}],
+        'coPayment': [row('50', level='EMPLOYEE_AND_CHILDREN',
+            messages=['Specialist Visit or Evaluation'], placesOfService=[{'code': '11'}]),
+            row('50', stc='73', level='EMPLOYEE_AND_CHILDREN',
+                messages=['Xray and Lab by a Specialist'])],
+        'coInsurance': [row(level='EMPLOYEE_AND_CHILDREN', percent='0',
+            messages=['Specialist Visit or Evaluation']),
+            row(stc='73', level='EMPLOYEE_AND_CHILDREN', percent='.1',
+                messages=['Complex Imaging'])],
+        'limitations': [row(level='EMPLOYEE_AND_CHILDREN',
+            messages=['Specialist Visit or Evaluation/Plan Ded Waived'])]}}]}
+    office = commercial.normalize_stedi_271(raw, '98', True, procedure_code='99203',
+        service_date=DAY, place_of_service='11')
+    ncs = commercial.normalize_stedi_271(raw, '73', True, procedure_code='95908',
+        service_date=DAY, place_of_service='11')
+    assert office['copay_cents'] == 5000
+    assert office['coinsurance_percent'] == '0'
+    assert office['deductible_applies'] is False
+    assert ncs['copay_cents'] is None
+    assert ncs['coinsurance_percent'] is None
+
+
 def test_provider_other_role_resolves_specialist_copay_and_discloses_remaining_deductible():
     guidance, terms = replay(uhc())
     assert guidance['amount_cents'] == 7500 and terms['deductible_remaining_cents'] == 404834

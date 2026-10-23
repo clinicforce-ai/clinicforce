@@ -8,6 +8,49 @@ import { requirementForLine } from './requirementForLine'
 
 const unknown = 'Not returned for this visit'
 
+function reportedMedicalLimit(
+  result: PrevisitEstimate,
+  level: 'INDIVIDUAL' | 'FAMILY',
+  period: 'CALENDAR_YEAR' | 'REMAINING',
+) {
+  const benefits = result.benefits
+  if (
+    benefits?.active !== true ||
+    benefits.service_date_matches !== true ||
+    benefits.network_status !== 'in_network'
+  )
+    return null
+  const options = benefits.reported_options || []
+  const anchors = options.filter(
+    (row) =>
+      row.kind === 'out_of_pocket' &&
+      row.service_type_code === '30' &&
+      row.coverage_level === level &&
+      row.time_period === 'CALENDAR_YEAR' &&
+      row.network === 'IN_NETWORK' &&
+      /\bINT MED AND RX\b/i.test(row.payer_note || ''),
+  )
+  if (anchors.length !== 1) return null
+  const amounts = [
+    ...new Set(
+      options
+        .filter(
+          (row) =>
+            row.kind === 'out_of_pocket' &&
+            row.service_type_code === '30' &&
+            row.coverage_level === level &&
+            row.time_period === period &&
+            row.network === 'IN_NETWORK' &&
+            row.plan_index === anchors[0].plan_index &&
+            row.plan_association !== 'supplementary' &&
+            row.amount_cents != null,
+        )
+        .map((row) => row.amount_cents!),
+    ),
+  ]
+  return amounts.length === 1 ? amounts[0] : null
+}
+
 function reportedLimit(
   result: PrevisitEstimate,
   kind: 'deductible' | 'out_of_pocket',
@@ -107,6 +150,16 @@ export default function CommercialCostBreakdown({
     lines.every((line) => line.benefits?.copay_cents === lines[0].benefits?.copay_cents)
       ? lines[0].benefits?.copay_cents
       : null
+  const individualOopAnnual =
+    benefits?.oop_annual_cents ?? reportedMedicalLimit(result, 'INDIVIDUAL', 'CALENDAR_YEAR')
+  const individualOopRemaining =
+    benefits?.oop_remaining_cents ?? reportedMedicalLimit(result, 'INDIVIDUAL', 'REMAINING')
+  const reportedOopOnly =
+    (benefits?.oop_annual_cents == null && individualOopAnnual != null) ||
+    (benefits?.oop_remaining_cents == null && individualOopRemaining != null)
+  const familyOopAnnual = reportedMedicalLimit(result, 'FAMILY', 'CALENDAR_YEAR')
+  const familyOopRemaining = reportedMedicalLimit(result, 'FAMILY', 'REMAINING')
+  const pricedCashLines = lines.filter((line) => line.cash_cents != null && !line.cash_included)
   const lineAllowedTotal =
     lines.length > 0 &&
     lines.every(
@@ -163,7 +216,7 @@ export default function CommercialCostBreakdown({
     {
       label: 'Total payer allowed',
       value:
-        price?.complete && price.allowed_min_cents != null && price.allowed_max_cents != null
+        price?.allowed_min_cents != null && price.allowed_max_cents != null
           ? range(price.allowed_min_cents, price.allowed_max_cents)
           : lineAllowedTotal != null
             ? money(lineAllowedTotal)
@@ -249,15 +302,14 @@ export default function CommercialCostBreakdown({
       label: 'Individual out-of-pocket maximum',
       value:
         [
-          benefits?.oop_annual_cents != null ? `${money(benefits.oop_annual_cents)} annual` : null,
-          benefits?.oop_remaining_cents != null
-            ? `${money(benefits.oop_remaining_cents)} remaining`
-            : null,
+          individualOopAnnual != null ? `${money(individualOopAnnual)} annual` : null,
+          individualOopRemaining != null ? `${money(individualOopRemaining)} remaining` : null,
         ]
           .filter(Boolean)
           .join(' · ') || limitSummary(result, 'out_of_pocket', 'INDIVIDUAL').value,
-      detail:
-        calculated && components?.oop_adjustment_cents != null
+      detail: reportedOopOnly
+        ? 'Payer-reported medical limit; not used as a verified calculation input'
+        : calculated && components?.oop_adjustment_cents != null
           ? `${money(components.oop_adjustment_cents)} reduction applied to this visit`
           : limitSummary(result, 'out_of_pocket', 'INDIVIDUAL').unassigned
             ? 'Payer-reported plan amount; medical applicability unverified and not used as a cap'
@@ -265,10 +317,19 @@ export default function CommercialCostBreakdown({
     },
     {
       label: 'Family out-of-pocket maximum',
-      value: limitSummary(result, 'out_of_pocket', 'FAMILY').value,
-      detail: limitSummary(result, 'out_of_pocket', 'FAMILY').unassigned
-        ? 'Payer-reported plan amount; medical applicability unverified and not used as a cap'
-        : undefined,
+      value:
+        [
+          familyOopAnnual != null ? `${money(familyOopAnnual)} annual` : null,
+          familyOopRemaining != null ? `${money(familyOopRemaining)} remaining` : null,
+        ]
+          .filter(Boolean)
+          .join(' · ') || limitSummary(result, 'out_of_pocket', 'FAMILY').value,
+      detail:
+        familyOopAnnual != null || familyOopRemaining != null
+          ? 'Payer-reported medical limit; not used as a verified calculation input'
+          : limitSummary(result, 'out_of_pocket', 'FAMILY').unassigned
+            ? 'Payer-reported plan amount; medical applicability unverified and not used as a cap'
+            : undefined,
     },
     { label: 'Referral', value: requirementStatus(result, 'referral') },
     { label: 'Prior authorization', value: requirementStatus(result, 'authorization') },
@@ -277,7 +338,9 @@ export default function CommercialCostBreakdown({
       value:
         price?.cash_complete && price.cash_min_cents != null && price.cash_max_cents != null
           ? range(price.cash_min_cents, price.cash_max_cents)
-          : 'Not quoted',
+          : pricedCashLines.length === 1 && /^9920[2-5]$/.test(pricedCashLines[0].code)
+            ? `${money(pricedCashLines[0].cash_cents!)} new-patient office visit`
+            : 'Not quoted',
       detail: 'Separate self-pay price; not used as the insurance allowed amount',
     },
   ]
