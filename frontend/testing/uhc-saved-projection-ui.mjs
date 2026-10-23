@@ -873,7 +873,7 @@ try {
   assert.equal(failedUpdate.amountText, 'Check visit details')
   assert.equal(failedUpdate.amountLabel, 'Previous estimate · needs recheck')
   assert(failedOverview.includes('The update failed. Recheck this visit before collecting.'))
-  assert(failedOverview.includes('Collection decision'))
+  assert(failedOverview.includes('Amount to collect at visit'))
   assert(!failedOverview.includes('Planned CPTs and coverage requirements'))
   assert(!failedCalculation.includes('What the patient may owe'))
   const failedCashResult = { ...supported, payment_mode: 'cash' }
