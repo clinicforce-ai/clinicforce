@@ -11,6 +11,7 @@ import re
 from app.insurance import plan_matrix
 from app.insurance.library_network_exclusions import product_kind
 from app.insurance.identity import generic_plan_label, payer_identity_verified
+from app.insurance import stedi_cpt_authorization
 from app.insurance.requirements.published import (
     UHC_MA_2026_AUTH_SOURCE, _published_rule, _uhc_choice_plus_referral, _uhc_ma_ppo_referral,
 )
@@ -28,6 +29,7 @@ def _payer_evidence(result: dict, kind: str, codes: set[str], context: dict) -> 
     decisions = exact.get('decisions') or {}
     identity = result.get('identity') or benefits.get('identity') or {}
     if (kind == 'authorization' and codes and exact.get('state') == 'complete'
+            and stedi_cpt_authorization.visit_coverage_bound(benefits, context.get('service_date') or '')
             and codes <= decisions.keys() and exact.get('service_date') == context.get('service_date')
             and exact.get('pos') == str(context.get('pos') or '')
             and exact.get('network') == benefits.get('network_status')
