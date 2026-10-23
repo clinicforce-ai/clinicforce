@@ -447,8 +447,10 @@ async def list_completed_appointments(profile: dict[str, Any], practice: dict[st
 
 
 async def fetch_inputs(profile: dict[str, Any], practice: dict[str, Any], appointment_id: str | None = None,
-                       *, transport: httpx.AsyncBaseTransport | None = None) -> tuple[dict, list[str], dict]:
-    return await _fetch_inputs(sys.modules[__name__], profile, practice, appointment_id, transport=transport)
+                       *, transport: httpx.AsyncBaseTransport | None = None,
+                       review_service_date: str | None = None) -> tuple[dict, list[str], dict]:
+    return await _fetch_inputs(sys.modules[__name__], profile, practice, appointment_id,
+                               transport=transport, review_service_date=review_service_date)
 
 
 async def fetch_claim_identifiers(source: dict, *, transport: httpx.AsyncBaseTransport | None = None) -> list[str]:
