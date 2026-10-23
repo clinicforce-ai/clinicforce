@@ -26,6 +26,8 @@ async def update_visit_review(case_id: str, value: _api.VisitReviewInput, reques
     authorizes a positive Medicare cost-sharing advance.
     Benefit verification requires saved payer rows for a compatible service
     category or the exact procedure; unrelated broad categories are rejected.
+    A changed eCW visit returns only the changed context category names, never
+    patient or coverage values.
     """
     session = await _api._session(request)
     case = await _api.run_in_threadpool(_api.store.get_case, case_id, session['patient_id'], session['share_manifest_id'], **_api._scope(session))
@@ -57,8 +59,12 @@ async def update_visit_review(case_id: str, value: _api.VisitReviewInput, reques
     library_documents = await _api.run_in_threadpool(_api.library_pricing.prepare, session['practice_id'])
     session['_library_documents'] = library_documents
     session['library_pricing'] = [{'document_id': row['id'], 'label': row['label'], 'payer': row.get('payer'), 'summary': row.get('extraction_summary')} for row in library_documents]
-    if value.context_token != context['context_token'] or _api._visit_context_token(inputs, source) != value.context_token:
+    if value.context_token != context['context_token']:
         raise _api.HTTPException(409, 'The appointment, coverage or services changed in eCW. Check the visit again.')
+    if _api._visit_context_token(inputs, source) != value.context_token:
+        changed = _api._visit_context_changes(context['inputs'], context['source'], inputs, source)
+        categories = ', '.join(changed) if changed else 'visit context'
+        raise _api.HTTPException(409, f'The eCW visit changed ({categories}). Check the visit again.')
     saved_eligibility = (context.get('source') or {}).get('saved_eligibility')
     if saved_eligibility:
         source['saved_eligibility'] = saved_eligibility
