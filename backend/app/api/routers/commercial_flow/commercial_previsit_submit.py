@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from types import ModuleType
+from app.api.routers.commercial_flow.commercial_previsit_requirements import check_cpt_authorization
 
 
 async def submit_previsit_eligibility(api: ModuleType, *, payer: dict, provider: dict,
@@ -105,6 +106,9 @@ async def submit_previsit_eligibility(api: ModuleType, *, payer: dict, provider:
                         "checked_at": result["checked_at"], "requested_service_types": requested_stc}
     case["previsit_raw_object_key"] = raw_key
     case["previsit_raw_sha256"] = api.hashlib.sha256(raw_bytes).hexdigest()
+    case = await check_cpt_authorization(api, result, case, payload, inputs, session, api_key)
+    if (case.get('cpt_authorization') or {}).get('state') == 'complete':
+        await api.run_in_threadpool(api._finish_previsit, result, case, inputs, source, payload, session, payer_id)
     saved_case = await api.run_in_threadpool(api._save, case, session, "previsit-stedi-complete")
     if (benefits.get('identity') or {}).get('policy_differences'):
         saved_case['previsit_discovery'] = {'request_state': 'not_requested', 'recovery_requested': True}

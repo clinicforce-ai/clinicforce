@@ -1,8 +1,17 @@
 """Synthetic patients against all three NMCT workbook sheets; no live payer access."""
 from copy import deepcopy
+import asyncio
+import hashlib
+import json
+import re
+from datetime import date
+from types import SimpleNamespace
+
+import httpx
 
 from app.core import library_files
-from app.insurance import contract_requirements, plan_matrix
+from app.insurance import contract_requirements, plan_matrix, stedi_cpt_authorization
+from app.api.routers.commercial_flow.commercial_previsit_requirements import check_cpt_authorization
 
 
 def visit(payer, plan, *codes, active=True, group='G-1', signal=None):
@@ -113,6 +122,78 @@ def test_cpt_specific_trigger_keeps_requirement_and_approval_distinct():
     assert visit('Aetna', 'Open Choice PPO', '64612')['authorization']['status'] == 'Verification required'
     emg = visit('BCBSTX', 'Blue Choice PPO', '95910')['authorization']
     assert emg['status'] == 'Verification required' and 'product and ASO exceptions' in emg['reason']
+
+
+def test_exact_stedi_cpt_and_office_setting_settle_authorization_over_matrix():
+    rows = [{'service': {'system': 'CPT', 'value': code},
+             'network': {'indicator': 'IN_NETWORK'}, 'placesOfService': [{'code': pos}],
+             'priorAuthIndicator': indicator}
+            for code in ('95908', '95886')
+            for pos, indicator in (('11', 'NOT_REQUIRED'), ('21', 'REQUIRED'))]
+    payload = {'plans': [{'benefits': {'coverageBasis': rows}}]}
+    office = stedi_cpt_authorization.decisions(payload, ['95908', '95886'], '11', 'in_network')
+    assert office == {'95908': 'Not required', '95886': 'Not required'}
+    assert stedi_cpt_authorization.decisions(payload, ['95908'], '21', 'in_network') == {'95908': 'Required'}
+    assert stedi_cpt_authorization.decisions(payload, ['95908'], '11', 'out_of_network') == {}
+    rows.append({**rows[0], 'placesOfService': [{'code': '11'}], 'priorAuthIndicator': 'REQUIRED'})
+    assert '95908' not in stedi_cpt_authorization.decisions(payload, ['95908'], '11', 'in_network')
+    rows.pop()
+    result = {'codes': [{'id': code, 'code': code, 'units': 1} for code in office],
+              'benefit_source': 'Stedi', 'identity': {'status': 'matched', 'binding': 'synthetic-current-binding',
+                                                       'match_version': 2},
+              'benefits': {'active': True, 'service_date_matches': True, 'network_status': 'in_network'},
+              'cpt_authorization': {'state': 'complete', 'service_date': '2026-10-12', 'pos': '11',
+                                     'network': 'in_network', 'patient_binding': 'synthetic-current-binding',
+                                     'decisions': office, 'check_id': 'ec_synthetic-check'}}
+    context = {'service_date': '2026-10-12', 'payer_names': ['BCBSTX'], 'plans': ['Blue Choice PPO'],
+               'member_id': 'M-1', 'group_number': 'G-1', 'rendering_npi': '1234567890', 'pos': '11'}
+    evidence = contract_requirements.evaluate(result, context, [])
+    assert evidence['authorization']['status'] == 'Not required'
+    assert {item['authorization']['status'] for item in evidence['procedures']} == {'Not required'}
+    stale = deepcopy(result)
+    stale['cpt_authorization']['pos'] = '21'
+    stale_evidence = contract_requirements.evaluate(stale, context, [])
+    assert stale_evidence['authorization']['status'] == 'Verification required'
+
+
+def test_selected_cpts_are_checked_once_and_saved_with_exact_stedi_scope():
+    response = {'payerId': 'PAYER', 'provider': {'npi': '1234567890'},
+                'subscriber': {'memberId': 'MEMBER', 'dateOfBirth': '1970-01-01',
+                               'name': {'person': {'firstName': 'Test', 'lastName': 'Member'}}},
+                'id': 'ec_synthetic-check', 'plans': [{'benefits': {'coverageBasis': [
+                    {'service': {'system': 'CPT', 'value': code}, 'network': {'indicator': 'IN_NETWORK'},
+                     'placesOfService': [{'code': '11'}], 'priorAuthIndicator': 'NOT_REQUIRED'}
+                    for code in ('95908', '95886')]}}]}
+    sent = []
+    class Client:
+        async def __aenter__(self): return self
+        async def __aexit__(self, *_): return None
+        async def post(self, _url, **kwargs):
+            sent.append(kwargs['json'])
+            return SimpleNamespace(is_error=False, json=lambda: response)
+    async def thread(fn, *args, **kwargs): return fn(*args, **kwargs)
+    def save(case, *_):
+        case['revision'] = case.get('revision', 0) + 1
+        return case
+    api = SimpleNamespace(re=re, hashlib=hashlib, json=json, date=date, run_in_threadpool=thread,
+                          _save=save, STEDI_URL='https://example.test/eligibility',
+                          httpx=SimpleNamespace(AsyncClient=lambda **_: Client(), Timeout=httpx.Timeout,
+                                                HTTPError=httpx.HTTPError),
+                          object_store=SimpleNamespace(put_staff_document=lambda *_: 'protected-object'))
+    payload = {'payerId': 'PAYER', 'provider': {'npi': '1234567890', 'name': {'organization': 'Clinic'}},
+               'subscriber': {'memberId': 'MEMBER', 'dateOfBirth': '1970-01-01',
+                              'name': {'person': {'firstName': 'Test', 'lastName': 'Member'}}}}
+    result = {'codes': [{'code': '95908'}, {'code': '95886'}],
+              'identity': {'status': 'matched', 'binding': 'synthetic-current-binding', 'match_version': 2},
+              'benefits': {'active': True, 'service_date_matches': True, 'network_status': 'in_network'}}
+    inputs = {'service_date': '2026-10-12', 'place_of_service': '11'}
+    case = asyncio.run(check_cpt_authorization(api, result, {'id': 'synthetic'}, payload, inputs,
+                                                {'practice_id': 'synthetic'}, 'synthetic-key'))
+    assert case['cpt_authorization']['decisions'] == {'95908': 'Not required', '95886': 'Not required'}
+    assert len(sent) == 1 and len(sent[0]['encounter']['services']) == 2
+    asyncio.run(check_cpt_authorization(api, result, case, payload, inputs,
+                                         {'practice_id': 'synthetic'}, 'synthetic-key'))
+    assert len(sent) == 1
 
 
 def test_rental_network_missing_plan_and_checklist_gaps_fail_closed():

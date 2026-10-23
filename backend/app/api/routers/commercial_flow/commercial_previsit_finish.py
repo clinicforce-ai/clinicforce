@@ -179,6 +179,10 @@ def _finish_previsit(result: dict, case: dict, inputs: dict, source: dict, paylo
         'ecw': source.get('plan_details') or {'plan': [source['plan']] if source.get('plan') else []},
         'stedi': _api.commercial.plan_details(payload) if payload else {}}, ecw_retrieved_at=source.get('retrieved_at'),
         response_reference=(payload or {}).get('id'), selected_ids=selected_ids or [])
+    cpt_check = case.get('cpt_authorization') or {}
+    result['cpt_authorization'] = {key: cpt_check[key] for key in
+        ('state', 'service_date', 'pos', 'network', 'patient_binding', 'decisions', 'check_id')
+        if key in cpt_check}
     if not selected_ids and codes and all(row.get('source') in {
             'conditional office E/M alternative', 'conditional NCS alternative'} for row in codes):
         result['provisional_scenario'] = {
