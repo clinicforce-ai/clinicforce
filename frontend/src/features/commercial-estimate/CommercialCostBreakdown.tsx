@@ -8,33 +8,48 @@ import { requirementForLine } from './requirementForLine'
 
 const unknown = 'Not returned for this visit'
 
-function familyLimit(
+function reportedLimit(
   result: PrevisitEstimate,
   kind: 'deductible' | 'out_of_pocket',
+  level: 'INDIVIDUAL' | 'FAMILY',
   period: 'CALENDAR_YEAR' | 'REMAINING',
 ) {
-  const amounts = [
-    ...new Set(
-      (result.benefits?.reported_options || [])
-        .filter(
-          (row) =>
-            row.kind === kind &&
-            row.coverage_level === 'FAMILY' &&
-            row.time_period === period &&
-            row.plan_association === 'medical' &&
-            row.amount_cents != null,
-        )
-        .map((row) => row.amount_cents!),
-    ),
-  ]
-  return amounts.length === 1 ? money(amounts[0]) : unknown
+  const rows = (result.benefits?.reported_options || []).filter(
+    (row) =>
+      row.kind === kind &&
+      row.coverage_level === level &&
+      row.time_period === period &&
+      row.service_type_code === '30' &&
+      row.amount_cents != null &&
+      row.network === 'IN_NETWORK',
+  )
+  for (const association of ['medical', 'unassigned']) {
+    const amounts = [
+      ...new Set(
+        rows.filter((row) => row.plan_association === association).map((row) => row.amount_cents!),
+      ),
+    ]
+    if (amounts.length === 1)
+      return { amount: money(amounts[0]), unassigned: association === 'unassigned' }
+    if (amounts.length > 1) break
+  }
+  return { amount: unknown, unassigned: false }
 }
 
-function familyLimitSummary(result: PrevisitEstimate, kind: 'deductible' | 'out_of_pocket') {
-  const annual = familyLimit(result, kind, 'CALENDAR_YEAR')
-  const remaining = familyLimit(result, kind, 'REMAINING')
-  if (annual === unknown && remaining === unknown) return unknown
-  return `${annual === unknown ? 'Annual amount not returned' : `${annual} annual`} · ${remaining === unknown ? 'Remaining amount not returned' : `${remaining} remaining`}`
+function limitSummary(
+  result: PrevisitEstimate,
+  kind: 'deductible' | 'out_of_pocket',
+  level: 'INDIVIDUAL' | 'FAMILY',
+) {
+  const annual = reportedLimit(result, kind, level, 'CALENDAR_YEAR')
+  const remaining = reportedLimit(result, kind, level, 'REMAINING')
+  return {
+    value:
+      annual.amount === unknown && remaining.amount === unknown
+        ? unknown
+        : `${annual.amount === unknown ? 'Annual amount not returned' : `${annual.amount} annual`} · ${remaining.amount === unknown ? 'Remaining amount not returned' : `${remaining.amount} remaining`}`,
+    unassigned: annual.unassigned || remaining.unassigned,
+  }
 }
 
 function requirementStatus(result: PrevisitEstimate, kind: 'referral' | 'authorization') {
@@ -86,8 +101,13 @@ export default function CommercialCostBreakdown({
   const lines = price?.mode === 'services' ? price.lines || [] : []
   const summary = result.encounter_summary
   const components = summary?.components
+  const diagnosticCopay =
+    result.collection_guidance?.basis === 'diagnostic_day_copay' &&
+    lines.length > 0 &&
+    lines.every((line) => line.benefits?.copay_cents === lines[0].benefits?.copay_cents)
+      ? lines[0].benefits?.copay_cents
+      : null
   const lineAllowedTotal =
-    price?.complete === true &&
     lines.length > 0 &&
     lines.every(
       (line) =>
@@ -152,22 +172,26 @@ export default function CommercialCostBreakdown({
     {
       label: 'Copay',
       value:
-        calculated && components?.copay_cents != null
-          ? money(components.copay_cents)
-          : lines.some((line) => line.benefits?.copay_cents != null)
-            ? lines
-                .map(
-                  (line) =>
-                    `CPT ${line.code}: ${line.benefits.copay_cents != null ? money(line.benefits.copay_cents) : 'not returned'}`,
-                )
-                .join('; ')
-            : unknown,
+        diagnosticCopay != null
+          ? `${money(diagnosticCopay)} once per day`
+          : calculated && components?.copay_cents != null
+            ? money(components.copay_cents)
+            : lines.some((line) => line.benefits?.copay_cents != null)
+              ? lines
+                  .map(
+                    (line) =>
+                      `CPT ${line.code}: ${line.benefits.copay_cents != null ? money(line.benefits.copay_cents) : 'not returned'}`,
+                  )
+                  .join('; ')
+              : unknown,
       detail:
-        calculated &&
-        components?.copay_cents === 0 &&
-        !lines.some((line) => line.benefits?.copay_cents != null)
-          ? 'No separate copay was applied to the priced CPTs'
-          : undefined,
+        result.collection_guidance?.basis === 'diagnostic_day_copay'
+          ? 'One payer diagnostic copay for the selected testing; final share follows the claim'
+          : calculated &&
+              components?.copay_cents === 0 &&
+              !lines.some((line) => line.benefits?.copay_cents != null)
+            ? 'No separate copay was applied to the priced CPTs'
+            : undefined,
     },
     {
       label: 'Individual deductible',
@@ -191,7 +215,10 @@ export default function CommercialCostBreakdown({
     },
     {
       label: 'Family deductible',
-      value: familyLimitSummary(result, 'deductible'),
+      value: limitSummary(result, 'deductible', 'FAMILY').value,
+      detail: limitSummary(result, 'deductible', 'FAMILY').unassigned
+        ? 'Payer-reported plan amount; medical applicability unverified'
+        : undefined,
     },
     {
       label: 'Coinsurance',
@@ -200,7 +227,9 @@ export default function CommercialCostBreakdown({
           ? money(components.coinsurance_cents)
           : benefits?.coinsurance_percent != null
             ? `${benefits.coinsurance_percent}% reported; dollar amount pending`
-            : unknown,
+            : lines.length && lines.every((line) => line.benefits?.coinsurance_percent === '0')
+              ? '0% reported for selected CPTs'
+              : unknown,
       detail: calculated
         ? coinsuranceFormula(result) ||
           (components?.coinsurance_cents === 0
@@ -226,15 +255,20 @@ export default function CommercialCostBreakdown({
             : null,
         ]
           .filter(Boolean)
-          .join(' · ') || unknown,
+          .join(' · ') || limitSummary(result, 'out_of_pocket', 'INDIVIDUAL').value,
       detail:
         calculated && components?.oop_adjustment_cents != null
           ? `${money(components.oop_adjustment_cents)} reduction applied to this visit`
-          : 'Payer-reported limit; applicability to these CPTs depends on the completed estimate',
+          : limitSummary(result, 'out_of_pocket', 'INDIVIDUAL').unassigned
+            ? 'Payer-reported plan amount; medical applicability unverified and not used as a cap'
+            : 'Payer-reported limit; applicability to these CPTs depends on the completed estimate',
     },
     {
       label: 'Family out-of-pocket maximum',
-      value: familyLimitSummary(result, 'out_of_pocket'),
+      value: limitSummary(result, 'out_of_pocket', 'FAMILY').value,
+      detail: limitSummary(result, 'out_of_pocket', 'FAMILY').unassigned
+        ? 'Payer-reported plan amount; medical applicability unverified and not used as a cap'
+        : undefined,
     },
     { label: 'Referral', value: requirementStatus(result, 'referral') },
     { label: 'Prior authorization', value: requirementStatus(result, 'authorization') },
@@ -298,9 +332,11 @@ export default function CommercialCostBreakdown({
     detail: model.supportedAmount
       ? result.collection_guidance?.basis === 'office_copay'
         ? 'Office copay advance; other services may have a later balance'
-        : result.collection_guidance?.basis === 'claim_after_service'
-          ? 'Clinic policy defers collection until after the claim'
-          : undefined
+        : result.collection_guidance?.basis === 'diagnostic_day_copay'
+          ? 'One diagnostic copay advance; other costs may follow the claim'
+          : result.collection_guidance?.basis === 'claim_after_service'
+            ? 'Clinic policy defers collection until after the claim'
+            : undefined
       : undefined,
     emphasis: true,
   })

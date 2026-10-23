@@ -1,6 +1,9 @@
-"""Single office visit copay when a complete visit estimate is unavailable."""
+"""Sourced visit copays when a complete patient share is unavailable."""
+
+import re
 
 from app.insurance.benefit_review import annual_oop_conflict_with_known_remaining
+from app.insurance.cpt_rules import EMG_ADD_ONS, NCS_CODES
 from app.insurance.library_network_exclusions import product_kind
 
 
@@ -53,4 +56,50 @@ def office_copay_amount(result: dict, benefits: dict, price: dict, lines: list[d
                 'This is only the verified out-of-network office copay. The payer allowed amount and possible additional charges are unknown.')
         guidance.update(status='estimated', basis='office_copay',
                         reason='The applicable office-visit copay is collected once. Any additional service responsibility will follow the claim.')
+    return amount
+
+
+def diagnostic_day_copay_amount(price: dict, lines: list[dict], guidance: dict,
+                                assumptions: list[str]) -> int | None:
+    """Collect one diagnostic copay when all planned testing shares its payer row."""
+    if price.get('mode') != 'services' or not lines or not all(
+            line.get('code') in NCS_CODES | EMG_ADD_ONS
+            and line.get('allowed_basis') == 'clinic_contract'
+            and (line.get('rate_resolution') or {}).get('status') == 'RESOLVED'
+            and type(line.get('allowed_cents')) is int and line['allowed_cents'] > 0
+            for line in lines):
+        return None
+    terms = [line.get('benefits') or {} for line in lines]
+    amounts = {term.get('copay_cents') for term in terms}
+    sources = {term.get('copay_id') for term in terms}
+    periods = {term.get('copay_period') for term in terms}
+    if (len(amounts) != 1 or len(sources) != 1 or len(periods) != 1
+            or not next(iter(sources)) or next(iter(periods)) not in {'DAY', 'VISIT', '7', '27'}
+            or type(next(iter(amounts))) is not int or next(iter(amounts)) <= 0):
+        return None
+    source_id = next(iter(sources))
+    for term in terms:
+        payer_row = next((row for row in term.get('reported_options') or []
+                          if row.get('id') == source_id and row.get('kind') == 'copay'), None)
+        note = str((payer_row or {}).get('payer_note') or '')
+        if (not payer_row or payer_row.get('amount_cents') != term['copay_cents']
+                or not re.search(r'\b(?:diagnostic medical(?: procedure)?|nerve conduction|electrodiagnostic|EMG|NCS)\b', note, re.I)
+                or term.get('active') is not True
+                or term.get('deductible_applies') is True and term.get('deductible_remaining_cents') != 0
+                or term.get('oop_remaining_cents') == 0
+                or term.get('coinsurance_percent') not in {None, '0', '0.0', '0.00'}
+                or term.get('cost_share') in {'coinsurance', 'cumulative'}
+                or any(not annual_oop_conflict_with_known_remaining(reason, term)
+                       and 'unassigned out-of-pocket rows are retained' not in reason.lower()
+                       and any(word in reason.lower() for word in ('conflict', 'conditional', 'limit', 'date', 'identity', 'evidence'))
+                       for reason in term.get('review_reasons') or [])):
+            return None
+    amount = min(next(iter(amounts)), sum(line['allowed_cents'] for line in lines))
+    known_caps = [term['oop_remaining_cents'] for term in terms
+                  if type(term.get('oop_remaining_cents')) is int]
+    if known_caps:
+        amount = min(amount, *known_caps)
+    assumptions.append('The payer reported one diagnostic-medical copay per day. Deductible applicability and the final patient share remain unresolved; additional responsibility may follow the claim.')
+    guidance.update(status='estimated', basis='diagnostic_day_copay',
+                    reason='Collect one payer-reported diagnostic-medical copay for the selected testing today. Other patient responsibility follows the claim.')
     return amount
