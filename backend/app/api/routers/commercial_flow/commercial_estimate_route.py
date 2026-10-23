@@ -14,7 +14,8 @@ from app.api.routers.commercial_flow.commercial_previsit_submit import submit_pr
     "booking without a site count starts with an editable three-site CPT 11104 + 11105 x2 scenario. A supported "
 
     "fixed office copay is the visit-time amount, with later costs estimated separately. A "
-    "fresh payer check includes service categories from saved selected CPTs. A signed "
+    "fresh payer check includes service categories from saved selected CPTs. A matching exact-CPT "
+    "Stedi inquiry automatically resolves authorization for the bound member and visit setting. A signed "
     "same-payer clinic agreement may set benefits.network_source to clinic_group_agreement and "
     "return mismatch_warnings for differing product or provider details. evidence_resolution reports "
     "unresolved facts; an in-network tier alone does not establish an amount to collect."
