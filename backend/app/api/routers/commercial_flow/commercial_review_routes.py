@@ -29,6 +29,8 @@ async def update_visit_review(case_id: str, value: _api.VisitReviewInput, reques
     category or the exact procedure; unrelated broad categories are rejected.
     Selected CPTs also receive one automatic Stedi CPT and place-of-service
     authorization inquiry when the active member and network are bound.
+    A saved past visit may reuse its dated payer response after 24 hours;
+    current and future visits still need a fresh benefit response.
     A changed eCW visit returns only the changed context category names, never
     patient or coverage values.
     Changed clinical details may be refreshed explicitly when all patient,
@@ -52,7 +54,8 @@ async def update_visit_review(case_id: str, value: _api.VisitReviewInput, reques
         raise _api.HTTPException(409, 'Complete the eligibility check before verifying benefits or recording payments against an insurance estimate.')
     try:
         checked = _api.datetime.now(_api.timezone.utc) if failed else _api.datetime.fromisoformat(case['previsit']['checked_at'])
-        if not failed and checked + _api.timedelta(hours=24) <= _api.datetime.now(_api.timezone.utc):
+        historical_visit = context['inputs']['service_date'] < _api.date.today().isoformat()
+        if not failed and not historical_visit and checked + _api.timedelta(hours=24) <= _api.datetime.now(_api.timezone.utc):
             raise ValueError('expired')
     except (KeyError, ValueError, TypeError):
         raise _api.HTTPException(409, 'The benefit response is stale. Check this visit again before saving verification.') from None
