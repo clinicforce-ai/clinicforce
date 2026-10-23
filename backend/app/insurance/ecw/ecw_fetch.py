@@ -52,7 +52,8 @@ from app.logs.collection_audit import collection_event
 
 
 async def fetch_inputs(backend: ModuleType, profile: dict[str, Any], practice: dict[str, Any], appointment_id: str | None = None,
-                       *, transport: httpx.AsyncBaseTransport | None = None) -> tuple[dict, list[str], dict]:
+                       *, transport: httpx.AsyncBaseTransport | None = None,
+                       review_service_date: str | None = None) -> tuple[dict, list[str], dict]:
     """Fetch and reduce eCW data; never infer codes, payer IDs, prices or provider roles."""
     client_id, issuer = backend.settings()
     try:
@@ -64,6 +65,7 @@ async def fetch_inputs(backend: ModuleType, profile: dict[str, Any], practice: d
             today = today_date.isoformat()
             visit, encounters, next_visits = await select_upcoming_visit(
                 backend, client, issuer, token, patient_id, profile, appointment_id, now,
+                review_service_date=review_service_date,
             )
             service_date = _appointment_date(visit) or today
             encounter_id = str(visit.get("id", ""))

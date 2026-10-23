@@ -143,8 +143,9 @@ async def list_completed_appointments(backend: ModuleType, profile: dict[str, An
 
 async def select_upcoming_visit(backend: ModuleType, client: httpx.AsyncClient, issuer: str, token: str,
                                 patient_id: str, profile: dict[str, Any],
-                                appointment_id: str | None, now: datetime) -> tuple[dict, list[dict], list[dict]]:
-    """Choose only a verified upcoming encounter for this patient."""
+                                appointment_id: str | None, now: datetime, *,
+                                review_service_date: str | None = None) -> tuple[dict, list[dict], list[dict]]:
+    """Choose a verified encounter; saved review may revisit its dated selection."""
     today_date = now.date()
     today = today_date.isoformat()
     preferred_date = str(profile.get("ecw_appointment_date") or "")
@@ -171,7 +172,9 @@ async def select_upcoming_visit(backend: ModuleType, client: httpx.AsyncClient, 
         )
     if encounter_timeout:
         raise backend.EcwBackendError("eClinicalWorks timed out while loading the patient's scheduled encounters. Reload the appointment to retry.")
-    scheduled = [row for row in encounters if _is_upcoming_appointment(row, now)]
+    scheduled = [row for row in encounters if _is_upcoming_appointment(row, now) or (
+        review_service_date and appointment_id and _appointment_date(row) == review_service_date
+        and str(row.get('status') or '').casefold() not in {'cancelled', 'entered-in-error'})]
     next_date = min((_appointment_date(row) for row in scheduled), default="")
     next_visits = [row for row in scheduled if _appointment_date(row) == next_date]
     if appointment_id:

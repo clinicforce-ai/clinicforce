@@ -50,7 +50,8 @@ async def update_visit_review(case_id: str, value: _api.VisitReviewInput, reques
         raise _api.HTTPException(409, 'The benefit response is stale. Check this visit again before saving verification.') from None
     try:
         inputs, _, source = await _api.ecw_backend.fetch_inputs(_api._ecw_identity(session, context['inputs']['service_date']),
-            _api._ecw_practice_config(session['practice_id']), context['source']['appointment_id'])
+            _api._ecw_practice_config(session['practice_id']), context['source']['appointment_id'],
+            review_service_date=context['inputs']['service_date'])
     except _api.ecw_backend.EcwBackendError as exc:
         raise _api.HTTPException(502, str(exc)) from exc
     library_documents = await _api.run_in_threadpool(_api.library_pricing.prepare, session['practice_id'])

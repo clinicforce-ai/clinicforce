@@ -14,6 +14,7 @@ import httpx
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "backend"))
 
 from app.insurance import ecw_backend
+from app.insurance.ecw.ecw_appointments import select_upcoming_visit
 from app.ingestion import ecw
 
 
@@ -22,6 +23,34 @@ class EcwBackendSourceTests(unittest.IsolatedAsyncioTestCase):
         registry = patch.object(ecw_backend.provider_specialty, 'lookup', AsyncMock(return_value={}))
         registry.start()
         self.addCleanup(registry.stop)
+
+    async def test_saved_review_can_read_only_its_selected_service_date_encounter(self):
+        now = datetime.now(ZoneInfo('America/New_York'))
+        same_day_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        visit = {'id': 'visit', 'status': 'finished', 'subject': {'reference': 'Patient/synthetic'},
+                 'period': {'start': same_day_start.isoformat()}}
+        backend = type('Backend', (), {'_bounded_read': AsyncMock(return_value=(visit, False)),
+                                       'EcwBackendError': ecw_backend.EcwBackendError})()
+        with self.assertRaisesRegex(ecw_backend.EcwBackendError, 'no longer available'):
+            await select_upcoming_visit(backend, None, '', '', 'synthetic', {}, 'visit', now)
+        selected, _, _ = await select_upcoming_visit(
+            backend, None, '', '', 'synthetic', {}, 'visit', now,
+            review_service_date=now.date().isoformat())
+        self.assertEqual(selected['id'], 'visit')
+        visit['status'] = 'cancelled'
+        with self.assertRaisesRegex(ecw_backend.EcwBackendError, 'no longer available'):
+            await select_upcoming_visit(backend, None, '', '', 'synthetic', {}, 'visit', now,
+                                        review_service_date=now.date().isoformat())
+        visit['status'] = 'finished'
+        visit['period']['start'] = (same_day_start - timedelta(days=1)).isoformat()
+        with self.assertRaisesRegex(ecw_backend.EcwBackendError, 'no longer available'):
+            await select_upcoming_visit(backend, None, '', '', 'synthetic', {}, 'visit', now,
+                                        review_service_date=now.date().isoformat())
+        visit['period']['start'] = same_day_start.isoformat()
+        visit['subject']['reference'] = 'Patient/other'
+        with self.assertRaisesRegex(ecw_backend.EcwBackendError, 'does not belong'):
+            await select_upcoming_visit(backend, None, '', '', 'synthetic', {}, 'visit', now,
+                                        review_service_date=now.date().isoformat())
 
     async def test_empty_coverage_preserves_note_candidate_without_inventing_subscriber(self):
         tomorrow = (datetime.now(ZoneInfo('America/New_York')).date() + timedelta(days=1)).isoformat()
