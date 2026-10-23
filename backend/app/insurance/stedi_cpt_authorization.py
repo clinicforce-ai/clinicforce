@@ -4,6 +4,19 @@ from __future__ import annotations
 import re
 
 
+def visit_coverage_bound(benefits: dict, service_date: str) -> bool:
+    """Accept a dated active coverage period when the 271 omits a visit-date echo."""
+    if benefits.get('active') is not True:
+        return False
+    matches = benefits.get('service_date_matches')
+    if matches is not None:
+        return matches is True
+    coverage = benefits.get('coverage_evidence') or {}
+    start, end = coverage.get('start'), coverage.get('end')
+    return bool(coverage.get('status') == 'ACTIVE' and start and start <= service_date
+                and (not end or end >= service_date))
+
+
 def decisions(payload: dict, codes: list[str], pos: str, network: str) -> dict[str, str]:
     """A broad service row or a conflicting tier never decides an exact CPT."""
     if not re.fullmatch(r"\d{2}", pos) or network not in {'in_network', 'out_of_network'}:

@@ -24,8 +24,8 @@ async def check_cpt_authorization(api: ModuleType, result: dict, case: dict, pay
     benefits = result.get('benefits') or {}
     identity = result.get('identity') or benefits.get('identity') or {}
     pos = str(inputs.get('place_of_service') or '')
-    if (not codes or not api_key or benefits.get('active') is not True
-            or benefits.get('service_date_matches') is not True
+    if (not codes or not api_key
+            or not stedi_cpt_authorization.visit_coverage_bound(benefits, inputs['service_date'])
             or not patient_benefits_bound(identity)
             or benefits.get('network_status') not in {'in_network', 'out_of_network'}
             or not api.re.fullmatch(r'\d{2}', pos)):

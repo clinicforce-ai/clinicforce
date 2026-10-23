@@ -150,6 +150,12 @@ def test_exact_stedi_cpt_and_office_setting_settle_authorization_over_matrix():
     evidence = contract_requirements.evaluate(result, context, [])
     assert evidence['authorization']['status'] == 'Not required'
     assert {item['authorization']['status'] for item in evidence['procedures']} == {'Not required'}
+    dated = deepcopy(result)
+    dated['benefits'].update(service_date_matches=None,
+                             coverage_evidence={'status': 'ACTIVE', 'start': '2026-01-01'})
+    assert contract_requirements.evaluate(dated, context, [])['authorization']['status'] == 'Not required'
+    dated['benefits']['coverage_evidence']['start'] = '2026-11-01'
+    assert contract_requirements.evaluate(dated, context, [])['authorization']['status'] == 'Verification required'
     stale = deepcopy(result)
     stale['cpt_authorization']['pos'] = '21'
     stale_evidence = contract_requirements.evaluate(stale, context, [])
@@ -185,13 +191,19 @@ def test_selected_cpts_are_checked_once_and_saved_with_exact_stedi_scope():
                               'name': {'person': {'firstName': 'Test', 'lastName': 'Member'}}}}
     result = {'codes': [{'code': '95908'}, {'code': '95886'}],
               'identity': {'status': 'matched', 'binding': 'synthetic-current-binding', 'match_version': 2},
-              'benefits': {'active': True, 'service_date_matches': True, 'network_status': 'in_network'}}
+              'benefits': {'active': True, 'service_date_matches': None, 'network_status': 'in_network',
+                           'coverage_evidence': {'status': 'ACTIVE', 'start': '2026-01-01'}}}
     inputs = {'service_date': '2026-10-12', 'place_of_service': '11'}
     case = asyncio.run(check_cpt_authorization(api, result, {'id': 'synthetic'}, payload, inputs,
                                                 {'practice_id': 'synthetic'}, 'synthetic-key'))
     assert case['cpt_authorization']['decisions'] == {'95908': 'Not required', '95886': 'Not required'}
     assert len(sent) == 1 and len(sent[0]['encounter']['services']) == 2
     asyncio.run(check_cpt_authorization(api, result, case, payload, inputs,
+                                         {'practice_id': 'synthetic'}, 'synthetic-key'))
+    assert len(sent) == 1
+    outside = deepcopy(result)
+    outside['benefits']['coverage_evidence']['start'] = '2026-11-01'
+    asyncio.run(check_cpt_authorization(api, outside, {'id': 'synthetic-other'}, payload, inputs,
                                          {'practice_id': 'synthetic'}, 'synthetic-key'))
     assert len(sent) == 1
 
