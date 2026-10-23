@@ -150,12 +150,6 @@
   line-height: 1.55;
 }
 
-.estimate-disclaimer {
-  color: var(--muted-ink);
-  font-size: 0.8rem;
-  line-height: 1.5;
-}
-
 .insurance-appointment {
   display: flex;
   justify-content: space-between;

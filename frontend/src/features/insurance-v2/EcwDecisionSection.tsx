@@ -1,6 +1,6 @@
 import type { InsuranceV2Model } from './useInsuranceV2Model'
 import { Clipboard, Mail } from 'lucide-react'
-import { PriceExplanation } from './V2TransactionDetails'
+import V2CostBreakdown from './V2CostBreakdown'
 import { money, readable } from './v2-display'
 
 export default function EcwDecisionSection({
@@ -148,20 +148,7 @@ export default function EcwDecisionSection({
               <span>
                 {stediCoverage ? 'Stedi + clinic contract estimate' : 'Availity patient estimate'}
               </span>
-              <dl>
-                <div>
-                  <dt>Clinic cash price</dt>
-                  <dd>{money(insuranceCase.summary.scheduled.cash_cents)}</dd>
-                </div>
-                <div>
-                  <dt>Allowed amount</dt>
-                  <dd>{money(insuranceCase.summary.scheduled.allowed_cents)}</dd>
-                </div>
-              </dl>
-              <small>
-                {insuranceCase.summary.scheduled.codes.join(', ') || 'No scheduled code confirmed'}
-              </small>
-              <PriceExplanation transaction={insuranceCase.transactions.estimate} />
+              <V2CostBreakdown insuranceCase={insuranceCase} kind="scheduled" />
             </article>
             <article>
               <p>Possible procedure</p>
@@ -171,21 +158,7 @@ export default function EcwDecisionSection({
                   ? 'Separate Stedi + clinic contract estimate'
                   : 'Separate Availity patient estimate'}
               </span>
-              <dl>
-                <div>
-                  <dt>Clinic cash price</dt>
-                  <dd>{money(insuranceCase.summary.possible.cash_cents)}</dd>
-                </div>
-                <div>
-                  <dt>Allowed amount</dt>
-                  <dd>{money(insuranceCase.summary.possible.allowed_cents)}</dd>
-                </div>
-              </dl>
-              <small>
-                {insuranceCase.summary.possible.codes.join(', ') ||
-                  'No possible procedure confirmed'}
-              </small>
-              <PriceExplanation transaction={insuranceCase.transactions.procedure_estimate} />
+              <V2CostBreakdown insuranceCase={insuranceCase} kind="possible" />
             </article>
           </section>
         </>

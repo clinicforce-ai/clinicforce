@@ -58,7 +58,7 @@ export function coveragePolicyStatus({
                     : 'Coverage check could not complete'
                   : result?.payment_mode === 'cash' && result.cash_fallback
                     ? result.insurance_diagnosis?.eligibilityStatus === 'BENEFITS_VERIFIED'
-                      ? 'Coverage active · insured price unavailable'
+                      ? 'Coverage active'
                       : 'Payer benefits unresolved · cash option'
                     : benefits?.active === true && !patientBenefitsBound
                       ? result?.identity?.status === 'review'
@@ -85,7 +85,7 @@ export function coveragePolicyStatus({
                                         : result?.coverage_status === 'REVIEW_REQUIRED'
                                           ? 'Policy review pending'
                                           : result?.ecw_coverage_active
-                                            ? 'Policy in eCW · payer benefits unavailable'
+                                            ? 'eCW policy · payer check needed'
                                             : result?.recovery?.reason_code ===
                                                 'multiple_active_policies'
                                               ? 'Multiple active policies found'
@@ -94,7 +94,7 @@ export function coveragePolicyStatus({
                                                 : result?.identity?.status === 'review'
                                                   ? 'Policy details differ'
                                                   : result?.cash_fallback
-                                                    ? 'Insurance amount unavailable'
+                                                    ? 'Payer check needed'
                                                     : result
                                                       ? 'Payer check incomplete'
                                                       : busy === 'estimate'

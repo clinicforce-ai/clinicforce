@@ -4,14 +4,7 @@
   font-size: clamp(1.65rem, 2.5vw, 2.15rem);
 }
 
-.insurance-stage-card
-  > p:not(
-    .section-kicker,
-    .form-error,
-    .insurance-status,
-    .calculation-line,
-    .estimate-disclaimer
-  ) {
+.insurance-stage-card > p:not(.section-kicker, .form-error, .insurance-status, .calculation-line) {
   max-width: 72ch;
   color: var(--muted-ink);
   line-height: 1.65;

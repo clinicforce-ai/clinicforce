@@ -257,8 +257,8 @@ try {
   assert.equal(localPpoModel.amountText, 'Insured amount unavailable')
   assert(localPpoOverview.includes('Payer-reported office copay · collection pending'))
   assert(localPpoOverview.includes('<strong role="status">$5.00</strong>'))
-  assert(localPpoOverview.includes('Additional service balances remain pending the claim.'))
-  assert(localPpoOverview.includes('This is not yet approved for collection.'))
+  assert(localPpoOverview.includes('Office copay reported; other service costs pending.'))
+  assert(localPpoOverview.includes('Payer-reported office copay · collection pending'))
   const futurePpo = structuredClone(localPpo)
   delete futurePpo.agreement_exclusion
   futurePpo.plan_details.stedi.names = ['UnitedHealthcare Local Medicare Advantage PPO']
@@ -590,7 +590,7 @@ try {
           `${name}: approved clinic policy`,
         )
         assert.equal(model.amountText, '$0.00', `${name}: approved clinic advance`)
-        assert(overview.includes('Collect $0 today:'), `${name}: explanation below amount`)
+        assert(overview.includes('Claim first. Patient responsibility follows the processed claim.'), `${name}: concise clinic action`)
       } else {
         assert.equal(
           result.collection_guidance.status,
@@ -756,25 +756,19 @@ try {
   assert.equal(supported.collection_guidance.amount_cents, 8000)
   assert.equal(supported.encounter_summary.collect_today_cents, 8000)
   assert.equal(supportedModel.amountText, '$80.00')
-  assert(
-    supportedOverview.includes(
-      'United Healthcare is treated as in-network for this visit: collect $80.00 now: the patient owes $50.00 deductible and $30.00 coinsurance, calculated as 20% of $150.00 based on the clinic’s contracted CPT prices.',
-    ),
-  )
-  assert(supportedOverview.includes('What the arrival amount includes'))
-  assert(supportedOverview.includes('Deductible</dt><dd>$50.00'))
-  assert(supportedOverview.includes('Coinsurance</dt><dd>$30.00'))
+  assert(supportedOverview.includes('Visit cost and collection'))
+  assert(supportedOverview.includes('$50.00 applied to this visit'))
+  assert(supportedOverview.includes('Coinsurance</th><td><span>$30.00'))
   assert(supportedOverview.includes('20% of $150.00 after deductible'))
-  assert(supportedOverview.includes('Total to collect now</dt><dd>$80.00'))
-  assert(supportedOverview.includes('Estimated patient cost for this visit'))
+  assert(supportedOverview.includes('Amount to collect at visit</th><td><span>$80.00'))
+  assert(supportedOverview.includes('Estimated patient share'))
   assert(supportedOverview.includes('Individual out-of-pocket maximum'))
   assert(supportedOverview.includes('$1,000.00'))
-  assert(supportedOverview.includes('Individual out-of-pocket remaining'))
   assert(supportedOverview.includes('Planned CPTs · referral and prior authorization'))
   assert(visibleText(supportedOverview).includes('CPT 99203: referral status not verified'))
   assert(visibleText(supportedOverview).includes('CPT 93000: referral status not verified'))
   assert(!supportedOverview.includes('Service not established'))
-  assert(supportedOverview.includes('<h3>Planned services</h3>'))
+  assert(supportedOverview.includes('CPT 99203 ×'))
   assert(!supportedOverview.includes('Why and sources'))
   assert(!supportedOverview.includes('This $80.00 advance includes $50.00 deductible'))
   assert(!supported.payment_explanation.sentence.includes(';'))
@@ -800,7 +794,7 @@ try {
   assert.equal(fourModel.amountText, '$80.00')
   assert(fourOverview.includes('Network<strong>In network'))
   assert(fourOverview.includes('Individual out-of-pocket maximum'))
-  assert(fourOverview.includes('Total to collect now</dt><dd>$80.00'))
+  assert(fourOverview.includes('Amount to collect at visit</th><td><span>$80.00'))
   assert(fourOverview.includes('20% of $150.00 after deductible for CPTs with payable coinsurance'))
   assert(visibleText(fourOverview).includes('CPT 99203: no referral, no prior authorization'))
   assert(visibleText(fourOverview).includes('CPT 93000: no referral, prior authorization approved'))
@@ -879,7 +873,7 @@ try {
   assert.equal(failedUpdate.amountText, 'Check visit details')
   assert.equal(failedUpdate.amountLabel, 'Previous estimate · needs recheck')
   assert(failedOverview.includes('The update failed. Recheck this visit before collecting.'))
-  assert(!failedOverview.includes('What the arrival amount includes'))
+  assert(failedOverview.includes('Collection decision'))
   assert(!failedOverview.includes('Planned CPTs and coverage requirements'))
   assert(!failedCalculation.includes('What the patient may owe'))
   const failedCashResult = { ...supported, payment_mode: 'cash' }
@@ -1032,7 +1026,7 @@ try {
     React.createElement(CommercialOverview, { model: conflictingModel, result: conflictingRule }),
   )
   assert(visibleText(conflictingOverview).includes('review referral rule'))
-  assert(conflictingOverview.includes('What the arrival amount includes'))
+  assert(conflictingOverview.includes('Visit cost and collection'))
   assert(!conflictingOverview.includes('Referral<strong>Not required'))
   const deferredConflict = structuredClone(conflictingRule)
   deferredConflict.collection_guidance = {
@@ -1078,7 +1072,7 @@ try {
     }),
   )
   assert.equal(missingApprovalModel.amount, '$80.00')
-  assert(missingApprovalOverview.includes('What the arrival amount includes'))
+  assert(missingApprovalOverview.includes('Visit cost and collection'))
   assert(!missingApprovalOverview.includes('prior authorization approved'))
   const unapproved = structuredClone(documented)
   unapproved.requirement_evidence.authorization.approval_status = 'Not verified'
@@ -1127,7 +1121,7 @@ try {
   )
   assert.equal(requiredModel.amountText, '$80.00')
   assert.equal(requiredAuthorization.encounter_summary.estimated_total_patient_min_cents, 8000)
-  assert(requiredOverview.includes('What the arrival amount includes'))
+  assert(requiredOverview.includes('Visit cost and collection'))
   console.log(
     'PASS: three deidentified UHC saved responses and two supported UHC calculations render',
   )
