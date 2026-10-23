@@ -39,6 +39,8 @@ export default function CommercialCalculationDetail({
     ].includes(result.benefits.network_source || '')
   const knownOfficeCopay =
     !cash && !previousEstimate && !!amount && guidance?.basis === 'office_copay' && !knownOonAdvance
+  const knownDiagnosticCopay =
+    !cash && !previousEstimate && !!amount && guidance?.basis === 'diagnostic_day_copay'
   const insuredTotalSupported =
     result.encounter_summary?.complete === true &&
     result.benefits?.network_status === 'in_network' &&
@@ -63,13 +65,15 @@ export default function CommercialCalculationDetail({
                     ? 'Known out-of-network plan share'
                     : knownOfficeCopay
                       ? 'Known office copay advance'
-                      : !insuredTotalSupported
-                        ? 'Complete patient responsibility'
-                        : emgScenario
-                          ? 'Planning total with testing'
-                          : price?.conditional
-                            ? 'Conditional patient estimate'
-                            : 'Estimated patient responsibility'}{' '}
+                      : knownDiagnosticCopay
+                        ? 'Known diagnostic copay advance'
+                        : !insuredTotalSupported
+                          ? 'Complete patient responsibility'
+                          : emgScenario
+                            ? 'Planning total with testing'
+                            : price?.conditional
+                              ? 'Conditional patient estimate'
+                              : 'Estimated patient responsibility'}{' '}
               ·{' '}
               {cash
                 ? previousEstimate
@@ -81,23 +85,25 @@ export default function CommercialCalculationDetail({
                     ? amount
                     : knownOfficeCopay
                       ? amount
-                      : !insuredTotalSupported
-                        ? 'See collection action above'
-                        : emgScenario &&
-                            emg &&
-                            emg.total_min_cents != null &&
-                            emg.total_max_cents != null
-                          ? range(emg.total_min_cents, emg.total_max_cents)
-                          : deferred || !amount
-                            ? 'Not yet calculated'
-                            : insuredTotalSupported &&
-                                result.planning_estimate?.min_cents != null &&
-                                result.planning_estimate?.max_cents != null
-                              ? range(
-                                  result.planning_estimate.min_cents,
-                                  result.planning_estimate.max_cents,
-                                )
-                              : patientPrice || 'Applicable advance amount shown above'}
+                      : knownDiagnosticCopay
+                        ? amount
+                        : !insuredTotalSupported
+                          ? 'See collection action above'
+                          : emgScenario &&
+                              emg &&
+                              emg.total_min_cents != null &&
+                              emg.total_max_cents != null
+                            ? range(emg.total_min_cents, emg.total_max_cents)
+                            : deferred || !amount
+                              ? 'Not yet calculated'
+                              : insuredTotalSupported &&
+                                  result.planning_estimate?.min_cents != null &&
+                                  result.planning_estimate?.max_cents != null
+                                ? range(
+                                    result.planning_estimate.min_cents,
+                                    result.planning_estimate.max_cents,
+                                  )
+                                : patientPrice || 'Applicable advance amount shown above'}
             </h3>
             {amount &&
               !deferred &&

@@ -33,6 +33,11 @@ export default function CommercialSourcesDetail({
     networkSource,
     emgScenario,
   } = model
+  const diagnosticCopayLine = result.price_range?.lines?.find((line) => line.benefits?.copay_id)
+  const displayedCopayId =
+    guidance?.basis === 'diagnostic_day_copay'
+      ? diagnosticCopayLine?.benefits.copay_id
+      : copayEvidenceId
   return (
     <details
       id="visit-detail-sources"
@@ -180,12 +185,14 @@ export default function CommercialSourcesDetail({
                 ))}
               </details>
             )}
-            {guidance?.basis === 'office_copay' && copayEvidenceId && (
-              <p>
-                Office copay: {copaySource} response, row {copayEvidenceId}. This is a payer
-                benefit, not a Library price.
-              </p>
-            )}
+            {['office_copay', 'diagnostic_day_copay'].includes(guidance?.basis || '') &&
+              displayedCopayId && (
+                <p>
+                  {guidance?.basis === 'diagnostic_day_copay' ? 'Diagnostic' : 'Office'} copay:{' '}
+                  {copaySource} response, row {displayedCopayId}. This is a payer benefit, not a
+                  Library price.
+                </p>
+              )}
             {!!result.library_pricing?.length && (
               <details className="library-diagnostics">
                 <summary>Library pricing sources and extraction diagnostics</summary>

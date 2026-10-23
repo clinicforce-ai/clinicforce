@@ -265,6 +265,7 @@ def build(result: dict, guidance: dict, review: dict | None = None) -> dict:
                             'final patient liability follows the processed claim')
             else:
                 sentence = f'Collect $0 today: {cause}, so {_collection_action(code, result, guidance.get("source_errors"))}'
+        elif basis == 'diagnostic_day_copay': sentence, code = (f'Collect {_money(amount)} once for diagnostic testing as a per-day copay; deductible and final share follow the claim', 'diagnostic_copay_partial')
         elif basis in {'office_copay', 'ecw_billing_note'} and (amount > 0 or basis == 'office_copay'):
             office_terms = [(line.get('benefits') or {}) for line in lines
                             if visit_estimate.clinical_group(line.get('code') or '') == 'visit']

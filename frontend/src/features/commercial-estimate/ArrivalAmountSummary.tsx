@@ -74,6 +74,8 @@ export default function ArrivalAmountSummary({
         <p>Claim first. Patient responsibility follows the processed claim.</p>
       ) : model.guidance?.basis === 'office_copay' && model.amount ? (
         <p>Office copay advance; other service costs may follow the claim.</p>
+      ) : model.guidance?.basis === 'diagnostic_day_copay' && model.amount ? (
+        <p>One diagnostic copay advance; deductible and final patient share follow the claim.</p>
       ) : null}
     </>
   )

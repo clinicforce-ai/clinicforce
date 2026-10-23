@@ -61,6 +61,34 @@ def test_complete_contract_priced_in_network_visit_collects_calculated_share():
     assert collection_guidance.build(result)['amount_cents'] is None
 
 
+def test_one_diagnostic_day_copay_is_a_partial_advance_when_full_share_is_unknown():
+    result = scenario()
+    result['price_range'] = {'complete': False, 'mode': 'services', 'lines': []}
+    for code, allowed in (('95908', 10511), ('95886', 17836)):
+        result['price_range']['lines'].append({
+            'id': code, 'code': code, 'units': 1 if code == '95908' else 2,
+            'allowed_cents': allowed, 'allowed_basis': 'clinic_contract',
+            'rate_resolution': {'status': 'RESOLVED'},
+            'benefits': {'active': True, 'network_status': 'in_network',
+                'copay_cents': 2000, 'copay_period': 'DAY', 'copay_id': 'payer-row-1',
+                'coinsurance_percent': '0', 'deductible_remaining_cents': None,
+                'oop_remaining_cents': None,
+                'reported_options': [{'id': 'payer-row-1', 'kind': 'copay',
+                    'service_type_code': '98', 'amount_cents': 2000,
+                    'payer_note': 'DIAGNOSTIC MEDICAL PROCEDURE - PROFESSIONAL'}],
+                'requirements': {kind: {'required': 'unknown', 'cleared': False}
+                    for kind in ('referral', 'authorization')}}})
+    guidance = collection_guidance.build(result)
+    assert guidance['amount_cents'] == 2000
+    assert guidance['basis'] == 'diagnostic_day_copay'
+    assert encounter_summary.build({**result, 'collection_guidance': guidance})['estimated_total_patient_min_cents'] is None
+    result['price_range']['lines'][1]['benefits']['copay_id'] = 'different-row'
+    assert collection_guidance.build(result)['amount_cents'] is None
+    result['price_range']['lines'][1]['benefits']['copay_id'] = 'payer-row-1'
+    result['price_range']['lines'][0]['benefits']['reported_options'][0]['payer_note'] = 'SLEEP STUDY - PROFESSIONAL'
+    assert collection_guidance.build(result)['amount_cents'] is None
+
+
 @pytest.mark.parametrize('result', [{}, {'eligibility_failure': {'title': 'Timeout'}},
     {'benefits': {'active': False}}, {'benefits': {'active': True, 'network_status': 'out_of_network'}},
     {'benefits': {'active': True}, 'price_range': {'lines': [], 'mode': 'options'}}])

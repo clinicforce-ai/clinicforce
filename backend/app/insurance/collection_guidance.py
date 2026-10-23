@@ -4,7 +4,7 @@ from __future__ import annotations
 from app.insurance.collection.cash import build as cash_guidance
 from app.insurance.collection.options import emg_option as _emg_option
 from app.insurance.collection.requirements import summarize_requirements
-from app.insurance.collection.office_copay import office_copay_amount
+from app.insurance.collection.office_copay import diagnostic_day_copay_amount, office_copay_amount
 from app.insurance.collection.billing_note import apply_billing_note
 from app.insurance.identity import patient_benefits_bound
 from app.insurance.benefit_review import (annual_oop_conflict_with_known_remaining,
@@ -131,18 +131,20 @@ def build(result: dict, review: dict | None = None) -> dict:
                     if safe and lines and price.get('mode') != 'options' else None)
     if office_copay is not None:
         amount = office_copay
-    elif (strict.get('amount_cents') is not None and safe and verified_in_network(benefits)
+    elif safe:
+        amount = diagnostic_day_copay_amount(price, lines, guidance, assumptions)
+    if amount is None and (strict.get('amount_cents') is not None and safe and verified_in_network(benefits)
             and not price.get('conditional')):
         amount = strict['amount_cents']
         guidance.update(status='estimate', basis=strict.get('basis', 'patient_obligations'),
                         reason='Applicable copay, deductible and coinsurance for the anticipated services.' if strict.get('status') != 'copay_only' else
                                'Applicable office-visit copay. Other service shares are outside this advance and follow the processed claim and member protections.')
-    elif safe and verified_in_network(benefits) and planning.get('basis') == 'out_of_pocket_limit':
+    elif amount is None and safe and verified_in_network(benefits) and planning.get('basis') == 'out_of_pocket_limit':
         amount = 0
         assumptions.extend(planning.get('assumptions') or [])
         guidance.update(status='estimated', basis='out_of_pocket_limit',
                         reason='The payer reports $0 remaining on the applicable in-network out-of-pocket limit for the selected covered services. No advance payment is needed.')
-    elif (safe and (verified_in_network(benefits) or benefits.get('network_status') == 'out_of_network')
+    elif (amount is None and safe and (verified_in_network(benefits) or benefits.get('network_status') == 'out_of_network')
           and price.get('complete') and not price.get('conditional') and price.get('mode') != 'options'
           and (not unapproved_services or suggested_plan)):
         amount = price.get('patient_min_cents')
