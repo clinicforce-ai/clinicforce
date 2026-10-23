@@ -969,7 +969,7 @@ try {
       },
     }),
   )
-  assert(unreconciledAmount.includes('Collection decision'))
+  assert(unreconciledAmount.includes('Amount to collect at visit'))
   const outOfNetwork = renderToStaticMarkup(
     React.createElement(CommercialOverview, {
       model: {

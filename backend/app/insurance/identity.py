@@ -19,8 +19,12 @@ def patient_benefits_bound(comparison: dict | None) -> bool:
 
 
 def payer_identity_verified(comparison: dict | None) -> bool:
-    """Payer-specific rules require a current exact or reconciled patient decision."""
-    return patient_benefits_bound(comparison) and comparison.get('status') in {'matched', 'reconciled'}
+    """Payer-specific rules require a current patient-bound identity decision."""
+    return patient_benefits_bound(comparison) and (
+        comparison.get('status') in {'matched', 'reconciled'}
+        or comparison.get('status') == 'warning'
+        and comparison.get('reconciliation_rule') == 'payer_matched_patient'
+    )
 
 
 def normalized(value: object) -> str:
@@ -152,11 +156,23 @@ def compare(payload: dict, coverage: dict, evidence: dict | None = None) -> dict
     enough_identity = ((member_matches or uhc_suffix or cigna_suffix)
                        and 'patient_demographics' not in missing_fields
                        and 'relationship' not in missing_fields)
-    return {'status': 'review' if policy_differences or not enough_identity else 'reconciled' if differences and verified else 'warning' if surname_warning or uhc_suffix or cigna_suffix else 'review' if differences else 'matched',
+    # The payer can identify the patient as a dependent even when eCW still
+    # calls that same patient the subscriber. Keep the registration difference
+    # visible, but bind the returned benefits to the matched patient.
+    payer_patient_bound = bool(
+        policy_differences and enough_identity and anchored and last_matches
+        and not differences and bool(dependent)
+        and returned['relationship'] in {'spouse', 'child', 'other'}
+        and coverage.get('active_coverages') == 1 and coverage.get('coverage_id')
+        and (not coverage.get('group_number') or not payer_plan.get('group_number') or group_matches)
+        and (not coverage.get('plan_number') or not payer_plan.get('plan_number')
+             or normalized(coverage['plan_number']) == normalized(payer_plan['plan_number']))
+    )
+    return {'status': 'review' if (policy_differences and not payer_patient_bound) or not enough_identity else 'reconciled' if differences and verified else 'warning' if payer_patient_bound or surname_warning or uhc_suffix or cigna_suffix else 'review' if differences else 'matched',
             'match_version': 2,
             'binding': binding, 'differences': differences, 'policy_differences': policy_differences,
             'missing_fields': missing_fields,
-            'message': 'The subscriber relationship could not be verified automatically from eCW and payer evidence.' if policy_differences else 'The eCW and payer response lack enough matching member and patient identifiers to bind these benefits to this patient.' if not enough_identity else 'Cigna returned the same base member ID with a different suffix representation; patient, subscriber, relationship and group match.' if cigna_suffix else 'UnitedHealthcare returned the matching nine-digit member ID without the eCW 00 suffix; name and date of birth match.' if uhc_suffix else 'Payer surname differs; first name, date of birth and member ID match.' if surname_warning and not verified else '',
-            'reconciliation_rule': 'cigna_member_suffix' if cigna_suffix else None,
+            'message': 'The payer matched this patient and member ID. Use the payer-reported policyholder and relationship for this estimate; eCW registration differs.' if payer_patient_bound else 'The subscriber relationship could not be verified automatically from eCW and payer evidence.' if policy_differences else 'The eCW and payer response lack enough matching member and patient identifiers to bind these benefits to this patient.' if not enough_identity else 'Cigna returned the same base member ID with a different suffix representation; patient, subscriber, relationship and group match.' if cigna_suffix else 'UnitedHealthcare returned the matching nine-digit member ID without the eCW 00 suffix; name and date of birth match.' if uhc_suffix else 'Payer surname differs; first name, date of birth and member ID match.' if surname_warning and not verified else '',
+            'reconciliation_rule': 'payer_matched_patient' if payer_patient_bound else 'cigna_member_suffix' if cigna_suffix else None,
             'can_confirm': bool(differences and anchored and not policy_differences),
             'evidence': evidence if verified else None}

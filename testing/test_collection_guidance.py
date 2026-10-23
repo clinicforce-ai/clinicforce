@@ -44,6 +44,20 @@ def test_patient_share_and_collection_policy_are_independent():
     assert encounter_summary.build({**result, 'collection_guidance': deferred})['estimated_total_patient_min_cents'] == 3800
 
 
+def test_complete_contract_priced_in_network_visit_collects_calculated_share():
+    result = scenario(22910)
+    result.pop('collection_policy')
+    line = result['price_range']['lines'][0]
+    line.update(rate_resolution={'status': 'RESOLVED'}, allowed_basis='clinic_contract',
+                allowed_cents=22910, unit_allowed_cents=22910)
+    result['price_range'].update(allowed_min_cents=22910, allowed_max_cents=22910)
+    guidance = collection_guidance.build(result)
+    assert guidance['amount_cents'] == 22910
+    assert guidance['collection_rule']['mode'] == 'calculated_in_network_advance'
+    line['rate_resolution']['status'] = 'MISSING'
+    assert collection_guidance.build(result)['amount_cents'] is None
+
+
 @pytest.mark.parametrize('result', [{}, {'eligibility_failure': {'title': 'Timeout'}},
     {'benefits': {'active': False}}, {'benefits': {'active': True, 'network_status': 'out_of_network'}},
     {'benefits': {'active': True}, 'price_range': {'lines': [], 'mode': 'options'}}])

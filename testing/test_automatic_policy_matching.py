@@ -15,15 +15,16 @@ from test_automatic_estimate_prerequisites import appointment
 from test_result_first_estimate import response
 
 
-def test_subscriber_conflict_cannot_be_reported_as_matched():
+def test_subscriber_conflict_keeps_registration_difference_with_patient_match():
     case, _, _, item = setup()
     inputs, source = case['previsit_context']['inputs'], case['previsit_context']['source']
     inputs['member_id'] = item['subscriber']['memberId']
     item['dependent'] = {**item['subscriber'], 'relationToSubscriber': '01'}
     item['subscriber'] = {'firstName': 'Sam', 'lastName': 'Example', 'memberId': inputs['member_id']}
     benefits = api._previsit_benefits(item, api._coverage_snapshot(inputs, source), inputs['service_date'])
-    assert benefits['identity']['status'] == 'review'
-    assert benefits['requires_review']
+    assert benefits['identity']['status'] == 'warning'
+    assert benefits['identity']['reconciliation_rule'] == 'payer_matched_patient'
+    assert benefits['identity']['policy_differences']
     assert not benefits['identity']['can_confirm']  # A name acknowledgement cannot change a policyholder.
 
 

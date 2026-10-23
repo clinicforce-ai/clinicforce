@@ -82,6 +82,21 @@ def test_after_deductible_uses_allowed_amount_and_requires_rate():
     assert run(raw, rates=[])[2]['amount_cents'] is None
 
 
+def test_three_unit_procedure_uses_per_unit_contract_rates_before_deductible():
+    priced = commercial.estimate(
+        [{'code': '11104', 'units': 1, 'allowed_cents': 11660},
+         {'code': '11105', 'units': 2, 'allowed_cents': 5625}],
+        {'active': True, 'coverage_level': 'individual', 'network_status': 'in_network',
+         'deductible_remaining_cents': 100000, 'oop_remaining_cents': 207549,
+         'coinsurance_percent': '20'},
+        {'cost_share': 'coinsurance'},
+    )
+    assert priced['allowed_cents'] == 22910
+    assert priced['deductible_cents'] == 22910
+    assert priced['coinsurance_cents'] == 0
+    assert priced['patient_cents'] == 22910
+
+
 def test_conflicting_or_conditional_waivers_cannot_erase_deductible():
     raw = payload(); raw['benefitsInformation'][1]['additionalInformation'] = [{'description': 'Deductible waived'}]
     raw['benefitsInformation'].append(row('C', '1000', period='23'))

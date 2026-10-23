@@ -179,10 +179,26 @@ def build(result: dict, review: dict | None = None) -> dict:
         fixed_copay and policy_mode == 'collect_verified_copay' or
         verified_out_of_network(benefits) and policy_mode == 'defer_to_claim'
         and policy.get('allow_supported_oon_advance') is True)
+    # A fully priced in-network visit can present the calculated check-in
+    # amount on an otherwise unconfigured route. Explicit clinic policies
+    # still control copay-only, deferred and out-of-network collection.
+    calculated_in_network_advance = (
+        not policy_approved and not published_copay and verified_in_network(benefits)
+        and guidance['basis'] in {'patient_obligations', 'anticipated_services'}
+        and price.get('complete') is True and not price.get('conditional')
+        and price.get('mode') == 'services' and bool(lines)
+        and price.get('patient_min_cents') == price.get('patient_max_cents')
+        and all(line.get('rate_resolution', {}).get('status') == 'RESOLVED'
+                and line.get('allowed_basis') == 'clinic_contract'
+                and line.get('allowed_cents') is not None for line in lines)
+    )
     if (amount is not None and amount > 0 and guidance['basis'] != 'ecw_billing_note'
-            and not (oon_advance and policy_allows_advance)):
+            and not (oon_advance and (policy_allows_advance or calculated_in_network_advance))):
         amount = None
         guidance['published_copay_policy_missing' if published_copay else 'positive_advance_policy_missing'] = True
+    if amount is not None and amount > 0 and calculated_in_network_advance:
+        guidance['collection_rule'] = {'mode': 'calculated_in_network_advance',
+                                       'reference': 'Selected CPTs, active clinic contract rates and member benefits'}
     if amount is not None and amount > 0 and policy_approved and guidance['basis'] != 'ecw_billing_note':
         guidance['collection_rule'] = {'mode': policy_mode, 'reference': policy['reference'],
                                        'approved_at': policy['approved_at']}

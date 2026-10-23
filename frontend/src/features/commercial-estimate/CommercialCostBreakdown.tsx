@@ -58,7 +58,7 @@ function requirementStatus(result: PrevisitEstimate, kind: 'referral' | 'authori
         lineRule.verified_at
       const status = conflict
         ? 'conflicting rules'
-        : evidence?.status === 'Not required'
+        : evidence?.status === 'Not required' || lineRule?.required === 'not_required'
           ? 'not required'
           : evidence?.status === 'Required' || lineRule?.required === 'required'
             ? kind === 'authorization'
@@ -290,7 +290,7 @@ export default function CommercialCostBreakdown({
       ]
 
   rows.push({
-    label: model.supportedAmount ? 'Amount to collect at visit' : 'Collection decision',
+    label: 'Amount to collect at visit',
     value:
       model.supportedAmount && result.collection_guidance?.amount_cents != null
         ? money(result.collection_guidance.amount_cents)
