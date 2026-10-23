@@ -264,7 +264,7 @@ class VisitReviewTests(IsolatedAsyncioTestCase):
         case = {'id': 'case', 'revision': 4, 'source_mode': 'commercial_previsit', 'previsit': {'checked_at': result['checked_at']}, 'previsit_raw_object_key': 'protected',
                 'previsit_context': {'result': result, 'context_token': token, 'inputs': inputs, 'source': source, 'payer_id': 'payer-b'}}
         with patch.object(api, '_session', AsyncMock(return_value=session)), patch.object(api.store, 'get_case', return_value=case) as get_case, \
-             patch.object(api.ecw_backend, 'fetch_inputs', AsyncMock(return_value=(inputs, [], source))), patch.object(api, '_ecw_practice_config', return_value={}), \
+             patch.object(api.ecw_backend, 'fetch_inputs', AsyncMock(return_value=(inputs, [], source))) as fetch_inputs, patch.object(api, '_ecw_practice_config', return_value={}), \
              patch.object(api.staff_store, 'list_library', return_value=[]), \
              patch.object(api.object_store, 'get_object_bytes', return_value=json.dumps(raw).encode()), \
              patch.object(api.commercial_store, 'list_connections', return_value=[{'id': 'payer', 'stedi_payer_id': 'payer-b', 'status': 'staff_guidance_enabled'}]), \
@@ -287,6 +287,15 @@ class VisitReviewTests(IsolatedAsyncioTestCase):
             case['previsit']['checked_at'] = (datetime.now(timezone.utc)-timedelta(days=2)).isoformat()
             with self.assertRaises(HTTPException):
                 await api.update_visit_review('case', api.VisitReviewInput(context_token=token, revision=4), MagicMock())
+            historical_inputs = {**inputs, 'service_date': (date.today()-timedelta(days=1)).isoformat()}
+            historical_token = api._visit_context_token(historical_inputs, source)
+            case['previsit_context'].update(inputs=historical_inputs, context_token=historical_token)
+            case['visit_review']['context_token'] = historical_token
+            fetch_inputs.return_value = (historical_inputs, [], source)
+            historical = await api.update_visit_review('case', api.VisitReviewInput(
+                context_token=historical_token, revision=4), MagicMock())
+            assert historical['revision'] == 5
+            assert fetch_inputs.await_args.kwargs['review_service_date'] == historical_inputs['service_date']
 
     async def test_ecw_pagination_follows_only_practice_origin_and_reports_truncation(self):
         calls = []
