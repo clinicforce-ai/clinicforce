@@ -101,12 +101,15 @@ async def create_profile(value: _api.ProfileInput, request: _api.Request) -> dic
 
 
 @_api.router.post("/rates")
-async def import_rates(request: _api.Request, payer_connection_id: str, source_type: str, source_reference: str, effective_from: str, effective_to: str | None = None, change_ceiling_bps: int = 0, file: _api.UploadFile = _api.File(...)) -> dict:
+async def import_rates(request: _api.Request, payer_connection_id: str, source_type: str, source_reference: str, effective_from: str | None = None, effective_to: str | None = None, change_ceiling_bps: int = 0, file: _api.UploadFile = _api.File(...)) -> dict:
+    """Import scoped rates; an omitted start date uses the import date and no end date is required."""
     session = await _api._session(request); _api._admin(session)
     content = await file.read(20 * 1024 * 1024 + 1)
     if len(content) > 20 * 1024 * 1024: raise _api.HTTPException(413, "Rate imports must be 20 MB or smaller.")
     try:
-        rows = _api.commercial.parse_rate_csv(content, file.filename or "rates.csv")
+        effective_from = effective_from or _api.date.today().isoformat()
+        rows = _api.commercial.parse_rate_csv(content, file.filename or "rates.csv",
+                                              default_effective_from=effective_from)
         payer = _api.commercial_store.connection(session['practice_id'], payer_connection_id)
         if not payer or source_type not in _api.commercial.RATE_SOURCE_TYPES or not source_reference.strip() or not 0 <= change_ceiling_bps <= 10000:
             raise _api.commercial.CommercialError('Provide a valid clinic payer, source reference, source type and change ceiling.')

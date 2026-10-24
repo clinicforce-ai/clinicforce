@@ -93,6 +93,8 @@ def oop_plan_association(row: dict, payload: dict) -> str:
         return kind
     insurance_type = str(row.get('insuranceType') or row.get('insuranceTypeCode') or '').upper()
     notes = ' '.join(_benefit_notes([row.get('messages'), row.get('additionalInformation')])).upper()
+    if '30' in {str(code) for code in row.get('serviceTypeCodes') or []} and re.search(r'\bINT MED AND RX\b', notes):
+        return 'medical'
     if insurance_type in {'PPO', 'PREFERRED_PROVIDER_ORGANIZATION',
                           'PREFERRED_PROVIDER_ORGANIZATION_PPO'} and 'COMBINED' in notes:
         return 'medical_candidate'

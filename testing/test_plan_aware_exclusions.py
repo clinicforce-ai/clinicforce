@@ -165,6 +165,30 @@ def test_supplementary_plan_or_service_code_quarantines_unassigned_medical_oop()
     assert result['copay_cents'] is None
 
 
+def test_explicit_medical_oop_annual_links_only_its_matching_remaining_row():
+    annual = lambda amount, level, **extra: {'amount': amount,
+        'timePeriod': 'CALENDAR_YEAR', 'service': {'system': 'STC', 'value': '30'},
+        'coverageLevel': level, 'network': {'indicator': 'IN_NETWORK'}, **extra}
+    remaining = lambda amount, level: {'amount': amount,
+        'timePeriod': 'REMAINING', 'service': {'system': 'STC', 'value': '30'},
+        'coverageLevel': level, 'network': {'indicator': 'IN_NETWORK'}}
+    payload = {'plans': [{'benefits': {'statuses': [{'status': 'Active'}],
+        'outOfPocket': [annual('4000', 'INDIVIDUAL', messages=['INT MED AND RX']),
+                        remaining('3496.08', 'INDIVIDUAL'),
+                        annual('8000', 'FAMILY', messages=['INT MED AND RX']),
+                        remaining('7041.35', 'FAMILY')],
+        'coPayment': [{'amount': '5', 'service': {'system': 'STC', 'value': 'AL'},
+                       'coverageLevel': 'INDIVIDUAL',
+                       'network': {'indicator': 'IN_NETWORK'}}]}}]}
+    result = normalize_stedi_271(payload, '98', True, office_visit=True)
+    assert result['oop_annual_cents'] == 400000
+    assert result['oop_remaining_cents'] == 349608
+    assert result['oop_quarantined_ids'] == []
+    options = {row['id']: row for row in result['reported_options']}
+    assert options['plans[0].benefits.outOfPocket[2]']['amount_cents'] == 800000
+    assert options['plans[0].benefits.outOfPocket[3]']['amount_cents'] == 704135
+
+
 def test_ecw_billing_tin_requires_explicit_identifier_label():
     assert _tin({'identifier': [{'system': 'http://hl7.org/fhir/sid/us-ein',
                                  'value': '12-3456789'}]}) == '123456789'

@@ -5,7 +5,7 @@ import json
 from dataclasses import dataclass
 from typing import Any
 
-from app.insurance.stedi_benefits.fields import _procedure, _stedi_cents, _stedi_entries, oop_plan_association, coverage_kind
+from app.insurance.stedi_benefits.fields import _benefit_notes, _procedure, _stedi_cents, _stedi_entries, oop_plan_association, coverage_kind
 
 
 @dataclass
@@ -38,10 +38,17 @@ def select_cost_share_rows(entries: list[dict[str, Any]], payload: dict[str, Any
         # fallback only when no specific counterpart exists.
         specificity = 3 if _procedure(row) and _procedure(row) == procedure_code else 2 if service_type_code in service_types else 1 if "30" in service_types else 0
         individual = level in {"INDIVIDUAL", "IND"} or (level in {"EMP", "EMPLOYEE_ONLY"} and not payload.get('dependent'))
+        # A per-service copay or percentage marked employee-and-children also
+        # applies to a covered child. It is not an individual accumulator.
+        shared_cost_share = row.get('code') in {'A', 'B'} and level in {'EMPLOYEE_AND_CHILDREN', 'ECH'}
+        shared_service_waiver = (row.get('code') == 'F' and specificity >= 2
+            and level in {'EMPLOYEE_AND_CHILDREN', 'ECH'}
+            and any('Plan Ded Waived' in note for note in
+                    _benefit_notes([row.get('messages'), row.get('additionalInformation')])))
         service_waiver = (not level and row.get('code') == 'C' and specificity >= 2
                           and _stedi_cents(row.get('benefitAmount')) == 0
                           and str(row.get('timeQualifierCode') or row.get('timeQualifier') or '').upper() in {'', '23', 'CALENDAR_YEAR', '22', 'SERVICE_YEAR'})
-        if (not individual and not service_waiver and not (not level and row.get("code") in {"A", "B"})) or indicator not in accepted_networks or not specificity:
+        if (not individual and not shared_cost_share and not shared_service_waiver and not service_waiver and not (not level and row.get("code") in {"A", "B"})) or indicator not in accepted_networks or not specificity:
             continue
         wanted.append((specificity, row))
     # A CPT-specific cost share replaces a broader category cost share for
@@ -55,10 +62,25 @@ def select_cost_share_rows(entries: list[dict[str, Any]], payload: dict[str, Any
         coverage_kind({'planCoverage': plan.get('name')}, payload) == 'supplementary'
         for plan in payload.get('plans') or [] if isinstance(plan, dict))
     oop_rows = [row for _, row in wanted if row.get('code') == 'G']
+    medical_oop_annual = [row for row in oop_rows if oop_plan_association(row, payload) == 'medical'
+        and str(row.get('timeQualifierCode') or row.get('timeQualifier') or '').upper()
+            in {'23', 'CALENDAR_YEAR', '22', 'SERVICE_YEAR', 'CONTRACT'}]
+    def paired_medical_remaining(row: dict) -> bool:
+        if oop_plan_association(row, payload) != 'unassigned':
+            return False
+        anchors = [anchor for anchor in medical_oop_annual
+            if anchor.get('plan_index') == row.get('plan_index')
+            and str(anchor.get('coverageLevel') or anchor.get('coverageLevelCode') or '').upper()
+                == str(row.get('coverageLevel') or row.get('coverageLevelCode') or '').upper()
+            and anchor.get('serviceTypeCodes') == row.get('serviceTypeCodes')
+            and anchor.get('network') == row.get('network')
+            and anchor.get('inPlanNetworkIndicatorCode') == row.get('inPlanNetworkIndicatorCode')]
+        return len(anchors) == 1
     oop_medical_candidate_ids = [row['evidence_path'] for row in oop_rows
                                  if oop_plan_association(row, payload) == 'medical_candidate']
     oop_quarantined_ids = [row['evidence_path'] for row in oop_rows
-                           if supplementary_present and oop_plan_association(row, payload) == 'unassigned']
+                           if supplementary_present and oop_plan_association(row, payload) == 'unassigned'
+                           and not paired_medical_remaining(row)]
     def pick(code: str, remaining: bool = False, periods: set[str] | None = None, *,
              plan_wide: bool = False, label: str) -> dict[str, Any] | None:
         periods = {'29', 'REMAINING'} if remaining else periods
@@ -67,7 +89,8 @@ def select_cost_share_rows(entries: list[dict[str, Any]], payload: dict[str, Any
             matches = [(score, row) for score, row in matches if not _procedure(row) and '30' in (row.get('serviceTypeCodes') or [])]
         if label in {'oop_annual', 'oop_remaining'} and supplementary_present:
             matches = [(score, row) for score, row in matches
-                       if oop_plan_association(row, payload) == 'medical']
+                       if oop_plan_association(row, payload) == 'medical'
+                       or label == 'oop_remaining' and paired_medical_remaining(row)]
         if not matches:
             return None
         if selected_ids is not None and code in {"A", "B"}:

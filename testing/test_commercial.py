@@ -195,6 +195,31 @@ class CommercialRulesTest(unittest.TestCase):
         self.assertEqual(result["patient_cents"], 15500)
         self.assertEqual(result["plan_cents"], 9500)
 
+    def test_standing_rate_import_uses_internal_start_without_expiration(self):
+        rows = parse_rate_csv(
+            b"CPT,Allowed Amount,Network,POS,Plan\n95908,104.90,Aetna Managed Choice,11,Open Access MC\n99203,93.25,Aetna Managed Choice,11,Open Access MC\n",
+            "rates.csv", default_effective_from="2026-10-23")
+        self.assertEqual([row["allowed_cents"] for row in rows], [10490, 9325])
+        self.assertTrue(all(row["effective_from"] == "2026-10-23" and
+                            row["effective_to"] is None for row in rows))
+
+    def test_mixed_office_copay_and_confirmed_nerve_deductible_are_separate(self):
+        common = {"active": True, "coverage_level": "individual",
+                  "network_status": "in_network", "has_secondary": False,
+                  "requires_review": False, "oop_remaining_cents": 349608,
+                  "deductible_remaining_cents": 71756}
+        office = estimate([{"code": "99203", "units": 1, "allowed_cents": 9325}],
+            {**common, "copay_cents": 5000, "coinsurance_percent": "0",
+             "deductible_applies": False}, {"cost_share": "payer_returned"})
+        nerve = estimate([{"code": "95908", "units": 1, "allowed_cents": 10490}],
+            {**common, "copay_cents": 0, "coinsurance_percent": "0",
+             "deductible_applies": True,
+             "oop_remaining_cents": common["oop_remaining_cents"] - office["patient_cents"]},
+            {"cost_share": "coinsurance"})
+        self.assertEqual(office["patient_cents"], 5000)
+        self.assertEqual(nerve["deductible_cents"], nerve["patient_cents"])
+        self.assertEqual(office["patient_cents"] + nerve["patient_cents"], 15490)
+
     def test_allowed_cap_and_out_of_pocket_cap_are_distinct(self):
         benefits = {"active": True, "coverage_level": "individual", "network_status": "in_network",
                     "deductible_remaining_cents": 0, "oop_remaining_cents": 100000,
