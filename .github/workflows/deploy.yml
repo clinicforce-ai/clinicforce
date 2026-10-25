@@ -82,7 +82,7 @@ jobs:
           node ../testing/test-card-capture.mjs
           node ../testing/test-healow-review.mjs
           node ../testing/test-insurance-request-context.mjs
-          node ../testing/test_completed_ecw_visit_dates.mjs
+          node ../testing/test_ecw_visit_dates.mjs
           node testing/member-benefits-ui.mjs
           node testing/uhc-saved-projection-ui.mjs
           node testing/historical-replay-ui.mjs
