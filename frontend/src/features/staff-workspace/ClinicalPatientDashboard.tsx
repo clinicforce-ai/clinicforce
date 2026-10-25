@@ -4,12 +4,14 @@ import { deleteStaffIntake } from '../../services/api/staff-intake'
 import {
   deleteStaffPatient,
   getClinicalPatients,
+  getPatientAppointments,
   retryStaffDeletionCleanup,
   type ClinicalDashboard,
   type ClinicalPatient,
 } from '../../services/api/staff-patients'
 
 import ClinicalPatientDetail from './ClinicalPatientDetail'
+import { completedEcwVisitDates } from './completedEcwVisitDates'
 import { name, accountLabel } from './clinical-patient-labels'
 
 interface Props {
@@ -20,7 +22,14 @@ interface Props {
   onPullEcw: () => void
 }
 type Cohort = 'all' | 'accounts_with_cards' | 'accounts_without_cards' | 'card_only' | 'other'
-const PAGE_SIZE = 7
+const GROUPS_PER_PAGE = 5
+type VisitResult = { status: 'complete' | 'unavailable'; dates: string[] }
+const undatedLabels: Record<string, string> = {
+  loading: 'Checking eCW visits',
+  unavailable: 'eCW visits unavailable',
+  none: 'No completed eCW visit',
+  unlinked: 'No confirmed eCW link',
+}
 const cohortLabel: Record<Cohort, string> = {
   all: 'All patients',
   accounts_with_cards: 'Accounts with cards',
@@ -46,6 +55,10 @@ export default function ClinicalPatientDashboard({
   const [deleting, setDeleting] = useState(false)
   const [cleanupPending, setCleanupPending] = useState(false)
   const [notice, setNotice] = useState('')
+  const [visitResults, setVisitResults] = useState<Record<string, VisitResult>>({})
+  const [visitProgress, setVisitProgress] = useState({ done: 0, total: 0 })
+  const visitResultsRef = useRef<Record<string, VisitResult>>({})
+  const visitRun = useRef(0)
   const heading = useRef<HTMLHeadingElement>(null)
   useEffect(() => {
     heading.current?.focus()
@@ -74,11 +87,53 @@ export default function ClinicalPatientDashboard({
       active = false
     }
   }, [initialPatientId])
-  async function refresh() {
+  useEffect(() => {
+    if (!dashboard) return
+    const linked = dashboard.patients.filter(
+      (patient) =>
+        patient.ecw_linked && patient.clinic_patient_id && !visitResultsRef.current[patient.id],
+    )
+    setVisitProgress({ done: 0, total: linked.length })
+    const run = ++visitRun.current
+    let next = 0
+    let done = 0
+    async function loadNext() {
+      while (run === visitRun.current && next < linked.length) {
+        const patient = linked[next++]
+        let result: VisitResult = { status: 'unavailable', dates: [] }
+        try {
+          const history = await getPatientAppointments(patient.clinic_patient_id!, true)
+          if (history.ecw_status === 'complete')
+            result = {
+              status: 'complete',
+              dates: completedEcwVisitDates(history),
+            }
+        } catch {
+          // Keep the patient visible in the unavailable group when the read fails.
+        }
+        if (run !== visitRun.current) return
+        visitResultsRef.current[patient.id] = result
+        setVisitResults((current) => ({ ...current, [patient.id]: result }))
+        done += 1
+        setVisitProgress({ done, total: linked.length })
+      }
+    }
+    void Promise.all(Array.from({ length: Math.min(3, linked.length) }, () => loadNext()))
+    return () => {
+      if (visitRun.current === run) visitRun.current += 1
+    }
+  }, [dashboard])
+  async function refresh(reloadVisits = true) {
     setBusy(true)
     setError('')
     try {
-      setDashboard(await getClinicalPatients())
+      const updated = await getClinicalPatients()
+      if (reloadVisits) {
+        visitRun.current += 1
+        visitResultsRef.current = {}
+        setVisitResults({})
+      }
+      setDashboard(updated)
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : 'Patients could not be loaded.')
     } finally {
@@ -152,10 +207,35 @@ export default function ClinicalPatientDashboard({
           .toLowerCase()
           .includes(query.trim().toLowerCase()),
     ) || []
-  const pageCount = Math.max(1, Math.ceil(patients.length / PAGE_SIZE))
+  const groups = new Map<string, ClinicalPatient[]>()
+  for (const patient of patients) {
+    const result = visitResults[patient.id]
+    const days = !patient.ecw_linked
+      ? ['unlinked']
+      : !result
+        ? ['loading']
+        : result.status === 'unavailable'
+          ? ['unavailable']
+          : result.dates.length
+            ? result.dates
+            : ['none']
+    for (const day of days) {
+      const group = groups.get(day)
+      if (group) group.push(patient)
+      else groups.set(day, [patient])
+    }
+  }
+  const datedGroups = [...groups]
+    .filter(([day]) => !undatedLabels[day])
+    .sort(([first], [second]) => second.localeCompare(first))
+  const undatedGroups = [...groups].filter(([day]) => undatedLabels[day])
+  const pageCount = Math.max(1, Math.ceil(datedGroups.length / GROUPS_PER_PAGE))
   const currentPage = Math.min(page, pageCount)
-  const pageStart = (currentPage - 1) * PAGE_SIZE
-  const visiblePatients = patients.slice(pageStart, pageStart + PAGE_SIZE)
+  const pageStart = (currentPage - 1) * GROUPS_PER_PAGE
+  const visibleGroups = [
+    ...datedGroups.slice(pageStart, pageStart + GROUPS_PER_PAGE),
+    ...undatedGroups,
+  ]
   if (selected)
     return (
       <ClinicalPatientDetail
@@ -168,7 +248,7 @@ export default function ClinicalPatientDashboard({
           setSelected(null)
           setError('')
           setCleanupPending(false)
-          void refresh()
+          void refresh(false)
         }}
         onDelete={() => void deletePatient()}
         onOpenIntake={onOpenIntake}
@@ -296,48 +376,80 @@ export default function ClinicalPatientDashboard({
           </div>
         ) : (
           <div className="clinical-patient-list">
-            {visiblePatients.map((patient) => (
-              <article className="clinical-patient-row" key={patient.id}>
-                <button
-                  className="clinical-patient-open"
-                  onClick={() => {
-                    setSelected(patient)
-                    setError('')
-                    setNotice('')
-                    setCleanupPending(false)
-                  }}
-                >
-                  <span>
-                    <strong>{name(patient)}</strong>
-                    <small>Date of birth: {patient.birth_date || 'Needs confirmation'}</small>
-                    <small>
-                      {accountLabel(patient.account_status)}
-                      {patient.ecw_account_number && ` · ACCT ${patient.ecw_account_number}`}
-                    </small>
+            <p className="staff-small staff-muted clinical-visit-note">
+              Grouped by completed visits returned by eCW. Patients with visits on several dates
+              appear in each date group. Records without a confirmed eCW link stay in a separate
+              group.
+            </p>
+            {visitProgress.total > 0 && (
+              <p className="staff-small staff-muted" role="status">
+                {visitProgress.done < visitProgress.total
+                  ? `Checking eCW visits: ${visitProgress.done} of ${visitProgress.total} patient histories loaded…`
+                  : `eCW visit checks finished for ${visitProgress.total} patients.`}
+              </p>
+            )}
+            {visibleGroups.map(([day, group]) => (
+              <details className="clinical-visit-group" key={day}>
+                <summary>
+                  <span className="clinical-visit-date">
+                    {undatedLabels[day] ||
+                      new Date(`${day}T12:00:00`).toLocaleDateString(undefined, {
+                        weekday: 'long',
+                        month: 'long',
+                        day: 'numeric',
+                        year: 'numeric',
+                      })}
                   </span>
-                  <span
-                    className={`staff-status ${patient.card_status === 'missing' ? 'staff-status-attention' : ''}`}
-                  >
-                    {patient.card_status === 'received' ? 'Card received' : 'Card missing'}
+                  <span className="clinical-visit-count">
+                    {group.length} {group.length === 1 ? 'patient' : 'patients'}
                   </span>
-                  <ChevronRight size={19} aria-hidden="true" />
-                </button>
-                <button onClick={() => onRequestCard(patient)}>
-                  <Mail size={17} /> Request insurance card
-                </button>
-              </article>
+                </summary>
+                <div>
+                  {group.map((patient) => (
+                    <article className="clinical-patient-row" key={patient.id}>
+                      <button
+                        className="clinical-patient-open"
+                        onClick={() => {
+                          setSelected(patient)
+                          setError('')
+                          setNotice('')
+                          setCleanupPending(false)
+                        }}
+                      >
+                        <span>
+                          <strong>{name(patient)}</strong>
+                          <small>Date of birth: {patient.birth_date || 'Needs confirmation'}</small>
+                          <small>
+                            {accountLabel(patient.account_status)}
+                            {patient.ecw_account_number && ` · ACCT ${patient.ecw_account_number}`}
+                          </small>
+                        </span>
+                        <span
+                          className={`staff-status ${patient.card_status === 'missing' ? 'staff-status-attention' : ''}`}
+                        >
+                          {patient.card_status === 'received' ? 'Card received' : 'Card missing'}
+                        </span>
+                        <ChevronRight size={19} aria-hidden="true" />
+                      </button>
+                      <button onClick={() => onRequestCard(patient)}>
+                        <Mail size={17} /> Request insurance card
+                      </button>
+                    </article>
+                  ))}
+                </div>
+              </details>
             ))}
           </div>
         )}
-        {patients.length > 0 && (
-          <nav className="clinical-pagination" aria-label="Patient pages">
+        {datedGroups.length > GROUPS_PER_PAGE && (
+          <nav className="clinical-pagination" aria-label="Visit date pages">
             <span className="staff-small staff-muted" role="status">
-              Showing {pageStart + 1}–{Math.min(pageStart + PAGE_SIZE, patients.length)} of{' '}
-              {patients.length} patients
+              Showing {pageStart + 1}–{Math.min(pageStart + GROUPS_PER_PAGE, datedGroups.length)} of{' '}
+              {datedGroups.length} date groups
             </span>
             <div className="clinical-page-buttons">
               <button
-                aria-label="Previous patient page"
+                aria-label="Previous visit date page"
                 disabled={currentPage === 1}
                 onClick={() => setPage(currentPage - 1)}
               >
@@ -346,7 +458,7 @@ export default function ClinicalPatientDashboard({
               {Array.from({ length: pageCount }, (_, index) => index + 1).map((number) => (
                 <button
                   key={number}
-                  aria-label={`Patient page ${number}`}
+                  aria-label={`Visit date page ${number}`}
                   aria-current={number === currentPage ? 'page' : undefined}
                   onClick={() => setPage(number)}
                 >
@@ -354,7 +466,7 @@ export default function ClinicalPatientDashboard({
                 </button>
               ))}
               <button
-                aria-label="Next patient page"
+                aria-label="Next visit date page"
                 disabled={currentPage === pageCount}
                 onClick={() => setPage(currentPage + 1)}
               >

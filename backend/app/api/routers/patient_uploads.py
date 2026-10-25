@@ -122,6 +122,11 @@ async def create_link(body: Create, request: Request):
 
 @router.get("/api/staff/patients/dashboard")
 async def patient_dashboard(request: Request):
+    """List practice-owned patients, including whether a confirmed eCW link is available.
+
+    The dashboard never includes eCW encounter dates; the clinician UI reads
+    each linked patient's appointment history through the scoped history route.
+    """
     actor = await staff.require_staff(request)
     return JSONResponse(await run_in_threadpool(staff_store.patient_dashboard, actor["practice_id"]), headers=HEADERS)
 

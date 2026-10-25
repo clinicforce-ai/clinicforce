@@ -194,6 +194,9 @@ class StaffDeletionTests(unittest.IsolatedAsyncioTestCase):
         with staff_store._connection() as db:
             db.execute("UPDATE staff_patients SET ecw_patient_id='ecw-a',identity_status='confirmed' WHERE id='patient-a'")
             db.execute("UPDATE staff_intakes SET patient_id='patient-a' WHERE id='other-intake'")
+        dashboard = staff_store.patient_dashboard('clinic-a')
+        self.assertTrue(next(row for row in dashboard['patients'] if row['clinic_patient_id'] == 'patient-a')['ecw_linked'])
+        self.assertFalse(next(row for row in dashboard['patients'] if row['clinic_patient_id'] == 'patient-b')['ecw_linked'])
         def create(visit, intake_id, slot):
             return store.create_case('patient-a', '', slot, {'source_mode': 'commercial_previsit', 'previsit_context': {
                 'source': {'_patient_id': 'ecw-a', 'appointment_id': visit},

@@ -5,6 +5,7 @@ export interface ClinicalPatient {
   id: string
   clinic_patient_id: string | null
   ecw_account_number?: string | null
+  ecw_linked: boolean
   identity_status: 'unverified' | 'confirmed'
   given_name: string
   family_name: string

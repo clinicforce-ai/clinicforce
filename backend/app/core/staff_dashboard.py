@@ -52,6 +52,7 @@ def patient_dashboard(practice_id: str, *, connection: Callable, hash_value: Cal
             **{name: patient.get(name) or fields.get(name) or "" for name in ("given_name", "family_name", "birth_date")},
             "email": patient.get("email") or next((item["fields"].get("email") for item in history if item["fields"].get("email")), None),
             "ecw_account_number": patient.get("ecw_account_number"),
+            "ecw_linked": patient.get("identity_status") == "confirmed" and bool(patient.get("ecw_patient_id")),
             "account_status": account, "card_status": "received" if has_card else "missing", "latest_intake_id": latest.get("id"),
             "intake_ids": [item["id"] for item in history], "intake_count": len(history),
             "updated_at": latest.get("updated_at") or patient["created_at"],

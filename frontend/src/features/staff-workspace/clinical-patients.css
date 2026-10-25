@@ -30,6 +30,54 @@
   color: var(--staff-blue);
 }
 
+.clinical-visit-note {
+  margin: 8px 0 16px;
+}
+
+.clinical-visit-group {
+  margin-bottom: 12px;
+  border: 1px solid var(--staff-line);
+  border-radius: 10px;
+  background: #fff;
+  overflow: hidden;
+}
+
+.clinical-visit-group > summary {
+  min-height: 54px;
+  padding: 14px 18px;
+  background: var(--staff-canvas);
+  cursor: pointer;
+}
+
+.clinical-visit-group > summary:hover {
+  background: #eaf1fc;
+}
+
+.clinical-visit-group > summary:focus-visible {
+  outline: 3px solid var(--staff-blue);
+  outline-offset: -3px;
+}
+
+.clinical-visit-group[open] > summary {
+  border-bottom: 1px solid var(--staff-line);
+}
+
+.clinical-visit-date {
+  margin-left: 8px;
+  font-weight: 700;
+}
+
+.clinical-visit-count {
+  float: right;
+  margin-left: 12px;
+  color: var(--staff-muted);
+  font-size: 14px;
+}
+
+.clinical-visit-group > div {
+  padding: 0 18px;
+}
+
 .clinical-patient-row {
   display: flex;
   align-items: center;
@@ -81,6 +129,12 @@
 }
 
 @media (max-width: 780px) {
+  .clinical-visit-count {
+    float: none;
+    display: block;
+    margin-left: 26px;
+  }
+
   .clinical-patient-row {
     align-items: stretch;
     flex-direction: column;
