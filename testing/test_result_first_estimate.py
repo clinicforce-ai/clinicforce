@@ -424,6 +424,13 @@ def test_single_matched_stedi_plan_can_supply_missing_ecw_contract_label(monkeyp
     exact_payer_product = _payer_plan_pricing_source(generic_ecw, {'names': ['Choice Plus']}, benefits, comparison)
     assert exact_payer_product['plan'] == 'Choice Plus'
     assert exact_payer_product['pricing_plan_source'] == 'Stedi eligibility plan name'
+    dated_benefits = {**benefits, 'service_date_matches': None,
+                      'coverage_evidence': {'status': 'ACTIVE', 'start': '2026-01-01', 'end': '2026-12-31'}}
+    assert _payer_plan_pricing_source(generic_ecw, {'names': ['Choice Plus']},
+                                      dated_benefits, comparison, DAY)['plan'] == 'Choice Plus'
+    assert _payer_plan_pricing_source(generic_ecw, {'names': ['Choice Plus']},
+                                      {**dated_benefits, 'coverage_evidence': {'status': 'ACTIVE', 'start': '2026-10-27'}},
+                                      comparison, DAY) is generic_ecw
     assert _payer_plan_pricing_source({**source, 'plan': 'PPO'}, {'names': ['Choice Plus']},
                                       benefits, comparison)['plan'] == 'Choice Plus'
     assert _payer_plan_pricing_source(generic_ecw, {'names': ['Choice Plus', 'choice plus']},

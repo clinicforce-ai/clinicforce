@@ -81,6 +81,8 @@ def test_multiple_active_policies_allow_selected_coverage_inquiry_but_require_co
 def test_estimate_uses_existing_mapping_without_staff_confirmation(appointment, mode):
     inputs, source, payer, network = appointment
     payload = response() if mode in {'verified', 'wrong_product'} else None
+    if payload:
+        payload['planDateInformation'] = {'planBegin': '20200101'}
     route = payer['stedi_payer_id'] if payload else ''
     clinic = 'other-clinic' if mode == 'other_clinic' else 'clinic-a'
     if mode == 'wrong_route':
@@ -128,6 +130,7 @@ def test_estimate_uses_existing_mapping_without_staff_confirmation(appointment, 
 def test_saved_payer_evidence_reprices_when_existing_contract_link_is_resolved(appointment):
     inputs, source, payer, network = appointment
     payload = response()
+    payload['planDateInformation'] = {'planBegin': '20200101'}
     case = {}
 
     def calculate():

@@ -30,6 +30,29 @@ def test_modern_plan_name_and_noncovered_service_are_not_lost():
     assert commercial.normalize_stedi_271(raw, '98', True, procedure_code='99203')['active'] is True
 
 
+def test_bluecard_verifier_is_distinct_from_route_product_and_participation():
+    raw = {'payerId': 'synthetic-local-route',
+           'subscriber': {'additionalInformation': {'group': {'name': 'Synthetic Employer', 'number': 'GROUP'}}},
+           'plans': [{'benefits': {'statuses': [{
+               'status': 'ACTIVE_COVERAGE', 'service': {'system': 'STC', 'value': '30'},
+               'planCoverageDescription': 'MED/SURG - PPO',
+               'relatedEntities': [{'type': 'PARTY_PERFORMING_VERIFICATION',
+                                    'name': {'organization': 'Synthetic Home Plan'},
+                                    'payerId': 'synthetic-home'}]}]}}]}
+    details = commercial.plan_details(raw)
+    assert details['names'] == ['MED/SURG - PPO']
+    assert details['group_name'] == 'Synthetic Employer'
+    assert details['verification_payer'] == {
+        'name': 'Synthetic Home Plan', 'payer_id': 'synthetic-home',
+        'evidence_path': 'plans[0].benefits.statuses[0].relatedEntities[0]'}
+    benefits = commercial.normalize_stedi_271(raw, '98', False, office_visit=True)
+    assert benefits['network_status'] == 'unknown'
+    raw['plans'][0]['benefits']['statuses'][0]['relatedEntities'].append({
+        'type': 'PARTY_PERFORMING_VERIFICATION', 'name': {'organization': 'Conflicting Home Plan'},
+        'payerId': 'other-home'})
+    assert commercial.plan_details(raw)['verification_payer'] is None
+
+
 def test_missing_service_terms_never_invent_a_deductible_only_price():
     raw = payload()
     raw['benefitsInformation'][1]['benefitAmount'] = '750'

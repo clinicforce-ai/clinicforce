@@ -36,6 +36,7 @@ def build(result: dict, review: dict | None = None) -> dict:
     actions = []
     candidate_network = (result.get('mapping_candidate') or {}).get('network') if collection_benefits.get('network_status') == 'unknown' else None
     guidance = {'amount_cents': None, 'status': 'action_required', 'basis': 'missing_collection_inputs',
+                'office_visit_copay_advance': None,
                 'reason': 'The available benefits do not establish an advance collection amount.',
                 'patient_message': 'Your payment amount is not yet calculated. Missing information does not mean your patient responsibility is zero.',
                 'assumptions': assumptions, 'patient_actions': actions, 'services': [],
@@ -44,7 +45,11 @@ def build(result: dict, review: dict | None = None) -> dict:
                            'Out of network' if verified_out_of_network(benefits) else
                            ('Network not established' if candidate_network or
                             (result.get('network_evidence') or {}).get('network_name') else 'Not reported'),
-                'network_source': ('Current signed clinic agreement; review member product and clinician tier'
+                'network_source': ('Signed Texas BlueCard agreement and scoped clinic provider-network record'
+                                   if (result.get('network_evidence') or {}).get('product_network_source') == 'signed_bluecard_agreement' else
+                                   'Clinic Blue contract policy and scoped provider-network record'
+                                   if (result.get('network_evidence') or {}).get('product_network_source') == 'clinic_blue_contract_policy' else
+                                   'Current signed clinic agreement; review member product and clinician tier'
                                    if (result.get('network_evidence') or {}).get('decision') == 'in_network_contract_supported' else
                                    'Payer statement about the requesting provider' if verified_in_network(benefits) and benefits.get('network_source') == 'payer_participation_message' else
                                    'Current Clinical Library contract and clinic provider-network record' if verified_in_network(benefits) and benefits.get('network_source') == 'clinic_library_contract' else
@@ -53,6 +58,7 @@ def build(result: dict, review: dict | None = None) -> dict:
                                    'In-network label has no current product/provider participation source' if benefits.get('network_status') == 'in_network' else
                                    'Payer statement about the requesting provider' if verified_out_of_network(benefits) and benefits.get('network_source') == 'payer_participation_message' else
                                    'Certified clinic agreement inventory; payer participation not independently confirmed' if verified_out_of_network(benefits) and benefits.get('network_source') == 'clinic_contract_inventory' else
+                                   'No current Blue contract registered in the clinic Library' if verified_out_of_network(benefits) and benefits.get('network_source') == 'clinic_no_blue_contract' else
                                    'Current scoped clinic nonparticipation rule' if verified_out_of_network(benefits) else
                                    'The plan returned out-of-network benefit terms without establishing this provider tier' if benefits.get('network_status') == 'out_of_network' else
                                    f'No exact product and rendering-provider link to the {candidate_network} agreement' if candidate_network else
@@ -347,4 +353,9 @@ def build(result: dict, review: dict | None = None) -> dict:
             for service in guidance['services']:
                 service['patient_cents'] = None
     guidance['assumptions'] = list(dict.fromkeys(assumptions))
+    if (guidance['basis'] == 'office_copay' and guidance['amount_cents'] is not None
+            and len(lines) == len([line for line in lines if str(line.get('code') or '').isdigit()
+                 and (99202 <= int(line['code']) <= 99205 or 99212 <= int(line['code']) <= 99215)])):
+        guidance['office_visit_copay_advance'] = {'amount_cents': guidance['amount_cents'],
+                                                    'source': 'selected_office_benefit'}
     return guidance

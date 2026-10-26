@@ -96,7 +96,7 @@ async def submit_previsit_eligibility(api: ModuleType, *, payer: dict, provider:
     raw_bytes = api.json.dumps(payload).encode()
     raw_key = await api.run_in_threadpool(api.object_store.put_staff_document, session["practice_id"], case["id"],
                                       "previsit-stedi-271.json", raw_bytes, "application/json")
-    benefits = api._previsit_benefits(payload, coverage, inputs["service_date"], requested_stc[0], inputs=inputs, source=source)
+    benefits = api._previsit_benefits(payload, coverage, inputs["service_date"], requested_stc, inputs=inputs, source=source)
     result["benefits"] = benefits
     result["checked_at"] = api._now()
     api.collection_event('eligibility_received', practice_id=session['practice_id'], intake_id=(session.get('intake') or {}).get('id'),

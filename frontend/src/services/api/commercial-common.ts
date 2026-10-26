@@ -64,6 +64,7 @@ export type RequirementEvidence = {
 export type CollectionGuidance = {
   billing_note?: BillingNote
   amount_cents: number | null
+  office_visit_copay_advance?: { amount_cents: number; source: 'selected_office_benefit' } | null
   range_min_cents?: number | null
   range_max_cents?: number | null
   status: string

@@ -189,6 +189,114 @@ def test_explicit_medical_oop_annual_links_only_its_matching_remaining_row():
     assert options['plans[0].benefits.outOfPocket[3]']['amount_cents'] == 704135
 
 
+def test_in_person_specialist_terms_ignore_remote_programs_and_bind_medical_limits():
+    def row(service, **fields):
+        return {'service': {'system': 'STC', 'value': service}, **fields}
+
+    payload = {'plans': [{'benefits': {
+        'statuses': [row('30', status='ACTIVE_COVERAGE',
+                         planCoverageDescription='MED/SURG - PPO'),
+                     row('98', status='ACTIVE_COVERAGE')],
+        'coPayment': [row('98', amount='30', timePeriod='EPISODE',
+                          coverageLevel='INDIVIDUAL', network={'indicator': 'IN_NETWORK'},
+                          messages=['SPECIALIST']),
+                      row('98', amount='30', timePeriod='EPISODE',
+                          coverageLevel='INDIVIDUAL', network={'indicator': 'IN_NETWORK'}),
+                      row('98', amount='10', timePeriod='EPISODE',
+                          coverageLevel='INDIVIDUAL', network={'indicator': 'IN_AND_OUT_OF_NETWORK'},
+                          messages=['SPECIALIST E-VISIT']),
+                      row('98', amount='0', coverageLevel='INDIVIDUAL',
+                          network={'indicator': 'IN_NETWORK'},
+                          messages=['SPECIALIST HINGE HEALTH PROGRAM'])],
+        'coInsurance': [row('98', percent='0', coverageLevel='INDIVIDUAL',
+                            network={'indicator': 'IN_NETWORK'}, messages=['SPECIALIST']),
+                        row('98', percent='0', coverageLevel='INDIVIDUAL',
+                            network={'indicator': 'IN_NETWORK'}),
+                        row('98', percent='0', coverageLevel='INDIVIDUAL',
+                            network={'indicator': 'IN_NETWORK'},
+                            messages=['SPECIALIST DIABETES MANAGEMENT PROGRAM OMADA HEALTH ONLY'])],
+        'outOfPocket': [row('30', amount='4500', timePeriod='CALENDAR_YEAR',
+                            coverageLevel='INDIVIDUAL', network={'indicator': 'IN_NETWORK'}),
+                        row('30', amount='1250.01', timePeriod='REMAINING',
+                            coverageLevel='INDIVIDUAL', network={'indicator': 'IN_NETWORK'}),
+                        row('30', amount='9000', timePeriod='CALENDAR_YEAR',
+                            coverageLevel='FAMILY', network={'indicator': 'IN_NETWORK'}),
+                        row('30', amount='5250.01', timePeriod='REMAINING',
+                            coverageLevel='FAMILY', network={'indicator': 'IN_NETWORK'})],
+        'deductible': [row('30', amount='1200', timePeriod='CALENDAR_YEAR',
+                           coverageLevel='INDIVIDUAL', network={'indicator': 'IN_NETWORK'}),
+                       row('30', amount='0', timePeriod='REMAINING',
+                           coverageLevel='INDIVIDUAL', network={'indicator': 'IN_NETWORK'}),
+                       row('30', amount='2400', timePeriod='CALENDAR_YEAR',
+                           coverageLevel='FAMILY', network={'indicator': 'IN_NETWORK'}),
+                       row('30', amount='1200', timePeriod='REMAINING',
+                           coverageLevel='FAMILY', network={'indicator': 'IN_NETWORK'})],
+        'limitations': [row('30', amount='5000', timePeriod='LIFETIME',
+                            messages=['TRAVEL EXPENSES FOR COVERED SERVICES OVER 50 MILES'])],
+        'nonCovered': [row('AL', network={'indicator': 'IN_AND_OUT_OF_NETWORK'})],
+    }}]}
+    result = normalize_stedi_271(payload, '98', False, office_visit=True,
+                                  place_of_service='11', service_date='2026-10-26')
+    assert result['active'] is True
+    assert result['network_status'] == 'unknown'
+    assert result['copay_cents'] == 3000
+    assert result['coinsurance_percent'] == '0'
+    assert result['oop_annual_cents'] == 450000
+    assert result['oop_remaining_cents'] == 125001
+    assert result['deductible_annual_cents'] == 120000
+    assert result['deductible_remaining_cents'] == 0
+    options = {option['id']: option for option in result['reported_options']}
+    for index, (amount, level, period) in enumerate([
+        (450000, 'INDIVIDUAL', 'CALENDAR_YEAR'), (125001, 'INDIVIDUAL', 'REMAINING'),
+        (900000, 'FAMILY', 'CALENDAR_YEAR'), (525001, 'FAMILY', 'REMAINING'),
+    ]):
+        option = options[f'plans[0].benefits.outOfPocket[{index}]']
+        assert (option['amount_cents'], option['coverage_level'], option['time_period'],
+                option['network'], option['plan_association']) == (
+                    amount, level, period, 'IN_NETWORK', 'medical')
+    for index, (amount, level, period) in enumerate([
+        (120000, 'INDIVIDUAL', 'CALENDAR_YEAR'), (0, 'INDIVIDUAL', 'REMAINING'),
+        (240000, 'FAMILY', 'CALENDAR_YEAR'), (120000, 'FAMILY', 'REMAINING'),
+    ]):
+        option = options[f'plans[0].benefits.deductible[{index}]']
+        assert (option['amount_cents'], option['coverage_level'], option['time_period'],
+                option['network'], option['plan_association']) == (
+                    amount, level, period, 'IN_NETWORK', 'medical')
+    assert all('travel expenses' not in reason.lower() for reason in result['review_reasons'])
+    priced = price_lines([{'id': 'office', 'code': '99203', 'units': 1}], [], result,
+                         {'place_of_service': '11', 'office_service_types': ['98', 'BY', '1']},
+                         payload=payload, service_date='2026-10-26')
+    assert priced['lines'][0]['benefits']['copay_cents'] == 3000
+    assert priced['lines'][0]['benefits']['oop_remaining_cents'] == 125001
+    assert priced['lines'][0]['allowed_cents'] is None
+    summary = commercial_previsit_pricing._previsit_benefits(
+        payload, {'active_coverages': 1}, '2026-10-26', ['30', '98'],
+        inputs={'lines': [{'code': '99203', 'service_status': 'scheduled', 'units': 1}],
+                'place_of_service': '11', 'service_date': '2026-10-26'}, source={})
+    assert summary['copay_cents'] == 3000
+    payload['plans'][0]['benefits']['coPayment'][1]['messages'] = ['FIRST VISIT ONLY']
+    conditional = normalize_stedi_271(payload, '98', False, office_visit=True,
+                                       place_of_service='11', service_date='2026-10-26')
+    assert conditional['copay_cents'] is None
+    payload['plans'][0]['benefits']['statuses'].append(
+        row('30', status='ACTIVE_COVERAGE', planCoverageDescription='Synthetic Vision Plan'))
+    mixed = normalize_stedi_271(payload, '98', False, office_visit=True,
+                                place_of_service='11', service_date='2026-10-26')
+    assert mixed['oop_remaining_cents'] is None
+    payload['plans'][0]['benefits']['statuses'].pop()
+    payload['plans'][0]['benefits']['outOfPocket'].append(row(
+        '30', amount='150', timePeriod='REMAINING', coverageLevel='INDIVIDUAL',
+        network={'indicator': 'IN_NETWORK'}, planCoverageDescription='Synthetic Vision Plan'))
+    conflicted = normalize_stedi_271(payload, '98', False, office_visit=True,
+                                     place_of_service='11', service_date='2026-10-26')
+    assert conflicted['oop_remaining_cents'] is None
+    payload['plans'][0]['benefits']['outOfPocket'].pop()
+    payload['plans'][0]['benefits']['statuses'][0]['status'] = 'INACTIVE_COVERAGE'
+    inactive = normalize_stedi_271(payload, '98', False, office_visit=True,
+                                   place_of_service='11', service_date='2026-10-26')
+    assert inactive['oop_remaining_cents'] is None
+
+
 def test_ecw_billing_tin_requires_explicit_identifier_label():
     assert _tin({'identifier': [{'system': 'http://hl7.org/fhir/sid/us-ein',
                                  'value': '12-3456789'}]}) == '123456789'

@@ -18,6 +18,22 @@ def patient_benefits_bound(comparison: dict | None) -> bool:
             and comparison.get('reconciliation_rule') == 'ecw_patient_coverage_reference')
 
 
+def patient_plan_applies(benefits: dict, comparison: dict | None, service_date: str) -> bool:
+    """Bind an active payer product to this patient and visit date."""
+    if (benefits.get('active') is not True or benefits.get('coverage_dates_invalid')
+            or benefits.get('coverage_status_conflict') or not patient_benefits_bound(comparison)
+            or not service_date):
+        return False
+    if benefits.get('service_date_matches') is True:
+        return True
+    if benefits.get('service_date_matches') is not None:
+        return False
+    coverage = benefits.get('coverage_evidence') or {}
+    return (coverage.get('status') == 'ACTIVE' and bool(coverage.get('start'))
+            and coverage['start'] <= service_date
+            and (not coverage.get('end') or coverage['end'] >= service_date))
+
+
 def payer_identity_verified(comparison: dict | None) -> bool:
     """Payer-specific rules require a current patient-bound identity decision."""
     return patient_benefits_bound(comparison) and (

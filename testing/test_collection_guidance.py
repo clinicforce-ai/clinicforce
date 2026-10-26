@@ -524,10 +524,14 @@ def test_standalone_office_copay_is_one_per_visit_and_requires_unambiguous_terms
     result = scenario()
     result['price_range'].update(complete=False, mode='alternatives')
     line = result['price_range']['lines'][0]
-    line['benefits'].update(copay_cents=4700, copay_period='DAY', deductible_applies=False, oop_remaining_cents=100000)
+    line['benefits'].update(copay_cents=4700, copay_period='EPISODE', deductible_applies=False, oop_remaining_cents=100000)
     result['price_range']['lines'] = [{**deepcopy(line), 'code': str(code)} for code in range(99202, 99206)]
     value = collection_guidance.build(result)
     assert value['amount_cents'] == 4700 and value['basis'] == 'office_copay'
+    assert value['office_visit_copay_advance']['amount_cents'] == 4700
+    result['price_range']['lines'].append({'code': '95886', 'units': 1, 'benefits': {}, 'calculation': None})
+    assert collection_guidance.build(result)['office_visit_copay_advance'] is None
+    result['price_range']['lines'].pop()
     result['price_range']['lines'][0]['benefits']['copay_cents'] = 6200
     assert collection_guidance.build(result)['status'] == 'action_required'
 
@@ -619,6 +623,7 @@ def test_unknown_network_does_not_collect_a_tier_specific_office_copay():
               'price_range': {'complete': False, 'mode': 'services', 'lines': [
                   {'code': '99203', 'units': 1, 'benefits': terms, 'calculation': None}]}}
     assert collection_guidance.build(result)['amount_cents'] is None
+    assert collection_guidance.build(result)['office_visit_copay_advance'] is None
     terms['network_independent'] = True
     assert collection_guidance.build(result)['amount_cents'] == 3000
 

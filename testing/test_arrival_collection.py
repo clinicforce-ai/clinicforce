@@ -146,7 +146,7 @@ def test_alternative_office_levels_collect_one_common_verified_copay():
     benefits = {'active': True, 'network_status': 'in_network', 'network_source': 'clinic_library_contract',
                 'identity': {'status': 'matched', 'binding': 'synthetic-current-binding', 'match_version': 2}}
     lines = [{'code': str(code), 'units': 1, 'benefits': {
-        'copay_cents': 4000, 'copay_period': 'VISIT', 'cost_share': 'copay',
+        'copay_cents': 4000, 'copay_period': 'EPISODE', 'cost_share': 'copay',
         'deductible_applies': False, 'oop_remaining_cents': 100000,
         'requirements': {kind: {'cleared': True} for kind in ('referral', 'authorization')},
     }} for code in range(99202, 99206)]

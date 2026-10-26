@@ -7,7 +7,46 @@ import json
 
 from app.core import object_store
 from app.insurance import commercial, group_contract_support, inventory_certification, library_network_exclusions
-from app.insurance.identity import patient_benefits_bound
+from app.insurance.identity import patient_benefits_bound, patient_plan_applies
+
+
+def record_confirmed_out_of_network(result: dict, benefits: dict) -> None:
+    """Describe the payer statement or clinic rule that selected this tier."""
+    source = benefits.get('network_source')
+    if source == 'clinic_contract_inventory':
+        return  # Keep the certified scope and exclusion passage already attached.
+    if source not in {'payer_participation_message', 'clinic_nonparticipation_rule', 'clinic_no_blue_contract'}:
+        return
+    result['network_evidence'] = {
+        'decision': ('out_of_network_confirmed_by_payer' if source == 'payer_participation_message'
+                     else 'out_of_network_by_clinic_contract_record' if source == 'clinic_no_blue_contract'
+                     else 'out_of_network_confirmed_by_scoped_nonparticipation_record'),
+        'source': source, 'evidence_ids': benefits.get('network_evidence_ids') or [],
+        'reason': ('Product-specific payer evidence identifies this requesting provider as out of network.'
+                   if source == 'payer_participation_message' else
+                   'No current Blue contract is registered in the clinic Library for this visit date.'
+                   if source == 'clinic_no_blue_contract' else
+                   'A scoped clinic nonparticipation rule applies to this provider and product.')}
+
+
+def resolve_unlinked_blue_route(result: dict, practice_id: str, inputs: dict, source: dict,
+                                payer_id: str, route_payer: dict | None, benefits: dict) -> bool:
+    """Select a supported BlueCard or absent-contract tier without a clinic payer connection."""
+    route = group_contract_support.eligibility_route(result, payer_id, route_payer)
+    supported = group_contract_support.resolve(practice_id, route, inputs, source, result, benefits)
+    if supported and supported.get('product_network_source') == 'signed_bluecard_agreement':
+        result['network_evidence'] = supported
+        benefits['network_status'] = 'in_network'
+        benefits['network_source'] = 'clinic_group_agreement'
+        return True
+    if (route and source.get('payer_plan_bound') is True and benefits.get('active') is True
+            and benefits.get('service_date_matches') is not False
+            and group_contract_support.no_blue_contract(practice_id, route, str(inputs.get('service_date') or ''))):
+        benefits['network_status'] = 'out_of_network'
+        benefits['network_source'] = 'clinic_no_blue_contract'
+        record_confirmed_out_of_network(result, benefits)
+        return True
+    return False
 
 
 def _clear_saved_tier(result: dict, reason: str) -> None:
@@ -64,26 +103,28 @@ def recheck_saved_network_evidence(result: dict, case: dict, practice_id: str, p
     recheck_saved_inventory(result, case, practice_id, payer)
     benefits = result.get('benefits') or {}
     prior_group = benefits.get('network_source') == 'clinic_group_agreement'
-    if prior_group:
+    prior_blue_absence = benefits.get('network_source') == 'clinic_no_blue_contract'
+    if prior_group or prior_blue_absence:
         benefits.update(network_status='unknown', network_source=None)
         result['network_evidence'] = {'decision': 'lacking_applicable_network_evidence'}
-    if (not payer or payer.get('status') != 'staff_guidance_enabled'
-            or benefits.get('network_status') != 'unknown' or result.get('agreement_exclusion')
+    payer_id = str((case.get('previsit_context') or {}).get('payer_id') or '')
+    route = group_contract_support.eligibility_route(result, payer_id, payer)
+    if (not route or benefits.get('network_status') != 'unknown' or result.get('agreement_exclusion')
             or (result.get('network_evidence') or {}).get('decision') not in
                {None, 'lacking_applicable_network_evidence'}):
-        if prior_group:
+        if prior_group or prior_blue_absence:
             _clear_saved_tier(result, 'The signed clinic agreement no longer supports this network and visit.')
         return
     context = case.get('previsit_context') or {}
     plan = ((result.get('plan_details') or {}).get('stedi') or {})
-    if not plan.get('identified_product') and case.get('previsit_raw_sha256') and case.get('previsit_raw_object_key'):
+    if (not plan.get('identified_product') or not plan.get('verification_payer')) and case.get('previsit_raw_sha256') and case.get('previsit_raw_object_key'):
         try:
             raw = object_store.get_object_bytes(case['previsit_raw_object_key'])
             if hashlib.sha256(raw).hexdigest() == case['previsit_raw_sha256']:
                 parsed = commercial.plan_details(json.loads(raw))
-                if parsed.get('identified_product') and parsed.get('names') == plan.get('names'):
-                    plan = parsed
-                    result.setdefault('plan_details', {})['stedi'] = parsed
+                if parsed.get('names') == plan.get('names'):
+                    plan = {**plan, **parsed}
+                    result.setdefault('plan_details', {})['stedi'] = plan
         except Exception:
             pass  # Keep the frozen projection when its protected raw response cannot be reopened.
     names = [plan['identified_product']] if plan.get('identified_product') else plan.get('names') or []
@@ -91,22 +132,23 @@ def recheck_saved_network_evidence(result: dict, case: dict, practice_id: str, p
               or context.get('source') or {})
     identity = result.get('identity') or benefits.get('identity') or {}
     service_date = str((context.get('inputs') or {}).get('service_date') or '')
-    coverage = benefits.get('coverage_evidence') or {}
-    dated_coverage = (coverage.get('status') == 'ACTIVE' and service_date
-                      and coverage.get('start') and coverage['start'] <= service_date
-                      and (not coverage.get('end') or coverage['end'] >= service_date))
-    exact = {**source, 'payer_plan_bound': benefits.get('active') is True
-             and (benefits.get('service_date_matches') is True
-                  or benefits.get('service_date_matches') is None and dated_coverage)
-             and patient_benefits_bound(identity),
-             'payer_plan_names': names, 'payer_network_names': plan.get('network_names') or []}
-    supported = group_contract_support.resolve(practice_id, payer, context.get('inputs') or {},
+    exact = {**source, 'payer_plan_bound': patient_plan_applies(benefits, identity, service_date),
+             'payer_plan_names': names, 'payer_network_names': plan.get('network_names') or [],
+             'payer_verification_party': plan.get('verification_payer')}
+    supported = group_contract_support.resolve(practice_id, route, context.get('inputs') or {},
                                                exact, result, benefits)
     if supported:
         result['network_evidence'] = supported
         benefits['network_status'] = 'in_network'
         benefits['network_source'] = 'clinic_group_agreement'
-    elif prior_group:
+    elif (exact['payer_plan_bound'] and group_contract_support.no_blue_contract(
+            practice_id, route, service_date)):
+        if prior_group:
+            _clear_saved_tier(result, 'The signed clinic agreement no longer supports this network and visit.')
+        benefits['network_status'] = 'out_of_network'
+        benefits['network_source'] = 'clinic_no_blue_contract'
+        record_confirmed_out_of_network(result, benefits)
+    elif prior_group or prior_blue_absence:
         _clear_saved_tier(result, 'The signed clinic agreement no longer supports this network and visit.')
 
 

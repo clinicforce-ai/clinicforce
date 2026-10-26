@@ -143,7 +143,7 @@ def arrival_collection(price: dict, benefits: dict, review: dict) -> dict:
         terms = office[0]['benefits']
         if (office[0].get('units') == 1 and not terms.get('requires_review') and not office[0].get('conditions')
                 and terms.get('cost_share') == 'copay' and terms.get('deductible_applies') is False
-                and terms.get('copay_period') in {'VISIT', '27', 'DAY', '7'}
+                and terms.get('copay_period') in {'VISIT', '27', 'DAY', '7', 'EPISODE'}
                 and terms.get('copay_cents') is not None and terms.get('oop_remaining_cents') is not None):
             result['verified_copay_cents'] = min(terms['copay_cents'], terms['oop_remaining_cents'])
     if not price.get('complete') and result['verified_copay_cents'] is None:

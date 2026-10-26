@@ -91,6 +91,30 @@ def oop_plan_association(row: dict, payload: dict) -> str:
     kind = coverage_kind(row, payload)
     if kind != 'unassigned':
         return kind
+    index = row.get('plan_index')
+    plans = payload.get('plans') or []
+    if (type(index) is int and 0 <= index < len(plans)
+            and set(row.get('serviceTypeCodes') or []) == {'30'}
+            and str(row.get('coverageLevel') or '').upper() in {'INDIVIDUAL', 'IND', 'FAMILY', 'FAM'}
+            and _network_indicator(row) in {'Y', 'YES', 'IN_NETWORK', 'N', 'NO',
+                                            'OUT_OF_NETWORK', 'W', 'IN_AND_OUT_OF_NETWORK'}
+            and str(row.get('timeQualifier') or row.get('timeQualifierCode') or '').upper()
+                in {'23', 'CALENDAR_YEAR', '22', 'SERVICE_YEAR', 'CONTRACT', '29', 'REMAINING'}):
+        plan = plans[index]
+        statuses = ((plan.get('benefits') or {}).get('statuses') or []) if isinstance(plan, dict) else []
+        medical = [status for status in statuses if isinstance(status, dict)
+                   and isinstance(status.get('service'), dict) and status['service'].get('value') == '30'
+                   and str(status.get('status') or '').upper() in {'ACTIVE', 'ACTIVE_COVERAGE'}
+                   and coverage_kind(status, payload) == 'medical']
+        same_plan_30 = [benefit for category in (plan.get('benefits') or {}).values()
+                        if isinstance(category, list) for benefit in category if isinstance(benefit, dict)
+                        and isinstance(benefit.get('service'), dict)
+                        and benefit['service'].get('value') == '30']
+        names = {str(benefit.get('planCoverageDescription') or benefit.get('planCoverage') or '').strip().casefold()
+                 for benefit in same_plan_30 if benefit.get('planCoverageDescription') or benefit.get('planCoverage')}
+        if (medical and not any(coverage_kind(benefit, payload) == 'supplementary'
+                                for benefit in same_plan_30) and len(names) == 1):
+            return 'medical'
     insurance_type = str(row.get('insuranceType') or row.get('insuranceTypeCode') or '').upper()
     notes = ' '.join(_benefit_notes([row.get('messages'), row.get('additionalInformation')])).upper()
     if '30' in {str(code) for code in row.get('serviceTypeCodes') or []} and re.search(r'\bINT MED AND RX\b', notes):
@@ -141,6 +165,26 @@ def plan_details(payload: dict) -> dict:
                                         for network in [((person.get('additionalInformation') or {}).get('planNetwork') or {})]
                                         if isinstance(network, dict) and network.get('name')))
     group = subscriber.get("groupNumber") or info.get("groupNumber") or (additional.get("group") or {}).get("number")
+    # BlueCard's verification party identifies the home plan; it is separate
+    # from the local route and says nothing about this provider's participation.
+    verifying_parties = {}
+    for row in rows:
+        if (row.get('code') != 'status' or '30' not in (row.get('serviceTypeCodes') or [])
+                or str(row.get('status') or '').upper() not in {'ACTIVE', 'ACTIVE_COVERAGE'}
+                or coverage_kind(row, payload) == 'supplementary'):
+            continue
+        for index, entity in enumerate(row.get('relatedEntities') or []):
+            if not isinstance(entity, dict) or entity.get('type') != 'PARTY_PERFORMING_VERIFICATION':
+                continue
+            name = entity.get('name') or {}
+            name = name.get('organization') if isinstance(name, dict) else name
+            payer_id = str(entity.get('payerId') or '').strip()
+            if isinstance(name, str) and name.strip() and payer_id:
+                verifying_parties.setdefault((name.strip(), payer_id),
+                                             f"{row['evidence_path']}.relatedEntities[{index}]")
+    # Do not join a verification party from one plan to a product from another.
+    verifier = (next(iter(verifying_parties)) if len(verifying_parties) == 1
+                and len(names) == 1 and len(payload.get('plans') or []) <= 1 else None)
     # A short display label cannot identify a federal product by itself. The
     # member-bound enrollment code and an FEP source marker must agree.
     fep_paths = [row['evidence_path'] for row in rows if any(
@@ -154,6 +198,9 @@ def plan_details(payload: dict) -> dict:
     return {"names": names, "supplementary_names": supplementary,
             "plan_number": subscriber.get("planNumber") or info.get("planNumber") or (additional.get('plan') or {}).get('number'),
             "group_number": group,
+            "group_name": str((additional.get('group') or {}).get('name') or '').strip() or None,
+            "verification_payer": ({'name': verifier[0], 'payer_id': verifier[1],
+                                     'evidence_path': verifying_parties[verifier]} if verifier else None),
             "network_names": network_names, "source": "Stedi",
             "identified_product": 'FEP Blue Basic PSHB' if fep_basic else None,
             "product_evidence": ({'plan': 'plans[0].name',
@@ -216,7 +263,7 @@ def reported_stedi_options(payload: dict[str, Any], service_type_code: str) -> l
         result.append({"id": row["evidence_path"], "kind": kinds[code], "service_type_code": ", ".join(service_types),
                        "procedure_code": _procedure(row), "coverage_level": row.get("coverageLevel") or row.get("coverageLevelCode"),
                        "plan_index": row.get("plan_index"), "plan_name": row.get("planCoverage") or row.get("planCoverageDescription"),
-                       "plan_association": oop_plan_association(row, payload) if code == 'G' else coverage_kind(row, payload),
+                       "plan_association": oop_plan_association(row, payload) if code in {'C', 'G'} else coverage_kind(row, payload),
                        "insurance_type": row.get('insuranceType') or row.get('insuranceTypeCode'),
                        "network": indicator, "time_period": str(row.get("timeQualifierCode") or row.get("timeQualifier") or ""),
                        "effective_dates": effective_dates,

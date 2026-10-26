@@ -4,7 +4,7 @@ from __future__ import annotations
 from app.api.routers import commercial_estimator as _api
 from app.api.routers.commercial_flow.commercial_previsit_catalog import build_catalog
 from app.api.routers.commercial_flow.commercial_previsit_requirements import attach_requirements
-from app.insurance.identity import patient_benefits_bound
+from app.insurance.identity import patient_benefits_bound, patient_plan_applies
 from app.insurance import botox_review, evidence_resolution, published_plan_benefits
 
 def _visit_context_parts(inputs: dict, source: dict) -> dict:
@@ -30,10 +30,12 @@ def _visit_context_token(inputs: dict, source: dict) -> str:
     return _api.hashlib.sha256(_api.json.dumps(context, sort_keys=True).encode()).hexdigest()
 
 
-def _payer_plan_pricing_source(source: dict, payer_plan: dict, benefits: dict, comparison: dict) -> dict:
+def _payer_plan_pricing_source(source: dict, payer_plan: dict, benefits: dict,
+                               comparison: dict, service_date: str = '') -> dict:
     """Use one matched 271 product when eCW has no product-specific plan label."""
     if (not _api.insurance_identity.generic_plan_label(source.get('plan')) or benefits.get('active') is not True
-            or benefits.get('service_date_matches') is not True
+            or not (patient_plan_applies(benefits, comparison, service_date) if service_date
+                    else benefits.get('service_date_matches') is True)
             or not patient_benefits_bound(comparison)):
         return source
     names = {}
@@ -74,9 +76,7 @@ def _finish_previsit(result: dict, case: dict, inputs: dict, source: dict, paylo
         result['benefits'].setdefault('review_reasons', []).append(result['eligibility_reconciliation']['message'])
         result['benefits']['requires_review'] = True
     payer_plan = _api.commercial.plan_details(payload or {})
-    payer_plan_bound = (result['benefits'].get('active') is True
-        and result['benefits'].get('service_date_matches') is True
-        and patient_benefits_bound(comparison))
+    payer_plan_bound = patient_plan_applies(result['benefits'], comparison, inputs['service_date'])
     published_plan_benefits.apply_plan_terms(result['benefits'], payer_plan,
                                              inputs['service_date'], payer_plan_bound)
     protection = review.get('billing_protection') or {}
@@ -88,10 +88,12 @@ def _finish_previsit(result: dict, case: dict, inputs: dict, source: dict, paylo
         and protection.get('service_date') == inputs.get('service_date')) else {}
     product_names = ([payer_plan['identified_product']] if payer_plan_bound and payer_plan.get('identified_product')
                      else payer_plan['names'])
-    exact_source = {**_payer_plan_pricing_source(pricing_source or source, payer_plan, result['benefits'], comparison),
+    exact_source = {**_payer_plan_pricing_source(pricing_source or source, payer_plan, result['benefits'],
+                                                comparison, inputs['service_date']),
                     'payer_plan_names': product_names,
                     'payer_plan_bound': payer_plan_bound,
                     'payer_network_names': payer_plan['network_names'] if payer_plan_bound else [],
+                    'payer_verification_party': payer_plan.get('verification_payer') if payer_plan_bound else None,
                     'payer_plan_scope': {key: payer_plan.get(key) for key in ('plan_number', 'group_number')}}
     payer_id, connections, codes, available, uploaded_cash = build_catalog(
         _api, result, session, planning_inputs, source, pricing_source, exact_source, payer_id, payload,

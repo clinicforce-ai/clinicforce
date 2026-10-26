@@ -20,7 +20,7 @@ def office_copay_amount(result: dict, benefits: dict, price: dict, lines: list[d
             and (benefits.get('network_status') in {'in_network', 'out_of_network'}
                  or all(t.get('network_independent') for t in terms))
             and all(t.get('active') is True and t.get('copay_cents') is not None
-                    and t.get('copay_period') in {'', 'VISIT', '27', 'DAY', '7', 'SERVICE', 'PROCEDURE'}
+                    and t.get('copay_period') in {'', 'VISIT', '27', 'DAY', '7', 'EPISODE', 'SERVICE', 'PROCEDURE'}
                     and (t.get('deductible_applies') is not True or t.get('deductible_remaining_cents') == 0)
                     and (benefits.get('network_status') != 'out_of_network' or
                          t.get('deductible_applies') is False or t.get('deductible_remaining_cents') == 0)

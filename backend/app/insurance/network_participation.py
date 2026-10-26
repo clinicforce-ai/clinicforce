@@ -41,7 +41,7 @@ def verified_in_network(benefits: dict) -> bool:
 def verified_out_of_network(benefits: dict) -> bool:
     return (benefits.get('network_status') == 'out_of_network'
             and benefits.get('network_source') in {'payer_participation_message', 'clinic_nonparticipation_rule',
-                                                  'clinic_contract_inventory'}
+                                                  'clinic_contract_inventory', 'clinic_no_blue_contract'}
             and not participation_conflict(benefits))
 
 

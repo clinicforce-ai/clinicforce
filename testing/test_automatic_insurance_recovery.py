@@ -40,6 +40,7 @@ def recovery(monkeypatch):
     monkeypatch.setattr(api.object_store, 'get_object_bytes', lambda key: objects[key])
     monkeypatch.setattr(api.store, 'patient_checks', lambda *_: [])
     monkeypatch.setattr(api.staff_store, 'patient_card_intakes', lambda *_: [])
+    monkeypatch.setattr(api.staff_store, 'list_library', lambda *_: [])
     monkeypatch.setattr(api.practice_prices, 'current', lambda *_: None)
     monkeypatch.setattr(api.commercial_store, 'list_connections', lambda *_: [])
     monkeypatch.setattr(api.stedi_financial, 'credentials', lambda *_: 'synthetic-key')
