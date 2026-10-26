@@ -346,7 +346,7 @@ def _recheck_saved_payer_allowance(result: dict, case: dict, practice_id: str) -
 def _previsit_result(case: dict, practice_id: str | None = None) -> dict:
     result = _api.deepcopy(case['previsit_context']['result'])
     reference = case.get('previsit_reference') or {}
-    if (reference.get('context_token') == case['previsit_context'].get('context_token')
+    if (reference.get('benefits') and reference.get('context_token') == case['previsit_context'].get('context_token')
             and reference.get('service_date') == result.get('service_date')):
         result['reference_benefits'] = _api.deepcopy(reference['benefits'])
         result['reference_subscriber'] = _api.deepcopy(reference.get('subscriber') or {})

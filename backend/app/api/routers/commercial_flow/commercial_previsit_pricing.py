@@ -245,9 +245,7 @@ def _previsit_benefits(payload: dict, coverage: dict, service_date: str | None =
     office_only = bool(codes) and all(row['code'].isdigit() and
         (99202 <= int(row['code']) <= 99205 or 99212 <= int(row['code']) <= 99215) for row in codes)
     requested = [str(code) for code in service_type] if isinstance(service_type, list) else [str(service_type)]
-    # The summary has one service scope; each priced CPT is normalized against
-    # the complete saved 271 independently. Never let general STC 30 replace
-    # an office STC 98 merely because the request order changed.
+    # Scope the summary to office care and each CPT to the complete saved 271.
     summary_service = ('98' if office_only and '98' in requested else
                        next((code for code in requested if code != '30'), requested[0] if requested else '98'))
     benefits = _api.commercial.normalize_stedi_271(payload, summary_service, False,
