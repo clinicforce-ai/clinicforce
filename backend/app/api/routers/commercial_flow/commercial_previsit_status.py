@@ -345,6 +345,12 @@ def _recheck_saved_payer_allowance(result: dict, case: dict, practice_id: str) -
 
 def _previsit_result(case: dict, practice_id: str | None = None) -> dict:
     result = _api.deepcopy(case['previsit_context']['result'])
+    reference = case.get('previsit_reference') or {}
+    if (reference.get('benefits') and reference.get('context_token') == case['previsit_context'].get('context_token')
+            and reference.get('service_date') == result.get('service_date')):
+        result['reference_benefits'] = _api.deepcopy(reference['benefits'])
+        result['reference_subscriber'] = _api.deepcopy(reference.get('subscriber') or {})
+        result['reference_only'] = True
     # Legacy discovery wrote a detail-only failure after a successful 271.
     # Keep its review message in recovery; it is not an eligibility failure.
     failure = result.get('eligibility_failure') or {}
@@ -425,6 +431,10 @@ def _previsit_result(case: dict, practice_id: str | None = None) -> dict:
         if row['source'] not in hint['sources']:
             hint['sources'].append(row['source'])
     result['insurance_hints'] = list(hints.values())
+    explicit_payment_mode = (case.get('visit_review') or {}).get('payment_mode')
+    if explicit_payment_mode in {'cash', 'insurance'}:
+        result['payment_mode'] = explicit_payment_mode
+        result.pop('cash_fallback', None)
     united_healthcare = _api.commercial.is_united_healthcare_payer(
         result, {'displayName': route_payer.get('display_name')} if route_payer else None)
     if (united_healthcare and result.get('cash_fallback') is not None
@@ -443,14 +453,14 @@ def _previsit_result(case: dict, practice_id: str | None = None) -> dict:
             and not timing and recovery.get('state') in {'complete', 'rejected'}
             and recovery.get('outcome') != 'recovered'
             and recovery.get('exhausted') is not False
-            and (case.get('visit_review') or {}).get('payment_mode') != 'insurance'):
+            and explicit_payment_mode is None):
         result['payment_mode'] = 'cash'
         result['cash_fallback'] = {}
         result.pop('emg_option', None)
     elif (not united_healthcare and (result.get('benefits') or {}).get('active') is not True
             and not timing and (pricing_unavailable or (recovery.get('state') == 'complete' and recovery.get('outcome') == 'recovered'
             and insurance_guidance.get('amount_cents') is None))
-            and (case.get('visit_review') or {}).get('payment_mode') != 'insurance'):
+            and explicit_payment_mode is None):
         result['payment_mode'] = 'cash'
         result['cash_fallback'] = {}
         result.pop('emg_option', None)

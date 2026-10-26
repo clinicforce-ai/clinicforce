@@ -5,51 +5,15 @@ import type { CommercialEstimateModel } from './useCommercialEstimateModel'
 import { coinsuranceFormula } from './coinsuranceFormula'
 import { money, range } from './format'
 import { requirementForLine } from './requirementForLine'
+import {
+  aetnaOfficeReferenceCopay,
+  specialistOfficeCoinsurance,
+  specialistOfficeCopay,
+} from './payerReportedPartialCopay'
+import { reportedMedicalLimit } from './reportedMedicalLimit'
+import { referenceCoverageRow } from './referenceCoverageRow'
 
 const unknown = 'Not returned for this visit'
-
-function reportedMedicalLimit(
-  result: PrevisitEstimate,
-  level: 'INDIVIDUAL' | 'FAMILY',
-  period: 'CALENDAR_YEAR' | 'REMAINING',
-) {
-  const benefits = result.benefits
-  if (
-    benefits?.active !== true ||
-    benefits.service_date_matches !== true ||
-    benefits.network_status !== 'in_network'
-  )
-    return null
-  const options = benefits.reported_options || []
-  const anchors = options.filter(
-    (row) =>
-      row.kind === 'out_of_pocket' &&
-      row.service_type_code === '30' &&
-      row.coverage_level === level &&
-      row.time_period === 'CALENDAR_YEAR' &&
-      row.network === 'IN_NETWORK' &&
-      /\bINT MED AND RX\b/i.test(row.payer_note || ''),
-  )
-  if (anchors.length !== 1) return null
-  const amounts = [
-    ...new Set(
-      options
-        .filter(
-          (row) =>
-            row.kind === 'out_of_pocket' &&
-            row.service_type_code === '30' &&
-            row.coverage_level === level &&
-            row.time_period === period &&
-            row.network === 'IN_NETWORK' &&
-            row.plan_index === anchors[0].plan_index &&
-            row.plan_association !== 'supplementary' &&
-            row.amount_cents != null,
-        )
-        .map((row) => row.amount_cents!),
-    ),
-  ]
-  return amounts.length === 1 ? amounts[0] : null
-}
 
 function reportedLimit(
   result: PrevisitEstimate,
@@ -141,23 +105,33 @@ export default function CommercialCostBreakdown({
   model: CommercialEstimateModel
   result: PrevisitEstimate
 }) {
-  const benefits = result.benefits
+  const benefits = result.reference_benefits ?? result.benefits
+  const reportedResult = result.reference_benefits ? { ...result, benefits } : result
   const price = result.price_range
   const lines = price?.mode === 'services' ? price.lines || [] : []
+  const automaticCashFallback = model.cash && result.cash_fallback != null
   const summary = result.encounter_summary
-  const individualDeductible = limitSummary(result, 'deductible', 'INDIVIDUAL')
-  const surgicalIndividualDeductible = limitSummary(result, 'deductible', 'INDIVIDUAL', '2')
-  const familyDeductible = limitSummary(result, 'deductible', 'FAMILY')
-  const surgicalFamilyDeductible = limitSummary(result, 'deductible', 'FAMILY', '2')
-  const individualReportedOop = limitSummary(result, 'out_of_pocket', 'INDIVIDUAL')
+  const individualDeductible = limitSummary(reportedResult, 'deductible', 'INDIVIDUAL')
+  const surgicalIndividualDeductible = limitSummary(reportedResult, 'deductible', 'INDIVIDUAL', '2')
+  const familyDeductible = limitSummary(reportedResult, 'deductible', 'FAMILY')
+  const surgicalFamilyDeductible = limitSummary(reportedResult, 'deductible', 'FAMILY', '2')
+  const individualReportedOop = limitSummary(reportedResult, 'out_of_pocket', 'INDIVIDUAL')
   const reportedIndividualRemainingOop = reportedLimit(
-    result,
+    reportedResult,
     'out_of_pocket',
     'INDIVIDUAL',
     'REMAINING',
   )
-  const reportedCoinsurance =
-    benefits?.coinsurance_percent ?? lines[0]?.benefits?.coinsurance_percent
+  const lineCoinsurance = [...new Set(lines.map((line) => line.benefits?.coinsurance_percent))]
+  const reportedCoinsurance = result.reference_benefits
+    ? specialistOfficeCoinsurance(reportedResult)
+    : lines.length
+      ? lineCoinsurance.length === 1
+        ? lineCoinsurance[0]
+        : null
+      : benefits?.coinsurance_percent
+  const reportedOfficeCopay = specialistOfficeCopay(reportedResult)
+  const officeReferenceCopay = aetnaOfficeReferenceCopay(result, model)
   const unconfirmedZeroOop =
     reportedIndividualRemainingOop.unassigned && reportedIndividualRemainingOop.amount === money(0)
   const components = summary?.components
@@ -168,14 +142,15 @@ export default function CommercialCostBreakdown({
       ? lines[0].benefits?.copay_cents
       : null
   const individualOopAnnual =
-    benefits?.oop_annual_cents ?? reportedMedicalLimit(result, 'INDIVIDUAL', 'CALENDAR_YEAR')
+    benefits?.oop_annual_cents ??
+    reportedMedicalLimit(reportedResult, 'INDIVIDUAL', 'CALENDAR_YEAR')
   const individualOopRemaining =
-    benefits?.oop_remaining_cents ?? reportedMedicalLimit(result, 'INDIVIDUAL', 'REMAINING')
+    benefits?.oop_remaining_cents ?? reportedMedicalLimit(reportedResult, 'INDIVIDUAL', 'REMAINING')
   const reportedOopOnly =
     (benefits?.oop_annual_cents == null && individualOopAnnual != null) ||
     (benefits?.oop_remaining_cents == null && individualOopRemaining != null)
-  const familyOopAnnual = reportedMedicalLimit(result, 'FAMILY', 'CALENDAR_YEAR')
-  const familyOopRemaining = reportedMedicalLimit(result, 'FAMILY', 'REMAINING')
+  const familyOopAnnual = reportedMedicalLimit(reportedResult, 'FAMILY', 'CALENDAR_YEAR')
+  const familyOopRemaining = reportedMedicalLimit(reportedResult, 'FAMILY', 'REMAINING')
   const pricedCashLines = lines.filter((line) => line.cash_cents != null && !line.cash_included)
   const lineAllowedTotal =
     lines.length > 0 &&
@@ -190,24 +165,37 @@ export default function CommercialCostBreakdown({
       ? lines.reduce((sum, line) => sum + line.allowed_cents!, 0)
       : null
   const calculated =
+    !automaticCashFallback &&
     !model.previousEstimate &&
     !summary?.integrity_error &&
     price?.complete === true &&
     (summary?.complete === true || model.supportedAmount === true)
   const insuredRows: CostBreakdownRow[] = [
-    {
-      label: 'Coverage',
-      value: [result.payer || 'Payer not recorded', model.planName].filter(Boolean).join(' · '),
-      detail: model.policyStatus,
-    },
+    referenceCoverageRow(result, model, benefits),
     { label: 'Network', value: model.networkLabel },
     {
       label: result.reason ? 'Reason for visit' : 'Planned service',
       value: result.reason || model.anticipatedService || 'Not recorded',
     },
+    {
+      label: 'CPTs',
+      value: lines.length
+        ? lines
+            .map(
+              (line) =>
+                `CPT ${line.code} × ${line.units || 1}${line.modifiers?.length ? ` · modifier ${line.modifiers.join(', ')}` : ''}`,
+            )
+            .join('; ')
+        : 'No CPTs selected',
+      detail:
+        result.service_selection_status !== 'approved'
+          ? 'Clinician selection of codes, quantities and modifiers is pending'
+          : undefined,
+    },
     ...(lines.length
       ? lines.map((line) => {
           const resolved =
+            !automaticCashFallback &&
             line.rate_resolution?.status === 'RESOLVED' &&
             ['clinic_contract', 'payer_out_of_network', 'cms_original_medicare_estimate'].includes(
               line.allowed_basis || '',
@@ -232,28 +220,44 @@ export default function CommercialCostBreakdown({
       : [{ label: 'Planned CPTs', value: 'No priced CPTs selected' }]),
     {
       label: 'Total payer allowed',
-      value:
-        price?.allowed_min_cents != null && price.allowed_max_cents != null
+      value: automaticCashFallback
+        ? 'Not established'
+        : price?.allowed_min_cents != null && price.allowed_max_cents != null
           ? range(price.allowed_min_cents, price.allowed_max_cents)
           : lineAllowedTotal != null
             ? money(lineAllowedTotal)
             : 'Not fully priced',
     },
+    ...(result.temporary_rate_reference?.lines.length
+      ? [
+          {
+            label: 'Blue Cross fee reference',
+            value: result.temporary_rate_reference.lines
+              .map((line) => `CPT ${line.code}: ${money(line.unit_reference_cents)} per unit`)
+              .join('; '),
+            detail: result.temporary_rate_reference.message,
+          },
+        ]
+      : []),
     {
       label: 'Copay',
       value:
-        diagnosticCopay != null
-          ? `${money(diagnosticCopay)} once per day`
-          : calculated && components?.copay_cents != null
-            ? money(components.copay_cents)
-            : lines.some((line) => line.benefits?.copay_cents != null)
-              ? lines
-                  .map(
-                    (line) =>
-                      `CPT ${line.code}: ${line.benefits.copay_cents != null ? money(line.benefits.copay_cents) : 'not returned'}`,
-                  )
-                  .join('; ')
-              : unknown,
+        officeReferenceCopay != null
+          ? `${money(officeReferenceCopay)} specialist office visit · payer-reported reference`
+          : diagnosticCopay != null
+            ? `${money(diagnosticCopay)} once per day`
+            : calculated && components?.copay_cents != null
+              ? money(components.copay_cents)
+              : lines.some((line) => line.benefits?.copay_cents != null)
+                ? lines
+                    .map(
+                      (line) =>
+                        `CPT ${line.code}: ${line.benefits.copay_cents != null ? money(line.benefits.copay_cents) : 'not returned'}`,
+                    )
+                    .join('; ')
+                : !lines.length && reportedOfficeCopay != null
+                  ? `${money(reportedOfficeCopay)} specialist office visit · payer-reported`
+                  : unknown,
       detail:
         result.collection_guidance?.basis === 'diagnostic_day_copay'
           ? 'One payer diagnostic copay for the selected testing; final share follows the claim'
@@ -263,7 +267,9 @@ export default function CommercialCostBreakdown({
                 components?.copay_cents === 0 &&
                 !lines.some((line) => line.benefits?.copay_cents != null)
               ? 'No separate copay was applied to the priced CPTs'
-              : undefined,
+              : !lines.length && reportedOfficeCopay != null
+                ? 'Payer category term; applicability to planned CPTs and visit date is not confirmed'
+                : undefined,
     },
     {
       label: 'Individual deductible',
@@ -321,17 +327,17 @@ export default function CommercialCostBreakdown({
             : '$0 payable after out-of-pocket limit'
           : calculated && components?.coinsurance_cents != null
             ? money(components.coinsurance_cents)
-            : benefits?.coinsurance_percent != null
-              ? `${benefits.coinsurance_percent}% reported; dollar amount pending`
-              : lines.length && lines.every((line) => line.benefits?.coinsurance_percent === '0')
-                ? '0% reported for selected CPTs'
-                : unknown,
+            : reportedCoinsurance != null
+              ? `${reportedCoinsurance}% reported; dollar amount pending`
+              : unknown,
       detail: calculated
         ? coinsuranceFormula(result) ||
           (components?.coinsurance_cents === 0
             ? 'No coinsurance applied after deductible'
             : undefined)
-        : undefined,
+        : !lines.length && reportedCoinsurance != null
+          ? 'Payer-reported office visit term; diagnostic testing share is not established'
+          : undefined,
     },
     ...(calculated && (components?.allowed_cap_adjustment_cents ?? 0) > 0
       ? [
@@ -370,11 +376,11 @@ export default function CommercialCostBreakdown({
           familyOopRemaining != null ? `${money(familyOopRemaining)} remaining` : null,
         ]
           .filter(Boolean)
-          .join(' · ') || limitSummary(result, 'out_of_pocket', 'FAMILY').value,
+          .join(' · ') || limitSummary(reportedResult, 'out_of_pocket', 'FAMILY').value,
       detail:
         familyOopAnnual != null || familyOopRemaining != null
           ? 'Payer-reported medical limit; not used as a verified calculation input'
-          : limitSummary(result, 'out_of_pocket', 'FAMILY').unassigned
+          : limitSummary(reportedResult, 'out_of_pocket', 'FAMILY').unassigned
             ? 'Payer-reported plan amount; medical applicability unverified and not used as a cap'
             : undefined,
     },
@@ -383,18 +389,23 @@ export default function CommercialCostBreakdown({
     {
       label: 'Cash alternative',
       value:
-        price?.cash_complete && price.cash_min_cents != null && price.cash_max_cents != null
-          ? range(price.cash_min_cents, price.cash_max_cents)
-          : pricedCashLines.length === 1 && /^9920[2-5]$/.test(pricedCashLines[0].code)
-            ? `${money(pricedCashLines[0].cash_cents!)} new-patient office visit`
-            : 'Not quoted',
+        automaticCashFallback && model.cashPrice
+          ? model.cashPrice
+          : price?.cash_complete && price.cash_min_cents != null && price.cash_max_cents != null
+            ? range(price.cash_min_cents, price.cash_max_cents)
+            : pricedCashLines.length === 1 && /^9920[2-5]$/.test(pricedCashLines[0].code)
+              ? `${money(pricedCashLines[0].cash_cents!)} new-patient office visit`
+              : 'Not quoted',
       detail: 'Separate self-pay price; not used as the insurance allowed amount',
     },
   ]
 
-  const patientShare =
-    result.collection_guidance?.basis === 'out_of_pocket_limit' &&
-    result.collection_guidance.amount_cents === 0
+  const patientShare = automaticCashFallback
+    ? officeReferenceCopay != null
+      ? `${money(officeReferenceCopay)} office-only reference; other services excluded`
+      : 'Not fully calculated'
+    : result.collection_guidance?.basis === 'out_of_pocket_limit' &&
+        result.collection_guidance.amount_cents === 0
       ? money(0)
       : calculated &&
           summary?.estimated_total_patient_min_cents != null &&
@@ -407,62 +418,73 @@ export default function CommercialCostBreakdown({
           (model.provisionalAmount != null
             ? money(model.provisionalAmount)
             : model.patientPrice || 'Not fully calculated')
-  const rows: CostBreakdownRow[] = model.cash
-    ? [
-        { label: 'Payment method', value: 'Self-pay' },
-        {
-          label: 'Planned services',
-          value: lines.length
-            ? lines
-                .map((line) =>
-                  serviceRowLabel({
-                    description: line.description,
-                    reason: result.reason || model.anticipatedService,
-                    code: line.code,
-                    units: line.units,
-                  }),
-                )
-                .join('; ')
-            : result.cash_quote?.package_label || 'Not selected',
-        },
-        { label: 'Clinic cash price', value: model.cashPrice || 'Not quoted' },
-      ]
-    : [
-        ...insuredRows,
-        {
-          label: summary?.conditional ? 'Conditional patient share' : 'Estimated patient share',
-          value: patientShare,
-          detail:
-            result.collection_guidance?.basis === 'out_of_pocket_limit'
-              ? 'Covered in-network share is capped by the applicable out-of-pocket limit'
-              : calculated
-                ? 'Copay + deductible applied + coinsurance − allowed and out-of-pocket reductions'
-                : 'Full share awaits applicable deductible and out-of-pocket terms',
-        },
-        ...(summary?.payments_verified_cents != null && summary.payments_verified_cents > 0
-          ? [{ label: 'Already paid', value: `−${money(summary.payments_verified_cents)}` }]
-          : []),
-      ]
+  const rows: CostBreakdownRow[] =
+    model.cash && !automaticCashFallback
+      ? [
+          { label: 'Payment method', value: 'Self-pay' },
+          {
+            label: 'Planned services',
+            value: lines.length
+              ? lines
+                  .map((line) =>
+                    serviceRowLabel({
+                      description: line.description,
+                      reason: result.reason || model.anticipatedService,
+                      code: line.code,
+                      units: line.units,
+                    }),
+                  )
+                  .join('; ')
+              : result.cash_quote?.package_label || 'Not selected',
+          },
+          { label: 'Clinic cash price', value: model.cashPrice || 'Not quoted' },
+        ]
+      : [
+          ...insuredRows,
+          {
+            label: summary?.conditional ? 'Conditional patient share' : 'Estimated patient share',
+            value: patientShare,
+            detail: automaticCashFallback
+              ? 'Insured share awaits a matching payer check and selected CPTs'
+              : result.collection_guidance?.basis === 'out_of_pocket_limit'
+                ? 'Covered in-network share is capped by the applicable out-of-pocket limit'
+                : calculated
+                  ? 'Copay + deductible applied + coinsurance − allowed and out-of-pocket reductions'
+                  : 'Full share awaits applicable deductible and out-of-pocket terms',
+          },
+          ...(summary?.payments_verified_cents != null && summary.payments_verified_cents > 0
+            ? [{ label: 'Already paid', value: `−${money(summary.payments_verified_cents)}` }]
+            : []),
+        ]
 
   rows.push({
     label: 'Amount to collect at visit',
     value:
-      model.supportedAmount && result.collection_guidance?.amount_cents != null
+      !automaticCashFallback &&
+      model.supportedAmount &&
+      result.collection_guidance?.amount_cents != null
         ? money(result.collection_guidance.amount_cents)
-        : 'Not established',
-    detail: result.collection_guidance?.unconfirmed_zero_oop
-      ? 'Confirm the reported $0 out-of-pocket balance with the payer before collection'
-      : model.supportedAmount
-        ? result.collection_guidance?.basis === 'office_copay'
-          ? 'Office copay advance; other services may have a later balance'
-          : result.collection_guidance?.basis === 'out_of_pocket_limit'
-            ? 'Applicable out-of-pocket maximum has no remaining balance for covered care'
-            : result.collection_guidance?.basis === 'diagnostic_day_copay'
-              ? 'One diagnostic copay advance; other costs may follow the claim'
-              : result.collection_guidance?.basis === 'claim_after_service'
-                ? 'Clinic policy defers collection until after the claim'
-                : undefined
-        : undefined,
+        : officeReferenceCopay != null
+          ? `${money(officeReferenceCopay)} office-only reference`
+          : 'Not established',
+    detail:
+      officeReferenceCopay != null
+        ? 'Planning figure for one specialist office visit on the appointment date; not an authorized collection instruction. Other services, prior payments and Medicare cost-sharing protection are not included.'
+        : automaticCashFallback
+          ? 'Insurance collection is unresolved; any cash quote is listed separately'
+          : result.collection_guidance?.unconfirmed_zero_oop
+            ? 'Confirm the reported $0 out-of-pocket balance with the payer before collection'
+            : model.supportedAmount
+              ? result.collection_guidance?.basis === 'office_copay'
+                ? 'Office copay advance; other services may have a later balance'
+                : result.collection_guidance?.basis === 'out_of_pocket_limit'
+                  ? 'Applicable out-of-pocket maximum has no remaining balance for covered care'
+                  : result.collection_guidance?.basis === 'diagnostic_day_copay'
+                    ? 'One diagnostic copay advance; other costs may follow the claim'
+                    : result.collection_guidance?.basis === 'claim_after_service'
+                      ? 'Clinic policy defers collection until after the claim'
+                      : undefined
+              : undefined,
     emphasis: true,
   })
   return <CostBreakdownTable rows={rows} />

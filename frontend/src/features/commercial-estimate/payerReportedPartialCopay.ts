@@ -3,6 +3,95 @@ import type { CommercialEstimateModel } from './useCommercialEstimateModel'
 import { patientBenefitsBound } from './identityBinding'
 import { firstSelectedCptIssue } from './selectedCptIssue'
 
+export function specialistOfficeCopay(
+  result: PrevisitEstimate,
+  networks = ['IN_NETWORK', 'IN_AND_OUT_OF_NETWORK'],
+): number | null {
+  const amounts = new Set(
+    (result.benefits?.active === true ? result.benefits.reported_options || [] : [])
+      .filter(
+        (row) =>
+          row.kind === 'copay' &&
+          row.service_type_code
+            .split(',')
+            .map((code) => code.trim())
+            .includes('98') &&
+          row.coverage_level === 'INDIVIDUAL' &&
+          networks.includes(row.network) &&
+          row.places_of_service?.includes('11') &&
+          /\bSpecialist Visit or Evaluation\b/i.test(row.payer_note || '') &&
+          !/telemedicine|teladoc|virtual/i.test(row.payer_note || '') &&
+          row.plan_association !== 'supplementary' &&
+          Number.isInteger(row.amount_cents) &&
+          row.amount_cents! >= 0,
+      )
+      .map((row) => row.amount_cents!),
+  )
+  return amounts.size === 1 ? [...amounts][0] : null
+}
+
+export function specialistOfficeCoinsurance(
+  result: PrevisitEstimate,
+  networks = ['IN_NETWORK', 'IN_AND_OUT_OF_NETWORK'],
+): string | null {
+  const percents = new Set(
+    (result.benefits?.active === true ? result.benefits.reported_options || [] : [])
+      .filter(
+        (row) =>
+          row.kind === 'coinsurance' &&
+          row.service_type_code
+            .split(',')
+            .map((code) => code.trim())
+            .includes('98') &&
+          row.coverage_level === 'INDIVIDUAL' &&
+          networks.includes(row.network) &&
+          row.places_of_service?.includes('11') &&
+          row.plan_association !== 'supplementary' &&
+          row.percent != null,
+      )
+      .map((row) => row.percent!),
+  )
+  return percents.size === 1 ? [...percents][0] : null
+}
+
+export function aetnaOfficeReferenceCopay(
+  result: PrevisitEstimate,
+  model: CommercialEstimateModel,
+): number | null {
+  const benefits = result.reference_benefits ?? result.benefits
+  const copay = specialistOfficeCopay(
+    { ...result, benefits },
+    benefits?.network_status === 'in_network' ? undefined : ['IN_AND_OUT_OF_NETWORK'],
+  )
+  const coinsurance = specialistOfficeCoinsurance(
+    { ...result, benefits },
+    benefits?.network_status === 'in_network' ? undefined : ['IN_AND_OUT_OF_NETWORK'],
+  )
+  if (
+    !model.cash ||
+    model.previousEstimate ||
+    !result.cash_fallback ||
+    !/\baetna\b/i.test([result.stedi_payer?.name, result.payer].filter(Boolean).join(' ')) ||
+    !result.service_date ||
+    benefits?.active !== true ||
+    benefits.network_status === 'out_of_network' ||
+    benefits.network_conflict ||
+    benefits.has_secondary ||
+    benefits.source_errors?.length ||
+    benefits.qmb_status === 'protected' ||
+    result.billing_protection?.status === 'qmb' ||
+    benefits.deductible_remaining_cents !== 0 ||
+    !/^0(?:\.0+)?$/.test(coinsurance || '') ||
+    !Number.isInteger(benefits.oop_remaining_cents) ||
+    benefits.oop_remaining_cents! < 0 ||
+    copay == null
+  )
+    return null
+  return benefits.network_status === 'in_network'
+    ? Math.min(copay, benefits.oop_remaining_cents!)
+    : copay
+}
+
 export function payerReportedPartialCopay(
   result: PrevisitEstimate,
   model: CommercialEstimateModel,

@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from app.api.routers import commercial_estimator as _api
-from app.api.routers.commercial_flow.commercial_previsit_rate_reference import _attach_temporary_uhc_rates
+from app.api.routers.commercial_flow.commercial_previsit_rate_reference import _attach_temporary_aetna_rates, _attach_temporary_uhc_rates
 from app.api.routers.commercial_flow.commercial_previsit_network_guard import NMCT_PRACTICE_ID, apply_nmct_network_policy, record_confirmed_out_of_network, resolve_unlinked_blue_route
 from app.insurance import botox_review, cms_locality, cms_pfs, cpt_rules, insurance_product, inventory_certification, library_network_exclusions, group_contract_support
 
@@ -245,9 +245,7 @@ def _previsit_benefits(payload: dict, coverage: dict, service_date: str | None =
     office_only = bool(codes) and all(row['code'].isdigit() and
         (99202 <= int(row['code']) <= 99205 or 99212 <= int(row['code']) <= 99215) for row in codes)
     requested = [str(code) for code in service_type] if isinstance(service_type, list) else [str(service_type)]
-    # The summary has one service scope; each priced CPT is normalized against
-    # the complete saved 271 independently. Never let general STC 30 replace
-    # an office STC 98 merely because the request order changed.
+    # Scope the summary to office care and each CPT to the complete saved 271.
     summary_service = ('98' if office_only and '98' in requested else
                        next((code for code in requested if code != '30'), requested[0] if requested else '98'))
     benefits = _api.commercial.normalize_stedi_271(payload, summary_service, False,
@@ -394,6 +392,9 @@ def _attach_previsit_pricing(result: dict, practice_id: str, inputs: dict, sourc
     if _api.commercial.is_united_healthcare_payer(
             result, {'displayName': route_payer.get('display_name')} if route_payer else None):
         _attach_temporary_uhc_rates(result, practice_id, inputs, source)
+    elif nmct and _api.re.search(r'\baetna\b', ' '.join((str(result.get('payer') or ''),
+            str((route_payer or {}).get('display_name') or ''))), _api.re.I):
+        _attach_temporary_aetna_rates(result, practice_id, inputs, source)
     if len(connections) != 1:
         if inventory and not _api.network_participation.verified_out_of_network(benefits):
             _apply_inventory_tier(result, benefits, inventory, exclusion)

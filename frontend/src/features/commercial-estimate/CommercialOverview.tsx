@@ -9,7 +9,7 @@ import TemporaryRateReference from './TemporaryRateReference'
 import EstimateSources from './EstimateSources'
 import { openServiceDetails } from './openServiceDetails'
 import ArrivalAmountSummary from './ArrivalAmountSummary'
-import { payerReportedPartialCopay } from './payerReportedPartialCopay'
+import { aetnaOfficeReferenceCopay, payerReportedPartialCopay } from './payerReportedPartialCopay'
 import PublishedPlanBenefit from './PublishedPlanBenefit'
 import UhcMedicarePpoBenefitTable from './UhcMedicarePpoBenefitTable'
 import CommercialCostBreakdown from './CommercialCostBreakdown'
@@ -55,7 +55,8 @@ export default function CommercialOverview({
       ? [...new Set(result.price_range.lines?.map((line) => line.code).filter(Boolean) || [])]
       : []
   const plannedCodeLabel = plannedCodes.map((code) => `CPT ${code}`).join(', ')
-  const payerReportedPartialCents = payerReportedPartialCopay(result, model)
+  const aetnaReferenceCopay = aetnaOfficeReferenceCopay(result, model)
+  const payerReportedPartialCents = aetnaReferenceCopay ?? payerReportedPartialCopay(result, model)
   const showSelectedRequirements =
     !cash &&
     !previousEstimate &&
@@ -96,11 +97,18 @@ export default function CommercialOverview({
     session?.role === 'admin' &&
     result.payment_explanation?.reason_code === 'out_of_network_allowance_missing' &&
     !!result.selected_ids?.length
+  const automaticCashFallback = cash && result.cash_fallback != null
   return (
     <section id="visit-estimate" className="visit-overview" aria-labelledby="payment-heading">
       <div className="overview-heading">
         <h2 id="payment-heading">
-          {readOnly ? 'Saved visit estimate' : cash ? 'Self-pay estimate' : 'Arrival collection'}
+          {readOnly
+            ? 'Saved visit estimate'
+            : automaticCashFallback
+              ? 'Insurance review · cash option'
+              : cash
+                ? 'Self-pay estimate'
+                : 'Arrival collection'}
         </h2>
         {!readOnly && (
           <div className="payment-toggle" aria-label="Payment method">
@@ -143,9 +151,10 @@ export default function CommercialOverview({
             model={model}
             result={result}
             partialCopay={payerReportedPartialCents}
+            referenceOnly={aetnaReferenceCopay != null}
             visibleAmount={visibleAmount}
           />
-          {payerReportedPartialCents != null && (
+          {payerReportedPartialCents != null && aetnaReferenceCopay == null && (
             <details className="financial-breakdown">
               <summary>Additional payer response details</summary>
               <UhcMedicarePpoBenefitTable result={result} />
@@ -161,7 +170,7 @@ export default function CommercialOverview({
                 <PublishedPlanBenefit result={result} />
               </details>
             )}
-          {!cash &&
+          {(!cash || automaticCashFallback) &&
             !previousEstimate &&
             result.benefits?.active === true &&
             patientBenefitsBound &&
@@ -349,11 +358,13 @@ export default function CommercialOverview({
       <div className="overview-plan-name">
         <ShieldCheck size={16} aria-hidden="true" />
         <span>
-          {cash
+          {cash && !automaticCashFallback
             ? 'Clinic self-pay schedule'
             : planName || result.payer || 'Policy details not returned'}
         </span>
-        {!cash && cashPrice && <span className="cash-comparison">Cash option {cashPrice}</span>}
+        {(!cash || automaticCashFallback) && cashPrice && (
+          <span className="cash-comparison">Cash option {cashPrice}</span>
+        )}
       </div>
     </section>
   )

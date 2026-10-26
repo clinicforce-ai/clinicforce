@@ -193,6 +193,8 @@ from app.api.routers.commercial_flow.commercial_previsit_routes import (
     _begin_coverage_discovery,
 )
 
+from app.api.routers.commercial_flow.commercial_previsit_reference import attach_payer_reference
+
 
 from app.api.routers.commercial_flow.commercial_estimate_route import (
     previsit_estimate,

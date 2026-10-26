@@ -379,6 +379,10 @@ def test_completed_recovery_falls_back_to_cash_without_inventing_price_or_covera
     assert api._previsit_result(case)['collection_guidance']['amount_cents'] == 16000
     case['visit_review'] = {'payment_mode': 'insurance'}
     assert api._previsit_result(case)['payment_mode'] == 'insurance'
+    case['visit_review'] = {'payment_mode': 'cash'}
+    chosen_cash = api._previsit_result(case)
+    assert chosen_cash['payment_mode'] == 'cash'
+    assert 'cash_fallback' not in chosen_cash
     case.pop('visit_review')
     case['previsit_discovery']['request_state'] = 'pending'
     assert api._previsit_result(case)['payment_mode'] == 'insurance'
