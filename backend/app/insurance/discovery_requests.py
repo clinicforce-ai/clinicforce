@@ -60,7 +60,7 @@ def previous_addresses(patient: dict) -> list[dict]:
     rows = [discovery_address(row) for row in patient.get('address', [])
             if row.get('use') == 'old' or (row.get('period', {}).get('end') or today)[:10] < today]
     unique = {json.dumps(row, sort_keys=True): row for row in rows if row.get('state')}
-    return list(unique.values())[:2]
+    return list(unique.values())
 
 
 def patient_address(patient: dict) -> dict:

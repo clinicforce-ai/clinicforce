@@ -319,6 +319,21 @@ def test_discovery_recovers_missing_member_and_dependent_with_prior_address():
     assert not discovery.automatic_match(item, inputs, source)
 
 
+def test_confirmed_third_ecw_prior_address_can_verify_discovery_candidate():
+    case, _, _, original = setup()
+    inputs = deepcopy(case['previsit_context']['inputs'])
+    item = deepcopy(original)
+    item['subscriber']['address']['address1'] = '300 Prior St'
+    inputs['patient']['previous_addresses'] = discovery.previous_addresses({'address': [
+        {'use': 'old', 'line': [f'{number} Prior St'], 'city': 'Austin', 'state': 'TX',
+         'postalCode': '78701'} for number in (100, 200, 300)]})
+
+    candidate = discovery.candidates({'items': [item]}, inputs, case['previsit_context']['source'])[0]
+    assert len(inputs['patient']['previous_addresses']) == 3
+    assert candidate['verification_status'] == 'VERIFIED'
+    assert candidate['address_matches'] is True
+
+
 def test_partial_address_and_medical_coverage_are_not_discarded_or_invented():
     assert discovery.patient_address({'address': [{'state': 'TX'}]}) == {'state': 'TX'}
     case, _, _, item = setup()
@@ -554,7 +569,8 @@ class RecoveryTest(IsolatedAsyncioTestCase):
         case, session, provider, _ = setup()
         patient = case['previsit_context']['inputs']['patient']
         patient['previous_addresses'] = [patient['address'],
-            {'address1': '200 Prior St', 'city': 'Dallas', 'state': 'TX', 'postalCode': '75001'}]
+            {'address1': '200 Prior St', 'city': 'Dallas', 'state': 'TX', 'postalCode': '75001'},
+            {'address1': '300 Later St', 'city': 'Houston', 'state': 'TX', 'postalCode': '77001'}]
         client = MagicMock(); client.__aenter__ = AsyncMock(return_value=client); client.__aexit__ = AsyncMock(return_value=None)
         client.post = AsyncMock(return_value=httpx.Response(200, json={'status': 'COMPLETE', 'coveragesFound': 0, 'items': []}))
         revision = case['revision']
