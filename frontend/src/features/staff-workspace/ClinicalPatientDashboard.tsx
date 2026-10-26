@@ -11,7 +11,7 @@ import {
 } from '../../services/api/staff-patients'
 
 import ClinicalPatientDetail from './ClinicalPatientDetail'
-import { completedEcwVisitDates } from './completedEcwVisitDates'
+import { compareVisitDays, ecwVisitDates, localVisitDay } from './ecwVisitDates'
 import { name, accountLabel } from './clinical-patient-labels'
 
 interface Props {
@@ -27,7 +27,7 @@ type VisitResult = { status: 'complete' | 'unavailable'; dates: string[] }
 const undatedLabels: Record<string, string> = {
   loading: 'Checking eCW visits',
   unavailable: 'eCW visits unavailable',
-  none: 'No completed eCW visit',
+  none: 'No upcoming or completed eCW visit',
   unlinked: 'No confirmed eCW link',
 }
 const cohortLabel: Record<Cohort, string> = {
@@ -106,7 +106,7 @@ export default function ClinicalPatientDashboard({
           if (history.ecw_status === 'complete')
             result = {
               status: 'complete',
-              dates: completedEcwVisitDates(history),
+              dates: ecwVisitDates(history, localVisitDay(new Date())),
             }
         } catch {
           // Keep the patient visible in the unavailable group when the read fails.
@@ -225,9 +225,10 @@ export default function ClinicalPatientDashboard({
       else groups.set(day, [patient])
     }
   }
+  const today = localVisitDay(new Date())
   const datedGroups = [...groups]
     .filter(([day]) => !undatedLabels[day])
-    .sort(([first], [second]) => second.localeCompare(first))
+    .sort(([first], [second]) => compareVisitDays(first, second, today))
   const undatedGroups = [...groups].filter(([day]) => undatedLabels[day])
   const pageCount = Math.max(1, Math.ceil(datedGroups.length / GROUPS_PER_PAGE))
   const currentPage = Math.min(page, pageCount)
@@ -377,9 +378,9 @@ export default function ClinicalPatientDashboard({
         ) : (
           <div className="clinical-patient-list">
             <p className="staff-small staff-muted clinical-visit-note">
-              Grouped by completed visits returned by eCW. Patients with visits on several dates
-              appear in each date group. Records without a confirmed eCW link stay in a separate
-              group.
+              Today and upcoming eCW visits appear first, followed by past completed visits.
+              Patients with visits on several dates appear in each date group. Records without a
+              confirmed eCW link stay in a separate group.
             </p>
             {visitProgress.total > 0 && (
               <p className="staff-small staff-muted" role="status">
@@ -400,6 +401,9 @@ export default function ClinicalPatientDashboard({
                         year: 'numeric',
                       })}
                   </span>
+                  {!undatedLabels[day] && day > today && (
+                    <span className="clinical-visit-upcoming">Upcoming</span>
+                  )}
                   <span className="clinical-visit-count">
                     {group.length} {group.length === 1 ? 'patient' : 'patients'}
                   </span>
