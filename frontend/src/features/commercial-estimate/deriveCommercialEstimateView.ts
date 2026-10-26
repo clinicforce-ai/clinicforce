@@ -5,6 +5,7 @@ import { firstSelectedCptIssue } from './selectedCptIssue'
 import { selectedRequirementIssue } from './selectedRequirementIssue'
 import { visitServiceLabel } from './visitServiceLabel'
 import { benefitPresentation } from './benefitPresentation'
+import { payerPlanDisplay } from './payerPlanDisplay'
 import type { CommercialEstimateActions } from './useCommercialEstimateActions'
 export function deriveCommercialEstimateView({
   result,
@@ -93,15 +94,8 @@ export function deriveCommercialEstimateView({
     price?.cash_complete && price.cash_min_cents != null && price.cash_max_cents != null
       ? range(price.cash_min_cents, price.cash_max_cents)
       : null
-  const planName =
-    result?.plan_details?.stedi.names?.join(' · ') ||
-    result?.plan_details?.ecw.plan?.filter((value) => value !== 'CI').join(' · ') ||
-    (result?.plan !== 'CI' ? result?.plan : null)
-  const planSource = result?.plan_details?.stedi.names?.length
-    ? `${result.benefit_source || result.plan_details.stedi.source || 'Payer'} eligibility response`
-    : planName
-      ? 'eCW policy record'
-      : null
+  const referenceBenefits = result?.reference_only ? result.reference_benefits : null
+  const { planName, planSource } = payerPlanDisplay(result)
   const planTypes = [
     /\bHMO\b|health maintenance organization/i.test(planName || '') ? 'HMO' : null,
     /\bPPO\b|preferred provider (?:option|organization)/i.test(planName || '') ? 'PPO' : null,
@@ -141,17 +135,19 @@ export function deriveCommercialEstimateView({
     patientBenefitsBound,
   })
   const coverageSource =
-    benefits?.active != null || benefits?.coverage_evidence
-      ? result?.benefit_source
-        ? `Payer eligibility via ${result.benefit_source}`
-        : 'Payer eligibility source not retained'
-      : result?.recovery?.state
-        ? result.insurance_diagnosis?.coverageSource === 'stedi_discovery'
-          ? 'Stedi coverage discovery · payer benefits unavailable'
-          : 'Coverage discovery · payer benefits unavailable'
-        : result?.ecw_coverage_active
-          ? 'eCW policy record · payer benefits unavailable'
-          : 'No verified coverage source'
+    referenceBenefits?.active === true
+      ? 'Stedi payer reference · visit-date and eCW identity differences shown separately'
+      : benefits?.active != null || benefits?.coverage_evidence
+        ? result?.benefit_source
+          ? `Payer eligibility via ${result.benefit_source}`
+          : 'Payer eligibility source not retained'
+        : result?.recovery?.state
+          ? result.insurance_diagnosis?.coverageSource === 'stedi_discovery'
+            ? 'Stedi coverage discovery · payer benefits unavailable'
+            : 'Coverage discovery · payer benefits unavailable'
+          : result?.ecw_coverage_active
+            ? 'eCW policy record · payer benefits unavailable'
+            : 'No verified coverage source'
   const contractEvidence = result?.network_evidence || result?.mapping_candidate?.contract
   const contractPage = contractEvidence?.locator?.match(/^Page (\d+)(?:,|$)/)?.[1]
   const contractDocumentId = contractEvidence?.document_id || contractEvidence?.related_document_id

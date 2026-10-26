@@ -313,11 +313,13 @@ export default function CommercialOverview({
           <span>
             Coverage<strong>{policyStatus}</strong>
             <small>
-              {result?.benefit_source
-                ? `Checked via ${result.benefit_source}`
-                : result?.benefits?.active
-                  ? 'Payer source not recorded'
-                  : 'Payer check needed'}
+              {result.reference_only && result.reference_benefits?.active === true
+                ? 'Stedi payer reference · appointment-date applicability unverified'
+                : result?.benefit_source
+                  ? `Checked via ${result.benefit_source}`
+                  : result?.benefits?.active
+                    ? 'Payer source not recorded'
+                    : 'Payer check needed'}
             </small>
           </span>
         </div>
