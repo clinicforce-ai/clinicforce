@@ -165,6 +165,38 @@ def test_supplementary_plan_or_service_code_quarantines_unassigned_medical_oop()
     assert result['copay_cents'] is None
 
 
+def test_mixed_dental_status_does_not_hide_explicit_medical_office_oop():
+    def row(service, **values):
+        return {'service': {'system': 'STC', 'value': service}, **values}
+
+    scope = 'DIAGNOSTIC MEDICAL PROCEDURE - PROFESSIONAL;OFFICE VISIT - PROFESSIONAL'
+    payload = {'plans': [{'benefits': {
+        'statuses': [row('30', status='ACTIVE_COVERAGE',
+                         planCoverageDescription='Synthetic Dental Plan'),
+                     row('30', status='ACTIVE_COVERAGE',
+                         planCoverageDescription='Synthetic Medical PPO')],
+        'deductible': [row('2', amount='1000', timePeriod='CALENDAR_YEAR',
+                           coverageLevel='INDIVIDUAL', network={'indicator': 'IN_NETWORK'}),
+                       row('2', amount='0', timePeriod='REMAINING',
+                           coverageLevel='INDIVIDUAL', network={'indicator': 'IN_NETWORK'})],
+        'outOfPocket': [row('30', amount='3500', timePeriod='CALENDAR_YEAR',
+                            coverageLevel='INDIVIDUAL', network={'indicator': 'IN_NETWORK'},
+                            messages=[scope]),
+                        row('30', amount='0', timePeriod='REMAINING',
+                            coverageLevel='INDIVIDUAL', network={'indicator': 'IN_NETWORK'},
+                            messages=[scope])],
+        'coPayment': [row('98', amount='50', timePeriod='VISIT',
+                          coverageLevel='INDIVIDUAL', network={'indicator': 'IN_NETWORK'})]}}]}
+    result = normalize_stedi_271(payload, '98', True, office_visit=True)
+    assert result['deductible_remaining_cents'] is None
+    assert result['oop_annual_cents'] == 350000
+    assert result['oop_remaining_cents'] == 0
+    assert result['oop_quarantined_ids'] == []
+    payload['plans'][0]['benefits']['outOfPocket'][1]['messages'] = [scope + ';DENTAL CARE']
+    result = normalize_stedi_271(payload, '98', True, office_visit=True)
+    assert result['oop_remaining_cents'] is None
+
+
 def test_explicit_medical_oop_annual_links_only_its_matching_remaining_row():
     annual = lambda amount, level, **extra: {'amount': amount,
         'timePeriod': 'CALENDAR_YEAR', 'service': {'system': 'STC', 'value': '30'},

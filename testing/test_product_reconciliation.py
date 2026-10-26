@@ -104,6 +104,23 @@ def test_saved_requirements_refresh_when_network_projection_changes(monkeypatch)
     assert len(called) == 1
 
 
+def test_saved_requirements_refresh_after_published_rule_update(monkeypatch):
+    """A saved office decision cannot keep an older rule with unchanged Library files."""
+    called = []
+    monkeypatch.setattr(requirements, 'attach_requirements', lambda *args: called.append(args))
+    api_stub = SimpleNamespace(staff_store=SimpleNamespace(list_library=lambda *_: []),
+                               commercial_store=SimpleNamespace(list_connections=lambda *_: []))
+    benefits = {'network_status': 'in_network', 'network_source': 'clinic_group_agreement'}
+    network = {'network_name': 'Blue Choice PPO'}
+    saved = {'requirement_sources': [], 'benefits': benefits, 'network_evidence': network,
+             'requirement_evidence': {'referral': {'status': 'Verification required'}}}
+    result = {'requirement_sources': [], 'benefits': benefits, 'network_evidence': network,
+              'requirement_evidence': saved['requirement_evidence']}
+    case = {'previsit_context': {'result': saved, 'inputs': {}, 'source': {}, 'payer_id': ''}}
+    requirements.refresh_saved_requirements(api_stub, result, case, 'synthetic-practice')
+    assert len(called) == 1
+
+
 def setup_path(monkeypatch, mappings=None):
     payer = {'id': 'payer', 'display_name': 'Example Blue', 'category': 'commercial_medical',
              'status': 'staff_guidance_enabled', 'stedi_payer_id': 'payer-route'}

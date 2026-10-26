@@ -56,13 +56,14 @@ function reportedLimit(
   kind: 'deductible' | 'out_of_pocket',
   level: 'INDIVIDUAL' | 'FAMILY',
   period: 'CALENDAR_YEAR' | 'REMAINING',
+  serviceTypeCode = '30',
 ) {
   const rows = (result.benefits?.reported_options || []).filter(
     (row) =>
       row.kind === kind &&
       row.coverage_level === level &&
       row.time_period === period &&
-      row.service_type_code === '30' &&
+      row.service_type_code === serviceTypeCode &&
       row.amount_cents != null &&
       row.network === 'IN_NETWORK',
   )
@@ -83,9 +84,10 @@ function limitSummary(
   result: PrevisitEstimate,
   kind: 'deductible' | 'out_of_pocket',
   level: 'INDIVIDUAL' | 'FAMILY',
+  serviceTypeCode = '30',
 ) {
-  const annual = reportedLimit(result, kind, level, 'CALENDAR_YEAR')
-  const remaining = reportedLimit(result, kind, level, 'REMAINING')
+  const annual = reportedLimit(result, kind, level, 'CALENDAR_YEAR', serviceTypeCode)
+  const remaining = reportedLimit(result, kind, level, 'REMAINING', serviceTypeCode)
   return {
     value:
       annual.amount === unknown && remaining.amount === unknown
@@ -122,11 +124,11 @@ function requirementStatus(result: PrevisitEstimate, kind: 'referral' | 'authori
             ? kind === 'authorization'
               ? clearanceOnFile && evidence?.approval_status === 'Verified'
                 ? 'approval verified'
-                : 'required; approval not verified'
+                : 'required; approval status unresolved'
               : clearanceOnFile
                 ? 'referral on file'
-                : 'required; referral not verified'
-            : 'not verified'
+                : 'required; referral status unresolved'
+            : 'not determined'
       return `CPT ${line.code}: ${status}`
     })
     .join('; ')
@@ -143,6 +145,21 @@ export default function CommercialCostBreakdown({
   const price = result.price_range
   const lines = price?.mode === 'services' ? price.lines || [] : []
   const summary = result.encounter_summary
+  const individualDeductible = limitSummary(result, 'deductible', 'INDIVIDUAL')
+  const surgicalIndividualDeductible = limitSummary(result, 'deductible', 'INDIVIDUAL', '2')
+  const familyDeductible = limitSummary(result, 'deductible', 'FAMILY')
+  const surgicalFamilyDeductible = limitSummary(result, 'deductible', 'FAMILY', '2')
+  const individualReportedOop = limitSummary(result, 'out_of_pocket', 'INDIVIDUAL')
+  const reportedIndividualRemainingOop = reportedLimit(
+    result,
+    'out_of_pocket',
+    'INDIVIDUAL',
+    'REMAINING',
+  )
+  const reportedCoinsurance =
+    benefits?.coinsurance_percent ?? lines[0]?.benefits?.coinsurance_percent
+  const unconfirmedZeroOop =
+    reportedIndividualRemainingOop.unassigned && reportedIndividualRemainingOop.amount === money(0)
   const components = summary?.components
   const diagnosticCopay =
     result.collection_guidance?.basis === 'diagnostic_day_copay' &&
@@ -240,11 +257,13 @@ export default function CommercialCostBreakdown({
       detail:
         result.collection_guidance?.basis === 'diagnostic_day_copay'
           ? 'One payer diagnostic copay for the selected testing; final share follows the claim'
-          : calculated &&
-              components?.copay_cents === 0 &&
-              !lines.some((line) => line.benefits?.copay_cents != null)
-            ? 'No separate copay was applied to the priced CPTs'
-            : undefined,
+          : result.collection_guidance?.basis === 'out_of_pocket_limit'
+            ? 'Plan copay before the applicable out-of-pocket limit; $0 due for covered care'
+            : calculated &&
+                components?.copay_cents === 0 &&
+                !lines.some((line) => line.benefits?.copay_cents != null)
+              ? 'No separate copay was applied to the priced CPTs'
+              : undefined,
     },
     {
       label: 'Individual deductible',
@@ -258,31 +277,55 @@ export default function CommercialCostBreakdown({
             : null,
         ]
           .filter(Boolean)
-          .join(' · ') || unknown,
+          .join(' · ') ||
+        (individualDeductible.value !== unknown
+          ? individualDeductible.value
+          : surgicalIndividualDeductible.value !== unknown
+            ? `${surgicalIndividualDeductible.value} · surgical services`
+            : unknown),
       detail:
-        calculated && components?.deductible_cents != null
-          ? `${money(components.deductible_cents)} applied to this visit`
-          : lines.length && lines.every((line) => line.benefits?.deductible_applies === false)
-            ? 'Does not apply to the selected CPTs'
-            : 'Applicability to the selected CPTs is not established',
+        result.collection_guidance?.basis === 'out_of_pocket_limit'
+          ? individualDeductible.value === unknown && benefits?.deductible_annual_cents == null
+            ? 'No deductible payment due after the out-of-pocket limit; the payer did not report an office-specific deductible rule'
+            : 'No deductible payment due for this covered office visit after the out-of-pocket limit'
+          : calculated && components?.deductible_cents != null
+            ? `${money(components.deductible_cents)} applied to this visit`
+            : individualDeductible.unassigned
+              ? 'Payer-reported plan amount; medical applicability needs confirmation'
+              : surgicalIndividualDeductible.value !== unknown
+                ? 'Payer did not report an office-specific deductible rule; surgical balance does not establish one'
+                : lines.length && lines.every((line) => line.benefits?.deductible_applies === false)
+                  ? 'Does not apply to the selected CPTs'
+                  : 'Office deductible applicability or amount is unresolved for the selected CPTs',
     },
     {
       label: 'Family deductible',
-      value: limitSummary(result, 'deductible', 'FAMILY').value,
-      detail: limitSummary(result, 'deductible', 'FAMILY').unassigned
+      value:
+        familyDeductible.value !== unknown
+          ? familyDeductible.value
+          : surgicalFamilyDeductible.value !== unknown
+            ? `${surgicalFamilyDeductible.value} · surgical services`
+            : unknown,
+      detail: familyDeductible.unassigned
         ? 'Payer-reported plan amount; medical applicability unverified'
-        : undefined,
+        : surgicalFamilyDeductible.value !== unknown
+          ? 'Payer did not report a family office-specific deductible rule; this surgical balance does not establish one'
+          : undefined,
     },
     {
       label: 'Coinsurance',
       value:
-        calculated && components?.coinsurance_cents != null
-          ? money(components.coinsurance_cents)
-          : benefits?.coinsurance_percent != null
-            ? `${benefits.coinsurance_percent}% reported; dollar amount pending`
-            : lines.length && lines.every((line) => line.benefits?.coinsurance_percent === '0')
-              ? '0% reported for selected CPTs'
-              : unknown,
+        result.collection_guidance?.basis === 'out_of_pocket_limit'
+          ? reportedCoinsurance != null
+            ? `${reportedCoinsurance}% reported; $0 payable after out-of-pocket limit`
+            : '$0 payable after out-of-pocket limit'
+          : calculated && components?.coinsurance_cents != null
+            ? money(components.coinsurance_cents)
+            : benefits?.coinsurance_percent != null
+              ? `${benefits.coinsurance_percent}% reported; dollar amount pending`
+              : lines.length && lines.every((line) => line.benefits?.coinsurance_percent === '0')
+                ? '0% reported for selected CPTs'
+                : unknown,
       detail: calculated
         ? coinsuranceFormula(result) ||
           (components?.coinsurance_cents === 0
@@ -306,14 +349,18 @@ export default function CommercialCostBreakdown({
           individualOopRemaining != null ? `${money(individualOopRemaining)} remaining` : null,
         ]
           .filter(Boolean)
-          .join(' · ') || limitSummary(result, 'out_of_pocket', 'INDIVIDUAL').value,
+          .join(' · ') || individualReportedOop.value,
       detail: reportedOopOnly
         ? 'Payer-reported medical limit; not used as a verified calculation input'
-        : calculated && components?.oop_adjustment_cents != null
-          ? `${money(components.oop_adjustment_cents)} reduction applied to this visit`
-          : limitSummary(result, 'out_of_pocket', 'INDIVIDUAL').unassigned
-            ? 'Payer-reported plan amount; medical applicability unverified and not used as a cap'
-            : 'Payer-reported limit; applicability to these CPTs depends on the completed estimate',
+        : benefits?.oop_remaining_cents === 0
+          ? 'Applicable in-network limit has $0 remaining for the selected covered care'
+          : calculated && components?.oop_adjustment_cents != null
+            ? `${money(components.oop_adjustment_cents)} reduction applied to this visit`
+            : unconfirmedZeroOop
+              ? 'Payer reports $0 remaining; confirm this is the applicable medical limit before collection'
+              : individualReportedOop.unassigned
+                ? 'Payer-reported plan amount; medical applicability needs confirmation before use as a cap'
+                : 'Payer-reported limit; applicability to these CPTs depends on the completed estimate',
     },
     {
       label: 'Family out-of-pocket maximum',
@@ -346,14 +393,20 @@ export default function CommercialCostBreakdown({
   ]
 
   const patientShare =
-    calculated &&
-    summary?.estimated_total_patient_min_cents != null &&
-    summary.estimated_total_patient_max_cents != null
-      ? range(summary.estimated_total_patient_min_cents, summary.estimated_total_patient_max_cents)
-      : model.estimatedShare ||
-        (model.provisionalAmount != null
-          ? money(model.provisionalAmount)
-          : model.patientPrice || 'Not fully calculated')
+    result.collection_guidance?.basis === 'out_of_pocket_limit' &&
+    result.collection_guidance.amount_cents === 0
+      ? money(0)
+      : calculated &&
+          summary?.estimated_total_patient_min_cents != null &&
+          summary.estimated_total_patient_max_cents != null
+        ? range(
+            summary.estimated_total_patient_min_cents,
+            summary.estimated_total_patient_max_cents,
+          )
+        : model.estimatedShare ||
+          (model.provisionalAmount != null
+            ? money(model.provisionalAmount)
+            : model.patientPrice || 'Not fully calculated')
   const rows: CostBreakdownRow[] = model.cash
     ? [
         { label: 'Payment method', value: 'Self-pay' },
@@ -379,7 +432,12 @@ export default function CommercialCostBreakdown({
         {
           label: summary?.conditional ? 'Conditional patient share' : 'Estimated patient share',
           value: patientShare,
-          detail: 'Copay + deductible applied + coinsurance − allowed and out-of-pocket reductions',
+          detail:
+            result.collection_guidance?.basis === 'out_of_pocket_limit'
+              ? 'Covered in-network share is capped by the applicable out-of-pocket limit'
+              : calculated
+                ? 'Copay + deductible applied + coinsurance − allowed and out-of-pocket reductions'
+                : 'Full share awaits applicable deductible and out-of-pocket terms',
         },
         ...(summary?.payments_verified_cents != null && summary.payments_verified_cents > 0
           ? [{ label: 'Already paid', value: `−${money(summary.payments_verified_cents)}` }]
@@ -392,15 +450,19 @@ export default function CommercialCostBreakdown({
       model.supportedAmount && result.collection_guidance?.amount_cents != null
         ? money(result.collection_guidance.amount_cents)
         : 'Not established',
-    detail: model.supportedAmount
-      ? result.collection_guidance?.basis === 'office_copay'
-        ? 'Office copay advance; other services may have a later balance'
-        : result.collection_guidance?.basis === 'diagnostic_day_copay'
-          ? 'One diagnostic copay advance; other costs may follow the claim'
-          : result.collection_guidance?.basis === 'claim_after_service'
-            ? 'Clinic policy defers collection until after the claim'
-            : undefined
-      : undefined,
+    detail: result.collection_guidance?.unconfirmed_zero_oop
+      ? 'Confirm the reported $0 out-of-pocket balance with the payer before collection'
+      : model.supportedAmount
+        ? result.collection_guidance?.basis === 'office_copay'
+          ? 'Office copay advance; other services may have a later balance'
+          : result.collection_guidance?.basis === 'out_of_pocket_limit'
+            ? 'Applicable out-of-pocket maximum has no remaining balance for covered care'
+            : result.collection_guidance?.basis === 'diagnostic_day_copay'
+              ? 'One diagnostic copay advance; other costs may follow the claim'
+              : result.collection_guidance?.basis === 'claim_after_service'
+                ? 'Clinic policy defers collection until after the claim'
+                : undefined
+        : undefined,
     emphasis: true,
   })
   return <CostBreakdownTable rows={rows} />

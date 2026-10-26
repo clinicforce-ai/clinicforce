@@ -29,6 +29,15 @@ def build(result: dict, review: dict | None = None) -> dict:
                            or verified_in_network(benefits) else {**benefits, 'network_status': 'unknown'})
     price = result.get('price_range') or {}
     lines = price.get('lines') or []
+    unconfirmed_zero_oop = (benefits.get('oop_remaining_cents') is None and
+        all((line.get('benefits') or {}).get('oop_remaining_cents') is None for line in lines) and
+        any(row.get('kind') == 'out_of_pocket' and row.get('service_type_code') == '30'
+            and row.get('coverage_level') in {'INDIVIDUAL', 'IND'}
+            and row.get('time_period') in {'REMAINING', '29'}
+            and row.get('network') in {'IN_NETWORK', 'Y'}
+            and row.get('plan_association') in {'unassigned', 'medical_candidate'}
+            and row.get('amount_cents') == 0
+            for row in benefits.get('reported_options') or []))
     strict = result.get('arrival_collection') or {}
     planning = result.get('planning_estimate') or {}
     assumptions = list(result.get('pricing_assumptions') or [])
@@ -206,6 +215,9 @@ def build(result: dict, review: dict | None = None) -> dict:
             and not (oon_advance and (policy_allows_advance or calculated_in_network_advance))):
         amount = None
         guidance['published_copay_policy_missing' if published_copay else 'positive_advance_policy_missing'] = True
+    if amount is not None and amount > 0 and unconfirmed_zero_oop and verified_in_network(benefits):
+        amount = None
+        guidance['unconfirmed_zero_oop'] = True
     if amount is not None and amount > 0 and calculated_in_network_advance:
         guidance['collection_rule'] = {'mode': 'calculated_in_network_advance',
                                        'reference': 'Selected CPTs, active clinic contract rates and member benefits'}
@@ -240,6 +252,10 @@ def build(result: dict, review: dict | None = None) -> dict:
                 if any(error.get('kind') == 'saved_raw_unavailable' for error in source_errors) else
                 'Calculation/source error: invalid payer financial evidence was rejected. Clinic staff must verify the source before collecting.')
             guidance['source_errors'] = source_errors
+        elif guidance.get('unconfirmed_zero_oop'):
+            guidance['reason'] = ('The payer reports $0 remaining on an individual in-network out-of-pocket maximum, '
+                                  'but its medical-plan applicability is unconfirmed. Confirm the member benefit '
+                                  'with the payer before collecting the office copay.')
         elif benefits.get('active') is False:
             guidance['reason'] = 'The payer reports inactive coverage for this visit, so the insurance collection amount cannot be calculated from this policy.'
             actions.append('Contact your insurer to resolve inactive coverage or provide your current insurance card.')

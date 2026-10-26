@@ -57,6 +57,10 @@ async def saved_previsit(case_id: str, request: _api.Request) -> dict:
     names the next staff action. An administrator-approved policy can give a $0 check-in advance
     with basis claim_after_service. It does not waive the later patient share or
     change coverage evidence. Saved reads apply the current practice policy.
+    An unlinked payer-reported zero individual out-of-pocket balance sets
+    collection_guidance.unconfirmed_zero_oop and withholds a positive advance.
+    A linked, applicable zero balance can return basis out_of_pocket_limit
+    and a $0 covered office-visit collection.
     temporary_rate_reference, when present, identifies Blue Cross Clinical
     Library CPT prices used as a disclosed UnitedHealthcare planning reference,
     not a contracted allowance or patient collection.
@@ -78,8 +82,9 @@ async def saved_previsit(case_id: str, request: _api.Request) -> dict:
     Saved insured amounts are withheld if the linked clinic contract, scoped
     plan/provider configuration, or active selected CPT rate changed; staff
     must rerun against current configuration.
-    New saved checks also re-evaluate CPT referral and authorization decisions
-    when their Clinical Library contract or plan-matrix sources change.
+    published_requirements_version identifies the current published payer-rule
+    set. Saved reads re-evaluate CPT referral and authorization decisions when
+    that version, their Clinical Library sources, or network evidence changes.
     selected_ids includes source-backed provisional CPTs as well as reviewed
     CPTs; service_selection_status distinguishes preview from approval. The
     selected IDs and priced code list refer to the same service scenario.

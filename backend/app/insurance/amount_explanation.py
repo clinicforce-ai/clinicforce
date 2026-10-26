@@ -302,7 +302,7 @@ def build(result: dict, guidance: dict, review: dict | None = None) -> dict:
                 sentence = (f'Collect {_money(amount)} as the 2026 FEP Blue Basic PSHB Preferred specialist office copay; '
                             'the final E/M level and any additional services follow the documented care and claim')
         elif basis == 'out_of_pocket_limit':
-            sentence, code = 'No payment is due now because the plan says the covered care has no remaining patient share', 'oop_limit_met'
+            sentence, code = (f"Collect $0 now because {guidance.get('reason', 'the applicable in-network out-of-pocket limit has no remaining balance').rstrip('.').lower()}", 'oop_limit_met')
         elif basis == 'qmb_protection':
             sentence, code = ('Collect $0 now because confirmed QMB protection prohibits Medicare cost-sharing collection; '
                               'any other liability requires separate covered-service and claim evidence', 'qmb_protected')
@@ -391,8 +391,8 @@ def build(result: dict, guidance: dict, review: dict | None = None) -> dict:
         elif guidance.get('positive_advance_policy_missing'):
             sentence, code = ('The patient share is estimated, but this payer route has no approved policy for that check-in advance',
                               'collection_policy_approval_required')
-        elif basis == 'calculation_conflict':
-            sentence, code = guidance.get('reason', 'Recalculate the insured estimate before collecting').rstrip('.'), 'calculation_conflict'
+        elif guidance.get('unconfirmed_zero_oop') or basis == 'calculation_conflict':
+            sentence, code = guidance.get('reason', 'Recalculate the insured estimate before collecting').rstrip('.'), ('individual_oop_unresolved' if guidance.get('unconfirmed_zero_oop') else 'calculation_conflict')
         elif recovery.get('state') in {'pending', 'indeterminate'}:
             sentence, code = 'No amount is ready because the insurance check has not finished', 'check_pending'
         elif cause_code == 'clinic_product_mismatch' and benefits.get('active') is True:

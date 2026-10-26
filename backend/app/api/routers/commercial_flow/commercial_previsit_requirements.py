@@ -4,6 +4,7 @@ from __future__ import annotations
 from types import ModuleType
 from app.insurance.identity import patient_benefits_bound
 from app.insurance import stedi_cpt_authorization
+from app.insurance.requirements.published import PUBLISHED_RULESET_VERSION
 
 
 def requirement_sources(documents: list[dict]) -> list[dict]:
@@ -129,6 +130,7 @@ def attach_requirements(api: ModuleType, result: dict, case: dict, inputs: dict,
     }
     requirement_documents = [document for document in library_sources if document]
     result['requirement_evidence'] = api.contract_requirements.evaluate(result, requirement_context, requirement_documents)
+    result['published_requirements_version'] = PUBLISHED_RULESET_VERSION
     candidates = api._requirement_candidates(result)
     if candidates:
         # Research the other suggested choices without changing the requirement
@@ -150,7 +152,8 @@ def refresh_saved_requirements(api: ModuleType, result: dict, case: dict, practi
         (result.get('benefits') or {}).get(field) != (saved_result.get('benefits') or {}).get(field)
         for field in ('network_status', 'network_source')
     ) or (result.get('network_evidence') or {}).get('network_name') != (saved_result.get('network_evidence') or {}).get('network_name')
-    if result['requirement_sources'] == requirement_sources(documents) and not network_changed:
+    if (result['requirement_sources'] == requirement_sources(documents) and not network_changed
+            and saved_result.get('published_requirements_version') == PUBLISHED_RULESET_VERSION):
         return
     context = case['previsit_context']
     attach_requirements(api, result, case, context['inputs'], context['source'],

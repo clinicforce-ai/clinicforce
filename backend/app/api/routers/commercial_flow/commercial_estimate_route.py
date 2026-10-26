@@ -17,7 +17,10 @@ from app.api.routers.commercial_flow.commercial_previsit_submit import submit_pr
     "which requires clinician review before billing. A skin-biopsy "
     "booking without a site count starts with an editable three-site CPT 11104 + 11105 x2 scenario. A supported "
 
-    "fixed office copay is the visit-time amount, with later costs estimated separately. "
+    "fixed office copay is the visit-time amount unless an applicable individual in-network "
+    "out-of-pocket limit reduces the covered visit share to zero. A payer-reported zero balance "
+    "whose medical scope cannot be confirmed withholds a positive advance and sets "
+    "collection_guidance.unconfirmed_zero_oop. Later costs are estimated separately. "
     "collection_guidance.office_visit_copay_advance contains the approved single-office-visit "
     "advance after network, member, requirement and collection-policy checks; otherwise it is null. A "
     "fresh payer check includes service categories from saved selected CPTs. A matching exact-CPT "
