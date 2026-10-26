@@ -21,7 +21,9 @@ from app.api.routers.commercial_flow.commercial_previsit_submit import submit_pr
     "fresh payer check includes service categories from saved selected CPTs. A matching exact-CPT "
     "Stedi inquiry automatically resolves authorization for the bound member and visit setting. A signed "
     "same-payer clinic agreement may set benefits.network_source to clinic_group_agreement and "
-    "return mismatch_warnings for differing product or provider details. evidence_resolution reports "
+    "return mismatch_warnings for differing product or provider details. For NMCT (practice_id primary), "
+    "clinic_nmct_policy selects the in-network tier for every insurer and product unless a "
+    "provider-specific payer statement reports out-of-network participation. evidence_resolution reports "
     "unresolved facts; an in-network tier alone does not establish an amount to collect."
 ))
 async def previsit_estimate(value: _api.PrevisitInput, request: _api.Request, background_tasks: _api.BackgroundTasks = None) -> dict:

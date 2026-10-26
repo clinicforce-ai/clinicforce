@@ -5,10 +5,14 @@ source version and date, never member approval.
 """
 from __future__ import annotations
 
-from app.insurance import cpt_rules
+from app.insurance import cpt_rules, stedi_cpt_authorization
 from app.insurance.identity import generic_plan_label, payer_identity_verified
 from app.insurance.library_network_exclusions import product_kind
 from app.insurance.requirements.evidence import _key
+
+BCBSTX_PAYER_NAMES = {'bcbstx', 'bcbstexas', 'bluecrossblueshieldoftexas',
+                      'bluecrossandblueshieldoftexas', 'bluecrossblueshieldtx',
+                      'bluecrossblueshieldtexas'}
 
 UHC_TEXAS_CHOICE_PLUS_SOURCE = {
     'label': 'UnitedHealthcare Texas Choice Plus plan description',
@@ -57,6 +61,19 @@ BCBSTX_2026_REFERRAL_SOURCE = {
     'source_version': 'Blue Choice PPO provider manual referral section, checked 2026-10-21',
     'verified_at': '2026-10-21', 'effective_from': '2026-07-01',
     'effective_to': '2027-06-30',
+}
+BCBSTX_PPO_REFERRAL_SOURCE = {
+    'label': 'BCBSTX PPO referral guidance',
+    'url': 'https://connect.bcbstx.com/ask-bcbstx/w/frequently-asked-questions/69/how-to-know-if-you-need-a-referral-and-how-to-get-one',
+    'source_version': 'PPO referral guidance, checked 2026-10-26',
+    'verified_at': '2026-10-26', 'effective_from': '2026-10-26',
+    'effective_to': '2026-12-31',
+}
+BCBSTX_PPO_99213_AUTH_SOURCE = {
+    'label': 'Clinic-confirmed BCBSTX PPO CPT 99213 office authorization rule',
+    'source_version': 'Clinic confirmation received 2026-10-26',
+    'verified_at': '2026-10-26', 'effective_from': '2026-10-26',
+    'effective_to': '2026-12-31',
 }
 UHC_TX_MA_REFERRAL_SOURCE = {
     'label': 'UnitedHealthcare Texas Medicare Advantage PPO specialist referrals',
@@ -115,30 +132,31 @@ def _published_rule(kind: str, result: dict, context: dict, plans: list[str], co
     identity = result.get('identity') or benefits.get('identity') or {}
     day = str(context.get('service_date') or '')
     payer_names = context.get('payer_names') or set()
-    same_day_bcbstx_referral = (
-        kind == 'referral' and benefits.get('service_date_matches') is None
+    same_day_bcbstx_visit = (
+        (kind == 'referral' or kind == 'authorization' and codes == {'99213'}
+         and str(context.get('pos') or '') == '11')
+        and benefits.get('service_date_matches') is None
         and benefits.get('network_status') == 'in_network'
-        and str(result.get('checked_at') or '')[:10] == day
-        and bool(payer_names & {'bcbstx', 'bcbstexas', 'bluecrossblueshieldoftexas',
-                                'bluecrossandblueshieldoftexas'})
+        and (str(result.get('checked_at') or '')[:10] == day
+             or stedi_cpt_authorization.visit_coverage_bound(benefits, day))
+        and bool(payer_names & BCBSTX_PAYER_NAMES)
     )
     if (not codes or not '2026-01-01' <= day <= '2026-12-31'
             or benefits.get('active') is not True
-            or benefits.get('service_date_matches') is not True and not same_day_bcbstx_referral
+            or benefits.get('service_date_matches') is not True and not same_day_bcbstx_visit
             or not payer_identity_verified(identity) or not result.get('benefit_source')
             or not context.get('member_id')):
         return None
     exact = {_key(plan).removeprefix('unitedhealthcare').removeprefix('uhc')
              for plan in plans if not generic_plan_label(plan)}
-    if len(exact) != 1:
-        return None
-    product = next(iter(exact))
+    product = next(iter(exact), '') if len(exact) <= 1 else ''
     names = context.get('payer_names') or set()
     in_network = benefits.get('network_status') == 'in_network'
     family = {cpt_rules.service_definition(code)['family'] for code in codes}
     office = family == {'office_consultation'}
-    def rule(status: str, reason: str, source: dict, *, check: bool = False) -> dict:
-        return {'status': status, 'reason': reason, 'sources': [{**source, 'source_type': 'official_published_rule'}],
+    def rule(status: str, reason: str, source: dict, *, check: bool = False,
+             source_type: str = 'official_published_rule') -> dict:
+        return {'status': status, 'reason': reason, 'sources': [{**source, 'source_type': source_type}],
                 'member_specific_check': check,
                 'applicable_scope': {'payer_product': next((p for p in plans if _key(p).endswith(product)), product),
                                      'codes': sorted(codes), 'service_categories': sorted(family),
@@ -150,6 +168,20 @@ def _published_rule(kind: str, result: dict, context: dict, plans: list[str], co
                                      'location_id': context.get('location_id'),
                                      'place_of_service': context.get('pos'),
                                      'service_date': day}}
+    bcbstx_ppo_follow_up = (exact <= {'bluechoiceppo'} and in_network and office and day >= '2026-10-26'
+            and names & BCBSTX_PAYER_NAMES
+            and 'preferredprovideroptionmedical' in {_key(plan) for plan in plans}
+            and all(generic_plan_label(plan) or _key(plan) == 'bluechoiceppo' for plan in plans))
+    if bcbstx_ppo_follow_up and not exact and kind == 'referral' and codes <= {'99212', '99213', '99214', '99215'}:
+        product = 'preferredprovideroptionmedical'
+        return rule('Not required', 'BCBSTX PPO plans do not require a referral for an in-network specialist office visit.', BCBSTX_PPO_REFERRAL_SOURCE)
+    if (bcbstx_ppo_follow_up and kind == 'authorization' and codes == {'99213'}
+            and str(context.get('pos') or '') == '11'):
+        product = next(iter(exact), 'preferredprovideroptionmedical')
+        return rule('Not required', 'Clinic-confirmed BCBSTX PPO rule: CPT 99213 alone does not require prior authorization for an in-network physician-office visit.',
+                    BCBSTX_PPO_99213_AUTH_SOURCE, source_type='clinic_confirmation')
+    if len(exact) != 1:
+        return None
     if product == 'fepbluebasicpshb':
         if kind == 'referral':
             return rule('Not required', 'The 2026 PSHB Service Benefit Plan does not require a PCP referral to see a specialist.', FEP_PSHB_2026_SOURCE)
@@ -204,7 +236,7 @@ def _published_rule(kind: str, result: dict, context: dict, plans: list[str], co
             return rule('Required', 'Cigna lists this selected drug or chemodenervation code separately for precertification. Confirm this member’s applicable care management rules and obtain approval.', CIGNA_2026_PA_SOURCE, check=True)
         return rule('Verification required', 'The Cigna list does not establish authorization for this selected service under the member’s exact plan. Check the member-specific precertification tool.', CIGNA_2026_PA_SOURCE, check=True)
     if (kind == 'authorization' and 'bluecard' not in product
-            and names & {'bcbstx', 'bcbstexas', 'bluecrossblueshieldoftexas', 'bluecrossandblueshieldoftexas'}):
+            and names & BCBSTX_PAYER_NAMES):
         if codes & {'J0585', '64612', '64615'}:
             return rule('Verification required', 'BCBSTX lists J0585 for some 2026 products, but the list has product and ASO exceptions and does not establish authorization for this member or the separate injection code.', BCBSTX_2026_PA_SOURCE, check=True)
         return rule('Verification required', 'The BCBSTX published list does not establish authorization for this member and selected code; product and ASO exceptions require a member-specific check.', BCBSTX_2026_PA_SOURCE, check=True)
@@ -215,7 +247,7 @@ def _published_rule(kind: str, result: dict, context: dict, plans: list[str], co
             return rule('Not required', 'Cigna PPO/Open Access Plus permits in-network specialist visits without a PCP referral.', CIGNA_REFERRAL_SOURCE)
         if product == 'cignahmo':
             return rule('Required', 'Cigna HMO requires a PCP specialist referral for this neurology office visit; verify the member and referral record.', CIGNA_REFERRAL_SOURCE, check=True)
-    if names & {'bcbstx', 'bcbstexas', 'bluecrossblueshieldoftexas', 'bluecrossandblueshieldoftexas'} and day >= '2026-07-01':
+    if names & BCBSTX_PAYER_NAMES and day >= '2026-07-01':
         if product in {'bluechoiceppo', 'bluechoiceppobasic'}:
             return rule('Not required', 'BCBSTX Blue Choice PPO does not require an in-network specialist referral; confirm the member uses this network.', BCBSTX_2026_REFERRAL_SOURCE)
         if product in {'blueessentials', 'blueadvantagehmo'}:
