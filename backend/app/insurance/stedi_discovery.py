@@ -263,7 +263,46 @@ def inquiry_eligible(item: dict, inputs: dict, source: dict) -> bool:
     verification = verify_candidate(item, inputs, source)
     allowed = {'ADDITIONAL_IDENTITY_EVIDENCE_REQUIRED', 'ACTIVE_MEDICAL_COVERAGE_NOT_VERIFIED',
                'COVERAGE_DATE_NOT_VERIFIED'}
-    return not set(verification['reason_codes']) - allowed
+    return (not set(verification['reason_codes']) - allowed
+            or address_conflict_inquiry(item, inputs, source))
+
+
+def address_conflict_inquiry(item: dict, inputs: dict, source: dict) -> bool:
+    """Allow one exact self match to ask its payer, without adopting discovery benefits."""
+    identity = candidate_identity(item, inputs)
+    if (not identity or not identity['address_conflict'] or identity['relationship'] != 'self'
+            or identity['surname_typo'] or source.get('active_coverages', 0) > 1):
+        return False
+    patient_dob = birth_date((inputs.get('patient') or {}).get('patient_birth_date'))
+    if (not patient_dob or not identity.get('subscriber_birth_date')
+            or birth_date(identity['subscriber_birth_date']) != patient_dob):
+        return False
+    ecw_member = inputs.get('member_id')
+    if ecw_member and normalized(ecw_member) != normalized(identity['member_id']):
+        return False
+    allowed = {'PATIENT_ADDRESS_MISMATCH', 'ADDITIONAL_IDENTITY_EVIDENCE_REQUIRED',
+               'ACTIVE_MEDICAL_COVERAGE_NOT_VERIFIED', 'COVERAGE_DATE_NOT_VERIFIED'}
+    reasons = set(verify_candidate(item, inputs, source)['reason_codes'])
+    return 'PATIENT_ADDRESS_MISMATCH' in reasons and not reasons - allowed
+
+
+def payer_followup_confirms(discovered: dict, verified: dict, inputs: dict, source: dict) -> bool:
+    """Bind a fresh member-specific 271 despite the discovery address conflict."""
+    if not address_conflict_inquiry(discovered, inputs, source):
+        return False
+    first = candidate_identity(discovered, inputs)
+    second = candidate_identity(verified, inputs)
+    if not first or not second or second['relationship'] != 'self' or second['surname_typo']:
+        return False
+    patient_dob = birth_date((inputs.get('patient') or {}).get('patient_birth_date'))
+    if not second.get('subscriber_birth_date') or birth_date(second['subscriber_birth_date']) != patient_dob:
+        return False
+    required = ('member_id', 'subscriber_first', 'subscriber_last', 'subscriber_birth_date', 'relationship_code')
+    if any(not first.get(key) or not second.get(key) or
+           normalized(first[key]) != normalized(second[key]) for key in required):
+        return False
+    return all(not first.get(key) or not second.get(key) or normalized(first[key]) == normalized(second[key])
+               for key in ('group_number', 'plan_number'))
 
 
 def card_candidate(fields: dict, inputs: dict, source: dict | None = None) -> dict | None:

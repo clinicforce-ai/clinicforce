@@ -104,7 +104,7 @@ async def _accept_recovered_coverage(case: dict, session: dict, verified: dict, 
     for candidate in discovery.get('candidates') or []:
         if candidate['id'] == discovery.get('selected_candidate_id'):
             candidate.update(verification_status='VERIFIED',
-                verification={'status': 'VERIFIED', 'pathway': 'accepted_payer_evidence', 'reason_codes': []},
+                verification={'status': 'VERIFIED', 'pathway': discovery.get('identity_pathway') or 'accepted_payer_evidence', 'reason_codes': []},
                 reason_codes=(_api.stedi_discovery.parse_discovery_candidate(verified) or {}).get('reason_codes', []))
     result.update(payer=pricing_source.get('payer'), stedi_payer={'name': payer.get('displayName'), 'id': payer['stediId']},
                   plan=pricing_source.get('plan'), issues=[], checked_at=_api._now(),
@@ -151,6 +151,8 @@ async def _recheck_discovery_candidate(case: dict, session: dict, provider: dict
                 case.update(await _api.run_in_threadpool(_api._save, case, session, 'subscriber-link-unresolved'))
                 return
             coverage = _api._discovered_coverage(inputs, source, item)
+        address_inquiry = bool(inquiry_only and not ecw_route and
+            _api.stedi_discovery.address_conflict_inquiry(item, inputs, source))
         api_key = _api.stedi_financial.credentials(session['practice_id'])
         payer_data = item.get('payer') or {}
         routes = []
@@ -199,7 +201,9 @@ async def _recheck_discovery_candidate(case: dict, session: dict, provider: dict
                 case.update(await _api.run_in_threadpool(_api._save, case, session, 'stedi-discovery-enrollment-required'))
                 _api._recovery_event(case, session, 'eligibility', 'unavailable', reason=enrollment['reason_code'])
                 return
-        body = _api.stedi_request_body({'stedi_payer_id': payer['stediId']}, provider, coverage, inputs['service_date'], _api._previsit_service_types(inputs), allow_demographic=not coverage.get('member_id'), inquiry_only=inquiry_only, place_of_service=inputs.get('place_of_service'))
+        body = _api.stedi_request_body({'stedi_payer_id': payer['stediId']}, provider, coverage, inputs['service_date'], _api._previsit_service_types(inputs),
+            include_identity_hints=not address_inquiry, allow_demographic=not coverage.get('member_id'),
+            inquiry_only=inquiry_only, place_of_service=inputs.get('place_of_service'))
         basic_body = _api.stedi_request_body({'stedi_payer_id': payer['stediId']}, provider, coverage, inputs['service_date'], _api._previsit_service_types(inputs),
                                         include_identity_hints=False, allow_demographic=not coverage.get('member_id'), inquiry_only=inquiry_only,
                                         place_of_service=inputs.get('place_of_service'))
@@ -229,6 +233,8 @@ async def _recheck_discovery_candidate(case: dict, session: dict, provider: dict
             session['practice_id'], case['id'], 'stedi-recovered-eligibility.json', saved_bytes, 'application/json')
         discovery['eligibility_sha256'] = _api.hashlib.sha256(saved_bytes).hexdigest()
         returned_identity = _api.stedi_discovery.candidate_identity(verified, inputs)
+        payer_confirmed = bool(address_inquiry and
+            _api.stedi_discovery.payer_followup_confirms(item, verified, inputs, source))
         identity_matches = False
         recorded = _api.insurance_identity.compare(verified, _api._coverage_snapshot(inputs, source))
         if returned_identity:
@@ -241,9 +247,10 @@ async def _recheck_discovery_candidate(case: dict, session: dict, provider: dict
             if inquiry_only and coverage.get('relationship') in {None, '', 'unknown'}:
                 identity_matches = bool(not coverage.get('member_id') or
                     _api.stedi_discovery.normalized(returned_identity['member_id']) == _api.stedi_discovery.normalized(coverage['member_id']))
-            if returned_identity.get('address_conflict'):
+            if returned_identity.get('address_conflict') and not payer_confirmed:
                 identity_matches = False
-            if recorded.get('policy_differences') and not _api.stedi_discovery.automatic_match(verified, inputs, source):
+            if (recorded.get('policy_differences') and not payer_confirmed
+                    and not _api.stedi_discovery.automatic_match(verified, inputs, source)):
                 identity_matches = False
         payer_error = (response.is_error or str(verified.get('status') or '').upper() in {'ERROR', 'FAILED', 'REJECTED'}
                        or bool(_api.commercial.eligibility_errors(verified)))
@@ -287,6 +294,8 @@ async def _recheck_discovery_candidate(case: dict, session: dict, provider: dict
         coverage.update({key: returned_identity[key] for key in ('member_id', 'group_number', 'plan_number') if returned_identity.get(key)})
         if inquiry_only:
             coverage = _api._discovered_coverage(inputs, source, verified)
+        if payer_confirmed:
+            discovery['identity_pathway'] = 'payer_eligibility_followup'
         await _api._accept_recovered_coverage(case, session, verified, payer, coverage, http_status=response.status_code)
     except (_api.httpx.HTTPError, ValueError, KeyError, TypeError, StopIteration, IndexError, _api.commercial.CommercialError):
         selection_error = ('The follow-up payer check outcome is unknown. Check Stedi activity before another payer request.'
@@ -326,6 +335,37 @@ async def _start_previsit_recovery(case: dict, session: dict, provider: dict, ba
         case = await _api.run_in_threadpool(_api._save, case, session, 'stedi-discovery-reconciling')
         background_tasks.add_task(_api._reconcile_saved_discovery, case, session)
         return _api._previsit_result(case, session['practice_id'])
+    # A new previsit POST may reuse one recent, patient-bound discovery result
+    # for an eligibility inquiry. Reads never submit a payer transaction.
+    if (background_tasks is not None and recovery.get('request_state') == 'complete'
+            and recovery.get('outcome') == 'review_needed'
+            and recovery.get('reason_code') == 'identity_or_coverage_review'
+            and recovery.get('raw_object_key') and not recovery.get('selected_candidate_id')
+            and not recovery.get('eligibility_attempts')
+            and recovery.get('identity_binding') == _api._recovery_binding(
+                case['previsit_context']['inputs'], case['previsit_context']['source'])):
+        try:
+            fresh = (_api.datetime.fromisoformat(recovery['checked_at']) + _api.timedelta(hours=24)
+                     > _api.datetime.now(_api.timezone.utc))
+            payload = _api.json.loads(await _api.run_in_threadpool(
+                _api.object_store.get_object_bytes, recovery['raw_object_key'])) if fresh else {}
+            candidates = (_api.stedi_discovery.candidates(payload, case['previsit_context']['inputs'],
+                case['previsit_context']['source']) if isinstance(payload, dict)
+                and payload.get('status') == 'COMPLETE' and not payload.get('errors') else [])
+            one = candidates[0] if len(candidates) == 1 else None
+            item = (payload.get('items') or [])[one['index']] if one else None
+        except Exception:
+            one = item = None
+        if (one and item and one['active_medical'] and one['inquiry_eligible']
+                and _api.stedi_discovery.address_conflict_inquiry(
+                    item, case['previsit_context']['inputs'], case['previsit_context']['source'])):
+            recovery.update(request_state='pending', stage='eligibility', outcome=None,
+                exhausted=False, selected_candidate_id=one['id'], candidates=candidates,
+                evidence_source='stedi_discovery')
+            case = await _api.run_in_threadpool(_api._save, case, session, 'stedi-saved-candidate-inquiry-pending')
+            background_tasks.add_task(_api._recheck_discovery_candidate, case, session, provider,
+                discovery_payload=payload, inquiry_only=True)
+            return _api._previsit_result(case, session['practice_id'])
     failure = result.get('eligibility_failure') or {}
     identity_errors = {'65', '67', '71', '72', '73', '75'}
     ready = bool(background_tasks is not None and
