@@ -207,11 +207,21 @@ class VisitReviewInput(BaseModel):
     clear_payer_allowance_line_id: str | None = Field(default=None, min_length=1, max_length=200)
 
 
+class PriorAddressConfirmation(BaseModel):
+    model_config = ConfigDict(extra='forbid', str_strip_whitespace=True)
+    address1: str = Field(min_length=3, max_length=200)
+    city: str = Field(min_length=2, max_length=100)
+    state: str = Field(pattern=r'^[A-Z]{2}$')
+    postalCode: str = Field(pattern=r'^\d{5}(?:\d{4})?$')
+    confirmed_in_ecw_history: Literal[True] = Field(description='Staff confirms this address appears in the selected patient’s eCW chart history.')
+
+
 class CoverageCandidateInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
     context_token: str = Field(min_length=64, max_length=64)
     revision: int = Field(ge=0)
     candidate_id: str = Field(pattern=r"^[a-f0-9]{20}$")
+    prior_address: PriorAddressConfirmation | None = Field(default=None, description='An address read by staff from the confirmed patient’s eCW address history. It must exactly match the saved payer candidate before an eligibility inquiry can use it.')
 
 
 class PayerRouteInput(BaseModel):

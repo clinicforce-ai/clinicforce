@@ -4,6 +4,13 @@ import type { PrevisitEstimate } from './commercial-previsit'
 import type { CommercialPastVisit, VisitReview, VisitFinancials } from './commercial-visit-types'
 export type { CommercialAppointment, RequirementEvidence } from './commercial-common'
 export type { PrevisitEstimate } from './commercial-previsit'
+export type PriorAddressConfirmation = {
+  address1: string
+  city: string
+  state: string
+  postalCode: string
+  confirmed_in_ecw_history: true
+}
 export type {
   CommercialPastVisit,
   VisitCode,
@@ -36,10 +43,16 @@ export const commercialSelectCoverageCandidate = (
   result: PrevisitEstimate,
   candidate_id: string,
   intakeId?: string,
+  prior_address?: PriorAddressConfirmation,
 ) =>
   staffRequest<PrevisitEstimate>(
     `${root}/cases/${encodeURIComponent(result.check_id!)}/coverage-candidate`,
-    json({ candidate_id, revision: result.revision, context_token: result.context_token }),
+    json({
+      candidate_id,
+      revision: result.revision,
+      context_token: result.context_token,
+      prior_address,
+    }),
     intakeId,
   )
 

@@ -14,6 +14,21 @@ def _original_medical_policy_established(case: dict) -> bool:
                 and not benefits.get('coverage_status_conflict')
                 and _api.insurance_identity.patient_benefits_bound(identity))
 
+
+def _confirmed_recovery_inputs(case: dict) -> dict:
+    """Apply a staff-confirmed chart address only to its selected saved policy."""
+    context = case['previsit_context']
+    inputs = context['inputs']
+    recovery = case.get('previsit_discovery') or {}
+    evidence = recovery.get('prior_address_confirmation') or {}
+    if (evidence.get('candidate_id') != recovery.get('selected_candidate_id')
+            or evidence.get('context_token') != context.get('context_token')
+            or not evidence.get('actor_id') or not evidence.get('confirmed_at')):
+        return inputs
+    patient = inputs.get('patient') or {}
+    return {**inputs, 'patient': {**patient, 'previous_addresses':
+        [*(patient.get('previous_addresses') or []), evidence['address']]}}
+
 async def _run_coverage_recovery(case: dict, session: dict, provider: dict) -> None:
     """Bound background work and retain unknown submissions for reconciliation."""
     try:
@@ -90,7 +105,7 @@ def _discovery_pricing_source(source: dict, item: dict, payer: dict) -> dict:
 async def _accept_recovered_coverage(case: dict, session: dict, verified: dict, payer: dict,
                                      coverage: dict, *, http_status: int = 200) -> None:
     context, discovery = case['previsit_context'], case['previsit_discovery']
-    inputs, source = context['inputs'], context['source']
+    original_inputs, source = context['inputs'], context['source']
     pricing_source = _api._discovery_pricing_source(source, verified, payer)
     discovery.update(request_state='complete', outcome='recovered', stage='complete', verified_coverage=coverage,
                      pricing_source=pricing_source, checked_at=_api._now(), reason_code='coverage_recovered', selection_error=None)
@@ -108,12 +123,15 @@ async def _accept_recovered_coverage(case: dict, session: dict, verified: dict, 
                 reason_codes=(_api.stedi_discovery.parse_discovery_candidate(verified) or {}).get('reason_codes', []))
     result.update(payer=pricing_source.get('payer'), stedi_payer={'name': payer.get('displayName'), 'id': payer['stediId']},
                   plan=pricing_source.get('plan'), issues=[], checked_at=_api._now(),
-                  benefits=_api._case_benefits(verified, inputs, source, case))
-    await _api.run_in_threadpool(_api._finish_previsit, result, case, inputs, source, verified, session, payer['stediId'], pricing_source=pricing_source)
+                  benefits=_api._case_benefits(verified, original_inputs, source, case))
+    # Keep the eCW visit context and its recovery binding unchanged. The chart
+    # address confirmation is scoped evidence in discovery, not an eCW field.
+    await _api.run_in_threadpool(_api._finish_previsit, result, case, original_inputs, source,
+                                 verified, session, payer['stediId'], pricing_source=pricing_source)
     guidance = result.get('collection_guidance') or _api.collection_guidance.build(result, case.get('visit_review'))
     _api._recovery_event(case, session, 'pricing', 'priced' if guidance.get('amount_cents') is not None else 'unavailable',
                     reason=guidance.get('basis') if guidance.get('amount_cents') is not None else 'benefits_or_rates_incomplete')
-    case['previsit'].update(request_state='complete', checked_at=result['checked_at'], benefits=result['benefits'], requested_service_types=_api._previsit_service_types(inputs))
+    case['previsit'].update(request_state='complete', checked_at=result['checked_at'], benefits=result['benefits'], requested_service_types=_api._previsit_service_types(original_inputs))
     case['previsit_original_error_object_key'] = case.get('previsit_raw_object_key')
     case['previsit_raw_object_key'] = discovery['eligibility_object_key']
     if discovery.get('eligibility_sha256'):
@@ -129,7 +147,7 @@ async def _recheck_discovery_candidate(case: dict, session: dict, provider: dict
                                       reuse_benefits: bool = False) -> None:
     """Use a selected, persisted discovery candidate without altering eCW."""
     context, discovery = case['previsit_context'], case['previsit_discovery']
-    inputs, source = context['inputs'], context['source']
+    inputs, source = _confirmed_recovery_inputs(case), context['source']
     if _api._previsit_result(case, session['practice_id']).get('eligibility_timing'):
         return
     submitted = False

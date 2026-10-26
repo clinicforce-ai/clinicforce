@@ -306,3 +306,29 @@
   background: white;
   color: #172b4d;
 }
+
+.prior-address-confirmation {
+  margin: 16px 0;
+  padding: 16px;
+  border: 1px solid #cbd5e1;
+  border-radius: 10px;
+}
+
+.prior-address-confirmation legend {
+  padding: 0 6px;
+  font-weight: 600;
+}
+
+.prior-address-confirmation input:not([type='checkbox']) {
+  width: 100%;
+  max-width: 360px;
+  padding: 10px;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+}
+
+.prior-address-confirmation .prior-address-check {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}

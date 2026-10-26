@@ -225,7 +225,8 @@ async def select_coverage_candidate(case_id: str, value: _api.CoverageCandidateI
     The saved recovery result distinguishes payer error, returned identity mismatch,
     missing service-date medical coverage and an indeterminate submitted check.
     A mismatched response stays protected as evidence without assigning its
-    member balances to this patient.
+    member balances to this patient. Staff may supply a prior address from the
+    confirmed patient's eCW chart history; it must match this saved candidate.
     """
     session = await _api._session(request)
     case = await _api.run_in_threadpool(_api.store.get_case, case_id, session['patient_id'], session['share_manifest_id'], **_api._scope(session))
@@ -236,8 +237,41 @@ async def select_coverage_candidate(case_id: str, value: _api.CoverageCandidateI
     discovery = case.get('previsit_discovery') or {}
     if discovery.get('request_state') != 'complete' or discovery.get('outcome') != 'review_needed':
         raise _api.HTTPException(409, 'There is no coverage candidate ready to select.')
-    if not any(row.get('id') == value.candidate_id for row in discovery.get('candidates', [])):
+    candidate = next((row for row in discovery.get('candidates', []) if row.get('id') == value.candidate_id), None)
+    if not candidate:
         raise _api.HTTPException(422, 'Select a coverage option returned for this patient.')
+    discovery.pop('prior_address_confirmation', None)
+    if value.prior_address:
+        if candidate.get('source') != 'stedi_discovery' or 'PATIENT_ADDRESS_MISMATCH' not in candidate.get('reason_codes', []):
+            raise _api.HTTPException(422, 'Prior-address confirmation applies only to a saved discovery address conflict.')
+        try:
+            payload = _api.json.loads(await _api.run_in_threadpool(
+                _api.object_store.get_object_bytes, discovery['raw_object_key']))
+            item = payload['items'][candidate['index']]
+            saved_candidates = _api.stedi_discovery.candidates({'items': [item]},
+                case['previsit_context']['inputs'], case['previsit_context']['source'])
+            insured = item.get('dependent') or item.get('subscriber') or {}
+            returned = insured.get('address') or {}
+            returned = {**returned, 'address1': returned.get('address1') or returned.get('addressLine1')}
+        except (KeyError, IndexError, TypeError, ValueError, _api.json.JSONDecodeError) as exc:
+            raise _api.HTTPException(409, 'The saved payer candidate could not be checked. Reopen the estimate.') from exc
+        address = value.prior_address.model_dump(exclude={'confirmed_in_ecw_history'})
+        if (len(saved_candidates) != 1 or saved_candidates[0]['id'] != value.candidate_id
+                or not _api.stedi_discovery.same_patient_address(address, returned)):
+            raise _api.HTTPException(422, 'The entered eCW historical address does not match this saved payer candidate.')
+        evidence_inputs = _api.deepcopy(case['previsit_context']['inputs'])
+        evidence_patient = evidence_inputs['patient']
+        evidence_patient['previous_addresses'] = [*(evidence_patient.get('previous_addresses') or []), address]
+        if not _api.stedi_discovery.inquiry_eligible(item, evidence_inputs, case['previsit_context']['source']):
+            raise _api.HTTPException(422, 'This payer candidate still has a conflicting patient or policy identity.')
+        discovery['prior_address_confirmation'] = {
+            'candidate_id': value.candidate_id, 'context_token': value.context_token,
+            'address': address, 'source': 'ecw_chart_history',
+            'actor_id': session['staff']['id'], 'confirmed_at': _api._now()}
+        reviewed = _api.stedi_discovery.candidates({'items': [item]}, evidence_inputs,
+            case['previsit_context']['source'])[0]
+        candidate.update({key: reviewed[key] for key in (
+            'address_matches', 'inquiry_eligible', 'verification_status', 'verification', 'reason_codes')})
     source, inputs = case['previsit_context']['source'], case['previsit_context']['inputs']
     # Staff may reconcile a different/new policy. Its patient identity and active
     # service-date coverage are still revalidated against the payer response.

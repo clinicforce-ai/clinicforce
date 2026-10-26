@@ -105,10 +105,7 @@ def candidate_identity(item: dict, inputs: dict) -> dict | None:
     returned = insured.get('address') or {}
     returned = {**returned, 'address1': returned.get('address1') or returned.get('addressLine1')}
     addresses = [patient.get('address') or {}, *patient.get('previous_addresses', [])]
-    address_matches = any(all(address.get(key) and returned.get(key) and
-        normalized(address[key]) == normalized(returned[key]) for key in ('address1', 'city', 'state'))
-        and bool(address.get('postalCode') and returned.get('postalCode'))
-        and normalized(address['postalCode'])[:5] == normalized(returned['postalCode'])[:5] for address in addresses)
+    address_matches = any(same_patient_address(address, returned) for address in addresses)
     address_conflict = bool(not address_matches and all(returned.get(key) for key in ('address1', 'city', 'state', 'postalCode'))
                             and any(all(address.get(key) for key in ('address1', 'city', 'state', 'postalCode')) for address in addresses))
     surname_matches = bool(normalized(expected['lastName']) and normalized(expected['lastName']) == normalized(insured.get('lastName')))
@@ -124,6 +121,14 @@ def candidate_identity(item: dict, inputs: dict) -> dict | None:
             'relationship_code': _dependent_relationship(dependent) if dependent else '18',
             'group_number': subscriber.get('groupNumber') or (item.get('planInformation') or {}).get('groupNumber'),
             'plan_number': subscriber.get('planNumber') or (item.get('planInformation') or {}).get('planNumber')}
+
+
+def same_patient_address(address: dict, returned: dict) -> bool:
+    """Compare a chart address with the payer's insured address."""
+    return (all(address.get(key) and returned.get(key) and
+                normalized(address[key]) == normalized(returned[key]) for key in ('address1', 'city', 'state'))
+            and bool(address.get('postalCode') and returned.get('postalCode'))
+            and normalized(address['postalCode'])[:5] == normalized(returned['postalCode'])[:5])
 
 
 def active_medical(item: dict, inputs: dict, service_type: str = '30') -> bool:
