@@ -349,6 +349,7 @@ def _previsit_result(case: dict, practice_id: str | None = None) -> dict:
     if (reference.get('context_token') == case['previsit_context'].get('context_token')
             and reference.get('service_date') == result.get('service_date')):
         result['reference_benefits'] = _api.deepcopy(reference['benefits'])
+        result['reference_subscriber'] = _api.deepcopy(reference.get('subscriber') or {})
         result['reference_only'] = True
     # Legacy discovery wrote a detail-only failure after a successful 271.
     # Keep its review message in recovery; it is not an eligibility failure.

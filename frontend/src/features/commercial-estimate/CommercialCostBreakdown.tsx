@@ -3,7 +3,7 @@ import CostBreakdownTable, { type CostBreakdownRow } from '../insurance-estimate
 import { serviceRowLabel } from '../insurance-estimate/serviceRowLabel'
 import type { CommercialEstimateModel } from './useCommercialEstimateModel'
 import { coinsuranceFormula } from './coinsuranceFormula'
-import { money, range, visitDate } from './format'
+import { money, range } from './format'
 import { requirementForLine } from './requirementForLine'
 import {
   aetnaOfficeReferenceCopay,
@@ -11,6 +11,7 @@ import {
   specialistOfficeCopay,
 } from './payerReportedPartialCopay'
 import { reportedMedicalLimit } from './reportedMedicalLimit'
+import { referenceCoverageRow } from './referenceCoverageRow'
 
 const unknown = 'Not returned for this visit'
 
@@ -170,17 +171,7 @@ export default function CommercialCostBreakdown({
     price?.complete === true &&
     (summary?.complete === true || model.supportedAmount === true)
   const insuredRows: CostBreakdownRow[] = [
-    {
-      label: 'Coverage',
-      value: [result.payer || 'Payer not recorded', model.planName].filter(Boolean).join(' · '),
-      detail: result.reference_benefits
-        ? `Payer reference only; subscriber first name and member ID differ from eCW · Visit ${visitDate(result.service_date)}; payer response ${benefits?.returned_service_dates?.start ? visitDate(benefits.returned_service_dates.start) : 'date unavailable'}`
-        : benefits?.service_date_matches === false
-          ? `${model.policyStatus} · Visit ${visitDate(result.service_date)}; payer response ${benefits.returned_service_dates?.start ? visitDate(benefits.returned_service_dates.start) : 'date differs'} · reference estimate only`
-          : result.service_date
-            ? `${model.policyStatus} · Visit ${visitDate(result.service_date)}`
-            : model.policyStatus,
-    },
+    referenceCoverageRow(result, model, benefits),
     { label: 'Network', value: model.networkLabel },
     {
       label: result.reason ? 'Reason for visit' : 'Planned service',

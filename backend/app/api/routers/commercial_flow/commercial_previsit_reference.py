@@ -110,6 +110,11 @@ async def attach_payer_reference(case_id: str, value: PayerReferenceInput, reque
         'context_token': context['context_token'],
         'service_date': inputs['service_date'],
         'benefits': benefits,
+        'subscriber': {
+            'first_name': _person(response).get('firstName'),
+            'last_name': _person(response).get('lastName'),
+            'member_id': (response.get('subscriber') or {}).get('memberId'),
+        },
         'raw_object_key': raw_key,
         'raw_sha256': _api.hashlib.sha256(raw).hexdigest(),
         'attached_at': _api._now(),

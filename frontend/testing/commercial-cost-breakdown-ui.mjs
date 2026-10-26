@@ -138,6 +138,9 @@ try {
         cash_fallback: { reason: 'eCW subscriber differs from Aetna.' },
         benefits: { active: null, network_status: 'unknown', reported_options: [] },
         reference_only: true,
+        reference_subscriber: {
+          first_name: 'Bonnie', last_name: 'Mccann', member_id: 'SYNTHETIC1234',
+        },
         reference_benefits: {
           active: true, service_date_matches: false,
           returned_service_dates: { start: '2026-10-26' },
@@ -164,7 +167,8 @@ try {
   )
   for (const value of ['$40.00 specialist office visit', '$100.00 annual', '$0.00 remaining',
     '0% reported', '$4,000.00 annual', '$2,683.57 remaining', 'Oct 27, 2026',
-    '$40.00 office-only reference', 'subscriber first name and member ID differ']) {
+    '$40.00 office-only reference', 'Stedi subscriber Bonnie Mccann',
+    'member ID ending 1234', 'eCW identity differs']) {
     assert(attachedReference.includes(value), `Missing attached reference value ${value}`)
   }
   assert(!attachedReference.includes('Amount to collect at visit</th><td><span>$250.00'))

@@ -66,6 +66,10 @@ async def saved_previsit(case_id: str, request: _api.Request) -> dict:
     not a contracted allowance or patient collection.
     benefits.reported_options[].places_of_service retains the payer's place-of-service
     codes for scoped benefit display; a reported office copay is not a collection decision.
+    reference_benefits and reference_subscriber, when present, come from one
+    administrator-attached same-visit Stedi check. The subscriber is displayed
+    with a masked member ID in the UI and its benefit rows take display
+    precedence over mismatched eCW values. This does not change collection_guidance.
     benefits.oop_annual_cents is a unique plan-wide individual maximum when
     the payer returned one; it is distinct from oop_remaining_cents.
     Conflicting individual annual or remaining OOP rows leave that amount null
