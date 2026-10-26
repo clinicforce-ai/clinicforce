@@ -20,15 +20,13 @@ async def saved_previsit(case_id: str, request: _api.Request) -> dict:
     Coverage verification does not imply that a price is available.
     evidence_resolution reports each field's source findings and precise
     remaining action after the shared estimator evaluates saved evidence.
-    A saved read also projects a current dated group-network contract finding
-    from the protected visit context. This projection makes no payer call or write
-    and does not restore old pricing. Under the clinic's all-Blue contract
-    policy, a current signed Blue agreement and matching provider/visit scope
-    may report benefits.network_source as clinic_group_agreement for any Blue
-    medical product; payer participation confirmation is not required. If no
-    current Blue agreement is registered, clinic_no_blue_contract selects the
-    out-of-network tier. An unreadable or conflicting agreement stays unresolved.
-    The network tier alone does not establish a collectible amount.
+    A saved read projects the current network rule without a payer call or write.
+    NMCT (practice_id primary) treats all insurer products as in network under
+    clinic_nmct_policy unless a provider-specific payer statement says otherwise.
+    Old clinic-derived out-of-network prices are cleared for recalculation.
+    Other practices still use dated group-network contracts; absent Blue
+    agreements can select clinic_no_blue_contract. Network tier alone does not
+    establish a collectible amount.
     If the protected raw payer response cannot be reopened, same-context saved
     benefit terms may remain with benefits.historical_only and a source error;
     they cannot authorize an insured collection. A changed policy context does

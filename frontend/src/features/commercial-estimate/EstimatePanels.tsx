@@ -264,7 +264,7 @@ export function CostPicture({ result }: { result: PrevisitEstimate }) {
     insurer = price?.plan_min_cents
   const inNetwork =
     result.benefits?.network_status === 'in_network' &&
-    ['clinic_library_contract', 'payer_participation_message'].includes(
+    ['clinic_library_contract', 'clinic_nmct_policy', 'payer_participation_message'].includes(
       result.benefits.network_source || '',
     )
   const split =

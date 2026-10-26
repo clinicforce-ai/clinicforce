@@ -53,6 +53,7 @@ def build(result: dict, review: dict | None = None) -> dict:
                                    if (result.get('network_evidence') or {}).get('decision') == 'in_network_contract_supported' else
                                    'Payer statement about the requesting provider' if verified_in_network(benefits) and benefits.get('network_source') == 'payer_participation_message' else
                                    'Current Clinical Library contract and clinic provider-network record' if verified_in_network(benefits) and benefits.get('network_source') == 'clinic_library_contract' else
+                                   'NMCT all-plan in-network policy; payer-specific nonparticipation takes precedence' if benefits.get('network_source') == 'clinic_nmct_policy' else
                                    'No contract linked to this exact payer product and provider' if benefits.get('network_source') == 'clinic_library_absent' else
                                    'Payer and clinic provider participation evidence conflict' if participation_conflict(benefits) else
                                    'In-network label has no current product/provider participation source' if benefits.get('network_status') == 'in_network' else

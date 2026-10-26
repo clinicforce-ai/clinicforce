@@ -22,7 +22,7 @@ from app.api.routers.insurance import _response, _session as _insurance_session,
 from app.api.settings import MAX_UPLOAD_BYTES
 from app.core.patient_store import get_patient_profile
 from app.core import object_store, staff_store
-from app.insurance import availity_intake as intake, availity_results as results, cpt_rules, cpt_suggester, ecw_backend, golden, stedi, stedi_estimate, stedi_results, store
+from app.insurance import availity_intake as intake, availity_results as results, commercial, cpt_rules, cpt_suggester, ecw_backend, golden, network_participation, stedi, stedi_estimate, stedi_results, store
 from app.insurance.v2_decisions import (
     demo_inputs,
     canonical,
@@ -211,13 +211,30 @@ def _normalized(value: object) -> str:
     return re.sub(r"\s+", " ", str(value or "").strip()).casefold()
 
 
-def stedi_network(case: dict, practice: dict, coverage: dict) -> dict:
+def stedi_network(case: dict, practice: dict, coverage: dict, *, practice_id: str = '', payload: dict | None = None) -> dict:
     inputs = case["inputs"]
     plans = {_normalized(plan.get("name") or plan.get("planName")) for plan in coverage.get("plans", [])}
     plans.discard("")
     if len(plans) > 1:
         return {"provider_network_status": "unconfirmed",
                 "provider_network": "Stedi returned different plan names; identify the applicable medical product before using the clinic network matrix."}
+    if practice_id == network_participation.NMCT_PRACTICE_ID:
+        payer = commercial.normalize_stedi_271(payload, '98', False,
+            service_date=str(inputs.get('service_date') or ''), office_visit=True,
+            provider_npi=str((inputs.get('provider') or {}).get('npi') or '')) if payload else {}
+        if payer.get('network_conflict'):
+            return {"provider_network_status": "unconfirmed",
+                    "provider_network": "Payer provider-participation statements conflict; verify the requesting provider with the payer."}
+        if (payer.get('network_status') == 'out_of_network'
+                and payer.get('network_source') == 'payer_participation_message'):
+            return {"provider_network_status": "out_of_network",
+                    "provider_network": "The payer specifically reports that the requesting provider is out of network."}
+        if (payer.get('network_status') == 'in_network'
+                and payer.get('network_source') == 'payer_participation_message'):
+            return {"provider_network_status": "in_network",
+                    "provider_network": "The payer specifically reports that the requesting provider is in network."}
+        return {"provider_network_status": "in_network",
+                "provider_network": "NMCT all-plan in-network policy; an explicit payer nonparticipation statement takes precedence."}
     service_date = str(inputs.get("service_date") or "")
     matched = []
     for entry in practice.get("stedi_provider_networks", []):
@@ -433,7 +450,9 @@ async def create(body: Start, request: Request):
 
 @router.get("/cases/{case_id}", description=(
     "Read the saved V2 case and payer results. Completed Stedi coverage keeps benefit rows and a "
-    "patient-identity decision containing mismatch field names, without payer demographic values."
+    "patient-identity decision containing mismatch field names, without payer demographic values. "
+    "For NMCT's temporary Stedi bridge, the all-plan clinic policy overrides matrix network rows; "
+    "a provider-specific payer nonparticipation statement still takes precedence."
 ))
 async def get_case(case_id: str, request: Request):
     session = await _session(request)

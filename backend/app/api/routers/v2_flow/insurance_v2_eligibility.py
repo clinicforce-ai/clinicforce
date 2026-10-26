@@ -126,7 +126,8 @@ async def submit_stedi(case: dict, session: dict, resource: str, practice: dict)
         result = stedi_results.coverage(payload) if response.get("outcome") == "complete" else {}
         if result:
             result["identity"] = stedi_patient_binding(case, payload)
-            result.update(_v2.stedi_network(case, practice, result))
+            result.update(_v2.stedi_network(case, practice, result,
+                practice_id=str(session.get('practice_id') or ''), payload=payload))
         value["result"] = result
         value["message"] = "Stedi returned eligibility and benefits." if response.get("outcome") == "complete" else response.get("message")
         case["transactions"][resource], case["operation_until"] = value, 0

@@ -6,8 +6,28 @@ import hashlib
 import json
 
 from app.core import object_store
-from app.insurance import commercial, group_contract_support, inventory_certification, library_network_exclusions
+from app.insurance import commercial, group_contract_support, inventory_certification, library_network_exclusions, network_participation
 from app.insurance.identity import patient_benefits_bound, patient_plan_applies
+
+
+NMCT_PRACTICE_ID = network_participation.NMCT_PRACTICE_ID
+
+
+def apply_nmct_network_policy(result: dict, practice_id: str, benefits: dict) -> bool:
+    """Use NMCT's all-plan policy unless the payer states this provider is out of network."""
+    if (practice_id != NMCT_PRACTICE_ID or benefits.get('network_conflict')
+            or benefits.get('network_source') == 'payer_participation_message'):
+        return False
+    if benefits.get('network_status') == 'in_network' and benefits.get('network_source') in {
+            'clinic_library_contract', 'clinic_group_agreement'}:
+        return False
+    benefits.update(network_status='in_network', network_source='clinic_nmct_policy',
+                    network_evidence_ids=[], network_provider_npi=None)
+    result.pop('agreement_exclusion', None)
+    result['network_evidence'] = {
+        'decision': 'in_network_by_clinic_policy', 'source': 'clinic_nmct_policy',
+        'reason': 'NMCT treats every insurer and PPO or HMO product as in network unless the payer specifically reports this provider is out of network.'}
+    return True
 
 
 def record_confirmed_out_of_network(result: dict, benefits: dict) -> None:
@@ -100,8 +120,13 @@ def recheck_saved_inventory(result: dict, case: dict, practice_id: str, payer: d
 
 def recheck_saved_network_evidence(result: dict, case: dict, practice_id: str, payer: dict | None) -> None:
     """Project current contract support from saved case context without a payer call or write."""
-    recheck_saved_inventory(result, case, practice_id, payer)
     benefits = result.get('benefits') or {}
+    if (practice_id == NMCT_PRACTICE_ID and benefits.get('network_status') == 'out_of_network'
+            and benefits.get('network_source') != 'payer_participation_message'):
+        _clear_saved_tier(result, 'NMCT network policy changed. Rerun this visit before collecting an insured amount.')
+    if apply_nmct_network_policy(result, practice_id, benefits):
+        return
+    recheck_saved_inventory(result, case, practice_id, payer)
     prior_group = benefits.get('network_source') == 'clinic_group_agreement'
     prior_blue_absence = benefits.get('network_source') == 'clinic_no_blue_contract'
     if prior_group or prior_blue_absence:

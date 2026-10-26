@@ -21,6 +21,73 @@ from app.insurance.identity import patient_plan_applies
 DAY = '2026-10-21'
 
 
+@pytest.mark.parametrize('payer,plan', [
+    ('Cigna', 'HMO'), ('Blue Cross', 'PPO'), ('Aetna', 'HMO'),
+    ('UnitedHealthcare', 'Regional Medicare Advantage PPO'), ('Other insurer', 'Other product'),
+])
+def test_nmct_all_plan_policy_without_clinic_contract(monkeypatch, payer, plan):
+    monkeypatch.setattr(api.commercial_store, 'list_connections', lambda *_: [])
+    monkeypatch.setattr(pricing.library_network_exclusions, 'applicable_exclusion',
+                        lambda *_: pytest.fail('NMCT exclusions must not select a network tier'))
+    monkeypatch.setattr(pricing.inventory_certification, 'applicable',
+                        lambda *_: pytest.fail('NMCT inventory must not select a network tier'))
+    monkeypatch.setattr(pricing, '_attach_temporary_uhc_rates', lambda *_: None)
+    monkeypatch.setattr(api.visit_estimate, 'price_lines', lambda *_args, **_kwargs: {'complete': False})
+    result = {'payer': payer, 'codes': [], 'issues': []}
+    benefits = {'active': True, 'network_status': 'unknown'}
+    api._attach_previsit_pricing(result, 'primary', {'service_date': DAY},
+                                 {'plan': plan}, 'route', benefits)
+    assert benefits['network_status'] == 'in_network'
+    assert benefits['network_source'] == 'clinic_nmct_policy'
+    assert network_participation.verified_in_network(benefits)
+    assert result['network_evidence']['decision'] == 'in_network_by_clinic_policy'
+    assert network_participation.outcome(benefits, result['network_evidence']) == 'IN_NETWORK_BY_CLINIC_POLICY'
+    assert result['price_range']['complete'] is False
+
+
+def test_nmct_policy_preserves_explicit_payer_nonparticipation(monkeypatch):
+    monkeypatch.setattr(api.commercial_store, 'list_connections', lambda *_: [])
+    monkeypatch.setattr(pricing, '_attach_temporary_uhc_rates', lambda *_: None)
+    monkeypatch.setattr(api, '_previsit_range', lambda *_args, **_kwargs: ({'complete': False}, []))
+    result = {'payer': 'Cigna', 'codes': [], 'issues': []}
+    benefits = {'active': True, 'network_status': 'out_of_network',
+                'network_source': 'payer_participation_message', 'network_evidence_ids': ['synthetic-row']}
+    api._attach_previsit_pricing(result, 'primary', {'service_date': DAY}, {}, 'route', benefits)
+    assert benefits['network_status'] == 'out_of_network'
+    assert result['network_evidence']['decision'] == 'out_of_network_confirmed_by_payer'
+
+
+def test_nmct_policy_overrides_scoped_clinic_nonparticipation(monkeypatch):
+    _, _, _, inputs, source = setup_path(monkeypatch)
+    monkeypatch.setattr(pricing.library_network_exclusions, 'applicable_exclusion', lambda *_: None)
+    monkeypatch.setattr(pricing.inventory_certification, 'applicable', lambda *_: None)
+    monkeypatch.setattr(api, '_previsit_practice_path', lambda *_: (_ for _ in ()).throw(
+        api.HTTPException(409, 'A sourced nonparticipation rule applies to this provider, product, location and date.')))
+    monkeypatch.setattr(api, '_previsit_range', lambda *_args, **_kwargs: ({'complete': False}, []))
+    result = {'payer': 'Example Blue', 'codes': [], 'issues': []}
+    benefits = {'active': True, 'network_status': 'unknown'}
+    api._attach_previsit_pricing(result, 'primary', inputs, source, 'payer-route', benefits)
+    assert benefits['network_status'] == 'in_network'
+    assert benefits['network_source'] == 'clinic_nmct_policy'
+    assert result['network_evidence']['decision'] == 'in_network_by_clinic_policy'
+
+
+def test_nmct_saved_clinic_out_of_network_result_requires_repricing():
+    result = {'benefits': {'network_status': 'out_of_network',
+                           'network_source': 'clinic_contract_inventory'},
+              'network_evidence': {'decision': 'out_of_network_by_clinic_contract_inventory'},
+              'agreement_exclusion': {'status': 'excluded_under_available_agreement'},
+              'price_range': {'complete': True, 'patient_min_cents': 9000,
+                              'patient_max_cents': 9000, 'lines': []},
+              'issues': []}
+    recheck_saved_network_evidence(result, {}, 'primary', None)
+    assert result['benefits']['network_status'] == 'in_network'
+    assert result['network_evidence']['decision'] == 'in_network_by_clinic_policy'
+    assert 'agreement_exclusion' not in result
+    assert result['price_range']['complete'] is False
+    assert result['price_range']['patient_max_cents'] is None
+
+
 def test_saved_requirements_refresh_when_network_projection_changes(monkeypatch):
     """A saved PPO decision must follow the newly supported signed network."""
     called = []

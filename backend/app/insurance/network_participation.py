@@ -1,6 +1,9 @@
-"""Provider participation must be backed by a scoped clinic or payer source."""
+"""Provider tier follows scoped evidence or NMCT's explicit clinic policy."""
 
 import re
+
+
+NMCT_PRACTICE_ID = 'primary'
 
 
 FEP_BLUE_CHOICE_SOURCE = (
@@ -34,7 +37,7 @@ def participation_conflict(benefits: dict) -> bool:
 def verified_in_network(benefits: dict) -> bool:
     return (benefits.get('network_status') == 'in_network'
             and benefits.get('network_source') in {'clinic_library_contract', 'clinic_group_agreement',
-                                                   'payer_participation_message'}
+                                                   'payer_participation_message', 'clinic_nmct_policy'}
             and not participation_conflict(benefits))
 
 
@@ -51,6 +54,8 @@ def outcome(benefits: dict, evidence: dict) -> str:
         return 'UNRESOLVED'
     if evidence.get('decision') == 'in_network_contract_supported':
         return 'IN_NETWORK_CONTRACT_SUPPORTED'
+    if evidence.get('decision') == 'in_network_by_clinic_policy' and verified_in_network(benefits):
+        return 'IN_NETWORK_BY_CLINIC_POLICY'
     if verified_in_network(benefits):
         return 'IN_NETWORK_VERIFIED'
     if verified_out_of_network(benefits):

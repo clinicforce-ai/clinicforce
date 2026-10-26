@@ -26,7 +26,7 @@ export function deriveCommercialEstimateView({
   const networkConfirmed =
     benefits?.network_status === 'in_network' &&
     !participationConflict &&
-    ['clinic_library_contract', 'clinic_group_agreement', 'payer_participation_message'].includes(
+    ['clinic_library_contract', 'clinic_group_agreement', 'clinic_nmct_policy', 'payer_participation_message'].includes(
       benefits.network_source || '',
     )
   const price = result?.price_range
@@ -205,7 +205,9 @@ export function deriveCommercialEstimateView({
       ? 'Current signed clinic agreement · review member product and clinician tier'
       : benefits?.network_source === 'clinic_library_contract'
         ? 'Current Clinical Library contract'
-        : benefits?.network_source === 'clinic_library_absent'
+        : benefits?.network_source === 'clinic_nmct_policy'
+          ? 'NMCT all-plan policy · payer-specific nonparticipation takes precedence'
+          : benefits?.network_source === 'clinic_library_absent'
           ? 'No contract linked to this exact payer product and provider'
           : benefits?.network_source === 'clinic_nonparticipation_rule'
             ? 'Current scoped clinic nonparticipation rule'

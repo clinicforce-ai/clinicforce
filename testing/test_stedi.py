@@ -102,6 +102,27 @@ class StediResultTests(unittest.TestCase):
         result = v2.stedi_network(case, {"stedi_provider_networks": []}, coverage)
         self.assertIn("No clinic network row matches", result["provider_network"])
 
+    def test_nmct_v2_bridge_uses_policy_except_explicit_payer_nonparticipation(self):
+        case = {"inputs": {"payer_id": "TEST", "provider": {"npi": "1234567893"},
+                           "place_of_service": "11", "service_date": "2026-10-15"}}
+        coverage = {"plans": [{"name": "Example HMO"}]}
+        matrix = {"stedi_provider_networks": [{"payer_id": "TEST", "provider_npi": "1234567893",
+                   "place_of_service": "11", "plan_name": "Example HMO", "status": "out_of_network"}]}
+        result = v2.stedi_network(case, matrix, coverage, practice_id="primary")
+        self.assertEqual(result["provider_network_status"], "in_network")
+        payer_message = {"subscriber": {"dates": {"service": {"start": "2026-10-15", "end": "2026-10-15"}}},
+                         "plans": [{"benefits": {"statuses": [{"status": "Active Coverage",
+                            "service": {"system": "STC", "value": "30"}}], "limitations": [
+                            {"service": {"system": "STC", "value": "30"},
+                             "messages": ["Provider is not in network."]}]}}]}
+        result = v2.stedi_network(case, matrix, coverage, practice_id="primary", payload=payer_message)
+        self.assertEqual(result["provider_network_status"], "out_of_network")
+        payer_message["plans"][0]["benefits"]["limitations"][0]["messages"] = [
+            "Provider is in network based on NPI ID provided in request"]
+        result = v2.stedi_network(case, matrix, coverage, practice_id="primary", payload=payer_message)
+        self.assertEqual(result["provider_network_status"], "in_network")
+        self.assertIn("payer specifically reports", result["provider_network"])
+
     def test_normalizes_benefits_but_keeps_network_unconfirmed_and_price_unavailable(self):
         result = stedi_results.coverage({"id": "ec_123", "payer": {"name": {"organization": "Test Payer"}}, "plans": [{"benefits": {
             "statuses": [{"status": "Active Coverage", "network": {"code": "Y", "definition": "In Network"}, "planCoverageDescription": "Test plan"}],
