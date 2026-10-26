@@ -34,9 +34,12 @@ export default function PayerReportedPlanFigures({ result }: { result: PrevisitE
   }
   const providerTierEstablished =
     (benefits.network_status === 'in_network' &&
-      ['clinic_library_contract', 'clinic_group_agreement', 'clinic_nmct_policy', 'payer_participation_message'].includes(
-        benefits.network_source || '',
-      )) ||
+      [
+        'clinic_library_contract',
+        'clinic_group_agreement',
+        'clinic_nmct_policy',
+        'payer_participation_message',
+      ].includes(benefits.network_source || '')) ||
     (benefits.network_status === 'out_of_network' &&
       [
         'payer_participation_message',

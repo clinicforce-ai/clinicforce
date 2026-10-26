@@ -26,9 +26,12 @@ export function deriveCommercialEstimateView({
   const networkConfirmed =
     benefits?.network_status === 'in_network' &&
     !participationConflict &&
-    ['clinic_library_contract', 'clinic_group_agreement', 'clinic_nmct_policy', 'payer_participation_message'].includes(
-      benefits.network_source || '',
-    )
+    [
+      'clinic_library_contract',
+      'clinic_group_agreement',
+      'clinic_nmct_policy',
+      'payer_participation_message',
+    ].includes(benefits.network_source || '')
   const price = result?.price_range
   const outOfNetworkConfirmed =
     benefits?.network_status === 'out_of_network' &&
@@ -208,12 +211,12 @@ export function deriveCommercialEstimateView({
         : benefits?.network_source === 'clinic_nmct_policy'
           ? 'NMCT all-plan policy · payer-specific nonparticipation takes precedence'
           : benefits?.network_source === 'clinic_library_absent'
-          ? 'No contract linked to this exact payer product and provider'
-          : benefits?.network_source === 'clinic_nonparticipation_rule'
-            ? 'Current scoped clinic nonparticipation rule'
-            : benefits?.network_source === 'clinic_contract_inventory'
-              ? 'Certified clinic contract inventory · not payer-confirmed'
-              : guidance?.network_source
+            ? 'No contract linked to this exact payer product and provider'
+            : benefits?.network_source === 'clinic_nonparticipation_rule'
+              ? 'Current scoped clinic nonparticipation rule'
+              : benefits?.network_source === 'clinic_contract_inventory'
+                ? 'Certified clinic contract inventory · not payer-confirmed'
+                : guidance?.network_source
   const networkTone =
     !result || tooEarly || result.recovery?.state === 'pending'
       ? ''
