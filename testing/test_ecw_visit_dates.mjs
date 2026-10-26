@@ -1,37 +1,45 @@
 import { test } from 'node:test'
-import { deepStrictEqual } from 'node:assert'
+import { strictEqual } from 'node:assert'
 import {
-  ecwVisitDates,
+  ecwVisitDay,
   localVisitDay,
 } from '../frontend/src/features/staff-workspace/ecwVisitDates.ts'
 
-test('groups upcoming and completed eCW encounters by valid visit day', () => {
+test('places a returning patient on today or their next future visit, then their latest past visit', () => {
   const today = '2026-10-25'
-  const appointments = [
-    { from_ecw: true, status: 'finished', date: '2026-10-21' },
-    { from_ecw: true, status: 'finished', date: '2026-10-21' },
-    { from_ecw: true, status: 'completed', date: '2026-10-19' },
-    { from_ecw: true, status: 'finished', start: '2026-10-17T09:00:00-04:00' },
-    { from_ecw: true, status: 'planned', date: today },
-    { from_ecw: true, status: 'booked', date: '2026-10-26' },
-    { from_ecw: true, status: 'planned', start: '2026-11-02T09:00:00-05:00' },
-    { from_ecw: true, status: 'planned', date: '2026-10-22' },
-    { from_ecw: true, status: 'cancelled', date: '2026-10-18' },
-    { from_ecw: true, status: 'cancelled', date: '2026-10-27' },
-    { from_ecw: true, status: 'entered-in-error', date: '2026-10-28' },
-    { from_ecw: false, status: 'finished', date: '2026-10-16' },
-    { from_ecw: false, status: 'booked', date: '2026-10-29' },
-    { from_ecw: true, status: 'finished', date: '2026-02-30' },
-    { from_ecw: true, status: 'planned', date: '2026-11-31' },
-  ]
-  deepStrictEqual(ecwVisitDates({ ecw_status: 'complete', appointments }, today), [
-    today,
-    '2026-10-26',
-    '2026-11-02',
-    '2026-10-21',
-    '2026-10-19',
-    '2026-10-17',
-  ])
-  deepStrictEqual(ecwVisitDates({ ecw_status: 'incomplete', appointments }, today), [])
-  deepStrictEqual(localVisitDay(new Date(2026, 9, 25)), today)
+  const visit = (status, date, from_ecw = true) => ({ status, date, from_ecw })
+  const history = (appointments, ecw_status = 'complete') => ({ appointments, ecw_status })
+
+  strictEqual(ecwVisitDay(history([
+    visit('finished', '2026-10-21'),
+    visit('booked', '2026-10-28'),
+    visit('planned', '2026-10-26'),
+  ]), today), '2026-10-26')
+  strictEqual(ecwVisitDay(history([
+    visit('finished', '2026-10-21'),
+    visit('finished', today),
+    visit('booked', '2026-10-26'),
+  ]), today), today)
+  strictEqual(ecwVisitDay(history([
+    visit('planned', today),
+    visit('finished', '2026-10-21'),
+  ]), today), today)
+  strictEqual(ecwVisitDay(history([
+    visit('finished', '2026-10-21'),
+    visit('booked', '2026-11-09'),
+  ]), today), '2026-11-09')
+  strictEqual(ecwVisitDay(history([
+    visit('planned', '2026-10-22'),
+    visit('finished', '2026-10-21'),
+    visit('cancelled', '2026-10-24'),
+  ]), today), '2026-10-22')
+  strictEqual(ecwVisitDay(history([
+    visit('cancelled', '2026-10-26'),
+    visit('entered-in-error', today),
+    visit('finished', '2026-02-30'),
+    visit('booked', '2026-11-31'),
+    visit('finished', '2026-10-20', false),
+  ]), today), null)
+  strictEqual(ecwVisitDay(history([visit('booked', '2026-10-26')], 'incomplete'), today), null)
+  strictEqual(localVisitDay(new Date(2026, 9, 25)), today)
 })
