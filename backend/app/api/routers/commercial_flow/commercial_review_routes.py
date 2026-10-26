@@ -95,7 +95,7 @@ async def update_visit_review(case_id: str, value: _api.VisitReviewInput, reques
     if refreshing:
         case['visit_review'] = review
         result.pop('suggestions', None)
-        if inputs.get('reason') and not (inputs.get('visit_type') or _api.visit_estimate.is_emg_visit(inputs)):
+        if inputs.get('reason'):
             result['suggestions'] = await _api.run_in_threadpool(
                 _api.cpt_suggester.suggest_preliminary_cpt_codes,
                 str(inputs['reason'])[:8000] + f"\nPatient visit status from eCW: {inputs.get('visit_type') or 'unknown'}.",

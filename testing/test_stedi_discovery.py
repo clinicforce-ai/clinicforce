@@ -14,8 +14,9 @@ from test_visit_estimate import payload
 
 
 @pytest.fixture(autouse=True)
-def isolated_payer_connections():
+def isolated_payer_connections(monkeypatch):
     """Recovery tests use synthetic cases and must not read a live practice DB."""
+    monkeypatch.setenv('STEDI_PRACTICE_API_KEYS', '{}')
     with patch.object(api.commercial_store, 'list_connections', return_value=[]):
         yield
 

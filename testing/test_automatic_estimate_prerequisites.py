@@ -100,8 +100,8 @@ def test_estimate_uses_existing_mapping_without_staff_confirmation(appointment, 
         result['eligibility_timing'] = {'status': 'too_early', 'check_from': inputs['service_date'], 'message': 'Checking opens later.'}
     case = {}
     api._finish_previsit(result, case, inputs, source, payload, {'practice_id': clinic}, route)
-    assert [(row['code'], row['units'], row['confirmed']) for row in result['codes']] == [
-        (code, 1, False) for code in ('99212', '99213', '99214', '99215')]
+    assert [(row['code'], row['units'], row['confirmed']) for row in result['codes']] == [('99213', 1, False)]
+    assert result['selected_ids'] == [next(row['id'] for row in result['available_codes'] if row['code'] == '99213')]
     assert result['service_plan']['selection_source'] == 'suggested'
     assert not case['visit_review'].get('selected_ids')
     if mode in {'deferred', 'verified'}:
@@ -110,7 +110,7 @@ def test_estimate_uses_existing_mapping_without_staff_confirmation(appointment, 
         assert case['previsit_context']['payer_id'] == payer['stedi_payer_id']
         diagnosis = api._insurance_diagnosis(case, result, result['collection_guidance'])
         assert 'PROVIDER_NETWORK_NOT_VERIFIED' not in diagnosis['reasonCodes']
-        assert result['price_range']['complete'] is False  # Other E/M levels remain unpriced.
+        assert [row['code'] for row in result['price_range']['lines']] == ['99213']
         if mode == 'deferred':
             assert diagnosis['eligibilityStatus'] == 'NOT_VERIFIED'
     else:

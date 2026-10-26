@@ -183,15 +183,15 @@ def test_saved_ecw_eligibility_reconciles_by_time_without_inventing_benefits():
     assert 'still needed' in visit_estimate.reconcile_eligibility(saved, {}, None)['message']
 
 
-def test_uncoded_appointment_uses_em_alternatives_without_model_call():
+def test_uncoded_appointment_asks_model_for_new_and_established_em():
     from app.insurance import cpt_suggester
     for kind, expected in [('new', range(99202, 99206)), ('established', range(99212, 99216))]:
         inputs = {'visit_type': kind, 'reason': 'Neurology consultation', 'lines': []}
         codes = api._previsit_codes(inputs)
-        with patch.object(cpt_suggester.boto3, 'client') as model:
+        with patch.object(cpt_suggester.boto3, 'client', side_effect=RuntimeError('offline')) as model:
             plan = cpt_suggester.recommend_visit_plan(inputs, {}, codes)
-        model.assert_not_called()
+        model.assert_called_once()
         assert [row['code'] for row in codes] == list(map(str, expected))
-        assert plan['recommended_ids'] == []
+        assert plan['recommended_ids'] == (['99213:1'] if kind == 'established' else [])
         assert plan['method'] == 'appointment'
     assert ecw_backend._display({'name': [{'use': 'official', 'text': 'Dr. Alex Example'}]}) == 'Dr. Alex Example'

@@ -82,6 +82,64 @@ def test_explicit_scheduled_care_wins_and_wrong_patient_status_cannot_be_inferre
         assert result['method'] == 'ecw'
 
 
+def test_new_patient_office_visit_uses_provisional_model_level():
+    available = [{'id': code, 'code': code, 'source': 'conditional office E/M alternative', 'units': 1}
+                 for code in ('99202', '99203', '99204', '99205')]
+    model = MagicMock()
+    model.converse.return_value = model_reply([{'code': '99204', 'units': 1}])
+    with patch.object(cpt_suggester.boto3, 'client', return_value=model):
+        plan = cpt_suggester.recommend_visit_plan(
+            {'reason': 'New patient consultation for recurring symptoms', 'visit_type': 'new'}, {}, available)
+    assert plan['method'] == 'llm'
+    assert plan['recommended_ids'] == ['99204']
+    assert any('provisional' in note for note in plan['assumptions'])
+    model.converse.assert_called_once()
+
+
+def test_established_office_visit_defaults_to_provisional_followup_when_model_is_unavailable():
+    available = [{'id': code, 'code': code, 'source': 'conditional office E/M alternative', 'units': 1}
+                 for code in ('99212', '99213', '99214', '99215')]
+    with patch.object(cpt_suggester.boto3, 'client', side_effect=RuntimeError('offline')) as model:
+        plan = cpt_suggester.recommend_visit_plan(
+            {'reason': 'Follow up consultation', 'visit_type': 'established'}, {}, available)
+    model.assert_called_once()
+    assert plan['recommended_ids'] == ['99213']
+    assert plan['method'] == 'appointment'
+    assert 'starting estimate' in plan['assumptions'][0]
+
+
+def test_established_office_visit_uses_supported_level_and_rejects_new_patient_level():
+    available = [{'id': code, 'code': code, 'source': 'conditional office E/M alternative', 'units': 1}
+                 for code in ('99212', '99213', '99214', '99215')]
+    model = MagicMock()
+    model.converse.return_value = model_reply([{'code': '99214', 'units': 1}])
+    with patch.object(cpt_suggester.boto3, 'client', return_value=model):
+        plan = cpt_suggester.recommend_visit_plan(
+            {'reason': 'Follow up consultation', 'visit_type': 'established'}, {}, available)
+    assert plan['recommended_ids'] == ['99214']
+    assert plan['method'] == 'llm'
+    model.converse.return_value = model_reply([{'code': '99203', 'units': 1}])
+    with patch.object(cpt_suggester.boto3, 'client', return_value=model):
+        plan = cpt_suggester.recommend_visit_plan(
+            {'reason': 'Follow up consultation', 'visit_type': 'established'}, {}, available)
+    assert plan['recommended_ids'] == ['99213']
+    assert plan['method'] == 'appointment'
+
+
+def test_new_patient_reason_service_can_join_provisional_office_visit():
+    available = [{'id': code, 'code': code, 'source': 'conditional office E/M alternative', 'units': 1}
+                 for code in ('99202', '99203', '99204', '99205')]
+    available.append({'id': 'suggested:93000', 'code': '93000',
+                      'source': 'Clinician-confirmed candidate', 'units': 1})
+    model = MagicMock()
+    model.converse.return_value = model_reply([{'code': '99204', 'units': 1}, {'code': '93000', 'units': 1}])
+    with patch.object(cpt_suggester.boto3, 'client', return_value=model):
+        plan = cpt_suggester.recommend_visit_plan(
+            {'reason': 'New patient consultation; ECG planned', 'visit_type': 'new'}, {}, available)
+    assert plan['method'] == 'llm'
+    assert plan['recommended_ids'] == ['99204', 'suggested:93000']
+
+
 IDENTITY = {'billing_npi': '1234567890', 'tin': '123456789', 'member_id': 'M123',
             'patient_first': 'Alex', 'patient_last': 'Morgan', 'claim_identifiers': ['patient-account-1']}
 TX = '7647d644-9348-4596-a3b4-6830b8b48cc8'
