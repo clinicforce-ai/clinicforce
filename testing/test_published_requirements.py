@@ -89,6 +89,36 @@ def test_same_day_bcbstx_active_271_can_show_network_referral_rule_without_dates
     assert evaluate(result, context, [])['referral']['status'] == 'Verification required'
 
 
+def test_bcbstx_in_network_ppo_99213_office_requirements():
+    result, context = case('BCBSTX', 'PREFERRED PROVIDER OPTION MEDICAL', '99213')
+    context['service_date'] = '2026-10-26'
+    decision = evaluate(result, context, [])
+    assert decision['referral']['status'] == 'Not required'
+    assert decision['procedures'][0]['referral']['status'] == 'Not required'
+    assert decision['authorization']['status'] == 'Not required'
+    assert decision['procedures'][0]['authorization']['status'] == 'Not required'
+    assert decision['authorization']['sources'][0]['source_type'] == 'clinic_confirmation'
+    displayed_payer = {**context, 'payer_names': ['Blue Cross Blue Shield Tx']}
+    assert evaluate(result, displayed_payer, [])['referral']['status'] == 'Not required'
+    assert evaluate(result, displayed_payer, [])['authorization']['status'] == 'Not required'
+    assert evaluate(result, {**context, 'plans': ['PREFERRED PROVIDER OPTION MEDICAL', 'Blue Choice PPO']}, [])['authorization']['status'] == 'Not required'
+    assert evaluate(result, {**context, 'plans': ['Health Maintenance Organization Medical']}, [])['referral']['status'] == 'Verification required'
+    assert evaluate(result, {**context, 'pos': '22'}, [])['authorization']['status'] == 'Verification required'
+    higher, _ = case('BCBSTX', 'PREFERRED PROVIDER OPTION MEDICAL', '99214')
+    assert evaluate(higher, context, [])['authorization']['status'] == 'Verification required'
+    result['price_range'] = {'lines': [{'id': '0', 'code': '99213', 'benefits': {
+        'requirements': {'authorization': {'payer_signal': 'required'}}}}]}
+    assert evaluate(result, context, [])['authorization']['status'] == 'Required'
+    result.pop('price_range')
+    result['benefits']['service_date_matches'] = None
+    result['checked_at'] = '2026-10-26T15:00:00Z'
+    assert evaluate(result, context, [])['authorization']['status'] == 'Not required'
+    result['checked_at'] = '2026-10-25T15:00:00Z'
+    assert evaluate(result, context, [])['authorization']['status'] == 'Verification required'
+    result['benefits']['coverage_evidence'] = {'status': 'ACTIVE', 'start': '2026-01-01'}
+    assert evaluate(result, context, [])['authorization']['status'] == 'Not required'
+
+
 def test_99205_transplant_rule_requires_confirmed_indication():
     result, context = case('UnitedHealthcare', 'Choice Plus', '99205')
     ordinary = evaluate(result, context, [])['authorization']
