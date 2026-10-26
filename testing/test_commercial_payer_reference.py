@@ -4,6 +4,8 @@ from copy import deepcopy
 
 from app.api.routers import commercial_estimator  # noqa: F401 - initialize route imports
 from app.api.routers.commercial_flow.commercial_previsit_reference import _same_person_for_reference
+from app.api.routers.commercial_flow import commercial_previsit_status as status
+from app.insurance import network_participation
 
 
 def test_reference_identity_allows_one_payer_spelling_correction():
@@ -26,3 +28,39 @@ def test_reference_identity_allows_one_payer_spelling_correction():
     wrong_birth = deepcopy(response)
     wrong_birth['subscriber']['dateOfBirth'] = '1948-10-11'
     assert not _same_person_for_reference(request, wrong_birth, coverage)
+
+
+def test_registered_clinic_saved_reference_uses_all_plan_network_policy(monkeypatch):
+    case = {
+        'previsit_context': {
+            'context_token': 'synthetic-token',
+            'inputs': {'service_date': '2026-10-27'},
+            'source': {},
+            'payer_id': '',
+            'result': {
+                'service_date': '2026-10-27', 'payer': 'Aetna',
+                'benefits': {'active': None, 'network_status': 'unknown'},
+                'payment_mode': 'cash', 'cash_fallback': {},
+                'price_range': {'lines': []}, 'codes': [],
+            },
+        },
+        'previsit_reference': {
+            'context_token': 'synthetic-token', 'service_date': '2026-10-27',
+            'benefits': {'active': True, 'service_date_matches': False,
+                         'network_status': 'unknown', 'network_source': None},
+        },
+    }
+    monkeypatch.setattr(status._api.commercial_store, 'list_connections', lambda *_: [])
+    monkeypatch.setattr(status, '_recheck_saved_clinic_pricing', lambda *_: None)
+    monkeypatch.setattr(status, '_recheck_saved_payer_allowance', lambda *_: None)
+    monkeypatch.setattr(status, 'refresh_saved_requirements', lambda *_: None)
+    monkeypatch.setattr(status._api.collection_guidance, 'build', lambda *_: {'amount_cents': None})
+    monkeypatch.setattr(status._api, '_insurance_diagnosis', lambda *_: {})
+    monkeypatch.setattr(status._api.encounter_summary, 'build', lambda *_: {})
+    monkeypatch.setattr(status._api.amount_explanation, 'build', lambda *_: {})
+    monkeypatch.setattr(status.evidence_resolution, 'build', lambda *_: {})
+    result = status._previsit_result(case, network_participation.NMCT_REGISTERED_PRACTICE_ID)
+    assert result['reference_benefits']['network_status'] == 'in_network'
+    assert result['reference_benefits']['network_source'] == 'clinic_nmct_policy'
+    assert result['reference_benefits']['service_date_matches'] is False
+    assert case['previsit_reference']['benefits']['network_status'] == 'unknown'

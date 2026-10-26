@@ -4,6 +4,11 @@ import re
 
 
 NMCT_PRACTICE_ID = 'primary'
+NMCT_REGISTERED_PRACTICE_ID = 'f378bc13-af1d-4ea5-bfbd-8cd102e42ddc'
+
+
+def is_nmct_practice(practice_id: str) -> bool:
+    return practice_id in {NMCT_PRACTICE_ID, NMCT_REGISTERED_PRACTICE_ID}
 
 
 FEP_BLUE_CHOICE_SOURCE = (

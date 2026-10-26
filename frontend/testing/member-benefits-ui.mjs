@@ -1195,6 +1195,66 @@ try {
   const { deriveCommercialEstimateView } = await server.ssrLoadModule(
     '/src/features/commercial-estimate/deriveCommercialEstimateView.ts',
   )
+  const savedReference = {
+    ...base,
+    payer: 'Aetna',
+    payment_mode: 'cash',
+    cash_fallback: { reason: 'Eligibility needs review' },
+    collection_guidance: {
+      ...base.collection_guidance,
+      patient_actions: [],
+      assumptions: [],
+      status: 'action_required',
+    },
+    reference_only: true,
+    reference_benefits: {
+      active: true,
+      service_date_matches: false,
+      network_status: 'in_network',
+      network_source: 'clinic_nmct_policy',
+    },
+    benefits: { active: false, network_status: 'unknown', reported_options: [] },
+  }
+  const savedReferenceModel = deriveCommercialEstimateView({
+    result: savedReference,
+    appointments: [],
+    selectedVisit: '',
+    busy: null,
+    error: '',
+    readOnly: true,
+    recovering: false,
+  })
+  assert.equal(savedReferenceModel.coverageTone, 'is-reported')
+  assert.equal(savedReferenceModel.networkLabel, 'In network · clinic policy')
+  assert.equal(savedReferenceModel.networkTone, 'is-confirmed')
+  const savedReferenceOverview = renderToStaticMarkup(
+    React.createElement(CommercialOverview, {
+      model: { ...savedReferenceModel, readOnly: true },
+      result: savedReference,
+    }),
+  )
+  assert(savedReferenceOverview.includes('class="is-reported"'))
+  assert(savedReferenceOverview.includes('In network · clinic policy'))
+  assert(savedReferenceOverview.includes('Sources: eCW + Stedi payer reference'))
+  assert(!savedReferenceOverview.includes('Sources: eCW · Payer check needed'))
+  const unknownReferenceModel = deriveCommercialEstimateView({
+    result: {
+      ...savedReference,
+      reference_benefits: {
+        ...savedReference.reference_benefits,
+        network_status: 'unknown',
+        network_source: null,
+      },
+    },
+    appointments: [],
+    selectedVisit: '',
+    busy: null,
+    error: '',
+    readOnly: true,
+    recovering: false,
+  })
+  assert.equal(unknownReferenceModel.networkLabel, 'Not determined')
+  assert.equal(unknownReferenceModel.networkTone, 'is-unknown')
   const clinicNonparticipation = deriveCommercialEstimateView({
     result: {
       ...base,

@@ -367,7 +367,7 @@ def _attach_previsit_pricing(result: dict, practice_id: str, inputs: dict, sourc
     # in-network benefit schedule alone still cannot establish participation.
     if benefits.get('network_source') != 'payer_participation_message':
         benefits["network_status"] = "unknown"
-    nmct = practice_id == NMCT_PRACTICE_ID
+    nmct = _api.network_participation.is_nmct_practice(practice_id)
     result.pop('temporary_rate_reference', None)
     result.pop('agreement_exclusion', None)
     payer_connections = _api.commercial_store.list_connections(practice_id)

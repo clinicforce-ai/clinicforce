@@ -70,6 +70,8 @@ async def saved_previsit(case_id: str, request: _api.Request) -> dict:
     administrator-attached same-visit Stedi check. The subscriber is displayed
     with a masked member ID in the UI and its benefit rows take display
     precedence over mismatched eCW values. This does not change collection_guidance.
+    At NMCT, the separate all-plan clinic policy can label the reference's network tier;
+    the payer-returned date and appointment-date coverage qualification remain visible.
     benefits.oop_annual_cents is a unique plan-wide individual maximum when
     the payer returned one; it is distinct from oop_remaining_cents.
     Conflicting individual annual or remaining OOP rows leave that amount null

@@ -8,7 +8,7 @@ from types import SimpleNamespace
 from app.api.routers import commercial_estimator as api
 from app.api.routers.commercial_flow import commercial_previsit_pricing as pricing
 from app.api.routers.commercial_flow import commercial_previsit_requirements as requirements
-from app.api.routers.commercial_flow.commercial_previsit_network_guard import recheck_saved_network_evidence
+from app.api.routers.commercial_flow.commercial_previsit_network_guard import apply_nmct_network_policy, recheck_saved_network_evidence
 from app.api.routers.commercial_flow.commercial_previsit_status import _reprice_saved_new_network
 from app.insurance import amount_explanation
 from app.insurance import collection_guidance
@@ -21,11 +21,15 @@ from app.insurance.identity import patient_plan_applies
 DAY = '2026-10-21'
 
 
+@pytest.mark.parametrize('practice_id', [
+    network_participation.NMCT_PRACTICE_ID,
+    network_participation.NMCT_REGISTERED_PRACTICE_ID,
+])
 @pytest.mark.parametrize('payer,plan', [
     ('Cigna', 'HMO'), ('Blue Cross', 'PPO'), ('Aetna', 'HMO'),
     ('UnitedHealthcare', 'Regional Medicare Advantage PPO'), ('Other insurer', 'Other product'),
 ])
-def test_nmct_all_plan_policy_without_clinic_contract(monkeypatch, payer, plan):
+def test_nmct_all_plan_policy_without_clinic_contract(monkeypatch, practice_id, payer, plan):
     monkeypatch.setattr(api.commercial_store, 'list_connections', lambda *_: [])
     monkeypatch.setattr(pricing.library_network_exclusions, 'applicable_exclusion',
                         lambda *_: pytest.fail('NMCT exclusions must not select a network tier'))
@@ -35,7 +39,7 @@ def test_nmct_all_plan_policy_without_clinic_contract(monkeypatch, payer, plan):
     monkeypatch.setattr(api.visit_estimate, 'price_lines', lambda *_args, **_kwargs: {'complete': False})
     result = {'payer': payer, 'codes': [], 'issues': []}
     benefits = {'active': True, 'network_status': 'unknown'}
-    api._attach_previsit_pricing(result, 'primary', {'service_date': DAY},
+    api._attach_previsit_pricing(result, practice_id, {'service_date': DAY},
                                  {'plan': plan}, 'route', benefits)
     assert benefits['network_status'] == 'in_network'
     assert benefits['network_source'] == 'clinic_nmct_policy'
@@ -43,6 +47,18 @@ def test_nmct_all_plan_policy_without_clinic_contract(monkeypatch, payer, plan):
     assert result['network_evidence']['decision'] == 'in_network_by_clinic_policy'
     assert network_participation.outcome(benefits, result['network_evidence']) == 'IN_NETWORK_BY_CLINIC_POLICY'
     assert result['price_range']['complete'] is False
+
+
+def test_registered_nmct_reference_network_policy_preserves_date_warning():
+    benefits = {'active': True, 'service_date_matches': False, 'network_status': 'unknown'}
+    assert apply_nmct_network_policy({}, network_participation.NMCT_REGISTERED_PRACTICE_ID, benefits)
+    assert benefits['network_status'] == 'in_network'
+    assert benefits['network_source'] == 'clinic_nmct_policy'
+    assert benefits['service_date_matches'] is False
+
+    conflicting = {'active': True, 'network_status': 'unknown', 'network_conflict': True}
+    assert not apply_nmct_network_policy({}, network_participation.NMCT_REGISTERED_PRACTICE_ID, conflicting)
+    assert conflicting['network_status'] == 'unknown'
 
 
 def test_nmct_policy_preserves_explicit_payer_nonparticipation(monkeypatch):

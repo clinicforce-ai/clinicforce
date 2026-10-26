@@ -218,7 +218,7 @@ def stedi_network(case: dict, practice: dict, coverage: dict, *, practice_id: st
     if len(plans) > 1:
         return {"provider_network_status": "unconfirmed",
                 "provider_network": "Stedi returned different plan names; identify the applicable medical product before using the clinic network matrix."}
-    if practice_id == network_participation.NMCT_PRACTICE_ID:
+    if network_participation.is_nmct_practice(practice_id):
         payer = commercial.normalize_stedi_271(payload, '98', False,
             service_date=str(inputs.get('service_date') or ''), office_visit=True,
             provider_npi=str((inputs.get('provider') or {}).get('npi') or '')) if payload else {}
