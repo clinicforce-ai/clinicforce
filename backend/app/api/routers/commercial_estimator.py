@@ -57,7 +57,6 @@ from app.api.schemas.commercial import (
     ProductMapping,
     VisitReviewInput,
     CoverageCandidateInput,
-    PriorAddressConfirmation,
     PayerRouteInput,
     EvidenceInput,
 )
@@ -172,7 +171,6 @@ from app.api.routers.commercial_flow.commercial_recovery_search import (
 
 
 from app.api.routers.commercial_flow.commercial_recovery_flow import (
-    _confirmed_recovery_inputs,
     _original_medical_policy_established,
     _run_coverage_recovery,
     _reconcile_saved_discovery,

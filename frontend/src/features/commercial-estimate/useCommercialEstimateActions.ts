@@ -16,7 +16,6 @@ import {
   type CommercialAppointment,
   type CommercialPastVisit,
   type PrevisitEstimate,
-  type PriorAddressConfirmation,
 } from '../../services/api/commercial-estimator'
 import { visitDate } from './format'
 import type { CommercialEstimatorProps } from './commercial-props'
@@ -209,11 +208,7 @@ export function useCommercialEstimateActions({
       if (current === requestId.current) setBusy(null)
     }
   }
-  const selectCoverage = async (
-    candidateId: string,
-    payerRoute = false,
-    priorAddress?: PriorAddressConfirmation,
-  ) => {
+  const selectCoverage = async (candidateId: string, payerRoute = false) => {
     if (!result || busy) return
     const current = ++requestId.current
     setBusy('coverage')
@@ -222,7 +217,7 @@ export function useCommercialEstimateActions({
     try {
       const updated = await (payerRoute
         ? commercialSelectPayerRoute(result, candidateId, intakeId)
-        : commercialSelectCoverageCandidate(result, candidateId, intakeId, priorAddress))
+        : commercialSelectCoverageCandidate(result, candidateId, intakeId))
       if (current === requestId.current) {
         setResult(updated)
         setNotice('Checking the selected policy with Stedi…')

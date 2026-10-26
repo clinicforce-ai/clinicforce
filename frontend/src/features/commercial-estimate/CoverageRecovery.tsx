@@ -1,4 +1,3 @@
-import { useState } from 'react'
 import type { CommercialEstimateModel } from './useCommercialEstimateModel'
 import { patientBenefitsBound } from './identityBinding'
 
@@ -31,17 +30,6 @@ export default function CoverageRecovery({
   model: CommercialEstimateModel
   result: NonNullable<CommercialEstimateModel['result']>
 }) {
-  const [priorAddress, setPriorAddress] = useState({
-    address1: '',
-    city: '',
-    state: '',
-    postalCode: '',
-  })
-  const [confirmedCandidateId, setConfirmedCandidateId] = useState('')
-  const changePriorAddress = (field: keyof typeof priorAddress, value: string) => {
-    setPriorAddress((current) => ({ ...current, [field]: value }))
-    setConfirmedCandidateId('')
-  }
   const {
     readOnly,
     candidateSuggestion,
@@ -196,15 +184,6 @@ export default function CoverageRecovery({
                 candidate.id === candidateSuggestion,
             )
             .map((candidate, index) => {
-              const needsPriorAddress =
-                candidate.reason_codes?.includes('PATIENT_ADDRESS_MISMATCH') || false
-              const priorAddressReady = Boolean(
-                priorAddress.address1.trim() &&
-                priorAddress.city.trim() &&
-                /^[A-Z]{2}$/.test(priorAddress.state) &&
-                /^\d{5}(?:\d{4})?$/.test(priorAddress.postalCode) &&
-                confirmedCandidateId === candidate.id,
-              )
               const coverageState = candidate.coverage_evidence?.status
               const statusHeadline =
                 !!coverageState &&
@@ -297,64 +276,6 @@ export default function CoverageRecovery({
                       this policy.
                     </p>
                   )}
-                  {!readOnly && needsPriorAddress && (
-                    <fieldset className="prior-address-confirmation">
-                      <legend>Prior address in eCW history</legend>
-                      <p>
-                        Enter the prior address shown in this patient's eCW chart. ClinicForce will
-                        compare it with the saved payer response.
-                      </p>
-                      <label>
-                        Street address
-                        <input
-                          value={priorAddress.address1}
-                          onChange={(event) => changePriorAddress('address1', event.target.value)}
-                          autoComplete="off"
-                        />
-                      </label>
-                      <label>
-                        City
-                        <input
-                          value={priorAddress.city}
-                          onChange={(event) => changePriorAddress('city', event.target.value)}
-                          autoComplete="off"
-                        />
-                      </label>
-                      <label>
-                        State
-                        <input
-                          value={priorAddress.state}
-                          maxLength={2}
-                          onChange={(event) =>
-                            changePriorAddress('state', event.target.value.toUpperCase())
-                          }
-                          autoComplete="off"
-                        />
-                      </label>
-                      <label>
-                        ZIP code
-                        <input
-                          value={priorAddress.postalCode}
-                          inputMode="numeric"
-                          maxLength={9}
-                          onChange={(event) =>
-                            changePriorAddress('postalCode', event.target.value.replace(/\D/g, ''))
-                          }
-                          autoComplete="off"
-                        />
-                      </label>
-                      <label className="prior-address-check">
-                        <input
-                          type="checkbox"
-                          checked={confirmedCandidateId === candidate.id}
-                          onChange={(event) =>
-                            setConfirmedCandidateId(event.target.checked ? candidate.id || '' : '')
-                          }
-                        />
-                        I confirmed this address in the selected patient's eCW chart history.
-                      </label>
-                    </fieldset>
-                  )}
                   {!readOnly && !!candidate.id && (
                     <button
                       disabled={
@@ -368,19 +289,9 @@ export default function CoverageRecovery({
                             'PATIENT_DOB_MISSING',
                             'RELATIONSHIP_CONFLICT',
                           ].includes(reason),
-                        ) ||
-                        (needsPriorAddress && !priorAddressReady)
-                      }
-                      onClick={() =>
-                        candidate.id &&
-                        void selectCoverage(
-                          candidate.id,
-                          false,
-                          needsPriorAddress && priorAddressReady
-                            ? { ...priorAddress, confirmed_in_ecw_history: true }
-                            : undefined,
                         )
                       }
+                      onClick={() => candidate.id && void selectCoverage(candidate.id)}
                     >
                       Check this policy
                     </button>
