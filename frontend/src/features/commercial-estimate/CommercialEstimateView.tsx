@@ -67,7 +67,11 @@ export default function CommercialEstimateView({ model }: { model: CommercialEst
               <ArrowLeft size={17} /> Back to patient
             </button>
             <h1 id="visit-estimate-title">
-              {cash ? 'Self-pay collection' : 'Insurance estimator'}
+              {cash && result?.cash_fallback
+                ? 'Insurance review · cash option'
+                : cash
+                  ? 'Self-pay collection'
+                  : 'Insurance estimator'}
             </h1>
           </div>
           <span className="visit-practice">{session?.practice_name}</span>
@@ -77,7 +81,11 @@ export default function CommercialEstimateView({ model }: { model: CommercialEst
         <header className="visit-page-header">
           <div>
             <h2 id="visit-estimate-title">
-              {cash ? 'Saved self-pay estimate' : 'Saved insurance estimate'}
+              {cash && result?.cash_fallback
+                ? 'Saved insurance review · cash option'
+                : cash
+                  ? 'Saved self-pay estimate'
+                  : 'Saved insurance estimate'}
             </h2>
             <p>
               Recorded recommendation for {visitDate(result!.service_date)}.

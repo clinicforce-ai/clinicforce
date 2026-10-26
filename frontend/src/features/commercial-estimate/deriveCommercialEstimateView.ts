@@ -16,7 +16,7 @@ export function deriveCommercialEstimateView({
   recovering,
 }: CommercialEstimateActions) {
   const selected = appointments.find((visit) => visit.id === selectedVisit)
-  const benefits = result?.benefits
+  const { benefits, price_range: price } = result ?? {}
   const patientBenefitsBound = hasPatientBinding(result?.identity)
   const participationConflict =
     benefits?.network_conflict === true ||
@@ -32,7 +32,6 @@ export function deriveCommercialEstimateView({
       'clinic_nmct_policy',
       'payer_participation_message',
     ].includes(benefits.network_source || '')
-  const price = result?.price_range
   const outOfNetworkConfirmed =
     benefits?.network_status === 'out_of_network' &&
     [
@@ -160,7 +159,6 @@ export function deriveCommercialEstimateView({
     result?.payment_mode !== 'cash' && contractDocumentId
       ? `/api/staff/library/${encodeURIComponent(contractDocumentId)}/document?preview=true${contractPage ? `#page=${contractPage}` : ''}`
       : null
-
   const cash = result?.payment_mode === 'cash'
   const coverageTone =
     policyStatus === 'Coverage active'

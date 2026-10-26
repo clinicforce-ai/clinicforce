@@ -95,11 +95,13 @@ class CommercialRulesTest(unittest.TestCase):
         payload = {"benefitsInformation": [{"code": "C", "serviceTypeCodes": ["30"],
             "coverageLevelCode": "IND", "timeQualifierCode": "29", "benefitAmount": "750",
             "inPlanNetworkIndicatorCode": "W", "inPlanNetworkIndicator": "Not Applicable",
-            "messages": ["Primary note"], "additionalInformation": [{"description": note}]}]}
+            "messages": ["Primary note"], "additionalInformation": [{"description": note}],
+            "placesOfService": [{"code": "11", "name": "Office"}]}]}
         benefits = normalize_stedi_271(payload, "98", False)
         self.assertEqual(benefits["deductible_remaining_cents"], 75000)
         self.assertEqual(benefits["network_status"], "unknown")
         self.assertEqual(benefits["reported_options"][0]["payer_note"], "Primary note " + note)
+        self.assertEqual(benefits["reported_options"][0]["places_of_service"], ["11"])
         self.assertEqual(benefits["referral_signal"], "required")
 
     def test_review_reasons_keep_conditional_terms_and_conflicting_referrals_blocking(self):

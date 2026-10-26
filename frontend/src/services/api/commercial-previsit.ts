@@ -433,6 +433,8 @@ export type PrevisitEstimate = {
   stedi_payer?: { name?: string; id: string }
   codes: VisitCode[]
   benefits: PrevisitBenefits
+  reference_benefits?: PrevisitBenefits
+  reference_only?: boolean
   price_range: null | {
     cash_complete?: boolean
     cash_min_cents?: number

@@ -34,11 +34,13 @@ export default function ArrivalAmountSummary({
   model,
   result,
   partialCopay,
+  referenceOnly = false,
   visibleAmount,
 }: {
   model: CommercialEstimateModel
   result: PrevisitEstimate
   partialCopay: number | null
+  referenceOnly?: boolean
   visibleAmount: boolean
 }) {
   const action = nextStep(model, result)
@@ -50,7 +52,9 @@ export default function ArrivalAmountSummary({
     <>
       <span>
         {partialCopay != null
-          ? 'Payer-reported office copay · collection pending'
+          ? referenceOnly
+            ? 'Office-only reference · collection pending'
+            : 'Payer-reported office copay · collection pending'
           : needsAction
             ? 'Next step'
             : model.amountLabel}
@@ -60,9 +64,11 @@ export default function ArrivalAmountSummary({
       </strong>
       {partialCopay != null ? (
         <p>
-          {additionalServicesPending
-            ? 'Office copay reported; other service costs pending.'
-            : 'Office copay reported; collection pending.'}
+          {referenceOnly
+            ? 'Planning amount for this visit date; confirm payer date and Medicare cost-sharing protection before collection.'
+            : additionalServicesPending
+              ? 'Office copay reported; other service costs pending.'
+              : 'Office copay reported; collection pending.'}
         </p>
       ) : needsAction ? (
         <p>{action.hint}</p>

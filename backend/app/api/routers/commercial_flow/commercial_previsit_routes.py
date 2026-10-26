@@ -62,8 +62,10 @@ async def saved_previsit(case_id: str, request: _api.Request) -> dict:
     A linked, applicable zero balance can return basis out_of_pocket_limit
     and a $0 covered office-visit collection.
     temporary_rate_reference, when present, identifies Blue Cross Clinical
-    Library CPT prices used as a disclosed UnitedHealthcare planning reference,
+    Library CPT prices used as a disclosed UnitedHealthcare or NMCT Aetna planning reference,
     not a contracted allowance or patient collection.
+    benefits.reported_options[].places_of_service retains the payer's place-of-service
+    codes for scoped benefit display; a reported office copay is not a collection decision.
     benefits.oop_annual_cents is a unique plan-wide individual maximum when
     the payer returned one; it is distinct from oop_remaining_cents.
     Conflicting individual annual or remaining OOP rows leave that amount null

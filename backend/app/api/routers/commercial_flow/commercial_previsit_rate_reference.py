@@ -1,10 +1,11 @@
-"""Temporary clinic fee reference for UHC planning."""
+"""Temporary clinic fee reference for other payers' planning."""
 from __future__ import annotations
 
 from app.api.routers import commercial_estimator as _api
 
-def _attach_temporary_uhc_rates(result: dict, practice_id: str, inputs: dict, source: dict) -> None:
-    """Expose the clinic's scoped BCBS rates as a UHC planning reference, never an insured allowance."""
+def _attach_temporary_blue_cross_rates(result: dict, practice_id: str, inputs: dict, source: dict,
+                                       payer_name: str) -> None:
+    """Expose scoped BCBS rates as a planning reference, never a payer allowance."""
     rendering_npi = str((inputs.get('rendering_provider') or {}).get('npi') or '')
     billing_npi = str((source.get('billing_provider') or {}).get('npi') or '')
     location_id = str(source.get('location_id') or '')
@@ -45,4 +46,12 @@ def _attach_temporary_uhc_rates(result: dict, practice_id: str, inputs: dict, so
     if lines:
         result['temporary_rate_reference'] = {'source': 'NMCT Clinical Library Blue Cross fee schedule',
             'lines': lines, 'complete': len(lines) == len(codes),
-            'message': 'Temporary CPT price reference only. These are Blue Cross rates, not UnitedHealthcare contracted allowances or a patient amount to collect.'}
+            'message': f'Temporary CPT price reference only. These are Blue Cross rates, not {payer_name} contracted allowances or a patient amount to collect.'}
+
+
+def _attach_temporary_uhc_rates(result: dict, practice_id: str, inputs: dict, source: dict) -> None:
+    _attach_temporary_blue_cross_rates(result, practice_id, inputs, source, 'UnitedHealthcare')
+
+
+def _attach_temporary_aetna_rates(result: dict, practice_id: str, inputs: dict, source: dict) -> None:
+    _attach_temporary_blue_cross_rates(result, practice_id, inputs, source, 'Aetna')

@@ -67,6 +67,7 @@ export type PrevisitBenefits = null | {
     insurance_type?: string
     kind: string
     service_type_code: string
+    places_of_service?: string[]
     network: string
     time_period: string
     effective_dates?: Record<string, string>
