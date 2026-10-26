@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { ChevronLeft, ChevronRight, Mail, Plus, RefreshCw, Users } from 'lucide-react'
+import { ChevronRight, Mail, Plus, RefreshCw, Users } from 'lucide-react'
 import { deleteStaffIntake } from '../../services/api/staff-intake'
 import {
   deleteStaffPatient,
@@ -11,6 +11,7 @@ import {
 } from '../../services/api/staff-patients'
 
 import ClinicalPatientDetail from './ClinicalPatientDetail'
+import ClinicalPatientSections from './ClinicalPatientSections'
 import { ecwVisitDay, localVisitDay } from './ecwVisitDates'
 import { name, accountLabel } from './clinical-patient-labels'
 
@@ -22,7 +23,6 @@ interface Props {
   onPullEcw: () => void
 }
 type Cohort = 'all' | 'accounts_with_cards' | 'accounts_without_cards' | 'card_only' | 'other'
-const GROUPS_PER_PAGE = 5
 type VisitResult = { day: string | null }
 const cohortLabel: Record<Cohort, string> = {
   all: 'All patients',
@@ -42,7 +42,6 @@ export default function ClinicalPatientDashboard({
   const [cohort, setCohort] = useState<Cohort>('all')
   const [query, setQuery] = useState('')
   const [cardStatus, setCardStatus] = useState('')
-  const [page, setPage] = useState(1)
   const [selected, setSelected] = useState<ClinicalPatient | null>(null)
   const [busy, setBusy] = useState(true)
   const [error, setError] = useState('')
@@ -205,22 +204,14 @@ export default function ClinicalPatientDashboard({
     else groups.set(day, [patient])
   }
   const today = localVisitDay(new Date())
-  const nextWeek = new Date(`${today}T12:00:00`)
-  nextWeek.setDate(nextWeek.getDate() + 7)
-  const nextWeekEnd = localVisitDay(nextWeek)
   const upcomingGroups = [...groups]
     .filter(([day]) => day > today && day !== 'undated')
     .sort(([first], [second]) => first.localeCompare(second))
-  const nextWeekGroups = upcomingGroups.filter(([day]) => day <= nextWeekEnd)
-  const laterGroups = upcomingGroups.filter(([day]) => day > nextWeekEnd)
   const todayGroup = groups.get(today) || []
   const pastGroups = [...groups]
     .filter(([day]) => day < today)
     .sort(([first], [second]) => second.localeCompare(first))
-  const pageCount = Math.max(1, Math.ceil(pastGroups.length / GROUPS_PER_PAGE))
-  const currentPage = Math.min(page, pageCount)
-  const pageStart = (currentPage - 1) * GROUPS_PER_PAGE
-  const visiblePastGroups = pastGroups.slice(pageStart, pageStart + GROUPS_PER_PAGE)
+  if (groups.has('undated')) pastGroups.push(['undated', groups.get('undated')!])
   const formatDay = (day: string) =>
     new Date(`${day}T12:00:00`).toLocaleDateString(undefined, {
       weekday: 'long',
@@ -343,7 +334,6 @@ export default function ClinicalPatientDashboard({
               aria-pressed={cohort === value}
               onClick={() => {
                 setCohort(value)
-                setPage(1)
               }}
             >
               <strong>{dashboard?.counts[value] ?? '—'}</strong>
@@ -360,7 +350,6 @@ export default function ClinicalPatientDashboard({
             value={query}
             onChange={(event) => {
               setQuery(event.target.value)
-              setPage(1)
             }}
           />
         </label>
@@ -370,7 +359,6 @@ export default function ClinicalPatientDashboard({
             value={cardStatus}
             onChange={(event) => {
               setCardStatus(event.target.value)
-              setPage(1)
             }}
           >
             <option value="">All card statuses</option>
@@ -424,65 +412,16 @@ export default function ClinicalPatientDashboard({
                   : `eCW visit checks finished for ${visitProgress.total} patients.`}
               </p>
             )}
-            <h3 className="clinical-period-title">Today’s patients</h3>
-            {todayGroup.length ? (
-              renderGroup(today, todayGroup)
-            ) : (
-              <p className="staff-small staff-muted">No patients today.</p>
-            )}
-            <h3 className="clinical-period-title">Upcoming patients</h3>
-            {nextWeekGroups.length ? (
-              nextWeekGroups.map(([day, group]) => renderGroup(day, group))
-            ) : (
-              <p className="staff-small staff-muted">No appointments in the next seven days.</p>
-            )}
-            {!!laterGroups.length && (
-              <>
-                <p className="staff-small staff-muted">Later appointments</p>
-                {laterGroups.map(([day, group]) => renderGroup(day, group))}
-              </>
-            )}
-            <h3 className="clinical-period-title">Past patients</h3>
-            {visiblePastGroups.map(([day, group]) => renderGroup(day, group))}
-            {groups.has('undated') && renderGroup('undated', groups.get('undated')!)}
-            {!pastGroups.length && !groups.has('undated') && (
-              <p className="staff-small staff-muted">No past patients.</p>
-            )}
+            <ClinicalPatientSections
+              key={JSON.stringify([cohort, query, cardStatus])}
+              groups={{
+                today: todayGroup.length ? [[today, todayGroup]] : [],
+                upcoming: upcomingGroups,
+                past: pastGroups,
+              }}
+              renderGroup={renderGroup}
+            />
           </div>
-        )}
-        {pastGroups.length > GROUPS_PER_PAGE && (
-          <nav className="clinical-pagination" aria-label="Visit date pages">
-            <span className="staff-small staff-muted" role="status">
-              Showing {pageStart + 1}–{Math.min(pageStart + GROUPS_PER_PAGE, pastGroups.length)} of{' '}
-              {pastGroups.length} past date groups
-            </span>
-            <div className="clinical-page-buttons">
-              <button
-                aria-label="Previous visit date page"
-                disabled={currentPage === 1}
-                onClick={() => setPage(currentPage - 1)}
-              >
-                <ChevronLeft size={18} aria-hidden="true" />
-              </button>
-              {Array.from({ length: pageCount }, (_, index) => index + 1).map((number) => (
-                <button
-                  key={number}
-                  aria-label={`Visit date page ${number}`}
-                  aria-current={number === currentPage ? 'page' : undefined}
-                  onClick={() => setPage(number)}
-                >
-                  {number}
-                </button>
-              ))}
-              <button
-                aria-label="Next visit date page"
-                disabled={currentPage === pageCount}
-                onClick={() => setPage(currentPage + 1)}
-              >
-                <ChevronRight size={18} aria-hidden="true" />
-              </button>
-            </div>
-          </nav>
         )}
       </section>
       <p className="staff-small staff-muted">
