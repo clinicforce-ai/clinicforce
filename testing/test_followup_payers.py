@@ -14,11 +14,11 @@ def test_ecw_followup_label_selects_an_editable_followup(label):
     assert kind == 'established'
     inputs = {'visit_type': kind, 'reason': 'Reason: 3 month f/u; Visit type: Follow Up'}
     codes = api._previsit_codes(inputs)
-    with patch.object(cpt_suggester.boto3, 'client') as model:
+    with patch.object(cpt_suggester.boto3, 'client', side_effect=RuntimeError('offline')) as model:
         plan = cpt_suggester.recommend_visit_plan(inputs, {}, codes)
-    model.assert_not_called()
-    assert plan['recommended_ids'] == []
-    assert 'alternatives' in plan['assumptions'][0]
+    model.assert_called_once()
+    assert plan['recommended_ids'] == [next(row['id'] for row in codes if row['code'] == '99213')]
+    assert 'starting estimate' in plan['assumptions'][0]
 
 
 def test_biopsy_catalog_and_combined_visit_preserve_all_procedures_and_units():

@@ -95,7 +95,10 @@ class PrevisitFlowTest(unittest.IsolatedAsyncioTestCase):
         await self._flow((date.today() + timedelta(days=2)).isoformat(), refresh=True, too_early=True, coverage_start=(date.today() + timedelta(days=1)).isoformat())
 
     async def test_uncoded_new_visit_requests_real_office_benefits_before_pricing(self):
-        await self._flow(date.today().isoformat())
+        await self._flow(date.today().isoformat(), expect_preliminary=True)
+
+    async def test_uncoded_established_visit_selects_provisional_followup_cpt(self):
+        await self._flow(date.today().isoformat(), visit_type='established')
 
     async def test_documented_95908_is_the_same_provisional_code_in_ui_and_pricing(self):
         await self._flow(date.today().isoformat(), scheduled_code='95908')
@@ -135,12 +138,13 @@ class PrevisitFlowTest(unittest.IsolatedAsyncioTestCase):
     async def test_newer_conflicting_ecw_check_refreshes_cached_stedi_evidence(self):
         await self._flow(date.today().isoformat(), newer_ecw=True)
 
-    async def _flow(self, service_date, reject=False, retry_basic=False, payer_missing=False, refresh=False, newer_ecw=False, too_early=False, self_pay=False, coverage_start=None, saved_hold=False, enrollment_missing=False, ecw_saved=False, ecw_incomplete=False, medicare_secondary=False, billing_note=None, member_id_missing=False, card_fields=None, card_conflict=False, card_status=None, pos=None, scheduled_code=None, emg_review=False):
+    async def _flow(self, service_date, reject=False, retry_basic=False, payer_missing=False, refresh=False, newer_ecw=False, too_early=False, self_pay=False, coverage_start=None, saved_hold=False, enrollment_missing=False, ecw_saved=False, ecw_incomplete=False, medicare_secondary=False, billing_note=None, member_id_missing=False, card_fields=None, card_conflict=False, card_status=None, pos=None, scheduled_code=None, emg_review=False, expect_preliminary=False, visit_type='new'):
         session = {"practice_id": "clinic", "intake_id": "intake", "patient_id": "patient",
                    "share_manifest_id": "", "staff": {"id": "staff", "display_name": "Staff", "practice_name": "Clinic"},
                    "intake": {"updated_at": "version", "patient": {"given_name": "Pat", "family_name": "Example",
                                                                    "birth_date": "1980-01-01"}, "fields": {}}}
-        inputs = {"service_date": service_date, "visit_type": "new", "reason": "New patient consultation",
+        inputs = {"service_date": service_date, "visit_type": visit_type,
+                  "reason": "Follow up consultation" if visit_type == 'established' else "New patient consultation",
                   "lines": [], "member_id": None if member_id_missing else "M123", "relationship": "18",
                   "subscriber": {"firstName": "Pat", "lastName": "Example", "birthDate": "1980-01-01"},
                   "patient": {"patient_first_name": "Pat", "patient_last_name": "Example", "patient_birth_date": "1980-01-01"},
@@ -210,7 +214,7 @@ class PrevisitFlowTest(unittest.IsolatedAsyncioTestCase):
              patch("app.api.routers.commercial_estimator.ecw_backend.fetch_saved_eligibility", AsyncMock(return_value=saved_ecw)), \
              patch("app.api.routers.commercial_estimator._read_card_hints", new=AsyncMock(return_value={
                  'status': card_status or ('read' if card_fields else 'not_found'), 'fields': card_fields or {}}), create=True), \
-             patch("app.api.routers.commercial_estimator.cpt_suggester.suggest_preliminary_cpt_codes", return_value={"groups": [], "notes": []}), \
+             patch("app.api.routers.commercial_estimator.cpt_suggester.suggest_preliminary_cpt_codes", return_value={"groups": [], "notes": []}) as preliminary_suggestions, \
              patch("app.api.routers.commercial_estimator.stedi_payers.search_payer", new=AsyncMock(return_value=None if payer_missing else {"stediId": "QDTRP", "displayName": "Blue Cross and Blue Shield of Texas", 'transactionSupport': {'eligibilityCheck': 'ENROLLMENT_REQUIRED' if enrollment_missing else 'SUPPORTED'}})), \
              patch("app.api.routers.commercial_estimator.stedi_payers.eligibility_enrollment", new=AsyncMock(return_value={'status': 'MISSING', 'reason_code': 'enrollment_missing'})), \
              patch("app.api.routers.commercial_estimator.store.get_cases", return_value=held_cases), \
@@ -232,6 +236,18 @@ class PrevisitFlowTest(unittest.IsolatedAsyncioTestCase):
             scoped_patches.enter_context(patch("app.api.routers.commercial_estimator.commercial_store.matching_rates",
                                                return_value=[]))
             result = await previsit_estimate(PrevisitInput(appointment_id="visit-1", refresh_benefits=refresh if too_early else False), MagicMock())
+            if visit_type == 'established':
+                preliminary_suggestions.assert_called_once()
+                self.assertIn('Patient visit status from eCW: established', preliminary_suggestions.call_args.args[0])
+                self.assertEqual([row['code'] for row in result['codes']], ['99213'])
+                self.assertEqual(result['selected_ids'], [next(row['id'] for row in result['available_codes'] if row['code'] == '99213')])
+                self.assertEqual(result['service_selection_status'], 'preview')
+                self.assertEqual([row['code'] for row in result['price_range']['lines']], ['99213'])
+                self.assertEqual(client.post.await_count, 1)
+                return
+            if expect_preliminary:
+                preliminary_suggestions.assert_called_once()
+                self.assertIn('Patient visit status from eCW: new', preliminary_suggestions.call_args.args[0])
             if emg_review:
                 self.assertEqual(result['service_selection_status'], 'preview')
                 self.assertEqual(result['selected_service_count'], 1)

@@ -10,7 +10,9 @@ from app.api.routers.commercial_flow.commercial_previsit_submit import submit_pr
     "Estimate a patient-bound eCW visit. Compatible saved payer evidence is reused without another "
     "eligibility request. A booked EMG/NCS visit without a study count returns one provisional "
     "scenario with mutually exclusive CPT levels; an exact suggested CPT plan is priced immediately "
-    "from patient-bound benefits and clinic rates, and clinician edits recalculate it. A skin-biopsy "
+    "from patient-bound benefits and clinic rates, and clinician edits recalculate it. An uncoded "
+    "established-patient office visit without a supported level starts with provisional CPT 99213, "
+    "which requires clinician review before billing. A skin-biopsy "
     "booking without a site count starts with an editable three-site CPT 11104 + 11105 x2 scenario. A supported "
 
     "fixed office copay is the visit-time amount, with later costs estimated separately. A "
@@ -411,7 +413,7 @@ async def previsit_estimate(value: _api.PrevisitInput, request: _api.Request, ba
     result["check_id"] = case["id"]
     if (case.get('previsit_context') or {}).get('context_token') == _api._visit_context_token(inputs, source):
         result['suggestions'] = case['previsit_context']['result'].get('suggestions')
-    elif inputs.get("reason") and not (inputs.get("visit_type") or _api.visit_estimate.is_emg_visit(inputs)):
+    elif inputs.get("reason"):
         result["suggestions"] = await _api.run_in_threadpool(
             _api.cpt_suggester.suggest_preliminary_cpt_codes,
             str(inputs["reason"])[:8000] + f"\nPatient visit status from eCW: {inputs.get('visit_type') or 'unknown'}.",
