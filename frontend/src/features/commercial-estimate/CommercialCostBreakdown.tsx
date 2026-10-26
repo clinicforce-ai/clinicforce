@@ -12,6 +12,7 @@ import {
 } from './payerReportedPartialCopay'
 import { reportedMedicalLimit } from './reportedMedicalLimit'
 import { referenceCoverageRow } from './referenceCoverageRow'
+import { aetnaReferenceRequirement } from './aetnaReferenceRequirements'
 
 const unknown = 'Not returned for this visit'
 
@@ -80,19 +81,21 @@ function requirementStatus(result: PrevisitEstimate, kind: 'referral' | 'authori
         lineRule.cleared &&
         lineRule.reference &&
         lineRule.verified_at
-      const status = conflict
-        ? 'conflicting rules'
-        : evidence?.status === 'Not required' || lineRule?.required === 'not_required'
-          ? 'not required'
-          : evidence?.status === 'Required' || lineRule?.required === 'required'
-            ? kind === 'authorization'
-              ? clearanceOnFile && evidence?.approval_status === 'Verified'
-                ? 'approval verified'
-                : 'required; approval status unresolved'
-              : clearanceOnFile
-                ? 'referral on file'
-                : 'required; referral status unresolved'
-            : 'not determined'
+      const status =
+        aetnaReferenceRequirement(result, kind, line.code) ??
+        (conflict
+          ? 'conflicting rules'
+          : evidence?.status === 'Not required' || lineRule?.required === 'not_required'
+            ? 'not required'
+            : evidence?.status === 'Required' || lineRule?.required === 'required'
+              ? kind === 'authorization'
+                ? clearanceOnFile && evidence?.approval_status === 'Verified'
+                  ? 'approval verified'
+                  : 'required; approval status unresolved'
+                : clearanceOnFile
+                  ? 'referral on file'
+                  : 'required; referral status unresolved'
+              : 'not determined')
       return `CPT ${line.code}: ${status}`
     })
     .join('; ')

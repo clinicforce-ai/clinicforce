@@ -10,6 +10,7 @@ export type PrevisitBenefits = null | {
   service_date_matches?: boolean | null
   returned_service_dates?: { start?: string; end?: string }
   active?: boolean | null
+  plan_details?: { names?: string[] }
   has_secondary?: boolean
   network_conflict?: boolean
   network_independent?: boolean

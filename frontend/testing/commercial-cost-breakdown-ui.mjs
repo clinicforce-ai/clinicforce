@@ -8,6 +8,28 @@ try {
   const { default: CommercialCostBreakdown } = await server.ssrLoadModule(
     '/src/features/commercial-estimate/CommercialCostBreakdown.tsx',
   )
+  const { payerPlanDisplay } = await server.ssrLoadModule(
+    '/src/features/commercial-estimate/payerPlanDisplay.ts',
+  )
+  const { aetnaReferenceRequirement } = await server.ssrLoadModule(
+    '/src/features/commercial-estimate/aetnaReferenceRequirements.ts',
+  )
+  const hmoReference = {
+    payer: 'Aetna', reference_only: true,
+    reference_benefits: { active: true, plan_details: { names: ['Synthetic Network-Only HMO'] } },
+  }
+  assert(aetnaReferenceRequirement(hmoReference, 'referral', '99203')?.startsWith('required'))
+  assert(aetnaReferenceRequirement(hmoReference, 'authorization', '64615')?.startsWith('required'))
+  assert.equal(aetnaReferenceRequirement(hmoReference, 'authorization', '99203'),
+    'not required under clinic Aetna rule')
+  assert.deepEqual(payerPlanDisplay({
+    reference_only: true,
+    reference_benefits: { active: true, plan_details: { names: ['Synthetic Medicare PPO'] } },
+    plan_details: { ecw: { plan: ['Synthetic HMO'] } },
+  }), {
+    planName: 'Synthetic Medicare PPO',
+    planSource: 'Stedi payer reference; verify applicability to the appointment date',
+  })
   const option = (amount_cents, coverage_level, time_period, payer_note = '') => ({
     kind: 'out_of_pocket',
     service_type_code: '30',
@@ -143,6 +165,7 @@ try {
         },
         reference_benefits: {
           active: true, service_date_matches: false,
+          plan_details: { names: ['Synthetic Medicare PPO'] },
           returned_service_dates: { start: '2026-10-26' },
           network_status: 'unknown', deductible_annual_cents: 10000,
           deductible_remaining_cents: 0, coinsurance_percent: '0',
@@ -168,7 +191,8 @@ try {
   for (const value of ['$40.00 specialist office visit', '$100.00 annual', '$0.00 remaining',
     '0% reported', '$4,000.00 annual', '$2,683.57 remaining', 'Oct 27, 2026',
     '$40.00 office-only reference', 'Stedi subscriber Bonnie Mccann',
-    'member ID ending 1234', 'eCW identity differs']) {
+    'member ID ending 1234', 'eCW identity differs',
+    'CPT 99203: not required under clinic Aetna rule']) {
     assert(attachedReference.includes(value), `Missing attached reference value ${value}`)
   }
   assert(!attachedReference.includes('Amount to collect at visit</th><td><span>$250.00'))
