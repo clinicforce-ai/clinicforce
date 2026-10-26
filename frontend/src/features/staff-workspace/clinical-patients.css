@@ -39,6 +39,14 @@
   font-size: 18px;
 }
 
+.staff-workspace .clinical-see-more {
+  margin-bottom: 8px;
+}
+
+.staff-workspace .clinical-back-to-periods {
+  margin-top: 12px;
+}
+
 .clinical-visit-group {
   margin-bottom: 12px;
   border: 1px solid var(--staff-line);
