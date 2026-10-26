@@ -125,7 +125,6 @@ export function deriveCommercialEstimateView({
   const policyDates = result?.insurance_details?.payer_coverage_period?.start
     ? result.insurance_details.payer_coverage_period
     : result?.insurance_details?.coverage_period
-
   const tooEarly = result?.eligibility_timing?.status === 'too_early'
   const candidateStates = [
     ...new Set(
