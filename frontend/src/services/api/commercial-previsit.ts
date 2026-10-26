@@ -380,6 +380,7 @@ export type PrevisitEstimate = {
     action: string
     attempted_at: string
   }
+  enrollment?: { status: string; route?: string }
   eligibility_error?: string
   context_token?: string
   revision?: number
@@ -403,6 +404,8 @@ export type PrevisitEstimate = {
       product_evidence?: Record<string, string> | null
       plan_number?: string
       group_number?: string
+      group_name?: string | null
+      verification_payer?: { name: string; payer_id: string; evidence_path: string } | null
       source?: string
     }
   }

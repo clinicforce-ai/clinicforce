@@ -69,8 +69,11 @@ def select_benefit_rows(payload: dict[str, Any], service_type_code: str,
                 return False
             clauses = [part.strip() for note in _benefit_notes([row.get('messages'), row.get('additionalInformation')])
                        for part in note.split(';') if part.strip()]
-            unrelated = [bool(re.fullmatch(r'(?:telemedicine|telehealth)\b.*|applied behavior analysis\b.*|agents, drugs and/or supplies administered or obtained in connection with care',
-                                           clause, re.I)) for clause in clauses]
+            unrelated = [bool(re.fullmatch(
+                r'(?:telemedicine|telehealth|e-?visit|doctor on demand|hinge health|retail clinic|preventive (?:adult )?care)\b.*'
+                r'|(?:prediabetes|diabetes management)\b.*\bomada health only'
+                r'|applied behavior analysis\b.*|agents, drugs and/or supplies administered or obtained in connection with care',
+                re.sub(r'^(?:specialist|primary care|PCP)\s+', '', clause, flags=re.I), re.I)) for clause in clauses]
             return bool(clauses and any(unrelated) and all(
                 unrelated[index] or re.fullmatch(r'(?:specialist|primary care|PCP|provider role other)', clause, re.I)
                 for index, clause in enumerate(clauses)))
@@ -95,7 +98,7 @@ def select_benefit_rows(payload: dict[str, Any], service_type_code: str,
         entries = [row for row in entries if row['evidence_path'] not in excluded_tmj_ids]
         # Explicitly different services sometimes share an office STC. Retain
         # every raw row in reported_options, but exclude these from office math.
-        unrelated = r'(?:injections?|diagnostic medical procedure|diagnostic lab(?:oratory)?|laboratory|(?:diagnostic )?x[ -]?ray|acupuncture|applied behavior analysis|chemotherapy)(?:\s*-\s*professional)?'
+        unrelated = r'(?:injections?|diagnostic medical procedure|diagnostic lab(?:oratory)?|laboratory|(?:diagnostic )?x[ -]?ray|acupuncture|applied behavior analysis|chemotherapy)(?:\s*-\s*professional)?|(?:lifetime )?travel expenses?(?: for covered services)?(?: over| more than) \d+ miles.*'
         def other_services_only(row: dict) -> bool:
             # A shared accumulator can list office visits alongside injections
             # and lab work. Discard only a list entirely naming other services.

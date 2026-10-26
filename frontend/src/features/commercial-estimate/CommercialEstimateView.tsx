@@ -200,7 +200,7 @@ export default function CommercialEstimateView({ model }: { model: CommercialEst
               {planType && (
                 <small>Plan type: {planType} · inferred from the reported plan description</small>
               )}
-              {blueCross && (
+              {blueCross && !result.plan_details?.stedi.verification_payer && (
                 <small>
                   Member home plan:{' '}
                   {blueCard

@@ -15,7 +15,9 @@ from app.api.routers.commercial_flow.commercial_previsit_submit import submit_pr
     "which requires clinician review before billing. A skin-biopsy "
     "booking without a site count starts with an editable three-site CPT 11104 + 11105 x2 scenario. A supported "
 
-    "fixed office copay is the visit-time amount, with later costs estimated separately. A "
+    "fixed office copay is the visit-time amount, with later costs estimated separately. "
+    "collection_guidance.office_visit_copay_advance contains the approved single-office-visit "
+    "advance after network, member, requirement and collection-policy checks; otherwise it is null. A "
     "fresh payer check includes service categories from saved selected CPTs. A matching exact-CPT "
     "Stedi inquiry automatically resolves authorization for the bound member and visit setting. A signed "
     "same-payer clinic agreement may set benefits.network_source to clinic_group_agreement and "
@@ -136,9 +138,13 @@ async def previsit_estimate(value: _api.PrevisitInput, request: _api.Request, ba
     traces to the same practice's uploaded PDF contract. The document route
     requires a staff session and serves the original PDF.
     A current signed same-payer agreement may set network_source to
-    clinic_group_agreement. mismatch_warnings lists patient/product or provider
-    details that differ from that agreement while the estimate uses its in-network
-    tier. A selected provisional CPT suggestion remains editable and is not final coding.
+    clinic_group_agreement only with a member-network link and exact verified
+    rendering, billing and office scope. A Texas BlueCard PPO link can combine
+    a patient-bound distinct Blue home-plan verifier with the signed agreement's
+    BlueCard clause and Blue Choice PPO attachment; network_evidence retains
+    the clause page and home-plan evidence path. Product, provider and office
+    mismatches leave the tier unresolved. A selected provisional CPT suggestion
+    remains editable and is not final coding.
     Its decision distinguishes participating, nonparticipating, exclusion from
     the available agreement, and lack of applicable evidence. A separate
     agreement_exclusion retains the source-linked excluded agreement when

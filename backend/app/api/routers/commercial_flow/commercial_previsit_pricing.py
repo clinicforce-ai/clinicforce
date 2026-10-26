@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from app.api.routers import commercial_estimator as _api
 from app.api.routers.commercial_flow.commercial_previsit_rate_reference import _attach_temporary_uhc_rates
+from app.api.routers.commercial_flow.commercial_previsit_network_guard import record_confirmed_out_of_network, resolve_unlinked_blue_route
 from app.insurance import botox_review, cms_locality, cms_pfs, cpt_rules, insurance_product, inventory_certification, library_network_exclusions, group_contract_support
 
 def _ecw_case_data(inputs: dict, source: dict, conflicts: list[str]) -> dict[str, _api.Any]:
@@ -232,7 +233,7 @@ def _previsit_range(practice_id: str, inputs: dict, source: dict, payer_id: str,
     return priced, issues
 
 
-def _previsit_benefits(payload: dict, coverage: dict, service_date: str | None = None, service_type: str = "98",
+def _previsit_benefits(payload: dict, coverage: dict, service_date: str | None = None, service_type: str | list[str] = "98",
                        *, inputs: dict | None = None, source: dict | None = None) -> dict:
     context = _api._benefit_context(inputs, source or {}) if inputs else {}
     context.pop('provider_npi_conflict', None)  # Pricing-only guard, not a Stedi normalization field.
@@ -243,7 +244,13 @@ def _previsit_benefits(payload: dict, coverage: dict, service_date: str | None =
     codes = _api._previsit_codes(inputs) if inputs else []
     office_only = bool(codes) and all(row['code'].isdigit() and
         (99202 <= int(row['code']) <= 99205 or 99212 <= int(row['code']) <= 99215) for row in codes)
-    benefits = _api.commercial.normalize_stedi_271(payload, service_type, False,
+    requested = [str(code) for code in service_type] if isinstance(service_type, list) else [str(service_type)]
+    # The summary has one service scope; each priced CPT is normalized against
+    # the complete saved 271 independently. Never let general STC 30 replace
+    # an office STC 98 merely because the request order changed.
+    summary_service = ('98' if office_only and '98' in requested else
+                       next((code for code in requested if code != '30'), requested[0] if requested else '98'))
+    benefits = _api.commercial.normalize_stedi_271(payload, summary_service, False,
         coverage["active_coverages"] > 1 or coverage.get("other_active_coverage", False), service_date=service_date,
         procedure_code=codes[0]['code'] if office_only and len(codes) == 1 else None,
         office_visit=office_only,
@@ -355,22 +362,6 @@ def _apply_inventory_tier(result: dict, benefits: dict, inventory: dict, exclusi
         'reason': 'NMCT’s certified complete agreement inventory excludes this Regional or Local Medicare Advantage PPO product; out-of-network benefits are used for estimation, without claiming payer confirmation.'}
 
 
-def _record_confirmed_out_of_network(result: dict, benefits: dict) -> None:
-    """Describe only the source that actually established nonparticipation."""
-    source = benefits.get('network_source')
-    if source == 'clinic_contract_inventory':
-        return  # Keep the certified scope and exclusion passage already attached.
-    if source not in {'payer_participation_message', 'clinic_nonparticipation_rule'}:
-        return
-    result['network_evidence'] = {
-        'decision': ('out_of_network_confirmed_by_payer' if source == 'payer_participation_message'
-                     else 'out_of_network_confirmed_by_scoped_nonparticipation_record'),
-        'source': source, 'evidence_ids': benefits.get('network_evidence_ids') or [],
-        'reason': ('Product-specific payer evidence identifies this requesting provider as out of network.'
-                   if source == 'payer_participation_message' else
-                   'A scoped clinic nonparticipation rule applies to this provider and product.')}
-
-
 def _attach_previsit_pricing(result: dict, practice_id: str, inputs: dict, source: dict,
                              payer_id: str, benefits: dict, *, payload: dict | None = None,
                              review: dict | None = None) -> None:
@@ -396,7 +387,7 @@ def _attach_previsit_pricing(result: dict, practice_id: str, inputs: dict, sourc
         result['network_evidence'] = {**exclusion,
             'reason': 'UHC Regional or Local Medicare Advantage PPO is excluded from the uploaded agreement; check for a separate applicable agreement or product-specific provider participation evidence.'}
     if _api.network_participation.verified_out_of_network(benefits):
-        _record_confirmed_out_of_network(result, benefits)
+        record_confirmed_out_of_network(result, benefits)
     if _api.commercial.is_united_healthcare_payer(
             result, {'displayName': route_payer.get('display_name')} if route_payer else None):
         _attach_temporary_uhc_rates(result, practice_id, inputs, source)
@@ -404,6 +395,14 @@ def _attach_previsit_pricing(result: dict, practice_id: str, inputs: dict, sourc
         if inventory and not _api.network_participation.verified_out_of_network(benefits):
             _apply_inventory_tier(result, benefits, inventory, exclusion)
         if _api.network_participation.verified_out_of_network(benefits):
+            priced_source = {**source, **((result.get('network_evidence') or {}).get('scope') or {})}
+            result['price_range'], issues = _api._previsit_range(
+                practice_id, inputs, priced_source, payer_id, result['codes'], benefits,
+                payload=payload, review=review, payer_route_id=payer_id)
+            result['issues'].extend(issues)
+            return
+        if (not exclusion and len(route_connections) <= 1 and resolve_unlinked_blue_route(
+                result, practice_id, inputs, source, payer_id, route_payer, benefits)):
             priced_source = {**source, **((result.get('network_evidence') or {}).get('scope') or {})}
             result['price_range'], issues = _api._previsit_range(
                 practice_id, inputs, priced_source, payer_id, result['codes'], benefits,
@@ -428,6 +427,8 @@ def _attach_previsit_pricing(result: dict, practice_id: str, inputs: dict, sourc
                           (source.get('billing_provider') or {}).get('npi'),
                           source.get('location_id'), inputs.get('place_of_service'), source.get('plan')))
     try:
+        if source.get('payer_plan_bound') is False and source.get('payer_plan_names'):
+            raise _api.HTTPException(409, 'The payer response has not linked this member product to the visit.')
         if benefits.get('network_status') == 'out_of_network':
             raise _api.HTTPException(422, 'Payer confirmed out-of-network participation; in-network contract prices do not apply.')
         _, network, profile = _api._previsit_practice_path(practice_id, {**inputs, "payer_id": connection["id"]}, source)
@@ -475,11 +476,17 @@ def _attach_previsit_pricing(result: dict, practice_id: str, inputs: dict, sourc
             result['network_evidence'] = supported
             benefits['network_status'] = 'in_network'
             benefits['network_source'] = 'clinic_group_agreement'
+    if (benefits.get('network_status') == 'unknown' and not exclusion
+            and source.get('payer_plan_bound') is True and benefits.get('active') is True
+            and benefits.get('service_date_matches') is not False
+            and group_contract_support.no_blue_contract(practice_id, connection, service_date)):
+        benefits['network_status'] = 'out_of_network'
+        benefits['network_source'] = 'clinic_no_blue_contract'
     if (inventory and benefits.get('network_source') != 'clinic_library_contract'
             and not _api.network_participation.verified_out_of_network(benefits)):
         _apply_inventory_tier(result, benefits, inventory, exclusion)
     if _api.network_participation.verified_out_of_network(benefits):
-        _record_confirmed_out_of_network(result, benefits)
+        record_confirmed_out_of_network(result, benefits)
     priced_source = {**source, **((result.get('network_evidence') or {}).get('scope') or {})}
     result["price_range"], issues = _api._previsit_range(practice_id, inputs, priced_source, connection["id"], result["codes"], benefits,
                                                   payload=payload, review=review, payer_route_id=payer_id)

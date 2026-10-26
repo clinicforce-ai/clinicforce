@@ -2,11 +2,12 @@
 from __future__ import annotations
 
 from app.api.routers import commercial_estimator as _api
-from app.insurance.identity import patient_benefits_bound, payer_identity_verified
+from app.insurance.identity import patient_benefits_bound, patient_plan_applies, payer_identity_verified
 from app.insurance.network_participation import verified_in_network, verified_out_of_network
-from app.insurance import evidence_resolution
+from app.insurance import evidence_resolution, group_contract_support
 from app.api.routers.commercial_flow.commercial_previsit_finish import _payer_plan_pricing_source
 from app.api.routers.commercial_flow.commercial_previsit_network_guard import recheck_saved_network_evidence, recheck_saved_payer_message
+from app.api.routers.commercial_flow.commercial_previsit_saved_pricing import _reprice_saved_new_network
 from app.api.routers.commercial_flow.commercial_previsit_requirements import refresh_saved_requirements
 from app.api.routers.commercial_flow.commercial_previsit_enrollment import _enrollment_failure
 @_api.router.get("/configuration")
@@ -71,7 +72,7 @@ def _case_benefits(payload: dict, inputs: dict, source: dict, case: dict) -> dic
                  and recovery.get('verified_coverage'))
     if recovered:
         coverage.update(recovery['verified_coverage'])
-    benefits = _api._previsit_benefits(payload, coverage, inputs['service_date'], _api._previsit_service_types(inputs)[0], inputs=inputs, source=source)
+    benefits = _api._previsit_benefits(payload, coverage, inputs['service_date'], _api._previsit_service_types(inputs), inputs=inputs, source=source)
     if recovered:
         benefits['normalization_notes'].append('Coverage was selected from Stedi discovery for this estimate. eCW was not changed.')
     return benefits
@@ -228,11 +229,12 @@ def _recheck_saved_clinic_pricing(result: dict, case: dict, practice_id: str) ->
                   or context.get('source') or {})
         plan = ((result.get('plan_details') or {}).get('stedi') or {})
         identity = result.get('identity') or benefits.get('identity') or {}
-        exact_source = {**_payer_plan_pricing_source(source, plan, benefits, identity),
+        exact_source = {**_payer_plan_pricing_source(source, plan, benefits, identity,
+                                                    str(inputs.get('service_date') or '')),
                         'payer_plan_names': ([plan['identified_product']] if plan.get('identified_product') and patient_benefits_bound(identity)
                                              else plan.get('names', source.get('payer_plan_names', []))),
                         'payer_network_names': (plan.get('network_names', source.get('payer_network_names', []))
-                            if benefits.get('active') is True and benefits.get('service_date_matches') is True and patient_benefits_bound(identity) else []),
+                            if patient_plan_applies(benefits, identity, str(inputs.get('service_date') or '')) else []),
                         'payer_plan_scope': {key: plan.get(key) for key in ('plan_number', 'group_number')}}
         try:
             _, network, profile = _api._previsit_practice_path(
@@ -310,7 +312,9 @@ def _recheck_saved_payer_allowance(result: dict, case: dict, practice_id: str) -
                        if row.get('stedi_payer_id') == context.get('payer_id')
                        and row.get('status') == 'staff_guidance_enabled']
         plan = (result.get('plan_details') or {}).get('stedi') or {}
-        exact_source = {**_payer_plan_pricing_source(source, plan, benefits, result.get('identity') or benefits.get('identity') or {}),
+        exact_source = {**_payer_plan_pricing_source(source, plan, benefits,
+                           result.get('identity') or benefits.get('identity') or {},
+                           str(inputs.get('service_date') or '')),
                         'payer_plan_names': plan.get('names') or [],
                         'payer_plan_scope': {key: plan.get(key) for key in ('plan_number', 'group_number')}}
         try:
@@ -364,7 +368,15 @@ def _previsit_result(case: dict, practice_id: str | None = None) -> dict:
                         and policy.get('approved_at') and policy.get('reference')):
                     result['collection_policy'] = policy
         _recheck_saved_clinic_pricing(result, case, practice_id)
+        prior_network = ((result.get('benefits') or {}).get('network_status'),
+                         (result.get('benefits') or {}).get('network_source'))
         recheck_saved_network_evidence(result, case, practice_id, route_payer)
+        if (prior_network != ((result.get('benefits') or {}).get('network_status'),
+                             (result.get('benefits') or {}).get('network_source'))
+                and (result.get('benefits') or {}).get('network_status') == 'in_network'
+                and (result.get('benefits') or {}).get('network_source') == 'clinic_group_agreement'):
+            _reprice_saved_new_network(result, case, practice_id,
+                group_contract_support.eligibility_route(result, str(payer_id or ''), route_payer))
         _recheck_saved_payer_allowance(result, case, practice_id)
         refresh_saved_requirements(_api, result, case, practice_id)
     result['revision'] = case.get('revision', 0)

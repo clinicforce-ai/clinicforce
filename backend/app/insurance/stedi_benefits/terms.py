@@ -65,6 +65,10 @@ def select_cost_share_rows(entries: list[dict[str, Any]], payload: dict[str, Any
     medical_oop_annual = [row for row in oop_rows if oop_plan_association(row, payload) == 'medical'
         and str(row.get('timeQualifierCode') or row.get('timeQualifier') or '').upper()
             in {'23', 'CALENDAR_YEAR', '22', 'SERVICE_YEAR', 'CONTRACT'}]
+    medical_deductible_annual = [row for _, row in wanted if row.get('code') == 'C'
+        and oop_plan_association(row, payload) == 'medical'
+        and str(row.get('timeQualifierCode') or row.get('timeQualifier') or '').upper()
+            in {'23', 'CALENDAR_YEAR', '22', 'SERVICE_YEAR'}]
     def paired_medical_remaining(row: dict) -> bool:
         if oop_plan_association(row, payload) != 'unassigned':
             return False
@@ -91,6 +95,16 @@ def select_cost_share_rows(entries: list[dict[str, Any]], payload: dict[str, Any
             matches = [(score, row) for score, row in matches
                        if oop_plan_association(row, payload) == 'medical'
                        or label == 'oop_remaining' and paired_medical_remaining(row)]
+        if label in {'deductible_annual', 'deductible_remaining'} and supplementary_present:
+            matches = [(score, row) for score, row in matches if
+                       _procedure(row) or '30' not in (row.get('serviceTypeCodes') or [])
+                       or oop_plan_association(row, payload) == 'medical'
+                       or label == 'deductible_remaining' and any(
+                           anchor.get('plan_index') == row.get('plan_index')
+                           and anchor.get('coverageLevel') == row.get('coverageLevel')
+                           and anchor.get('serviceTypeCodes') == row.get('serviceTypeCodes')
+                           and anchor.get('network') == row.get('network')
+                           for anchor in medical_deductible_annual)]
         if not matches:
             return None
         if selected_ids is not None and code in {"A", "B"}:
@@ -104,6 +118,11 @@ def select_cost_share_rows(entries: list[dict[str, Any]], payload: dict[str, Any
         # Authorization metadata is evaluated separately for the selected
         # service; it does not change an otherwise identical copay or share.
         nonfinancial = {'authOrCertIndicator', 'priorAuthIndicator'} if code in {'A', 'B'} else set()
+        # A plain SPECIALIST label does not change an otherwise identical
+        # generic office term; conditional messages still remain distinct.
+        if code in {'A', 'B'} and all(
+                not row.get('messages') or row['messages'] == ['SPECIALIST'] for row in selected):
+            nonfinancial.add('messages')
         signatures = {json.dumps({k: v for k, v in row.items()
                                   if k != 'evidence_path' and k not in nonfinancial}, sort_keys=True)
                       for row in selected}

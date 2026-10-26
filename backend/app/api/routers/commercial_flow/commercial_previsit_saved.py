@@ -23,7 +23,7 @@ async def reuse_saved_eligibility(api: ModuleType, result: dict, session: dict,
             workflow_slot='commercial-ecw:' + binding, **api._scope(session))
         candidate = api.deepcopy(result)
         candidate.update(check_id=ecw_case['id'], checked_at=source['saved_eligibility']['checked_at'],
-            benefits=api._previsit_benefits(ecw_payload, coverage, inputs['service_date'], api._previsit_service_types(inputs)[0], inputs=inputs, source=source))
+            benefits=api._previsit_benefits(ecw_payload, coverage, inputs['service_date'], api._previsit_service_types(inputs), inputs=inputs, source=source))
         await api.run_in_threadpool(api._finish_previsit, candidate, ecw_case, inputs, source, ecw_payload, session, ecw_payer_id)
         guidance = candidate['collection_guidance']
         # Never skip a check just because an unsupported result has a numeric fallback.

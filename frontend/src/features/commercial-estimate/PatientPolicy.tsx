@@ -85,6 +85,31 @@ export default function PatientPolicy({
           </div>
         </div>
         <dl>
+          {result.stedi_payer?.name && (
+            <div>
+              <dt>Local eligibility route</dt>
+              <dd>{result.stedi_payer.name}</dd>
+            </div>
+          )}
+          {result.plan_details?.stedi.verification_payer && (
+            <div>
+              <dt>
+                {/blue cross|bcbs/i.test(result.stedi_payer?.name || result.payer || '')
+                  ? 'BlueCard home plan verification party'
+                  : 'Payer verification party'}
+              </dt>
+              <dd>
+                {result.plan_details.stedi.verification_payer.name}
+                <small>Source: Stedi medical coverage status</small>
+              </dd>
+            </div>
+          )}
+          {result.plan_details?.stedi.group_name && (
+            <div>
+              <dt>Reported group</dt>
+              <dd>{result.plan_details.stedi.group_name}</dd>
+            </div>
+          )}
           {!!result.plan_details?.stedi.names?.length && (
             <div>
               <dt>Medical product</dt>

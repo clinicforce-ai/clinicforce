@@ -3,6 +3,10 @@
   padding-left: 22px;
 }
 
+.medicare-enrollment-notice {
+  margin: 16px 24px 0;
+}
+
 .arrival-total.is-blocked {
   border-left-color: var(--ve-error);
 }

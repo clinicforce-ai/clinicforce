@@ -746,6 +746,52 @@ try {
   )
   assert(activeWithoutMetadata.includes('Payer check date unknown'))
   assert(!activeWithoutMetadata.includes('Current payer benefits unavailable'))
+  const renderMedicareEnrollment = (payer, enrollment) =>
+    renderToStaticMarkup(
+      React.createElement(CommercialOverview, {
+        model: {
+          readOnly: true,
+          cash: false,
+          amount: null,
+          amountText: 'Insured amount unavailable',
+          amountLabel: 'Arrival collection',
+          policyStatus: 'Clinic payer access missing',
+          networkLabel: 'Network not determined',
+        },
+        result: {
+          ...base,
+          payer,
+          enrollment,
+          benefits: { active: null, network_status: 'unknown', reported_options: [] },
+        },
+      }),
+    )
+  const enrollmentMessage =
+    'ClinicForce does not have a matching Medicare eligibility transaction enrollment through Stedi yet.'
+  assert(
+    renderMedicareEnrollment('Medicare of Texas', {
+      route: 'original_medicare_hets',
+      status: 'MISSING',
+    }).includes(enrollmentMessage),
+  )
+  assert(
+    !renderMedicareEnrollment('Medicare of Texas', {
+      route: 'original_medicare_hets',
+      status: 'LIVE',
+    }).includes(enrollmentMessage),
+  )
+  assert(
+    !renderMedicareEnrollment('Medicare of Texas', {
+      route: 'original_medicare_hets',
+      status: 'LOOKUP_FAILED',
+    }).includes(enrollmentMessage),
+  )
+  assert(
+    !renderMedicareEnrollment('UHC Medicare Advantage of Texas', {
+      route: 'payer_specific_eligibility',
+      status: 'MISSING',
+    }).includes(enrollmentMessage),
+  )
   const full = renderToStaticMarkup(
     React.createElement(CommercialOverview, {
       model: {

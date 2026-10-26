@@ -260,6 +260,7 @@ class VisitReviewTests(IsolatedAsyncioTestCase):
         source = {'appointment_id': 'visit', 'active_coverages': 1, 'plan': 'Choice', 'coverage_id': 'coverage', 'location_id': 'office'}
         token = api._visit_context_token(inputs, source)
         raw = payload()
+        raw['planDateInformation'] = {'planBegin': '20200101'}
         result = {'check_id': 'case', 'codes': api._previsit_codes(inputs), 'available_codes': api._previsit_codes(inputs), 'suggestions': None, 'issues': [], 'checked_at': datetime.now(timezone.utc).isoformat()}
         case = {'id': 'case', 'revision': 4, 'source_mode': 'commercial_previsit', 'previsit': {'checked_at': result['checked_at']}, 'previsit_raw_object_key': 'protected',
                 'previsit_context': {'result': result, 'context_token': token, 'inputs': inputs, 'source': source, 'payer_id': 'payer-b'}}
