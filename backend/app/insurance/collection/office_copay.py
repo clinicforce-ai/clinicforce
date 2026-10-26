@@ -42,7 +42,10 @@ def office_copay_amount(result: dict, benefits: dict, price: dict, lines: list[d
         if len(payable) != 1:
             return None
         amount = payable.pop()
-        if any(t.get('deductible_remaining_cents') != 0 and t.get('deductible_applies') is not False for t in terms):
+        oop_met = (amount == 0 and len(office) == len(lines)
+                   and all(t.get('oop_remaining_cents') == 0 and not t.get('separate_copay_limit')
+                           for t in terms))
+        if not oop_met and any(t.get('deductible_remaining_cents') != 0 and t.get('deductible_applies') is not False for t in terms):
             assumptions.append('The payer returned a fixed office copay but did not establish whether the deductible applies to it. This advance includes the copay only; additional deductible responsibility may follow the claim.')
         if any(t.get('separate_copay_limit') for t in terms):
             assumptions.append('The payer reports a separate remaining copay maximum. The office copay uses that balance, while the general out-of-pocket balance remains separate.')
@@ -54,8 +57,9 @@ def office_copay_amount(result: dict, benefits: dict, price: dict, lines: list[d
                 'This is only the verified out-of-network office copay. Apply Medicare Advantage member billing protections.'
                 if len(names) == 1 and product_kind(str(names[0])) else
                 'This is only the verified out-of-network office copay. The payer allowed amount and possible additional charges are unknown.')
-        guidance.update(status='estimated', basis='office_copay',
-                        reason='The applicable office-visit copay is collected once. Any additional service responsibility will follow the claim.')
+        guidance.update(status='estimated', basis='out_of_pocket_limit' if oop_met else 'office_copay',
+                        reason=('The payer reports $0 remaining on the applicable individual in-network out-of-pocket maximum for this covered office visit.'
+                                if oop_met else 'The applicable office-visit copay is collected once. Any additional service responsibility will follow the claim.'))
     return amount
 
 

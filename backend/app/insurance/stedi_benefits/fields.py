@@ -93,6 +93,7 @@ def oop_plan_association(row: dict, payload: dict) -> str:
         return kind
     index = row.get('plan_index')
     plans = payload.get('plans') or []
+    notes = ' '.join(_benefit_notes([row.get('messages'), row.get('additionalInformation')])).upper()
     if (type(index) is int and 0 <= index < len(plans)
             and set(row.get('serviceTypeCodes') or []) == {'30'}
             and str(row.get('coverageLevel') or '').upper() in {'INDIVIDUAL', 'IND', 'FAMILY', 'FAM'}
@@ -112,11 +113,14 @@ def oop_plan_association(row: dict, payload: dict) -> str:
                         and benefit['service'].get('value') == '30']
         names = {str(benefit.get('planCoverageDescription') or benefit.get('planCoverage') or '').strip().casefold()
                  for benefit in same_plan_30 if benefit.get('planCoverageDescription') or benefit.get('planCoverage')}
+        if (medical and re.search(r'\bDIAGNOSTIC MEDICAL PROCEDURE\s*-\s*PROFESSIONAL\b', notes)
+                and re.search(r'\bOFFICE VISIT\s*-\s*PROFESSIONAL\b', notes)
+                and not re.search(r'\b(?:DENTAL|VISION|PHARMACY|PRESCRIPTION|RX|HEARING)\b', notes)):
+            return 'medical'
         if (medical and not any(coverage_kind(benefit, payload) == 'supplementary'
                                 for benefit in same_plan_30) and len(names) == 1):
             return 'medical'
     insurance_type = str(row.get('insuranceType') or row.get('insuranceTypeCode') or '').upper()
-    notes = ' '.join(_benefit_notes([row.get('messages'), row.get('additionalInformation')])).upper()
     if '30' in {str(code) for code in row.get('serviceTypeCodes') or []} and re.search(r'\bINT MED AND RX\b', notes):
         return 'medical'
     if insurance_type in {'PPO', 'PREFERRED_PROVIDER_ORGANIZATION',

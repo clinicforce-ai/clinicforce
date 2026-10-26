@@ -302,7 +302,10 @@ def build(result: dict, guidance: dict, review: dict | None = None) -> dict:
                 sentence = (f'Collect {_money(amount)} as the 2026 FEP Blue Basic PSHB Preferred specialist office copay; '
                             'the final E/M level and any additional services follow the documented care and claim')
         elif basis == 'out_of_pocket_limit':
-            sentence, code = 'No payment is due now because the plan says the covered care has no remaining patient share', 'oop_limit_met'
+            limit = ('individual' if lines and all((line.get('benefits') or {}).get('oop_remaining_cents') == 0
+                    for line in lines) else 'family' if lines and all((line.get('benefits') or {}).get('family_oop_zero_applies')
+                    for line in lines) else 'applicable')
+            sentence, code = (f'Collect $0 now because the payer reports $0 remaining on the {limit} in-network out-of-pocket maximum for this covered visit', 'oop_limit_met')
         elif basis == 'qmb_protection':
             sentence, code = ('Collect $0 now because confirmed QMB protection prohibits Medicare cost-sharing collection; '
                               'any other liability requires separate covered-service and claim evidence', 'qmb_protected')
@@ -391,6 +394,8 @@ def build(result: dict, guidance: dict, review: dict | None = None) -> dict:
         elif guidance.get('positive_advance_policy_missing'):
             sentence, code = ('The patient share is estimated, but this payer route has no approved policy for that check-in advance',
                               'collection_policy_approval_required')
+        elif guidance.get('unconfirmed_zero_oop'):
+            sentence, code = (guidance['reason'].rstrip('.'), 'individual_oop_unresolved')
         elif basis == 'calculation_conflict':
             sentence, code = guidance.get('reason', 'Recalculate the insured estimate before collecting').rstrip('.'), 'calculation_conflict'
         elif recovery.get('state') in {'pending', 'indeterminate'}:

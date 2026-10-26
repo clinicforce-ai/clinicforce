@@ -311,6 +311,36 @@ def test_conditional_total_can_preserve_independent_fixed_office_copay():
     assert value['amount_cents'] == 3000
 
 
+def test_unassigned_zero_medical_oop_requires_review_before_office_copay_advance():
+    result = scenario(5000)
+    result['price_range'].update(complete=False, patient_min_cents=None, patient_max_cents=None)
+    result['price_range']['lines'][0]['benefits'].update(
+        copay_cents=5000, copay_period='VISIT', deductible_applicability='UNKNOWN',
+        oop_remaining_cents=None, coinsurance_percent='0')
+    result['benefits']['reported_options'] = [{
+        'kind': 'out_of_pocket', 'service_type_code': '30',
+        'coverage_level': 'INDIVIDUAL', 'time_period': 'REMAINING',
+        'network': 'IN_NETWORK', 'plan_association': 'unassigned', 'amount_cents': 0}]
+    guidance = collection_guidance.build(result)
+    assert guidance['amount_cents'] is None
+    assert 'reports $0 remaining' in guidance['reason']
+    assert 'confirm' in guidance['reason'].lower()
+    assert 'reports $0 remaining' in amount_explanation.build(result, guidance)['sentence']
+
+
+def test_verified_zero_individual_oop_explains_zero_office_collection():
+    result = scenario(5000)
+    result['price_range'].update(complete=False, patient_min_cents=None, patient_max_cents=None)
+    result['benefits']['oop_remaining_cents'] = 0
+    result['price_range']['lines'][0]['benefits'].update(
+        copay_cents=5000, copay_period='VISIT', deductible_applicability='UNKNOWN',
+        oop_remaining_cents=0, coinsurance_percent='0')
+    guidance = collection_guidance.build(result)
+    assert guidance['amount_cents'] == 0
+    assert guidance['basis'] == 'out_of_pocket_limit'
+    assert 'out-of-pocket maximum' in amount_explanation.build(result, guidance)['sentence']
+
+
 def test_supported_copay_advance_does_not_promise_later_member_billing():
     result = scenario(3000)
     result['arrival_collection'] = {'amount_cents': 3000, 'status': 'copay_only'}

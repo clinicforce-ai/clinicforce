@@ -60,7 +60,7 @@ export default function SelectedServiceRequirements({ result }: { result: Previs
                 : 'referral required'
               : decision?.referral?.status === 'Not required'
                 ? 'no referral'
-                : 'referral status not verified'
+                : 'referral not determined'
           const authorization = authorizationConflict
             ? 'review prior authorization rule'
             : authorizationRequired
@@ -71,7 +71,7 @@ export default function SelectedServiceRequirements({ result }: { result: Previs
                   : 'prior authorization required'
               : decision?.authorization?.status === 'Not required'
                 ? 'no prior authorization'
-                : 'prior authorization status not verified'
+                : 'prior authorization not determined'
           return (
             <li key={line.id}>
               <strong>CPT {line.code}</strong>

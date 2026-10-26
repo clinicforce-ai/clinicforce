@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass
 from typing import Any
 
@@ -71,6 +72,9 @@ def select_cost_share_rows(entries: list[dict[str, Any]], payload: dict[str, Any
             in {'23', 'CALENDAR_YEAR', '22', 'SERVICE_YEAR'}]
     def paired_medical_remaining(row: dict) -> bool:
         if oop_plan_association(row, payload) != 'unassigned':
+            return False
+        notes = ' '.join(_benefit_notes([row.get('messages'), row.get('additionalInformation')])).upper()
+        if re.search(r'\b(?:DENTAL|VISION|PHARMACY|PRESCRIPTION|RX|HEARING)\b', notes):
             return False
         anchors = [anchor for anchor in medical_oop_annual
             if anchor.get('plan_index') == row.get('plan_index')

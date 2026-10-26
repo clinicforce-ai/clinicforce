@@ -14,6 +14,9 @@ BCBSTX_PAYER_NAMES = {'bcbstx', 'bcbstexas', 'bluecrossblueshieldoftexas',
                       'bluecrossandblueshieldoftexas', 'bluecrossblueshieldtx',
                       'bluecrossblueshieldtexas'}
 
+# Saved estimates re-evaluate requirement decisions when a published rule changes.
+PUBLISHED_RULESET_VERSION = '2026-10-26-bcbstx-ppo-99213'
+
 UHC_TEXAS_CHOICE_PLUS_SOURCE = {
     'label': 'UnitedHealthcare Texas Choice Plus plan description',
     'url': 'https://www.uhcprovider.com/en/health-plans-by-state/texas-health-plans/tx-commercial-plans.html',
