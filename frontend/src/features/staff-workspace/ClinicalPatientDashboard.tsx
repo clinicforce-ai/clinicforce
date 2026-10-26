@@ -11,7 +11,7 @@ import {
 } from '../../services/api/staff-patients'
 
 import ClinicalPatientDetail from './ClinicalPatientDetail'
-import { compareVisitDays, ecwVisitDates, localVisitDay } from './ecwVisitDates'
+import { ecwVisitDay, localVisitDay } from './ecwVisitDates'
 import { name, accountLabel } from './clinical-patient-labels'
 
 interface Props {
@@ -23,13 +23,7 @@ interface Props {
 }
 type Cohort = 'all' | 'accounts_with_cards' | 'accounts_without_cards' | 'card_only' | 'other'
 const GROUPS_PER_PAGE = 5
-type VisitResult = { status: 'complete' | 'unavailable'; dates: string[] }
-const undatedLabels: Record<string, string> = {
-  loading: 'Checking eCW visits',
-  unavailable: 'eCW visits unavailable',
-  none: 'No upcoming or completed eCW visit',
-  unlinked: 'No confirmed eCW link',
-}
+type VisitResult = { day: string | null }
 const cohortLabel: Record<Cohort, string> = {
   all: 'All patients',
   accounts_with_cards: 'Accounts with cards',
@@ -100,16 +94,12 @@ export default function ClinicalPatientDashboard({
     async function loadNext() {
       while (run === visitRun.current && next < linked.length) {
         const patient = linked[next++]
-        let result: VisitResult = { status: 'unavailable', dates: [] }
+        let result: VisitResult = { day: null }
         try {
           const history = await getPatientAppointments(patient.clinic_patient_id!, true)
-          if (history.ecw_status === 'complete')
-            result = {
-              status: 'complete',
-              dates: ecwVisitDates(history, localVisitDay(new Date())),
-            }
+          result = { day: ecwVisitDay(history, localVisitDay(new Date())) }
         } catch {
-          // Keep the patient visible in the unavailable group when the read fails.
+          // Keep the patient visible when the appointment read fails.
         }
         if (run !== visitRun.current) return
         visitResultsRef.current[patient.id] = result
@@ -209,34 +199,80 @@ export default function ClinicalPatientDashboard({
     ) || []
   const groups = new Map<string, ClinicalPatient[]>()
   for (const patient of patients) {
-    const result = visitResults[patient.id]
-    const days = !patient.ecw_linked
-      ? ['unlinked']
-      : !result
-        ? ['loading']
-        : result.status === 'unavailable'
-          ? ['unavailable']
-          : result.dates.length
-            ? result.dates
-            : ['none']
-    for (const day of days) {
-      const group = groups.get(day)
-      if (group) group.push(patient)
-      else groups.set(day, [patient])
-    }
+    const day = visitResults[patient.id]?.day || 'undated'
+    const group = groups.get(day)
+    if (group) group.push(patient)
+    else groups.set(day, [patient])
   }
   const today = localVisitDay(new Date())
-  const datedGroups = [...groups]
-    .filter(([day]) => !undatedLabels[day])
-    .sort(([first], [second]) => compareVisitDays(first, second, today))
-  const undatedGroups = [...groups].filter(([day]) => undatedLabels[day])
-  const pageCount = Math.max(1, Math.ceil(datedGroups.length / GROUPS_PER_PAGE))
+  const nextWeek = new Date(`${today}T12:00:00`)
+  nextWeek.setDate(nextWeek.getDate() + 7)
+  const nextWeekEnd = localVisitDay(nextWeek)
+  const upcomingGroups = [...groups]
+    .filter(([day]) => day > today && day !== 'undated')
+    .sort(([first], [second]) => first.localeCompare(second))
+  const nextWeekGroups = upcomingGroups.filter(([day]) => day <= nextWeekEnd)
+  const laterGroups = upcomingGroups.filter(([day]) => day > nextWeekEnd)
+  const todayGroup = groups.get(today) || []
+  const pastGroups = [...groups]
+    .filter(([day]) => day < today)
+    .sort(([first], [second]) => second.localeCompare(first))
+  const pageCount = Math.max(1, Math.ceil(pastGroups.length / GROUPS_PER_PAGE))
   const currentPage = Math.min(page, pageCount)
   const pageStart = (currentPage - 1) * GROUPS_PER_PAGE
-  const visibleGroups = [
-    ...datedGroups.slice(pageStart, pageStart + GROUPS_PER_PAGE),
-    ...undatedGroups,
-  ]
+  const visiblePastGroups = pastGroups.slice(pageStart, pageStart + GROUPS_PER_PAGE)
+  const formatDay = (day: string) =>
+    new Date(`${day}T12:00:00`).toLocaleDateString(undefined, {
+      weekday: 'long',
+      month: 'long',
+      day: 'numeric',
+      year: 'numeric',
+    })
+  const renderGroup = (day: string, group: ClinicalPatient[]) => (
+    <details className="clinical-visit-group" key={day}>
+      <summary>
+        <span className="clinical-visit-date">
+          {day === 'undated' ? 'Appointment date not available' : formatDay(day)}
+        </span>
+        <span className="clinical-visit-count">
+          {group.length} {group.length === 1 ? 'patient' : 'patients'}
+        </span>
+      </summary>
+      <div>
+        {group.map((patient) => (
+          <article className="clinical-patient-row" key={patient.id}>
+            <button
+              className="clinical-patient-open"
+              onClick={() => {
+                setSelected(patient)
+                setError('')
+                setNotice('')
+                setCleanupPending(false)
+              }}
+            >
+              <span>
+                <strong>{name(patient)}</strong>
+                <small>Date of birth: {patient.birth_date || 'Needs confirmation'}</small>
+                <small>
+                  {accountLabel(patient.account_status)}
+                  {patient.ecw_account_number && ` · ACCT ${patient.ecw_account_number}`}
+                </small>
+              </span>
+              <span
+                className={`staff-status ${patient.card_status === 'missing' ? 'staff-status-attention' : ''}`}
+              >
+                {patient.card_status === 'received' ? 'Card received' : 'Card missing'}
+              </span>
+              <ChevronRight size={19} aria-hidden="true" />
+            </button>
+            <button onClick={() => onRequestCard(patient)}>
+              <Mail size={17} /> Request insurance card
+            </button>
+          </article>
+        ))}
+      </div>
+    </details>
+  )
   if (selected)
     return (
       <ClinicalPatientDetail
@@ -378,9 +414,8 @@ export default function ClinicalPatientDashboard({
         ) : (
           <div className="clinical-patient-list">
             <p className="staff-small staff-muted clinical-visit-note">
-              Today and upcoming eCW visits appear first, followed by past completed visits.
-              Patients with visits on several dates appear in each date group. Records without a
-              confirmed eCW link stay in a separate group.
+              Each patient appears once: today, on their next appointment date, or on their most
+              recent past visit date. Refresh patients to check for newly booked appointments.
             </p>
             {visitProgress.total > 0 && (
               <p className="staff-small staff-muted" role="status">
@@ -389,67 +424,37 @@ export default function ClinicalPatientDashboard({
                   : `eCW visit checks finished for ${visitProgress.total} patients.`}
               </p>
             )}
-            {visibleGroups.map(([day, group]) => (
-              <details className="clinical-visit-group" key={day}>
-                <summary>
-                  <span className="clinical-visit-date">
-                    {undatedLabels[day] ||
-                      new Date(`${day}T12:00:00`).toLocaleDateString(undefined, {
-                        weekday: 'long',
-                        month: 'long',
-                        day: 'numeric',
-                        year: 'numeric',
-                      })}
-                  </span>
-                  {!undatedLabels[day] && day > today && (
-                    <span className="clinical-visit-upcoming">Upcoming</span>
-                  )}
-                  <span className="clinical-visit-count">
-                    {group.length} {group.length === 1 ? 'patient' : 'patients'}
-                  </span>
-                </summary>
-                <div>
-                  {group.map((patient) => (
-                    <article className="clinical-patient-row" key={patient.id}>
-                      <button
-                        className="clinical-patient-open"
-                        onClick={() => {
-                          setSelected(patient)
-                          setError('')
-                          setNotice('')
-                          setCleanupPending(false)
-                        }}
-                      >
-                        <span>
-                          <strong>{name(patient)}</strong>
-                          <small>Date of birth: {patient.birth_date || 'Needs confirmation'}</small>
-                          <small>
-                            {accountLabel(patient.account_status)}
-                            {patient.ecw_account_number && ` · ACCT ${patient.ecw_account_number}`}
-                          </small>
-                        </span>
-                        <span
-                          className={`staff-status ${patient.card_status === 'missing' ? 'staff-status-attention' : ''}`}
-                        >
-                          {patient.card_status === 'received' ? 'Card received' : 'Card missing'}
-                        </span>
-                        <ChevronRight size={19} aria-hidden="true" />
-                      </button>
-                      <button onClick={() => onRequestCard(patient)}>
-                        <Mail size={17} /> Request insurance card
-                      </button>
-                    </article>
-                  ))}
-                </div>
-              </details>
-            ))}
+            <h3 className="clinical-period-title">Today’s patients</h3>
+            {todayGroup.length ? (
+              renderGroup(today, todayGroup)
+            ) : (
+              <p className="staff-small staff-muted">No patients today.</p>
+            )}
+            <h3 className="clinical-period-title">Upcoming patients</h3>
+            {nextWeekGroups.length ? (
+              nextWeekGroups.map(([day, group]) => renderGroup(day, group))
+            ) : (
+              <p className="staff-small staff-muted">No appointments in the next seven days.</p>
+            )}
+            {!!laterGroups.length && (
+              <>
+                <p className="staff-small staff-muted">Later appointments</p>
+                {laterGroups.map(([day, group]) => renderGroup(day, group))}
+              </>
+            )}
+            <h3 className="clinical-period-title">Past patients</h3>
+            {visiblePastGroups.map(([day, group]) => renderGroup(day, group))}
+            {groups.has('undated') && renderGroup('undated', groups.get('undated')!)}
+            {!pastGroups.length && !groups.has('undated') && (
+              <p className="staff-small staff-muted">No past patients.</p>
+            )}
           </div>
         )}
-        {datedGroups.length > GROUPS_PER_PAGE && (
+        {pastGroups.length > GROUPS_PER_PAGE && (
           <nav className="clinical-pagination" aria-label="Visit date pages">
             <span className="staff-small staff-muted" role="status">
-              Showing {pageStart + 1}–{Math.min(pageStart + GROUPS_PER_PAGE, datedGroups.length)} of{' '}
-              {datedGroups.length} date groups
+              Showing {pageStart + 1}–{Math.min(pageStart + GROUPS_PER_PAGE, pastGroups.length)} of{' '}
+              {pastGroups.length} past date groups
             </span>
             <div className="clinical-page-buttons">
               <button
