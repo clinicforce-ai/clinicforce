@@ -27,3 +27,14 @@ class PatientVisitHistoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(result['appointments']), 15)
         self.assertEqual(read.call_args.args[-1], {'patient': 'p'})
         self.assertEqual(result['patient_id'], 'p')
+
+    async def test_future_planned_encounter_is_returned_for_date_grouping(self):
+        future = {'id': 'future-visit', 'subject': {'reference': 'Patient/p'},
+                  'status': 'planned', 'period': {'start': '2099-01-01T09:00:00-05:00'}}
+        with patch.object(ecw_backend, 'settings', return_value=('client', 'https://example.test/fhir')), \
+             patch.object(ecw_backend, '_access_token', AsyncMock(return_value='token')), \
+             patch.object(ecw_backend, '_patient_for_profile', AsyncMock(return_value=({}, 'p', None))), \
+             patch.object(ecw_backend, '_bounded_search', AsyncMock(return_value=([future], None))):
+            result = await ecw_backend.patient_appointment_history({'ecw_patient_id': 'p'}, {})
+        self.assertEqual(result['appointments'][0]['date'], '2099-01-01')
+        self.assertEqual(result['appointments'][0]['status'], 'planned')

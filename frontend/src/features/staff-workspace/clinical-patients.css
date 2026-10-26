@@ -67,6 +67,17 @@
   font-weight: 700;
 }
 
+.clinical-visit-upcoming {
+  display: inline-block;
+  margin-left: 10px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: #eaf1fc;
+  color: var(--staff-blue);
+  font-size: 13px;
+  font-weight: 700;
+}
+
 .clinical-visit-count {
   float: right;
   margin-left: 12px;

@@ -2,6 +2,7 @@ export type CommercialNetworkEvidence = {
   outcome?:
     | 'IN_NETWORK_VERIFIED'
     | 'IN_NETWORK_CONTRACT_SUPPORTED'
+    | 'IN_NETWORK_BY_CLINIC_POLICY'
     | 'OUT_OF_NETWORK_VERIFIED'
     | 'OUT_OF_NETWORK_CONTRACT_SUPPORTED'
     | 'UNRESOLVED'
@@ -9,6 +10,7 @@ export type CommercialNetworkEvidence = {
     | 'confirmed_participating'
     | 'confirmed_nonparticipating'
     | 'in_network_contract_supported'
+    | 'in_network_by_clinic_policy'
     | 'excluded_under_available_agreement'
     | 'lacking_applicable_network_evidence'
     | 'out_of_network_by_clinic_contract_inventory'

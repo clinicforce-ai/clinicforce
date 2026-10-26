@@ -26,9 +26,12 @@ export function deriveCommercialEstimateView({
   const networkConfirmed =
     benefits?.network_status === 'in_network' &&
     !participationConflict &&
-    ['clinic_library_contract', 'clinic_group_agreement', 'payer_participation_message'].includes(
-      benefits.network_source || '',
-    )
+    [
+      'clinic_library_contract',
+      'clinic_group_agreement',
+      'clinic_nmct_policy',
+      'payer_participation_message',
+    ].includes(benefits.network_source || '')
   const price = result?.price_range
   const outOfNetworkConfirmed =
     benefits?.network_status === 'out_of_network' &&
@@ -122,7 +125,6 @@ export function deriveCommercialEstimateView({
   const policyDates = result?.insurance_details?.payer_coverage_period?.start
     ? result.insurance_details.payer_coverage_period
     : result?.insurance_details?.coverage_period
-
   const tooEarly = result?.eligibility_timing?.status === 'too_early'
   const candidateStates = [
     ...new Set(
@@ -205,13 +207,15 @@ export function deriveCommercialEstimateView({
       ? 'Current signed clinic agreement · review member product and clinician tier'
       : benefits?.network_source === 'clinic_library_contract'
         ? 'Current Clinical Library contract'
-        : benefits?.network_source === 'clinic_library_absent'
-          ? 'No contract linked to this exact payer product and provider'
-          : benefits?.network_source === 'clinic_nonparticipation_rule'
-            ? 'Current scoped clinic nonparticipation rule'
-            : benefits?.network_source === 'clinic_contract_inventory'
-              ? 'Certified clinic contract inventory · not payer-confirmed'
-              : guidance?.network_source
+        : benefits?.network_source === 'clinic_nmct_policy'
+          ? 'NMCT all-plan policy · payer-specific nonparticipation takes precedence'
+          : benefits?.network_source === 'clinic_library_absent'
+            ? 'No contract linked to this exact payer product and provider'
+            : benefits?.network_source === 'clinic_nonparticipation_rule'
+              ? 'Current scoped clinic nonparticipation rule'
+              : benefits?.network_source === 'clinic_contract_inventory'
+                ? 'Certified clinic contract inventory · not payer-confirmed'
+                : guidance?.network_source
   const networkTone =
     !result || tooEarly || result.recovery?.state === 'pending'
       ? ''

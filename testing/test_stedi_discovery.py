@@ -319,6 +319,21 @@ def test_discovery_recovers_missing_member_and_dependent_with_prior_address():
     assert not discovery.automatic_match(item, inputs, source)
 
 
+def test_confirmed_third_ecw_prior_address_can_verify_discovery_candidate():
+    case, _, _, original = setup()
+    inputs = deepcopy(case['previsit_context']['inputs'])
+    item = deepcopy(original)
+    item['subscriber']['address']['address1'] = '300 Prior St'
+    inputs['patient']['previous_addresses'] = discovery.previous_addresses({'address': [
+        {'use': 'old', 'line': [f'{number} Prior St'], 'city': 'Austin', 'state': 'TX',
+         'postalCode': '78701'} for number in (100, 200, 300)]})
+
+    candidate = discovery.candidates({'items': [item]}, inputs, case['previsit_context']['source'])[0]
+    assert len(inputs['patient']['previous_addresses']) == 3
+    assert candidate['verification_status'] == 'VERIFIED'
+    assert candidate['address_matches'] is True
+
+
 def test_partial_address_and_medical_coverage_are_not_discarded_or_invented():
     assert discovery.patient_address({'address': [{'state': 'TX'}]}) == {'state': 'TX'}
     case, _, _, item = setup()
@@ -554,7 +569,8 @@ class RecoveryTest(IsolatedAsyncioTestCase):
         case, session, provider, _ = setup()
         patient = case['previsit_context']['inputs']['patient']
         patient['previous_addresses'] = [patient['address'],
-            {'address1': '200 Prior St', 'city': 'Dallas', 'state': 'TX', 'postalCode': '75001'}]
+            {'address1': '200 Prior St', 'city': 'Dallas', 'state': 'TX', 'postalCode': '75001'},
+            {'address1': '300 Later St', 'city': 'Houston', 'state': 'TX', 'postalCode': '77001'}]
         client = MagicMock(); client.__aenter__ = AsyncMock(return_value=client); client.__aexit__ = AsyncMock(return_value=None)
         client.post = AsyncMock(return_value=httpx.Response(200, json={'status': 'COMPLETE', 'coveragesFound': 0, 'items': []}))
         revision = case['revision']
@@ -882,8 +898,14 @@ class RecoveryTest(IsolatedAsyncioTestCase):
         self.addCleanup(self.cash_patch.stop)
 
     async def exercise(self, response, *, directory='payer', timeout=False, saved=False, unroutable=False,
-                       matching_ecw=False):
+                       matching_ecw=False, missing_ecw_policy=False, followup=None):
         case, session, provider, _ = setup()
+        if missing_ecw_policy:
+            case['previsit_context']['inputs'].update(member_id=None, subscriber={})
+            case['previsit_context']['source'].update(active_coverages=0, coverage_id='', payer=None, plan=None)
+            case['previsit_context']['payer_id'] = None
+            case['previsit_discovery']['identity_binding'] = api._recovery_binding(
+                case['previsit_context']['inputs'], case['previsit_context']['source'])
         if unroutable:
             case['previsit_context']['payer_id'] = None
             case['previsit_context']['result'].update(eligibility_error='payer_routing_unresolved',
@@ -892,7 +914,7 @@ class RecoveryTest(IsolatedAsyncioTestCase):
             case['previsit_context']['inputs']['member_id'] = 'new-id'
             case['previsit_context']['source']['payer'] = 'UHC Medicare'
         client = MagicMock(); client.__aenter__ = AsyncMock(return_value=client); client.__aexit__ = AsyncMock(return_value=None)
-        final = {**setup()[3], 'id': 'verified'}
+        final = followup if followup is not None else {**setup()[3], 'id': 'verified'}
         client.post = AsyncMock(side_effect=httpx.ReadTimeout('timeout') if timeout else
                                [httpx.Response(200, json=response), httpx.Response(200, json=final)])
         client.get = AsyncMock(return_value=httpx.Response(200, json=response))
@@ -909,6 +931,73 @@ class RecoveryTest(IsolatedAsyncioTestCase):
              patch.object(api.commercial_store, 'list_connections', return_value=[]):
             await api._recover_previsit(case, session, provider)
         return case, client, events
+
+    async def test_unique_address_conflict_queries_payer_and_uses_matching_271(self):
+        _, _, _, discovered = setup()
+        discovered['subscriber']['address'] = {
+            'address1': '200 Prior St', 'city': 'Austin', 'state': 'TX', 'postalCode': '78702'}
+        case, client, events = await self.exercise(
+            {'status': 'COMPLETE', 'coveragesFound': 1, 'items': [discovered]},
+            missing_ecw_policy=True)
+        assert client.post.await_count == 2
+        assert case['previsit_discovery']['outcome'] == 'recovered'
+        assert case['previsit_context']['result']['benefits']['active'] is True
+        assert case['previsit_context']['result']['benefits']['deductible_remaining_cents'] is not None
+        assert case['previsit_context']['result']['benefits']['oop_remaining_cents'] is not None
+        assert case['previsit_context']['result']['insurance_details']['member_id'] == discovered['subscriber']['memberId']
+        assert 'stedi-candidate-inquiry-pending' in events
+        inquiry = client.post.await_args_list[1].kwargs['json']
+        assert inquiry['subscriber']['memberId'] == discovered['subscriber']['memberId']
+        assert 'address' not in inquiry['subscriber']
+
+    async def test_saved_address_conflict_resumes_one_inquiry_without_new_discovery(self):
+        case, session, provider, discovered = setup()
+        case['previsit_context']['inputs'].update(member_id=None, subscriber={})
+        case['previsit_context']['source'].update(active_coverages=0, coverage_id='', payer=None, plan=None)
+        case['previsit_discovery']['identity_binding'] = api._recovery_binding(
+            case['previsit_context']['inputs'], case['previsit_context']['source'])
+        discovered['subscriber']['address'] = {
+            'address1': '200 Prior St', 'city': 'Austin', 'state': 'TX', 'postalCode': '78702'}
+        payload = {'status': 'COMPLETE', 'coveragesFound': 1, 'items': [discovered]}
+        case['previsit_discovery'].update(request_state='complete', outcome='review_needed',
+            reason_code='identity_or_coverage_review', raw_object_key='protected', candidate_version=5,
+            checked_at=datetime.now(timezone.utc).isoformat(),
+            candidates=discovery.candidates(payload, case['previsit_context']['inputs']))
+        tasks = BackgroundTasks()
+        with patch.object(api.object_store, 'get_object_bytes', return_value=json.dumps(payload).encode()), \
+             patch.object(api, '_save', side_effect=lambda value, *_: value):
+            await api._start_previsit_recovery(case, session, provider, tasks)
+        assert len(tasks.tasks) == 1
+        assert tasks.tasks[0].func is api._recheck_discovery_candidate
+        assert case['previsit_discovery']['selected_candidate_id']
+        await api._start_previsit_recovery(case, session, provider, tasks)
+        assert len(tasks.tasks) == 1
+
+    async def test_address_conflict_followup_with_wrong_member_stays_in_review(self):
+        _, _, _, discovered = setup()
+        discovered['subscriber']['address'] = {
+            'address1': '200 Prior St', 'city': 'Austin', 'state': 'TX', 'postalCode': '78702'}
+        wrong = deepcopy(discovered)
+        wrong['subscriber']['memberId'] = 'another-member'
+        case, client, _ = await self.exercise(
+            {'status': 'COMPLETE', 'coveragesFound': 1, 'items': [discovered]},
+            missing_ecw_policy=True, followup=wrong)
+        assert client.post.await_count == 2
+        assert case['previsit_discovery']['outcome'] == 'review_needed'
+        assert case['previsit_context']['result']['benefits'] is None
+
+    async def test_address_conflict_followup_requires_returned_subscriber_dob(self):
+        _, _, _, discovered = setup()
+        discovered['subscriber']['address'] = {
+            'address1': '200 Prior St', 'city': 'Austin', 'state': 'TX', 'postalCode': '78702'}
+        uncorroborated = deepcopy(discovered)
+        uncorroborated['subscriber'].pop('dateOfBirth')
+        case, client, _ = await self.exercise(
+            {'status': 'COMPLETE', 'coveragesFound': 1, 'items': [discovered]},
+            missing_ecw_policy=True, followup=uncorroborated)
+        assert client.post.await_count == 2
+        assert case['previsit_discovery']['outcome'] == 'review_needed'
+        assert case['previsit_context']['result']['benefits'] is None
 
     async def test_recovery_rechecks_matching_policy_and_preserves_original_error(self):
         _, _, _, item = setup()
