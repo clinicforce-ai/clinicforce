@@ -351,9 +351,11 @@ export default function CommercialOverview({
             )}
           </span>
         </div>
-        {!showSelectedRequirements && !requirementIssue && (
-          <RequirementCards result={result} readOnly={readOnly} payerName={payerForAction} />
-        )}
+        {!showSelectedRequirements &&
+          !requirementIssue &&
+          !(result.reference_only && result.reference_benefits?.active === true) && (
+            <RequirementCards result={result} readOnly={readOnly} payerName={payerForAction} />
+          )}
       </div>
       {showSelectedRequirements && <SelectedServiceRequirements result={result} />}
       <EstimateSources result={result} tooEarly={!!tooEarly} />
