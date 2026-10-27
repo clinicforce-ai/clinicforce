@@ -40,9 +40,10 @@ export default function CommercialCostBreakdown({
     lines.every((line) => line.benefits?.family_oop_zero_applies)
   const automaticCashFallback = model.cash && result.cash_fallback != null
   const summary = result.encounter_summary
-  const feeProxyCheckin = feeProxy && !cignaFeeProxy
-    ? Math.max(0, feeProxy.patient_share_cents - (summary?.payments_verified_cents || 0))
-    : null
+  const feeProxyCheckin =
+    feeProxy && !cignaFeeProxy
+      ? Math.max(0, feeProxy.patient_share_cents - (summary?.payments_verified_cents || 0))
+      : null
   const individualDeductible = limitSummary(reportedResult, 'deductible', 'INDIVIDUAL')
   const surgicalIndividualDeductible = limitSummary(reportedResult, 'deductible', 'INDIVIDUAL', '2')
   const familyDeductible = limitSummary(reportedResult, 'deductible', 'FAMILY')
@@ -194,8 +195,7 @@ export default function CommercialCostBreakdown({
           {
             label: 'BCBS Texas fee proxy total',
             value: money(feeProxy.reference_total_cents),
-            detail:
-              `Planning rate for the selected CPTs and units; ${result.payer || 'payer'} allowed amount remains unknown`,
+            detail: `Planning rate for the selected CPTs and units; ${result.payer || 'payer'} allowed amount remains unknown`,
           },
         ]
       : []),
@@ -227,16 +227,16 @@ export default function CommercialCostBreakdown({
         cignaFeeProxy && feeProxy?.copay_unconfirmed
           ? 'Stedi did not confirm a $0 copay; verify the member plan before collecting'
           : result.collection_guidance?.basis === 'diagnostic_day_copay'
-          ? 'One payer diagnostic copay for the selected testing; final share follows the claim'
-          : result.collection_guidance?.basis === 'out_of_pocket_limit'
-            ? 'Plan copay before the applicable out-of-pocket limit; $0 due for covered care'
-            : calculated &&
-                components?.copay_cents === 0 &&
-                !lines.some((line) => line.benefits?.copay_cents != null)
-              ? 'No separate copay was applied to the priced CPTs'
-              : !lines.length && reportedOfficeCopay != null
-                ? 'Payer category term; applicability to planned CPTs and visit date is not confirmed'
-                : undefined,
+            ? 'One payer diagnostic copay for the selected testing; final share follows the claim'
+            : result.collection_guidance?.basis === 'out_of_pocket_limit'
+              ? 'Plan copay before the applicable out-of-pocket limit; $0 due for covered care'
+              : calculated &&
+                  components?.copay_cents === 0 &&
+                  !lines.some((line) => line.benefits?.copay_cents != null)
+                ? 'No separate copay was applied to the priced CPTs'
+                : !lines.length && reportedOfficeCopay != null
+                  ? 'Payer category term; applicability to planned CPTs and visit date is not confirmed'
+                  : undefined,
     },
     {
       label: 'Individual deductible',
@@ -258,10 +258,9 @@ export default function CommercialCostBreakdown({
               : surgicalIndividualDeductible.value !== unknown
                 ? `${surgicalIndividualDeductible.value} · surgical services`
                 : unknown),
-      detail:
-        cignaFeeProxy
-          ? `${money(feeProxy?.deductible_cents || 0)} applied in this provisional scenario; exact CPT Stedi responses reported no remaining individual deductible`
-          : feeProxy != null
+      detail: cignaFeeProxy
+        ? `${money(feeProxy?.deductible_cents || 0)} applied in this provisional scenario; exact CPT Stedi responses reported no remaining individual deductible`
+        : feeProxy != null
           ? feeProxy.deductible_source
           : result.collection_guidance?.basis === 'out_of_pocket_limit'
             ? individualDeductible.value === unknown && benefits?.deductible_annual_cents == null
@@ -321,7 +320,12 @@ export default function CommercialCostBreakdown({
               : undefined,
     },
     ...(cignaFeeProxy && feeProxy?.oop_reduction_cents > 0
-      ? [{ label: 'Out-of-pocket limit reduction', value: `−${money(feeProxy.oop_reduction_cents)}` }]
+      ? [
+          {
+            label: 'Out-of-pocket limit reduction',
+            value: `−${money(feeProxy.oop_reduction_cents)}`,
+          },
+        ]
       : []),
     ...(calculated && (components?.allowed_cap_adjustment_cents ?? 0) > 0
       ? [
@@ -434,7 +438,10 @@ export default function CommercialCostBreakdown({
       : [
           ...insuredRows,
           {
-            label: cignaFeeProxy || summary?.conditional ? 'Conditional patient share' : 'Estimated patient share',
+            label:
+              cignaFeeProxy || summary?.conditional
+                ? 'Conditional patient share'
+                : 'Estimated patient share',
             value: patientShare,
             detail: automaticCashFallback
               ? 'Insured share awaits a matching payer check and selected CPTs'
@@ -476,26 +483,26 @@ export default function CommercialCostBreakdown({
         : cignaFeeProxy
           ? 'BCBS Texas rate and exact-CPT Stedi benefit scenario; the payer copay and Cigna allowed amount are unconfirmed, so no charge is authorized here'
           : feeProxy != null
-          ? result.collection_guidance?.basis === 'bcbstx_proxy_advance'
-            ? 'Clinic-approved BCBS Texas fee proxy advance after Medicare billing-protection clearance; final responsibility follows the claim.'
-            : 'Estimated check-in amount from the BCBS Texas fee proxy. Charge only when the clinic collection policy and Medicare billing-protection check clear this member.'
-          : officeReferenceCopay != null
-            ? 'Planning figure for one specialist office visit on the appointment date; not an authorized collection instruction. Other services, prior payments and Medicare cost-sharing protection are not included.'
-            : automaticCashFallback
-              ? 'Insurance collection is unresolved; any cash quote is listed separately'
-              : result.collection_guidance?.unconfirmed_zero_oop
-                ? 'Confirm the reported $0 out-of-pocket balance with the payer before collection'
-                : model.supportedAmount
-                  ? result.collection_guidance?.basis === 'office_copay'
-                    ? 'Office copay advance; other services may have a later balance'
-                    : result.collection_guidance?.basis === 'out_of_pocket_limit'
-                      ? 'Applicable out-of-pocket maximum has no remaining balance for covered care'
-                      : result.collection_guidance?.basis === 'diagnostic_day_copay'
-                        ? 'One diagnostic copay advance; other costs may follow the claim'
-                        : result.collection_guidance?.basis === 'claim_after_service'
-                          ? 'Clinic policy defers collection until after the claim'
-                          : undefined
-                  : undefined,
+            ? result.collection_guidance?.basis === 'bcbstx_proxy_advance'
+              ? 'Clinic-approved BCBS Texas fee proxy advance after Medicare billing-protection clearance; final responsibility follows the claim.'
+              : 'Estimated check-in amount from the BCBS Texas fee proxy. Charge only when the clinic collection policy and Medicare billing-protection check clear this member.'
+            : officeReferenceCopay != null
+              ? 'Planning figure for one specialist office visit on the appointment date; not an authorized collection instruction. Other services, prior payments and Medicare cost-sharing protection are not included.'
+              : automaticCashFallback
+                ? 'Insurance collection is unresolved; any cash quote is listed separately'
+                : result.collection_guidance?.unconfirmed_zero_oop
+                  ? 'Confirm the reported $0 out-of-pocket balance with the payer before collection'
+                  : model.supportedAmount
+                    ? result.collection_guidance?.basis === 'office_copay'
+                      ? 'Office copay advance; other services may have a later balance'
+                      : result.collection_guidance?.basis === 'out_of_pocket_limit'
+                        ? 'Applicable out-of-pocket maximum has no remaining balance for covered care'
+                        : result.collection_guidance?.basis === 'diagnostic_day_copay'
+                          ? 'One diagnostic copay advance; other costs may follow the claim'
+                          : result.collection_guidance?.basis === 'claim_after_service'
+                            ? 'Clinic policy defers collection until after the claim'
+                            : undefined
+                    : undefined,
     emphasis: true,
   })
   return <CostBreakdownTable rows={rows} />
