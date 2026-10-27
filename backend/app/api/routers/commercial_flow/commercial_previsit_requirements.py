@@ -48,7 +48,7 @@ async def check_cpt_authorization(api: ModuleType, result: dict, case: dict, pay
         subscriber['memberId'], identity.get('binding'), inputs['service_date'], pos,
         benefits['network_status'], codes]
     if cigna:
-        scope_values.insert(0, 'cigna-individual-cpt-v2')
+        scope_values.insert(0, 'cigna-individual-cpt-v3')
     scope = api.hashlib.sha256(api.json.dumps(scope_values, sort_keys=True).encode()).hexdigest()
     prior = case.get('cpt_authorization') or {}
     if prior.get('scope') == scope:
@@ -64,7 +64,7 @@ async def check_cpt_authorization(api: ModuleType, result: dict, case: dict, pay
     dependent = payload.get('dependent') or {}
     if dependent:
         body['dependent'] = {key: dependent[key] for key in ('dateOfBirth', 'name') if dependent.get(key)}
-    if inputs['service_date'] != api.date.today().isoformat():
+    if cigna or inputs['service_date'] != api.date.today().isoformat():
         body['encounter']['dates'] = {'service': {'start': inputs['service_date']}}
     def same_name(left: dict, right: dict) -> bool:
         first = (left.get('name') or {}).get('person') or {}
