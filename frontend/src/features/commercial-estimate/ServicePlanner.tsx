@@ -203,7 +203,11 @@ export function ServicePlanner({
   }
   return (
     <section className="visit-planner" aria-labelledby="service-plan-title">
-      <h3 id="service-plan-title">Choose care for this estimate</h3>
+      <h3 id="service-plan-title">
+        {result.service_plan?.method === 'llm' && chosen.length
+          ? 'LLM-proposed care in this estimate'
+          : 'Choose care for this estimate'}
+      </h3>
       <p className="visit-muted">
         {emgVisit && !chosen.length
           ? 'Nerve testing is planned from this booking. Choose the study-count CPT when its scope is documented; final coding follows the care provided.'
