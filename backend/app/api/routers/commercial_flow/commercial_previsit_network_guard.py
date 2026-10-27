@@ -6,7 +6,7 @@ import hashlib
 import json
 
 from app.core import object_store
-from app.insurance import commercial, commercial_store, group_contract_support, inventory_certification, library_network_exclusions, network_participation
+from app.insurance import commercial, commercial_store, group_contract_support, insurance_product, inventory_certification, library_network_exclusions, network_participation
 from app.insurance.identity import patient_benefits_bound, patient_plan_applies
 
 
@@ -16,16 +16,22 @@ NMCT_PRACTICE_ID = network_participation.NMCT_PRACTICE_ID
 def scoped_admin_nonparticipation(practice_id: str, payer: dict | None, inputs: dict,
                                   source: dict, plan_names: list[str], group_number: str) -> dict | None:
     """Match an administrator attestation to one payer product and visit scope."""
-    if not payer or source.get('payer_plan_bound') is not True or len(plan_names) != 1:
+    if (not payer or source.get('payer_plan_bound') is not True or len(plan_names) != 1
+            or str(group_number) != '13705'
+            or insurance_product.classify(plan_names) != 'medicare_advantage_group_ppo'):
         return None
     norm = lambda value: re.sub(r'[^a-z0-9]', '', str(value or '').casefold())
     billing = source.get('billing_provider') or {}
     if billing.get('tin_conflict'):
         return None
-    scope = (str(billing.get('npi') or ''), str((inputs.get('rendering_provider') or {}).get('npi') or ''),
+    input_npi = str((inputs.get('rendering_provider') or {}).get('npi') or '')
+    source_npi = str((source.get('rendering_provider') or {}).get('npi') or '')
+    if input_npi and source_npi and input_npi != source_npi:
+        return None
+    scope = (str(billing.get('npi') or ''), input_npi or source_npi,
              re.sub(r'\D', '', str(billing.get('tin') or '')), str(source.get('location_id') or ''),
              str(inputs.get('place_of_service') or ''), str(inputs.get('service_date') or ''))
-    if not all(scope) or not group_number:
+    if not scope[1] or not scope[5] or not group_number:
         return None
     matches = [row for row in commercial_store.list_networks(practice_id)
                if row['payer_connection_id'] == payer['id'] and row['status'] == 'nonparticipating'
@@ -51,7 +57,7 @@ def apply_admin_nonparticipation(result: dict, benefits: dict, row: dict | None)
     benefits.update(network_status='out_of_network', network_source='clinic_nonparticipation_rule')
     result['network_evidence'] = {'decision': 'out_of_network_confirmed_by_scoped_nonparticipation_record',
         'source': 'clinic_admin_attestation', 'reference': row['evidence_reference'],
-        'reason': 'Clinic administrator attestation for this payer product, group, provider, location and visit date; payer participation is not independently confirmed.'}
+        'reason': 'Clinic administrator attestation for this payer product, group, rendering provider and recorded visit scope; payer participation is not independently confirmed.'}
     return True
 
 
