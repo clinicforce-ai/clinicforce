@@ -80,7 +80,6 @@ class NetworkInput(BaseModel):
     place_of_service: str = Field(min_length=1, max_length=20)
     network_name: str = Field(min_length=1, max_length=120)
     plan_matcher: str = Field(default="", max_length=200)
-    plan_group_number: str = Field(default="", max_length=40)
     effective_from: str = Field(pattern=r"^\d{4}-\d{2}-\d{2}$")
     effective_to: str | None = Field(default=None, pattern=r"^\d{4}-\d{2}-\d{2}$")
     status: Literal["draft", "verified", "suspended"] = "draft"
