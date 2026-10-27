@@ -117,6 +117,31 @@ def test_proxy_uses_only_unique_out_of_network_medical_oop_balance():
     assert estimate(result, '2026-10-27') is None
 
 
+def test_saved_diagnostic_rows_restore_proxy_when_cpt_benefits_cannot_rehydrate():
+    result = _result()
+    for line in result['price_range']['lines']:
+        line['benefits'] = {}
+        line['allowed_cents'] = None
+    result['benefits'].update(
+        resolved_service_type='73', copay_cents=0, coinsurance_percent='10.0',
+        selected_benefit_ids=['diagnostic-copay', 'diagnostic-coinsurance'],
+        reported_options=[
+            {'id': 'diagnostic-copay', 'kind': 'copay', 'service_type_code': '73',
+             'network': 'IN_AND_OUT_OF_NETWORK', 'coverage_level': 'INDIVIDUAL',
+             'plan_index': 0, 'amount_cents': 0},
+            {'id': 'diagnostic-coinsurance', 'kind': 'coinsurance',
+             'service_type_code': '73', 'network': 'IN_AND_OUT_OF_NETWORK',
+             'coverage_level': 'INDIVIDUAL', 'plan_index': 0, 'percent': '10.0'},
+        ])
+    assert estimate(result, '2026-10-27')['patient_share_cents'] == 2835
+    result['benefits']['reported_options'][1]['service_type_code'] = '98'
+    assert estimate(result, '2026-10-27') is None
+    result['benefits']['reported_options'][1]['service_type_code'] = '73'
+    result['benefits']['reported_options'].append(
+        {'kind': 'copay', 'procedure_code': '95886', 'amount_cents': 1500})
+    assert estimate(result, '2026-10-27') is None
+
+
 def test_proxy_advance_requires_explicit_policy_and_qmb_clearance():
     result = _result()
     result['service_selection_status'] = 'approved'

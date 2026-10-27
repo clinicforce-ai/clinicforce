@@ -40,6 +40,34 @@ def _oop_remaining(benefits: dict) -> int | None:
     return next(iter(values)) if len(values) == 1 else None
 
 
+def _saved_diagnostic_terms(benefits: dict, codes: list[str]) -> dict | None:
+    """Use selected diagnostic rows when a saved 271 cannot rehydrate CPT lines."""
+    ids = benefits.get('selected_benefit_ids') or []
+    if (benefits.get('resolved_service_type') != '73' or len(ids) != 2
+            or len(set(ids)) != 2 or benefits.get('copay_cents') != 0):
+        return None
+    options = benefits.get('reported_options') or []
+    selected = [row for row in options if row.get('id') in ids]
+    if (len(selected) != 2 or {row.get('kind') for row in selected} != {'copay', 'coinsurance'}
+            or len({row.get('plan_index') for row in selected}) != 1
+            or any(row.get('service_type_code') != '73'
+                   or row.get('network') not in {'OUT_OF_NETWORK', 'IN_AND_OUT_OF_NETWORK'}
+                   or row.get('coverage_level') not in {'IND', 'INDIVIDUAL'}
+                   or row.get('procedure_code') or row.get('places_of_service')
+                   or row.get('effective_dates') for row in selected)
+            or any(row.get('procedure_code') in codes and row.get('kind') in {'copay', 'coinsurance'}
+                   for row in options)):
+        return None
+    copay = next(row for row in selected if row['kind'] == 'copay')
+    coinsurance = next(row for row in selected if row['kind'] == 'coinsurance')
+    try:
+        same_percent = Decimal(str(coinsurance.get('percent'))) == Decimal(
+            str(benefits.get('coinsurance_percent')))
+    except (InvalidOperation, TypeError):
+        return None
+    return benefits if copay.get('amount_cents') == 0 and same_percent else None
+
+
 def estimate(result: dict, service_date: str) -> dict | None:
     """Return an exact-line fee proxy only when diagnostic benefit terms agree."""
     benefits = result.get('benefits') or {}
@@ -83,12 +111,14 @@ def estimate(result: dict, service_date: str) -> dict | None:
     by_id = {row.get('id'): row for row in reference['lines']}
     if len(by_id) != len(lines):
         return None
+    saved_terms = (_saved_diagnostic_terms(benefits, codes)
+                   if all(not line.get('benefits') for line in lines) else None)
     total = 0
     percentages = set()
     sources = []
     for line in lines:
         row = by_id.get(line.get('id'))
-        terms = line.get('benefits') or {}
+        terms = line.get('benefits') or saved_terms or {}
         units = line.get('units')
         rate = (row or {}).get('unit_reference_cents')
         if (not row or row.get('code') != line.get('code') or row.get('units') != units
