@@ -6,7 +6,7 @@ import hashlib
 import json
 
 from app.core import object_store
-from app.insurance import commercial, commercial_store, group_contract_support, inventory_certification, library_network_exclusions, network_participation
+from app.insurance import commercial, commercial_store, group_contract_support, insurance_product, inventory_certification, library_network_exclusions, network_participation
 from app.insurance.identity import patient_benefits_bound, patient_plan_applies
 
 
@@ -16,7 +16,9 @@ NMCT_PRACTICE_ID = network_participation.NMCT_PRACTICE_ID
 def scoped_admin_nonparticipation(practice_id: str, payer: dict | None, inputs: dict,
                                   source: dict, plan_names: list[str], group_number: str) -> dict | None:
     """Match an administrator attestation to one payer product and visit scope."""
-    if not payer or source.get('payer_plan_bound') is not True or len(plan_names) != 1:
+    if (not payer or source.get('payer_plan_bound') is not True or len(plan_names) != 1
+            or str(group_number) != '13705'
+            or insurance_product.classify(plan_names) != 'medicare_advantage_group_ppo'):
         return None
     norm = lambda value: re.sub(r'[^a-z0-9]', '', str(value or '').casefold())
     billing = source.get('billing_provider') or {}

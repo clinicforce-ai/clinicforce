@@ -121,6 +121,10 @@ def test_group_ppo_admin_attestation_is_bound_to_product_group_provider_and_date
     assert scoped_admin_nonparticipation('primary', {'id': 'payer-1'}, sparse_inputs,
         {**sparse_source, 'billing_provider': {'npi': '1111111111'}},
         ['GROUP MEDICARE ADVANTAGE PPO'], '13705') is None
+    monkeypatch.setattr(guard.commercial_store, 'list_networks',
+                        lambda *_: (_ for _ in ()).throw(AssertionError('unrelated payer must not query network rules')))
+    assert scoped_admin_nonparticipation('primary', {'id': 'payer-1'}, sparse_inputs,
+        sparse_source, ['FEP Blue Basic PSHB'], '13705') is None
 
 
 def test_saved_nmct_visit_uses_current_admin_attestation(monkeypatch):
