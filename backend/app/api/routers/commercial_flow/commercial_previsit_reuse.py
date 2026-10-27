@@ -35,6 +35,10 @@ async def reuse_previsit_case(api: ModuleType, *, case: dict, result: dict,
     saved = case.get("previsit") or {}
     if case.get('previsit_discovery', {}).get('request_state') in {'pending', 'indeterminate'}:
         return await api._start_previsit_recovery(case, session, provider, background_tasks)
+    if not refresh_benefits and saved.get('request_state') == 'partial' and case.get('previsit_context'):
+        return api._previsit_result(case, session['practice_id'])
+    if saved.get('request_state') == 'indeterminate' and case.get('previsit_context'):
+        return api._previsit_result(case, session['practice_id'])
     if not refresh_benefits and saved.get('request_state') == 'rejected' and saved.get('identity_retry_version') == 1 and case.get('previsit_context'):
         old = case['previsit_context']['result']
         failure = old.get('eligibility_failure') or {}

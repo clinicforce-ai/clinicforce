@@ -6,6 +6,8 @@ import { selectedRequirementIssue } from './selectedRequirementIssue'
 import { visitServiceLabel } from './visitServiceLabel'
 import { benefitPresentation } from './benefitPresentation'
 import { payerPlanDisplay } from './payerPlanDisplay'
+import { provisionalEstimateAmounts } from './provisionalEstimateAmounts'
+import { networkEvidenceStatus } from './networkEvidenceStatus'
 import type { CommercialEstimateActions } from './useCommercialEstimateActions'
 export function deriveCommercialEstimateView({
   result,
@@ -19,43 +21,8 @@ export function deriveCommercialEstimateView({
   const selected = appointments.find((visit) => visit.id === selectedVisit)
   const { benefits, price_range: price } = result ?? {}
   const patientBenefitsBound = hasPatientBinding(result?.identity)
-  const participationConflict =
-    benefits?.network_conflict === true ||
-    benefits?.review_reasons?.some((reason) =>
-      reason.toLowerCase().includes('provider-network evidence reports nonparticipation'),
-    ) === true
-  const networkConfirmed =
-    benefits?.network_status === 'in_network' &&
-    !participationConflict &&
-    [
-      'clinic_library_contract',
-      'clinic_group_agreement',
-      'clinic_nmct_policy',
-      'payer_participation_message',
-    ].includes(benefits.network_source || '')
-  const outOfNetworkConfirmed =
-    benefits?.network_status === 'out_of_network' &&
-    [
-      'payer_participation_message',
-      'clinic_nonparticipation_rule',
-      'clinic_contract_inventory',
-    ].includes(benefits.network_source || '') &&
-    !participationConflict
-  const outOfNetworkAllowance =
-    outOfNetworkConfirmed &&
-    price?.mode === 'services' &&
-    price.complete === true &&
-    !!price.lines?.length &&
-    price.lines.every(
-      (line) =>
-        ['payer_out_of_network', 'cms_original_medicare_estimate'].includes(
-          line.allowed_basis || '',
-        ) &&
-        Number.isInteger(line.allowed_cents) &&
-        line.allowed_cents! >= 0 &&
-        line.rate_resolution?.status === 'RESOLVED' &&
-        !!line.calculation,
-    )
+  const { participationConflict, networkConfirmed, outOfNetworkConfirmed, outOfNetworkAllowance } =
+    networkEvidenceStatus(result)
   const selectedCptIssue = firstSelectedCptIssue(result)
   const servicePlanIssue = price?.service_issues?.find((issue) => issue.trim())
   const servicePlanAction = servicePlanIssue
@@ -318,42 +285,19 @@ export function deriveCommercialEstimateView({
         : supportedAmount
           ? money(guidance!.amount_cents!)
           : null
-  const feeProxyAmount =
-    !cash &&
-    !previousEstimate &&
-    !calculating &&
-    !supportedAmount &&
-    guidance?.basis !== 'qmb_protection' &&
-    result?.fee_proxy_estimate &&
-    patientBenefitsBound &&
-    outOfNetworkConfirmed &&
-    !selectedCptIssue &&
-    !servicePlanAction
-      ? Math.max(
-          0,
-          result.fee_proxy_estimate.patient_share_cents -
-            (result.encounter_summary?.payments_verified_cents || 0),
-        )
-      : null
-  const provisionalAmount =
-    feeProxyAmount ??
-    (!readOnly &&
-    !cash &&
-    !previousEstimate &&
-    !calculating &&
-    !supportedAmount &&
-    result?.service_selection_status === 'preview' &&
-    (!!result.selected_ids?.length || result.provisional_scenario?.count === 1) &&
-    currentPayerAmount &&
-    !result.encounter_summary?.integrity_error &&
-    (price?.mode === 'services' || price?.mode === 'alternatives') &&
-    price.complete &&
-    price.patient_min_cents != null &&
-    price.patient_max_cents != null &&
-    price.patient_min_cents === result.planning_estimate?.min_cents &&
-    price.patient_max_cents === result.planning_estimate?.max_cents
-      ? price.patient_min_cents
-      : null)
+  const { feeProxyAmount, provisionalAmount } = provisionalEstimateAmounts({
+    result,
+    cash,
+    previousEstimate,
+    calculating,
+    supportedAmount,
+    patientBenefitsBound,
+    outOfNetworkConfirmed,
+    selectedCptIssue: !!selectedCptIssue,
+    servicePlanAction: !!servicePlanAction,
+    readOnly,
+    currentPayerAmount,
+  })
   const provisionalAmountText =
     provisionalAmount == null
       ? null

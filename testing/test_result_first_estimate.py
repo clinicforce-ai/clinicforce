@@ -821,6 +821,11 @@ def test_saved_payer_response_is_scoped_and_never_cached(monkeypatch):
         read_case.return_value = {**case, 'previsit': {'request_state': state}}
         with pytest.raises(HTTPException): asyncio.run(api.saved_payer_response('case', None))
     read_object.assert_not_called()
+    read_case.return_value = {**case, 'previsit': {
+        'request_state': 'indeterminate', 'requested_service_types': ['98', '73']}}
+    linked_inquiry = asyncio.run(api.saved_payer_response('case', None))
+    assert linked_inquiry.headers['Cache-Control'] == 'no-store'
+    assert json.loads(linked_inquiry.body)['response']['id'] == 'payer-reference'
 
 
 def test_shared_accumulator_with_office_and_injection_labels_is_not_discarded():

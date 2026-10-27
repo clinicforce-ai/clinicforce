@@ -4,7 +4,7 @@ import { serviceRowLabel } from '../insurance-estimate/serviceRowLabel'
 import type { CommercialEstimateModel } from './useCommercialEstimateModel'
 import { coinsuranceFormula } from './coinsuranceFormula'
 import { money, range } from './format'
-import { requirementForLine } from './requirementForLine'
+import { requirementStatus } from './commercialRequirementStatus'
 import {
   aetnaOfficeReferenceCopay,
   specialistOfficeCoinsurance,
@@ -12,38 +12,9 @@ import {
 } from './payerReportedPartialCopay'
 import { reportedMedicalLimit } from './reportedMedicalLimit'
 import { referenceCoverageRow } from './referenceCoverageRow'
-import { aetnaReferenceRequirement } from './aetnaReferenceRequirements'
+import { reportedLimit } from './reportedLimit'
 
 const unknown = 'Not returned for this visit'
-
-function reportedLimit(
-  result: PrevisitEstimate,
-  kind: 'deductible' | 'out_of_pocket',
-  level: 'INDIVIDUAL' | 'FAMILY',
-  period: 'CALENDAR_YEAR' | 'REMAINING',
-  serviceTypeCode = '30',
-) {
-  const rows = (result.benefits?.reported_options || []).filter(
-    (row) =>
-      row.kind === kind &&
-      row.coverage_level === level &&
-      row.time_period === period &&
-      row.service_type_code === serviceTypeCode &&
-      row.amount_cents != null &&
-      row.network === 'IN_NETWORK',
-  )
-  for (const association of ['medical', 'unassigned']) {
-    const amounts = [
-      ...new Set(
-        rows.filter((row) => row.plan_association === association).map((row) => row.amount_cents!),
-      ),
-    ]
-    if (amounts.length === 1)
-      return { amount: money(amounts[0]), unassigned: association === 'unassigned' }
-    if (amounts.length > 1) break
-  }
-  return { amount: unknown, unassigned: false }
-}
 
 function limitSummary(
   result: PrevisitEstimate,
@@ -62,45 +33,6 @@ function limitSummary(
   }
 }
 
-function requirementStatus(result: PrevisitEstimate, kind: 'referral' | 'authorization') {
-  const lines = result.price_range?.mode === 'services' ? result.price_range.lines || [] : []
-  if (!lines.length) return 'Select planned CPTs to check'
-  return lines
-    .map((line) => {
-      const evidence = requirementForLine(
-        result.requirement_evidence?.procedures,
-        line.id,
-        line.code,
-      )?.[kind]
-      const lineRule = line.benefits?.requirements?.[kind]
-      const conflict =
-        (evidence?.status === 'Required' && lineRule?.required === 'not_required') ||
-        (evidence?.status === 'Not required' && lineRule?.required === 'required')
-      const clearanceOnFile =
-        lineRule?.status === 'valid' &&
-        lineRule.cleared &&
-        lineRule.reference &&
-        lineRule.verified_at
-      const status =
-        aetnaReferenceRequirement(result, kind, line.code) ??
-        (conflict
-          ? 'conflicting rules'
-          : evidence?.status === 'Not required' || lineRule?.required === 'not_required'
-            ? 'not required'
-            : evidence?.status === 'Required' || lineRule?.required === 'required'
-              ? kind === 'authorization'
-                ? clearanceOnFile && evidence?.approval_status === 'Verified'
-                  ? 'approval verified'
-                  : 'required; approval status unresolved'
-                : clearanceOnFile
-                  ? 'referral on file'
-                  : 'required; referral status unresolved'
-              : 'not determined')
-      return `CPT ${line.code}: ${status}`
-    })
-    .join('; ')
-}
-
 export default function CommercialCostBreakdown({
   model,
   result,
@@ -113,6 +45,10 @@ export default function CommercialCostBreakdown({
   const price = result.price_range
   const feeProxy = result.fee_proxy_estimate
   const lines = price?.mode === 'services' ? price.lines || [] : []
+  const familyOopApplied =
+    result.collection_guidance?.basis === 'out_of_pocket_limit' &&
+    lines.length > 0 &&
+    lines.every((line) => line.benefits?.family_oop_zero_applies)
   const automaticCashFallback = model.cash && result.cash_fallback != null
   const summary = result.encounter_summary
   const feeProxyCheckin = feeProxy
@@ -258,8 +194,9 @@ export default function CommercialCostBreakdown({
       : []),
     {
       label: 'Copay',
-      value:
-        feeProxy != null
+      value: familyOopApplied
+        ? '$0 payable after family out-of-pocket limit'
+        : feeProxy != null
           ? `${money(feeProxy.copay_cents)} diagnostic copay`
           : officeReferenceCopay != null
             ? `${money(officeReferenceCopay)} specialist office visit · payer-reported reference`
@@ -336,11 +273,13 @@ export default function CommercialCostBreakdown({
           : surgicalFamilyDeductible.value !== unknown
             ? `${surgicalFamilyDeductible.value} · surgical services`
             : unknown,
-      detail: familyDeductible.unassigned
-        ? 'Payer-reported plan amount; medical applicability unverified'
-        : surgicalFamilyDeductible.value !== unknown
-          ? 'Payer did not report a family office-specific deductible rule; this surgical balance does not establish one'
-          : undefined,
+      detail: familyOopApplied
+        ? 'No deductible payment due for the selected covered services after the family out-of-pocket limit'
+        : familyDeductible.unassigned
+          ? 'Payer-reported plan amount; medical applicability unverified'
+          : surgicalFamilyDeductible.value !== unknown
+            ? 'Payer did not report a family office-specific deductible rule; this surgical balance does not establish one'
+            : undefined,
     },
     {
       label: 'Coinsurance',
@@ -385,17 +324,19 @@ export default function CommercialCostBreakdown({
         ]
           .filter(Boolean)
           .join(' · ') || individualReportedOop.value,
-      detail: reportedOopOnly
-        ? 'Payer-reported medical limit; not used as a verified calculation input'
-        : benefits?.oop_remaining_cents === 0
-          ? 'Applicable in-network limit has $0 remaining for the selected covered care'
-          : calculated && components?.oop_adjustment_cents != null
-            ? `${money(components.oop_adjustment_cents)} reduction applied to this visit`
-            : unconfirmedZeroOop
-              ? 'Payer reports $0 remaining; confirm this is the applicable medical limit before collection'
-              : individualReportedOop.unassigned
-                ? 'Payer-reported plan amount; medical applicability needs confirmation before use as a cap'
-                : 'Payer-reported limit; applicability to these CPTs depends on the completed estimate',
+      detail: familyOopApplied
+        ? 'The individual balance can remain positive after the family limit is met'
+        : reportedOopOnly
+          ? 'Payer-reported medical limit; not used as a verified calculation input'
+          : benefits?.oop_remaining_cents === 0
+            ? 'Applicable in-network limit has $0 remaining for the selected covered care'
+            : calculated && components?.oop_adjustment_cents != null
+              ? `${money(components.oop_adjustment_cents)} reduction applied to this visit`
+              : unconfirmedZeroOop
+                ? 'Payer reports $0 remaining; confirm this is the applicable medical limit before collection'
+                : individualReportedOop.unassigned
+                  ? 'Payer-reported plan amount; medical applicability needs confirmation before use as a cap'
+                  : 'Payer-reported limit; applicability to these CPTs depends on the completed estimate',
     },
     {
       label: 'Family out-of-pocket maximum',
@@ -406,8 +347,9 @@ export default function CommercialCostBreakdown({
         ]
           .filter(Boolean)
           .join(' · ') || limitSummary(reportedResult, 'out_of_pocket', 'FAMILY').value,
-      detail:
-        familyOopAnnual != null || familyOopRemaining != null
+      detail: familyOopApplied
+        ? 'Met in-network family medical limit applied to every selected covered CPT'
+        : familyOopAnnual != null || familyOopRemaining != null
           ? 'Payer-reported medical limit; not used as a verified calculation input'
           : limitSummary(reportedResult, 'out_of_pocket', 'FAMILY').unassigned
             ? 'Payer-reported plan amount; medical applicability unverified and not used as a cap'

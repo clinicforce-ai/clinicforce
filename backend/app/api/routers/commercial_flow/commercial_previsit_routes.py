@@ -115,10 +115,13 @@ async def saved_previsit(case_id: str, request: _api.Request) -> dict:
 
 @_api.router.get('/cases/{case_id}/payer-response')
 async def saved_payer_response(case_id: str, request: _api.Request):
+    """Return protected payer evidence, including linked service replies when present."""
     session = await _api._session(request)
     case = await _api.run_in_threadpool(_api.store.get_case, case_id, session['patient_id'], session['share_manifest_id'], **_api._scope(session))
     if (not case or case.get('source_mode') != 'commercial_previsit'
-            or case.get('previsit', {}).get('request_state') not in {'complete', 'rejected'}
+            or case.get('previsit', {}).get('request_state') not in {'complete', 'partial', 'indeterminate', 'rejected'}
+            or (case.get('previsit', {}).get('request_state') == 'indeterminate'
+                and not case.get('previsit', {}).get('requested_service_types'))
             or not case.get('previsit_raw_object_key')):
         raise _api.HTTPException(404, 'No completed payer response is available for this visit.')
     try:
@@ -133,7 +136,8 @@ async def historical_replay_bundle(case_id: str, request: _api.Request) -> dict:
     """Export a read-only protected replay bundle for a scoped administrator.
 
     This route makes no payer request and never updates the saved estimate. The
-    response contains PHI and raw payer evidence; keep it in protected local
+    response contains PHI and raw payer evidence, including linked service
+    inquiries when present; keep it in protected local
     storage and do not place it in repository notes or test fixtures. Current
     Library records are returned with dates for the replay's historical cutoff;
     missing historical versions cannot be reconstructed by this export. The

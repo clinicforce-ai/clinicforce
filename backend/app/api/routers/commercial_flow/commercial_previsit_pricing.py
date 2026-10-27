@@ -4,6 +4,7 @@ from __future__ import annotations
 from app.api.routers import commercial_estimator as _api
 from app.api.routers.commercial_flow.commercial_previsit_rate_reference import _attach_temporary_aetna_rates, _attach_temporary_uhc_rates, _attach_temporary_blue_cross_rates
 from app.api.routers.commercial_flow.commercial_previsit_network_guard import NMCT_PRACTICE_ID, apply_nmct_network_policy, record_confirmed_out_of_network, resolve_unlinked_blue_route
+from app.api.routers.commercial_flow.commercial_previsit_service_scope import reviewed_service_types as _reviewed_service_types
 from app.insurance import botox_review, cms_locality, cms_pfs, cpt_rules, insurance_product, inventory_certification, library_network_exclusions, group_contract_support
 
 def _ecw_case_data(inputs: dict, source: dict, conflicts: list[str]) -> dict[str, _api.Any]:
@@ -58,29 +59,6 @@ def _previsit_service_types(inputs: dict) -> list[str]:
         ordered.remove('98')
         ordered.insert(0, '98')
     return list(dict.fromkeys([*ordered, '30']))
-
-
-def _reviewed_service_types(cases: list[dict], appointment_id: str, service_date: str,
-                            context_token: str) -> list[str]:
-    """Carry selected visit CPT categories into a fresh payer inquiry."""
-    for case in reversed(cases):
-        context = case.get('previsit_context') or {}
-        source = context.get('source') or {}
-        prior_inputs = context.get('inputs') or {}
-        review = case.get('visit_review') or {}
-        if (source.get('appointment_id') != appointment_id
-                or prior_inputs.get('service_date') != service_date
-                or review.get('context_token') != context_token):
-            continue
-        saved_result = context.get('result') or {}
-        selected = set(review.get('selected_ids') or saved_result.get('selected_ids') or [])
-        rows = [row for row in saved_result.get('codes') or []
-                if row.get('id') in selected]
-        if selected and len(rows) == len(selected):
-            return list(dict.fromkeys(
-                category for row in rows
-                if (category := _api.visit_estimate.service_type(str(row.get('code') or ''), {}))))
-    return []
 
 
 def _eligibility_timing(service_date: str, check_from_date: str | None = None) -> dict | None:

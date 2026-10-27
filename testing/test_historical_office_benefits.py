@@ -188,6 +188,65 @@ def test_met_family_oop_supports_zero_advance_without_copying_family_balances_to
     assert any(option['coverage_level'] == 'FAMILY' for option in terms['reported_options'])
     raw['plans'][0]['benefits']['outOfPocket'][0]['amount'] = '500'
     assert replay(raw)[0]['amount_cents'] is None
+
+
+def test_diagnostic_medical_family_oop_is_kept_away_from_office_care():
+    raw = {'plans': [{'benefits': {'statuses': [
+        {'status': 'ACTIVE_COVERAGE', 'service': {'system': 'STC', 'value': '30'},
+         'planCoverageDescription': 'PPO DENTAL'},
+        {'status': 'ACTIVE_COVERAGE', 'service': {'system': 'STC', 'value': '30'},
+         'planCoverageDescription': 'PPO MEDICAL'}],
+        'coInsurance': [row(stc='98', percent='0', messages=['DIAGNOSTIC MEDICAL PROCEDURE - PROFESSIONAL'])],
+        'outOfPocket': [row('0', stc='30', level='FAMILY', period='REMAINING',
+                            messages=['DIAGNOSTIC MEDICAL PROCEDURE - PROFESSIONAL'])]}}]}
+    terms = commercial.normalize_stedi_271(raw, '73', False,
+                                            procedure_code='95909', service_date=DAY)
+    assert terms['family_oop_zero_applies'] is True
+    office = commercial.normalize_stedi_271(raw, '98', False,
+                                             procedure_code='99213', service_date=DAY,
+                                             place_of_service='11')
+    assert office['family_oop_zero_applies'] is False
+    assert office['family_oop_remaining_cents'] is None
     raw['plans'][0]['benefits']['outOfPocket'][0]['amount'] = '0'
     raw['plans'][0]['benefits']['limitations'] = [row('100', level='FAMILY', period='REMAINING', messages=['COPAY MAX'])]
     assert replay(raw)[0]['amount_cents'] is None
+
+
+def test_office_only_family_oop_is_kept_away_from_diagnostic_testing():
+    raw = {'plans': [{'name': 'PPO MEDICAL', 'benefits': {
+        'statuses': [{'status': 'Active', 'service': {'system': 'STC', 'value': '30'}}],
+        'outOfPocket': [row('0', stc='30', level='FAMILY', period='REMAINING',
+                            messages=['OFFICE VISIT - PROFESSIONAL'])]}}]}
+    terms = commercial.normalize_stedi_271(raw, '73', True,
+                                            procedure_code='95909', service_date=DAY)
+    assert terms['family_oop_zero_applies'] is False
+
+
+def test_separate_diagnostic_and_office_inquiries_apply_met_family_medical_cap_to_combined_visit():
+    diagnostic = {'plans': [{'benefits': {'statuses': [
+        {'status': 'ACTIVE_COVERAGE', 'service': {'system': 'STC', 'value': '30'},
+         'planCoverageDescription': 'PPO DENTAL'},
+        {'status': 'ACTIVE_COVERAGE', 'service': {'system': 'STC', 'value': '30'},
+         'planCoverageDescription': 'PPO MEDICAL'}],
+        'outOfPocket': [row('0', stc='30', level='FAMILY', period='REMAINING',
+                            messages=['DIAGNOSTIC MEDICAL PROCEDURE - PROFESSIONAL'])]}}]}
+    office = {'plans': [{'name': 'PPO MEDICAL', 'benefits': {
+        'statuses': [{'status': 'ACTIVE_COVERAGE', 'service': {'system': 'STC', 'value': '30'}}],
+        'outOfPocket': [row('0', stc='30', level='FAMILY', period='REMAINING',
+                            messages=['OFFICE VISIT - PROFESSIONAL'])]}}]}
+    diagnostic['_service_payloads'] = {'98': office}
+    benefits = commercial.normalize_stedi_271(diagnostic, '73', True, service_date=DAY)
+    benefits.update(network_status='in_network', network_source='clinic_group_agreement',
+                    identity={'status': 'matched', 'binding': 'synthetic-current-binding', 'match_version': 2})
+    codes = [{'id': code, 'code': code, 'units': 1} for code in ('95909', '95886', '99213')]
+    rates = [{'code': code, 'allowed_cents': amount, 'source_reference': 'Synthetic contract'}
+             for code, amount in [('95909', 12644), ('95886', 8918), ('99213', 7615)]]
+    price = visit_estimate.price_lines(codes, rates, benefits, RULES,
+                                       payload=diagnostic, service_date=DAY)
+    assert [line['benefits']['family_oop_zero_applies'] for line in price['lines']] == [True, True, True]
+    planning = visit_estimate.planning_estimate(price, benefits, benefits['identity'])
+    assert planning['amount_cents'] == 0
+    guidance = collection_guidance.build({'benefits': benefits, 'price_range': price,
+                                          'planning_estimate': planning,
+                                          'collection_policy': COPAY_POLICY})
+    assert guidance['amount_cents'] == 0 and guidance['basis'] == 'out_of_pocket_limit'

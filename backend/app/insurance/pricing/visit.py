@@ -80,7 +80,8 @@ def price_lines(codes: list[dict], rates: list[dict], benefits: dict, rules: dic
         invalid_category = False
         if medical_line and selection_valid:
             category = str(selection.get('service_type_code') or '')
-            options = {row['id']: row for row in commercial.reported_stedi_options(payload or {}, category)}
+            option_payload = ((payload or {}).get('_service_payloads') or {}).get(category) or payload or {}
+            options = {row['id']: row for row in commercial.reported_stedi_options(option_payload, category)}
             picked = [options.get(key) for key in selection.get('selected_ids') or []]
             rows_match = bool(picked) and all(row and category in
                 str(row.get('service_type_code') or '').replace(' ', '').split(',')
@@ -91,7 +92,8 @@ def price_lines(codes: list[dict], rates: list[dict], benefits: dict, rules: dic
             selection_valid = not invalid_category
         if medical_line and selection_valid:
             stc = selection.get('service_type_code') or stc
-        raw_benefits = commercial.normalize_stedi_271(payload, stc or ('30' if medical_line else '98'), benefits.get('network_status') == 'in_network',
+        line_payload = ((payload.get('_service_payloads') or {}).get(stc) or payload) if payload is not None else None
+        raw_benefits = commercial.normalize_stedi_271(line_payload, stc or ('30' if medical_line else '98'), benefits.get('network_status') == 'in_network',
             benefits.get('has_secondary', False), procedure_code=code['code'], service_date=service_date,
             provider_out_of_network_verified=verified_out_of_network(benefits),
             selected_ids=selection.get('selected_ids') if selection_valid else None,
@@ -109,7 +111,7 @@ def price_lines(codes: list[dict], rates: list[dict], benefits: dict, rules: dic
         if name_difference:
             raw_benefits['review_reasons'] = [reason for reason in raw_benefits.get('review_reasons', []) if 'identity' not in reason]
         direct = any(commercial._procedure(row) == code['code'] and row.get('code') in {'A', 'B'}
-                     for row in commercial._stedi_entries(payload or {}))
+                     for row in commercial._stedi_entries(line_payload or {}))
         if medical_line:
             raw_benefits['authorization_signal'] = 'unknown'
         raw_benefits['review_reasons'] = list(dict.fromkeys([*raw_benefits.get('review_reasons', []), *integrity]))

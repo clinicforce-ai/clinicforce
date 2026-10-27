@@ -110,7 +110,9 @@ def replay(bundle: dict) -> dict:
                     'reason': 'The saved 271 member identity does not match the saved estimate identity binding.'}
         identity = reconstructed
     selected_services = [visit_estimate.service_type(row['code'], {}) for row in codes]
-    response_service = next((kind for kind in selected_services if kind), '30')
+    requested_services = (case.get('previsit') or {}).get('requested_service_types') or []
+    response_service = next((kind for kind in requested_services if kind != '30'), None) or next(
+        (kind for kind in selected_services if kind), '30')
     benefits = commercial.normalize_stedi_271(payload, response_service, False, service_date=service_date)
     benefits['identity'] = identity
     benefits['benefit_source'] = 'saved Stedi 271'
