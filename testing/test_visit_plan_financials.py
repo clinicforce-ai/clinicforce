@@ -43,6 +43,43 @@ def test_emg_prior_completed_cpts_are_selected_when_model_unavailable():
     assert plan['recommended_ids'] == ['95909', '95886']
 
 
+def test_booked_cervical_radiculopathy_emg_has_provisional_plan_when_model_rejects_response():
+    history = [{'date': '2026-10-20', 'visit_type': 'new',
+                'reason': 'Initial consultation', 'coded_services': ['99204']}]
+    with patch.object(cpt_suggester.boto3, 'client', side_effect=ValueError('invalid model plan')):
+        plan = cpt_suggester.recommend_visit_plan(
+            {'reason': 'EMG Visit; right cervical radiculopathy'},
+            {'recent_completed_appointments': history}, catalog())
+    assert plan['recommended_ids'] == ['95909', '95886']
+    assert plan['recommended_units'] == {'95909': 1, '95886': 1}
+    assert all(not code.startswith('992') for code in plan['recommended_ids'])
+    assert any('five to six' in note.lower() for note in plan['assumptions'])
+    assert any('five or more muscles' in note.lower() for note in plan['assumptions'])
+    with patch.object(cpt_suggester.boto3, 'client', side_effect=ValueError('invalid model plan')):
+        diagnosis_only = cpt_suggester.recommend_visit_plan(
+            {'reason': 'Right cervical radiculopathy'},
+            {'recent_completed_appointments': history}, catalog())
+    assert diagnosis_only['recommended_ids'] == []
+
+
+def test_separate_emg_followup_adds_only_provisional_established_level_when_planned():
+    history = [{'date': '2026-10-20', 'visit_type': 'new',
+                'reason': 'Initial consultation', 'coded_services': ['99204']}]
+    with patch.object(cpt_suggester.boto3, 'client', side_effect=ValueError('invalid model plan')):
+        plan = cpt_suggester.recommend_visit_plan(
+            {'reason': 'EMG visit; right cervical radiculopathy',
+             'separate_em_planned': True},
+            {'recent_completed_appointments': history}, catalog())
+    assert plan['recommended_ids'] == ['95909', '95886', '99213']
+    assert plan['recommended_units'] == {'95909': 1, '95886': 1, '99213': 1}
+    assert any('modifier 25' in note for note in plan['assumptions'])
+    with patch.object(cpt_suggester.boto3, 'client', side_effect=ValueError('invalid model plan')):
+        unknown_status = cpt_suggester.recommend_visit_plan(
+            {'reason': 'EMG visit; right cervical radiculopathy',
+             'separate_em_planned': True}, {}, catalog())
+    assert unknown_status['recommended_ids'] == ['95909', '95886']
+
+
 def test_emg_with_scheduled_office_still_suggests_testing_and_keeps_office():
     available = catalog()
     office = next(row for row in available if row['code'] == '99213')

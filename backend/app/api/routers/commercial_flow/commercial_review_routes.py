@@ -11,7 +11,8 @@ from app.api.routers.commercial_flow.commercial_previsit_requirements import che
 async def update_visit_review(case_id: str, value: _api.VisitReviewInput, request: _api.Request) -> dict:
     """Reprice a saved visit after service, payment or evidence review.
 
-    A clinician can select a named cash package from the active schedule;
+    A clinician can select a named cash package from the active schedule or
+    approve a visit-only cash price for one selected CPT 99213 follow-up;
     included care is priced once and source CPT examples are never auto-selected.
     A verified payment is deducted once from the displayed cash or insured
     amount. The returned and saved payment_explanation describes only the
@@ -36,6 +37,9 @@ async def update_visit_review(case_id: str, value: _api.VisitReviewInput, reques
     Changed clinical details may be refreshed explicitly when all patient,
     coverage, provider, location and date context remains identical. The
     refreshed CPT plan requires a new clinician selection before collection.
+    Staff may mark a distinct office assessment planned with EMG/NCS. With
+    supported prior office history, this previews established CPT 99213 for
+    cost planning; the clinician confirms the final E/M level and modifier.
     """
     session = await _api._session(request)
     case = await _api.run_in_threadpool(_api.store.get_case, case_id, session['patient_id'], session['share_manifest_id'], **_api._scope(session))
@@ -165,6 +169,14 @@ async def update_visit_review(case_id: str, value: _api.VisitReviewInput, reques
                 review[key] = {line_id: stored for line_id, stored in (review.get(key) or {}).items()
                                if line_id in keep}
             review.pop('payments', None)
+    if value.separate_em_planned is not None:
+        review['separate_em_planned'] = value.separate_em_planned
+        if not value.separate_em_planned and review.get('selected_ids'):
+            review['selected_ids'] = [line_id for line_id in review['selected_ids']
+                                      if _api.visit_estimate.clinical_group(available[line_id]['code']) != 'visit']
+            if not review['selected_ids']:
+                review.pop('selected_ids')
+            review.pop('payments', None)
     if value.insurance_check_from is not None:
         review['insurance_check_from'] = value.insurance_check_from.isoformat()
     if value.payment_mode is not None:
@@ -200,6 +212,30 @@ async def update_visit_review(case_id: str, value: _api.VisitReviewInput, reques
                 review.setdefault('lines', {}).pop(key, None)
                 (review.get('payer_allowances') or {}).pop(key, None)
         review['confirmed_modifiers'] = {**previous, **value.confirmed_modifiers}
+        review.pop('payments', None)
+    if any(item is not None for item in (value.selected_ids, value.confirmed_units, value.confirmed_modifiers)):
+        review.pop('cash_visit_quote', None)
+    if value.cash_visit_quote and value.clear_cash_visit_quote:
+        raise _api.HTTPException(422, 'Set or remove the visit cash quote, not both.')
+    if value.clear_cash_visit_quote:
+        review.pop('cash_visit_quote', None)
+        review.pop('payments', None)
+    if value.cash_visit_quote:
+        selected = review.get('selected_ids') or []
+        if review.get('payment_mode') != 'cash' or len(selected) != 1:
+            raise _api.HTTPException(422, 'Select Cash and confirm only CPT 99213 before quoting this follow-up.')
+        line = available.get(selected[0]) or {}
+        units = (review.get('confirmed_units') or {}).get(selected[0], line.get('units'))
+        modifiers = (review.get('confirmed_modifiers') or {}).get(selected[0], line.get('modifiers') or [])
+        if line.get('code') != '99213' or units != 1 or modifiers:
+            raise _api.HTTPException(422, 'This visit cash quote applies only to one unmodified CPT 99213.')
+        reason = value.cash_visit_quote.reason.strip()
+        if len(reason) < 3:
+            raise _api.HTTPException(422, 'Enter a reason for the visit cash quote.')
+        review['cash_visit_quote'] = {'line_id': selected[0], 'code': '99213', 'units': 1,
+            'amount_cents': value.cash_visit_quote.amount_cents, 'reason': reason,
+            'service_date': inputs['service_date'], 'context_token': value.context_token,
+            'approved_at': _api._now(), 'actor_id': session['staff']['id']}
         review.pop('payments', None)
     if value.payer_allowance or value.clear_payer_allowance_line_id:
         _api._admin(session)

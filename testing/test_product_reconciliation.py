@@ -109,7 +109,8 @@ def test_saved_requirements_refresh_when_network_projection_changes(monkeypatch)
     called = []
     monkeypatch.setattr(requirements, 'attach_requirements', lambda *args: called.append(args))
     api_stub = SimpleNamespace(staff_store=SimpleNamespace(list_library=lambda *_: []),
-                               commercial_store=SimpleNamespace(list_connections=lambda *_: []))
+                               commercial_store=SimpleNamespace(list_connections=lambda *_: [],
+                                                                list_cpt_requirements=lambda *_: []))
     saved = {'benefits': {'network_status': 'unknown', 'network_source': None},
              'network_evidence': {'decision': 'lacking_applicable_network_evidence'}}
     result = {'requirement_sources': [],
@@ -125,7 +126,8 @@ def test_saved_requirements_refresh_after_published_rule_update(monkeypatch):
     called = []
     monkeypatch.setattr(requirements, 'attach_requirements', lambda *args: called.append(args))
     api_stub = SimpleNamespace(staff_store=SimpleNamespace(list_library=lambda *_: []),
-                               commercial_store=SimpleNamespace(list_connections=lambda *_: []))
+                               commercial_store=SimpleNamespace(list_connections=lambda *_: [],
+                                                                list_cpt_requirements=lambda *_: []))
     benefits = {'network_status': 'in_network', 'network_source': 'clinic_group_agreement'}
     network = {'network_name': 'Blue Choice PPO'}
     saved = {'requirement_sources': [], 'benefits': benefits, 'network_evidence': network,
@@ -884,6 +886,7 @@ def test_requirement_context_uses_only_approved_contract_product():
               'insurance_details': {'group_number': 'SYNTHETIC', 'member_id': 'SYNTHETIC'},
               'plan_details': {'stedi': {'names': ['BASIC'], 'group_number': 'SYNTHETIC'}}}
     service = SimpleNamespace(staff_store=SimpleNamespace(get_library=lambda *_: None),
+                              commercial_store=SimpleNamespace(list_cpt_requirements=lambda *_: []),
                               contract_requirements=contract_requirements,
                               _requirement_candidates=lambda *_: [])
     source = {'plan': 'CI', 'plan_details': {'ecw': ['CI']}, 'billing_provider': {'npi': '1111111111'}}

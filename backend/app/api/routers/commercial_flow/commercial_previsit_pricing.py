@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from app.api.routers import commercial_estimator as _api
-from app.api.routers.commercial_flow.commercial_previsit_rate_reference import _attach_temporary_aetna_rates, _attach_temporary_uhc_rates
+from app.api.routers.commercial_flow.commercial_previsit_rate_reference import _attach_temporary_aetna_rates, _attach_temporary_uhc_rates, _attach_temporary_blue_cross_rates
 from app.api.routers.commercial_flow.commercial_previsit_network_guard import NMCT_PRACTICE_ID, apply_nmct_network_policy, record_confirmed_out_of_network, resolve_unlinked_blue_route
 from app.insurance import botox_review, cms_locality, cms_pfs, cpt_rules, insurance_product, inventory_certification, library_network_exclusions, group_contract_support
 
@@ -395,6 +395,9 @@ def _attach_previsit_pricing(result: dict, practice_id: str, inputs: dict, sourc
     elif nmct and _api.re.search(r'\baetna\b', ' '.join((str(result.get('payer') or ''),
             str((route_payer or {}).get('display_name') or ''))), _api.re.I):
         _attach_temporary_aetna_rates(result, practice_id, inputs, source)
+    elif (payer_name := str(result.get('payer') or (route_payer or {}).get('display_name') or '')) and not _api.re.search(
+            r'blue cross|bcbstx|blue shield', payer_name, _api.re.I):
+        _attach_temporary_blue_cross_rates(result, practice_id, inputs, source, payer_name)
     if len(connections) != 1:
         if inventory and not _api.network_participation.verified_out_of_network(benefits):
             _apply_inventory_tier(result, benefits, inventory, exclusion)

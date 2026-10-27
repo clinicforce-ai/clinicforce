@@ -1,6 +1,8 @@
 """Evaluate documented coverage requirements for selected and candidate services."""
 from __future__ import annotations
 
+import hashlib
+import json
 from types import ModuleType
 from app.insurance.identity import patient_benefits_bound
 from app.insurance import stedi_cpt_authorization
@@ -15,6 +17,12 @@ def requirement_sources(documents: list[dict]) -> list[dict]:
                    for row in documents if row.get('kind') == 'plan_matrix' or
                    row.get('kind') == 'contract' and row.get('content_type') == 'application/pdf'),
                   key=lambda row: row['id'])
+
+
+def _rules_version(rows: list[dict]) -> str:
+    scope = sorted((row['id'], row['updated_at']) for row in rows)
+    digest = hashlib.sha256(json.dumps(scope).encode()).hexdigest()[:16]
+    return f'{PUBLISHED_RULESET_VERSION}:{digest}'
 
 
 async def check_cpt_authorization(api: ModuleType, result: dict, case: dict, payload: dict,
@@ -94,6 +102,7 @@ async def check_cpt_authorization(api: ModuleType, result: dict, case: dict, pay
 
 def attach_requirements(api: ModuleType, result: dict, case: dict, inputs: dict,
                         source: dict, session: dict, connections: list[dict], payer_id: str) -> None:
+    stored_rules = api.commercial_store.list_cpt_requirements(session['practice_id'])
     documents = (session.get('_library_documents') if '_library_documents' in session else
                  api.staff_store.list_library(session['practice_id']) if case.get('library_pricing') else None)
     if documents is not None:
@@ -108,6 +117,7 @@ def attach_requirements(api: ModuleType, result: dict, case: dict, inputs: dict,
     approved_product = ((result.get('network_evidence') or {}).get('product_mapping_approval') or {}).get('contract_product')
     identified_product = ((result.get('plan_details') or {}).get('stedi') or {}).get('identified_product')
     requirement_context = {
+        'stored_rules': stored_rules,
         'service_date': inputs['service_date'], 'payer_verified': bool(connection),
         'payer_names': [result.get('payer'), source.get('payer'), connection.get('display_name'),
                         connection.get('stedi_payer_id'), *(connection.get('aliases') or [])],
@@ -130,7 +140,7 @@ def attach_requirements(api: ModuleType, result: dict, case: dict, inputs: dict,
     }
     requirement_documents = [document for document in library_sources if document]
     result['requirement_evidence'] = api.contract_requirements.evaluate(result, requirement_context, requirement_documents)
-    result['published_requirements_version'] = PUBLISHED_RULESET_VERSION
+    result['published_requirements_version'] = _rules_version(stored_rules)
     candidates = api._requirement_candidates(result)
     if candidates:
         # Research the other suggested choices without changing the requirement
@@ -147,13 +157,14 @@ def refresh_saved_requirements(api: ModuleType, result: dict, case: dict, practi
     if 'requirement_sources' not in result:
         return
     documents = api.staff_store.list_library(practice_id)
+    rules_version = _rules_version(api.commercial_store.list_cpt_requirements(practice_id))
     saved_result = (case.get('previsit_context') or {}).get('result') or {}
     network_changed = any(
         (result.get('benefits') or {}).get(field) != (saved_result.get('benefits') or {}).get(field)
         for field in ('network_status', 'network_source')
     ) or (result.get('network_evidence') or {}).get('network_name') != (saved_result.get('network_evidence') or {}).get('network_name')
     if (result['requirement_sources'] == requirement_sources(documents) and not network_changed
-            and saved_result.get('published_requirements_version') == PUBLISHED_RULESET_VERSION):
+            and saved_result.get('published_requirements_version') == rules_version):
         return
     context = case['previsit_context']
     attach_requirements(api, result, case, context['inputs'], context['source'],

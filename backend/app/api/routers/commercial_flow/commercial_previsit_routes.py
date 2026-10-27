@@ -90,9 +90,9 @@ async def saved_previsit(case_id: str, request: _api.Request) -> dict:
     Saved insured amounts are withheld if the linked clinic contract, scoped
     plan/provider configuration, or active selected CPT rate changed; staff
     must rerun against current configuration.
-    published_requirements_version identifies the current published payer-rule
-    set. Saved reads re-evaluate CPT referral and authorization decisions when
-    that version, their Clinical Library sources, or network evidence changes.
+    published_requirements_version identifies the current published payer rules
+    and stored CPT requirement rows. Saved reads re-evaluate referral and
+    authorization when these, Clinical Library sources, or network evidence change.
     selected_ids includes source-backed provisional CPTs as well as reviewed
     CPTs; service_selection_status distinguishes preview from approval. The
     selected IDs and priced code list refer to the same service scenario.

@@ -31,6 +31,9 @@ class PrevisitFlowTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(_reviewed_service_types([case], 'another-appointment', '2026-10-22', 'same-visit'), [])
 
     def setUp(self):
+        self.cpt_rules_patch = patch('app.api.routers.commercial_estimator.commercial_store.list_cpt_requirements', return_value=[])
+        self.cpt_rules_patch.start()
+        self.addCleanup(self.cpt_rules_patch.stop)
         self.library_patch = patch('app.api.routers.commercial_estimator.library_pricing.prepare', return_value=[])
         self.library_patch.start()
         self.addCleanup(self.library_patch.stop)

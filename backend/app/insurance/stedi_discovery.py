@@ -22,7 +22,7 @@ from app.insurance.discovery_requests import (
     missing_request_fields,
 )
 from app.insurance.stedi_discovery_policies import (
-    _policy_identity, one_active_policy, active_policy_evidence_conflict, active_policy_count,
+    _policy_identity, _service_evidence, one_active_policy, active_policy_evidence_conflict, active_policy_count,
 )
 
 
@@ -377,9 +377,14 @@ def candidates(payload: dict, inputs: dict, source: dict | None = None) -> list[
                      'reason_codes': list(dict.fromkeys(parsed['reason_codes'] + verification['reason_codes']))})
     groups = {}
     for row in rows:
-        identity = _policy_identity((payload.get('items') or [])[row['index']]) if row['active_medical'] else None
+        item = (payload.get('items') or [])[row['index']]
+        identity = _policy_identity(item)
         if identity:
-            row['policy_group_id'] = hashlib.sha256(identity.encode()).hexdigest()[:20]
+            # Inactive/unknown routes are one display result only when their
+            # dated service evidence is identical. Active routes retain the
+            # policy-wide identity so conflicting benefits remain visible.
+            group = identity if row['active_medical'] else identity + _service_evidence(item, None)
+            row['policy_group_id'] = hashlib.sha256(group.encode()).hexdigest()[:20]
             groups[row['policy_group_id']] = groups.get(row['policy_group_id'], 0) + 1
     for row in rows:
         if row.get('policy_group_id'):

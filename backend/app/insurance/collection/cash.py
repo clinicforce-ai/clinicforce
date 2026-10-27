@@ -7,7 +7,9 @@ def build(result: dict, review: dict | None, guidance: dict, price: dict, lines:
     complete = (price.get('cash_complete') and not price.get('service_issues')
                 and all(type(value) is int and 0 <= value <= 100_000_000 for value in amounts)
                 and amounts[0] <= amounts[1])
-    message = ((result.get('cash_fallback') or {}).get('reason') or 'Cash pricing for the selected services.')
+    message = ((result.get('cash_quote') or {}).get('reason')
+               or (result.get('cash_fallback') or {}).get('reason')
+               or 'Cash pricing for the selected services.')
     payments = (review or {}).get('payments') or {}
     paid = payments.get('amount_cents', 0) if payments.get('reference') else 0
     guidance.update(status='cash_estimate' if complete else 'cash_price_missing', basis='practice_cash_price',

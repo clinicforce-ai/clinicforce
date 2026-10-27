@@ -122,3 +122,30 @@ def apply(result: dict, config: dict, review: dict | None = None) -> None:
     result['practice_cash_source'] = {'filename': config['filename'], 'effective_from': config['effective_from'], 'version': config['id'], 'versions': config.get('versions', [config['id']])}
     if complete:
         result['cash_quote'].update(min_cents=priced['cash_min_cents'], max_cents=priced['cash_max_cents'])
+
+
+def apply_visit_quote(result: dict, review: dict | None = None) -> None:
+    """Price one clinician-approved 99213 cash visit without changing the clinic schedule."""
+    quote = (review or {}).get('cash_visit_quote') or {}
+    price = result.get('price_range') or {}
+    lines = price.get('lines') or []
+    if (result.get('payment_mode') != 'cash' or price.get('mode') != 'services'
+            or len(lines) != 1 or price.get('service_issues')
+            or not quote.get('approved_at') or not quote.get('actor_id')
+            or quote.get('context_token') != result.get('context_token')
+            or quote.get('service_date') != result.get('service_date')
+            or quote.get('line_id') != lines[0].get('id')
+            or quote.get('code') != lines[0].get('code') or quote.get('code') != '99213'
+            or quote.get('units') != lines[0].get('units') or lines[0].get('units') != 1
+            or lines[0].get('modifiers') or type(quote.get('amount_cents')) is not int
+            or not 0 < quote['amount_cents'] <= 100_000_000
+            or not str(quote.get('reason') or '').strip()):
+        return
+    cents = quote['amount_cents']
+    lines[0].update(unit_cash_cents=cents, cash_cents=cents,
+                    cash_source='Clinician-approved visit quote', cash_rule=None)
+    price.update(cash_complete=True, cash_min_cents=cents, cash_max_cents=cents, cash_packages=[])
+    result['cash_quote'] = {'complete': True, 'selection': '', 'source': 'Clinician-approved visit quote',
+        'effective_from': quote['service_date'], 'message': quote['reason'], 'reason': quote['reason'],
+        'min_cents': cents, 'max_cents': cents}
+    result.pop('practice_cash_source', None)

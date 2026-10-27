@@ -123,6 +123,7 @@ export type VisitReview = {
     notes: string
   }
   emg_required?: boolean
+  separate_em_planned?: boolean
   identity_confirmation?: { binding: string; reference: string; notes: string }
   product_mapping?: {
     reference: string
@@ -134,6 +135,8 @@ export type VisitReview = {
     network_identifiers?: string[]
   }
   payment_mode?: 'cash' | 'insurance'
+  cash_visit_quote?: { amount_cents: number; reason: string }
+  clear_cash_visit_quote?: boolean
   cash_selection?: string
   selected_ids?: string[]
   confirmed_units?: Record<string, number>

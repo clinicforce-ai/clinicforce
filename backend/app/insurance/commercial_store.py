@@ -35,6 +35,15 @@ def list_connections(practice_id: str) -> list[dict]:
     return [_row(row) for row in rows]
 
 
+def list_cpt_requirements(practice_id: str) -> list[dict]:
+    """Read sourced, product-specific rules without member data."""
+    with _connection() as db:
+        rows = db.execute('''SELECT * FROM commercial_cpt_requirements
+            WHERE practice_id IN (%s,'*') ORDER BY payer_key,product_key,cpt,effective_from''',
+            (practice_id,)).fetchall()
+    return [dict(row) for row in rows]
+
+
 def connection(practice_id: str, connection_id: str) -> dict | None:
     with _connection() as db:
         row = db.execute("SELECT * FROM commercial_payer_connections WHERE id=%s AND practice_id=%s", (connection_id, practice_id)).fetchone()

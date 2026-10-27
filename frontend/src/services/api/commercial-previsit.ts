@@ -15,6 +15,7 @@ import type { PaymentExplanation } from './commercial-explanation'
 import type { CommercialNetworkEvidence } from './commercial-network-evidence'
 
 export type PrevisitEstimate = {
+  separate_em_planned?: boolean
   botox_review?: BotoxReview
   billing_protection?: {
     status?: 'qmb' | 'not_qmb'
@@ -246,6 +247,7 @@ export type PrevisitEstimate = {
     source: string
     effective_from: string
     message: string
+    reason?: string
     min_cents?: number
     max_cents?: number
   }
@@ -328,6 +330,7 @@ export type PrevisitEstimate = {
       id?: string
       policy_group_id?: string
       policy_response_count?: number
+      active_medical?: boolean
       payer: string
       payer_identifier?: string
       plans?: string[]

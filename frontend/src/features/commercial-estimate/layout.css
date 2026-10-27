@@ -272,6 +272,31 @@
   color: white;
 }
 
+.visit-cash-quote {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: 12px;
+  padding: 16px 24px 0;
+}
+
+.visit-cash-quote label {
+  display: grid;
+  gap: 4px;
+  font-size: 13px;
+}
+
+.visit-cash-quote input {
+  min-height: 38px;
+  padding: 8px 10px;
+  border: 1px solid var(--ve-line);
+  border-radius: 8px;
+}
+
+.visit-cash-quote input[name='cash_reason'] {
+  min-width: min(300px, 80vw);
+}
+
 .overview-amounts {
   display: grid;
   grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr);

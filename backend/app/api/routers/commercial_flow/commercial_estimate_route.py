@@ -12,7 +12,11 @@ from app.api.routers.commercial_flow.commercial_previsit_submit import submit_pr
     "one automatic member-specific payer inquiry; only a matching active 271 supplies benefits. "
     "A booked EMG/NCS visit without a study count returns one provisional "
     "scenario with mutually exclusive CPT levels; an exact suggested CPT plan is priced immediately "
-    "from patient-bound benefits and clinic rates, and clinician edits recalculate it. An uncoded "
+    "from patient-bound benefits and clinic rates, and clinician edits recalculate it. A booked unilateral "
+    "cervical radiculopathy EMG can preview 95909 plus 95886 when no study count or usable model plan exists; "
+    "the study and muscle counts remain clinician-review assumptions. A distinct planned "
+    "follow-up may add provisional established CPT 99213 when office history supports that status; "
+    "final MDM or time and modifier need clinician review. An uncoded "
     "established-patient office visit without a supported level starts with provisional CPT 99213, "
     "which requires clinician review before billing. A skin-biopsy "
     "booking without a site count starts with an editable three-site CPT 11104 + 11105 x2 scenario. A supported "
@@ -83,6 +87,10 @@ async def previsit_estimate(value: _api.PrevisitInput, request: _api.Request, ba
     unknown referral or authorization status does not by itself withhold an
     otherwise supported amount. Explicit denied or expired status still does. A generic EMG
     booking does not select a nerve-study count or muscle examination.
+    An explicit unilateral cervical radiculopathy EMG can use a provisional
+    five-to-six-study NCS and complete one-extremity needle-EMG scenario when
+    no actual count or usable model proposal exists. No separate E/M is added
+    without a documented distinct office visit.
     An uncoded new or established consultation leaves the E/M level unselected
     and prices its mutually exclusive code family as alternatives; a common
     supported office copay is collected once, never once per alternative.

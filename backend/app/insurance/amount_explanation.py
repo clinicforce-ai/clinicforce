@@ -236,12 +236,17 @@ def build(result: dict, guidance: dict, review: dict | None = None) -> dict:
     ma_ppo = is_medicare_advantage(medical_names)
     if result.get('payment_mode') == 'cash':
         named_package = (result.get('cash_quote') or {}).get('selection') and (result.get('cash_quote') or {}).get('complete')
-        if not result.get('cash_fallback'):
+        visit_reason = (result.get('cash_quote') or {}).get('reason')
+        if visit_reason:
+            cause, code = visit_reason, 'clinician_cash_quote'
+        elif not result.get('cash_fallback'):
             cause, code = 'cash was selected for the planned care', 'cash_selected'
         else:
             cause, code = _cash_cause(result, failure, recovery, card, network, benefits, unpriced, missing)
         sentence = (f"No payment is due now because the recorded payment covers NMCT’s cash price{', which was used because ' + cause if code != 'cash_selected' else ''}"
                     if amount == 0 and paid else
+                    f"Collect {_money(amount)} as the clinician-approved cash price because {cause}"
+                    if code == 'clinician_cash_quote' and amount is not None else
                     f"This is NMCT’s nerve-testing package price{' because ' + cause if code != 'cash_selected' else ' for the planned care'}{', after the recorded payment' if paid else ''}, with the focused visit included" if named_package and amount is not None else
                     f"This is NMCT’s cash price{', after the recorded payment' if paid else ''} for the planned care"
                     if code == 'cash_selected' and amount is not None else
