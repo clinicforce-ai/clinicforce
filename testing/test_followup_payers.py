@@ -152,4 +152,5 @@ def test_generic_emg_does_not_select_a_study_count_or_muscle_work():
     model.return_value.converse.assert_called_once()
     assert plan['recommended_ids'] == []
     assert 'cash_selection' not in plan
-    assert 'No supported CPT suggestion' in plan['recommendation_basis']
+    assert plan['method'] == 'unavailable'
+    assert 'model could not complete' in plan['recommendation_basis']

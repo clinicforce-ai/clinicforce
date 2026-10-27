@@ -1,11 +1,12 @@
 """Synthetic recommendation and financial-boundary checks; no live payer calls."""
 import asyncio
+import json
 from copy import deepcopy
 from unittest.mock import MagicMock, patch
 
 import httpx
 
-from app.insurance import cpt_suggester, stedi_financial
+from app.insurance import cpt_suggester, stedi_financial, visit_estimate
 
 
 def catalog():
@@ -60,6 +61,67 @@ def test_booked_cervical_radiculopathy_emg_has_provisional_plan_when_model_rejec
             {'reason': 'Right cervical radiculopathy'},
             {'recent_completed_appointments': history}, catalog())
     assert diagnosis_only['recommended_ids'] == []
+
+
+def test_booked_bilateral_hand_emg_uses_the_model_proposal_without_manual_selection():
+    available = [
+        {'id': code, 'code': code, 'source': 'CPT planning catalog', 'units': 1}
+        for code in ('95908', '95886')
+    ]
+    booked = {'reason': 'Reason: Bilateral hand', 'appointment_type': 'EMG Visit'}
+    model = MagicMock()
+    model.converse.return_value = model_reply([{'code': '95908', 'units': 1}, {'code': '95886', 'units': 2}])
+    with patch.object(cpt_suggester.boto3, 'client', return_value=model):
+        plan = cpt_suggester.recommend_visit_plan(booked, {}, available)
+    assert visit_estimate.is_emg_visit(booked)
+    assert plan['recommended_ids'] == ['95908', '95886']
+    assert plan['recommended_units'] == {'95908': 1, '95886': 2}
+    assert plan['method'] == 'llm' and plan['version'] == 15
+    assert '"appointment_type": "EMG Visit"' in model.converse.call_args.kwargs['messages'][0]['content'][0]['text']
+    assert not visit_estimate.is_emg_visit({'reason': 'Bilateral hand'})
+    assert not visit_estimate.is_emg_visit({'reason': 'Bilateral hand', 'appointment_type': 'Possible EMG'})
+
+
+def test_booked_emg_model_failure_stays_visible_and_retryable():
+    available = [{'id': code, 'code': code, 'source': 'CPT planning catalog', 'units': 1}
+                 for code in ('95908', '95886')]
+    with patch.object(cpt_suggester.boto3, 'client', side_effect=RuntimeError('offline')):
+        plan = cpt_suggester.recommend_visit_plan(
+            {'reason': 'Bilateral hand', 'appointment_type': 'EMG Visit'}, {}, available)
+    assert plan['recommended_ids'] == []
+    assert plan['method'] == 'unavailable'
+
+
+def test_booked_emg_retries_an_incompatible_model_bundle():
+    available = [{'id': code, 'code': code, 'source': 'CPT planning catalog', 'units': 1}
+                 for code in ('95908', '95861', '95886')]
+    model = MagicMock()
+    model.converse.side_effect = [
+        model_reply([{'code': '95908', 'units': 1}, {'code': '95861', 'units': 1}]),
+        model_reply([{'code': '95908', 'units': 1}, {'code': '95886', 'units': 2}]),
+    ]
+    with patch.object(cpt_suggester.boto3, 'client', return_value=model):
+        plan = cpt_suggester.recommend_visit_plan(
+            {'reason': 'Bilateral hand', 'appointment_type': 'EMG Visit'}, {}, available)
+    assert plan['recommended_ids'] == ['95908', '95886']
+    assert model.converse.call_count == 2
+    assert 'standalone EMG codes' in model.converse.call_args.kwargs['messages'][0]['content'][0]['text']
+
+
+def test_bilateral_complete_emg_model_units_match_both_extremities():
+    available = [{'id': code, 'code': code, 'source': 'CPT planning catalog', 'units': 1}
+                 for code in ('95908', '95886')]
+    model = MagicMock()
+    model.converse.side_effect = [
+        model_reply([{'code': '95908', 'units': 1}, {'code': '95886', 'units': 1}]),
+        model_reply([{'code': '95908', 'units': 1}, {'code': '95886', 'units': 2}]),
+    ]
+    with patch.object(cpt_suggester.boto3, 'client', return_value=model):
+        plan = cpt_suggester.recommend_visit_plan(
+            {'reason': 'Bilateral hand', 'appointment_type': 'EMG Visit'}, {}, available)
+    assert plan['recommended_units']['95886'] == 2
+    feedback = json.loads(model.converse.call_args.kwargs['messages'][0]['content'][0]['text'])
+    assert '95886 × 2' in feedback['previous_proposal_issue']
 
 
 def test_separate_emg_followup_adds_only_provisional_established_level_when_planned():
