@@ -209,6 +209,17 @@ export function ServicePlanner({
           ? 'Nerve testing is planned from this booking. Choose the study-count CPT when its scope is documented; final coding follows the care provided.'
           : 'The suggested services are included in the estimate. Remove or change them if planned care differs. Final coding follows the care provided.'}
       </p>
+      {emgVisit && (
+        <label className="visit-muted">
+          <input
+            type="checkbox"
+            checked={!!result.separate_em_planned}
+            disabled={busy}
+            onChange={(event) => void save({ separate_em_planned: event.target.checked })}
+          />{' '}
+          A separate office follow-up assessment is planned in addition to EMG/NCS
+        </label>
+      )}
       <div className="selected-service-chips" aria-label="Selected services">
         {chosen.map((row) => {
           const referral = requirementTag(result, row, 'referral')

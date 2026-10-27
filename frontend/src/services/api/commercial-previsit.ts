@@ -15,6 +15,7 @@ import type { PaymentExplanation } from './commercial-explanation'
 import type { CommercialNetworkEvidence } from './commercial-network-evidence'
 
 export type PrevisitEstimate = {
+  separate_em_planned?: boolean
   botox_review?: BotoxReview
   billing_protection?: {
     status?: 'qmb' | 'not_qmb'

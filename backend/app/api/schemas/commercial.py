@@ -192,6 +192,7 @@ class VisitReviewInput(BaseModel):
     selected_ids: list[str] | None = Field(default=None, max_length=20)
     payment_mode: Literal["insurance", "cash"] | None = None
     emg_required: bool | None = None
+    separate_em_planned: bool | None = Field(default=None, description='Clinician plans a medically necessary office evaluation distinct from routine EMG/NCS pretest work. This enables a provisional established-patient E/M cost scenario when prior same-practice care supports it; final level, documentation and modifier remain clinician decisions.')
     insurance_check_from: date | None = None
     cash_selection: str | None = Field(default=None, max_length=40, description="ID of a named package in the active cash schedule, or an empty string to clear the selection. Package selection is a clinician choice; example CPTs in the source are not automatically selected.")
     confirmed_units: dict[str, StrictInt] | None = Field(default=None, max_length=20)

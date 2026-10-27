@@ -123,6 +123,7 @@ export type VisitReview = {
     notes: string
   }
   emg_required?: boolean
+  separate_em_planned?: boolean
   identity_confirmation?: { binding: string; reference: string; notes: string }
   product_mapping?: {
     reference: string

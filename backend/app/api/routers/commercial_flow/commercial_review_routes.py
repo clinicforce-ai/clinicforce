@@ -36,6 +36,9 @@ async def update_visit_review(case_id: str, value: _api.VisitReviewInput, reques
     Changed clinical details may be refreshed explicitly when all patient,
     coverage, provider, location and date context remains identical. The
     refreshed CPT plan requires a new clinician selection before collection.
+    Staff may mark a distinct office assessment planned with EMG/NCS. With
+    supported prior office history, this previews established CPT 99213 for
+    cost planning; the clinician confirms the final E/M level and modifier.
     """
     session = await _api._session(request)
     case = await _api.run_in_threadpool(_api.store.get_case, case_id, session['patient_id'], session['share_manifest_id'], **_api._scope(session))
@@ -164,6 +167,14 @@ async def update_visit_review(case_id: str, value: _api.VisitReviewInput, reques
             for key in ('payer_allowances', 'confirmed_units'):
                 review[key] = {line_id: stored for line_id, stored in (review.get(key) or {}).items()
                                if line_id in keep}
+            review.pop('payments', None)
+    if value.separate_em_planned is not None:
+        review['separate_em_planned'] = value.separate_em_planned
+        if not value.separate_em_planned and review.get('selected_ids'):
+            review['selected_ids'] = [line_id for line_id in review['selected_ids']
+                                      if _api.visit_estimate.clinical_group(available[line_id]['code']) != 'visit']
+            if not review['selected_ids']:
+                review.pop('selected_ids')
             review.pop('payments', None)
     if value.insurance_check_from is not None:
         review['insurance_check_from'] = value.insurance_check_from.isoformat()

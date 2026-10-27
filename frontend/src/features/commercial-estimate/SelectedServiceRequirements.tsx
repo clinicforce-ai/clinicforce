@@ -69,7 +69,8 @@ export default function SelectedServiceRequirements({ result }: { result: Previs
                 : authorizationReferenceOnFile
                   ? 'prior authorization on file'
                   : 'prior authorization required'
-              : decision?.authorization?.status === 'Not required'
+              : decision?.authorization?.status === 'Not required' ||
+                  authorizationLine?.required === 'not_required'
                 ? 'no prior authorization'
                 : 'prior authorization not determined'
           return (
@@ -83,7 +84,7 @@ export default function SelectedServiceRequirements({ result }: { result: Previs
               </span>
               ,{' '}
               <span
-                className={`requirement-tag ${authorizationConflict ? 'is-unknown' : authorizationRequired ? (authorizationCleared ? 'is-clear' : authorizationReferenceOnFile ? 'is-unknown' : 'is-required') : decision?.authorization?.status === 'Not required' ? 'is-clear' : 'is-unknown'}`}
+                className={`requirement-tag ${authorizationConflict ? 'is-unknown' : authorizationRequired ? (authorizationCleared ? 'is-clear' : authorizationReferenceOnFile ? 'is-unknown' : 'is-required') : decision?.authorization?.status === 'Not required' || authorizationLine?.required === 'not_required' ? 'is-clear' : 'is-unknown'}`}
               >
                 {authorization}
               </span>
