@@ -21,7 +21,7 @@ export function referenceCoverageRow(
         .join(' · ')
     : [result.payer || 'Payer not recorded', model.planName].filter(Boolean).join(' · ')
   const detail = result.reference_benefits
-    ? `Stedi subscriber and benefit values used for this reference; eCW identity differs · Visit ${requestedDate}; payer response ${benefits?.returned_service_dates?.start ? visitDate(benefits.returned_service_dates.start) : 'date unavailable'}`
+    ? `Stedi subscriber and benefit values used for this reference; eCW identity differs · Stedi requested ${requestedDate}; payer returned service date ${benefits?.returned_service_dates?.start ? visitDate(benefits.returned_service_dates.start) : 'unavailable'}`
     : benefits?.service_date_matches === false
       ? `${model.policyStatus} · Visit ${requestedDate}; payer response ${benefits.returned_service_dates?.start ? visitDate(benefits.returned_service_dates.start) : 'date differs'} · reference estimate only`
       : result.service_date

@@ -321,7 +321,9 @@ export default function CommercialOverview({
             Coverage<strong>{policyStatus}</strong>
             <small>
               {result.reference_only && result.reference_benefits?.active === true
-                ? 'Stedi payer reference · appointment-date applicability unverified'
+                ? result.reference_benefits.service_date_matches === false
+                  ? `Stedi requested ${result.service_date ? visitDate(result.service_date) : 'visit date'}; Aetna returned service date ${result.reference_benefits.returned_service_dates?.start ? visitDate(result.reference_benefits.returned_service_dates.start) : 'unavailable'} · visit coverage unverified`
+                  : 'Stedi payer reference · appointment-date applicability unverified'
                 : result?.benefit_source
                   ? `Checked via ${result.benefit_source}`
                   : result?.benefits?.active
