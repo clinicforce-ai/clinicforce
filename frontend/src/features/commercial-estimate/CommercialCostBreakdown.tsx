@@ -26,6 +26,7 @@ export default function CommercialCostBreakdown({
   const reportedResult = result.reference_benefits ? { ...result, benefits } : result
   const price = result.price_range
   const feeProxy = result.fee_proxy_estimate
+  const cignaFeeProxy = feeProxy?.basis === 'bcbstx_cigna_fee_proxy'
   const lines = price?.mode === 'services' ? price.lines || [] : []
   const reason = result.reason || model.anticipatedService || 'Not recorded'
   const visitReason =
@@ -39,7 +40,7 @@ export default function CommercialCostBreakdown({
     lines.every((line) => line.benefits?.family_oop_zero_applies)
   const automaticCashFallback = model.cash && result.cash_fallback != null
   const summary = result.encounter_summary
-  const feeProxyCheckin = feeProxy
+  const feeProxyCheckin = feeProxy && !cignaFeeProxy
     ? Math.max(0, feeProxy.patient_share_cents - (summary?.payments_verified_cents || 0))
     : null
   const individualDeductible = limitSummary(reportedResult, 'deductible', 'INDIVIDUAL')
@@ -162,7 +163,7 @@ export default function CommercialCostBreakdown({
               resolved && line.unit_allowed_cents != null
                 ? `${money(line.unit_allowed_cents)} per unit × ${line.units || 1}`
                 : proxyRate
-                  ? `${money(proxyRate.unit_reference_cents)} per unit × ${line.units || 1}; UHC allowed amount unknown`
+                  ? `${money(proxyRate.unit_reference_cents)} per unit × ${line.units || 1}; ${result.payer || 'payer'} allowed amount unknown`
                   : line.description || undefined,
           }
         })
@@ -194,7 +195,7 @@ export default function CommercialCostBreakdown({
             label: 'BCBS Texas fee proxy total',
             value: money(feeProxy.reference_total_cents),
             detail:
-              'Planning rate for the selected CPTs and units; UHC allowed amount remains unknown',
+              `Planning rate for the selected CPTs and units; ${result.payer || 'payer'} allowed amount remains unknown`,
           },
         ]
       : []),
@@ -203,7 +204,9 @@ export default function CommercialCostBreakdown({
       value: familyOopApplied
         ? '$0 payable after family out-of-pocket limit'
         : feeProxy != null
-          ? `${money(feeProxy.copay_cents)} diagnostic copay`
+          ? cignaFeeProxy && feeProxy.copay_unconfirmed
+            ? `${money(0)} assumed for calculation · no CPT copay returned`
+            : `${money(feeProxy.copay_cents)} diagnostic copay`
           : officeReferenceCopay != null
             ? `${money(officeReferenceCopay)} specialist office visit · payer-reported reference`
             : diagnosticCopay != null
@@ -221,7 +224,9 @@ export default function CommercialCostBreakdown({
                     ? `${money(reportedOfficeCopay)} specialist office visit · payer-reported`
                     : unknown,
       detail:
-        result.collection_guidance?.basis === 'diagnostic_day_copay'
+        cignaFeeProxy && feeProxy?.copay_unconfirmed
+          ? 'Stedi did not confirm a $0 copay; verify the member plan before collecting'
+          : result.collection_guidance?.basis === 'diagnostic_day_copay'
           ? 'One payer diagnostic copay for the selected testing; final share follows the claim'
           : result.collection_guidance?.basis === 'out_of_pocket_limit'
             ? 'Plan copay before the applicable out-of-pocket limit; $0 due for covered care'
@@ -236,7 +241,7 @@ export default function CommercialCostBreakdown({
     {
       label: 'Individual deductible',
       value:
-        feeProxy != null
+        feeProxy != null && !cignaFeeProxy
           ? `${money(feeProxy.deductible_cents)} annual · published group plan`
           : [
               benefits?.deductible_annual_cents != null
@@ -254,7 +259,9 @@ export default function CommercialCostBreakdown({
                 ? `${surgicalIndividualDeductible.value} · surgical services`
                 : unknown),
       detail:
-        feeProxy != null
+        cignaFeeProxy
+          ? `${money(feeProxy?.deductible_cents || 0)} applied in this provisional scenario; exact CPT Stedi responses reported no remaining individual deductible`
+          : feeProxy != null
           ? feeProxy.deductible_source
           : result.collection_guidance?.basis === 'out_of_pocket_limit'
             ? individualDeductible.value === unknown && benefits?.deductible_annual_cents == null
@@ -313,6 +320,9 @@ export default function CommercialCostBreakdown({
               ? 'Payer-reported office visit term; diagnostic testing share is not established'
               : undefined,
     },
+    ...(cignaFeeProxy && feeProxy?.oop_reduction_cents > 0
+      ? [{ label: 'Out-of-pocket limit reduction', value: `−${money(feeProxy.oop_reduction_cents)}` }]
+      : []),
     ...(calculated && (components?.allowed_cap_adjustment_cents ?? 0) > 0
       ? [
           {
@@ -424,7 +434,7 @@ export default function CommercialCostBreakdown({
       : [
           ...insuredRows,
           {
-            label: summary?.conditional ? 'Conditional patient share' : 'Estimated patient share',
+            label: cignaFeeProxy || summary?.conditional ? 'Conditional patient share' : 'Estimated patient share',
             value: patientShare,
             detail: automaticCashFallback
               ? 'Insured share awaits a matching payer check and selected CPTs'
@@ -463,7 +473,9 @@ export default function CommercialCostBreakdown({
     detail:
       result.collection_guidance?.basis === 'qmb_protection'
         ? 'QMB protection prohibits collecting Medicare cost sharing for covered care'
-        : feeProxy != null
+        : cignaFeeProxy
+          ? 'BCBS Texas rate and exact-CPT Stedi benefit scenario; the payer copay and Cigna allowed amount are unconfirmed, so no charge is authorized here'
+          : feeProxy != null
           ? result.collection_guidance?.basis === 'bcbstx_proxy_advance'
             ? 'Clinic-approved BCBS Texas fee proxy advance after Medicare billing-protection clearance; final responsibility follows the claim.'
             : 'Estimated check-in amount from the BCBS Texas fee proxy. Charge only when the clinic collection policy and Medicare billing-protection check clear this member.'

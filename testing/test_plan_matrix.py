@@ -135,6 +135,11 @@ def test_exact_stedi_cpt_and_office_setting_settle_authorization_over_matrix():
     assert office == {'95908': 'Not required', '95886': 'Not required'}
     assert stedi_cpt_authorization.decisions(payload, ['95908'], '21', 'in_network') == {'95908': 'Required'}
     assert stedi_cpt_authorization.decisions(payload, ['95908'], '11', 'out_of_network') == {}
+    financial = {'plans': [{'benefits': {'coInsurance': [
+        {'service': {'system': 'CPT', 'value': '95908'}, 'network': {'indicator': 'IN_NETWORK'},
+         'placesOfService': [{'code': '11'}], 'percent': 0.2,
+         'priorAuthIndicator': 'NOT_REQUIRED'}]}}]}
+    assert stedi_cpt_authorization.decisions(financial, ['95908'], '11', 'in_network') == {'95908': 'Not required'}
     rows.append({**rows[0], 'placesOfService': [{'code': '11'}], 'priorAuthIndicator': 'REQUIRED'})
     assert '95908' not in stedi_cpt_authorization.decisions(payload, ['95908'], '11', 'in_network')
     rows.pop()
@@ -166,17 +171,20 @@ def test_selected_cpts_are_checked_once_and_saved_with_exact_stedi_scope():
     response = {'payerId': 'PAYER', 'provider': {'npi': '1234567890'},
                 'subscriber': {'memberId': 'MEMBER', 'dateOfBirth': '1970-01-01',
                                'name': {'person': {'firstName': 'Test', 'lastName': 'Member'}}},
-                'id': 'ec_synthetic-check', 'plans': [{'benefits': {'coverageBasis': [
-                    {'service': {'system': 'CPT', 'value': code}, 'network': {'indicator': 'IN_NETWORK'},
-                     'placesOfService': [{'code': '11'}], 'priorAuthIndicator': 'NOT_REQUIRED'}
-                    for code in ('95908', '95886')]}}]}
+                'id': 'ec_synthetic-check', 'plans': [{'benefits': {'coInsurance': [
+                    {'service': {'system': 'CPT', 'value': '95908'}, 'network': {'indicator': 'IN_NETWORK'},
+                     'placesOfService': [{'code': '11'}], 'percent': 0.2,
+                     'priorAuthIndicator': 'NOT_REQUIRED'}]}}]}
     sent = []
     class Client:
         async def __aenter__(self): return self
         async def __aexit__(self, *_): return None
         async def post(self, _url, **kwargs):
             sent.append(kwargs['json'])
-            return SimpleNamespace(is_error=False, json=lambda: response)
+            code = kwargs['json']['encounter']['services'][0]['value']
+            checked = deepcopy(response)
+            checked['plans'][0]['benefits']['coInsurance'][0]['service']['value'] = code
+            return SimpleNamespace(is_error=False, json=lambda: checked)
     async def thread(fn, *args, **kwargs): return fn(*args, **kwargs)
     def save(case, *_):
         case['revision'] = case.get('revision', 0) + 1
@@ -189,7 +197,7 @@ def test_selected_cpts_are_checked_once_and_saved_with_exact_stedi_scope():
     payload = {'payerId': 'PAYER', 'provider': {'npi': '1234567890', 'name': {'organization': 'Clinic'}},
                'subscriber': {'memberId': 'MEMBER', 'dateOfBirth': '1970-01-01',
                               'name': {'person': {'firstName': 'Test', 'lastName': 'Member'}}}}
-    result = {'codes': [{'code': '95908'}, {'code': '95886'}],
+    result = {'payer': 'Cigna', 'codes': [{'code': '95908'}, {'code': '95886'}],
               'identity': {'status': 'matched', 'binding': 'synthetic-current-binding', 'match_version': 2},
               'benefits': {'active': True, 'service_date_matches': None, 'network_status': 'in_network',
                            'coverage_evidence': {'status': 'ACTIVE', 'start': '2026-01-01'}}}
@@ -197,15 +205,15 @@ def test_selected_cpts_are_checked_once_and_saved_with_exact_stedi_scope():
     case = asyncio.run(check_cpt_authorization(api, result, {'id': 'synthetic'}, payload, inputs,
                                                 {'practice_id': 'synthetic'}, 'synthetic-key'))
     assert case['cpt_authorization']['decisions'] == {'95908': 'Not required', '95886': 'Not required'}
-    assert len(sent) == 1 and len(sent[0]['encounter']['services']) == 2
+    assert len(sent) == 2 and all(len(body['encounter']['services']) == 1 for body in sent)
     asyncio.run(check_cpt_authorization(api, result, case, payload, inputs,
                                          {'practice_id': 'synthetic'}, 'synthetic-key'))
-    assert len(sent) == 1
+    assert len(sent) == 2
     outside = deepcopy(result)
     outside['benefits']['coverage_evidence']['start'] = '2026-11-01'
     asyncio.run(check_cpt_authorization(api, outside, {'id': 'synthetic-other'}, payload, inputs,
                                          {'practice_id': 'synthetic'}, 'synthetic-key'))
-    assert len(sent) == 1
+    assert len(sent) == 2
 
 
 def test_rental_network_missing_plan_and_checklist_gaps_fail_closed():

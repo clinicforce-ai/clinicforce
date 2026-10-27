@@ -188,7 +188,7 @@ def _finish_previsit(result: dict, case: dict, inputs: dict, source: dict, paylo
         response_reference=(payload or {}).get('id'), selected_ids=selected_ids or [])
     cpt_check = case.get('cpt_authorization') or {}
     result['cpt_authorization'] = {key: cpt_check[key] for key in
-        ('state', 'service_date', 'pos', 'network', 'patient_binding', 'decisions', 'check_id')
+        ('state', 'service_date', 'pos', 'network', 'patient_binding', 'decisions', 'financial_terms', 'check_id', 'check_ids')
         if key in cpt_check}
     if not selected_ids and codes and all(row.get('source') in {
             'conditional office E/M alternative', 'conditional NCS alternative'} for row in codes):
@@ -239,7 +239,8 @@ def _finish_previsit(result: dict, case: dict, inputs: dict, source: dict, paylo
     _api.practice_prices.apply_visit_quote(result, review)
     attach_requirements(_api, result, case, planning_inputs, source, session, connections, payer_id)
     result.pop('fee_proxy_estimate', None)
-    if proxy := blue_cross_proxy.estimate(result, inputs['service_date']):
+    if proxy := (blue_cross_proxy.estimate(result, inputs['service_date'])
+                 or blue_cross_proxy.cigna_estimate(result, inputs['service_date'])):
         result['fee_proxy_estimate'] = proxy
     result['collection_guidance'] = _api.collection_guidance.build(result, review)
     result.pop('emg_option', None)

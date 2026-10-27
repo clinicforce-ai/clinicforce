@@ -62,9 +62,11 @@ async def saved_previsit(case_id: str, request: _api.Request) -> dict:
     A linked, applicable zero balance can return basis out_of_pocket_limit
     and a $0 covered office-visit collection.
     temporary_rate_reference identifies scoped Blue Cross Clinical Library
-    prices, never a UnitedHealthcare allowance. fee_proxy_estimate may use
-    exact selected diagnostic lines and group-plan benefits to show a separate
-    provisional share. A positive proxy collection additionally requires an
+    prices, never another payer's allowance. For Cigna, separate exact-CPT
+    Stedi inquiries may supply authorization and financial terms. When every
+    selected line has compatible terms, fee_proxy_estimate shows a provisional
+    BCBS-priced share; an absent copay remains unconfirmed. This estimate does
+    not authorize collection. The UHC group-plan proxy keeps its separate
     administrator-approved opt-in and member billing-protection clearance.
     benefits.reported_options[].places_of_service retains the payer's place-of-service
     codes for scoped benefit display; a reported office copay is not a collection decision.

@@ -27,7 +27,7 @@ def _rules_version(rows: list[dict]) -> str:
 
 async def check_cpt_authorization(api: ModuleType, result: dict, case: dict, payload: dict,
                                   inputs: dict, session: dict, api_key: str | None) -> dict:
-    """Check selected CPTs once for this member, date, network and office setting."""
+    """Check selected CPTs for this member, date, network and office setting."""
     codes = sorted({str(row.get('code') or '') for row in result.get('codes') or []
                     if api.re.fullmatch(r'\d{5}', str(row.get('code') or ''))})
     benefits = result.get('benefits') or {}
@@ -43,9 +43,13 @@ async def check_cpt_authorization(api: ModuleType, result: dict, case: dict, pay
     if not (payload.get('payerId') and provider.get('npi') and provider.get('name')
             and subscriber.get('memberId') and subscriber.get('name')):
         return case
-    scope = api.hashlib.sha256(api.json.dumps([payload.get('id'), payload['payerId'], provider['npi'],
+    cigna = bool(api.re.search(r'\bcigna\b', str(result.get('payer') or ''), api.re.I))
+    scope_values = [payload.get('id'), payload['payerId'], provider['npi'],
         subscriber['memberId'], identity.get('binding'), inputs['service_date'], pos,
-        benefits['network_status'], codes], sort_keys=True).encode()).hexdigest()
+        benefits['network_status'], codes]
+    if cigna:
+        scope_values.insert(0, 'cigna-individual-cpt-v2')
+    scope = api.hashlib.sha256(api.json.dumps(scope_values, sort_keys=True).encode()).hexdigest()
     prior = case.get('cpt_authorization') or {}
     if prior.get('scope') == scope:
         return case
@@ -56,47 +60,62 @@ async def check_cpt_authorization(api: ModuleType, result: dict, case: dict, pay
     body = {'payerId': payload['payerId'],
             'provider': {key: provider[key] for key in ('name', 'npi')},
             'subscriber': {key: subscriber[key] for key in ('memberId', 'dateOfBirth', 'name') if subscriber.get(key)},
-            'encounter': {'services': [{'system': 'CPT', 'value': code} for code in codes],
-                          'placeOfService': {'code': pos}}}
+            'encounter': {'placeOfService': {'code': pos}}}
     dependent = payload.get('dependent') or {}
     if dependent:
         body['dependent'] = {key: dependent[key] for key in ('dateOfBirth', 'name') if dependent.get(key)}
     if inputs['service_date'] != api.date.today().isoformat():
         body['encounter']['dates'] = {'service': {'start': inputs['service_date']}}
-    try:
-        async with api.httpx.AsyncClient(timeout=api.httpx.Timeout(30, connect=5)) as client:
-            response = await client.post(api.STEDI_URL,
-                headers={'Authorization': api_key, 'Content-Type': 'application/json'}, json=body)
-            checked = response.json()
-    except (api.httpx.HTTPError, ValueError):
-        case['cpt_authorization']['state'] = 'indeterminate'
-        return await api.run_in_threadpool(api._save, case, session, 'cpt-authorization-indeterminate')
     def same_name(left: dict, right: dict) -> bool:
         first = (left.get('name') or {}).get('person') or {}
         second = (right.get('name') or {}).get('person') or {}
         normalize = lambda value: api.re.sub(r'[^A-Z0-9]', '', str(value or '').upper())
         return all(normalize(first.get(field)) and normalize(first.get(field)) == normalize(second.get(field))
                    for field in ('firstName', 'lastName'))
-    returned_subscriber = (checked.get('subscriber') or {}) if isinstance(checked, dict) else {}
-    returned_dependent = (checked.get('dependent') or {}) if isinstance(checked, dict) else {}
     normalize_id = lambda value: api.re.sub(r'[^A-Z0-9]', '', str(value or '').upper())
-    if (response.is_error or not isinstance(checked, dict)
-            or checked.get('payerId') != payload['payerId']
-            or normalize_id(returned_subscriber.get('memberId')) != normalize_id(subscriber['memberId'])
-            or returned_subscriber.get('dateOfBirth') != subscriber.get('dateOfBirth')
-            or not same_name(subscriber, returned_subscriber)
-            or bool(dependent) != bool(returned_dependent)
-            or dependent and (returned_dependent.get('dateOfBirth') != dependent.get('dateOfBirth')
-                              or not same_name(dependent, returned_dependent))
-            or str((checked.get('provider') or {}).get('npi') or '') != str(provider['npi'])):
-        case['cpt_authorization']['state'] = 'unavailable'
-    else:
+    groups = [[code] for code in codes] if cigna else [codes]
+    checks = []
+    for group in groups:
+        inquiry = {**body, 'encounter': {**body['encounter'],
+            'services': [{'system': 'CPT', 'value': code} for code in group]}}
+        try:
+            async with api.httpx.AsyncClient(timeout=api.httpx.Timeout(30, connect=5)) as client:
+                response = await client.post(api.STEDI_URL,
+                    headers={'Authorization': api_key, 'Content-Type': 'application/json'}, json=inquiry)
+                checked = response.json()
+        except (api.httpx.HTTPError, ValueError):
+            case['cpt_authorization']['state'] = 'indeterminate'
+            return await api.run_in_threadpool(api._save, case, session, 'cpt-authorization-indeterminate')
+        returned_subscriber = (checked.get('subscriber') or {}) if isinstance(checked, dict) else {}
+        returned_dependent = (checked.get('dependent') or {}) if isinstance(checked, dict) else {}
+        if (response.is_error or not isinstance(checked, dict)
+                or checked.get('payerId') != payload['payerId']
+                or normalize_id(returned_subscriber.get('memberId')) != normalize_id(subscriber['memberId'])
+                or returned_subscriber.get('dateOfBirth') != subscriber.get('dateOfBirth')
+                or not same_name(subscriber, returned_subscriber)
+                or bool(dependent) != bool(returned_dependent)
+                or dependent and (returned_dependent.get('dateOfBirth') != dependent.get('dateOfBirth')
+                                  or not same_name(dependent, returned_dependent))
+                or str((checked.get('provider') or {}).get('npi') or '') != str(provider['npi'])):
+            case['cpt_authorization']['state'] = 'unavailable'
+            return await api.run_in_threadpool(api._save, case, session, 'cpt-authorization-unavailable')
         raw = api.json.dumps(checked).encode()
-        case['cpt_authorization'].update(state='complete',
-            check_id=checked.get('id'),
-            decisions=stedi_cpt_authorization.decisions(checked, codes, pos, benefits['network_status']),
-            raw_object_key=await api.run_in_threadpool(api.object_store.put_staff_document,
-                session['practice_id'], case['id'], 'cpt-authorization-stedi-271.json', raw, 'application/json'))
+        raw_key = await api.run_in_threadpool(api.object_store.put_staff_document,
+            session['practice_id'], case['id'], f'cpt-authorization-{group[0]}-stedi-271.json', raw, 'application/json')
+        case['cpt_authorization'].setdefault('raw_object_keys', {})[group[0]] = raw_key
+        case['cpt_authorization'].setdefault('check_ids', []).append(checked.get('id'))
+        checks.append((group, checked, raw_key))
+    decisions = {}
+    terms = {}
+    for group, checked, _ in checks:
+        decisions.update(stedi_cpt_authorization.decisions(checked, group, pos, benefits['network_status']))
+        if cigna:
+            terms[group[0]] = stedi_cpt_authorization.financial_terms(
+                checked, group[0], pos, benefits['network_status'])
+    case['cpt_authorization'].update(state='complete',
+        check_id=checks[0][1].get('id'), check_ids=[checked.get('id') for _, checked, _ in checks],
+        decisions=decisions, financial_terms=terms,
+        raw_object_key=checks[0][2], raw_object_keys={group[0]: key for group, _, key in checks})
     return await api.run_in_threadpool(api._save, case, session, 'cpt-authorization-complete')
 
 
