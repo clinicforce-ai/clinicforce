@@ -327,6 +327,56 @@ try {
   )
   assert(regionalPpoOverview.includes('Payer-reported office copay · collection pending'))
   assert(regionalPpoOverview.includes('<strong role="status">$5.00</strong>'))
+  const diagnostic = structuredClone(localPpo)
+  diagnostic.reason = 'Bilateral hand'
+  diagnostic.service_plan = { kind: 'emg_ncs', method: 'llm', recommended_ids: ['ncs', 'emg'] }
+  diagnostic.service_selection_status = 'preview'
+  diagnostic.selected_ids = ['ncs', 'emg']
+  diagnostic.identity = { status: 'matched', match_version: 2, binding: 'synthetic-diagnostic' }
+  diagnostic.benefits = { ...diagnostic.benefits, active: true, service_date_matches: true,
+    identity: diagnostic.identity, network_status: 'out_of_network',
+    network_source: 'clinic_contract_inventory', oop_annual_cents: 100000,
+    oop_remaining_cents: 97500, has_secondary: false }
+  diagnostic.plan_details.stedi.names = ['UnitedHealthcare Group Medicare Advantage (PPO)']
+  diagnostic.insurance_details = { group_number: '13705' }
+  diagnostic.payment_mode = 'insurance'
+  diagnostic.cash_fallback = undefined
+  diagnostic.encounter_summary = undefined
+  diagnostic.collection_guidance = { amount_cents: null, basis: 'missing_collection_inputs',
+    status: 'action_required', services: [], patient_actions: [], assumptions: [] }
+  diagnostic.price_range = { mode: 'services', complete: false, conditional: false,
+    service_issues: [], lines: [
+      { id: 'ncs', code: '95908', units: 1, modifiers: [], description: 'Nerve conduction, 3–4 studies',
+        rate_resolution: { status: 'UNRESOLVED' }, benefits: { active: true, service_date_matches: true,
+          identity: diagnostic.identity, network_status: 'out_of_network', copay_cents: 0,
+          coinsurance_percent: '10.00' } },
+      { id: 'emg', code: '95886', units: 2, modifiers: [], description: 'Complete needle EMG',
+        rate_resolution: { status: 'UNRESOLVED' }, benefits: { active: true, service_date_matches: true,
+          identity: diagnostic.identity, network_status: 'out_of_network', copay_cents: 0,
+          coinsurance_percent: '10.00' } },
+    ] }
+  diagnostic.temporary_rate_reference = { source: 'Synthetic clinic BCBS Texas schedule',
+    complete: true, message: 'BCBS Texas reference only', lines: [
+      { id: 'ncs', code: '95908', units: 1, modifiers: [], unit_reference_cents: 10511 },
+      { id: 'emg', code: '95886', units: 2, modifiers: [], unit_reference_cents: 8918 },
+    ] }
+  diagnostic.fee_proxy_estimate = { basis: 'bcbstx_fee_proxy', status: 'provisional',
+    reference_total_cents: 28347, patient_share_cents: 2835, coinsurance_percent: '10',
+    coinsurance_cents: 2835, copay_cents: 0, deductible_cents: 0,
+    deductible_source: 'Synthetic group plan', message: 'Synthetic BCBS Texas proxy' }
+  diagnostic.requirement_evidence = { procedures: [
+    { id: 'ncs', code: '95908', referral: { status: 'Not required' }, authorization: { status: 'Not required' } },
+    { id: 'emg', code: '95886', referral: { status: 'Not required' }, authorization: { status: 'Not required' } },
+  ] }
+  const diagnosticModel = deriveCommercialEstimateView({ result: diagnostic, appointments: [],
+    selectedVisit: '', busy: null, error: '', readOnly: false, recovering: false })
+  const diagnosticOverview = renderToStaticMarkup(
+    React.createElement(CommercialOverview, { model: diagnosticModel, result: diagnostic }),
+  )
+  for (const value of ['LLM-proposed CPTs', 'CPT 95908 × 1; CPT 95886 × 2',
+    '$105.11 BCBS Texas reference', '$178.36 BCBS Texas reference', '$283.47',
+    'Planned amount to collect at visit', '$28.35']) assert(diagnosticOverview.includes(value), value)
+  assert(!diagnosticOverview.includes('Select services'))
   const { ApplicableBenefits } = await server.ssrLoadModule(
     '/src/features/commercial-estimate/EstimatePanels.tsx',
   )
