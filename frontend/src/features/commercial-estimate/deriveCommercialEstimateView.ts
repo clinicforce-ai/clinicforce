@@ -133,7 +133,7 @@ export function deriveCommercialEstimateView({
           (cash && !result.cash_fallback)
         ? ''
         : 'is-missing'
-  if (referenceBenefits?.active === true) coverageTone = 'is-reported'
+  if (referenceBenefits?.active === true) coverageTone = 'is-confirmed'
   const calculating =
     (!!busy && busy !== 'delete') || recovering || (!!selected && !result && !error)
   const previousEstimate = !!error && !!result
