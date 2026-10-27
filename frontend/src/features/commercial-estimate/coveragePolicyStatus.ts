@@ -21,7 +21,7 @@ export function coveragePolicyStatus({
   const policyStatus = tooEarly
     ? 'Check closer to visit'
     : result?.reference_only && result.reference_benefits?.active === true
-      ? 'Aetna coverage reported'
+      ? 'Aetna coverage active'
       : result?.recovery?.state === 'pending'
         ? readOnly
           ? benefits?.active === true
