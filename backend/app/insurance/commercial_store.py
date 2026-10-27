@@ -240,7 +240,7 @@ def create_network(practice_id: str, data: dict[str, Any]) -> dict:
     with _connection() as db:
         db.execute("""INSERT INTO commercial_provider_networks
           (id,practice_id,payer_connection_id,billing_npi,rendering_npi,organization_name,tin,location_id,place_of_service,plan_matcher,plan_group_number,network_name,effective_from,effective_to,status,evidence_reference,created_at,updated_at)
-          VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
+          VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
           (record_id, practice_id, data["payer_connection_id"], data["billing_npi"], data["rendering_npi"], data["organization_name"], data["tin"], data["location_id"], data["place_of_service"], data.get("plan_matcher", ""), data.get("plan_group_number", ""), data["network_name"], data["effective_from"], data.get("effective_to") or None, data.get("status", "draft"), data["evidence_reference"], now, now))
         row = db.execute("SELECT * FROM commercial_provider_networks WHERE id=%s AND practice_id=%s", (record_id, practice_id)).fetchone()
     return dict(row)

@@ -1,6 +1,7 @@
 """Synthetic product and network evidence must not invent participation."""
 
 import pytest
+import asyncio
 import hashlib
 import json
 from types import SimpleNamespace
@@ -156,8 +157,7 @@ def test_draft_uhc_route_uses_admin_attestation_for_initial_pricing(monkeypatch)
     assert result['network_evidence']['source'] == 'clinic_admin_attestation'
 
 
-@pytest.mark.asyncio
-async def test_admin_attestation_route_derives_scope_from_saved_visit(monkeypatch):
+def test_admin_attestation_route_derives_scope_from_saved_visit(monkeypatch):
     from app.api.routers.commercial_flow import commercial_configuration_routes as routes
     from app.api.schemas.commercial import NetworkAttestationInput
     case = {'source_mode': 'commercial_previsit', 'previsit_context': {
@@ -185,8 +185,8 @@ async def test_admin_attestation_route_derives_scope_from_saved_visit(monkeypatc
     monkeypatch.setattr(routes, 'scoped_admin_nonparticipation', lambda *_: None)
     monkeypatch.setattr(api.commercial_store, 'create_network',
         lambda _practice, row: saved.append(row) or {'id': 'rule-1', **row})
-    response = await routes.attest_saved_group_ppo_network('case-1',
-        NetworkAttestationInput(reference='Administrator determination', effective_to='2026-12-31'), None)
+    response = asyncio.run(routes.attest_saved_group_ppo_network('case-1',
+        NetworkAttestationInput(reference='Administrator determination', effective_to='2026-12-31'), None))
     assert response == {'id': 'rule-1', 'status': 'nonparticipating',
                         'source': 'clinic_admin_attestation'}
     assert saved[0]['plan_group_number'] == '13705'
@@ -194,8 +194,8 @@ async def test_admin_attestation_route_derives_scope_from_saved_visit(monkeypatc
     assert saved[0]['effective_to'] == '2026-12-31'
     result['plan_details']['stedi']['group_number'] = '99999'
     with pytest.raises(api.HTTPException) as error:
-        await routes.attest_saved_group_ppo_network('case-1',
-            NetworkAttestationInput(reference='Administrator determination', effective_to='2026-12-31'), None)
+        asyncio.run(routes.attest_saved_group_ppo_network('case-1',
+            NetworkAttestationInput(reference='Administrator determination', effective_to='2026-12-31'), None))
     assert error.value.status_code == 409
 
 
