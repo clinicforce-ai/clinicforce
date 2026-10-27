@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from app.api.routers import commercial_estimator as _api
 from app.api.routers.commercial_flow.commercial_previsit_rate_reference import _attach_temporary_aetna_rates, _attach_temporary_uhc_rates, _attach_temporary_blue_cross_rates
-from app.api.routers.commercial_flow.commercial_previsit_network_guard import NMCT_PRACTICE_ID, apply_nmct_network_policy, record_confirmed_out_of_network, resolve_unlinked_blue_route
+from app.api.routers.commercial_flow.commercial_previsit_network_guard import NMCT_PRACTICE_ID, apply_nmct_network_policy, apply_admin_nonparticipation, scoped_admin_nonparticipation, record_confirmed_out_of_network, resolve_unlinked_blue_route
 from app.api.routers.commercial_flow.commercial_previsit_service_scope import reviewed_service_types as _reviewed_service_types
 from app.insurance import botox_review, cms_locality, cms_pfs, cpt_rules, insurance_product, inventory_certification, library_network_exclusions, group_contract_support
 
@@ -359,6 +359,9 @@ def _attach_previsit_pricing(result: dict, practice_id: str, inputs: dict, sourc
          source.get('plan') or ''], service_date)
     inventory = (inventory_certification.applicable(practice_id, route_payer, inputs, source, exclusion)
                  if route_payer else None)
+    apply_admin_nonparticipation(result, benefits, scoped_admin_nonparticipation(
+        practice_id, route_payer, inputs, source,
+        source.get('payer_plan_names') or [], str((source.get('payer_plan_scope') or {}).get('group_number') or '')))
     if nmct and not inventory:
         apply_nmct_network_policy(result, practice_id, benefits)
     if exclusion:

@@ -26,12 +26,12 @@ def classify(names: list[str] | None, *, payer_id: str = '',
     if ma:
         if re.search(r'\b(?:d\s*snp|dual\s+special\s+needs)\b', label):
             return 'medicare_advantage_dsnp'
+        if re.search(r'\bgroup\s+medicare\s+advantage\s+pp\b|\bgroup\b.*\bppo\b|\bppo\b.*\bgroup\b', label):
+            return 'medicare_advantage_group_ppo'
         if re.search(r'\b(?:regional\s+(?:medicare\s+advantage\s+)?ppo|rppo)\b', label):
             return 'medicare_advantage_regional_ppo'
         if re.search(r'\b(?:local\s+(?:medicare\s+advantage\s+)?ppo|lppo)\b', label):
             return 'medicare_advantage_local_ppo'
-        if re.search(r'\bgroup\b.*\bppo\b|\bppo\b.*\bgroup\b', label):
-            return 'medicare_advantage_group_ppo'
         if re.search(r'\bhmo\b', label):
             return 'medicare_advantage_hmo'
         return 'medicare_advantage_other'

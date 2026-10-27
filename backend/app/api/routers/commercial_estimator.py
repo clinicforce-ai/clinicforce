@@ -45,6 +45,7 @@ from app.api.schemas.commercial import (
     CollectionPolicyInput,
     AgreementInventoryInput,
     NetworkInput,
+    NetworkAttestationInput,
     ProfileInput,
     StartInput,
     EcwStartInput,

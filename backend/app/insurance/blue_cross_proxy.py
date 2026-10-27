@@ -12,6 +12,7 @@ from app.insurance import commercial, cpt_rules, insurance_product
 from app.insurance.benefit_review import selected_service_blocker
 from app.insurance.identity import patient_benefits_bound
 from app.insurance.network_participation import verified_out_of_network
+from app.insurance.stedi_cpt_authorization import visit_coverage_bound
 
 
 FRB_2026_BENEFITS = {
@@ -58,7 +59,7 @@ def estimate(result: dict, service_date: str) -> dict | None:
             or not group_ppo
             or str(insurance.get('group_number') or plan.get('group_number') or '') != FRB_2026_BENEFITS['group_number']
             or not FRB_2026_BENEFITS['effective_from'] <= service_date <= FRB_2026_BENEFITS['effective_to']
-            or benefits.get('active') is not True or benefits.get('service_date_matches') is not True
+            or not visit_coverage_bound(benefits, service_date)
             or benefits.get('coverage_status_conflict') or benefits.get('coverage_dates_invalid')
             or benefits.get('source_errors')
             or not patient_benefits_bound(identity)

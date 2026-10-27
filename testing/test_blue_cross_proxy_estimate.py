@@ -80,7 +80,18 @@ def test_scoped_proxy_calculates_diagnostic_share_without_claiming_payer_allowan
     assert estimate(result, '2026-10-27')['patient_share_cents'] == 2835
 
 
+def test_proxy_accepts_active_dated_coverage_when_visit_date_echo_is_absent():
+    result = _result()
+    result['benefits']['service_date_matches'] = None
+    result['benefits']['coverage_evidence'] = {
+        'status': 'ACTIVE', 'start': '2026-01-01', 'end': None}
+    assert estimate(result, '2026-10-27')['patient_share_cents'] == 2835
+    result['benefits']['coverage_evidence']['end'] = '2026-10-26'
+    assert estimate(result, '2026-10-27') is None
+
+
 def test_proxy_rejects_incomplete_rates_or_unresolved_deductible():
+    assert estimate(_result(network='in_network'), '2026-10-27') is None
     result = _result()
     result['temporary_rate_reference']['lines'].pop()
     assert estimate(result, '2026-10-27') is None
@@ -177,3 +188,15 @@ def test_group_ppo_oon_diagnostic_requirements_are_scoped_to_group_and_codes():
     assert _published_rule('authorization', result, context, plans, {'95908', '99999'})['status'] == 'Verification required'
     assert _published_rule('authorization', result, {**context, 'group_number': 'other'},
                            plans, {'95908', '95886'})['status'] == 'Verification required'
+
+
+def test_group_ppo_diagnostic_clearance_uses_active_dated_in_network_coverage():
+    result = _result(network='in_network')
+    result['benefit_source'] = 'Stedi'
+    result['benefits'].update(service_date_matches=None, coverage_evidence={
+        'status': 'ACTIVE', 'start': '2026-01-01', 'end': None})
+    context = {'service_date': '2026-10-27', 'payer_names': {'unitedhealthcare'},
+        'group_number': '13705', 'member_id': 'synthetic-member', 'pos': '11'}
+    plans = ['LPPO-UNITEDHEALTHCARE GROUP MEDICARE ADVANTAGE (PP']
+    assert _published_rule('referral', result, context, plans, {'95908', '95886'})['status'] == 'Not required'
+    assert _published_rule('authorization', result, context, plans, {'95908', '95886'})['status'] == 'Not required'

@@ -26,6 +26,8 @@ def product_kind(name: str) -> str | None:
     value = re.sub(r"[^a-z0-9]+", " ", name.casefold()).strip()
     if not re.search(r"\b(?:medicare|advantage|complete care)\b", value):
         return None
+    if re.search(r'\bgroup\s+medicare\s+advantage\s+pp\b|\bgroup\b.*\bppo\b|\bppo\b.*\bgroup\b', value):
+        return 'group_medicare_advantage_ppo'
     if re.search(r"\b(?:regional (?:medicare advantage )?ppo|rppo)\b", value):
         return "regional_medicare_advantage_ppo"
     if re.search(r"\b(?:local (?:medicare advantage )?ppo|lppo)\b", value):

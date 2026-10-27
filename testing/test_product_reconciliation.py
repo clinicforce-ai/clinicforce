@@ -1,6 +1,7 @@
 """Synthetic product and network evidence must not invent participation."""
 
 import pytest
+import asyncio
 import hashlib
 import json
 from types import SimpleNamespace
@@ -8,7 +9,7 @@ from types import SimpleNamespace
 from app.api.routers import commercial_estimator as api
 from app.api.routers.commercial_flow import commercial_previsit_pricing as pricing
 from app.api.routers.commercial_flow import commercial_previsit_requirements as requirements
-from app.api.routers.commercial_flow.commercial_previsit_network_guard import apply_nmct_network_policy, recheck_saved_network_evidence
+from app.api.routers.commercial_flow.commercial_previsit_network_guard import apply_nmct_network_policy, recheck_saved_network_evidence, scoped_admin_nonparticipation
 from app.api.routers.commercial_flow.commercial_previsit_status import _reprice_saved_new_network
 from app.insurance import amount_explanation
 from app.insurance import collection_guidance
@@ -86,6 +87,120 @@ def test_nmct_policy_overrides_scoped_clinic_nonparticipation(monkeypatch):
     assert benefits['network_status'] == 'in_network'
     assert benefits['network_source'] == 'clinic_nmct_policy'
     assert result['network_evidence']['decision'] == 'in_network_by_clinic_policy'
+
+
+def test_group_ppo_admin_attestation_is_bound_to_product_group_provider_and_date(monkeypatch):
+    from app.api.routers.commercial_flow import commercial_previsit_network_guard as guard
+    row = {'id': 'attestation-1', 'payer_connection_id': 'payer-1', 'status': 'nonparticipating',
+           'evidence_reference': 'clinic-admin-attestation: synthetic clinic determination',
+           'billing_npi': '1111111111', 'rendering_npi': '2222222222', 'tin': '123456789',
+           'location_id': 'office-1', 'place_of_service': '11',
+           'plan_matcher': 'GROUP MEDICARE ADVANTAGE PPO', 'plan_group_number': '13705',
+           'effective_from': '2026-01-01', 'effective_to': '2026-12-31'}
+    monkeypatch.setattr(guard.commercial_store, 'list_networks', lambda *_: [row])
+    inputs = {'service_date': DAY, 'rendering_provider': {'npi': '2222222222'}, 'place_of_service': '11'}
+    source = {'payer_plan_bound': True, 'billing_provider': {'npi': '1111111111', 'tin': '123456789'},
+              'location_id': 'office-1'}
+    find = lambda **changes: scoped_admin_nonparticipation('primary', {'id': 'payer-1'},
+        {**inputs, **changes.get('inputs', {})}, {**source, **changes.get('source', {})},
+        changes.get('names', ['GROUP MEDICARE ADVANTAGE PPO']), changes.get('group', '13705'))
+    assert find() == row
+    assert find(group='99999') is None
+    assert find(names=['LOCAL MEDICARE ADVANTAGE PPO']) is None
+    assert find(inputs={'rendering_provider': {'npi': '3333333333'}}) is None
+    assert find(inputs={'service_date': '2027-01-01'}) is None
+    assert find(source={'payer_plan_bound': False}) is None
+
+
+def test_saved_nmct_visit_uses_current_admin_attestation(monkeypatch):
+    from app.api.routers.commercial_flow import commercial_previsit_network_guard as guard
+    row = {'id': 'attestation-1', 'evidence_reference': 'clinic-admin-attestation: synthetic clinic determination'}
+    monkeypatch.setattr(guard, 'scoped_admin_nonparticipation', lambda *_: row)
+    result = {'benefits': {'active': True, 'network_status': 'in_network',
+                          'network_source': 'clinic_nmct_policy'},
+              'identity': {'status': 'matched', 'binding': 'synthetic'},
+              'plan_details': {'stedi': {'names': ['GROUP MEDICARE ADVANTAGE PPO'],
+                                        'group_number': '13705'}}, 'price_range': {'lines': []}}
+    case = {'previsit_context': {'inputs': {'service_date': DAY}, 'source': {}}}
+    monkeypatch.setattr(guard, 'patient_plan_applies', lambda *_: True)
+    recheck_saved_network_evidence(result, case, 'primary', {'id': 'payer-1'})
+    assert result['benefits']['network_status'] == 'out_of_network'
+    assert result['benefits']['network_source'] == 'clinic_nonparticipation_rule'
+    assert result['network_evidence']['source'] == 'clinic_admin_attestation'
+    monkeypatch.setattr(guard, 'scoped_admin_nonparticipation', lambda *_: None)
+    recheck_saved_network_evidence(result, case, 'primary', {'id': 'payer-1'})
+    assert result['benefits']['network_status'] == 'in_network'
+    assert result['benefits']['network_source'] == 'clinic_nmct_policy'
+
+
+def test_draft_uhc_route_uses_admin_attestation_for_initial_pricing(monkeypatch):
+    row = {'id': 'rule-1', 'payer_connection_id': 'payer-1', 'status': 'nonparticipating',
+           'evidence_reference': 'clinic-admin-attestation: synthetic clinic determination',
+           'billing_npi': '1111111111', 'rendering_npi': '2222222222', 'tin': '123456789',
+           'location_id': 'office-1', 'place_of_service': '11',
+           'plan_matcher': 'GROUP MEDICARE ADVANTAGE PPO', 'plan_group_number': '13705',
+           'effective_from': '2026-01-01', 'effective_to': '2026-12-31'}
+    monkeypatch.setattr(api.commercial_store, 'list_connections', lambda *_: [
+        {'id': 'payer-1', 'stedi_payer_id': 'uhc-route', 'status': 'draft', 'display_name': 'UnitedHealthcare'}])
+    monkeypatch.setattr(api.commercial_store, 'list_networks', lambda *_: [row])
+    monkeypatch.setattr(pricing.library_network_exclusions, 'applicable_exclusion', lambda *_: None)
+    monkeypatch.setattr(pricing.inventory_certification, 'applicable', lambda *_: None)
+    monkeypatch.setattr(pricing, '_attach_temporary_uhc_rates', lambda *_: None)
+    observed = []
+    monkeypatch.setattr(api, '_previsit_range', lambda _p, _i, _s, _payer, _codes, terms, **_kw:
+        (observed.append((terms['network_status'], terms['network_source'])) or {'complete': False}, []))
+    result = {'payer': 'UnitedHealthcare', 'codes': [], 'issues': []}
+    benefits = {'active': True, 'network_status': 'unknown'}
+    api._attach_previsit_pricing(result, 'primary',
+        {'service_date': DAY, 'place_of_service': '11', 'rendering_provider': {'npi': '2222222222'}},
+        {'payer_plan_bound': True, 'payer_plan_names': ['GROUP MEDICARE ADVANTAGE PPO'],
+         'payer_plan_scope': {'group_number': '13705'},
+         'billing_provider': {'npi': '1111111111', 'tin': '123456789'}, 'location_id': 'office-1'},
+        'uhc-route', benefits)
+    assert observed == [('out_of_network', 'clinic_nonparticipation_rule')]
+    assert result['network_evidence']['source'] == 'clinic_admin_attestation'
+
+
+def test_admin_attestation_route_derives_scope_from_saved_visit(monkeypatch):
+    from app.api.routers.commercial_flow import commercial_configuration_routes as routes
+    from app.api.schemas.commercial import NetworkAttestationInput
+    case = {'source_mode': 'commercial_previsit', 'previsit_context': {
+        'payer_id': 'uhc-route', 'inputs': {'service_date': DAY, 'place_of_service': '11',
+            'rendering_provider': {'npi': '2222222222'}},
+        'source': {'billing_provider': {'npi': '1111111111', 'tin': '123456789'},
+                   'location_id': 'office-1'}}}
+    result = {'payer': 'UnitedHealthcare', 'benefits': {'active': True},
+              'identity': {'status': 'matched', 'binding': 'synthetic'},
+              'plan_details': {'stedi': {'names': ['GROUP MEDICARE ADVANTAGE PPO'],
+                                        'group_number': '13705'}}}
+    session = {'staff': {'role': 'admin'}, 'practice_id': 'primary',
+               'patient_id': 'synthetic', 'share_manifest_id': 'synthetic'}
+    async def session_stub(_): return session
+    saved = []
+    monkeypatch.setattr(api, '_session', session_stub)
+    monkeypatch.setattr(api, '_scope', lambda _: {})
+    monkeypatch.setattr(api.store, 'get_case', lambda *_args, **_kwargs: case)
+    monkeypatch.setattr(api, '_previsit_result', lambda *_: result)
+    monkeypatch.setattr(routes, 'patient_plan_applies', lambda *_: True)
+    monkeypatch.setattr(routes, 'patient_benefits_bound', lambda *_: True)
+    monkeypatch.setattr(api.commercial, 'is_united_healthcare_payer', lambda *_: True)
+    monkeypatch.setattr(api.commercial_store, 'list_connections', lambda *_: [
+        {'id': 'payer-1', 'stedi_payer_id': 'uhc-route', 'status': 'draft'}])
+    monkeypatch.setattr(routes, 'scoped_admin_nonparticipation', lambda *_: None)
+    monkeypatch.setattr(api.commercial_store, 'create_network',
+        lambda _practice, row: saved.append(row) or {'id': 'rule-1', **row})
+    response = asyncio.run(routes.attest_saved_group_ppo_network('case-1',
+        NetworkAttestationInput(reference='Administrator determination', effective_to='2026-12-31'), None))
+    assert response == {'id': 'rule-1', 'status': 'nonparticipating',
+                        'source': 'clinic_admin_attestation'}
+    assert saved[0]['plan_group_number'] == '13705'
+    assert saved[0]['rendering_npi'] == '2222222222'
+    assert saved[0]['effective_to'] == '2026-12-31'
+    result['plan_details']['stedi']['group_number'] = '99999'
+    with pytest.raises(api.HTTPException) as error:
+        asyncio.run(routes.attest_saved_group_ppo_network('case-1',
+            NetworkAttestationInput(reference='Administrator determination', effective_to='2026-12-31'), None))
+    assert error.value.status_code == 409
 
 
 def test_nmct_saved_inventory_out_of_network_result_requires_repricing():

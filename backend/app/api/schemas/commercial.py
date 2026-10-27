@@ -86,6 +86,13 @@ class NetworkInput(BaseModel):
     evidence_reference: str = Field(min_length=3, max_length=500)
 
 
+class NetworkAttestationInput(BaseModel):
+    """Administrator's dated participation determination for a saved visit scope."""
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+    reference: str = Field(min_length=10, max_length=400)
+    effective_to: str = Field(pattern=r"^\d{4}-\d{2}-\d{2}$")
+
+
 class ProfileInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
     payer_connection_id: str

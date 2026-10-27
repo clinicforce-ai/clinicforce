@@ -69,6 +69,7 @@ def build(result: dict, review: dict | None = None) -> dict:
                                    'Payer statement about the requesting provider' if verified_out_of_network(benefits) and benefits.get('network_source') == 'payer_participation_message' else
                                    'Certified clinic agreement inventory; payer participation not independently confirmed' if verified_out_of_network(benefits) and benefits.get('network_source') == 'clinic_contract_inventory' else
                                    'No current Blue contract registered in the clinic Library' if verified_out_of_network(benefits) and benefits.get('network_source') == 'clinic_no_blue_contract' else
+                                   'Clinic administrator attestation for this product and provider; payer participation not independently confirmed' if verified_out_of_network(benefits) and (result.get('network_evidence') or {}).get('source') == 'clinic_admin_attestation' else
                                    'Current scoped clinic nonparticipation rule' if verified_out_of_network(benefits) else
                                    'The plan returned out-of-network benefit terms without establishing this provider tier' if benefits.get('network_status') == 'out_of_network' else
                                    f'No exact product and rendering-provider link to the {candidate_network} agreement' if candidate_network else
