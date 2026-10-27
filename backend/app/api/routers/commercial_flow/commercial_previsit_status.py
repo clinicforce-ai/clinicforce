@@ -4,11 +4,12 @@ from __future__ import annotations
 from app.api.routers import commercial_estimator as _api
 from app.insurance.identity import patient_benefits_bound, patient_plan_applies, payer_identity_verified
 from app.insurance.network_participation import verified_in_network, verified_out_of_network
-from app.insurance import evidence_resolution, group_contract_support
+from app.insurance import blue_cross_proxy, evidence_resolution, group_contract_support
 from app.api.routers.commercial_flow.commercial_previsit_finish import _payer_plan_pricing_source
 from app.api.routers.commercial_flow.commercial_previsit_network_guard import apply_nmct_network_policy, recheck_saved_network_evidence, recheck_saved_payer_message
 from app.api.routers.commercial_flow.commercial_previsit_saved_pricing import _reprice_saved_new_network
 from app.api.routers.commercial_flow.commercial_previsit_requirements import refresh_saved_requirements
+from app.api.routers.commercial_flow.commercial_previsit_rate_reference import _attach_temporary_uhc_rates
 from app.api.routers.commercial_flow.commercial_previsit_enrollment import _enrollment_failure
 @_api.router.get("/configuration")
 async def configuration(request: _api.Request) -> dict:
@@ -387,6 +388,15 @@ def _previsit_result(case: dict, practice_id: str | None = None) -> dict:
                 group_contract_support.eligibility_route(result, str(payer_id or ''), route_payer))
         _recheck_saved_payer_allowance(result, case, practice_id)
         refresh_saved_requirements(_api, result, case, practice_id)
+        result.pop('fee_proxy_estimate', None)
+        result.pop('temporary_rate_reference', None)
+        context = case['previsit_context']
+        if _api.commercial.is_united_healthcare_payer(
+                result, {'displayName': route_payer.get('display_name')} if route_payer else None):
+            _attach_temporary_uhc_rates(result, practice_id, context.get('inputs') or {},
+                                        context.get('source') or {})
+            if proxy := blue_cross_proxy.estimate(result, str(result.get('service_date') or '')):
+                result['fee_proxy_estimate'] = proxy
     result['revision'] = case.get('revision', 0)
     check_from = max((case.get('visit_review') or {}).get('insurance_check_from') or '',
         ((case['previsit_context'].get('source', {}).get('coverage_period') or {}).get('start') or '')[:10])

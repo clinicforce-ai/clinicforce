@@ -41,7 +41,9 @@ def _attach_temporary_blue_cross_rates(result: dict, practice_id: str, inputs: d
     for code in codes:
         rate = by_code.get((code['code'], ','.join(code.get('modifiers') or [])))
         if rate and rate.get('allowed_cents') is not None:
-            lines.append({'code': code['code'], 'unit_reference_cents': rate['allowed_cents'],
+            lines.append({'id': code.get('id'), 'code': code['code'],
+                          'units': code.get('units'), 'modifiers': code.get('modifiers') or [],
+                          'unit_reference_cents': rate['allowed_cents'],
                           'source_reference': rate['source_reference']})
     if lines:
         result['temporary_rate_reference'] = {'source': 'NMCT Clinical Library Blue Cross fee schedule',

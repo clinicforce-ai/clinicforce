@@ -16,6 +16,7 @@ NMCT_PRACTICE_ID = network_participation.NMCT_PRACTICE_ID
 def apply_nmct_network_policy(result: dict, practice_id: str, benefits: dict) -> bool:
     """Use NMCT's all-plan policy unless the payer states this provider is out of network."""
     if (not network_participation.is_nmct_practice(practice_id) or benefits.get('network_conflict')
+            or benefits.get('network_source') == 'clinic_contract_inventory'
             or benefits.get('network_source') == 'payer_participation_message'):
         return False
     if benefits.get('network_status') == 'in_network' and benefits.get('network_source') in {
@@ -122,7 +123,7 @@ def recheck_saved_network_evidence(result: dict, case: dict, practice_id: str, p
     """Project current contract support from saved case context without a payer call or write."""
     benefits = result.get('benefits') or {}
     if (network_participation.is_nmct_practice(practice_id) and benefits.get('network_status') == 'out_of_network'
-            and benefits.get('network_source') != 'payer_participation_message'):
+            and benefits.get('network_source') not in {'payer_participation_message', 'clinic_contract_inventory'}):
         _clear_saved_tier(result, 'NMCT network policy changed. Rerun this visit before collecting an insured amount.')
     if apply_nmct_network_policy(result, practice_id, benefits):
         return

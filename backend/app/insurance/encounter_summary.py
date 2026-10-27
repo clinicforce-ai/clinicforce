@@ -119,7 +119,10 @@ def build(result: dict, review: dict | None = None) -> dict:
             and guidance.get('basis') in {'patient_obligations', 'anticipated_services'}
             and collect != max(0, total - (paid or 0))):
         integrity_error = 'collection_amount_mismatch'
-    if (integrity_error and guidance.get('basis') in {'patient_obligations', 'anticipated_services',
+    if (guidance.get('basis') == 'bcbstx_proxy_advance' and collect is not None
+            and collect != max(0, (result.get('fee_proxy_estimate') or {}).get('patient_share_cents', -1) - (paid or 0))):
+        integrity_error = 'collection_amount_mismatch'
+    if (integrity_error and guidance.get('basis') in {'patient_obligations', 'anticipated_services', 'bcbstx_proxy_advance',
                                                       'calculation_conflict'} and not clinic_zero_instruction):
         collect = None
     if (unsupported_insurance or requirement_blocker(result) is not None) and collect is not None and not clinic_zero_instruction:
@@ -129,8 +132,11 @@ def build(result: dict, review: dict | None = None) -> dict:
     independent_office_copay = (guidance.get('basis') == 'office_copay' and bool(office)
                                 and all((line.get('benefits') or {}).get('network_independent') for line in office))
     out_of_network_office_copay = verified_out_of_network(benefits) and guidance.get('basis') == 'office_copay'
+    proxy_advance = (verified_out_of_network(benefits) and guidance.get('basis') == 'bcbstx_proxy_advance'
+                     and (result.get('fee_proxy_estimate') or {}).get('basis') == 'bcbstx_fee_proxy')
     if (not cash and collect is not None and collect > 0 and not verified_in_network(benefits)
-            and not independent_office_copay and not out_of_network_share and not out_of_network_office_copay):
+            and not independent_office_copay and not out_of_network_share
+            and not out_of_network_office_copay and not proxy_advance):
         collect = None
     if guidance.get('basis') == 'office_copay' and components['copay_cents'] is None:
         amounts = {line.get('benefits', {}).get('copay_cents') for line in office}

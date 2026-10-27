@@ -55,7 +55,11 @@ async def add_connection_aliases(connection_id: str, value: _api.ConnectionAlias
 
 @_api.router.put("/connections/{connection_id}/collection-policy")
 async def set_collection_policy(connection_id: str, value: _api.CollectionPolicyInput, request: _api.Request) -> dict:
-    """Approve $0 deferral, a fixed copay, or a supported patient-share advance for one payer route."""
+    """Approve $0 deferral, a fixed copay, or a supported advance for one payer route.
+
+    A BCBS Texas fee proxy advance is a separate opt-in and still requires
+    member-specific Medicare billing-protection clearance before collection.
+    """
     session = await _api._session(request)
     _api._admin(session)
     try:
@@ -63,7 +67,8 @@ async def set_collection_policy(connection_id: str, value: _api.CollectionPolicy
             session['practice_id'], connection_id, value.mode, value.reference,
             str(session['staff']['id']),
             allow_supported_oon_advance=value.allow_supported_oon_advance,
-            allow_cms_based_advance=value.allow_cms_based_advance)
+            allow_cms_based_advance=value.allow_cms_based_advance,
+            allow_blue_cross_proxy_advance=value.allow_blue_cross_proxy_advance)
     except _api.commercial.CommercialError as exc:
         raise _api.HTTPException(422, str(exc)) from exc
 

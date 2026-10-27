@@ -224,7 +224,9 @@ export function deriveCommercialEstimateView({
             : 'is-review'
           : benefits?.network_status === 'out_of_network'
             ? outOfNetworkConfirmed
-              ? 'is-missing'
+              ? benefits.network_source === 'clinic_contract_inventory'
+                ? 'is-review'
+                : 'is-missing'
               : 'is-review'
             : 'is-review'
   if (referenceClinicNetwork) networkTone = 'is-confirmed'
@@ -242,7 +244,9 @@ export function deriveCommercialEstimateView({
       .filter((line) => /^992(?:0[2-5]|1[2-5])$/.test(line.code))
       .every((line) => line.benefits.network_independent)
   const outOfNetworkCollection =
-    outOfNetworkConfirmed && (outOfNetworkAllowance || guidance?.basis === 'office_copay')
+    outOfNetworkConfirmed &&
+    (outOfNetworkAllowance ||
+      ['office_copay', 'qmb_protection', 'bcbstx_proxy_advance'].includes(guidance?.basis || ''))
   const currentPayerAmount =
     benefits?.active === true &&
     benefits.service_date_matches !== false &&
@@ -314,8 +318,26 @@ export function deriveCommercialEstimateView({
         : supportedAmount
           ? money(guidance!.amount_cents!)
           : null
+  const feeProxyAmount =
+    !cash &&
+    !previousEstimate &&
+    !calculating &&
+    !supportedAmount &&
+    guidance?.basis !== 'qmb_protection' &&
+    result?.fee_proxy_estimate &&
+    patientBenefitsBound &&
+    outOfNetworkConfirmed &&
+    !selectedCptIssue &&
+    !servicePlanAction
+      ? Math.max(
+          0,
+          result.fee_proxy_estimate.patient_share_cents -
+            (result.encounter_summary?.payments_verified_cents || 0),
+        )
+      : null
   const provisionalAmount =
-    !readOnly &&
+    feeProxyAmount ??
+    (!readOnly &&
     !cash &&
     !previousEstimate &&
     !calculating &&
@@ -331,11 +353,13 @@ export function deriveCommercialEstimateView({
     price.patient_min_cents === result.planning_estimate?.min_cents &&
     price.patient_max_cents === result.planning_estimate?.max_cents
       ? price.patient_min_cents
-      : null
+      : null)
   const provisionalAmountText =
     provisionalAmount == null
       ? null
-      : price?.patient_max_cents != null && price.patient_max_cents !== provisionalAmount
+      : feeProxyAmount == null &&
+          price?.patient_max_cents != null &&
+          price.patient_max_cents !== provisionalAmount
         ? range(provisionalAmount, price.patient_max_cents)
         : money(provisionalAmount)
   const estimatedShare =

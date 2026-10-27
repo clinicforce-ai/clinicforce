@@ -9,6 +9,7 @@ from app.insurance.stedi_benefits.fields import (
     _benefit_notes, _dates_apply, _network_indicator, _procedure,
     _provider_participation, _stedi_entries, coverage_kind,
 )
+from app.insurance.cpt_rules import EMG_ADD_ONS, NCS_CODES, STANDALONE_EMG_CODES
 
 
 @dataclass
@@ -41,7 +42,7 @@ def select_benefit_rows(payload: dict[str, Any], service_type_code: str,
         # Office and telehealth terms can share STC 98 but are different benefits.
         entries = [row for row in entries if not row.get('placesOfService') or
                    any(str(pos.get('code') or '') == place_of_service for pos in row['placesOfService'] if isinstance(pos, dict))]
-    diagnostic = procedure_code in {*(str(n) for n in range(95907, 95914)), '95885', '95886', '95887'}
+    diagnostic = procedure_code in NCS_CODES | EMG_ADD_ONS | STANDALONE_EMG_CODES
     if diagnostic:
         # Sleep studies and radiology share STC 73 with EMG. Their presence
         # must not prevent use of an explicitly labelled diagnostic benefit.

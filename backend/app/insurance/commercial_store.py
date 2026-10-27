@@ -158,10 +158,13 @@ def add_connection_aliases(practice_id: str, connection_id: str, aliases: list[s
 
 def set_collection_policy(practice_id: str, connection_id: str, mode: str,
                           reference: str, actor_id: str, *, allow_supported_oon_advance: bool = False,
-                          allow_cms_based_advance: bool = False) -> dict:
+                          allow_cms_based_advance: bool = False,
+                          allow_blue_cross_proxy_advance: bool = False) -> dict:
     """Set a practice-scoped payer policy with an administrator and source reference."""
     if mode not in {'defer_to_claim', 'collect_verified_copay', 'collect_supported_advance', 'disabled'} or not reference.strip() or not actor_id:
         raise CommercialError('A collection policy mode, approval reference and administrator are required.')
+    if allow_blue_cross_proxy_advance and (mode != 'collect_supported_advance' or not allow_supported_oon_advance):
+        raise CommercialError('A Blue Cross fee proxy advance requires an approved out-of-network supported-advance policy.')
     now = _now()
     with _connection() as db:
         row = db.execute('SELECT rules_json FROM commercial_payer_connections WHERE id=%s AND practice_id=%s FOR UPDATE',
@@ -175,7 +178,8 @@ def set_collection_policy(practice_id: str, connection_id: str, mode: str,
             rules['collection_policy'] = {'mode': mode, 'reference': reference.strip(),
                                           'approved_by': actor_id, 'approved_at': now,
                                           'allow_supported_oon_advance': allow_supported_oon_advance,
-                                          'allow_cms_based_advance': allow_cms_based_advance}
+                                          'allow_cms_based_advance': allow_cms_based_advance,
+                                          'allow_blue_cross_proxy_advance': allow_blue_cross_proxy_advance}
         db.execute('UPDATE commercial_payer_connections SET rules_json=%s,updated_at=%s WHERE id=%s AND practice_id=%s',
                    (_json(rules), now, connection_id, practice_id))
     return connection(practice_id, connection_id) or {}

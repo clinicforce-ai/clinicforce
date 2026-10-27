@@ -150,7 +150,8 @@ export default function CoverageRecovery({
             {result.benefits?.active === true
               ? `${result.payer || 'The current payer'} returned active benefits${verifiedCoverage ? ' matched to this patient' : '; the patient match needs review'}. The entries below are separate saved policy search results.`
               : 'These are saved policy search results, including inactive policies. They do not establish current benefits.'}{' '}
-            A returned inactive status applies to that search result for the visit date; it does not establish that every policy is inactive. Selecting a suggestion is optional.
+            A returned inactive status applies to that search result for the visit date; it does not
+            establish that every policy is inactive. Selecting a suggestion is optional.
           </p>
           {policySuggestions.length >= 2 && (
             <label>
@@ -224,7 +225,10 @@ export default function CoverageRecovery({
                     {!candidate.member_id && candidate.group_number && (
                       <div>
                         <dt>What this number means</dt>
-                        <dd>The group number identifies a plan or employer. It cannot replace a member ID for a payer check.</dd>
+                        <dd>
+                          The group number identifies a plan or employer. It cannot replace a member
+                          ID for a payer check.
+                        </dd>
                       </div>
                     )}
                     {candidate.coverage_evidence && (

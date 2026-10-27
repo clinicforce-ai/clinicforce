@@ -33,12 +33,17 @@ class ConnectionAliasInput(BaseModel):
 
 
 class CollectionPolicyInput(BaseModel):
-    """Clinic administrator's payer-specific check-in collection decision."""
+    """Clinic administrator's payer-specific check-in collection decision.
+
+    A BCBS Texas fee proxy advance needs both out-of-network approval flags;
+    it remains separately labeled from a UHC payer allowed amount.
+    """
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
     mode: Literal["defer_to_claim", "collect_verified_copay", "collect_supported_advance", "disabled"]
     reference: str = Field(min_length=10, max_length=500)
     allow_supported_oon_advance: bool = False
     allow_cms_based_advance: bool = False
+    allow_blue_cross_proxy_advance: bool = False
 
 
 class AgreementInventoryScopeInput(BaseModel):

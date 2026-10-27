@@ -311,6 +311,9 @@ def build(result: dict, guidance: dict, review: dict | None = None) -> dict:
         elif basis == 'qmb_protection':
             sentence, code = ('Collect $0 now because confirmed QMB protection prohibits Medicare cost-sharing collection; '
                               'any other liability requires separate covered-service and claim evidence', 'qmb_protected')
+        elif basis == 'bcbstx_proxy_advance':
+            sentence, code = (f'Collect {_money(amount)} as the clinic-approved BCBS Texas fee proxy advance for the planned diagnostic services; the UHC allowed amount and final claim share remain unknown',
+                              'bcbstx_proxy_advance')
         elif basis == 'ecw_billing_note':
             sentence, code = 'No payment is due now because the visit’s eCW billing note says not to collect', 'ecw_no_collection'
         elif basis == 'practice_cash_price':
@@ -387,7 +390,11 @@ def build(result: dict, guidance: dict, review: dict | None = None) -> dict:
     else:
         cause, cause_code = _cash_cause(result, failure, recovery, card, network, benefits, unpriced, missing,
                                         guidance.get('source_errors'))
-        if guidance.get('published_copay_policy_missing'):
+        proxy = result.get('fee_proxy_estimate') or {}
+        if proxy.get('basis') == 'bcbstx_fee_proxy' and type(proxy.get('patient_share_cents')) is int:
+            sentence, code = (f'The provisional patient share is {_money(proxy["patient_share_cents"])} using the BCBS Texas fee proxy; do not collect until the clinic policy and Medicare billing-protection checks clear this member',
+                              'bcbstx_proxy_provisional')
+        elif guidance.get('published_copay_policy_missing'):
             sentence, code = ('The 2026 FEP Blue Basic PSHB Preferred specialist copay is supported, but no approved clinic policy authorizes its collection at check-in',
                               'collection_policy_approval_required')
         elif identified_product == 'FEP Blue Basic PSHB' and network == 'unknown' and benefits.get('active') is True:

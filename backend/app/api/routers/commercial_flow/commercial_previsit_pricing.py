@@ -375,13 +375,13 @@ def _attach_previsit_pricing(result: dict, practice_id: str, inputs: dict, sourc
     connections = [row for row in route_connections if row.get('status') == 'staff_guidance_enabled']
     route_payer = route_connections[0] if len(route_connections) == 1 else None
     service_date = str(inputs.get('service_date') or '')
-    exclusion = None if nmct else library_network_exclusions.applicable_exclusion(
+    exclusion = library_network_exclusions.applicable_exclusion(
         practice_id, (route_payer or {}).get('display_name') or result.get('payer') or '',
         [*((source.get('payer_plan_names') or []) if source.get('payer_plan_bound') else []),
          source.get('plan') or ''], service_date)
     inventory = (inventory_certification.applicable(practice_id, route_payer, inputs, source, exclusion)
-                 if route_payer and not nmct else None)
-    if nmct:
+                 if route_payer else None)
+    if nmct and not inventory:
         apply_nmct_network_policy(result, practice_id, benefits)
     if exclusion:
         result['agreement_exclusion'] = exclusion
@@ -399,7 +399,7 @@ def _attach_previsit_pricing(result: dict, practice_id: str, inputs: dict, sourc
             r'blue cross|bcbstx|blue shield', payer_name, _api.re.I):
         _attach_temporary_blue_cross_rates(result, practice_id, inputs, source, payer_name)
     if len(connections) != 1:
-        if inventory and not _api.network_participation.verified_out_of_network(benefits):
+        if inventory:
             _apply_inventory_tier(result, benefits, inventory, exclusion)
         if _api.network_participation.verified_out_of_network(benefits):
             priced_source = {**source, **((result.get('network_evidence') or {}).get('scope') or {})}
@@ -492,7 +492,7 @@ def _attach_previsit_pricing(result: dict, practice_id: str, inputs: dict, sourc
     if (inventory and benefits.get('network_source') != 'clinic_library_contract'
             and not _api.network_participation.verified_out_of_network(benefits)):
         _apply_inventory_tier(result, benefits, inventory, exclusion)
-    if nmct:
+    if nmct and not inventory:
         apply_nmct_network_policy(result, practice_id, benefits)
     if _api.network_participation.verified_out_of_network(benefits):
         record_confirmed_out_of_network(result, benefits)

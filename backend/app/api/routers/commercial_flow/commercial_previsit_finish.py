@@ -5,7 +5,7 @@ from app.api.routers import commercial_estimator as _api
 from app.api.routers.commercial_flow.commercial_previsit_catalog import build_catalog
 from app.api.routers.commercial_flow.commercial_previsit_requirements import attach_requirements
 from app.insurance.identity import patient_benefits_bound, patient_plan_applies
-from app.insurance import botox_review, evidence_resolution, published_plan_benefits
+from app.insurance import blue_cross_proxy, botox_review, evidence_resolution, published_plan_benefits
 
 def _visit_context_parts(inputs: dict, source: dict) -> dict:
     return {'coverage': {k: v for k, v in _api._coverage_snapshot(inputs, source).items() if k != 'other_active_coverage'},
@@ -103,7 +103,7 @@ def _finish_previsit(result: dict, case: dict, inputs: dict, source: dict, paylo
     plan_key = _api.hashlib.sha256(_api.json.dumps([token, review.get('emg_required'), review.get('separate_em_planned'), source.get('recent_completed_appointments', []),
         [(row['id'], row.get('units')) for row in available]], sort_keys=True).encode()).hexdigest()
     prior_plan = case.get('previsit_plan') or {}
-    if prior_plan.get('key') != plan_key or prior_plan.get('plan', {}).get('version') != 13:
+    if prior_plan.get('key') != plan_key or prior_plan.get('plan', {}).get('version') != 14:
         prior_plan = {'key': plan_key, 'plan': _api.cpt_suggester.recommend_visit_plan(
             planning_inputs, source, available)}
         case['previsit_plan'] = prior_plan
@@ -237,12 +237,15 @@ def _finish_previsit(result: dict, case: dict, inputs: dict, source: dict, paylo
         _api.practice_prices.apply(result, uploaded_cash, review)
     _api.practice_prices.apply_visit_quote(result, review)
     attach_requirements(_api, result, case, planning_inputs, source, session, connections, payer_id)
+    result.pop('fee_proxy_estimate', None)
+    if proxy := blue_cross_proxy.estimate(result, inputs['service_date']):
+        result['fee_proxy_estimate'] = proxy
     result['collection_guidance'] = _api.collection_guidance.build(result, review)
     result.pop('emg_option', None)
     if inputs.get('visit_type') == 'new' and result['payment_mode'] == 'insurance':
         emg_rates, emg_rules = [], {**_api._benefit_context(inputs, source),
             'office_service_types': _api._office_service_types(session['practice_id'], source)}
-        if (review.get('emg_required') or any(row['code'] in _api.cpt_rules.NCS_CODES | _api.cpt_rules.EMG_ADD_ONS for row in result['codes'])) and len(connections) == 1:
+        if (review.get('emg_required') or any(row['code'] in _api.cpt_rules.NCS_CODES | _api.cpt_rules.EMG_CODES for row in result['codes'])) and len(connections) == 1:
             try:
                 _, network, profile = _api._previsit_practice_path(session['practice_id'], {**inputs, 'payer_id': connections[0]['id']}, exact_source)
                 emg_rates = _api.commercial_store.matching_rates(session['practice_id'], profile, network, inputs['service_date'], None)

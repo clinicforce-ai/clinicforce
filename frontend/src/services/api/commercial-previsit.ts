@@ -46,7 +46,30 @@ export type PrevisitEstimate = {
     source: string
     message: string
     complete: boolean
-    lines: Array<{ code: string; unit_reference_cents: number; source_reference: string }>
+    lines: Array<{
+      id?: string
+      code: string
+      units?: number
+      modifiers?: string[]
+      unit_reference_cents: number
+      source_reference: string
+    }>
+  }
+  fee_proxy_estimate?: {
+    basis: 'bcbstx_fee_proxy'
+    status: 'provisional'
+    reference_total_cents: number
+    coinsurance_percent: string
+    copay_cents: number
+    deductible_cents: number
+    coinsurance_cents: number
+    oop_reduction_cents: number
+    patient_share_cents: number
+    oop_remaining_cents: number
+    rate_source: string
+    deductible_source: string
+    deductible_url: string
+    message: string
   }
   payment_explanation?: PaymentExplanation
   evidence_resolution?: Array<{

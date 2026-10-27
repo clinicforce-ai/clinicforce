@@ -111,9 +111,13 @@ export default function CommercialCostBreakdown({
   const benefits = result.reference_benefits ?? result.benefits
   const reportedResult = result.reference_benefits ? { ...result, benefits } : result
   const price = result.price_range
+  const feeProxy = result.fee_proxy_estimate
   const lines = price?.mode === 'services' ? price.lines || [] : []
   const automaticCashFallback = model.cash && result.cash_fallback != null
   const summary = result.encounter_summary
+  const feeProxyCheckin = feeProxy
+    ? Math.max(0, feeProxy.patient_share_cents - (summary?.payments_verified_cents || 0))
+    : null
   const individualDeductible = limitSummary(reportedResult, 'deductible', 'INDIVIDUAL')
   const surgicalIndividualDeductible = limitSummary(reportedResult, 'deductible', 'INDIVIDUAL', '2')
   const familyDeductible = limitSummary(reportedResult, 'deductible', 'FAMILY')
@@ -242,25 +246,37 @@ export default function CommercialCostBreakdown({
           },
         ]
       : []),
+    ...(feeProxy
+      ? [
+          {
+            label: 'BCBS Texas fee proxy total',
+            value: money(feeProxy.reference_total_cents),
+            detail:
+              'Planning rate for the selected CPTs and units; UHC allowed amount remains unknown',
+          },
+        ]
+      : []),
     {
       label: 'Copay',
       value:
-        officeReferenceCopay != null
-          ? `${money(officeReferenceCopay)} specialist office visit · payer-reported reference`
-          : diagnosticCopay != null
-            ? `${money(diagnosticCopay)} once per day`
-            : calculated && components?.copay_cents != null
-              ? money(components.copay_cents)
-              : lines.some((line) => line.benefits?.copay_cents != null)
-                ? lines
-                    .map(
-                      (line) =>
-                        `CPT ${line.code}: ${line.benefits.copay_cents != null ? money(line.benefits.copay_cents) : 'not returned'}`,
-                    )
-                    .join('; ')
-                : !lines.length && reportedOfficeCopay != null
-                  ? `${money(reportedOfficeCopay)} specialist office visit · payer-reported`
-                  : unknown,
+        feeProxy != null
+          ? `${money(feeProxy.copay_cents)} diagnostic copay`
+          : officeReferenceCopay != null
+            ? `${money(officeReferenceCopay)} specialist office visit · payer-reported reference`
+            : diagnosticCopay != null
+              ? `${money(diagnosticCopay)} once per day`
+              : calculated && components?.copay_cents != null
+                ? money(components.copay_cents)
+                : lines.some((line) => line.benefits?.copay_cents != null)
+                  ? lines
+                      .map(
+                        (line) =>
+                          `CPT ${line.code}: ${line.benefits.copay_cents != null ? money(line.benefits.copay_cents) : 'not returned'}`,
+                      )
+                      .join('; ')
+                  : !lines.length && reportedOfficeCopay != null
+                    ? `${money(reportedOfficeCopay)} specialist office visit · payer-reported`
+                    : unknown,
       detail:
         result.collection_guidance?.basis === 'diagnostic_day_copay'
           ? 'One payer diagnostic copay for the selected testing; final share follows the claim'
@@ -277,35 +293,40 @@ export default function CommercialCostBreakdown({
     {
       label: 'Individual deductible',
       value:
-        [
-          benefits?.deductible_annual_cents != null
-            ? `${money(benefits.deductible_annual_cents)} annual`
-            : null,
-          benefits?.deductible_remaining_cents != null
-            ? `${money(benefits.deductible_remaining_cents)} remaining`
-            : null,
-        ]
-          .filter(Boolean)
-          .join(' · ') ||
-        (individualDeductible.value !== unknown
-          ? individualDeductible.value
-          : surgicalIndividualDeductible.value !== unknown
-            ? `${surgicalIndividualDeductible.value} · surgical services`
-            : unknown),
-      detail:
-        result.collection_guidance?.basis === 'out_of_pocket_limit'
-          ? individualDeductible.value === unknown && benefits?.deductible_annual_cents == null
-            ? 'No deductible payment due after the out-of-pocket limit; the payer did not report an office-specific deductible rule'
-            : 'No deductible payment due for this covered office visit after the out-of-pocket limit'
-          : calculated && components?.deductible_cents != null
-            ? `${money(components.deductible_cents)} applied to this visit`
-            : individualDeductible.unassigned
-              ? 'Payer-reported plan amount; medical applicability needs confirmation'
+        feeProxy != null
+          ? `${money(feeProxy.deductible_cents)} annual · published group plan`
+          : [
+              benefits?.deductible_annual_cents != null
+                ? `${money(benefits.deductible_annual_cents)} annual`
+                : null,
+              benefits?.deductible_remaining_cents != null
+                ? `${money(benefits.deductible_remaining_cents)} remaining`
+                : null,
+            ]
+              .filter(Boolean)
+              .join(' · ') ||
+            (individualDeductible.value !== unknown
+              ? individualDeductible.value
               : surgicalIndividualDeductible.value !== unknown
-                ? 'Payer did not report an office-specific deductible rule; surgical balance does not establish one'
-                : lines.length && lines.every((line) => line.benefits?.deductible_applies === false)
-                  ? 'Does not apply to the selected CPTs'
-                  : 'Office deductible applicability or amount is unresolved for the selected CPTs',
+                ? `${surgicalIndividualDeductible.value} · surgical services`
+                : unknown),
+      detail:
+        feeProxy != null
+          ? feeProxy.deductible_source
+          : result.collection_guidance?.basis === 'out_of_pocket_limit'
+            ? individualDeductible.value === unknown && benefits?.deductible_annual_cents == null
+              ? 'No deductible payment due after the out-of-pocket limit; the payer did not report an office-specific deductible rule'
+              : 'No deductible payment due for this covered office visit after the out-of-pocket limit'
+            : calculated && components?.deductible_cents != null
+              ? `${money(components.deductible_cents)} applied to this visit`
+              : individualDeductible.unassigned
+                ? 'Payer-reported plan amount; medical applicability needs confirmation'
+                : surgicalIndividualDeductible.value !== unknown
+                  ? 'Payer did not report an office-specific deductible rule; surgical balance does not establish one'
+                  : lines.length &&
+                      lines.every((line) => line.benefits?.deductible_applies === false)
+                    ? 'Does not apply to the selected CPTs'
+                    : 'Office deductible applicability or amount is unresolved for the selected CPTs',
     },
     {
       label: 'Family deductible',
@@ -324,23 +345,28 @@ export default function CommercialCostBreakdown({
     {
       label: 'Coinsurance',
       value:
-        result.collection_guidance?.basis === 'out_of_pocket_limit'
-          ? reportedCoinsurance != null
-            ? `${reportedCoinsurance}% reported; $0 payable after out-of-pocket limit`
-            : '$0 payable after out-of-pocket limit'
-          : calculated && components?.coinsurance_cents != null
-            ? money(components.coinsurance_cents)
-            : reportedCoinsurance != null
-              ? `${reportedCoinsurance}% reported; dollar amount pending`
-              : unknown,
-      detail: calculated
-        ? coinsuranceFormula(result) ||
-          (components?.coinsurance_cents === 0
-            ? 'No coinsurance applied after deductible'
-            : undefined)
-        : !lines.length && reportedCoinsurance != null
-          ? 'Payer-reported office visit term; diagnostic testing share is not established'
-          : undefined,
+        feeProxy != null
+          ? `${feeProxy.coinsurance_percent}% · ${money(feeProxy.coinsurance_cents)} on the fee proxy`
+          : result.collection_guidance?.basis === 'out_of_pocket_limit'
+            ? reportedCoinsurance != null
+              ? `${reportedCoinsurance}% reported; $0 payable after out-of-pocket limit`
+              : '$0 payable after out-of-pocket limit'
+            : calculated && components?.coinsurance_cents != null
+              ? money(components.coinsurance_cents)
+              : reportedCoinsurance != null
+                ? `${reportedCoinsurance}% reported; dollar amount pending`
+                : unknown,
+      detail:
+        feeProxy != null
+          ? `${money(feeProxy.reference_total_cents)} × ${feeProxy.coinsurance_percent}% = ${money(feeProxy.coinsurance_cents)}`
+          : calculated
+            ? coinsuranceFormula(result) ||
+              (components?.coinsurance_cents === 0
+                ? 'No coinsurance applied after deductible'
+                : undefined)
+            : !lines.length && reportedCoinsurance != null
+              ? 'Payer-reported office visit term; diagnostic testing share is not established'
+              : undefined,
     },
     ...(calculated && (components?.allowed_cap_adjustment_cents ?? 0) > 0
       ? [
@@ -407,20 +433,25 @@ export default function CommercialCostBreakdown({
     ? officeReferenceCopay != null
       ? `${money(officeReferenceCopay)} office-only reference; other services excluded`
       : 'Not fully calculated'
-    : result.collection_guidance?.basis === 'out_of_pocket_limit' &&
+    : result.collection_guidance?.basis === 'qmb_protection' &&
         result.collection_guidance.amount_cents === 0
       ? money(0)
-      : calculated &&
-          summary?.estimated_total_patient_min_cents != null &&
-          summary.estimated_total_patient_max_cents != null
-        ? range(
-            summary.estimated_total_patient_min_cents,
-            summary.estimated_total_patient_max_cents,
-          )
-        : model.estimatedShare ||
-          (model.provisionalAmount != null
-            ? money(model.provisionalAmount)
-            : model.patientPrice || 'Not fully calculated')
+      : result.collection_guidance?.basis === 'out_of_pocket_limit' &&
+          result.collection_guidance.amount_cents === 0
+        ? money(0)
+        : calculated &&
+            summary?.estimated_total_patient_min_cents != null &&
+            summary.estimated_total_patient_max_cents != null
+          ? range(
+              summary.estimated_total_patient_min_cents,
+              summary.estimated_total_patient_max_cents,
+            )
+          : feeProxy != null
+            ? `${money(feeProxy.patient_share_cents)} provisional · BCBS Texas fee proxy`
+            : model.estimatedShare ||
+              (model.provisionalAmount != null
+                ? money(model.provisionalAmount)
+                : model.patientPrice || 'Not fully calculated')
   const rows: CostBreakdownRow[] =
     model.cash && !automaticCashFallback
       ? [
@@ -451,9 +482,11 @@ export default function CommercialCostBreakdown({
               ? 'Insured share awaits a matching payer check and selected CPTs'
               : result.collection_guidance?.basis === 'out_of_pocket_limit'
                 ? 'Covered in-network share is capped by the applicable out-of-pocket limit'
-                : calculated
-                  ? 'Copay + deductible applied + coinsurance − allowed and out-of-pocket reductions'
-                  : 'Full share awaits applicable deductible and out-of-pocket terms',
+                : feeProxy != null
+                  ? feeProxy.message
+                  : calculated
+                    ? 'Copay + deductible applied + coinsurance − allowed and out-of-pocket reductions'
+                    : 'Full share awaits applicable deductible and out-of-pocket terms',
           },
           ...(summary?.payments_verified_cents != null && summary.payments_verified_cents > 0
             ? [{ label: 'Already paid', value: `−${money(summary.payments_verified_cents)}` }]
@@ -463,31 +496,42 @@ export default function CommercialCostBreakdown({
   rows.push({
     label: 'Amount to collect at visit',
     value:
-      !automaticCashFallback &&
-      model.supportedAmount &&
-      result.collection_guidance?.amount_cents != null
-        ? money(result.collection_guidance.amount_cents)
-        : officeReferenceCopay != null
-          ? `${money(officeReferenceCopay)} office-only reference`
-          : 'Not established',
+      result.collection_guidance?.basis === 'qmb_protection' &&
+      result.collection_guidance.amount_cents === 0
+        ? money(0)
+        : !automaticCashFallback &&
+            model.supportedAmount &&
+            result.collection_guidance?.amount_cents != null
+          ? money(result.collection_guidance.amount_cents)
+          : feeProxyCheckin != null
+            ? `${money(feeProxyCheckin)} provisional · verify before charging`
+            : officeReferenceCopay != null
+              ? `${money(officeReferenceCopay)} office-only reference`
+              : 'Not established',
     detail:
-      officeReferenceCopay != null
-        ? 'Planning figure for one specialist office visit on the appointment date; not an authorized collection instruction. Other services, prior payments and Medicare cost-sharing protection are not included.'
-        : automaticCashFallback
-          ? 'Insurance collection is unresolved; any cash quote is listed separately'
-          : result.collection_guidance?.unconfirmed_zero_oop
-            ? 'Confirm the reported $0 out-of-pocket balance with the payer before collection'
-            : model.supportedAmount
-              ? result.collection_guidance?.basis === 'office_copay'
-                ? 'Office copay advance; other services may have a later balance'
-                : result.collection_guidance?.basis === 'out_of_pocket_limit'
-                  ? 'Applicable out-of-pocket maximum has no remaining balance for covered care'
-                  : result.collection_guidance?.basis === 'diagnostic_day_copay'
-                    ? 'One diagnostic copay advance; other costs may follow the claim'
-                    : result.collection_guidance?.basis === 'claim_after_service'
-                      ? 'Clinic policy defers collection until after the claim'
-                      : undefined
-              : undefined,
+      result.collection_guidance?.basis === 'qmb_protection'
+        ? 'QMB protection prohibits collecting Medicare cost sharing for covered care'
+        : feeProxy != null
+          ? result.collection_guidance?.basis === 'bcbstx_proxy_advance'
+            ? 'Clinic-approved BCBS Texas fee proxy advance after Medicare billing-protection clearance; final responsibility follows the claim.'
+            : 'Estimated check-in amount from the BCBS Texas fee proxy. Charge only when the clinic collection policy and Medicare billing-protection check clear this member.'
+          : officeReferenceCopay != null
+            ? 'Planning figure for one specialist office visit on the appointment date; not an authorized collection instruction. Other services, prior payments and Medicare cost-sharing protection are not included.'
+            : automaticCashFallback
+              ? 'Insurance collection is unresolved; any cash quote is listed separately'
+              : result.collection_guidance?.unconfirmed_zero_oop
+                ? 'Confirm the reported $0 out-of-pocket balance with the payer before collection'
+                : model.supportedAmount
+                  ? result.collection_guidance?.basis === 'office_copay'
+                    ? 'Office copay advance; other services may have a later balance'
+                    : result.collection_guidance?.basis === 'out_of_pocket_limit'
+                      ? 'Applicable out-of-pocket maximum has no remaining balance for covered care'
+                      : result.collection_guidance?.basis === 'diagnostic_day_copay'
+                        ? 'One diagnostic copay advance; other costs may follow the claim'
+                        : result.collection_guidance?.basis === 'claim_after_service'
+                          ? 'Clinic policy defers collection until after the claim'
+                          : undefined
+                  : undefined,
     emphasis: true,
   })
   return <CostBreakdownTable rows={rows} />
