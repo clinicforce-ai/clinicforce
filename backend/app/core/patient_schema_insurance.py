@@ -41,6 +41,7 @@ def initialize_insurance(cursor) -> None:
         created_at TEXT NOT NULL, updated_at TEXT NOT NULL
     )""")
     cursor.execute("ALTER TABLE commercial_provider_networks ADD COLUMN IF NOT EXISTS organization_name TEXT NOT NULL DEFAULT ''")
+    cursor.execute("ALTER TABLE commercial_provider_networks ADD COLUMN IF NOT EXISTS plan_group_number TEXT NOT NULL DEFAULT ''")
     cursor.execute("CREATE INDEX IF NOT EXISTS commercial_provider_networks_practice_idx ON commercial_provider_networks (practice_id, payer_connection_id, status)")
     cursor.execute("""CREATE TABLE IF NOT EXISTS commercial_estimation_profiles (
         id TEXT PRIMARY KEY, practice_id TEXT NOT NULL, payer_connection_id TEXT NOT NULL REFERENCES commercial_payer_connections(id),

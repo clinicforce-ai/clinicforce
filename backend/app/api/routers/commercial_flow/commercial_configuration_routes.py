@@ -2,6 +2,9 @@
 from __future__ import annotations
 
 from app.api.routers import commercial_estimator as _api
+from app.api.routers.commercial_flow.commercial_previsit_network_guard import scoped_admin_nonparticipation
+from app.insurance import insurance_product
+from app.insurance.identity import patient_benefits_bound, patient_plan_applies
 
 @_api.router.post("/ecw/saved-eligibility-probe")
 async def saved_eligibility_probe(request: _api.Request) -> dict:
@@ -96,6 +99,68 @@ async def create_network(value: _api.NetworkInput, request: _api.Request) -> dic
     session = await _api._session(request); _api._admin(session)
     try: return _api.commercial_store.create_network(session["practice_id"], value.model_dump())
     except _api.commercial.CommercialError as exc: raise _api.HTTPException(422, str(exc)) from exc
+
+
+@_api.router.post("/cases/{case_id}/network-attestation")
+async def attest_saved_group_ppo_network(case_id: str, value: _api.NetworkAttestationInput,
+                                         request: _api.Request) -> dict:
+    """Record an administrator-sourced, visit-scoped Group PPO nonparticipation rule.
+
+    The clinic determination applies to the same payer, product, group, provider,
+    office and place of service through the stated date. It is not payer confirmation.
+    """
+    session = await _api._session(request)
+    _api._admin(session)
+    case = await _api.run_in_threadpool(_api.store.get_case, case_id, session['patient_id'],
+        session['share_manifest_id'], **_api._scope(session))
+    if not case or case.get('source_mode') != 'commercial_previsit' or not case.get('previsit_context'):
+        raise _api.HTTPException(404, 'Saved visit estimate not found.')
+    context = case['previsit_context']
+    inputs = context.get('inputs') or {}
+    source = ((case.get('previsit_discovery') or {}).get('pricing_source') or context.get('source') or {})
+    result = _api._previsit_result(case, session['practice_id'])
+    benefits = result.get('benefits') or {}
+    identity = result.get('identity') or benefits.get('identity') or {}
+    plan = ((result.get('plan_details') or {}).get('stedi') or {})
+    names = [plan['identified_product']] if plan.get('identified_product') else plan.get('names') or []
+    service_date = str(inputs.get('service_date') or '')
+    group = str(plan.get('group_number') or '')
+    if (len(names) != 1 or insurance_product.classify(names) != 'medicare_advantage_group_ppo'
+            or group != '13705' or benefits.get('active') is not True
+            or not patient_plan_applies(benefits, identity, service_date)
+            or not patient_benefits_bound(identity)):
+        raise _api.HTTPException(409, 'The saved visit is not bound to one active Group PPO member product and group.')
+    if not service_date <= value.effective_to <= service_date[:4] + '-12-31':
+        raise _api.HTTPException(422, 'The attestation end date must follow this visit and stay within its plan year.')
+    connections = [row for row in _api.commercial_store.list_connections(session['practice_id'])
+                   if row.get('stedi_payer_id') == context.get('payer_id')]
+    if len(connections) != 1 or not _api.commercial.is_united_healthcare_payer(result):
+        raise _api.HTTPException(409, 'The saved visit has no unique UnitedHealthcare payer route.')
+    billing = source.get('billing_provider') or {}
+    rendering = inputs.get('rendering_provider') or {}
+    tin = _api.re.sub(r'\D', '', str(billing.get('tin') or ''))
+    scope = (str(billing.get('npi') or ''), str(rendering.get('npi') or ''), tin,
+             str(source.get('location_id') or ''), str(inputs.get('place_of_service') or ''))
+    if (billing.get('tin_conflict') or not all(scope) or len(tin) != 9
+            or not all(_api.re.fullmatch(r'\d{10}', npi) for npi in scope[:2])):
+        raise _api.HTTPException(409, 'The saved billing and rendering provider scope is incomplete.')
+    exact_source = {**source, 'payer_plan_bound': True}
+    existing = scoped_admin_nonparticipation(session['practice_id'], connections[0], inputs,
+        exact_source, names, group)
+    if existing:
+        return {'id': existing['id'], 'status': existing['status'], 'source': 'clinic_admin_attestation'}
+    record = _api.commercial_store.create_network(session['practice_id'], {
+        'payer_connection_id': connections[0]['id'], 'billing_npi': scope[0],
+        'rendering_npi': scope[1], 'tin': tin,
+        'organization_name': str(billing.get('organization_name') or billing.get('name') or 'Clinic')[:160],
+        'location_id': scope[3], 'place_of_service': scope[4],
+        'plan_matcher': names[0], 'plan_group_number': group,
+        'network_name': 'UHC Group Medicare Advantage PPO',
+        'effective_from': service_date, 'effective_to': value.effective_to,
+        'status': 'nonparticipating',
+        'evidence_reference': 'clinic-admin-attestation: ' + value.reference,
+    })
+    return {'id': record['id'], 'status': record['status'], 'source': 'clinic_admin_attestation'}
 
 
 @_api.router.post("/profiles")
