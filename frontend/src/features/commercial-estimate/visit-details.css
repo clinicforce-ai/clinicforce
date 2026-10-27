@@ -58,6 +58,16 @@
   border: 1px solid #c8e2d9;
 }
 
+.visit-overview .visit-snapshots > div.is-reported {
+  background: #eef5fc;
+  border: 1px solid #bed5eb;
+}
+
+.visit-overview .visit-snapshots > div.is-unknown {
+  background: #f5f7f8;
+  border: 1px solid #d7e0e3;
+}
+
 .visit-overview .visit-snapshots > div.is-missing {
   background: #fcebed;
   border: 1px solid #e7b9bf;
@@ -70,6 +80,16 @@
 
 .visit-snapshots .is-confirmed svg {
   color: var(--ve-teal);
+}
+
+.visit-snapshots .is-reported svg,
+.visit-snapshots .is-reported strong {
+  color: #285b83;
+}
+
+.visit-snapshots .is-unknown svg,
+.visit-snapshots .is-unknown strong {
+  color: #526b75;
 }
 
 .visit-snapshots .is-missing svg,

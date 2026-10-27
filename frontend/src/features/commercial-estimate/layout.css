@@ -200,6 +200,11 @@
   background: var(--ve-soft);
 }
 
+.coverage-chip.is-reported {
+  color: #285b83;
+  background: #eef5fc;
+}
+
 .coverage-chip.is-missing {
   color: var(--ve-error);
   background: #fcebed;

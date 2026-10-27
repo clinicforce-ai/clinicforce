@@ -88,6 +88,13 @@ export default function CommercialOverview({
   const networkReason = result.network_evidence?.reason
     ?.replace(/billing TIN is missing from the visit\.?/i, '')
     .trim()
+  const networkExplanation =
+    networkReason ||
+    (result.reference_only &&
+    result.reference_benefits?.active === true &&
+    networkLabel === 'Not determined'
+      ? 'Stedi did not confirm this provider’s network tier'
+      : null)
   const chooseServices =
     !readOnly &&
     result.service_selection_status === 'preview' &&
@@ -332,7 +339,7 @@ export default function CommercialOverview({
                 Agreement mismatch: {networkWarnings.join(' ')}
               </small>
             ) : (
-              networkReason && <small>{networkReason}</small>
+              networkExplanation && <small>{networkExplanation}</small>
             )}
             {result?.network_evidence?.product_source && (
               <small>Contract plan lookup: {result.network_evidence.product_source}</small>

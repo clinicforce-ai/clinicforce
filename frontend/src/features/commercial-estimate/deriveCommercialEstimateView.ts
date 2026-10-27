@@ -156,7 +156,7 @@ export function deriveCommercialEstimateView({
       ? `/api/staff/library/${encodeURIComponent(contractDocumentId)}/document?preview=true${contractPage ? `#page=${contractPage}` : ''}`
       : null
   const cash = result?.payment_mode === 'cash'
-  const coverageTone =
+  let coverageTone =
     policyStatus === 'Coverage active'
       ? 'is-confirmed'
       : !result ||
@@ -166,6 +166,7 @@ export function deriveCommercialEstimateView({
           (cash && !result.cash_fallback)
         ? ''
         : 'is-missing'
+  if (referenceBenefits?.active === true) coverageTone = 'is-reported'
   const calculating =
     (!!busy && busy !== 'delete') || recovering || (!!selected && !result && !error)
   const previousEstimate = !!error && !!result
@@ -173,7 +174,7 @@ export function deriveCommercialEstimateView({
     result?.collection_guidance?.status !== 'deferred' ? result?.collection_guidance : undefined
   const contractCandidate =
     benefits?.network_status === 'unknown' ? result?.mapping_candidate?.network : null
-  const networkLabel =
+  let networkLabel =
     result?.network_evidence?.decision === 'out_of_network_by_clinic_contract_inventory'
       ? 'Out of network for estimation · clinic inventory'
       : result?.network_evidence?.decision === 'excluded_under_available_agreement'
@@ -196,6 +197,8 @@ export function deriveCommercialEstimateView({
                 : contractCandidate
                   ? 'Contract match unavailable'
                   : 'Not determined'
+  const referenceClinicNetwork = referenceBenefits?.network_source === 'clinic_nmct_policy'
+  if (referenceClinicNetwork) networkLabel = 'In network · clinic policy'
   const networkSource =
     result?.network_evidence?.decision === 'in_network_contract_supported'
       ? 'Current signed clinic agreement · review member product and clinician tier'
@@ -210,7 +213,7 @@ export function deriveCommercialEstimateView({
               : benefits?.network_source === 'clinic_contract_inventory'
                 ? 'Certified clinic contract inventory · not payer-confirmed'
                 : guidance?.network_source
-  const networkTone =
+  let networkTone =
     !result || tooEarly || result.recovery?.state === 'pending'
       ? ''
       : benefits?.active === true && !patientBenefitsBound
@@ -224,6 +227,9 @@ export function deriveCommercialEstimateView({
               ? 'is-missing'
               : 'is-review'
             : 'is-review'
+  if (referenceClinicNetwork) networkTone = 'is-confirmed'
+  else if (referenceBenefits?.active === true && networkLabel === 'Not determined')
+    networkTone = 'is-unknown'
   const unavailableReason = error
     ? 'Current benefits could not be loaded.'
     : failure?.detail || 'The insured advance has not been calculated for the selected services.'
