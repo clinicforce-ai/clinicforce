@@ -130,6 +130,10 @@ async def attest_saved_group_ppo_network(case_id: str, value: _api.NetworkAttest
             or not patient_plan_applies(benefits, identity, service_date)
             or not patient_benefits_bound(identity)):
         raise _api.HTTPException(409, 'The saved visit is not bound to one active Group PPO member product and group.')
+    try:
+        _api.date.fromisoformat(value.effective_to)
+    except ValueError:
+        raise _api.HTTPException(422, 'The attestation end date is invalid.') from None
     if not service_date <= value.effective_to <= service_date[:4] + '-12-31':
         raise _api.HTTPException(422, 'The attestation end date must follow this visit and stay within its plan year.')
     connections = [row for row in _api.commercial_store.list_connections(session['practice_id'])
