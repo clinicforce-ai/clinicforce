@@ -17,7 +17,8 @@ from test_visit_estimate import payload
 def isolated_payer_connections(monkeypatch):
     """Recovery tests use synthetic cases and must not read a live practice DB."""
     monkeypatch.setenv('STEDI_PRACTICE_API_KEYS', '{}')
-    with patch.object(api.commercial_store, 'list_connections', return_value=[]):
+    with patch.object(api.commercial_store, 'list_connections', return_value=[]), \
+         patch.object(api.commercial_store, 'list_cpt_requirements', return_value=[]):
         yield
 
 
@@ -143,6 +144,25 @@ def test_dependent_uses_the_only_active_policy_and_collapses_identical_route_cop
     duplicate['benefitsInformation'].append({'code': 'B', 'serviceTypeCodes': ['98'], 'benefitAmount': '50'})
     rows = discovery.candidates({'items': items}, inputs, source)
     assert discovery.one_active_policy(rows, items, ['98', '30']) is None
+
+
+def test_identical_inactive_routes_are_one_display_policy_without_hiding_different_evidence():
+    case, _, _, item = setup()
+    inputs = case['previsit_context']['inputs']
+    source = case['previsit_context']['source']
+    inactive = deepcopy(item)
+    inactive['benefitsInformation'] = [{'code': '6', 'serviceTypeCodes': ['30']}]
+    inactive.pop('plans', None)
+    copy = deepcopy(inactive)
+    copy['payerId'] = 'alternate-route'
+    copy['payer']['payorIdentification'] = 'alternate-route'
+    rows = discovery.candidates({'items': [inactive, copy]}, inputs, source)
+    assert rows[0]['active_medical'] is False
+    assert rows[0]['policy_group_id'] == rows[1]['policy_group_id']
+    assert [row['policy_response_count'] for row in rows] == [2, 2]
+    copy['benefitsInformation'].append({'code': 'B', 'serviceTypeCodes': ['98'], 'benefitAmount': '50'})
+    changed = discovery.candidates({'items': [inactive, copy]}, inputs, source)
+    assert changed[0]['policy_group_id'] != changed[1]['policy_group_id']
 
 
 def test_distinct_active_policy_count_ignores_duplicate_routes_and_inactive_hits():

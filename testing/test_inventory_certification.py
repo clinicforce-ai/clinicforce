@@ -121,6 +121,22 @@ def test_draft_connection_can_use_certified_inventory_without_becoming_active(mo
     assert PAYER['status'] == 'draft'
 
 
+def test_nmct_uses_certified_uhc_product_exclusion_ahead_of_all_plan_policy(monkeypatch):
+    api = commercial_previsit_pricing._api
+    monkeypatch.setattr(inventory_certification.staff_store, 'list_library', lambda _: [DOC])
+    monkeypatch.setattr(api.commercial_store, 'list_connections', lambda _: [PAYER])
+    monkeypatch.setattr(library_network_exclusions, 'applicable_exclusion', lambda *args: EXCLUSION)
+    monkeypatch.setattr(commercial_previsit_pricing, '_attach_temporary_uhc_rates', lambda *args: None)
+    monkeypatch.setattr(api, '_previsit_range', lambda *args, **kwargs: ({'mode': 'services', 'lines': []}, []))
+    result = {'payer': 'UnitedHealthcare', 'codes': [], 'issues': []}
+    benefits = {'network_status': 'unknown'}
+    commercial_previsit_pricing._attach_previsit_pricing(
+        result, 'primary', INPUTS, SOURCE, '87726', benefits)
+    assert benefits['network_status'] == 'out_of_network'
+    assert benefits['network_source'] == 'clinic_contract_inventory'
+    assert result['network_evidence']['decision'] == 'out_of_network_by_clinic_contract_inventory'
+
+
 def test_enabled_connection_keeps_inventory_exclusion_not_payer_confirmation(monkeypatch):
     api = commercial_previsit_pricing._api
     enabled = {**PAYER, 'status': 'staff_guidance_enabled'}

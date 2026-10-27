@@ -2,11 +2,13 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 from datetime import datetime, timezone
 from typing import Any
 from uuid import uuid4
 
+from app.core import patient_store
 from app.core.patient_store import _connection
 from app.insurance.commercial import CommercialError, RATE_SOURCE_TYPES, SERVICE_CATEGORIES, is_united_healthcare_payer
 
@@ -33,6 +35,17 @@ def list_connections(practice_id: str) -> list[dict]:
     with _connection() as connection:
         rows = connection.execute("SELECT * FROM commercial_payer_connections WHERE practice_id=%s ORDER BY display_name", (practice_id,)).fetchall()
     return [_row(row) for row in rows]
+
+
+def list_cpt_requirements(practice_id: str) -> list[dict]:
+    """Read sourced, product-specific rules without member data."""
+    if not patient_store.DATABASE_URL and not (os.getenv('DB_HOST') and os.getenv('DATABASE_PASSWORD')):
+        return []  # No optional stored rule is asserted before database setup.
+    with _connection() as db:
+        rows = db.execute('''SELECT * FROM commercial_cpt_requirements
+            WHERE practice_id IN (%s,'*') ORDER BY payer_key,product_key,cpt,effective_from''',
+            (practice_id,)).fetchall()
+    return [dict(row) for row in rows]
 
 
 def connection(practice_id: str, connection_id: str) -> dict | None:
@@ -149,10 +162,13 @@ def add_connection_aliases(practice_id: str, connection_id: str, aliases: list[s
 
 def set_collection_policy(practice_id: str, connection_id: str, mode: str,
                           reference: str, actor_id: str, *, allow_supported_oon_advance: bool = False,
-                          allow_cms_based_advance: bool = False) -> dict:
+                          allow_cms_based_advance: bool = False,
+                          allow_blue_cross_proxy_advance: bool = False) -> dict:
     """Set a practice-scoped payer policy with an administrator and source reference."""
     if mode not in {'defer_to_claim', 'collect_verified_copay', 'collect_supported_advance', 'disabled'} or not reference.strip() or not actor_id:
         raise CommercialError('A collection policy mode, approval reference and administrator are required.')
+    if allow_blue_cross_proxy_advance and (mode != 'collect_supported_advance' or not allow_supported_oon_advance):
+        raise CommercialError('A Blue Cross fee proxy advance requires an approved out-of-network supported-advance policy.')
     now = _now()
     with _connection() as db:
         row = db.execute('SELECT rules_json FROM commercial_payer_connections WHERE id=%s AND practice_id=%s FOR UPDATE',
@@ -166,7 +182,8 @@ def set_collection_policy(practice_id: str, connection_id: str, mode: str,
             rules['collection_policy'] = {'mode': mode, 'reference': reference.strip(),
                                           'approved_by': actor_id, 'approved_at': now,
                                           'allow_supported_oon_advance': allow_supported_oon_advance,
-                                          'allow_cms_based_advance': allow_cms_based_advance}
+                                          'allow_cms_based_advance': allow_cms_based_advance,
+                                          'allow_blue_cross_proxy_advance': allow_blue_cross_proxy_advance}
         db.execute('UPDATE commercial_payer_connections SET rules_json=%s,updated_at=%s WHERE id=%s AND practice_id=%s',
                    (_json(rules), now, connection_id, practice_id))
     return connection(practice_id, connection_id) or {}

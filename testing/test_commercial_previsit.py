@@ -8,9 +8,28 @@ import httpx
 
 from app.api.routers.commercial_estimator import PrevisitInput, VisitReviewInput, _compare_card_hints, _previsit_benefits, previsit_estimate, update_visit_review
 from app.api.routers.commercial_flow.commercial_previsit_pricing import _previsit_service_types, _reviewed_service_types
+from app.api.routers.commercial_flow.commercial_previsit_submit import same_member_and_medical_plan
 
 
 class PrevisitFlowTest(unittest.IsolatedAsyncioTestCase):
+    def test_separate_responses_require_the_same_member_and_medical_plan(self):
+        from app.api.routers import commercial_estimator as api
+        first = {'subscriber': {'memberId': 'M123', 'name': {'person': {'firstName': 'Pat', 'lastName': 'Example'}}},
+                 'plans': [{'name': 'PPO MEDICAL', 'benefits': {'statuses': [{'status': 'Active'}]}}]}
+        self.assertTrue(same_member_and_medical_plan(api, first, first))
+        changed = json.loads(json.dumps(first))
+        changed['subscriber']['memberId'] = 'M999'
+        self.assertFalse(same_member_and_medical_plan(api, first, changed))
+        changed = json.loads(json.dumps(first))
+        changed['plans'][0]['name'] = 'OTHER MEDICAL'
+        self.assertFalse(same_member_and_medical_plan(api, first, changed))
+
+    async def test_bcbstx_combined_visit_uses_one_service_type_per_inquiry(self):
+        await self._flow(date.today().isoformat(), combined_emg=True)
+
+    async def test_bcbstx_combined_visit_rejects_different_member_on_second_inquiry(self):
+        await self._flow(date.today().isoformat(), combined_emg=True, secondary_mismatch=True)
+
     def test_refresh_requests_selected_diagnostic_and_office_categories(self):
         case = {'previsit_context': {'context_token': 'same-visit',
             'source': {'appointment_id': 'appointment-1'},
@@ -28,9 +47,15 @@ class PrevisitFlowTest(unittest.IsolatedAsyncioTestCase):
         case['previsit_context']['result']['selected_ids'] = ['nerve', 'muscle', 'office']
         case['visit_review'].pop('selected_ids')
         self.assertEqual(_reviewed_service_types([case], 'appointment-1', '2026-10-22', 'same-visit'), ['73', '98'])
+        case['previsit_context']['result']['selected_ids'] = []
+        case['visit_review']['separate_em_planned'] = True
+        self.assertEqual(_reviewed_service_types([case], 'appointment-1', '2026-10-22', 'same-visit'), ['73', '98'])
         self.assertEqual(_reviewed_service_types([case], 'another-appointment', '2026-10-22', 'same-visit'), [])
 
     def setUp(self):
+        self.cpt_rules_patch = patch('app.api.routers.commercial_estimator.commercial_store.list_cpt_requirements', return_value=[])
+        self.cpt_rules_patch.start()
+        self.addCleanup(self.cpt_rules_patch.stop)
         self.library_patch = patch('app.api.routers.commercial_estimator.library_pricing.prepare', return_value=[])
         self.library_patch.start()
         self.addCleanup(self.library_patch.stop)
@@ -138,7 +163,7 @@ class PrevisitFlowTest(unittest.IsolatedAsyncioTestCase):
     async def test_newer_conflicting_ecw_check_refreshes_cached_stedi_evidence(self):
         await self._flow(date.today().isoformat(), newer_ecw=True)
 
-    async def _flow(self, service_date, reject=False, retry_basic=False, payer_missing=False, refresh=False, newer_ecw=False, too_early=False, self_pay=False, coverage_start=None, saved_hold=False, enrollment_missing=False, ecw_saved=False, ecw_incomplete=False, medicare_secondary=False, billing_note=None, member_id_missing=False, card_fields=None, card_conflict=False, card_status=None, pos=None, scheduled_code=None, emg_review=False, expect_preliminary=False, visit_type='new'):
+    async def _flow(self, service_date, reject=False, retry_basic=False, payer_missing=False, refresh=False, newer_ecw=False, too_early=False, self_pay=False, coverage_start=None, saved_hold=False, enrollment_missing=False, ecw_saved=False, ecw_incomplete=False, medicare_secondary=False, billing_note=None, member_id_missing=False, card_fields=None, card_conflict=False, card_status=None, pos=None, scheduled_code=None, emg_review=False, expect_preliminary=False, visit_type='new', combined_emg=False, secondary_mismatch=False):
         session = {"practice_id": "clinic", "intake_id": "intake", "patient_id": "patient",
                    "share_manifest_id": "", "staff": {"id": "staff", "display_name": "Staff", "practice_name": "Clinic"},
                    "intake": {"updated_at": "version", "patient": {"given_name": "Pat", "family_name": "Example",
@@ -155,6 +180,9 @@ class PrevisitFlowTest(unittest.IsolatedAsyncioTestCase):
             inputs['lines'] = [{'id': 'documented-service', 'code': scheduled_code,
                                 'service_status': 'scheduled', 'units': 1,
                                 'source': 'eCW ServiceRequest'}]
+        if combined_emg:
+            inputs.update(reason='EMG for right cervical radiculopathy', visit_type='established',
+                          place_of_service='11')
         source = {"appointment_id": "visit-1", "_patient_id": "p", "coverage_id": "coverage-1", "active_coverages": 1,
                   "payer": "Blue Cross Blue Shield Tx", "plan": "CI", "rendering_provider": {"npi": "1234567890", "first_name": "Ada", "last_name": "Clinician"},
                   "billing_provider": {"name": "Clinic", "npi": "1811853260"}, "location_id": "office"}
@@ -195,6 +223,16 @@ class PrevisitFlowTest(unittest.IsolatedAsyncioTestCase):
             session['intake']['workflows'] = {'saved': 'held-case'}
         held_cases = [{'previsit_context': {'source': {'appointment_id': 'visit-1'}},
                        'visit_review': {'insurance_check_from': (date.today() + timedelta(days=1)).isoformat()}}]
+        if combined_emg:
+            from app.api.routers.commercial_flow.commercial_previsit_finish import _visit_context_token
+            token = _visit_context_token(inputs, source)
+            case['visit_review'] = {'context_token': token, 'separate_em_planned': True}
+            case['previsit_context'] = {'context_token': token,
+                'source': {'appointment_id': 'visit-1'}, 'inputs': {'service_date': service_date},
+                'result': {'codes': [{'id': code, 'code': code, 'units': 1}
+                                     for code in ('95909', '95886', '99213')], 'selected_ids': []}}
+            session['intake']['workflows'] = {'saved': 'case-1'}
+            held_cases = [case]
         client = MagicMock()
         client.__aenter__ = AsyncMock(return_value=client)
         client.__aexit__ = AsyncMock(return_value=None)
@@ -202,6 +240,28 @@ class PrevisitFlowTest(unittest.IsolatedAsyncioTestCase):
             "id": "eligibility-1", "plans": [{"benefits": {"statuses": [{"status": "Active"}]}}],
             "benefitsInformation": [{"code": "1"}]})
         client.post = AsyncMock(return_value=success_response)
+        if combined_emg:
+            response = {'subscriber': {'memberId': 'M123',
+                'name': {'person': {'firstName': 'Pat', 'lastName': 'Example'}}},
+                'plans': [{'name': 'PPO MEDICAL', 'benefits': {
+                    'statuses': [{'status': 'Active', 'service': {'system': 'STC', 'value': '30'},
+                        'messages': ['Provider is in-network based on NPI ID provided in request.']}],
+                    'outOfPocket': [{'amount': '0', 'coverageLevel': 'FAMILY',
+                        'network': {'indicator': 'IN_NETWORK'}, 'timePeriod': 'REMAINING',
+                        'service': {'system': 'STC', 'value': '30'},
+                        'messages': ['OFFICE VISIT - PROFESSIONAL']}]}}]}
+            second = json.loads(json.dumps(response))
+            second['plans'][0].pop('name')
+            second['plans'][0]['benefits']['statuses'] = [
+                {'status': 'Active', 'service': {'system': 'STC', 'value': '30'},
+                 'planCoverageDescription': 'PPO DENTAL'},
+                {'status': 'Active', 'service': {'system': 'STC', 'value': '30'},
+                 'planCoverageDescription': 'PPO MEDICAL'}]
+            second['plans'][0]['benefits']['outOfPocket'][0]['messages'] = ['DIAGNOSTIC MEDICAL PROCEDURE - PROFESSIONAL']
+            if secondary_mismatch:
+                second['subscriber']['memberId'] = 'M999'
+            client.post.side_effect = [httpx.Response(200, json={**response, 'id': 'diagnostic-check'}),
+                                       httpx.Response(200, json={**second, 'id': 'office-check'})]
         if reject:
             client.post.return_value = httpx.Response(200 if isinstance(reject, dict) else 400,
                 json=reject if isinstance(reject, dict) else {'errors': [{'path': '/encounter/dates/service', 'message': 'Must be an object'}]})
@@ -221,21 +281,51 @@ class PrevisitFlowTest(unittest.IsolatedAsyncioTestCase):
              patch("app.api.routers.commercial_estimator.store.create_case", return_value=case), \
              patch("app.api.routers.commercial_estimator._save", side_effect=lambda value, *_: value), \
              patch("app.api.routers.commercial_estimator.object_store.enabled", return_value=True), \
-             patch("app.api.routers.commercial_estimator.object_store.put_staff_document", return_value="protected-key"), \
+             patch("app.api.routers.commercial_estimator.object_store.put_staff_document", return_value="protected-key") as raw_put, \
              ExitStack() as scoped_patches, \
              patch("app.api.routers.commercial_estimator.httpx.AsyncClient", return_value=client), \
              patch.dict("app.api.routers.commercial_estimator.os.environ", {
                  "STEDI_API_KEY": "production-key", "STEDI_EXECUTION_MODE": "commercial_pilot",
                  "STEDI_LIVE_ELIGIBILITY_ENABLED": "true"}):
             scoped_patches.enter_context(patch("app.api.routers.commercial_estimator.commercial_store.list_connections",
-                                               return_value=[connection] if scoped_ecw_contract else []))
+                                               return_value=[connection] if scoped_ecw_contract or combined_emg else []))
             scoped_patches.enter_context(patch("app.api.routers.commercial_estimator._previsit_practice_path",
                                                return_value=(connection, network, profile)))
             scoped_patches.enter_context(patch("app.api.routers.commercial_estimator._network_contract_evidence",
                                                return_value={'document_id': 'synthetic-contract'}))
             scoped_patches.enter_context(patch("app.api.routers.commercial_estimator.commercial_store.matching_rates",
-                                               return_value=[]))
+                                               return_value=[{'code': code, 'allowed_cents': amount,
+                                                   'source_reference': 'Synthetic contract'}
+                                                   for code, amount in [('95909', 12644), ('95886', 8918), ('99213', 7615)]]
+                                               if combined_emg else []))
             result = await previsit_estimate(PrevisitInput(appointment_id="visit-1", refresh_benefits=refresh if too_early else False), MagicMock())
+            if combined_emg:
+                self.assertEqual(client.post.await_count, 2)
+                self.assertEqual([[row['value'] for row in call.kwargs['json']['encounter']['services']]
+                                  for call in client.post.await_args_list], [['98'], ['73']])
+                self.assertEqual(case['previsit']['request_state'], 'partial' if secondary_mismatch else 'complete')
+                self.assertEqual(result['requested_service_types'], ['98', '73'])
+                saved_raw = [json.loads(call.args[3]) for call in raw_put.call_args_list
+                             if call.args[2] == 'previsit-stedi-271.json']
+                self.assertEqual(len(saved_raw), 1)
+                if secondary_mismatch:
+                    self.assertNotIn('_service_payloads', saved_raw[0])
+                    self.assertIsNone(result['collection_guidance']['amount_cents'])
+                    cached = await previsit_estimate(PrevisitInput(appointment_id='visit-1'), MagicMock())
+                    self.assertEqual(client.post.await_count, 2)
+                    self.assertIsNone(cached['collection_guidance']['amount_cents'])
+                    with patch('app.api.routers.commercial_estimator.store.get_case', return_value=case), \
+                         patch('app.api.routers.commercial_estimator.object_store.get_object_bytes',
+                               return_value=json.dumps(response).encode()):
+                        edited = await update_visit_review('case-1', VisitReviewInput(
+                            context_token=result['context_token'], revision=0,
+                            separate_em_planned=True), MagicMock())
+                    self.assertIsNone(edited['collection_guidance']['amount_cents'])
+                else:
+                    self.assertIn('73', saved_raw[0]['_service_payloads'])
+                    self.assertEqual([row['code'] for row in result['codes']], ['95909', '95886', '99213'])
+                    self.assertEqual(result['collection_guidance']['amount_cents'], 0)
+                return
             if visit_type == 'established':
                 preliminary_suggestions.assert_called_once()
                 self.assertIn('Patient visit status from eCW: established', preliminary_suggestions.call_args.args[0])
@@ -427,7 +517,7 @@ class PrevisitFlowTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([row['code'] for row in result['requirement_evidence']['procedures']],
                          ['99202', '99203', '99204', '99205'])
         sent = client.post.await_args.kwargs["json"]
-        self.assertEqual(sent["encounter"]["services"], [{"system": "STC", "value": "98"}, {"system": "STC", "value": "30"}])
+        self.assertEqual(sent["encounter"]["services"], [{"system": "STC", "value": "98"}])
         if pos:
             self.assertEqual(sent['encounter']['placeOfService'], {'code': pos})
         if service_date == date.today().isoformat():

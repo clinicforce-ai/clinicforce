@@ -5,6 +5,8 @@ from app.insurance.golden import GoldenCaseError
 
 
 EMG_ADD_ONS = {'95885', '95886', '95887'}
+STANDALONE_EMG_CODES = {'95860', '95861', '95862', '95863', '95864', '95867', '95868', '95869', '95870'}
+EMG_CODES = EMG_ADD_ONS | STANDALONE_EMG_CODES
 NCS_CODES = {str(code) for code in range(95907, 95914)}
 NCS_STUDY_RANGES = {
     '95907': '1–2', '95908': '3–4', '95909': '5–6', '95910': '7–8',
@@ -24,12 +26,13 @@ def documented_ncs_code(reason: str) -> str | None:
 
 # Versioned clinical planning metadata. This classifies services; it never
 # supplies a payer benefit, covered status, allowance, or billable quantity.
-SERVICE_CATALOGUE_VERSION = 1
+SERVICE_CATALOGUE_VERSION = 2
 SERVICE_FAMILIES = {
     'office_consultation': {'codes': {str(n) for n in (*range(99202, 99206), *range(99212, 99216))},
                             'group': 'visit', 'role': 'consultation', 'service_type': '98'},
     'nerve_conduction': {'codes': NCS_CODES, 'group': 'nerve', 'role': 'diagnostic_test', 'service_type': '73'},
     'needle_emg': {'codes': EMG_ADD_ONS, 'group': 'muscle', 'role': 'diagnostic_test', 'service_type': '73'},
+    'standalone_emg': {'codes': STANDALONE_EMG_CODES, 'group': 'muscle', 'role': 'diagnostic_test', 'service_type': '73'},
     'diagnostic_procedure': {'codes': {'11104', '11105', '62270', '62328'},
                              'group': 'other', 'role': 'procedure', 'service_type': '2'},
     'botulinum_drug': {'codes': {'J0585'}, 'group': 'other', 'role': 'drug',
@@ -68,6 +71,8 @@ def service_selection_issues(codes: list[str]) -> list[str]:
     issues = []
     if selected & EMG_ADD_ONS and not selected & NCS_CODES:
         issues.append('Add the anticipated nerve-conduction service (95907–95913) for these EMG add-ons. Choose its level from the planned study count; the add-ons alone are not a complete visit estimate.')
+    if selected & STANDALONE_EMG_CODES and selected & NCS_CODES:
+        issues.append('Use 95885–95887 for same-day needle EMG with nerve-conduction testing; 95860–95864 and 95867–95870 are standalone EMG codes.')
     if sum(code in NCS_CODES for code in codes) > 1:
         issues.append('Choose one nerve-conduction level (95907–95913) for the total planned study count, rather than adding alternative levels together.')
     return issues

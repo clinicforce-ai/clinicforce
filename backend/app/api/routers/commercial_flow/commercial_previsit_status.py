@@ -4,12 +4,15 @@ from __future__ import annotations
 from app.api.routers import commercial_estimator as _api
 from app.insurance.identity import patient_benefits_bound, patient_plan_applies, payer_identity_verified
 from app.insurance.network_participation import verified_in_network, verified_out_of_network
-from app.insurance import evidence_resolution, group_contract_support
+from app.insurance import blue_cross_proxy, evidence_resolution, group_contract_support
 from app.api.routers.commercial_flow.commercial_previsit_finish import _payer_plan_pricing_source
 from app.api.routers.commercial_flow.commercial_previsit_network_guard import apply_nmct_network_policy, recheck_saved_network_evidence, recheck_saved_payer_message
 from app.api.routers.commercial_flow.commercial_previsit_saved_pricing import _reprice_saved_new_network
 from app.api.routers.commercial_flow.commercial_previsit_requirements import refresh_saved_requirements
+from app.api.routers.commercial_flow.commercial_previsit_rate_reference import _attach_temporary_uhc_rates
 from app.api.routers.commercial_flow.commercial_previsit_enrollment import _enrollment_failure
+from app.api.routers.commercial_flow.commercial_previsit_service_scope import retain_incomplete_service_evidence as _retain_incomplete_service_evidence
+from app.api.routers.commercial_flow.commercial_previsit_benefits import case_benefits as _case_benefits
 @_api.router.get("/configuration")
 async def configuration(request: _api.Request) -> dict:
     session = await _api._session(request)
@@ -64,19 +67,6 @@ async def ecw_appointment_readiness(value: _api.EcwStartInput, request: _api.Req
 def _recovery_binding(inputs: dict, source: dict) -> str:
     # Choosing anticipated services must not invalidate the recovered member identity.
     return _api._visit_context_token({**inputs, 'lines': [], 'reason': None, 'visit_type': None}, source)
-
-def _case_benefits(payload: dict, inputs: dict, source: dict, case: dict) -> dict:
-    coverage = _api._coverage_snapshot(inputs, source)
-    recovery = case.get('previsit_discovery') or {}
-    recovered = (recovery.get('outcome') == 'recovered' and recovery.get('identity_binding') == _api._recovery_binding(inputs, source)
-                 and recovery.get('verified_coverage'))
-    if recovered:
-        coverage.update(recovery['verified_coverage'])
-    benefits = _api._previsit_benefits(payload, coverage, inputs['service_date'], _api._previsit_service_types(inputs), inputs=inputs, source=source)
-    if recovered:
-        benefits['normalization_notes'].append('Coverage was selected from Stedi discovery for this estimate. eCW was not changed.')
-    return benefits
-
 
 def _insurance_diagnosis(case: dict, result: dict, guidance: dict) -> dict:
     """Independent, persisted stage results; never put candidate identities in logs."""
@@ -345,6 +335,7 @@ def _recheck_saved_payer_allowance(result: dict, case: dict, practice_id: str) -
 
 def _previsit_result(case: dict, practice_id: str | None = None) -> dict:
     result = _api.deepcopy(case['previsit_context']['result'])
+    _retain_incomplete_service_evidence(result.get('benefits') or {}, case)
     reference = case.get('previsit_reference') or {}
     if (reference.get('benefits') and reference.get('context_token') == case['previsit_context'].get('context_token')
             and reference.get('service_date') == result.get('service_date')):
@@ -387,6 +378,15 @@ def _previsit_result(case: dict, practice_id: str | None = None) -> dict:
                 group_contract_support.eligibility_route(result, str(payer_id or ''), route_payer))
         _recheck_saved_payer_allowance(result, case, practice_id)
         refresh_saved_requirements(_api, result, case, practice_id)
+        result.pop('fee_proxy_estimate', None)
+        result.pop('temporary_rate_reference', None)
+        context = case['previsit_context']
+        if _api.commercial.is_united_healthcare_payer(
+                result, {'displayName': route_payer.get('display_name')} if route_payer else None):
+            _attach_temporary_uhc_rates(result, practice_id, context.get('inputs') or {},
+                                        context.get('source') or {})
+            if proxy := blue_cross_proxy.estimate(result, str(result.get('service_date') or '')):
+                result['fee_proxy_estimate'] = proxy
     result['revision'] = case.get('revision', 0)
     check_from = max((case.get('visit_review') or {}).get('insurance_check_from') or '',
         ((case['previsit_context'].get('source', {}).get('coverage_period') or {}).get('start') or '')[:10])

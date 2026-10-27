@@ -58,4 +58,4 @@ def current(practice_id: str, service_date: str) -> dict | None:
     return {**records[0], 'rows': rows, 'versions': [row['id'] for row in records]}
 
 
-from app.insurance.pricing.cash import apply
+from app.insurance.pricing.cash import apply, apply_visit_quote

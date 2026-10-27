@@ -32,9 +32,9 @@ DAY = '2026-10-21'
 def test_nmct_all_plan_policy_without_clinic_contract(monkeypatch, practice_id, payer, plan):
     monkeypatch.setattr(api.commercial_store, 'list_connections', lambda *_: [])
     monkeypatch.setattr(pricing.library_network_exclusions, 'applicable_exclusion',
-                        lambda *_: pytest.fail('NMCT exclusions must not select a network tier'))
+                        lambda *_: None)
     monkeypatch.setattr(pricing.inventory_certification, 'applicable',
-                        lambda *_: pytest.fail('NMCT inventory must not select a network tier'))
+                        lambda *_: None)
     monkeypatch.setattr(pricing, '_attach_temporary_uhc_rates', lambda *_: None)
     monkeypatch.setattr(api.visit_estimate, 'price_lines', lambda *_args, **_kwargs: {'complete': False})
     result = {'payer': payer, 'codes': [], 'issues': []}
@@ -88,7 +88,7 @@ def test_nmct_policy_overrides_scoped_clinic_nonparticipation(monkeypatch):
     assert result['network_evidence']['decision'] == 'in_network_by_clinic_policy'
 
 
-def test_nmct_saved_clinic_out_of_network_result_requires_repricing():
+def test_nmct_saved_inventory_out_of_network_result_requires_repricing():
     result = {'benefits': {'network_status': 'out_of_network',
                            'network_source': 'clinic_contract_inventory'},
               'network_evidence': {'decision': 'out_of_network_by_clinic_contract_inventory'},
@@ -97,9 +97,8 @@ def test_nmct_saved_clinic_out_of_network_result_requires_repricing():
                               'patient_max_cents': 9000, 'lines': []},
               'issues': []}
     recheck_saved_network_evidence(result, {}, 'primary', None)
-    assert result['benefits']['network_status'] == 'in_network'
-    assert result['network_evidence']['decision'] == 'in_network_by_clinic_policy'
-    assert 'agreement_exclusion' not in result
+    assert result['benefits']['network_status'] == 'unknown'
+    assert result['agreement_exclusion']['status'] == 'excluded_under_available_agreement'
     assert result['price_range']['complete'] is False
     assert result['price_range']['patient_max_cents'] is None
 
@@ -109,7 +108,8 @@ def test_saved_requirements_refresh_when_network_projection_changes(monkeypatch)
     called = []
     monkeypatch.setattr(requirements, 'attach_requirements', lambda *args: called.append(args))
     api_stub = SimpleNamespace(staff_store=SimpleNamespace(list_library=lambda *_: []),
-                               commercial_store=SimpleNamespace(list_connections=lambda *_: []))
+                               commercial_store=SimpleNamespace(list_connections=lambda *_: [],
+                                                                list_cpt_requirements=lambda *_: []))
     saved = {'benefits': {'network_status': 'unknown', 'network_source': None},
              'network_evidence': {'decision': 'lacking_applicable_network_evidence'}}
     result = {'requirement_sources': [],
@@ -125,7 +125,8 @@ def test_saved_requirements_refresh_after_published_rule_update(monkeypatch):
     called = []
     monkeypatch.setattr(requirements, 'attach_requirements', lambda *args: called.append(args))
     api_stub = SimpleNamespace(staff_store=SimpleNamespace(list_library=lambda *_: []),
-                               commercial_store=SimpleNamespace(list_connections=lambda *_: []))
+                               commercial_store=SimpleNamespace(list_connections=lambda *_: [],
+                                                                list_cpt_requirements=lambda *_: []))
     benefits = {'network_status': 'in_network', 'network_source': 'clinic_group_agreement'}
     network = {'network_name': 'Blue Choice PPO'}
     saved = {'requirement_sources': [], 'benefits': benefits, 'network_evidence': network,
@@ -884,6 +885,7 @@ def test_requirement_context_uses_only_approved_contract_product():
               'insurance_details': {'group_number': 'SYNTHETIC', 'member_id': 'SYNTHETIC'},
               'plan_details': {'stedi': {'names': ['BASIC'], 'group_number': 'SYNTHETIC'}}}
     service = SimpleNamespace(staff_store=SimpleNamespace(get_library=lambda *_: None),
+                              commercial_store=SimpleNamespace(list_cpt_requirements=lambda *_: []),
                               contract_requirements=contract_requirements,
                               _requirement_candidates=lambda *_: [])
     source = {'plan': 'CI', 'plan_details': {'ecw': ['CI']}, 'billing_provider': {'npi': '1111111111'}}

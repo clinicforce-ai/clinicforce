@@ -18,6 +18,9 @@ from app.insurance.stedi_benefits.fields import (
     reported_stedi_options,
     _benefit_notes,
     _provider_participation,
+    _stedi_entries,
+    coverage_kind,
+    oop_plan_association,
 )
 
 
@@ -135,10 +138,13 @@ def normalize_stedi_271(payload: dict[str, Any], service_type_code: str, provide
     # A met family out-of-pocket limit covers every member's covered in-network
     # cost share. Keep it separate from the individual accumulator: a positive
     # family balance cannot establish this member's remaining responsibility.
+    supplementary_present = any(coverage_kind(row, payload) == 'supplementary'
+                                for row in _stedi_entries(payload))
     family_oop = [row for row in relevant if row.get('code') == 'G'
                   and (not _procedure(row) or _procedure(row) == procedure_code)
                   and str(row.get('coverageLevel') or row.get('coverageLevelCode') or '').upper() in {'FAMILY', 'FAM'}
                   and _network_indicator(row) in accepted_networks
+                  and (not supplementary_present or oop_plan_association(row, payload) == 'medical')
                   and str(row.get('timeQualifierCode') or row.get('timeQualifier') or '').upper() in {'29', 'REMAINING'}]
     family_scores = [(3 if _procedure(row) == procedure_code and procedure_code else
                       2 if service_type_code in (row.get('serviceTypeCodes') or []) else 1, row)

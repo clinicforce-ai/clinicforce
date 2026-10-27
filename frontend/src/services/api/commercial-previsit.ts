@@ -15,6 +15,7 @@ import type { PaymentExplanation } from './commercial-explanation'
 import type { CommercialNetworkEvidence } from './commercial-network-evidence'
 
 export type PrevisitEstimate = {
+  separate_em_planned?: boolean
   botox_review?: BotoxReview
   billing_protection?: {
     status?: 'qmb' | 'not_qmb'
@@ -45,7 +46,30 @@ export type PrevisitEstimate = {
     source: string
     message: string
     complete: boolean
-    lines: Array<{ code: string; unit_reference_cents: number; source_reference: string }>
+    lines: Array<{
+      id?: string
+      code: string
+      units?: number
+      modifiers?: string[]
+      unit_reference_cents: number
+      source_reference: string
+    }>
+  }
+  fee_proxy_estimate?: {
+    basis: 'bcbstx_fee_proxy'
+    status: 'provisional'
+    reference_total_cents: number
+    coinsurance_percent: string
+    copay_cents: number
+    deductible_cents: number
+    coinsurance_cents: number
+    oop_reduction_cents: number
+    patient_share_cents: number
+    oop_remaining_cents: number
+    rate_source: string
+    deductible_source: string
+    deductible_url: string
+    message: string
   }
   payment_explanation?: PaymentExplanation
   evidence_resolution?: Array<{
@@ -246,6 +270,7 @@ export type PrevisitEstimate = {
     source: string
     effective_from: string
     message: string
+    reason?: string
     min_cents?: number
     max_cents?: number
   }
@@ -328,6 +353,7 @@ export type PrevisitEstimate = {
       id?: string
       policy_group_id?: string
       policy_response_count?: number
+      active_medical?: boolean
       payer: string
       payer_identifier?: string
       plans?: string[]

@@ -18,7 +18,7 @@ def clinical_group(code: str) -> str:
 def is_emg_visit(inputs: dict) -> bool:
     if type(inputs.get('emg_required')) is bool:
         return inputs['emg_required']
-    if any(row.get('service_status') == 'scheduled' and row.get('code') in cpt_rules.NCS_CODES | cpt_rules.EMG_ADD_ONS
+    if any(row.get('service_status') == 'scheduled' and row.get('code') in cpt_rules.NCS_CODES | cpt_rules.EMG_CODES
            for row in inputs.get('lines', [])):
         return True
     reason = str(inputs.get('reason') or '')

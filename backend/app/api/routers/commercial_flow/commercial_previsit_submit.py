@@ -1,8 +1,44 @@
-"""Submit one previsit eligibility request after case and payer checks."""
+"""Submit previsit service inquiries after case and payer checks."""
 from __future__ import annotations
 
+from copy import deepcopy
 from types import ModuleType
 from app.api.routers.commercial_flow.commercial_previsit_requirements import check_cpt_authorization
+
+
+def same_member_and_medical_plan(api: ModuleType, primary: dict, additional: dict) -> bool:
+    """Bind separate service inquiries before their benefits share a visit."""
+    def person(value: dict) -> tuple[str, ...]:
+        name_field = value.get('name') or {}
+        name = (name_field.get('person') or {}) if isinstance(name_field, dict) else {}
+        name = name if isinstance(name, dict) else {}
+        return tuple(str(item or '').strip().casefold() for item in (
+            value.get('memberId'), value.get('dateOfBirth'),
+            name.get('firstName'), name.get('lastName'), value.get('relationToSubscriber')))
+    if not isinstance(primary.get('subscriber'), dict) or not isinstance(additional.get('subscriber'), dict):
+        return False
+    if not all(person(primary['subscriber'])[index] for index in (0, 2, 3)):
+        return False
+    if person(primary['subscriber']) != person(additional['subscriber']):
+        return False
+    if bool(primary.get('dependent')) != bool(additional.get('dependent')):
+        return False
+    if primary.get('dependent') and (not isinstance(primary['dependent'], dict)
+            or not isinstance(additional['dependent'], dict)
+            or person(primary['dependent']) != person(additional['dependent'])):
+        return False
+    if ((primary.get('provider') or {}).get('npi') and (additional.get('provider') or {}).get('npi')
+            and primary['provider']['npi'] != additional['provider']['npi']):
+        return False
+    if primary.get('payerId') and additional.get('payerId') and primary['payerId'] != additional['payerId']:
+        return False
+    first, second = api.commercial.plan_details(primary), api.commercial.plan_details(additional)
+    if any(first.get(key) and second.get(key) and first[key] != second[key]
+           for key in ('group_number', 'plan_number')):
+        return False
+    names, other_names = first.get('names') or [], second.get('names') or []
+    return (len(names) == len(other_names) == 1
+            and names[0].strip().casefold() == other_names[0].strip().casefold())
 
 
 async def submit_previsit_eligibility(api: ModuleType, *, payer: dict, provider: dict,
@@ -93,21 +129,55 @@ async def submit_previsit_eligibility(api: ModuleType, *, payer: dict, provider:
         # Planned services remain editable; failed benefits cannot be verified away.
         case = await api.run_in_threadpool(api._save, case, session, "previsit-stedi-rejected")
         return await api._start_previsit_recovery(case, session, provider, background_tasks)
+    inquiry_state = 'complete'
+    if payer_id == 'QDTRP' and len(requested_stc) > 1:
+        linked = {}
+        for stc in requested_stc[1:]:
+            next_body, next_basic = deepcopy(body), deepcopy(basic_body)
+            for request_body in (next_body, next_basic):
+                request_body['encounter']['services'] = [{'system': 'STC', 'value': stc}]
+            try:
+                async with api.httpx.AsyncClient(timeout=api.httpx.Timeout(30, connect=5)) as client:
+                    extra_response, extra, _ = await api._post_stedi_eligibility(
+                        client, {"Authorization": api_key, "Content-Type": "application/json"},
+                        next_body, next_basic)
+            except (api.httpx.HTTPError, ValueError):
+                inquiry_state = 'indeterminate'
+                result['issues'].append('A separate service benefit inquiry has an unknown outcome. Check payer activity before retrying.')
+                break
+            normalized = (api.commercial.normalize_stedi_271(extra, stc, False,
+                service_date=inputs['service_date']) if isinstance(extra, dict) else {})
+            if (extra_response.is_error or not isinstance(extra, dict)
+                    or api.commercial.eligibility_errors(extra)
+                    or not same_member_and_medical_plan(api, payload, extra)
+                    or normalized.get('active') is not True
+                    or normalized.get('service_date_matches') is False):
+                inquiry_state = 'partial'
+                result['issues'].append('A separate service benefit inquiry did not establish matching active medical coverage for this visit.')
+                break
+            linked[stc] = extra
+        if linked:
+            payload = {**payload, '_service_payloads': linked}
     raw_bytes = api.json.dumps(payload).encode()
     raw_key = await api.run_in_threadpool(api.object_store.put_staff_document, session["practice_id"], case["id"],
                                       "previsit-stedi-271.json", raw_bytes, "application/json")
     benefits = api._previsit_benefits(payload, coverage, inputs["service_date"], requested_stc, inputs=inputs, source=source)
+    if inquiry_state != 'complete':
+        benefits.setdefault('review_reasons', []).append(
+            'Separate requested service inquiry evidence is unavailable for the combined visit.')
+        benefits['requires_review'] = True
     result["benefits"] = benefits
     result["checked_at"] = api._now()
     api.collection_event('eligibility_received', practice_id=session['practice_id'], intake_id=(session.get('intake') or {}).get('id'),
                      case_id=case['id'], stage='eligibility', source='stedi', http_status=response.status_code)
     await api.run_in_threadpool(api._finish_previsit, result, case, inputs, source, payload, session, payer_id)
-    case["previsit"] = {"request_state": "complete", "benefits": benefits,
+    case["previsit"] = {"request_state": inquiry_state, "benefits": benefits,
                         "checked_at": result["checked_at"], "requested_service_types": requested_stc}
     case["previsit_raw_object_key"] = raw_key
     case["previsit_raw_sha256"] = api.hashlib.sha256(raw_bytes).hexdigest()
-    case = await check_cpt_authorization(api, result, case, payload, inputs, session, api_key)
-    if (case.get('cpt_authorization') or {}).get('state') == 'complete':
+    if inquiry_state == 'complete':
+        case = await check_cpt_authorization(api, result, case, payload, inputs, session, api_key)
+    if inquiry_state == 'complete' and (case.get('cpt_authorization') or {}).get('state') == 'complete':
         await api.run_in_threadpool(api._finish_previsit, result, case, inputs, source, payload, session, payer_id)
     saved_case = await api.run_in_threadpool(api._save, case, session, "previsit-stedi-complete")
     if (benefits.get('identity') or {}).get('policy_differences'):

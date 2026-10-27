@@ -1257,6 +1257,36 @@ try {
   })
   assert.equal(unknownReferenceModel.networkLabel, 'Not determined')
   assert.equal(unknownReferenceModel.networkTone, 'is-unknown')
+  const { default: ArrivalAmountSummary } = await server.ssrLoadModule(
+    '/src/features/commercial-estimate/ArrivalAmountSummary.tsx',
+  )
+  const cashAmountModel = (payer) =>
+    deriveCommercialEstimateView({
+      result: { ...base, payer, payment_mode: 'cash' },
+      appointments: [],
+      selectedVisit: '',
+      busy: null,
+      error: '',
+      readOnly: false,
+      recovering: false,
+    })
+  assert.equal(
+    cashAmountModel('Medicare of Texas').amountText,
+    'Clinicforce is not yet enrolled for medicare of Texas',
+  )
+  assert(
+    renderToStaticMarkup(
+      React.createElement(ArrivalAmountSummary, {
+        model: cashAmountModel('Medicare of Texas'),
+        result: { ...base, payer: 'Medicare of Texas', payment_mode: 'cash' },
+        partialCopay: null,
+        visibleAmount: false,
+      }),
+    ).includes(
+      'class="amount-pending" role="status">Clinicforce is not yet enrolled for medicare of Texas',
+    ),
+  )
+  assert.equal(cashAmountModel('Other insurer').amountText, 'Confirm clinic price')
   const clinicNonparticipation = deriveCommercialEstimateView({
     result: {
       ...base,

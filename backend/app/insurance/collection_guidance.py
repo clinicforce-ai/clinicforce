@@ -187,6 +187,18 @@ def build(result: dict, review: dict | None = None) -> dict:
     policy = result.get('collection_policy') if isinstance(result.get('collection_policy'), dict) else {}
     policy_approved = bool(policy.get('approved_by') and policy.get('approved_at') and policy.get('reference'))
     policy_mode = policy.get('mode') if policy_approved else None
+    fee_proxy = result.get('fee_proxy_estimate') or {}
+    if (amount is None and safe and not qmb_protected and not qmb_unresolved
+            and fee_proxy.get('basis') == 'bcbstx_fee_proxy'
+            and type(fee_proxy.get('patient_share_cents')) is int
+            and policy_mode == 'collect_supported_advance'
+            and policy.get('allow_supported_oon_advance') is True
+            and policy.get('allow_blue_cross_proxy_advance') is True
+            and verified_out_of_network(benefits)):
+        amount = fee_proxy['patient_share_cents']
+        guidance.update(status='estimated', basis='bcbstx_proxy_advance',
+            reason='Provisional advance from the clinic-approved BCBS Texas fee proxy and the member diagnostic benefit. The UHC allowed amount is unknown.')
+        assumptions.append('The advance uses clinic BCBS Texas fee references, not a payer-confirmed UHC allowance. Final responsibility follows the processed claim.')
     oon_advance = (not verified_out_of_network(benefits) or
         policy.get('allow_supported_oon_advance') is True and
         (not any(line.get('allowed_basis') == 'cms_original_medicare_estimate' for line in lines)
@@ -355,7 +367,7 @@ def build(result: dict, review: dict | None = None) -> dict:
             if note['kind'] == 'no_collection' else 'This advance uses the office copay recorded by the clinic. Additional services and final responsibility follow claim processing.')
         for service in guidance['services']:
             service['patient_cents'] = None
-    if guidance['amount_cents'] is not None and guidance['basis'] in {'patient_obligations', 'anticipated_services'}:
+    if guidance['amount_cents'] is not None and guidance['basis'] in {'patient_obligations', 'anticipated_services', 'bcbstx_proxy_advance'}:
         error = encounter_summary.build({**result, 'collection_guidance': guidance}, review)['integrity_error']
         if error:
             reasons = {

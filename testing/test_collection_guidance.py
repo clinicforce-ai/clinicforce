@@ -895,6 +895,7 @@ def test_saved_collection_rechecks_new_library_requirement_before_display(legacy
          patch.object(api.staff_store, 'get_library', return_value=document), \
          patch.object(api.commercial_store, 'list_connections', return_value=[
              {'stedi_payer_id': 'synthetic-payer', 'rules': {'collection_policy': ADVANCE_POLICY}}]), \
+             patch.object(api.commercial_store, 'list_cpt_requirements', return_value=[]), \
          patch.object(api.contract_requirements, 'evaluate', return_value=decision) as evaluate, \
          patch.object(api, '_requirement_candidates', return_value=[]):
         reopened = api._previsit_result(case, 'clinic')

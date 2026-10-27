@@ -15,7 +15,20 @@ BCBSTX_PAYER_NAMES = {'bcbstx', 'bcbstexas', 'bluecrossblueshieldoftexas',
                       'bluecrossblueshieldtexas'}
 
 # Saved estimates re-evaluate requirement decisions when a published rule changes.
-PUBLISHED_RULESET_VERSION = '2026-10-26-bcbstx-ppo-99213'
+PUBLISHED_RULESET_VERSION = '2026-10-27-uhc-group-ppo-diagnostics'
+
+UHC_GROUP_PPO_OON_SOURCE = {
+    'label': 'UnitedHealthcare Group Medicare Advantage PPO out-of-network provider guide',
+    'url': 'https://www.uhcprovider.com/content/dam/provider/docs/public/health-plans/UHC-Group-Med_Adv-OON-Care-Provider_QRG.pdf',
+    'source_version': 'PCA-1-26-00083, 2026', 'verified_at': '2026-10-27',
+    'effective_from': '2026-01-01', 'effective_to': '2026-12-31',
+}
+UHC_GROUP_13705_DIAGNOSTIC_PA_SOURCE = {
+    'label': 'Clinic-confirmed UHC Group PPO diagnostic CPT authorization decision',
+    'url': 'https://www.uhcprovider.com/content/dam/provider/docs/public/prior-auth/pa-requirements/medicare/Med-Adv-Dual-Eff-10-1-26.pdf',
+    'source_version': 'Clinic confirmation for CPT 95908, 95861 and 95886, received 2026-10-26',
+    'verified_at': '2026-10-26', 'effective_from': '2026-10-26', 'effective_to': '2026-12-31',
+}
 
 UHC_TEXAS_CHOICE_PLUS_SOURCE = {
     'label': 'UnitedHealthcare Texas Choice Plus plan description',
@@ -171,6 +184,21 @@ def _published_rule(kind: str, result: dict, context: dict, plans: list[str], co
                                      'location_id': context.get('location_id'),
                                      'place_of_service': context.get('pos'),
                                      'service_date': day}}
+    group_13705_diagnostics = (
+        {'unitedhealthcare', 'uhc'} & names
+        and str(context.get('group_number') or '') == '13705'
+        and benefits.get('network_status') == 'out_of_network'
+        and any('groupmedicareadvantageppo' in _key(plan)
+                or _key(plan).startswith('lppounitedhealthcaregroupmedicareadvantagepp')
+                for plan in plans)
+        and codes <= {'95908', '95861', '95886'}
+    )
+    if group_13705_diagnostics:
+        product = 'groupmedicareadvantageppo'
+        if kind == 'referral':
+            return rule('Not required', 'The 2026 UHC Group Medicare Advantage PPO out-of-network guide permits specialist visits without a PCP referral.', UHC_GROUP_PPO_OON_SOURCE)
+        if kind == 'authorization' and day >= '2026-10-26':
+            return rule('Not required', 'Clinic-confirmed decision for the selected diagnostic CPTs under this group plan and out-of-network setting.', UHC_GROUP_13705_DIAGNOSTIC_PA_SOURCE, source_type='clinic_confirmation')
     bcbstx_ppo_follow_up = (exact <= {'bluechoiceppo'} and in_network and office and day >= '2026-10-26'
             and names & BCBSTX_PAYER_NAMES
             and 'preferredprovideroptionmedical' in {_key(plan) for plan in plans}

@@ -11,27 +11,11 @@ from app.insurance.collection.pricing_actions import priced_line_issue, priced_p
 from app.insurance.collection.requirements import requirement_blocker
 from app.insurance.library_network_exclusions import product_kind
 from app.insurance.insurance_product import is_medicare_advantage
+from app.insurance.amount_explanation_terms import choice_plus_reported_terms as _choice_plus_reported_terms
 
 
 def _money(cents: int) -> str:
     return f'${cents // 100:,}.{cents % 100:02d}'
-
-
-def _choice_plus_reported_terms(benefits: dict) -> str | None:
-    rows = [row for row in benefits.get('reported_options') or []
-            if row.get('service_type_code') == '98' and row.get('network') in {'Y', 'N'}]
-    terms = {(kind, tier): {row.get(field) for row in rows
-                            if row.get('kind') == kind and row.get('network') == tier}
-             for kind, field in (('copay', 'amount_cents'), ('coinsurance', 'percent'))
-             for tier in ('Y', 'N')}
-    if (terms['copay', 'Y'] == terms['copay', 'N'] == {0}
-            and len(terms['coinsurance', 'Y']) == len(terms['coinsurance', 'N']) == 1):
-        in_rate = next(iter(terms['coinsurance', 'Y']))
-        out_rate = next(iter(terms['coinsurance', 'N']))
-        if in_rate is not None and out_rate is not None:
-            return (f'The payer reported a $0.00 professional office copay, '
-                    f'{in_rate}% in-network and {out_rate}% out-of-network coinsurance. ')
-    return None
 
 
 def _cash_cause(result: dict, failure: dict, recovery: dict, card: dict, network: str,
@@ -236,12 +220,17 @@ def build(result: dict, guidance: dict, review: dict | None = None) -> dict:
     ma_ppo = is_medicare_advantage(medical_names)
     if result.get('payment_mode') == 'cash':
         named_package = (result.get('cash_quote') or {}).get('selection') and (result.get('cash_quote') or {}).get('complete')
-        if not result.get('cash_fallback'):
+        visit_reason = (result.get('cash_quote') or {}).get('reason')
+        if visit_reason:
+            cause, code = visit_reason, 'clinician_cash_quote'
+        elif not result.get('cash_fallback'):
             cause, code = 'cash was selected for the planned care', 'cash_selected'
         else:
             cause, code = _cash_cause(result, failure, recovery, card, network, benefits, unpriced, missing)
         sentence = (f"No payment is due now because the recorded payment covers NMCT’s cash price{', which was used because ' + cause if code != 'cash_selected' else ''}"
                     if amount == 0 and paid else
+                    f"Collect {_money(amount)} as the clinician-approved cash price because {cause}"
+                    if code == 'clinician_cash_quote' and amount is not None else
                     f"This is NMCT’s nerve-testing package price{' because ' + cause if code != 'cash_selected' else ' for the planned care'}{', after the recorded payment' if paid else ''}, with the focused visit included" if named_package and amount is not None else
                     f"This is NMCT’s cash price{', after the recorded payment' if paid else ''} for the planned care"
                     if code == 'cash_selected' and amount is not None else
@@ -306,6 +295,9 @@ def build(result: dict, guidance: dict, review: dict | None = None) -> dict:
         elif basis == 'qmb_protection':
             sentence, code = ('Collect $0 now because confirmed QMB protection prohibits Medicare cost-sharing collection; '
                               'any other liability requires separate covered-service and claim evidence', 'qmb_protected')
+        elif basis == 'bcbstx_proxy_advance':
+            sentence, code = (f'Collect {_money(amount)} as the clinic-approved BCBS Texas fee proxy advance for the planned diagnostic services; the UHC allowed amount and final claim share remain unknown',
+                              'bcbstx_proxy_advance')
         elif basis == 'ecw_billing_note':
             sentence, code = 'No payment is due now because the visit’s eCW billing note says not to collect', 'ecw_no_collection'
         elif basis == 'practice_cash_price':
@@ -382,7 +374,11 @@ def build(result: dict, guidance: dict, review: dict | None = None) -> dict:
     else:
         cause, cause_code = _cash_cause(result, failure, recovery, card, network, benefits, unpriced, missing,
                                         guidance.get('source_errors'))
-        if guidance.get('published_copay_policy_missing'):
+        proxy = result.get('fee_proxy_estimate') or {}
+        if proxy.get('basis') == 'bcbstx_fee_proxy' and type(proxy.get('patient_share_cents')) is int:
+            sentence, code = (f'The provisional patient share is {_money(proxy["patient_share_cents"])} using the BCBS Texas fee proxy; do not collect until the clinic policy and Medicare billing-protection checks clear this member',
+                              'bcbstx_proxy_provisional')
+        elif guidance.get('published_copay_policy_missing'):
             sentence, code = ('The 2026 FEP Blue Basic PSHB Preferred specialist copay is supported, but no approved clinic policy authorizes its collection at check-in',
                               'collection_policy_approval_required')
         elif identified_product == 'FEP Blue Basic PSHB' and network == 'unknown' and benefits.get('active') is True:

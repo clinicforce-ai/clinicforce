@@ -61,9 +61,11 @@ async def saved_previsit(case_id: str, request: _api.Request) -> dict:
     collection_guidance.unconfirmed_zero_oop and withholds a positive advance.
     A linked, applicable zero balance can return basis out_of_pocket_limit
     and a $0 covered office-visit collection.
-    temporary_rate_reference, when present, identifies Blue Cross Clinical
-    Library CPT prices used as a disclosed UnitedHealthcare or NMCT Aetna planning reference,
-    not a contracted allowance or patient collection.
+    temporary_rate_reference identifies scoped Blue Cross Clinical Library
+    prices, never a UnitedHealthcare allowance. fee_proxy_estimate may use
+    exact selected diagnostic lines and group-plan benefits to show a separate
+    provisional share. A positive proxy collection additionally requires an
+    administrator-approved opt-in and member billing-protection clearance.
     benefits.reported_options[].places_of_service retains the payer's place-of-service
     codes for scoped benefit display; a reported office copay is not a collection decision.
     reference_benefits and reference_subscriber, when present, come from one
@@ -90,9 +92,9 @@ async def saved_previsit(case_id: str, request: _api.Request) -> dict:
     Saved insured amounts are withheld if the linked clinic contract, scoped
     plan/provider configuration, or active selected CPT rate changed; staff
     must rerun against current configuration.
-    published_requirements_version identifies the current published payer-rule
-    set. Saved reads re-evaluate CPT referral and authorization decisions when
-    that version, their Clinical Library sources, or network evidence changes.
+    published_requirements_version identifies the current published payer rules
+    and stored CPT requirement rows. Saved reads re-evaluate referral and
+    authorization when these, Clinical Library sources, or network evidence change.
     selected_ids includes source-backed provisional CPTs as well as reviewed
     CPTs; service_selection_status distinguishes preview from approval. The
     selected IDs and priced code list refer to the same service scenario.
@@ -113,10 +115,13 @@ async def saved_previsit(case_id: str, request: _api.Request) -> dict:
 
 @_api.router.get('/cases/{case_id}/payer-response')
 async def saved_payer_response(case_id: str, request: _api.Request):
+    """Return protected payer evidence, including linked service replies when present."""
     session = await _api._session(request)
     case = await _api.run_in_threadpool(_api.store.get_case, case_id, session['patient_id'], session['share_manifest_id'], **_api._scope(session))
     if (not case or case.get('source_mode') != 'commercial_previsit'
-            or case.get('previsit', {}).get('request_state') not in {'complete', 'rejected'}
+            or case.get('previsit', {}).get('request_state') not in {'complete', 'partial', 'indeterminate', 'rejected'}
+            or (case.get('previsit', {}).get('request_state') == 'indeterminate'
+                and not case.get('previsit', {}).get('requested_service_types'))
             or not case.get('previsit_raw_object_key')):
         raise _api.HTTPException(404, 'No completed payer response is available for this visit.')
     try:
@@ -131,7 +136,8 @@ async def historical_replay_bundle(case_id: str, request: _api.Request) -> dict:
     """Export a read-only protected replay bundle for a scoped administrator.
 
     This route makes no payer request and never updates the saved estimate. The
-    response contains PHI and raw payer evidence; keep it in protected local
+    response contains PHI and raw payer evidence, including linked service
+    inquiries when present; keep it in protected local
     storage and do not place it in repository notes or test fixtures. Current
     Library records are returned with dates for the replay's historical cutoff;
     missing historical versions cannot be reconstructed by this export. The

@@ -114,7 +114,6 @@ def oop_plan_association(row: dict, payload: dict) -> str:
         names = {str(benefit.get('planCoverageDescription') or benefit.get('planCoverage') or '').strip().casefold()
                  for benefit in same_plan_30 if benefit.get('planCoverageDescription') or benefit.get('planCoverage')}
         if (medical and re.search(r'\bDIAGNOSTIC MEDICAL PROCEDURE\s*-\s*PROFESSIONAL\b', notes)
-                and re.search(r'\bOFFICE VISIT\s*-\s*PROFESSIONAL\b', notes)
                 and not re.search(r'\b(?:DENTAL|VISION|PHARMACY|PRESCRIPTION|RX|HEARING)\b', notes)):
             return 'medical'
         if (medical and not any(coverage_kind(benefit, payload) == 'supplementary'

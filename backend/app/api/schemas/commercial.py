@@ -33,12 +33,17 @@ class ConnectionAliasInput(BaseModel):
 
 
 class CollectionPolicyInput(BaseModel):
-    """Clinic administrator's payer-specific check-in collection decision."""
+    """Clinic administrator's payer-specific check-in collection decision.
+
+    A BCBS Texas fee proxy advance needs both out-of-network approval flags;
+    it remains separately labeled from a UHC payer allowed amount.
+    """
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
     mode: Literal["defer_to_claim", "collect_verified_copay", "collect_supported_advance", "disabled"]
     reference: str = Field(min_length=10, max_length=500)
     allow_supported_oon_advance: bool = False
     allow_cms_based_advance: bool = False
+    allow_blue_cross_proxy_advance: bool = False
 
 
 class AgreementInventoryScopeInput(BaseModel):
@@ -184,6 +189,12 @@ class BotoxReviewInput(BaseModel):
     separate_em_documented: bool = False
 
 
+class CashVisitQuoteInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    amount_cents: StrictInt = Field(ge=1, le=100_000_000)
+    reason: str = Field(min_length=3, max_length=200)
+
+
 class VisitReviewInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
     context_token: str = Field(min_length=64, max_length=64)
@@ -191,7 +202,10 @@ class VisitReviewInput(BaseModel):
     refresh_context: bool = Field(default=False, description='Re-read changed eCW reason, diagnoses, or planned services for the same saved patient, coverage, provider, location, and visit date. The clinician must select services again before collection.')
     selected_ids: list[str] | None = Field(default=None, max_length=20)
     payment_mode: Literal["insurance", "cash"] | None = None
+    cash_visit_quote: CashVisitQuoteInput | None = Field(default=None, description='Clinician-approved cash price and reason for a single selected CPT 99213 follow-up. This visit-only quote does not change the practice cash schedule or establish insurance eligibility.')
+    clear_cash_visit_quote: bool | None = None
     emg_required: bool | None = None
+    separate_em_planned: bool | None = Field(default=None, description='Clinician plans a medically necessary office evaluation distinct from routine EMG/NCS pretest work. This enables a provisional established-patient E/M cost scenario when prior same-practice care supports it; final level, documentation and modifier remain clinician decisions.')
     insurance_check_from: date | None = None
     cash_selection: str | None = Field(default=None, max_length=40, description="ID of a named package in the active cash schedule, or an empty string to clear the selection. Package selection is a clinician choice; example CPTs in the source are not automatically selected.")
     confirmed_units: dict[str, StrictInt] | None = Field(default=None, max_length=20)

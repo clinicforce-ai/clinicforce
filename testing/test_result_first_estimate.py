@@ -625,7 +625,7 @@ def test_current_library_contract_decides_network_independently_of_price(monkeyp
 
 @pytest.mark.parametrize('payer_label, practice_id', [
     ('United Healthcare', 'clinic'), ('United Health Care', 'clinic'),
-    ('Aetna', NMCT_PRACTICE_ID),
+    ('Aetna', NMCT_PRACTICE_ID), ('Cigna', 'clinic'),
 ])
 def test_other_payers_use_scoped_blue_cross_library_rate_only_as_temporary_reference(monkeypatch, payer_label, practice_id):
     payer = {'id': 'bcbs', 'display_name': 'Blue Cross and Blue Shield of Texas',
@@ -696,6 +696,7 @@ def test_identity_review_persists_across_visits_and_rejects_stale_or_unauthorize
     monkeypatch.setattr(api, '_ecw_practice_config', lambda *a: {})
     monkeypatch.setattr(api.ecw_backend, 'fetch_inputs', AsyncMock(return_value=(inputs, [], source)))
     monkeypatch.setattr(api.commercial_store, 'list_connections', lambda *a: [])
+    monkeypatch.setattr(api.commercial_store, 'list_cpt_requirements', lambda *a: [])
     monkeypatch.setattr(api.practice_prices, 'current', lambda *a: None)
     monkeypatch.setattr(api.cpt_suggester, 'recommend_visit_plan', lambda i, s, rows: {
         'version': 2, 'recommended_ids': [rows[0]['id']], 'recommended_units': {rows[0]['id']: 1}})
@@ -820,6 +821,11 @@ def test_saved_payer_response_is_scoped_and_never_cached(monkeypatch):
         read_case.return_value = {**case, 'previsit': {'request_state': state}}
         with pytest.raises(HTTPException): asyncio.run(api.saved_payer_response('case', None))
     read_object.assert_not_called()
+    read_case.return_value = {**case, 'previsit': {
+        'request_state': 'indeterminate', 'requested_service_types': ['98', '73']}}
+    linked_inquiry = asyncio.run(api.saved_payer_response('case', None))
+    assert linked_inquiry.headers['Cache-Control'] == 'no-store'
+    assert json.loads(linked_inquiry.body)['response']['id'] == 'payer-reference'
 
 
 def test_shared_accumulator_with_office_and_injection_labels_is_not_discarded():

@@ -63,6 +63,29 @@ def initialize_insurance(cursor) -> None:
         effective_from TEXT NOT NULL, effective_to TEXT
     )""")
     cursor.execute("CREATE INDEX IF NOT EXISTS commercial_rate_lines_match_idx ON commercial_rate_lines (version_id, code, network_name, place_of_service)")
+    cursor.execute("""CREATE TABLE IF NOT EXISTS commercial_cpt_requirements (
+        id TEXT PRIMARY KEY, practice_id TEXT NOT NULL, payer_key TEXT NOT NULL,
+        product_key TEXT NOT NULL, cpt TEXT NOT NULL, network_tier TEXT NOT NULL,
+        place_of_service TEXT NOT NULL, effective_from TEXT NOT NULL, effective_to TEXT,
+        referral_required BOOLEAN, prior_authorization_required BOOLEAN,
+        source_label TEXT NOT NULL, source_url TEXT, updated_at TEXT NOT NULL,
+        CHECK (referral_required IS NOT NULL OR prior_authorization_required IS NOT NULL),
+        UNIQUE (practice_id,payer_key,product_key,cpt,network_tier,place_of_service,effective_from)
+    )""")
+    cursor.execute("CREATE INDEX IF NOT EXISTS commercial_cpt_requirements_scope_idx ON commercial_cpt_requirements (practice_id, payer_key, product_key, cpt, effective_from)")
+    # Published Choice Plus access rule; authorization remains unknown until a
+    # code- and member-specific source settles it. Expire with the 2026 guide.
+    for cpt in ('99212', '99213', '99214', '99215'):
+        cursor.execute('''INSERT INTO commercial_cpt_requirements
+                (id,practice_id,payer_key,product_key,cpt,network_tier,place_of_service,
+                 effective_from,effective_to,referral_required,prior_authorization_required,
+                 source_label,source_url,updated_at)
+                VALUES (%s,'*','unitedhealthcare',%s,%s,'in_network','11',
+                        '2026-01-01','2026-12-31',FALSE,NULL,
+                        'UnitedHealthcare 2026 commercial product overview',
+                        'https://www.uhcprovider.com/content/dam/provider/docs/public/admin-guides/2026-UHC-Administrative-Guide.pdf',
+                        '2026-10-26') ON CONFLICT (id) DO NOTHING''',
+                (f'uhc-choice-plus-{cpt}-2026', 'choiceplus', cpt))
     cursor.execute("""CREATE TABLE IF NOT EXISTS commercial_eligibility_evidence (
         id TEXT PRIMARY KEY, practice_id TEXT NOT NULL, case_id TEXT NOT NULL REFERENCES insurance_cases(id),
         context_hash TEXT NOT NULL, source TEXT NOT NULL, status TEXT NOT NULL, response_reference TEXT NOT NULL,

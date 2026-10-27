@@ -12,7 +12,11 @@ from app.api.routers.commercial_flow.commercial_previsit_submit import submit_pr
     "one automatic member-specific payer inquiry; only a matching active 271 supplies benefits. "
     "A booked EMG/NCS visit without a study count returns one provisional "
     "scenario with mutually exclusive CPT levels; an exact suggested CPT plan is priced immediately "
-    "from patient-bound benefits and clinic rates, and clinician edits recalculate it. An uncoded "
+    "from patient-bound benefits and clinic rates, and clinician edits recalculate it. A booked unilateral "
+    "cervical radiculopathy EMG can preview 95909 plus 95886 when no study count or usable model plan exists; "
+    "the study and muscle counts remain clinician-review assumptions. A distinct planned "
+    "follow-up may add provisional established CPT 99213 when office history supports that status; "
+    "final MDM or time and modifier need clinician review. An uncoded "
     "established-patient office visit without a supported level starts with provisional CPT 99213, "
     "which requires clinician review before billing. A skin-biopsy "
     "booking without a site count starts with an editable three-site CPT 11104 + 11105 x2 scenario. A supported "
@@ -23,7 +27,10 @@ from app.api.routers.commercial_flow.commercial_previsit_submit import submit_pr
     "collection_guidance.unconfirmed_zero_oop. Later costs are estimated separately. "
     "collection_guidance.office_visit_copay_advance contains the approved single-office-visit "
     "advance after network, member, requirement and collection-policy checks; otherwise it is null. A "
-    "fresh payer check includes service categories from saved selected CPTs. A matching exact-CPT "
+    "fresh payer check includes service categories from saved selected CPTs. For BCBSTX route QDTRP, "
+    "each service category uses its own 270 inquiry; linked responses must match the member, medical "
+    "plan and visit date before combined pricing. A missing second response leaves collection unresolved. "
+    "A matching exact-CPT "
     "Stedi inquiry automatically resolves authorization for the bound member and visit setting. A signed "
     "same-payer clinic agreement may set benefits.network_source to clinic_group_agreement and "
     "return mismatch_warnings for differing product or provider details. For NMCT (practice_id primary), "
@@ -83,6 +90,10 @@ async def previsit_estimate(value: _api.PrevisitInput, request: _api.Request, ba
     unknown referral or authorization status does not by itself withhold an
     otherwise supported amount. Explicit denied or expired status still does. A generic EMG
     booking does not select a nerve-study count or muscle examination.
+    An explicit unilateral cervical radiculopathy EMG can use a provisional
+    five-to-six-study NCS and complete one-extremity needle-EMG scenario when
+    no actual count or usable model proposal exists. No separate E/M is added
+    without a documented distinct office visit.
     An uncoded new or established consultation leaves the E/M level unselected
     and prices its mutually exclusive code family as alternatives; a common
     supported office copay is collected once, never once per alternative.
@@ -401,11 +412,15 @@ async def previsit_estimate(value: _api.PrevisitInput, request: _api.Request, ba
             refresh_benefits=value.refresh_benefits, payer_routes=payer_routes)
     payer_id = payer["stediId"]
     requested_stc = _api._previsit_service_types(inputs)
+    if payer_id == 'QDTRP':
+        # BCBSTX accepts one service type per 270 inquiry.
+        requested_stc = [code for code in requested_stc if code != '30'] or ['30']
     result['requested_service_types'] = requested_stc
     result["stedi_payer"] = {"name": payer.get("displayName"), "id": payer_id}
     try:
-        body = _api.stedi_request_body({"stedi_payer_id": payer_id}, provider, coverage, inputs["service_date"], requested_stc, allow_demographic=not coverage.get('member_id'), place_of_service=inputs.get('place_of_service'))
-        basic_body = _api.stedi_request_body({"stedi_payer_id": payer_id}, provider, coverage, inputs["service_date"], requested_stc,
+        inquiry_stc = requested_stc[0] if payer_id == 'QDTRP' else requested_stc
+        body = _api.stedi_request_body({"stedi_payer_id": payer_id}, provider, coverage, inputs["service_date"], inquiry_stc, allow_demographic=not coverage.get('member_id'), place_of_service=inputs.get('place_of_service'))
+        basic_body = _api.stedi_request_body({"stedi_payer_id": payer_id}, provider, coverage, inputs["service_date"], inquiry_stc,
                                         include_identity_hints=False, allow_demographic=not coverage.get('member_id'),
                                         place_of_service=inputs.get('place_of_service'))
     except _api.commercial.CommercialError as exc:

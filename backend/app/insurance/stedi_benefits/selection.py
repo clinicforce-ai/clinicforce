@@ -9,6 +9,7 @@ from app.insurance.stedi_benefits.fields import (
     _benefit_notes, _dates_apply, _network_indicator, _procedure,
     _provider_participation, _stedi_entries, coverage_kind,
 )
+from app.insurance.cpt_rules import EMG_ADD_ONS, NCS_CODES, STANDALONE_EMG_CODES
 
 
 @dataclass
@@ -41,8 +42,15 @@ def select_benefit_rows(payload: dict[str, Any], service_type_code: str,
         # Office and telehealth terms can share STC 98 but are different benefits.
         entries = [row for row in entries if not row.get('placesOfService') or
                    any(str(pos.get('code') or '') == place_of_service for pos in row['placesOfService'] if isinstance(pos, dict))]
-    diagnostic = procedure_code in {*(str(n) for n in range(95907, 95914)), '95885', '95886', '95887'}
+    diagnostic = procedure_code in NCS_CODES | EMG_ADD_ONS | STANDALONE_EMG_CODES
     if diagnostic:
+        # An office-only plan accumulator does not establish diagnostic terms.
+        entries = [row for row in entries if _procedure(row) or not (
+            row.get('code') in {'A', 'B', 'C', 'G'}
+            and (labels := [part.strip() for note in _benefit_notes([row.get('messages'), row.get('additionalInformation')])
+                           for part in note.split(';') if part.strip()])
+            and all(re.fullmatch(r'(?:office visit|specialist visit or evaluation|primary care visit or evaluation)(?:\s*-\s*professional)?',
+                                  label, re.I) for label in labels))]
         # Sleep studies and radiology share STC 73 with EMG. Their presence
         # must not prevent use of an explicitly labelled diagnostic benefit.
         entries = [row for row in entries if _procedure(row) or not (
@@ -98,7 +106,7 @@ def select_benefit_rows(payload: dict[str, Any], service_type_code: str,
         entries = [row for row in entries if row['evidence_path'] not in excluded_tmj_ids]
         # Explicitly different services sometimes share an office STC. Retain
         # every raw row in reported_options, but exclude these from office math.
-        unrelated = r'(?:injections?|diagnostic medical procedure|diagnostic lab(?:oratory)?|laboratory|(?:diagnostic )?x[ -]?ray|acupuncture|applied behavior analysis|chemotherapy)(?:\s*-\s*professional)?|(?:lifetime )?travel expenses?(?: for covered services)?(?: over| more than) \d+ miles.*'
+        unrelated = r'(?:injections?|diagnostic medical procedure|diagnostic lab(?:oratory)?|laboratory|cat scan|mri|psa tests?|sleep stud(?:y|ies)|(?:diagnostic )?x[ -]?ray|acupuncture|applied behavior analysis|chemotherapy)(?:\s*-\s*professional)?|(?:lifetime )?travel expenses?(?: for covered services)?(?: over| more than) \d+ miles.*'
         def other_services_only(row: dict) -> bool:
             # A shared accumulator can list office visits alongside injections
             # and lab work. Discard only a list entirely naming other services.

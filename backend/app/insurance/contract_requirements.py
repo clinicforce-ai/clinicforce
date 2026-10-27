@@ -17,6 +17,7 @@ from app.insurance.requirements.published import (
 )
 from app.insurance.requirements.matrix_merge import merge_matrix_research
 from app.insurance.requirements.approval import attach_approval_status
+from app.insurance.requirements.stored import decide as stored_decision
 
 from app.insurance.requirements.evidence import (
     KINDS, CODE, PAGE, PROVISIONAL, OTHER_POLICY, CONDITIONAL, HEADERS,
@@ -220,6 +221,19 @@ def evaluate(result: dict, context: dict, documents: list[dict], *, include_proc
         elif current['status'] == published['status']:
             output[kind] = {**current, 'sources': [*current['sources'], *published['sources']],
                             'applicable_scope': published['applicable_scope']}
+    for kind in KINDS:
+        stored = stored_decision(kind, result, context, codes, reported_plans)
+        if not stored or unconfirmed_codes and not conditional_candidate:
+            continue
+        current = output[kind]
+        if current['status'] == 'Verification required' and 'conflict' not in current['reason'].casefold() and not rules[kind]:
+            output[kind] = stored
+        elif current['status'] == stored['status']:
+            output[kind] = {**current, 'sources': [*current['sources'], *stored['sources']]}
+        elif current['status'] != 'Verification required':
+            output[kind] = {'status': 'Verification required',
+                            'reason': 'A stored CPT rule differs from the payer or contract evidence for this visit.',
+                            'sources': [*current['sources'], *stored['sources']]}
     if (output['authorization']['status'] == 'Verification required'
             and {'unitedhealthcare', 'uhc'} & payer_names
             and any(product_kind(plan) for plan in reported_plans)
