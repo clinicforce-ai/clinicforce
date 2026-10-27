@@ -13,25 +13,7 @@ import {
 import { reportedMedicalLimit } from './reportedMedicalLimit'
 import { referenceCoverageRow } from './referenceCoverageRow'
 import { reportedLimit } from './reportedLimit'
-
-const unknown = 'Not returned for this visit'
-
-function limitSummary(
-  result: PrevisitEstimate,
-  kind: 'deductible' | 'out_of_pocket',
-  level: 'INDIVIDUAL' | 'FAMILY',
-  serviceTypeCode = '30',
-) {
-  const annual = reportedLimit(result, kind, level, 'CALENDAR_YEAR', serviceTypeCode)
-  const remaining = reportedLimit(result, kind, level, 'REMAINING', serviceTypeCode)
-  return {
-    value:
-      annual.amount === unknown && remaining.amount === unknown
-        ? unknown
-        : `${annual.amount === unknown ? 'Annual amount not returned' : `${annual.amount} annual`} · ${remaining.amount === unknown ? 'Remaining amount not returned' : `${remaining.amount} remaining`}`,
-    unassigned: annual.unassigned || remaining.unassigned,
-  }
-}
+import { limitSummary, unknown } from './limitSummary'
 
 export default function CommercialCostBreakdown({
   model,
@@ -45,12 +27,12 @@ export default function CommercialCostBreakdown({
   const price = result.price_range
   const feeProxy = result.fee_proxy_estimate
   const lines = price?.mode === 'services' ? price.lines || [] : []
+  const reason = result.reason || model.anticipatedService || 'Not recorded'
   const visitReason =
     result.service_plan?.kind === 'emg_ncs' &&
-    result.reason &&
-    !/\b(?:emg|ncs|electromyograph|nerve conduction)\b/i.test(result.reason)
-      ? `${result.reason} · EMG/NCS evaluation`
-      : result.reason || model.anticipatedService || 'Not recorded'
+    !/\b(?:emg|ncs|electromyograph|nerve conduction)\b/i.test(reason)
+      ? `${reason} · EMG/NCS evaluation`
+      : reason
   const familyOopApplied =
     result.collection_guidance?.basis === 'out_of_pocket_limit' &&
     lines.length > 0 &&
@@ -148,16 +130,15 @@ export default function CommercialCostBreakdown({
     },
     ...(lines.length
       ? lines.map((line) => {
-          const proxyRate = feeProxy
-            ? result.temporary_rate_reference?.lines.find(
-                (reference) =>
-                  reference.id === line.id &&
-                  reference.code === line.code &&
-                  reference.units === line.units &&
-                  JSON.stringify(reference.modifiers || []) ===
-                    JSON.stringify(line.modifiers || []),
-              )
-            : undefined
+          const proxyRate =
+            feeProxy &&
+            result.temporary_rate_reference?.lines.find(
+              (rate) =>
+                rate.id === line.id &&
+                rate.code === line.code &&
+                rate.units === line.units &&
+                (rate.modifiers || []).join() === (line.modifiers || []).join(),
+            )
           const resolved =
             !automaticCashFallback &&
             line.rate_resolution?.status === 'RESOLVED' &&
