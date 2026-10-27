@@ -65,6 +65,15 @@ def _recovery_binding(inputs: dict, source: dict) -> str:
     # Choosing anticipated services must not invalidate the recovered member identity.
     return _api._visit_context_token({**inputs, 'lines': [], 'reason': None, 'visit_type': None}, source)
 
+def _retain_incomplete_service_evidence(benefits: dict, case: dict) -> dict:
+    if (case.get('previsit') or {}).get('request_state') in {'partial', 'indeterminate'} and case.get('previsit_raw_object_key'):
+        reason = 'Separate requested service inquiry evidence is unavailable for the combined visit.'
+        reasons = benefits.setdefault('review_reasons', [])
+        if reason not in reasons:
+            reasons.append(reason)
+        benefits['requires_review'] = True
+    return benefits
+
 def _case_benefits(payload: dict, inputs: dict, source: dict, case: dict) -> dict:
     coverage = _api._coverage_snapshot(inputs, source)
     recovery = case.get('previsit_discovery') or {}
@@ -72,10 +81,12 @@ def _case_benefits(payload: dict, inputs: dict, source: dict, case: dict) -> dic
                  and recovery.get('verified_coverage'))
     if recovered:
         coverage.update(recovery['verified_coverage'])
-    benefits = _api._previsit_benefits(payload, coverage, inputs['service_date'], _api._previsit_service_types(inputs), inputs=inputs, source=source)
+    requested = ((case.get('previsit') or {}).get('requested_service_types')
+                 if payload.get('_service_payloads') else None) or _api._previsit_service_types(inputs)
+    benefits = _api._previsit_benefits(payload, coverage, inputs['service_date'], requested, inputs=inputs, source=source)
     if recovered:
         benefits['normalization_notes'].append('Coverage was selected from Stedi discovery for this estimate. eCW was not changed.')
-    return benefits
+    return _retain_incomplete_service_evidence(benefits, case)
 
 
 def _insurance_diagnosis(case: dict, result: dict, guidance: dict) -> dict:
@@ -345,6 +356,7 @@ def _recheck_saved_payer_allowance(result: dict, case: dict, practice_id: str) -
 
 def _previsit_result(case: dict, practice_id: str | None = None) -> dict:
     result = _api.deepcopy(case['previsit_context']['result'])
+    _retain_incomplete_service_evidence(result.get('benefits') or {}, case)
     reference = case.get('previsit_reference') or {}
     if (reference.get('benefits') and reference.get('context_token') == case['previsit_context'].get('context_token')
             and reference.get('service_date') == result.get('service_date')):

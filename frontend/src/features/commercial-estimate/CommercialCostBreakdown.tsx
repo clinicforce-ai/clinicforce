@@ -112,6 +112,10 @@ export default function CommercialCostBreakdown({
   const reportedResult = result.reference_benefits ? { ...result, benefits } : result
   const price = result.price_range
   const lines = price?.mode === 'services' ? price.lines || [] : []
+  const familyOopApplied =
+    result.collection_guidance?.basis === 'out_of_pocket_limit' &&
+    lines.length > 0 &&
+    lines.every((line) => line.benefits?.family_oop_zero_applies)
   const automaticCashFallback = model.cash && result.cash_fallback != null
   const summary = result.encounter_summary
   const individualDeductible = limitSummary(reportedResult, 'deductible', 'INDIVIDUAL')
@@ -247,20 +251,22 @@ export default function CommercialCostBreakdown({
       value:
         officeReferenceCopay != null
           ? `${money(officeReferenceCopay)} specialist office visit · payer-reported reference`
-          : diagnosticCopay != null
-            ? `${money(diagnosticCopay)} once per day`
-            : calculated && components?.copay_cents != null
-              ? money(components.copay_cents)
-              : lines.some((line) => line.benefits?.copay_cents != null)
-                ? lines
-                    .map(
-                      (line) =>
-                        `CPT ${line.code}: ${line.benefits.copay_cents != null ? money(line.benefits.copay_cents) : 'not returned'}`,
-                    )
-                    .join('; ')
-                : !lines.length && reportedOfficeCopay != null
-                  ? `${money(reportedOfficeCopay)} specialist office visit · payer-reported`
-                  : unknown,
+          : familyOopApplied
+            ? '$0 payable after family out-of-pocket limit'
+            : diagnosticCopay != null
+              ? `${money(diagnosticCopay)} once per day`
+              : calculated && components?.copay_cents != null
+                ? money(components.copay_cents)
+                : lines.some((line) => line.benefits?.copay_cents != null)
+                  ? lines
+                      .map(
+                        (line) =>
+                          `CPT ${line.code}: ${line.benefits.copay_cents != null ? money(line.benefits.copay_cents) : 'not returned'}`,
+                      )
+                      .join('; ')
+                  : !lines.length && reportedOfficeCopay != null
+                    ? `${money(reportedOfficeCopay)} specialist office visit · payer-reported`
+                    : unknown,
       detail:
         result.collection_guidance?.basis === 'diagnostic_day_copay'
           ? 'One payer diagnostic copay for the selected testing; final share follows the claim'
@@ -296,7 +302,7 @@ export default function CommercialCostBreakdown({
         result.collection_guidance?.basis === 'out_of_pocket_limit'
           ? individualDeductible.value === unknown && benefits?.deductible_annual_cents == null
             ? 'No deductible payment due after the out-of-pocket limit; the payer did not report an office-specific deductible rule'
-            : 'No deductible payment due for this covered office visit after the out-of-pocket limit'
+            : 'No deductible payment due for the selected covered services after the out-of-pocket limit'
           : calculated && components?.deductible_cents != null
             ? `${money(components.deductible_cents)} applied to this visit`
             : individualDeductible.unassigned
@@ -315,11 +321,13 @@ export default function CommercialCostBreakdown({
           : surgicalFamilyDeductible.value !== unknown
             ? `${surgicalFamilyDeductible.value} · surgical services`
             : unknown,
-      detail: familyDeductible.unassigned
-        ? 'Payer-reported plan amount; medical applicability unverified'
-        : surgicalFamilyDeductible.value !== unknown
-          ? 'Payer did not report a family office-specific deductible rule; this surgical balance does not establish one'
-          : undefined,
+      detail: familyOopApplied
+        ? 'No deductible payment due for the selected covered services after the family out-of-pocket limit'
+        : familyDeductible.unassigned
+          ? 'Payer-reported plan amount; medical applicability unverified'
+          : surgicalFamilyDeductible.value !== unknown
+            ? 'Payer did not report a family office-specific deductible rule; this surgical balance does not establish one'
+            : undefined,
     },
     {
       label: 'Coinsurance',
@@ -359,17 +367,19 @@ export default function CommercialCostBreakdown({
         ]
           .filter(Boolean)
           .join(' · ') || individualReportedOop.value,
-      detail: reportedOopOnly
-        ? 'Payer-reported medical limit; not used as a verified calculation input'
-        : benefits?.oop_remaining_cents === 0
-          ? 'Applicable in-network limit has $0 remaining for the selected covered care'
-          : calculated && components?.oop_adjustment_cents != null
-            ? `${money(components.oop_adjustment_cents)} reduction applied to this visit`
-            : unconfirmedZeroOop
-              ? 'Payer reports $0 remaining; confirm this is the applicable medical limit before collection'
-              : individualReportedOop.unassigned
-                ? 'Payer-reported plan amount; medical applicability needs confirmation before use as a cap'
-                : 'Payer-reported limit; applicability to these CPTs depends on the completed estimate',
+      detail: familyOopApplied
+        ? 'The individual balance can remain positive after the family limit is met'
+        : reportedOopOnly
+          ? 'Payer-reported medical limit; not used as a verified calculation input'
+          : benefits?.oop_remaining_cents === 0
+            ? 'Applicable in-network limit has $0 remaining for the selected covered care'
+            : calculated && components?.oop_adjustment_cents != null
+              ? `${money(components.oop_adjustment_cents)} reduction applied to this visit`
+              : unconfirmedZeroOop
+                ? 'Payer reports $0 remaining; confirm this is the applicable medical limit before collection'
+                : individualReportedOop.unassigned
+                  ? 'Payer-reported plan amount; medical applicability needs confirmation before use as a cap'
+                  : 'Payer-reported limit; applicability to these CPTs depends on the completed estimate',
     },
     {
       label: 'Family out-of-pocket maximum',
@@ -380,8 +390,9 @@ export default function CommercialCostBreakdown({
         ]
           .filter(Boolean)
           .join(' · ') || limitSummary(reportedResult, 'out_of_pocket', 'FAMILY').value,
-      detail:
-        familyOopAnnual != null || familyOopRemaining != null
+      detail: familyOopApplied
+        ? 'Met in-network family medical limit applied to every selected covered CPT'
+        : familyOopAnnual != null || familyOopRemaining != null
           ? 'Payer-reported medical limit; not used as a verified calculation input'
           : limitSummary(reportedResult, 'out_of_pocket', 'FAMILY').unassigned
             ? 'Payer-reported plan amount; medical applicability unverified and not used as a cap'

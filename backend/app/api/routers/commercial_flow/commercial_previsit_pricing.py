@@ -76,6 +76,13 @@ def _reviewed_service_types(cases: list[dict], appointment_id: str, service_date
         selected = set(review.get('selected_ids') or saved_result.get('selected_ids') or [])
         rows = [row for row in saved_result.get('codes') or []
                 if row.get('id') in selected]
+        if not selected and review.get('separate_em_planned'):
+            rows = saved_result.get('codes') or []
+            categories = list(dict.fromkeys(
+                category for row in rows
+                if (category := _api.visit_estimate.service_type(str(row.get('code') or ''), {}))))
+            if '73' in categories and '98' in categories:
+                return categories
         if selected and len(rows) == len(selected):
             return list(dict.fromkeys(
                 category for row in rows

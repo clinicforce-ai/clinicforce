@@ -36,6 +36,7 @@ export type PrevisitBenefits = null | {
   published_preferred_office_copay_cents?: number
   deductible_annual_cents?: number | null
   oop_remaining_cents?: number | null
+  family_oop_zero_applies?: boolean
   oop_annual_cents?: number | null
   oop_annual_conflict_ids?: string[]
   oop_remaining_conflict_ids?: string[]

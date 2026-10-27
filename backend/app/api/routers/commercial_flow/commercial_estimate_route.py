@@ -27,7 +27,10 @@ from app.api.routers.commercial_flow.commercial_previsit_submit import submit_pr
     "collection_guidance.unconfirmed_zero_oop. Later costs are estimated separately. "
     "collection_guidance.office_visit_copay_advance contains the approved single-office-visit "
     "advance after network, member, requirement and collection-policy checks; otherwise it is null. A "
-    "fresh payer check includes service categories from saved selected CPTs. A matching exact-CPT "
+    "fresh payer check includes service categories from saved selected CPTs. For BCBSTX route QDTRP, "
+    "each service category uses its own 270 inquiry; linked responses must match the member, medical "
+    "plan and visit date before combined pricing. A missing second response leaves collection unresolved. "
+    "A matching exact-CPT "
     "Stedi inquiry automatically resolves authorization for the bound member and visit setting. A signed "
     "same-payer clinic agreement may set benefits.network_source to clinic_group_agreement and "
     "return mismatch_warnings for differing product or provider details. For NMCT (practice_id primary), "
@@ -409,11 +412,15 @@ async def previsit_estimate(value: _api.PrevisitInput, request: _api.Request, ba
             refresh_benefits=value.refresh_benefits, payer_routes=payer_routes)
     payer_id = payer["stediId"]
     requested_stc = _api._previsit_service_types(inputs)
+    if payer_id == 'QDTRP':
+        # BCBSTX accepts one service type per 270 inquiry.
+        requested_stc = [code for code in requested_stc if code != '30'] or ['30']
     result['requested_service_types'] = requested_stc
     result["stedi_payer"] = {"name": payer.get("displayName"), "id": payer_id}
     try:
-        body = _api.stedi_request_body({"stedi_payer_id": payer_id}, provider, coverage, inputs["service_date"], requested_stc, allow_demographic=not coverage.get('member_id'), place_of_service=inputs.get('place_of_service'))
-        basic_body = _api.stedi_request_body({"stedi_payer_id": payer_id}, provider, coverage, inputs["service_date"], requested_stc,
+        inquiry_stc = requested_stc[0] if payer_id == 'QDTRP' else requested_stc
+        body = _api.stedi_request_body({"stedi_payer_id": payer_id}, provider, coverage, inputs["service_date"], inquiry_stc, allow_demographic=not coverage.get('member_id'), place_of_service=inputs.get('place_of_service'))
+        basic_body = _api.stedi_request_body({"stedi_payer_id": payer_id}, provider, coverage, inputs["service_date"], inquiry_stc,
                                         include_identity_hints=False, allow_demographic=not coverage.get('member_id'),
                                         place_of_service=inputs.get('place_of_service'))
     except _api.commercial.CommercialError as exc:
