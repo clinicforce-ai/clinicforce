@@ -229,10 +229,17 @@ def list_networks(practice_id: str) -> list[dict]:
 
 
 def create_network(practice_id: str, data: dict[str, Any]) -> dict:
-    required = ("payer_connection_id", "billing_npi", "rendering_npi", "organization_name", "tin", "location_id", "place_of_service", "network_name", "effective_from", "evidence_reference")
+    attested = (data.get('status') == 'nonparticipating'
+                and str(data.get('evidence_reference') or '').startswith('clinic-admin-attestation:')
+                and bool(data.get('plan_matcher')) and bool(data.get('plan_group_number')))
+    required = (("payer_connection_id", "rendering_npi", "plan_matcher", "plan_group_number", "network_name", "effective_from", "evidence_reference")
+                if attested else
+                ("payer_connection_id", "billing_npi", "rendering_npi", "organization_name", "tin", "location_id", "place_of_service", "network_name", "effective_from", "evidence_reference"))
     if any(not isinstance(data.get(key), str) or not data[key].strip() for key in required):
         raise CommercialError("Provider, location, network, effective date, and participation evidence are required.")
-    if not (data["billing_npi"].isdigit() and len(data["billing_npi"]) == 10 and data["rendering_npi"].isdigit() and len(data["rendering_npi"]) == 10):
+    billing_npi = str(data.get('billing_npi') or '')
+    if not ((attested and not billing_npi or billing_npi.isdigit() and len(billing_npi) == 10)
+            and data["rendering_npi"].isdigit() and len(data["rendering_npi"]) == 10):
         raise CommercialError("Billing and rendering NPIs must each be 10 digits.")
     if not connection(practice_id, data["payer_connection_id"]):
         raise CommercialError("The selected payer connection is not in this practice.")
@@ -241,7 +248,7 @@ def create_network(practice_id: str, data: dict[str, Any]) -> dict:
         db.execute("""INSERT INTO commercial_provider_networks
           (id,practice_id,payer_connection_id,billing_npi,rendering_npi,organization_name,tin,location_id,place_of_service,plan_matcher,plan_group_number,network_name,effective_from,effective_to,status,evidence_reference,created_at,updated_at)
           VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
-          (record_id, practice_id, data["payer_connection_id"], data["billing_npi"], data["rendering_npi"], data["organization_name"], data["tin"], data["location_id"], data["place_of_service"], data.get("plan_matcher", ""), data.get("plan_group_number", ""), data["network_name"], data["effective_from"], data.get("effective_to") or None, data.get("status", "draft"), data["evidence_reference"], now, now))
+          (record_id, practice_id, data["payer_connection_id"], billing_npi, data["rendering_npi"], data.get("organization_name", ""), data.get("tin", ""), data.get("location_id", ""), data.get("place_of_service", ""), data.get("plan_matcher", ""), data.get("plan_group_number", ""), data["network_name"], data["effective_from"], data.get("effective_to") or None, data.get("status", "draft"), data["evidence_reference"], now, now))
         row = db.execute("SELECT * FROM commercial_provider_networks WHERE id=%s AND practice_id=%s", (record_id, practice_id)).fetchone()
     return dict(row)
 

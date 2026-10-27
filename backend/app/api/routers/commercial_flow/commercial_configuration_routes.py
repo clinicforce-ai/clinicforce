@@ -142,12 +142,16 @@ async def attest_saved_group_ppo_network(case_id: str, value: _api.NetworkAttest
         raise _api.HTTPException(409, 'The saved visit has no unique UnitedHealthcare payer route.')
     billing = source.get('billing_provider') or {}
     rendering = inputs.get('rendering_provider') or {}
+    source_rendering = source.get('rendering_provider') or {}
+    if rendering.get('npi') and source_rendering.get('npi') and rendering['npi'] != source_rendering['npi']:
+        raise _api.HTTPException(409, 'The saved rendering provider identifiers conflict.')
     tin = _api.re.sub(r'\D', '', str(billing.get('tin') or ''))
-    scope = (str(billing.get('npi') or ''), str(rendering.get('npi') or ''), tin,
+    scope = (str(billing.get('npi') or ''), str(rendering.get('npi') or source_rendering.get('npi') or ''), tin,
              str(source.get('location_id') or ''), str(inputs.get('place_of_service') or ''))
-    if (billing.get('tin_conflict') or not all(scope) or len(tin) != 9
-            or not all(_api.re.fullmatch(r'\d{10}', npi) for npi in scope[:2])):
-        raise _api.HTTPException(409, 'The saved billing and rendering provider scope is incomplete.')
+    if (billing.get('tin_conflict') or not _api.re.fullmatch(r'\d{10}', scope[1])
+            or (scope[0] and not _api.re.fullmatch(r'\d{10}', scope[0]))
+            or (tin and len(tin) != 9)):
+        raise _api.HTTPException(409, 'The saved rendering provider or supplied billing identifiers are invalid.')
     exact_source = {**source, 'payer_plan_bound': True}
     existing = scoped_admin_nonparticipation(session['practice_id'], connections[0], inputs,
         exact_source, names, group)

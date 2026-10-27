@@ -2,6 +2,7 @@
 
 import pytest
 import asyncio
+from contextlib import nullcontext
 import hashlib
 import json
 from types import SimpleNamespace
@@ -110,6 +111,16 @@ def test_group_ppo_admin_attestation_is_bound_to_product_group_provider_and_date
     assert find(inputs={'rendering_provider': {'npi': '3333333333'}}) is None
     assert find(inputs={'service_date': '2027-01-01'}) is None
     assert find(source={'payer_plan_bound': False}) is None
+    sparse = {**row, 'billing_npi': '', 'tin': '', 'location_id': '', 'place_of_service': ''}
+    monkeypatch.setattr(guard.commercial_store, 'list_networks', lambda *_: [sparse])
+    sparse_source = {'payer_plan_bound': True, 'billing_provider': {}, 'location_id': ''}
+    sparse_inputs = {'service_date': DAY, 'rendering_provider': {'npi': '2222222222'},
+                     'place_of_service': ''}
+    assert scoped_admin_nonparticipation('primary', {'id': 'payer-1'}, sparse_inputs,
+        sparse_source, ['GROUP MEDICARE ADVANTAGE PPO'], '13705') == sparse
+    assert scoped_admin_nonparticipation('primary', {'id': 'payer-1'}, sparse_inputs,
+        {**sparse_source, 'billing_provider': {'npi': '1111111111'}},
+        ['GROUP MEDICARE ADVANTAGE PPO'], '13705') is None
 
 
 def test_saved_nmct_visit_uses_current_admin_attestation(monkeypatch):
@@ -161,6 +172,28 @@ def test_draft_uhc_route_uses_admin_attestation_for_initial_pricing(monkeypatch)
     assert result['network_evidence']['source'] == 'clinic_admin_attestation'
 
 
+def test_sparse_admin_attestation_store_keeps_missing_fields_empty(monkeypatch):
+    from app.insurance import commercial_store
+    class FakeDb:
+        def __init__(self): self.params = None
+        def execute(self, query, params):
+            if query.startswith('INSERT'):
+                self.params = params
+                assert query.count('%s') == len(params)
+            return self
+        def fetchone(self): return {'id': 'rule-1', 'status': 'nonparticipating'}
+    db = FakeDb()
+    monkeypatch.setattr(commercial_store, '_connection', lambda: nullcontext(db))
+    monkeypatch.setattr(commercial_store, 'connection', lambda *_: {'id': 'payer-1'})
+    row = commercial_store.create_network('primary', {
+        'payer_connection_id': 'payer-1', 'rendering_npi': '2222222222',
+        'plan_matcher': 'GROUP MEDICARE ADVANTAGE PPO', 'plan_group_number': '13705',
+        'network_name': 'UHC Group Medicare Advantage PPO', 'effective_from': DAY,
+        'status': 'nonparticipating', 'evidence_reference': 'clinic-admin-attestation: synthetic determination'})
+    assert row['status'] == 'nonparticipating'
+    assert db.params[3] == db.params[6] == db.params[7] == db.params[8] == ''
+
+
 def test_admin_attestation_route_derives_scope_from_saved_visit(monkeypatch):
     from app.api.routers.commercial_flow import commercial_configuration_routes as routes
     from app.api.schemas.commercial import NetworkAttestationInput
@@ -201,6 +234,14 @@ def test_admin_attestation_route_derives_scope_from_saved_visit(monkeypatch):
         asyncio.run(routes.attest_saved_group_ppo_network('case-1',
             NetworkAttestationInput(reference='Administrator determination', effective_to='2026-12-31'), None))
     assert error.value.status_code == 409
+    result['plan_details']['stedi']['group_number'] = '13705'
+    case['previsit_context']['source']['billing_provider'] = {}
+    case['previsit_context']['source']['location_id'] = ''
+    case['previsit_context']['inputs']['place_of_service'] = ''
+    sparse_response = asyncio.run(routes.attest_saved_group_ppo_network('case-1',
+        NetworkAttestationInput(reference='Administrator determination', effective_to='2026-12-31'), None))
+    assert sparse_response['status'] == 'nonparticipating'
+    assert saved[-1]['billing_npi'] == saved[-1]['tin'] == saved[-1]['location_id'] == saved[-1]['place_of_service'] == ''
 
 
 def test_nmct_saved_inventory_out_of_network_result_requires_repricing():
