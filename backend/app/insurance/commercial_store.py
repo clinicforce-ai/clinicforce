@@ -2,11 +2,13 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 from datetime import datetime, timezone
 from typing import Any
 from uuid import uuid4
 
+from app.core import patient_store
 from app.core.patient_store import _connection
 from app.insurance.commercial import CommercialError, RATE_SOURCE_TYPES, SERVICE_CATEGORIES, is_united_healthcare_payer
 
@@ -37,6 +39,8 @@ def list_connections(practice_id: str) -> list[dict]:
 
 def list_cpt_requirements(practice_id: str) -> list[dict]:
     """Read sourced, product-specific rules without member data."""
+    if not patient_store.DATABASE_URL and not (os.getenv('DB_HOST') and os.getenv('DATABASE_PASSWORD')):
+        return []  # No optional stored rule is asserted before database setup.
     with _connection() as db:
         rows = db.execute('''SELECT * FROM commercial_cpt_requirements
             WHERE practice_id IN (%s,'*') ORDER BY payer_key,product_key,cpt,effective_from''',

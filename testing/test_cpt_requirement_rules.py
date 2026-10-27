@@ -1,4 +1,4 @@
-from app.insurance import contract_requirements
+from app.insurance import commercial_store, contract_requirements
 from app.insurance.requirements.stored import decide
 
 
@@ -36,3 +36,10 @@ def test_stored_rule_reaches_visit_cards_without_clearing_authorization():
     assert cards['referral']['status'] == 'Not required'
     assert cards['authorization']['status'] == 'Verification required'
     assert cards['procedures'][0]['referral']['status'] == 'Not required'
+
+
+def test_optional_stored_rules_are_empty_before_database_setup(monkeypatch):
+    monkeypatch.setattr(commercial_store.patient_store, 'DATABASE_URL', '')
+    monkeypatch.delenv('DB_HOST', raising=False)
+    monkeypatch.delenv('DATABASE_PASSWORD', raising=False)
+    assert commercial_store.list_cpt_requirements('synthetic-practice') == []

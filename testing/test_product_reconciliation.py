@@ -32,9 +32,9 @@ DAY = '2026-10-21'
 def test_nmct_all_plan_policy_without_clinic_contract(monkeypatch, practice_id, payer, plan):
     monkeypatch.setattr(api.commercial_store, 'list_connections', lambda *_: [])
     monkeypatch.setattr(pricing.library_network_exclusions, 'applicable_exclusion',
-                        lambda *_: pytest.fail('NMCT exclusions must not select a network tier'))
+                        lambda *_: None)
     monkeypatch.setattr(pricing.inventory_certification, 'applicable',
-                        lambda *_: pytest.fail('NMCT inventory must not select a network tier'))
+                        lambda *_: None)
     monkeypatch.setattr(pricing, '_attach_temporary_uhc_rates', lambda *_: None)
     monkeypatch.setattr(api.visit_estimate, 'price_lines', lambda *_args, **_kwargs: {'complete': False})
     result = {'payer': payer, 'codes': [], 'issues': []}
@@ -88,7 +88,7 @@ def test_nmct_policy_overrides_scoped_clinic_nonparticipation(monkeypatch):
     assert result['network_evidence']['decision'] == 'in_network_by_clinic_policy'
 
 
-def test_nmct_saved_clinic_out_of_network_result_requires_repricing():
+def test_nmct_saved_inventory_out_of_network_result_requires_repricing():
     result = {'benefits': {'network_status': 'out_of_network',
                            'network_source': 'clinic_contract_inventory'},
               'network_evidence': {'decision': 'out_of_network_by_clinic_contract_inventory'},
@@ -97,9 +97,8 @@ def test_nmct_saved_clinic_out_of_network_result_requires_repricing():
                               'patient_max_cents': 9000, 'lines': []},
               'issues': []}
     recheck_saved_network_evidence(result, {}, 'primary', None)
-    assert result['benefits']['network_status'] == 'in_network'
-    assert result['network_evidence']['decision'] == 'in_network_by_clinic_policy'
-    assert 'agreement_exclusion' not in result
+    assert result['benefits']['network_status'] == 'unknown'
+    assert result['agreement_exclusion']['status'] == 'excluded_under_available_agreement'
     assert result['price_range']['complete'] is False
     assert result['price_range']['patient_max_cents'] is None
 

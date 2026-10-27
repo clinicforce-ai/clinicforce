@@ -12,6 +12,7 @@ from app.api.routers.commercial_flow.commercial_previsit_requirements import ref
 from app.api.routers.commercial_flow.commercial_previsit_rate_reference import _attach_temporary_uhc_rates
 from app.api.routers.commercial_flow.commercial_previsit_enrollment import _enrollment_failure
 from app.api.routers.commercial_flow.commercial_previsit_service_scope import retain_incomplete_service_evidence as _retain_incomplete_service_evidence
+from app.api.routers.commercial_flow.commercial_previsit_benefits import case_benefits as _case_benefits
 @_api.router.get("/configuration")
 async def configuration(request: _api.Request) -> dict:
     session = await _api._session(request)
@@ -66,21 +67,6 @@ async def ecw_appointment_readiness(value: _api.EcwStartInput, request: _api.Req
 def _recovery_binding(inputs: dict, source: dict) -> str:
     # Choosing anticipated services must not invalidate the recovered member identity.
     return _api._visit_context_token({**inputs, 'lines': [], 'reason': None, 'visit_type': None}, source)
-
-def _case_benefits(payload: dict, inputs: dict, source: dict, case: dict) -> dict:
-    coverage = _api._coverage_snapshot(inputs, source)
-    recovery = case.get('previsit_discovery') or {}
-    recovered = (recovery.get('outcome') == 'recovered' and recovery.get('identity_binding') == _api._recovery_binding(inputs, source)
-                 and recovery.get('verified_coverage'))
-    if recovered:
-        coverage.update(recovery['verified_coverage'])
-    requested = ((case.get('previsit') or {}).get('requested_service_types')
-                 if payload.get('_service_payloads') else None) or _api._previsit_service_types(inputs)
-    benefits = _api._previsit_benefits(payload, coverage, inputs['service_date'], requested, inputs=inputs, source=source)
-    if recovered:
-        benefits['normalization_notes'].append('Coverage was selected from Stedi discovery for this estimate. eCW was not changed.')
-    return _retain_incomplete_service_evidence(benefits, case)
-
 
 def _insurance_diagnosis(case: dict, result: dict, guidance: dict) -> dict:
     """Independent, persisted stage results; never put candidate identities in logs."""
