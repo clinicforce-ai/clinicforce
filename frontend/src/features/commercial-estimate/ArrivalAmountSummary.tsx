@@ -4,6 +4,11 @@ import { money } from './format'
 
 function nextStep(model: CommercialEstimateModel, result: PrevisitEstimate) {
   const lines = result.price_range?.mode === 'services' ? result.price_range.lines || [] : []
+  if (!lines.length && result.service_plan?.method === 'unavailable')
+    return {
+      title: 'CPT suggestion unavailable',
+      hint: 'Retry the coding suggestion for this visit.',
+    }
   if (!lines.length && !result.selected_ids?.length)
     return { title: 'Select services', hint: 'Choose the planned CPTs for this visit.' }
   if (

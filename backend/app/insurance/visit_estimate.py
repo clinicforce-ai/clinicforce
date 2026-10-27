@@ -21,6 +21,10 @@ def is_emg_visit(inputs: dict) -> bool:
     if any(row.get('service_status') == 'scheduled' and row.get('code') in cpt_rules.NCS_CODES | cpt_rules.EMG_CODES
            for row in inputs.get('lines', [])):
         return True
+    appointment_type = str(inputs.get('appointment_type') or '')
+    if (re.search(r'\b(?:emg|ncs|electromyograph\w*|nerve conduction)\b', appointment_type, re.I)
+            and not re.search(r'\b(?:possible|consider\w*|discuss\w*|if needed|no|not)\b', appointment_type, re.I)):
+        return True
     reason = str(inputs.get('reason') or '')
     procedure = r'\b(?:emg|ncs|electromyograph\w*|nerve conduction)\b'
     # A possible future test is not today's booked procedure. Explicit orders win above.

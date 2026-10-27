@@ -45,6 +45,12 @@ export default function CommercialCostBreakdown({
   const price = result.price_range
   const feeProxy = result.fee_proxy_estimate
   const lines = price?.mode === 'services' ? price.lines || [] : []
+  const visitReason =
+    result.service_plan?.kind === 'emg_ncs' &&
+    result.reason &&
+    !/\b(?:emg|ncs|electromyograph|nerve conduction)\b/i.test(result.reason)
+      ? `${result.reason} · EMG/NCS evaluation`
+      : result.reason || model.anticipatedService || 'Not recorded'
   const familyOopApplied =
     result.collection_guidance?.basis === 'out_of_pocket_limit' &&
     lines.length > 0 &&
@@ -118,10 +124,13 @@ export default function CommercialCostBreakdown({
     { label: 'Network', value: model.networkLabel },
     {
       label: result.reason ? 'Reason for visit' : 'Planned service',
-      value: result.reason || model.anticipatedService || 'Not recorded',
+      value: visitReason,
     },
     {
-      label: 'CPTs',
+      label:
+        result.service_selection_status === 'preview' && result.service_plan?.method === 'llm'
+          ? 'LLM-proposed CPTs'
+          : 'CPTs',
       value: lines.length
         ? lines
             .map(
@@ -132,11 +141,23 @@ export default function CommercialCostBreakdown({
         : 'No CPTs selected',
       detail:
         result.service_selection_status !== 'approved'
-          ? 'Clinician selection of codes, quantities and modifiers is pending'
+          ? result.service_plan?.method === 'llm'
+            ? 'Model proposal used for this estimate; billed codes follow the services actually performed'
+            : 'Provisional service scenario used for this estimate'
           : undefined,
     },
     ...(lines.length
       ? lines.map((line) => {
+          const proxyRate = feeProxy
+            ? result.temporary_rate_reference?.lines.find(
+                (reference) =>
+                  reference.id === line.id &&
+                  reference.code === line.code &&
+                  reference.units === line.units &&
+                  JSON.stringify(reference.modifiers || []) ===
+                    JSON.stringify(line.modifiers || []),
+              )
+            : undefined
           const resolved =
             !automaticCashFallback &&
             line.rate_resolution?.status === 'RESOLVED' &&
@@ -153,11 +174,15 @@ export default function CommercialCostBreakdown({
             value:
               resolved && line.allowed_cents != null
                 ? money(line.allowed_cents)
-                : 'Allowed amount unavailable',
+                : proxyRate
+                  ? `${money(proxyRate.unit_reference_cents * (Number(line.units) || 1))} BCBS Texas reference`
+                  : 'Allowed amount unavailable',
             detail:
               resolved && line.unit_allowed_cents != null
                 ? `${money(line.unit_allowed_cents)} per unit × ${line.units || 1}`
-                : line.description || undefined,
+                : proxyRate
+                  ? `${money(proxyRate.unit_reference_cents)} per unit × ${line.units || 1}; UHC allowed amount unknown`
+                  : line.description || undefined,
           }
         })
       : [{ label: 'Planned CPTs', value: 'No priced CPTs selected' }]),
@@ -436,7 +461,11 @@ export default function CommercialCostBreakdown({
         ]
 
   rows.push({
-    label: 'Amount to collect at visit',
+    label:
+      feeProxyCheckin != null &&
+      !['bcbstx_proxy_advance', 'qmb_protection'].includes(result.collection_guidance?.basis || '')
+        ? 'Planned amount to collect at visit'
+        : 'Amount to collect at visit',
     value:
       result.collection_guidance?.basis === 'qmb_protection' &&
       result.collection_guidance.amount_cents === 0
@@ -446,7 +475,7 @@ export default function CommercialCostBreakdown({
             result.collection_guidance?.amount_cents != null
           ? money(result.collection_guidance.amount_cents)
           : feeProxyCheckin != null
-            ? `${money(feeProxyCheckin)} provisional · verify before charging`
+            ? money(feeProxyCheckin)
             : officeReferenceCopay != null
               ? `${money(officeReferenceCopay)} office-only reference`
               : 'Not established',

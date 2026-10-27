@@ -98,7 +98,8 @@ export default function CommercialOverview({
   const chooseServices =
     !readOnly &&
     result.service_selection_status === 'preview' &&
-    result.benefits?.network_source === 'clinic_contract_inventory'
+    result.benefits?.network_source === 'clinic_contract_inventory' &&
+    !result.service_plan?.recommended_ids?.length
   const enterAllowance =
     !readOnly &&
     session?.role === 'admin' &&
@@ -270,6 +271,16 @@ export default function CommercialOverview({
               {chooseServices
                 ? 'Choose consultation, EMG/NCS, or both'
                 : 'Record payer allowed amount for selected CPT'}
+            </button>
+          )}
+          {!readOnly && result.service_plan?.method === 'unavailable' && (
+            <button
+              type="button"
+              className="cash-package-shortcut"
+              disabled={!!busy || recovering}
+              onClick={() => void saveReview({})}
+            >
+              Retry CPT suggestion
             </button>
           )}
           {!amount && <TemporaryRateReference result={result} />}
