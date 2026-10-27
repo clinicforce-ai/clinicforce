@@ -1,5 +1,18 @@
 export type CommercialAppointment = { id: string; start: string; status: string; reason: string }
 
+export type CombinedEmgPlan = {
+  amount_cents: number
+  patient_share_cents: number
+  office_copay_cents: number
+  diagnostic_allowed_cents: number
+  diagnostic_coinsurance_cents: number
+  coinsurance_percent: string
+  total_allowed_cents: number
+  payments_cents: number
+  basis: 'office_copay_plus_emg_coinsurance'
+  assumptions: string[]
+}
+
 export type PrevisitIdentity = {
   status: 'matched' | 'warning' | 'review' | 'reconciled'
   match_version?: number

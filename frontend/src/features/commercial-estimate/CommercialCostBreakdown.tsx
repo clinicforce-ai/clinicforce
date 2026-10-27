@@ -14,6 +14,7 @@ import { reportedMedicalLimit } from './reportedMedicalLimit'
 import { referenceCoverageRow } from './referenceCoverageRow'
 import { reportedLimit } from './reportedLimit'
 import { limitSummary, unknown } from './limitSummary'
+import { resolvedAllowedTotal } from './resolvedAllowedTotal'
 
 export default function CommercialCostBreakdown({
   model,
@@ -86,18 +87,7 @@ export default function CommercialCostBreakdown({
   const familyOopAnnual = reportedMedicalLimit(reportedResult, 'FAMILY', 'CALENDAR_YEAR')
   const familyOopRemaining = reportedMedicalLimit(reportedResult, 'FAMILY', 'REMAINING')
   const pricedCashLines = lines.filter((line) => line.cash_cents != null && !line.cash_included)
-  const lineAllowedTotal =
-    lines.length > 0 &&
-    lines.every(
-      (line) =>
-        line.rate_resolution?.status === 'RESOLVED' &&
-        line.allowed_cents != null &&
-        ['clinic_contract', 'payer_out_of_network', 'cms_original_medicare_estimate'].includes(
-          line.allowed_basis || '',
-        ),
-    )
-      ? lines.reduce((sum, line) => sum + line.allowed_cents!, 0)
-      : null
+  const lineAllowedTotal = resolvedAllowedTotal(lines)
   const calculated =
     !automaticCashFallback &&
     !model.previousEstimate &&
