@@ -133,3 +133,90 @@ def estimate(result: dict, service_date: str) -> dict | None:
         'deductible_url': FRB_2026_BENEFITS['url'],
         'message': 'Provisional patient share using BCBS Texas clinic fees and UHC diagnostic benefits. The UHC allowed amount and actual claim result are unknown.',
     }
+
+
+def cigna_estimate(result: dict, service_date: str) -> dict | None:
+    """Disclose an exact-CPT Cigna cost-share scenario on BCBS Texas reference fees."""
+    benefits = result.get('benefits') or {}
+    identity = result.get('identity') or benefits.get('identity') or {}
+    check = result.get('cpt_authorization') or {}
+    reference = result.get('temporary_rate_reference') or {}
+    price = result.get('price_range') or {}
+    codes = result.get('codes') or []
+    lines = price.get('lines') or []
+    if (result.get('payment_mode') == 'cash'
+            or not re.search(r'\bcigna\b', str(result.get('payer') or ''), re.I)
+            or benefits.get('network_status') != 'in_network'
+            or not visit_coverage_bound(benefits, service_date)
+            or benefits.get('has_secondary') or benefits.get('network_conflict')
+            or benefits.get('coverage_status_conflict') or benefits.get('source_errors')
+            or not patient_benefits_bound(identity)
+            or check.get('state') != 'complete' or check.get('service_date') != service_date
+            or not re.fullmatch(r'\d{2}', str(check.get('pos') or ''))
+            or check.get('network') != 'in_network'
+            or check.get('patient_binding') != identity.get('binding')
+            or reference.get('complete') is not True
+            or price.get('mode') != 'services' or price.get('service_issues')
+            or not codes or len(codes) != len(lines) or len(codes) != len(reference.get('lines') or [])
+            or not any(row.get('code') in cpt_rules.NCS_CODES for row in codes)
+            or any(row.get('code') not in cpt_rules.NCS_CODES | cpt_rules.EMG_ADD_ONS for row in codes)
+            or sum((row.get('units') or 0) for row in codes if row.get('code') in cpt_rules.EMG_ADD_ONS) > 4
+            or cpt_rules.service_selection_issues([row.get('code') for row in codes])):
+        return None
+    rates = {row.get('id'): row for row in reference['lines']}
+    terms_by_code = check.get('financial_terms') or {}
+    if len(rates) != len(codes):
+        return None
+    shares = []
+    percentages = set()
+    oop_balances = set()
+    copay_assumed = False
+    for line in lines:
+        rate = rates.get(line.get('id')) or {}
+        terms = terms_by_code.get(line.get('code')) or {}
+        units = line.get('units')
+        unit_cents = rate.get('unit_reference_cents')
+        if (rate.get('code') != line.get('code') or rate.get('units') != units
+                or (rate.get('modifiers') or []) != (line.get('modifiers') or [])
+                or type(units) is not int or not 1 <= units <= 4
+                or type(unit_cents) is not int or not 0 < unit_cents <= 100_000_000
+                or not str(rate.get('source_reference') or '').startswith('library:')
+                or terms.get('deductible_remaining_cents') != 0
+                or terms.get('copay_cents') not in {None, 0}
+                or terms.get('copay_unresolved')
+                or type(terms.get('oop_remaining_cents')) is not int):
+            return None
+        try:
+            percent = Decimal(str(terms['coinsurance_percent']))
+        except (KeyError, TypeError, InvalidOperation):
+            return None
+        if not percent.is_finite() or not 0 <= percent <= 100:
+            return None
+        percentages.add(percent)
+        oop_balances.add(terms['oop_remaining_cents'])
+        copay_assumed |= terms['copay_cents'] is None
+        base = unit_cents * units
+        share = int((Decimal(base) * percent / 100).quantize(Decimal('1'), rounding=ROUND_HALF_UP))
+        shares.append({'code': line['code'], 'units': units, 'reference_cents': base,
+                       'coinsurance_cents': share})
+    if len(percentages) != 1 or len(oop_balances) != 1:
+        return None
+    total = sum(row['reference_cents'] for row in shares)
+    coinsurance = sum(row['coinsurance_cents'] for row in shares)
+    oop_remaining = oop_balances.pop()
+    general_oop = benefits.get('oop_remaining_cents')
+    if type(general_oop) is int and general_oop != oop_remaining and min(general_oop, oop_remaining) < coinsurance:
+        return None
+    share = min(coinsurance, oop_remaining)
+    cap_note = f' The exact CPT out-of-pocket balance reduced the provisional share by ${(coinsurance - share) / 100:.2f}.' if share < coinsurance else ''
+    return {'basis': 'bcbstx_cigna_fee_proxy', 'status': 'provisional',
+            'reference_total_cents': total, 'coinsurance_percent': str(percentages.pop()),
+            'copay_cents': 0, 'copay_unconfirmed': copay_assumed,
+            'deductible_cents': 0, 'coinsurance_cents': coinsurance,
+            'oop_reduction_cents': coinsurance - share, 'oop_remaining_cents': oop_remaining,
+            'patient_share_cents': share, 'lines': shares,
+            'rate_source': reference.get('source'), 'deductible_source': 'Exact CPT Stedi 271',
+            'message': ('Provisional patient share using BCBS Texas clinic fees and Cigna exact-CPT benefits. '
+                        + ('No CPT copay was returned; $0 additional copay is an assumption. '
+                           if copay_assumed else 'The exact CPT copay is $0. '
+                           ) + 'Cigna allowed amounts and the authorized check-in charge remain unknown.' + cap_note)}

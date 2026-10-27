@@ -28,8 +28,10 @@ async def update_visit_review(case_id: str, value: _api.VisitReviewInput, reques
     authorizes a positive Medicare cost-sharing advance.
     Benefit verification requires saved payer rows for a compatible service
     category or the exact procedure; unrelated broad categories are rejected.
-    Selected CPTs also receive one automatic Stedi CPT and place-of-service
-    authorization inquiry when the active member and network are bound.
+    Selected CPTs also receive scoped Stedi CPT and place-of-service inquiries
+    when the active member and network are bound. Cigna uses one inquiry per
+    CPT; matching financial terms may support a separate provisional BCBS
+    Texas fee-reference share without authorizing collection.
     A saved past visit may reuse its dated payer response after 24 hours;
     current and future visits still need a fresh benefit response.
     A changed eCW visit returns only the changed context category names, never

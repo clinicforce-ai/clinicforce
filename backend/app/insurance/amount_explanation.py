@@ -378,6 +378,9 @@ def build(result: dict, guidance: dict, review: dict | None = None) -> dict:
         if proxy.get('basis') == 'bcbstx_fee_proxy' and type(proxy.get('patient_share_cents')) is int:
             sentence, code = (f'The provisional patient share is {_money(proxy["patient_share_cents"])} using the BCBS Texas fee proxy; do not collect until the clinic policy and Medicare billing-protection checks clear this member',
                               'bcbstx_proxy_provisional')
+        elif proxy.get('basis') == 'bcbstx_cigna_fee_proxy' and type(proxy.get('patient_share_cents')) is int:
+            sentence, code = (f'The provisional patient share is {_money(proxy["patient_share_cents"])} using BCBS Texas fees and Cigna exact-CPT benefits; the Cigna allowed amount and check-in charge remain unconfirmed, so no amount is authorized for collection',
+                              'cigna_fee_proxy_provisional')
         elif guidance.get('published_copay_policy_missing'):
             sentence, code = ('The 2026 FEP Blue Basic PSHB Preferred specialist copay is supported, but no approved clinic policy authorizes its collection at check-in',
                               'collection_policy_approval_required')

@@ -56,11 +56,12 @@ export type PrevisitEstimate = {
     }>
   }
   fee_proxy_estimate?: {
-    basis: 'bcbstx_fee_proxy'
+    basis: 'bcbstx_fee_proxy' | 'bcbstx_cigna_fee_proxy'
     status: 'provisional'
     reference_total_cents: number
     coinsurance_percent: string
     copay_cents: number
+    copay_unconfirmed?: boolean
     deductible_cents: number
     coinsurance_cents: number
     oop_reduction_cents: number
@@ -68,7 +69,7 @@ export type PrevisitEstimate = {
     oop_remaining_cents: number
     rate_source: string
     deductible_source: string
-    deductible_url: string
+    deductible_url?: string
     message: string
   }
   payment_explanation?: PaymentExplanation
