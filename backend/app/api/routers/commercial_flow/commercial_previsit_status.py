@@ -373,7 +373,7 @@ def _previsit_result(case: dict, practice_id: str | None = None) -> dict:
         if (prior_network != ((result.get('benefits') or {}).get('network_status'),
                              (result.get('benefits') or {}).get('network_source'))
                 and (result.get('benefits') or {}).get('network_source') in {
-                    'clinic_group_agreement', 'clinic_nonparticipation_rule'}):
+                    'clinic_group_agreement', 'clinic_nonparticipation_rule', 'clinic_nmct_policy'}):
             _reprice_saved_new_network(result, case, practice_id,
                 group_contract_support.eligibility_route(result, str(payer_id or ''), route_payer))
         _recheck_saved_payer_allowance(result, case, practice_id)

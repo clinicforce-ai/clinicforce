@@ -127,6 +127,10 @@ def test_saved_nmct_visit_uses_current_admin_attestation(monkeypatch):
     assert result['benefits']['network_status'] == 'out_of_network'
     assert result['benefits']['network_source'] == 'clinic_nonparticipation_rule'
     assert result['network_evidence']['source'] == 'clinic_admin_attestation'
+    monkeypatch.setattr(guard, 'scoped_admin_nonparticipation', lambda *_: None)
+    recheck_saved_network_evidence(result, case, 'primary', {'id': 'payer-1'})
+    assert result['benefits']['network_status'] == 'in_network'
+    assert result['benefits']['network_source'] == 'clinic_nmct_policy'
 
 
 def test_draft_uhc_route_uses_admin_attestation_for_initial_pricing(monkeypatch):
