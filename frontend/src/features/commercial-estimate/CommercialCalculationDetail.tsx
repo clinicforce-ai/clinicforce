@@ -1,6 +1,6 @@
 import type { CommercialEstimateModel } from './useCommercialEstimateModel'
 import { CostPicture } from './EstimatePanels'
-import { range } from './format'
+import { money, range } from './format'
 import { patientBenefitsBound } from './identityBinding'
 
 export default function CommercialCalculationDetail({
@@ -24,6 +24,7 @@ export default function CommercialCalculationDetail({
     previousEstimate,
   } = model
   const claimAfterService = guidance?.basis === 'claim_after_service'
+  const combinedPlan = !cash && !previousEstimate ? result.combined_emg_plan : null
   const knownOonAdvance =
     !cash &&
     !previousEstimate &&
@@ -57,54 +58,66 @@ export default function CommercialCalculationDetail({
         <section>
           <div className="planning-summary">
             <h3>
-              {cash
-                ? 'Cash price'
-                : claimAfterService
-                  ? 'Patient responsibility after claim'
-                  : knownOonAdvance
-                    ? 'Known out-of-network plan share'
-                    : knownOfficeCopay
-                      ? 'Known office copay advance'
-                      : knownDiagnosticCopay
-                        ? 'Known diagnostic copay advance'
-                        : !insuredTotalSupported
-                          ? 'Complete patient responsibility'
-                          : emgScenario
-                            ? 'Planning total with testing'
-                            : price?.conditional
-                              ? 'Conditional patient estimate'
-                              : 'Estimated patient responsibility'}{' '}
+              {combinedPlan
+                ? 'Planned office and EMG/NCS patient share'
+                : cash
+                  ? 'Cash price'
+                  : claimAfterService
+                    ? 'Patient responsibility after claim'
+                    : knownOonAdvance
+                      ? 'Known out-of-network plan share'
+                      : knownOfficeCopay
+                        ? 'Known office copay advance'
+                        : knownDiagnosticCopay
+                          ? 'Known diagnostic copay advance'
+                          : !insuredTotalSupported
+                            ? 'Complete patient responsibility'
+                            : emgScenario
+                              ? 'Planning total with testing'
+                              : price?.conditional
+                                ? 'Conditional patient estimate'
+                                : 'Estimated patient responsibility'}{' '}
               ·{' '}
-              {cash
-                ? previousEstimate
-                  ? 'Needs recheck'
-                  : cashPrice || 'Price unavailable'
-                : claimAfterService
-                  ? 'Determined by processed claim'
-                  : knownOonAdvance
-                    ? amount
-                    : knownOfficeCopay
+              {combinedPlan
+                ? money(combinedPlan.patient_share_cents)
+                : cash
+                  ? previousEstimate
+                    ? 'Needs recheck'
+                    : cashPrice || 'Price unavailable'
+                  : claimAfterService
+                    ? 'Determined by processed claim'
+                    : knownOonAdvance
                       ? amount
-                      : knownDiagnosticCopay
+                      : knownOfficeCopay
                         ? amount
-                        : !insuredTotalSupported
-                          ? 'See collection action above'
-                          : emgScenario &&
-                              emg &&
-                              emg.total_min_cents != null &&
-                              emg.total_max_cents != null
-                            ? range(emg.total_min_cents, emg.total_max_cents)
-                            : deferred || !amount
-                              ? 'Not yet calculated'
-                              : insuredTotalSupported &&
-                                  result.planning_estimate?.min_cents != null &&
-                                  result.planning_estimate?.max_cents != null
-                                ? range(
-                                    result.planning_estimate.min_cents,
-                                    result.planning_estimate.max_cents,
-                                  )
-                                : patientPrice || 'Applicable advance amount shown above'}
+                        : knownDiagnosticCopay
+                          ? amount
+                          : !insuredTotalSupported
+                            ? 'See collection action above'
+                            : emgScenario &&
+                                emg &&
+                                emg.total_min_cents != null &&
+                                emg.total_max_cents != null
+                              ? range(emg.total_min_cents, emg.total_max_cents)
+                              : deferred || !amount
+                                ? 'Not yet calculated'
+                                : insuredTotalSupported &&
+                                    result.planning_estimate?.min_cents != null &&
+                                    result.planning_estimate?.max_cents != null
+                                  ? range(
+                                      result.planning_estimate.min_cents,
+                                      result.planning_estimate.max_cents,
+                                    )
+                                  : patientPrice || 'Applicable advance amount shown above'}
             </h3>
+            {combinedPlan && (
+              <p>
+                {money(combinedPlan.office_copay_cents)} office copay +{' '}
+                {combinedPlan.coinsurance_percent}% × {money(combinedPlan.diagnostic_allowed_cents)}{' '}
+                diagnostic allowance. Remaining deductible and out-of-pocket balances were not
+                returned.
+              </p>
+            )}
             {amount &&
               !deferred &&
               !claimAfterService &&

@@ -474,6 +474,8 @@ def _previsit_result(case: dict, practice_id: str | None = None) -> dict:
         result['cash_fallback']['reason'] = 'Clinic self-pay pricing is shown because ' + _api.amount_explanation.fallback_cause(result) + '.'
     # Cash is a separate price path, never evidence of inactive insurance.
     result['collection_guidance'] = _api.collection_guidance.build(result, case.get('visit_review'))
+    result['established_for_planning'] = _api.cpt_suggester.established_visit_for_planning(case['previsit_context'].get('inputs') or {}, source)
+    result['combined_emg_plan'] = _api.visit_estimate.combined_emg_plan(result, case.get('visit_review'))
     option = result.get('emg_option')
     if isinstance(option, dict) and (
             option.get('calculation_version') != 2
@@ -492,8 +494,7 @@ def _previsit_result(case: dict, practice_id: str | None = None) -> dict:
     return result
 
 
-def _recovery_event(case: dict, session: dict, stage: str, outcome: str, *, reason: str | None = None,
-                    count: int | None = None, http_status: int | None = None) -> None:
-    _api.collection_event('coverage_recovery', practice_id=session['practice_id'],
-        intake_id=(session.get('intake') or {}).get('id'), case_id=case['id'], stage=stage,
+def _recovery_event(case: dict, session: dict, stage: str, outcome: str, *, reason: str | None = None, count: int | None = None, http_status: int | None = None) -> None:
+    _api.collection_event('coverage_recovery', practice_id=session['practice_id'], intake_id=(session.get('intake') or {}).get('id'),
+        case_id=case['id'], stage=stage,
         outcome=outcome, reason_code=reason, count=count, http_status=http_status)

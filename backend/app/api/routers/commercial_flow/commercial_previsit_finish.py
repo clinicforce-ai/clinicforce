@@ -110,6 +110,7 @@ def _finish_previsit(result: dict, case: dict, inputs: dict, source: dict, paylo
         case['previsit_plan'] = prior_plan
     result['service_plan'] = {**prior_plan['plan'], 'selection_source': 'clinician' if review.get('selected_ids') else 'suggested'}
     result['separate_em_planned'] = bool(review.get('separate_em_planned'))
+    result['established_for_planning'] = _api.cpt_suggester.established_visit_for_planning(inputs, source)
     auto_units = result['service_plan'].get('recommended_units') or {}
     units = {**auto_units, **(review.get('confirmed_units') or {})}
     result['available_codes'] = [{**row, 'units': units.get(row['id'], row.get('units'))} for row in available]
@@ -243,6 +244,7 @@ def _finish_previsit(result: dict, case: dict, inputs: dict, source: dict, paylo
                  or blue_cross_proxy.cigna_estimate(result, inputs['service_date'])):
         result['fee_proxy_estimate'] = proxy
     result['collection_guidance'] = _api.collection_guidance.build(result, review)
+    result['combined_emg_plan'] = _api.visit_estimate.combined_emg_plan(result, review)
     result.pop('emg_option', None)
     if inputs.get('visit_type') == 'new' and result['payment_mode'] == 'insurance':
         emg_rates, emg_rules = [], {**_api._benefit_context(inputs, source),

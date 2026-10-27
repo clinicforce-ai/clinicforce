@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 
-from app.api.routers.commercial_estimator import PrevisitInput, VisitReviewInput, _compare_card_hints, _previsit_benefits, previsit_estimate, update_visit_review
+from app.api.routers.commercial_estimator import PrevisitInput, VisitReviewInput, _compare_card_hints, _previsit_benefits, _previsit_result, previsit_estimate, update_visit_review
 from app.api.routers.commercial_flow.commercial_previsit_pricing import _previsit_service_types, _reviewed_service_types
 from app.api.routers.commercial_flow.commercial_previsit_submit import same_member_and_medical_plan
 
@@ -325,6 +325,19 @@ class PrevisitFlowTest(unittest.IsolatedAsyncioTestCase):
                     self.assertIn('73', saved_raw[0]['_service_payloads'])
                     self.assertEqual([row['code'] for row in result['codes']], ['95909', '95886', '99213'])
                     self.assertEqual(result['collection_guidance']['amount_cents'], 0)
+                    case['visit_review']['selected_ids'] = [row['id'] for row in result['codes'] if row['code'] != '99213']
+                    with patch('app.api.routers.commercial_estimator.store.get_case', return_value=case), \
+                         patch('app.api.routers.commercial_estimator.object_store.get_object_bytes',
+                               return_value=json.dumps(saved_raw[0]).encode()), \
+                         patch('app.api.routers.commercial_flow.commercial_review_routes.check_cpt_authorization',
+                               new=AsyncMock(return_value=case)):
+                        edited = await update_visit_review('case-1', VisitReviewInput(
+                            context_token=result['context_token'], revision=0,
+                            separate_em_planned=True), MagicMock())
+                    self.assertEqual([row['code'] for row in edited['codes']], ['95909', '95886', '99213'])
+                    self.assertEqual(len(edited['selected_ids']), 3)
+                    case['previsit_context']['result'].pop('established_for_planning', None)
+                    self.assertTrue(_previsit_result(case, 'clinic')['established_for_planning'])
                 return
             if visit_type == 'established':
                 preliminary_suggestions.assert_called_once()

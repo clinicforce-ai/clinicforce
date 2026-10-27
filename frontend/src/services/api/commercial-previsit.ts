@@ -15,7 +15,21 @@ import type { PaymentExplanation } from './commercial-explanation'
 import type { CommercialNetworkEvidence } from './commercial-network-evidence'
 
 export type PrevisitEstimate = {
+  established_for_planning?: boolean
+  requested_service_types?: string[]
   separate_em_planned?: boolean
+  combined_emg_plan?: {
+    amount_cents: number
+    patient_share_cents: number
+    office_copay_cents: number
+    diagnostic_allowed_cents: number
+    diagnostic_coinsurance_cents: number
+    coinsurance_percent: string
+    total_allowed_cents: number
+    payments_cents: number
+    basis: 'office_copay_plus_emg_coinsurance'
+    assumptions: string[]
+  } | null
   botox_review?: BotoxReview
   billing_protection?: {
     status?: 'qmb' | 'not_qmb'

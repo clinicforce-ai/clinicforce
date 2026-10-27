@@ -39,9 +39,10 @@ async def update_visit_review(case_id: str, value: _api.VisitReviewInput, reques
     Changed clinical details may be refreshed explicitly when all patient,
     coverage, provider, location and date context remains identical. The
     refreshed CPT plan requires a new clinician selection before collection.
-    Staff may mark a distinct office assessment planned with EMG/NCS. With
-    supported prior office history, this previews established CPT 99213 for
-    cost planning; the clinician confirms the final E/M level and modifier.
+    Established-patient EMG/NCS visits offer a separate follow-up checkbox.
+    Turning it on adds provisional CPT 99213 to existing planned testing;
+    turning it off removes the office selection. The clinician confirms the
+    final E/M level, distinct work and modifier.
     """
     session = await _api._session(request)
     case = await _api.run_in_threadpool(_api.store.get_case, case_id, session['patient_id'], session['share_manifest_id'], **_api._scope(session))
@@ -172,7 +173,18 @@ async def update_visit_review(case_id: str, value: _api.VisitReviewInput, reques
                                if line_id in keep}
             review.pop('payments', None)
     if value.separate_em_planned is not None:
+        if value.separate_em_planned and not _api.cpt_suggester.established_visit_for_planning(inputs, source):
+            raise _api.HTTPException(422, 'A separate follow-up CPT can be planned here only for an established patient.')
         review['separate_em_planned'] = value.separate_em_planned
+        if value.separate_em_planned and review.get('selected_ids'):
+            office = [key for key in review['selected_ids']
+                      if _api.visit_estimate.clinical_group(available[key]['code']) == 'visit']
+            if not office:
+                follow_up = next((key for key, row in available.items() if row['code'] == '99213'), None)
+                if not follow_up:
+                    raise _api.HTTPException(422, 'The established follow-up CPT is unavailable for this visit.')
+                review['selected_ids'].append(follow_up)
+                review.pop('payments', None)
         if not value.separate_em_planned and review.get('selected_ids'):
             review['selected_ids'] = [line_id for line_id in review['selected_ids']
                                       if _api.visit_estimate.clinical_group(available[line_id]['code']) != 'visit']

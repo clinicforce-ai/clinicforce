@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 from collections import Counter
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 import re
 from datetime import date, datetime
 
@@ -213,3 +214,73 @@ def planning_estimate(price: dict, benefits: dict, comparison: dict) -> dict | N
                                 'Estimated patient responsibility for the selected services, before payments and credits.'),
                 'assumptions': assumptions}
     return None
+
+
+def combined_emg_plan(result: dict, review: dict | None = None) -> dict | None:
+    """Show one sourced office copay plus diagnostic coinsurance as a planning scenario."""
+    benefits, price = result.get('benefits') or {}, result.get('price_range') or {}
+    lines = price.get('lines') or []
+    identity_check = result.get('identity') or benefits.get('identity') or {}
+    if (result.get('payment_mode') == 'cash' or result.get('established_for_planning') is not True
+            or result.get('separate_em_planned') is not True
+            or result.get('refresh_requires_selection') is True
+            or not identity.patient_plan_applies(benefits, identity_check, str(result.get('service_date') or ''))
+            or not verified_in_network(benefits) or benefits.get('has_secondary')
+            or benefits.get('network_conflict') or benefits.get('source_errors')
+            or (result.get('recovery') or {}).get('reason_code') in {'multiple_active_policies', 'same_policy_evidence_conflict'}
+            or (result.get('collection_guidance') or {}).get('basis') in {'qmb_protection', 'out_of_pocket_limit'}
+            or price.get('mode') != 'services' or price.get('complete') is True
+            or price.get('service_issues') or len(lines) < 3
+            or benefits.get('oop_remaining_cents') is not None
+            or type(benefits.get('deductible_remaining_cents')) is int and benefits['deductible_remaining_cents'] > 0):
+        return None
+    office = [line for line in lines if line.get('code') == '99213']
+    diagnostic = [line for line in lines if line.get('code') in cpt_rules.NCS_CODES | cpt_rules.EMG_ADD_ONS]
+    if (len(office) != 1 or len(diagnostic) != len(lines) - 1
+            or not any(line.get('code') in cpt_rules.NCS_CODES for line in diagnostic)
+            or not any(line.get('code') in cpt_rules.EMG_ADD_ONS for line in diagnostic)
+            or {line.get('id') for line in lines} != set(result.get('selected_ids') or [])):
+        return None
+    for line in lines:
+        terms = line.get('benefits') or {}
+        if (line.get('allowed_basis') != 'clinic_contract'
+                or (line.get('rate_resolution') or {}).get('status') != 'RESOLVED'
+                or type(line.get('allowed_cents')) is not int or line['allowed_cents'] <= 0
+                or line.get('units') != 1
+                or terms.get('active') is not True or terms.get('network_status') != 'in_network'
+                or terms.get('service_date_matches') is False or terms.get('source_errors')
+                or terms.get('has_secondary') or terms.get('oop_remaining_cents') is not None
+                or type(terms.get('deductible_remaining_cents')) is int and terms['deductible_remaining_cents'] > 0):
+            return None
+    office_terms = office[0]['benefits']
+    copay = office_terms.get('copay_cents')
+    if (office[0]['units'] != 1 or type(copay) is not int or not 0 <= copay <= office[0]['allowed_cents']
+            or not office_terms.get('copay_id')
+            or office_terms.get('deductible_applies') is True and office_terms.get('deductible_remaining_cents') != 0
+            or office_terms.get('coinsurance_percent') not in {None, '0', '0.0', '0.00'}):
+        return None
+    percentages = {str((line.get('benefits') or {}).get('coinsurance_percent')) for line in diagnostic}
+    if len(percentages) != 1 or any((line.get('benefits') or {}).get('coinsurance_id') is None
+                                or (line.get('benefits') or {}).get('copay_cents') not in {None, 0}
+                                for line in diagnostic):
+        return None
+    try:
+        percent = Decimal(percentages.pop())
+    except (InvalidOperation, TypeError):
+        return None
+    if not percent.is_finite() or not 0 <= percent <= 100:
+        return None
+    diagnostic_total = sum(line['allowed_cents'] for line in diagnostic)
+    coinsurance = sum(int((Decimal(line['allowed_cents']) * percent / 100).quantize(
+        Decimal('1'), rounding=ROUND_HALF_UP)) for line in diagnostic)
+    share = copay + coinsurance
+    payments = (review or {}).get('payments') or {}
+    paid = payments.get('amount_cents') if payments.get('reference') and type(payments.get('amount_cents')) is int else 0
+    return {'amount_cents': max(0, share - paid), 'patient_share_cents': share,
+            'office_copay_cents': copay, 'diagnostic_allowed_cents': diagnostic_total,
+            'diagnostic_coinsurance_cents': coinsurance, 'coinsurance_percent': str(percent),
+            'total_allowed_cents': office[0]['allowed_cents'] + diagnostic_total,
+            'payments_cents': paid, 'basis': 'office_copay_plus_emg_coinsurance',
+            'assumptions': ['No additional diagnostic deductible is applied when its remaining balance is not returned.',
+                            'No out-of-pocket reduction is applied when the remaining balance is not returned.',
+                            'A separately documented established-patient office assessment is performed.']}
