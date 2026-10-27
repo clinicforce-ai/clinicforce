@@ -15,7 +15,7 @@ BCBSTX_PAYER_NAMES = {'bcbstx', 'bcbstexas', 'bluecrossblueshieldoftexas',
                       'bluecrossblueshieldtexas'}
 
 # Saved estimates re-evaluate requirement decisions when a published rule changes.
-PUBLISHED_RULESET_VERSION = '2026-10-27-uhc-group-ppo-diagnostics'
+PUBLISHED_RULESET_VERSION = '2026-10-27-uhc-group-ppo-diagnostics-v2'
 
 UHC_GROUP_PPO_OON_SOURCE = {
     'label': 'UnitedHealthcare Group Medicare Advantage PPO out-of-network provider guide',
@@ -159,7 +159,7 @@ def _published_rule(kind: str, result: dict, context: dict, plans: list[str], co
     )
     if (not codes or not '2026-01-01' <= day <= '2026-12-31'
             or benefits.get('active') is not True
-            or benefits.get('service_date_matches') is not True and not same_day_bcbstx_visit
+            or not (stedi_cpt_authorization.visit_coverage_bound(benefits, day) or same_day_bcbstx_visit)
             or not payer_identity_verified(identity) or not result.get('benefit_source')
             or not context.get('member_id')):
         return None
@@ -187,7 +187,7 @@ def _published_rule(kind: str, result: dict, context: dict, plans: list[str], co
     group_13705_diagnostics = (
         {'unitedhealthcare', 'uhc'} & names
         and str(context.get('group_number') or '') == '13705'
-        and benefits.get('network_status') == 'out_of_network'
+        and benefits.get('network_status') in {'in_network', 'out_of_network'}
         and any('groupmedicareadvantageppo' in _key(plan)
                 or _key(plan).startswith('lppounitedhealthcaregroupmedicareadvantagepp')
                 for plan in plans)
@@ -196,9 +196,10 @@ def _published_rule(kind: str, result: dict, context: dict, plans: list[str], co
     if group_13705_diagnostics:
         product = 'groupmedicareadvantageppo'
         if kind == 'referral':
-            return rule('Not required', 'The 2026 UHC Group Medicare Advantage PPO out-of-network guide permits specialist visits without a PCP referral.', UHC_GROUP_PPO_OON_SOURCE)
+            source = UHC_GROUP_PPO_OON_SOURCE if not in_network else UHC_MA_PPO_REFERRAL_SOURCE
+            return rule('Not required', 'This Group Medicare Advantage PPO diagnostic visit does not require a PCP specialist referral.', source)
         if kind == 'authorization' and day >= '2026-10-26':
-            return rule('Not required', 'Clinic-confirmed decision for the selected diagnostic CPTs under this group plan and out-of-network setting.', UHC_GROUP_13705_DIAGNOSTIC_PA_SOURCE, source_type='clinic_confirmation')
+            return rule('Not required', 'Clinic-confirmed decision for the selected diagnostic CPTs under this group plan.', UHC_GROUP_13705_DIAGNOSTIC_PA_SOURCE, source_type='clinic_confirmation')
     bcbstx_ppo_follow_up = (exact <= {'bluechoiceppo'} and in_network and office and day >= '2026-10-26'
             and names & BCBSTX_PAYER_NAMES
             and 'preferredprovideroptionmedical' in {_key(plan) for plan in plans}

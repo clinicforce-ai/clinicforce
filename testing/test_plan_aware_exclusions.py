@@ -60,6 +60,8 @@ def test_exact_product_exclusion_does_not_establish_nonparticipation(monkeypatch
     assert found['document_id'] == 'first-agreement'
     assert library_network_exclusions.applicable_exclusion(
         'synthetic-practice', 'UnitedHealthcare', ['Choice Plus'], '2026-10-14') is None
+    assert library_network_exclusions.product_kind(
+        'LPPO-UNITEDHEALTHCARE GROUP MEDICARE ADVANTAGE (PP') == 'group_medicare_advantage_ppo'
     assert library_network_exclusions.applicable_exclusion(
         'synthetic-practice', 'UnitedHealthcare', ['RPPO-UHC Complete Care Support TX-1A'], '2025-10-14') is None
 

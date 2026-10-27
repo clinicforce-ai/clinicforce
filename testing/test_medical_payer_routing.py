@@ -108,6 +108,7 @@ def test_stale_part_b_code_cannot_send_known_ma_issuer_to_hets():
 def test_group_hmo_dsnp_and_original_medicare_product_classification():
     assert insurance_product.classify(['RPPO-UHC Complete Care Support TX-1A']) == 'medicare_advantage_regional_ppo'
     assert insurance_product.classify(['UnitedHealthcare Group Medicare Advantage PPO']) == 'medicare_advantage_group_ppo'
+    assert insurance_product.classify(['LPPO-UNITEDHEALTHCARE GROUP MEDICARE ADVANTAGE (PP']) == 'medicare_advantage_group_ppo'
     assert insurance_product.classify(['UnitedHealthcare Medicare Advantage HMO']) == 'medicare_advantage_hmo'
     assert insurance_product.classify(['UnitedHealthcare Medicare Advantage D-SNP']) == 'medicare_advantage_dsnp'
     assert insurance_product.classify([], payer_id='CMS') == 'original_medicare'
