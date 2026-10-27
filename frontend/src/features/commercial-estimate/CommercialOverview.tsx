@@ -57,6 +57,7 @@ export default function CommercialOverview({
   const plannedCodeLabel = plannedCodes.map((code) => `CPT ${code}`).join(', ')
   const aetnaReferenceCopay = aetnaOfficeReferenceCopay(result, model)
   const payerReportedPartialCents = aetnaReferenceCopay ?? payerReportedPartialCopay(result, model)
+  const combinedPlan = !cash && !previousEstimate ? result.combined_emg_plan : null
   const showSelectedRequirements =
     !cash &&
     !previousEstimate &&
@@ -74,10 +75,12 @@ export default function CommercialOverview({
   const staleInsuredGuidance = !cash && guidance?.amount_cents != null && !amount
   const showAssumptions = Boolean(
     amount ||
+    combinedPlan ||
     (!staleInsuredGuidance && (guidance?.patient_actions.length || guidance?.assumptions.length)),
   )
   const visibleAmount =
     Boolean(amount) ||
+    combinedPlan != null ||
     provisionalAmount != null ||
     !!model.estimatedShare ||
     payerReportedPartialCents != null
@@ -319,7 +322,7 @@ export default function CommercialOverview({
                   patient share.
                 </p>
               )}
-              {amount && (
+              {amount && !combinedPlan && (
                 <p>
                   {(!staleInsuredGuidance && guidance?.patient_message) ||
                     'The final patient share follows the insurer’s processed claim.'}
@@ -353,7 +356,14 @@ export default function CommercialOverview({
                     )}
                   </dl>
                 )}
-              {!staleInsuredGuidance && !!guidance?.patient_actions.length && (
+              {combinedPlan && (
+                <ul>
+                  {combinedPlan.assumptions.map((item) => (
+                    <li key={item}>{item}</li>
+                  ))}
+                </ul>
+              )}
+              {!combinedPlan && !staleInsuredGuidance && !!guidance?.patient_actions.length && (
                 <div>
                   <b>Tell the patient:</b>
                   <ul>
@@ -363,7 +373,7 @@ export default function CommercialOverview({
                   </ul>
                 </div>
               )}
-              {!staleInsuredGuidance && !!guidance?.assumptions.length && (
+              {!combinedPlan && !staleInsuredGuidance && !!guidance?.assumptions.length && (
                 <ul>
                   {guidance.assumptions.map((item) => (
                     <li key={item}>{item}</li>
@@ -377,8 +387,18 @@ export default function CommercialOverview({
           <CommercialCostBreakdown model={model} result={result} />
           {!cash && !calculating && model.summaryExplanation && (
             <details className="financial-breakdown">
-              <summary>{amount ? 'Why this amount?' : 'Why this needs review'}</summary>
-              <p>{model.summaryExplanation}</p>
+              <summary>
+                {combinedPlan
+                  ? 'How the planning amount was calculated'
+                  : amount
+                    ? 'Why this amount?'
+                    : 'Why this needs review'}
+              </summary>
+              <p>
+                {combinedPlan
+                  ? `${money(combinedPlan.office_copay_cents)} office copay plus ${combinedPlan.coinsurance_percent}% of ${money(combinedPlan.diagnostic_allowed_cents)} diagnostic allowance. Final responsibility follows the processed claim.`
+                  : model.summaryExplanation}
+              </p>
             </details>
           )}
         </div>

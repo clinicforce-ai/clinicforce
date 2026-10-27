@@ -82,6 +82,10 @@ async def saved_previsit(case_id: str, request: _api.Request) -> dict:
     the payer returned one; it is distinct from oop_remaining_cents.
     Conflicting individual annual or remaining OOP rows leave that amount null
     and retain their payer paths in the corresponding *_conflict_ids field.
+    combined_emg_plan, when present, is a noncollectible planning calculation
+    for a separately planned established-patient office visit plus priced
+    EMG/NCS lines. It adds one sourced office copay to diagnostic coinsurance
+    while disclosing missing remaining deductible and out-of-pocket balances.
     coordination, when present, is a safe summary of a separate Stedi COB
     check, including fixed field names missing at preflight and any eCW birth
     date source used when the 271 omitted it. Payer names and roles remain

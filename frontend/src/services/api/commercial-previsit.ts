@@ -2,6 +2,7 @@ import type {
   BillingNote,
   RequirementEvidence,
   CollectionGuidance,
+  CombinedEmgPlan,
   PrevisitIdentity,
 } from './commercial-common'
 import type {
@@ -15,7 +16,10 @@ import type { PaymentExplanation } from './commercial-explanation'
 import type { CommercialNetworkEvidence } from './commercial-network-evidence'
 
 export type PrevisitEstimate = {
+  established_for_planning?: boolean
+  requested_service_types?: string[]
   separate_em_planned?: boolean
+  combined_emg_plan?: CombinedEmgPlan | null
   botox_review?: BotoxReview
   billing_protection?: {
     status?: 'qmb' | 'not_qmb'

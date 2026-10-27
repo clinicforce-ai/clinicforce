@@ -63,6 +63,16 @@ def _prior_appointments(value: Any) -> list[dict[str, Any]]:
     return appointments
 
 
+def established_visit_for_planning(inputs: dict, source: dict) -> bool:
+    if inputs.get('visit_type') == 'established':
+        return True
+    if inputs.get('visit_type') is not None:
+        return False
+    return any(any(code.isdigit() and (99202 <= int(code) <= 99205 or 99212 <= int(code) <= 99215)
+                   for code in row['coded_services'])
+               for row in _prior_appointments(source.get('recent_completed_appointments')))
+
+
 class _InvalidVisitPlan(ValueError):
     pass
 
@@ -110,11 +120,7 @@ def recommend_visit_plan(inputs: dict, source: dict, available: list[dict]) -> d
              or type(row.get('units')) is int and row['units'] > 0)}
     scheduled_office = [row for row in available if row.get('source') == 'eCW scheduled service'
                         and visit_estimate.clinical_group(row['code']) == 'visit']
-    prior_office = any(any(code.isdigit() and (99202 <= int(code) <= 99205 or 99212 <= int(code) <= 99215)
-                               for code in row.get('coded_services', []))
-                       for row in _prior_appointments(source.get('recent_completed_appointments')))
-    established_for_planning = (inputs.get('visit_type') == 'established' or
-                                inputs.get('visit_type') is None and prior_office)
+    established_for_planning = established_visit_for_planning(inputs, source)
     unsupported_muscle_ids = {row['id'] for row in available
         if row.get('source') == 'eCW scheduled service'
         and row['code'] in cpt_rules.EMG_ADD_ONS and row['code'] not in diagnostic_scheduled}

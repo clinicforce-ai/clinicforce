@@ -196,6 +196,21 @@ export function useCommercialEstimateActions({
       const updated = await commercialVisitReview(result, review, intakeId)
       if (current === requestId.current) {
         setResult(updated)
+        if (
+          review.separate_em_planned === true &&
+          !result.requested_service_types?.includes('98')
+        ) {
+          let refreshed: PrevisitEstimate
+          try {
+            refreshed = await commercialPrevisit(updated.appointment_id, true, intakeId)
+          } catch (caught) {
+            // The gateway can time out after Stedi succeeds; read the saved case before offering another paid inquiry.
+            const saved = await commercialSavedPrevisit(updated.check_id!, intakeId)
+            if (!saved.requested_service_types?.includes('98')) throw caught
+            refreshed = saved
+          }
+          if (current === requestId.current) setResult(refreshed)
+        }
         setNotice('')
         return true
       }

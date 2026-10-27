@@ -14,6 +14,7 @@ import { reportedMedicalLimit } from './reportedMedicalLimit'
 import { referenceCoverageRow } from './referenceCoverageRow'
 import { reportedLimit } from './reportedLimit'
 import { limitSummary, unknown } from './limitSummary'
+import { resolvedAllowedTotal } from './resolvedAllowedTotal'
 
 export default function CommercialCostBreakdown({
   model,
@@ -26,6 +27,7 @@ export default function CommercialCostBreakdown({
   const reportedResult = result.reference_benefits ? { ...result, benefits } : result
   const price = result.price_range
   const feeProxy = result.fee_proxy_estimate
+  const combinedPlan = !model.cash && !model.previousEstimate ? result.combined_emg_plan : null
   const cignaFeeProxy = feeProxy?.basis === 'bcbstx_cigna_fee_proxy'
   const lines = price?.mode === 'services' ? price.lines || [] : []
   const reason = result.reason || model.anticipatedService || 'Not recorded'
@@ -85,18 +87,7 @@ export default function CommercialCostBreakdown({
   const familyOopAnnual = reportedMedicalLimit(reportedResult, 'FAMILY', 'CALENDAR_YEAR')
   const familyOopRemaining = reportedMedicalLimit(reportedResult, 'FAMILY', 'REMAINING')
   const pricedCashLines = lines.filter((line) => line.cash_cents != null && !line.cash_included)
-  const lineAllowedTotal =
-    lines.length > 0 &&
-    lines.every(
-      (line) =>
-        line.rate_resolution?.status === 'RESOLVED' &&
-        line.allowed_cents != null &&
-        ['clinic_contract', 'payer_out_of_network', 'cms_original_medicare_estimate'].includes(
-          line.allowed_basis || '',
-        ),
-    )
-      ? lines.reduce((sum, line) => sum + line.allowed_cents!, 0)
-      : null
+  const lineAllowedTotal = resolvedAllowedTotal(lines)
   const calculated =
     !automaticCashFallback &&
     !model.previousEstimate &&
@@ -196,26 +187,28 @@ export default function CommercialCostBreakdown({
       label: 'Copay',
       value: familyOopApplied
         ? '$0 payable after family out-of-pocket limit'
-        : feeProxy != null
-          ? cignaFeeProxy && feeProxy.copay_unconfirmed
-            ? `${money(0)} assumed for calculation · no CPT copay returned`
-            : `${money(feeProxy.copay_cents)} diagnostic copay`
-          : officeReferenceCopay != null
-            ? `${money(officeReferenceCopay)} specialist office visit · payer-reported reference`
-            : diagnosticCopay != null
-              ? `${money(diagnosticCopay)} once per day`
-              : calculated && components?.copay_cents != null
-                ? money(components.copay_cents)
-                : lines.some((line) => line.benefits?.copay_cents != null)
-                  ? lines
-                      .map(
-                        (line) =>
-                          `CPT ${line.code}: ${line.benefits.copay_cents != null ? money(line.benefits.copay_cents) : 'not returned'}`,
-                      )
-                      .join('; ')
-                  : !lines.length && reportedOfficeCopay != null
-                    ? `${money(reportedOfficeCopay)} specialist office visit · payer-reported`
-                    : unknown,
+        : combinedPlan
+          ? `${money(combinedPlan.office_copay_cents)} specialist follow-up`
+          : feeProxy != null
+            ? cignaFeeProxy && feeProxy.copay_unconfirmed
+              ? `${money(0)} assumed for calculation · no CPT copay returned`
+              : `${money(feeProxy.copay_cents)} diagnostic copay`
+            : officeReferenceCopay != null
+              ? `${money(officeReferenceCopay)} specialist office visit · payer-reported reference`
+              : diagnosticCopay != null
+                ? `${money(diagnosticCopay)} once per day`
+                : calculated && components?.copay_cents != null
+                  ? money(components.copay_cents)
+                  : lines.some((line) => line.benefits?.copay_cents != null)
+                    ? lines
+                        .map(
+                          (line) =>
+                            `CPT ${line.code}: ${line.benefits.copay_cents != null ? money(line.benefits.copay_cents) : 'not returned'}`,
+                        )
+                        .join('; ')
+                    : !lines.length && reportedOfficeCopay != null
+                      ? `${money(reportedOfficeCopay)} specialist office visit · payer-reported`
+                      : unknown,
       detail:
         cignaFeeProxy && feeProxy?.copay_unconfirmed
           ? 'No CPT copay row was returned; this calculation uses $0'
@@ -288,8 +281,9 @@ export default function CommercialCostBreakdown({
     },
     {
       label: 'Coinsurance',
-      value:
-        feeProxy != null
+      value: combinedPlan
+        ? `${combinedPlan.coinsurance_percent}% · ${money(combinedPlan.diagnostic_coinsurance_cents)}`
+        : feeProxy != null
           ? `${feeProxy.coinsurance_percent}% · ${money(feeProxy.coinsurance_cents)} on the fee proxy`
           : result.collection_guidance?.basis === 'out_of_pocket_limit'
             ? reportedCoinsurance != null
@@ -300,8 +294,9 @@ export default function CommercialCostBreakdown({
               : reportedCoinsurance != null
                 ? `${reportedCoinsurance}% reported; dollar amount pending`
                 : unknown,
-      detail:
-        feeProxy != null
+      detail: combinedPlan
+        ? `${combinedPlan.coinsurance_percent}% × ${money(combinedPlan.diagnostic_allowed_cents)} = ${money(combinedPlan.diagnostic_coinsurance_cents)}`
+        : feeProxy != null
           ? `${money(feeProxy.reference_total_cents)} × ${feeProxy.coinsurance_percent}% = ${money(feeProxy.coinsurance_cents)}`
           : calculated
             ? coinsuranceFormula(result) ||
@@ -380,25 +375,27 @@ export default function CommercialCostBreakdown({
     ? officeReferenceCopay != null
       ? `${money(officeReferenceCopay)} office-only reference; other services excluded`
       : 'Not fully calculated'
-    : result.collection_guidance?.basis === 'qmb_protection' &&
-        result.collection_guidance.amount_cents === 0
-      ? money(0)
-      : result.collection_guidance?.basis === 'out_of_pocket_limit' &&
+    : combinedPlan
+      ? `${money(combinedPlan.patient_share_cents)} planning estimate`
+      : result.collection_guidance?.basis === 'qmb_protection' &&
           result.collection_guidance.amount_cents === 0
         ? money(0)
-        : calculated &&
-            summary?.estimated_total_patient_min_cents != null &&
-            summary.estimated_total_patient_max_cents != null
-          ? range(
-              summary.estimated_total_patient_min_cents,
-              summary.estimated_total_patient_max_cents,
-            )
-          : feeProxy != null
-            ? `${money(feeProxy.patient_share_cents)} provisional · BCBS Texas fee proxy`
-            : model.estimatedShare ||
-              (model.provisionalAmount != null
-                ? money(model.provisionalAmount)
-                : model.patientPrice || 'Not fully calculated')
+        : result.collection_guidance?.basis === 'out_of_pocket_limit' &&
+            result.collection_guidance.amount_cents === 0
+          ? money(0)
+          : calculated &&
+              summary?.estimated_total_patient_min_cents != null &&
+              summary.estimated_total_patient_max_cents != null
+            ? range(
+                summary.estimated_total_patient_min_cents,
+                summary.estimated_total_patient_max_cents,
+              )
+            : feeProxy != null
+              ? `${money(feeProxy.patient_share_cents)} provisional · BCBS Texas fee proxy`
+              : model.estimatedShare ||
+                (model.provisionalAmount != null
+                  ? money(model.provisionalAmount)
+                  : model.patientPrice || 'Not fully calculated')
   const rows: CostBreakdownRow[] =
     model.cash && !automaticCashFallback
       ? [
@@ -430,13 +427,15 @@ export default function CommercialCostBreakdown({
             value: patientShare,
             detail: automaticCashFallback
               ? 'Insured share awaits a matching payer check and selected CPTs'
-              : result.collection_guidance?.basis === 'out_of_pocket_limit'
-                ? 'Covered in-network share is capped by the applicable out-of-pocket limit'
-                : feeProxy != null
-                  ? feeProxy.message
-                  : calculated
-                    ? 'Copay + deductible applied + coinsurance − allowed and out-of-pocket reductions'
-                    : 'Full share awaits applicable deductible and out-of-pocket terms',
+              : combinedPlan
+                ? `${money(combinedPlan.office_copay_cents)} office copay + ${combinedPlan.coinsurance_percent}% × ${money(combinedPlan.diagnostic_allowed_cents)} diagnostic allowance. No additional deductible or out-of-pocket reduction was applied where remaining balances were not returned.`
+                : result.collection_guidance?.basis === 'out_of_pocket_limit'
+                  ? 'Covered in-network share is capped by the applicable out-of-pocket limit'
+                  : feeProxy != null
+                    ? feeProxy.message
+                    : calculated
+                      ? 'Copay + deductible applied + coinsurance − allowed and out-of-pocket reductions'
+                      : 'Full share awaits applicable deductible and out-of-pocket terms',
           },
           ...(summary?.payments_verified_cents != null && summary.payments_verified_cents > 0
             ? [{ label: 'Already paid', value: `−${money(summary.payments_verified_cents)}` }]
@@ -449,9 +448,10 @@ export default function CommercialCostBreakdown({
       !['bcbstx_proxy_advance', 'qmb_protection'].includes(result.collection_guidance?.basis || '')
         ? 'Planned amount to collect at visit'
         : 'Amount to collect at visit',
-    value:
-      result.collection_guidance?.basis === 'qmb_protection' &&
-      result.collection_guidance.amount_cents === 0
+    value: combinedPlan
+      ? `${money(combinedPlan.amount_cents)} planning estimate`
+      : result.collection_guidance?.basis === 'qmb_protection' &&
+          result.collection_guidance.amount_cents === 0
         ? money(0)
         : !automaticCashFallback &&
             model.supportedAmount &&
@@ -462,8 +462,9 @@ export default function CommercialCostBreakdown({
             : officeReferenceCopay != null
               ? `${money(officeReferenceCopay)} office-only reference`
               : 'Not established',
-    detail:
-      result.collection_guidance?.basis === 'qmb_protection'
+    detail: combinedPlan
+      ? `${money(combinedPlan.office_copay_cents)} + ${combinedPlan.coinsurance_percent}% × ${money(combinedPlan.diagnostic_allowed_cents)} = ${money(combinedPlan.patient_share_cents)}${combinedPlan.payments_cents ? `; less ${money(combinedPlan.payments_cents)} already paid` : ''}. Separate follow-up E/M is planned; deductible and out-of-pocket adjustments remain assumptions until payer balances are returned.`
+      : result.collection_guidance?.basis === 'qmb_protection'
         ? 'QMB protection prohibits collecting Medicare cost sharing for covered care'
         : cignaFeeProxy
           ? result.collection_guidance?.basis === 'cigna_fee_proxy_advance'

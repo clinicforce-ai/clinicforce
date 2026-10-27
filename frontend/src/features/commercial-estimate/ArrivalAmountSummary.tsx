@@ -11,10 +11,7 @@ function nextStep(model: CommercialEstimateModel, result: PrevisitEstimate) {
     }
   if (!lines.length && !result.selected_ids?.length)
     return { title: 'Select services', hint: 'Choose the planned CPTs for this visit.' }
-  if (
-    lines.some((line) => line.rate_resolution?.status !== 'RESOLVED') ||
-    !result.price_range?.complete
-  )
+  if (lines.some((line) => line.rate_resolution?.status !== 'RESOLVED'))
     return { title: 'Check CPT prices', hint: 'Match payer rates to the selected services.' }
   if (result.benefits?.active !== true)
     return { title: 'Check coverage', hint: 'Run eligibility for this visit.' }
@@ -49,6 +46,7 @@ export default function ArrivalAmountSummary({
   visibleAmount: boolean
 }) {
   const action = nextStep(model, result)
+  const plan = !model.cash && !model.previousEstimate ? result.combined_emg_plan : null
   const needsAction = model.amountText === 'Insured amount unavailable'
   const additionalServicesPending = result.price_range?.lines?.some(
     (line) => !/^992(?:0[2-5]|1[2-5])$/.test(line.code),
@@ -56,18 +54,33 @@ export default function ArrivalAmountSummary({
   return (
     <>
       <span>
-        {partialCopay != null
-          ? referenceOnly
-            ? 'Office-only reference · collection pending'
-            : 'Payer-reported office copay · collection pending'
-          : needsAction
-            ? 'Next step'
-            : model.amountLabel}
+        {plan
+          ? 'Amount to collect at visit · planning estimate'
+          : partialCopay != null
+            ? referenceOnly
+              ? 'Office-only reference · collection pending'
+              : 'Payer-reported office copay · collection pending'
+            : needsAction
+              ? 'Next step'
+              : model.amountLabel}
       </span>
       <strong className={!visibleAmount ? 'amount-pending' : undefined} role="status">
-        {partialCopay != null ? money(partialCopay) : needsAction ? action.title : model.amountText}
+        {plan
+          ? money(plan.amount_cents)
+          : partialCopay != null
+            ? money(partialCopay)
+            : needsAction
+              ? action.title
+              : model.amountText}
       </strong>
-      {partialCopay != null ? (
+      {plan ? (
+        <p>
+          {money(plan.office_copay_cents)} office copay + {plan.coinsurance_percent}% ×{' '}
+          {money(plan.diagnostic_allowed_cents)} diagnostic allowance ={' '}
+          {money(plan.patient_share_cents)} before any recorded payment. Deductible and
+          out-of-pocket balances were not returned.
+        </p>
+      ) : partialCopay != null ? (
         <p>
           {referenceOnly
             ? 'Planning amount for this visit date; confirm payer date and Medicare cost-sharing protection before collection.'
