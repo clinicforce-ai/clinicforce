@@ -182,20 +182,13 @@ export default function CommercialCostBreakdown({
     ...(result.temporary_rate_reference?.lines.length
       ? [
           {
-            label: 'Blue Cross fee reference',
-            value: result.temporary_rate_reference.lines
-              .map((line) => `CPT ${line.code}: ${money(line.unit_reference_cents)} per unit`)
-              .join('; '),
+            label: feeProxy ? 'BCBS Texas fee proxy total' : 'Blue Cross fee reference',
+            value: feeProxy
+              ? money(feeProxy.reference_total_cents)
+              : result.temporary_rate_reference.lines
+                  .map((line) => `CPT ${line.code}: ${money(line.unit_reference_cents)} per unit`)
+                  .join('; '),
             detail: result.temporary_rate_reference.message,
-          },
-        ]
-      : []),
-    ...(feeProxy
-      ? [
-          {
-            label: 'BCBS Texas fee proxy total',
-            value: money(feeProxy.reference_total_cents),
-            detail: `Planning rate for the selected CPTs and units; ${result.payer || 'payer'} allowed amount remains unknown`,
           },
         ]
       : []),
@@ -319,14 +312,6 @@ export default function CommercialCostBreakdown({
               ? 'Payer-reported office visit term; diagnostic testing share is not established'
               : undefined,
     },
-    ...(cignaFeeProxy && feeProxy?.oop_reduction_cents > 0
-      ? [
-          {
-            label: 'Out-of-pocket limit reduction',
-            value: `−${money(feeProxy.oop_reduction_cents)}`,
-          },
-        ]
-      : []),
     ...(calculated && (components?.allowed_cap_adjustment_cents ?? 0) > 0
       ? [
           {

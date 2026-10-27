@@ -208,6 +208,7 @@ def cigna_estimate(result: dict, service_date: str) -> dict | None:
     if type(general_oop) is int and general_oop != oop_remaining and min(general_oop, oop_remaining) < coinsurance:
         return None
     share = min(coinsurance, oop_remaining)
+    cap_note = f' The exact CPT out-of-pocket balance reduced the provisional share by ${(coinsurance - share) / 100:.2f}.' if share < coinsurance else ''
     return {'basis': 'bcbstx_cigna_fee_proxy', 'status': 'provisional',
             'reference_total_cents': total, 'coinsurance_percent': str(percentages.pop()),
             'copay_cents': 0, 'copay_unconfirmed': copay_assumed,
@@ -218,4 +219,4 @@ def cigna_estimate(result: dict, service_date: str) -> dict | None:
             'message': ('Provisional patient share using BCBS Texas clinic fees and Cigna exact-CPT benefits. '
                         + ('No CPT copay was returned; $0 additional copay is an assumption. '
                            if copay_assumed else 'The exact CPT copay is $0. '
-                           ) + 'Cigna allowed amounts and the authorized check-in charge remain unknown.')}
+                           ) + 'Cigna allowed amounts and the authorized check-in charge remain unknown.' + cap_note)}
