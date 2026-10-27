@@ -10,6 +10,7 @@ from app.api.routers.commercial_flow.commercial_previsit_network_guard import ap
 from app.api.routers.commercial_flow.commercial_previsit_saved_pricing import _reprice_saved_new_network
 from app.api.routers.commercial_flow.commercial_previsit_requirements import refresh_saved_requirements
 from app.api.routers.commercial_flow.commercial_previsit_enrollment import _enrollment_failure
+from app.api.routers.commercial_flow.commercial_previsit_service_scope import retain_incomplete_service_evidence as _retain_incomplete_service_evidence
 @_api.router.get("/configuration")
 async def configuration(request: _api.Request) -> dict:
     session = await _api._session(request)
@@ -64,15 +65,6 @@ async def ecw_appointment_readiness(value: _api.EcwStartInput, request: _api.Req
 def _recovery_binding(inputs: dict, source: dict) -> str:
     # Choosing anticipated services must not invalidate the recovered member identity.
     return _api._visit_context_token({**inputs, 'lines': [], 'reason': None, 'visit_type': None}, source)
-
-def _retain_incomplete_service_evidence(benefits: dict, case: dict) -> dict:
-    if (case.get('previsit') or {}).get('request_state') in {'partial', 'indeterminate'} and case.get('previsit_raw_object_key'):
-        reason = 'Separate requested service inquiry evidence is unavailable for the combined visit.'
-        reasons = benefits.setdefault('review_reasons', [])
-        if reason not in reasons:
-            reasons.append(reason)
-        benefits['requires_review'] = True
-    return benefits
 
 def _case_benefits(payload: dict, inputs: dict, source: dict, case: dict) -> dict:
     coverage = _api._coverage_snapshot(inputs, source)

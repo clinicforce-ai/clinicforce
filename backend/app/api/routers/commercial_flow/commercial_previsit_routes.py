@@ -118,6 +118,8 @@ async def saved_payer_response(case_id: str, request: _api.Request):
     case = await _api.run_in_threadpool(_api.store.get_case, case_id, session['patient_id'], session['share_manifest_id'], **_api._scope(session))
     if (not case or case.get('source_mode') != 'commercial_previsit'
             or case.get('previsit', {}).get('request_state') not in {'complete', 'partial', 'indeterminate', 'rejected'}
+            or (case.get('previsit', {}).get('request_state') == 'indeterminate'
+                and not case.get('previsit', {}).get('requested_service_types'))
             or not case.get('previsit_raw_object_key')):
         raise _api.HTTPException(404, 'No completed payer response is available for this visit.')
     try:
