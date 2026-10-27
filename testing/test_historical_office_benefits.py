@@ -188,6 +188,21 @@ def test_met_family_oop_supports_zero_advance_without_copying_family_balances_to
     assert any(option['coverage_level'] == 'FAMILY' for option in terms['reported_options'])
     raw['plans'][0]['benefits']['outOfPocket'][0]['amount'] = '500'
     assert replay(raw)[0]['amount_cents'] is None
+
+
+def test_mixed_medical_and_dental_unassigned_family_oop_is_not_applied():
+    raw = {'plans': [{'benefits': {'statuses': [
+        {'status': 'ACTIVE_COVERAGE', 'service': {'system': 'STC', 'value': '30'},
+         'planCoverageDescription': 'PPO DENTAL'},
+        {'status': 'ACTIVE_COVERAGE', 'service': {'system': 'STC', 'value': '30'},
+         'planCoverageDescription': 'PPO MEDICAL'}],
+        'coInsurance': [row(stc='98', percent='0', messages=['DIAGNOSTIC MEDICAL PROCEDURE - PROFESSIONAL'])],
+        'outOfPocket': [row('0', stc='30', level='FAMILY', period='REMAINING',
+                            messages=['DIAGNOSTIC MEDICAL PROCEDURE - PROFESSIONAL'])]}}]}
+    terms = commercial.normalize_stedi_271(raw, '73', False,
+                                            procedure_code='95909', service_date=DAY)
+    assert terms['family_oop_zero_applies'] is False
+    assert terms['family_oop_remaining_cents'] is None
     raw['plans'][0]['benefits']['outOfPocket'][0]['amount'] = '0'
     raw['plans'][0]['benefits']['limitations'] = [row('100', level='FAMILY', period='REMAINING', messages=['COPAY MAX'])]
     assert replay(raw)[0]['amount_cents'] is None
