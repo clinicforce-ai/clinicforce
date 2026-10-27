@@ -1224,7 +1224,8 @@ try {
     readOnly: true,
     recovering: false,
   })
-  assert.equal(savedReferenceModel.coverageTone, 'is-reported')
+  assert.equal(savedReferenceModel.coverageTone, 'is-confirmed')
+  assert.equal(savedReferenceModel.policyStatus, 'Aetna coverage active')
   assert.equal(savedReferenceModel.networkLabel, 'In network · clinic policy')
   assert.equal(savedReferenceModel.networkTone, 'is-confirmed')
   const savedReferenceOverview = renderToStaticMarkup(
@@ -1233,7 +1234,8 @@ try {
       result: savedReference,
     }),
   )
-  assert(savedReferenceOverview.includes('class="is-reported"'))
+  assert(savedReferenceOverview.includes('class="is-confirmed"'))
+  assert(savedReferenceOverview.includes('Aetna coverage active'))
   assert(savedReferenceOverview.includes('In network · clinic policy'))
   assert(savedReferenceOverview.includes('Sources: eCW + Stedi payer reference'))
   assert(!savedReferenceOverview.includes('Sources: eCW · Payer check needed'))
