@@ -201,16 +201,17 @@ def test_selected_cpts_are_checked_once_and_saved_with_exact_stedi_scope():
               'identity': {'status': 'matched', 'binding': 'synthetic-current-binding', 'match_version': 2},
               'benefits': {'active': True, 'service_date_matches': None, 'network_status': 'in_network',
                            'coverage_evidence': {'status': 'ACTIVE', 'start': '2026-01-01'}}}
-    inputs = {'service_date': '2026-10-12', 'place_of_service': '11'}
+    inputs = {'service_date': date.today().isoformat(), 'place_of_service': '11'}
     case = asyncio.run(check_cpt_authorization(api, result, {'id': 'synthetic'}, payload, inputs,
                                                 {'practice_id': 'synthetic'}, 'synthetic-key'))
     assert case['cpt_authorization']['decisions'] == {'95908': 'Not required', '95886': 'Not required'}
     assert len(sent) == 2 and all(len(body['encounter']['services']) == 1 for body in sent)
+    assert all(body['encounter']['dates'] == {'service': {'start': inputs['service_date']}} for body in sent)
     asyncio.run(check_cpt_authorization(api, result, case, payload, inputs,
                                          {'practice_id': 'synthetic'}, 'synthetic-key'))
     assert len(sent) == 2
     outside = deepcopy(result)
-    outside['benefits']['coverage_evidence']['start'] = '2026-11-01'
+    outside['benefits']['coverage_evidence']['start'] = '9999-01-01'
     asyncio.run(check_cpt_authorization(api, outside, {'id': 'synthetic-other'}, payload, inputs,
                                          {'practice_id': 'synthetic'}, 'synthetic-key'))
     assert len(sent) == 2
