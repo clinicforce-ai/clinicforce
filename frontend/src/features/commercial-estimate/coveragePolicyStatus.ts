@@ -21,9 +21,7 @@ export function coveragePolicyStatus({
   const policyStatus = tooEarly
     ? 'Check closer to visit'
     : result?.reference_only && result.reference_benefits?.active === true
-      ? result.reference_benefits.service_date_matches === false
-        ? 'Aetna coverage reported · payer date differs from visit'
-        : 'Aetna coverage reported · eCW identity differs'
+      ? 'Aetna coverage reported'
       : result?.recovery?.state === 'pending'
         ? readOnly
           ? benefits?.active === true

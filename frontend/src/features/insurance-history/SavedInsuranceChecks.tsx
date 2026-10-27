@@ -108,7 +108,9 @@ export default function SavedInsuranceChecks({
     <details
       className="staff-panel staff-saved-checks"
       onToggle={(event) => {
-        if (event.currentTarget.open && checks === null && !busy && !error) void load()
+        if (event.target !== event.currentTarget || !event.currentTarget.open || busy) return
+        if (selected) void open(selected)
+        else void load()
       }}
     >
       <summary>{checksForVisit ? 'View saved estimate results' : 'Saved insurance checks'}</summary>
@@ -170,6 +172,9 @@ export default function SavedInsuranceChecks({
       ))}
       {selected && (
         <section aria-label="Saved visit record">
+          <button type="button" disabled={loadingCheck} onClick={() => void open(selected)}>
+            Refresh saved result
+          </button>
           {loadingCheck && <p role="status">Loading the saved estimate…</p>}
           {checkError && (
             <p className="staff-alert staff-error" role="alert">
@@ -185,6 +190,7 @@ export default function SavedInsuranceChecks({
               >
                 {snapshots.map((snapshot, index) => (
                   <option key={index} value={index}>
+                    {index === 0 ? 'Latest' : 'Earlier'} ·{' '}
                     {snapshot.saved_at
                       ? new Date(snapshot.saved_at).toLocaleString()
                       : 'Earlier saved result'}{' '}
@@ -193,6 +199,14 @@ export default function SavedInsuranceChecks({
                 ))}
               </select>
             </label>
+          )}
+          {revision > 0 && (
+            <p className="staff-muted" role="note">
+              This is an earlier saved version. Newer payer evidence may change the coverage card.{' '}
+              <button type="button" onClick={() => void open(selected)}>
+                Show latest result
+              </button>
+            </p>
           )}
           {snapshots[revision] && (
             <CommercialEstimator
