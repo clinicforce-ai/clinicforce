@@ -149,6 +149,7 @@ def build(result: dict, source: dict) -> list[dict]:
          'member QMB protection' if guidance.get('basis') == 'qmb_protection' else
          'payer out-of-pocket limit' if guidance.get('basis') == 'out_of_pocket_limit' else
          'visit-linked eCW billing instruction' if guidance.get('basis') == 'ecw_billing_note' else
+         'Cigna exact-CPT benefits and clinic BCBS Texas fee schedule' if guidance.get('basis') == 'cigna_fee_proxy_advance' else
          'no applicable approved route decision'),
     ], 'Supported check-in instruction after service, benefits and clinic policy',
         'Approve the applicable payer-route collection rule if the patient share is supported; otherwise resolve the specific unresolved fields above and recalculate without another payer transaction.')

@@ -212,7 +212,6 @@ def build(result: dict, guidance: dict, review: dict | None = None) -> dict:
         notice = 'The payer returned the member ID with a two-digit suffix without changing eCW.'
     elif card.get('differences') and recovery.get('outcome') == 'recovered':
         notice = 'The payer check confirmed coverage after the card and eCW differed.'
-
     basis = guidance.get('basis') or 'insufficient_evidence'
     amount = guidance.get('amount_cents')
     medical_names = (((result.get('plan_details') or {}).get('stedi') or {}).get('names') or [])
@@ -298,6 +297,8 @@ def build(result: dict, guidance: dict, review: dict | None = None) -> dict:
         elif basis == 'bcbstx_proxy_advance':
             sentence, code = (f'Collect {_money(amount)} as the clinic-approved BCBS Texas fee proxy advance for the planned diagnostic services; the UHC allowed amount and final claim share remain unknown',
                               'bcbstx_proxy_advance')
+        elif basis == 'cigna_fee_proxy_advance':
+            sentence, code = f'Collect {_money(amount)} for the planned diagnostic services using Cigna exact-CPT benefits and the clinic BCBS Texas fee schedule', 'cigna_fee_proxy_advance'
         elif basis == 'ecw_billing_note':
             sentence, code = 'No payment is due now because the visit’s eCW billing note says not to collect', 'ecw_no_collection'
         elif basis == 'practice_cash_price':

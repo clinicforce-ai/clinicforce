@@ -249,4 +249,4 @@ def cigna_estimate(result: dict, service_date: str) -> dict | None:
             'message': ('Provisional patient share using BCBS Texas clinic fees and Cigna exact-CPT benefits. '
                         + ('No CPT copay was returned; $0 additional copay is an assumption. '
                            if copay_assumed else 'The exact CPT copay is $0. '
-                           ) + 'Cigna allowed amounts and the authorized check-in charge remain unknown.' + cap_note)}
+                           ) + 'The check-in amount uses this fee proxy; Cigna allowed amounts are not supplied.' + cap_note)}
