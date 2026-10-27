@@ -856,6 +856,9 @@ def test_out_of_network_benefit_row_does_not_establish_provider_tier():
     assert clinic_rule['network'] == 'Out of network'
     assert clinic_rule['network_source'] == 'Current scoped clinic nonparticipation rule'
     assert clinic_rule['amount_cents'] is None
+    result['network_evidence'] = {'source': 'clinic_admin_attestation'}
+    attested = collection_guidance.build(result)
+    assert attested['network_source'].startswith('Clinic administrator attestation')
 
 
 def test_missing_deductible_can_use_the_actual_copay_as_partial_advance_with_explanation():
