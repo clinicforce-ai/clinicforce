@@ -248,25 +248,24 @@ export default function CommercialCostBreakdown({
       : []),
     {
       label: 'Copay',
-      value:
-        officeReferenceCopay != null
+      value: familyOopApplied
+        ? '$0 payable after family out-of-pocket limit'
+        : officeReferenceCopay != null
           ? `${money(officeReferenceCopay)} specialist office visit · payer-reported reference`
-          : familyOopApplied
-            ? '$0 payable after family out-of-pocket limit'
-            : diagnosticCopay != null
-              ? `${money(diagnosticCopay)} once per day`
-              : calculated && components?.copay_cents != null
-                ? money(components.copay_cents)
-                : lines.some((line) => line.benefits?.copay_cents != null)
-                  ? lines
-                      .map(
-                        (line) =>
-                          `CPT ${line.code}: ${line.benefits.copay_cents != null ? money(line.benefits.copay_cents) : 'not returned'}`,
-                      )
-                      .join('; ')
-                  : !lines.length && reportedOfficeCopay != null
-                    ? `${money(reportedOfficeCopay)} specialist office visit · payer-reported`
-                    : unknown,
+          : diagnosticCopay != null
+            ? `${money(diagnosticCopay)} once per day`
+            : calculated && components?.copay_cents != null
+              ? money(components.copay_cents)
+              : lines.some((line) => line.benefits?.copay_cents != null)
+                ? lines
+                    .map(
+                      (line) =>
+                        `CPT ${line.code}: ${line.benefits.copay_cents != null ? money(line.benefits.copay_cents) : 'not returned'}`,
+                    )
+                    .join('; ')
+                : !lines.length && reportedOfficeCopay != null
+                  ? `${money(reportedOfficeCopay)} specialist office visit · payer-reported`
+                  : unknown,
       detail:
         result.collection_guidance?.basis === 'diagnostic_day_copay'
           ? 'One payer diagnostic copay for the selected testing; final share follows the claim'
