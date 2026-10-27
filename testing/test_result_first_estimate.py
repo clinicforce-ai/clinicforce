@@ -1,7 +1,7 @@
 """Synthetic regressions for the result-first workflow; no live payer traffic."""
 import asyncio
 from copy import deepcopy
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -428,8 +428,9 @@ def test_single_matched_stedi_plan_can_supply_missing_ecw_contract_label(monkeyp
                       'coverage_evidence': {'status': 'ACTIVE', 'start': '2026-01-01', 'end': '2026-12-31'}}
     assert _payer_plan_pricing_source(generic_ecw, {'names': ['Choice Plus']},
                                       dated_benefits, comparison, DAY)['plan'] == 'Choice Plus'
+    future_start = (date.fromisoformat(DAY) + timedelta(days=1)).isoformat()
     assert _payer_plan_pricing_source(generic_ecw, {'names': ['Choice Plus']},
-                                      {**dated_benefits, 'coverage_evidence': {'status': 'ACTIVE', 'start': '2026-10-27'}},
+                                      {**dated_benefits, 'coverage_evidence': {'status': 'ACTIVE', 'start': future_start}},
                                       comparison, DAY) is generic_ecw
     assert _payer_plan_pricing_source({**source, 'plan': 'PPO'}, {'names': ['Choice Plus']},
                                       benefits, comparison)['plan'] == 'Choice Plus'
