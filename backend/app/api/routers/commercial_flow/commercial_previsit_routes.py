@@ -65,8 +65,10 @@ async def saved_previsit(case_id: str, request: _api.Request) -> dict:
     prices, never another payer's allowance. For Cigna, separate exact-CPT
     Stedi inquiries may supply authorization and financial terms. When every
     selected line has compatible terms, fee_proxy_estimate shows a provisional
-    BCBS-priced share; an absent copay remains unconfirmed. This estimate does
-    not authorize collection. The UHC group-plan proxy keeps its separate
+    BCBS-priced share; an absent copay is treated as $0 in that calculation.
+    For a supported in-network Cigna diagnostic visit, collection_guidance
+    uses that share as the estimated check-in amount after recorded payments.
+    The UHC group-plan proxy keeps its separate
     administrator-approved opt-in and member billing-protection clearance.
     benefits.reported_options[].places_of_service retains the payer's place-of-service
     codes for scoped benefit display; a reported office copay is not a collection decision.

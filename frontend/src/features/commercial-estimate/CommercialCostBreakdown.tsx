@@ -218,7 +218,7 @@ export default function CommercialCostBreakdown({
                     : unknown,
       detail:
         cignaFeeProxy && feeProxy?.copay_unconfirmed
-          ? 'Stedi did not confirm a $0 copay; verify the member plan before collecting'
+          ? 'No CPT copay row was returned; this calculation uses $0'
           : result.collection_guidance?.basis === 'diagnostic_day_copay'
             ? 'One payer diagnostic copay for the selected testing; final share follows the claim'
             : result.collection_guidance?.basis === 'out_of_pocket_limit'
@@ -466,7 +466,9 @@ export default function CommercialCostBreakdown({
       result.collection_guidance?.basis === 'qmb_protection'
         ? 'QMB protection prohibits collecting Medicare cost sharing for covered care'
         : cignaFeeProxy
-          ? 'BCBS Texas rate and exact-CPT Stedi benefit scenario; the payer copay and Cigna allowed amount are unconfirmed, so no charge is authorized here'
+          ? result.collection_guidance?.basis === 'cigna_fee_proxy_advance'
+            ? 'Calculated from BCBS Texas fee references and Cigna exact-CPT benefits; an absent CPT copay is treated as $0'
+            : 'BCBS Texas rate and exact-CPT Stedi benefit scenario; no collection amount was calculated'
           : feeProxy != null
             ? result.collection_guidance?.basis === 'bcbstx_proxy_advance'
               ? 'Clinic-approved BCBS Texas fee proxy advance after Medicare billing-protection clearance; final responsibility follows the claim.'

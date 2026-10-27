@@ -298,6 +298,9 @@ def build(result: dict, guidance: dict, review: dict | None = None) -> dict:
         elif basis == 'bcbstx_proxy_advance':
             sentence, code = (f'Collect {_money(amount)} as the clinic-approved BCBS Texas fee proxy advance for the planned diagnostic services; the UHC allowed amount and final claim share remain unknown',
                               'bcbstx_proxy_advance')
+        elif basis == 'cigna_fee_proxy_advance':
+            sentence, code = (f'Collect {_money(amount)} for the planned diagnostic services using Cigna exact-CPT benefits and the clinic BCBS Texas fee schedule',
+                              'cigna_fee_proxy_advance')
         elif basis == 'ecw_billing_note':
             sentence, code = 'No payment is due now because the visit’s eCW billing note says not to collect', 'ecw_no_collection'
         elif basis == 'practice_cash_price':

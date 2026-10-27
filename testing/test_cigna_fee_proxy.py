@@ -2,7 +2,8 @@
 
 from copy import deepcopy
 
-from app.insurance import blue_cross_proxy, stedi_cpt_authorization
+from app.insurance import (amount_explanation, blue_cross_proxy, collection_guidance,
+                           encounter_summary, stedi_cpt_authorization)
 
 
 def _result():
@@ -33,6 +34,50 @@ def test_cigna_exact_cpt_fee_proxy_is_provisional_and_rounded_per_line():
     assert value['coinsurance_cents'] == value['patient_share_cents'] == 5669
     assert [row['coinsurance_cents'] for row in value['lines']] == [2102, 3567]
     assert value['copay_unconfirmed'] is True
+
+
+def test_cigna_fee_proxy_sets_visit_collection_without_a_hardcoded_amount():
+    result = _result()
+    result['benefits']['network_source'] = 'clinic_nmct_policy'
+    result['service_selection_status'] = 'approved'
+    result['fee_proxy_estimate'] = blue_cross_proxy.cigna_estimate(result, '2026-10-27')
+    guidance = collection_guidance.build(result)
+    assert guidance['basis'] == 'cigna_fee_proxy_advance'
+    assert guidance['amount_cents'] == 5669
+    result['collection_guidance'] = guidance
+    assert encounter_summary.build(result)['collect_today_cents'] == 5669
+    assert 'Collect $56.69' in amount_explanation.build(result, guidance)['sentence']
+
+    result['collection_guidance'] = {**guidance, 'amount_cents': 5668}
+    assert encounter_summary.build(result)['integrity_error'] == 'collection_amount_mismatch'
+    paid = collection_guidance.build(result, {'payments': {'reference': 'synthetic-receipt', 'amount_cents': 1000}})
+    assert paid['amount_cents'] == 4669
+
+    changed = deepcopy(result)
+    changed['temporary_rate_reference']['lines'][0]['unit_reference_cents'] = 11000
+    changed['fee_proxy_estimate'] = blue_cross_proxy.cigna_estimate(changed, '2026-10-27')
+    assert collection_guidance.build(changed)['amount_cents'] == changed['fee_proxy_estimate']['patient_share_cents'] == 5767
+
+    result['collection_policy'] = {'mode': 'defer_to_claim', 'approved_by': 'synthetic-admin',
+                                   'approved_at': '2026-10-27T12:00:00Z', 'reference': 'synthetic-policy'}
+    deferred = collection_guidance.build(result)
+    assert deferred['basis'] == 'claim_after_service' and deferred['amount_cents'] == 0
+
+    result.pop('collection_policy')
+    result['benefits']['has_secondary'] = True
+    assert collection_guidance.build(result)['amount_cents'] is None
+
+
+def test_cigna_fee_proxy_collects_for_exact_suggested_preview_plan():
+    result = _result()
+    result['benefits']['network_source'] = 'clinic_nmct_policy'
+    result['service_selection_status'] = 'preview'
+    result['service_plan'] = {'recommended_ids': ['ncs', 'emg']}
+    result['fee_proxy_estimate'] = blue_cross_proxy.cigna_estimate(result, '2026-10-27')
+    assert collection_guidance.build(result)['amount_cents'] == 5669
+
+    result['service_plan']['recommended_ids'] = ['ncs']
+    assert collection_guidance.build(result)['amount_cents'] is None
 
 
 def test_cigna_proxy_withholds_on_missing_exact_terms_or_unmatched_scope():

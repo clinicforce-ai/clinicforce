@@ -185,6 +185,8 @@ export default function VisitServices({
                       </>
                     ) : result.collection_guidance?.basis === 'claim_after_service' ? (
                       'No advance today under clinic policy'
+                    ) : result.collection_guidance?.basis === 'cigna_fee_proxy_advance' ? (
+                      'Included in visit amount'
                     ) : (
                       'Not calculated'
                     )}

@@ -119,10 +119,10 @@ def build(result: dict, review: dict | None = None) -> dict:
             and guidance.get('basis') in {'patient_obligations', 'anticipated_services'}
             and collect != max(0, total - (paid or 0))):
         integrity_error = 'collection_amount_mismatch'
-    if (guidance.get('basis') == 'bcbstx_proxy_advance' and collect is not None
+    if (guidance.get('basis') in {'bcbstx_proxy_advance', 'cigna_fee_proxy_advance'} and collect is not None
             and collect != max(0, (result.get('fee_proxy_estimate') or {}).get('patient_share_cents', -1) - (paid or 0))):
         integrity_error = 'collection_amount_mismatch'
-    if (integrity_error and guidance.get('basis') in {'patient_obligations', 'anticipated_services', 'bcbstx_proxy_advance',
+    if (integrity_error and guidance.get('basis') in {'patient_obligations', 'anticipated_services', 'bcbstx_proxy_advance', 'cigna_fee_proxy_advance',
                                                       'calculation_conflict'} and not clinic_zero_instruction):
         collect = None
     if (unsupported_insurance or requirement_blocker(result) is not None) and collect is not None and not clinic_zero_instruction:

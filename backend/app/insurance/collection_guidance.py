@@ -190,6 +190,17 @@ def build(result: dict, review: dict | None = None) -> dict:
     policy_mode = policy.get('mode') if policy_approved else None
     fee_proxy = result.get('fee_proxy_estimate') or {}
     if (amount is None and safe and not qmb_protected and not qmb_unresolved
+            and fee_proxy.get('basis') == 'bcbstx_cigna_fee_proxy'
+            and type(fee_proxy.get('patient_share_cents')) is int
+            and 0 <= fee_proxy['patient_share_cents'] <= 100_000_000
+            and verified_in_network(benefits)
+            and policy_mode in {None, 'collect_supported_advance'}):
+        amount = fee_proxy['patient_share_cents']
+        guidance.update(status='estimated', basis='cigna_fee_proxy_advance',
+            reason='Cigna diagnostic check-in amount calculated from exact-CPT benefits and the clinic BCBS Texas fee schedule.')
+        if fee_proxy.get('message'):
+            assumptions.append(fee_proxy['message'])
+    if (amount is None and safe and not qmb_protected and not qmb_unresolved
             and fee_proxy.get('basis') == 'bcbstx_fee_proxy'
             and type(fee_proxy.get('patient_share_cents')) is int
             and policy_mode == 'collect_supported_advance'
@@ -224,8 +235,11 @@ def build(result: dict, review: dict | None = None) -> dict:
                 and line.get('allowed_basis') == 'clinic_contract'
                 and line.get('allowed_cents') is not None for line in lines)
     )
+    cigna_proxy_advance = (guidance['basis'] == 'cigna_fee_proxy_advance'
+                           and verified_in_network(benefits) and not policy_approved)
     if (amount is not None and amount > 0 and guidance['basis'] != 'ecw_billing_note'
-            and not (oon_advance and (policy_allows_advance or calculated_in_network_advance))):
+            and not (oon_advance and (policy_allows_advance or calculated_in_network_advance
+                                      or cigna_proxy_advance))):
         amount = None
         guidance['published_copay_policy_missing' if published_copay else 'positive_advance_policy_missing'] = True
     if amount is not None and amount > 0 and unconfirmed_zero_oop and verified_in_network(benefits):
@@ -368,7 +382,7 @@ def build(result: dict, review: dict | None = None) -> dict:
             if note['kind'] == 'no_collection' else 'This advance uses the office copay recorded by the clinic. Additional services and final responsibility follow claim processing.')
         for service in guidance['services']:
             service['patient_cents'] = None
-    if guidance['amount_cents'] is not None and guidance['basis'] in {'patient_obligations', 'anticipated_services', 'bcbstx_proxy_advance'}:
+    if guidance['amount_cents'] is not None and guidance['basis'] in {'patient_obligations', 'anticipated_services', 'bcbstx_proxy_advance', 'cigna_fee_proxy_advance'}:
         error = encounter_summary.build({**result, 'collection_guidance': guidance}, review)['integrity_error']
         if error:
             reasons = {

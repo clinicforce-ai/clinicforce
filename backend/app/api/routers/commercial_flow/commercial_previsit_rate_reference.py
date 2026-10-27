@@ -48,7 +48,9 @@ def _attach_temporary_blue_cross_rates(result: dict, practice_id: str, inputs: d
     if lines:
         result['temporary_rate_reference'] = {'source': 'NMCT Clinical Library Blue Cross fee schedule',
             'lines': lines, 'complete': len(lines) == len(codes),
-            'message': f'Temporary CPT price reference only. These are Blue Cross rates, not {payer_name} contracted allowances or a patient amount to collect.'}
+            'message': (f'Temporary CPT price reference only. These are Blue Cross rates, not {payer_name} contracted allowances.'
+                        if payer_name == 'Cigna' else
+                        f'Temporary CPT price reference only. These are Blue Cross rates, not {payer_name} contracted allowances or a patient amount to collect.')}
 
 
 def _attach_temporary_uhc_rates(result: dict, practice_id: str, inputs: dict, source: dict) -> None:
