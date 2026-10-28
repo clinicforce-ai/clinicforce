@@ -385,6 +385,16 @@ class PrevisitFlowTest(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(cleared['codes'], [])
                 self.assertEqual(cleared['price_range']['lines'], [])
                 self.assertIsNone(cleared['collection_guidance']['amount_cents'])
+                office = next(row['id'] for row in cleared['available_codes'] if row['code'] == '99204')
+                with patch('app.api.routers.commercial_estimator.store.get_case', return_value=case), \
+                     patch('app.api.routers.commercial_estimator.object_store.get_object_bytes', return_value=json.dumps(success_response.json()).encode()):
+                    office_only = await update_visit_review('case-1', VisitReviewInput(
+                        context_token=result['context_token'], revision=cleared['revision'],
+                        selected_ids=[office], emg_required=False), MagicMock())
+                self.assertEqual([row['code'] for row in office_only['codes']], ['99204'])
+                self.assertEqual([row['code'] for row in office_only['price_range']['lines']], ['99204'])
+                self.assertEqual(office_only['service_plan']['kind'], 'office')
+                self.assertEqual(office_only['service_selection_status'], 'approved')
                 return
             if card_conflict:
                 self.assertEqual(result['card_check']['status'], 'conflict')

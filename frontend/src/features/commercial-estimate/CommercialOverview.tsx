@@ -9,7 +9,11 @@ import TemporaryRateReference from './TemporaryRateReference'
 import EstimateSources from './EstimateSources'
 import { openServiceDetails } from './openServiceDetails'
 import ArrivalAmountSummary from './ArrivalAmountSummary'
-import { aetnaOfficeReferenceCopay, payerReportedPartialCopay } from './payerReportedPartialCopay'
+import {
+  aetnaOfficePlanningCopay,
+  aetnaOfficeReferenceCopay,
+  payerReportedPartialCopay,
+} from './payerReportedPartialCopay'
 import PublishedPlanBenefit from './PublishedPlanBenefit'
 import UhcMedicarePpoBenefitTable from './UhcMedicarePpoBenefitTable'
 import CommercialCostBreakdown from './CommercialCostBreakdown'
@@ -57,6 +61,13 @@ export default function CommercialOverview({
   const plannedCodeLabel = plannedCodes.map((code) => `CPT ${code}`).join(', ')
   const aetnaReferenceCopay = aetnaOfficeReferenceCopay(result, model)
   const payerReportedPartialCents = aetnaReferenceCopay ?? payerReportedPartialCopay(result, model)
+  const officePlan = aetnaOfficePlanningCopay(
+    result,
+    model,
+    result.price_range?.complete === true &&
+      (result.encounter_summary?.complete === true || model.supportedAmount === true),
+    result.price_range?.mode === 'services' ? result.price_range.lines || [] : [],
+  )
   const combinedPlan = !cash && !previousEstimate ? result.combined_emg_plan : null
   const showSelectedRequirements =
     !cash &&
@@ -83,6 +94,7 @@ export default function CommercialOverview({
     combinedPlan != null ||
     provisionalAmount != null ||
     !!model.estimatedShare ||
+    officePlan != null ||
     payerReportedPartialCents != null
   const patientBenefitsBound = hasPatientBinding(result.identity)
   const networkWarnings = (result.network_evidence?.mismatch_warnings || []).filter(

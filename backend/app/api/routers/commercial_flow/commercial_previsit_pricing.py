@@ -378,7 +378,7 @@ def _attach_previsit_pricing(result: dict, practice_id: str, inputs: dict, sourc
             str((route_payer or {}).get('display_name') or ''))), _api.re.I):
         _attach_temporary_aetna_rates(result, practice_id, inputs, source)
     elif (payer_name := str(result.get('payer') or (route_payer or {}).get('display_name') or '')) and not _api.re.search(
-            r'blue cross|bcbstx|blue shield', payer_name, _api.re.I):
+            r'blue cross|bcbstx|blue shield|aetna', payer_name, _api.re.I):
         _attach_temporary_blue_cross_rates(result, practice_id, inputs, source, payer_name)
     if len(connections) != 1:
         if inventory:

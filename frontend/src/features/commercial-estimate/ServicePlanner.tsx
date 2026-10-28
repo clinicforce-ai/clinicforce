@@ -75,6 +75,7 @@ export function ServicePlanner({
     emgVisit ? 'nerve' : botoxVisit || result.service_plan?.kind === 'biopsy' ? 'other' : 'visit',
   )
   const chosen = available.filter((row) => selected.includes(row.id!))
+  const selectedTesting = chosen.some((row) => ['nerve', 'muscle'].includes(groupOf(row)))
   const scenarioAlternatives = result.provisional_scenario?.candidate_ids || []
   const nerve = available
     .filter((row) => groupOf(row) === 'nerve')
@@ -165,6 +166,7 @@ export function ServicePlanner({
       }
       const saved = await save({
         selected_ids: selected,
+        emg_required: selectedTesting,
         confirmed_units: Object.fromEntries(selected.map((id) => [id, quantities[id]])),
         ...(botoxVisit ? { botox } : {}),
         ...(result.cash_schedule ? { cash_selection: cashSelection } : {}),
@@ -260,6 +262,27 @@ export function ServicePlanner({
           </span>
         )}
       </div>
+      {selectedTesting && (
+        <button
+          type="button"
+          className="visit-text-button"
+          disabled={busy}
+          onClick={() => {
+            setStudyCount(0)
+            setCategory('visit')
+            update(
+              selected.filter(
+                (id) =>
+                  !available.some(
+                    (row) => row.id === id && ['nerve', 'muscle'].includes(groupOf(row)),
+                  ),
+              ),
+            )
+          }}
+        >
+          Remove EMG / nerve testing
+        </button>
+      )}
       {scenarioAlternatives.length > 1 && !chosen.length && result.payment_mode !== 'cash' && (
         <p className="visit-muted">
           Referral: {scenarioRequirementStatus(result, available, 'referral')}. Prior authorization:{' '}

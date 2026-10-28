@@ -104,6 +104,7 @@ export function aetnaOfficePlanningCopay(
   const terms = officeLine?.benefits
   return !model.cash &&
     !calculated &&
+    result.collection_guidance?.amount_cents == null &&
     /^aetna$/i.test(result.payer || '') &&
     officeLine?.units === 1 &&
     /^(9920[2-5]|9921[2-5])$/.test(officeLine.code) &&
@@ -115,6 +116,9 @@ export function aetnaOfficePlanningCopay(
     !benefits.coverage_status_conflict &&
     !benefits.coverage_dates_invalid &&
     !benefits.source_errors?.length &&
+    benefits.qmb_status !== 'protected' &&
+    result.benefits?.qmb_status !== 'protected' &&
+    result.billing_protection?.status !== 'qmb' &&
     terms?.active === true &&
     terms.network_status === 'in_network' &&
     terms.service_date_matches !== false &&
