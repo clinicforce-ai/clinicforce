@@ -66,7 +66,7 @@ class PrevisitFlowTest(unittest.IsolatedAsyncioTestCase):
         self.model_patch.start()
         self.addCleanup(self.model_patch.stop)
         self.cash_patch = patch('app.api.routers.commercial_estimator.practice_prices.current', return_value=None)
-        self.cash_patch.start()
+        self.cash_current = self.cash_patch.start()
         self.addCleanup(self.cash_patch.stop)
 
     async def test_complete_ecw_benefits_skip_paid_check_and_remain_editable(self):
@@ -128,6 +128,9 @@ class PrevisitFlowTest(unittest.IsolatedAsyncioTestCase):
     async def test_documented_95908_is_the_same_provisional_code_in_ui_and_pricing(self):
         await self._flow(date.today().isoformat(), scheduled_code='95908')
 
+    async def test_disabling_emg_keeps_office_selection_when_catalog_id_changes(self):
+        await self._flow(date.today().isoformat(), emg_review=True, cash_office=True)
+
     async def test_emg_review_creates_one_ncs_range_without_muscle_work(self):
         await self._flow(date.today().isoformat(), emg_review=True)
 
@@ -163,7 +166,11 @@ class PrevisitFlowTest(unittest.IsolatedAsyncioTestCase):
     async def test_newer_conflicting_ecw_check_refreshes_cached_stedi_evidence(self):
         await self._flow(date.today().isoformat(), newer_ecw=True)
 
-    async def _flow(self, service_date, reject=False, retry_basic=False, payer_missing=False, refresh=False, newer_ecw=False, too_early=False, self_pay=False, coverage_start=None, saved_hold=False, enrollment_missing=False, ecw_saved=False, ecw_incomplete=False, medicare_secondary=False, billing_note=None, member_id_missing=False, card_fields=None, card_conflict=False, card_status=None, pos=None, scheduled_code=None, emg_review=False, expect_preliminary=False, visit_type='new', combined_emg=False, secondary_mismatch=False):
+    async def _flow(self, service_date, reject=False, retry_basic=False, payer_missing=False, refresh=False, newer_ecw=False, too_early=False, self_pay=False, coverage_start=None, saved_hold=False, enrollment_missing=False, ecw_saved=False, ecw_incomplete=False, medicare_secondary=False, billing_note=None, member_id_missing=False, card_fields=None, card_conflict=False, card_status=None, pos=None, scheduled_code=None, emg_review=False, expect_preliminary=False, visit_type='new', combined_emg=False, secondary_mismatch=False, cash_office=False):
+        if cash_office:
+            self.cash_current.return_value = {'id': 'synthetic-cash', 'filename': 'synthetic.csv',
+                'effective_from': '2026-01-01', 'rows': [{'code': '99204', 'cash_cents': 25000,
+                    'description': 'Office consultation'}]}
         session = {"practice_id": "clinic", "intake_id": "intake", "patient_id": "patient",
                    "share_manifest_id": "", "staff": {"id": "staff", "display_name": "Staff", "practice_name": "Clinic"},
                    "intake": {"updated_at": "version", "patient": {"given_name": "Pat", "family_name": "Example",
@@ -362,6 +369,21 @@ class PrevisitFlowTest(unittest.IsolatedAsyncioTestCase):
                                  [str(code) for code in range(95907, 95914)])
                 self.assertFalse(any(row['code'] in {'95885', '95886'} for row in result['codes']))
                 self.assertIsNone(result['collection_guidance']['amount_cents'])
+                if cash_office:
+                    office = next(row['id'] for row in result['available_codes'] if row['code'] == '99204')
+                    self.assertEqual(office, 'cash:99204')
+                    with patch('app.api.routers.commercial_estimator.store.get_case', return_value=case), \
+                         patch('app.api.routers.commercial_estimator.object_store.get_object_bytes',
+                               return_value=json.dumps(success_response.json()).encode()):
+                        office_only = await update_visit_review('case-1', VisitReviewInput(
+                            context_token=result['context_token'], revision=0,
+                            selected_ids=[office], confirmed_units={office: 1},
+                            emg_required=False), MagicMock())
+                    self.assertEqual([row['code'] for row in office_only['codes']], ['99204'])
+                    self.assertEqual(office_only['selected_ids'], ['99204:2'])
+                    self.assertEqual(case['visit_review']['selected_ids'], ['99204:2'])
+                    self.assertEqual(case['visit_review']['confirmed_units'], {'99204:2': 1})
+                    return
                 with patch('app.api.routers.commercial_estimator.store.get_case', return_value=case), \
                      patch('app.api.routers.commercial_estimator.object_store.get_object_bytes', return_value=json.dumps(success_response.json()).encode()):
                     cleared = await update_visit_review('case-1', VisitReviewInput(
