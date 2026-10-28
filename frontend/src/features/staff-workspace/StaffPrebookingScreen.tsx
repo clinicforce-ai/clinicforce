@@ -32,10 +32,17 @@ export default function StaffPrebookingScreen({ onBack }: { onBack: () => void }
     let active = true
     const timer = window.setTimeout(() => {
       getPrebookingOptions(insurer.trim())
-        .then((value) => { if (active) setPayers(value.payers) })
-        .catch(() => { if (active) setError('Insurance companies are temporarily unavailable.') })
+        .then((value) => {
+          if (active) setPayers(value.payers)
+        })
+        .catch(() => {
+          if (active) setError('Insurance companies are temporarily unavailable.')
+        })
     }, 300)
-    return () => { active = false; window.clearTimeout(timer) }
+    return () => {
+      active = false
+      window.clearTimeout(timer)
+    }
   }, [insurer, form.payer_id])
 
   function change(key: keyof PrebookingDetails, value: string) {
@@ -78,30 +85,58 @@ export default function StaffPrebookingScreen({ onBack }: { onBack: () => void }
         <div>
           <div className="staff-eyebrow">Prospective patient</div>
           <h1>Check coverage before booking</h1>
-          <p className="staff-muted">Check general medical coverage today, before creating a patient or appointment in eCW.</p>
+          <p className="staff-muted">
+            Check general medical coverage today, before creating a patient or appointment in eCW.
+          </p>
         </div>
       </header>
-      {error && <p className="staff-alert staff-error" role="alert">{error}</p>}
+      {error && (
+        <p className="staff-alert staff-error" role="alert">
+          {error}
+        </p>
+      )}
       <form className="staff-panel" onSubmit={(event) => void check(event)} autoComplete="off">
         <div className="staff-two-columns">
           <label className="staff-field">
             <span>Patient's first name *</span>
-            <input value={form.given_name} required maxLength={100} disabled={busy}
-              onChange={(event) => change('given_name', event.target.value)} />
+            <input
+              value={form.given_name}
+              required
+              maxLength={100}
+              disabled={busy}
+              onChange={(event) => change('given_name', event.target.value)}
+            />
           </label>
           <label className="staff-field">
             <span>Patient's last name *</span>
-            <input value={form.family_name} required maxLength={100} disabled={busy}
-              onChange={(event) => change('family_name', event.target.value)} />
+            <input
+              value={form.family_name}
+              required
+              maxLength={100}
+              disabled={busy}
+              onChange={(event) => change('family_name', event.target.value)}
+            />
           </label>
           <label className="staff-field">
             <span>Patient's date of birth *</span>
-            <input type="date" value={form.birth_date} required min="1850-01-01" max={today} disabled={busy}
-              onChange={(event) => change('birth_date', event.target.value)} />
+            <input
+              type="date"
+              value={form.birth_date}
+              required
+              min="1850-01-01"
+              max={today}
+              disabled={busy}
+              onChange={(event) => change('birth_date', event.target.value)}
+            />
           </label>
           <label className="staff-field">
             <span>Insurance company *</span>
-            <input list="prebooking-payers" value={insurer} required maxLength={200} disabled={busy}
+            <input
+              list="prebooking-payers"
+              value={insurer}
+              required
+              maxLength={200}
+              disabled={busy}
               placeholder="Search Aetna, BCBS, Cigna…"
               onChange={(event) => {
                 const value = event.target.value
@@ -109,16 +144,23 @@ export default function StaffPrebookingScreen({ onBack }: { onBack: () => void }
                 if (!selected) setPayers([])
                 setInsurer(value)
                 change('payer_id', selected?.id ?? '')
-              }} />
+              }}
+            />
             <datalist id="prebooking-payers">
-              {payers.map((payer) => <option key={payer.id} value={`${payer.name} (${payer.id})`} />)}
+              {payers.map((payer) => (
+                <option key={payer.id} value={`${payer.name} (${payer.id})`} />
+              ))}
             </datalist>
             <small>Choose the exact insurer from the suggestions.</small>
           </label>
           <label className="staff-field">
             <span>Insurance member ID (optional)</span>
-            <input value={form.member_id} maxLength={80} disabled={busy}
-              onChange={(event) => change('member_id', event.target.value)} />
+            <input
+              value={form.member_id}
+              maxLength={80}
+              disabled={busy}
+              onChange={(event) => change('member_id', event.target.value)}
+            />
           </label>
         </div>
         <button className="staff-primary" disabled={busy || !form.payer_id}>
@@ -130,11 +172,18 @@ export default function StaffPrebookingScreen({ onBack }: { onBack: () => void }
         </p>
       </form>
       {result && (
-        <section className={`staff-alert ${result.status === 'active_today' ? 'staff-success' : 'staff-warning'}`}
-          role="status" aria-live="polite">
-          <h2>{result.status === 'active_today' ? 'General medical coverage active today'
-            : result.status === 'inactive_today' ? 'No active general medical coverage reported today'
-            : 'Coverage needs review'}</h2>
+        <section
+          className={`staff-alert ${result.status === 'active_today' ? 'staff-success' : 'staff-warning'}`}
+          role="status"
+          aria-live="polite"
+        >
+          <h2>
+            {result.status === 'active_today'
+              ? 'General medical coverage active today'
+              : result.status === 'inactive_today'
+                ? 'No active general medical coverage reported today'
+                : 'Coverage needs review'}
+          </h2>
           <p>{result.message}</p>
           <p className="staff-small">
             {result.payer} · Checked {result.checked_on}
@@ -143,8 +192,8 @@ export default function StaffPrebookingScreen({ onBack }: { onBack: () => void }
             {result.check_id && ` · Stedi check ${result.check_id}`}
           </p>
           <p className="staff-small">
-            This check does not establish this clinic's network status, coverage for a specific service,
-            or eligibility on a future appointment date.
+            This check does not establish this clinic's network status, coverage for a specific
+            service, or eligibility on a future appointment date.
           </p>
         </section>
       )}
