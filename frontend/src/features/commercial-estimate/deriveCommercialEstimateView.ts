@@ -292,6 +292,7 @@ export function deriveCommercialEstimateView({
     calculating,
     supportedAmount,
     patientBenefitsBound,
+    networkConfirmed,
     outOfNetworkConfirmed,
     selectedCptIssue: !!selectedCptIssue,
     servicePlanAction: !!servicePlanAction,

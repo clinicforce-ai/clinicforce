@@ -413,10 +413,19 @@ try {
   assert(feeProxyFormula(followUpProxy).total.includes('$10.00 copay + $0.00 deductible + ($105.11 × 5% = $5.26) + ($89.18 × 5% = $4.46) = $19.72'))
   const inNetworkModel = deriveCommercialEstimateView({ result: inNetworkDiagnostic,
     appointments: [], selectedVisit: '', busy: null, error: '', readOnly: false, recovering: false })
+  assert.equal(inNetworkModel.amountText, '$9.72')
+  const unverifiedNetwork = structuredClone(inNetworkDiagnostic)
+  unverifiedNetwork.benefits.network_source = 'clinic_record'
+  const unverifiedModel = deriveCommercialEstimateView({ result: unverifiedNetwork,
+    appointments: [], selectedVisit: '', busy: null, error: '', readOnly: false, recovering: false })
+  assert.notEqual(unverifiedModel.amountText, '$9.72')
   const inNetworkOverview = renderToStaticMarkup(
     React.createElement(CommercialOverview, { model: inNetworkModel, result: inNetworkDiagnostic }),
   )
-  for (const value of ['$400.00 annual', '$0.00 remaining', '$9.72',
+  for (const value of ['Visit cost and collection',
+    'LPPO-UNITEDHEALTHCARE GROUP MEDICARE ADVANTAGE (PP', '$194.29',
+    '$2,704.30 remaining', 'Planned amount to collect at visit',
+    '$400.00 annual', '$0.00 remaining', '$9.72',
     '$105.11 × 5% = $5.26', '$89.18 × 5% = $4.46',
     'CPT 95908: not required; CPT 95886: not required']) assert(inNetworkOverview.includes(value), value)
   const { ApplicableBenefits } = await server.ssrLoadModule(
