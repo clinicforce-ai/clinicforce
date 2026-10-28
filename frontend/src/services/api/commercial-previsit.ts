@@ -63,7 +63,7 @@ export type PrevisitEstimate = {
     oop_reduction_cents: number
     patient_share_cents: number
     oop_remaining_cents: number
-    lines?: { code: string; reference_cents: number; coinsurance_cents: number }[]
+    lines?: { code: string; units?: number; reference_cents: number; coinsurance_cents: number }[]
     rate_source: string
     deductible_source: string
     deductible_url?: string
