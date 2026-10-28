@@ -69,8 +69,6 @@ export default function ArrivalAmountSummary({
   const officePlan = aetnaOfficePlanningCopay(
     result,
     model,
-    result.price_range?.complete === true &&
-      (result.encounter_summary?.complete === true || model.supportedAmount === true),
     result.price_range?.mode === 'services' ? result.price_range.lines || [] : [],
   )
   const officeBalance =

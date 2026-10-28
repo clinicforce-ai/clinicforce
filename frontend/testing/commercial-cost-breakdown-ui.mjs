@@ -193,7 +193,7 @@ try {
     '/src/features/commercial-estimate/payerReportedPartialCopay.ts',
   )
   assert.equal(aetnaOfficePlanningCopay({ ...officeOnlyResult,
-    billing_protection: { status: 'qmb' } }, model, false, officeOnlyResult.price_range.lines), null)
+    billing_protection: { status: 'qmb' } }, model, officeOnlyResult.price_range.lines), null)
 
   const aetna = renderToStaticMarkup(
     React.createElement(CommercialCostBreakdown, {

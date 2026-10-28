@@ -105,7 +105,7 @@ export default function CommercialCostBreakdown({
     !model.cash && !model.previousEstimate && result.collection_guidance?.amount_cents == null
       ? result.aetna_diagnostic_reference
       : null
-  const aetnaCopayPlanning = aetnaOfficePlanningCopay(result, model, calculated, lines)
+  const aetnaCopayPlanning = aetnaOfficePlanningCopay(result, model, lines)
   const insuredRows: CostBreakdownRow[] = [
     referenceCoverageRow(result, model, benefits),
     { label: 'Network', value: model.networkLabel },
