@@ -58,7 +58,7 @@ def _attach_temporary_uhc_rates(result: dict, practice_id: str, inputs: dict, so
 
 
 def _attach_temporary_aetna_rates(result: dict, practice_id: str, inputs: dict, source: dict) -> None:
-    """Show dated Aetna portal maximums as a noncollectible diagnostic scenario."""
+    """Show a sourced, noncollectible Aetna diagnostic planning estimate."""
     from app.insurance import published_plan_benefits
 
     day = str(inputs.get('service_date') or '')
@@ -86,19 +86,19 @@ def _attach_temporary_aetna_rates(result: dict, practice_id: str, inputs: dict, 
               'source_reference': by_code[code['code']]['source_reference']}
              for code in codes]
     total = sum(row['unit_reference_cents'] for row in lines)
+    result['temporary_rate_reference'] = {
+        'source': 'Aetna MEPPO portal table values supplied by clinic', 'lines': lines,
+        'complete': True,
+        'message': 'Dated Aetna maximums from a clinic-supplied portal table. The provider and contract scope is unverified; these are planning references, not active clinic allowed rates.'}
     oop = benefits.get('oop_remaining_cents')
     if type(oop) is not int or oop < 0 or benefits.get('deductible_remaining_cents') != 0:
         return
     copay = published_plan_benefits.AETNA_SIGNATURE_TX_2026['diagnostic_copay_cents'] * len(lines)
     patient = min(total, copay, oop)
-    result['temporary_rate_reference'] = {
-        'source': 'Aetna MEPPO portal table values supplied by clinic', 'lines': lines,
-        'complete': True,
-        'message': 'Dated Aetna maximums from a clinic-supplied portal table. The provider and contract scope is unverified; these are planning references, not active clinic allowed rates.'}
     result['aetna_diagnostic_reference'] = {
         'estimated_allowed_cents': total, 'copay_cents': copay,
         'deductible_cents': 0, 'coinsurance_cents': 0, 'coinsurance_percent': '0',
         'oop_reduction_cents': copay - patient, 'oop_remaining_cents': oop,
         'patient_share_cents': patient, 'payer_share_cents': total - patient,
         'benefit_source': published_plan_benefits.AETNA_SIGNATURE_TX_2026,
-        'message': 'Planning estimate only. Verify the Aetna fee scope, exact member plan, QMB status and payments before collection.'}
+        'message': 'Planning estimate from the likely 2026 Aetna Signature PPO diagnostic benefit. Verify the exact member plan, Medicare billing protection and prior payments before charging.'}

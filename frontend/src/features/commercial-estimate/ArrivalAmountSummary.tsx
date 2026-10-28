@@ -55,7 +55,16 @@ export default function ArrivalAmountSummary({
       ? result.fee_proxy_estimate
       : null
   const aetnaPlanning =
-    !model.cash && !model.previousEstimate ? result.aetna_diagnostic_reference : null
+    !model.cash && !model.previousEstimate && result.collection_guidance?.amount_cents == null
+      ? result.aetna_diagnostic_reference
+      : null
+  const aetnaBalance = aetnaPlanning
+    ? Math.max(
+        0,
+        aetnaPlanning.patient_share_cents -
+          (result.encounter_summary?.payments_verified_cents || 0),
+      )
+    : null
   const needsAction = model.amountText === 'Insured amount unavailable'
   const additionalServicesPending = result.price_range?.lines?.some(
     (line) => !/^992(?:0[2-5]|1[2-5])$/.test(line.code),
@@ -68,7 +77,7 @@ export default function ArrivalAmountSummary({
           : cignaPlanning
             ? 'Cigna planning estimate · collection pending'
             : aetnaPlanning
-              ? 'Aetna planning estimate · collection pending'
+              ? 'Planned amount to collect at visit'
               : partialCopay != null
                 ? referenceOnly
                   ? 'Office-only reference · collection pending'
@@ -88,7 +97,7 @@ export default function ArrivalAmountSummary({
           : cignaPlanning
             ? money(cignaPlanning.patient_share_cents)
             : aetnaPlanning
-              ? money(aetnaPlanning.patient_share_cents)
+              ? money(aetnaBalance!)
               : partialCopay != null
                 ? money(partialCopay)
                 : needsAction
@@ -109,8 +118,12 @@ export default function ArrivalAmountSummary({
         </p>
       ) : aetnaPlanning ? (
         <p>
-          Two Aetna diagnostic copays on the clinic-supplied fee reference. Review the per-CPT
-          formula below; collection remains on hold.
+          {money(aetnaPlanning.copay_cents / 2)} per diagnostic test × 2 ={' '}
+          {money(aetnaPlanning.patient_share_cents)} before payments
+          {result.encounter_summary?.payments_verified_cents
+            ? `; less ${money(result.encounter_summary.payments_verified_cents)} already paid = ${money(aetnaBalance!)}`
+            : ''}
+          . Verify the exact plan and Medicare billing protection before charging.
         </p>
       ) : partialCopay != null ? (
         <p>
