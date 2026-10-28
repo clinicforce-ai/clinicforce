@@ -129,7 +129,7 @@ def _previsit_range(practice_id: str, inputs: dict, source: dict, payer_id: str,
     alternatives = options or (bool(codes) and all(row.get("source") in {
         "conditional office E/M alternative", "conditional NCS alternative"} for row in codes)
         and not review.get("selected_ids"))
-    selected = [row for row in codes if not review.get("selected_ids") or row.get("id") in review['selected_ids']]
+    selected = [row for row in codes if 'selected_ids' not in review or row.get("id") in review['selected_ids']]
     office_types = _api._office_service_types(practice_id, source)
     rates, rules, issues = [], {'office_service_types': office_types, **_api._benefit_context(inputs, source)}, []
     fep_product = ((benefits.get('plan_details') or {}).get('identified_product') == 'FEP Blue Basic PSHB'
@@ -194,6 +194,7 @@ def _previsit_range(practice_id: str, inputs: dict, source: dict, payer_id: str,
             rules = {**rules, **profile['rules']}
         except (_api.HTTPException, _api.commercial.CommercialError) as exc:
             issues.append(str(exc.detail) if isinstance(exc, _api.HTTPException) else str(exc))
+    rules['aetna_payer_verified'] = str(payer_route_id or payer_id).upper() == 'HPQRS'
     priced = _api.visit_estimate.price_lines(selected, rates, benefits, rules, payload=payload,
         service_date=inputs.get('service_date', ''), reviews=review.get('lines'), alternatives=alternatives)
     if options:

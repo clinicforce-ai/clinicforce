@@ -1,7 +1,7 @@
 import { RequirementDecision } from './RequirementDecision'
 import { BotoxClinicalReview } from './BotoxClinicalReview'
 import { requirementForLine } from './requirementForLine'
-import { requirementTag } from './plannerRequirementTag'
+import { requirementTag, scenarioRequirementStatus } from './plannerRequirementTag'
 import { useEffect, useRef, useState } from 'react'
 import { ArrowRight, Check, Minus, Plus } from 'lucide-react'
 import type {
@@ -10,7 +10,14 @@ import type {
   VisitReview,
 } from '../../services/api/commercial-estimator'
 import type { BotoxReview } from '../../services/api/commercial-visit-types'
-import { clinicalName, groupFor, money } from './service-code'
+import {
+  clinicalName,
+  groupFor,
+  money,
+  nerveCodeForStudyCount,
+  serviceGroups,
+} from './service-code'
+import { NerveStudyRuler } from './NerveStudyRuler'
 
 type Save = (review: VisitReview) => Promise<boolean>
 const groupOf = (row: VisitCode) => row.service_group || groupFor(row.code)
@@ -36,6 +43,13 @@ export function ServicePlanner({
       ? []
       : result.service_plan?.recommended_ids || []
   const [selected, setSelected] = useState<string[]>(defaults)
+  // shortcut: the plan stores only the CPT range, so reopen at its first count; store an exact count if later care needs it.
+  const [studyCount, setStudyCount] = useState(() => {
+    const code = available.find(
+      (row) => defaults.includes(row.id!) && groupOf(row) === 'nerve',
+    )?.code
+    return code ? Math.min(13, (Number(code) - 95907) * 2 + 1) : 0
+  })
   const [quantities, setQuantities] = useState<Record<string, number>>(() =>
     Object.fromEntries(
       available.map((row) => [row.id!, Number(row.units) || (row.code.startsWith('J') ? 0 : 1)]),
@@ -62,21 +76,10 @@ export function ServicePlanner({
   )
   const chosen = available.filter((row) => selected.includes(row.id!))
   const scenarioAlternatives = result.provisional_scenario?.candidate_ids || []
-  const scenarioRules = scenarioAlternatives.map((id) => {
-    const row = available.find((candidate) => candidate.id === id)
-    return row && requirementForLine(result.requirement_evidence?.procedures || [], id, row.code)
-  })
-  const scenarioRule = (kind: 'referral' | 'authorization') => {
-    const statuses = scenarioRules.map((rule) => rule?.[kind]?.status)
-    return statuses.length &&
-      statuses.every((status) => status === statuses[0]) &&
-      statuses[0] !== 'Verification required'
-      ? statuses[0]
-      : 'Plan-specific rule not established for all alternatives'
-  }
   const nerve = available
     .filter((row) => groupOf(row) === 'nerve')
     .sort((a, b) => a.code.localeCompare(b.code))
+  const selectedNerve = nerve.find((row) => selected.includes(row.id!))
   const muscle = available.filter((row) => ['95885', '95886'].includes(row.code))
   const office = available
     .filter(
@@ -112,6 +115,16 @@ export function ServicePlanner({
     if (id) ids.push(id)
     update(ids)
   }
+  const chooseStudyCount = (count: number) => {
+    const code = nerveCodeForStudyCount(count)
+    const row = nerve.find((candidate) => candidate.code === code)
+    if (count && !row) {
+      setEditError(`CPT ${code} is unavailable for this visit. Choose another study count.`)
+      return
+    }
+    setStudyCount(count)
+    if (row?.id !== selectedNerve?.id) pickOne(nerve, row?.id || '')
+  }
   const choosePackage = (id: string) => {
     setCashSelection((current) => (current === id ? '' : id))
     setChanged(true)
@@ -121,10 +134,6 @@ export function ServicePlanner({
     if (changed) {
       if (chosen.some(retired)) {
         setEditError('Remove retired procedure codes before updating this plan.')
-        return
-      }
-      if (!chosen.length) {
-        setEditError('Select at least one service.')
         return
       }
       if (
@@ -177,18 +186,12 @@ export function ServicePlanner({
     }, 500)
     return () => window.clearTimeout(timer)
   }, [changed, busy, selected, quantities, botox, cashSelection])
-  const groups = [
-    { id: 'visit', label: 'Office visit', rows: office, single: true },
-    { id: 'nerve', label: 'Nerve study', rows: nerve, single: true },
-    { id: 'muscle', label: 'Muscle EMG', rows: muscle, single: false },
-    {
-      id: 'other',
-      label: botoxVisit ? 'Injection and medication' : 'Other care',
-      rows: other,
-      single: false,
-    },
-  ].filter((group) => group.rows.length)
+  const groups = serviceGroups(office, nerve, muscle, other, botoxVisit)
   const activeGroup = groups.find((group) => group.id === category) || groups[0]
+  const visibleRows =
+    activeGroup?.id === 'nerve'
+      ? activeGroup.rows.filter((row) => selected.includes(row.id!))
+      : activeGroup?.rows || []
   const quantity = (row: VisitCode, change: number) => {
     setQuantities((current) => ({
       ...current,
@@ -213,7 +216,7 @@ export function ServicePlanner({
           ? 'Nerve testing is planned from this booking. Choose the study-count CPT when its scope is documented; final coding follows the care provided.'
           : 'The suggested services are included in the estimate. Remove or change them if planned care differs. Final coding follows the care provided.'}
       </p>
-      {emgVisit && result.established_for_planning && (
+      {emgVisit && result.visit_type !== 'new' && (
         <label className="visit-muted">
           <input
             type="checkbox"
@@ -221,7 +224,7 @@ export function ServicePlanner({
             disabled={busy}
             onChange={(event) => void save({ separate_em_planned: event.target.checked })}
           />{' '}
-          Include a separate follow-up office visit in addition to EMG/NCS
+          Include a separate established-patient follow-up office visit in addition to EMG/NCS
         </label>
       )}
       <div className="selected-service-chips" aria-label="Selected services">
@@ -259,8 +262,9 @@ export function ServicePlanner({
       </div>
       {scenarioAlternatives.length > 1 && !chosen.length && result.payment_mode !== 'cash' && (
         <p className="visit-muted">
-          Referral: {scenarioRule('referral')}. Prior authorization: {scenarioRule('authorization')}
-          . Choose a CPT level to see its own rule and update the estimate.
+          Referral: {scenarioRequirementStatus(result, available, 'referral')}. Prior authorization:{' '}
+          {scenarioRequirementStatus(result, available, 'authorization')}. Choose a CPT level to see
+          its own rule and update the estimate.
         </p>
       )}
       <div className="service-category-buttons" aria-label="Service categories">
@@ -281,14 +285,25 @@ export function ServicePlanner({
             {activeGroup.single && (
               <button
                 disabled={busy || !activeGroup.rows.some((row) => selected.includes(row.id!))}
-                onClick={() => pickOne(activeGroup.rows, '')}
+                onClick={() => {
+                  if (activeGroup.id === 'nerve') setStudyCount(0)
+                  pickOne(activeGroup.rows, '')
+                }}
               >
                 Remove from plan
               </button>
             )}
           </div>
+          {activeGroup.id === 'nerve' && (
+            <NerveStudyRuler
+              selectedNerve={selectedNerve}
+              studyCount={studyCount}
+              busy={busy}
+              onCountChange={chooseStudyCount}
+            />
+          )}
           <div className="procedure-options">
-            {activeGroup.rows.map((row) => {
+            {visibleRows.map((row) => {
               const included = selected.includes(row.id!),
                 single = activeGroup.single
               const disable =
@@ -309,32 +324,34 @@ export function ServicePlanner({
               return (
                 <article
                   key={row.id}
-                  className={`procedure-choice${included ? ' is-selected' : ''}`}
+                  className={`procedure-choice${included ? ' is-selected' : ''}${activeGroup.id === 'nerve' ? ' is-nerve-detail' : ''}`}
                 >
-                  <button
-                    className="procedure-pick"
-                    aria-pressed={included}
-                    disabled={disable}
-                    onClick={() =>
-                      single
-                        ? pickOne(activeGroup.rows, row.id!)
-                        : update(
-                            included
-                              ? selected.filter((id) => id !== row.id)
-                              : [...selected, row.id!],
-                          )
-                    }
-                  >
-                    <span className="procedure-check" aria-hidden="true">
-                      {included && <Check size={16} />}
-                    </span>
-                    <span>
-                      <strong>{clinicalName(row)}</strong>
-                      <small>
-                        {row.code.startsWith('J') ? 'HCPCS' : 'CPT'} {row.code}
-                      </small>
-                    </span>
-                  </button>
+                  {activeGroup.id !== 'nerve' && (
+                    <button
+                      className="procedure-pick"
+                      aria-pressed={included}
+                      disabled={disable}
+                      onClick={() =>
+                        single
+                          ? pickOne(activeGroup.rows, included ? '' : row.id!)
+                          : update(
+                              included
+                                ? selected.filter((id) => id !== row.id)
+                                : [...selected, row.id!],
+                            )
+                      }
+                    >
+                      <span className="procedure-check" aria-hidden="true">
+                        {included && <Check size={16} />}
+                      </span>
+                      <span>
+                        <strong>{clinicalName(row)}</strong>
+                        <small>
+                          {row.code.startsWith('J') ? 'HCPCS' : 'CPT'} {row.code}
+                        </small>
+                      </span>
+                    </button>
+                  )}
                   <div className="procedure-price-note">
                     {row.unit_allowed_cents != null &&
                     (result.benefits?.network_status !== 'out_of_network' ||

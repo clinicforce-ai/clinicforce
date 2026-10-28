@@ -43,6 +43,7 @@ export function useStaffWorkspaceState({
     | 'patients'
     | 'inbox'
     | 'lookup'
+    | 'prebooking'
     | 'add'
     | 'review'
     | 'match'

@@ -39,6 +39,7 @@ def decisions(payload: dict, codes: list[str], pos: str, network: str) -> dict[s
                 service = row.get('service') or {}
                 code = str(service.get('value') or '')
                 if (service.get('system') != 'CPT' or code not in findings
+                        or row.get('diagnosis')
                         or (row.get('network') or {}).get('indicator') != tier
                         or row.get('placesOfService') and pos not in {
                             str(place.get('code')) for place in row['placesOfService'] if isinstance(place, dict)}):
@@ -60,6 +61,7 @@ def financial_terms(payload: dict, code: str, pos: str, network: str) -> dict:
         return [row for row in benefits.get(kind) or [] if isinstance(row, dict)
                 and (row.get('service') or {}).get('system') == 'CPT'
                 and str((row.get('service') or {}).get('value') or '') == code
+                and not row.get('diagnosis')
                 and (row.get('network') or {}).get('indicator') == tier
                 and (not row.get('placesOfService') or pos in {
                     str(place.get('code')) for place in row['placesOfService'] if isinstance(place, dict)})

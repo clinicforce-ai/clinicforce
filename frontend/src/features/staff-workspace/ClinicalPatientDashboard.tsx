@@ -12,7 +12,7 @@ import {
 
 import ClinicalPatientDetail from './ClinicalPatientDetail'
 import ClinicalPatientSections from './ClinicalPatientSections'
-import { ecwVisitDay, localVisitDay } from './ecwVisitDates'
+import { ecwVisit, localVisitDay } from './ecwVisitDates'
 import { name, accountLabel } from './clinical-patient-labels'
 
 interface Props {
@@ -23,7 +23,7 @@ interface Props {
   onPullEcw: () => void
 }
 type Cohort = 'all' | 'accounts_with_cards' | 'accounts_without_cards' | 'card_only' | 'other'
-type VisitResult = { day: string | null }
+type VisitResult = { day: string | null; time: number | null }
 const cohortLabel: Record<Cohort, string> = {
   all: 'All patients',
   accounts_with_cards: 'Accounts with cards',
@@ -93,10 +93,10 @@ export default function ClinicalPatientDashboard({
     async function loadNext() {
       while (run === visitRun.current && next < linked.length) {
         const patient = linked[next++]
-        let result: VisitResult = { day: null }
+        let result: VisitResult = { day: null, time: null }
         try {
           const history = await getPatientAppointments(patient.clinic_patient_id!, true)
-          result = { day: ecwVisitDay(history, localVisitDay(new Date())) }
+          result = ecwVisit(history, localVisitDay(new Date()))
         } catch {
           // Keep the patient visible when the appointment read fails.
         }
@@ -203,6 +203,12 @@ export default function ClinicalPatientDashboard({
     if (group) group.push(patient)
     else groups.set(day, [patient])
   }
+  for (const group of groups.values())
+    group.sort(
+      (first, second) =>
+        (visitResults[first.id]?.time ?? Infinity) - (visitResults[second.id]?.time ?? Infinity) ||
+        name(first).localeCompare(name(second)),
+    )
   const today = localVisitDay(new Date())
   const upcomingGroups = [...groups]
     .filter(([day]) => day > today && day !== 'undated')

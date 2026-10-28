@@ -39,3 +39,23 @@ export const requirementTag = (
     return { label: `No ${name.toLowerCase()}`, tone: 'clear' }
   return { label: `${name}: ask payer`, tone: 'unknown' }
 }
+
+export function scenarioRequirementStatus(
+  result: PrevisitEstimate,
+  available: VisitCode[],
+  kind: 'referral' | 'authorization',
+) {
+  const statuses = (result.provisional_scenario?.candidate_ids || []).map((id) => {
+    const row = available.find((candidate) => candidate.id === id)
+    return (
+      row &&
+      requirementForLine(result.requirement_evidence?.procedures || [], id, row.code)?.[kind]
+        ?.status
+    )
+  })
+  return statuses.length &&
+    statuses.every((status) => status === statuses[0]) &&
+    statuses[0] !== 'Verification required'
+    ? statuses[0]
+    : 'Plan-specific rule not established for all alternatives'
+}

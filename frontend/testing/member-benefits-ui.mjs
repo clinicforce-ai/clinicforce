@@ -307,6 +307,29 @@ try {
   const { ServicePlanner } = await server.ssrLoadModule(
     '/src/features/commercial-estimate/ServicePlanner.tsx',
   )
+  const { nerveCodeForStudyCount } = await server.ssrLoadModule(
+    '/src/features/commercial-estimate/service-code.ts',
+  )
+  assert.deepEqual(
+    Array.from({ length: 15 }, (_, count) => nerveCodeForStudyCount(count)),
+    [
+      '',
+      '95907',
+      '95907',
+      '95908',
+      '95908',
+      '95909',
+      '95909',
+      '95910',
+      '95910',
+      '95911',
+      '95911',
+      '95912',
+      '95912',
+      '95913',
+      '',
+    ],
+  )
   const testingPlanner = renderToStaticMarkup(
     React.createElement(ServicePlanner, {
       result: {
@@ -326,6 +349,11 @@ try {
     }),
   )
   assert(testingPlanner.includes('Ask United Healthcare whether CPT 95910 needs referral'))
+  assert(testingPlanner.includes('id="nerve-study-count"'))
+  assert(testingPlanner.includes('value="7"'))
+  assert(testingPlanner.includes('is-nerve-detail'))
+  assert(!testingPlanner.includes('class="procedure-pick"'))
+  assert.equal((testingPlanner.match(/class="procedure-choice/g) || []).length, 1)
   assert(!testingPlanner.includes('Select E/M CPT'))
   const pendingNcs = renderToStaticMarkup(
     React.createElement(ServicePlanner, {
@@ -350,6 +378,8 @@ try {
     }),
   )
   assert(pendingNcs.includes('aria-pressed="true">Nerve study'))
+  assert(pendingNcs.includes('value="0"'))
+  assert(!pendingNcs.includes('class="procedure-choice'))
   assert(!pendingNcs.includes('New patient'))
   assert.equal((pendingNcs.match(/CPT 99203/g) || []).length, 0)
   const duplicateSavedCatalog = renderToStaticMarkup(
@@ -658,7 +688,10 @@ try {
         price_range: {
           mode: 'services',
           lines: [
-            { code: '95908', benefits: { coinsurance_percent: '20', deductible_annual_cents: 35000 } },
+            {
+              code: '95908',
+              benefits: { coinsurance_percent: '20', deductible_annual_cents: 35000 },
+            },
             { code: '99204', benefits: { copay_cents: 3000, deductible_applies: false } },
           ],
         },
@@ -741,9 +774,7 @@ try {
       result: { ...base, benefit_source: undefined, checked_at: undefined },
     }),
   )
-  assert(
-    activeWithoutMetadata.includes('Payer source not recorded'),
-  )
+  assert(activeWithoutMetadata.includes('Payer source not recorded'))
   assert(activeWithoutMetadata.includes('Payer check date unknown'))
   assert(!activeWithoutMetadata.includes('Current payer benefits unavailable'))
   const renderMedicareEnrollment = (payer, enrollment) =>

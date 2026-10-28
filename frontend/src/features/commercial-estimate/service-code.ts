@@ -12,6 +12,28 @@ export const groupFor = (code: string) =>
       : /^9588[5-7]$/.test(code)
         ? 'muscle'
         : 'other'
+export const nerveCodeForStudyCount = (count: number) =>
+  Number.isInteger(count) && count >= 1 && count <= 13
+    ? String(95907 + Math.floor((count - 1) / 2))
+    : ''
+export const serviceGroups = (
+  office: VisitCode[],
+  nerve: VisitCode[],
+  muscle: VisitCode[],
+  other: VisitCode[],
+  botoxVisit: boolean,
+) =>
+  [
+    { id: 'visit', label: 'Office visit', rows: office, single: true },
+    { id: 'nerve', label: 'Nerve study', rows: nerve, single: true },
+    { id: 'muscle', label: 'Muscle EMG', rows: muscle, single: false },
+    {
+      id: 'other',
+      label: botoxVisit ? 'Injection and medication' : 'Other care',
+      rows: other,
+      single: false,
+    },
+  ].filter((group) => group.rows.length)
 export const clinicalName = (row: VisitCode) => {
   if (groupFor(row.code) === 'nerve')
     return (

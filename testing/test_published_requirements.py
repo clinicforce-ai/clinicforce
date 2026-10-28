@@ -78,6 +78,20 @@ def test_aetna_open_access_managed_choice_selected_office_and_ncs_rules():
     assert evaluate(botox, botox_context, [])['authorization']['status'] == 'Verification required'
 
 
+def test_aetna_signature_diagnostics_keep_preparation_separate_from_approval():
+    result, context = case('Aetna', 'Aetna Medicare Signature (PPO)', '95908', '95886',
+                           day='2026-10-28')
+    result['benefits']['plan_details'] = {
+        'names': ['Aetna Medicare Signature (PPO)'],
+        'group_number': '000003-TX', 'plan_number': '000003-TX000006'}
+    decisions = evaluate(result, context, [])
+    assert all(row['referral']['status'] == 'Not required' for row in decisions['procedures'])
+    assert all(row['authorization']['status'] == 'Verification required'
+               for row in decisions['procedures'])
+    assert all(row['authorization']['pa_approval'] == 'UNVERIFIED'
+               for row in decisions['procedures'])
+
+
 def test_same_day_bcbstx_active_271_can_show_network_referral_rule_without_dates():
     result, context = case('BCBSTX', 'Blue Choice PPO', '95908')
     result['benefits']['service_date_matches'] = None

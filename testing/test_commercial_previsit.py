@@ -362,6 +362,13 @@ class PrevisitFlowTest(unittest.IsolatedAsyncioTestCase):
                                  [str(code) for code in range(95907, 95914)])
                 self.assertFalse(any(row['code'] in {'95885', '95886'} for row in result['codes']))
                 self.assertIsNone(result['collection_guidance']['amount_cents'])
+                with patch('app.api.routers.commercial_estimator.store.get_case', return_value=case), \
+                     patch('app.api.routers.commercial_estimator.object_store.get_object_bytes', return_value=json.dumps(success_response.json()).encode()):
+                    cleared = await update_visit_review('case-1', VisitReviewInput(
+                        context_token=result['context_token'], revision=0, selected_ids=[]), MagicMock())
+                self.assertEqual(cleared['codes'], [])
+                self.assertEqual(cleared['selected_service_count'], 0)
+                self.assertNotIn('provisional_scenario', cleared)
                 return
             if scheduled_code:
                 self.assertEqual(result['service_selection_status'], 'preview')
@@ -370,6 +377,14 @@ class PrevisitFlowTest(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual([row['id'] for row in result['codes']], result['selected_ids'])
                 self.assertEqual([row['code'] for row in result['price_range']['lines']], [scheduled_code])
                 self.assertIsNone(result['collection_guidance']['amount_cents'])
+                with patch('app.api.routers.commercial_estimator.store.get_case', return_value=case), \
+                     patch('app.api.routers.commercial_estimator.object_store.get_object_bytes', return_value=json.dumps(success_response.json()).encode()):
+                    cleared = await update_visit_review('case-1', VisitReviewInput(
+                        context_token=result['context_token'], revision=0, selected_ids=[]), MagicMock())
+                self.assertEqual(cleared['selected_ids'], [])
+                self.assertEqual(cleared['codes'], [])
+                self.assertEqual(cleared['price_range']['lines'], [])
+                self.assertIsNone(cleared['collection_guidance']['amount_cents'])
                 return
             if card_conflict:
                 self.assertEqual(result['card_check']['status'], 'conflict')

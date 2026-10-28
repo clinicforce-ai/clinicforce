@@ -1,4 +1,5 @@
 import type { PrevisitEstimate } from '../../services/api/commercial-estimator'
+import type { VisitPricedLine } from '../../services/api/commercial-visit-types'
 import type { CommercialEstimateModel } from './useCommercialEstimateModel'
 import { patientBenefitsBound } from './identityBinding'
 import { firstSelectedCptIssue } from './selectedCptIssue'
@@ -90,6 +91,45 @@ export function aetnaOfficeReferenceCopay(
   return benefits.network_status === 'in_network'
     ? Math.min(copay, benefits.oop_remaining_cents!)
     : copay
+}
+
+export function aetnaOfficePlanningCopay(
+  result: PrevisitEstimate,
+  model: CommercialEstimateModel,
+  calculated: boolean,
+  lines: VisitPricedLine[],
+): number | null {
+  const benefits = result.reference_benefits ?? result.benefits
+  const officeLine = lines.length === 1 ? lines[0] : null
+  const terms = officeLine?.benefits
+  return !model.cash &&
+    !calculated &&
+    /^aetna$/i.test(result.payer || '') &&
+    officeLine?.units === 1 &&
+    /^(9920[2-5]|9921[2-5])$/.test(officeLine.code) &&
+    benefits?.active === true &&
+    benefits.network_status === 'in_network' &&
+    benefits.network_source === 'payer_participation_message' &&
+    benefits.service_date_matches !== false &&
+    !benefits.has_secondary &&
+    !benefits.coverage_status_conflict &&
+    !benefits.coverage_dates_invalid &&
+    !benefits.source_errors?.length &&
+    terms?.active === true &&
+    terms.network_status === 'in_network' &&
+    terms.service_date_matches !== false &&
+    !terms.coverage_status_conflict &&
+    !terms.coverage_dates_invalid &&
+    !terms.source_errors?.length &&
+    !!terms.selected_benefit_ids?.length &&
+    terms.copay_cents != null &&
+    terms.coinsurance_percent != null &&
+    Number(terms.coinsurance_percent) === 0 &&
+    (terms.deductible_applies === false || terms.deductible_remaining_cents === 0) &&
+    terms.oop_remaining_cents != null &&
+    terms.oop_remaining_cents >= terms.copay_cents
+    ? terms.copay_cents
+    : null
 }
 
 export function payerReportedPartialCopay(

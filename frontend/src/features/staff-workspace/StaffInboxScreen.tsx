@@ -39,6 +39,9 @@ export default function StaffInboxScreen({
           <p className="staff-muted">Card scans and PDFs submitted to {session.practice_name}.</p>
         </div>
         <div className="staff-inbox-actions">
+          <button disabled={Boolean(busy)} onClick={() => navigate('prebooking')}>
+            Check before booking
+          </button>
           <button
             disabled={Boolean(busy)}
             onClick={() => {

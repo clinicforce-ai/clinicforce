@@ -1,7 +1,7 @@
 """Validated request and response models for the staff workspace."""
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -90,6 +90,68 @@ class Patient(Model):
         if value and not date(1850, 1, 1) <= value <= date.today():
             raise ValueError("Enter a valid birth date that is not in the future")
         return value
+
+
+class PrebookingEligibility(Model):
+    """Prospective-person eligibility inquiry; it creates no clinic patient."""
+
+    payer_connection_id: str = Field(min_length=1, max_length=100)
+    provider_network_id: str = Field(min_length=1, max_length=100)
+    given_name: str = Field(min_length=1, max_length=100)
+    family_name: str = Field(min_length=1, max_length=100)
+    birth_date: date
+    member_id: str = Field(min_length=1, max_length=80)
+    relationship: Literal["self", "dependent"]
+    subscriber_given_name: str = Field(default="", max_length=100)
+    subscriber_family_name: str = Field(default="", max_length=100)
+    subscriber_birth_date: date | None = None
+
+    @field_validator("given_name", "family_name", "member_id", "subscriber_given_name", "subscriber_family_name")
+    @classmethod
+    def no_control_characters(cls, value: str) -> str:
+        if any(ord(char) < 32 for char in value):
+            raise ValueError("Remove control characters from insurance details")
+        return value
+
+    @field_validator("birth_date", "subscriber_birth_date")
+    @classmethod
+    def plausible_birth_date(cls, value: date | None) -> date | None:
+        if value and not date(1850, 1, 1) <= value <= date.today():
+            raise ValueError("Enter a valid birth date that is not in the future")
+        return value
+
+    @model_validator(mode="after")
+    def dependent_has_policyholder(self):
+        if self.relationship == "dependent" and not (self.subscriber_given_name and self.subscriber_family_name and self.subscriber_birth_date):
+            raise ValueError("Enter the policyholder's name and birth date for a dependent")
+        return self
+
+
+class PrebookingProviderOption(Model):
+    id: str
+    name: str
+    npi: str
+
+
+class PrebookingPayerOption(Model):
+    id: str
+    name: str
+    providers: list[PrebookingProviderOption]
+
+
+class PrebookingOptions(Model):
+    payers: list[PrebookingPayerOption]
+
+
+class PrebookingResult(Model):
+    status: Literal["active_today", "inactive_today", "needs_review"]
+    message: str
+    checked_at: datetime
+    checked_on: date
+    payer: str
+    check_id: str | None
+    coverage_start: date | None
+    coverage_end: date | None
 
 
 class IntakeSearch(Model):

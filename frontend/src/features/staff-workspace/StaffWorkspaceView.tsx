@@ -2,6 +2,7 @@ import CommercialEstimateLoading from '../commercial-estimate/CommercialEstimate
 import StaffInboxScreen from './StaffInboxScreen'
 import StaffEcwLookupScreen from './StaffEcwLookupScreen'
 import StaffCardIntakeScreen from './StaffCardIntakeScreen'
+import StaffPrebookingScreen from './StaffPrebookingScreen'
 import StaffPatientReviewScreen from './StaffPatientReviewScreen'
 import StaffPatientMatchScreen from './StaffPatientMatchScreen'
 import StaffPatientRecordScreen from './StaffPatientRecordScreen'
@@ -13,6 +14,7 @@ import {
   Inbox,
   LogOut,
   QrCode,
+  ShieldCheck,
   Upload,
   Users,
 } from 'lucide-react'
@@ -201,6 +203,13 @@ export default function StaffWorkspaceView({ model }: { model: StaffWorkspaceMod
             <Inbox size={18} /> Insurance inbox
           </button>
           <button
+            className={screen === 'prebooking' ? 'staff-current' : ''}
+            onClick={() => navigate('prebooking')}
+            disabled={Boolean(busy)}
+          >
+            <ShieldCheck size={18} /> Check before booking
+          </button>
+          <button
             className={screen === 'links' ? 'staff-current' : ''}
             onClick={() => {
               setLinkBack('inbox')
@@ -279,6 +288,7 @@ export default function StaffWorkspaceView({ model }: { model: StaffWorkspaceMod
           />
         )}
         {screen === 'inbox' && <StaffInboxScreen model={model} session={session} />}
+        {screen === 'prebooking' && <StaffPrebookingScreen onBack={() => navigate('patients')} />}
         {screen === 'links' && (
           <StaffUploadLinks
             key={linkPatient?.id || linkPatient?.intakeId || 'new'}

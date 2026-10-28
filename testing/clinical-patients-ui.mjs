@@ -2,7 +2,7 @@
 import assert from 'node:assert/strict'
 
 const { chromium } = await import(process.env.PLAYWRIGHT_MODULE || 'playwright')
-const browser = await chromium.launch({ headless: true })
+const browser = await chromium.launch({ headless: true, executablePath: process.env.CHROME_PATH })
 const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } })
 const errors = []
 page.on('pageerror', (error) => errors.push(error.message))
@@ -56,11 +56,11 @@ await page.route((url) => url.pathname.startsWith('/api/'), async (route) => {
       appointments:
         patientId === '1'
           ? [
-              { id: 'future-1', from_ecw: true, status: 'planned', date: future },
+              { id: 'future-1', from_ecw: true, status: 'planned', date: future, start: `${future}T15:00:00-04:00` },
               { id: 'past-1', from_ecw: true, status: 'finished', date: past },
             ]
           : patientId === '2'
-            ? [{ id: 'future-2', from_ecw: true, status: 'booked', date: future }]
+            ? [{ id: 'future-2', from_ecw: true, status: 'booked', date: future, start: `${future}T09:00:00-04:00` }]
             : patientId === '3'
               ? [{ id: 'past-planned', from_ecw: true, status: 'planned', date: past }]
               : [],
@@ -75,23 +75,24 @@ try {
   await page.goto(process.env.UI_URL || 'http://127.0.0.1:5182/?staff')
   await page.getByText('eCW visit checks finished for 4 patients.').waitFor()
   const groups = page.locator('.clinical-visit-group')
-  assert.equal(await groups.count(), 5)
-  const futureGroup = groups.filter({ has: page.locator('.clinical-visit-upcoming') })
-  assert.equal(await futureGroup.count(), 1)
-  assert.equal(await groups.first().locator('.clinical-visit-upcoming').count(), 1)
+  assert.equal(await groups.count(), 3)
+  const futureGroup = page.locator('section[aria-labelledby="clinical-upcoming-title"] .clinical-visit-group')
   assert.match(await futureGroup.locator('summary').innerText(), /2 patients/)
   await futureGroup.locator('summary').click()
   assert.deepEqual(await futureGroup.locator('.clinical-patient-open strong').allTextContents(), [
-    'Patient 01',
     'Patient 02',
-  ])
-  await groups.nth(1).locator('summary').click()
-  assert.deepEqual(await groups.nth(1).locator('.clinical-patient-open strong').allTextContents(), [
     'Patient 01',
   ])
-  assert.equal(await groups.filter({ hasText: 'No upcoming or completed eCW visit' }).count(), 1)
-  assert.equal(await groups.filter({ hasText: 'eCW visits unavailable' }).count(), 1)
-  assert.equal(await groups.filter({ hasText: 'No confirmed eCW link' }).count(), 1)
+  const pastGroups = page.locator('section[aria-labelledby="clinical-past-title"] .clinical-visit-group')
+  await pastGroups.first().locator('summary').click()
+  assert.deepEqual(await pastGroups.first().locator('.clinical-patient-open strong').allTextContents(), [
+    'Patient 03',
+  ])
+  await pastGroups.nth(1).locator('summary').click()
+  assert.deepEqual(await pastGroups.nth(1).locator('.clinical-patient-open strong').allTextContents(), [
+    'Patient 04',
+    'Patient 05',
+  ])
 
   await page.getByLabel('Find a clinical patient').fill('Patient 02')
   assert.match(await futureGroup.locator('summary').innerText(), /1 patient/)
@@ -105,7 +106,7 @@ try {
     )
   }
   assert.deepEqual(errors, [])
-  console.log('PASS: future and completed eCW date groups, unavailable states, search, responsive layout')
+  console.log('PASS: appointment time order, date groups, search, responsive layout')
 } finally {
   await browser.close()
 }

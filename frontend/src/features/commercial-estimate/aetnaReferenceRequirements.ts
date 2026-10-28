@@ -8,6 +8,7 @@ export function aetnaReferenceRequirement(
 ): string | null {
   const reference = result.reference_only ? result.reference_benefits : null
   if (reference?.active !== true || !/\baetna\b/i.test(result.payer || '')) return null
+  if (result.aetna_diagnostic_reference && ['95908', '95886'].includes(code)) return null
   if (kind === 'authorization')
     return ['64612', '64615'].includes(code)
       ? 'required; approval status unresolved (clinic Aetna rule)'

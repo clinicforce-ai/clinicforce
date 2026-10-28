@@ -648,8 +648,11 @@ def test_other_payers_use_scoped_blue_cross_library_rate_only_as_temporary_refer
     result = {'payer': payer_label, 'codes': [{'code': '99203', 'units': 1}], 'issues': []}
     benefits = {'active': True, 'network_status': 'unknown'}
     api._attach_previsit_pricing(result, practice_id, inputs, source, 'uhc-route', benefits)
-    assert result['temporary_rate_reference']['lines'][0]['unit_reference_cents'] == 10117
-    assert result['temporary_rate_reference']['complete'] is True
+    if payer_label == 'Aetna':
+        assert 'temporary_rate_reference' not in result
+    else:
+        assert result['temporary_rate_reference']['lines'][0]['unit_reference_cents'] == 10117
+        assert result['temporary_rate_reference']['complete'] is True
     assert result['price_range']['lines'][0]['allowed_cents'] is None
     assert benefits['network_status'] == ('in_network' if payer_label == 'Aetna' else 'unknown')
     source['location_id'] = 'different-office'

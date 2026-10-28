@@ -11,6 +11,28 @@ FEP_PSHB_2026 = {
     'office_specialist_copay_cents': 5000,
 }
 
+AETNA_SIGNATURE_TX_2026 = {
+    'label': '2026 Aetna Medicare Signature (PPO) Evidence of Coverage, diagnostic tests',
+    'url': 'https://content.medicareadvantage.com/2026/Aetna-Y0001-H3288-006-PP48-EOC2026-C-SF20251014.pdf',
+    'effective_from': '2026-01-01', 'effective_to': '2026-12-31',
+    'diagnostic_copay_cents': 5000,
+}
+
+
+def aetna_signature_diagnostic(benefits: dict, service_date: str, code: str,
+                               *, payer_verified: bool) -> bool:
+    """Use the published diagnostic benefit only for the exact member product."""
+    plan = benefits.get('plan_details') or {}
+    return (payer_verified and code in {'95908', '95886'}
+            and plan.get('names') == ['Aetna Medicare Signature (PPO)']
+            and plan.get('group_number') == '000003-TX'
+            and plan.get('plan_number') == '000003-TX000006'
+            and AETNA_SIGNATURE_TX_2026['effective_from'] <= service_date <= AETNA_SIGNATURE_TX_2026['effective_to']
+            and benefits.get('active') is True and verified_in_network(benefits)
+            and patient_benefits_bound(benefits.get('identity') or {})
+            and not benefits.get('has_secondary')
+            and benefits.get('service_date_matches') is not False)
+
 
 def apply_plan_terms(benefits: dict, plan: dict, service_date: str, patient_bound: bool) -> None:
     """A confirmed Basic plan has no annual medical deductible at any provider tier."""
@@ -53,6 +75,26 @@ def preferred_fep_office(benefits: dict, rules: dict, service_date: str, code: s
 def apply_office_terms(raw: dict, case_benefits: dict, rules: dict,
                        service_date: str, code: str) -> dict:
     """Fill missing office terms; retain conflicting member-specific evidence."""
+    if (rules.get('aetna_eoc_verified') is True
+            and str(rules.get('place_of_service') or '') == '11' and
+            aetna_signature_diagnostic(case_benefits, service_date, code,
+                                       payer_verified=rules.get('aetna_payer_verified') is True)):
+        copay = AETNA_SIGNATURE_TX_2026['diagnostic_copay_cents']
+        if (raw.get('copay_cents') not in {None, copay}
+                or raw.get('coinsurance_percent') not in {None, '0', '0.0', '0.00'}
+                or raw.get('deductible_remaining_cents') not in {None, 0}):
+            return {**raw, 'review_reasons': [*(raw.get('review_reasons') or []),
+                'The member-specific diagnostic cost share conflicts with the published Aetna plan rule.'],
+                'requires_review': True}
+        reasons = [reason for reason in raw.get('review_reasons') or [] if reason not in {
+            'Confirm the remaining individual deductible that applies to this visit.',
+            'Confirm which copay or coinsurance term applies, including any visit-count conditions.',
+        }]
+        return {**raw, 'copay_cents': copay, 'copay_period': 'PROCEDURE',
+                'coinsurance_percent': '0', 'deductible_applies': False,
+                'deductible_applicability': 'DOES_NOT_APPLY', 'deductible_remaining_cents': 0,
+                'cost_share': 'copay', 'published_plan_rule': AETNA_SIGNATURE_TX_2026,
+                'review_reasons': reasons, 'requires_review': bool(reasons)}
     if not preferred_fep_office(case_benefits, rules, service_date, code):
         return raw
     copay = FEP_PSHB_2026['office_specialist_copay_cents']

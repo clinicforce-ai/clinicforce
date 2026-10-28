@@ -15,7 +15,7 @@ BCBSTX_PAYER_NAMES = {'bcbstx', 'bcbstexas', 'bluecrossblueshieldoftexas',
                       'bluecrossblueshieldtexas'}
 
 # Saved estimates re-evaluate requirement decisions when a published rule changes.
-PUBLISHED_RULESET_VERSION = '2026-10-27-uhc-group-ppo-diagnostics-v2'
+PUBLISHED_RULESET_VERSION = '2026-10-28-aetna-signature-diagnostics-v6'
 
 UHC_GROUP_PPO_OON_SOURCE = {
     'label': 'UnitedHealthcare Group Medicare Advantage PPO out-of-network provider guide',
@@ -28,6 +28,11 @@ UHC_GROUP_13705_DIAGNOSTIC_PA_SOURCE = {
     'url': 'https://www.uhcprovider.com/content/dam/provider/docs/public/prior-auth/pa-requirements/medicare/Med-Adv-Dual-Eff-10-1-26.pdf',
     'source_version': 'Clinic confirmation for CPT 95908, 95861 and 95886, received 2026-10-26',
     'verified_at': '2026-10-26', 'effective_from': '2026-10-26', 'effective_to': '2026-12-31',
+}
+UHC_LPPO_DIAGNOSTIC_PA_SOURCE = {
+    'label': 'Clinic-confirmed UHC LPPO diagnostic CPT authorization decision',
+    'source_version': 'Clinic confirmation for CPT 95908 and 95886, received 2026-10-27',
+    'verified_at': '2026-10-27', 'effective_from': '2026-10-27', 'effective_to': '2026-12-31',
 }
 
 UHC_TEXAS_CHOICE_PLUS_SOURCE = {
@@ -104,11 +109,29 @@ CIGNA_2026_PA_SOURCE = {
     'source_version': 'July 2026 Master Precertification List', 'verified_at': '2026-10-21',
     'effective_from': '2026-07-01', 'effective_to': '2026-12-31',
 }
+CIGNA_OAP_DIAGNOSTIC_PA_SOURCE = {
+    'label': 'Cigna 2026 Master Precertification List, diagnostic and office CPT review',
+    'url': CIGNA_2026_PA_SOURCE['url'],
+    'source_version': '2026 list checked 2026-10-27', 'verified_at': '2026-10-27',
+    'effective_from': '2026-01-01', 'effective_to': '2026-12-31',
+}
 AETNA_OPEN_ACCESS_SOURCE = {
     'label': 'Aetna benefits product guide, Open Access Managed Choice POS referrals',
     'url': 'https://www.aetna.com/document-library/healthcare-professionals/documents-forms/benefits-product-guide.pdf',
     'source_version': 'Product guide dated September 2025, checked 2026-10-23',
     'verified_at': '2026-10-23', 'effective_from': '2026-10-01', 'effective_to': '2026-12-31',
+}
+AETNA_MEDICARE_PPO_REFERRAL_SOURCE = {
+    'label': 'Aetna Medicare PPO specialist referral guidance',
+    'url': 'https://www.aetna.com/medicare/compare-plans-enroll/medicare-advantage-ppo-plans.html',
+    'source_version': '2026 PPO guidance, checked 2026-10-28', 'verified_at': '2026-10-28',
+    'effective_from': '2026-01-01', 'effective_to': '2026-12-31',
+}
+AETNA_2026_PRECERT_SOURCE = {
+    'label': 'Aetna 2026 participating-provider precertification list and code search',
+    'url': 'https://www.aetna.com/health-care-professionals/precertification/precertification-lists.html',
+    'source_version': '2026 list checked 2026-10-28', 'verified_at': '2026-10-28',
+    'effective_from': '2026-01-01', 'effective_to': '2026-12-31',
 }
 MEDICARE_REFERRAL_SOURCE = {
     'label': 'Medicare.gov Original Medicare specialist access',
@@ -193,6 +216,15 @@ def _published_rule(kind: str, result: dict, context: dict, plans: list[str], co
                 for plan in plans)
         and codes <= {'95908', '95861', '95886'}
     )
+    lppo_diagnostics = (
+        {'unitedhealthcare', 'uhc'} & names
+        and str(context.get('group_number') or '') == '15725'
+        and benefits.get('network_status') in {'in_network', 'out_of_network'}
+        and any(_key(plan) in {'lppounitedhealthcaregroupmedicareadvantagepp',
+                               'lppounitedhealthcaregroupmedicareadvantageppo'}
+                for plan in (((result.get('plan_details') or {}).get('stedi') or {}).get('names') or []))
+        and codes <= {'95908', '95886'}
+    )
     if group_13705_diagnostics:
         product = 'groupmedicareadvantageppo'
         if kind == 'referral':
@@ -200,6 +232,12 @@ def _published_rule(kind: str, result: dict, context: dict, plans: list[str], co
             return rule('Not required', 'This Group Medicare Advantage PPO diagnostic visit does not require a PCP specialist referral.', source)
         if kind == 'authorization' and day >= '2026-10-26':
             return rule('Not required', 'Clinic-confirmed decision for the selected diagnostic CPTs under this group plan.', UHC_GROUP_13705_DIAGNOSTIC_PA_SOURCE, source_type='clinic_confirmation')
+    if lppo_diagnostics:
+        product = 'lppounitedhealthcaregroupmedicareadvantagepp'
+        if kind == 'referral':
+            return rule('Not required', 'UnitedHealthcare Group Medicare Advantage PPO does not require a PCP specialist referral.', UHC_MA_PPO_REFERRAL_SOURCE)
+        if kind == 'authorization' and day >= '2026-10-27':
+            return rule('Not required', 'Clinic-confirmed decision for the selected diagnostic CPTs under this group plan.', UHC_LPPO_DIAGNOSTIC_PA_SOURCE, source_type='clinic_confirmation')
     bcbstx_ppo_follow_up = (exact <= {'bluechoiceppo'} and in_network and office and day >= '2026-10-26'
             and names & BCBSTX_PAYER_NAMES
             and 'preferredprovideroptionmedical' in {_key(plan) for plan in plans}
@@ -207,6 +245,17 @@ def _published_rule(kind: str, result: dict, context: dict, plans: list[str], co
     if bcbstx_ppo_follow_up and not exact and kind == 'referral' and codes <= {'99212', '99213', '99214', '99215'}:
         product = 'preferredprovideroptionmedical'
         return rule('Not required', 'BCBSTX PPO plans do not require a referral for an in-network specialist office visit.', BCBSTX_PPO_REFERRAL_SOURCE)
+    aetna_plan = benefits.get('plan_details') or {}
+    aetna_signature_diagnostics = (
+        'aetna' in names and in_network and str(context.get('pos') or '') == '11'
+        and aetna_plan.get('names') == ['Aetna Medicare Signature (PPO)']
+        and aetna_plan.get('group_number') == '000003-TX'
+        and aetna_plan.get('plan_number') == '000003-TX000006'
+        and codes <= {'95908', '95886'})
+    if aetna_signature_diagnostics:
+        if kind == 'referral':
+            return rule('Not required', 'This Aetna Medicare PPO permits direct specialist care without a PCP referral.', AETNA_MEDICARE_PPO_REFERRAL_SOURCE)
+        return rule('Verification required', 'These diagnostic CPTs are not identified on the published precertification list; confirm the member-specific requirement in Aetna or Availity.', AETNA_2026_PRECERT_SOURCE, check=True)
     if (bcbstx_ppo_follow_up and kind == 'authorization' and codes == {'99213'}
             and str(context.get('pos') or '') == '11'):
         product = next(iter(exact), 'preferredprovideroptionmedical')
@@ -266,6 +315,8 @@ def _published_rule(kind: str, result: dict, context: dict, plans: list[str], co
     if kind == 'authorization' and 'cigna' in names and in_network and day >= '2026-07-01':
         if product in {'cignappo', 'openaccessplus', 'cignaopenaccessplus', 'cignahmo'} and codes & {'J0585', '64612', '64615'}:
             return rule('Required', 'Cigna lists this selected drug or chemodenervation code separately for precertification. Confirm this member’s applicable care management rules and obtain approval.', CIGNA_2026_PA_SOURCE, check=True)
+        if product in {'openaccessplus', 'cignaopenaccessplus'} and codes <= (cpt_rules.NCS_CODES | cpt_rules.EMG_ADD_ONS | cpt_rules.SERVICE_FAMILIES['office_consultation']['codes']):
+            return rule('Not required', 'These selected office and EMG/NCS CPTs are absent from Cigna’s 2026 Master Precertification List for Open Access Plus.', CIGNA_OAP_DIAGNOSTIC_PA_SOURCE)
         return rule('Verification required', 'The Cigna list does not establish authorization for this selected service under the member’s exact plan. Check the member-specific precertification tool.', CIGNA_2026_PA_SOURCE, check=True)
     if (kind == 'authorization' and 'bluecard' not in product
             and names & BCBSTX_PAYER_NAMES):
