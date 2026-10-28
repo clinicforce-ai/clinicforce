@@ -36,6 +36,16 @@ try {
     { result: visit, busy: false, save: async () => true, viewEstimate: () => {} }))
   assert(planner(planningVisit).includes('Include a separate established-patient follow-up'))
   assert(!planner({ ...planningVisit, visit_type: 'new' }).includes('Include a separate established-patient follow-up'))
+  const memoryCorrection = planner({ ...planningVisit, visit_type: 'new',
+    available_codes: [
+      { id: 'ncs', code: '95908', units: 1 },
+      { id: 'emg', code: '95886', units: 1 },
+      { id: 'office', code: '99204', units: 1 },
+    ],
+    selected_ids: ['ncs', 'emg'],
+  })
+  assert(memoryCorrection.includes('Remove EMG / nerve testing'))
+  assert(memoryCorrection.includes('Office visit'))
   const { coinsuranceFormula, feeProxyFormula } = await server.ssrLoadModule(
     '/src/features/commercial-estimate/coinsuranceFormula.ts',
   )

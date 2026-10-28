@@ -1,6 +1,7 @@
 import type { PrevisitEstimate } from '../../services/api/commercial-estimator'
 import type { CommercialEstimateModel } from './useCommercialEstimateModel'
 import { money } from './format'
+import { aetnaOfficePlanningCopay } from './payerReportedPartialCopay'
 
 function nextStep(model: CommercialEstimateModel, result: PrevisitEstimate) {
   const lines = result.price_range?.mode === 'services' ? result.price_range.lines || [] : []
@@ -65,6 +66,15 @@ export default function ArrivalAmountSummary({
           (result.encounter_summary?.payments_verified_cents || 0),
       )
     : null
+  const officePlan = aetnaOfficePlanningCopay(
+    result,
+    model,
+    result.price_range?.mode === 'services' ? result.price_range.lines || [] : [],
+  )
+  const officeBalance =
+    officePlan == null
+      ? null
+      : Math.max(0, officePlan - (result.encounter_summary?.payments_verified_cents || 0))
   const needsAction = model.amountText === 'Insured amount unavailable'
   const additionalServicesPending = result.price_range?.lines?.some(
     (line) => !/^992(?:0[2-5]|1[2-5])$/.test(line.code),
@@ -78,17 +88,21 @@ export default function ArrivalAmountSummary({
             ? 'Cigna planning estimate · collection pending'
             : aetnaPlanning
               ? 'Planned amount to collect at visit'
-              : partialCopay != null
-                ? referenceOnly
-                  ? 'Office-only reference · collection pending'
-                  : 'Payer-reported office copay · collection pending'
-                : needsAction
-                  ? 'Next step'
-                  : model.amountLabel}
+              : officeBalance != null
+                ? 'Planned amount to collect at visit'
+                : partialCopay != null
+                  ? referenceOnly
+                    ? 'Office-only reference · collection pending'
+                    : 'Payer-reported office copay · collection pending'
+                  : needsAction
+                    ? 'Next step'
+                    : model.amountLabel}
       </span>
       <strong
         className={
-          !visibleAmount && !cignaPlanning && !aetnaPlanning ? 'amount-pending' : undefined
+          !visibleAmount && !cignaPlanning && !aetnaPlanning && officeBalance == null
+            ? 'amount-pending'
+            : undefined
         }
         role="status"
       >
@@ -98,11 +112,13 @@ export default function ArrivalAmountSummary({
             ? money(cignaPlanning.patient_share_cents)
             : aetnaPlanning
               ? money(aetnaBalance!)
-              : partialCopay != null
-                ? money(partialCopay)
-                : needsAction
-                  ? action.title
-                  : model.amountText}
+              : officeBalance != null
+                ? money(officeBalance)
+                : partialCopay != null
+                  ? money(partialCopay)
+                  : needsAction
+                    ? action.title
+                    : model.amountText}
       </strong>
       {plan ? (
         <p>
@@ -124,6 +140,15 @@ export default function ArrivalAmountSummary({
             ? `; less ${money(result.encounter_summary.payments_verified_cents)} already paid = ${money(aetnaBalance!)}`
             : ''}
           . Verify the exact plan and Medicare billing protection before charging.
+        </p>
+      ) : officeBalance != null ? (
+        <p>
+          {money(officePlan!)} specialist office copay + {money(0)} deductible + 0% coinsurance
+          {result.encounter_summary?.payments_verified_cents
+            ? `; less ${money(result.encounter_summary.payments_verified_cents)} already paid`
+            : ''}{' '}
+          = {money(officeBalance)} planning estimate. Confirm the final allowed charge and Medicare
+          billing protection before collection.
         </p>
       ) : partialCopay != null ? (
         <p>

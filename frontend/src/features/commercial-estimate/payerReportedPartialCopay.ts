@@ -96,14 +96,19 @@ export function aetnaOfficeReferenceCopay(
 export function aetnaOfficePlanningCopay(
   result: PrevisitEstimate,
   model: CommercialEstimateModel,
-  calculated: boolean,
   lines: VisitPricedLine[],
 ): number | null {
   const benefits = result.reference_benefits ?? result.benefits
   const officeLine = lines.length === 1 ? lines[0] : null
   const terms = officeLine?.benefits
   return !model.cash &&
-    !calculated &&
+    !model.previousEstimate &&
+    !(
+      result.price_range?.complete === true &&
+      !result.encounter_summary?.integrity_error &&
+      (result.encounter_summary?.complete === true || model.supportedAmount === true)
+    ) &&
+    result.collection_guidance?.amount_cents == null &&
     /^aetna$/i.test(result.payer || '') &&
     officeLine?.units === 1 &&
     /^(9920[2-5]|9921[2-5])$/.test(officeLine.code) &&
@@ -115,6 +120,9 @@ export function aetnaOfficePlanningCopay(
     !benefits.coverage_status_conflict &&
     !benefits.coverage_dates_invalid &&
     !benefits.source_errors?.length &&
+    benefits.qmb_status !== 'protected' &&
+    result.benefits?.qmb_status !== 'protected' &&
+    result.billing_protection?.status !== 'qmb' &&
     terms?.active === true &&
     terms.network_status === 'in_network' &&
     terms.service_date_matches !== false &&

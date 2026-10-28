@@ -3,7 +3,11 @@ import { money } from './format'
 
 export default function TemporaryRateReference({ result }: { result: PrevisitEstimate }) {
   const reference = result.temporary_rate_reference
-  if (!reference?.lines.length) return null
+  if (
+    !reference?.lines.length ||
+    (/\baetna\b/i.test(result.payer || '') && !reference.source?.startsWith('Aetna MEPPO'))
+  )
+    return null
   return (
     <details className="summary-assumptions">
       <summary>Temporary CPT price reference</summary>

@@ -293,7 +293,7 @@ export default function CommercialEstimateView({ model }: { model: CommercialEst
                     <input
                       type="checkbox"
                       checked={emg.requested || emg.included}
-                      disabled={!!busy || recovering || emg.included}
+                      disabled={!!busy || recovering}
                       onChange={(event) => void saveReview({ emg_required: event.target.checked })}
                     />
                   )}{' '}
@@ -302,7 +302,7 @@ export default function CommercialEstimateView({ model }: { model: CommercialEst
                     ? emg.requested || emg.included
                       ? 'included in estimate'
                       : 'not selected'
-                    : 'required'}
+                    : 'planned for this visit'}
                 </label>
                 <p>{calculating ? 'Calculating additional testing cost…' : emg.message}</p>
                 {(emg.requested || emg.included) && !calculating && !error && (

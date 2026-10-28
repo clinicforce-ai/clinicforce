@@ -9,7 +9,11 @@ import TemporaryRateReference from './TemporaryRateReference'
 import EstimateSources from './EstimateSources'
 import { openServiceDetails } from './openServiceDetails'
 import ArrivalAmountSummary from './ArrivalAmountSummary'
-import { aetnaOfficeReferenceCopay, payerReportedPartialCopay } from './payerReportedPartialCopay'
+import {
+  aetnaOfficePlanningCopay,
+  aetnaOfficeReferenceCopay,
+  payerReportedPartialCopay,
+} from './payerReportedPartialCopay'
 import PublishedPlanBenefit from './PublishedPlanBenefit'
 import UhcMedicarePpoBenefitTable from './UhcMedicarePpoBenefitTable'
 import CommercialCostBreakdown from './CommercialCostBreakdown'
@@ -83,6 +87,7 @@ export default function CommercialOverview({
     combinedPlan != null ||
     provisionalAmount != null ||
     !!model.estimatedShare ||
+    aetnaOfficePlanningCopay(result, model, result.price_range?.lines || []) != null ||
     payerReportedPartialCents != null
   const patientBenefitsBound = hasPatientBinding(result.identity)
   const networkWarnings = (result.network_evidence?.mismatch_warnings || []).filter(

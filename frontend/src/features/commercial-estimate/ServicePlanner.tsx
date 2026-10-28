@@ -1,7 +1,7 @@
 import { RequirementDecision } from './RequirementDecision'
 import { BotoxClinicalReview } from './BotoxClinicalReview'
 import { requirementForLine } from './requirementForLine'
-import { requirementTag, scenarioRequirementStatus } from './plannerRequirementTag'
+import { scenarioRequirementStatus } from './plannerRequirementTag'
 import { useEffect, useRef, useState } from 'react'
 import { ArrowRight, Check, Minus, Plus } from 'lucide-react'
 import type {
@@ -18,6 +18,7 @@ import {
   serviceGroups,
 } from './service-code'
 import { NerveStudyRuler } from './NerveStudyRuler'
+import { SelectedServiceChips } from './SelectedServiceChips'
 
 type Save = (review: VisitReview) => Promise<boolean>
 const groupOf = (row: VisitCode) => row.service_group || groupFor(row.code)
@@ -75,6 +76,7 @@ export function ServicePlanner({
     emgVisit ? 'nerve' : botoxVisit || result.service_plan?.kind === 'biopsy' ? 'other' : 'visit',
   )
   const chosen = available.filter((row) => selected.includes(row.id!))
+  const selectedTesting = chosen.some((row) => ['nerve', 'muscle'].includes(groupOf(row)))
   const scenarioAlternatives = result.provisional_scenario?.candidate_ids || []
   const nerve = available
     .filter((row) => groupOf(row) === 'nerve')
@@ -165,6 +167,7 @@ export function ServicePlanner({
       }
       const saved = await save({
         selected_ids: selected,
+        emg_required: selectedTesting,
         confirmed_units: Object.fromEntries(selected.map((id) => [id, quantities[id]])),
         ...(botoxVisit ? { botox } : {}),
         ...(result.cash_schedule ? { cash_selection: cashSelection } : {}),
@@ -227,39 +230,28 @@ export function ServicePlanner({
           Include a separate established-patient follow-up office visit in addition to EMG/NCS
         </label>
       )}
-      <div className="selected-service-chips" aria-label="Selected services">
-        {chosen.map((row) => {
-          const referral = requirementTag(result, row, 'referral')
-          const authorization = requirementTag(result, row, 'authorization')
-          return (
-            <span key={row.id}>
-              <Check size={14} aria-hidden="true" />
-              <strong>
-                {row.code} × {quantities[row.id!] || '—'}
-              </strong>
-              {result.payment_mode !== 'cash' && (
-                <>
-                  <small className={`service-requirement-tag is-${referral.tone}`}>
-                    {referral.label}
-                  </small>
-                  <small className={`service-requirement-tag is-${authorization.tone}`}>
-                    {authorization.label}
-                  </small>
-                </>
-              )}
-            </span>
-          )
-        })}
-        {!chosen.length && (
-          <span>
-            {result.provisional_scenario?.kind === 'ncs_study_count'
-              ? 'One NCS scenario · study count pending · CPT levels are alternatives'
-              : result.price_range?.mode === 'alternatives'
-                ? 'One office consultation · E/M level pending'
-                : 'No services selected'}
-          </span>
-        )}
-      </div>
+      <SelectedServiceChips result={result} chosen={chosen} quantities={quantities} />
+      {selectedTesting && (
+        <button
+          type="button"
+          className="visit-text-button"
+          disabled={busy}
+          onClick={() => {
+            setStudyCount(0)
+            setCategory('visit')
+            update(
+              selected.filter(
+                (id) =>
+                  !available.some(
+                    (row) => row.id === id && ['nerve', 'muscle'].includes(groupOf(row)),
+                  ),
+              ),
+            )
+          }}
+        >
+          Remove EMG / nerve testing
+        </button>
+      )}
       {scenarioAlternatives.length > 1 && !chosen.length && result.payment_mode !== 'cash' && (
         <p className="visit-muted">
           Referral: {scenarioRequirementStatus(result, available, 'referral')}. Prior authorization:{' '}

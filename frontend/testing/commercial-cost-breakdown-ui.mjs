@@ -11,6 +11,9 @@ try {
   const { default: ArrivalAmountSummary } = await server.ssrLoadModule(
     '/src/features/commercial-estimate/ArrivalAmountSummary.tsx',
   )
+  const { default: TemporaryRateReference } = await server.ssrLoadModule(
+    '/src/features/commercial-estimate/TemporaryRateReference.tsx',
+  )
   const { payerPlanDisplay } = await server.ssrLoadModule(
     '/src/features/commercial-estimate/payerPlanDisplay.ts',
   )
@@ -147,10 +150,50 @@ try {
       },
     }),
   )
-  assert(unpricedAetna.includes('$151.60 BCBS Texas reference'))
+  assert(unpricedAetna.includes('Allowed amount unavailable'))
+  assert(!unpricedAetna.includes('BCBS Texas reference'))
+  assert(!unpricedAetna.includes('Blue Cross fee reference'))
+  assert.equal(renderToStaticMarkup(React.createElement(TemporaryRateReference, {
+    result: { payer: 'Aetna', temporary_rate_reference: {
+      source: 'Synthetic Blue Cross schedule', lines: [{ code: '99204', unit_reference_cents: 15160 }],
+    } },
+  })), '')
   assert(unpricedAetna.includes('$60.00 provisional office copay'))
   assert(unpricedAetna.includes('$60.00 copay + $0.00 deductible + 0%'))
-  assert(unpricedAetna.includes('$0.00 now'))
+  assert(unpricedAetna.includes('$60.00 planning estimate'))
+  assert(!unpricedAetna.includes('$0.00 now'))
+  const officeOnlyResult = {
+    payer: 'Aetna',
+    benefits: { active: true, network_status: 'in_network', network_source: 'payer_participation_message' },
+    price_range: { mode: 'services', lines: [{
+      id: 'office', code: '99204', units: 1,
+      benefits: { active: true, network_status: 'in_network', selected_benefit_ids: ['office'],
+        copay_cents: 6000, coinsurance_percent: '0', deductible_applies: false,
+        oop_remaining_cents: 639000 },
+    }] },
+    collection_guidance: { amount_cents: null },
+  }
+  const officeOnlySummary = renderToStaticMarkup(
+    React.createElement(ArrivalAmountSummary, {
+      model: { ...model, amountText: 'Insured amount unavailable', amountLabel: 'Arrival collection' },
+      result: officeOnlyResult,
+      partialCopay: null,
+      visibleAmount: true,
+    }),
+  )
+  assert(officeOnlySummary.includes('$60.00'))
+  assert(officeOnlySummary.includes('Planned amount to collect at visit'))
+  const paidOfficeSummary = renderToStaticMarkup(React.createElement(ArrivalAmountSummary, {
+    model,
+    result: { ...officeOnlyResult, encounter_summary: { payments_verified_cents: 2000 } },
+    partialCopay: null, visibleAmount: true,
+  }))
+  assert(paidOfficeSummary.includes('$40.00'))
+  const { aetnaOfficePlanningCopay } = await server.ssrLoadModule(
+    '/src/features/commercial-estimate/payerReportedPartialCopay.ts',
+  )
+  assert.equal(aetnaOfficePlanningCopay({ ...officeOnlyResult,
+    billing_protection: { status: 'qmb' } }, model, officeOnlyResult.price_range.lines), null)
 
   const aetna = renderToStaticMarkup(
     React.createElement(CommercialCostBreakdown, {
@@ -223,7 +266,6 @@ try {
     'Coverage',
     'Network',
     'CPTs',
-    'Blue Cross fee reference',
     'Copay',
     'Individual deductible',
     'Coinsurance',
@@ -238,7 +280,6 @@ try {
     '$100.00 annual',
     '$0.00 remaining',
     '0% reported',
-    '$151.60 per unit',
     '$4,000.00 annual',
     '$2,683.57 remaining',
     'Oct 27, 2026',
@@ -246,6 +287,8 @@ try {
   ]) {
     assert(aetna.includes(value), `Missing payer-reported value ${value}`)
   }
+  assert(!aetna.includes('Blue Cross fee reference'))
+  assert(!aetna.includes('$151.60 per unit'))
   assert(
     /Amount to collect at visit<\/th><td><span>\$40\.00 office-only reference<\/span>/.test(aetna),
   )

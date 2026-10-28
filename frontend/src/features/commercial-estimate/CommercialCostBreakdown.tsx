@@ -95,14 +95,17 @@ export default function CommercialCostBreakdown({
     !summary?.integrity_error &&
     price?.complete === true &&
     (summary?.complete === true || model.supportedAmount === true)
-  const aetnaRateReference = Boolean(
-    result.temporary_rate_reference?.source?.startsWith('Aetna MEPPO'),
-  )
+  const temporaryRateReference =
+    /\baetna\b/i.test(result.payer || '') &&
+    !result.temporary_rate_reference?.source?.startsWith('Aetna MEPPO')
+      ? null
+      : result.temporary_rate_reference
+  const aetnaRateReference = Boolean(temporaryRateReference?.source?.startsWith('Aetna MEPPO'))
   const aetnaPlanning =
     !model.cash && !model.previousEstimate && result.collection_guidance?.amount_cents == null
       ? result.aetna_diagnostic_reference
       : null
-  const aetnaCopayPlanning = aetnaOfficePlanningCopay(result, model, calculated, lines)
+  const aetnaCopayPlanning = aetnaOfficePlanningCopay(result, model, lines)
   const insuredRows: CostBreakdownRow[] = [
     referenceCoverageRow(result, model, benefits),
     { label: 'Network', value: model.networkLabel },
@@ -132,7 +135,7 @@ export default function CommercialCostBreakdown({
     },
     ...(lines.length
       ? lines.map((line) => {
-          const proxyRate = result.temporary_rate_reference?.lines.find(
+          const proxyRate = temporaryRateReference?.lines.find(
             (rate) =>
               rate.id === line.id &&
               rate.code === line.code &&
@@ -177,7 +180,7 @@ export default function CommercialCostBreakdown({
             ? money(lineAllowedTotal)
             : 'Not fully priced',
     },
-    ...(result.temporary_rate_reference?.lines.length
+    ...(temporaryRateReference?.lines.length
       ? [
           {
             label: feeProxy
@@ -188,11 +191,11 @@ export default function CommercialCostBreakdown({
             value: feeProxy
               ? money(feeProxy.reference_total_cents)
               : aetnaRateReference
-                ? `${money(result.temporary_rate_reference.lines.reduce((sum, line) => sum + line.unit_reference_cents * (Number(line.units) || 1), 0))} total reference`
-                : result.temporary_rate_reference.lines
+                ? `${money(temporaryRateReference.lines.reduce((sum, line) => sum + line.unit_reference_cents * (Number(line.units) || 1), 0))} total reference`
+                : temporaryRateReference.lines
                     .map((line) => `CPT ${line.code}: ${money(line.unit_reference_cents)} per unit`)
                     .join('; '),
-            detail: result.temporary_rate_reference.message,
+            detail: temporaryRateReference.message,
           },
         ]
       : []),
