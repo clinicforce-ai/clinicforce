@@ -99,6 +99,24 @@ def _finish_previsit(result: dict, case: dict, inputs: dict, source: dict, paylo
     payer_id, connections, codes, available, uploaded_cash = build_catalog(
         _api, result, session, planning_inputs, source, pricing_source, exact_source, payer_id, payload,
     )
+    # Switching a planned procedure can replace a catalog row's ID while keeping its CPT.
+    previous = {row['id']: row for row in result.get('available_codes') or []}
+    current = {row['id']: row for row in available}
+    for old_id in list(review.get('selected_ids') or []):
+        if old_id in current or old_id not in previous:
+            continue
+        old = previous[old_id]
+        matches = [row for row in available if row['code'] == old['code']
+                   and (row.get('modifiers') or []) == (old.get('modifiers') or [])]
+        if len(matches) != 1:
+            continue
+        new_id = matches[0]['id']
+        review['selected_ids'] = [new_id if key == old_id else key for key in review['selected_ids']]
+        for key in ('confirmed_units', 'confirmed_modifiers'):
+            if old_id in (review.get(key) or {}):
+                review[key][new_id] = review[key].pop(old_id)
+        for key in ('lines', 'payer_allowances'):
+            (review.get(key) or {}).pop(old_id, None)
     _api.commercial.discard_stale_directory_payer(result, payer_id)
     plan_key = _api.hashlib.sha256(_api.json.dumps([token, review.get('emg_required'), review.get('separate_em_planned'), source.get('recent_completed_appointments', []),
         [(row['id'], row.get('units')) for row in available]], sort_keys=True).encode()).hexdigest()
