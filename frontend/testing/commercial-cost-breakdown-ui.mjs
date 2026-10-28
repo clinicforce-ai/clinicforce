@@ -547,6 +547,7 @@ try {
         { id: 'ncs', code: '95908', units: 1, modifiers: [], unit_reference_cents: 11879 },
         { id: 'emg', code: '95886', units: 1, modifiers: [], unit_reference_cents: 9997 },
       ] },
+    // A planning scenario must agree with the headline and the final table row.
     aetna_diagnostic_reference: { estimated_allowed_cents: 21876, copay_cents: 10000,
       deductible_cents: 0, coinsurance_cents: 0, coinsurance_percent: '0',
       oop_reduction_cents: 0, oop_remaining_cents: 639000,
@@ -559,17 +560,38 @@ try {
     CommercialCostBreakdown, { model, result: aetnaDiagnosticResult },
   ))
   for (const value of ['$118.79 Aetna fee reference', '$99.97 Aetna fee reference',
-    '$218.76 provisional', '$50.00 per diagnostic procedure × 2 = $100.00',
-    '$100.00 provisional · Aetna diagnostic estimate', '$118.76', '$0.00 now']) {
+    '$218.76 total reference', '$50.00 per diagnostic test × 2 = $100.00',
+    'Estimated patient share</th><td><span>$100.00 planning estimate',
+    'Planned amount to collect at visit</th><td><span>$100.00 planning estimate']) {
     assert(aetnaDiagnosticTable.includes(value), `Missing Aetna diagnostic value ${value}`)
   }
   assert(!aetnaDiagnosticTable.includes('BCBS Texas reference'))
+  assert(aetnaDiagnosticTable.includes('min(($50.00 per test × 2) + $0.00 deductible + $0.00 coinsurance, $218.76 Aetna fee reference, $6,390.00 remaining out-of-pocket) = $100.00'))
   const aetnaDiagnosticHeadline = renderToStaticMarkup(React.createElement(
     ArrivalAmountSummary, { model: { ...model, amountText: 'Insured amount unavailable' },
       result: aetnaDiagnosticResult, partialCopay: null, visibleAmount: false },
   ))
-  assert(aetnaDiagnosticHeadline.includes('Aetna planning estimate'))
+  assert(aetnaDiagnosticHeadline.includes('Planned amount to collect at visit'))
   assert(aetnaDiagnosticHeadline.includes('$100.00'))
+  const paidResult = { ...aetnaDiagnosticResult,
+    encounter_summary: { payments_verified_cents: 2500 } }
+  const paidTable = renderToStaticMarkup(React.createElement(
+    CommercialCostBreakdown, { model, result: paidResult },
+  ))
+  const paidHeadline = renderToStaticMarkup(React.createElement(
+    ArrivalAmountSummary, { model: { ...model, amountText: 'Insured amount unavailable' },
+      result: paidResult, partialCopay: null, visibleAmount: false },
+  ))
+  assert(paidTable.includes('Planned amount to collect at visit</th><td><span>$75.00 planning estimate'))
+  assert(paidTable.includes('less $25.00 already paid = $75.00'))
+  assert(paidHeadline.includes('<strong role="status">$75.00</strong>'))
+  const qmbResult = { ...aetnaDiagnosticResult,
+    collection_guidance: { amount_cents: 0, basis: 'qmb_protection' } }
+  const qmbTable = renderToStaticMarkup(React.createElement(
+    CommercialCostBreakdown, { model, result: qmbResult },
+  ))
+  assert(qmbTable.includes('Amount to collect at visit</th><td><span>$0.00'))
+  assert(!qmbTable.includes('Planned amount to collect at visit'))
   assert.equal(aetnaReferenceRequirement({ ...aetnaDiagnosticResult, reference_only: true,
     reference_benefits: { active: true, plan_details: { names: ['Aetna Medicare Signature (PPO)'] } } },
     'authorization', '95908'), null)

@@ -10,7 +10,7 @@ export function collectionAtVisitRow(
   values: {
     combinedPlan: PrevisitEstimate['combined_emg_plan']
     feeProxy: PrevisitEstimate['fee_proxy_estimate']
-    aetnaDiagnostic: PrevisitEstimate['aetna_diagnostic_reference'] | null
+    aetnaPlanning: PrevisitEstimate['aetna_diagnostic_reference'] | null
     aetnaCopayPlanning: number | null
     officeReferenceCopay: number | null
     automaticCashFallback: boolean
@@ -21,7 +21,7 @@ export function collectionAtVisitRow(
   const {
     combinedPlan,
     feeProxy,
-    aetnaDiagnostic,
+    aetnaPlanning,
     aetnaCopayPlanning,
     officeReferenceCopay,
     automaticCashFallback,
@@ -35,10 +35,15 @@ export function collectionAtVisitRow(
           feeProxy.patient_share_cents - (result.encounter_summary?.payments_verified_cents || 0),
         )
       : null
+  const aetnaPaid = result.encounter_summary?.payments_verified_cents || 0
+  const aetnaBalance = aetnaPlanning
+    ? Math.max(0, aetnaPlanning.patient_share_cents - aetnaPaid)
+    : null
   return {
     label:
       ((cignaFeeProxy && result.collection_guidance?.basis !== 'claim_after_service') ||
-        feeProxyCheckin != null) &&
+        feeProxyCheckin != null ||
+        aetnaPlanning != null) &&
       !['bcbstx_proxy_advance', 'qmb_protection'].includes(result.collection_guidance?.basis || '')
         ? 'Planned amount to collect at visit'
         : 'Amount to collect at visit',
@@ -59,8 +64,8 @@ export function collectionAtVisitRow(
               ? `${money(feeProxy!.patient_share_cents)} planning estimate`
               : feeProxyCheckin != null
                 ? money(feeProxyCheckin)
-                : aetnaDiagnostic
-                  ? `${money(0)} now · verify before charging`
+                : aetnaPlanning
+                  ? `${money(aetnaBalance!)} planning estimate`
                   : aetnaCopayPlanning != null
                     ? `${money(0)} now · verify before charging`
                     : officeReferenceCopay != null
@@ -78,8 +83,8 @@ export function collectionAtVisitRow(
               ? result.collection_guidance?.basis === 'bcbstx_proxy_advance'
                 ? `${proxyFormula?.total} Clinic-approved BCBS Texas fee proxy advance; final responsibility follows the UHC claim.`
                 : `${proxyFormula?.total} Provisional BCBS Texas fee proxy; collect only after clinic policy and Medicare billing-protection clearance.`
-              : aetnaDiagnostic
-                ? aetnaDiagnostic.message
+              : aetnaPlanning
+                ? `min((${money(aetnaPlanning.copay_cents / 2)} per test × 2) + ${money(aetnaPlanning.deductible_cents)} deductible + ${money(aetnaPlanning.coinsurance_cents)} coinsurance, ${money(aetnaPlanning.estimated_allowed_cents)} Aetna fee reference, ${money(aetnaPlanning.oop_remaining_cents)} remaining out-of-pocket) = ${money(aetnaPlanning.patient_share_cents)}${aetnaPaid ? `; less ${money(aetnaPaid)} already paid = ${money(aetnaBalance!)}` : ' before any prior payment'}. ${aetnaPlanning.message}`
                 : officeReferenceCopay != null
                   ? 'Planning figure for one specialist office visit on the appointment date; not an authorized collection instruction. Other services, prior payments and Medicare cost-sharing protection are not included.'
                   : automaticCashFallback

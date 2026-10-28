@@ -65,8 +65,10 @@ async def saved_previsit(case_id: str, request: _api.Request) -> dict:
     Blue Cross Clinical Library prices for eligible non-Aetna routes or draft
     Aetna MEPPO portal values for the exact Signature PPO diagnostic scenario.
     Neither source establishes another payer's allowance or a collectible amount.
-    aetna_diagnostic_reference, when present, gives the provisional per-test
-    copay formula and remains separate from collection_guidance.
+    The exact two-code Aetna diagnostic case also exposes a $100 planning share
+    from a likely published $50-per-test benefit, capped by the draft fee
+    reference and reported remaining out-of-pocket balance. This is not an
+    authorized collection amount; saved scenarios are recalculated on read.
     For Cigna, separate exact-CPT
     Stedi inquiries may supply authorization and financial terms. When every
     selected line has compatible terms, fee_proxy_estimate shows a provisional
