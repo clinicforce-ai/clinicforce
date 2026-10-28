@@ -1,8 +1,9 @@
 import type { PrevisitEstimate } from '../../services/api/commercial-estimator'
-import CostBreakdownTable, { type CostBreakdownRow } from '../insurance-estimate/CostBreakdownTable'
+import type { CostBreakdownRow } from '../insurance-estimate/CostBreakdownTable'
 import { serviceRowLabel } from '../insurance-estimate/serviceRowLabel'
 import type { CommercialEstimateModel } from './useCommercialEstimateModel'
 import { coinsuranceFormula, feeProxyFormula } from './coinsuranceFormula'
+import CommercialCostTables from './CommercialCostTables'
 import { collectionAtVisitRow } from './collectionAtVisitRow'
 import { money, range } from './format'
 import { requirementStatus } from './commercialRequirementStatus'
@@ -493,5 +494,5 @@ export default function CommercialCostBreakdown({
       proxyFormula,
     }),
   )
-  return <CostBreakdownTable rows={rows} />
+  return <CommercialCostTables result={result} cash={model.cash} rows={rows} />
 }

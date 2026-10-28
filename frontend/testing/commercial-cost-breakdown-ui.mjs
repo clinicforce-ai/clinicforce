@@ -459,8 +459,8 @@ try {
       oop_reduction_cents: 0,
       patient_share_cents: 4000,
       lines: [
-        { code: '95908', reference_cents: 10511, coinsurance_cents: 0 },
-        { code: '95886', reference_cents: 8918, coinsurance_cents: 0 },
+        { code: '95908', units: 1, reference_cents: 10511, coinsurance_cents: 0 },
+        { code: '95886', units: 1, reference_cents: 8918, coinsurance_cents: 0 },
       ],
       message: 'Conditional planning scenario; obtain Cigna’s Explanation of Estimate.',
     },
@@ -477,6 +477,14 @@ try {
     }),
   )
   for (const value of [
+    'Visit cost and collection · planning scenario',
+    'Formula or source',
+    '95908 × 1',
+    '95886 × 1',
+    'Reference total',
+    'Individual deductible applied',
+    'Specialist office copay',
+    'Diagnostic coinsurance in this scenario',
     '$105.11 BCBS Texas reference',
     '$89.18 BCBS Texas reference',
     '$194.29',
@@ -487,6 +495,21 @@ try {
   ]) {
     assert(cignaOfficeTable.includes(value), `Missing Cigna scenario value ${value}`)
   }
+  const singleCpt = structuredClone(cignaOfficeScenario)
+  singleCpt.price_range.lines.pop()
+  singleCpt.temporary_rate_reference.lines.pop()
+  singleCpt.fee_proxy_estimate.lines.pop()
+  singleCpt.fee_proxy_estimate.reference_total_cents = 10511
+  const singleCptTable = renderToStaticMarkup(
+    React.createElement(CommercialCostBreakdown, {
+      model: { ...model, planName: 'Open Access Plus' },
+      result: singleCpt,
+    }),
+  )
+  assert(singleCptTable.includes('95908 × 1'))
+  assert(!singleCptTable.includes('95886 × 1'))
+  assert(singleCptTable.includes('$105.11'))
+  assert(!singleCptTable.includes('$194.29'))
   const cignaHeadline = renderToStaticMarkup(
     React.createElement(ArrivalAmountSummary, {
       model: { ...model, amountText: 'Insured amount unavailable' },
