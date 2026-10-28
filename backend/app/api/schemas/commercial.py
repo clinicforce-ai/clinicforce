@@ -207,7 +207,7 @@ class VisitReviewInput(BaseModel):
     context_token: str = Field(min_length=64, max_length=64)
     revision: int = Field(ge=0)
     refresh_context: bool = Field(default=False, description='Re-read changed eCW reason, diagnoses, or planned services for the same saved patient, coverage, provider, location, and visit date. The clinician must select services again before collection.')
-    selected_ids: list[str] | None = Field(default=None, max_length=20)
+    selected_ids: list[str] | None = Field(default=None, max_length=20, description='Exact planned service IDs. An empty list clears all selected CPTs and recalculates the estimate without service lines; omitted leaves selection unchanged.')
     payment_mode: Literal["insurance", "cash"] | None = None
     cash_visit_quote: CashVisitQuoteInput | None = Field(default=None, description='Clinician-approved cash price and reason for a single selected CPT 99213 follow-up. This visit-only quote does not change the practice cash schedule or establish insurance eligibility.')
     clear_cash_visit_quote: bool | None = None

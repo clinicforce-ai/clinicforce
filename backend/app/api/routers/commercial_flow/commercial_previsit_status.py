@@ -9,7 +9,7 @@ from app.api.routers.commercial_flow.commercial_previsit_finish import _payer_pl
 from app.api.routers.commercial_flow.commercial_previsit_network_guard import apply_nmct_network_policy, recheck_saved_network_evidence, recheck_saved_payer_message
 from app.api.routers.commercial_flow.commercial_previsit_saved_pricing import _reprice_saved_new_network
 from app.api.routers.commercial_flow.commercial_previsit_requirements import refresh_saved_requirements
-from app.api.routers.commercial_flow.commercial_previsit_rate_reference import _attach_temporary_uhc_rates, _attach_temporary_blue_cross_rates
+from app.api.routers.commercial_flow.commercial_previsit_rate_reference import _attach_temporary_aetna_rates, _attach_temporary_uhc_rates, _attach_temporary_blue_cross_rates
 from app.api.routers.commercial_flow.commercial_previsit_enrollment import _enrollment_failure
 from app.api.routers.commercial_flow.commercial_previsit_service_scope import retain_incomplete_service_evidence as _retain_incomplete_service_evidence
 from app.api.routers.commercial_flow.commercial_previsit_benefits import case_benefits as _case_benefits
@@ -22,13 +22,10 @@ async def configuration(request: _api.Request) -> dict:
 async def ecw_appointments(request: _api.Request) -> dict:
     """List confirmed scheduled visits without an eligibility check.
 
-    Identity no-match/ambiguity returns HTTP 409 with the machine-readable code
-    ecw_patient_selection_required. The UI opens a prefilled staff lookup; it
-    never switches the patient or repeats eligibility from a similarity score.
-
-    The shared reader has a 24-second deadline. HTTP 502 errors identify the
-    failed lookup phase; X-ClinicForce-Request-ID joins the safe stage logs in
-    CloudWatch. A failed read does not establish that no appointment exists.
+    Identity no-match/ambiguity returns 409 (ecw_patient_selection_required).
+    The UI opens staff lookup; it never switches a patient by similarity score.
+    The 24-second reader returns 502 with a phase and request ID on failure.
+    A failed read does not establish that no appointment exists.
     """
     session = await _api._session(request)
     if not _api.ecw_backend.configured():
@@ -380,6 +377,7 @@ def _previsit_result(case: dict, practice_id: str | None = None) -> dict:
         refresh_saved_requirements(_api, result, case, practice_id)
         result.pop('fee_proxy_estimate', None)
         result.pop('temporary_rate_reference', None)
+        result.pop('aetna_diagnostic_reference', None)
         context = case['previsit_context']
         if _api.commercial.is_united_healthcare_payer(
                 result, {'displayName': route_payer.get('display_name')} if route_payer else None):
@@ -388,8 +386,12 @@ def _previsit_result(case: dict, practice_id: str | None = None) -> dict:
         elif _api.re.search(r'\bcigna\b', str(result.get('payer') or ''), _api.re.I):
             _attach_temporary_blue_cross_rates(result, practice_id, context.get('inputs') or {},
                                                context.get('source') or {}, 'Cigna')
+        elif _api.re.search(r'\baetna\b', str(result.get('payer') or ''), _api.re.I):
+            _attach_temporary_aetna_rates(result, practice_id, context.get('inputs') or {},
+                                          context.get('source') or {})
         if proxy := (blue_cross_proxy.estimate(result, str(result.get('service_date') or ''))
-                     or blue_cross_proxy.cigna_estimate(result, str(result.get('service_date') or ''))):
+                     or blue_cross_proxy.cigna_estimate(result, str(result.get('service_date') or ''))
+                     or blue_cross_proxy.cigna_oap_office_scenario(result, str(result.get('service_date') or ''))):
             result['fee_proxy_estimate'] = proxy
     result['revision'] = case.get('revision', 0)
     check_from = max((case.get('visit_review') or {}).get('insurance_check_from') or '',
@@ -445,9 +447,7 @@ def _previsit_result(case: dict, practice_id: str | None = None) -> dict:
         result, {'displayName': route_payer.get('display_name')} if route_payer else None)
     if (united_healthcare and result.get('cash_fallback') is not None
             and (case.get('visit_review') or {}).get('payment_mode') != 'cash'):
-        # Older saves chose cash automatically when pricing was incomplete.
-        # Reopen those UHC payer responses on the insurance path; preserve an
-        # explicit clinician choice of cash.
+        # Reopen older UHC auto-cash saves on insurance, preserving an explicit cash choice.
         result['payment_mode'] = 'insurance'
         result.pop('cash_fallback', None)
     insurance_guidance = _api.collection_guidance.build(result, case.get('visit_review'))
@@ -472,9 +472,9 @@ def _previsit_result(case: dict, practice_id: str | None = None) -> dict:
         result.pop('emg_option', None)
     if 'cash_fallback' in result:
         result['cash_fallback']['reason'] = 'Clinic self-pay pricing is shown because ' + _api.amount_explanation.fallback_cause(result) + '.'
-    # Cash is a separate price path, never evidence of inactive insurance.
     result['collection_guidance'] = _api.collection_guidance.build(result, case.get('visit_review'))
-    result['established_for_planning'] = _api.cpt_suggester.established_visit_for_planning(case['previsit_context'].get('inputs') or {}, source)
+    result['established_for_planning'] = _api.cpt_suggester.established_visit_for_planning(
+        {**(case['previsit_context'].get('inputs') or {}), 'separate_em_planned': result.get('separate_em_planned')}, source)
     result['combined_emg_plan'] = _api.visit_estimate.combined_emg_plan(result, case.get('visit_review'))
     option = result.get('emg_option')
     if isinstance(option, dict) and (
@@ -483,13 +483,13 @@ def _previsit_result(case: dict, practice_id: str | None = None) -> dict:
             or (result.get('identity') or {}).get('status') == 'review'
             or (result.get('benefits') or {}).get('has_secondary')
             or recovery.get('reason_code') == 'multiple_active_policies'):
-        # Older saved scenarios used the check-in advance as patient cost.
-        # A later payer-order or clinic-policy change can also invalidate one.
+        # Older saved scenarios used the check-in advance as patient cost; newer evidence can invalidate one.
         option.update(additional_min_cents=None, additional_max_cents=None,
                       total_min_cents=None, total_max_cents=None, scenario_count=0,
                       message='Recalculate the testing scenario with current payer and visit evidence.')
     result['encounter_summary'] = _api.encounter_summary.build(result, case.get('visit_review'))
-    result['payment_explanation'] = _api.amount_explanation.build(result, result['collection_guidance'], case.get('visit_review'))
+    result['payment_explanation'] = _api.amount_explanation.build(
+        result, result['collection_guidance'], case.get('visit_review'))
     result['evidence_resolution'] = evidence_resolution.build(result, source)
     return result
 

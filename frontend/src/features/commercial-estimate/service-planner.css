@@ -100,6 +100,132 @@
   margin: 12px 0 20px;
 }
 
+.nerve-study-ruler {
+  border: 1px solid var(--ve-line);
+  border-radius: 12px;
+  padding: 16px 18px 10px;
+  background: var(--ve-soft);
+}
+
+.nerve-study-ruler-heading {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 4px 16px;
+  margin-bottom: 12px;
+}
+
+.nerve-study-ruler-heading label {
+  font-weight: 600;
+}
+
+.nerve-study-ruler-heading strong {
+  color: var(--ve-teal);
+}
+
+.nerve-study-ruler input[type='range'] {
+  display: block;
+  width: 100%;
+  height: 44px;
+  margin: 0;
+  appearance: none;
+  background: transparent;
+  cursor: pointer;
+}
+
+.nerve-study-ruler input[type='range']::-webkit-slider-runnable-track {
+  height: 6px;
+  border-radius: 999px;
+  background: #a9c9c2;
+}
+
+.nerve-study-ruler input[type='range']::-moz-range-track {
+  height: 6px;
+  border-radius: 999px;
+  background: #a9c9c2;
+}
+
+.nerve-study-ruler input[type='range']::-webkit-slider-thumb {
+  appearance: none;
+  width: 36px;
+  height: 36px;
+  margin-top: -15px;
+  border: 2px solid white;
+  border-radius: 11px;
+  background: var(--ve-teal)
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 18 18'%3E%3Cpath d='M5 5v8M9 5v8M13 5v8' stroke='white' stroke-width='2' stroke-linecap='round'/%3E%3C/svg%3E")
+    center / 18px no-repeat;
+  box-shadow: 0 2px 5px #183b4740;
+}
+
+.nerve-study-ruler input[type='range']::-moz-range-thumb {
+  width: 32px;
+  height: 32px;
+  border: 2px solid white;
+  border-radius: 11px;
+  background: var(--ve-teal)
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 18 18'%3E%3Cpath d='M5 5v8M9 5v8M13 5v8' stroke='white' stroke-width='2' stroke-linecap='round'/%3E%3C/svg%3E")
+    center / 18px no-repeat;
+  box-shadow: 0 2px 5px #183b4740;
+}
+
+.nerve-study-ruler input[type='range']:focus-visible {
+  outline: 3px solid var(--ve-teal);
+  outline-offset: 2px;
+  border-radius: 8px;
+}
+
+.nerve-study-ruler input[type='range']:disabled {
+  cursor: wait;
+}
+
+.nerve-study-ruler-marks {
+  display: flex;
+  justify-content: space-between;
+  margin: -2px 10px 0;
+}
+
+.nerve-study-ruler-marks span {
+  display: grid;
+  justify-items: center;
+  min-width: 0;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ve-muted);
+}
+
+.nerve-study-ruler-marks span::before {
+  content: '';
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.nerve-study-ruler-marks .is-active {
+  color: var(--ve-teal);
+}
+
+.nerve-study-ruler .visit-muted {
+  margin: 10px 0 0;
+}
+
+.nerve-study-ruler + .procedure-options {
+  grid-template-columns: 1fr;
+}
+
+.procedure-choice.is-nerve-detail {
+  border: 0;
+  border-radius: 0;
+  background: none;
+  padding: 0;
+}
+
+.is-nerve-detail .procedure-price-note,
+.is-nerve-detail .procedure-requirements {
+  margin-left: 0;
+}
+
 .procedure-choice {
   border: 1px solid var(--ve-line);
   border-radius: 12px;

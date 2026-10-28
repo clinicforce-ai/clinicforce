@@ -173,7 +173,7 @@ def attach_requirements(api: ModuleType, result: dict, case: dict, inputs: dict,
 
 def refresh_saved_requirements(api: ModuleType, result: dict, case: dict, practice_id: str) -> None:
     """Recheck new saves when source documents or the projected network changes."""
-    if 'requirement_sources' not in result:
+    if 'requirement_sources' not in result and 'published_requirements_version' not in result:
         return
     documents = api.staff_store.list_library(practice_id)
     rules_version = _rules_version(api.commercial_store.list_cpt_requirements(practice_id))
@@ -182,7 +182,7 @@ def refresh_saved_requirements(api: ModuleType, result: dict, case: dict, practi
         (result.get('benefits') or {}).get(field) != (saved_result.get('benefits') or {}).get(field)
         for field in ('network_status', 'network_source')
     ) or (result.get('network_evidence') or {}).get('network_name') != (saved_result.get('network_evidence') or {}).get('network_name')
-    if (result['requirement_sources'] == requirement_sources(documents) and not network_changed
+    if (result.get('requirement_sources') == requirement_sources(documents) and not network_changed
             and saved_result.get('published_requirements_version') == rules_version):
         return
     context = case['previsit_context']

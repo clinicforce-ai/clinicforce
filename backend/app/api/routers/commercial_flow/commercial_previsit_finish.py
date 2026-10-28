@@ -108,9 +108,9 @@ def _finish_previsit(result: dict, case: dict, inputs: dict, source: dict, paylo
         prior_plan = {'key': plan_key, 'plan': _api.cpt_suggester.recommend_visit_plan(
             planning_inputs, source, available)}
         case['previsit_plan'] = prior_plan
-    result['service_plan'] = {**prior_plan['plan'], 'selection_source': 'clinician' if review.get('selected_ids') else 'suggested'}
+    result['service_plan'] = {**prior_plan['plan'], 'selection_source': 'clinician' if 'selected_ids' in review else 'suggested'}
     result['separate_em_planned'] = bool(review.get('separate_em_planned'))
-    result['established_for_planning'] = _api.cpt_suggester.established_visit_for_planning(inputs, source)
+    result['established_for_planning'] = _api.cpt_suggester.established_visit_for_planning(planning_inputs, source)
     auto_units = result['service_plan'].get('recommended_units') or {}
     units = {**auto_units, **(review.get('confirmed_units') or {})}
     result['available_codes'] = [{**row, 'units': units.get(row['id'], row.get('units'))} for row in available]
@@ -147,15 +147,15 @@ def _finish_previsit(result: dict, case: dict, inputs: dict, source: dict, paylo
     result['coverage_records'] = source.get('coverage_records', [])
     result['insurance_fallback'] = {key: value for key, value in source.get('insurance_fallback', {}).items() if key != 'source'}
     by_id = {row['id']: row for row in available}
-    selected_ids = [key for key in (review.get('selected_ids') or result['service_plan']['recommended_ids'])
+    selected_ids = [key for key in review.get('selected_ids', result['service_plan']['recommended_ids'])
                     if key in by_id]
-    if selected_ids:
+    if 'selected_ids' in review or selected_ids:
         codes = [by_id[key] for key in selected_ids]
-    result['codes'] = [{**row, 'confirmed': bool(review.get('selected_ids')), 'units': units.get(row['id'], row.get('units')),
+    result['codes'] = [{**row, 'confirmed': 'selected_ids' in review, 'units': units.get(row['id'], row.get('units')),
                         'modifiers': (review.get('confirmed_modifiers') or {}).get(row['id'], row.get('modifiers') or [])} for row in codes]
     if botox_review.is_botox_visit(inputs) or any(row['code'] in botox_review.SELECTABLE_CODES for row in result['codes']):
         result['botox_review'] = review.get('botox') or {}
-    result['service_selection_status'] = 'approved' if review.get('selected_ids') else 'preview'
+    result['service_selection_status'] = 'approved' if 'selected_ids' in review else 'preview'
     result['payer_allowances'] = {key: {field: quote.get(field) for field in
         ('unit_allowed_cents', 'channel', 'reference', 'valid_through', 'verified_at')}
         for key, quote in (review.get('payer_allowances') or {}).items() if isinstance(quote, dict)}
@@ -191,7 +191,9 @@ def _finish_previsit(result: dict, case: dict, inputs: dict, source: dict, paylo
     result['cpt_authorization'] = {key: cpt_check[key] for key in
         ('state', 'service_date', 'pos', 'network', 'patient_binding', 'decisions', 'financial_terms', 'check_id', 'check_ids')
         if key in cpt_check}
-    if not selected_ids and codes and all(row.get('source') in {
+    if 'selected_ids' in review:
+        result.pop('provisional_scenario', None)
+    if 'selected_ids' not in review and not selected_ids and codes and all(row.get('source') in {
             'conditional office E/M alternative', 'conditional NCS alternative'} for row in codes):
         result['provisional_scenario'] = {
             'kind': 'ncs_study_count' if codes[0]['source'] == 'conditional NCS alternative' else 'office_level',
@@ -241,7 +243,8 @@ def _finish_previsit(result: dict, case: dict, inputs: dict, source: dict, paylo
     attach_requirements(_api, result, case, planning_inputs, source, session, connections, payer_id)
     result.pop('fee_proxy_estimate', None)
     if proxy := (blue_cross_proxy.estimate(result, inputs['service_date'])
-                 or blue_cross_proxy.cigna_estimate(result, inputs['service_date'])):
+                 or blue_cross_proxy.cigna_estimate(result, inputs['service_date'])
+                 or blue_cross_proxy.cigna_oap_office_scenario(result, inputs['service_date'])):
         result['fee_proxy_estimate'] = proxy
     result['collection_guidance'] = _api.collection_guidance.build(result, review)
     result['combined_emg_plan'] = _api.visit_estimate.combined_emg_plan(result, review)

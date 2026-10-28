@@ -47,6 +47,15 @@ export default function ArrivalAmountSummary({
 }) {
   const action = nextStep(model, result)
   const plan = !model.cash && !model.previousEstimate ? result.combined_emg_plan : null
+  const cignaPlanning =
+    !model.cash &&
+    !model.previousEstimate &&
+    !['claim_after_service', 'qmb_protection'].includes(result.collection_guidance?.basis || '') &&
+    result.fee_proxy_estimate?.basis === 'bcbstx_cigna_fee_proxy'
+      ? result.fee_proxy_estimate
+      : null
+  const aetnaPlanning =
+    !model.cash && !model.previousEstimate ? result.aetna_diagnostic_reference : null
   const needsAction = model.amountText === 'Insured amount unavailable'
   const additionalServicesPending = result.price_range?.lines?.some(
     (line) => !/^992(?:0[2-5]|1[2-5])$/.test(line.code),
@@ -56,22 +65,35 @@ export default function ArrivalAmountSummary({
       <span>
         {plan
           ? 'Amount to collect at visit · planning estimate'
-          : partialCopay != null
-            ? referenceOnly
-              ? 'Office-only reference · collection pending'
-              : 'Payer-reported office copay · collection pending'
-            : needsAction
-              ? 'Next step'
-              : model.amountLabel}
+          : cignaPlanning
+            ? 'Cigna planning estimate · collection pending'
+            : aetnaPlanning
+              ? 'Aetna planning estimate · collection pending'
+              : partialCopay != null
+                ? referenceOnly
+                  ? 'Office-only reference · collection pending'
+                  : 'Payer-reported office copay · collection pending'
+                : needsAction
+                  ? 'Next step'
+                  : model.amountLabel}
       </span>
-      <strong className={!visibleAmount ? 'amount-pending' : undefined} role="status">
+      <strong
+        className={
+          !visibleAmount && !cignaPlanning && !aetnaPlanning ? 'amount-pending' : undefined
+        }
+        role="status"
+      >
         {plan
           ? money(plan.amount_cents)
-          : partialCopay != null
-            ? money(partialCopay)
-            : needsAction
-              ? action.title
-              : model.amountText}
+          : cignaPlanning
+            ? money(cignaPlanning.patient_share_cents)
+            : aetnaPlanning
+              ? money(aetnaPlanning.patient_share_cents)
+              : partialCopay != null
+                ? money(partialCopay)
+                : needsAction
+                  ? action.title
+                  : model.amountText}
       </strong>
       {plan ? (
         <p>
@@ -79,6 +101,16 @@ export default function ArrivalAmountSummary({
           {money(plan.diagnostic_allowed_cents)} diagnostic allowance ={' '}
           {money(plan.patient_share_cents)} before any recorded payment. Deductible and
           out-of-pocket balances were not returned.
+        </p>
+      ) : cignaPlanning ? (
+        <p>
+          Conditional patient share using BCBS Texas fee references. Review the per-CPT formula
+          below and obtain Cigna’s Explanation of Estimate before collection.
+        </p>
+      ) : aetnaPlanning ? (
+        <p>
+          Two Aetna diagnostic copays on the clinic-supplied fee reference. Review the per-CPT
+          formula below; collection remains on hold.
         </p>
       ) : partialCopay != null ? (
         <p>

@@ -8,6 +8,8 @@ import type {
 import type {
   BotoxReview,
   PayerAllowanceSummary,
+  TemporaryRateReference,
+  AetnaDiagnosticReference,
   VisitCode,
   VisitPricedLine,
 } from './commercial-visit-types'
@@ -46,22 +48,12 @@ export type PrevisitEstimate = {
     payer_comparison?: { ecw: string; card: string }
   }
   cash_fallback?: { reason: string }
-  temporary_rate_reference?: {
-    source: string
-    message: string
-    complete: boolean
-    lines: Array<{
-      id?: string
-      code: string
-      units?: number
-      modifiers?: string[]
-      unit_reference_cents: number
-      source_reference: string
-    }>
-  }
+  temporary_rate_reference?: TemporaryRateReference
+  aetna_diagnostic_reference?: AetnaDiagnosticReference
   fee_proxy_estimate?: {
-    basis: 'bcbstx_fee_proxy' | 'bcbstx_cigna_fee_proxy'
+    basis: 'bcbstx_fee_proxy' | 'bcbstx_uhc_in_network_fee_proxy' | 'bcbstx_cigna_fee_proxy'
     status: 'provisional'
+    scenario_kind?: 'oap_office_copay_general_coinsurance'
     reference_total_cents: number
     coinsurance_percent: string
     copay_cents: number
@@ -71,6 +63,7 @@ export type PrevisitEstimate = {
     oop_reduction_cents: number
     patient_share_cents: number
     oop_remaining_cents: number
+    lines?: { code: string; reference_cents: number; coinsurance_cents: number }[]
     rate_source: string
     deductible_source: string
     deductible_url?: string

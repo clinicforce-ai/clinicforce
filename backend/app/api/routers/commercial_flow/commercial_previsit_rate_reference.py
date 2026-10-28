@@ -58,4 +58,47 @@ def _attach_temporary_uhc_rates(result: dict, practice_id: str, inputs: dict, so
 
 
 def _attach_temporary_aetna_rates(result: dict, practice_id: str, inputs: dict, source: dict) -> None:
-    _attach_temporary_blue_cross_rates(result, practice_id, inputs, source, 'Aetna')
+    """Show dated Aetna portal maximums as a noncollectible diagnostic scenario."""
+    from app.insurance import published_plan_benefits
+
+    day = str(inputs.get('service_date') or '')
+    benefits = result.get('reference_benefits') or result.get('benefits') or {}
+    codes = result.get('codes') or []
+    if (result.get('payment_mode') == 'cash' or str(inputs.get('place_of_service') or '') != '11'
+            or len(codes) != 2 or {row.get('code') for row in codes} != {'95908', '95886'}
+            or any(row.get('units') != 1 or row.get('modifiers') for row in codes)
+            or any(not published_plan_benefits.aetna_signature_diagnostic(
+                benefits, day, row['code'], payer_verified=True) for row in codes)):
+        return
+    payers = [row for row in _api.commercial_store.list_connections(practice_id)
+              if row.get('stedi_payer_id') == 'HPQRS' and row.get('status') in {'draft', 'staff_guidance_enabled'}]
+    if len(payers) != 1:
+        return
+    rates = _api.commercial_store.aetna_meppo_reference_rates(
+        practice_id, payers[0]['id'], day, ['95908', '95886'])
+    if len(rates) != 2 or {(row['code'], row.get('modifier') or '') for row in rates} != {
+            ('95908', ''), ('95886', '')} or any(type(row.get('allowed_cents')) is not int
+            or row['allowed_cents'] < 5000 for row in rates):
+        return
+    by_code = {row['code']: row for row in rates}
+    lines = [{'id': code.get('id'), 'code': code['code'], 'units': 1, 'modifiers': [],
+              'unit_reference_cents': by_code[code['code']]['allowed_cents'],
+              'source_reference': by_code[code['code']]['source_reference']}
+             for code in codes]
+    total = sum(row['unit_reference_cents'] for row in lines)
+    oop = benefits.get('oop_remaining_cents')
+    if type(oop) is not int or oop < 0 or benefits.get('deductible_remaining_cents') != 0:
+        return
+    copay = published_plan_benefits.AETNA_SIGNATURE_TX_2026['diagnostic_copay_cents'] * len(lines)
+    patient = min(total, copay, oop)
+    result['temporary_rate_reference'] = {
+        'source': 'Aetna MEPPO portal table values supplied by clinic', 'lines': lines,
+        'complete': True,
+        'message': 'Dated Aetna maximums from a clinic-supplied portal table. The provider and contract scope is unverified; these are planning references, not active clinic allowed rates.'}
+    result['aetna_diagnostic_reference'] = {
+        'estimated_allowed_cents': total, 'copay_cents': copay,
+        'deductible_cents': 0, 'coinsurance_cents': 0, 'coinsurance_percent': '0',
+        'oop_reduction_cents': copay - patient, 'oop_remaining_cents': oop,
+        'patient_share_cents': patient, 'payer_share_cents': total - patient,
+        'benefit_source': published_plan_benefits.AETNA_SIGNATURE_TX_2026,
+        'message': 'Planning estimate only. Verify the Aetna fee scope, exact member plan, QMB status and payments before collection.'}

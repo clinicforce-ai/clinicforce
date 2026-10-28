@@ -6,6 +6,7 @@ from contextlib import nullcontext
 import hashlib
 import json
 from types import SimpleNamespace
+from unittest.mock import patch
 
 from app.api.routers import commercial_estimator as api
 from app.api.routers.commercial_flow import commercial_previsit_pricing as pricing
@@ -293,6 +294,20 @@ def test_saved_requirements_refresh_after_published_rule_update(monkeypatch):
              'requirement_evidence': {'referral': {'status': 'Verification required'}}}
     result = {'requirement_sources': [], 'benefits': benefits, 'network_evidence': network,
               'requirement_evidence': saved['requirement_evidence']}
+    case = {'previsit_context': {'result': saved, 'inputs': {}, 'source': {}, 'payer_id': ''}}
+    requirements.refresh_saved_requirements(api_stub, result, case, 'synthetic-practice')
+    assert len(called) == 1
+
+
+def test_saved_requirements_refresh_without_library_sources_when_rule_changes(monkeypatch):
+    called = []
+    monkeypatch.setattr(requirements, 'attach_requirements', lambda *args: called.append(args))
+    api_stub = SimpleNamespace(staff_store=SimpleNamespace(list_library=lambda *_: []),
+                               commercial_store=SimpleNamespace(list_connections=lambda *_: [],
+                                                                list_cpt_requirements=lambda *_: []))
+    saved = {'published_requirements_version': 'older-rule-version',
+             'benefits': {'network_status': 'in_network'}}
+    result = dict(saved)
     case = {'previsit_context': {'result': saved, 'inputs': {}, 'source': {}, 'payer_id': ''}}
     requirements.refresh_saved_requirements(api_stub, result, case, 'synthetic-practice')
     assert len(called) == 1
@@ -1059,3 +1074,18 @@ def test_requirement_context_uses_only_approved_contract_product():
     result['network_evidence'].pop('product_mapping_approval')
     requirements.attach_requirements(service, result, {}, inputs, source, session, connections, 'route')
     assert result['requirement_evidence']['referral']['status'] == 'Verification required'
+
+
+def test_cigna_open_access_plus_diagnostics_do_not_require_published_precertification():
+    from app.insurance.requirements import published
+    result = {'payer': 'Cigna', 'benefit_source': 'Stedi',
+              'benefits': {'active': True, 'network_status': 'in_network'}}
+    context = {'service_date': '2026-10-28', 'payer_names': {'cigna'}, 'member_id': 'SYNTHETIC'}
+    with patch.object(published.stedi_cpt_authorization, 'visit_coverage_bound', return_value=True), \
+         patch.object(published, 'payer_identity_verified', return_value=True):
+        for code in ('95907', '95908', '95913', '95885', '95886', '99203'):
+            decision = published._published_rule('authorization', result, context, ['Open Access Plus'], {code})
+            assert decision['status'] == 'Not required'
+        for code in ('64612', '64615', 'J0585'):
+            decision = published._published_rule('authorization', result, context, ['Open Access Plus'], {code})
+            assert decision['status'] == 'Required'

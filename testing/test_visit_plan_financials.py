@@ -139,7 +139,7 @@ def test_separate_emg_followup_adds_only_provisional_established_level_when_plan
         unknown_status = cpt_suggester.recommend_visit_plan(
             {'reason': 'EMG visit; right cervical radiculopathy',
              'separate_em_planned': True}, {}, catalog())
-    assert unknown_status['recommended_ids'] == ['95909', '95886']
+    assert unknown_status['recommended_ids'] == ['95909', '95886', '99213']
 
 
 def test_emg_with_scheduled_office_still_suggests_testing_and_keeps_office():

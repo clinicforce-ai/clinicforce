@@ -1,6 +1,34 @@
 import type { CommercialAppointment } from './commercial-common'
 import type { PrevisitEstimate } from './commercial-previsit'
 
+export type TemporaryRateReference = {
+  source: string
+  message: string
+  complete: boolean
+  lines: Array<{
+    id?: string
+    code: string
+    units?: number
+    modifiers?: string[]
+    unit_reference_cents: number
+    source_reference: string
+  }>
+}
+
+export type AetnaDiagnosticReference = {
+  estimated_allowed_cents: number
+  copay_cents: number
+  deductible_cents: number
+  coinsurance_cents: number
+  coinsurance_percent: string
+  oop_reduction_cents: number
+  oop_remaining_cents: number
+  patient_share_cents: number
+  payer_share_cents: number
+  benefit_source: { label: string; url: string; effective_from: string; effective_to: string }
+  message: string
+}
+
 export type CommercialPastVisit = CommercialAppointment & {
   date: string
   visit_type: string

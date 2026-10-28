@@ -193,11 +193,10 @@ def build(result: dict, review: dict | None = None) -> dict:
             and fee_proxy.get('basis') == 'bcbstx_cigna_fee_proxy'
             and type(fee_proxy.get('patient_share_cents')) is int
             and 0 <= fee_proxy['patient_share_cents'] <= 100_000_000
-            and verified_in_network(benefits)
-            and policy_mode in {None, 'collect_supported_advance'}):
-        amount = fee_proxy['patient_share_cents']
-        guidance.update(status='estimated', basis='cigna_fee_proxy_advance',
-            reason='Cigna diagnostic check-in amount calculated from exact-CPT benefits and the clinic BCBS Texas fee schedule.')
+            and verified_in_network(benefits)):
+        amount = None
+        guidance.update(cigna_estimate_required=True,
+            reason='Cigna requires an Explanation of Estimate from its cost estimator before collecting an estimated visit payment; the BCBS Texas fee proxy is only a planning reference.')
         if fee_proxy.get('message'):
             assumptions.append(fee_proxy['message'])
     if (amount is None and safe and not qmb_protected and not qmb_unresolved
@@ -210,6 +209,17 @@ def build(result: dict, review: dict | None = None) -> dict:
         amount = fee_proxy['patient_share_cents']
         guidance.update(status='estimated', basis='bcbstx_proxy_advance',
             reason='Provisional advance from the clinic-approved BCBS Texas fee proxy and the member diagnostic benefit. The UHC allowed amount is unknown.')
+        assumptions.append('The advance uses clinic BCBS Texas fee references, not a payer-confirmed UHC allowance. Final responsibility follows the processed claim.')
+    if (amount is None and safe and not qmb_protected and not qmb_unresolved
+            and fee_proxy.get('basis') == 'bcbstx_uhc_in_network_fee_proxy'
+            and type(fee_proxy.get('patient_share_cents')) is int
+            and 0 <= fee_proxy['patient_share_cents'] <= 100_000_000
+            and policy_mode == 'collect_supported_advance'
+            and policy.get('allow_blue_cross_proxy_advance') is True
+            and verified_in_network(benefits)):
+        amount = fee_proxy['patient_share_cents']
+        guidance.update(status='estimated', basis='bcbstx_proxy_advance',
+            reason='Provisional in-network advance from the clinic-approved BCBS Texas fee proxy and member diagnostic benefits. The UHC allowed amount is unknown.')
         assumptions.append('The advance uses clinic BCBS Texas fee references, not a payer-confirmed UHC allowance. Final responsibility follows the processed claim.')
     oon_advance = (not verified_out_of_network(benefits) or
         policy.get('allow_supported_oon_advance') is True and
@@ -235,13 +245,15 @@ def build(result: dict, review: dict | None = None) -> dict:
                 and line.get('allowed_basis') == 'clinic_contract'
                 and line.get('allowed_cents') is not None for line in lines)
     )
-    cigna_proxy_advance = (guidance['basis'] == 'cigna_fee_proxy_advance'
-                           and verified_in_network(benefits) and not policy_approved)
     if (amount is not None and amount > 0 and guidance['basis'] != 'ecw_billing_note'
-            and not (oon_advance and (policy_allows_advance or calculated_in_network_advance
-                                      or cigna_proxy_advance))):
+            and not (oon_advance and (policy_allows_advance or calculated_in_network_advance))):
         amount = None
         guidance['published_copay_policy_missing' if published_copay else 'positive_advance_policy_missing'] = True
+    if (amount is not None and amount > 0 and 'cigna' in str(result.get('payer') or '').casefold()
+            and guidance['basis'] != 'ecw_billing_note'):
+        amount = None
+        guidance.update(cigna_estimate_required=True,
+            reason='Cigna requires an Explanation of Estimate from its cost estimator before collecting an estimated visit payment.')
     if amount is not None and amount > 0 and unconfirmed_zero_oop and verified_in_network(benefits):
         amount = None
         guidance['unconfirmed_zero_oop'] = True
@@ -263,6 +275,8 @@ def build(result: dict, review: dict | None = None) -> dict:
             guidance['range_min_cents'] = guidance['amount_cents']
             guidance['range_max_cents'] = max(0, guidance['range_max_cents'] - payments['amount_cents'])
         guidance['patient_message'] = 'This is an advance estimate for the planned care. The insurer determines final responsibility when it processes the claim.'
+        if guidance['basis'] == 'claim_after_service' and 'cigna' in str(result.get('payer') or '').casefold():
+            guidance['patient_message'] = 'No payment is requested at arrival without a Cigna Explanation of Estimate. Final responsibility follows the processed claim.'
         if amount > 0 and not payments.get('reference') and strict.get('payments_received_cents') is None:
             assumptions.append('No prior payments or credits were deducted because the clinic ledger is unavailable. Tell us if you already paid for this visit and show your receipt to avoid paying twice.')
         elif payments.get('reference') or strict.get('payments_received_cents') is not None:
@@ -357,6 +371,9 @@ def build(result: dict, review: dict | None = None) -> dict:
                 {**result, 'collection_guidance': guidance}, review)['complete']
         elif active_payer_benefits:
             guidance['policy_setup_required'] = True
+        if guidance.get('cigna_estimate_required') and guidance['basis'] != 'claim_after_service':
+            guidance.update(reason='The Cigna visit share needs its Explanation of Estimate before a check-in amount can be set.',
+                patient_message='Your visit payment is pending a Cigna estimate; this does not mean you owe $0.')
     for line in lines:
         mapped = 'needs mapping' not in line.get('benefit_basis', '')
         terms = (line.get('benefits') or {}) if mapped else {}

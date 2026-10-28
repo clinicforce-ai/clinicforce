@@ -11,7 +11,7 @@ from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from app.insurance import commercial, cpt_rules, insurance_product
 from app.insurance.benefit_review import selected_service_blocker
 from app.insurance.identity import patient_benefits_bound
-from app.insurance.network_participation import verified_out_of_network
+from app.insurance.network_participation import verified_in_network, verified_out_of_network
 from app.insurance.stedi_cpt_authorization import visit_coverage_bound
 
 
@@ -23,9 +23,14 @@ FRB_2026_BENEFITS = {
     'source': 'UnitedHealthcare Federal Reserve Banks 2026 plan materials',
     'url': 'https://retiree.uhc.com/content/dam/retiree/pdf/frb/2026/2026-ANOC-FRB-13705.pdf',
 }
+TRS_2026_SPECIALIST_COPAY = {
+    'group_number': '15725', 'copay_cents': 1000,
+    'source': '2026 TRS-Care Medicare Advantage Plan Highlights',
+    'url': 'https://trs.texas.gov/files/documents/plan-highlights-trs-care-2026.pdf',
+}
 
 
-def _oop_remaining(benefits: dict) -> int | None:
+def _oop_remaining(benefits: dict, network: str = 'out_of_network') -> int | None:
     direct = benefits.get('oop_remaining_cents')
     if type(direct) is int and 0 <= direct <= 100_000_000:
         return direct
@@ -34,13 +39,15 @@ def _oop_remaining(benefits: dict) -> int | None:
               and row.get('service_type_code') == '30'
               and row.get('coverage_level') in {'INDIVIDUAL', 'IND'}
               and row.get('time_period') in {'REMAINING', '29'}
-              and row.get('network') in {'OUT_OF_NETWORK', 'N', 'IN_AND_OUT_OF_NETWORK', 'W'}
+              and row.get('network') in ({'IN_NETWORK', 'Y', 'IN_AND_OUT_OF_NETWORK', 'W'}
+                                         if network == 'in_network' else
+                                         {'OUT_OF_NETWORK', 'N', 'IN_AND_OUT_OF_NETWORK', 'W'})
               and row.get('plan_association') in {'medical', 'medical_candidate'}
               and type(row.get('amount_cents')) is int}
     return next(iter(values)) if len(values) == 1 else None
 
 
-def _saved_diagnostic_terms(benefits: dict, codes: list[str]) -> dict | None:
+def _saved_diagnostic_terms(benefits: dict, codes: list[str], network: str) -> dict | None:
     """Use selected diagnostic rows when a saved 271 cannot rehydrate CPT lines."""
     ids = benefits.get('selected_benefit_ids') or []
     if (benefits.get('resolved_service_type') != '73' or len(ids) != 2
@@ -51,7 +58,9 @@ def _saved_diagnostic_terms(benefits: dict, codes: list[str]) -> dict | None:
     if (len(selected) != 2 or {row.get('kind') for row in selected} != {'copay', 'coinsurance'}
             or len({row.get('plan_index') for row in selected}) != 1
             or any(row.get('service_type_code') != '73'
-                   or row.get('network') not in {'OUT_OF_NETWORK', 'IN_AND_OUT_OF_NETWORK'}
+                   or row.get('network') not in ({'IN_NETWORK', 'IN_AND_OUT_OF_NETWORK'}
+                                                if network == 'in_network' else
+                                                {'OUT_OF_NETWORK', 'IN_AND_OUT_OF_NETWORK'})
                    or row.get('coverage_level') not in {'IND', 'INDIVIDUAL'}
                    or row.get('procedure_code') or row.get('places_of_service')
                    or row.get('effective_dates') for row in selected)
@@ -82,25 +91,46 @@ def estimate(result: dict, service_date: str) -> dict | None:
                  or len(names) == 1 and bool(re.search(
                      r'\bLPPO\s*[- ]\s*UNITED\s*HEALTHCARE\s+GROUP\s+MEDICARE\s+ADVANTAGE\s*\(?(?:PP|PPO)\b',
                      str(names[0]), re.I)))
+    in_network = (verified_in_network(benefits) and len(names) == 1 and bool(re.fullmatch(
+        r'LPPO\s*[- ]\s*UNITED\s*HEALTHCARE\s+GROUP\s+MEDICARE\s+ADVANTAGE\s*\(?PPO?\)?',
+        str(names[0]).strip(), re.I)))
     if (result.get('payment_mode') == 'cash'
             or not commercial.is_united_healthcare_payer(result)
             or not group_ppo
-            or str(insurance.get('group_number') or plan.get('group_number') or '') != FRB_2026_BENEFITS['group_number']
+            or not in_network and str(insurance.get('group_number') or plan.get('group_number') or '') != FRB_2026_BENEFITS['group_number']
             or not FRB_2026_BENEFITS['effective_from'] <= service_date <= FRB_2026_BENEFITS['effective_to']
             or not visit_coverage_bound(benefits, service_date)
             or benefits.get('coverage_status_conflict') or benefits.get('coverage_dates_invalid')
             or benefits.get('source_errors')
             or not patient_benefits_bound(identity)
             or benefits.get('identity') and identity.get('binding') != benefits['identity'].get('binding')
-            or not verified_out_of_network(benefits) or benefits.get('has_secondary')
+            or not (in_network or verified_out_of_network(benefits)) or benefits.get('has_secondary')
             or (result.get('recovery') or {}).get('reason_code') == 'multiple_active_policies'
             or result.get('refresh_requires_selection') is True
             or price.get('mode') != 'services' or price.get('service_issues') or price.get('conditional')
-            or selected_service_blocker('out_of_network', identity, lines)
-            or reference.get('complete') is not True or not lines
-            or len(lines) != len(reference.get('lines') or [])
+            or selected_service_blocker('in_network' if in_network else 'out_of_network', identity, lines)
+            or not lines
             or {(row.get('id'), row.get('code')) for row in result.get('codes') or []}
                 != {(row.get('id'), row.get('code')) for row in lines}):
+        return None
+    office_lines = [line for line in lines if line.get('code') == '99213']
+    follow_up = bool(office_lines)
+    if follow_up:
+        office = office_lines[0]
+        terms = office.get('benefits') or {}
+        if (len(office_lines) != 1 or result.get('separate_em_planned') is not True
+                or result.get('visit_type') == 'new' or not in_network
+                or str(insurance.get('group_number') or plan.get('group_number') or '') != TRS_2026_SPECIALIST_COPAY['group_number']
+                or office.get('units') != 1 or office.get('modifiers')
+                or terms.get('copay_cents') not in {None, TRS_2026_SPECIALIST_COPAY['copay_cents']}
+                or terms.get('deductible_remaining_cents') not in {None, 0}
+                or str(terms.get('coinsurance_percent') or '0') not in {'0', '0.0', '0.00'}):
+            return None
+        lines = [line for line in lines if line is not office]
+    reference_lines = [row for row in reference.get('lines') or []
+                       if row.get('code') in cpt_rules.NCS_CODES | cpt_rules.EMG_ADD_ONS]
+    if (not follow_up and reference.get('complete') is not True
+            or len(lines) != len(reference_lines)):
         return None
     codes = [str(line.get('code') or '') for line in lines]
     if (cpt_rules.service_selection_issues(codes)
@@ -108,14 +138,15 @@ def estimate(result: dict, service_date: str) -> dict | None:
             or any(code not in cpt_rules.NCS_CODES | cpt_rules.EMG_ADD_ONS for code in codes)
             or sum((line.get('units') or 0) for line in lines if line.get('code') in {'95885', '95886'}) > 4):
         return None
-    by_id = {row.get('id'): row for row in reference['lines']}
+    by_id = {row.get('id'): row for row in reference_lines}
     if len(by_id) != len(lines):
         return None
-    saved_terms = (_saved_diagnostic_terms(benefits, codes)
+    saved_terms = (_saved_diagnostic_terms(benefits, codes, 'in_network' if in_network else 'out_of_network')
                    if all(not line.get('benefits') for line in lines) else None)
     total = 0
     percentages = set()
     sources = []
+    shares = []
     for line in lines:
         row = by_id.get(line.get('id'))
         terms = line.get('benefits') or saved_terms or {}
@@ -127,10 +158,12 @@ def estimate(result: dict, service_date: str) -> dict | None:
                 or type(rate) is not int or not 0 < rate <= 100_000_000
                 or not str(row.get('source_reference') or '').startswith('library:')
                 or terms.get('active') is not True or terms.get('service_date_matches') is False
-                or terms.get('network_status') != 'out_of_network'
+                or terms.get('network_status') != ('in_network' if in_network else 'out_of_network')
                 or terms.get('copay_cents') != 0
-                or terms.get('deductible_applies') is True
-                or terms.get('deductible_remaining_cents') not in {None, 0}
+                or (in_network and (terms.get('deductible_remaining_cents') if terms.get('deductible_remaining_cents') is not None
+                                    else benefits.get('deductible_remaining_cents')) != 0)
+                or (not in_network and (terms.get('deductible_applies') is True
+                    or terms.get('deductible_remaining_cents') not in {None, 0}))
                 or terms.get('coverage_status_conflict') or terms.get('coverage_dates_invalid')
                 or terms.get('network_conflict') or terms.get('has_secondary')
                 or terms.get('historical_only') or terms.get('source_errors')):
@@ -143,25 +176,37 @@ def estimate(result: dict, service_date: str) -> dict | None:
             return None
         percentages.add(percent)
         total += rate * units
+        shares.append({'code': line['code'], 'units': units, 'reference_cents': rate * units,
+                       'coinsurance_cents': int((Decimal(rate * units) * percent / 100).quantize(
+                           Decimal('1'), rounding=ROUND_HALF_UP))})
         sources.append(row['source_reference'])
     if len(percentages) != 1 or total > 100_000_000:
         return None
-    remaining = _oop_remaining(benefits)
+    remaining = _oop_remaining(benefits, 'in_network' if in_network else 'out_of_network')
     if type(remaining) is not int or not 0 <= remaining <= 100_000_000:
         return None
     percent = percentages.pop()
-    coinsurance = int((Decimal(total) * percent / 100).quantize(Decimal('1'), rounding=ROUND_HALF_UP))
-    share = min(coinsurance, remaining)
+    coinsurance = (sum(row['coinsurance_cents'] for row in shares) if in_network else
+                   int((Decimal(total) * percent / 100).quantize(Decimal('1'), rounding=ROUND_HALF_UP)))
+    office_copay = TRS_2026_SPECIALIST_COPAY['copay_cents'] if follow_up else 0
+    share = min(coinsurance + office_copay, remaining)
     return {
-        'basis': 'bcbstx_fee_proxy', 'status': 'provisional',
+        'basis': 'bcbstx_uhc_in_network_fee_proxy' if in_network else 'bcbstx_fee_proxy',
+        'status': 'provisional',
         'reference_total_cents': total, 'coinsurance_percent': str(percent),
-        'copay_cents': 0, 'deductible_cents': 0,
-        'coinsurance_cents': coinsurance, 'oop_reduction_cents': coinsurance - share,
+        'copay_cents': office_copay, 'deductible_cents': 0,
+        'coinsurance_cents': coinsurance, 'oop_reduction_cents': coinsurance + office_copay - share,
         'patient_share_cents': share, 'oop_remaining_cents': remaining,
+        **({'lines': shares} if in_network else {}),
         'rate_source': reference.get('source'), 'rate_references': list(dict.fromkeys(sources)),
-        'deductible_source': FRB_2026_BENEFITS['source'],
-        'deductible_url': FRB_2026_BENEFITS['url'],
-        'message': 'Provisional patient share using BCBS Texas clinic fees and UHC diagnostic benefits. The UHC allowed amount and actual claim result are unknown.',
+        'deductible_source': ('No deductible applied because the member-specific Stedi remaining deductible is $0'
+                              if in_network else FRB_2026_BENEFITS['source']),
+        **({} if in_network else {'deductible_url': FRB_2026_BENEFITS['url']}),
+        **({'office_copay_source': TRS_2026_SPECIALIST_COPAY['source'],
+            'office_copay_url': TRS_2026_SPECIALIST_COPAY['url']} if follow_up else {}),
+        'message': ('Provisional patient share using the published TRS-Care specialist visit copay, BCBS Texas clinic fees, and UHC diagnostic benefits. '
+                    if follow_up else 'Provisional patient share using BCBS Texas clinic fees and UHC diagnostic benefits. ')
+                   + 'The UHC allowed amount and actual claim result are unknown.',
     }
 
 
@@ -249,4 +294,92 @@ def cigna_estimate(result: dict, service_date: str) -> dict | None:
             'message': ('Provisional patient share using BCBS Texas clinic fees and Cigna exact-CPT benefits. '
                         + ('No CPT copay was returned; $0 additional copay is an assumption. '
                            if copay_assumed else 'The exact CPT copay is $0. '
-                           ) + 'The check-in amount uses this fee proxy; Cigna allowed amounts are not supplied.' + cap_note)}
+                           ) + 'This is a planning share only; Cigna allowed amounts are not supplied and the fee proxy does not authorize check-in collection.' + cap_note)}
+
+
+def cigna_oap_office_scenario(result: dict, service_date: str) -> dict | None:
+    """Show a conditional office-copay scenario when exact CPT terms are unavailable."""
+    benefits = result.get('benefits') or {}
+    check = result.get('cpt_authorization') or {}
+    reference = result.get('temporary_rate_reference') or {}
+    price = result.get('price_range') or {}
+    codes, lines = result.get('codes') or [], price.get('lines') or []
+    identity = result.get('identity') or benefits.get('identity') or {}
+    plan_names = [result.get('plan'), *((result.get('plan_details') or {}).get('stedi') or {}).get('names', [])]
+    if (result.get('payment_mode') == 'cash' or not re.search(r'\bcigna\b', str(result.get('payer') or ''), re.I)
+            or not any(re.search(r'open access plus|\boap\b', str(name or ''), re.I) for name in plan_names)
+            or not verified_in_network(benefits) or not visit_coverage_bound(benefits, service_date)
+            or not patient_benefits_bound(identity) or benefits.get('has_secondary')
+            or benefits.get('network_conflict') or benefits.get('coverage_status_conflict')
+            or benefits.get('source_errors') or result.get('refresh_requires_selection') is True
+            or check.get('state') != 'complete' or check.get('service_date') != service_date
+            or check.get('pos') != '11' or check.get('network') != 'in_network'
+            or check.get('patient_binding') != identity.get('binding')
+            or len(check.get('check_ids') or []) != len(codes)
+            or price.get('mode') != 'services' or price.get('service_issues') or price.get('conditional')
+            or reference.get('complete') is not True or not codes or len(codes) != len(lines)
+            or len(codes) != len(reference.get('lines') or [])
+            or not any(row.get('code') in cpt_rules.NCS_CODES for row in codes)
+            or any(row.get('code') not in cpt_rules.NCS_CODES | cpt_rules.EMG_ADD_ONS for row in codes)
+            or cpt_rules.service_selection_issues([row.get('code') for row in codes])
+            or benefits.get('deductible_remaining_cents') != 0
+            or type(benefits.get('oop_remaining_cents')) is not int):
+        return None
+    general_rows = [row for row in benefits.get('reported_options') or []
+                    if row.get('kind') == 'coinsurance' and row.get('service_type_code') == '30'
+                    and not row.get('procedure_code') and row.get('coverage_level') == 'INDIVIDUAL'
+                    and row.get('network') == 'IN_NETWORK' and not row.get('places_of_service')
+                    and row.get('plan_association') == 'medical']
+    plan_ids = {row.get('plan_index') for row in general_rows}
+    if (not general_rows or {str(row.get('percent')) for row in general_rows} - {'0', '0.0', '0.00'}
+            or len(plan_ids) != 1 or type(next(iter(plan_ids))) is not int):
+        return None
+    terms = check.get('financial_terms') or {}
+    if set(terms) != {row.get('code') for row in codes}:
+        return None
+    if any(any((terms.get(row['code']) or {}).get(field) is not None for field in
+               ('coinsurance_percent', 'copay_cents', 'deductible_remaining_cents', 'oop_remaining_cents'))
+           for row in codes):
+        return None
+    copays = {row.get('amount_cents') for row in benefits.get('reported_options') or []
+              if row.get('kind') == 'copay' and row.get('service_type_code') == '98'
+              and row.get('plan_index') in plan_ids
+              and not row.get('procedure_code') and row.get('coverage_level') == 'INDIVIDUAL'
+              and row.get('network') == 'IN_NETWORK' and '11' in (row.get('places_of_service') or [])
+              and row.get('time_period') in {'VISIT', '27'}
+              and str(row.get('payer_note') or '').split(' Benefit does apply')[0].strip()
+                  in {'Specialist', 'Specialist Visit or Evaluation'}
+              and row.get('plan_association') != 'supplementary'
+              and type(row.get('amount_cents')) is int and row['amount_cents'] > 0}
+    if len(copays) != 1:
+        return None
+    copay = copays.pop()
+    if benefits['oop_remaining_cents'] < copay:
+        return None
+    rates = {row.get('id'): row for row in reference['lines']}
+    shares = []
+    for line in lines:
+        rate = rates.get(line.get('id')) or {}
+        units, unit_cents = line.get('units'), rate.get('unit_reference_cents')
+        if (rate.get('code') != line.get('code') or rate.get('units') != units
+                or (rate.get('modifiers') or []) != (line.get('modifiers') or [])
+                or type(units) is not int or not 1 <= units <= 4
+                or type(unit_cents) is not int or not 0 < unit_cents <= 100_000_000
+                or not str(rate.get('source_reference') or '').startswith('library:')):
+            return None
+        shares.append({'code': line['code'], 'units': units,
+                       'reference_cents': unit_cents * units, 'coinsurance_cents': 0})
+    total = sum(row['reference_cents'] for row in shares)
+    if total < copay or total > 100_000_000:
+        return None
+    return {'basis': 'bcbstx_cigna_fee_proxy', 'status': 'provisional',
+            'scenario_kind': 'oap_office_copay_general_coinsurance',
+            'reference_total_cents': total, 'coinsurance_percent': '0',
+            'copay_cents': copay, 'deductible_cents': 0, 'coinsurance_cents': 0,
+            'oop_reduction_cents': 0, 'oop_remaining_cents': benefits['oop_remaining_cents'],
+            'patient_share_cents': copay, 'lines': shares,
+            'rate_source': reference.get('source'), 'deductible_source': 'General individual Stedi 271 balance',
+            'message': ('Conditional planning scenario: one in-network specialist office copay plus the general 0% '
+                        'coinsurance and $0 remaining individual deductible, applied to selected diagnostic CPTs. '
+                        'The office copay and general coinsurance may not apply to these procedures. BCBS Texas fees '
+                        'are reference prices, not Cigna allowances; obtain Cigna’s Explanation of Estimate before collection.')}

@@ -223,6 +223,7 @@ def manual_card_fields(full_name: str, member_id: str, birth_date: str) -> dict:
 
 
 from app.api.routers.staff_flow.staff_cards import create_ecw_lookup, upload_cards
+from app.api.routers.staff_flow.staff_prebooking import prebooking_options, prebooking_check
 
 
 @router.post("/intakes/from-share")

@@ -141,7 +141,7 @@ async def update_visit_review(case_id: str, value: _api.VisitReviewInput, reques
             review.pop('payments', None)
     if value.selected_ids is not None:
         result.pop('refresh_requires_selection', None)
-        if not value.selected_ids or len(set(value.selected_ids)) != len(value.selected_ids) or set(value.selected_ids) - available.keys():
+        if len(set(value.selected_ids)) != len(value.selected_ids) or set(value.selected_ids) - available.keys():
             raise _api.HTTPException(422, 'Select valid planned services from this visit.')
         visit_levels = [available[key] for key in value.selected_ids if available[key]['code'].isdigit() and 99202 <= int(available[key]['code']) <= 99215]
         if len(visit_levels) > 1:
@@ -167,13 +167,14 @@ async def update_visit_review(case_id: str, value: _api.VisitReviewInput, reques
             if keep:
                 review['selected_ids'] = keep
             else:
-                review.pop('selected_ids', None)
+                review['selected_ids'] = []
             for key in ('payer_allowances', 'confirmed_units'):
                 review[key] = {line_id: stored for line_id, stored in (review.get(key) or {}).items()
                                if line_id in keep}
             review.pop('payments', None)
     if value.separate_em_planned is not None:
-        if value.separate_em_planned and not _api.cpt_suggester.established_visit_for_planning(inputs, source):
+        if value.separate_em_planned and not _api.cpt_suggester.established_visit_for_planning(
+                {**inputs, 'separate_em_planned': True}, source):
             raise _api.HTTPException(422, 'A separate follow-up CPT can be planned here only for an established patient.')
         review['separate_em_planned'] = value.separate_em_planned
         if value.separate_em_planned and review.get('selected_ids'):
@@ -188,8 +189,6 @@ async def update_visit_review(case_id: str, value: _api.VisitReviewInput, reques
         if not value.separate_em_planned and review.get('selected_ids'):
             review['selected_ids'] = [line_id for line_id in review['selected_ids']
                                       if _api.visit_estimate.clinical_group(available[line_id]['code']) != 'visit']
-            if not review['selected_ids']:
-                review.pop('selected_ids')
             review.pop('payments', None)
     if value.insurance_check_from is not None:
         review['insurance_check_from'] = value.insurance_check_from.isoformat()

@@ -61,15 +61,26 @@ async def saved_previsit(case_id: str, request: _api.Request) -> dict:
     collection_guidance.unconfirmed_zero_oop and withholds a positive advance.
     A linked, applicable zero balance can return basis out_of_pocket_limit
     and a $0 covered office-visit collection.
-    temporary_rate_reference identifies scoped Blue Cross Clinical Library
-    prices, never another payer's allowance. For Cigna, separate exact-CPT
+    temporary_rate_reference identifies a dated CPT planning source: scoped
+    Blue Cross Clinical Library prices for eligible non-Aetna routes or draft
+    Aetna MEPPO portal values for the exact Signature PPO diagnostic scenario.
+    Neither source establishes another payer's allowance or a collectible amount.
+    aetna_diagnostic_reference, when present, gives the provisional per-test
+    copay formula and remains separate from collection_guidance.
+    For Cigna, separate exact-CPT
     Stedi inquiries may supply authorization and financial terms. When every
     selected line has compatible terms, fee_proxy_estimate shows a provisional
     BCBS-priced share; an absent copay is treated as $0 in that calculation.
-    For a supported in-network Cigna diagnostic visit, collection_guidance
-    uses that share as the estimated check-in amount after recorded payments.
+    For an in-network Cigna Open Access Plus office visit with selected EMG/NCS
+    codes, a separate conditional scenario can show one reported specialist
+    copay plus assumed general coinsurance on matching BCBS reference fees.
+    The UI displays the formula and marks collection pending until Cigna's
+    Explanation of Estimate is available; fee_proxy_estimate is not a Cigna allowance.
     The UHC group-plan proxy keeps its separate
     administrator-approved opt-in and member billing-protection clearance.
+    For a verified 2026 TRS-Care LPPO group 15725 visit, selecting a separate
+    established follow-up CPT 99213 may add the published $10 specialist copay
+    to the diagnostic fee proxy when the member deductible is exhausted.
     benefits.reported_options[].places_of_service retains the payer's place-of-service
     codes for scoped benefit display; a reported office copay is not a collection decision.
     reference_benefits and reference_subscriber, when present, come from one

@@ -41,7 +41,9 @@ def test_prior_office_visit_supports_checkbox_only_when_status_is_not_new():
     source = {'recent_completed_appointments': [{'coded_services': ['99204']}]}
     assert established_visit_for_planning({'visit_type': None}, source)
     assert established_visit_for_planning({'visit_type': 'established'}, {})
+    assert established_visit_for_planning({'visit_type': None, 'separate_em_planned': True}, {})
     assert not established_visit_for_planning({'visit_type': 'new'}, source)
+    assert not established_visit_for_planning({'visit_type': 'new', 'separate_em_planned': True}, {})
 
 
 def test_combined_emg_plan_requires_established_selected_and_scoped_payer_terms():

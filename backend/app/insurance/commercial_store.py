@@ -375,6 +375,25 @@ def matching_rates(practice_id: str, profile: dict, network: dict, service_date:
     return list(selected.values())
 
 
+def aetna_meppo_reference_rates(practice_id: str, payer_connection_id: str, service_date: str,
+                                codes: list[str]) -> list[dict]:
+    """Read the dated, unapproved Aetna portal rows as reference prices only."""
+    if not codes:
+        return []
+    with _connection() as db:
+        rows = db.execute("""SELECT l.code, l.modifier, l.allowed_cents, v.source_reference
+            FROM commercial_rate_lines l JOIN commercial_rate_versions v ON v.id=l.version_id
+            WHERE v.practice_id=%s AND v.payer_connection_id=%s AND v.status='draft'
+              AND v.source_type='manual' AND v.source_reference LIKE 'Aetna MEPPO portal table values supplied by clinic%%'
+              AND l.network_name='MEPPO unverified' AND l.plan_matcher='Aetna Medicare Signature (PPO)'
+              AND l.place_of_service='11' AND l.code=ANY(%s)
+              AND v.effective_from<=%s AND (v.effective_to IS NULL OR v.effective_to>=%s)
+              AND l.effective_from<=%s AND (l.effective_to IS NULL OR l.effective_to>=%s)""",
+            (practice_id, payer_connection_id, codes, service_date, service_date,
+             service_date, service_date)).fetchall()
+    return [dict(row) for row in rows]
+
+
 def save_evidence(practice_id: str, case_id: str, context_hash: str, data: dict[str, Any]) -> dict:
     now, evidence_id = _now(), str(uuid4())
     with _connection() as db:

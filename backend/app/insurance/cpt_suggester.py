@@ -68,6 +68,8 @@ def established_visit_for_planning(inputs: dict, source: dict) -> bool:
         return True
     if inputs.get('visit_type') is not None:
         return False
+    if inputs.get('separate_em_planned') is True:
+        return True
     return any(any(code.isdigit() and (99202 <= int(code) <= 99205 or 99212 <= int(code) <= 99215)
                    for code in row['coded_services'])
                for row in _prior_appointments(source.get('recent_completed_appointments')))

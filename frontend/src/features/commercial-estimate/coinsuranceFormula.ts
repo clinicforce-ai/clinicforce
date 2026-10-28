@@ -1,6 +1,23 @@
 import type { PrevisitEstimate } from '../../services/api/commercial-previsit'
 import { money } from './format'
 
+export function feeProxyFormula(
+  proxy: NonNullable<PrevisitEstimate['fee_proxy_estimate']>,
+  payments = 0,
+) {
+  const appliedPayments = Math.min(Math.max(0, payments), proxy.patient_share_cents)
+  const coinsurance = proxy.lines?.length
+    ? proxy.lines
+        .map(
+          (line) =>
+            `(${money(line.reference_cents)} × ${proxy.coinsurance_percent}% = ${money(line.coinsurance_cents)})`,
+        )
+        .join(' + ')
+    : money(proxy.coinsurance_cents)
+  const total = `${money(proxy.copay_cents)} copay + ${money(proxy.deductible_cents)} deductible + ${coinsurance}${proxy.oop_reduction_cents ? ` − ${money(proxy.oop_reduction_cents)} out-of-pocket cap` : ''}${appliedPayments ? ` − ${money(appliedPayments)} already paid` : ''} = ${money(proxy.patient_share_cents - appliedPayments)}.`
+  return { coinsurance, total }
+}
+
 export function coinsuranceFormula(result: PrevisitEstimate): string | null {
   const summary = result.encounter_summary
   if (!summary) return null

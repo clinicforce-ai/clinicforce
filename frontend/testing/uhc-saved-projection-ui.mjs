@@ -25,7 +25,18 @@ try {
   const { default: CommercialOverview } = await server.ssrLoadModule(
     '/src/features/commercial-estimate/CommercialOverview.tsx',
   )
-  const { coinsuranceFormula } = await server.ssrLoadModule(
+  const { ServicePlanner } = await server.ssrLoadModule(
+    '/src/features/commercial-estimate/ServicePlanner.tsx',
+  )
+  const planningVisit = { visit_type: null, service_date: '2026-10-28', payment_mode: 'insurance',
+    service_plan: { kind: 'emg_ncs', recommended_ids: ['ncs'] },
+    codes: [{ id: 'ncs', code: '95908', units: 1 }],
+    available_codes: [{ id: 'ncs', code: '95908', units: 1 }] }
+  const planner = (visit) => renderToStaticMarkup(React.createElement(ServicePlanner,
+    { result: visit, busy: false, save: async () => true, viewEstimate: () => {} }))
+  assert(planner(planningVisit).includes('Include a separate established-patient follow-up'))
+  assert(!planner({ ...planningVisit, visit_type: 'new' }).includes('Include a separate established-patient follow-up'))
+  const { coinsuranceFormula, feeProxyFormula } = await server.ssrLoadModule(
     '/src/features/commercial-estimate/coinsuranceFormula.ts',
   )
   const { selectedRequirementIssue } = await server.ssrLoadModule(
@@ -377,6 +388,37 @@ try {
     '$105.11 BCBS Texas reference', '$178.36 BCBS Texas reference', '$283.47',
     'Planned amount to collect at visit', '$28.35']) assert(diagnosticOverview.includes(value), value)
   assert(!diagnosticOverview.includes('Select services'))
+  const inNetworkDiagnostic = structuredClone(diagnostic)
+  inNetworkDiagnostic.plan_details.stedi.names = ['LPPO-UNITEDHEALTHCARE GROUP MEDICARE ADVANTAGE (PP']
+  inNetworkDiagnostic.benefits = { ...inNetworkDiagnostic.benefits,
+    network_status: 'in_network', network_source: 'payer_participation_message',
+    deductible_annual_cents: 40000, deductible_remaining_cents: 0,
+    oop_annual_cents: 350000, oop_remaining_cents: 270430 }
+  inNetworkDiagnostic.price_range.lines[1].units = 1
+  inNetworkDiagnostic.price_range.lines.forEach((line) => {
+    line.benefits.network_status = 'in_network'
+    line.benefits.coinsurance_percent = '5.00'
+    line.benefits.deductible_remaining_cents = 0
+  })
+  inNetworkDiagnostic.temporary_rate_reference.lines[1].units = 1
+  inNetworkDiagnostic.fee_proxy_estimate = { ...diagnostic.fee_proxy_estimate,
+    basis: 'bcbstx_uhc_in_network_fee_proxy', reference_total_cents: 19429,
+    coinsurance_percent: '5', coinsurance_cents: 972, patient_share_cents: 972,
+    oop_remaining_cents: 270430, deductible_source: 'Member-specific Stedi remaining deductible',
+    lines: [{ code: '95908', units: 1, reference_cents: 10511, coinsurance_cents: 526 },
+      { code: '95886', units: 1, reference_cents: 8918, coinsurance_cents: 446 }] }
+  assert(feeProxyFormula(inNetworkDiagnostic.fee_proxy_estimate, 2000).total.includes('− $9.72 already paid = $0.00'))
+  const followUpProxy = { ...inNetworkDiagnostic.fee_proxy_estimate,
+    copay_cents: 1000, patient_share_cents: 1972 }
+  assert(feeProxyFormula(followUpProxy).total.includes('$10.00 copay + $0.00 deductible + ($105.11 × 5% = $5.26) + ($89.18 × 5% = $4.46) = $19.72'))
+  const inNetworkModel = deriveCommercialEstimateView({ result: inNetworkDiagnostic,
+    appointments: [], selectedVisit: '', busy: null, error: '', readOnly: false, recovering: false })
+  const inNetworkOverview = renderToStaticMarkup(
+    React.createElement(CommercialOverview, { model: inNetworkModel, result: inNetworkDiagnostic }),
+  )
+  for (const value of ['$400.00 annual', '$0.00 remaining', '$9.72',
+    '$105.11 × 5% = $5.26', '$89.18 × 5% = $4.46',
+    'CPT 95908: not required; CPT 95886: not required']) assert(inNetworkOverview.includes(value), value)
   const { ApplicableBenefits } = await server.ssrLoadModule(
     '/src/features/commercial-estimate/EstimatePanels.tsx',
   )
@@ -1173,7 +1215,7 @@ try {
   assert.equal(requiredAuthorization.encounter_summary.estimated_total_patient_min_cents, 8000)
   assert(requiredOverview.includes('Visit cost and collection'))
   console.log(
-    'PASS: three deidentified UHC saved responses and two supported UHC calculations render',
+    'PASS: three deidentified UHC saved responses and three supported UHC calculations render',
   )
 } finally {
   await server.close()

@@ -6,9 +6,9 @@ export function localVisitDay(date: Date): string {
   return `${date.getFullYear()}-${month}-${day}`
 }
 
-export function ecwVisitDay(history: PatientAppointmentHistory, today: string): string | null {
-  if (history.ecw_status !== 'complete') return null
-  const dates = history.appointments
+export function ecwVisit(history: PatientAppointmentHistory, today: string) {
+  if (history.ecw_status !== 'complete') return { day: null, time: null }
+  const visits = history.appointments
     .filter((visit) => visit.from_ecw)
     .filter((visit) => {
       const day = visit.date || visit.start?.slice(0, 10) || ''
@@ -17,14 +17,19 @@ export function ecwVisitDay(history: PatientAppointmentHistory, today: string): 
       if (Number.isNaN(date.valueOf()) || date.toISOString().slice(0, 10) !== day) return false
       return !['cancelled', 'entered-in-error'].includes(visit.status.toLowerCase())
     })
-    .map((visit) => visit.date || visit.start?.slice(0, 10) || '')
-  if (dates.includes(today)) return today
-  return (
-    dates.filter((day) => day > today).sort()[0] ||
-    dates
-      .filter((day) => day < today)
-      .sort()
-      .at(-1) ||
-    null
-  )
+    .map((visit) => ({
+      day: visit.date || visit.start?.slice(0, 10) || '',
+      time: visit.start?.includes('T') ? Date.parse(visit.start) : NaN,
+    }))
+  const dates = visits.map((visit) => visit.day)
+  const day = dates.includes(today)
+    ? today
+    : dates.filter((date) => date > today).sort()[0] ||
+      dates
+        .filter((day) => day < today)
+        .sort()
+        .at(-1) ||
+      null
+  const times = visits.filter((visit) => visit.day === day && Number.isFinite(visit.time))
+  return { day, time: times.length ? Math.min(...times.map((visit) => visit.time)) : null }
 }

@@ -2,7 +2,7 @@
 
 from copy import deepcopy
 
-from app.insurance import amount_explanation, collection_guidance, commercial, cpt_rules, encounter_summary
+from app.insurance import amount_explanation, collection_guidance, commercial, contract_requirements, cpt_rules, encounter_summary
 from app.api.schemas.commercial import CollectionPolicyInput
 from app.insurance.blue_cross_proxy import estimate
 from app.insurance.requirements.published import _published_rule
@@ -78,6 +78,96 @@ def test_scoped_proxy_calculates_diagnostic_share_without_claiming_payer_allowan
     result['plan_details']['stedi']['names'] = [
         'LPPO-UNITEDHEALTHCARE GROUP MEDICARE ADVANTAGE (PP']
     assert estimate(result, '2026-10-27')['patient_share_cents'] == 2835
+
+
+def test_in_network_group_ppo_uses_remaining_deductible_and_rounds_each_cpt():
+    result = _result(group='other-group', coinsurance='5', network='in_network')
+    result['plan_details']['stedi']['names'] = ['LPPO-UNITEDHEALTHCARE GROUP MEDICARE ADVANTAGE (PP']
+    result['benefits'].update(network_source='payer_participation_message',
+                              deductible_annual_cents=40000, deductible_remaining_cents=0,
+                              oop_remaining_cents=270430)
+    result['codes'][1]['units'] = 1
+    result['price_range']['lines'][1]['units'] = 1
+    result['temporary_rate_reference']['lines'][1]['units'] = 1
+    for line in result['price_range']['lines']:
+        line['benefits'].update(deductible_remaining_cents=0, oop_remaining_cents=270430)
+    proxy = estimate(result, '2026-10-28')
+    assert proxy['basis'] == 'bcbstx_uhc_in_network_fee_proxy'
+    assert proxy['reference_total_cents'] == 19429
+    assert proxy['deductible_cents'] == 0
+    assert proxy['coinsurance_cents'] == proxy['patient_share_cents'] == 972
+    assert [line['coinsurance_cents'] for line in proxy['lines']] == [526, 446]
+    assert result['price_range'].get('allowed_min_cents') is None
+    result['price_range']['lines'][0]['benefits']['deductible_remaining_cents'] = 100
+    assert estimate(result, '2026-10-28') is None
+    result['price_range']['lines'][0]['benefits']['deductible_remaining_cents'] = 0
+    result['fee_proxy_estimate'] = estimate(result, '2026-10-28')
+    result['service_selection_status'] = 'approved'
+    result['collection_policy'] = {'mode': 'collect_supported_advance',
+        'approved_by': 'admin', 'approved_at': '2026-10-27T12:00:00Z',
+        'reference': 'Synthetic clinic policy', 'allow_blue_cross_proxy_advance': True}
+    assert collection_guidance.build(result)['amount_cents'] is None
+    result['billing_protection'] = {'status': 'not_qmb', 'reference': 'synthetic-check',
+        'verified_at': '2026-10-28T12:00:00Z', 'identity_binding': 'synthetic-binding'}
+    guidance = collection_guidance.build(result)
+    assert guidance['amount_cents'] == 972
+    assert guidance['basis'] == 'bcbstx_proxy_advance'
+    result['collection_guidance'] = guidance
+    assert encounter_summary.build(result)['collect_today_cents'] == 972
+
+
+def test_trs_follow_up_adds_specialist_copay_to_diagnostic_proxy():
+    result = _result(group='15725', coinsurance='5', network='in_network')
+    result['plan_details']['stedi']['names'] = ['LPPO-UNITEDHEALTHCARE GROUP MEDICARE ADVANTAGE (PP']
+    result['benefits'].update(network_source='payer_participation_message',
+                              deductible_remaining_cents=0, oop_remaining_cents=270430)
+    result['codes'][1]['units'] = 1
+    result['price_range']['lines'][1]['units'] = 1
+    result['temporary_rate_reference']['lines'][1]['units'] = 1
+    for line in result['price_range']['lines']:
+        line['benefits'].update(deductible_remaining_cents=0, oop_remaining_cents=270430)
+    result['separate_em_planned'] = True
+    result['visit_type'] = None
+    result['codes'].append({'id': 'office', 'code': '99213', 'units': 1, 'modifiers': []})
+    result['price_range']['lines'].append({'id': 'office', 'code': '99213', 'units': 1,
+                                          'modifiers': [], 'benefits': {}})
+    result['temporary_rate_reference']['complete'] = False
+    proxy = estimate(result, '2026-10-28')
+    assert proxy['copay_cents'] == 1000
+    assert proxy['coinsurance_cents'] == 972
+    assert proxy['patient_share_cents'] == 1972
+    assert proxy['reference_total_cents'] == 19429
+    result['fee_proxy_estimate'] = proxy
+    result['service_selection_status'] = 'approved'
+    result['collection_policy'] = {'mode': 'collect_supported_advance',
+        'approved_by': 'admin', 'approved_at': '2026-10-27T12:00:00Z',
+        'reference': 'Synthetic clinic policy', 'allow_blue_cross_proxy_advance': True}
+    result['billing_protection'] = {'status': 'not_qmb', 'reference': 'synthetic-check',
+        'verified_at': '2026-10-28T12:00:00Z', 'identity_binding': 'synthetic-binding'}
+    assert collection_guidance.build(result)['amount_cents'] == 1972
+    assert estimate({**result, 'separate_em_planned': False}, '2026-10-28') is None
+    assert estimate({**result, 'visit_type': 'new'}, '2026-10-28') is None
+    result['price_range']['lines'][-1]['benefits']['copay_cents'] = 500
+    assert estimate(result, '2026-10-28') is None
+
+
+def test_in_network_group_ppo_requirement_uses_product_and_selected_cpts():
+    result = _result(group='15725', network='in_network')
+    result['benefit_source'] = 'Stedi'
+    result['plan_details']['stedi']['names'] = ['LPPO-UNITEDHEALTHCARE GROUP MEDICARE ADVANTAGE (PP']
+    context = {'service_date': '2026-10-28', 'payer_names': {'unitedhealthcare'},
+               'group_number': '15725', 'member_id': 'synthetic-member', 'pos': '11'}
+    plans = ['LPPO-UNITEDHEALTHCARE GROUP MEDICARE ADVANTAGE (PP']
+    assert _published_rule('referral', result, context, plans, {'95908', '95886'})['status'] == 'Not required'
+    decision = _published_rule('authorization', result, context, plans, {'95908', '95886'})
+    assert decision['status'] == 'Not required'
+    assert decision['sources'][0]['source_type'] == 'clinic_confirmation'
+    evaluated = contract_requirements.evaluate(result, {**context, 'plans': plans}, [])
+    assert all(procedure['referral']['status'] == procedure['authorization']['status'] == 'Not required'
+               for procedure in evaluated['procedures'])
+    assert _published_rule('authorization', result, context, plans, {'95908', '99213'})['status'] == 'Verification required'
+    assert _published_rule('authorization', result, {**context, 'group_number': 'another-group'}, plans,
+                           {'95908', '95886'})['status'] == 'Verification required'
 
 
 def test_proxy_accepts_active_dated_coverage_when_visit_date_echo_is_absent():
@@ -212,7 +302,8 @@ def test_group_ppo_oon_diagnostic_requirements_are_scoped_to_group_and_codes():
     assert _published_rule('authorization', result, context, plans, {'95908', '95886'})['status'] == 'Not required'
     assert _published_rule('authorization', result, context, plans, {'95908', '99999'})['status'] == 'Verification required'
     assert _published_rule('authorization', result, {**context, 'group_number': 'other'},
-                           plans, {'95908', '95886'})['status'] == 'Verification required'
+                           plans,
+                           {'95908', '95886'})['status'] == 'Verification required'
 
 
 def test_group_ppo_diagnostic_clearance_uses_active_dated_in_network_coverage():

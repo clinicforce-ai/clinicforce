@@ -1,6 +1,5 @@
-"""One plain sentence for the doctor's collection amount and its evidence basis."""
+"""Explain collection amounts and their evidence basis."""
 from __future__ import annotations
-
 from app.insurance import visit_estimate
 from app.insurance.identity import patient_benefits_bound
 from app.insurance.benefit_review import selected_service_blocker, selected_service_detail
@@ -12,8 +11,6 @@ from app.insurance.collection.requirements import requirement_blocker
 from app.insurance.library_network_exclusions import product_kind
 from app.insurance.insurance_product import is_medicare_advantage
 from app.insurance.amount_explanation_terms import choice_plus_reported_terms as _choice_plus_reported_terms
-
-
 def _money(cents: int) -> str:
     return f'${cents // 100:,}.{cents % 100:02d}'
 
@@ -376,11 +373,14 @@ def build(result: dict, guidance: dict, review: dict | None = None) -> dict:
         cause, cause_code = _cash_cause(result, failure, recovery, card, network, benefits, unpriced, missing,
                                         guidance.get('source_errors'))
         proxy = result.get('fee_proxy_estimate') or {}
-        if proxy.get('basis') == 'bcbstx_fee_proxy' and type(proxy.get('patient_share_cents')) is int:
+        if proxy.get('basis') in {'bcbstx_fee_proxy', 'bcbstx_uhc_in_network_fee_proxy'} and type(proxy.get('patient_share_cents')) is int:
             sentence, code = (f'The provisional patient share is {_money(proxy["patient_share_cents"])} using the BCBS Texas fee proxy; do not collect until the clinic policy and Medicare billing-protection checks clear this member',
                               'bcbstx_proxy_provisional')
         elif proxy.get('basis') == 'bcbstx_cigna_fee_proxy' and type(proxy.get('patient_share_cents')) is int:
-            sentence, code = (f'The provisional patient share is {_money(proxy["patient_share_cents"])} using BCBS Texas fees and Cigna exact-CPT benefits; the Cigna allowed amount and check-in charge remain unconfirmed, so no amount is authorized for collection',
+            scope = ('the reported specialist office copay and assumed general 0% diagnostic coinsurance'
+                     if proxy.get('scenario_kind') == 'oap_office_copay_general_coinsurance'
+                     else 'Cigna exact-CPT benefits')
+            sentence, code = (f'The provisional patient share is {_money(proxy["patient_share_cents"])} using BCBS Texas fees and {scope}; the Cigna allowed amount and check-in charge remain unconfirmed, so no amount is authorized for collection',
                               'cigna_fee_proxy_provisional')
         elif guidance.get('published_copay_policy_missing'):
             sentence, code = ('The 2026 FEP Blue Basic PSHB Preferred specialist copay is supported, but no approved clinic policy authorizes its collection at check-in',
