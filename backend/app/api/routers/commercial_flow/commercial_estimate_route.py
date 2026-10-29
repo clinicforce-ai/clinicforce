@@ -51,7 +51,11 @@ from app.api.routers.commercial_flow.commercial_previsit_submit import submit_pr
     "For NMCT (practice_id primary), "
     "clinic_nmct_policy selects the in-network tier for every insurer and product unless a "
     "provider-specific payer statement reports out-of-network participation. evidence_resolution reports "
-    "unresolved facts; an in-network tier alone does not establish an amount to collect."
+    "unresolved facts; an in-network tier alone does not establish an amount to collect. "
+    "A BCBSTX Botox booking asks for office injection benefits first. When one current suggested "
+    "chemodenervation CPT has a scoped clinic fee and an unambiguous office-injection term, "
+    "botox_preview shows a provisional one-procedure amount without selecting a billable CPT or "
+    "authorizing collection."
 ))
 async def previsit_estimate(value: _api.PrevisitInput, request: _api.Request, background_tasks: _api.BackgroundTasks = None) -> dict:
     """Estimate suggested or edited visit CPTs from current eligibility and clinic prices.

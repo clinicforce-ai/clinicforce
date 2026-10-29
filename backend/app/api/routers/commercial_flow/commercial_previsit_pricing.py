@@ -6,7 +6,6 @@ from app.api.routers.commercial_flow.commercial_previsit_rate_reference import _
 from app.api.routers.commercial_flow.commercial_previsit_network_guard import NMCT_PRACTICE_ID, apply_nmct_network_policy, apply_admin_nonparticipation, scoped_admin_nonparticipation, record_confirmed_out_of_network, resolve_unlinked_blue_route
 from app.api.routers.commercial_flow.commercial_previsit_service_scope import reviewed_service_types as _reviewed_service_types
 from app.insurance import botox_review, cms_locality, cms_pfs, cpt_rules, insurance_product, inventory_certification, library_network_exclusions, group_contract_support
-
 def _ecw_case_data(inputs: dict, source: dict, conflicts: list[str]) -> dict[str, _api.Any]:
     return {"appointment_id": source.get("appointment_id"), "appointment_date": source.get("appointment_date"),
             "retrieved_at": source.get("retrieved_at"), "appointment_status": source.get("appointment_status"),
@@ -40,6 +39,7 @@ def _previsit_service_types(inputs: dict) -> list[str]:
     categories = [_api.visit_estimate.service_type(code, {}) for code in scheduled]
     categories.extend(inputs.get('_selected_service_types') or [])
     if botox_review.is_botox_visit(inputs):
+        categories.insert(0, '98')  # BCBSTX returns office-injection terms from this inquiry.
         categories.extend(category for family in ('botulinum_drug', 'chemodenervation')
                           for category in cpt_rules.SERVICE_FAMILIES[family]['eligibility_service_types'])
     if not scheduled:

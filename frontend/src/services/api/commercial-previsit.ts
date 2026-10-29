@@ -7,6 +7,7 @@ import type {
 } from './commercial-common'
 import type {
   BotoxReview,
+  BotoxPreview,
   PayerAllowanceSummary,
   TemporaryRateReference,
   AetnaDiagnosticReference,
@@ -24,6 +25,7 @@ export type PrevisitEstimate = {
   separate_em_planned?: boolean
   combined_emg_plan?: CombinedEmgPlan | null
   botox_review?: BotoxReview
+  botox_preview?: BotoxPreview | null
   billing_protection?: {
     status?: 'qmb' | 'not_qmb'
     reference?: string

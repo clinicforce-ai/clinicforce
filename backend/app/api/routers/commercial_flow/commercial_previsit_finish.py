@@ -268,6 +268,10 @@ def _finish_previsit(result: dict, case: dict, inputs: dict, source: dict, paylo
                  or blue_cross_proxy.cigna_oap_office_scenario(result, inputs['service_date'])):
         result['fee_proxy_estimate'] = proxy
     result['collection_guidance'] = _api.collection_guidance.build(result, review)
+    result.pop('botox_preview', None)
+    if botox_review.is_botox_visit(inputs) and payload:
+        result['botox_preview'] = botox_review.provisional_office_injection(
+            result, _api.commercial.reported_stedi_options(payload, '98'), review)
     result['combined_emg_plan'] = _api.visit_estimate.combined_emg_plan(result, review)
     result.pop('emg_option', None)
     if inputs.get('visit_type') == 'new' and result['payment_mode'] == 'insurance':

@@ -69,6 +69,9 @@ async def saved_previsit(case_id: str, request: _api.Request) -> dict:
     from a likely published $50-per-test benefit, capped by the draft fee
     reference and reported remaining out-of-pocket balance. This is not an
     authorized collection amount; saved scenarios are recalculated on read.
+    botox_preview, when present, shows one suggested BCBSTX office-injection
+    procedure priced from a scoped clinic fee and the returned injection term.
+    It is a conditional planning amount, not a selected CPT or collection order.
     For Cigna, separate exact-CPT
     Stedi inquiries may supply authorization and financial terms. When every
     selected line has compatible terms, fee_proxy_estimate shows a provisional
