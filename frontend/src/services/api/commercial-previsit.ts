@@ -18,6 +18,7 @@ import type { PaymentExplanation } from './commercial-explanation'
 import type { CommercialNetworkEvidence } from './commercial-network-evidence'
 
 export type PrevisitEstimate = {
+  telehealth?: { place_of_service: '10' | '02'; modality: 'audio_video' | 'audio_only' }
   established_for_planning?: boolean
   requested_service_types?: string[]
   separate_em_planned?: boolean

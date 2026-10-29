@@ -15,7 +15,7 @@ BCBSTX_PAYER_NAMES = {'bcbstx', 'bcbstexas', 'bluecrossblueshieldoftexas',
                       'bluecrossblueshieldtexas'}
 
 # Saved estimates re-evaluate requirement decisions when a published rule changes.
-PUBLISHED_RULESET_VERSION = '2026-10-28-aetna-signature-diagnostics-v6'
+PUBLISHED_RULESET_VERSION = '2026-10-28-bcbstx-ppo-office-v7'
 
 UHC_GROUP_PPO_OON_SOURCE = {
     'label': 'UnitedHealthcare Group Medicare Advantage PPO out-of-network provider guide',
@@ -240,7 +240,8 @@ def _published_rule(kind: str, result: dict, context: dict, plans: list[str], co
             return rule('Not required', 'Clinic-confirmed decision for the selected diagnostic CPTs under this group plan.', UHC_LPPO_DIAGNOSTIC_PA_SOURCE, source_type='clinic_confirmation')
     bcbstx_ppo_follow_up = (exact <= {'bluechoiceppo'} and in_network and office and day >= '2026-10-26'
             and names & BCBSTX_PAYER_NAMES
-            and 'preferredprovideroptionmedical' in {_key(plan) for plan in plans}
+            and ('preferredprovideroptionmedical' in {_key(plan) for plan in plans}
+                 or exact == {'bluechoiceppo'})
             and all(generic_plan_label(plan) or _key(plan) == 'bluechoiceppo' for plan in plans))
     if bcbstx_ppo_follow_up and not exact and kind == 'referral' and codes <= {'99212', '99213', '99214', '99215'}:
         product = 'preferredprovideroptionmedical'

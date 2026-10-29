@@ -40,6 +40,10 @@ export function useCommercialEstimateActions({
   const [historyError, setHistoryError] = useState('')
   const [historyBusy, setHistoryBusy] = useState(false)
   const [selectedVisit, setSelectedVisit] = useState('')
+  const [telehealthPos, setTelehealthPos] = useState<'' | '10' | '02'>('')
+  const [telehealthModality, setTelehealthModality] = useState<'' | 'audio_video' | 'audio_only'>(
+    '',
+  )
   const [candidateSuggestion, setCandidateSuggestion] = useState('')
   const [payerSuggestion, setPayerSuggestion] = useState('')
   const [loaded, setLoaded] = useState(false)
@@ -202,7 +206,15 @@ export function useCommercialEstimateActions({
         ) {
           let refreshed: PrevisitEstimate
           try {
-            refreshed = await commercialPrevisit(updated.appointment_id, true, intakeId)
+            refreshed = await commercialPrevisit(
+              updated.appointment_id,
+              true,
+              intakeId,
+              updated.telehealth && {
+                telehealth_pos: updated.telehealth.place_of_service,
+                telehealth_modality: updated.telehealth.modality,
+              },
+            )
           } catch (caught) {
             // The gateway can time out after Stedi succeeds; read the saved case before offering another paid inquiry.
             const saved = await commercialSavedPrevisit(updated.check_id!, intakeId)
@@ -295,12 +307,38 @@ export function useCommercialEstimateActions({
   const chooseVisit = (id: string) => {
     if (selectedVisit !== id) {
       setPanel(null)
+      setTelehealthPos('')
+      setTelehealthModality('')
       setSelectedVisit(id)
       setResult(null)
       setError('')
       setDeleteError('')
       setCleanupPending(false)
       setNotice('')
+    }
+  }
+  const confirmTelehealth = async () => {
+    if (!selectedVisit || !telehealthPos || !telehealthModality || busy) return
+    const current = ++requestId.current
+    setBusy('estimate')
+    setError('')
+    try {
+      const response = await commercialPrevisit(selectedVisit, false, intakeId, {
+        telehealth_pos: telehealthPos,
+        telehealth_modality: telehealthModality,
+      })
+      if (response.appointment_id !== selectedVisit)
+        throw new Error('The returned estimate does not match this visit.')
+      if (current === requestId.current) setResult(response)
+    } catch (caught) {
+      if (current === requestId.current)
+        setError(
+          caught instanceof Error
+            ? caught.message
+            : 'The telehealth benefits could not be checked.',
+        )
+    } finally {
+      if (current === requestId.current) setBusy(null)
     }
   }
   return {
@@ -320,6 +358,11 @@ export function useCommercialEstimateActions({
     historyError,
     historyBusy,
     selectedVisit,
+    telehealthPos,
+    setTelehealthPos,
+    telehealthModality,
+    setTelehealthModality,
+    confirmTelehealth,
     candidateSuggestion,
     setCandidateSuggestion,
     payerSuggestion,

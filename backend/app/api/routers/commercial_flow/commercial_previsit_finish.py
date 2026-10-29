@@ -8,17 +8,20 @@ from app.insurance.identity import patient_benefits_bound, patient_plan_applies
 from app.insurance import blue_cross_proxy, botox_review, evidence_resolution, published_plan_benefits
 
 def _visit_context_parts(inputs: dict, source: dict) -> dict:
-    return {'coverage': {k: v for k, v in _api._coverage_snapshot(inputs, source).items() if k != 'other_active_coverage'},
+    context = {'coverage': {k: v for k, v in _api._coverage_snapshot(inputs, source).items() if k != 'other_active_coverage'},
                'codes': _api._previsit_codes(inputs),
                'provider': inputs.get('rendering_provider'),
                'provider_evidence': {key: (source.get('rendering_provider') or {}).get(key) for key in ('npi', 'roles')},
                'diagnoses': inputs.get('diagnoses'), 'billing': source.get('billing_provider'),
                'reason': inputs.get('reason'), 'location': source.get('location_id'), 'pos': inputs.get('place_of_service'), 'date': inputs.get('service_date')}
+    if inputs.get('telehealth_modality'):
+        context['telehealth_modality'] = inputs['telehealth_modality']
+    return context
 
 
 def _visit_context_changes(saved_inputs: dict, saved_source: dict, current_inputs: dict, current_source: dict) -> list[str]:
     saved, current = _visit_context_parts(saved_inputs, saved_source), _visit_context_parts(current_inputs, current_source)
-    return [key for key in saved if saved[key] != current[key]]
+    return [key for key in dict.fromkeys([*saved, *current]) if saved.get(key) != current.get(key)]
 
 
 def _clinical_context_refreshable(changed: list[str]) -> bool:
@@ -121,7 +124,7 @@ def _finish_previsit(result: dict, case: dict, inputs: dict, source: dict, paylo
     plan_key = _api.hashlib.sha256(_api.json.dumps([token, review.get('emg_required'), review.get('separate_em_planned'), source.get('recent_completed_appointments', []),
         [(row['id'], row.get('units')) for row in available]], sort_keys=True).encode()).hexdigest()
     prior_plan = case.get('previsit_plan') or {}
-    if (prior_plan.get('key') != plan_key or prior_plan.get('plan', {}).get('version') != 15
+    if (prior_plan.get('key') != plan_key or prior_plan.get('plan', {}).get('version') != 16
             or prior_plan.get('plan', {}).get('method') == 'unavailable'):
         prior_plan = {'key': plan_key, 'plan': _api.cpt_suggester.recommend_visit_plan(
             planning_inputs, source, available)}
@@ -255,7 +258,7 @@ def _finish_previsit(result: dict, case: dict, inputs: dict, source: dict, paylo
                 result.pop('mapping_candidate', None)
         except _api.HTTPException:
             result.pop('mapping_candidate', None)
-    if uploaded_cash:
+    if uploaded_cash and not _api.visit_estimate.is_telehealth(planning_inputs):
         _api.practice_prices.apply(result, uploaded_cash, review)
     _api.practice_prices.apply_visit_quote(result, review)
     attach_requirements(_api, result, case, planning_inputs, source, session, connections, payer_id)

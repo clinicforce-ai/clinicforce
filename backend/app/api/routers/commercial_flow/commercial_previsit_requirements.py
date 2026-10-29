@@ -5,7 +5,7 @@ import hashlib
 import json
 from types import ModuleType
 from app.insurance.identity import patient_benefits_bound
-from app.insurance import stedi_cpt_authorization
+from app.insurance import stedi_cpt_authorization, visit_estimate
 from app.insurance.requirements.published import PUBLISHED_RULESET_VERSION
 
 
@@ -32,7 +32,7 @@ async def check_cpt_authorization(api: ModuleType, result: dict, case: dict, pay
                     if api.re.fullmatch(r'\d{5}', str(row.get('code') or ''))})
     benefits = result.get('benefits') or {}
     identity = result.get('identity') or benefits.get('identity') or {}
-    pos = str(inputs.get('place_of_service') or '')
+    pos = '' if visit_estimate.telehealth_pos_unresolved(inputs) else str(inputs.get('place_of_service') or '')
     if (not codes or not api_key
             or not stedi_cpt_authorization.visit_coverage_bound(benefits, inputs['service_date'])
             or not patient_benefits_bound(identity)
@@ -154,7 +154,7 @@ def attach_requirements(api: ModuleType, result: dict, case: dict, inputs: dict,
         'member_id': result['insurance_details'].get('member_id') or inputs.get('member_id'),
         'coverage_period': source.get('coverage_period') or result['insurance_details'].get('payer_coverage_period'),
         'location_id': source.get('location_id'),
-        'pos': inputs.get('place_of_service'),
+        'pos': None if visit_estimate.telehealth_pos_unresolved(inputs) else inputs.get('place_of_service'),
         'diagnoses': inputs.get('diagnoses'),
     }
     requirement_documents = [document for document in library_sources if document]

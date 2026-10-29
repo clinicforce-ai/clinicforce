@@ -6,6 +6,29 @@ from app.api.routers.commercial_flow.commercial_previsit_finish import _payer_pl
 from app.insurance.identity import patient_plan_applies
 
 
+def guard_unresolved_telehealth(result: dict, case: dict) -> bool:
+    if not _api.visit_estimate.telehealth_pos_unresolved(case['previsit_context'].get('inputs') or {}):
+        return False
+    price = result.get('price_range') or {}
+    result['price_range'] = price
+    price['service_issues'] = [*(price.get('service_issues') or []),
+        'Confirm the patient telehealth location and obtain benefits for that place of service before collection.']
+    price.update(complete=False, patient_min_cents=None, patient_max_cents=None,
+                 allowed_min_cents=None, allowed_max_cents=None, plan_min_cents=None, plan_max_cents=None)
+    for line in price.get('lines') or []:
+        line.update(allowed_cents=None, unit_allowed_cents=None, calculation=None)
+    for key in ('arrival_collection', 'planning_estimate', 'fee_proxy_estimate'):
+        result.pop(key, None)
+    return True
+
+
+def guard_telehealth_guidance(result: dict, unresolved: bool) -> None:
+    if unresolved and result.get('payment_mode') != 'cash':
+        result['collection_guidance'].update(amount_cents=None, status='action_required',
+            basis='missing_collection_inputs',
+            reason='Confirm the patient telehealth location and obtain benefits for that place of service before collection.')
+
+
 def _reprice_saved_new_network(result: dict, case: dict, practice_id: str, payer: dict | None) -> None:
     """Refresh per-CPT benefits after a saved 271 gains a supported network tier."""
     price = result.get('price_range') or {}

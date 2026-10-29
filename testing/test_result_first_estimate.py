@@ -67,6 +67,18 @@ def test_dependent_patient_is_compared_separately_from_policyholder():
     assert identity.compare(raw, policy())['status'] == 'matched'
 
 
+def test_payer_matched_dependent_does_not_trigger_repeat_policy_recovery():
+    recorded = {**policy(), 'subscriber_first': 'Alex', 'subscriber_last': 'Morgan', 'relationship': '18'}
+    matched = identity.compare(response(), recorded)
+    assert matched['reconciliation_rule'] == 'payer_matched_patient'
+    assert matched['policy_differences']
+    assert not identity.unresolved_policy_difference(matched)
+
+    different_patient = response()
+    different_patient['dependent']['dateOfBirth'] = '2001-02-04'
+    assert identity.unresolved_policy_difference(identity.compare(different_patient, recorded))
+
+
 def test_missing_payer_member_or_patient_anchors_cannot_bind_benefits():
     raw = response()
     raw['subscriber'].pop('memberId')
