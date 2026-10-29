@@ -30,7 +30,8 @@ try {
     amountText: 'Insured amount unavailable' }
   const markup = renderToStaticMarkup(React.createElement(CommercialCostBreakdown, { model, result }))
   for (const phrase of ['Coding assistant candidates', 'CPT 64612', '$131.14', '20%', '$26.23',
-    'provisional', 'Synthetic clinic fee row', 'candidate: not required']) assert(markup.includes(phrase), phrase)
+    'provisional', 'Synthetic clinic fee row', 'candidate: not required', 'No CPTs selected',
+    'Planned CPTs']) assert(markup.includes(phrase), phrase)
   assert(!markup.includes('CPT 64613'))
   assert(!markup.includes('Not established'))
   const summary = renderToStaticMarkup(React.createElement(ArrivalAmountSummary, {
