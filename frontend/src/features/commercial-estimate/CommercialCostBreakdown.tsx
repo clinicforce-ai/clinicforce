@@ -15,12 +15,11 @@ import {
   specialistOfficeCoinsurance,
   specialistOfficeCopay,
 } from './payerReportedPartialCopay'
-import { reportedMedicalLimit } from './reportedMedicalLimit'
 import { referenceCoverageRow } from './referenceCoverageRow'
-import { reportedLimit } from './reportedLimit'
 import { limitSummary, unknown } from './limitSummary'
 import { resolvedAllowedTotal } from './resolvedAllowedTotal'
 import { commercialCptRows } from './commercialCptRows'
+import { commercialOopRows } from './commercialOopRows'
 export default function CommercialCostBreakdown({
   model,
   result,
@@ -55,13 +54,6 @@ export default function CommercialCostBreakdown({
   const surgicalIndividualDeductible = limitSummary(reportedResult, 'deductible', 'INDIVIDUAL', '2')
   const familyDeductible = limitSummary(reportedResult, 'deductible', 'FAMILY')
   const surgicalFamilyDeductible = limitSummary(reportedResult, 'deductible', 'FAMILY', '2')
-  const individualReportedOop = limitSummary(reportedResult, 'out_of_pocket', 'INDIVIDUAL')
-  const reportedIndividualRemainingOop = reportedLimit(
-    reportedResult,
-    'out_of_pocket',
-    'INDIVIDUAL',
-    'REMAINING',
-  )
   const lineCoinsurance = [...new Set(lines.map((line) => line.benefits?.coinsurance_percent))]
   const reportedCoinsurance = result.reference_benefits
     ? specialistOfficeCoinsurance(reportedResult)
@@ -74,8 +66,6 @@ export default function CommercialCostBreakdown({
   const officeReferenceCopay = aetnaOfficeReferenceCopay(result, model)
   const humanaReferenceCopay = publishedHumanaOfficeCopay(result, model)
   const partialOfficeCopay = payerReportedPartialCopay(result, model)
-  const unconfirmedZeroOop =
-    reportedIndividualRemainingOop.unassigned && reportedIndividualRemainingOop.amount === money(0)
   const components = summary?.components
   const diagnosticCopay =
     result.collection_guidance?.basis === 'diagnostic_day_copay' &&
@@ -83,16 +73,6 @@ export default function CommercialCostBreakdown({
     lines.every((line) => line.benefits?.copay_cents === lines[0].benefits?.copay_cents)
       ? lines[0].benefits?.copay_cents
       : null
-  const individualOopAnnual =
-    benefits?.oop_annual_cents ??
-    reportedMedicalLimit(reportedResult, 'INDIVIDUAL', 'CALENDAR_YEAR')
-  const individualOopRemaining =
-    benefits?.oop_remaining_cents ?? reportedMedicalLimit(reportedResult, 'INDIVIDUAL', 'REMAINING')
-  const reportedOopOnly =
-    (benefits?.oop_annual_cents == null && individualOopAnnual != null) ||
-    (benefits?.oop_remaining_cents == null && individualOopRemaining != null)
-  const familyOopAnnual = reportedMedicalLimit(reportedResult, 'FAMILY', 'CALENDAR_YEAR')
-  const familyOopRemaining = reportedMedicalLimit(reportedResult, 'FAMILY', 'REMAINING')
   const pricedCashLines = lines.filter((line) => line.cash_cents != null && !line.cash_included)
   const lineAllowedTotal = resolvedAllowedTotal(lines)
   const calculated =
@@ -211,64 +191,66 @@ export default function CommercialCostBreakdown({
                     ? `${money(officeReferenceCopay)} specialist office visit · payer-reported reference`
                     : humanaReferenceCopay != null
                       ? `${money(humanaReferenceCopay)} in-network specialist office visit · published plan reference`
-                    : diagnosticCopay != null
-                      ? `${money(diagnosticCopay)} once per day`
-                      : calculated && components?.copay_cents != null
-                        ? money(components.copay_cents)
-                        : lines.some((line) => line.benefits?.copay_cents != null)
-                          ? lines
-                              .map(
-                                (line) =>
-                                  `CPT ${line.code}: ${line.benefits.copay_cents != null ? money(line.benefits.copay_cents) : 'not returned'}`,
-                              )
-                              .join('; ')
-                          : !lines.length && reportedOfficeCopay != null
-                            ? `${money(reportedOfficeCopay)} specialist office visit · payer-reported`
-                            : unknown,
+                      : diagnosticCopay != null
+                        ? `${money(diagnosticCopay)} once per day`
+                        : calculated && components?.copay_cents != null
+                          ? money(components.copay_cents)
+                          : lines.some((line) => line.benefits?.copay_cents != null)
+                            ? lines
+                                .map(
+                                  (line) =>
+                                    `CPT ${line.code}: ${line.benefits.copay_cents != null ? money(line.benefits.copay_cents) : 'not returned'}`,
+                                )
+                                .join('; ')
+                            : !lines.length && reportedOfficeCopay != null
+                              ? `${money(reportedOfficeCopay)} specialist office visit · payer-reported`
+                              : unknown,
       detail: botoxPreview
         ? 'No injection copay was included in this provisional calculation'
         : humanaReferenceCopay != null
           ? 'Published Humana H7617-057 benefit; confirm provider participation and visit conditions before collection'
-        : aetnaPlanning
-          ? aetnaPlanning.benefit_source.label
-          : cignaOfficeScenario
-            ? 'Cigna reported this office copay; applicability to the selected diagnostic services is an assumption'
-            : cignaFeeProxy && feeProxy?.copay_unconfirmed
-              ? 'No CPT copay row was returned; this calculation uses $0'
-              : result.collection_guidance?.basis === 'diagnostic_day_copay'
-                ? 'One payer diagnostic copay for the selected testing; final share follows the claim'
-                : result.collection_guidance?.basis === 'out_of_pocket_limit'
-                  ? 'Plan copay before the applicable out-of-pocket limit; $0 due for covered care'
-                  : calculated &&
-                      components?.copay_cents === 0 &&
-                      !lines.some((line) => line.benefits?.copay_cents != null)
-                    ? 'No separate copay was applied to the priced CPTs'
-                    : !lines.length && reportedOfficeCopay != null
-                      ? 'Payer category term; applicability to planned CPTs and visit date is not confirmed'
-                      : undefined,
+          : aetnaPlanning
+            ? aetnaPlanning.benefit_source.label
+            : cignaOfficeScenario
+              ? 'Cigna reported this office copay; applicability to the selected diagnostic services is an assumption'
+              : cignaFeeProxy && feeProxy?.copay_unconfirmed
+                ? 'No CPT copay row was returned; this calculation uses $0'
+                : result.collection_guidance?.basis === 'diagnostic_day_copay'
+                  ? 'One payer diagnostic copay for the selected testing; final share follows the claim'
+                  : result.collection_guidance?.basis === 'out_of_pocket_limit'
+                    ? 'Plan copay before the applicable out-of-pocket limit; $0 due for covered care'
+                    : calculated &&
+                        components?.copay_cents === 0 &&
+                        !lines.some((line) => line.benefits?.copay_cents != null)
+                      ? 'No separate copay was applied to the priced CPTs'
+                      : !lines.length && reportedOfficeCopay != null
+                        ? 'Payer category term; applicability to planned CPTs and visit date is not confirmed'
+                        : undefined,
     },
     {
       label: 'Individual deductible',
       value:
         humanaReferenceCopay != null && benefits?.deductible_applies === false
           ? '$0.00 annual · no medical deductible (published plan)'
-          : feeProxy != null && !cignaFeeProxy && feeProxy.basis !== 'bcbstx_uhc_in_network_fee_proxy'
-          ? `${money(feeProxy.deductible_cents)} annual · published group plan`
-          : [
-              benefits?.deductible_annual_cents != null
-                ? `${money(benefits.deductible_annual_cents)} annual`
-                : null,
-              benefits?.deductible_remaining_cents != null
-                ? `${money(benefits.deductible_remaining_cents)} remaining`
-                : null,
-            ]
-              .filter(Boolean)
-              .join(' · ') ||
-            (individualDeductible.value !== unknown
-              ? individualDeductible.value
-              : surgicalIndividualDeductible.value !== unknown
-                ? `${surgicalIndividualDeductible.value} · surgical services`
-                : unknown),
+          : feeProxy != null &&
+              !cignaFeeProxy &&
+              feeProxy.basis !== 'bcbstx_uhc_in_network_fee_proxy'
+            ? `${money(feeProxy.deductible_cents)} annual · published group plan`
+            : [
+                benefits?.deductible_annual_cents != null
+                  ? `${money(benefits.deductible_annual_cents)} annual`
+                  : null,
+                benefits?.deductible_remaining_cents != null
+                  ? `${money(benefits.deductible_remaining_cents)} remaining`
+                  : null,
+              ]
+                .filter(Boolean)
+                .join(' · ') ||
+              (individualDeductible.value !== unknown
+                ? individualDeductible.value
+                : surgicalIndividualDeductible.value !== unknown
+                  ? `${surgicalIndividualDeductible.value} · surgical services`
+                  : unknown),
       detail: botoxPreview
         ? 'Individual balance not returned; provisional scenario uses the payer-reported met family deductible'
         : cignaFeeProxy
@@ -298,10 +280,10 @@ export default function CommercialCostBreakdown({
         humanaReferenceCopay != null
           ? 'Not applicable to this Medicare Advantage individual plan'
           : familyDeductible.value !== unknown
-          ? familyDeductible.value
-          : surgicalFamilyDeductible.value !== unknown
-            ? `${surgicalFamilyDeductible.value} · surgical services`
-            : unknown,
+            ? familyDeductible.value
+            : surgicalFamilyDeductible.value !== unknown
+              ? `${surgicalFamilyDeductible.value} · surgical services`
+              : unknown,
       detail: familyOopApplied
         ? 'No deductible payment due for the selected covered services after the family out-of-pocket limit'
         : familyDeductible.unassigned
@@ -330,7 +312,7 @@ export default function CommercialCostBreakdown({
                     ? `${reportedCoinsurance}% reported; dollar amount pending`
                     : humanaReferenceCopay != null
                       ? '40% out of network · in-network office benefit is a copay'
-                    : unknown,
+                      : unknown,
       detail: aetnaPlanning
         ? 'The planning formula uses a fixed diagnostic copay rather than office visit coinsurance'
         : combinedPlan
@@ -357,50 +339,14 @@ export default function CommercialCostBreakdown({
           },
         ]
       : []),
-    {
-      label: 'Individual out-of-pocket maximum',
-      value:
-        humanaReferenceCopay != null
-          ? `${money(680000)} in-network annual · ${money(1190000)} combined annual (published plan)${individualOopRemaining != null ? ` · ${money(individualOopRemaining)} payer-reported remaining, tier unconfirmed` : ''}`
-          : [
-          individualOopAnnual != null ? `${money(individualOopAnnual)} annual` : null,
-          individualOopRemaining != null ? `${money(individualOopRemaining)} remaining` : null,
-        ]
-          .filter(Boolean)
-          .join(' · ') || individualReportedOop.value,
-      detail: familyOopApplied
-        ? 'The individual balance can remain positive after the family limit is met'
-        : reportedOopOnly
-          ? 'Payer-reported medical limit; not used as a verified calculation input'
-          : benefits?.oop_remaining_cents === 0
-            ? 'Applicable in-network limit has $0 remaining for the selected covered care'
-            : calculated && components?.oop_adjustment_cents != null
-              ? `${money(components.oop_adjustment_cents)} reduction applied to this visit`
-              : unconfirmedZeroOop
-                ? 'Payer reports $0 remaining; confirm this is the applicable medical limit before collection'
-                : individualReportedOop.unassigned
-                  ? 'Payer-reported plan amount; medical applicability needs confirmation before use as a cap'
-                  : 'Payer-reported limit; applicability to these CPTs depends on the completed estimate',
-    },
-    {
-      label: 'Family out-of-pocket maximum',
-      value:
-        humanaReferenceCopay != null
-          ? 'Not applicable to this Medicare Advantage individual plan'
-          : [
-          familyOopAnnual != null ? `${money(familyOopAnnual)} annual` : null,
-          familyOopRemaining != null ? `${money(familyOopRemaining)} remaining` : null,
-        ]
-          .filter(Boolean)
-          .join(' · ') || limitSummary(reportedResult, 'out_of_pocket', 'FAMILY').value,
-      detail: familyOopApplied
-        ? 'Met in-network family medical limit applied to every selected covered CPT'
-        : familyOopAnnual != null || familyOopRemaining != null
-          ? 'Payer-reported medical limit; not used as a verified calculation input'
-          : limitSummary(reportedResult, 'out_of_pocket', 'FAMILY').unassigned
-            ? 'Payer-reported plan amount; medical applicability unverified and not used as a cap'
-            : undefined,
-    },
+    ...commercialOopRows(
+      result,
+      reportedResult,
+      benefits,
+      familyOopApplied,
+      calculated,
+      humanaReferenceCopay,
+    ),
     { label: 'Referral', value: requirementStatus(result, 'referral') },
     { label: 'Prior authorization', value: requirementStatus(result, 'authorization') },
     {
@@ -441,15 +387,15 @@ export default function CommercialCostBreakdown({
                 ? `${money(feeProxy.patient_share_cents)} provisional · BCBS Texas fee proxy`
                 : humanaReferenceCopay != null
                   ? `${money(humanaReferenceCopay)} conditional in-network office copay · collection pending`
-                : aetnaCopayPlanning != null
-                  ? `${money(aetnaCopayPlanning)} provisional office copay`
-                  : model.estimatedShare ||
-                    (partialOfficeCopay != null
-                      ? `${money(model.officeCopayLine!.benefits.copay_cents!)} office-only planning estimate`
-                      : null) ||
-                    (model.provisionalAmount != null
-                      ? money(model.provisionalAmount)
-                      : model.patientPrice || 'Not fully calculated')
+                  : aetnaCopayPlanning != null
+                    ? `${money(aetnaCopayPlanning)} provisional office copay`
+                    : model.estimatedShare ||
+                      (partialOfficeCopay != null
+                        ? `${money(model.officeCopayLine!.benefits.copay_cents!)} office-only planning estimate`
+                        : null) ||
+                      (model.provisionalAmount != null
+                        ? money(model.provisionalAmount)
+                        : model.patientPrice || 'Not fully calculated')
   const rows: CostBreakdownRow[] =
     model.cash && !automaticCashFallback
       ? [

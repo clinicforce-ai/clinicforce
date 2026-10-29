@@ -695,7 +695,7 @@ try {
     '$6,800.00 in-network annual', 'conditional in-network office copay', 'Not established']) {
     assert(humanaTable.includes(value), `Missing Humana reference ${value}`)
   }
-  assert(renderToStaticMarkup(React.createElement(PublishedPlanBenefit, { result: humana })).includes('Humana plan source'))
+  assert(renderToStaticMarkup(React.createElement(PublishedPlanBenefit, { result: humana, show: true })).includes('Humana plan source'))
   assert(aetnaDiagnosticTable.includes('min(($50.00 per test × 2) + $0.00 deductible + $0.00 coinsurance, $218.76 Aetna fee reference, $6,390.00 remaining out-of-pocket) = $100.00'))
   const aetnaDiagnosticHeadline = renderToStaticMarkup(React.createElement(
     ArrivalAmountSummary, { model: { ...model, amountText: 'Insured amount unavailable' },
