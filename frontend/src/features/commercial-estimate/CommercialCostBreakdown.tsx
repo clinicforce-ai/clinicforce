@@ -33,8 +33,7 @@ export default function CommercialCostBreakdown({
   const feeProxy = result.fee_proxy_estimate
   const combinedPlan = !model.cash && !model.previousEstimate ? result.combined_emg_plan : null
   const cignaFeeProxy = feeProxy?.basis === 'bcbstx_cigna_fee_proxy'
-  const cignaDiagnosticScenario = feeProxy?.scenario_kind === 'oap_diagnostic_office_copay'
-  const cignaOfficeScenario = cignaDiagnosticScenario || feeProxy?.scenario_kind === 'oap_office_copay_general_coinsurance'
+  const cignaOfficeScenario = cignaFeeProxy && !!feeProxy.scenario_kind
   const lines = price?.mode === 'services' ? price.lines || [] : []
   const reason = result.reason || model.anticipatedService || 'Not recorded'
   const visitReason =
@@ -237,9 +236,7 @@ export default function CommercialCostBreakdown({
       detail: aetnaPlanning
         ? aetnaPlanning.benefit_source.label
         : cignaOfficeScenario
-          ? cignaDiagnosticScenario
-            ? 'Cigna reported this diagnostic specialist office copay for one visit; confirm the final share with its Explanation of Estimate'
-            : 'Cigna reported this office copay; applicability to the selected diagnostic services is an assumption'
+          ? 'Cigna reported this office copay; applicability to the selected diagnostic services is an assumption'
           : cignaFeeProxy && feeProxy?.copay_unconfirmed
             ? 'No CPT copay row was returned; this calculation uses $0'
             : result.collection_guidance?.basis === 'diagnostic_day_copay'
@@ -276,7 +273,7 @@ export default function CommercialCostBreakdown({
                 : unknown),
       detail: cignaFeeProxy
         ? cignaOfficeScenario
-            ? `${money(0)} applied in this provisional scenario from the general individual remaining balance; CPT applicability is not confirmed`
+          ? `${money(0)} applied in this provisional scenario from the general individual remaining balance; CPT applicability is not confirmed`
           : `${money(feeProxy?.deductible_cents || 0)} applied in this provisional scenario; exact CPT Stedi responses reported no remaining individual deductible`
         : feeProxy != null
           ? feeProxy.deductible_source
