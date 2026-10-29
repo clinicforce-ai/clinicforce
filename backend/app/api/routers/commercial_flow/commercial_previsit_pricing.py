@@ -240,6 +240,8 @@ def _previsit_benefits(payload: dict, coverage: dict, service_date: str | None =
         procedure_code=codes[0]['code'] if office_only and len(codes) == 1 else None,
         office_visit=office_only,
         office_service_types=_api._office_service_types('', source or {}), **context)
+    if diagnostic_payload := (payload.get('_service_payloads') or {}).get('73'):
+        benefits['reported_options'].extend({**row, 'id': f"stc73:{row['id']}"} for row in _api.commercial.reported_stedi_options(diagnostic_payload, '73') if row.get('service_type_code') == '73')
     benefits['benefit_source'] = (payload.get('benefit_source') or 'Stedi') if payload else None
     if (inputs and source and not coverage.get('other_active_coverage')
             and _api.stedi_discovery.corroborates_patient_policy(payload, inputs, source)

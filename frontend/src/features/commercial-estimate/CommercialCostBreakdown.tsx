@@ -33,7 +33,7 @@ export default function CommercialCostBreakdown({
   const feeProxy = result.fee_proxy_estimate
   const combinedPlan = !model.cash && !model.previousEstimate ? result.combined_emg_plan : null
   const cignaFeeProxy = feeProxy?.basis === 'bcbstx_cigna_fee_proxy'
-  const cignaOfficeScenario = feeProxy?.scenario_kind === 'oap_office_copay_general_coinsurance'
+  const cignaOfficeScenario = cignaFeeProxy && !!feeProxy.scenario_kind
   const lines = price?.mode === 'services' ? price.lines || [] : []
   const reason = result.reason || model.anticipatedService || 'Not recorded'
   const visitReason =
