@@ -8,13 +8,35 @@ from fastapi import FastAPI, HTTPException
 
 from app.api.routers import staff
 from app.api.routers.staff_flow import staff_prebooking
-from app.insurance import prebooking, stedi
+from app.insurance import prebooking, stedi, stedi_payers
 
 
 PAYER = {"stediId": "EXAMPLE", "displayName": "Example Health", "transactionSupport": {"eligibilityCheck": "SUPPORTED"}}
 PROVIDER = {"npi": "1234567893", "name": "Example Clinic"}
 PERSON = {"payer_id": "EXAMPLE", "given_name": "Pat", "family_name": "Example",
           "birth_date": "1980-01-01", "member_id": "MEM123"}
+
+
+def test_payer_suggestions_keep_stedi_ranked_medical_matches():
+    def respond(request):
+        assert request.url.params["query"] == "Example Health"
+        assert request.headers["Authorization"] == "synthetic-key"
+        payers = [
+            {"stediId": "EXACT", "displayName": "Example Health", "coverageTypes": ["medical"],
+             "transactionSupport": {"eligibilityCheck": "SUPPORTED"}},
+            {"stediId": "CLOSE", "displayName": "Example Health East", "coverageTypes": ["medical"],
+             "transactionSupport": {"eligibilityCheck": "ENROLLMENT_REQUIRED"}},
+            {"stediId": "DENTAL", "displayName": "Example Dental", "coverageTypes": ["dental"],
+             "transactionSupport": {"eligibilityCheck": "SUPPORTED"}},
+            {"stediId": "UNSUPPORTED", "displayName": "Example Unsupported", "coverageTypes": ["medical"],
+             "transactionSupport": {"eligibilityCheck": "NOT_SUPPORTED"}},
+        ]
+        return httpx.Response(200, json={"items": [{"payer": payer} for payer in [*payers, payers[0]]]})
+
+    found = asyncio.run(stedi_payers.payer_suggestions(
+        "Example Health", "synthetic-key", transport=httpx.MockTransport(respond)))
+    assert found == [{"id": "EXACT", "name": "Example Health"},
+                     {"id": "CLOSE", "name": "Example Health East"}]
 
 
 def response(status="ACTIVE_COVERAGE", service="30"):
@@ -64,8 +86,6 @@ def test_only_matching_current_medical_coverage_is_active():
 
 def test_staff_route_checks_without_creating_a_patient_or_case():
     async def search(name, ids, key, *, candidates=None):
-        if candidates is not None:
-            candidates.append(PAYER)
         return PAYER if ids == ["EXAMPLE"] else None
 
     async def run():
@@ -79,6 +99,7 @@ def test_staff_route_checks_without_creating_a_patient_or_case():
                  patch.object(staff_prebooking.clinic_store, "get_for_practice", return_value=PROVIDER), \
                  patch.object(staff_prebooking, "_today", return_value="2026-10-27"), \
                  patch.object(staff_prebooking.stedi_financial, "credentials", return_value="synthetic-key"), \
+                 patch.object(staff_prebooking.stedi_payers, "payer_suggestions", AsyncMock(return_value=[{"id": "EXAMPLE", "name": "Example Health"}])), \
                  patch.object(staff_prebooking.stedi_payers, "search_payer", side_effect=search), \
                  patch.object(stedi.Client, "check", AsyncMock(return_value={"outcome": "complete", "payload": response()})) as check, \
                  patch.object(staff.staff_store, "create_intake") as create_intake, \

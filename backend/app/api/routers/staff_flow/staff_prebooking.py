@@ -27,21 +27,17 @@ def _today() -> str:
         raise HTTPException(503, "The clinic timezone is not configured correctly.") from None
 
 
-@router.get("/prebooking-eligibility/options", response_model=PrebookingOptions, description="Search Stedi's current medical eligibility payer directory by insurance company name. Staff select the exact insurer; no patient or appointment is created.")
+@router.get("/prebooking-eligibility/options", response_model=PrebookingOptions, description="Search Stedi's current payer directory by insurance company name and return ranked medical eligibility suggestions, including close matches. Staff select the exact insurer; no patient or appointment is created.")
 async def prebooking_options(request: Request, query: str = Query(min_length=2, max_length=100)):
     staff = await _staff.require_staff(request)
     api_key = stedi_financial.credentials(staff["practice_id"])
     if not api_key:
         raise HTTPException(503, "The clinic's Stedi credential is not configured.")
-    candidates: list[dict] = []
     try:
-        await stedi_payers.search_payer(query, [], api_key, candidates=candidates)
+        payers = await stedi_payers.payer_suggestions(query, api_key)
     except (httpx.HTTPError, ValueError, TypeError):
         raise HTTPException(503, "Insurance companies are temporarily unavailable.") from None
-    payers = {row["stediId"]: {"id": row["stediId"], "name": row["displayName"]}
-              for row in candidates if isinstance(row.get("stediId"), str)
-              and isinstance(row.get("displayName"), str)}
-    return JSONResponse({"payers": list(payers.values())}, headers=_staff.NO_STORE)
+    return JSONResponse({"payers": payers}, headers=_staff.NO_STORE)
 
 
 @router.post("/prebooking-eligibility/check", response_model=PrebookingResult, description="Check today's general medical coverage (STC 30) through Stedi using prospective patient name, birth date, selected insurer and optional member ID. The clinic's saved name and NPI supply the provider identity. A missing member ID or dependent identity may prevent a conclusive payer match. Returns active_today, inactive_today, or needs_review. No patient, intake, case, appointment, or saved eligibility result is created; repeat the check after booking for the visit date.")

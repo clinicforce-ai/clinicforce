@@ -21,6 +21,7 @@ const empty: PrebookingDetails = {
 export default function StaffPrebookingScreen({ onBack }: { onBack: () => void }) {
   const [payers, setPayers] = useState<Payer[]>([])
   const [insurer, setInsurer] = useState('')
+  const [optionsState, setOptionsState] = useState<'idle' | 'loading' | 'ready' | 'failed'>('idle')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [form, setForm] = useState<PrebookingDetails>(empty)
@@ -33,10 +34,16 @@ export default function StaffPrebookingScreen({ onBack }: { onBack: () => void }
     const timer = window.setTimeout(() => {
       getPrebookingOptions(insurer.trim())
         .then((value) => {
-          if (active) setPayers(value.payers)
+          if (active) {
+            setPayers(value.payers)
+            setOptionsState('ready')
+          }
         })
         .catch(() => {
-          if (active) setError('Insurance companies are temporarily unavailable.')
+          if (active) {
+            setOptionsState('failed')
+            setError('Insurance companies are temporarily unavailable.')
+          }
         })
     }, 300)
     return () => {
@@ -129,30 +136,61 @@ export default function StaffPrebookingScreen({ onBack }: { onBack: () => void }
               onChange={(event) => change('birth_date', event.target.value)}
             />
           </label>
-          <label className="staff-field">
-            <span>Insurance company *</span>
+          <div className="staff-field">
+            <label htmlFor="prebooking-insurer">Insurance company *</label>
             <input
-              list="prebooking-payers"
+              id="prebooking-insurer"
               value={insurer}
               required
               maxLength={200}
               disabled={busy}
+              aria-describedby="prebooking-insurer-help"
               placeholder="Search Aetna, BCBS, Cigna…"
               onChange={(event) => {
                 const value = event.target.value
-                const selected = payers.find((payer) => `${payer.name} (${payer.id})` === value)
-                if (!selected) setPayers([])
                 setInsurer(value)
-                change('payer_id', selected?.id ?? '')
+                setPayers([])
+                setOptionsState(value.trim().length >= 2 ? 'loading' : 'idle')
+                change('payer_id', '')
               }}
             />
-            <datalist id="prebooking-payers">
-              {payers.map((payer) => (
-                <option key={payer.id} value={`${payer.name} (${payer.id})`} />
-              ))}
-            </datalist>
-            <small>Choose the exact insurer from the suggestions.</small>
-          </label>
+            {payers.length > 0 && !form.payer_id && (
+              <div
+                className="prebooking-payer-options"
+                role="listbox"
+                aria-label="Matching insurance companies"
+              >
+                {payers.map((payer) => (
+                  <button
+                    key={payer.id}
+                    type="button"
+                    role="option"
+                    aria-selected={false}
+                    disabled={busy}
+                    onClick={() => {
+                      setInsurer(`${payer.name} (${payer.id})`)
+                      setPayers([])
+                      setOptionsState('idle')
+                      change('payer_id', payer.id)
+                    }}
+                  >
+                    {payer.name} ({payer.id})
+                  </button>
+                ))}
+              </div>
+            )}
+            <small id="prebooking-insurer-help" aria-live="polite">
+              {form.payer_id
+                ? 'Insurer selected.'
+                : optionsState === 'loading'
+                  ? 'Searching insurance companies…'
+                  : optionsState === 'ready' && !payers.length
+                    ? 'No matching insurer found. Try a different name.'
+                    : optionsState === 'failed'
+                      ? 'Search unavailable. Try again shortly.'
+                      : 'Type at least two letters, then select the exact insurer below.'}
+            </small>
+          </div>
           <label className="staff-field">
             <span>Insurance member ID (optional)</span>
             <input
