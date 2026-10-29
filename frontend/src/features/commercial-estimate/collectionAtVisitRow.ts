@@ -43,9 +43,11 @@ export function collectionAtVisitRow(
     : null
   const officeBalance =
     aetnaCopayPlanning == null ? null : Math.max(0, aetnaCopayPlanning - aetnaPaid)
+  const botoxPreview = !model.cash && !model.previousEstimate ? result.botox_preview : null
   return {
-    label:
-      partialOfficeCopay != null && feeProxyCheckin == null
+    label: botoxPreview
+      ? 'Planned amount to collect at visit'
+      : partialOfficeCopay != null && feeProxyCheckin == null
         ? 'Suggested amount to collect at visit'
         : ((cignaFeeProxy && result.collection_guidance?.basis !== 'claim_after_service') ||
               feeProxyCheckin != null ||
@@ -61,62 +63,66 @@ export function collectionAtVisitRow(
       : result.collection_guidance?.basis === 'qmb_protection' &&
           result.collection_guidance.amount_cents === 0
         ? money(0)
-        : cignaFeeProxy &&
-            result.collection_guidance?.basis === 'claim_after_service' &&
-            result.collection_guidance.amount_cents === 0
-          ? money(0)
-          : !automaticCashFallback &&
-              model.supportedAmount &&
-              result.collection_guidance?.amount_cents != null
-            ? money(result.collection_guidance.amount_cents)
-            : cignaFeeProxy
-              ? `${money(feeProxy!.patient_share_cents)} planning estimate`
-              : feeProxyCheckin != null
-                ? money(feeProxyCheckin)
-                : aetnaPlanning
-                  ? `${money(aetnaBalance!)} planning estimate`
-                  : aetnaCopayPlanning != null
-                    ? `${money(officeBalance!)} planning estimate`
-                    : officeReferenceCopay != null
-                      ? `${money(officeReferenceCopay)} office-only reference`
-                      : partialOfficeCopay != null
-                        ? money(partialOfficeCopay)
-                        : 'Not established',
+        : botoxPreview
+          ? `${money(botoxPreview.patient_share_cents)} provisional · confirm CPT`
+          : cignaFeeProxy &&
+              result.collection_guidance?.basis === 'claim_after_service' &&
+              result.collection_guidance.amount_cents === 0
+            ? money(0)
+            : !automaticCashFallback &&
+                model.supportedAmount &&
+                result.collection_guidance?.amount_cents != null
+              ? money(result.collection_guidance.amount_cents)
+              : cignaFeeProxy
+                ? `${money(feeProxy!.patient_share_cents)} planning estimate`
+                : feeProxyCheckin != null
+                  ? money(feeProxyCheckin)
+                  : aetnaPlanning
+                    ? `${money(aetnaBalance!)} planning estimate`
+                    : aetnaCopayPlanning != null
+                      ? `${money(officeBalance!)} planning estimate`
+                      : officeReferenceCopay != null
+                        ? `${money(officeReferenceCopay)} office-only reference`
+                        : partialOfficeCopay != null
+                          ? money(partialOfficeCopay)
+                          : 'Not established',
     detail: combinedPlan
       ? `${money(combinedPlan.office_copay_cents)} + ${combinedPlan.coinsurance_percent}% × ${money(combinedPlan.diagnostic_allowed_cents)} = ${money(combinedPlan.patient_share_cents)}${combinedPlan.payments_cents ? `; less ${money(combinedPlan.payments_cents)} already paid` : ''}. Separate follow-up E/M is planned; deductible and out-of-pocket adjustments remain assumptions until payer balances are returned.`
       : result.collection_guidance?.basis === 'qmb_protection'
         ? 'QMB protection prohibits collecting Medicare cost sharing for covered care'
-        : cignaFeeProxy && result.collection_guidance?.basis === 'claim_after_service'
-          ? result.collection_guidance.reason
-          : cignaFeeProxy
-            ? `${proxyFormula?.total} ${feeProxy!.message || result.collection_guidance?.reason || ''}`
-            : feeProxy != null
-              ? result.collection_guidance?.basis === 'bcbstx_proxy_advance'
-                ? `${proxyFormula?.total} Clinic-approved BCBS Texas fee proxy advance; final responsibility follows the UHC claim.`
-                : `${proxyFormula?.total} Provisional BCBS Texas fee proxy; collect only after clinic policy and Medicare billing-protection clearance.`
-              : aetnaPlanning
-                ? `min((${money(aetnaPlanning.copay_cents / 2)} per test × 2) + ${money(aetnaPlanning.deductible_cents)} deductible + ${money(aetnaPlanning.coinsurance_cents)} coinsurance, ${money(aetnaPlanning.estimated_allowed_cents)} Aetna fee reference, ${money(aetnaPlanning.oop_remaining_cents)} remaining out-of-pocket) = ${money(aetnaPlanning.patient_share_cents)}${aetnaPaid ? `; less ${money(aetnaPaid)} already paid = ${money(aetnaBalance!)}` : ' before any prior payment'}. ${aetnaPlanning.message}`
-                : aetnaCopayPlanning != null
-                  ? `${money(aetnaCopayPlanning)} specialist office copay + ${money(0)} deductible + 0% coinsurance = ${money(aetnaCopayPlanning)}${aetnaPaid ? `; less ${money(aetnaPaid)} already paid = ${money(officeBalance!)}` : ' before any prior payment'}. Planning amount; confirm the final allowed charge and Medicare billing protection before collection.`
-                  : officeReferenceCopay != null
-                    ? 'Planning figure for one specialist office visit on the appointment date; not an authorized collection instruction. Other services, prior payments and Medicare cost-sharing protection are not included.'
-                    : partialOfficeCopay != null
-                      ? 'Suggested office visit copay after recorded payments. Separately performed DBS device services may add cost.'
-                      : automaticCashFallback
-                        ? 'Insurance collection is unresolved; any cash quote is listed separately'
-                        : result.collection_guidance?.unconfirmed_zero_oop
-                          ? 'Confirm the reported $0 out-of-pocket balance with the payer before collection'
-                          : model.supportedAmount
-                            ? result.collection_guidance?.basis === 'office_copay'
-                              ? 'Office copay advance; other services may have a later balance'
-                              : result.collection_guidance?.basis === 'out_of_pocket_limit'
-                                ? 'Applicable out-of-pocket maximum has no remaining balance for covered care'
-                                : result.collection_guidance?.basis === 'diagnostic_day_copay'
-                                  ? 'One diagnostic copay advance; other costs may follow the claim'
-                                  : result.collection_guidance?.basis === 'claim_after_service'
-                                    ? 'Clinic policy defers collection until after the claim'
-                                    : undefined
-                            : undefined,
+        : botoxPreview
+          ? `${botoxPreview.coinsurance_percent}% × ${money(botoxPreview.allowed_cents)} for CPT ${botoxPreview.code} = ${money(botoxPreview.patient_share_cents)}. Confirm the injection site, individual limits, and prior payments before charging.`
+          : cignaFeeProxy && result.collection_guidance?.basis === 'claim_after_service'
+            ? result.collection_guidance.reason
+            : cignaFeeProxy
+              ? `${proxyFormula?.total} ${feeProxy!.message || result.collection_guidance?.reason || ''}`
+              : feeProxy != null
+                ? result.collection_guidance?.basis === 'bcbstx_proxy_advance'
+                  ? `${proxyFormula?.total} Clinic-approved BCBS Texas fee proxy advance; final responsibility follows the UHC claim.`
+                  : `${proxyFormula?.total} Provisional BCBS Texas fee proxy; collect only after clinic policy and Medicare billing-protection clearance.`
+                : aetnaPlanning
+                  ? `min((${money(aetnaPlanning.copay_cents / 2)} per test × 2) + ${money(aetnaPlanning.deductible_cents)} deductible + ${money(aetnaPlanning.coinsurance_cents)} coinsurance, ${money(aetnaPlanning.estimated_allowed_cents)} Aetna fee reference, ${money(aetnaPlanning.oop_remaining_cents)} remaining out-of-pocket) = ${money(aetnaPlanning.patient_share_cents)}${aetnaPaid ? `; less ${money(aetnaPaid)} already paid = ${money(aetnaBalance!)}` : ' before any prior payment'}. ${aetnaPlanning.message}`
+                  : aetnaCopayPlanning != null
+                    ? `${money(aetnaCopayPlanning)} specialist office copay + ${money(0)} deductible + 0% coinsurance = ${money(aetnaCopayPlanning)}${aetnaPaid ? `; less ${money(aetnaPaid)} already paid = ${money(officeBalance!)}` : ' before any prior payment'}. Planning amount; confirm the final allowed charge and Medicare billing protection before collection.`
+                    : officeReferenceCopay != null
+                      ? 'Planning figure for one specialist office visit on the appointment date; not an authorized collection instruction. Other services, prior payments and Medicare cost-sharing protection are not included.'
+                      : partialOfficeCopay != null
+                        ? 'Suggested office visit copay after recorded payments. Separately performed DBS device services may add cost.'
+                        : automaticCashFallback
+                          ? 'Insurance collection is unresolved; any cash quote is listed separately'
+                          : result.collection_guidance?.unconfirmed_zero_oop
+                            ? 'Confirm the reported $0 out-of-pocket balance with the payer before collection'
+                            : model.supportedAmount
+                              ? result.collection_guidance?.basis === 'office_copay'
+                                ? 'Office copay advance; other services may have a later balance'
+                                : result.collection_guidance?.basis === 'out_of_pocket_limit'
+                                  ? 'Applicable out-of-pocket maximum has no remaining balance for covered care'
+                                  : result.collection_guidance?.basis === 'diagnostic_day_copay'
+                                    ? 'One diagnostic copay advance; other costs may follow the claim'
+                                    : result.collection_guidance?.basis === 'claim_after_service'
+                                      ? 'Clinic policy defers collection until after the claim'
+                                      : undefined
+                              : undefined,
     emphasis: true,
   }
 }

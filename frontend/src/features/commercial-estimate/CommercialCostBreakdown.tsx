@@ -19,7 +19,7 @@ import { referenceCoverageRow } from './referenceCoverageRow'
 import { reportedLimit } from './reportedLimit'
 import { limitSummary, unknown } from './limitSummary'
 import { resolvedAllowedTotal } from './resolvedAllowedTotal'
-
+import { commercialCptRows } from './commercialCptRows'
 export default function CommercialCostBreakdown({
   model,
   result,
@@ -31,10 +31,12 @@ export default function CommercialCostBreakdown({
   const reportedResult = result.reference_benefits ? { ...result, benefits } : result
   const price = result.price_range
   const feeProxy = result.fee_proxy_estimate
+  const botoxPreview = !model.cash && !model.previousEstimate ? result.botox_preview : null
   const combinedPlan = !model.cash && !model.previousEstimate ? result.combined_emg_plan : null
   const cignaFeeProxy = feeProxy?.basis === 'bcbstx_cigna_fee_proxy'
   const cignaOfficeScenario = cignaFeeProxy && !!feeProxy.scenario_kind
   const lines = price?.mode === 'services' ? price.lines || [] : []
+  const cptRows = commercialCptRows(result, lines, botoxPreview)
   const reason = result.reason || model.anticipatedService || 'Not recorded'
   const visitReason =
     result.service_plan?.kind === 'emg_ncs' &&
@@ -115,26 +117,8 @@ export default function CommercialCostBreakdown({
       label: result.reason ? 'Reason for visit' : 'Planned service',
       value: visitReason,
     },
-    {
-      label:
-        result.service_selection_status === 'preview' && result.service_plan?.method === 'llm'
-          ? 'LLM-proposed CPTs'
-          : 'CPTs',
-      value: lines.length
-        ? lines
-            .map(
-              (line) =>
-                `CPT ${line.code} × ${line.units || 1}${line.modifiers?.length ? ` · modifier ${line.modifiers.join(', ')}` : ''}`,
-            )
-            .join('; ')
-        : 'No CPTs selected',
-      detail:
-        result.service_selection_status !== 'approved'
-          ? result.service_plan?.method === 'llm'
-            ? 'Model proposal used for this estimate; billed codes follow the services actually performed'
-            : 'Provisional service scenario used for this estimate'
-          : undefined,
-    },
+    cptRows.cpt,
+    ...cptRows.candidates,
     ...(lines.length
       ? lines.map((line) => {
           const proxyRate = temporaryRateReference?.lines.find(
@@ -171,7 +155,7 @@ export default function CommercialCostBreakdown({
                   : line.description || undefined,
           }
         })
-      : [{ label: 'Planned CPTs', value: 'No priced CPTs selected' }]),
+      : [cptRows.unpriced]),
     {
       label: 'Total payer allowed',
       value: automaticCashFallback
@@ -180,7 +164,9 @@ export default function CommercialCostBreakdown({
           ? range(price.allowed_min_cents, price.allowed_max_cents)
           : lineAllowedTotal != null
             ? money(lineAllowedTotal)
-            : 'Not fully priced',
+            : botoxPreview
+              ? `${money(botoxPreview.allowed_cents)} · clinic fee row`
+              : 'Not fully priced',
     },
     ...(temporaryRateReference?.lines.length
       ? [
@@ -217,39 +203,43 @@ export default function CommercialCostBreakdown({
                   : feeProxy.copay_cents
                     ? `${money(feeProxy.copay_cents)} specialist follow-up; $0.00 diagnostic copay`
                     : '$0.00 diagnostic copay'
-                : officeReferenceCopay != null
-                  ? `${money(officeReferenceCopay)} specialist office visit · payer-reported reference`
-                  : diagnosticCopay != null
-                    ? `${money(diagnosticCopay)} once per day`
-                    : calculated && components?.copay_cents != null
-                      ? money(components.copay_cents)
-                      : lines.some((line) => line.benefits?.copay_cents != null)
-                        ? lines
-                            .map(
-                              (line) =>
-                                `CPT ${line.code}: ${line.benefits.copay_cents != null ? money(line.benefits.copay_cents) : 'not returned'}`,
-                            )
-                            .join('; ')
-                        : !lines.length && reportedOfficeCopay != null
-                          ? `${money(reportedOfficeCopay)} specialist office visit · payer-reported`
-                          : unknown,
-      detail: aetnaPlanning
-        ? aetnaPlanning.benefit_source.label
-        : cignaOfficeScenario
-          ? 'Cigna reported this office copay; applicability to the selected diagnostic services is an assumption'
-          : cignaFeeProxy && feeProxy?.copay_unconfirmed
-            ? 'No CPT copay row was returned; this calculation uses $0'
-            : result.collection_guidance?.basis === 'diagnostic_day_copay'
-              ? 'One payer diagnostic copay for the selected testing; final share follows the claim'
-              : result.collection_guidance?.basis === 'out_of_pocket_limit'
-                ? 'Plan copay before the applicable out-of-pocket limit; $0 due for covered care'
-                : calculated &&
-                    components?.copay_cents === 0 &&
-                    !lines.some((line) => line.benefits?.copay_cents != null)
-                  ? 'No separate copay was applied to the priced CPTs'
-                  : !lines.length && reportedOfficeCopay != null
-                    ? 'Payer category term; applicability to planned CPTs and visit date is not confirmed'
-                    : undefined,
+                : botoxPreview
+                  ? 'Not returned for office injection'
+                  : officeReferenceCopay != null
+                    ? `${money(officeReferenceCopay)} specialist office visit · payer-reported reference`
+                    : diagnosticCopay != null
+                      ? `${money(diagnosticCopay)} once per day`
+                      : calculated && components?.copay_cents != null
+                        ? money(components.copay_cents)
+                        : lines.some((line) => line.benefits?.copay_cents != null)
+                          ? lines
+                              .map(
+                                (line) =>
+                                  `CPT ${line.code}: ${line.benefits.copay_cents != null ? money(line.benefits.copay_cents) : 'not returned'}`,
+                              )
+                              .join('; ')
+                          : !lines.length && reportedOfficeCopay != null
+                            ? `${money(reportedOfficeCopay)} specialist office visit · payer-reported`
+                            : unknown,
+      detail: botoxPreview
+        ? 'No injection copay was included in this provisional calculation'
+        : aetnaPlanning
+          ? aetnaPlanning.benefit_source.label
+          : cignaOfficeScenario
+            ? 'Cigna reported this office copay; applicability to the selected diagnostic services is an assumption'
+            : cignaFeeProxy && feeProxy?.copay_unconfirmed
+              ? 'No CPT copay row was returned; this calculation uses $0'
+              : result.collection_guidance?.basis === 'diagnostic_day_copay'
+                ? 'One payer diagnostic copay for the selected testing; final share follows the claim'
+                : result.collection_guidance?.basis === 'out_of_pocket_limit'
+                  ? 'Plan copay before the applicable out-of-pocket limit; $0 due for covered care'
+                  : calculated &&
+                      components?.copay_cents === 0 &&
+                      !lines.some((line) => line.benefits?.copay_cents != null)
+                    ? 'No separate copay was applied to the priced CPTs'
+                    : !lines.length && reportedOfficeCopay != null
+                      ? 'Payer category term; applicability to planned CPTs and visit date is not confirmed'
+                      : undefined,
     },
     {
       label: 'Individual deductible',
@@ -271,26 +261,28 @@ export default function CommercialCostBreakdown({
               : surgicalIndividualDeductible.value !== unknown
                 ? `${surgicalIndividualDeductible.value} · surgical services`
                 : unknown),
-      detail: cignaFeeProxy
-        ? cignaOfficeScenario
-          ? `${money(0)} applied in this provisional scenario from the general individual remaining balance; CPT applicability is not confirmed`
-          : `${money(feeProxy?.deductible_cents || 0)} applied in this provisional scenario; exact CPT Stedi responses reported no remaining individual deductible`
-        : feeProxy != null
-          ? feeProxy.deductible_source
-          : result.collection_guidance?.basis === 'out_of_pocket_limit'
-            ? individualDeductible.value === unknown && benefits?.deductible_annual_cents == null
-              ? 'No deductible payment due after the out-of-pocket limit; the payer did not report an office-specific deductible rule'
-              : 'No deductible payment due for this covered office visit after the out-of-pocket limit'
-            : calculated && components?.deductible_cents != null
-              ? `${money(components.deductible_cents)} applied to this visit`
-              : individualDeductible.unassigned
-                ? 'Payer-reported plan amount; medical applicability needs confirmation'
-                : surgicalIndividualDeductible.value !== unknown
-                  ? 'Payer did not report an office-specific deductible rule; surgical balance does not establish one'
-                  : lines.length &&
-                      lines.every((line) => line.benefits?.deductible_applies === false)
-                    ? 'Does not apply to the selected CPTs'
-                    : 'Office deductible applicability or amount is unresolved for the selected CPTs',
+      detail: botoxPreview
+        ? 'Individual balance not returned; provisional scenario uses the payer-reported met family deductible'
+        : cignaFeeProxy
+          ? cignaOfficeScenario
+            ? `${money(0)} applied in this provisional scenario from the general individual remaining balance; CPT applicability is not confirmed`
+            : `${money(feeProxy?.deductible_cents || 0)} applied in this provisional scenario; exact CPT Stedi responses reported no remaining individual deductible`
+          : feeProxy != null
+            ? feeProxy.deductible_source
+            : result.collection_guidance?.basis === 'out_of_pocket_limit'
+              ? individualDeductible.value === unknown && benefits?.deductible_annual_cents == null
+                ? 'No deductible payment due after the out-of-pocket limit; the payer did not report an office-specific deductible rule'
+                : 'No deductible payment due for this covered office visit after the out-of-pocket limit'
+              : calculated && components?.deductible_cents != null
+                ? `${money(components.deductible_cents)} applied to this visit`
+                : individualDeductible.unassigned
+                  ? 'Payer-reported plan amount; medical applicability needs confirmation'
+                  : surgicalIndividualDeductible.value !== unknown
+                    ? 'Payer did not report an office-specific deductible rule; surgical balance does not establish one'
+                    : lines.length &&
+                        lines.every((line) => line.benefits?.deductible_applies === false)
+                      ? 'Does not apply to the selected CPTs'
+                      : 'Office deductible applicability or amount is unresolved for the selected CPTs',
     },
     {
       label: 'Family deductible',
@@ -314,32 +306,36 @@ export default function CommercialCostBreakdown({
         ? `0% applied · ${money(0)}`
         : combinedPlan
           ? `${combinedPlan.coinsurance_percent}% · ${money(combinedPlan.diagnostic_coinsurance_cents)}`
-          : feeProxy != null
-            ? `${feeProxy.coinsurance_percent}%${cignaOfficeScenario ? ' assumed' : ''} · ${money(feeProxy.coinsurance_cents)} on the fee proxy`
-            : result.collection_guidance?.basis === 'out_of_pocket_limit'
-              ? reportedCoinsurance != null
-                ? `${reportedCoinsurance}% reported; $0 payable after out-of-pocket limit`
-                : '$0 payable after out-of-pocket limit'
-              : calculated && components?.coinsurance_cents != null
-                ? money(components.coinsurance_cents)
-                : reportedCoinsurance != null
-                  ? `${reportedCoinsurance}% reported; dollar amount pending`
-                  : unknown,
+          : botoxPreview
+            ? `${botoxPreview.coinsurance_percent}% · ${money(botoxPreview.patient_share_cents)} provisional`
+            : feeProxy != null
+              ? `${feeProxy.coinsurance_percent}%${cignaOfficeScenario ? ' assumed' : ''} · ${money(feeProxy.coinsurance_cents)} on the fee proxy`
+              : result.collection_guidance?.basis === 'out_of_pocket_limit'
+                ? reportedCoinsurance != null
+                  ? `${reportedCoinsurance}% reported; $0 payable after out-of-pocket limit`
+                  : '$0 payable after out-of-pocket limit'
+                : calculated && components?.coinsurance_cents != null
+                  ? money(components.coinsurance_cents)
+                  : reportedCoinsurance != null
+                    ? `${reportedCoinsurance}% reported; dollar amount pending`
+                    : unknown,
       detail: aetnaPlanning
         ? 'The planning formula uses a fixed diagnostic copay rather than office visit coinsurance'
         : combinedPlan
           ? `${combinedPlan.coinsurance_percent}% × ${money(combinedPlan.diagnostic_allowed_cents)} = ${money(combinedPlan.diagnostic_coinsurance_cents)}`
-          : feeProxy != null
-            ? proxyFormula?.coinsurance ||
-              `${money(feeProxy.reference_total_cents)} × ${feeProxy.coinsurance_percent}% = ${money(feeProxy.coinsurance_cents)}`
-            : calculated
-              ? coinsuranceFormula(result) ||
-                (components?.coinsurance_cents === 0
-                  ? 'No coinsurance applied after deductible'
-                  : undefined)
-              : !lines.length && reportedCoinsurance != null
-                ? 'Payer-reported office visit term; diagnostic testing share is not established'
-                : undefined,
+          : botoxPreview
+            ? `${botoxPreview.coinsurance_percent}% × ${money(botoxPreview.allowed_cents)} = ${money(botoxPreview.patient_share_cents)}`
+            : feeProxy != null
+              ? proxyFormula?.coinsurance ||
+                `${money(feeProxy.reference_total_cents)} × ${feeProxy.coinsurance_percent}% = ${money(feeProxy.coinsurance_cents)}`
+              : calculated
+                ? coinsuranceFormula(result) ||
+                  (components?.coinsurance_cents === 0
+                    ? 'No coinsurance applied after deductible'
+                    : undefined)
+                : !lines.length && reportedCoinsurance != null
+                  ? 'Payer-reported office visit term; diagnostic testing share is not established'
+                  : undefined,
     },
     ...(calculated && (components?.allowed_cap_adjustment_cents ?? 0) > 0
       ? [
@@ -423,17 +419,19 @@ export default function CommercialCostBreakdown({
             )
           : aetnaPlanning
             ? `${money(aetnaPlanning.patient_share_cents)} planning estimate`
-            : feeProxy != null
-              ? `${money(feeProxy.patient_share_cents)} provisional · BCBS Texas fee proxy`
-              : aetnaCopayPlanning != null
-                ? `${money(aetnaCopayPlanning)} provisional office copay`
-                : model.estimatedShare ||
-                  (partialOfficeCopay != null
-                    ? `${money(model.officeCopayLine!.benefits.copay_cents!)} office-only planning estimate`
-                    : null) ||
-                  (model.provisionalAmount != null
-                    ? money(model.provisionalAmount)
-                    : model.patientPrice || 'Not fully calculated')
+            : botoxPreview
+              ? `${money(botoxPreview.patient_share_cents)} provisional · CPT ${botoxPreview.code} scenario`
+              : feeProxy != null
+                ? `${money(feeProxy.patient_share_cents)} provisional · BCBS Texas fee proxy`
+                : aetnaCopayPlanning != null
+                  ? `${money(aetnaCopayPlanning)} provisional office copay`
+                  : model.estimatedShare ||
+                    (partialOfficeCopay != null
+                      ? `${money(model.officeCopayLine!.benefits.copay_cents!)} office-only planning estimate`
+                      : null) ||
+                    (model.provisionalAmount != null
+                      ? money(model.provisionalAmount)
+                      : model.patientPrice || 'Not fully calculated')
   const rows: CostBreakdownRow[] =
     model.cash && !automaticCashFallback
       ? [
@@ -471,13 +469,15 @@ export default function CommercialCostBreakdown({
                   ? 'Covered in-network share is capped by the applicable out-of-pocket limit'
                   : aetnaPlanning
                     ? `min(${money(aetnaPlanning.copay_cents)} diagnostic copays + ${money(aetnaPlanning.deductible_cents)} deductible + ${money(aetnaPlanning.coinsurance_cents)} coinsurance, ${money(aetnaPlanning.estimated_allowed_cents)} fee reference, ${money(aetnaPlanning.oop_remaining_cents)} remaining out-of-pocket) = ${money(aetnaPlanning.patient_share_cents)} before prior payments. ${aetnaPlanning.message}`
-                    : feeProxy != null
-                      ? feeProxy.message
-                      : aetnaCopayPlanning != null
-                        ? `${money(aetnaCopayPlanning)} copay + ${money(0)} deductible + 0% × Aetna allowed amount = ${money(aetnaCopayPlanning)} before the unknown allowance cap. Confirm the visit conditions and final claim amount.`
-                        : calculated
-                          ? 'Copay + deductible applied + coinsurance − allowed and out-of-pocket reductions'
-                          : 'Full share awaits applicable deductible and out-of-pocket terms',
+                    : botoxPreview
+                      ? `One procedure unit at ${money(botoxPreview.allowed_cents)} from ${botoxPreview.rate_source}; ${botoxPreview.coinsurance_percent}% office-injection coinsurance from Stedi. Confirm coding and individual benefit limits before charging.`
+                      : feeProxy != null
+                        ? feeProxy.message
+                        : aetnaCopayPlanning != null
+                          ? `${money(aetnaCopayPlanning)} copay + ${money(0)} deductible + 0% × Aetna allowed amount = ${money(aetnaCopayPlanning)} before the unknown allowance cap. Confirm the visit conditions and final claim amount.`
+                          : calculated
+                            ? 'Copay + deductible applied + coinsurance − allowed and out-of-pocket reductions'
+                            : 'Full share awaits applicable deductible and out-of-pocket terms',
           },
           ...(summary?.payments_verified_cents != null && summary.payments_verified_cents > 0
             ? [{ label: 'Already paid', value: `−${money(summary.payments_verified_cents)}` }]

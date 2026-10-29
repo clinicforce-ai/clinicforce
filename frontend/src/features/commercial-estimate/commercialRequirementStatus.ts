@@ -4,7 +4,13 @@ import { aetnaReferenceRequirement } from './aetnaReferenceRequirements'
 
 export function requirementStatus(result: PrevisitEstimate, kind: 'referral' | 'authorization') {
   const lines = result.price_range?.mode === 'services' ? result.price_range.lines || [] : []
-  if (!lines.length) return 'Select planned CPTs to check'
+  if (!lines.length) {
+    const code = result.botox_preview?.code
+    const candidate = result.candidate_requirements?.find((row) => row.code === code)
+    return candidate && code
+      ? `CPT ${code} candidate: ${candidate[kind]?.status?.toLowerCase() || 'not determined'}`
+      : 'Select planned CPTs to check'
+  }
   return lines
     .map((line) => {
       const evidence = requirementForLine(

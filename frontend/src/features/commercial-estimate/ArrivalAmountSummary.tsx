@@ -59,6 +59,7 @@ export default function ArrivalAmountSummary({
     !model.cash && !model.previousEstimate && result.collection_guidance?.amount_cents == null
       ? result.aetna_diagnostic_reference
       : null
+  const botoxPlanning = !model.cash && !model.previousEstimate ? result.botox_preview : null
   const aetnaBalance = aetnaPlanning
     ? Math.max(
         0,
@@ -84,23 +85,29 @@ export default function ArrivalAmountSummary({
       <span>
         {plan
           ? 'Amount to collect at visit · planning estimate'
-          : cignaPlanning
-            ? 'Cigna planning estimate · collection pending'
-            : aetnaPlanning
-              ? 'Planned amount to collect at visit'
-              : officeBalance != null
+          : botoxPlanning
+            ? 'Planned amount to collect · provisional CPT scenario'
+            : cignaPlanning
+              ? 'Cigna planning estimate · collection pending'
+              : aetnaPlanning
                 ? 'Planned amount to collect at visit'
-                : partialCopay != null
-                  ? referenceOnly
-                    ? 'Office-only reference · collection pending'
-                    : 'Suggested amount to collect at visit'
-                  : needsAction
-                    ? 'Next step'
-                    : model.amountLabel}
+                : officeBalance != null
+                  ? 'Planned amount to collect at visit'
+                  : partialCopay != null
+                    ? referenceOnly
+                      ? 'Office-only reference · collection pending'
+                      : 'Suggested amount to collect at visit'
+                    : needsAction
+                      ? 'Next step'
+                      : model.amountLabel}
       </span>
       <strong
         className={
-          !visibleAmount && !cignaPlanning && !aetnaPlanning && officeBalance == null
+          !visibleAmount &&
+          !botoxPlanning &&
+          !cignaPlanning &&
+          !aetnaPlanning &&
+          officeBalance == null
             ? 'amount-pending'
             : undefined
         }
@@ -108,17 +115,19 @@ export default function ArrivalAmountSummary({
       >
         {plan
           ? money(plan.amount_cents)
-          : cignaPlanning
-            ? money(cignaPlanning.patient_share_cents)
-            : aetnaPlanning
-              ? money(aetnaBalance!)
-              : officeBalance != null
-                ? money(officeBalance)
-                : partialCopay != null
-                  ? money(partialCopay)
-                  : needsAction
-                    ? action.title
-                    : model.amountText}
+          : botoxPlanning
+            ? money(botoxPlanning.patient_share_cents)
+            : cignaPlanning
+              ? money(cignaPlanning.patient_share_cents)
+              : aetnaPlanning
+                ? money(aetnaBalance!)
+                : officeBalance != null
+                  ? money(officeBalance)
+                  : partialCopay != null
+                    ? money(partialCopay)
+                    : needsAction
+                      ? action.title
+                      : model.amountText}
       </strong>
       {plan ? (
         <p>
@@ -126,6 +135,12 @@ export default function ArrivalAmountSummary({
           {money(plan.diagnostic_allowed_cents)} diagnostic allowance ={' '}
           {money(plan.patient_share_cents)} before any recorded payment. Deductible and
           out-of-pocket balances were not returned.
+        </p>
+      ) : botoxPlanning ? (
+        <p>
+          {botoxPlanning.coinsurance_percent}% × {money(botoxPlanning.allowed_cents)} for one
+          provisional CPT {botoxPlanning.code} procedure. Confirm the coding and member benefit
+          limits before charging.
         </p>
       ) : cignaPlanning ? (
         <p>

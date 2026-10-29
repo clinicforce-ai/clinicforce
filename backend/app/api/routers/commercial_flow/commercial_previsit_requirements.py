@@ -27,9 +27,11 @@ def _rules_version(rows: list[dict]) -> str:
 
 async def check_cpt_authorization(api: ModuleType, result: dict, case: dict, payload: dict,
                                   inputs: dict, session: dict, api_key: str | None) -> dict:
-    """Check selected CPTs for this member, date, network and office setting."""
+    """Check selected CPTs or one priced Botox preview for this member and setting."""
     codes = sorted({str(row.get('code') or '') for row in result.get('codes') or []
                     if api.re.fullmatch(r'\d{5}', str(row.get('code') or ''))})
+    if not codes and (result.get('botox_preview') or {}).get('code'):
+        codes = [result['botox_preview']['code']]
     benefits = result.get('benefits') or {}
     identity = result.get('identity') or benefits.get('identity') or {}
     pos = '' if visit_estimate.telehealth_pos_unresolved(inputs) else str(inputs.get('place_of_service') or '')

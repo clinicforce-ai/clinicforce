@@ -232,3 +232,15 @@ export type VisitFinancials = {
     received_at: string
   }>
 }
+export type BotoxPreview = {
+  status: 'provisional'
+  code: string
+  units: number
+  allowed_cents: number
+  coinsurance_percent: string
+  family_deductible_remaining_cents: number
+  family_oop_remaining_cents: number
+  patient_share_cents: number
+  rate_source: string
+  benefit_source: string
+}
