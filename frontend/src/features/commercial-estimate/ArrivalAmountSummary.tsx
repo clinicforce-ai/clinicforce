@@ -93,7 +93,7 @@ export default function ArrivalAmountSummary({
                 : partialCopay != null
                   ? referenceOnly
                     ? 'Office-only reference · collection pending'
-                    : 'Payer-reported office copay · collection pending'
+                    : 'Suggested amount to collect at visit'
                   : needsAction
                     ? 'Next step'
                     : model.amountLabel}
@@ -156,7 +156,7 @@ export default function ArrivalAmountSummary({
             ? 'Planning amount for this visit date; confirm payer date and Medicare cost-sharing protection before collection.'
             : additionalServicesPending
               ? 'Office copay reported; other service costs pending.'
-              : 'Office copay reported; collection pending.'}
+              : 'Payer-reported office copay after recorded payments; separately performed services may change the total.'}
         </p>
       ) : needsAction ? (
         <p>{action.hint}</p>

@@ -135,6 +135,31 @@ def test_bcbstx_in_network_ppo_99213_office_requirements():
     assert evaluate(result, context, [])['authorization']['status'] == 'Not required'
 
 
+def test_uhc_group_lppo_routine_office_followup_requirements():
+    result, context = case('UnitedHealthcare',
+                           'LPPO-UNITEDHEALTHCARE GROUP MEDICARE ADVANTAGE (PPO)',
+                           '99213', day='2026-10-29')
+    context['group_number'] = '15725'
+    decision = evaluate(result, context, [])
+    assert decision['referral']['status'] == 'Not required'
+    assert decision['authorization']['status'] == 'Not required'
+    assert decision['procedures'][0]['authorization']['status'] == 'Not required'
+    for code in ('99202', '99203', '99204', '99212', '99214', '99215'):
+        result['codes'] = [{'id': '0', 'code': code, 'units': 1}]
+        assert evaluate(result, context, [])['authorization']['status'] == 'Not required'
+    result['codes'] = [{'id': '0', 'code': '99213', 'units': 1}]
+    assert evaluate(result, {**context, 'plans': ['LPPO-UNITEDHEALTHCARE GROUP MEDICARE ADVANTAGE (PP']}, [])['authorization']['status'] == 'Not required'
+    assert evaluate(result, {**context, 'pos': '22'}, [])['authorization']['status'] != 'Not required'
+    assert evaluate(result, {**context, 'plans': ['UnitedHealthcare Navigate']}, [])['authorization']['status'] != 'Not required'
+    result['benefits']['service_date_matches'] = None
+    result['checked_at'] = '2026-10-29T15:00:00Z'
+    assert evaluate(result, context, [])['authorization']['status'] == 'Not required'
+    result['checked_at'] = '2026-10-28T15:00:00Z'
+    assert evaluate(result, context, [])['authorization']['status'] == 'Verification required'
+    result['benefits']['coverage_evidence'] = {'status': 'ACTIVE', 'start': '2026-01-01'}
+    assert evaluate(result, context, [])['authorization']['status'] == 'Not required'
+
+
 def test_99205_transplant_rule_requires_confirmed_indication():
     result, context = case('UnitedHealthcare', 'Choice Plus', '99205')
     ordinary = evaluate(result, context, [])['authorization']

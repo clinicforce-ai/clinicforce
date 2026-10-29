@@ -92,6 +92,11 @@ def build_catalog(api: ModuleType, result: dict, session: dict, inputs: dict, so
     if botox_visit:
         descriptions.update({code: description for family in ('botulinum_drug', 'chemodenervation')
                              for code, description in cpt_rules.SERVICE_FAMILIES[family]['candidate_descriptions'].items()})
+    if api.re.search(r'\b(?:DBS|deep brain stimulation)\b',
+                     ' '.join(str(inputs.get(key) or '') for key in ('reason', 'appointment_type')), api.re.I):
+        descriptions.update({'95970': 'Implanted neurostimulator analysis · no programming',
+                             '95983': 'Deep brain neurostimulator programming · first 15 minutes',
+                             '95984': 'Deep brain neurostimulator programming · each additional 15 minutes'})
     available.extend({'id': 'planning:' + code, 'code': code, 'description': description,
                       'source': 'CPT planning catalog',
                       'units': None if code == 'J0585' else 1, 'modifiers': []}

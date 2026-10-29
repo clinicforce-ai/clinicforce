@@ -295,6 +295,48 @@ try {
   assert(aetna.includes('Network</th><td><span>Not determined'))
   assert(!aetna.includes('Estimated patient share</th><td><span>$250.00'))
 
+  const uhcOfficeLine = {
+    id: 'office', code: '99213', units: 1, cash_cents: 15000, allowed_cents: null,
+    benefits: { active: true, network_status: 'in_network', copay_id: 'copay-1',
+      copay_cents: 1000, copay_period: 'VISIT', network_independent: false },
+  }
+  const uhcOffice = {
+    payer: 'United Healthcare', reason: 'DBS Follow Up', service_date: '2026-10-29',
+    identity: { match_version: 2, status: 'matched', binding: 'synthetic-binding' },
+    plan_details: { stedi: { names: ['LPPO-UNITEDHEALTHCARE GROUP MEDICARE ADVANTAGE (PPO)'] } },
+    benefits: { active: true, service_date_matches: true, network_status: 'in_network',
+      network_source: 'clinic_group_agreement' },
+    price_range: { mode: 'services', complete: false, cash_complete: true,
+      cash_min_cents: 15000, cash_max_cents: 15000, lines: [uhcOfficeLine] },
+    collection_guidance: { amount_cents: null, basis: 'missing_collection_inputs' },
+    encounter_summary: { payments_verified_cents: 0 },
+  }
+  const uhcOfficeModel = { ...model, officeCopayLine: uhcOfficeLine,
+    amountText: 'Insured amount unavailable' }
+  const uhcTable = renderToStaticMarkup(React.createElement(
+    CommercialCostBreakdown, { model: uhcOfficeModel, result: uhcOffice },
+  ))
+  assert(uhcTable.includes('Estimated patient share</th><td><span>$10.00 office-only planning estimate'))
+  assert(uhcTable.includes('Suggested amount to collect at visit</th><td><span>$10.00'))
+  const uhcHeadline = renderToStaticMarkup(React.createElement(
+    ArrivalAmountSummary, { model: uhcOfficeModel, result: uhcOffice,
+      partialCopay: 1000, visibleAmount: true },
+  ))
+  assert(uhcHeadline.includes('Suggested amount to collect at visit'))
+  assert(uhcHeadline.includes('$10.00'))
+  const uhcPaid = renderToStaticMarkup(React.createElement(CommercialCostBreakdown, {
+    model: uhcOfficeModel,
+    result: { ...uhcOffice, encounter_summary: { payments_verified_cents: 400 } },
+  }))
+  assert(uhcPaid.includes('Suggested amount to collect at visit</th><td><span>$6.00'))
+  assert(uhcPaid.includes('Estimated patient share</th><td><span>$10.00 office-only planning estimate'))
+  const uhcQmb = renderToStaticMarkup(React.createElement(CommercialCostBreakdown, {
+    model: uhcOfficeModel,
+    result: { ...uhcOffice, billing_protection: { status: 'qmb' },
+      collection_guidance: { amount_cents: 0, basis: 'qmb_protection' } },
+  }))
+  assert(uhcQmb.includes('Amount to collect at visit</th><td><span>$0.00'))
+
   const attachedReference = renderToStaticMarkup(
     React.createElement(CommercialCostBreakdown, {
       model: {
