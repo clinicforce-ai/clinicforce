@@ -7,7 +7,7 @@ import json
 from datetime import date, datetime, timedelta, timezone
 
 from app.insurance import commercial
-from app.insurance.identity import birth_date, normalized, one_name_edit
+from app.insurance.identity import birth_date, normalized, one_name_edit, card_name_matches
 
 URL = 'https://healthcare.us.stedi.com/2024-04-01/insurance-discovery/check/v1'
 MBI_URL = 'https://healthcare.us.stedi.com/2024-04-01/change/medicalnetwork/eligibility/v3'
@@ -303,16 +303,6 @@ def payer_followup_confirms(discovered: dict, verified: dict, inputs: dict, sour
         return False
     return all(not first.get(key) or not second.get(key) or normalized(first[key]) == normalized(second[key])
                for key in ('group_number', 'plan_number'))
-
-
-def card_name_matches(printed: str | None, first: str | None, last: str | None) -> bool:
-    if not (printed and first and last):
-        return False
-    if normalized(printed) == normalized(f'{first} {last}'):
-        return True
-    parts = printed.split()
-    return (len(parts) == 3 and bool(re.fullmatch(r'[A-Za-z]\.?', parts[1]))
-            and normalized(f'{parts[0]} {parts[2]}') == normalized(f'{first} {last}'))
 
 
 def card_candidate(fields: dict, inputs: dict, source: dict | None = None) -> dict | None:

@@ -56,6 +56,16 @@ def normalized(value: object) -> str:
                    if c.isalnum())
 
 
+def card_name_matches(printed: str | None, first: str | None, last: str | None) -> bool:
+    if not (printed and first and last):
+        return False
+    if normalized(printed) == normalized(f'{first} {last}'):
+        return True
+    parts = printed.split()
+    return (len(parts) == 3 and bool(re.fullmatch(r'[A-Za-z]\.?', parts[1]))
+            and normalized(f'{parts[0]} {parts[2]}') == normalized(f'{first} {last}'))
+
+
 def generic_plan_label(value: object) -> bool:
     """Labels that identify a payer or product family, not an exact product."""
     label = normalized(value)
