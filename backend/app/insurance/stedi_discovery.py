@@ -305,6 +305,16 @@ def payer_followup_confirms(discovered: dict, verified: dict, inputs: dict, sour
                for key in ('group_number', 'plan_number'))
 
 
+def card_name_matches(printed: str | None, first: str | None, last: str | None) -> bool:
+    if not (printed and first and last):
+        return False
+    if normalized(printed) == normalized(f'{first} {last}'):
+        return True
+    parts = printed.split()
+    return (len(parts) == 3 and bool(re.fullmatch(r'[A-Za-z]\.?', parts[1]))
+            and normalized(f'{parts[0]} {parts[2]}') == normalized(f'{first} {last}'))
+
+
 def card_candidate(fields: dict, inputs: dict, source: dict | None = None) -> dict | None:
     """OCR supplies request hints only; a payer response must validate them."""
     patient, subscriber = inputs.get('patient') or {}, inputs.get('subscriber') or {}
@@ -314,14 +324,14 @@ def card_candidate(fields: dict, inputs: dict, source: dict | None = None) -> di
     # Coverage.subscriber is an explicit policy link, even if its self label is stale.
     linked = ((source or {}).get('subscriber_evidence') or {}).get('patient_linked') is True
     if (linked and subscriber.get('firstName') and subscriber.get('lastName')
-            and normalized(fields['member_name']) == normalized(f"{subscriber['firstName']} {subscriber['lastName']}")
-            and normalized(fields['member_name']) != normalized(f"{patient.get('patient_first_name')} {patient.get('patient_last_name')}")
+            and card_name_matches(fields['member_name'], subscriber['firstName'], subscriber['lastName'])
+            and not card_name_matches(fields['member_name'], patient.get('patient_first_name'), patient.get('patient_last_name'))
             and inputs.get('member_id') and normalized(fields['member_id']) == normalized(inputs['member_id'])):
         dependent = True
     first = subscriber.get('firstName') if dependent else patient.get('patient_first_name')
     last = subscriber.get('lastName') if dependent else patient.get('patient_last_name')
     dob = subscriber.get('birthDate') if dependent else patient.get('patient_birth_date')
-    if not first or not last or normalized(fields['member_name']) != normalized(f'{first} {last}'):
+    if not card_name_matches(fields['member_name'], first, last):
         # The patient-bound card may name a different subscriber on this same policy.
         # Only an unambiguous two-part printed name is a request hint, never enrollment proof.
         parts = str(fields['member_name']).split()

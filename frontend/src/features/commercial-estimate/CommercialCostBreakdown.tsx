@@ -11,6 +11,7 @@ import {
   aetnaOfficeReferenceCopay,
   aetnaOfficePlanningCopay,
   payerReportedPartialCopay,
+  publishedHumanaOfficeCopay,
   specialistOfficeCoinsurance,
   specialistOfficeCopay,
 } from './payerReportedPartialCopay'
@@ -71,6 +72,7 @@ export default function CommercialCostBreakdown({
       : benefits?.coinsurance_percent
   const reportedOfficeCopay = specialistOfficeCopay(reportedResult)
   const officeReferenceCopay = aetnaOfficeReferenceCopay(result, model)
+  const humanaReferenceCopay = publishedHumanaOfficeCopay(result, model)
   const partialOfficeCopay = payerReportedPartialCopay(result, model)
   const unconfirmedZeroOop =
     reportedIndividualRemainingOop.unassigned && reportedIndividualRemainingOop.amount === money(0)
@@ -207,6 +209,8 @@ export default function CommercialCostBreakdown({
                   ? 'Not returned for office injection'
                   : officeReferenceCopay != null
                     ? `${money(officeReferenceCopay)} specialist office visit · payer-reported reference`
+                    : humanaReferenceCopay != null
+                      ? `${money(humanaReferenceCopay)} in-network specialist office visit · published plan reference`
                     : diagnosticCopay != null
                       ? `${money(diagnosticCopay)} once per day`
                       : calculated && components?.copay_cents != null
@@ -223,6 +227,8 @@ export default function CommercialCostBreakdown({
                             : unknown,
       detail: botoxPreview
         ? 'No injection copay was included in this provisional calculation'
+        : humanaReferenceCopay != null
+          ? 'Published Humana H7617-057 benefit; confirm provider participation and visit conditions before collection'
         : aetnaPlanning
           ? aetnaPlanning.benefit_source.label
           : cignaOfficeScenario
@@ -244,7 +250,9 @@ export default function CommercialCostBreakdown({
     {
       label: 'Individual deductible',
       value:
-        feeProxy != null && !cignaFeeProxy && feeProxy.basis !== 'bcbstx_uhc_in_network_fee_proxy'
+        humanaReferenceCopay != null && benefits?.deductible_applies === false
+          ? '$0.00 annual · no medical deductible (published plan)'
+          : feeProxy != null && !cignaFeeProxy && feeProxy.basis !== 'bcbstx_uhc_in_network_fee_proxy'
           ? `${money(feeProxy.deductible_cents)} annual · published group plan`
           : [
               benefits?.deductible_annual_cents != null
@@ -287,7 +295,9 @@ export default function CommercialCostBreakdown({
     {
       label: 'Family deductible',
       value:
-        familyDeductible.value !== unknown
+        humanaReferenceCopay != null
+          ? 'Not applicable to this Medicare Advantage individual plan'
+          : familyDeductible.value !== unknown
           ? familyDeductible.value
           : surgicalFamilyDeductible.value !== unknown
             ? `${surgicalFamilyDeductible.value} · surgical services`
@@ -318,6 +328,8 @@ export default function CommercialCostBreakdown({
                   ? money(components.coinsurance_cents)
                   : reportedCoinsurance != null
                     ? `${reportedCoinsurance}% reported; dollar amount pending`
+                    : humanaReferenceCopay != null
+                      ? '40% out of network · in-network office benefit is a copay'
                     : unknown,
       detail: aetnaPlanning
         ? 'The planning formula uses a fixed diagnostic copay rather than office visit coinsurance'
@@ -348,7 +360,9 @@ export default function CommercialCostBreakdown({
     {
       label: 'Individual out-of-pocket maximum',
       value:
-        [
+        humanaReferenceCopay != null
+          ? `${money(680000)} in-network annual · ${money(1190000)} combined annual (published plan)${individualOopRemaining != null ? ` · ${money(individualOopRemaining)} payer-reported remaining, tier unconfirmed` : ''}`
+          : [
           individualOopAnnual != null ? `${money(individualOopAnnual)} annual` : null,
           individualOopRemaining != null ? `${money(individualOopRemaining)} remaining` : null,
         ]
@@ -371,7 +385,9 @@ export default function CommercialCostBreakdown({
     {
       label: 'Family out-of-pocket maximum',
       value:
-        [
+        humanaReferenceCopay != null
+          ? 'Not applicable to this Medicare Advantage individual plan'
+          : [
           familyOopAnnual != null ? `${money(familyOopAnnual)} annual` : null,
           familyOopRemaining != null ? `${money(familyOopRemaining)} remaining` : null,
         ]
@@ -401,8 +417,8 @@ export default function CommercialCostBreakdown({
     },
   ]
   const patientShare = automaticCashFallback
-    ? officeReferenceCopay != null
-      ? `${money(officeReferenceCopay)} office-only reference; other services excluded`
+    ? officeReferenceCopay != null || humanaReferenceCopay != null
+      ? `${money(officeReferenceCopay ?? humanaReferenceCopay!)} office-only reference; collection pending`
       : 'Not fully calculated'
     : combinedPlan
       ? `${money(combinedPlan.patient_share_cents)} planning estimate`
@@ -423,6 +439,8 @@ export default function CommercialCostBreakdown({
               ? `${money(botoxPreview.patient_share_cents)} provisional · CPT ${botoxPreview.code} scenario`
               : feeProxy != null
                 ? `${money(feeProxy.patient_share_cents)} provisional · BCBS Texas fee proxy`
+                : humanaReferenceCopay != null
+                  ? `${money(humanaReferenceCopay)} conditional in-network office copay · collection pending`
                 : aetnaCopayPlanning != null
                   ? `${money(aetnaCopayPlanning)} provisional office copay`
                   : model.estimatedShare ||

@@ -94,6 +94,43 @@ export function aetnaOfficeReferenceCopay(
     : copay
 }
 
+export function publishedHumanaOfficeCopay(
+  result: PrevisitEstimate,
+  model: CommercialEstimateModel,
+): number | null {
+  const benefits = result.benefits
+  const lines = result.price_range?.mode === 'services' ? result.price_range.lines || [] : []
+  const copay = benefits?.published_preferred_office_copay_cents
+  return !model.previousEstimate &&
+    !model.amount &&
+    (!model.cash || !!result.cash_fallback) &&
+    result.plan_details?.stedi?.identified_product === 'Humana Value Choice PPO H7617-057' &&
+    benefits?.active === true &&
+    benefits.service_date_matches !== false &&
+    !benefits.coverage_status_conflict &&
+    !benefits.coverage_dates_invalid &&
+    !benefits.network_conflict &&
+    benefits.network_status !== 'out_of_network' &&
+    !benefits.historical_only &&
+    !benefits.source_errors?.length &&
+    !benefits.has_secondary &&
+    benefits.qmb_status !== 'protected' &&
+    result.billing_protection?.status !== 'qmb' &&
+    (benefits.copay_cents == null || benefits.copay_cents === copay) &&
+    (specialistOfficeCopay(result) == null || specialistOfficeCopay(result) === copay) &&
+    patientBenefitsBound(result.identity) &&
+    lines.length === 1 &&
+    /^9921[2-5]$/.test(lines[0].code) &&
+    Number(lines[0].units) === 1 &&
+    !lines[0].modifiers?.length &&
+    !result.price_range?.service_issues?.length &&
+    !firstSelectedCptIssue(result) &&
+    Number.isInteger(copay) &&
+    copay! >= 0
+    ? copay!
+    : null
+}
+
 export function aetnaOfficePlanningCopay(
   result: PrevisitEstimate,
   model: CommercialEstimateModel,

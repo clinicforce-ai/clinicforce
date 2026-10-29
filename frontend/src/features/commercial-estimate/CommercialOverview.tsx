@@ -13,6 +13,7 @@ import {
   aetnaOfficePlanningCopay,
   aetnaOfficeReferenceCopay,
   payerReportedPartialCopay,
+  publishedHumanaOfficeCopay,
 } from './payerReportedPartialCopay'
 import PublishedPlanBenefit from './PublishedPlanBenefit'
 import UhcMedicarePpoBenefitTable from './UhcMedicarePpoBenefitTable'
@@ -60,7 +61,8 @@ export default function CommercialOverview({
       : []
   const plannedCodeLabel = plannedCodes.map((code) => `CPT ${code}`).join(', ')
   const aetnaReferenceCopay = aetnaOfficeReferenceCopay(result, model)
-  const payerReportedPartialCents = aetnaReferenceCopay ?? payerReportedPartialCopay(result, model)
+  const humanaReferenceCopay = publishedHumanaOfficeCopay(result, model)
+  const payerReportedPartialCents = aetnaReferenceCopay ?? humanaReferenceCopay ?? payerReportedPartialCopay(result, model)
   const combinedPlan = !cash && !previousEstimate ? result.combined_emg_plan : null
   const showSelectedRequirements =
     !cash &&
@@ -243,17 +245,18 @@ export default function CommercialOverview({
             model={model}
             result={result}
             partialCopay={payerReportedPartialCents}
-            referenceOnly={aetnaReferenceCopay != null}
+            referenceOnly={aetnaReferenceCopay != null || humanaReferenceCopay != null}
             visibleAmount={visibleAmount}
           />
-          {payerReportedPartialCents != null && aetnaReferenceCopay == null && (
+          {payerReportedPartialCents != null && aetnaReferenceCopay == null && humanaReferenceCopay == null && (
             <details className="financial-breakdown">
               <summary>Additional payer response details</summary>
               <UhcMedicarePpoBenefitTable result={result} />
             </details>
           )}
-          {!cash &&
-            result.plan_details?.stedi?.identified_product === 'FEP Blue Basic PSHB' &&
+          {(!cash || automaticCashFallback) &&
+            (result.plan_details?.stedi?.identified_product === 'FEP Blue Basic PSHB' ||
+              humanaReferenceCopay != null) &&
             result.benefits?.active === true &&
             result.benefits.published_plan_rule &&
             result.benefits.published_preferred_office_copay_cents != null && (

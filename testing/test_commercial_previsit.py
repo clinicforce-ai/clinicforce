@@ -150,6 +150,19 @@ class PrevisitFlowTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(check['conflicts'], ['member_id'])
         self.assertEqual(inputs['member_id'], 'ECW-123')
 
+    def test_matching_card_carries_cms_plan_id_only_after_identity_check(self):
+        inputs = {'member_id': 'H12345678', 'patient': {'patient_first_name': 'Pat', 'patient_last_name': 'Example'},
+                  'subscriber': {}, 'relationship': '18'}
+        card = {'status': 'read', 'fields': {'member_id': 'H12345678', 'member_name': 'PAT Q EXAMPLE',
+                'payer': 'Humana', 'cms_plan_id': 'H7617-057', 'plan_name': 'Humana Value Choice (PPO)'}}
+        matched = _compare_card_hints(card, inputs.copy(), {'payer': 'Humana'})
+        self.assertEqual(matched['status'], 'matched')
+        self.assertEqual(matched['cms_plan_id'], 'H7617-057')
+        unverified = _compare_card_hints({**card, 'fields': {**card['fields'], 'member_name': 'OTHER EXAMPLE'}},
+                                          inputs.copy(), {'payer': 'Humana'})
+        self.assertEqual(unverified['status'], 'unverified')
+        self.assertNotIn('cms_plan_id', unverified)
+
     async def test_explicit_self_pay_skips_stedi_and_defaults_to_cash(self):
         await self._flow(date.today().isoformat(), self_pay=True)
 

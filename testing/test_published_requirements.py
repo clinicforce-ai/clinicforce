@@ -4,6 +4,46 @@ from copy import deepcopy
 import pytest
 
 from app.insurance.contract_requirements import evaluate
+from app.insurance import published_plan_benefits
+
+
+def test_humana_plan_requires_card_and_payer_match_before_publishing_office_rule():
+    payer_plan = {'names': ['Humana Value Choice']}
+    card = {'status': 'matched', 'cms_plan_id': 'H7617-057', 'plan_name': 'Humana Value Choice (PPO)'}
+    identified = published_plan_benefits.identify_card_plan(payer_plan, card, 'Humana Health Plan', True)
+    assert identified['identified_product'] == 'Humana Value Choice PPO H7617-057'
+    for wrong in ({**card, 'cms_plan_id': 'H7617-064'}, {**card, 'status': 'unverified'},
+                  {**card, 'plan_name': 'Humana Value Choice (HMO)'}):
+        assert published_plan_benefits.identify_card_plan(payer_plan, wrong, 'Humana', True) == payer_plan
+    assert published_plan_benefits.identify_card_plan(payer_plan, card, 'Humana', False) == payer_plan
+    assert published_plan_benefits.identify_card_plan({'names': ['Humana Gold Plus']}, card, 'Humana', True) == {'names': ['Humana Gold Plus']}
+    benefits = {'active': True, 'service_date_matches': True, 'deductible_remaining_cents': None}
+    published_plan_benefits.apply_plan_terms(benefits, identified, '2026-10-29', True)
+    assert benefits['published_preferred_office_copay_cents'] == 3000
+    assert benefits['deductible_applies'] is False
+    outside = {'active': True, 'service_date_matches': True}
+    published_plan_benefits.apply_plan_terms(outside, identified, '2027-01-01', True)
+    assert 'published_plan_rule' not in outside
+    case_benefits = {**benefits, 'plan_details': identified, 'network_status': 'in_network',
+                     'network_source': 'clinic_group_agreement',
+                     'identity': {'status': 'matched', 'binding': 'synthetic', 'match_version': 2}}
+    rules = {'place_of_service': '11', 'provider_office_role': 'specialist'}
+    office = published_plan_benefits.apply_office_terms({}, case_benefits, rules, '2026-10-29', '99214')
+    assert (office['copay_cents'], office['deductible_applies'], office['coinsurance_percent']) == (3000, False, '0')
+    assert published_plan_benefits.apply_office_terms({}, {**case_benefits, 'network_status': 'out_of_network'},
+                                                      rules, '2026-10-29', '99214') == {}
+    assert published_plan_benefits.apply_office_terms({'copay_cents': 2000}, case_benefits,
+                                                      rules, '2026-10-29', '99214')['requires_review'] is True
+
+
+def test_humana_exact_ppo_office_visit_has_scoped_referral_and_authorization_rules():
+    result, context = case('Humana', 'Humana Value Choice PPO H7617-057', '99214', day='2026-10-29')
+    decisions = evaluate(result, context, [])
+    assert decisions['referral']['status'] == 'Not required'
+    assert decisions['authorization']['status'] == 'Not required'
+    for other_plan in ['Humana Value Choice', 'Humana Value Choice PPO H7617-064', 'Humana HMO']:
+        assert evaluate(result, {**context, 'plans': [other_plan]}, [])['authorization']['status'] != 'Not required'
+    assert evaluate(result, {**context, 'pos': '22'}, [])['authorization']['status'] != 'Not required'
 
 
 def case(payer, product, *codes, pos='11', day='2026-10-14', indication=None):
