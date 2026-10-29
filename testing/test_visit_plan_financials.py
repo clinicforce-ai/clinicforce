@@ -1,6 +1,7 @@
 """Synthetic recommendation and financial-boundary checks; no live payer calls."""
 import asyncio
 import json
+import re
 from copy import deepcopy
 from unittest.mock import MagicMock, patch
 
@@ -205,6 +206,47 @@ def test_established_office_visit_defaults_to_provisional_followup_when_model_is
     assert plan['recommended_ids'] == ['99213']
     assert plan['method'] == 'appointment'
     assert 'starting estimate' in plan['assumptions'][0]
+
+
+def test_dbs_followup_keeps_device_services_conditional():
+    from app.insurance import cpt_rules
+    from app.api.routers.commercial_flow.commercial_previsit_catalog import build_catalog
+    available = [{'id': code, 'code': code, 'source': 'CPT planning catalog', 'units': 1}
+                 for code in ('99213', '95970', '95983', '95984')]
+    available[0]['source'] = 'conditional office E/M alternative'
+    assert cpt_rules.service_definition('95983')['family'] == 'dbs_programming'
+    assert cpt_rules.service_definition('95983')['service_type'] == '98'
+    assert not cpt_rules.benefit_category_compatible('95983', '98')
+    assert cpt_rules.benefit_category_compatible('95983', '95983', procedure_specific=True)
+    api = MagicMock()
+    api._previsit_codes.return_value = [available[0]]
+    api.commercial_store.list_connections.return_value = []
+    api.practice_prices.current.return_value = None
+    api.re = re
+    _, _, _, choices, _ = build_catalog(api, {}, {'practice_id': 'synthetic'},
+                                       {'reason': 'DBS Follow Up', 'service_date': '2026-10-29'},
+                                       {}, None, {}, '', None)
+    assert {'95970', '95983', '95984'} <= {row['code'] for row in choices}
+    assert cpt_rules.service_selection_issues(['95984'])
+    assert cpt_rules.service_selection_issues(['95970', '95983'])
+    with patch.object(cpt_suggester.boto3, 'client', side_effect=RuntimeError('offline')):
+        plan = cpt_suggester.recommend_visit_plan(
+            {'reason': 'DBS Follow Up', 'visit_type': 'established'}, {}, available)
+    assert plan['recommended_ids'] == ['99213']
+    assert any('95970' in note and '95983' in note for note in plan['assumptions'])
+    model = MagicMock()
+    model.converse.return_value = model_reply([{'code': '95983', 'units': 1}])
+    with patch.object(cpt_suggester.boto3, 'client', return_value=model):
+        plan = cpt_suggester.recommend_visit_plan(
+            {'reason': 'DBS Follow Up', 'visit_type': 'established'}, {}, available)
+    assert plan['recommended_ids'] == ['99213']
+    model.converse.return_value = model_reply([{'code': '99213', 'units': 1},
+                                                {'code': '95983', 'units': 1}])
+    with patch.object(cpt_suggester.boto3, 'client', return_value=model):
+        plan = cpt_suggester.recommend_visit_plan(
+            {'reason': 'DBS programming and separate evaluation planned', 'visit_type': 'established'},
+            {}, available)
+    assert plan['recommended_ids'] == ['99213', '95983']
 
 
 def test_generic_televisit_uses_prior_same_clinic_office_visit_for_provisional_plan():

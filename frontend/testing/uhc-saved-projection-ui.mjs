@@ -276,10 +276,10 @@ try {
     React.createElement(CommercialOverview, { model: localPpoModel, result: localPpo }),
   )
   assert.equal(localPpoModel.amountText, 'Insured amount unavailable')
-  assert(localPpoOverview.includes('Payer-reported office copay · collection pending'))
+  assert(localPpoOverview.includes('Suggested amount to collect at visit'))
   assert(localPpoOverview.includes('<strong role="status">$5.00</strong>'))
   assert(localPpoOverview.includes('Office copay reported; other service costs pending.'))
-  assert(localPpoOverview.includes('Payer-reported office copay · collection pending'))
+  assert(localPpoOverview.includes('Suggested amount to collect at visit'))
   const futurePpo = structuredClone(localPpo)
   delete futurePpo.agreement_exclusion
   futurePpo.plan_details.stedi.names = ['UnitedHealthcare Local Medicare Advantage PPO']
@@ -311,7 +311,7 @@ try {
   const futurePpoOverview = renderToStaticMarkup(
     React.createElement(CommercialOverview, { model: futurePpoModel, result: futurePpo }),
   )
-  assert(futurePpoOverview.includes('Payer-reported office copay · collection pending'))
+  assert(futurePpoOverview.includes('Suggested amount to collect at visit'))
   assert(futurePpoOverview.includes('<strong role="status">$5.00</strong>'))
   assert(futurePpoOverview.includes('Insurance details for this visit'))
   assert(futurePpoOverview.indexOf('<strong role="status">$5.00</strong>') < futurePpoOverview.indexOf('Insurance details for this visit'))
@@ -330,13 +330,13 @@ try {
   const unmatchedPpoOverview = renderToStaticMarkup(
     React.createElement(CommercialOverview, { model: unmatchedPpoModel, result: unmatchedPpo }),
   )
-  assert(!unmatchedPpoOverview.includes('Payer-reported office copay · collection pending'))
+  assert(!unmatchedPpoOverview.includes('Suggested amount to collect at visit'))
   const futureHmo = structuredClone(futurePpo)
   futureHmo.plan_details.stedi.names = ['UnitedHealthcare Medicare Advantage HMO']
   const futureHmoOverview = renderToStaticMarkup(
     React.createElement(CommercialOverview, { model: futurePpoModel, result: futureHmo }),
   )
-  assert(!futureHmoOverview.includes('Payer-reported office copay · collection pending'))
+  assert(!futureHmoOverview.includes('Suggested amount to collect at visit'))
   const regionalPpo = structuredClone(localPpo)
   regionalPpo.agreement_exclusion.product_kind = 'regional_medicare_advantage_ppo'
   const regionalPpoModel = deriveCommercialEstimateView({
@@ -346,7 +346,7 @@ try {
   const regionalPpoOverview = renderToStaticMarkup(
     React.createElement(CommercialOverview, { model: regionalPpoModel, result: regionalPpo }),
   )
-  assert(regionalPpoOverview.includes('Payer-reported office copay · collection pending'))
+  assert(regionalPpoOverview.includes('Suggested amount to collect at visit'))
   assert(regionalPpoOverview.includes('<strong role="status">$5.00</strong>'))
   const diagnostic = structuredClone(localPpo)
   diagnostic.reason = 'Bilateral hand'

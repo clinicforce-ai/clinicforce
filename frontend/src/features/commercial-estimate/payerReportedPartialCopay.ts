@@ -3,6 +3,7 @@ import type { VisitPricedLine } from '../../services/api/commercial-visit-types'
 import type { CommercialEstimateModel } from './useCommercialEstimateModel'
 import { patientBenefitsBound } from './identityBinding'
 import { firstSelectedCptIssue } from './selectedCptIssue'
+import { networkEvidenceStatus } from './networkEvidenceStatus'
 
 export function specialistOfficeCopay(
   result: PrevisitEstimate,
@@ -183,9 +184,15 @@ export function payerReportedPartialCopay(
     !['', 'VISIT', '27', 'DAY', '7', 'SERVICE', 'PROCEDURE'].includes(
       line.benefits.copay_period || '',
     ) ||
-    !line.benefits.network_independent
+    !(
+      line.benefits.network_independent ||
+      (networkEvidenceStatus(result).networkConfirmed &&
+        line.benefits.network_status === 'in_network')
+    )
   )
     return null
   const copay = line.benefits.copay_cents
-  return typeof copay === 'number' && Number.isInteger(copay) && copay > 0 ? copay : null
+  return typeof copay === 'number' && Number.isInteger(copay) && copay > 0
+    ? Math.max(0, copay - (result.encounter_summary?.payments_verified_cents || 0))
+    : null
 }

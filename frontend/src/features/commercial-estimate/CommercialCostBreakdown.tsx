@@ -10,6 +10,7 @@ import { requirementStatus } from './commercialRequirementStatus'
 import {
   aetnaOfficeReferenceCopay,
   aetnaOfficePlanningCopay,
+  payerReportedPartialCopay,
   specialistOfficeCoinsurance,
   specialistOfficeCopay,
 } from './payerReportedPartialCopay'
@@ -68,6 +69,7 @@ export default function CommercialCostBreakdown({
       : benefits?.coinsurance_percent
   const reportedOfficeCopay = specialistOfficeCopay(reportedResult)
   const officeReferenceCopay = aetnaOfficeReferenceCopay(result, model)
+  const partialOfficeCopay = payerReportedPartialCopay(result, model)
   const unconfirmedZeroOop =
     reportedIndividualRemainingOop.unassigned && reportedIndividualRemainingOop.amount === money(0)
   const components = summary?.components
@@ -408,29 +410,30 @@ export default function CommercialCostBreakdown({
       : 'Not fully calculated'
     : combinedPlan
       ? `${money(combinedPlan.patient_share_cents)} planning estimate`
-      : result.collection_guidance?.basis === 'qmb_protection' &&
-          result.collection_guidance.amount_cents === 0
+      : ['qmb_protection', 'out_of_pocket_limit'].includes(
+            result.collection_guidance?.basis || '',
+          ) && result.collection_guidance?.amount_cents === 0
         ? money(0)
-        : result.collection_guidance?.basis === 'out_of_pocket_limit' &&
-            result.collection_guidance.amount_cents === 0
-          ? money(0)
-          : calculated &&
-              summary?.estimated_total_patient_min_cents != null &&
-              summary.estimated_total_patient_max_cents != null
-            ? range(
-                summary.estimated_total_patient_min_cents,
-                summary.estimated_total_patient_max_cents,
-              )
-            : aetnaPlanning
-              ? `${money(aetnaPlanning.patient_share_cents)} planning estimate`
-              : feeProxy != null
-                ? `${money(feeProxy.patient_share_cents)} provisional · BCBS Texas fee proxy`
-                : aetnaCopayPlanning != null
-                  ? `${money(aetnaCopayPlanning)} provisional office copay`
-                  : model.estimatedShare ||
-                    (model.provisionalAmount != null
-                      ? money(model.provisionalAmount)
-                      : model.patientPrice || 'Not fully calculated')
+        : calculated &&
+            summary?.estimated_total_patient_min_cents != null &&
+            summary.estimated_total_patient_max_cents != null
+          ? range(
+              summary.estimated_total_patient_min_cents,
+              summary.estimated_total_patient_max_cents,
+            )
+          : aetnaPlanning
+            ? `${money(aetnaPlanning.patient_share_cents)} planning estimate`
+            : feeProxy != null
+              ? `${money(feeProxy.patient_share_cents)} provisional · BCBS Texas fee proxy`
+              : aetnaCopayPlanning != null
+                ? `${money(aetnaCopayPlanning)} provisional office copay`
+                : model.estimatedShare ||
+                  (partialOfficeCopay != null
+                    ? `${money(model.officeCopayLine!.benefits.copay_cents!)} office-only planning estimate`
+                    : null) ||
+                  (model.provisionalAmount != null
+                    ? money(model.provisionalAmount)
+                    : model.patientPrice || 'Not fully calculated')
   const rows: CostBreakdownRow[] =
     model.cash && !automaticCashFallback
       ? [
@@ -480,7 +483,6 @@ export default function CommercialCostBreakdown({
             ? [{ label: 'Already paid', value: `−${money(summary.payments_verified_cents)}` }]
             : []),
         ]
-
   rows.push(
     collectionAtVisitRow(result, model, {
       combinedPlan,
@@ -488,6 +490,7 @@ export default function CommercialCostBreakdown({
       aetnaPlanning,
       aetnaCopayPlanning,
       officeReferenceCopay,
+      partialOfficeCopay,
       automaticCashFallback,
       cignaFeeProxy,
       proxyFormula,

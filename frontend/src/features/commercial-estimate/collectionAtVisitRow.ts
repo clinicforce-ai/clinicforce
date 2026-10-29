@@ -13,6 +13,7 @@ export function collectionAtVisitRow(
     aetnaPlanning: PrevisitEstimate['aetna_diagnostic_reference'] | null
     aetnaCopayPlanning: number | null
     officeReferenceCopay: number | null
+    partialOfficeCopay: number | null
     automaticCashFallback: boolean
     cignaFeeProxy: boolean
     proxyFormula: ReturnType<typeof feeProxyFormula> | undefined
@@ -24,6 +25,7 @@ export function collectionAtVisitRow(
     aetnaPlanning,
     aetnaCopayPlanning,
     officeReferenceCopay,
+    partialOfficeCopay,
     automaticCashFallback,
     cignaFeeProxy,
     proxyFormula,
@@ -43,13 +45,17 @@ export function collectionAtVisitRow(
     aetnaCopayPlanning == null ? null : Math.max(0, aetnaCopayPlanning - aetnaPaid)
   return {
     label:
-      ((cignaFeeProxy && result.collection_guidance?.basis !== 'claim_after_service') ||
-        feeProxyCheckin != null ||
-        aetnaPlanning != null ||
-        aetnaCopayPlanning != null) &&
-      !['bcbstx_proxy_advance', 'qmb_protection'].includes(result.collection_guidance?.basis || '')
-        ? 'Planned amount to collect at visit'
-        : 'Amount to collect at visit',
+      partialOfficeCopay != null && feeProxyCheckin == null
+        ? 'Suggested amount to collect at visit'
+        : ((cignaFeeProxy && result.collection_guidance?.basis !== 'claim_after_service') ||
+              feeProxyCheckin != null ||
+              aetnaPlanning != null ||
+              aetnaCopayPlanning != null) &&
+            !['bcbstx_proxy_advance', 'qmb_protection'].includes(
+              result.collection_guidance?.basis || '',
+            )
+          ? 'Planned amount to collect at visit'
+          : 'Amount to collect at visit',
     value: combinedPlan
       ? `${money(combinedPlan.amount_cents)} planning estimate`
       : result.collection_guidance?.basis === 'qmb_protection' &&
@@ -73,7 +79,9 @@ export function collectionAtVisitRow(
                     ? `${money(officeBalance!)} planning estimate`
                     : officeReferenceCopay != null
                       ? `${money(officeReferenceCopay)} office-only reference`
-                      : 'Not established',
+                      : partialOfficeCopay != null
+                        ? money(partialOfficeCopay)
+                        : 'Not established',
     detail: combinedPlan
       ? `${money(combinedPlan.office_copay_cents)} + ${combinedPlan.coinsurance_percent}% × ${money(combinedPlan.diagnostic_allowed_cents)} = ${money(combinedPlan.patient_share_cents)}${combinedPlan.payments_cents ? `; less ${money(combinedPlan.payments_cents)} already paid` : ''}. Separate follow-up E/M is planned; deductible and out-of-pocket adjustments remain assumptions until payer balances are returned.`
       : result.collection_guidance?.basis === 'qmb_protection'
@@ -92,21 +100,23 @@ export function collectionAtVisitRow(
                   ? `${money(aetnaCopayPlanning)} specialist office copay + ${money(0)} deductible + 0% coinsurance = ${money(aetnaCopayPlanning)}${aetnaPaid ? `; less ${money(aetnaPaid)} already paid = ${money(officeBalance!)}` : ' before any prior payment'}. Planning amount; confirm the final allowed charge and Medicare billing protection before collection.`
                   : officeReferenceCopay != null
                     ? 'Planning figure for one specialist office visit on the appointment date; not an authorized collection instruction. Other services, prior payments and Medicare cost-sharing protection are not included.'
-                    : automaticCashFallback
-                      ? 'Insurance collection is unresolved; any cash quote is listed separately'
-                      : result.collection_guidance?.unconfirmed_zero_oop
-                        ? 'Confirm the reported $0 out-of-pocket balance with the payer before collection'
-                        : model.supportedAmount
-                          ? result.collection_guidance?.basis === 'office_copay'
-                            ? 'Office copay advance; other services may have a later balance'
-                            : result.collection_guidance?.basis === 'out_of_pocket_limit'
-                              ? 'Applicable out-of-pocket maximum has no remaining balance for covered care'
-                              : result.collection_guidance?.basis === 'diagnostic_day_copay'
-                                ? 'One diagnostic copay advance; other costs may follow the claim'
-                                : result.collection_guidance?.basis === 'claim_after_service'
-                                  ? 'Clinic policy defers collection until after the claim'
-                                  : undefined
-                          : undefined,
+                    : partialOfficeCopay != null
+                      ? 'Suggested office visit copay after recorded payments. Separately performed DBS device services may add cost.'
+                      : automaticCashFallback
+                        ? 'Insurance collection is unresolved; any cash quote is listed separately'
+                        : result.collection_guidance?.unconfirmed_zero_oop
+                          ? 'Confirm the reported $0 out-of-pocket balance with the payer before collection'
+                          : model.supportedAmount
+                            ? result.collection_guidance?.basis === 'office_copay'
+                              ? 'Office copay advance; other services may have a later balance'
+                              : result.collection_guidance?.basis === 'out_of_pocket_limit'
+                                ? 'Applicable out-of-pocket maximum has no remaining balance for covered care'
+                                : result.collection_guidance?.basis === 'diagnostic_day_copay'
+                                  ? 'One diagnostic copay advance; other costs may follow the claim'
+                                  : result.collection_guidance?.basis === 'claim_after_service'
+                                    ? 'Clinic policy defers collection until after the claim'
+                                    : undefined
+                            : undefined,
     emphasis: true,
   }
 }
