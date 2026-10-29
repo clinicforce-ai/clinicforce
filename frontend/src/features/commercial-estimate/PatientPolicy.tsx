@@ -162,14 +162,6 @@ export default function PatientPolicy({
             </dd>
           </div>
           <div>
-            <dt>Address</dt>
-            <dd>
-              {Object.values(result.patient_details?.address || {})
-                .filter(Boolean)
-                .join(', ') || 'Not returned'}
-            </dd>
-          </div>
-          <div>
             <dt>Payer patient DOB</dt>
             <dd>
               {payerPatient?.dateOfBirth ? visitDate(payerPatient.dateOfBirth) : 'Not returned'}

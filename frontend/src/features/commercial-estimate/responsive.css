@@ -19,6 +19,16 @@
 }
 
 @media (max-width: 800px) {
+  .visit-patient-bar {
+    flex-wrap: wrap;
+  }
+  .visit-patient-bar > div,
+  .visit-patient-address {
+    flex-basis: 100%;
+  }
+  .visit-patient-address {
+    padding-left: 58px;
+  }
   .overview-amounts {
     gap: 20px;
   }
@@ -69,7 +79,6 @@
     margin-bottom: 16px;
   }
   .visit-patient-bar {
-    flex-wrap: wrap;
     padding: 14px;
     gap: 10px;
   }
