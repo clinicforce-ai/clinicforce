@@ -36,7 +36,7 @@ def provisional_office_injection(result: dict, options: list[dict], review: dict
     suggested = {str(code.get('code') or '').upper()
                  for group in (result.get('suggestions') or {}).get('groups') or []
                  for code in group.get('codes') or []} & PROCEDURE_CODES
-    if len(suggested) != 1:
+    if not suggested:
         return None
     candidate = [row for row in result.get('available_codes') or []
                  if row.get('code') in suggested and row.get('unit_allowed_cents') is not None

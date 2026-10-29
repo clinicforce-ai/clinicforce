@@ -65,6 +65,15 @@ def test_provisional_office_injection_uses_exact_fee_and_injection_benefit_only(
     scenario = botox_review.provisional_office_injection(result, options)
     assert scenario['patient_share_cents'] == 2623
     assert scenario['allowed_cents'] == 13114
+    alternatives = {**result,
+                    'suggestions': {'groups': [{'codes': [{'code': '64612'}, {'code': '64615'}]}]},
+                    'available_codes': [*result['available_codes'],
+                                        {'code': '64615', 'units': 1, 'modifiers': [],
+                                         'unit_allowed_cents': None, 'rate_source': None}]}
+    assert botox_review.provisional_office_injection(alternatives, options)['code'] == '64612'
+    assert botox_review.provisional_office_injection({**alternatives, 'available_codes': [
+        *result['available_codes'], {'code': '64615', 'units': 1, 'modifiers': [],
+                                     'unit_allowed_cents': 20000, 'rate_source': 'Second clinic fee'}]}, options) is None
     assert botox_review.provisional_office_injection(result, options + [{**options[0], 'kind': 'copay'}]) is None
     individual_limit = {**options[-1], 'coverage_level': 'INDIVIDUAL', 'amount_cents': 0}
     assert botox_review.provisional_office_injection(result, options + [individual_limit])['patient_share_cents'] == 0

@@ -31,9 +31,7 @@ export function commercialCptRows(
                 `CPT ${line.code} × ${line.units || 1}${line.modifiers?.length ? ` · modifier ${line.modifiers.join(', ')}` : ''}`,
             )
             .join('; ')
-        : preview
-          ? `CPT ${preview.code} × 1 · provisional coding scenario`
-          : 'No CPTs selected',
+        : 'No CPTs selected',
       detail:
         result.service_selection_status !== 'approved'
           ? result.service_plan?.method === 'llm'
