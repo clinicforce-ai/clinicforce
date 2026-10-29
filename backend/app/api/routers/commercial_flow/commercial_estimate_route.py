@@ -3,12 +3,14 @@ from __future__ import annotations
 
 from app.api.routers import commercial_estimator as _api
 from app.api.routers.commercial_flow.commercial_previsit_saved import reuse_saved_eligibility
-from app.api.routers.commercial_flow.commercial_previsit_reuse import reuse_previsit_case
+from app.api.routers.commercial_flow.commercial_previsit_reuse import reuse_previsit_case, retain_saved_group_binding, telehealth_inquiry_coverage, telehealth_setting
 from app.api.routers.commercial_flow.commercial_previsit_submit import submit_previsit_eligibility
 
 @_api.router.post("/appointments/previsit", description=(
     "Estimate a patient-bound eCW visit. Compatible saved payer evidence is reused without another "
-    "eligibility request. A recent single discovery candidate with an address conflict can trigger "
+    "eligibility request. A card-supplied group that matches a fresh, patient-bound saved payer "
+    "response and member ID preserves that visit binding for reuse. A recent single discovery "
+    "candidate with an address conflict can trigger "
     "one automatic member-specific payer inquiry; only a matching active 271 supplies benefits. "
     "A booked EMG/NCS visit without a study count returns one provisional "
     "scenario with mutually exclusive CPT levels; an exact suggested CPT plan is priced immediately "
@@ -18,7 +20,17 @@ from app.api.routers.commercial_flow.commercial_previsit_submit import submit_pr
     "follow-up may add provisional established CPT 99213 when office history supports that status; "
     "final MDM or time and modifier need clinician review. An uncoded "
     "established-patient office visit without a supported level starts with provisional CPT 99213, "
-    "which requires clinician review before billing. A skin-biopsy "
+    "which requires clinician review before billing. "
+    "A generic televisit with no eCW patient-status label may use a completed same-clinic office "
+    "visit to propose provisional CPT 99213 when the model returns no usable plan; the clinician "
+    "must confirm status, modality, patient location and E/M level before billing. A telehealth "
+    "appointment inheriting office POS 11 cannot use that office rate or office-only authorization "
+    "rule for collection. Its inquiry omits the inherited office POS and collection stays unresolved "
+    "until the patient location and applicable telehealth benefits are established. Staff may submit "
+    "telehealth_pos and telehealth_modality together for a telehealth appointment; the visit retains "
+    "that setting and uses a separate payer inquiry slot. A fresh same-visit, patient-bound dependent "
+    "response can supply the verified policyholder identity for the new inquiry. Office-only fee "
+    "schedules do not price a telehealth visit. A skin-biopsy "
     "booking without a site count starts with an editable three-site CPT 11104 + 11105 x2 scenario. A supported "
 
     "fixed office copay is the visit-time amount unless an applicable individual in-network "
@@ -271,6 +283,8 @@ async def previsit_estimate(value: _api.PrevisitInput, request: _api.Request, ba
         _api.collection_event('previsit_failed', practice_id=session['practice_id'], intake_id=(session.get('intake') or {}).get('id'),
                          stage='appointment', reason_code='appointment_mismatch')
         raise _api.HTTPException(409, "The selected upcoming eClinicalWorks appointment could not be verified.")
+    if value.telehealth_pos and not _api.visit_estimate.is_telehealth(inputs):
+        raise _api.HTTPException(422, 'Confirm a telehealth appointment before recording its location and modality.')
     source['_request_ip_chain'] = _api._request_ip_chain(request)
     _api.collection_event('previsit_appointment_loaded', practice_id=session['practice_id'], intake_id=(session.get('intake') or {}).get('id'),
                      stage='appointment', count=len(inputs.get('lines') or []), source='ecw')
@@ -345,7 +359,17 @@ async def previsit_estimate(value: _api.PrevisitInput, request: _api.Request, ba
         card = await _api.asyncio.wait_for(_api._read_card_hints(session, source.get('_patient_id')), timeout=8)
     except _api.asyncio.TimeoutError:
         card = {'status': 'unavailable', 'fields': {}, 'count': 0}
+    original_group = inputs.get('group_number')
+    original_token = _api._visit_context_token(inputs, source)
     result['card_check'] = _api._compare_card_hints(card, inputs, source)
+    retain_saved_group_binding(_api, inputs, card, result['card_check'], prior_cases, original_token, original_group)
+    setting, confirmed_at = telehealth_setting(_api, value, inputs, prior_cases, original_token)
+    if setting:
+        inputs['place_of_service'] = setting['place_of_service']
+        inputs['telehealth_modality'] = setting['modality']
+        result['telehealth'] = setting
+        source['_telehealth_base_token'] = original_token
+        source['_telehealth_confirmed_at'] = confirmed_at
     coverage = _api._coverage_snapshot(inputs, source)
     result['payer'] = source.get('payer')
     _api.collection_event('card_precheck', practice_id=session['practice_id'], intake_id=(session.get('intake') or {}).get('id'),
@@ -367,7 +391,7 @@ async def previsit_estimate(value: _api.PrevisitInput, request: _api.Request, ba
                 result['eligibility_failure']['detail'], refresh_benefits=value.refresh_benefits)
         return await incomplete_result()
 
-    saved_result = await reuse_saved_eligibility(_api, result, session, inputs, source, coverage)
+    saved_result = None if setting else await reuse_saved_eligibility(_api, result, session, inputs, source, coverage)
     if saved_result is not None:
         return saved_result
 
@@ -414,6 +438,8 @@ async def previsit_estimate(value: _api.PrevisitInput, request: _api.Request, ba
             'The eCW payer name and ID did not identify one Stedi route. ClinicForce is checking the same policy through insurance discovery.',
             refresh_benefits=value.refresh_benefits, payer_routes=payer_routes)
     payer_id = payer["stediId"]
+    inquiry_coverage = (await telehealth_inquiry_coverage(_api, prior_cases, inputs, source,
+        original_token, payer_id, coverage)) if setting else coverage
     requested_stc = _api._previsit_service_types(inputs)
     if payer_id == 'QDTRP':
         # BCBSTX accepts one service type per 270 inquiry.
@@ -422,18 +448,22 @@ async def previsit_estimate(value: _api.PrevisitInput, request: _api.Request, ba
     result["stedi_payer"] = {"name": payer.get("displayName"), "id": payer_id}
     try:
         inquiry_stc = requested_stc[0] if payer_id == 'QDTRP' else requested_stc
-        body = _api.stedi_request_body({"stedi_payer_id": payer_id}, provider, coverage, inputs["service_date"], inquiry_stc, allow_demographic=not coverage.get('member_id'), place_of_service=inputs.get('place_of_service'))
-        basic_body = _api.stedi_request_body({"stedi_payer_id": payer_id}, provider, coverage, inputs["service_date"], inquiry_stc,
-                                        include_identity_hints=False, allow_demographic=not coverage.get('member_id'),
-                                        place_of_service=inputs.get('place_of_service'))
+        inquiry_pos = None if _api.visit_estimate.telehealth_pos_unresolved(inputs) else inputs.get('place_of_service')
+        body = _api.stedi_request_body({"stedi_payer_id": payer_id}, provider, inquiry_coverage, inputs["service_date"], inquiry_stc, allow_demographic=not inquiry_coverage.get('member_id'), place_of_service=inquiry_pos)
+        basic_body = _api.stedi_request_body({"stedi_payer_id": payer_id}, provider, inquiry_coverage, inputs["service_date"], inquiry_stc,
+                                        include_identity_hints=False, allow_demographic=not inquiry_coverage.get('member_id'),
+                                        place_of_service=inquiry_pos)
     except _api.commercial.CommercialError as exc:
         result["issues"].append(str(exc))
         return await incomplete_result()
     if service_day == _api.date.today():
         body["encounter"].pop("dates", None)
         basic_body["encounter"].pop("dates", None)
-    binding = _api.hashlib.sha256(_api.json.dumps({"coverage": coverage, "payer": payer_id,
-        "provider": provider, "service_date": inputs["service_date"]}, sort_keys=True).encode()).hexdigest()
+    binding_data = {"coverage": coverage, "payer": payer_id,
+        "provider": provider, "service_date": inputs["service_date"]}
+    if setting:
+        binding_data['telehealth'] = result['telehealth']
+    binding = _api.hashlib.sha256(_api.json.dumps(binding_data, sort_keys=True).encode()).hexdigest()
     slot = "commercial-previsit:" + _api.hashlib.sha256(f"{value.appointment_id}:{binding}".encode()).hexdigest()
     try:
         case = await _api.run_in_threadpool(_api.store.create_case, session["patient_id"], "", binding,

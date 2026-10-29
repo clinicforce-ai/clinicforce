@@ -180,7 +180,7 @@ async def submit_previsit_eligibility(api: ModuleType, *, payer: dict, provider:
     if inquiry_state == 'complete' and (case.get('cpt_authorization') or {}).get('state') == 'complete':
         await api.run_in_threadpool(api._finish_previsit, result, case, inputs, source, payload, session, payer_id)
     saved_case = await api.run_in_threadpool(api._save, case, session, "previsit-stedi-complete")
-    if (benefits.get('identity') or {}).get('policy_differences'):
+    if api.insurance_identity.unresolved_policy_difference(benefits.get('identity')):
         saved_case['previsit_discovery'] = {'request_state': 'not_requested', 'recovery_requested': True}
         return await api._start_previsit_recovery(saved_case, session, provider, background_tasks)
     if benefits.get('active') is False:

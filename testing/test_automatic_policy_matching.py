@@ -3,6 +3,7 @@ import asyncio
 import json
 from copy import deepcopy
 from datetime import date, timedelta
+from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -62,6 +63,30 @@ def dependent_policy():
     item['dependent'] = {**item['subscriber'], 'relationToSubscriberCode': '01'}
     item['subscriber'] = {'firstName': 'Sam', 'lastName': 'Other', 'memberId': inputs['member_id']}
     return case, session, provider, item
+
+
+@pytest.mark.parametrize('change', ['none', 'payer', 'visit', 'member', 'group', 'provider', 'stale', 'digest', 'multiple'])
+def test_telehealth_inquiry_reuses_only_fresh_same_visit_dependent_identity(monkeypatch, change):
+    from app.api.routers.commercial_flow.commercial_previsit_reuse import telehealth_inquiry_coverage
+    case, _, _, item = dependent_policy()
+    inputs, source = case['previsit_context']['inputs'], case['previsit_context']['source']
+    source['rendering_provider'] = {'npi': '1234567890'}
+    item['provider'] = {'npi': '1234567890'}
+    token = api._visit_context_token(inputs, source)
+    case['previsit_context'].update(context_token=token, payer_id='route')
+    case['previsit'] = {'request_state': 'complete', 'checked_at': datetime.now(timezone.utc).isoformat()}
+    if change == 'payer': case['previsit_context']['payer_id'] = 'other'
+    if change == 'visit': case['previsit_context']['context_token'] = 'other'
+    if change == 'member': item['subscriber']['memberId'] = 'other'
+    if change == 'group': inputs['group_number'] = 'A'; item['subscriber']['groupNumber'] = 'B'
+    if change == 'provider': item['provider']['npi'] = '0000000000'
+    if change == 'stale': case['previsit']['checked_at'] = (datetime.now(timezone.utc) - timedelta(days=2)).isoformat()
+    if change == 'digest': case['previsit_raw_sha256'] = 'wrong'
+    if change == 'multiple': source['active_coverages'] = 2
+    monkeypatch.setattr(api.object_store, 'get_object_bytes', lambda _: json.dumps(item).encode())
+    coverage = api._coverage_snapshot(inputs, source)
+    result = asyncio.run(telehealth_inquiry_coverage(api, [case], inputs, source, token, 'route', coverage))
+    assert (result['relationship'] != '18') == (change == 'none')
 
 
 def test_payer_can_resolve_recorded_self_to_dependent_without_a_form():

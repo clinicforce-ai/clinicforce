@@ -194,9 +194,17 @@ def _previsit_range(practice_id: str, inputs: dict, source: dict, payer_id: str,
             rules = {**rules, **profile['rules']}
         except (_api.HTTPException, _api.commercial.CommercialError) as exc:
             issues.append(str(exc.detail) if isinstance(exc, _api.HTTPException) else str(exc))
+    telehealth_pos_unresolved = _api.visit_estimate.telehealth_pos_unresolved(inputs)
+    if _api.visit_estimate.is_telehealth(inputs):
+        rates = []
+        rules['place_of_service'] = inputs.get('place_of_service')
+        issues.append('A contract rate for telehealth POS 10 or 02 is not established; the clinic office rate is not used.')
     rules['aetna_payer_verified'] = str(payer_route_id or payer_id).upper() == 'HPQRS'
     priced = _api.visit_estimate.price_lines(selected, rates, benefits, rules, payload=payload,
         service_date=inputs.get('service_date', ''), reviews=review.get('lines'), alternatives=alternatives)
+    if telehealth_pos_unresolved:
+        priced['service_issues'] = [*(priced.get('service_issues') or []),
+            'Confirm the patient telehealth location and obtain benefits for that place of service before collection.']
     if options:
         priced['mode'] = 'options'
         priced['collection'] = {'action': 'choose_services', 'amount_cents': None,
@@ -479,6 +487,12 @@ def _attach_previsit_pricing(result: dict, practice_id: str, inputs: dict, sourc
     if _api.network_participation.verified_out_of_network(benefits):
         record_confirmed_out_of_network(result, benefits)
     priced_source = {**source, **((result.get('network_evidence') or {}).get('scope') or {})}
+    if (benefits.get('network_source') == 'clinic_group_agreement'
+            and (result.get('network_evidence') or {}).get('contract_plan_matcher') is not None
+            and _api.insurance_identity.normalized(result['network_evidence'].get('product')) ==
+                _api.insurance_identity.normalized(result['network_evidence'].get('network_name'))):
+        priced_source = {**priced_source,
+            'plan': result['network_evidence']['contract_plan_matcher'], 'payer_plan_names': []}
     result["price_range"], issues = _api._previsit_range(practice_id, inputs, priced_source, connection["id"], result["codes"], benefits,
                                                   payload=payload, review=review, payer_route_id=payer_id)
     result["issues"].extend(issues)

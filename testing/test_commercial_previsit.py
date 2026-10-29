@@ -9,9 +9,59 @@ import httpx
 from app.api.routers.commercial_estimator import PrevisitInput, VisitReviewInput, _compare_card_hints, _previsit_benefits, _previsit_result, previsit_estimate, update_visit_review
 from app.api.routers.commercial_flow.commercial_previsit_pricing import _previsit_service_types, _reviewed_service_types
 from app.api.routers.commercial_flow.commercial_previsit_submit import same_member_and_medical_plan
+from app.api.routers.commercial_flow.commercial_previsit_reuse import retain_saved_group_binding
 
 
 class PrevisitFlowTest(unittest.IsolatedAsyncioTestCase):
+    def test_telehealth_setting_requires_both_location_and_modality(self):
+        from pydantic import ValidationError
+        with self.assertRaises(ValidationError):
+            PrevisitInput(appointment_id='visit-1', telehealth_pos='10')
+        with self.assertRaises(ValidationError):
+            PrevisitInput(appointment_id='visit-1', telehealth_modality='audio_video')
+
+    def test_matching_card_group_reuses_only_fresh_patient_bound_payer_evidence(self):
+        from app.api.routers import commercial_estimator as api
+        from copy import deepcopy
+
+        card = {'count': 1, 'fields': {'member_id': 'MEM-123', 'payer': 'Blue Cross Blue Shield of Texas'}}
+        card_check = {'status': 'filled_missing', 'fields_added': ['group_number']}
+        prior = {'previsit': {'request_state': 'complete', 'checked_at': datetime.now(timezone.utc).isoformat()},
+                 'previsit_raw_object_key': 'protected-source', 'previsit_context': {
+                     'context_token': 'same-visit', 'result': {
+                         'identity': {'status': 'matched', 'binding': 'synthetic', 'match_version': 2},
+                         'benefits': {'active': True},
+                         'stedi_payer': {'name': 'Blue Cross and Blue Shield of Texas'},
+                         'insurance_details': {'payer_subscriber': {'memberId': 'MEM-123'}},
+                         'plan_details': {'stedi': {'group_number': 'GROUP-123'}}}}}
+        inputs = {'group_number': 'GROUP-123'}
+        retain_saved_group_binding(api, inputs, card, card_check, [prior], 'same-visit', None)
+        self.assertIsNone(inputs['group_number'])
+        self.assertEqual(card_check['status'], 'read')
+        self.assertEqual(card_check['fields_added'], [])
+
+        for change in ('member', 'group', 'payer', 'expired', 'other_visit', 'unbound', 'missing_raw'):
+            candidate = deepcopy(prior)
+            if change == 'member':
+                candidate['previsit_context']['result']['insurance_details']['payer_subscriber']['memberId'] = 'OTHER'
+            elif change == 'group':
+                candidate['previsit_context']['result']['plan_details']['stedi']['group_number'] = 'OTHER'
+            elif change == 'payer':
+                candidate['previsit_context']['result']['stedi_payer']['name'] = 'Other insurer'
+            elif change == 'expired':
+                candidate['previsit']['checked_at'] = (datetime.now(timezone.utc) - timedelta(days=2)).isoformat()
+            elif change == 'other_visit':
+                candidate['previsit_context']['context_token'] = 'other-visit'
+            elif change == 'unbound':
+                candidate['previsit_context']['result']['identity'] = {'status': 'review'}
+            else:
+                candidate.pop('previsit_raw_object_key')
+            inputs = {'group_number': 'GROUP-123'}
+            check = {'status': 'filled_missing', 'fields_added': ['group_number']}
+            retain_saved_group_binding(api, inputs, card, check, [candidate], 'same-visit', None)
+            self.assertEqual(inputs['group_number'], 'GROUP-123', change)
+            self.assertEqual(check['status'], 'filled_missing', change)
+
     def test_separate_responses_require_the_same_member_and_medical_plan(self):
         from app.api.routers import commercial_estimator as api
         first = {'subscriber': {'memberId': 'M123', 'name': {'person': {'firstName': 'Pat', 'lastName': 'Example'}}},
@@ -29,6 +79,9 @@ class PrevisitFlowTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_bcbstx_combined_visit_rejects_different_member_on_second_inquiry(self):
         await self._flow(date.today().isoformat(), combined_emg=True, secondary_mismatch=True)
+
+    async def test_confirmed_telehealth_checks_patient_location_not_clinic_location(self):
+        await self._flow(date.today().isoformat(), pos='11', telehealth=True, ecw_saved=True)
 
     def test_refresh_requests_selected_diagnostic_and_office_categories(self):
         case = {'previsit_context': {'context_token': 'same-visit',
@@ -166,7 +219,7 @@ class PrevisitFlowTest(unittest.IsolatedAsyncioTestCase):
     async def test_newer_conflicting_ecw_check_refreshes_cached_stedi_evidence(self):
         await self._flow(date.today().isoformat(), newer_ecw=True)
 
-    async def _flow(self, service_date, reject=False, retry_basic=False, payer_missing=False, refresh=False, newer_ecw=False, too_early=False, self_pay=False, coverage_start=None, saved_hold=False, enrollment_missing=False, ecw_saved=False, ecw_incomplete=False, medicare_secondary=False, billing_note=None, member_id_missing=False, card_fields=None, card_conflict=False, card_status=None, pos=None, scheduled_code=None, emg_review=False, expect_preliminary=False, visit_type='new', combined_emg=False, secondary_mismatch=False, cash_office=False):
+    async def _flow(self, service_date, reject=False, retry_basic=False, payer_missing=False, refresh=False, newer_ecw=False, too_early=False, self_pay=False, coverage_start=None, saved_hold=False, enrollment_missing=False, ecw_saved=False, ecw_incomplete=False, medicare_secondary=False, billing_note=None, member_id_missing=False, card_fields=None, card_conflict=False, card_status=None, pos=None, scheduled_code=None, emg_review=False, expect_preliminary=False, visit_type='new', combined_emg=False, secondary_mismatch=False, cash_office=False, telehealth=False):
         if cash_office:
             self.cash_current.return_value = {'id': 'synthetic-cash', 'filename': 'synthetic.csv',
                 'effective_from': '2026-01-01', 'rows': [{'code': '99204', 'cash_cents': 25000,
@@ -183,6 +236,8 @@ class PrevisitFlowTest(unittest.IsolatedAsyncioTestCase):
                   "rendering_provider": {"npi": "1234567890"}}
         if pos:
             inputs['place_of_service'] = pos
+        if telehealth:
+            inputs['reason'] = 'Televisit'
         if scheduled_code:
             inputs['lines'] = [{'id': 'documented-service', 'code': scheduled_code,
                                 'service_status': 'scheduled', 'units': 1,
@@ -305,7 +360,39 @@ class PrevisitFlowTest(unittest.IsolatedAsyncioTestCase):
                                                    'source_reference': 'Synthetic contract'}
                                                    for code, amount in [('95909', 12644), ('95886', 8918), ('99213', 7615)]]
                                                if combined_emg else []))
-            result = await previsit_estimate(PrevisitInput(appointment_id="visit-1", refresh_benefits=refresh if too_early else False), MagicMock())
+            setting = {'telehealth_pos': '10', 'telehealth_modality': 'audio_video'} if telehealth else {}
+            result = await previsit_estimate(PrevisitInput(appointment_id="visit-1", refresh_benefits=refresh if too_early else False, **setting), MagicMock())
+            if telehealth:
+                self.assertEqual(client.post.await_args_list[0].kwargs['json']['encounter']['placeOfService'], {'code': '10'})
+                self.assertEqual(result['telehealth'], {'place_of_service': '10', 'modality': 'audio_video'})
+                self.assertEqual(case['previsit_context']['inputs']['place_of_service'], '10')
+                self.assertEqual(case['previsit_context']['inputs']['telehealth_modality'], 'audio_video')
+                from copy import deepcopy
+                stored = deepcopy(case)
+                fresh_inputs, fresh_source = deepcopy(inputs), deepcopy(source)
+                fresh_inputs['place_of_service'] = '11'
+                fresh_inputs.pop('telehealth_modality')
+                fresh_source.pop('_telehealth_base_token')
+                fresh_source.pop('_telehealth_confirmed_at')
+                session['intake']['workflows'] = {'saved': 'case-1'}
+                scoped_patches.enter_context(patch('app.api.routers.commercial_estimator.ecw_backend.fetch_inputs',
+                    new=AsyncMock(return_value=(fresh_inputs, [], fresh_source))))
+                scoped_patches.enter_context(patch('app.api.routers.commercial_estimator.store.get_cases', return_value=[stored]))
+                scoped_patches.enter_context(patch('app.api.routers.commercial_estimator.store.create_case', return_value=stored))
+                scoped_patches.enter_context(patch('app.api.routers.commercial_estimator.object_store.get_object_bytes',
+                    return_value=json.dumps(success_response.json()).encode()))
+                reopened = await previsit_estimate(PrevisitInput(appointment_id='visit-1'), MagicMock())
+                self.assertEqual(reopened['telehealth'], result['telehealth'])
+                self.assertEqual(client.post.await_count, 1)
+                legacy = deepcopy(stored)
+                legacy['previsit_context']['inputs']['place_of_service'] = '11'
+                legacy['previsit_context']['inputs'].pop('telehealth_modality')
+                legacy['previsit_context']['result']['collection_guidance']['amount_cents'] = 0
+                legacy['previsit_context']['result']['price_range']['complete'] = True
+                projected = _previsit_result(legacy)
+                self.assertIsNone(projected['collection_guidance']['amount_cents'])
+                self.assertFalse(projected['price_range']['complete'])
+                return
             if combined_emg:
                 self.assertEqual(client.post.await_count, 2)
                 self.assertEqual([[row['value'] for row in call.kwargs['json']['encounter']['services']]

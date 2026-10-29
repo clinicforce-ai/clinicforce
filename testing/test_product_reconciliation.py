@@ -5,6 +5,7 @@ import asyncio
 from contextlib import nullcontext
 import hashlib
 import json
+import re
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -621,6 +622,7 @@ def test_signed_group_agreement_requires_member_network_and_provider_scope(monke
         assert result['network_evidence']['document_id'] == document['id']
         if invalid == 'missing_ecw_tin':
             assert result['network_evidence']['tin_source'] == 'scoped clinic network record'
+            assert not result['network_evidence']['mismatch_warnings']
         if invalid == 'missing_library_date':
             assert result['network_evidence']['agreement_effective_from'] == '2026-06-16'
             assert result['network_evidence']['agreement_effective_source'] == 'signed agreement text'
@@ -632,6 +634,45 @@ def test_signed_group_agreement_requires_member_network_and_provider_scope(monke
         assert network_participation.verified_in_network(benefits)
     elif invalid != 'date':
         assert benefits['network_status'] == 'unknown'
+
+
+def test_signed_blue_agreement_prices_its_local_plan_after_payer_product_reconciliation(monkeypatch):
+    payer, network, _, inputs, source = setup_path(monkeypatch)
+    payer['display_name'] = 'Blue Cross Blue Shield of Texas'
+    source.update(plan='BlueChoice PPO', payer_plan_names=['BlueChoice PPO'])
+    document = {'id': 'signed-blue-contract', 'kind': 'contract', 'content_type': 'application/pdf',
+                'label': 'Signed Blue Choice agreement', 'payer': payer['display_name'],
+                'effective_from': '2026-01-01', 'sha256': 'synthetic-digest'}
+    monkeypatch.setattr(api.staff_store, 'list_library', lambda *_: [document])
+    monkeypatch.setattr(api.staff_store, 'get_library', lambda *_: {**document, 'extraction': {
+        'sha256': 'synthetic-digest', 'pages': [{'text': 'Executed group agreement. Attachment A: Blue Choice PPO network.'}]}})
+    monkeypatch.setattr(pricing.library_network_exclusions, 'applicable_exclusion', lambda *_: None)
+    monkeypatch.setattr(pricing.inventory_certification, 'applicable', lambda *_: None)
+    monkeypatch.setattr(api, '_network_contract_evidence', lambda *_: {'document_id': document['id']})
+    matched = []
+    def rates(_practice, profile, selected_network, _day, codes):
+        matched.append((profile['rate_plan_matcher'] if 'rate_plan_matcher' in profile else profile['plan_matcher'],
+                        selected_network['id'], [row['code'] for row in codes]))
+        return [{'code': '99213', 'allowed_cents': 7615}]
+    monkeypatch.setattr(api.commercial_store, 'matching_rates', rates)
+    monkeypatch.setattr(api.visit_estimate, 'price_lines', lambda _codes, prices, *_args, **_kwargs:
+                        {'complete': bool(prices), 'lines': prices})
+    result = {'payer': payer['display_name'], 'plan_details': {'stedi': {'names': ['BlueChoice PPO']}},
+              'codes': [{'id': 'visit', 'code': '99213', 'units': 1, 'modifiers': []}],
+              'issues': [], 'service_selection_status': 'preview',
+              'identity': {'status': 'matched', 'binding': 'synthetic', 'match_version': 2}}
+    benefits = {'active': True, 'service_date_matches': True, 'network_status': 'unknown', 'network_conflict': False}
+    api._attach_previsit_pricing(result, 'clinic', inputs, source, 'payer-route', benefits)
+    assert result['network_evidence']['decision'] == 'in_network_contract_supported'
+    assert matched == [('CI', network['id'], ['99213'])]
+    assert result['price_range']['complete']
+    inputs.update(reason='Televisit', appointment_type='Televisit')
+    result.update(issues=[])
+    api._attach_previsit_pricing(result, 'clinic', inputs, source, 'payer-route', benefits)
+    assert result['network_evidence']['decision'] == 'in_network_contract_supported'
+    assert not result['price_range']['complete']
+    assert any('POS 10 or 02' in issue for issue in result['issues'])
+    assert any('telehealth location' in issue for issue in result['price_range']['service_issues'])
 
 
 @pytest.mark.parametrize('missing', [None, 'local_payer_alias', 'home_plan', 'product', 'bluecard_clause',
@@ -1074,6 +1115,21 @@ def test_requirement_context_uses_only_approved_contract_product():
     result['network_evidence'].pop('product_mapping_approval')
     requirements.attach_requirements(service, result, {}, inputs, source, session, connections, 'route')
     assert result['requirement_evidence']['referral']['status'] == 'Verification required'
+
+
+def test_televisit_does_not_submit_cpt_check_using_clinic_office_pos(monkeypatch):
+    from app.insurance import stedi_cpt_authorization
+    monkeypatch.setattr(stedi_cpt_authorization, 'visit_coverage_bound', lambda *_: True)
+    benefits = {'active': True, 'network_status': 'in_network',
+                'identity': {'status': 'matched', 'binding': 'synthetic', 'match_version': 2}}
+    result = {'codes': [{'code': '99213'}], 'benefits': benefits, 'identity': benefits['identity']}
+    case = {'id': 'synthetic'}
+    returned = asyncio.run(requirements.check_cpt_authorization(
+        SimpleNamespace(re=re), result, case, {},
+        {'service_date': '2026-10-29', 'place_of_service': '11', 'reason': 'Televisit'},
+        {}, 'synthetic-key'))
+    assert returned is case
+    assert 'cpt_authorization' not in case
 
 
 def test_cigna_open_access_plus_diagnostics_do_not_require_published_precertification():

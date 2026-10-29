@@ -29,6 +29,11 @@ export default function CommercialEstimateView({ model }: { model: CommercialEst
     error,
     patientResolutionNeeded,
     selectedVisit,
+    telehealthPos,
+    setTelehealthPos,
+    telehealthModality,
+    setTelehealthModality,
+    confirmTelehealth,
     loaded,
     busy,
     deleteError,
@@ -173,6 +178,59 @@ export default function CommercialEstimateView({ model }: { model: CommercialEst
           </button>
         </div>
       )}
+      {result &&
+        !readOnly &&
+        /\b(televisit|telehealth|telemedicine|video visit|virtual visit)\b/i.test(
+          `${result.reason || ''} ${result.appointment_context?.appointment_type || ''}`,
+        ) && (
+          <section aria-label="Telehealth visit details">
+            <h2>Telehealth visit details</h2>
+            {result.telehealth && (
+              <p>
+                Checked for{' '}
+                {result.telehealth.place_of_service === '10'
+                  ? 'patient at home'
+                  : 'patient at another location'}{' '}
+                · {result.telehealth.modality === 'audio_video' ? 'audio and video' : 'audio only'}.
+              </p>
+            )}
+            <label>
+              Patient location
+              <select
+                value={telehealthPos}
+                disabled={!!busy}
+                onChange={(event) => setTelehealthPos(event.target.value as '' | '10' | '02')}
+              >
+                <option value="">Select location</option>
+                <option value="10">At home</option>
+                <option value="02">Another location</option>
+              </select>
+            </label>
+            <label>
+              Visit modality
+              <select
+                value={telehealthModality}
+                disabled={!!busy}
+                onChange={(event) =>
+                  setTelehealthModality(event.target.value as '' | 'audio_video' | 'audio_only')
+                }
+              >
+                <option value="">Select modality</option>
+                <option value="audio_video">Audio and video</option>
+                <option value="audio_only">Audio only</option>
+              </select>
+            </label>
+            <button
+              disabled={!!busy || !telehealthPos || !telehealthModality}
+              onClick={() => void confirmTelehealth()}
+            >
+              Check telehealth benefits
+            </button>
+            <p>
+              Checking may send a payer eligibility request. Final coding requires clinician review.
+            </p>
+          </section>
+        )}
       {result && (
         <dl className="visit-context-facts">
           <div>

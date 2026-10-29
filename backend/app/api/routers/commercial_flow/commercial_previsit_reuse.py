@@ -9,6 +9,111 @@ SAVED_RESPONSE_UNAVAILABLE = ('The protected saved payer response could not be r
                               'These saved benefit terms are for review only. Rerun the payer check before collection.')
 
 
+def telehealth_setting(api: ModuleType, value, inputs: dict, cases: list[dict], original_token: str):
+    if value.telehealth_pos:
+        return {'place_of_service': value.telehealth_pos, 'modality': value.telehealth_modality}, api._now()
+    if not api.visit_estimate.is_telehealth(inputs):
+        return None, None
+    saved = []
+    for case in cases:
+        context = case.get('previsit_context') or {}
+        source = context.get('source') or {}
+        setting = (context.get('result') or {}).get('telehealth') or {}
+        if (source.get('_telehealth_base_token') == original_token and source.get('_telehealth_confirmed_at')
+                and setting.get('place_of_service') in {'10', '02'}
+                and setting.get('modality') in {'audio_video', 'audio_only'}):
+            saved.append((source['_telehealth_confirmed_at'], setting))
+    saved.sort(key=lambda item: item[0], reverse=True)
+    if saved and (len(saved) == 1 or saved[0][0] != saved[1][0]):
+        return saved[0][1], saved[0][0]
+    return None, None
+
+
+async def telehealth_inquiry_coverage(api: ModuleType, cases: list[dict], inputs: dict,
+                                     source: dict, original_token: str, payer_id: str,
+                                     coverage: dict) -> dict:
+    """Use only a fresh, same-visit payer-bound dependent identity for a new setting."""
+    if coverage.get('active_coverages') != 1 or coverage.get('other_active_coverage') or not coverage.get('member_id'):
+        return coverage
+    candidates = []
+    for case in cases:
+        context, saved = case.get('previsit_context') or {}, case.get('previsit') or {}
+        try:
+            checked = api.datetime.fromisoformat(saved['checked_at'])
+            fresh = checked <= api.datetime.now(api.timezone.utc) < checked + api.timedelta(hours=24)
+        except (KeyError, TypeError, ValueError):
+            fresh = False
+        if not (fresh and context.get('context_token') == original_token
+                and context.get('payer_id') == payer_id and saved.get('request_state') == 'complete'
+                and case.get('previsit_raw_object_key')):
+            continue
+        try:
+            raw = await api.run_in_threadpool(api.object_store.get_object_bytes, case['previsit_raw_object_key'])
+            if case.get('previsit_raw_sha256') and api.hashlib.sha256(raw).hexdigest() != case['previsit_raw_sha256']:
+                continue
+            payload = api.json.loads(raw)
+            benefits = api._previsit_benefits(payload, coverage, inputs['service_date'], inputs=inputs, source=source)
+            identity = benefits.get('identity') or {}
+            matched = api.stedi_discovery.candidate_identity(payload, inputs)
+            if (matched and matched.get('relationship') == 'dependent'
+                    and str((payload.get('provider') or {}).get('npi') or '')
+                        == str((source.get('rendering_provider') or {}).get('npi') or '')
+                    and bool((source.get('rendering_provider') or {}).get('npi'))
+                    and api.insurance_identity.patient_plan_applies(benefits, identity, inputs['service_date'])
+                    and api.insurance_identity.patient_benefits_bound(identity)
+                    and all(not coverage.get(key) or not matched.get(key)
+                            or api.insurance_identity.normalized(coverage[key]) == api.insurance_identity.normalized(matched[key])
+                            for key in ('group_number', 'plan_number'))
+                    and api.insurance_identity.normalized(matched.get('member_id')) == api.insurance_identity.normalized(coverage.get('member_id'))):
+                candidates.append(api.stedi_discovery.discovered_coverage(coverage, inputs, payload))
+        except Exception:
+            continue
+    return candidates[0] if len(candidates) == 1 else coverage
+
+
+def retain_saved_group_binding(api: ModuleType, inputs: dict, card: dict, card_check: dict,
+                               prior_cases: list[dict], original_token: str,
+                               original_group: object) -> None:
+    """A card-confirmed group already in the 271 need not create a new inquiry slot."""
+    if (card.get('count') not in {1, 2} or card_check.get('status') != 'filled_missing'
+            or card_check.get('fields_added') != ['group_number']):
+        return
+    group = str(inputs.get('group_number') or '')
+    member = str((card.get('fields') or {}).get('member_id') or '')
+    if not group or not member:
+        return
+    matches = []
+    for case in prior_cases:
+        saved = case.get('previsit') or {}
+        context = case.get('previsit_context') or {}
+        result = context.get('result') or {}
+        try:
+            checked = api.datetime.fromisoformat(saved['checked_at'])
+            now = api.datetime.now(api.timezone.utc)
+            fresh = checked <= now < checked + api.timedelta(hours=24)
+        except (KeyError, TypeError, ValueError):
+            fresh = False
+        payer_member = ((result.get('insurance_details') or {}).get('payer_subscriber') or {}).get('memberId')
+        payer_group = ((result.get('plan_details') or {}).get('stedi') or {}).get('group_number')
+        card_payer = str((card.get('fields') or {}).get('payer') or '')
+        saved_payer = str((result.get('stedi_payer') or {}).get('name') or result.get('payer') or '')
+        payer_matches = not card_payer or bool(saved_payer and api.stedi_payers._same_name(card_payer, saved_payer, []))
+        normalize = api.stedi_discovery.normalized
+        if (saved.get('request_state') == 'complete' and fresh and case.get('previsit_raw_object_key')
+                and context.get('context_token') == original_token
+                and (result.get('benefits') or {}).get('active') is True
+                and (result.get('benefits') or {}).get('service_date_matches') is not False
+                and not (result.get('benefits') or {}).get('coverage_status_conflict')
+                and api.insurance_identity.patient_benefits_bound(result.get('identity') or {})
+                and payer_matches
+                and normalize(member) == normalize(payer_member)
+                and normalize(group) == normalize(payer_group)):
+            matches.append(case)
+    if len(matches) == 1:
+        inputs['group_number'] = original_group
+        card_check.update(status='read', fields_added=[])
+
+
 def saved_benefits_for_review(saved: dict | None) -> dict | None:
     """Retain old terms as evidence without authorizing a new financial result."""
     if not isinstance(saved, dict) or not saved:
@@ -76,7 +181,7 @@ async def reuse_previsit_case(api: ModuleType, *, case: dict, result: dict,
                 result['issues'].append(SAVED_RESPONSE_UNAVAILABLE)
             await api.run_in_threadpool(api._finish_previsit, result, case, inputs, source, payload, session, payer_id)
             saved_case = await api.run_in_threadpool(api._save, case, session, "previsit-recalculated")
-            if (result['benefits'].get('identity') or {}).get('policy_differences'):
+            if api.insurance_identity.unresolved_policy_difference(result['benefits'].get('identity')):
                 saved_case.setdefault('previsit_discovery', {'request_state': 'not_requested', 'recovery_requested': True})
                 return await api._start_previsit_recovery(saved_case, session, provider, background_tasks)
             if payload and (result['benefits'].get('has_secondary') or

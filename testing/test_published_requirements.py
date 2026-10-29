@@ -116,8 +116,10 @@ def test_bcbstx_in_network_ppo_99213_office_requirements():
     assert evaluate(result, displayed_payer, [])['referral']['status'] == 'Not required'
     assert evaluate(result, displayed_payer, [])['authorization']['status'] == 'Not required'
     assert evaluate(result, {**context, 'plans': ['PREFERRED PROVIDER OPTION MEDICAL', 'Blue Choice PPO']}, [])['authorization']['status'] == 'Not required'
+    assert evaluate(result, {**context, 'plans': ['Blue Choice PPO']}, [])['authorization']['status'] == 'Not required'
     assert evaluate(result, {**context, 'plans': ['Health Maintenance Organization Medical']}, [])['referral']['status'] == 'Verification required'
     assert evaluate(result, {**context, 'pos': '22'}, [])['authorization']['status'] == 'Verification required'
+    assert evaluate(result, {**context, 'pos': None}, [])['authorization']['status'] == 'Verification required'
     higher, _ = case('BCBSTX', 'PREFERRED PROVIDER OPTION MEDICAL', '99214')
     assert evaluate(higher, context, [])['authorization']['status'] == 'Verification required'
     result['price_range'] = {'lines': [{'id': '0', 'code': '99213', 'benefits': {

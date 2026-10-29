@@ -76,7 +76,7 @@ def test_booked_bilateral_hand_emg_uses_the_model_proposal_without_manual_select
     assert visit_estimate.is_emg_visit(booked)
     assert plan['recommended_ids'] == ['95908', '95886']
     assert plan['recommended_units'] == {'95908': 1, '95886': 2}
-    assert plan['method'] == 'llm' and plan['version'] == 15
+    assert plan['method'] == 'llm' and plan['version'] == 16
     assert '"appointment_type": "EMG Visit"' in model.converse.call_args.kwargs['messages'][0]['content'][0]['text']
     assert not visit_estimate.is_emg_visit({'reason': 'Bilateral hand'})
     assert not visit_estimate.is_emg_visit({'reason': 'Bilateral hand', 'appointment_type': 'Possible EMG'})
@@ -205,6 +205,40 @@ def test_established_office_visit_defaults_to_provisional_followup_when_model_is
     assert plan['recommended_ids'] == ['99213']
     assert plan['method'] == 'appointment'
     assert 'starting estimate' in plan['assumptions'][0]
+
+
+def test_generic_televisit_uses_prior_same_clinic_office_visit_for_provisional_plan():
+    available = [{'id': 'planning:99213', 'code': '99213', 'source': 'CPT planning catalog', 'units': 1}]
+    history = [{'date': '2026-10-01', 'reason': 'New patient office consultation',
+                'coded_services': ['99204']}]
+    model = MagicMock()
+    model.converse.return_value = model_reply([])
+    with patch.object(cpt_suggester.boto3, 'client', return_value=model):
+        plan = cpt_suggester.recommend_visit_plan(
+            {'reason': 'Visit type: Televisit', 'visit_type': None},
+            {'recent_completed_appointments': history}, available)
+    assert plan['recommended_ids'] == ['planning:99213']
+    assert plan['method'] == 'history'
+    assert any('confirm' in note.lower() for note in plan['assumptions'])
+
+
+def test_generic_televisit_without_status_or_office_history_remains_unselected():
+    available = [{'id': 'planning:99213', 'code': '99213', 'source': 'CPT planning catalog', 'units': 1}]
+    model = MagicMock()
+    model.converse.return_value = model_reply([])
+    with patch.object(cpt_suggester.boto3, 'client', return_value=model):
+        plan = cpt_suggester.recommend_visit_plan(
+            {'reason': 'Televisit', 'visit_type': None}, {}, available)
+    assert plan['recommended_ids'] == []
+
+
+def test_televisit_at_clinic_mapped_office_pos_needs_patient_location():
+    assert visit_estimate.telehealth_pos_unresolved({
+        'reason': 'Televisit', 'place_of_service': '11'})
+    assert not visit_estimate.telehealth_pos_unresolved({
+        'reason': 'Televisit', 'place_of_service': '10', 'telehealth_modality': 'audio_video'})
+    assert visit_estimate.telehealth_pos_unresolved({
+        'reason': 'Televisit', 'place_of_service': '10'})
 
 
 def test_established_office_visit_uses_supported_level_and_rejects_new_patient_level():

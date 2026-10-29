@@ -202,8 +202,6 @@ def resolve(practice_id: str, payer: dict | None, inputs: dict, source: dict,
                 and insurance_identity.normalized(source['plan']) !=
                     insurance_identity.normalized(network['plan_matcher'])):
             warnings.append('eCW plan code differs from the clinic agreement record.')
-        if not ecw_tin:
-            warnings.append('eCW billing TIN is unavailable; the verified clinic network record supplies it.')
         candidates.append((network, relationship, warnings,
                            local_blue if bluecard_candidate and not relationship else payer,
                            bluecard_candidate))
@@ -254,6 +252,7 @@ def resolve(practice_id: str, payer: dict | None, inputs: dict, source: dict,
                         'home_plan': bluecard_candidate['home_plan'],
                         'home_plan_evidence_path': bluecard_candidate['home_plan_evidence_path']}
     return {'decision': 'in_network_contract_supported', 'network_name': network['network_name'],
+            'contract_plan_matcher': network.get('plan_matcher'),
             'product': product, 'product_network_source': relationship['source'],
             'product_network_reference': relationship.get('reference'),
             'bluecard_clause_source': relationship.get('bluecard_clause_source'),

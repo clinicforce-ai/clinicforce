@@ -43,6 +43,14 @@ def payer_identity_verified(comparison: dict | None) -> bool:
     )
 
 
+def unresolved_policy_difference(comparison: dict | None) -> bool:
+    """A payer-matched dependent can retain an eCW registration warning without rediscovery."""
+    comparison = comparison or {}
+    return bool(comparison.get('policy_differences') and not (
+        comparison.get('reconciliation_rule') == 'payer_matched_patient'
+        and payer_identity_verified(comparison)))
+
+
 def normalized(value: object) -> str:
     return ''.join(c for c in unicodedata.normalize('NFKD', str(value or '')).casefold()
                    if c.isalnum())

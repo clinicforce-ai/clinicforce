@@ -4,7 +4,7 @@ from __future__ import annotations
 from datetime import date
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, StrictInt
+from pydantic import BaseModel, ConfigDict, Field, StrictInt, model_validator
 
 
 class ConnectionInput(BaseModel):
@@ -118,6 +118,14 @@ class EcwStartInput(BaseModel):
 
 class PrevisitInput(EcwStartInput):
     refresh_benefits: bool = False
+    telehealth_pos: Literal['10', '02'] | None = Field(default=None, description='Confirmed patient location for this televisit: home (10) or other location (02).')
+    telehealth_modality: Literal['audio_video', 'audio_only'] | None = Field(default=None, description='Confirmed live visit modality; final coding remains clinician-reviewed.')
+
+    @model_validator(mode='after')
+    def complete_telehealth_setting(self):
+        if bool(self.telehealth_pos) != bool(self.telehealth_modality):
+            raise ValueError('Telehealth location and modality must be supplied together.')
+        return self
 
 
 class ServiceLine(BaseModel):
