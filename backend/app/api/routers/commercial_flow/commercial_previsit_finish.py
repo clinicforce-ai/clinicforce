@@ -81,6 +81,10 @@ def _finish_previsit(result: dict, case: dict, inputs: dict, source: dict, paylo
         result['benefits']['requires_review'] = True
     payer_plan = _api.commercial.plan_details(payload or {})
     payer_plan_bound = patient_plan_applies(result['benefits'], comparison, inputs['service_date'])
+    payer_plan = published_plan_benefits.identify_card_plan(
+        payer_plan, result.get('card_check') or {}, str(result.get('payer') or source.get('payer') or ''), payer_plan_bound)
+    if payer_plan.get('cms_plan_id') == 'H7617-057':
+        result['benefits']['plan_details'] = payer_plan
     published_plan_benefits.apply_plan_terms(result['benefits'], payer_plan,
                                              inputs['service_date'], payer_plan_bound)
     protection = review.get('billing_protection') or {}
@@ -206,7 +210,7 @@ def _finish_previsit(result: dict, case: dict, inputs: dict, source: dict, paylo
         payer_coverage_period=((dependent or subscriber).get('dates') or {}).get('plan') or {})
     result.update(ecw_coverage_active=source.get('active_coverages', 0) > 0, calculated_at=_api._now(), context_token=token, revision=case.get('revision', 0), plan_details={
         'ecw': source.get('plan_details') or {'plan': [source['plan']] if source.get('plan') else []},
-        'stedi': _api.commercial.plan_details(payload) if payload else {}}, ecw_retrieved_at=source.get('retrieved_at'),
+        'stedi': payer_plan if payload else {}}, ecw_retrieved_at=source.get('retrieved_at'),
         response_reference=(payload or {}).get('id'), selected_ids=selected_ids or [])
     cpt_check = case.get('cpt_authorization') or {}
     result['cpt_authorization'] = {key: cpt_check[key] for key in

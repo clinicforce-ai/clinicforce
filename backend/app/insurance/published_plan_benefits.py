@@ -18,6 +18,29 @@ AETNA_SIGNATURE_TX_2026 = {
     'diagnostic_copay_cents': 5000,
 }
 
+HUMANA_VALUE_CHOICE_057_2026 = {
+    'label': '2026 Humana Value Choice (PPO) H7617-057 Summary of Benefits',
+    'url': 'https://assets.humana.com/is/content/humana/H7617057000SB26pdf',
+    'effective_from': '2026-01-01', 'effective_to': '2026-12-31',
+    'office_specialist_copay_cents': 3000,
+    'in_network_oop_max_cents': 680000,
+    'combined_oop_max_cents': 1190000,
+    'out_of_network_coinsurance_percent': 40,
+}
+
+
+def identify_card_plan(plan: dict, card: dict, payer: str, patient_bound: bool) -> dict:
+    """Use a matched card's CMS ID only when the member's 271 names the same product."""
+    if (not patient_bound or card.get('status') not in {'matched', 'filled_missing'}
+            or card.get('cms_plan_id') != 'H7617-057'
+            or card.get('plan_name') != 'Humana Value Choice (PPO)'
+            or [name.casefold() for name in plan.get('names') or []] != ['humana value choice']
+            or 'humana' not in payer.casefold()):
+        return plan
+    return {**plan, 'identified_product': 'Humana Value Choice PPO H7617-057',
+            'cms_plan_id': 'H7617-057', 'product_evidence': {'card': 'matched patient card CMS plan ID and PPO name',
+                                                            'payer': 'patient-bound Stedi plan name'}}
+
 
 def aetna_signature_diagnostic(benefits: dict, service_date: str, code: str,
                                *, payer_verified: bool) -> bool:
@@ -35,7 +58,23 @@ def aetna_signature_diagnostic(benefits: dict, service_date: str, code: str,
 
 
 def apply_plan_terms(benefits: dict, plan: dict, service_date: str, patient_bound: bool) -> None:
-    """A confirmed Basic plan has no annual medical deductible at any provider tier."""
+    """Attach a dated published plan term only to an exact, patient-bound product."""
+    if (patient_bound and plan.get('identified_product') == 'Humana Value Choice PPO H7617-057'
+            and HUMANA_VALUE_CHOICE_057_2026['effective_from'] <= service_date <= HUMANA_VALUE_CHOICE_057_2026['effective_to']
+            and benefits.get('active') is True and benefits.get('service_date_matches') is not False):
+        benefits['published_plan_rule'] = HUMANA_VALUE_CHOICE_057_2026
+        benefits['published_preferred_office_copay_cents'] = HUMANA_VALUE_CHOICE_057_2026['office_specialist_copay_cents']
+        if (benefits.get('deductible_remaining_cents') not in {None, 0}
+                or benefits.get('deductible_annual_cents') not in {None, 0}
+                or benefits.get('deductible_applies') is True):
+            benefits.setdefault('review_reasons', []).append(
+                'The member-specific deductible conflicts with the published Humana no-medical-deductible rule.')
+            benefits['requires_review'] = True
+        else:
+            benefits['deductible_applies'] = False
+            benefits['deductible_applicability'] = 'DOES_NOT_APPLY'
+            benefits['deductible_remaining_cents'] = 0
+        return
     if (not patient_bound or plan.get('identified_product') != 'FEP Blue Basic PSHB'
             or not FEP_PSHB_2026['effective_from'] <= service_date <= FEP_PSHB_2026['effective_to']):
         return
@@ -75,6 +114,35 @@ def preferred_fep_office(benefits: dict, rules: dict, service_date: str, code: s
 def apply_office_terms(raw: dict, case_benefits: dict, rules: dict,
                        service_date: str, code: str) -> dict:
     """Fill missing office terms; retain conflicting member-specific evidence."""
+    plan = case_benefits.get('plan_details') or {}
+    if (plan.get('identified_product') == 'Humana Value Choice PPO H7617-057'
+            and HUMANA_VALUE_CHOICE_057_2026['effective_from'] <= service_date <= HUMANA_VALUE_CHOICE_057_2026['effective_to']
+            and case_benefits.get('active') is True and case_benefits.get('service_date_matches') is True
+            and verified_in_network(case_benefits)
+            and patient_benefits_bound(case_benefits.get('identity') or {})
+            and not case_benefits.get('has_secondary')
+            and str(rules.get('place_of_service') or '') == '11'
+            and rules.get('provider_office_role') == 'specialist'
+            and code in {'99212', '99213', '99214', '99215'}):
+        copay = HUMANA_VALUE_CHOICE_057_2026['office_specialist_copay_cents']
+        if (raw.get('copay_cents') not in {None, copay}
+                or raw.get('coinsurance_percent') not in {None, '0', '0.0', '0.00'}
+                or raw.get('deductible_remaining_cents') not in {None, 0}
+                or raw.get('deductible_applies') is True):
+            return {**raw, 'review_reasons': [*(raw.get('review_reasons') or []),
+                'The member-specific office cost share conflicts with the published Humana plan rule.'],
+                'requires_review': True}
+        reasons = [reason for reason in raw.get('review_reasons') or [] if reason not in {
+            'Confirm the remaining individual deductible that applies to this visit.',
+            'Confirm which copay or coinsurance term applies, including any visit-count conditions.',
+            "Confirm the plan's referral requirement and, if required, that a referral is on file.",
+        }]
+        return {**raw, 'copay_cents': copay, 'copay_period': 'VISIT',
+                'coinsurance_percent': '0', 'deductible_applies': False,
+                'deductible_applicability': 'DOES_NOT_APPLY', 'deductible_remaining_cents': 0,
+                'cost_share': 'copay', 'published_plan_rule': HUMANA_VALUE_CHOICE_057_2026,
+                'referral_signal': 'not_required' if raw.get('referral_signal') != 'required' else 'required',
+                'review_reasons': reasons, 'requires_review': bool(reasons)}
     if (rules.get('aetna_eoc_verified') is True
             and str(rules.get('place_of_service') or '') == '11' and
             aetna_signature_diagnostic(case_benefits, service_date, code,

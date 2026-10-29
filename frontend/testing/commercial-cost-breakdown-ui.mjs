@@ -14,6 +14,12 @@ try {
   const { default: TemporaryRateReference } = await server.ssrLoadModule(
     '/src/features/commercial-estimate/TemporaryRateReference.tsx',
   )
+  const { publishedHumanaOfficeCopay } = await server.ssrLoadModule(
+    '/src/features/commercial-estimate/payerReportedPartialCopay.ts',
+  )
+  const { default: PublishedPlanBenefit } = await server.ssrLoadModule(
+    '/src/features/commercial-estimate/PublishedPlanBenefit.tsx',
+  )
   const { payerPlanDisplay } = await server.ssrLoadModule(
     '/src/features/commercial-estimate/payerPlanDisplay.ts',
   )
@@ -666,6 +672,30 @@ try {
     assert(aetnaDiagnosticTable.includes(value), `Missing Aetna diagnostic value ${value}`)
   }
   assert(!aetnaDiagnosticTable.includes('BCBS Texas reference'))
+  const humana = {
+    payer: 'Humana Health Plan', reason: 'Six week follow-up', service_date: '2026-10-29',
+    identity: { status: 'matched', binding: 'synthetic', match_version: 2 },
+    plan_details: { stedi: { identified_product: 'Humana Value Choice PPO H7617-057' } },
+    benefits: { active: true, service_date_matches: true, network_status: 'in_network',
+      deductible_applies: false, deductible_remaining_cents: 0,
+      published_preferred_office_copay_cents: 3000,
+      published_plan_rule: { url: 'https://example.invalid/synthetic-plan' } },
+    price_range: { mode: 'services', complete: false, lines: [
+      { id: 'office', code: '99214', units: 1, modifiers: [], allowed_cents: null,
+        benefits: { active: true, network_status: 'in_network' },
+        rate_resolution: { status: 'UNRESOLVED' } },
+    ] },
+  }
+  assert.equal(payerPlanDisplay(humana).planName, 'Humana Value Choice PPO H7617-057')
+  assert.equal(publishedHumanaOfficeCopay(humana, model), 3000)
+  assert.equal(publishedHumanaOfficeCopay({ ...humana, plan_details: { stedi: { identified_product: null } } }, model), null)
+  assert.equal(publishedHumanaOfficeCopay({ ...humana, benefits: { ...humana.benefits, network_status: 'out_of_network' } }, model), null)
+  const humanaTable = renderToStaticMarkup(React.createElement(CommercialCostBreakdown, { model, result: humana }))
+  for (const value of ['$30.00 in-network specialist office visit', '$0.00 annual',
+    '$6,800.00 in-network annual', 'conditional in-network office copay', 'Not established']) {
+    assert(humanaTable.includes(value), `Missing Humana reference ${value}`)
+  }
+  assert(renderToStaticMarkup(React.createElement(PublishedPlanBenefit, { result: humana, show: true })).includes('Humana plan source'))
   assert(aetnaDiagnosticTable.includes('min(($50.00 per test × 2) + $0.00 deductible + $0.00 coinsurance, $218.76 Aetna fee reference, $6,390.00 remaining out-of-pocket) = $100.00'))
   const aetnaDiagnosticHeadline = renderToStaticMarkup(React.createElement(
     ArrivalAmountSummary, { model: { ...model, amountText: 'Insured amount unavailable' },

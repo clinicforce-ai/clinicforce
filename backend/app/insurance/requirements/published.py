@@ -15,7 +15,20 @@ BCBSTX_PAYER_NAMES = {'bcbstx', 'bcbstexas', 'bluecrossblueshieldoftexas',
                       'bluecrossblueshieldtexas'}
 
 # Saved estimates re-evaluate requirement decisions when a published rule changes.
-PUBLISHED_RULESET_VERSION = '2026-10-29-uhc-lppo-office-v8'
+PUBLISHED_RULESET_VERSION = '2026-10-29-humana-value-choice-057-v9'
+
+HUMANA_VALUE_CHOICE_057_SOURCE = {
+    'label': '2026 Humana Value Choice (PPO) H7617-057 Summary of Benefits',
+    'url': 'https://assets.humana.com/is/content/humana/H7617057000SB26pdf',
+    'source_version': '2026 H7617-057 summary', 'verified_at': '2026-10-29',
+    'effective_from': '2026-01-01', 'effective_to': '2026-12-31',
+}
+HUMANA_2026_MA_PAL = {
+    'label': 'Humana Medicare Advantage and D-SNP Prior Authorization and Notification List',
+    'url': 'https://assets.humana.com/is/content/humana/FINAL_Medicare%20and%20DSNP%20Prior%20Authorization%20and%20Notification%20List%20-%207-1-2026pdf',
+    'source_version': 'July 1, 2026 list, revised October 1, 2026', 'verified_at': '2026-10-29',
+    'effective_from': '2026-10-01', 'effective_to': '2026-12-31',
+}
 
 UHC_GROUP_PPO_OON_SOURCE = {
     'label': 'UnitedHealthcare Group Medicare Advantage PPO out-of-network provider guide',
@@ -283,6 +296,12 @@ def _published_rule(kind: str, result: dict, context: dict, plans: list[str], co
                     BCBSTX_PPO_99213_AUTH_SOURCE, source_type='clinic_confirmation')
     if len(exact) != 1:
         return None
+    if product == 'humanavaluechoiceppoh7617057' and 'humana' in names:
+        if kind == 'referral' and office and codes <= {'99212', '99213', '99214', '99215'}:
+            return rule('Not required', 'This PPO permits direct specialist visits without a PCP referral.', HUMANA_VALUE_CHOICE_057_SOURCE)
+        if (kind == 'authorization' and office and codes <= {'99212', '99213', '99214', '99215'}
+                and str(context.get('pos') or '') == '11' and day >= '2026-10-01'):
+            return rule('Not required', 'Routine office E/M is absent from the current Medicare Advantage prior authorization list; additional services need separate review.', HUMANA_2026_MA_PAL)
     if product == 'fepbluebasicpshb':
         if kind == 'referral':
             return rule('Not required', 'The 2026 PSHB Service Benefit Plan does not require a PCP referral to see a specialist.', FEP_PSHB_2026_SOURCE)

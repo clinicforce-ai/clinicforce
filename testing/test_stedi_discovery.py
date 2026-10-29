@@ -375,6 +375,15 @@ def test_card_identity_hints_require_named_patient_or_known_subscriber():
     assert not discovery.card_candidate({**fields, 'birth_date': '1981-01-01'}, inputs)
 
 
+def test_card_middle_initial_is_kept_as_evidence_but_matches_patient_name():
+    case, _, _, _ = setup()
+    inputs = case['previsit_context']['inputs']
+    fields = {'member_name': 'PAT Q EXAMPLE', 'member_id': 'CARD-123', 'payer': 'Humana'}
+    assert discovery.card_candidate(fields, inputs)
+    assert not discovery.card_candidate({**fields, 'member_name': 'PAT Q OTHER'}, inputs)
+    assert not discovery.card_candidate({**fields, 'member_name': 'PAT OTHER EXAMPLE'}, inputs)
+
+
 def test_known_route_demographic_request_never_fabricates_member_id():
     case, _, provider, _ = setup()
     inputs, source = case['previsit_context']['inputs'], case['previsit_context']['source']
