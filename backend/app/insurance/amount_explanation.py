@@ -377,7 +377,9 @@ def build(result: dict, guidance: dict, review: dict | None = None) -> dict:
             sentence, code = (f'The provisional patient share is {_money(proxy["patient_share_cents"])} using the BCBS Texas fee proxy; do not collect until the clinic policy and Medicare billing-protection checks clear this member',
                               'bcbstx_proxy_provisional')
         elif proxy.get('basis') == 'bcbstx_cigna_fee_proxy' and type(proxy.get('patient_share_cents')) is int:
-            scope = ('the reported specialist office copay and assumed general 0% diagnostic coinsurance'
+            scope = ('the reported diagnostic specialist office copay and 0% diagnostic coinsurance'
+                     if proxy.get('scenario_kind') == 'oap_diagnostic_office_copay'
+                     else 'the reported specialist office copay and assumed general 0% diagnostic coinsurance'
                      if proxy.get('scenario_kind') == 'oap_office_copay_general_coinsurance'
                      else 'Cigna exact-CPT benefits')
             sentence, code = (f'The provisional patient share is {_money(proxy["patient_share_cents"])} using BCBS Texas fees and {scope}; the Cigna allowed amount and check-in charge remain unconfirmed, so no amount is authorized for collection',

@@ -54,7 +54,7 @@ export type PrevisitEstimate = {
   fee_proxy_estimate?: {
     basis: 'bcbstx_fee_proxy' | 'bcbstx_uhc_in_network_fee_proxy' | 'bcbstx_cigna_fee_proxy'
     status: 'provisional'
-    scenario_kind?: 'oap_office_copay_general_coinsurance'
+    scenario_kind?: 'oap_office_copay_general_coinsurance' | 'oap_diagnostic_office_copay'
     reference_total_cents: number
     coinsurance_percent: string
     copay_cents: number

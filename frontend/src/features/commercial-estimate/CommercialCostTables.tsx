@@ -17,7 +17,8 @@ export default function CommercialCostTables({
     <>
       {!cash &&
         result.collection_guidance?.basis !== 'qmb_protection' &&
-        proxy?.scenario_kind === 'oap_office_copay_general_coinsurance' && (
+        (proxy?.scenario_kind === 'oap_office_copay_general_coinsurance' ||
+          proxy?.scenario_kind === 'oap_diagnostic_office_copay') && (
           <CignaPlanningTable
             proxy={proxy}
             basis={result.collection_guidance?.basis}
@@ -77,12 +78,16 @@ function CignaPlanningTable({
             <tr>
               <th scope="row">Specialist office copay</th>
               <td>{money(proxy.copay_cents)}</td>
-              <td>One payer-reported copay per visit; application to these tests is assumed</td>
+              <td>{proxy.scenario_kind === 'oap_diagnostic_office_copay'
+                ? 'One payer-reported diagnostic specialist copay per office visit'
+                : 'One payer-reported copay per visit; application to these tests is assumed'}</td>
             </tr>
             <tr>
               <th scope="row">Diagnostic coinsurance in this scenario</th>
               <td>{proxy.coinsurance_percent}%</td>
-              <td>General Cigna plan row; assumed for the selected tests</td>
+              <td>{proxy.scenario_kind === 'oap_diagnostic_office_copay'
+                ? 'Cigna diagnostic office benefit row; CPT applicability remains conditional'
+                : 'General Cigna plan row; assumed for the selected tests'}</td>
             </tr>
             <tr className="is-total">
               <th scope="row">

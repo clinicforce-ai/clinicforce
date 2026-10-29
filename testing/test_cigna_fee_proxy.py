@@ -1,6 +1,7 @@
 """Synthetic exact-CPT Cigna benefit and BCBS Texas planning-rate checks."""
 
 from copy import deepcopy
+from unittest.mock import patch
 
 from app.insurance import (amount_explanation, blue_cross_proxy, collection_guidance,
                            encounter_summary, stedi_cpt_authorization)
@@ -73,6 +74,71 @@ def test_cigna_oap_office_scenario_uses_one_copay_and_reprices_selected_cpts():
     assert blue_cross_proxy.cigna_oap_office_scenario(result, '2026-10-28')['reference_total_cents'] == 10511
     result['codes'][0]['code'] = '95886'
     assert blue_cross_proxy.cigna_oap_office_scenario(result, '2026-10-28') is None
+
+
+def test_cigna_oap_diagnostic_office_terms_override_general_coinsurance():
+    result = _result()
+    result.update(plan='Open Access Plus', service_date='2026-11-03')
+    result['benefits'].update(network_source='payer_participation_message',
+        deductible_remaining_cents=0, coinsurance_percent='30', oop_remaining_cents=603480,
+        reported_options=[
+            {'kind': 'coinsurance', 'service_type_code': '30', 'plan_index': 0,
+             'coverage_level': 'INDIVIDUAL', 'network': 'IN_NETWORK',
+             'places_of_service': [], 'plan_association': 'medical', 'percent': '30'},
+            {'kind': 'coinsurance', 'service_type_code': '73', 'plan_index': 0,
+             'coverage_level': 'INDIVIDUAL', 'network': 'IN_NETWORK',
+             'places_of_service': ['11'], 'plan_association': 'medical', 'percent': '0',
+             'payer_note': 'BenefitTier Non Tier 1 Specialist'},
+            {'kind': 'copay', 'service_type_code': '73', 'plan_index': 0,
+             'coverage_level': 'INDIVIDUAL', 'network': 'IN_NETWORK',
+             'places_of_service': ['11'], 'time_period': 'VISIT',
+             'plan_association': 'medical', 'amount_cents': 8000,
+             'payer_note': 'BenefitTier Non Tier 1 Specialist'},
+            {'kind': 'copay', 'service_type_code': '73', 'plan_index': 0,
+             'coverage_level': 'INDIVIDUAL', 'network': 'IN_NETWORK',
+             'places_of_service': ['11'], 'time_period': 'VISIT',
+             'plan_association': 'medical', 'amount_cents': 4000,
+             'payer_note': 'Primary Care Physician'},
+            {'kind': 'copay', 'service_type_code': '73', 'plan_index': 0,
+             'coverage_level': 'INDIVIDUAL', 'network': 'IN_NETWORK',
+             'places_of_service': ['11'], 'time_period': 'VISIT',
+             'plan_association': 'medical', 'amount_cents': 10000,
+             'payer_note': 'BenefitTier Non Tier 1 Specialist Sleep Study'}])
+    result['cpt_authorization'].update(service_date='2026-11-03',
+        check_ids=['synthetic-ncs', 'synthetic-emg'],
+        financial_terms={code: {'coinsurance_percent': None, 'copay_cents': None,
+                               'deductible_remaining_cents': None, 'oop_remaining_cents': None}
+                         for code in ('95908', '95886')})
+    result['codes'][1]['units'] = result['temporary_rate_reference']['lines'][1]['units'] = 1
+    estimate = blue_cross_proxy.cigna_oap_office_scenario(result, '2026-11-03')
+    assert estimate['scenario_kind'] == 'oap_diagnostic_office_copay'
+    assert estimate['reference_total_cents'] == 19429
+    assert estimate['patient_share_cents'] == estimate['copay_cents'] == 8000
+    result['fee_proxy_estimate'] = estimate
+    assert collection_guidance.build(result)['amount_cents'] is None
+    result['codes'].pop()
+    result['temporary_rate_reference']['lines'].pop()
+    result['cpt_authorization']['check_ids'].pop()
+    result['cpt_authorization']['financial_terms'].pop('95886')
+    assert blue_cross_proxy.cigna_oap_office_scenario(result, '2026-11-03')['patient_share_cents'] == 8000
+
+
+def test_cigna_separate_diagnostic_response_reaches_reported_options():
+    from app.api.routers import commercial_estimator as api
+    primary = {'subscriber': {'memberId': 'SYNTH-1', 'dateOfBirth': '1980-01-01',
+                              'name': {'person': {'firstName': 'Test', 'lastName': 'Person'}}},
+               'plans': [{'name': 'Open Access Plus', 'benefits': {'statuses': [
+                   {'status': 'Active', 'service': {'system': 'STC', 'value': '30'}}]}}]}
+    diagnostic = {'plans': [{'name': 'Open Access Plus', 'benefits': {'coPayment': [
+        {'amount': '80', 'service': {'system': 'STC', 'value': '73'},
+         'coverageLevel': 'INDIVIDUAL', 'network': {'indicator': 'IN_NETWORK'},
+         'placesOfService': [{'code': '11'}], 'timePeriod': 'VISIT',
+         'messages': ['BenefitTier Non Tier 1 Specialist']}]}}]}
+    with patch.object(api.insurance_identity, 'compare', return_value={'status': 'matched', 'differences': []}):
+        benefits = api._previsit_benefits({**primary, '_service_payloads': {'73': diagnostic}},
+                                         {'active_coverages': 1}, '2026-11-03', ['73', '30'])
+    assert [(row['service_type_code'], row['amount_cents']) for row in benefits['reported_options']
+            if row['kind'] == 'copay'] == [('73', 8000)]
 
 
 def test_cigna_oap_office_scenario_withholds_without_member_scoped_inputs():

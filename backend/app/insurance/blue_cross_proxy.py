@@ -325,14 +325,36 @@ def cigna_oap_office_scenario(result: dict, service_date: str) -> dict | None:
             or benefits.get('deductible_remaining_cents') != 0
             or type(benefits.get('oop_remaining_cents')) is not int):
         return None
-    general_rows = [row for row in benefits.get('reported_options') or []
+    options = benefits.get('reported_options') or []
+    diagnostic_rows = [row for row in options
+                       if row.get('service_type_code') == '73' and not row.get('procedure_code')
+                       and row.get('coverage_level') == 'INDIVIDUAL'
+                       and row.get('network') == 'IN_NETWORK'
+                       and '11' in (row.get('places_of_service') or [])
+                       and row.get('plan_association') == 'medical'
+                       and re.search(r'\bnon[- ]tier 1 specialist\b', str(row.get('payer_note') or ''), re.I)
+                       and not re.search(r'\bsleep stud(?:y|ies)\b', str(row.get('payer_note') or ''), re.I)]
+    diagnostic_coinsurance = [row for row in diagnostic_rows if row.get('kind') == 'coinsurance']
+    diagnostic_copays = [row for row in diagnostic_rows if row.get('kind') == 'copay'
+                         and row.get('time_period') in {'VISIT', '27'}]
+    diagnostic_plan_ids = {row.get('plan_index') for row in diagnostic_coinsurance + diagnostic_copays}
+    diagnostic_amounts = {row.get('amount_cents') for row in diagnostic_copays}
+    diagnostic_match = (bool(diagnostic_coinsurance and diagnostic_copays)
+                        and {str(row.get('percent')) for row in diagnostic_coinsurance} <= {'0', '0.0', '0.00'}
+                        and len(diagnostic_plan_ids) == 1
+                        and type(next(iter(diagnostic_plan_ids))) is int
+                        and len(diagnostic_amounts) == 1
+                        and all(type(amount) is int and amount > 0 for amount in diagnostic_amounts))
+    general_rows = [row for row in options
                     if row.get('kind') == 'coinsurance' and row.get('service_type_code') == '30'
                     and not row.get('procedure_code') and row.get('coverage_level') == 'INDIVIDUAL'
                     and row.get('network') == 'IN_NETWORK' and not row.get('places_of_service')
                     and row.get('plan_association') == 'medical']
     plan_ids = {row.get('plan_index') for row in general_rows}
-    if (not general_rows or {str(row.get('percent')) for row in general_rows} - {'0', '0.0', '0.00'}
-            or len(plan_ids) != 1 or type(next(iter(plan_ids))) is not int):
+    general_match = (bool(general_rows)
+                     and {str(row.get('percent')) for row in general_rows} <= {'0', '0.0', '0.00'}
+                     and len(plan_ids) == 1 and type(next(iter(plan_ids))) is int)
+    if not diagnostic_match and not general_match:
         return None
     terms = check.get('financial_terms') or {}
     if set(terms) != {row.get('code') for row in codes}:
@@ -341,7 +363,7 @@ def cigna_oap_office_scenario(result: dict, service_date: str) -> dict | None:
                ('coinsurance_percent', 'copay_cents', 'deductible_remaining_cents', 'oop_remaining_cents'))
            for row in codes):
         return None
-    copays = {row.get('amount_cents') for row in benefits.get('reported_options') or []
+    copays = {row.get('amount_cents') for row in options
               if row.get('kind') == 'copay' and row.get('service_type_code') == '98'
               and row.get('plan_index') in plan_ids
               and not row.get('procedure_code') and row.get('coverage_level') == 'INDIVIDUAL'
@@ -351,9 +373,14 @@ def cigna_oap_office_scenario(result: dict, service_date: str) -> dict | None:
                   in {'Specialist', 'Specialist Visit or Evaluation'}
               and row.get('plan_association') != 'supplementary'
               and type(row.get('amount_cents')) is int and row['amount_cents'] > 0}
-    if len(copays) != 1:
+    if diagnostic_match:
+        copay = diagnostic_amounts.pop()
+        scenario_kind = 'oap_diagnostic_office_copay'
+    elif len(copays) == 1:
+        copay = copays.pop()
+        scenario_kind = 'oap_office_copay_general_coinsurance'
+    else:
         return None
-    copay = copays.pop()
     if benefits['oop_remaining_cents'] < copay:
         return None
     rates = {row.get('id'): row for row in reference['lines']}
@@ -373,13 +400,17 @@ def cigna_oap_office_scenario(result: dict, service_date: str) -> dict | None:
     if total < copay or total > 100_000_000:
         return None
     return {'basis': 'bcbstx_cigna_fee_proxy', 'status': 'provisional',
-            'scenario_kind': 'oap_office_copay_general_coinsurance',
+            'scenario_kind': scenario_kind,
             'reference_total_cents': total, 'coinsurance_percent': '0',
             'copay_cents': copay, 'deductible_cents': 0, 'coinsurance_cents': 0,
             'oop_reduction_cents': 0, 'oop_remaining_cents': benefits['oop_remaining_cents'],
             'patient_share_cents': copay, 'lines': shares,
             'rate_source': reference.get('source'), 'deductible_source': 'General individual Stedi 271 balance',
-            'message': ('Conditional planning scenario: one in-network specialist office copay plus the general 0% '
-                        'coinsurance and $0 remaining individual deductible, applied to selected diagnostic CPTs. '
-                        'The office copay and general coinsurance may not apply to these procedures. BCBS Texas fees '
-                        'are reference prices, not Cigna allowances; obtain Cigna’s Explanation of Estimate before collection.')}
+            'message': (('Conditional planning scenario: one in-network diagnostic specialist office copay plus the '
+                         'reported diagnostic 0% coinsurance and $0 remaining individual deductible. '
+                         if diagnostic_match else
+                         'Conditional planning scenario: one in-network specialist office copay plus the general 0% '
+                         'coinsurance and $0 remaining individual deductible, applied to selected diagnostic CPTs. '
+                         'The office copay and general coinsurance may not apply to these procedures. ')
+                        + 'BCBS Texas fees are reference prices, not Cigna allowances; obtain Cigna’s Explanation '
+                          'of Estimate before collection.')}

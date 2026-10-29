@@ -130,9 +130,10 @@ async def submit_previsit_eligibility(api: ModuleType, *, payer: dict, provider:
         case = await api.run_in_threadpool(api._save, case, session, "previsit-stedi-rejected")
         return await api._start_previsit_recovery(case, session, provider, background_tasks)
     inquiry_state = 'complete'
-    if payer_id == 'QDTRP' and len(requested_stc) > 1:
+    if ((payer_id == 'QDTRP' and len(requested_stc) > 1)
+            or (payer_id == 'HGJLR' and '73' in requested_stc)):
         linked = {}
-        for stc in requested_stc[1:]:
+        for stc in (requested_stc[1:] if payer_id == 'QDTRP' else ['73']):
             next_body, next_basic = deepcopy(body), deepcopy(basic_body)
             for request_body in (next_body, next_basic):
                 request_body['encounter']['services'] = [{'system': 'STC', 'value': stc}]

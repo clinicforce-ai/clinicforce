@@ -580,6 +580,21 @@ try {
   ]) {
     assert(cignaOfficeTable.includes(value), `Missing Cigna scenario value ${value}`)
   }
+  const cignaDiagnosticScenario = structuredClone(cignaOfficeScenario)
+  cignaDiagnosticScenario.benefits.coinsurance_percent = '30'
+  cignaDiagnosticScenario.fee_proxy_estimate.scenario_kind = 'oap_diagnostic_office_copay'
+  cignaDiagnosticScenario.fee_proxy_estimate.copay_cents = 8000
+  cignaDiagnosticScenario.fee_proxy_estimate.patient_share_cents = 8000
+  const diagnosticTable = renderToStaticMarkup(
+    React.createElement(CommercialCostBreakdown, {
+      model: { ...model, planName: 'Open Access Plus' },
+      result: cignaDiagnosticScenario,
+    }),
+  )
+  assert(diagnosticTable.includes('$80.00 planning estimate'))
+  assert(diagnosticTable.includes('Cigna diagnostic office benefit row'))
+  assert(diagnosticTable.includes('One payer-reported diagnostic specialist copay'))
+  assert(diagnosticTable.includes('Explanation of Estimate before collection'))
   const singleCpt = structuredClone(cignaOfficeScenario)
   singleCpt.price_range.lines.pop()
   singleCpt.temporary_rate_reference.lines.pop()
