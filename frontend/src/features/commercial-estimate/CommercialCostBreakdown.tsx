@@ -67,9 +67,6 @@ export default function CommercialCostBreakdown({
   const reportedOfficeCopay = specialistOfficeCopay(reportedResult)
   const officeReferenceCopay = aetnaOfficeReferenceCopay(result, model)
   const humanaReferenceCopay = publishedHumanaOfficeCopay(result, model)
-  const humanaCardConflict =
-    (result.card_check?.status === 'conflict' || result.card_check?.reference_only === true) &&
-    humanaReferenceCopay != null
   const partialOfficeCopay = payerReportedPartialCopay(result, model)
   const pendingAetnaCopay = aetnaPendingOfficeCopay(result, model)
   const cardPlanningCopay =
@@ -228,11 +225,11 @@ export default function CommercialCostBreakdown({
       detail: botoxPreview
         ? 'No injection copay was included in this provisional calculation'
         : humanaReferenceCopay != null
-          ? humanaCardConflict
-            ? result.card_check?.reference_only
-              ? 'Published Humana H7617-057 plan reference from an upload awaiting staff confirmation. The printed member number has not been verified against the active eCW policy. Confirm the card and Medicare billing protection before collection.'
-              : 'Published Humana H7617-057 plan reference; the card member number differs from the active eCW policy. Confirm the correct card and Medicare billing protection before collection.'
-            : 'Published Humana H7617-057 benefit; confirm provider participation and visit conditions before collection'
+          ? result.card_check?.reference_only
+            ? 'Published Humana H7617-057 plan reference from an upload awaiting staff confirmation. The printed member number has not been verified against the active eCW policy. Confirm the card and Medicare billing protection before collection.'
+            : result.card_check?.status === 'conflict'
+              ? 'Published Humana H7617-057 plan reference; the card member number differs from the active eCW policy. Confirm the correct card and Medicare billing protection before collection.'
+              : 'Published Humana H7617-057 benefit; confirm provider participation and visit conditions before collection'
           : aetnaPlanning
             ? aetnaPlanning.benefit_source.label
             : cignaOfficeScenario
