@@ -94,7 +94,11 @@ jobs:
 
 
   build:
-    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && inputs.environment != 'production'
+    if: >-
+      github.event_name != 'pull_request' &&
+      ((github.ref == 'refs/heads/main' && inputs.environment != 'production') ||
+       (github.event_name == 'workflow_dispatch' && inputs.environment == 'production' &&
+        github.ref == 'refs/heads/fix/humana-card-conflict'))
     needs: verify
     runs-on: ubuntu-latest
     timeout-minutes: 30
