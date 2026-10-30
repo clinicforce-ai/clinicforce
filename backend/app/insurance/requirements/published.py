@@ -314,9 +314,9 @@ def _published_rule(kind: str, result: dict, context: dict, plans: list[str], co
     if len(exact) != 1:
         return None
     if product == 'humanavaluechoiceppoh7617057' and 'humana' in names:
-        if kind == 'referral' and office and codes <= {'99212', '99213', '99214', '99215'}:
+        if kind == 'referral' and office and codes <= {'99202', '99203', '99204', '99205', '99212', '99213', '99214', '99215'}:
             return rule('Not required', 'This PPO permits direct specialist visits without a PCP referral.', HUMANA_VALUE_CHOICE_057_SOURCE)
-        if (kind == 'authorization' and office and codes <= {'99212', '99213', '99214', '99215'}
+        if (kind == 'authorization' and office and codes <= {'99202', '99203', '99204', '99205', '99212', '99213', '99214', '99215'}
                 and str(context.get('pos') or '') == '11' and day >= '2026-10-01'):
             return rule('Not required', 'Routine office E/M is absent from the current Medicare Advantage prior authorization list; additional services need separate review.', HUMANA_2026_MA_PAL)
     if product == 'fepbluebasicpshb':

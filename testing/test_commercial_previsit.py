@@ -133,7 +133,7 @@ class PrevisitFlowTest(unittest.IsolatedAsyncioTestCase):
             card_fields={'payer': 'Blue Cross Blue Shield Tx', 'member_name': 'Pat Example',
                          'member_id': 'CARD-123', 'group_number': 'GROUP-9'})
 
-    async def test_card_member_conflict_holds_first_stedi_request(self):
+    async def test_card_member_conflict_checks_unique_ecw_policy(self):
         await self._flow(date.today().isoformat(), card_conflict=True,
             card_fields={'payer': 'Blue Cross Blue Shield Tx', 'member_name': 'Pat Example',
                          'member_id': 'CARD-999'})
@@ -148,6 +148,22 @@ class PrevisitFlowTest(unittest.IsolatedAsyncioTestCase):
             'member_name': 'Another Person', 'payer': 'Example Payer'}}, inputs, {'payer': 'Example Payer'})
         self.assertEqual(check['status'], 'conflict')
         self.assertEqual(check['conflicts'], ['member_id'])
+        self.assertEqual(inputs['member_id'], 'ECW-123')
+
+    def test_humana_card_alias_and_member_conflict_keep_plan_reference(self):
+        inputs = {'member_id': 'ECW-123', 'patient': {'patient_first_name': 'Pat',
+                  'patient_last_name': 'Example'}, 'subscriber': {}, 'relationship': '18'}
+        card = {'status': 'read', 'fields': {'member_id': 'CARD-999', 'member_name': 'PAT Q EXAMPLE',
+                'payer': 'Humana', 'cms_plan_id': 'H7617-057',
+                'plan_name': 'Humana Value Choice (PPO)'}, 'count': 1}
+        source = {'payer': 'Humana Health Plan', '_patient_id': 'patient-1',
+                  'coverage_id': 'coverage-1', 'active_coverages': 1}
+        check = _compare_card_hints(card, inputs, source)
+        self.assertEqual(check['status'], 'conflict')
+        self.assertEqual(check['conflicts'], ['member_id'])
+        self.assertEqual(check['differences'], [])
+        self.assertTrue(check['patient_name_matches'])
+        self.assertEqual(check['cms_plan_id'], 'H7617-057')
         self.assertEqual(inputs['member_id'], 'ECW-123')
 
     def test_hpi_card_copay_requires_matching_patient_and_member(self):
@@ -361,7 +377,8 @@ class PrevisitFlowTest(unittest.IsolatedAsyncioTestCase):
              patch("app.api.routers.commercial_estimator._ecw_practice_config", return_value={}), \
              patch("app.api.routers.commercial_estimator.ecw_backend.fetch_saved_eligibility", AsyncMock(return_value=saved_ecw)), \
              patch("app.api.routers.commercial_estimator._read_card_hints", new=AsyncMock(return_value={
-                 'status': card_status or ('read' if card_fields else 'not_found'), 'fields': card_fields or {}}), create=True), \
+                 'status': card_status or ('read' if card_fields else 'not_found'), 'fields': card_fields or {},
+                 'count': 1 if card_fields else 0}), create=True), \
              patch("app.api.routers.commercial_estimator.cpt_suggester.suggest_preliminary_cpt_codes", return_value={"groups": [], "notes": []}) as preliminary_suggestions, \
              patch("app.api.routers.commercial_estimator.stedi_payers.search_payer", new=AsyncMock(return_value=None if payer_missing else {"stediId": "QDTRP", "displayName": "Blue Cross and Blue Shield of Texas", 'transactionSupport': {'eligibilityCheck': 'ENROLLMENT_REQUIRED' if enrollment_missing else 'SUPPORTED'}})), \
              patch("app.api.routers.commercial_estimator.stedi_payers.eligibility_enrollment", new=AsyncMock(return_value={'status': 'MISSING', 'reason_code': 'enrollment_missing'})), \
@@ -533,8 +550,8 @@ class PrevisitFlowTest(unittest.IsolatedAsyncioTestCase):
                 return
             if card_conflict:
                 self.assertEqual(result['card_check']['status'], 'conflict')
-                self.assertEqual(result['eligibility_failure']['kind'], 'card_conflict')
-                client.post.assert_not_awaited()
+                client.post.assert_awaited()
+                self.assertEqual(client.post.await_args.kwargs['json']['subscriber']['memberId'], 'M123')
                 return
             if card_status == 'multiple_cards':
                 self.assertEqual(result['card_check']['status'], 'multiple_cards')

@@ -50,6 +50,10 @@ export type PrevisitEstimate = {
     alternative_supported?: boolean
     payer_comparison?: { ecw: string; card: string }
     office_copay_cents?: number
+    patient_name_matches?: boolean
+    cms_plan_id?: string
+    plan_name?: string
+    published_office_copay_cents?: number
   }
   cash_fallback?: { reason: string }
   temporary_rate_reference?: TemporaryRateReference

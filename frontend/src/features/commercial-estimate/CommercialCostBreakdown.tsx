@@ -67,6 +67,8 @@ export default function CommercialCostBreakdown({
   const reportedOfficeCopay = specialistOfficeCopay(reportedResult)
   const officeReferenceCopay = aetnaOfficeReferenceCopay(result, model)
   const humanaReferenceCopay = publishedHumanaOfficeCopay(result, model)
+  const humanaCardConflict =
+    result.card_check?.status === 'conflict' && humanaReferenceCopay != null
   const partialOfficeCopay = payerReportedPartialCopay(result, model)
   const pendingAetnaCopay = aetnaPendingOfficeCopay(result, model)
   const cardPlanningCopay =
@@ -221,7 +223,9 @@ export default function CommercialCostBreakdown({
       detail: botoxPreview
         ? 'No injection copay was included in this provisional calculation'
         : humanaReferenceCopay != null
-          ? 'Published Humana H7617-057 benefit; confirm provider participation and visit conditions before collection'
+          ? humanaCardConflict
+            ? 'Published Humana H7617-057 plan reference; the card member number differs from the active eCW policy. Confirm the correct card and Medicare billing protection before collection.'
+            : 'Published Humana H7617-057 benefit; confirm provider participation and visit conditions before collection'
           : aetnaPlanning
             ? aetnaPlanning.benefit_source.label
             : cignaOfficeScenario
@@ -245,7 +249,9 @@ export default function CommercialCostBreakdown({
     {
       label: 'Individual deductible',
       value:
-        humanaReferenceCopay != null && benefits?.deductible_applies === false
+        humanaReferenceCopay != null &&
+        benefits?.deductible_applies !== true &&
+        benefits?.deductible_annual_cents == null
           ? '$0.00 annual · no medical deductible (published plan)'
           : feeProxy != null &&
               !cignaFeeProxy &&
@@ -477,6 +483,7 @@ export default function CommercialCostBreakdown({
       aetnaPlanning,
       aetnaCopayPlanning,
       officeReferenceCopay,
+      humanaReferenceCopay,
       partialOfficeCopay,
       pendingAetnaCopay,
       cardPlanningCopay,

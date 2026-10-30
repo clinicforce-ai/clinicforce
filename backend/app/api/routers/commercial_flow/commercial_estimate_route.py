@@ -5,6 +5,7 @@ from app.api.routers import commercial_estimator as _api
 from app.api.routers.commercial_flow.commercial_previsit_saved import reuse_saved_eligibility
 from app.api.routers.commercial_flow.commercial_previsit_reuse import reuse_previsit_case, retain_saved_group_binding, telehealth_inquiry_coverage, telehealth_setting
 from app.api.routers.commercial_flow.commercial_previsit_submit import submit_previsit_eligibility
+from app.api.routers.commercial_flow.commercial_recovery_cards import _unique_ecw_member_conflict
 
 @_api.router.post("/appointments/previsit", description=(
     "Estimate a patient-bound eCW visit. Compatible saved payer evidence is reused without another "
@@ -32,7 +33,6 @@ from app.api.routers.commercial_flow.commercial_previsit_submit import submit_pr
     "response can supply the verified policyholder identity for the new inquiry. Office-only fee "
     "schedules do not price a telehealth visit. A skin-biopsy "
     "booking without a site count starts with an editable three-site CPT 11104 + 11105 x2 scenario. A supported "
-
     "fixed office copay is the visit-time amount unless an applicable individual in-network "
     "out-of-pocket limit reduces the covered visit share to zero. A payer-reported zero balance "
     "whose medical scope cannot be confirmed withholds a positive advance and sets "
@@ -51,7 +51,7 @@ from app.api.routers.commercial_flow.commercial_previsit_submit import submit_pr
     "For NMCT (practice_id primary), clinic_nmct_policy selects in network only for the clinic's confirmed insurer roster; "
     "other identified insurers select clinic_nmct_noncontracted and out of network. "
     "Contradictory provider-specific payer evidence requires review. evidence_resolution reports "
-    "unresolved facts; an in-network tier alone does not establish an amount to collect. A matched HPI card can expose card_check.office_copay_cents for office-only planning, not payer-confirmed liability or imaging costs. "
+    "unresolved facts; an in-network tier alone does not establish an amount to collect. A sole card member-ID conflict checks one active eCW policy using the eCW ID while preserving the conflict. A matched HPI card can expose card_check.office_copay_cents for office-only planning, not payer-confirmed liability or imaging costs. "
     "A BCBSTX Botox booking asks for office injection benefits first. When exactly one current suggested "
     "chemodenervation CPT has a scoped clinic fee, even if other suggestions lack fees, and the "
     "office-injection term is unambiguous, "
@@ -71,14 +71,11 @@ async def previsit_estimate(value: _api.PrevisitInput, request: _api.Request, ba
     Explicit visit-linked eCW billing notes can supply a collection instruction
     or a fallback office copay; their source and timestamp accompany the result.
     They do not establish payer eligibility.
-    Before any new Stedi request, patient-bound card OCR compares with eCW and
-    fills only missing matched inquiry fields. A single conflicting card with
-    matching patient identity can use one uniquely supported card payer route;
-    its response must verify identity and active coverage before use. Other
-    conflicts and multiple card sets hold the request for review. Neither path
-    edits eCW or repeats an indeterminate paid request. card_check excludes image bytes
-    and reports ecw_no_matching_card_document when the eCW card search returns
-    no qualifying patient-bound insurance card. A matched HPI card's printed specialist copay appears in card_check.office_copay_cents for office-only planning.
+    Patient-bound card OCR fills only matching missing eCW fields. If only the
+    member ID differs and eCW has one active policy, Stedi checks the eCW ID.
+    Other conflicts use a uniquely supported card route or wait for review; no
+    path edits eCW or retries an indeterminate paid request. card_check omits
+    image bytes, reports ecw_no_matching_card_document, and may show a matched HPI card's printed specialist copay for office-only planning.
     payment_explanation gives one doctor-only sentence, a reason code, network
     tier, pricing basis, unpriced CPTs and an optional resolved-mismatch note.
     encounter_summary.coinsurance_rounded_per_line is true when individual CPT
@@ -379,7 +376,10 @@ async def previsit_estimate(value: _api.PrevisitInput, request: _api.Request, ba
     result['payer'] = source.get('payer')
     _api.collection_event('card_precheck', practice_id=session['practice_id'], intake_id=(session.get('intake') or {}).get('id'),
                      stage='before_eligibility', outcome=result['card_check']['status'], count=card.get('count', 0))
-    if result['card_check']['status'] in {'conflict', 'multiple_cards'}:
+    card_member_conflict_only = _unique_ecw_member_conflict(result['card_check'], coverage)
+    if card_member_conflict_only:
+        result['issues'].append('The card member ID differs from eCW; checking the unique eCW policy without using the card number.')
+    if result['card_check']['status'] in {'conflict', 'multiple_cards'} and not card_member_conflict_only:
         conflicting = result['card_check']['status'] == 'conflict'
         kind = 'card_conflict' if conflicting else 'multiple_cards'
         result.update(eligibility_error=kind, eligibility_failure={

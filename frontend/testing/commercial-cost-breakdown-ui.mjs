@@ -794,8 +794,25 @@ try {
   assert.equal(publishedHumanaOfficeCopay({ ...humana, benefits: { ...humana.benefits, network_status: 'out_of_network' } }, model), null)
   const humanaTable = renderToStaticMarkup(React.createElement(CommercialCostBreakdown, { model, result: humana }))
   for (const value of ['$30.00 in-network specialist office visit', '$0.00 annual',
-    '$6,800.00 in-network annual', 'conditional in-network office copay', 'Not established']) {
+    '$6,800.00 in-network annual', 'conditional in-network office copay',
+    'Pending · $30.00 office copay if confirmed']) {
     assert(humanaTable.includes(value), `Missing Humana reference ${value}`)
+  }
+  const humanaConflict = { ...humana, reason: 'Hand symptoms',
+    card_check: { status: 'conflict', conflicts: ['member_id'], differences: [],
+      patient_name_matches: true, cms_plan_id: 'H7617-057', plan_name: 'Humana Value Choice (PPO)',
+      published_office_copay_cents: 3000 },
+    plan_details: { stedi: { names: ['Humana Value Choice'] } },
+    benefits: { ...humana.benefits, published_preferred_office_copay_cents: undefined,
+      published_plan_rule: undefined, deductible_applies: undefined },
+    price_range: { ...humana.price_range, lines: [{ ...humana.price_range.lines[0], code: '99203' }] },
+  }
+  assert.equal(publishedHumanaOfficeCopay(humanaConflict, model), 3000)
+  const humanaConflictTable = renderToStaticMarkup(React.createElement(CommercialCostBreakdown,
+    { model, result: humanaConflict }))
+  for (const value of ['$30.00 in-network specialist office visit',
+    'Pending · $30.00 office copay if confirmed', 'card member number differs']) {
+    assert(humanaConflictTable.includes(value), `Missing conflicting card reference ${value}`)
   }
   assert(renderToStaticMarkup(React.createElement(PublishedPlanBenefit, { result: humana, show: true })).includes('Humana plan source'))
   assert(aetnaDiagnosticTable.includes('min(($50.00 per test × 2) + $0.00 deductible + $0.00 coinsurance, $218.76 Aetna fee reference, $6,390.00 remaining out-of-pocket) = $100.00'))
