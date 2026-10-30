@@ -143,6 +143,27 @@ def test_same_day_bcbstx_active_271_can_show_network_referral_rule_without_dates
     assert evaluate(result, context, [])['referral']['status'] == 'Verification required'
 
 
+def test_aetna_oxy_ppo_new_office_99204_requirements_are_scoped():
+    result, context = case('Aetna', 'Oxy PPO with Rx', '99204', day='2026-10-30')
+    context['plans'].insert(0, 'CI')
+    decisions = evaluate(result, context, [])
+    assert decisions['referral']['status'] == 'Not required'
+    assert decisions['authorization']['status'] == 'Not required'
+    assert all(row['sources'][0]['source_type'] == 'official_published_rule'
+               for row in (decisions['referral'], decisions['authorization']))
+    for changed in ({**context, 'plans': ['Other PPO']}, {**context, 'pos': '22'}):
+        assert evaluate(result, changed, [])['authorization']['status'] != 'Not required'
+    other_code, _ = case('Aetna', 'Oxy PPO with Rx', '95908', day='2026-10-30')
+    assert evaluate(other_code, context, [])['authorization']['status'] != 'Not required'
+    wrong_date = deepcopy(result)
+    wrong_date['benefits']['service_date_matches'] = False
+    assert evaluate(wrong_date, context, [])['authorization']['status'] != 'Not required'
+    payer_requires_auth = deepcopy(result)
+    payer_requires_auth['price_range'] = {'lines': [{'id': '0', 'code': '99204', 'benefits': {
+        'requirements': {'authorization': {'payer_signal': 'required'}}}}]}
+    assert evaluate(payer_requires_auth, context, [])['authorization']['status'] == 'Required'
+
+
 def test_bcbstx_in_network_ppo_99213_office_requirements():
     result, context = case('BCBSTX', 'PREFERRED PROVIDER OPTION MEDICAL', '99213')
     context['service_date'] = '2026-10-26'
