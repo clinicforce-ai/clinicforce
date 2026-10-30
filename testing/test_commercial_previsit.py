@@ -185,6 +185,7 @@ class PrevisitFlowTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(route['payer'], 'Health Plans Incorporated')
             self.assertEqual(route['payer_source'], 'card_ocr')
             self.assertEqual(route['payer_identifiers'], [])
+            self.assertEqual(check['network_label'], label)
         for rejected_inputs, rejected_source in (
             ({**inputs, 'member_id': 'OTHER'}, source.copy()),
             (inputs.copy(), {**source, 'active_coverages': 2}),

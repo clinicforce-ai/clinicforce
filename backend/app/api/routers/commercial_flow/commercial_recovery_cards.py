@@ -81,6 +81,8 @@ def _compare_card_hints(card: dict, inputs: dict, source: dict) -> dict:
             inputs[field] = fields[field]
             result['fields_added'].append(field)
     if (not source.get('payer') or phcs_hpi_card) and fields.get('payer'):
+        if phcs_hpi_card:
+            result['network_label'] = source['payer']
         source['payer'] = fields['payer']
         source['payer_source'] = 'card_ocr'
         if phcs_hpi_card:

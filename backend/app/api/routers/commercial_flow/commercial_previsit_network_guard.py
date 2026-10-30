@@ -63,7 +63,7 @@ def apply_admin_nonparticipation(result: dict, benefits: dict, row: dict | None)
 
 def apply_nmct_network_policy(result: dict, practice_id: str, benefits: dict, payer: str) -> bool:
     """Use NMCT's clinic-confirmed contracted-insurer roster for its provider tier."""
-    contracted = network_participation.nmct_contract_roster(payer)
+    contracted = network_participation.nmct_contract_roster(payer, result.get('card_check'))
     if (not network_participation.is_nmct_practice(practice_id) or contracted is None or benefits.get('network_conflict')
             or benefits.get('network_source') == 'clinic_contract_inventory'
             or (contracted and benefits.get('network_source') == 'payer_participation_message')
@@ -213,10 +213,10 @@ def recheck_saved_network_evidence(result: dict, case: dict, practice_id: str, p
                                                       'clinic_nmct_noncontracted'}):
         _clear_saved_tier(result, 'NMCT network policy changed. Rerun this visit before collecting an insured amount.')
     if (network_participation.is_nmct_practice(practice_id) and benefits.get('network_status') == 'in_network'
-            and network_participation.nmct_contract_roster(payer_name) is False):
+            and network_participation.nmct_contract_roster(payer_name, result.get('card_check')) is False):
         _clear_saved_tier(result, 'This insurer is outside NMCT’s confirmed contract roster. Rerun before collecting an insured amount.')
     if apply_nmct_network_policy(result, practice_id, benefits, payer_name):
-        if prior_disagrees and network_participation.nmct_contract_roster(payer_name) is False:
+        if prior_disagrees and network_participation.nmct_contract_roster(payer_name, result.get('card_check')) is False:
             benefits['network_conflict'] = True
             result['network_evidence'] = {'decision': 'conflicting_network_evidence',
                 'source': 'clinic_nmct_noncontracted',

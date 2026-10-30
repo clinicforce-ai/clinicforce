@@ -31,6 +31,19 @@ def test_nmct_contract_roster_does_not_guess_an_ambiguous_insurer():
     assert network_participation.nmct_contract_roster('Wellcare / Aetna') is None
 
 
+def test_hpi_uses_only_a_matched_phcs_card_network_for_nmct_tier():
+    card = {'status': 'filled_missing', 'fields_added': ['payer'], 'conflicts': [],
+            'network_label': 'PHCS Extended PPO'}
+    assert network_participation.nmct_contract_roster('Health Plans Incorporated') is False
+    assert network_participation.nmct_contract_roster('Health Plans Incorporated',
+        {**card, 'fields_added': []}) is False
+    assert network_participation.nmct_contract_roster('Health Plans Incorporated', card) is True
+    benefits = {'network_status': 'unknown'}
+    assert apply_nmct_network_policy({'card_check': card}, network_participation.NMCT_PRACTICE_ID,
+                                     benefits, 'Health Plans Incorporated')
+    assert benefits['network_status'] == 'in_network'
+
+
 @pytest.mark.parametrize('practice_id', [
     network_participation.NMCT_PRACTICE_ID,
     network_participation.NMCT_REGISTERED_PRACTICE_ID,
@@ -38,7 +51,7 @@ def test_nmct_contract_roster_does_not_guess_an_ambiguous_insurer():
 @pytest.mark.parametrize('payer,plan', [
     ('Cigna', 'HMO'), ('Blue Cross', 'PPO'), ('Aetna', 'HMO'), ('Humana', 'PPO'),
     ('UnitedHealthcare', 'Regional Medicare Advantage PPO'), ('Medicare of Texas', 'Medicare'),
-    ('HealthSmart', 'PPO'), ('Wellpoint', 'HMO'), ('MultiPlan', 'PPO'),
+    ('HealthSmart', 'PPO'), ('Wellpoint', 'HMO'), ('MultiPlan', 'PPO'), ('PHCS', 'PPO'),
     ('BCBSTX', 'PPO'), ('UHC', 'Medicare Advantage PPO'),
 ])
 def test_nmct_confirmed_contract_roster_is_in_network(monkeypatch, practice_id, payer, plan):
