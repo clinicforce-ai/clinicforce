@@ -134,6 +134,13 @@ def test_nmct_ambiguous_insurer_name_does_not_select_a_library_contract():
     assert network_participation.nmct_library_contract(documents, 'Aetna / Humana', DAY) is None
 
 
+def test_hpi_card_network_label_does_not_replace_nmct_insurer_contract():
+    multiplan = {'id': 'synthetic-multiplan', 'kind': 'contract', 'payer': 'MultiPlan'}
+    hpi = {'id': 'synthetic-hpi', 'kind': 'contract', 'payer': 'Health Plans Incorporated'}
+    assert network_participation.nmct_library_contract([multiplan], 'Health Plans Incorporated', DAY) is None
+    assert network_participation.nmct_library_contract([hpi], 'Health Plans Incorporated', DAY) == hpi
+
+
 def test_nmct_v2_bridge_does_not_infer_participation_from_plan_name():
     from app.api.routers.insurance_v2 import stedi_network
     result = stedi_network({'inputs': {'service_date': DAY}}, {},
