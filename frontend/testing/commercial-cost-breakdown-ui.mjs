@@ -817,6 +817,33 @@ try {
   assert(paidTable.includes('Planned amount to collect at visit</th><td><span>$75.00 planning estimate'))
   assert(paidTable.includes('less $25.00 already paid = $75.00'))
   assert(paidHeadline.includes('<strong role="status">$75.00</strong>'))
+  const diagnosticCopayResult = {
+    payer: 'Blue Cross Blue Shield Texas', service_date: '2026-10-30',
+    reason: 'Synthetic EMG/NCS evaluation',
+    benefits: { active: true, network_status: 'in_network' },
+    price_range: { mode: 'services', complete: false, lines: [
+      { id: 'ncs', code: '95908', units: 1, allowed_cents: 10511,
+        allowed_basis: 'clinic_contract', rate_resolution: { status: 'RESOLVED' },
+        benefits: { copay_cents: 5000 } },
+      { id: 'emg', code: '95886', units: 1, allowed_cents: 8918,
+        allowed_basis: 'clinic_contract', rate_resolution: { status: 'RESOLVED' },
+        benefits: { copay_cents: 5000 } },
+    ] },
+    collection_guidance: { amount_cents: null, basis: 'missing_collection_inputs',
+      positive_advance_policy_missing: true, diagnostic_copay_reference_cents: 5000 },
+  }
+  const bcbsDiagnosticTable = renderToStaticMarkup(React.createElement(
+    CommercialCostBreakdown, { model, result: diagnosticCopayResult },
+  ))
+  assert(bcbsDiagnosticTable.includes('Copay</th><td><span>$50.00 once per day'))
+  assert(bcbsDiagnosticTable.includes('Diagnostic copay · collection pending</th><td><span>$50.00 once per day · verify before charging'))
+  assert(bcbsDiagnosticTable.includes('Estimated patient share</th><td><span>Not fully calculated'))
+  const diagnosticHeadline = renderToStaticMarkup(React.createElement(
+    ArrivalAmountSummary, { model: { ...model, amountText: 'Insured amount unavailable' },
+      result: diagnosticCopayResult, partialCopay: null, visibleAmount: false },
+  ))
+  assert(diagnosticHeadline.includes('Diagnostic copay · collection pending'))
+  assert(diagnosticHeadline.includes('$50.00'))
   const qmbResult = { ...aetnaDiagnosticResult,
     collection_guidance: { amount_cents: 0, basis: 'qmb_protection' } }
   const qmbTable = renderToStaticMarkup(React.createElement(

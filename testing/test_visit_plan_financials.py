@@ -83,6 +83,33 @@ def test_booked_bilateral_hand_emg_uses_the_model_proposal_without_manual_select
     assert not visit_estimate.is_emg_visit({'reason': 'Bilateral hand', 'appointment_type': 'Possible EMG'})
 
 
+def test_retired_95900_cannot_enter_a_current_emg_plan():
+    from app.api.routers.commercial_flow.commercial_previsit_catalog import build_catalog
+    from app.insurance import cpt_rules
+
+    api = MagicMock()
+    api._previsit_codes.return_value = [{'id': 'scheduled:95900', 'code': '95900',
+                                        'source': 'eCW scheduled service', 'units': 1}]
+    api.commercial_store.list_connections.return_value = []
+    api.practice_prices.current.return_value = None
+    api.re = re
+    result = {'suggestions': {'groups': [{'codes': [{'code': '95900', 'reason': 'Old NCS code'}]}]}}
+    _, _, codes, available, _ = build_catalog(api, result, {'practice_id': 'synthetic'},
+        {'service_date': '2026-10-30', 'reason': 'EMG/NCS'}, {}, None, {}, '', None)
+    assert '95900' not in {row['code'] for row in codes + available}
+    assert cpt_rules.service_selection_issues(['95908', '95886', '95900'])
+    model = MagicMock()
+    model.converse.return_value = model_reply([
+        {'code': '95908', 'units': 1}, {'code': '95886', 'units': 1},
+        {'code': '95900', 'units': 1}])
+    with patch.object(cpt_suggester.boto3, 'client', return_value=model):
+        plan = cpt_suggester.recommend_visit_plan(
+            {'reason': 'carpal tunnel and migraines', 'appointment_type': 'EMG Visit'},
+            {}, available)
+    assert [next(row['code'] for row in available if row['id'] == key)
+            for key in plan['recommended_ids']] == ['95908', '95886']
+
+
 def test_booked_emg_model_failure_stays_visible_and_retryable():
     available = [{'id': code, 'code': code, 'source': 'CPT planning catalog', 'units': 1}
                  for code in ('95908', '95886')]

@@ -110,4 +110,8 @@ def build_catalog(api: ModuleType, result: dict, session: dict, inputs: dict, so
         if len(matches) == 1:
             row.update(unit_allowed_cents=matches[0]['allowed_cents'], unit_cash_cents=matches[0].get('cash_cents'),
                        description=row.get('description') or matches[0].get('description'), rate_source=matches[0].get('source_reference'))
+    # Retired in 2013; old eCW and AI candidates cannot enter a current visit plan.
+    if inputs['service_date'] >= '2013-01-01':
+        codes = [row for row in codes if row['code'] != '95900']
+        available = [row for row in available if row['code'] != '95900']
     return payer_id, connections, codes, available, uploaded_cash

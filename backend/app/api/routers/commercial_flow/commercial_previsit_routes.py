@@ -54,7 +54,10 @@ async def saved_previsit(case_id: str, request: _api.Request) -> dict:
     insured price is unresolved unless staff explicitly choose cash. Missing
     collection inputs return collection_guidance with a null
     amount, status action_required and basis missing_collection_inputs; the reason
-    names the next staff action. An administrator-approved policy can give a $0 check-in advance
+    names the next staff action. A supported diagnostic per-day copay without an
+    approved positive-advance policy returns diagnostic_copay_reference_cents
+    for UI display while amount_cents stays null. An administrator-approved
+    policy can give a $0 check-in advance
     with basis claim_after_service. It does not waive the later patient share or
     change coverage evidence. Saved reads apply the current practice policy.
     An unlinked payer-reported zero individual out-of-pocket balance sets

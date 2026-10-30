@@ -75,7 +75,8 @@ export default function CommercialCostBreakdown({
       : null
   const components = summary?.components
   const diagnosticCopay =
-    result.collection_guidance?.basis === 'diagnostic_day_copay' &&
+    (result.collection_guidance?.basis === 'diagnostic_day_copay' ||
+      result.collection_guidance?.diagnostic_copay_reference_cents != null) &&
     lines.length > 0 &&
     lines.every((line) => line.benefits?.copay_cents === lines[0].benefits?.copay_cents)
       ? lines[0].benefits?.copay_cents
@@ -227,7 +228,7 @@ export default function CommercialCostBreakdown({
               ? 'Cigna reported this office copay; applicability to the selected diagnostic services is an assumption'
               : cignaFeeProxy && feeProxy?.copay_unconfirmed
                 ? 'No CPT copay row was returned; this calculation uses $0'
-                : result.collection_guidance?.basis === 'diagnostic_day_copay'
+                : diagnosticCopay != null
                   ? 'One payer diagnostic copay for the selected testing; final share follows the claim'
                   : result.collection_guidance?.basis === 'out_of_pocket_limit'
                     ? 'Plan copay before the applicable out-of-pocket limit; $0 due for covered care'

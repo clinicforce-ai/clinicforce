@@ -61,6 +61,15 @@ export default function ArrivalAmountSummary({
     !model.cash && !model.previousEstimate && result.collection_guidance?.amount_cents == null
       ? result.aetna_diagnostic_reference
       : null
+  const diagnosticCopayReference =
+    !model.cash &&
+    !model.previousEstimate &&
+    !model.calculating &&
+    !model.requirementIssue &&
+    !result.price_range?.service_issues?.length &&
+    result.collection_guidance?.positive_advance_policy_missing === true
+      ? result.collection_guidance.diagnostic_copay_reference_cents
+      : null
   const botoxPlanning = !model.cash && !model.previousEstimate ? result.botox_preview : null
   const aetnaBalance = aetnaPlanning
     ? Math.max(
@@ -94,19 +103,21 @@ export default function ArrivalAmountSummary({
               ? 'Cigna planning estimate · collection pending'
               : aetnaPlanning
                 ? 'Planned amount to collect at visit'
-                : officeBalance != null
-                  ? 'Planned amount to collect at visit'
-                  : pendingAetnaCopay != null
-                    ? 'Amount to collect at visit · pending verification'
-                    : partialCopay != null
-                      ? referenceOnly
-                        ? 'Office-only reference · collection pending'
-                        : 'Suggested amount to collect at visit'
-                      : cardPlanningCopay != null
-                        ? 'Card-based office suggestion · collection pending'
-                        : needsAction
-                          ? 'Next step'
-                          : model.amountLabel}
+                : diagnosticCopayReference != null
+                  ? 'Diagnostic copay · collection pending'
+                  : officeBalance != null
+                    ? 'Planned amount to collect at visit'
+                    : pendingAetnaCopay != null
+                      ? 'Amount to collect at visit · pending verification'
+                      : partialCopay != null
+                        ? referenceOnly
+                          ? 'Office-only reference · collection pending'
+                          : 'Suggested amount to collect at visit'
+                        : cardPlanningCopay != null
+                          ? 'Card-based office suggestion · collection pending'
+                          : needsAction
+                            ? 'Next step'
+                            : model.amountLabel}
       </span>
       <strong
         className={
@@ -129,17 +140,19 @@ export default function ArrivalAmountSummary({
               ? money(cignaPlanning.patient_share_cents)
               : aetnaPlanning
                 ? money(aetnaBalance!)
-                : officeBalance != null
-                  ? money(officeBalance)
-                  : pendingAetnaCopay != null
-                    ? `Pending · ${money(pendingAetnaCopay)}`
-                    : partialCopay != null
-                      ? money(partialCopay)
-                      : cardPlanningCopay != null
-                        ? money(cardPlanningCopay)
-                        : needsAction
-                          ? action.title
-                          : model.amountText}
+                : diagnosticCopayReference != null
+                  ? money(diagnosticCopayReference)
+                  : officeBalance != null
+                    ? money(officeBalance)
+                    : pendingAetnaCopay != null
+                      ? `Pending · ${money(pendingAetnaCopay)}`
+                      : partialCopay != null
+                        ? money(partialCopay)
+                        : cardPlanningCopay != null
+                          ? money(cardPlanningCopay)
+                          : needsAction
+                            ? action.title
+                            : model.amountText}
       </strong>
       {plan ? (
         <p>
@@ -167,6 +180,11 @@ export default function ArrivalAmountSummary({
             ? `; less ${money(result.encounter_summary.payments_verified_cents)} already paid = ${money(aetnaBalance!)}`
             : ''}
           . Verify the exact plan and Medicare billing protection before charging.
+        </p>
+      ) : diagnosticCopayReference != null ? (
+        <p>
+          One payer-reported diagnostic copay per day. Approve the clinic collection policy and
+          check prior payments before charging.
         </p>
       ) : officeBalance != null ? (
         <p>
