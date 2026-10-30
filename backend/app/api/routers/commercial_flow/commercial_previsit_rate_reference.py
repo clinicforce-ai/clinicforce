@@ -3,6 +3,10 @@ from __future__ import annotations
 
 from app.api.routers import commercial_estimator as _api
 
+BCBSTX_2026_OTHER_CODES = {'70496': 22719, '70498': 22693}
+BCBSTX_2026_OTHER_CODES_SOURCE = ('https://www.bcbstx.com/docs/provider/tx/standards/general-reimbursement-information/'
+    'gri-info/professional-schedules/2026-internet-posting-notices/other-codes-2026-files/dft-2026-v1.pdf')
+
 def refresh_saved_temporary_rates(result: dict, practice_id: str, inputs: dict, source: dict,
                                   route_payer: dict | None) -> None:
     """Rebuild saved cross-payer references from the current scoped clinic rates."""
@@ -52,17 +56,26 @@ def _attach_temporary_blue_cross_rates(result: dict, practice_id: str, inputs: d
     by_code = {(row['code'], row.get('modifier') or ''): row for row in rates
                if str(row.get('source_reference') or '').startswith('library:')}
     lines = []
+    published = False
     for code in codes:
         rate = by_code.get((code['code'], ','.join(code.get('modifiers') or [])))
+        if (not rate and not code.get('modifiers') and '2026-05-01' <= date <= '2026-12-31'
+                and code['code'] in BCBSTX_2026_OTHER_CODES):
+            rate = {'allowed_cents': BCBSTX_2026_OTHER_CODES[code['code']],
+                    'source_reference': BCBSTX_2026_OTHER_CODES_SOURCE}
+            published = True
         if rate and rate.get('allowed_cents') is not None:
             lines.append({'id': code.get('id'), 'code': code['code'],
                           'units': code.get('units'), 'modifiers': code.get('modifiers') or [],
                           'unit_reference_cents': rate['allowed_cents'],
                           'source_reference': rate['source_reference']})
     if lines:
-        result['temporary_rate_reference'] = {'source': 'NMCT Clinical Library Blue Cross fee schedule',
+        result['temporary_rate_reference'] = {'source': ('Blue Cross Texas clinic and published 2026 fee references'
+            if published else 'NMCT Clinical Library Blue Cross fee schedule'),
             'lines': lines, 'complete': len(lines) == len(codes),
-            'message': (f'Temporary CPT price reference only. These are Blue Cross rates, not {payer_name} contracted allowances.'
+            'message': (f'Temporary CPT price reference only. Published unmodified CTA amounts are from the BCBSTX 2026 professional Other Codes schedule. These are not {payer_name} contracted allowances or a patient amount to collect.'
+                        if published else
+                        f'Temporary CPT price reference only. These are Blue Cross rates, not {payer_name} contracted allowances.'
                         if payer_name == 'Cigna' else
                         f'Temporary CPT price reference only. These are Blue Cross rates, not {payer_name} contracted allowances or a patient amount to collect.')}
 

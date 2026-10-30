@@ -72,7 +72,7 @@ def participation_conflict(benefits: dict) -> bool:
 def verified_in_network(benefits: dict) -> bool:
     return (benefits.get('network_status') == 'in_network'
             and benefits.get('network_source') in {'clinic_library_contract', 'clinic_group_agreement',
-                                                   'payer_participation_message'}
+                                                   'payer_participation_message', 'clinic_attested_phcs_roster'}
             and not participation_conflict(benefits))
 
 
