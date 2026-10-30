@@ -14,6 +14,7 @@ export type CommercialNetworkEvidence = {
     | 'excluded_under_available_agreement'
     | 'lacking_applicable_network_evidence'
     | 'out_of_network_by_clinic_contract_inventory'
+    | 'out_of_network_by_clinic_contract_roster'
     | 'out_of_network_confirmed_by_scoped_nonparticipation_record'
     | 'conflicting_network_evidence'
   source?: string

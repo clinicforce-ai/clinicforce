@@ -20,6 +20,7 @@ export type PrevisitBenefits = null | {
     | 'clinic_library_contract'
     | 'clinic_group_agreement'
     | 'clinic_nmct_policy'
+    | 'clinic_nmct_noncontracted'
     | 'clinic_library_absent'
     | 'payer_participation_message'
     | 'clinic_nonparticipation_rule'

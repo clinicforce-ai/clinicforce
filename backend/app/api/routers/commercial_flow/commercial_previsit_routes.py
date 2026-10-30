@@ -21,9 +21,9 @@ async def saved_previsit(case_id: str, request: _api.Request) -> dict:
     evidence_resolution reports each field's source findings and precise
     remaining action after the shared estimator evaluates saved evidence.
     A saved read projects the current network rule without a payer call or write.
-    NMCT (practice_id primary) treats all insurer products as in network under
-    clinic_nmct_policy unless a provider-specific payer statement says otherwise.
-    Old clinic-derived out-of-network prices are cleared for recalculation.
+    NMCT (practice_id primary) uses its confirmed insurer roster for
+    clinic_nmct_policy in network; other identified insurers are out of network.
+    Old insured amounts are cleared when this network tier changes.
     Other practices still use dated group-network contracts; absent Blue
     agreements can select clinic_no_blue_contract. Network tier alone does not
     establish a collectible amount.

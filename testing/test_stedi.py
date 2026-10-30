@@ -109,6 +109,9 @@ class StediResultTests(unittest.TestCase):
         matrix = {"stedi_provider_networks": [{"payer_id": "TEST", "provider_npi": "1234567893",
                    "place_of_service": "11", "plan_name": "Example HMO", "status": "out_of_network"}]}
         result = v2.stedi_network(case, matrix, coverage, practice_id="primary")
+        self.assertEqual(result["provider_network_status"], "unconfirmed")
+        matrix["payer_aliases"] = {"Aetna": "TEST"}
+        result = v2.stedi_network(case, matrix, coverage, practice_id="primary")
         self.assertEqual(result["provider_network_status"], "in_network")
         payer_message = {"subscriber": {"dates": {"service": {"start": "2026-10-15", "end": "2026-10-15"}}},
                          "plans": [{"benefits": {"statuses": [{"status": "Active Coverage",
