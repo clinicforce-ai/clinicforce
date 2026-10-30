@@ -8,6 +8,7 @@ from app.insurance.blue_cross_proxy import estimate
 from app.insurance.requirements.published import _published_rule
 from app.api.routers import commercial_estimator as api  # Register workflow imports.
 from app.api.routers.commercial_flow import commercial_previsit_status as saved_status
+from app.api.routers.commercial_flow import commercial_previsit_rate_reference as rate_reference
 
 
 def _result(*, group='13705', coinsurance='10', network='out_of_network'):
@@ -281,7 +282,7 @@ def test_saved_read_rechecks_current_fee_rows_before_showing_proxy(monkeypatch):
          'rules': {}}])
     fresh = deepcopy(result['temporary_rate_reference'])
     fresh['lines'][0]['unit_reference_cents'] = 10000
-    monkeypatch.setattr(saved_status, '_attach_temporary_uhc_rates',
+    monkeypatch.setattr(rate_reference, '_attach_temporary_uhc_rates',
                         lambda reopened, *args: reopened.update(temporary_rate_reference=fresh))
     reopened = saved_status._previsit_result(case, 'synthetic-clinic')
     assert reopened['fee_proxy_estimate']['reference_total_cents'] == 27836
@@ -290,6 +291,24 @@ def test_saved_read_rechecks_current_fee_rows_before_showing_proxy(monkeypatch):
     fresh['complete'] = False
     reopened = saved_status._previsit_result(case, 'synthetic-clinic')
     assert 'fee_proxy_estimate' not in reopened
+
+
+def test_saved_phcs_read_rebuilds_blue_cross_reference(monkeypatch):
+    result = _result()
+    result['payer'] = 'phcs'
+    result.pop('plan_details')
+    result['temporary_rate_reference']['lines'][0]['unit_reference_cents'] = 1
+    case = {'revision': 1, 'previsit_context': {
+        'result': result, 'payer_id': '', 'inputs': {'service_date': '2026-10-30'}, 'source': {}}}
+    for name in ('_recheck_saved_clinic_pricing', 'recheck_saved_network_evidence',
+                 '_recheck_saved_payer_allowance', 'refresh_saved_requirements'):
+        monkeypatch.setattr(saved_status, name, lambda *args: None)
+    monkeypatch.setattr(saved_status._api.commercial_store, 'list_connections', lambda *args: [])
+    monkeypatch.setattr(rate_reference, '_attach_temporary_blue_cross_rates',
+        lambda reopened, *args: reopened.update(temporary_rate_reference={
+            'source': 'synthetic current schedule', 'lines': [{'unit_reference_cents': 11156}]}))
+    reopened = saved_status._previsit_result(case, 'synthetic-clinic')
+    assert reopened['temporary_rate_reference']['lines'][0]['unit_reference_cents'] == 11156
 
 
 def test_group_ppo_oon_diagnostic_requirements_are_scoped_to_group_and_codes():

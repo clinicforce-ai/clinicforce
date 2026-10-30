@@ -14,6 +14,14 @@ NCS_STUDY_RANGES = {
 }
 
 
+def tia_cta_office_scenario(inputs: dict, choices: list[dict], scheduled_office: list[dict], available: dict) -> bool:
+    """Use moderate E/M only for the established TIA and planned CTA cost scenario."""
+    return (inputs.get('visit_type') == 'established' and not scheduled_office and '99214' in available
+            and re.search(r'\b(?:transient cerebral ischemia|TIA)\b', str(inputs.get('reason') or ''), re.I)
+            and any(row['code'] in {'70496', '70498'} for row in choices)
+            and any(row['code'] == '99213' for row in choices))
+
+
 def documented_ncs_code(reason: str) -> str | None:
     """Use only an explicit current study count, never an anatomical guess."""
     match = re.search(r'\b(\d{1,2})\s+(?:nerve[ -]?conduction|ncs)\s+stud(?:y|ies)\b', reason, re.I)

@@ -14,7 +14,7 @@ try {
   const { default: TemporaryRateReference } = await server.ssrLoadModule(
     '/src/features/commercial-estimate/TemporaryRateReference.tsx',
   )
-  const { publishedHumanaOfficeCopay } = await server.ssrLoadModule(
+  const { publishedHumanaOfficeCopay, cardOfficePlanningCopay } = await server.ssrLoadModule(
     '/src/features/commercial-estimate/payerReportedPartialCopay.ts',
   )
   const { default: PublishedPlanBenefit } = await server.ssrLoadModule(
@@ -108,6 +108,34 @@ try {
     policyStatus: 'Active',
     supportedAmount: false,
   }
+  const cardResult = {
+    payer: 'phcs', service_date: '2026-10-30', reason: 'Transient cerebral ischemia',
+    card_check: { status: 'matched', office_copay_cents: 4500, conflicts: [], differences: [] },
+    temporary_rate_reference: {
+      source: 'Synthetic BCBS Texas fee schedule', complete: false,
+      message: 'BCBS Texas reference, not an HPI allowance.',
+      lines: [{ id: 'office', code: '99214', units: 1, modifiers: [], unit_reference_cents: 11156 }],
+    },
+    price_range: { mode: 'services', complete: false, lines: [
+      { id: 'office', code: '99214', units: 1, allowed_cents: null, description: 'Office follow-up' },
+      { id: 'head', code: '70496', units: 1, allowed_cents: null, description: 'CTA head' },
+      { id: 'neck', code: '70498', units: 1, allowed_cents: null, description: 'CTA neck' },
+    ] },
+  }
+  const cardMarkup = renderToStaticMarkup(React.createElement(CommercialCostBreakdown, { model, result: cardResult }))
+  assert(cardMarkup.includes('$111.56 BCBS Texas reference'))
+  assert(cardMarkup.includes('Payer allowance pending'))
+  assert(cardMarkup.includes('$45.00 specialist office visit · printed on card'))
+  assert(cardMarkup.includes('$45.00 office-only card suggestion'))
+  assert(cardMarkup.includes('CTA head') && cardMarkup.includes('CTA neck'))
+  const cardHeadline = renderToStaticMarkup(React.createElement(ArrivalAmountSummary, {
+    model: { ...model, amountText: 'Insured amount unavailable' }, result: cardResult,
+    partialCopay: null, cardPlanningCopay: 4500, visibleAmount: true,
+  }))
+  assert(cardHeadline.includes('Card-based office suggestion') && cardHeadline.includes('$45.00'))
+  assert.equal(cardOfficePlanningCopay({ ...cardResult, encounter_summary: { payments_verified_cents: 4500 } }, model), null)
+  assert.equal(cardOfficePlanningCopay({ ...cardResult, collection_guidance: { amount_cents: 0 } }, model), null)
+  assert.equal(cardOfficePlanningCopay({ ...cardResult, card_check: { ...cardResult.card_check, status: 'conflict' } }, model), null)
   const markup = renderToStaticMarkup(
     React.createElement(CommercialCostBreakdown, { model, result }),
   )
