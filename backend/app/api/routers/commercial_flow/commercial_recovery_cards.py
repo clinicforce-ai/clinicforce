@@ -3,6 +3,13 @@ from __future__ import annotations
 
 from app.api.routers import commercial_estimator as _api
 
+
+def _unique_ecw_member_conflict(card_check: dict, coverage: dict) -> bool:
+    return (card_check['status'] == 'conflict' and card_check['conflicts'] == ['member_id']
+            and not card_check['differences'] and coverage['active_coverages'] == 1
+            and not coverage.get('other_active_coverage') and coverage['patient_id']
+            and coverage['coverage_id'] and coverage['member_id'])
+
 def _compare_card_hints(card: dict, inputs: dict, source: dict) -> dict:
     """Fill absent eCW inquiry fields only when OCR names the linked patient/policy."""
     status = card['status']
