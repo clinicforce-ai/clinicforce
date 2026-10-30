@@ -177,9 +177,9 @@ export default function CommercialCostBreakdown({
               ? money(feeProxy.reference_total_cents)
               : aetnaRateReference
                 ? `${money(temporaryRateReference.lines.reduce((sum, line) => sum + line.unit_reference_cents * (Number(line.units) || 1), 0))} total reference`
-                : temporaryRateReference.lines
+                : `${money(temporaryRateReference.lines.reduce((sum, line) => sum + line.unit_reference_cents * (Number(line.units) || 1), 0))} total reference; ${temporaryRateReference.lines
                     .map((line) => `CPT ${line.code}: ${money(line.unit_reference_cents)} per unit`)
-                    .join('; '),
+                    .join('; ')}`,
             detail: temporaryRateReference.message,
           },
         ]
