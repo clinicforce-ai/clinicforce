@@ -45,12 +45,12 @@ export function pendingCignaOfficeCopay(
       officeLine.benefits.oop_remaining_cents >= officeLine.benefits.copay_cents!) &&
     Number.isInteger(officeLine.benefits?.copay_cents) &&
     officeLine.benefits!.copay_cents! > 0
-      ? Math.max(
-          0,
-          officeLine.benefits.copay_cents! -
-            Math.max(0, result.encounter_summary?.payments_verified_cents || 0),
-        )
-      : null
+    ? Math.max(
+        0,
+        officeLine.benefits.copay_cents! -
+          Math.max(0, result.encounter_summary?.payments_verified_cents || 0),
+      )
+    : null
 }
 
 export function collectionAtVisitRow(

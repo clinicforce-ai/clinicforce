@@ -151,13 +151,13 @@ export default function ArrivalAmountSummary({
                       ? `Pending · ${money(pendingAetnaCopay)}`
                       : pendingCignaCopay != null
                         ? `Pending · ${money(pendingCignaCopay)}`
-                      : partialCopay != null
-                        ? money(partialCopay)
-                        : cardPlanningCopay != null
-                          ? money(cardPlanningCopay)
-                          : needsAction
-                            ? action.title
-                            : model.amountText}
+                        : partialCopay != null
+                          ? money(partialCopay)
+                          : cardPlanningCopay != null
+                            ? money(cardPlanningCopay)
+                            : needsAction
+                              ? action.title
+                              : model.amountText}
       </strong>
       {plan ? (
         <p>
