@@ -150,6 +150,22 @@ class PrevisitFlowTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(check['conflicts'], ['member_id'])
         self.assertEqual(inputs['member_id'], 'ECW-123')
 
+    def test_humana_card_alias_and_member_conflict_keep_plan_reference(self):
+        inputs = {'member_id': 'ECW-123', 'patient': {'patient_first_name': 'Pat',
+                  'patient_last_name': 'Example'}, 'subscriber': {}, 'relationship': '18'}
+        card = {'status': 'read', 'fields': {'member_id': 'CARD-999', 'member_name': 'PAT Q EXAMPLE',
+                'payer': 'Humana', 'cms_plan_id': 'H7617-057',
+                'plan_name': 'Humana Value Choice (PPO)'}, 'count': 1}
+        source = {'payer': 'Humana Health Plan', '_patient_id': 'patient-1',
+                  'coverage_id': 'coverage-1', 'active_coverages': 1}
+        check = _compare_card_hints(card, inputs, source)
+        self.assertEqual(check['status'], 'conflict')
+        self.assertEqual(check['conflicts'], ['member_id'])
+        self.assertEqual(check['differences'], [])
+        self.assertTrue(check['patient_name_matches'])
+        self.assertEqual(check['cms_plan_id'], 'H7617-057')
+        self.assertEqual(inputs['member_id'], 'ECW-123')
+
     def test_hpi_card_copay_requires_matching_patient_and_member(self):
         from app.insurance.v1_sources import card_fields
         fields, _ = card_fields([(1, 'Health Plans, Inc. (HPI)\nEXAMPLE: PAT\nID# ABC12345\nSpecialist:\n$45')])

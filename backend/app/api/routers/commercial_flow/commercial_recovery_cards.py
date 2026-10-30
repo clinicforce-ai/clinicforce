@@ -20,7 +20,8 @@ def _compare_card_hints(card: dict, inputs: dict, source: dict) -> dict:
                 and _api.stedi_discovery.normalized(inputs[field]) != _api.stedi_discovery.normalized(fields[field])):
             result['conflicts'].append(field)
     payer_difference = bool(source.get('payer') and fields.get('payer') and
-        _api.stedi_discovery.normalized(source['payer']) != _api.stedi_discovery.normalized(fields['payer']))
+        _api.stedi_discovery.normalized(source['payer']) != _api.stedi_discovery.normalized(fields['payer']) and
+        not (fields['payer'].casefold() == 'humana' and source['payer'].casefold() == 'humana health plan'))
     if payer_difference:
         result['differences'].append('payer_name')
         result['payer_comparison'] = {'ecw': source['payer'], 'card': fields['payer']}
