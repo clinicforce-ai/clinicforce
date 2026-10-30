@@ -51,7 +51,7 @@ from app.api.routers.commercial_flow.commercial_recovery_cards import _unique_ec
     "For NMCT (practice_id primary), clinic_nmct_policy selects in network only for the clinic's confirmed insurer roster; "
     "other identified insurers select clinic_nmct_noncontracted and out of network. "
     "Contradictory provider-specific payer evidence requires review. evidence_resolution reports "
-    "unresolved facts; an in-network tier alone does not establish an amount to collect. A sole card member-ID conflict checks one active eCW policy using the eCW ID while preserving the conflict. A matched HPI card can expose card_check.office_copay_cents for office-only planning, not payer-confirmed liability or imaging costs. "
+    "unresolved facts; an in-network tier alone does not establish an amount to collect. A sole card member-ID conflict checks one active eCW policy using the eCW ID while preserving the conflict. A matched HPI card can expose card_check.office_copay_cents for office-only planning, not payer-confirmed liability or imaging costs. A matching HPI card replaces an eCW PHCS or MultiPlan network label for payer routing and clears its payer IDs before the Stedi directory search. The matched PHCS or MultiPlan label remains available to the clinic network roster; HPI alone does not establish participation. "
     "A BCBSTX Botox booking asks for office injection benefits first. When exactly one current suggested "
     "chemodenervation CPT has a scoped clinic fee, even if other suggestions lack fees, and the "
     "office-injection term is unambiguous, "
@@ -71,7 +71,7 @@ async def previsit_estimate(value: _api.PrevisitInput, request: _api.Request, ba
     Explicit visit-linked eCW billing notes can supply a collection instruction
     or a fallback office copay; their source and timestamp accompany the result.
     They do not establish payer eligibility.
-    Patient-bound card OCR fills only matching missing eCW fields. If only the
+    Patient-bound card OCR fills only matching missing eCW fields. An exact HPI card match replaces an eCW PHCS or MultiPlan network label for payer routing. If only the
     member ID differs and eCW has one active policy, Stedi checks the eCW ID.
     Other conflicts use a uniquely supported card route or wait for review; no
     path edits eCW or retries an indeterminate paid request. card_check omits

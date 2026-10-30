@@ -48,6 +48,10 @@ def _compare_card_hints(card: dict, inputs: dict, source: dict) -> dict:
         _api.stedi_discovery.normalized(inputs['member_id']) == _api.stedi_discovery.normalized(fields['member_id']))
     patient_bound = bool(card.get('count') in {1, 2} and source.get('_patient_id') and
                          source.get('coverage_id') and source.get('active_coverages') == 1)
+    phcs_hpi_card = bool(patient_bound and member_matches and name_matches and
+        (not card_dob or dob_matches) and not result['conflicts'] and
+        _api.re.match(r'^\s*(?:PHCS|MultiPlan)\b', str(source.get('payer') or ''), _api.re.I) and
+        fields.get('payer') == 'Health Plans Incorporated')
     result['patient_name_matches'] = bool(patient_bound and name_matches and (not card_dob or dob_matches))
     if result['patient_name_matches'] and fields.get('cms_plan_id'):
         result['cms_plan_id'] = fields['cms_plan_id']
@@ -57,7 +61,7 @@ def _compare_card_hints(card: dict, inputs: dict, source: dict) -> dict:
             and not result['conflicts'] and printed_copay):
         result['office_copay_cents'] = int(printed_copay[1]) * 100 + int(printed_copay[2] or 0)
     result['alternative_supported'] = bool(patient_bound and candidate and name_matches and
-        (not card_dob or dob_matches) and (
+        (not card_dob or dob_matches) and not phcs_hpi_card and (
             bool(result['conflicts']) and dob_matches and group_matches or
             payer_difference and member_matches and (group_matches or dob_matches)))
     if result['alternative_supported']:
@@ -76,9 +80,13 @@ def _compare_card_hints(card: dict, inputs: dict, source: dict) -> dict:
         if not inputs.get(field) and fields.get(field):
             inputs[field] = fields[field]
             result['fields_added'].append(field)
-    if not source.get('payer') and fields.get('payer'):
+    if (not source.get('payer') or phcs_hpi_card) and fields.get('payer'):
+        if phcs_hpi_card:
+            result['network_label'] = source['payer']
         source['payer'] = fields['payer']
         source['payer_source'] = 'card_ocr'
+        if phcs_hpi_card:
+            source['payer_identifiers'] = []
         result['fields_added'].append('payer')
     if 'member_id' in result['fields_added']:
         source['subscriber_evidence'] = {**(source.get('subscriber_evidence') or {}), 'member_id_source': 'card_ocr'}
