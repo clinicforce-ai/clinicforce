@@ -8,7 +8,7 @@ from app.api.routers.commercial_flow.commercial_previsit_finish import _payer_pl
 from app.api.routers.commercial_flow.commercial_previsit_network_guard import apply_nmct_network_policy, recheck_saved_network_evidence, recheck_saved_payer_message
 from app.api.routers.commercial_flow.commercial_previsit_saved_pricing import _reprice_saved_new_network, guard_unresolved_telehealth, guard_telehealth_guidance
 from app.api.routers.commercial_flow.commercial_previsit_requirements import refresh_saved_requirements
-from app.api.routers.commercial_flow.commercial_previsit_rate_reference import _attach_temporary_aetna_rates, _attach_temporary_uhc_rates, _attach_temporary_blue_cross_rates
+from app.api.routers.commercial_flow.commercial_previsit_rate_reference import refresh_saved_temporary_rates
 from app.api.routers.commercial_flow.commercial_previsit_enrollment import _enrollment_failure
 from app.api.routers.commercial_flow.commercial_previsit_service_scope import retain_incomplete_service_evidence as _retain_incomplete_service_evidence
 from app.api.routers.commercial_flow.commercial_previsit_benefits import case_benefits as _case_benefits
@@ -378,20 +378,8 @@ def _previsit_result(case: dict, practice_id: str | None = None) -> dict:
         result.pop('temporary_rate_reference', None)
         result.pop('aetna_diagnostic_reference', None)
         context = case['previsit_context']
-        if _api.commercial.is_united_healthcare_payer(
-                result, {'displayName': route_payer.get('display_name')} if route_payer else None):
-            _attach_temporary_uhc_rates(result, practice_id, context.get('inputs') or {},
-                                        context.get('source') or {})
-        elif _api.re.search(r'\bcigna\b', str(result.get('payer') or ''), _api.re.I):
-            _attach_temporary_blue_cross_rates(result, practice_id, context.get('inputs') or {},
-                                               context.get('source') or {}, 'Cigna')
-        elif _api.re.search(r'\baetna\b', str(result.get('payer') or ''), _api.re.I):
-            _attach_temporary_aetna_rates(result, practice_id, context.get('inputs') or {},
-                                          context.get('source') or {})
-        elif (payer_name := str(result.get('payer') or (route_payer or {}).get('display_name') or '')) and not _api.re.search(
-                r'blue cross|bcbstx|blue shield|aetna', payer_name, _api.re.I):
-            _attach_temporary_blue_cross_rates(result, practice_id, context.get('inputs') or {},
-                                               context.get('source') or {}, payer_name)
+        refresh_saved_temporary_rates(result, practice_id, context.get('inputs') or {},
+                                      context.get('source') or {}, route_payer)
         if proxy := (blue_cross_proxy.estimate(result, str(result.get('service_date') or ''))
                      or blue_cross_proxy.cigna_estimate(result, str(result.get('service_date') or ''))
                      or blue_cross_proxy.cigna_oap_office_scenario(result, str(result.get('service_date') or ''))):
