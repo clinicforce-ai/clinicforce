@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from app.api.routers import commercial_estimator as _api
 
-async def _read_card_hints(session: dict, patient_id: str | None) -> dict:
+async def _read_card_hints(session: dict, patient_id: str | None, *, allow_pending_reference: bool = False) -> dict:
     """Read one patient-bound card set; OCR fields are inquiry hints, not benefits."""
     from app.insurance import v1_sources
     from app.api.routers.staff import inspect_file
@@ -16,7 +16,7 @@ async def _read_card_hints(session: dict, patient_id: str | None) -> dict:
         card_intakes = [intake for intake in intakes if intake.get('documents')]
         if len(card_intakes) > 1:
             return {'status': 'multiple_cards', 'fields': {}, 'count': 0}
-        pending = [] if card_intakes else await _api.run_in_threadpool(
+        pending = [] if card_intakes or not allow_pending_reference else await _api.run_in_threadpool(
             _api.staff_store.patient_pending_card_references, session['practice_id'], session['patient_id'])
         if len(pending) > 1:
             return {'status': 'multiple_cards', 'fields': {}, 'count': 0}
