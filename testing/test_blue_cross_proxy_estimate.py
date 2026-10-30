@@ -292,6 +292,24 @@ def test_saved_read_rechecks_current_fee_rows_before_showing_proxy(monkeypatch):
     assert 'fee_proxy_estimate' not in reopened
 
 
+def test_saved_phcs_read_rebuilds_blue_cross_reference(monkeypatch):
+    result = _result()
+    result['payer'] = 'phcs'
+    result.pop('plan_details')
+    result['temporary_rate_reference']['lines'][0]['unit_reference_cents'] = 1
+    case = {'revision': 1, 'previsit_context': {
+        'result': result, 'payer_id': '', 'inputs': {'service_date': '2026-10-30'}, 'source': {}}}
+    for name in ('_recheck_saved_clinic_pricing', 'recheck_saved_network_evidence',
+                 '_recheck_saved_payer_allowance', 'refresh_saved_requirements'):
+        monkeypatch.setattr(saved_status, name, lambda *args: None)
+    monkeypatch.setattr(saved_status._api.commercial_store, 'list_connections', lambda *args: [])
+    monkeypatch.setattr(saved_status, '_attach_temporary_blue_cross_rates',
+        lambda reopened, *args: reopened.update(temporary_rate_reference={
+            'source': 'synthetic current schedule', 'lines': [{'unit_reference_cents': 11156}]}))
+    reopened = saved_status._previsit_result(case, 'synthetic-clinic')
+    assert reopened['temporary_rate_reference']['lines'][0]['unit_reference_cents'] == 11156
+
+
 def test_group_ppo_oon_diagnostic_requirements_are_scoped_to_group_and_codes():
     result = _result()
     result['benefit_source'] = 'Stedi'

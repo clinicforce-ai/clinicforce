@@ -388,6 +388,10 @@ def _previsit_result(case: dict, practice_id: str | None = None) -> dict:
         elif _api.re.search(r'\baetna\b', str(result.get('payer') or ''), _api.re.I):
             _attach_temporary_aetna_rates(result, practice_id, context.get('inputs') or {},
                                           context.get('source') or {})
+        elif (payer_name := str(result.get('payer') or (route_payer or {}).get('display_name') or '')) and not _api.re.search(
+                r'blue cross|bcbstx|blue shield|aetna', payer_name, _api.re.I):
+            _attach_temporary_blue_cross_rates(result, practice_id, context.get('inputs') or {},
+                                               context.get('source') or {}, payer_name)
         if proxy := (blue_cross_proxy.estimate(result, str(result.get('service_date') or ''))
                      or blue_cross_proxy.cigna_estimate(result, str(result.get('service_date') or ''))
                      or blue_cross_proxy.cigna_oap_office_scenario(result, str(result.get('service_date') or ''))):

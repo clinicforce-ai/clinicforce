@@ -637,7 +637,7 @@ def test_current_library_contract_decides_network_independently_of_price(monkeyp
 
 @pytest.mark.parametrize('payer_label, practice_id', [
     ('United Healthcare', 'clinic'), ('United Health Care', 'clinic'),
-    ('Aetna', NMCT_PRACTICE_ID), ('Cigna', 'clinic'),
+    ('Aetna', NMCT_PRACTICE_ID), ('Cigna', 'clinic'), ('phcs', 'clinic'),
 ])
 def test_other_payers_use_scoped_blue_cross_library_rate_only_as_temporary_reference(monkeypatch, payer_label, practice_id):
     payer = {'id': 'bcbs', 'display_name': 'Blue Cross and Blue Shield of Texas',

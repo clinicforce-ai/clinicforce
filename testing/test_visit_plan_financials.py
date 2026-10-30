@@ -208,6 +208,21 @@ def test_established_office_visit_defaults_to_provisional_followup_when_model_is
     assert 'starting estimate' in plan['assumptions'][0]
 
 
+def test_established_tia_with_planned_cta_uses_provisional_moderate_office_scenario():
+    available = [{'id': code, 'code': code,
+                  'source': 'conditional office E/M alternative' if code.startswith('992') else 'CPT planning catalog',
+                  'units': 1} for code in ('99213', '99214', '99215', '70496', '70498')]
+    model = MagicMock()
+    model.converse.return_value = model_reply([
+        {'code': '99213', 'units': 1}, {'code': '70496', 'units': 1}, {'code': '70498', 'units': 1}])
+    with patch.object(cpt_suggester.boto3, 'client', return_value=model):
+        plan = cpt_suggester.recommend_visit_plan(
+            {'reason': 'Transient cerebral ischemia', 'visit_type': 'established'}, {}, available)
+    assert plan['recommended_ids'] == ['99214', '70496', '70498']
+    assert plan['method'] == 'appointment'
+    assert any('Moderate MDM is assumed' in note for note in plan['assumptions'])
+
+
 def test_dbs_followup_keeps_device_services_conditional():
     from app.insurance import cpt_rules
     from app.api.routers.commercial_flow.commercial_previsit_catalog import build_catalog

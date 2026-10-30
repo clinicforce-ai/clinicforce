@@ -12,6 +12,7 @@ import ArrivalAmountSummary from './ArrivalAmountSummary'
 import {
   aetnaOfficePlanningCopay,
   aetnaOfficeReferenceCopay,
+  cardOfficePlanningCopay,
   payerReportedPartialCopay,
   publishedHumanaOfficeCopay,
 } from './payerReportedPartialCopay'
@@ -64,6 +65,8 @@ export default function CommercialOverview({
   const humanaReferenceCopay = publishedHumanaOfficeCopay(result, model)
   const payerReportedPartialCents =
     aetnaReferenceCopay ?? humanaReferenceCopay ?? payerReportedPartialCopay(result, model)
+  const cardPlanningCents =
+    payerReportedPartialCents == null ? cardOfficePlanningCopay(result, model) : null
   const combinedPlan = !cash && !previousEstimate ? result.combined_emg_plan : null
   const showSelectedRequirements =
     !cash &&
@@ -91,7 +94,8 @@ export default function CommercialOverview({
     provisionalAmount != null ||
     !!model.estimatedShare ||
     aetnaOfficePlanningCopay(result, model, result.price_range?.lines || []) != null ||
-    payerReportedPartialCents != null
+    payerReportedPartialCents != null ||
+    cardPlanningCents != null
   const patientBenefitsBound = hasPatientBinding(result.identity)
   const networkWarnings = (result.network_evidence?.mismatch_warnings || []).filter(
     (warning) => !warning.toLowerCase().includes('billing tin is missing from the visit'),
@@ -246,6 +250,7 @@ export default function CommercialOverview({
             model={model}
             result={result}
             partialCopay={payerReportedPartialCents}
+            cardPlanningCopay={cardPlanningCents}
             referenceOnly={aetnaReferenceCopay != null || humanaReferenceCopay != null}
             visibleAmount={visibleAmount}
           />

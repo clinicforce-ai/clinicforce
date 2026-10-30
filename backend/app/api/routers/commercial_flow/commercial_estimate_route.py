@@ -21,6 +21,8 @@ from app.api.routers.commercial_flow.commercial_previsit_submit import submit_pr
     "final MDM or time and modifier need clinician review. An uncoded "
     "established-patient office visit without a supported level starts with provisional CPT 99213, "
     "which requires clinician review before billing. "
+    "For established TIA follow-up with proposed head or neck CTA, a proposed 99213 becomes "
+    "provisional 99214 for a moderate-MDM cost scenario; final coding follows documented MDM or time. "
     "A generic televisit with no eCW patient-status label may use a completed same-clinic office "
     "visit to propose provisional CPT 99213 when the model returns no usable plan; the clinician "
     "must confirm status, modality, patient location and E/M level before billing. A telehealth "
@@ -52,6 +54,8 @@ from app.api.routers.commercial_flow.commercial_previsit_submit import submit_pr
     "clinic_nmct_policy selects the in-network tier for every insurer and product unless a "
     "provider-specific payer statement reports out-of-network participation. evidence_resolution reports "
     "unresolved facts; an in-network tier alone does not establish an amount to collect. "
+    "A matching patient-bound HPI card can expose card_check.office_copay_cents as an "
+    "office-only planning suggestion; it is not payer-confirmed liability or an imaging estimate. "
     "A BCBSTX Botox booking asks for office injection benefits first. When exactly one current suggested "
     "chemodenervation CPT has a scoped clinic fee, even if other suggestions lack fees, and the "
     "office-injection term is unambiguous, "
@@ -79,6 +83,8 @@ async def previsit_estimate(value: _api.PrevisitInput, request: _api.Request, ba
     edits eCW or repeats an indeterminate paid request. card_check excludes image bytes
     and reports ecw_no_matching_card_document when the eCW card search returns
     no qualifying patient-bound insurance card.
+    A printed specialist copay on a matched HPI card is returned in
+    card_check.office_copay_cents for provisional office-only display.
     payment_explanation gives one doctor-only sentence, a reason code, network
     tier, pricing basis, unpriced CPTs and an optional resolved-mismatch note.
     encounter_summary.coinsurance_rounded_per_line is true when individual CPT

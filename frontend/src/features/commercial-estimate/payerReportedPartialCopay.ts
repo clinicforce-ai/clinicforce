@@ -5,6 +5,34 @@ import { patientBenefitsBound } from './identityBinding'
 import { firstSelectedCptIssue } from './selectedCptIssue'
 import { networkEvidenceStatus } from './networkEvidenceStatus'
 
+export function cardOfficePlanningCopay(
+  result: PrevisitEstimate,
+  model: CommercialEstimateModel,
+): number | null {
+  const copay = result.card_check?.office_copay_cents
+  const officeLines =
+    result.price_range?.mode === 'services'
+      ? result.price_range.lines?.filter(
+          (line) => /^9921[2-5]$/.test(line.code) && line.units === 1,
+        ) || []
+      : []
+  return (!model.cash || !!result.cash_fallback) &&
+    !model.calculating &&
+    !model.previousEstimate &&
+    !model.supportedAmount &&
+    result.card_check?.status !== 'conflict' &&
+    result.collection_guidance?.amount_cents == null &&
+    result.collection_guidance?.basis !== 'qmb_protection' &&
+    result.billing_protection?.status !== 'qmb' &&
+    !result.benefits?.has_secondary &&
+    !result.encounter_summary?.payments_verified_cents &&
+    officeLines.length === 1 &&
+    Number.isInteger(copay) &&
+    copay! >= 0
+    ? copay!
+    : null
+}
+
 export function specialistOfficeCopay(
   result: PrevisitEstimate,
   networks = ['IN_NETWORK', 'IN_AND_OUT_OF_NETWORK'],

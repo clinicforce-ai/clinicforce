@@ -10,6 +10,7 @@ import { requirementStatus } from './commercialRequirementStatus'
 import {
   aetnaOfficeReferenceCopay,
   aetnaOfficePlanningCopay,
+  cardOfficePlanningCopay,
   payerReportedPartialCopay,
   publishedHumanaOfficeCopay,
   specialistOfficeCoinsurance,
@@ -66,6 +67,10 @@ export default function CommercialCostBreakdown({
   const officeReferenceCopay = aetnaOfficeReferenceCopay(result, model)
   const humanaReferenceCopay = publishedHumanaOfficeCopay(result, model)
   const partialOfficeCopay = payerReportedPartialCopay(result, model)
+  const cardPlanningCopay =
+    partialOfficeCopay == null && officeReferenceCopay == null && humanaReferenceCopay == null
+      ? cardOfficePlanningCopay(result, model)
+      : null
   const components = summary?.components
   const diagnosticCopay =
     result.collection_guidance?.basis === 'diagnostic_day_copay' &&
@@ -140,15 +145,18 @@ export default function CommercialCostBreakdown({
       : [cptRows.unpriced]),
     {
       label: 'Total payer allowed',
-      value: automaticCashFallback
-        ? 'Not established'
-        : price?.allowed_min_cents != null && price.allowed_max_cents != null
-          ? range(price.allowed_min_cents, price.allowed_max_cents)
-          : lineAllowedTotal != null
-            ? money(lineAllowedTotal)
-            : botoxPreview
-              ? `${money(botoxPreview.allowed_cents)} · clinic fee row`
-              : 'Not fully priced',
+      value:
+        cardPlanningCopay != null
+          ? 'Payer allowance pending'
+          : automaticCashFallback
+            ? 'Not established'
+            : price?.allowed_min_cents != null && price.allowed_max_cents != null
+              ? range(price.allowed_min_cents, price.allowed_max_cents)
+              : lineAllowedTotal != null
+                ? money(lineAllowedTotal)
+                : botoxPreview
+                  ? `${money(botoxPreview.allowed_cents)} · clinic fee row`
+                  : 'Not fully priced',
     },
     ...(temporaryRateReference?.lines.length
       ? [
@@ -204,7 +212,9 @@ export default function CommercialCostBreakdown({
                                 .join('; ')
                             : !lines.length && reportedOfficeCopay != null
                               ? `${money(reportedOfficeCopay)} specialist office visit · payer-reported`
-                              : unknown,
+                              : cardPlanningCopay != null
+                                ? `${money(cardPlanningCopay)} specialist office visit · printed on card`
+                                : unknown,
       detail: botoxPreview
         ? 'No injection copay was included in this provisional calculation'
         : humanaReferenceCopay != null
@@ -225,7 +235,9 @@ export default function CommercialCostBreakdown({
                       ? 'No separate copay was applied to the priced CPTs'
                       : !lines.length && reportedOfficeCopay != null
                         ? 'Payer category term; applicability to planned CPTs and visit date is not confirmed'
-                        : undefined,
+                        : cardPlanningCopay != null
+                          ? 'Card-based office suggestion; payer applicability and imaging cost are unresolved'
+                          : undefined,
     },
     {
       label: 'Individual deductible',
@@ -365,7 +377,9 @@ export default function CommercialCostBreakdown({
   const patientShare = automaticCashFallback
     ? officeReferenceCopay != null || humanaReferenceCopay != null
       ? `${money(officeReferenceCopay ?? humanaReferenceCopay!)} office-only reference; collection pending`
-      : 'Not fully calculated'
+      : cardPlanningCopay != null
+        ? `${money(cardPlanningCopay)} office-only card suggestion`
+        : 'Not fully calculated'
     : combinedPlan
       ? `${money(combinedPlan.patient_share_cents)} planning estimate`
       : ['qmb_protection', 'out_of_pocket_limit'].includes(
@@ -392,7 +406,9 @@ export default function CommercialCostBreakdown({
                     : model.estimatedShare ||
                       (partialOfficeCopay != null
                         ? `${money(model.officeCopayLine!.benefits.copay_cents!)} office-only planning estimate`
-                        : null) ||
+                        : cardPlanningCopay != null
+                          ? `${money(cardPlanningCopay)} office-only card suggestion`
+                          : null) ||
                       (model.provisionalAmount != null
                         ? money(model.provisionalAmount)
                         : model.patientPrice || 'Not fully calculated')
@@ -426,7 +442,9 @@ export default function CommercialCostBreakdown({
                 : 'Estimated patient share',
             value: patientShare,
             detail: automaticCashFallback
-              ? 'Insured share awaits a matching payer check and selected CPTs'
+              ? cardPlanningCopay != null
+                ? 'Printed specialist copay for one office visit; planned imaging and final payer share are unresolved.'
+                : 'Insured share awaits a matching payer check and selected CPTs'
               : combinedPlan
                 ? `${money(combinedPlan.office_copay_cents)} office copay + ${combinedPlan.coinsurance_percent}% × ${money(combinedPlan.diagnostic_allowed_cents)} diagnostic allowance. No additional deductible or out-of-pocket reduction was applied where remaining balances were not returned.`
                 : result.collection_guidance?.basis === 'out_of_pocket_limit'
@@ -441,7 +459,9 @@ export default function CommercialCostBreakdown({
                           ? `${money(aetnaCopayPlanning)} copay + ${money(0)} deductible + 0% × Aetna allowed amount = ${money(aetnaCopayPlanning)} before the unknown allowance cap. Confirm the visit conditions and final claim amount.`
                           : calculated
                             ? 'Copay + deductible applied + coinsurance − allowed and out-of-pocket reductions'
-                            : 'Full share awaits applicable deductible and out-of-pocket terms',
+                            : cardPlanningCopay != null
+                              ? 'Printed specialist copay for one office visit; planned imaging and final payer share are unresolved.'
+                              : 'Full share awaits applicable deductible and out-of-pocket terms',
           },
           ...(summary?.payments_verified_cents != null && summary.payments_verified_cents > 0
             ? [{ label: 'Already paid', value: `−${money(summary.payments_verified_cents)}` }]
@@ -455,6 +475,7 @@ export default function CommercialCostBreakdown({
       aetnaCopayPlanning,
       officeReferenceCopay,
       partialOfficeCopay,
+      cardPlanningCopay,
       automaticCashFallback,
       cignaFeeProxy,
       proxyFormula,

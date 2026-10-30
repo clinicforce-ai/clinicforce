@@ -37,12 +37,14 @@ export default function ArrivalAmountSummary({
   model,
   result,
   partialCopay,
+  cardPlanningCopay = null,
   referenceOnly = false,
   visibleAmount,
 }: {
   model: CommercialEstimateModel
   result: PrevisitEstimate
   partialCopay: number | null
+  cardPlanningCopay?: number | null
   referenceOnly?: boolean
   visibleAmount: boolean
 }) {
@@ -97,9 +99,11 @@ export default function ArrivalAmountSummary({
                     ? referenceOnly
                       ? 'Office-only reference · collection pending'
                       : 'Suggested amount to collect at visit'
-                    : needsAction
-                      ? 'Next step'
-                      : model.amountLabel}
+                    : cardPlanningCopay != null
+                      ? 'Card-based office suggestion · collection pending'
+                      : needsAction
+                        ? 'Next step'
+                        : model.amountLabel}
       </span>
       <strong
         className={
@@ -125,9 +129,11 @@ export default function ArrivalAmountSummary({
                   ? money(officeBalance)
                   : partialCopay != null
                     ? money(partialCopay)
-                    : needsAction
-                      ? action.title
-                      : model.amountText}
+                    : cardPlanningCopay != null
+                      ? money(cardPlanningCopay)
+                      : needsAction
+                        ? action.title
+                        : model.amountText}
       </strong>
       {plan ? (
         <p>
@@ -172,6 +178,11 @@ export default function ArrivalAmountSummary({
             : additionalServicesPending
               ? 'Office copay reported; other service costs pending.'
               : 'Payer-reported office copay after recorded payments; separately performed services may change the total.'}
+        </p>
+      ) : cardPlanningCopay != null ? (
+        <p>
+          Printed specialist copay for one office visit. Payer benefits and separate imaging costs
+          are unresolved; verify before charging.
         </p>
       ) : needsAction ? (
         <p>{action.hint}</p>

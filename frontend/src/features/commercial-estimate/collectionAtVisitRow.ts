@@ -14,6 +14,7 @@ export function collectionAtVisitRow(
     aetnaCopayPlanning: number | null
     officeReferenceCopay: number | null
     partialOfficeCopay: number | null
+    cardPlanningCopay: number | null
     automaticCashFallback: boolean
     cignaFeeProxy: boolean
     proxyFormula: ReturnType<typeof feeProxyFormula> | undefined
@@ -26,6 +27,7 @@ export function collectionAtVisitRow(
     aetnaCopayPlanning,
     officeReferenceCopay,
     partialOfficeCopay,
+    cardPlanningCopay,
     automaticCashFallback,
     cignaFeeProxy,
     proxyFormula,
@@ -47,7 +49,7 @@ export function collectionAtVisitRow(
   return {
     label: botoxPreview
       ? 'Planned amount to collect at visit'
-      : partialOfficeCopay != null && feeProxyCheckin == null
+      : (partialOfficeCopay != null || cardPlanningCopay != null) && feeProxyCheckin == null
         ? 'Suggested amount to collect at visit'
         : ((cignaFeeProxy && result.collection_guidance?.basis !== 'claim_after_service') ||
               feeProxyCheckin != null ||
@@ -85,7 +87,9 @@ export function collectionAtVisitRow(
                         ? `${money(officeReferenceCopay)} office-only reference`
                         : partialOfficeCopay != null
                           ? money(partialOfficeCopay)
-                          : 'Not established',
+                          : cardPlanningCopay != null
+                            ? `${money(cardPlanningCopay)} office-only card suggestion`
+                            : 'Not established',
     detail: combinedPlan
       ? `${money(combinedPlan.office_copay_cents)} + ${combinedPlan.coinsurance_percent}% × ${money(combinedPlan.diagnostic_allowed_cents)} = ${money(combinedPlan.patient_share_cents)}${combinedPlan.payments_cents ? `; less ${money(combinedPlan.payments_cents)} already paid` : ''}. Separate follow-up E/M is planned; deductible and out-of-pocket adjustments remain assumptions until payer balances are returned.`
       : result.collection_guidance?.basis === 'qmb_protection'
@@ -108,21 +112,23 @@ export function collectionAtVisitRow(
                       ? 'Planning figure for one specialist office visit on the appointment date; not an authorized collection instruction. Other services, prior payments and Medicare cost-sharing protection are not included.'
                       : partialOfficeCopay != null
                         ? 'Suggested office visit copay after recorded payments. Separately performed DBS device services may add cost.'
-                        : automaticCashFallback
-                          ? 'Insurance collection is unresolved; any cash quote is listed separately'
-                          : result.collection_guidance?.unconfirmed_zero_oop
-                            ? 'Confirm the reported $0 out-of-pocket balance with the payer before collection'
-                            : model.supportedAmount
-                              ? result.collection_guidance?.basis === 'office_copay'
-                                ? 'Office copay advance; other services may have a later balance'
-                                : result.collection_guidance?.basis === 'out_of_pocket_limit'
-                                  ? 'Applicable out-of-pocket maximum has no remaining balance for covered care'
-                                  : result.collection_guidance?.basis === 'diagnostic_day_copay'
-                                    ? 'One diagnostic copay advance; other costs may follow the claim'
-                                    : result.collection_guidance?.basis === 'claim_after_service'
-                                      ? 'Clinic policy defers collection until after the claim'
-                                      : undefined
-                              : undefined,
+                        : cardPlanningCopay != null
+                          ? 'Printed specialist copay for one office visit; verify before charging. Planned imaging and final payer share are unresolved.'
+                          : automaticCashFallback
+                            ? 'Insurance collection is unresolved; any cash quote is listed separately'
+                            : result.collection_guidance?.unconfirmed_zero_oop
+                              ? 'Confirm the reported $0 out-of-pocket balance with the payer before collection'
+                              : model.supportedAmount
+                                ? result.collection_guidance?.basis === 'office_copay'
+                                  ? 'Office copay advance; other services may have a later balance'
+                                  : result.collection_guidance?.basis === 'out_of_pocket_limit'
+                                    ? 'Applicable out-of-pocket maximum has no remaining balance for covered care'
+                                    : result.collection_guidance?.basis === 'diagnostic_day_copay'
+                                      ? 'One diagnostic copay advance; other costs may follow the claim'
+                                      : result.collection_guidance?.basis === 'claim_after_service'
+                                        ? 'Clinic policy defers collection until after the claim'
+                                        : undefined
+                                : undefined,
     emphasis: true,
   }
 }
