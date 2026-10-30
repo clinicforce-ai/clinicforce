@@ -174,10 +174,28 @@ class PrevisitFlowTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(fields['specialist_copay'], '$45')
         inputs = {'member_id': 'ABC12345', 'patient': {
             'patient_first_name': 'Pat', 'patient_last_name': 'Example'}, 'subscriber': {}}
-        source = {'payer': 'phcs', '_patient_id': 'patient-1', 'coverage_id': 'coverage-1', 'active_coverages': 1}
+        source = {'payer': 'phcs', 'payer_identifiers': ['old-network-id'],
+                  '_patient_id': 'patient-1', 'coverage_id': 'coverage-1', 'active_coverages': 1}
         card = {'status': 'read', 'fields': fields, 'count': 1, 'source': 'clinicforce_card'}
-        self.assertEqual(_compare_card_hints(card, inputs.copy(), source.copy())['office_copay_cents'], 4500)
-        self.assertNotIn('office_copay_cents', _compare_card_hints(card, {**inputs, 'member_id': 'OTHER'}, source.copy()))
+        for label in ('phcs', 'PHCS Extended PPO', 'MultiPlan PPO'):
+            route = {**source, 'payer': label}
+            check = _compare_card_hints(card, inputs.copy(), route)
+            self.assertEqual(check['office_copay_cents'], 4500)
+            self.assertEqual(check['status'], 'filled_missing')
+            self.assertEqual(route['payer'], 'Health Plans Incorporated')
+            self.assertEqual(route['payer_source'], 'card_ocr')
+            self.assertEqual(route['payer_identifiers'], [])
+        for rejected_inputs, rejected_source in (
+            ({**inputs, 'member_id': 'OTHER'}, source.copy()),
+            (inputs.copy(), {**source, 'active_coverages': 2}),
+            (inputs.copy(), {**source, 'payer': 'Another Insurer'}),
+        ):
+            original_payer = rejected_source['payer']
+            rejected = _compare_card_hints(card, rejected_inputs, rejected_source)
+            self.assertEqual(rejected_source['payer'], original_payer)
+            self.assertNotIn('payer_source', rejected_source)
+            if rejected_inputs['member_id'] == 'OTHER':
+                self.assertNotIn('office_copay_cents', rejected)
 
     def test_matching_card_carries_cms_plan_id_only_after_identity_check(self):
         inputs = {'member_id': 'H12345678', 'patient': {'patient_first_name': 'Pat', 'patient_last_name': 'Example'},
