@@ -5,6 +5,7 @@ import http.cookiejar
 import json
 import os
 import urllib.error
+import urllib.parse
 import urllib.request
 
 
@@ -27,6 +28,11 @@ def main():
                     raise RuntimeError("Legacy documentation URL did not redirect to the guide")
                 data = response.read()
         except urllib.error.HTTPError as exc:
+            if (path == "/api/redoc" and exc.code == 308 and
+                    urllib.parse.urljoin(base + path, exc.headers.get("Location", "")) == base + "/api/docs"):
+                data = request("/api/docs")
+                print("PASS GET /api/redoc HTTP 308 -> /api/docs", flush=True)
+                return data
             raise RuntimeError(f"{path}: HTTP {exc.code}; response body withheld") from None
         print(f"PASS {method} {path} HTTP {expected}", flush=True)
         return data
