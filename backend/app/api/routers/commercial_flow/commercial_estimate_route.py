@@ -8,7 +8,7 @@ from app.api.routers.commercial_flow.commercial_previsit_submit import submit_pr
 from app.api.routers.commercial_flow.commercial_recovery_cards import _unique_ecw_member_conflict
 
 @_api.router.post("/appointments/previsit", description=(
-    "Estimate a patient-bound eCW visit. Compatible saved payer evidence is reused without another "
+    "Estimate a patient-bound eCW visit. An existing saved visit can be re-read by its original service date after its start time; cancelled encounters remain excluded. Compatible saved payer evidence is reused without another "
     "eligibility request. A card-supplied group that matches a fresh, patient-bound saved payer "
     "response and member ID preserves that visit binding for reuse. A recent single discovery "
     "candidate with an address conflict can trigger "
@@ -261,6 +261,18 @@ async def previsit_estimate(value: _api.PrevisitInput, request: _api.Request, ba
     card findings do not change the negotiated rate or collection calculation.
     """
     session = await _api._session(request)
+    workflows = list((session['intake'].get('workflows') or {}).values())
+    prior_cases = await _api.run_in_threadpool(
+        _api.store.get_cases, workflows, session['patient_id'], session['share_manifest_id'], **_api._scope(session)
+    ) if workflows else []
+    review_dates = {
+        (row.get('previsit_context') or {}).get('inputs', {}).get('service_date')
+        for row in prior_cases
+        if row.get('source_mode') == 'commercial_previsit'
+        and (row.get('previsit_context') or {}).get('source', {}).get('appointment_id') == value.appointment_id
+        and (row.get('previsit_context') or {}).get('inputs', {}).get('service_date')
+    }
+    review_service_date = next(iter(review_dates)) if len(review_dates) == 1 else None
     library_documents = await _api.run_in_threadpool(_api.library_pricing.prepare, session['practice_id'])
     session['_library_documents'] = library_documents
     session['library_pricing'] = [{'document_id': row['id'], 'label': row['label'], 'payer': row.get('payer'), 'summary': row.get('extraction_summary')} for row in library_documents]
@@ -273,7 +285,8 @@ async def previsit_estimate(value: _api.PrevisitInput, request: _api.Request, ba
     try:
         inputs, _, source = await _api.ecw_backend.fetch_inputs(
             _api._ecw_identity(session, _api.date.today().isoformat()),
-            _api._ecw_practice_config(session["practice_id"]), value.appointment_id)
+            _api._ecw_practice_config(session["practice_id"]), value.appointment_id,
+            review_service_date=review_service_date)
     except _api.ecw_backend.EcwBackendError as exc:
         _api.collection_event('previsit_failed', practice_id=session['practice_id'], intake_id=(session.get('intake') or {}).get('id'),
                          stage='appointment', reason_code='ecw_error')
@@ -333,10 +346,7 @@ async def previsit_estimate(value: _api.PrevisitInput, request: _api.Request, ba
         return _api._previsit_result(await _api.run_in_threadpool(_api._save, case, session, 'previsit-awaiting-coverage'), session['practice_id'])
 
     check_from = ((source.get('coverage_period') or {}).get('start') or '')[:10] or None
-    workflows = list(session['intake'].get('workflows', {}).values())
-    prior_cases = []
     if workflows:
-        prior_cases = await _api.run_in_threadpool(_api.store.get_cases, workflows, session['patient_id'], session['share_manifest_id'], **_api._scope(session))
         holds = [row['visit_review']['insurance_check_from'] for row in prior_cases
                  if row.get('previsit_context', {}).get('source', {}).get('appointment_id') == value.appointment_id
                  and row.get('visit_review', {}).get('insurance_check_from')]
