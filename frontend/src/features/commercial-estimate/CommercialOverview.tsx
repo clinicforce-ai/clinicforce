@@ -5,6 +5,7 @@ import { money, range, visitDate } from './format'
 import { patientBenefitsBound as hasPatientBinding } from './identityBinding'
 import PayerReportedPlanFigures from './PayerReportedPlanFigures'
 import SelectedServiceRequirements from './SelectedServiceRequirements'
+import { shouldShowSelectedRequirements } from './selectedRequirementsVisibility'
 import TemporaryRateReference from './TemporaryRateReference'
 import EstimateSources from './EstimateSources'
 import { openServiceDetails } from './openServiceDetails'
@@ -68,20 +69,12 @@ export default function CommercialOverview({
   const cardPlanningCents =
     payerReportedPartialCents == null ? cardOfficePlanningCopay(result, model) : null
   const combinedPlan = !cash && !previousEstimate ? result.combined_emg_plan : null
-  const showSelectedRequirements =
-    !cash &&
-    !previousEstimate &&
-    plannedCodes.length > 0 &&
-    result.benefits?.active === true &&
-    result.benefits.service_date_matches !== false &&
-    !result.benefits.coverage_status_conflict &&
-    !result.benefits.coverage_dates_invalid &&
-    !result.benefits.network_conflict &&
-    !result.benefits.historical_only &&
-    !result.benefits.source_errors?.length &&
-    !result.benefits.has_secondary &&
-    result.recovery?.reason_code !== 'multiple_active_policies' &&
-    hasPatientBinding(result.identity)
+  const showSelectedRequirements = shouldShowSelectedRequirements(
+    result,
+    plannedCodes,
+    cash,
+    previousEstimate,
+  )
   const staleInsuredGuidance = !cash && guidance?.amount_cents != null && !amount
   const showAssumptions = Boolean(
     amount ||
