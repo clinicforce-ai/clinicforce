@@ -152,6 +152,37 @@ try {
   assert(markup.includes('not used as a verified calculation input'))
   assert(markup.includes('Not established'))
 
+  const pendingCigna = {
+    payer: 'Cigna', service_date: '2026-10-30', reason: 'Office consultation',
+    benefits: { network_status: 'in_network' },
+    price_range: { mode: 'services', complete: false, lines: [{
+      id: 'office', code: '99204', units: 1, allowed_cents: null,
+      benefits: { copay_cents: 6000 },
+    }] },
+    collection_guidance: { amount_cents: null, basis: 'missing_collection_inputs' },
+  }
+  const pendingCignaTable = renderToStaticMarkup(React.createElement(CommercialCostBreakdown, {
+    model: { ...model, policyStatus: 'eCW policy · payer check needed' }, result: pendingCigna,
+  }))
+  assert(pendingCignaTable.includes('Pending · $60.00 office copay if verified'))
+  assert(pendingCignaTable.includes('Full patient share remains unresolved'))
+  const paidCignaTable = renderToStaticMarkup(React.createElement(CommercialCostBreakdown, {
+    model, result: { ...pendingCigna, encounter_summary: { payments_verified_cents: 1500 } },
+  }))
+  assert(paidCignaTable.includes('Pending · $45.00 office copay if verified'))
+  const inactiveCignaTable = renderToStaticMarkup(React.createElement(CommercialCostBreakdown, {
+    model, result: { ...pendingCigna, benefits: { active: false, network_status: 'in_network' } },
+  }))
+  assert(!inactiveCignaTable.includes('office copay if verified'))
+  for (const terms of [{ deductible_applies: true, deductible_remaining_cents: 10000 },
+    { oop_remaining_cents: 0 }]) {
+    const blocked = renderToStaticMarkup(React.createElement(CommercialCostBreakdown, {
+      model, result: { ...pendingCigna, price_range: { ...pendingCigna.price_range,
+        lines: [{ ...pendingCigna.price_range.lines[0], benefits: { copay_cents: 6000, ...terms } }] } },
+    }))
+    assert(!blocked.includes('office copay if verified'))
+  }
+
   const unpricedAetna = renderToStaticMarkup(
     React.createElement(CommercialCostBreakdown, {
       model,

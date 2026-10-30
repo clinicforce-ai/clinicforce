@@ -8,7 +8,7 @@ import httpx
 import pytest
 
 from app.api.routers import commercial_estimator as api
-from app.insurance import commercial, ecw_backend, identity, provider_specialty
+from app.insurance import collection_guidance, commercial, ecw_backend, identity, provider_specialty
 from testing.synthetic_policy import COPAY_POLICY
 
 
@@ -72,6 +72,16 @@ def test_automatic_specialist_estimate_without_card_contract_or_ledger():
     assert 'ledger is unavailable' in ' '.join(result['collection_guidance']['assumptions'])
     result = finish(*example(), review={'payments': {'reference': 'synthetic-receipt', 'amount_cents': 1500}})
     assert result['collection_guidance']['amount_cents'] == 4000
+
+
+def test_named_cigna_result_keeps_approved_fixed_copay_without_allowed_rate():
+    result = finish(*example())
+    result['payer'] = 'Cigna'
+    assert collection_guidance.build(result)['amount_cents'] == 5500
+    paid = collection_guidance.build(result, {'payments': {'reference': 'synthetic-receipt', 'amount_cents': 1500}})
+    assert paid['amount_cents'] == 4000
+    result.pop('collection_policy')
+    assert collection_guidance.build(result)['amount_cents'] is None
 
 
 @pytest.mark.parametrize('amount,cents', [('60', 6000), ('91.37', 9137)])

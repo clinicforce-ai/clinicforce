@@ -196,7 +196,7 @@ def build(result: dict, review: dict | None = None) -> dict:
             and verified_in_network(benefits)):
         amount = None
         guidance.update(cigna_estimate_required=True,
-            reason='Cigna requires an Explanation of Estimate from its cost estimator before collecting an estimated visit payment; the BCBS Texas fee proxy is only a planning reference.')
+            reason='Cigna requires an Explanation of Estimate before collecting this estimated visit share; the BCBS Texas fee proxy is only a planning reference.')
         if fee_proxy.get('message'):
             assumptions.append(fee_proxy['message'])
     if (amount is None and safe and not qmb_protected and not qmb_unresolved
@@ -250,10 +250,10 @@ def build(result: dict, review: dict | None = None) -> dict:
         amount = None
         guidance['published_copay_policy_missing' if published_copay else 'positive_advance_policy_missing'] = True
     if (amount is not None and amount > 0 and 'cigna' in str(result.get('payer') or '').casefold()
-            and guidance['basis'] != 'ecw_billing_note'):
+            and guidance['basis'] not in {'ecw_billing_note', 'office_copay'}):
         amount = None
         guidance.update(cigna_estimate_required=True,
-            reason='Cigna requires an Explanation of Estimate from its cost estimator before collecting an estimated visit payment.')
+            reason='Cigna requires an Explanation of Estimate from its cost estimator before collecting an estimated deductible or coinsurance advance.')
     if amount is not None and amount > 0 and unconfirmed_zero_oop and verified_in_network(benefits):
         amount = None
         guidance['unconfirmed_zero_oop'] = True
