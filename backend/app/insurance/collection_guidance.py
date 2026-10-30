@@ -61,14 +61,15 @@ def build(result: dict, review: dict | None = None) -> dict:
                                    'Current signed clinic agreement; review member product and clinician tier'
                                    if (result.get('network_evidence') or {}).get('decision') == 'in_network_contract_supported' else
                                    'Payer statement about the requesting provider' if verified_in_network(benefits) and benefits.get('network_source') == 'payer_participation_message' else
-                                   'Current Clinical Library contract and clinic provider-network record' if verified_in_network(benefits) and benefits.get('network_source') == 'clinic_library_contract' else
-                                   'NMCT all-plan in-network policy; payer-specific nonparticipation takes precedence' if benefits.get('network_source') == 'clinic_nmct_policy' else
+                                   'Current Clinical Library contract' if verified_in_network(benefits) and benefits.get('network_source') == 'clinic_library_contract' else
+                                   'Legacy NMCT clinic policy; recalculate against current Clinical Library contracts' if benefits.get('network_source') == 'clinic_nmct_policy' else
                                    'No contract linked to this exact payer product and provider' if benefits.get('network_source') == 'clinic_library_absent' else
                                    'Payer and clinic provider participation evidence conflict' if participation_conflict(benefits) else
                                    'In-network label has no current product/provider participation source' if benefits.get('network_status') == 'in_network' else
                                    'Payer statement about the requesting provider' if verified_out_of_network(benefits) and benefits.get('network_source') == 'payer_participation_message' else
                                    'Certified clinic agreement inventory; payer participation not independently confirmed' if verified_out_of_network(benefits) and benefits.get('network_source') == 'clinic_contract_inventory' else
                                    'No current Blue contract registered in the clinic Library' if verified_out_of_network(benefits) and benefits.get('network_source') == 'clinic_no_blue_contract' else
+                                   'No current insurer contract registered in the NMCT Clinical Library' if verified_out_of_network(benefits) and benefits.get('network_source') == 'clinic_no_insurer_contract' else
                                    'Clinic administrator attestation for this product and provider; payer participation not independently confirmed' if verified_out_of_network(benefits) and (result.get('network_evidence') or {}).get('source') == 'clinic_admin_attestation' else
                                    'Current scoped clinic nonparticipation rule' if verified_out_of_network(benefits) else
                                    'The plan returned out-of-network benefit terms without establishing this provider tier' if benefits.get('network_status') == 'out_of_network' else
@@ -196,7 +197,7 @@ def build(result: dict, review: dict | None = None) -> dict:
             and verified_in_network(benefits)):
         amount = None
         guidance.update(cigna_estimate_required=True,
-            reason='Cigna requires an Explanation of Estimate from its cost estimator before collecting an estimated visit payment; the BCBS Texas fee proxy is only a planning reference.')
+            reason='Cigna requires an Explanation of Estimate before collecting this estimated visit share; the BCBS Texas fee proxy is only a planning reference.')
         if fee_proxy.get('message'):
             assumptions.append(fee_proxy['message'])
     if (amount is None and safe and not qmb_protected and not qmb_unresolved
@@ -247,13 +248,15 @@ def build(result: dict, review: dict | None = None) -> dict:
     )
     if (amount is not None and amount > 0 and guidance['basis'] != 'ecw_billing_note'
             and not (oon_advance and (policy_allows_advance or calculated_in_network_advance))):
+        if guidance['basis'] == 'diagnostic_day_copay' and not policy_approved and not unconfirmed_zero_oop:
+            guidance['diagnostic_copay_reference_cents'] = amount
         amount = None
         guidance['published_copay_policy_missing' if published_copay else 'positive_advance_policy_missing'] = True
     if (amount is not None and amount > 0 and 'cigna' in str(result.get('payer') or '').casefold()
-            and guidance['basis'] != 'ecw_billing_note'):
+            and guidance['basis'] not in {'ecw_billing_note', 'office_copay'}):
         amount = None
         guidance.update(cigna_estimate_required=True,
-            reason='Cigna requires an Explanation of Estimate from its cost estimator before collecting an estimated visit payment.')
+            reason='Cigna requires an Explanation of Estimate from its cost estimator before collecting an estimated deductible or coinsurance advance.')
     if amount is not None and amount > 0 and unconfirmed_zero_oop and verified_in_network(benefits):
         amount = None
         guidance['unconfirmed_zero_oop'] = True

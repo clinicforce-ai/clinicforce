@@ -97,6 +97,19 @@ class PrevisitFlowTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(check['conflicts'], ['member_id'])
         self.assertEqual(inputs['member_id'], 'ECW-123')
 
+    def test_hpi_card_copay_requires_matching_patient_and_member(self):
+        from app.insurance.v1_sources import card_fields
+        fields, _ = card_fields([(1, 'Health Plans, Inc. (HPI)\nEXAMPLE: PAT\nID# ABC12345\nSpecialist:\n$45')])
+        self.assertEqual(fields['payer'], 'Health Plans Incorporated')
+        self.assertEqual(fields['member_name'], 'PAT EXAMPLE')
+        self.assertEqual(fields['specialist_copay'], '$45')
+        inputs = {'member_id': 'ABC12345', 'patient': {
+            'patient_first_name': 'Pat', 'patient_last_name': 'Example'}, 'subscriber': {}}
+        source = {'payer': 'phcs', '_patient_id': 'patient-1', 'coverage_id': 'coverage-1', 'active_coverages': 1}
+        card = {'status': 'read', 'fields': fields, 'count': 1, 'source': 'clinicforce_card'}
+        self.assertEqual(_compare_card_hints(card, inputs.copy(), source.copy())['office_copay_cents'], 4500)
+        self.assertNotIn('office_copay_cents', _compare_card_hints(card, {**inputs, 'member_id': 'OTHER'}, source.copy()))
+
     async def test_explicit_self_pay_skips_stedi_and_defaults_to_cash(self):
         await self._flow(date.today().isoformat(), self_pay=True)
 

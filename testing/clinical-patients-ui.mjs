@@ -15,7 +15,8 @@ function day(offset) {
 
 const future = day(2)
 const past = day(-3)
-const patients = Array.from({ length: 5 }, (_, index) => ({
+const today = day(0)
+const patients = Array.from({ length: 6 }, (_, index) => ({
   id: String(index + 1),
   clinic_patient_id: String(index + 1),
   given_name: 'Patient',
@@ -47,7 +48,7 @@ await page.route((url) => url.pathname.startsWith('/api/'), async (route) => {
   } else if (path === '/api/staff/patients/dashboard') {
     body = {
       patients,
-      counts: { all: 5, accounts_with_cards: 3, accounts_without_cards: 2, card_only: 0, other: 0 },
+      counts: { all: 6, accounts_with_cards: 3, accounts_without_cards: 3, card_only: 0, other: 0 },
     }
   } else if (path.endsWith('/appointments')) {
     const patientId = path.split('/')[4]
@@ -63,6 +64,8 @@ await page.route((url) => url.pathname.startsWith('/api/'), async (route) => {
             ? [{ id: 'future-2', from_ecw: true, status: 'booked', date: future, start: `${future}T09:00:00-04:00` }]
             : patientId === '3'
               ? [{ id: 'past-planned', from_ecw: true, status: 'planned', date: past }]
+              : patientId === '6'
+                ? [{ id: 'today-6', from_ecw: true, status: 'booked', date: today }]
               : [],
     }
   } else {
@@ -73,17 +76,30 @@ await page.route((url) => url.pathname.startsWith('/api/'), async (route) => {
 
 try {
   await page.goto(process.env.UI_URL || 'http://127.0.0.1:5182/?staff')
-  await page.getByText('eCW visit checks finished for 4 patients.').waitFor()
+  await page.getByText('eCW visit checks finished for 5 patients.').waitFor()
   const groups = page.locator('.clinical-visit-group')
-  assert.equal(await groups.count(), 3)
-  const futureGroup = page.locator('section[aria-labelledby="clinical-upcoming-title"] .clinical-visit-group')
+  assert.equal(await page.locator('.clinical-cohorts').count(), 0)
+  assert.equal(await page.getByText('See more').count(), 0)
+  assert.equal(await page.locator('.clinical-period-links button').count(), 2)
+  assert.equal(await groups.count(), 1)
+  assert.deepEqual(await page.locator('.clinical-period-title').allTextContents(), ['Today’s patients'])
+  assert.equal(await groups.first().getAttribute('open'), '')
+  assert.deepEqual(await groups.first().locator('.clinical-patient-open strong').allTextContents(), [
+    'Patient 06',
+  ])
+
+  await page.getByRole('button', { name: 'Upcoming patients' }).click()
+  assert.equal(await groups.count(), 1)
+  const futureGroup = page.locator('section[aria-labelledby="clinical-selected-period-title"] .clinical-visit-group')
   assert.match(await futureGroup.locator('summary').innerText(), /2 patients/)
   await futureGroup.locator('summary').click()
   assert.deepEqual(await futureGroup.locator('.clinical-patient-open strong').allTextContents(), [
     'Patient 02',
     'Patient 01',
   ])
-  const pastGroups = page.locator('section[aria-labelledby="clinical-past-title"] .clinical-visit-group')
+  await page.getByRole('button', { name: 'Today’s patients' }).click()
+  await page.getByRole('button', { name: 'Previous patients' }).click()
+  const pastGroups = page.locator('section[aria-labelledby="clinical-selected-period-title"] .clinical-visit-group')
   await pastGroups.first().locator('summary').click()
   assert.deepEqual(await pastGroups.first().locator('.clinical-patient-open strong').allTextContents(), [
     'Patient 03',
@@ -94,7 +110,10 @@ try {
     'Patient 05',
   ])
 
+  await page.getByRole('button', { name: 'Today’s patients' }).click()
+  await page.getByRole('button', { name: 'Upcoming patients' }).click()
   await page.getByLabel('Find a clinical patient').fill('Patient 02')
+  await page.getByRole('button', { name: 'Upcoming patients' }).click()
   assert.match(await futureGroup.locator('summary').innerText(), /1 patient/)
   assert.equal(await groups.count(), 1)
   await page.getByLabel('Find a clinical patient').fill('')

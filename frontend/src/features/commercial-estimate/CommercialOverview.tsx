@@ -9,7 +9,11 @@ import TemporaryRateReference from './TemporaryRateReference'
 import EstimateSources from './EstimateSources'
 import { openServiceDetails } from './openServiceDetails'
 import ArrivalAmountSummary from './ArrivalAmountSummary'
-import { aetnaOfficeReferenceCopay, payerReportedPartialCopay } from './payerReportedPartialCopay'
+import {
+  aetnaOfficeReferenceCopay,
+  cardOfficePlanningCopay,
+  payerReportedPartialCopay,
+} from './payerReportedPartialCopay'
 import PublishedPlanBenefit from './PublishedPlanBenefit'
 import UhcMedicarePpoBenefitTable from './UhcMedicarePpoBenefitTable'
 import CommercialCostBreakdown from './CommercialCostBreakdown'
@@ -57,6 +61,8 @@ export default function CommercialOverview({
   const plannedCodeLabel = plannedCodes.map((code) => `CPT ${code}`).join(', ')
   const aetnaReferenceCopay = aetnaOfficeReferenceCopay(result, model)
   const payerReportedPartialCents = aetnaReferenceCopay ?? payerReportedPartialCopay(result, model)
+  const cardPlanningCents =
+    payerReportedPartialCents == null ? cardOfficePlanningCopay(result, model) : null
   const combinedPlan = !cash && !previousEstimate ? result.combined_emg_plan : null
   const showSelectedRequirements =
     !cash &&
@@ -83,7 +89,8 @@ export default function CommercialOverview({
     combinedPlan != null ||
     provisionalAmount != null ||
     !!model.estimatedShare ||
-    payerReportedPartialCents != null
+    payerReportedPartialCents != null ||
+    cardPlanningCents != null
   const patientBenefitsBound = hasPatientBinding(result.identity)
   const networkWarnings = (result.network_evidence?.mismatch_warnings || []).filter(
     (warning) => !warning.toLowerCase().includes('billing tin is missing from the visit'),
@@ -238,6 +245,7 @@ export default function CommercialOverview({
             model={model}
             result={result}
             partialCopay={payerReportedPartialCents}
+            cardPlanningCopay={cardPlanningCents}
             referenceOnly={aetnaReferenceCopay != null}
             visibleAmount={visibleAmount}
           />

@@ -1241,8 +1241,8 @@ try {
     reference_benefits: {
       active: true,
       service_date_matches: false,
-      network_status: 'in_network',
-      network_source: 'clinic_nmct_policy',
+      network_status: 'unknown',
+      network_source: null,
     },
     benefits: { active: false, network_status: 'unknown', reported_options: [] },
   }
@@ -1257,8 +1257,8 @@ try {
   })
   assert.equal(savedReferenceModel.coverageTone, 'is-confirmed')
   assert.equal(savedReferenceModel.policyStatus, 'Aetna coverage active')
-  assert.equal(savedReferenceModel.networkLabel, 'In network · clinic policy')
-  assert.equal(savedReferenceModel.networkTone, 'is-confirmed')
+  assert.equal(savedReferenceModel.networkLabel, 'Not determined')
+  assert.equal(savedReferenceModel.networkTone, 'is-unknown')
   const savedReferenceOverview = renderToStaticMarkup(
     React.createElement(CommercialOverview, {
       model: { ...savedReferenceModel, readOnly: true },
@@ -1267,7 +1267,7 @@ try {
   )
   assert(savedReferenceOverview.includes('class="is-confirmed"'))
   assert(savedReferenceOverview.includes('Aetna coverage active'))
-  assert(savedReferenceOverview.includes('In network · clinic policy'))
+  assert(savedReferenceOverview.includes('Not determined'))
   assert(savedReferenceOverview.includes('Sources: eCW + Stedi payer reference'))
   assert(!savedReferenceOverview.includes('Sources: eCW · Payer check needed'))
   const unknownReferenceModel = deriveCommercialEstimateView({
@@ -1343,6 +1343,25 @@ try {
   })
   assert.equal(clinicNonparticipation.networkLabel, 'Out of network')
   assert.equal(clinicNonparticipation.amountText, 'Insured amount unavailable')
+  const absentContractView = deriveCommercialEstimateView({
+    result: {
+      ...base,
+      identity: currentIdentity,
+      benefits: {
+        ...base.benefits,
+        network_status: 'out_of_network',
+        network_source: 'clinic_no_insurer_contract',
+      },
+    },
+    appointments: [],
+    selectedVisit: '',
+    busy: null,
+    error: '',
+    readOnly: false,
+    recovering: false,
+  })
+  assert.equal(absentContractView.networkLabel, 'Out of network')
+  assert.equal(absentContractView.networkSource, 'No current insurer contract in the NMCT Clinical Library')
   const scopedOonResult = {
     ...base,
     identity: currentIdentity,

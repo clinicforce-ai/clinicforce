@@ -3,9 +3,11 @@ from __future__ import annotations
 
 from app.api.routers import commercial_estimator as _api
 from app.api.routers.commercial_flow.commercial_previsit_rate_reference import _attach_temporary_aetna_rates, _attach_temporary_uhc_rates, _attach_temporary_blue_cross_rates
-from app.api.routers.commercial_flow.commercial_previsit_network_guard import NMCT_PRACTICE_ID, apply_nmct_network_policy, apply_admin_nonparticipation, scoped_admin_nonparticipation, record_confirmed_out_of_network, resolve_unlinked_blue_route
+from app.api.routers.commercial_flow.commercial_previsit_network_guard import apply_admin_nonparticipation, apply_nmct_library_contract, apply_nmct_contract_absence, scoped_admin_nonparticipation, record_confirmed_out_of_network, resolve_unlinked_blue_route
 from app.api.routers.commercial_flow.commercial_previsit_service_scope import reviewed_service_types as _reviewed_service_types
 from app.insurance import botox_review, cms_locality, cms_pfs, cpt_rules, insurance_product, inventory_certification, library_network_exclusions, group_contract_support
+
+NMCT_PRACTICE_ID = _api.network_participation.NMCT_PRACTICE_ID
 
 def _ecw_case_data(inputs: dict, source: dict, conflicts: list[str]) -> dict[str, _api.Any]:
     return {"appointment_id": source.get("appointment_id"), "appointment_date": source.get("appointment_date"),
@@ -194,6 +196,9 @@ def _previsit_range(practice_id: str, inputs: dict, source: dict, payer_id: str,
             rules = {**rules, **profile['rules']}
         except (_api.HTTPException, _api.commercial.CommercialError) as exc:
             issues.append(str(exc.detail) if isinstance(exc, _api.HTTPException) else str(exc))
+    if _api.visit_estimate.telehealth_pos_unresolved(inputs):
+        rates = []
+        issues.append('Confirm the patient telehealth location (POS 10 or 02), visit modality and matching contract rate before pricing this visit; the clinic office POS 11 does not apply.')
     rules['aetna_payer_verified'] = str(payer_route_id or payer_id).upper() == 'HPQRS'
     priced = _api.visit_estimate.price_lines(selected, rates, benefits, rules, payload=payload,
         service_date=inputs.get('service_date', ''), reviews=review.get('lines'), alternatives=alternatives)
@@ -354,6 +359,10 @@ def _attach_previsit_pricing(result: dict, practice_id: str, inputs: dict, sourc
     connections = [row for row in route_connections if row.get('status') == 'staff_guidance_enabled']
     route_payer = route_connections[0] if len(route_connections) == 1 else None
     service_date = str(inputs.get('service_date') or '')
+    payer_name = str((route_payer or {}).get('display_name') or result.get('payer') or '')
+    nmct_contract = (_api.network_participation.nmct_library_contract(
+        _api.staff_store.list_library(practice_id), payer_name, service_date)
+        if nmct and payer_name else None)
     exclusion = library_network_exclusions.applicable_exclusion(
         practice_id, (route_payer or {}).get('display_name') or result.get('payer') or '',
         [*((source.get('payer_plan_names') or []) if source.get('payer_plan_bound') else []),
@@ -363,8 +372,6 @@ def _attach_previsit_pricing(result: dict, practice_id: str, inputs: dict, sourc
     apply_admin_nonparticipation(result, benefits, scoped_admin_nonparticipation(
         practice_id, route_payer, inputs, source,
         source.get('payer_plan_names') or [], str((source.get('payer_plan_scope') or {}).get('group_number') or '')))
-    if nmct and not inventory:
-        apply_nmct_network_policy(result, practice_id, benefits)
     if exclusion:
         result['agreement_exclusion'] = exclusion
         result['network_evidence'] = {**exclusion,
@@ -381,7 +388,11 @@ def _attach_previsit_pricing(result: dict, practice_id: str, inputs: dict, sourc
             r'blue cross|bcbstx|blue shield', payer_name, _api.re.I):
         _attach_temporary_blue_cross_rates(result, practice_id, inputs, source, payer_name)
     if len(connections) != 1:
-        if inventory:
+        apply_nmct_library_contract(result, benefits, nmct_contract)
+        if nmct:
+            apply_nmct_contract_absence(result, benefits, payer_name, nmct_contract,
+                                        service_date, source.get('payer_plan_bound'))
+        if inventory and not nmct_contract:
             _apply_inventory_tier(result, benefits, inventory, exclusion)
         if _api.network_participation.verified_out_of_network(benefits):
             priced_source = {**source, **((result.get('network_evidence') or {}).get('scope') or {})}
@@ -418,7 +429,7 @@ def _attach_previsit_pricing(result: dict, practice_id: str, inputs: dict, sourc
     try:
         if source.get('payer_plan_bound') is False and source.get('payer_plan_names'):
             raise _api.HTTPException(409, 'The payer response has not linked this member product to the visit.')
-        if benefits.get('network_status') == 'out_of_network':
+        if benefits.get('network_status') == 'out_of_network' and not nmct_contract:
             raise _api.HTTPException(422, 'Payer confirmed out-of-network participation; in-network contract prices do not apply.')
         _, network, profile = _api._previsit_practice_path(practice_id, {**inputs, "payer_id": connection["id"]}, source)
         evidence = _api._network_contract_evidence(practice_id, network, profile, service_date)
@@ -471,14 +482,22 @@ def _attach_previsit_pricing(result: dict, practice_id: str, inputs: dict, sourc
             and group_contract_support.no_blue_contract(practice_id, connection, service_date)):
         benefits['network_status'] = 'out_of_network'
         benefits['network_source'] = 'clinic_no_blue_contract'
-    if (inventory and benefits.get('network_source') != 'clinic_library_contract'
+    if (inventory and not nmct_contract and benefits.get('network_source') != 'clinic_library_contract'
             and not _api.network_participation.verified_out_of_network(benefits)):
         _apply_inventory_tier(result, benefits, inventory, exclusion)
-    if nmct and not inventory:
-        apply_nmct_network_policy(result, practice_id, benefits)
+    apply_nmct_library_contract(result, benefits, nmct_contract)
+    if nmct:
+        apply_nmct_contract_absence(result, benefits, payer_name, nmct_contract,
+                                    service_date, source.get('payer_plan_bound'))
     if _api.network_participation.verified_out_of_network(benefits):
         record_confirmed_out_of_network(result, benefits)
     priced_source = {**source, **((result.get('network_evidence') or {}).get('scope') or {})}
+    if (benefits.get('network_source') == 'clinic_group_agreement'
+            and (result.get('network_evidence') or {}).get('contract_plan_matcher') is not None
+            and _api.insurance_identity.normalized(result['network_evidence'].get('product')) ==
+                _api.insurance_identity.normalized(result['network_evidence'].get('network_name'))):
+        priced_source = {**priced_source,
+            'plan': result['network_evidence']['contract_plan_matcher'], 'payer_plan_names': []}
     result["price_range"], issues = _api._previsit_range(practice_id, inputs, priced_source, connection["id"], result["codes"], benefits,
                                                   payload=payload, review=review, payer_route_id=payer_id)
     result["issues"].extend(issues)

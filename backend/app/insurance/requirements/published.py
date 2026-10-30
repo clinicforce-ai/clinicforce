@@ -15,7 +15,7 @@ BCBSTX_PAYER_NAMES = {'bcbstx', 'bcbstexas', 'bluecrossblueshieldoftexas',
                       'bluecrossblueshieldtexas'}
 
 # Saved estimates re-evaluate requirement decisions when a published rule changes.
-PUBLISHED_RULESET_VERSION = '2026-10-28-aetna-signature-diagnostics-v6'
+PUBLISHED_RULESET_VERSION = '2026-10-29-uhc-lppo-office-v8'
 
 UHC_GROUP_PPO_OON_SOURCE = {
     'label': 'UnitedHealthcare Group Medicare Advantage PPO out-of-network provider guide',
@@ -180,9 +180,19 @@ def _published_rule(kind: str, result: dict, context: dict, plans: list[str], co
              or stedi_cpt_authorization.visit_coverage_bound(benefits, day))
         and bool(payer_names & BCBSTX_PAYER_NAMES)
     )
+    same_day_uhc_lppo_office = (
+        benefits.get('service_date_matches') is None
+        and benefits.get('network_status') == 'in_network'
+        and str(result.get('checked_at') or '')[:10] == day
+        and str(context.get('pos') or '') == '11'
+        and bool({'unitedhealthcare', 'uhc'} & payer_names)
+        and codes <= {str(n) for n in (*range(99202, 99205), *range(99212, 99216))}
+        and any(_key(plan).startswith('lppounitedhealthcaregroupmedicareadvantagepp') for plan in plans)
+    )
     if (not codes or not '2026-01-01' <= day <= '2026-12-31'
             or benefits.get('active') is not True
-            or not (stedi_cpt_authorization.visit_coverage_bound(benefits, day) or same_day_bcbstx_visit)
+            or not (stedi_cpt_authorization.visit_coverage_bound(benefits, day)
+                    or same_day_bcbstx_visit or same_day_uhc_lppo_office)
             or not payer_identity_verified(identity) or not result.get('benefit_source')
             or not context.get('member_id')):
         return None
@@ -238,9 +248,19 @@ def _published_rule(kind: str, result: dict, context: dict, plans: list[str], co
             return rule('Not required', 'UnitedHealthcare Group Medicare Advantage PPO does not require a PCP specialist referral.', UHC_MA_PPO_REFERRAL_SOURCE)
         if kind == 'authorization' and day >= '2026-10-27':
             return rule('Not required', 'Clinic-confirmed decision for the selected diagnostic CPTs under this group plan.', UHC_LPPO_DIAGNOSTIC_PA_SOURCE, source_type='clinic_confirmation')
+    lppo_office = (in_network and str(context.get('pos') or '') == '11' and office
+        and codes <= {str(n) for n in (*range(99202, 99205), *range(99212, 99216))}
+        and {'unitedhealthcare', 'uhc'} & names and len(exact) == 1
+        and product.startswith('lppounitedhealthcaregroupmedicareadvantagepp'))
+    if lppo_office:
+        if kind == 'referral':
+            return rule('Not required', 'UnitedHealthcare Group Medicare Advantage PPO does not require a specialist referral.', UHC_MA_PPO_REFERRAL_SOURCE)
+        if kind == 'authorization' and day >= '2026-10-01':
+            return rule('Not required', 'The 2026 UnitedHealthcare Medicare Advantage participating-provider authorization list does not include these routine office E/M CPTs.', UHC_MA_2026_AUTH_SOURCE)
     bcbstx_ppo_follow_up = (exact <= {'bluechoiceppo'} and in_network and office and day >= '2026-10-26'
             and names & BCBSTX_PAYER_NAMES
-            and 'preferredprovideroptionmedical' in {_key(plan) for plan in plans}
+            and ('preferredprovideroptionmedical' in {_key(plan) for plan in plans}
+                 or exact == {'bluechoiceppo'})
             and all(generic_plan_label(plan) or _key(plan) == 'bluechoiceppo' for plan in plans))
     if bcbstx_ppo_follow_up and not exact and kind == 'referral' and codes <= {'99212', '99213', '99214', '99215'}:
         product = 'preferredprovideroptionmedical'

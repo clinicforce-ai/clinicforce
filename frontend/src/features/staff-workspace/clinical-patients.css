@@ -1,35 +1,3 @@
-.clinical-cohorts {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(145px, 1fr));
-  gap: 12px;
-  margin-bottom: 24px;
-}
-
-.staff-workspace .clinical-cohorts button {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  justify-content: flex-start;
-  text-align: left;
-  gap: 5px;
-  padding: 16px;
-}
-
-.clinical-cohorts strong {
-  font-size: 26px;
-  line-height: 1.2;
-}
-
-.clinical-cohorts span {
-  font-size: 12px;
-}
-
-.staff-workspace .clinical-cohorts button[aria-pressed='true'] {
-  background: #eaf1fc;
-  border-color: var(--staff-blue);
-  color: var(--staff-blue);
-}
-
 .clinical-visit-note {
   margin: 8px 0 16px;
 }
@@ -39,8 +7,17 @@
   font-size: 18px;
 }
 
-.staff-workspace .clinical-see-more {
-  margin-bottom: 8px;
+.clinical-period-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 20px;
+}
+
+.clinical-period-links button {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
 }
 
 .staff-workspace .clinical-back-to-periods {
@@ -169,9 +146,6 @@
   }
   .clinical-patient-open > svg {
     display: none;
-  }
-  .clinical-cohorts {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
   .clinical-patient-open {
     flex-wrap: wrap;

@@ -5,18 +5,16 @@ import type { ClinicalPatient } from '../../services/api/staff-patients'
 type Period = 'today' | 'upcoming' | 'past'
 type DateGroup = [string, ClinicalPatient[]]
 
-const PREVIEW_DATES = 3
 const DATES_PER_PAGE = 5
-const periods: Period[] = ['today', 'upcoming', 'past']
 const labels: Record<Period, string> = {
   today: 'Today’s patients',
   upcoming: 'Upcoming patients',
-  past: 'Past patients',
+  past: 'Previous patients',
 }
 const emptyLabels: Record<Period, string> = {
   today: 'No patients today.',
   upcoming: 'No upcoming patients.',
-  past: 'No past patients.',
+  past: 'No previous patients.',
 }
 
 export default function ClinicalPatientSections({
@@ -33,34 +31,38 @@ export default function ClinicalPatientSections({
   useEffect(() => {
     if (selected) selectedHeading.current?.focus()
     else if (returnTo.current) {
-      document.getElementById(`clinical-${returnTo.current}-title`)?.focus()
+      document.getElementById(`clinical-${returnTo.current}-button`)?.focus()
       returnTo.current = null
     }
   }, [selected])
 
   if (!selected)
-    return periods.map((period) => (
-      <section key={period} aria-labelledby={`clinical-${period}-title`}>
-        <h3 id={`clinical-${period}-title`} className="clinical-period-title" tabIndex={-1}>
-          {labels[period]}
-        </h3>
-        {groups[period]
-          .slice(0, PREVIEW_DATES)
-          .map(([day, patients]) => renderGroup(day, patients))}
-        {!groups[period].length && <p className="staff-small staff-muted">{emptyLabels[period]}</p>}
-        <button
-          className="staff-text-button clinical-see-more"
-          aria-label={`See more ${labels[period].toLowerCase()}`}
-          onClick={() => {
-            setSelected(period)
-            setPage(1)
-          }}
-        >
-          See more
-          <ChevronRight size={17} aria-hidden="true" />
-        </button>
-      </section>
-    ))
+    return (
+      <>
+        <section aria-labelledby="clinical-today-title">
+          <h3 id="clinical-today-title" className="clinical-period-title" tabIndex={-1}>
+            {labels.today}
+          </h3>
+          {groups.today.map(([day, patients]) => renderGroup(day, patients))}
+          {!groups.today.length && <p className="staff-small staff-muted">{emptyLabels.today}</p>}
+        </section>
+        <nav className="clinical-period-links" aria-label="Other patient dates">
+          {(['upcoming', 'past'] as const).map((period) => (
+            <button
+              key={period}
+              id={`clinical-${period}-button`}
+              onClick={() => {
+                setSelected(period)
+                setPage(1)
+              }}
+            >
+              {labels[period]}
+              <ChevronRight size={17} aria-hidden="true" />
+            </button>
+          ))}
+        </nav>
+      </>
+    )
 
   const dateGroups = groups[selected]
   const pageCount = Math.max(1, Math.ceil(dateGroups.length / DATES_PER_PAGE))
@@ -75,7 +77,7 @@ export default function ClinicalPatientSections({
           setSelected(null)
         }}
       >
-        <ChevronLeft size={17} aria-hidden="true" /> All patient dates
+        <ChevronLeft size={17} aria-hidden="true" /> Today’s patients
       </button>
       <h3
         id="clinical-selected-period-title"

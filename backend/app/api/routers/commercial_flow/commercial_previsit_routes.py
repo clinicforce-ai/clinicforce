@@ -21,8 +21,10 @@ async def saved_previsit(case_id: str, request: _api.Request) -> dict:
     evidence_resolution reports each field's source findings and precise
     remaining action after the shared estimator evaluates saved evidence.
     A saved read projects the current network rule without a payer call or write.
-    NMCT (practice_id primary) treats all insurer products as in network under
-    clinic_nmct_policy unless a provider-specific payer statement says otherwise.
+    NMCT (practice_id primary) uses a current Clinical Library insurer contract
+    for its HMO, PPO and Medicare Advantage products' in-network tier.
+    A patient-bound insurer plan is out of network when no current insurer
+    contract is in that Library.
     Old clinic-derived out-of-network prices are cleared for recalculation.
     Other practices still use dated group-network contracts; absent Blue
     agreements can select clinic_no_blue_contract. Network tier alone does not
@@ -54,7 +56,10 @@ async def saved_previsit(case_id: str, request: _api.Request) -> dict:
     insured price is unresolved unless staff explicitly choose cash. Missing
     collection inputs return collection_guidance with a null
     amount, status action_required and basis missing_collection_inputs; the reason
-    names the next staff action. An administrator-approved policy can give a $0 check-in advance
+    names the next staff action. A supported diagnostic per-day copay without an
+    approved positive-advance policy returns diagnostic_copay_reference_cents
+    for UI display while amount_cents stays null. An administrator-approved
+    policy can give a $0 check-in advance
     with basis claim_after_service. It does not waive the later patient share or
     change coverage evidence. Saved reads apply the current practice policy.
     An unlinked payer-reported zero individual out-of-pocket balance sets
@@ -65,8 +70,10 @@ async def saved_previsit(case_id: str, request: _api.Request) -> dict:
     Blue Cross Clinical Library prices for eligible non-Aetna routes or draft
     Aetna MEPPO portal values for the exact Signature PPO diagnostic scenario.
     Neither source establishes another payer's allowance or a collectible amount.
-    aetna_diagnostic_reference, when present, gives the provisional per-test
-    copay formula and remains separate from collection_guidance.
+    The exact two-code Aetna diagnostic case also exposes a $100 planning share
+    from a likely published $50-per-test benefit, capped by the draft fee
+    reference and reported remaining out-of-pocket balance. This is not an
+    authorized collection amount; saved scenarios are recalculated on read.
     For Cigna, separate exact-CPT
     Stedi inquiries may supply authorization and financial terms. When every
     selected line has compatible terms, fee_proxy_estimate shows a provisional
@@ -87,7 +94,7 @@ async def saved_previsit(case_id: str, request: _api.Request) -> dict:
     administrator-attached same-visit Stedi check. The subscriber is displayed
     with a masked member ID in the UI and its benefit rows take display
     precedence over mismatched eCW values. This does not change collection_guidance.
-    At NMCT, the separate all-plan clinic policy can label the reference's network tier;
+    At NMCT, a payer reference alone does not establish the clinic contract tier;
     the payer-returned date and appointment-date coverage qualification remain visible.
     benefits.oop_annual_cents is a unique plan-wide individual maximum when
     the payer returned one; it is distinct from oop_remaining_cents.

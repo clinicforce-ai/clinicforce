@@ -9,6 +9,8 @@ import { requirementStatus } from './commercialRequirementStatus'
 import {
   aetnaOfficeReferenceCopay,
   aetnaOfficePlanningCopay,
+  cardOfficePlanningCopay,
+  payerReportedPartialCopay,
   specialistOfficeCoinsurance,
   specialistOfficeCopay,
 } from './payerReportedPartialCopay'
@@ -33,6 +35,20 @@ export default function CommercialCostBreakdown({
   const cignaFeeProxy = feeProxy?.basis === 'bcbstx_cigna_fee_proxy'
   const cignaOfficeScenario = feeProxy?.scenario_kind === 'oap_office_copay_general_coinsurance'
   const lines = price?.mode === 'services' ? price.lines || [] : []
+  const availableCodes = new Set(
+    (result.available_codes || result.codes || []).map((row) => row.code),
+  )
+  const suggestedCodes = [
+    ...new Set(
+      (result.suggestions?.groups || [])
+        .flatMap((group) => group.codes.map((candidate) => candidate.code))
+        .filter(
+          (code) =>
+            availableCodes.has(code) &&
+            (result.service_date < '2014-01-01' || !['64613', '64614'].includes(code)),
+        ),
+    ),
+  ]
   const reason = result.reason || model.anticipatedService || 'Not recorded'
   const visitReason =
     result.service_plan?.kind === 'emg_ncs' &&
@@ -67,11 +83,17 @@ export default function CommercialCostBreakdown({
       : benefits?.coinsurance_percent
   const reportedOfficeCopay = specialistOfficeCopay(reportedResult)
   const officeReferenceCopay = aetnaOfficeReferenceCopay(result, model)
+  const partialOfficeCopay = payerReportedPartialCopay(result, model)
+  const cardPlanningCopay =
+    partialOfficeCopay == null && officeReferenceCopay == null
+      ? cardOfficePlanningCopay(result, model)
+      : null
   const unconfirmedZeroOop =
     reportedIndividualRemainingOop.unassigned && reportedIndividualRemainingOop.amount === money(0)
   const components = summary?.components
   const diagnosticCopay =
-    result.collection_guidance?.basis === 'diagnostic_day_copay' &&
+    (result.collection_guidance?.basis === 'diagnostic_day_copay' ||
+      result.collection_guidance?.diagnostic_copay_reference_cents != null) &&
     lines.length > 0 &&
     lines.every((line) => line.benefits?.copay_cents === lines[0].benefits?.copay_cents)
       ? lines[0].benefits?.copay_cents
@@ -94,8 +116,21 @@ export default function CommercialCostBreakdown({
     !summary?.integrity_error &&
     price?.complete === true &&
     (summary?.complete === true || model.supportedAmount === true)
-  const aetnaDiagnostic = !model.cash && !calculated ? result.aetna_diagnostic_reference : null
-  const aetnaRateReference = result.temporary_rate_reference?.source?.startsWith('Aetna MEPPO')
+  const aetnaRateReference = Boolean(
+    result.temporary_rate_reference?.source?.startsWith('Aetna MEPPO'),
+  )
+  const aetnaPlanning =
+    !model.cash && !model.previousEstimate && result.collection_guidance?.amount_cents == null
+      ? result.aetna_diagnostic_reference
+      : null
+  const aetnaCopayMissing =
+    aetnaRateReference &&
+    !aetnaPlanning &&
+    lines.every((line) => line.benefits?.copay_cents == null)
+  const aetnaCoinsuranceMissing =
+    aetnaRateReference &&
+    !aetnaPlanning &&
+    lines.every((line) => line.benefits?.coinsurance_percent == null)
   const aetnaCopayPlanning = aetnaOfficePlanningCopay(result, model, calculated, lines)
   const insuredRows: CostBreakdownRow[] = [
     referenceCoverageRow(result, model, benefits),
@@ -124,6 +159,18 @@ export default function CommercialCostBreakdown({
             : 'Provisional service scenario used for this estimate'
           : undefined,
     },
+    ...(!lines.length && suggestedCodes.length
+      ? [
+          {
+            label: 'Coding assistant candidates',
+            value: suggestedCodes.map((code) => `CPT ${code}`).join('; '),
+            detail:
+              result.service_plan?.kind === 'botox'
+                ? 'Confirm injection anatomy and administered units before selecting and pricing a candidate.'
+                : 'Confirm the planned service before selecting and pricing a candidate.',
+          },
+        ]
+      : []),
     ...(lines.length
       ? lines.map((line) => {
           const proxyRate = result.temporary_rate_reference?.lines.find(
@@ -162,16 +209,17 @@ export default function CommercialCostBreakdown({
         })
       : [{ label: 'Planned CPTs', value: 'No priced CPTs selected' }]),
     {
-      label: aetnaDiagnostic ? 'Aetna fee schedule maximum total' : 'Total payer allowed',
-      value: automaticCashFallback
-        ? 'Not established'
-        : aetnaDiagnostic
-          ? `${money(aetnaDiagnostic.estimated_allowed_cents)} provisional`
-          : price?.allowed_min_cents != null && price.allowed_max_cents != null
-            ? range(price.allowed_min_cents, price.allowed_max_cents)
-            : lineAllowedTotal != null
-              ? money(lineAllowedTotal)
-              : 'Not fully priced',
+      label: 'Total payer allowed',
+      value:
+        cardPlanningCopay != null
+          ? 'Payer allowance pending'
+          : automaticCashFallback
+            ? 'Not established'
+            : price?.allowed_min_cents != null && price.allowed_max_cents != null
+              ? range(price.allowed_min_cents, price.allowed_max_cents)
+              : lineAllowedTotal != null
+                ? money(lineAllowedTotal)
+                : 'Not fully priced',
     },
     ...(result.temporary_rate_reference?.lines.length
       ? [
@@ -183,62 +231,72 @@ export default function CommercialCostBreakdown({
                 : 'Blue Cross fee reference',
             value: feeProxy
               ? money(feeProxy.reference_total_cents)
-              : result.temporary_rate_reference.lines
-                  .map((line) => `CPT ${line.code}: ${money(line.unit_reference_cents)} per unit`)
-                  .join('; '),
+              : aetnaRateReference
+                ? `${money(result.temporary_rate_reference.lines.reduce((sum, line) => sum + line.unit_reference_cents * (Number(line.units) || 1), 0))} total reference`
+                : result.temporary_rate_reference.lines
+                    .map((line) => `CPT ${line.code}: ${money(line.unit_reference_cents)} per unit`)
+                    .join('; '),
             detail: result.temporary_rate_reference.message,
           },
         ]
       : []),
     {
       label: 'Copay',
-      value: familyOopApplied
-        ? '$0 payable after family out-of-pocket limit'
-        : combinedPlan
-          ? `${money(combinedPlan.office_copay_cents)} specialist follow-up`
-          : aetnaDiagnostic
-            ? `${money(aetnaDiagnostic.copay_cents / lines.length)} per diagnostic procedure × ${lines.length} = ${money(aetnaDiagnostic.copay_cents)}`
-            : cignaOfficeScenario
-              ? `${money(feeProxy!.copay_cents)} specialist office visit · assumed once`
-              : feeProxy != null
-                ? cignaFeeProxy && feeProxy.copay_unconfirmed
-                  ? `${money(0)} assumed for calculation · no CPT copay returned`
-                  : feeProxy.copay_cents
-                    ? `${money(feeProxy.copay_cents)} specialist follow-up; $0.00 diagnostic copay`
-                    : '$0.00 diagnostic copay'
-                : officeReferenceCopay != null
-                  ? `${money(officeReferenceCopay)} specialist office visit · payer-reported reference`
-                  : diagnosticCopay != null
-                    ? `${money(diagnosticCopay)} once per day`
-                    : calculated && components?.copay_cents != null
-                      ? money(components.copay_cents)
-                      : lines.some((line) => line.benefits?.copay_cents != null)
-                        ? lines
-                            .map(
-                              (line) =>
-                                `CPT ${line.code}: ${line.benefits.copay_cents != null ? money(line.benefits.copay_cents) : 'not returned'}`,
-                            )
-                            .join('; ')
-                        : !lines.length && reportedOfficeCopay != null
-                          ? `${money(reportedOfficeCopay)} specialist office visit · payer-reported`
-                          : unknown,
-      detail: aetnaDiagnostic
-        ? aetnaDiagnostic.benefit_source.label
-        : cignaOfficeScenario
-          ? 'Cigna reported this office copay; applicability to the selected diagnostic services is an assumption'
-          : cignaFeeProxy && feeProxy?.copay_unconfirmed
-            ? 'No CPT copay row was returned; this calculation uses $0'
-            : result.collection_guidance?.basis === 'diagnostic_day_copay'
-              ? 'One payer diagnostic copay for the selected testing; final share follows the claim'
-              : result.collection_guidance?.basis === 'out_of_pocket_limit'
-                ? 'Plan copay before the applicable out-of-pocket limit; $0 due for covered care'
-                : calculated &&
-                    components?.copay_cents === 0 &&
-                    !lines.some((line) => line.benefits?.copay_cents != null)
-                  ? 'No separate copay was applied to the priced CPTs'
-                  : !lines.length && reportedOfficeCopay != null
-                    ? 'Payer category term; applicability to planned CPTs and visit date is not confirmed'
-                    : undefined,
+      value: aetnaPlanning
+        ? `${money(aetnaPlanning.copay_cents / lines.length)} per diagnostic test × ${lines.length} = ${money(aetnaPlanning.copay_cents)}`
+        : aetnaCopayMissing
+          ? 'No CPT-specific copay returned'
+          : familyOopApplied
+            ? '$0 payable after family out-of-pocket limit'
+            : combinedPlan
+              ? `${money(combinedPlan.office_copay_cents)} specialist follow-up`
+              : cignaOfficeScenario
+                ? `${money(feeProxy!.copay_cents)} specialist office visit · assumed once`
+                : feeProxy != null
+                  ? cignaFeeProxy && feeProxy.copay_unconfirmed
+                    ? `${money(0)} assumed for calculation · no CPT copay returned`
+                    : feeProxy.copay_cents
+                      ? `${money(feeProxy.copay_cents)} specialist follow-up; $0.00 diagnostic copay`
+                      : '$0.00 diagnostic copay'
+                  : officeReferenceCopay != null
+                    ? `${money(officeReferenceCopay)} specialist office visit · payer-reported reference`
+                    : diagnosticCopay != null
+                      ? `${money(diagnosticCopay)} once per day`
+                      : calculated && components?.copay_cents != null
+                        ? money(components.copay_cents)
+                        : lines.some((line) => line.benefits?.copay_cents != null)
+                          ? lines
+                              .map(
+                                (line) =>
+                                  `CPT ${line.code}: ${line.benefits.copay_cents != null ? money(line.benefits.copay_cents) : 'not returned'}`,
+                              )
+                              .join('; ')
+                          : !lines.length && reportedOfficeCopay != null
+                            ? `${money(reportedOfficeCopay)} specialist office visit · payer-reported`
+                            : cardPlanningCopay != null
+                              ? `${money(cardPlanningCopay)} specialist office visit · printed on card`
+                              : unknown,
+      detail: aetnaPlanning
+        ? aetnaPlanning.benefit_source.label
+        : aetnaCopayMissing
+          ? 'A specialist office copay does not establish the share for these diagnostic CPTs'
+          : cignaOfficeScenario
+            ? 'Cigna reported this office copay; applicability to the selected diagnostic services is an assumption'
+            : cignaFeeProxy && feeProxy?.copay_unconfirmed
+              ? 'No CPT copay row was returned; this calculation uses $0'
+              : diagnosticCopay != null
+                ? 'One payer diagnostic copay for the selected testing; final share follows the claim'
+                : result.collection_guidance?.basis === 'out_of_pocket_limit'
+                  ? 'Plan copay before the applicable out-of-pocket limit; $0 due for covered care'
+                  : calculated &&
+                      components?.copay_cents === 0 &&
+                      !lines.some((line) => line.benefits?.copay_cents != null)
+                    ? 'No separate copay was applied to the priced CPTs'
+                    : !lines.length && reportedOfficeCopay != null
+                      ? 'Payer category term; applicability to planned CPTs and visit date is not confirmed'
+                      : cardPlanningCopay != null
+                        ? 'Card-based office suggestion; payer applicability and imaging cost are unresolved'
+                        : undefined,
     },
     {
       label: 'Individual deductible',
@@ -299,36 +357,40 @@ export default function CommercialCostBreakdown({
     },
     {
       label: 'Coinsurance',
-      value: combinedPlan
-        ? `${combinedPlan.coinsurance_percent}% · ${money(combinedPlan.diagnostic_coinsurance_cents)}`
-        : aetnaDiagnostic
-          ? `0% applied · ${money(aetnaDiagnostic.coinsurance_cents)}`
-          : feeProxy != null
-            ? `${feeProxy.coinsurance_percent}%${cignaOfficeScenario ? ' assumed' : ''} · ${money(feeProxy.coinsurance_cents)} on the fee proxy`
-            : result.collection_guidance?.basis === 'out_of_pocket_limit'
-              ? reportedCoinsurance != null
-                ? `${reportedCoinsurance}% reported; $0 payable after out-of-pocket limit`
-                : '$0 payable after out-of-pocket limit'
-              : calculated && components?.coinsurance_cents != null
-                ? money(components.coinsurance_cents)
-                : reportedCoinsurance != null
-                  ? `${reportedCoinsurance}% reported; dollar amount pending`
-                  : unknown,
-      detail: combinedPlan
-        ? `${combinedPlan.coinsurance_percent}% × ${money(combinedPlan.diagnostic_allowed_cents)} = ${money(combinedPlan.diagnostic_coinsurance_cents)}`
-        : aetnaDiagnostic
-          ? 'The matched published diagnostic benefit uses a fixed copay for these tests'
-          : feeProxy != null
-            ? proxyFormula?.coinsurance ||
-              `${money(feeProxy.reference_total_cents)} × ${feeProxy.coinsurance_percent}% = ${money(feeProxy.coinsurance_cents)}`
-            : calculated
-              ? coinsuranceFormula(result) ||
-                (components?.coinsurance_cents === 0
-                  ? 'No coinsurance applied after deductible'
-                  : undefined)
-              : !lines.length && reportedCoinsurance != null
-                ? 'Payer-reported office visit term; diagnostic testing share is not established'
-                : undefined,
+      value: aetnaPlanning
+        ? `0% applied · ${money(0)}`
+        : aetnaCoinsuranceMissing
+          ? 'No CPT-specific coinsurance returned'
+          : combinedPlan
+            ? `${combinedPlan.coinsurance_percent}% · ${money(combinedPlan.diagnostic_coinsurance_cents)}`
+            : feeProxy != null
+              ? `${feeProxy.coinsurance_percent}%${cignaOfficeScenario ? ' assumed' : ''} · ${money(feeProxy.coinsurance_cents)} on the fee proxy`
+              : result.collection_guidance?.basis === 'out_of_pocket_limit'
+                ? reportedCoinsurance != null
+                  ? `${reportedCoinsurance}% reported; $0 payable after out-of-pocket limit`
+                  : '$0 payable after out-of-pocket limit'
+                : calculated && components?.coinsurance_cents != null
+                  ? money(components.coinsurance_cents)
+                  : reportedCoinsurance != null
+                    ? `${reportedCoinsurance}% reported; dollar amount pending`
+                    : unknown,
+      detail: aetnaPlanning
+        ? 'The planning formula uses a fixed diagnostic copay rather than office visit coinsurance'
+        : aetnaCoinsuranceMissing
+          ? 'An office visit coinsurance row does not establish the diagnostic test rate'
+          : combinedPlan
+            ? `${combinedPlan.coinsurance_percent}% × ${money(combinedPlan.diagnostic_allowed_cents)} = ${money(combinedPlan.diagnostic_coinsurance_cents)}`
+            : feeProxy != null
+              ? proxyFormula?.coinsurance ||
+                `${money(feeProxy.reference_total_cents)} × ${feeProxy.coinsurance_percent}% = ${money(feeProxy.coinsurance_cents)}`
+              : calculated
+                ? coinsuranceFormula(result) ||
+                  (components?.coinsurance_cents === 0
+                    ? 'No coinsurance applied after deductible'
+                    : undefined)
+                : !lines.length && reportedCoinsurance != null
+                  ? 'Payer-reported office visit term; diagnostic testing share is not established'
+                  : undefined,
     },
     ...(calculated && (components?.allowed_cap_adjustment_cents ?? 0) > 0
       ? [
@@ -412,13 +474,18 @@ export default function CommercialCostBreakdown({
                 summary.estimated_total_patient_min_cents,
                 summary.estimated_total_patient_max_cents,
               )
-            : aetnaDiagnostic
-              ? `${money(aetnaDiagnostic.patient_share_cents)} provisional · Aetna diagnostic estimate`
+            : aetnaPlanning
+              ? `${money(aetnaPlanning.patient_share_cents)} planning estimate`
               : feeProxy != null
                 ? `${money(feeProxy.patient_share_cents)} provisional · BCBS Texas fee proxy`
                 : aetnaCopayPlanning != null
                   ? `${money(aetnaCopayPlanning)} provisional office copay`
                   : model.estimatedShare ||
+                    (partialOfficeCopay != null
+                      ? `${money(partialOfficeCopay)} office-only planning estimate`
+                      : cardPlanningCopay != null
+                        ? `${money(cardPlanningCopay)} office-only card suggestion`
+                        : null) ||
                     (model.provisionalAmount != null
                       ? money(model.provisionalAmount)
                       : model.patientPrice || 'Not fully calculated')
@@ -457,25 +524,20 @@ export default function CommercialCostBreakdown({
                 ? `${money(combinedPlan.office_copay_cents)} office copay + ${combinedPlan.coinsurance_percent}% × ${money(combinedPlan.diagnostic_allowed_cents)} diagnostic allowance. No additional deductible or out-of-pocket reduction was applied where remaining balances were not returned.`
                 : result.collection_guidance?.basis === 'out_of_pocket_limit'
                   ? 'Covered in-network share is capped by the applicable out-of-pocket limit'
-                  : aetnaDiagnostic
-                    ? `${money(aetnaDiagnostic.deductible_cents)} deductible + ${money(aetnaDiagnostic.copay_cents)} copays + ${money(aetnaDiagnostic.coinsurance_cents)} coinsurance − ${money(aetnaDiagnostic.oop_reduction_cents)} out-of-pocket cap = ${money(aetnaDiagnostic.patient_share_cents)}. ${aetnaDiagnostic.message}`
+                  : aetnaPlanning
+                    ? `min(${money(aetnaPlanning.copay_cents)} diagnostic copays + ${money(aetnaPlanning.deductible_cents)} deductible + ${money(aetnaPlanning.coinsurance_cents)} coinsurance, ${money(aetnaPlanning.estimated_allowed_cents)} fee reference, ${money(aetnaPlanning.oop_remaining_cents)} remaining out-of-pocket) = ${money(aetnaPlanning.patient_share_cents)} before prior payments. ${aetnaPlanning.message}`
                     : feeProxy != null
                       ? feeProxy.message
                       : aetnaCopayPlanning != null
                         ? `${money(aetnaCopayPlanning)} copay + ${money(0)} deductible + 0% × Aetna allowed amount = ${money(aetnaCopayPlanning)} before the unknown allowance cap. Confirm the visit conditions and final claim amount.`
-                        : calculated
-                          ? 'Copay + deductible applied + coinsurance − allowed and out-of-pocket reductions'
-                          : 'Full share awaits applicable deductible and out-of-pocket terms',
+                        : partialOfficeCopay != null
+                          ? 'Selected office visit copay after recorded payments; any separately performed DBS service has its own terms.'
+                          : cardPlanningCopay != null
+                            ? 'Printed specialist copay for one office visit; planned imaging and final payer share are unresolved.'
+                            : calculated
+                              ? 'Copay + deductible applied + coinsurance − allowed and out-of-pocket reductions'
+                              : 'Full share awaits applicable deductible and out-of-pocket terms',
           },
-          ...(aetnaDiagnostic
-            ? [
-                {
-                  label: 'Estimated Aetna share',
-                  value: money(aetnaDiagnostic.payer_share_cents),
-                  detail: 'Provisional fee total less estimated patient share',
-                },
-              ]
-            : []),
           ...(summary?.payments_verified_cents != null && summary.payments_verified_cents > 0
             ? [{ label: 'Already paid', value: `−${money(summary.payments_verified_cents)}` }]
             : []),
@@ -485,9 +547,11 @@ export default function CommercialCostBreakdown({
     collectionAtVisitRow(result, model, {
       combinedPlan,
       feeProxy,
-      aetnaDiagnostic,
+      aetnaPlanning,
       aetnaCopayPlanning,
       officeReferenceCopay,
+      partialOfficeCopay,
+      cardPlanningCopay,
       automaticCashFallback,
       cignaFeeProxy,
       proxyFormula,

@@ -16,6 +16,14 @@ def clinical_group(code: str) -> str:
     return cpt_rules.service_definition(code)['group']
 
 
+def telehealth_pos_unresolved(inputs: dict) -> bool:
+    """A clinic-location office POS does not describe a remote patient's location."""
+    return (str(inputs.get('place_of_service') or '') == '11' and
+            any(re.search(r'\b(?:televisit|telehealth|video visit|virtual visit)\b',
+                          str(inputs.get(field) or ''), re.I)
+                for field in ('appointment_type', 'reason')))
+
+
 def is_emg_visit(inputs: dict) -> bool:
     if type(inputs.get('emg_required')) is bool:
         return inputs['emg_required']

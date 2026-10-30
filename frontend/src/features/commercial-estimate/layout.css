@@ -166,10 +166,24 @@
   display: flex;
   gap: 14px;
   align-items: center;
+  min-width: 0;
+  flex: 1 1 240px;
 }
 
 .visit-patient-bar strong {
   font-size: 20px;
+}
+
+.visit-patient-address {
+  flex: 0 1 320px;
+  min-width: 0;
+  font-style: normal;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.visit-patient-address small {
+  margin-bottom: 2px;
 }
 
 .patient-monogram {
@@ -186,6 +200,7 @@
 
 .coverage-chip {
   display: inline-flex;
+  flex-shrink: 0;
   align-items: center;
   gap: 7px;
   padding: 7px 12px;

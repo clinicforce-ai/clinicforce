@@ -45,7 +45,7 @@ export default function CommercialCalculationDetail({
   const insuredTotalSupported =
     result.encounter_summary?.complete === true &&
     result.benefits?.network_status === 'in_network' &&
-    ['clinic_library_contract', 'clinic_nmct_policy', 'payer_participation_message'].includes(
+    ['clinic_library_contract', 'clinic_group_agreement', 'payer_participation_message'].includes(
       result.benefits.network_source || '',
     ) &&
     patientBenefitsBound(result.identity) &&

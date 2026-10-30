@@ -38,7 +38,6 @@ export default function UhcMedicarePpoBenefitTable({ result }: { result: Previsi
       [
         'clinic_library_contract',
         'clinic_group_agreement',
-        'clinic_nmct_policy',
         'payer_participation_message',
       ].includes(networkSource || '')) ||
     (benefits.network_status === 'out_of_network' &&

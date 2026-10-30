@@ -40,6 +40,7 @@ def card_fields(pages: list[tuple[int, str]]) -> tuple[dict, dict]:
         "plan_type": r"plan(?:\s*(?:type|/\s*product))?|product",
         "coverage_date": r"(?:coverage|effective)\s*date",
         "coinsurance": r"coinsurance",
+        "specialist_copay": r"specialist(?:\s+(?:office|visit))?(?:\s+copay)?",
     }
     for page, text in pages:
         lines = [" ".join(line.split()) for line in text.splitlines() if line.strip()]
@@ -99,6 +100,8 @@ def card_fields(pages: list[tuple[int, str]]) -> tuple[dict, dict]:
                     value = parsed.isoformat()
                 if key == "coinsurance" and not re.search(r"\d+\s*%", value):
                     continue
+                if key == "specialist_copay" and not re.fullmatch(MONEY, value):
+                    continue
                 if key == "coverage_date":
                     date_match = re.match(r"\d{1,2}[/-]\d{1,2}[/-]\d{2,4}\b", value)
                     if not date_match:
@@ -130,15 +133,22 @@ def card_fields(pages: list[tuple[int, str]]) -> tuple[dict, dict]:
                 section = ""
         # Recognize printed insurer wordmarks, retaining the source quote.
         joined = " ".join(lines)
-        blue = re.search(r"Blue\s*Cross\s*(?:and\s*)?Blue\s*Shield\s*(?:of\s+)?([A-Za-z]+)", joined, re.I)
-        if blue and blue[1].casefold() in {"texas", "tx"}:
-            add("payer", "Blue Cross Blue Shield of Texas", page, blue[0])
-        elif match := re.search(r"\bBCBSTX\b", joined, re.I):
-            add("payer", "Blue Cross Blue Shield of Texas", page, match[0])
-        elif match := re.search(r"\bUnited\s*Healthcare\b", joined, re.I):
-            add("payer", "UnitedHealthcare", page, match[0])
-        elif match := re.search(r"\b(Aetna|Cigna|Humana)\b", joined, re.I):
-            add("payer", match[0], page, match[0])
+        hpi = re.search(r"Health\s+Plans,?\s+Inc\.?\s*\(HPI\)", joined, re.I)
+        if hpi:
+            add("payer", "Health Plans Incorporated", page, hpi[0])
+            for line in lines:
+                if match := re.fullmatch(r"([A-Z][A-Z'-]+):\s*([A-Z][A-Z'-]+)", line, re.I):
+                    add("member_name", f"{match[2]} {match[1]}", page, line)
+        if not hpi:
+            blue = re.search(r"Blue\s*Cross\s*(?:and\s*)?Blue\s*Shield\s*(?:of\s+)?([A-Za-z]+)", joined, re.I)
+            if blue and blue[1].casefold() in {"texas", "tx"}:
+                add("payer", "Blue Cross Blue Shield of Texas", page, blue[0])
+            elif match := re.search(r"\bBCBSTX\b", joined, re.I):
+                add("payer", "Blue Cross Blue Shield of Texas", page, match[0])
+            elif match := re.search(r"\bUnited\s*Healthcare\b", joined, re.I):
+                add("payer", "UnitedHealthcare", page, match[0])
+            elif match := re.search(r"\b(Aetna|Cigna|Humana)\b", joined, re.I):
+                add("payer", match[0], page, match[0])
         # Routing/phone fields only: require the captured value in the same page.
         for key, pattern in golden.CARD_DETAIL_PATTERNS.items():
             if not (key.endswith("_phone") or key.startswith("rx_")):

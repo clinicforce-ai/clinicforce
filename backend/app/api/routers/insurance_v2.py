@@ -219,6 +219,11 @@ def stedi_network(case: dict, practice: dict, coverage: dict, *, practice_id: st
         return {"provider_network_status": "unconfirmed",
                 "provider_network": "Stedi returned different plan names; identify the applicable medical product before using the clinic network matrix."}
     if network_participation.is_nmct_practice(practice_id):
+        aliases = [name for name, payer_id in practice.get('payer_aliases', {}).items()
+                   if payer_id == inputs.get('payer_id')]
+        documents = staff_store.list_library(practice_id)
+        contract = any(network_participation.nmct_library_contract(
+            documents, name, str(inputs.get('service_date') or '')) for name in aliases)
         payer = commercial.normalize_stedi_271(payload, '98', False,
             service_date=str(inputs.get('service_date') or ''), office_visit=True,
             provider_npi=str((inputs.get('provider') or {}).get('npi') or '')) if payload else {}
@@ -227,14 +232,23 @@ def stedi_network(case: dict, practice: dict, coverage: dict, *, practice_id: st
                     "provider_network": "Payer provider-participation statements conflict; verify the requesting provider with the payer."}
         if (payer.get('network_status') == 'out_of_network'
                 and payer.get('network_source') == 'payer_participation_message'):
+            if contract:
+                return {"provider_network_status": "unconfirmed",
+                        "provider_network": "The payer reports this provider out of network despite NMCT's current insurer contract; reconcile before collecting."}
             return {"provider_network_status": "out_of_network",
                     "provider_network": "The payer specifically reports that the requesting provider is out of network."}
         if (payer.get('network_status') == 'in_network'
                 and payer.get('network_source') == 'payer_participation_message'):
             return {"provider_network_status": "in_network",
                     "provider_network": "The payer specifically reports that the requesting provider is in network."}
-        return {"provider_network_status": "in_network",
-                "provider_network": "NMCT all-plan in-network policy; an explicit payer nonparticipation statement takes precedence."}
+        if contract:
+            return {"provider_network_status": "in_network",
+                    "provider_network": "Current NMCT Clinical Library contract for this insurer; Medicare, HMO and PPO products are in network."}
+        if inputs.get('service_date') and len(plans) == 1 and aliases:
+            return {"provider_network_status": "out_of_network",
+                    "provider_network": "No current insurer contract is registered in the NMCT Clinical Library for this visit date."}
+        return {"provider_network_status": "unconfirmed",
+                "provider_network": "No current NMCT Clinical Library contract matches this insurer."}
     service_date = str(inputs.get("service_date") or "")
     matched = []
     for entry in practice.get("stedi_provider_networks", []):
@@ -451,8 +465,9 @@ async def create(body: Start, request: Request):
 @router.get("/cases/{case_id}", description=(
     "Read the saved V2 case and payer results. Completed Stedi coverage keeps benefit rows and a "
     "patient-identity decision containing mismatch field names, without payer demographic values. "
-    "For NMCT's temporary Stedi bridge, the all-plan clinic policy overrides matrix network rows; "
-    "a provider-specific payer nonparticipation statement still takes precedence."
+    "For NMCT's temporary Stedi bridge, a current Clinical Library insurer contract covers "
+    "its Medicare, HMO and PPO products. A selected insurer with no current Library contract "
+    "is out of network; a contradictory provider-specific payer statement requires review."
 ))
 async def get_case(case_id: str, request: Request):
     session = await _session(request)

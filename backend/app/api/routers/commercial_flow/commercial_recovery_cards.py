@@ -42,6 +42,10 @@ def _compare_card_hints(card: dict, inputs: dict, source: dict) -> dict:
         _api.stedi_discovery.normalized(inputs['member_id']) == _api.stedi_discovery.normalized(fields['member_id']))
     patient_bound = bool(card.get('count') in {1, 2} and source.get('_patient_id') and
                          source.get('coverage_id') and source.get('active_coverages') == 1)
+    printed_copay = _api.re.fullmatch(r'\$\s*(\d{1,4})(?:\.(\d{2}))?', str(fields.get('specialist_copay') or ''))
+    if (patient_bound and member_matches and name_matches and (not card_dob or dob_matches)
+            and not result['conflicts'] and printed_copay):
+        result['office_copay_cents'] = int(printed_copay[1]) * 100 + int(printed_copay[2] or 0)
     result['alternative_supported'] = bool(patient_bound and candidate and name_matches and
         (not card_dob or dob_matches) and (
             bool(result['conflicts']) and dob_matches and group_matches or

@@ -11,6 +11,9 @@ try {
   const { default: ArrivalAmountSummary } = await server.ssrLoadModule(
     '/src/features/commercial-estimate/ArrivalAmountSummary.tsx',
   )
+  const { cardOfficePlanningCopay } = await server.ssrLoadModule(
+    '/src/features/commercial-estimate/payerReportedPartialCopay.ts',
+  )
   const { payerPlanDisplay } = await server.ssrLoadModule(
     '/src/features/commercial-estimate/payerPlanDisplay.ts',
   )
@@ -99,6 +102,34 @@ try {
     policyStatus: 'Active',
     supportedAmount: false,
   }
+  const cardResult = {
+    payer: 'phcs', service_date: '2026-10-30', reason: 'Transient cerebral ischemia',
+    card_check: { status: 'matched', office_copay_cents: 4500, conflicts: [], differences: [] },
+    temporary_rate_reference: {
+      source: 'Synthetic BCBS Texas fee schedule', complete: false,
+      message: 'BCBS Texas reference, not an HPI allowance.',
+      lines: [{ id: 'office', code: '99214', units: 1, modifiers: [], unit_reference_cents: 11156 }],
+    },
+    price_range: { mode: 'services', complete: false, lines: [
+      { id: 'office', code: '99214', units: 1, allowed_cents: null, description: 'Office follow-up' },
+      { id: 'head', code: '70496', units: 1, allowed_cents: null, description: 'CTA head' },
+      { id: 'neck', code: '70498', units: 1, allowed_cents: null, description: 'CTA neck' },
+    ] },
+  }
+  const cardMarkup = renderToStaticMarkup(React.createElement(CommercialCostBreakdown, { model, result: cardResult }))
+  assert(cardMarkup.includes('$111.56 BCBS Texas reference'))
+  assert(cardMarkup.includes('Payer allowance pending'))
+  assert(cardMarkup.includes('$45.00 specialist office visit · printed on card'))
+  assert(cardMarkup.includes('$45.00 office-only card suggestion'))
+  assert(cardMarkup.includes('CTA head') && cardMarkup.includes('CTA neck'))
+  const cardHeadline = renderToStaticMarkup(React.createElement(ArrivalAmountSummary, {
+    model: { ...model, amountText: 'Insured amount unavailable' }, result: cardResult,
+    partialCopay: null, cardPlanningCopay: 4500, visibleAmount: true,
+  }))
+  assert(cardHeadline.includes('Card-based office suggestion') && cardHeadline.includes('$45.00'))
+  assert.equal(cardOfficePlanningCopay({ ...cardResult, encounter_summary: { payments_verified_cents: 4500 } }, model), null)
+  assert.equal(cardOfficePlanningCopay({ ...cardResult, collection_guidance: { amount_cents: 0 } }, model), null)
+  assert.equal(cardOfficePlanningCopay({ ...cardResult, card_check: { ...cardResult.card_check, status: 'conflict' } }, model), null)
   const markup = renderToStaticMarkup(
     React.createElement(CommercialCostBreakdown, { model, result }),
   )
@@ -114,6 +145,37 @@ try {
   }
   assert(markup.includes('not used as a verified calculation input'))
   assert(markup.includes('Not established'))
+
+  const pendingCigna = {
+    payer: 'Cigna', service_date: '2026-10-30', reason: 'Office consultation',
+    benefits: { network_status: 'in_network' },
+    price_range: { mode: 'services', complete: false, lines: [{
+      id: 'office', code: '99204', units: 1, allowed_cents: null,
+      benefits: { copay_cents: 6000 },
+    }] },
+    collection_guidance: { amount_cents: null, basis: 'missing_collection_inputs' },
+  }
+  const pendingCignaTable = renderToStaticMarkup(React.createElement(CommercialCostBreakdown, {
+    model: { ...model, policyStatus: 'eCW policy · payer check needed' }, result: pendingCigna,
+  }))
+  assert(pendingCignaTable.includes('Pending · $60.00 office copay if verified'))
+  assert(pendingCignaTable.includes('Full patient share remains unresolved'))
+  const paidCignaTable = renderToStaticMarkup(React.createElement(CommercialCostBreakdown, {
+    model, result: { ...pendingCigna, encounter_summary: { payments_verified_cents: 1500 } },
+  }))
+  assert(paidCignaTable.includes('Pending · $45.00 office copay if verified'))
+  const inactiveCignaTable = renderToStaticMarkup(React.createElement(CommercialCostBreakdown, {
+    model, result: { ...pendingCigna, benefits: { active: false, network_status: 'in_network' } },
+  }))
+  assert(!inactiveCignaTable.includes('office copay if verified'))
+  for (const terms of [{ deductible_applies: true, deductible_remaining_cents: 10000 },
+    { oop_remaining_cents: 0 }]) {
+    const blocked = renderToStaticMarkup(React.createElement(CommercialCostBreakdown, {
+      model, result: { ...pendingCigna, price_range: { ...pendingCigna.price_range,
+        lines: [{ ...pendingCigna.price_range.lines[0], benefits: { copay_cents: 6000, ...terms } }] } },
+    }))
+    assert(!blocked.includes('office copay if verified'))
+  }
 
   const unpricedAetna = renderToStaticMarkup(
     React.createElement(CommercialCostBreakdown, {
@@ -251,6 +313,47 @@ try {
   )
   assert(aetna.includes('Network</th><td><span>Not determined'))
   assert(!aetna.includes('Estimated patient share</th><td><span>$250.00'))
+
+  const uhcOfficeLine = {
+    id: 'office', code: '99213', units: 1, cash_cents: 15000, allowed_cents: null,
+    benefits: { active: true, network_status: 'in_network', copay_id: 'copay-1',
+      copay_cents: 1000, copay_period: 'VISIT', network_independent: false },
+  }
+  const uhcOffice = {
+    payer: 'United Healthcare', reason: 'DBS Follow Up', service_date: '2026-10-29',
+    identity: { match_version: 2, status: 'matched', binding: 'synthetic-binding' },
+    plan_details: { stedi: { names: ['LPPO-UNITEDHEALTHCARE GROUP MEDICARE ADVANTAGE (PPO)'] } },
+    benefits: { active: true, service_date_matches: true, network_status: 'in_network',
+      network_source: 'clinic_group_agreement' },
+    price_range: { mode: 'services', complete: false, cash_complete: true,
+      cash_min_cents: 15000, cash_max_cents: 15000, lines: [uhcOfficeLine] },
+    collection_guidance: { amount_cents: null, basis: 'missing_collection_inputs' },
+    encounter_summary: { payments_verified_cents: 0 },
+  }
+  const uhcOfficeModel = { ...model, officeCopayLine: uhcOfficeLine,
+    amountText: 'Insured amount unavailable' }
+  const uhcTable = renderToStaticMarkup(React.createElement(
+    CommercialCostBreakdown, { model: uhcOfficeModel, result: uhcOffice },
+  ))
+  assert(uhcTable.includes('Estimated patient share</th><td><span>$10.00 office-only planning estimate'))
+  assert(uhcTable.includes('Suggested amount to collect at visit</th><td><span>$10.00'))
+  const uhcHeadline = renderToStaticMarkup(React.createElement(
+    ArrivalAmountSummary, { model: uhcOfficeModel, result: uhcOffice,
+      partialCopay: 1000, visibleAmount: true },
+  ))
+  assert(uhcHeadline.includes('Suggested amount to collect at visit'))
+  assert(uhcHeadline.includes('$10.00'))
+  const uhcPaid = renderToStaticMarkup(React.createElement(CommercialCostBreakdown, {
+    model: uhcOfficeModel,
+    result: { ...uhcOffice, encounter_summary: { payments_verified_cents: 400 } },
+  }))
+  assert(uhcPaid.includes('Suggested amount to collect at visit</th><td><span>$6.00'))
+  const uhcQmb = renderToStaticMarkup(React.createElement(CommercialCostBreakdown, {
+    model: uhcOfficeModel,
+    result: { ...uhcOffice, billing_protection: { status: 'qmb' },
+      collection_guidance: { amount_cents: 0, basis: 'qmb_protection' } },
+  }))
+  assert(uhcQmb.includes('Amount to collect at visit</th><td><span>$0.00'))
 
   const attachedReference = renderToStaticMarkup(
     React.createElement(CommercialCostBreakdown, {
@@ -524,6 +627,7 @@ try {
         { id: 'ncs', code: '95908', units: 1, modifiers: [], unit_reference_cents: 11879 },
         { id: 'emg', code: '95886', units: 1, modifiers: [], unit_reference_cents: 9997 },
       ] },
+    // A planning scenario must agree with the headline and the final table row.
     aetna_diagnostic_reference: { estimated_allowed_cents: 21876, copay_cents: 10000,
       deductible_cents: 0, coinsurance_cents: 0, coinsurance_percent: '0',
       oop_reduction_cents: 0, oop_remaining_cents: 639000,
@@ -536,17 +640,53 @@ try {
     CommercialCostBreakdown, { model, result: aetnaDiagnosticResult },
   ))
   for (const value of ['$118.79 Aetna fee reference', '$99.97 Aetna fee reference',
-    '$218.76 provisional', '$50.00 per diagnostic procedure × 2 = $100.00',
-    '$100.00 provisional · Aetna diagnostic estimate', '$118.76', '$0.00 now']) {
+    '$218.76 total reference', '$50.00 per diagnostic test × 2 = $100.00',
+    'Estimated patient share</th><td><span>$100.00 planning estimate',
+    'Planned amount to collect at visit</th><td><span>$100.00 planning estimate']) {
     assert(aetnaDiagnosticTable.includes(value), `Missing Aetna diagnostic value ${value}`)
   }
   assert(!aetnaDiagnosticTable.includes('BCBS Texas reference'))
+  assert(aetnaDiagnosticTable.includes('min(($50.00 per test × 2) + $0.00 deductible + $0.00 coinsurance, $218.76 Aetna fee reference, $6,390.00 remaining out-of-pocket) = $100.00'))
   const aetnaDiagnosticHeadline = renderToStaticMarkup(React.createElement(
     ArrivalAmountSummary, { model: { ...model, amountText: 'Insured amount unavailable' },
       result: aetnaDiagnosticResult, partialCopay: null, visibleAmount: false },
   ))
-  assert(aetnaDiagnosticHeadline.includes('Aetna planning estimate'))
+  assert(aetnaDiagnosticHeadline.includes('Planned amount to collect at visit'))
   assert(aetnaDiagnosticHeadline.includes('$100.00'))
+  const diagnosticCopayResult = {
+    payer: 'Blue Cross Blue Shield Texas', service_date: '2026-10-30',
+    reason: 'Synthetic EMG/NCS evaluation',
+    benefits: { active: true, network_status: 'in_network' },
+    price_range: { mode: 'services', complete: false, lines: [
+      { id: 'ncs', code: '95908', units: 1, allowed_cents: 10511,
+        allowed_basis: 'clinic_contract', rate_resolution: { status: 'RESOLVED' },
+        benefits: { copay_cents: 5000 } },
+      { id: 'emg', code: '95886', units: 1, allowed_cents: 8918,
+        allowed_basis: 'clinic_contract', rate_resolution: { status: 'RESOLVED' },
+        benefits: { copay_cents: 5000 } },
+    ] },
+    collection_guidance: { amount_cents: null, basis: 'missing_collection_inputs',
+      positive_advance_policy_missing: true, diagnostic_copay_reference_cents: 5000 },
+  }
+  const diagnosticTable = renderToStaticMarkup(React.createElement(
+    CommercialCostBreakdown, { model, result: diagnosticCopayResult },
+  ))
+  assert(diagnosticTable.includes('Copay</th><td><span>$50.00 once per day'))
+  assert(diagnosticTable.includes('Diagnostic copay · collection pending</th><td><span>$50.00 once per day · verify before charging'))
+  assert(diagnosticTable.includes('Estimated patient share</th><td><span>Not fully calculated'))
+  const diagnosticHeadline = renderToStaticMarkup(React.createElement(
+    ArrivalAmountSummary, { model: { ...model, amountText: 'Insured amount unavailable' },
+      result: diagnosticCopayResult, partialCopay: null, visibleAmount: false },
+  ))
+  assert(diagnosticHeadline.includes('Diagnostic copay · collection pending'))
+  assert(diagnosticHeadline.includes('$50.00'))
+  const qmbResult = { ...aetnaDiagnosticResult,
+    collection_guidance: { amount_cents: 0, basis: 'qmb_protection' } }
+  const qmbTable = renderToStaticMarkup(React.createElement(
+    CommercialCostBreakdown, { model, result: qmbResult },
+  ))
+  assert(qmbTable.includes('Amount to collect at visit</th><td><span>$0.00'))
+  assert(!qmbTable.includes('Planned amount to collect at visit'))
   assert.equal(aetnaReferenceRequirement({ ...aetnaDiagnosticResult, reference_only: true,
     reference_benefits: { active: true, plan_details: { names: ['Aetna Medicare Signature (PPO)'] } } },
     'authorization', '95908'), null)

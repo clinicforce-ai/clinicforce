@@ -108,11 +108,19 @@ def test_one_diagnostic_day_copay_is_a_partial_advance_when_full_share_is_unknow
     assert guidance['amount_cents'] == 2000
     assert guidance['basis'] == 'diagnostic_day_copay'
     assert encounter_summary.build({**result, 'collection_guidance': guidance})['estimated_total_patient_min_cents'] is None
+    result.pop('collection_policy')
+    pending = collection_guidance.build(result)
+    assert pending['amount_cents'] is None
+    assert pending['diagnostic_copay_reference_cents'] == 2000
+    assert pending['positive_advance_policy_missing'] is True
     result['price_range']['lines'][1]['benefits']['copay_id'] = 'different-row'
-    assert collection_guidance.build(result)['amount_cents'] is None
+    assert collection_guidance.build(result).get('diagnostic_copay_reference_cents') is None
     result['price_range']['lines'][1]['benefits']['copay_id'] = 'payer-row-1'
     result['price_range']['lines'][0]['benefits']['reported_options'][0]['payer_note'] = 'SLEEP STUDY - PROFESSIONAL'
-    assert collection_guidance.build(result)['amount_cents'] is None
+    assert collection_guidance.build(result).get('diagnostic_copay_reference_cents') is None
+    result['price_range']['lines'].append({'id': 'retired', 'code': '95900', 'units': 1,
+        'allowed_cents': None, 'benefits': result['price_range']['lines'][1]['benefits']})
+    assert collection_guidance.build(result).get('diagnostic_copay_reference_cents') is None
 
 
 @pytest.mark.parametrize('result', [{}, {'eligibility_failure': {'title': 'Timeout'}},

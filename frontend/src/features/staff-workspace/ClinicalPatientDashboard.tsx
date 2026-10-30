@@ -22,15 +22,7 @@ interface Props {
   onAddCard: () => void
   onPullEcw: () => void
 }
-type Cohort = 'all' | 'accounts_with_cards' | 'accounts_without_cards' | 'card_only' | 'other'
 type VisitResult = { day: string | null; time: number | null }
-const cohortLabel: Record<Cohort, string> = {
-  all: 'All patients',
-  accounts_with_cards: 'Accounts with cards',
-  accounts_without_cards: 'Accounts missing cards',
-  card_only: 'Card-only records',
-  other: 'Other clinic patients',
-}
 export default function ClinicalPatientDashboard({
   initialPatientId,
   onOpenIntake,
@@ -39,7 +31,6 @@ export default function ClinicalPatientDashboard({
   onPullEcw,
 }: Props) {
   const [dashboard, setDashboard] = useState<ClinicalDashboard | null>(null)
-  const [cohort, setCohort] = useState<Cohort>('all')
   const [query, setQuery] = useState('')
   const [cardStatus, setCardStatus] = useState('')
   const [selected, setSelected] = useState<ClinicalPatient | null>(null)
@@ -177,20 +168,9 @@ export default function ClinicalPatientDashboard({
       setDeleting(false)
     }
   }
-  function inCohort(patient: ClinicalPatient) {
-    if (cohort === 'all') return true
-    if (cohort === 'accounts_with_cards')
-      return patient.account_status === 'portal' && patient.card_status === 'received'
-    if (cohort === 'accounts_without_cards')
-      return patient.account_status === 'portal' && patient.card_status === 'missing'
-    if (cohort === 'card_only')
-      return patient.account_status !== 'portal' && patient.card_status === 'received'
-    return patient.account_status !== 'portal' && patient.card_status === 'missing'
-  }
   const patients =
     dashboard?.patients.filter(
       (patient) =>
-        inCohort(patient) &&
         (!cardStatus || patient.card_status === cardStatus) &&
         `${name(patient)} ${patient.email || ''} ${patient.birth_date} ${patient.ecw_account_number || ''}`
           .toLowerCase()
@@ -226,7 +206,7 @@ export default function ClinicalPatientDashboard({
       year: 'numeric',
     })
   const renderGroup = (day: string, group: ClinicalPatient[]) => (
-    <details className="clinical-visit-group" key={day}>
+    <details className="clinical-visit-group" key={day} open={day === today}>
       <summary>
         <span className="clinical-visit-date">
           {day === 'undated' ? 'Appointment date not available' : formatDay(day)}
@@ -331,22 +311,6 @@ export default function ClinicalPatientDashboard({
           </button>
         </p>
       )}
-      <nav className="clinical-cohorts" aria-label="Patient groups">
-        {(Object.keys(cohortLabel) as Cohort[])
-          .filter((value) => value !== 'other' || !!dashboard?.counts.other)
-          .map((value) => (
-            <button
-              key={value}
-              aria-pressed={cohort === value}
-              onClick={() => {
-                setCohort(value)
-              }}
-            >
-              <strong>{dashboard?.counts[value] ?? '—'}</strong>
-              <span>{cohortLabel[value]}</span>
-            </button>
-          ))}
-      </nav>
       <div className="staff-search clinical-search">
         <label className="staff-field">
           <span>Find a clinical patient</span>
@@ -378,7 +342,7 @@ export default function ClinicalPatientDashboard({
       </div>
       <section className="staff-panel">
         <div className="staff-section-heading">
-          <h2>{cohortLabel[cohort]}</h2>
+          <h2>All patients</h2>
           <span className="staff-small staff-muted" role="status">
             {busy
               ? 'Loading patients…'
@@ -394,14 +358,10 @@ export default function ClinicalPatientDashboard({
         ) : dashboard && !busy && !patients.length ? (
           <div className="staff-empty">
             <Users size={30} aria-hidden="true" />
-            <h3>
-              {query || cardStatus || cohort !== 'all'
-                ? 'No matching patients'
-                : 'No clinic patients yet'}
-            </h3>
+            <h3>{query || cardStatus ? 'No matching patients' : 'No clinic patients yet'}</h3>
             <p>
-              {query || cardStatus || cohort !== 'all'
-                ? 'Try a different name or patient group.'
+              {query || cardStatus
+                ? 'Try a different name or card status.'
                 : 'Scan a card, request a patient upload, or open a patient’s ClinicForce QR to get started.'}
             </p>
           </div>
@@ -419,7 +379,7 @@ export default function ClinicalPatientDashboard({
               </p>
             )}
             <ClinicalPatientSections
-              key={JSON.stringify([cohort, query, cardStatus])}
+              key={JSON.stringify([query, cardStatus])}
               groups={{
                 today: todayGroup.length ? [[today, todayGroup]] : [],
                 upcoming: upcomingGroups,

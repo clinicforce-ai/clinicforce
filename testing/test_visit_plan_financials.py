@@ -1,6 +1,7 @@
 """Synthetic recommendation and financial-boundary checks; no live payer calls."""
 import asyncio
 import json
+import re
 from copy import deepcopy
 from unittest.mock import MagicMock, patch
 
@@ -76,10 +77,37 @@ def test_booked_bilateral_hand_emg_uses_the_model_proposal_without_manual_select
     assert visit_estimate.is_emg_visit(booked)
     assert plan['recommended_ids'] == ['95908', '95886']
     assert plan['recommended_units'] == {'95908': 1, '95886': 2}
-    assert plan['method'] == 'llm' and plan['version'] == 15
+    assert plan['method'] == 'llm' and plan['version'] == 16
     assert '"appointment_type": "EMG Visit"' in model.converse.call_args.kwargs['messages'][0]['content'][0]['text']
     assert not visit_estimate.is_emg_visit({'reason': 'Bilateral hand'})
     assert not visit_estimate.is_emg_visit({'reason': 'Bilateral hand', 'appointment_type': 'Possible EMG'})
+
+
+def test_retired_95900_cannot_enter_a_current_emg_plan():
+    from app.api.routers.commercial_flow.commercial_previsit_catalog import build_catalog
+    from app.insurance import cpt_rules
+
+    api = MagicMock()
+    api._previsit_codes.return_value = [{'id': 'scheduled:95900', 'code': '95900',
+                                        'source': 'eCW scheduled service', 'units': 1}]
+    api.commercial_store.list_connections.return_value = []
+    api.practice_prices.current.return_value = None
+    api.re = re
+    result = {'suggestions': {'groups': [{'codes': [{'code': '95900', 'reason': 'Old NCS code'}]}]}}
+    _, _, codes, available, _ = build_catalog(api, result, {'practice_id': 'synthetic'},
+        {'service_date': '2026-10-30', 'reason': 'EMG/NCS'}, {}, None, {}, '', None)
+    assert '95900' not in {row['code'] for row in codes + available}
+    assert cpt_rules.service_selection_issues(['95908', '95886', '95900'])
+    model = MagicMock()
+    model.converse.return_value = model_reply([
+        {'code': '95908', 'units': 1}, {'code': '95886', 'units': 1},
+        {'code': '95900', 'units': 1}])
+    with patch.object(cpt_suggester.boto3, 'client', return_value=model):
+        plan = cpt_suggester.recommend_visit_plan(
+            {'reason': 'carpal tunnel and migraines', 'appointment_type': 'EMG Visit'},
+            {}, available)
+    assert [next(row['code'] for row in available if row['id'] == key)
+            for key in plan['recommended_ids']] == ['95908', '95886']
 
 
 def test_booked_emg_model_failure_stays_visible_and_retryable():
@@ -205,6 +233,94 @@ def test_established_office_visit_defaults_to_provisional_followup_when_model_is
     assert plan['recommended_ids'] == ['99213']
     assert plan['method'] == 'appointment'
     assert 'starting estimate' in plan['assumptions'][0]
+
+
+def test_established_tia_with_planned_cta_uses_provisional_moderate_office_scenario():
+    available = [{'id': code, 'code': code,
+                  'source': 'conditional office E/M alternative' if code.startswith('992') else 'CPT planning catalog',
+                  'units': 1} for code in ('99213', '99214', '99215', '70496', '70498')]
+    model = MagicMock()
+    model.converse.return_value = model_reply([
+        {'code': '99213', 'units': 1}, {'code': '70496', 'units': 1}, {'code': '70498', 'units': 1}])
+    with patch.object(cpt_suggester.boto3, 'client', return_value=model):
+        plan = cpt_suggester.recommend_visit_plan(
+            {'reason': 'Transient cerebral ischemia', 'visit_type': 'established'}, {}, available)
+    assert plan['recommended_ids'] == ['99214', '70496', '70498']
+    assert plan['method'] == 'appointment'
+    assert any('Moderate MDM is assumed' in note for note in plan['assumptions'])
+
+
+def test_dbs_followup_keeps_device_services_conditional():
+    from app.insurance import cpt_rules
+    from app.api.routers.commercial_flow.commercial_previsit_catalog import build_catalog
+    available = [{'id': code, 'code': code, 'source': 'CPT planning catalog', 'units': 1}
+                 for code in ('99213', '95970', '95983', '95984')]
+    available[0]['source'] = 'conditional office E/M alternative'
+    assert cpt_rules.service_definition('95983')['family'] == 'dbs_programming'
+    assert cpt_rules.service_definition('95983')['service_type'] == '98'
+    assert not cpt_rules.benefit_category_compatible('95983', '98')
+    assert cpt_rules.benefit_category_compatible('95983', '95983', procedure_specific=True)
+    api = MagicMock()
+    api._previsit_codes.return_value = [available[0]]
+    api.commercial_store.list_connections.return_value = []
+    api.practice_prices.current.return_value = None
+    api.re = re
+    _, _, _, choices, _ = build_catalog(api, {}, {'practice_id': 'synthetic'},
+                                       {'reason': 'DBS Follow Up', 'service_date': '2026-10-29'},
+                                       {}, None, {}, '', None)
+    assert {'95970', '95983', '95984'} <= {row['code'] for row in choices}
+    assert cpt_rules.service_selection_issues(['95984'])
+    assert cpt_rules.service_selection_issues(['95970', '95983'])
+    with patch.object(cpt_suggester.boto3, 'client', side_effect=RuntimeError('offline')):
+        plan = cpt_suggester.recommend_visit_plan(
+            {'reason': 'DBS Follow Up', 'visit_type': 'established'}, {}, available)
+    assert plan['recommended_ids'] == ['99213']
+    assert any('95970' in note and '95983' in note for note in plan['assumptions'])
+    model = MagicMock()
+    model.converse.return_value = model_reply([{'code': '95983', 'units': 1}])
+    with patch.object(cpt_suggester.boto3, 'client', return_value=model):
+        plan = cpt_suggester.recommend_visit_plan(
+            {'reason': 'DBS Follow Up', 'visit_type': 'established'}, {}, available)
+    assert plan['recommended_ids'] == ['99213']
+    model.converse.return_value = model_reply([{'code': '99213', 'units': 1},
+                                                {'code': '95983', 'units': 1}])
+    with patch.object(cpt_suggester.boto3, 'client', return_value=model):
+        plan = cpt_suggester.recommend_visit_plan(
+            {'reason': 'DBS programming and separate evaluation planned', 'visit_type': 'established'},
+            {}, available)
+    assert plan['recommended_ids'] == ['99213', '95983']
+
+
+def test_generic_televisit_uses_prior_same_clinic_office_visit_for_provisional_plan():
+    available = [{'id': 'planning:99213', 'code': '99213', 'source': 'CPT planning catalog', 'units': 1}]
+    history = [{'date': '2026-10-01', 'reason': 'New patient office consultation',
+                'coded_services': ['99204']}]
+    model = MagicMock()
+    model.converse.return_value = model_reply([])
+    with patch.object(cpt_suggester.boto3, 'client', return_value=model):
+        plan = cpt_suggester.recommend_visit_plan(
+            {'reason': 'Televisit', 'visit_type': None},
+            {'recent_completed_appointments': history}, available)
+    assert plan['recommended_ids'] == ['planning:99213']
+    assert plan['method'] == 'history'
+    assert any('confirm' in note.lower() for note in plan['assumptions'])
+
+
+def test_generic_televisit_without_status_or_office_history_remains_unselected():
+    available = [{'id': 'planning:99213', 'code': '99213', 'source': 'CPT planning catalog', 'units': 1}]
+    model = MagicMock()
+    model.converse.return_value = model_reply([])
+    with patch.object(cpt_suggester.boto3, 'client', return_value=model):
+        plan = cpt_suggester.recommend_visit_plan(
+            {'reason': 'Televisit', 'visit_type': None}, {}, available)
+    assert plan['recommended_ids'] == []
+
+
+def test_televisit_at_clinic_mapped_office_pos_needs_patient_location():
+    assert visit_estimate.telehealth_pos_unresolved({
+        'reason': 'Televisit', 'place_of_service': '11'})
+    assert not visit_estimate.telehealth_pos_unresolved({
+        'reason': 'Televisit', 'place_of_service': '10'})
 
 
 def test_established_office_visit_uses_supported_level_and_rejects_new_patient_level():

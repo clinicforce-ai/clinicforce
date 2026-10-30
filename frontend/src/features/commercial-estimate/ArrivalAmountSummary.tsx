@@ -36,12 +36,14 @@ export default function ArrivalAmountSummary({
   model,
   result,
   partialCopay,
+  cardPlanningCopay = null,
   referenceOnly = false,
   visibleAmount,
 }: {
   model: CommercialEstimateModel
   result: PrevisitEstimate
   partialCopay: number | null
+  cardPlanningCopay?: number | null
   referenceOnly?: boolean
   visibleAmount: boolean
 }) {
@@ -55,7 +57,15 @@ export default function ArrivalAmountSummary({
       ? result.fee_proxy_estimate
       : null
   const aetnaPlanning =
-    !model.cash && !model.previousEstimate ? result.aetna_diagnostic_reference : null
+    !model.cash && !model.previousEstimate && result.collection_guidance?.amount_cents == null
+      ? result.aetna_diagnostic_reference
+      : null
+  const diagnosticCopayReference =
+    !model.cash && !model.previousEstimate && !model.calculating &&
+    !model.requirementIssue && !result.price_range?.service_issues?.length &&
+    result.collection_guidance?.positive_advance_policy_missing === true
+      ? result.collection_guidance.diagnostic_copay_reference_cents
+      : null
   const needsAction = model.amountText === 'Insured amount unavailable'
   const additionalServicesPending = result.price_range?.lines?.some(
     (line) => !/^992(?:0[2-5]|1[2-5])$/.test(line.code),
@@ -68,14 +78,18 @@ export default function ArrivalAmountSummary({
           : cignaPlanning
             ? 'Cigna planning estimate · collection pending'
             : aetnaPlanning
-              ? 'Aetna planning estimate · collection pending'
+              ? 'Planned amount to collect at visit'
+              : diagnosticCopayReference != null
+                ? 'Diagnostic copay · collection pending'
               : partialCopay != null
                 ? referenceOnly
                   ? 'Office-only reference · collection pending'
-                  : 'Payer-reported office copay · collection pending'
-                : needsAction
-                  ? 'Next step'
-                  : model.amountLabel}
+                  : 'Suggested amount to collect at visit'
+                : cardPlanningCopay != null
+                  ? 'Card-based office suggestion · collection pending'
+                  : needsAction
+                    ? 'Next step'
+                    : model.amountLabel}
       </span>
       <strong
         className={
@@ -89,11 +103,15 @@ export default function ArrivalAmountSummary({
             ? money(cignaPlanning.patient_share_cents)
             : aetnaPlanning
               ? money(aetnaPlanning.patient_share_cents)
+              : diagnosticCopayReference != null
+                ? money(diagnosticCopayReference)
               : partialCopay != null
                 ? money(partialCopay)
-                : needsAction
-                  ? action.title
-                  : model.amountText}
+                : cardPlanningCopay != null
+                  ? money(cardPlanningCopay)
+                  : needsAction
+                    ? action.title
+                    : model.amountText}
       </strong>
       {plan ? (
         <p>
@@ -109,16 +127,24 @@ export default function ArrivalAmountSummary({
         </p>
       ) : aetnaPlanning ? (
         <p>
-          Two Aetna diagnostic copays on the clinic-supplied fee reference. Review the per-CPT
-          formula below; collection remains on hold.
+          {money(aetnaPlanning.copay_cents / 2)} per diagnostic test × 2 ={' '}
+          {money(aetnaPlanning.patient_share_cents)} before payments. Verify the exact plan and
+          Medicare billing protection before charging.
         </p>
+      ) : diagnosticCopayReference != null ? (
+        <p>One payer-reported diagnostic copay per day. Approve the clinic collection policy and check prior payments before charging.</p>
       ) : partialCopay != null ? (
         <p>
           {referenceOnly
             ? 'Planning amount for this visit date; confirm payer date and Medicare cost-sharing protection before collection.'
             : additionalServicesPending
               ? 'Office copay reported; other service costs pending.'
-              : 'Office copay reported; collection pending.'}
+              : 'Payer-reported office copay after recorded payments; separately performed services may change the total.'}
+        </p>
+      ) : cardPlanningCopay != null ? (
+        <p>
+          Printed specialist copay for one office visit. Payer benefits and separate imaging costs
+          are unresolved; verify before charging.
         </p>
       ) : needsAction ? (
         <p>{action.hint}</p>

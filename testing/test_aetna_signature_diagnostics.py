@@ -60,7 +60,7 @@ def test_plan_name_alone_does_not_activate_eoc_for_collection():
     assert all(line['benefits']['copay_cents'] is None for line in priced['lines'])
 
 
-def test_draft_aetna_values_remain_planning_reference():
+def test_draft_aetna_values_support_labelled_planning_amount():
     result = {'payer': 'Aetna', 'payment_mode': 'insurance', 'reference_only': True,
               'reference_benefits': benefits(), 'benefits': {},
               'codes': deepcopy(CODES)}
@@ -74,9 +74,8 @@ def test_draft_aetna_values_remain_planning_reference():
                return_value=draft):
         _attach_temporary_aetna_rates(result, 'synthetic-practice',
                                       {'service_date': DAY, 'place_of_service': '11'}, {})
-    scenario = result['aetna_diagnostic_reference']
-    assert scenario['estimated_allowed_cents'] == 21876
-    assert scenario['patient_share_cents'] == 10000
-    assert scenario['payer_share_cents'] == 11876
+    assert result['aetna_diagnostic_reference']['patient_share_cents'] == 10000
+    assert result['aetna_diagnostic_reference']['copay_cents'] == 10000
+    assert result['aetna_diagnostic_reference']['payer_share_cents'] == 11876
     assert result['temporary_rate_reference']['complete'] is True
-    assert 'collectable' not in scenario
+    assert sum(line['unit_reference_cents'] for line in result['temporary_rate_reference']['lines']) == 21876

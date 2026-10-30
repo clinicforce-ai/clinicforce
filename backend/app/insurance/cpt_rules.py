@@ -26,7 +26,7 @@ def documented_ncs_code(reason: str) -> str | None:
 
 # Versioned clinical planning metadata. This classifies services; it never
 # supplies a payer benefit, covered status, allowance, or billable quantity.
-SERVICE_CATALOGUE_VERSION = 2
+SERVICE_CATALOGUE_VERSION = 3
 SERVICE_FAMILIES = {
     'office_consultation': {'codes': {str(n) for n in (*range(99202, 99206), *range(99212, 99216))},
                             'group': 'visit', 'role': 'consultation', 'service_type': '98'},
@@ -35,6 +35,10 @@ SERVICE_FAMILIES = {
     'standalone_emg': {'codes': STANDALONE_EMG_CODES, 'group': 'muscle', 'role': 'diagnostic_test', 'service_type': '73'},
     'diagnostic_procedure': {'codes': {'11104', '11105', '62270', '62328'},
                              'group': 'other', 'role': 'procedure', 'service_type': '2'},
+    'dbs_analysis': {'codes': {'95970'}, 'group': 'other', 'role': 'procedure',
+                     'service_type': '98', 'exact_cpt_only': True},
+    'dbs_programming': {'codes': {'95983', '95984'}, 'group': 'other', 'role': 'procedure',
+                        'service_type': '98', 'exact_cpt_only': True},
     'botulinum_drug': {'codes': {'J0585'}, 'group': 'other', 'role': 'drug',
                        'service_type': None, 'associated_families': ('chemodenervation',),
                        'brand': 'Botox', 'eligibility_service_types': ('1',),
@@ -60,8 +64,10 @@ def service_definition(code: str) -> dict:
 
 def benefit_category_compatible(code: str, category: str, *, procedure_specific: bool = False) -> bool:
     """A broad STC must describe this service; an exact procedure row can be narrower."""
-    allowed = service_definition(code).get('benefit_service_types')
-    return bool(category) and (procedure_specific or not allowed or category in allowed)
+    definition = service_definition(code)
+    allowed = definition.get('benefit_service_types')
+    return bool(category) and (procedure_specific or not definition.get('exact_cpt_only')
+                               and (not allowed or category in allowed))
 
 
 def service_selection_issues(codes: list[str]) -> list[str]:
@@ -69,13 +75,38 @@ def service_selection_issues(codes: list[str]) -> list[str]:
     # validate the planned bundle, not whether the payer covers the procedure.
     selected = set(codes)
     issues = []
+    if '95900' in selected:
+        issues.append('CPT 95900 was deleted in 2013. Choose one current nerve-conduction study-count code (95907–95913).')
     if selected & EMG_ADD_ONS and not selected & NCS_CODES:
         issues.append('Add the anticipated nerve-conduction service (95907–95913) for these EMG add-ons. Choose its level from the planned study count; the add-ons alone are not a complete visit estimate.')
     if selected & STANDALONE_EMG_CODES and selected & NCS_CODES:
         issues.append('Use 95885–95887 for same-day needle EMG with nerve-conduction testing; 95860–95864 and 95867–95870 are standalone EMG codes.')
     if sum(code in NCS_CODES for code in codes) > 1:
         issues.append('Choose one nerve-conduction level (95907–95913) for the total planned study count, rather than adding alternative levels together.')
+    if '95984' in selected and '95983' not in selected:
+        issues.append('DBS programming add-on 95984 requires the first programming service 95983.')
+    if '95970' in selected and selected & {'95983', '95984'}:
+        issues.append('Choose DBS analysis without programming or DBS programming for the same device encounter.')
     return issues
+
+
+def dbs_plan_issue(codes: list[str], inputs: dict) -> str | None:
+    context = ' '.join(str(inputs.get(key) or '') for key in ('reason', 'appointment_type'))
+    analysis = re.search(r'\b(?:interrogat\w*|analy\w*|device check|battery check)\b', context, re.I)
+    programming = re.search(r'\b(?:reprogram\w*|program\w*)\b', context, re.I)
+    additional = re.search(r'\b(?:additional\s+15|(?:[3-9]\d|\d{3,})\s*(?:minutes?|min))\b', context, re.I)
+    if ('95970' in codes and (not analysis or programming)
+            or set(codes) & {'95983', '95984'} and not programming
+            or '95984' in codes and not additional):
+        return 'DBS device service and programming time must be explicitly planned.'
+    return None
+
+
+def dbs_planning_note(reason: str, codes: list[str]) -> str | None:
+    if re.search(r'\b(?:DBS|deep brain stimulation)\b', reason, re.I) and not set(codes) & {'95970', '95983', '95984'}:
+        return ('DBS means deep brain stimulation. Consider 95970 for documented device analysis without programming, '
+                'or 95983 and 95984 for documented programming time; none is established by a follow-up label alone.')
+    return None
 
 
 def grouped_candidates(suggestions: dict, rates: list[dict], *, allow_unpriced: bool = False) -> tuple[list, list]:

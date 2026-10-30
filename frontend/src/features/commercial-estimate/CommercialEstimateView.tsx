@@ -58,6 +58,9 @@ export default function CommercialEstimateView({ model }: { model: CommercialEst
     explanation,
     provider,
   } = model
+  const address = Object.values(result?.patient_details?.address || {})
+    .filter(Boolean)
+    .join(', ')
   return (
     <section className="visit-estimator visit-visual" aria-labelledby="visit-estimate-title">
       {!readOnly && (
@@ -133,6 +136,12 @@ export default function CommercialEstimateView({ model }: { model: CommercialEst
             )}
           </div>
         </div>
+        {result && (
+          <address className="visit-patient-address">
+            <small>Address</small>
+            <span>{address || 'Not returned'}</span>
+          </address>
+        )}
         <span className={`coverage-chip ${coverageTone}`}>
           <ShieldCheck size={18} aria-hidden="true" />
           {policyStatus}

@@ -6,13 +6,15 @@ import re
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from fastapi import HTTPException, Request
+import httpx
+from fastapi import HTTPException, Query, Request
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import JSONResponse
 
 from app.api.routers import staff as _staff
 from app.api.schemas.staff import PrebookingEligibility, PrebookingOptions, PrebookingResult
-from app.insurance import commercial_store, prebooking, stedi, stedi_financial
+from app.core import clinic_store
+from app.insurance import prebooking, stedi, stedi_financial, stedi_payers
 
 
 router = _staff.router
@@ -25,31 +27,20 @@ def _today() -> str:
         raise HTTPException(503, "The clinic timezone is not configured correctly.") from None
 
 
-def _configured(practice_id: str, today: str) -> tuple[list[dict], list[dict]]:
-    payers = [row for row in commercial_store.list_connections(practice_id)
-              if row.get("category") == "commercial_medical" and row.get("status") == "staff_guidance_enabled"
-              and row.get("stedi_payer_id")]
-    payer_ids = {row["id"] for row in payers}
-    providers = [row for row in commercial_store.list_networks(practice_id)
-                 if row.get("payer_connection_id") in payer_ids and row.get("status") == "verified"
-                 and row.get("effective_from", "") <= today
-                 and (not row.get("effective_to") or row["effective_to"] >= today)
-                 and re.fullmatch(r"\d{10}", str(row.get("billing_npi") or ""))
-                 and row.get("organization_name")]
-    return payers, providers
-
-
-@router.get("/prebooking-eligibility/options", response_model=PrebookingOptions, description="List this clinic's approved Stedi medical payer routes and provider identities for an unsaved pre-booking inquiry. No patient or eCW record is needed.")
-async def prebooking_options(request: Request):
+@router.get("/prebooking-eligibility/options", response_model=PrebookingOptions, description="Search Stedi's current payer directory by insurance company name and return ranked medical eligibility suggestions, including close matches. Staff select the exact insurer; no patient or appointment is created.")
+async def prebooking_options(request: Request, query: str = Query(min_length=2, max_length=100)):
     staff = await _staff.require_staff(request)
-    payers, providers = await run_in_threadpool(_configured, staff["practice_id"], _today())
-    return JSONResponse({"payers": [{"id": payer["id"], "name": payer["display_name"],
-        "providers": [{"id": row["id"], "name": row["network_name"], "npi": row["billing_npi"]}
-                      for row in providers if row["payer_connection_id"] == payer["id"]]}
-        for payer in payers]}, headers=_staff.NO_STORE)
+    api_key = stedi_financial.credentials(staff["practice_id"])
+    if not api_key:
+        raise HTTPException(503, "The clinic's Stedi credential is not configured.")
+    try:
+        payers = await stedi_payers.payer_suggestions(query, api_key)
+    except (httpx.HTTPError, ValueError, TypeError):
+        raise HTTPException(503, "Insurance companies are temporarily unavailable.") from None
+    return JSONResponse({"payers": payers}, headers=_staff.NO_STORE)
 
 
-@router.post("/prebooking-eligibility/check", response_model=PrebookingResult, description="Check today's general medical coverage (STC 30) through Stedi for a prospective person. Requires a clinic staff session and approved payer/provider configuration. Returns active_today, inactive_today, or needs_review. ClinicForce does not create a patient, intake, case, appointment, or saved eligibility result; repeat the check after booking for the visit date.")
+@router.post("/prebooking-eligibility/check", response_model=PrebookingResult, description="Check today's general medical coverage (STC 30) through Stedi using prospective patient name, birth date, selected insurer and optional member ID. The clinic's saved name and NPI supply the provider identity. A missing member ID or dependent identity may prevent a conclusive payer match. Returns active_today, inactive_today, or needs_review. No patient, intake, case, appointment, or saved eligibility result is created; repeat the check after booking for the visit date.")
 async def prebooking_check(value: PrebookingEligibility, request: Request):
     staff = await _staff.require_staff(request)
     if (os.getenv("STEDI_EXECUTION_MODE", "off") != "commercial_pilot"
@@ -59,17 +50,19 @@ async def prebooking_check(value: PrebookingEligibility, request: Request):
     if not api_key:
         raise HTTPException(503, "The clinic's Stedi credential is not configured.")
     today = _today()
-    payers, providers = await run_in_threadpool(_configured, staff["practice_id"], today)
-    payer = next((row for row in payers if row["id"] == value.payer_connection_id), None)
-    provider = next((row for row in providers if row["id"] == value.provider_network_id
-                     and row["payer_connection_id"] == value.payer_connection_id), None)
-    if not payer or not provider:
-        raise HTTPException(422, "Choose an approved payer and clinic provider for this check.")
-    details = value.model_dump(mode="json")
+    provider = await run_in_threadpool(clinic_store.get_for_practice, staff["practice_id"], staff["practice_name"])
+    if not clinic_store.valid_npi(str(provider.get("npi") or "")) or not provider.get("name"):
+        raise HTTPException(503, "The clinic needs a valid saved NPI and name before checking coverage.")
     try:
-        body = prebooking.request_body(details, payer, provider)
-    except ValueError as exc:
-        raise HTTPException(422, str(exc)) from exc
+        payer = await stedi_payers.search_payer("", [value.payer_id], api_key)
+    except (httpx.HTTPError, ValueError, TypeError):
+        raise HTTPException(503, "The insurance company could not be verified right now.") from None
+    if not payer or payer.get("stediId") != value.payer_id:
+        raise HTTPException(422, "Choose an insurance company from the search results.")
+    if stedi_payers.enrollment_required(payer) and not await stedi_payers.eligibility_enrolled(value.payer_id, provider["npi"], api_key):
+        raise HTTPException(503, "This insurer requires a live clinic enrollment before coverage can be checked.")
+    details = value.model_dump(mode="json")
+    body = prebooking.request_body(details, payer, provider)
     response = await stedi.Client(stedi.Settings("production", api_key)).check(body)
     checked_at = datetime.now(timezone.utc).isoformat()
     payload = response.get("payload") if isinstance(response.get("payload"), dict) else {}
@@ -78,4 +71,4 @@ async def prebooking_check(value: PrebookingEligibility, request: Request):
               else {"status": "needs_review", "coverage_start": None, "coverage_end": None,
                     "message": "The payer check was not completed. Review Stedi activity before sending another inquiry."})
     return JSONResponse({**result, "checked_at": checked_at, "checked_on": today,
-                         "payer": payer["display_name"], "check_id": check_id}, headers=_staff.NO_STORE)
+                         "payer": payer["displayName"], "check_id": check_id}, headers=_staff.NO_STORE)

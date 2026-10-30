@@ -5,12 +5,9 @@ import re
 import hashlib
 import json
 
-from app.core import object_store
+from app.core import object_store, staff_store
 from app.insurance import commercial, commercial_store, group_contract_support, insurance_product, inventory_certification, library_network_exclusions, network_participation
 from app.insurance.identity import patient_benefits_bound, patient_plan_applies
-
-
-NMCT_PRACTICE_ID = network_participation.NMCT_PRACTICE_ID
 
 
 def scoped_admin_nonparticipation(practice_id: str, payer: dict | None, inputs: dict,
@@ -61,23 +58,43 @@ def apply_admin_nonparticipation(result: dict, benefits: dict, row: dict | None)
     return True
 
 
-def apply_nmct_network_policy(result: dict, practice_id: str, benefits: dict) -> bool:
-    """Use NMCT's all-plan policy unless the payer states this provider is out of network."""
-    if (not network_participation.is_nmct_practice(practice_id) or benefits.get('network_conflict')
-            or benefits.get('network_source') == 'clinic_contract_inventory'
+def apply_nmct_library_contract(result: dict, benefits: dict, document: dict | None) -> bool:
+    if not document or network_participation.participation_conflict(benefits):
+        return False
+    if (benefits.get('network_source') == 'payer_participation_message'
+            and benefits.get('network_status') == 'in_network'):
+        return False
+    if (benefits.get('network_status') == 'in_network'
+            and benefits.get('network_source') in {'clinic_library_contract', 'clinic_group_agreement'}
+            and (result.get('network_evidence') or {}).get('document_id')):
+        return False
+    payer_disagrees = (benefits.get('network_source') == 'payer_participation_message'
+                      and benefits.get('network_status') == 'out_of_network')
+    benefits.update(network_status='in_network', network_source='clinic_library_contract',
+                    network_evidence_ids=[document['id']], network_provider_npi=None)
+    if payer_disagrees:
+        benefits['network_conflict'] = True
+    result['network_evidence'] = {'decision': 'conflicting_network_evidence' if payer_disagrees else 'confirmed_participating',
+        'source': 'clinic_library_contract', 'document_id': document['id'],
+        'document_label': document.get('label'),
+        'reason': ('The payer reports this provider out of network despite NMCT’s current insurer contract; reconcile before collecting.'
+                   if payer_disagrees else
+                   'NMCT has a current Clinical Library contract for this insurer; its Medicare, HMO and PPO products are in network.')}
+    return True
+
+
+def apply_nmct_contract_absence(result: dict, benefits: dict, payer: str, document: dict | None,
+                                service_date: str, plan_bound: bool) -> bool:
+    if (document or not payer or not service_date
+            or plan_bound is not True or benefits.get('active') is not True
+            or benefits.get('service_date_matches') is False
             or benefits.get('network_source') == 'payer_participation_message'
-            or (benefits.get('network_source') == 'clinic_nonparticipation_rule'
-                and (result.get('network_evidence') or {}).get('source') == 'clinic_admin_attestation')):
+            or network_participation.verified_out_of_network(benefits)
+            or network_participation.participation_conflict(benefits)):
         return False
-    if benefits.get('network_status') == 'in_network' and benefits.get('network_source') in {
-            'clinic_library_contract', 'clinic_group_agreement'}:
-        return False
-    benefits.update(network_status='in_network', network_source='clinic_nmct_policy',
+    benefits.update(network_status='out_of_network', network_source='clinic_no_insurer_contract',
                     network_evidence_ids=[], network_provider_npi=None)
-    result.pop('agreement_exclusion', None)
-    result['network_evidence'] = {
-        'decision': 'in_network_by_clinic_policy', 'source': 'clinic_nmct_policy',
-        'reason': 'NMCT treats every insurer and PPO or HMO product as in network unless the payer specifically reports this provider is out of network.'}
+    record_confirmed_out_of_network(result, benefits)
     return True
 
 
@@ -88,17 +105,20 @@ def record_confirmed_out_of_network(result: dict, benefits: dict) -> None:
         return
     if source == 'clinic_contract_inventory':
         return  # Keep the certified scope and exclusion passage already attached.
-    if source not in {'payer_participation_message', 'clinic_nonparticipation_rule', 'clinic_no_blue_contract'}:
+    if source not in {'payer_participation_message', 'clinic_nonparticipation_rule',
+                      'clinic_no_blue_contract', 'clinic_no_insurer_contract'}:
         return
     result['network_evidence'] = {
         'decision': ('out_of_network_confirmed_by_payer' if source == 'payer_participation_message'
-                     else 'out_of_network_by_clinic_contract_record' if source == 'clinic_no_blue_contract'
+                     else 'out_of_network_by_clinic_contract_record' if source in {'clinic_no_blue_contract', 'clinic_no_insurer_contract'}
                      else 'out_of_network_confirmed_by_scoped_nonparticipation_record'),
         'source': source, 'evidence_ids': benefits.get('network_evidence_ids') or [],
         'reason': ('Product-specific payer evidence identifies this requesting provider as out of network.'
                    if source == 'payer_participation_message' else
                    'No current Blue contract is registered in the clinic Library for this visit date.'
                    if source == 'clinic_no_blue_contract' else
+                   'No current contract for this insurer is registered in the NMCT Clinical Library for this visit date.'
+                   if source == 'clinic_no_insurer_contract' else
                    'A scoped clinic nonparticipation rule applies to this provider and product.')}
 
 
@@ -181,17 +201,44 @@ def recheck_saved_network_evidence(result: dict, case: dict, practice_id: str, p
     date = str((context.get('inputs') or {}).get('service_date') or '')
     exact = {**source, 'payer_plan_bound': patient_plan_applies(benefits, identity, date)}
     names = [plan['identified_product']] if plan.get('identified_product') else plan.get('names') or []
+    payer_name = str((payer or {}).get('display_name') or result.get('payer') or '')
+    nmct_document = (network_participation.nmct_library_contract(
+        staff_store.list_library(practice_id), payer_name, date)
+        if network_participation.is_nmct_practice(practice_id) and payer_name else None)
     attestation = scoped_admin_nonparticipation(practice_id, payer, context.get('inputs') or {}, exact,
                                                  names, str(plan.get('group_number') or ''))
     if apply_admin_nonparticipation(result, benefits, attestation):
-        return
+        if not nmct_document:
+            return
+        _clear_saved_tier(result, 'NMCT has a current insurer contract. Recalculate the saved out-of-network amount.')
     if benefits.get('network_source') == 'clinic_nonparticipation_rule':
         benefits.update(network_status='unknown', network_source=None)
-    if (network_participation.is_nmct_practice(practice_id) and benefits.get('network_status') == 'out_of_network'
-            and benefits.get('network_source') not in {'payer_participation_message', 'clinic_contract_inventory'}):
-        _clear_saved_tier(result, 'NMCT network policy changed. Rerun this visit before collecting an insured amount.')
-    if apply_nmct_network_policy(result, practice_id, benefits):
-        return
+    if benefits.get('network_source') == 'clinic_nmct_policy':
+        _clear_saved_tier(result, 'NMCT now requires an applicable Clinical Library contract. Rerun this visit before collecting an insured amount.')
+    if network_participation.is_nmct_practice(practice_id):
+        if not nmct_document and benefits.get('network_source') == 'clinic_library_contract':
+            _clear_saved_tier(result, 'The NMCT insurer contract is no longer current in the Clinical Library. Rerun before collecting.')
+        if nmct_document:
+            if benefits.get('network_status') == 'out_of_network' and benefits.get('network_source') != 'payer_participation_message':
+                _clear_saved_tier(result, 'NMCT has a current insurer contract. Recalculate the saved out-of-network amount.')
+            if apply_nmct_library_contract(result, benefits, nmct_document):
+                return
+        if (not nmct_document and payer_name
+                and exact['payer_plan_bound'] and benefits.get('active') is True
+                and benefits.get('service_date_matches') is not False
+                and benefits.get('network_source') != 'payer_participation_message'
+                and (benefits.get('network_source') == 'clinic_no_insurer_contract'
+                     or not network_participation.verified_out_of_network(benefits))
+                and not network_participation.participation_conflict(benefits)):
+            if (benefits.get('network_source') != 'clinic_no_insurer_contract'
+                    and ((result.get('price_range') or {}).get('complete')
+                         or (result.get('price_range') or {}).get('patient_min_cents') is not None
+                         or (result.get('price_range') or {}).get('patient_max_cents') is not None
+                         or result.get('arrival_collection'))):
+                _clear_saved_tier(result, 'No current insurer contract is registered for NMCT. Recalculate this visit before collecting an insured amount.')
+            apply_nmct_contract_absence(result, benefits, payer_name, nmct_document, date,
+                                        exact['payer_plan_bound'])
+            return
     recheck_saved_inventory(result, case, practice_id, payer)
     prior_group = benefits.get('network_source') == 'clinic_group_agreement'
     prior_blue_absence = benefits.get('network_source') == 'clinic_no_blue_contract'

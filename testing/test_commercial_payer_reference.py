@@ -30,7 +30,8 @@ def test_reference_identity_allows_one_payer_spelling_correction():
     assert not _same_person_for_reference(request, wrong_birth, coverage)
 
 
-def test_registered_clinic_saved_reference_uses_all_plan_network_policy(monkeypatch):
+def test_registered_clinic_saved_reference_does_not_infer_network(monkeypatch):
+    monkeypatch.setattr(status._api.staff_store, 'list_library', lambda *_: [])
     case = {
         'previsit_context': {
             'context_token': 'synthetic-token',
@@ -60,7 +61,7 @@ def test_registered_clinic_saved_reference_uses_all_plan_network_policy(monkeypa
     monkeypatch.setattr(status._api.amount_explanation, 'build', lambda *_: {})
     monkeypatch.setattr(status.evidence_resolution, 'build', lambda *_: {})
     result = status._previsit_result(case, network_participation.NMCT_REGISTERED_PRACTICE_ID)
-    assert result['reference_benefits']['network_status'] == 'in_network'
-    assert result['reference_benefits']['network_source'] == 'clinic_nmct_policy'
+    assert result['reference_benefits']['network_status'] == 'unknown'
+    assert result['reference_benefits'].get('network_source') is None
     assert result['reference_benefits']['service_date_matches'] is False
     assert case['previsit_reference']['benefits']['network_status'] == 'unknown'

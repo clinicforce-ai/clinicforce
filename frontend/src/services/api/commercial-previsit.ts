@@ -46,6 +46,7 @@ export type PrevisitEstimate = {
     differences: string[]
     alternative_supported?: boolean
     payer_comparison?: { ecw: string; card: string }
+    office_copay_cents?: number
   }
   cash_fallback?: { reason: string }
   temporary_rate_reference?: TemporaryRateReference

@@ -1,28 +1,20 @@
 """Interpret one unsaved Stedi check for a prospective clinic patient."""
 from __future__ import annotations
 
-from app.insurance import commercial, identity, stedi
+from app.insurance import commercial, identity
 
 
 def request_body(details: dict, payer: dict, provider: dict) -> dict:
-    self_policy = details["relationship"] == "self"
-    subscriber = {
-        "firstName": details["given_name"] if self_policy else details["subscriber_given_name"],
-        "lastName": details["family_name"] if self_policy else details["subscriber_family_name"],
-        "birthDate": details["birth_date"] if self_policy else details["subscriber_birth_date"],
-        "memberId": details["member_id"],
+    body = {
+        "payerId": payer["stediId"],
+        "provider": {"name": {"organization": provider["name"]}, "npi": provider["npi"]},
+        "subscriber": {"name": {"person": {"firstName": details["given_name"],
+                                             "lastName": details["family_name"]}},
+                       "dateOfBirth": details["birth_date"]},
+        "encounter": {"services": [{"system": "STC", "value": "30"}]},
     }
-    body, error = stedi.request_body({
-        "payer_id": payer["id"], "provider": {"npi": provider["billing_npi"]},
-        "relationship": "18" if self_policy else "19", "subscriber": subscriber,
-        "patient": {"patient_first_name": details["given_name"],
-                    "patient_last_name": details["family_name"],
-                    "patient_birth_date": details["birth_date"]},
-    }, {"stedi_payer_ids": {payer["id"]: payer["stedi_payer_id"]},
-        "providers": {provider["billing_npi"]: {"stedi_organization_name": provider["organization_name"]}}},
-        service_type="30")
-    if error or not body:
-        raise ValueError("The selected payer or clinic provider cannot be used for an eligibility check.")
+    if details["member_id"]:
+        body["subscriber"]["memberId"] = details["member_id"]
     return body
 
 
@@ -39,14 +31,10 @@ def evaluate(payload: dict, details: dict, service_date: str) -> dict:
     """Only a person-bound STC 30 response can establish current medical coverage."""
     subscriber = payload.get("subscriber") if isinstance(payload.get("subscriber"), dict) else {}
     dependent = payload.get("dependent") if isinstance(payload.get("dependent"), dict) else {}
-    self_policy = details["relationship"] == "self"
-    matched = (identity.normalized(subscriber.get("memberId")) == identity.normalized(details["member_id"])
-               and _person_matches(subscriber,
-                   details["given_name"] if self_policy else details["subscriber_given_name"],
-                   details["family_name"] if self_policy else details["subscriber_family_name"],
-                   details["birth_date"] if self_policy else details["subscriber_birth_date"])
-               and (self_policy or _person_matches(dependent, details["given_name"],
-                                                   details["family_name"], details["birth_date"])))
+    person = dependent if dependent else subscriber
+    matched = (_person_matches(person, details["given_name"], details["family_name"], details["birth_date"])
+               and bool(identity.normalized(subscriber.get("memberId")))
+               and (not details["member_id"] or identity.normalized(subscriber.get("memberId")) == identity.normalized(details["member_id"])))
     result = {"status": "needs_review", "coverage_start": None, "coverage_end": None,
               "message": "The payer did not confirm current medical coverage. Review the details with the payer."}
     if not matched:

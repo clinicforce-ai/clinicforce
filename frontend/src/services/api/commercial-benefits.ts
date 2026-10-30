@@ -24,6 +24,7 @@ export type PrevisitBenefits = null | {
     | 'payer_participation_message'
     | 'clinic_nonparticipation_rule'
     | 'clinic_contract_inventory'
+    | 'clinic_no_insurer_contract'
     | null
   network_evidence_ids?: string[]
   selected_benefit_ids?: string[]

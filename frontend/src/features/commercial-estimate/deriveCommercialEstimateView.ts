@@ -164,21 +164,21 @@ export function deriveCommercialEstimateView({
                 : contractCandidate
                   ? 'Contract match unavailable'
                   : 'Not determined'
-  const referenceClinicNetwork = referenceBenefits?.network_source === 'clinic_nmct_policy'
-  if (referenceClinicNetwork) networkLabel = 'In network · clinic policy'
   const networkSource =
     result?.network_evidence?.decision === 'in_network_contract_supported'
       ? 'Current signed clinic agreement · review member product and clinician tier'
       : benefits?.network_source === 'clinic_library_contract'
         ? 'Current Clinical Library contract'
         : benefits?.network_source === 'clinic_nmct_policy'
-          ? 'NMCT all-plan policy · payer-specific nonparticipation takes precedence'
+          ? 'Legacy NMCT policy · recalculate against current contracts'
           : benefits?.network_source === 'clinic_library_absent'
             ? 'No contract linked to this exact payer product and provider'
             : benefits?.network_source === 'clinic_nonparticipation_rule'
               ? 'Current scoped clinic nonparticipation rule'
               : benefits?.network_source === 'clinic_contract_inventory'
                 ? 'Certified clinic contract inventory · not payer-confirmed'
+                : benefits?.network_source === 'clinic_no_insurer_contract'
+                  ? 'No current insurer contract in the NMCT Clinical Library'
                 : guidance?.network_source
   let networkTone =
     !result || tooEarly || result.recovery?.state === 'pending'
@@ -196,8 +196,7 @@ export function deriveCommercialEstimateView({
                 : 'is-missing'
               : 'is-review'
             : 'is-review'
-  if (referenceClinicNetwork) networkTone = 'is-confirmed'
-  else if (referenceBenefits?.active === true && networkLabel === 'Not determined')
+  if (referenceBenefits?.active === true && networkLabel === 'Not determined')
     networkTone = 'is-unknown'
   const unavailableReason = error
     ? 'Current benefits could not be loaded.'

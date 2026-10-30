@@ -123,6 +123,18 @@ td:first-child{font-weight:500}
 .trail>div,.diagram>div{flex:1 1 120px;min-width:0;padding:1rem;background:var(--soft);border-radius:6px}
 .trail strong,.trail small,.diagram b,.diagram span{display:block}
 .trail small,.diagram span{color:var(--muted);font-size:.85rem;line-height:1.6}
+.aws-picture{padding:1rem;border:1px solid var(--line);border-radius:8px;background:#f7fbfc}
+.aws-picture figcaption{font-weight:600;color:var(--ink);margin-bottom:.8rem}
+.aws-route,.aws-fork{display:flex;align-items:stretch;gap:.6rem}
+.aws-route>div,.aws-fork>div{flex:1;min-width:0;padding:.8rem;background:white;border:1px solid #bfd8df;border-radius:7px}
+.aws-route>span{align-self:center;color:var(--teal);font-weight:700}
+.aws-route strong,.aws-fork strong,.aws-route small,.aws-fork small{display:block}
+.aws-route small,.aws-fork small{color:var(--muted);line-height:1.5}
+.aws-fork{margin-top:.7rem}
+.aws-fork>div:first-child{border-color:#a5c5ed;background:#f4f8ff}
+.aws-fork>div:last-child{border-color:#b4d9ce;background:#f1faf6}
+.aws-arrow{display:block;text-align:center;color:var(--teal);font-size:1.2rem;line-height:1.5}
+.aws-note{font-size:.85rem;color:var(--muted);margin:.7rem 0 0}
 .steps{padding-left:1.5rem}
 .steps li{padding:.2rem 0 .7rem .3rem}
 figure{margin:1rem 0}
@@ -177,6 +189,8 @@ figcaption{font-size:.85rem;line-height:1.6;color:var(--muted)}
 .learning-flow strong{margin:0 0 .15rem}
 .learning-flow li+li:before{content:'↓';left:1.1rem;top:-1.65rem}
 .lesson-cards,.glossary,.cards{grid-template-columns:1fr}
+.aws-route,.aws-fork{flex-direction:column}
+.aws-route>span{transform:rotate(90deg)}
 .desktop-only{display:none}
 .viewer-wrap{padding:1.5rem 0}
 .viewer-head{padding:0 1rem}

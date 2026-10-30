@@ -6,7 +6,7 @@ from app.insurance.identity import patient_benefits_bound, patient_plan_applies,
 from app.insurance.network_participation import verified_in_network, verified_out_of_network
 from app.insurance import blue_cross_proxy, evidence_resolution, group_contract_support
 from app.api.routers.commercial_flow.commercial_previsit_finish import _payer_plan_pricing_source
-from app.api.routers.commercial_flow.commercial_previsit_network_guard import apply_nmct_network_policy, recheck_saved_network_evidence, recheck_saved_payer_message
+from app.api.routers.commercial_flow.commercial_previsit_network_guard import recheck_saved_network_evidence, recheck_saved_payer_message
 from app.api.routers.commercial_flow.commercial_previsit_saved_pricing import _reprice_saved_new_network
 from app.api.routers.commercial_flow.commercial_previsit_requirements import refresh_saved_requirements
 from app.api.routers.commercial_flow.commercial_previsit_rate_reference import _attach_temporary_aetna_rates, _attach_temporary_uhc_rates, _attach_temporary_blue_cross_rates
@@ -337,8 +337,8 @@ def _previsit_result(case: dict, practice_id: str | None = None) -> dict:
     if (reference.get('benefits') and reference.get('context_token') == case['previsit_context'].get('context_token')
             and reference.get('service_date') == result.get('service_date')):
         result['reference_benefits'] = _api.deepcopy(reference['benefits'])
-        if practice_id and result['reference_benefits'].get('active') is True:
-            apply_nmct_network_policy({}, practice_id, result['reference_benefits'])
+        if result['reference_benefits'].get('network_source') == 'clinic_nmct_policy':
+            result['reference_benefits'].update(network_status='unknown', network_source=None)
         result['reference_subscriber'] = _api.deepcopy(reference.get('subscriber') or {})
         result['reference_only'] = True
     # Legacy discovery wrote a detail-only failure after a successful 271.
@@ -389,6 +389,10 @@ def _previsit_result(case: dict, practice_id: str | None = None) -> dict:
         elif _api.re.search(r'\baetna\b', str(result.get('payer') or ''), _api.re.I):
             _attach_temporary_aetna_rates(result, practice_id, context.get('inputs') or {},
                                           context.get('source') or {})
+        elif (payer_name := str(result.get('payer') or (route_payer or {}).get('display_name') or '')) and not _api.re.search(
+                r'blue cross|bcbstx|blue shield', payer_name, _api.re.I):
+            _attach_temporary_blue_cross_rates(result, practice_id, context.get('inputs') or {},
+                                               context.get('source') or {}, payer_name)
         if proxy := (blue_cross_proxy.estimate(result, str(result.get('service_date') or ''))
                      or blue_cross_proxy.cigna_estimate(result, str(result.get('service_date') or ''))
                      or blue_cross_proxy.cigna_oap_office_scenario(result, str(result.get('service_date') or ''))):

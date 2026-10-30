@@ -92,6 +92,11 @@ def build_catalog(api: ModuleType, result: dict, session: dict, inputs: dict, so
     if botox_visit:
         descriptions.update({code: description for family in ('botulinum_drug', 'chemodenervation')
                              for code, description in cpt_rules.SERVICE_FAMILIES[family]['candidate_descriptions'].items()})
+    if api.re.search(r'\b(?:DBS|deep brain stimulation)\b',
+                     ' '.join(str(inputs.get(key) or '') for key in ('reason', 'appointment_type')), api.re.I):
+        descriptions.update({'95970': 'Implanted neurostimulator analysis · no programming',
+                             '95983': 'Deep brain neurostimulator programming · first 15 minutes',
+                             '95984': 'Deep brain neurostimulator programming · each additional 15 minutes'})
     available.extend({'id': 'planning:' + code, 'code': code, 'description': description,
                       'source': 'CPT planning catalog',
                       'units': None if code == 'J0585' else 1, 'modifiers': []}
@@ -105,4 +110,8 @@ def build_catalog(api: ModuleType, result: dict, session: dict, inputs: dict, so
         if len(matches) == 1:
             row.update(unit_allowed_cents=matches[0]['allowed_cents'], unit_cash_cents=matches[0].get('cash_cents'),
                        description=row.get('description') or matches[0].get('description'), rate_source=matches[0].get('source_reference'))
+    # CPT 95900 was retired in 2013; an old eCW or AI candidate cannot enter a current visit plan.
+    if inputs['service_date'] >= '2013-01-01':
+        codes = [row for row in codes if row['code'] != '95900']
+        available = [row for row in available if row['code'] != '95900']
     return payer_id, connections, codes, available, uploaded_cash

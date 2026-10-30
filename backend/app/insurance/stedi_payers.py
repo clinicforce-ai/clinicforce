@@ -70,6 +70,34 @@ def select_payer(items: list[dict[str, Any]], name: str, identifiers: list[str])
     return matches[0] if len(matches) == 1 else None
 
 
+async def payer_suggestions(query: str, api_key: str, *, transport: httpx.AsyncBaseTransport | None = None) -> list[dict]:
+    """Return Stedi-ranked medical eligibility payers for a staff choice."""
+    async with httpx.AsyncClient(timeout=httpx.Timeout(10, connect=5), transport=transport) as client:
+        response = await client.get(SEARCH_URL, params={"query": query[:200], "pageSize": 100},
+                                    headers={"Authorization": api_key})
+        response.raise_for_status()
+        payload = response.json()
+    if not isinstance(payload, dict) or not isinstance(payload.get("items"), list):
+        raise ValueError("Invalid payer search response")
+    suggestions = {}
+    for row in payload["items"]:
+        payer = row.get("payer") if isinstance(row, dict) else None
+        if not isinstance(payer, dict):
+            continue
+        support = payer.get("transactionSupport")
+        types = payer.get("coverageTypes")
+        payer_id, name = payer.get("stediId"), payer.get("displayName")
+        if (not isinstance(support, dict) or support.get("eligibilityCheck") not in {"SUPPORTED", "ENROLLMENT_REQUIRED"}
+                or types and (not isinstance(types, list) or "medical" not in types)
+                or not isinstance(payer_id, str) or not payer_id
+                or not isinstance(name, str) or not name):
+            continue
+        suggestions.setdefault(payer_id, {"id": payer_id, "name": name})
+        if len(suggestions) == 10:
+            break
+    return list(suggestions.values())
+
+
 async def search_payer(name: str, identifiers: list[str], api_key: str,
                        *, transport: httpx.AsyncBaseTransport | None = None, plan: str | None = None,
                        candidates: list[dict] | None = None) -> dict | None:

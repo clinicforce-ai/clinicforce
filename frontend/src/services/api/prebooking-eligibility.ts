@@ -1,16 +1,11 @@
 import { json, request } from './client'
 
 export type PrebookingDetails = {
-  payer_connection_id: string
-  provider_network_id: string
+  payer_id: string
   given_name: string
   family_name: string
   birth_date: string
   member_id: string
-  relationship: 'self' | 'dependent'
-  subscriber_given_name: string
-  subscriber_family_name: string
-  subscriber_birth_date: string
 }
 
 export type PrebookingResult = {
@@ -24,21 +19,10 @@ export type PrebookingResult = {
   coverage_end: string | null
 }
 
-export const getPrebookingOptions = () =>
+export const getPrebookingOptions = (query: string) =>
   request<{
-    payers: Array<{
-      id: string
-      name: string
-      providers: Array<{ id: string; name: string; npi: string }>
-    }>
-  }>('/api/staff/prebooking-eligibility/options')
+    payers: Array<{ id: string; name: string }>
+  }>(`/api/staff/prebooking-eligibility/options?query=${encodeURIComponent(query)}`)
 
 export const checkPrebookingEligibility = (details: PrebookingDetails) =>
-  request<PrebookingResult>(
-    '/api/staff/prebooking-eligibility/check',
-    json({
-      ...details,
-      subscriber_birth_date:
-        details.relationship === 'dependent' ? details.subscriber_birth_date : null,
-    }),
-  )
+  request<PrebookingResult>('/api/staff/prebooking-eligibility/check', json(details))
