@@ -75,6 +75,10 @@ def _valid_visit_plan(proposal: dict, by_code: dict, inputs: dict) -> list[dict]
     candidate = proposal.get('services')
     if not isinstance(candidate, list) or not candidate or len(candidate) > 12:
         raise _InvalidVisitPlan('No supported plan')
+    # Models can still propose retired 95900 alongside valid current studies.
+    candidate = [item for item in candidate if not isinstance(item, dict) or item.get('code') != '95900']
+    if not candidate:
+        raise _InvalidVisitPlan('No current service in plan')
     codes = [item.get('code') for item in candidate if isinstance(item, dict)]
     if (len(codes) != len(candidate)
             or any(not isinstance(code, str) or code not in by_code or code.startswith('J') for code in codes)

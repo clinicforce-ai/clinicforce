@@ -100,7 +100,8 @@ def test_retired_95900_cannot_enter_a_current_emg_plan():
     assert cpt_rules.service_selection_issues(['95908', '95886', '95900'])
     model = MagicMock()
     model.converse.return_value = model_reply([
-        {'code': '95908', 'units': 1}, {'code': '95886', 'units': 1}])
+        {'code': '95908', 'units': 1}, {'code': '95886', 'units': 1},
+        {'code': '95900', 'units': 1}])
     with patch.object(cpt_suggester.boto3, 'client', return_value=model):
         plan = cpt_suggester.recommend_visit_plan(
             {'reason': 'carpal tunnel and migraines', 'appointment_type': 'EMG Visit'},
