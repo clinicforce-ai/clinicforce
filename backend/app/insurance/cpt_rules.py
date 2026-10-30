@@ -83,6 +83,8 @@ def service_selection_issues(codes: list[str]) -> list[str]:
     # validate the planned bundle, not whether the payer covers the procedure.
     selected = set(codes)
     issues = []
+    if '95900' in selected:
+        issues.append('CPT 95900 was deleted in 2013. Choose one current nerve-conduction study-count code (95907–95913).')
     if selected & EMG_ADD_ONS and not selected & NCS_CODES:
         issues.append('Add the anticipated nerve-conduction service (95907–95913) for these EMG add-ons. Choose its level from the planned study count; the add-ons alone are not a complete visit estimate.')
     if selected & STANDALONE_EMG_CODES and selected & NCS_CODES:

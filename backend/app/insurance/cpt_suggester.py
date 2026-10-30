@@ -14,7 +14,6 @@ from botocore.config import Config
 from app.ingestion.bedrock_extractor import BEDROCK_MODEL_ID
 from app.logs.logger import log_warning
 
-
 from app.insurance.cpt_prompt_contract import (
     _SYSTEM,
     _TOOL_NAME,
@@ -75,8 +74,9 @@ def _valid_visit_plan(proposal: dict, by_code: dict, inputs: dict) -> list[dict]
     candidate = proposal.get('services')
     if not isinstance(candidate, list) or not candidate or len(candidate) > 12:
         raise _InvalidVisitPlan('No supported plan')
+    candidate = [item for item in candidate if not isinstance(item, dict) or item.get('code') != '95900']
     codes = [item.get('code') for item in candidate if isinstance(item, dict)]
-    if (len(codes) != len(candidate)
+    if (not candidate or len(codes) != len(candidate)
             or any(not isinstance(code, str) or code not in by_code or code.startswith('J') for code in codes)
             or len(set(codes)) != len(codes)):
         raise _InvalidVisitPlan('Unsupported plan code')
