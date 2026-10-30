@@ -149,7 +149,7 @@ def test_cigna_oap_office_scenario_withholds_without_member_scoped_inputs():
 
 def test_cigna_fee_proxy_defers_collection_without_cigna_explanation_of_estimate():
     result = _result()
-    result['benefits']['network_source'] = 'clinic_nmct_policy'
+    result['benefits']['network_source'] = 'clinic_library_contract'
     result['service_selection_status'] = 'approved'
     result['fee_proxy_estimate'] = blue_cross_proxy.cigna_estimate(result, '2026-10-27')
     guidance = collection_guidance.build(result)
@@ -180,7 +180,7 @@ def test_cigna_fee_proxy_defers_collection_without_cigna_explanation_of_estimate
 
 def test_cigna_fee_proxy_defers_for_exact_suggested_preview_plan():
     result = _result()
-    result['benefits']['network_source'] = 'clinic_nmct_policy'
+    result['benefits']['network_source'] = 'clinic_library_contract'
     result['service_selection_status'] = 'preview'
     result['service_plan'] = {'recommended_ids': ['ncs', 'emg']}
     result['fee_proxy_estimate'] = blue_cross_proxy.cigna_estimate(result, '2026-10-27')

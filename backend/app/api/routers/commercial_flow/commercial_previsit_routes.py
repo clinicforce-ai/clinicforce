@@ -21,9 +21,11 @@ async def saved_previsit(case_id: str, request: _api.Request) -> dict:
     evidence_resolution reports each field's source findings and precise
     remaining action after the shared estimator evaluates saved evidence.
     A saved read projects the current network rule without a payer call or write.
-    NMCT (practice_id primary) uses its confirmed insurer roster for
-    clinic_nmct_policy in network; other identified insurers are out of network.
-    Old insured amounts are cleared when this network tier changes.
+    NMCT (practice_id primary) uses a current Clinical Library insurer contract
+    for its HMO, PPO and Medicare Advantage products' in-network tier.
+    A patient-bound insurer plan is out of network when no current insurer
+    contract is in that Library.
+    Old clinic-derived out-of-network prices are cleared for recalculation.
     Other practices still use dated group-network contracts; absent Blue
     agreements can select clinic_no_blue_contract. Network tier alone does not
     establish a collectible amount.
@@ -97,7 +99,7 @@ async def saved_previsit(case_id: str, request: _api.Request) -> dict:
     administrator-attached same-visit Stedi check. The subscriber is displayed
     with a masked member ID in the UI and its benefit rows take display
     precedence over mismatched eCW values. This does not change collection_guidance.
-    At NMCT, the separate all-plan clinic policy can label the reference's network tier;
+    At NMCT, a payer reference alone does not establish the clinic contract tier;
     the payer-returned date and appointment-date coverage qualification remain visible.
     benefits.oop_annual_cents is a unique plan-wide individual maximum when
     the payer returned one; it is distinct from oop_remaining_cents.

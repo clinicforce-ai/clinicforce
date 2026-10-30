@@ -211,6 +211,11 @@ export default function ArrivalAmountSummary({
           CPT, the clinic collection policy, and any payments or credits before charging. Cigna’s
           allowed amount and full patient share remain unknown.
         </p>
+      ) : diagnosticCopayReference != null ? (
+        <p>
+          One payer-reported diagnostic copay per day. Approve the clinic collection policy and
+          check prior payments before charging.
+        </p>
       ) : partialCopay != null ? (
         <p>
           {referenceOnly

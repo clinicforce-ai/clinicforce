@@ -40,11 +40,9 @@ from app.insurance.v2_decisions import (
 from app.insurance.availity import Settings, gateway, PATHS, DEMO_SCENARIOS, unwrap
 from app.logs.logger import log_info, log_warning
 
-
 router = APIRouter(prefix="/api/doctor/insurance/v2", tags=["doctor-insurance-v2"])
 Resource = Literal["coverage", "estimate", "procedure_estimate", "authorization", "referral"]
 ECW_FETCH_TIMEOUT_SECONDS = 25
-
 
 async def _session(request: Request) -> dict:
     session = await _insurance_session(request)
@@ -57,7 +55,6 @@ async def _session(request: Request) -> dict:
         if session["practice_id"] not in configured_practices:
             raise HTTPException(403, "Connected insurance is not configured for this clinic. Your intake is saved; use document review.")
     return session
-
 
 def validate_staff_coverage(fields: dict, inputs: dict, source: dict, practice: dict) -> None:
     """Compare card details that can actually be confirmed independently of eCW."""
@@ -84,7 +81,6 @@ def validate_staff_coverage(fields: dict, inputs: dict, source: dict, practice: 
     if len(mapped) == 1 and (not connected_id or connected_id in mapped):
         return
     raise HTTPException(409, "The confirmed payer could not be matched to the eCW coverage. Ask the administrator to check the payer name and approved payer mapping, or use document review. Your card is saved.")
-
 
 def apply_staff_card_coverage(fields: dict, inputs: dict, missing: list[str], practice: dict) -> bool:
     """Fill only eCW coverage fields absent from a staff-confirmed scanned card."""
@@ -127,12 +123,10 @@ def apply_staff_card_coverage(fields: dict, inputs: dict, missing: list[str], pr
     missing[:] = [item for item in missing if not item.startswith(resolved)]
     return True
 
-
 class Start(BaseModel):
     model_config = ConfigDict(extra="forbid")
     scenario: Literal["Coverages-Complete-i", "Coverages-InProgress-i", "Coverages-Retrying-i", "Coverages-PayerError1-i", "Coverages-RequestError1-i"] = "Coverages-Complete-i"
     appointment_id: str | None = Field(default=None, max_length=200, pattern=r"^[A-Za-z0-9.\-]+$")
-
 
 class ServiceChoice(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -140,11 +134,9 @@ class ServiceChoice(BaseModel):
     quantity: int = Field(ge=1, le=10_000)
     service_status: Literal["scheduled", "possible"]
 
-
 class ConfirmServices(BaseModel):
     model_config = ConfigDict(extra="forbid")
     lines: list[ServiceChoice] = Field(min_length=1, max_length=20)
-
 
 class ManualReview(BaseModel):
     """Staff-recorded payer confirmation for the Stedi benefits-only path."""
@@ -157,7 +149,6 @@ class ManualReview(BaseModel):
     authorization_status: Literal["unconfirmed", "not_required", "approved", "required"]
     authorization_reference: str = Field(default="", max_length=200)
     price_path: Literal["pending", "cash"]
-
 
 def configuration() -> tuple[Settings, dict, str]:
     try:
@@ -201,15 +192,12 @@ def configuration() -> tuple[Settings, dict, str]:
     except (ValueError, TypeError, ZoneInfoNotFoundError):
         raise HTTPException(503, "The Availity server configuration is invalid. Check environment, scope, URLs and practice settings.") from None
 
-
 def stedi_temporary_enabled(settings: Settings, practice: dict) -> bool:
     """Stedi is an explicit bridge only; Availity production always wins."""
     return settings.environment == "demo" and practice.get("stedi_temporary_enabled") is True and stedi.Settings.read().mode == "production"
 
-
 def _normalized(value: object) -> str:
     return re.sub(r"\s+", " ", str(value or "").strip()).casefold()
-
 
 def stedi_network(case: dict, practice: dict, coverage: dict, *, practice_id: str = '', payload: dict | None = None) -> dict:
     inputs = case["inputs"]
@@ -221,11 +209,16 @@ def stedi_network(case: dict, practice: dict, coverage: dict, *, practice_id: st
     if network_participation.is_nmct_practice(practice_id):
         aliases = [name for name, payer_id in practice.get('payer_aliases', {}).items()
                    if payer_id == inputs.get('payer_id')]
-        tiers = {network_participation.nmct_contract_roster(name) for name in aliases}
-        if not inputs.get('service_date') or len(tiers) != 1 or None in tiers:
+        if not aliases or not inputs.get('service_date'):
             return {"provider_network_status": "unconfirmed",
-                    "provider_network": "Identify one clinic payer alias and visit date before applying NMCT's contract roster."}
-        contracted = tiers.pop()
+                    "provider_network": "Identify a clinic payer alias and visit date before checking NMCT's insurer contracts."}
+        documents = staff_store.list_library(practice_id)
+        contracts = [network_participation.nmct_library_contract(
+            documents, name, str(inputs['service_date'])) for name in aliases]
+        if len({row['id'] if row else None for row in contracts}) != 1:
+            return {"provider_network_status": "unconfirmed",
+                    "provider_network": "Clinic payer aliases disagree about the insurer contract; resolve the alias before using its network tier."}
+        contract = contracts[0]
         payer = commercial.normalize_stedi_271(payload, '98', False,
             service_date=str(inputs.get('service_date') or ''), office_visit=True,
             provider_npi=str((inputs.get('provider') or {}).get('npi') or '')) if payload else {}
@@ -234,17 +227,23 @@ def stedi_network(case: dict, practice: dict, coverage: dict, *, practice_id: st
                     "provider_network": "Payer provider-participation statements conflict; verify the requesting provider with the payer."}
         if (payer.get('network_status') == 'out_of_network'
                 and payer.get('network_source') == 'payer_participation_message'):
+            if contract:
+                return {"provider_network_status": "unconfirmed",
+                        "provider_network": "The payer reports this provider out of network despite NMCT's current insurer contract; reconcile before collecting."}
             return {"provider_network_status": "out_of_network",
                     "provider_network": "The payer specifically reports that the requesting provider is out of network."}
         if (payer.get('network_status') == 'in_network'
                 and payer.get('network_source') == 'payer_participation_message'):
-            if not contracted:
-                return {"provider_network_status": "unconfirmed",
-                        "provider_network": "The payer reports participation, but NMCT lists no contract for this insurer; reconcile before collecting."}
             return {"provider_network_status": "in_network",
                     "provider_network": "The payer specifically reports that the requesting provider is in network."}
-        return {"provider_network_status": "in_network" if contracted else "out_of_network",
-                "provider_network": "NMCT lists this insurer as contracted." if contracted else "This insurer is outside NMCT's confirmed contract roster."}
+        if contract:
+            return {"provider_network_status": "in_network",
+                    "provider_network": "Current NMCT Clinical Library contract for this insurer; Medicare, HMO and PPO products are in network."}
+        if inputs.get('service_date') and len(plans) == 1 and aliases:
+            return {"provider_network_status": "out_of_network",
+                    "provider_network": "No current insurer contract is registered in the NMCT Clinical Library for this visit date."}
+        return {"provider_network_status": "unconfirmed",
+                "provider_network": "No current NMCT Clinical Library contract matches this insurer."}
     service_date = str(inputs.get("service_date") or "")
     matched = []
     for entry in practice.get("stedi_provider_networks", []):
@@ -461,8 +460,9 @@ async def create(body: Start, request: Request):
 @router.get("/cases/{case_id}", description=(
     "Read the saved V2 case and payer results. Completed Stedi coverage keeps benefit rows and a "
     "patient-identity decision containing mismatch field names, without payer demographic values. "
-    "For NMCT's temporary Stedi bridge, the confirmed insurer roster sets the network tier "
-    "when one payer alias is identified; contradictory payer participation needs review."
+    "For NMCT's temporary Stedi bridge, a current Clinical Library insurer contract covers "
+    "its Medicare, HMO and PPO products. A selected insurer with no current Library contract "
+    "is out of network; a contradictory provider-specific payer statement requires review."
 ))
 async def get_case(case_id: str, request: Request):
     session = await _session(request)

@@ -19,7 +19,7 @@ RATES = [{'id': 'ncs-rate', 'code': '95908', 'modifier': '', 'allowed_cents': 11
 def benefits():
     return {'active': True, 'service_date_matches': True,
             'coverage_level': 'individual', 'network_status': 'in_network',
-            'network_source': 'clinic_nmct_policy', 'has_secondary': False,
+            'network_source': 'clinic_library_contract', 'has_secondary': False,
             'identity': {'status': 'matched', 'binding': 'synthetic', 'match_version': 2},
             'plan_details': {'names': ['Aetna Medicare Signature (PPO)'],
                 'group_number': '000003-TX', 'plan_number': '000003-TX000006'},

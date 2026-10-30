@@ -141,7 +141,7 @@ export function deriveCommercialEstimateView({
     result?.collection_guidance?.status !== 'deferred' ? result?.collection_guidance : undefined
   const contractCandidate =
     benefits?.network_status === 'unknown' ? result?.mapping_candidate?.network : null
-  let networkLabel =
+  const networkLabel =
     result?.network_evidence?.decision === 'out_of_network_by_clinic_contract_inventory'
       ? 'Out of network for estimation · clinic inventory'
       : result?.network_evidence?.decision === 'excluded_under_available_agreement'
@@ -164,24 +164,20 @@ export function deriveCommercialEstimateView({
                 : contractCandidate
                   ? 'Contract match unavailable'
                   : 'Not determined'
-  const referenceClinicNetwork = referenceBenefits?.network_source === 'clinic_nmct_policy'
-  if (referenceClinicNetwork) networkLabel = 'In network · clinic policy'
   const networkSource =
     result?.network_evidence?.decision === 'in_network_contract_supported'
       ? 'Current signed clinic agreement · review member product and clinician tier'
       : benefits?.network_source === 'clinic_library_contract'
         ? 'Current Clinical Library contract'
-        : benefits?.network_source === 'clinic_nmct_policy'
-          ? 'NMCT contracted-insurer roster · payer-specific nonparticipation takes precedence'
-          : benefits?.network_source === 'clinic_nmct_noncontracted'
-            ? 'Insurer outside NMCT’s confirmed contract roster'
-            : benefits?.network_source === 'clinic_library_absent'
-              ? 'No contract linked to this exact payer product and provider'
-              : benefits?.network_source === 'clinic_nonparticipation_rule'
-                ? 'Current scoped clinic nonparticipation rule'
-                : benefits?.network_source === 'clinic_contract_inventory'
-                  ? 'Certified clinic contract inventory · not payer-confirmed'
-                  : guidance?.network_source
+        : benefits?.network_source === 'clinic_library_absent'
+          ? 'No contract linked to this exact payer product and provider'
+          : benefits?.network_source === 'clinic_no_insurer_contract'
+            ? 'No current insurer contract registered in the NMCT Clinical Library'
+            : benefits?.network_source === 'clinic_nonparticipation_rule'
+              ? 'Current scoped clinic nonparticipation rule'
+              : benefits?.network_source === 'clinic_contract_inventory'
+                ? 'Certified clinic contract inventory · not payer-confirmed'
+                : guidance?.network_source
   let networkTone =
     !result || tooEarly || result.recovery?.state === 'pending'
       ? ''
@@ -198,8 +194,7 @@ export function deriveCommercialEstimateView({
                 : 'is-missing'
               : 'is-review'
             : 'is-review'
-  if (referenceClinicNetwork) networkTone = 'is-confirmed'
-  else if (referenceBenefits?.active === true && networkLabel === 'Not determined')
+  if (referenceBenefits?.active === true && networkLabel === 'Not determined')
     networkTone = 'is-unknown'
   const unavailableReason = error
     ? 'Current benefits could not be loaded.'

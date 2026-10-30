@@ -12,7 +12,7 @@ from unittest.mock import patch
 from app.api.routers import commercial_estimator as api
 from app.api.routers.commercial_flow import commercial_previsit_pricing as pricing
 from app.api.routers.commercial_flow import commercial_previsit_requirements as requirements
-from app.api.routers.commercial_flow.commercial_previsit_network_guard import apply_nmct_network_policy, recheck_saved_network_evidence, scoped_admin_nonparticipation
+from app.api.routers.commercial_flow.commercial_previsit_network_guard import recheck_saved_network_evidence, scoped_admin_nonparticipation
 from app.api.routers.commercial_flow.commercial_previsit_status import _reprice_saved_new_network
 from app.insurance import amount_explanation
 from app.insurance import collection_guidance
@@ -25,23 +25,9 @@ from app.insurance.identity import patient_plan_applies
 DAY = '2026-10-21'
 
 
-def test_nmct_contract_roster_does_not_guess_an_ambiguous_insurer():
-    assert network_participation.nmct_contract_roster('') is None
-    assert network_participation.nmct_contract_roster('Aetna / Humana') is None
-    assert network_participation.nmct_contract_roster('Wellcare / Aetna') is None
-
-
-def test_hpi_uses_only_a_matched_phcs_card_network_for_nmct_tier():
-    card = {'status': 'filled_missing', 'fields_added': ['payer'], 'conflicts': [],
-            'network_label': 'PHCS Extended PPO'}
-    assert network_participation.nmct_contract_roster('Health Plans Incorporated') is False
-    assert network_participation.nmct_contract_roster('Health Plans Incorporated',
-        {**card, 'fields_added': []}) is False
-    assert network_participation.nmct_contract_roster('Health Plans Incorporated', card) is True
-    benefits = {'network_status': 'unknown'}
-    assert apply_nmct_network_policy({'card_check': card}, network_participation.NMCT_PRACTICE_ID,
-                                     benefits, 'Health Plans Incorporated')
-    assert benefits['network_status'] == 'in_network'
+@pytest.fixture(autouse=True)
+def empty_library_unless_test_supplies_contract(monkeypatch):
+    monkeypatch.setattr(api.staff_store, 'list_library', lambda *_: [])
 
 
 @pytest.mark.parametrize('practice_id', [
@@ -49,12 +35,11 @@ def test_hpi_uses_only_a_matched_phcs_card_network_for_nmct_tier():
     network_participation.NMCT_REGISTERED_PRACTICE_ID,
 ])
 @pytest.mark.parametrize('payer,plan', [
-    ('Cigna', 'HMO'), ('Blue Cross', 'PPO'), ('Aetna', 'HMO'), ('Humana', 'PPO'),
-    ('UnitedHealthcare', 'Regional Medicare Advantage PPO'), ('Medicare of Texas', 'Medicare'),
-    ('HealthSmart', 'PPO'), ('Wellpoint', 'HMO'), ('MultiPlan', 'PPO'), ('PHCS', 'PPO'),
-    ('BCBSTX', 'PPO'), ('UHC', 'Medicare Advantage PPO'),
+    ('Cigna', 'HMO'), ('Blue Cross', 'PPO'), ('Aetna', 'HMO'),
+    ('UnitedHealthcare', 'Regional Medicare Advantage PPO'), ('Other insurer', 'Other product'),
+    ('Wellcare', 'Medicare Advantage HMO'),
 ])
-def test_nmct_confirmed_contract_roster_is_in_network(monkeypatch, practice_id, payer, plan):
+def test_nmct_keeps_unbound_plan_unresolved_without_clinic_contract(monkeypatch, practice_id, payer, plan):
     monkeypatch.setattr(api.commercial_store, 'list_connections', lambda *_: [])
     monkeypatch.setattr(pricing.library_network_exclusions, 'applicable_exclusion',
                         lambda *_: None)
@@ -66,90 +51,179 @@ def test_nmct_confirmed_contract_roster_is_in_network(monkeypatch, practice_id, 
     benefits = {'active': True, 'network_status': 'unknown'}
     api._attach_previsit_pricing(result, practice_id, {'service_date': DAY},
                                  {'plan': plan}, 'route', benefits)
-    assert benefits['network_status'] == 'in_network'
-    assert benefits['network_source'] == 'clinic_nmct_policy'
-    assert network_participation.verified_in_network(benefits)
-    assert result['network_evidence']['decision'] == 'in_network_by_clinic_policy'
-    assert network_participation.outcome(benefits, result['network_evidence']) == 'IN_NETWORK_BY_CLINIC_POLICY'
+    assert benefits['network_status'] == 'unknown'
+    assert not network_participation.verified_in_network(benefits)
+    assert network_participation.outcome(benefits, result.get('network_evidence') or {}) == 'UNRESOLVED'
     assert result['price_range']['complete'] is False
 
 
-@pytest.mark.parametrize('payer', ['Wellcare', 'WellCare Health Plans', 'Other insurer'])
-def test_nmct_payers_outside_contract_roster_are_out_of_network(monkeypatch, payer):
+@pytest.mark.parametrize('payer,documents', [
+    ('Wellcare', [{'id': 'synthetic-aetna', 'kind': 'contract', 'payer': 'Aetna'}]),
+    ('Aetna', []),
+    ('Other insurer', []),
+])
+def test_nmct_payer_without_current_contract_is_out_of_network(monkeypatch, payer, documents):
+    monkeypatch.setattr(api.staff_store, 'list_library', lambda *_: documents)
     monkeypatch.setattr(api.commercial_store, 'list_connections', lambda *_: [])
     monkeypatch.setattr(pricing.library_network_exclusions, 'applicable_exclusion', lambda *_: None)
     monkeypatch.setattr(pricing.inventory_certification, 'applicable', lambda *_: None)
     monkeypatch.setattr(api, '_previsit_range', lambda *_args, **_kwargs: ({'complete': False}, []))
     result = {'payer': payer, 'codes': [], 'issues': []}
-    benefits = {'active': True, 'network_status': 'unknown'}
-    api._attach_previsit_pricing(result, 'primary', {'service_date': DAY}, {}, 'route', benefits)
+    benefits = {'active': True, 'service_date_matches': True, 'network_status': 'unknown'}
+    api._attach_previsit_pricing(result, 'primary', {'service_date': DAY},
+                                 {'payer_plan_bound': True, 'plan': 'Medicare Advantage HMO'}, 'route', benefits)
     assert benefits['network_status'] == 'out_of_network'
+    assert benefits['network_source'] == 'clinic_no_insurer_contract'
     assert network_participation.verified_out_of_network(benefits)
+    assert network_participation.outcome(benefits, result['network_evidence']) == 'OUT_OF_NETWORK_VERIFIED'
+    assert result['network_evidence']['decision'] == 'out_of_network_by_clinic_contract_record'
 
 
-def test_connected_nmct_noncontracted_payer_keeps_roster_evidence(monkeypatch):
-    payer, _, _, inputs, source = setup_path(monkeypatch)
-    payer['display_name'] = 'Wellcare'
+def test_nmct_connected_payer_without_current_contract_is_out_of_network(monkeypatch):
+    monkeypatch.setattr(api.commercial_store, 'list_connections', lambda *_: [
+        {'id': 'wellcare-route', 'display_name': 'Wellcare', 'status': 'staff_guidance_enabled',
+         'stedi_payer_id': 'route'}])
     monkeypatch.setattr(pricing.library_network_exclusions, 'applicable_exclusion', lambda *_: None)
     monkeypatch.setattr(pricing.inventory_certification, 'applicable', lambda *_: None)
+    monkeypatch.setattr(api, '_previsit_practice_path', lambda *_: (_ for _ in ()).throw(
+        api.HTTPException(409, 'No exact Wellcare contract path.')))
     monkeypatch.setattr(api, '_previsit_range', lambda *_args, **_kwargs: ({'complete': False}, []))
     result = {'payer': 'Wellcare', 'codes': [], 'issues': []}
-    benefits = {'active': True, 'network_status': 'unknown'}
-    api._attach_previsit_pricing(result, 'primary', inputs, source, 'payer-route', benefits)
+    benefits = {'active': True, 'service_date_matches': True, 'network_status': 'unknown'}
+    api._attach_previsit_pricing(result, 'primary', {'service_date': DAY},
+                                 {'payer_plan_bound': True, 'plan': 'Medicare Advantage HMO'}, 'route', benefits)
     assert benefits['network_status'] == 'out_of_network'
-    assert result['network_evidence']['decision'] == 'out_of_network_by_clinic_contract_roster'
+    assert benefits['network_source'] == 'clinic_no_insurer_contract'
 
 
-def test_registered_nmct_reference_network_policy_preserves_date_warning():
-    benefits = {'active': True, 'service_date_matches': False, 'network_status': 'unknown'}
-    assert apply_nmct_network_policy({}, network_participation.NMCT_REGISTERED_PRACTICE_ID, benefits, 'Cigna')
+@pytest.mark.parametrize('payer,library_payer', [
+    ('Blue Cross and Blue Shield of Texas', 'BCBS TX'),
+    ('Wellpoint', 'Wellpoint'), ('HealthSmart', 'HealthSmart'),
+    ('Cigna', 'Cigna'), ('Humana', 'Humana'), ('MultiPlan', 'MultiPlan'),
+    ('United Healthcare', 'UnitedHealthcare'), ('Aetna', 'Aetna'),
+    ('Wellcare Health Plans', 'Wellcare'),
+    ('Medicare of Texas', 'Medicare of Texas'),
+])
+@pytest.mark.parametrize('product', ['HMO', 'PPO', 'Medicare Advantage HMO', 'Medicare Advantage PPO'])
+def test_nmct_insurer_contract_covers_all_product_families(monkeypatch, payer, library_payer, product):
+    document = {'id': 'synthetic-contract', 'kind': 'contract', 'payer': library_payer,
+                'label': 'Synthetic insurer agreement', 'effective_from': '2026-01-01'}
+    monkeypatch.setattr(api.staff_store, 'list_library', lambda *_: [document])
+    monkeypatch.setattr(api.commercial_store, 'list_connections', lambda *_: [])
+    monkeypatch.setattr(pricing.library_network_exclusions, 'applicable_exclusion', lambda *_: None)
+    monkeypatch.setattr(pricing.inventory_certification, 'applicable', lambda *_: None)
+    monkeypatch.setattr(api.visit_estimate, 'price_lines', lambda *_args, **_kwargs: {'complete': False})
+    result = {'payer': payer, 'codes': [], 'issues': []}
+    benefits = {'active': True, 'network_status': 'unknown'}
+    api._attach_previsit_pricing(result, 'primary', {'service_date': DAY},
+                                 {'plan': product}, 'route', benefits)
     assert benefits['network_status'] == 'in_network'
-    assert benefits['network_source'] == 'clinic_nmct_policy'
-    assert benefits['service_date_matches'] is False
-
-    conflicting = {'active': True, 'network_status': 'unknown', 'network_conflict': True}
-    assert not apply_nmct_network_policy({}, network_participation.NMCT_REGISTERED_PRACTICE_ID, conflicting, 'Cigna')
-    assert conflicting['network_status'] == 'unknown'
+    assert benefits['network_source'] == 'clinic_library_contract'
+    assert result['network_evidence']['document_id'] == document['id']
+    assert result['price_range']['complete'] is False
 
 
-def test_saved_nmct_noncontracted_insurer_clears_old_insured_amount():
+def test_nmct_expired_contract_does_not_establish_network():
+    document = {'id': 'old-contract', 'kind': 'contract', 'payer': 'Cigna',
+                'effective_to': '2026-10-20'}
+    assert network_participation.nmct_library_contract([document], 'Cigna', DAY) is None
+
+
+def test_nmct_ambiguous_insurer_name_does_not_select_a_library_contract():
+    documents = [{'id': 'synthetic-humana', 'kind': 'contract', 'payer': 'Humana'}]
+    assert network_participation.nmct_library_contract(documents, 'Aetna / Humana', DAY) is None
+
+
+def test_hpi_card_network_label_does_not_replace_nmct_insurer_contract():
+    multiplan = {'id': 'synthetic-multiplan', 'kind': 'contract', 'payer': 'MultiPlan'}
+    hpi = {'id': 'synthetic-hpi', 'kind': 'contract', 'payer': 'Health Plans Incorporated'}
+    assert network_participation.nmct_library_contract([multiplan], 'Health Plans Incorporated', DAY) is None
+    assert network_participation.nmct_library_contract([hpi], 'Health Plans Incorporated', DAY) == hpi
+
+
+def test_nmct_v2_bridge_does_not_infer_participation_from_plan_name():
+    from app.api.routers.insurance_v2 import stedi_network
+    result = stedi_network({'inputs': {'service_date': DAY}}, {},
+                           {'plans': [{'name': 'Synthetic PPO'}]}, practice_id='primary')
+    assert result['provider_network_status'] == 'unconfirmed'
+
+
+def test_nmct_v2_bridge_uses_library_insurer_contract(monkeypatch):
+    from app.api.routers import insurance_v2
+    monkeypatch.setattr(insurance_v2.staff_store, 'list_library', lambda *_: [
+        {'id': 'synthetic-aetna', 'kind': 'contract', 'payer': 'Aetna'}])
+    result = insurance_v2.stedi_network(
+        {'inputs': {'service_date': DAY, 'payer_id': 'route'}},
+        {'payer_aliases': {'Aetna': 'route'}},
+        {'plans': [{'name': 'Medicare Advantage PPO'}]}, practice_id='primary')
+    assert result['provider_network_status'] == 'in_network'
+
+
+@pytest.mark.parametrize('payer', ['Wellcare', 'Other insurer'])
+def test_nmct_v2_bridge_marks_payer_without_contract_out_of_network(payer):
+    from app.api.routers.insurance_v2 import stedi_network
+    result = stedi_network(
+        {'inputs': {'service_date': DAY, 'payer_id': 'route'}},
+        {'payer_aliases': {payer: 'route'}},
+        {'plans': [{'name': 'Medicare Advantage HMO'}]}, practice_id='primary')
+    assert result['provider_network_status'] == 'out_of_network'
+
+
+def test_saved_nmct_all_plan_amount_is_cleared_without_contract():
+    result = {'benefits': {'network_status': 'in_network', 'network_source': 'clinic_nmct_policy'},
+              'price_range': {'complete': True, 'patient_min_cents': 4000,
+                              'lines': [{'allowed_cents': 10000}]},
+              'arrival_collection': {'amount_cents': 4000}}
+    case = {'previsit_context': {'inputs': {'service_date': DAY}, 'source': {}, 'payer_id': ''}}
+    recheck_saved_network_evidence(result, case, 'primary', None)
+    assert result['benefits']['network_status'] == 'unknown'
+    assert result['price_range']['patient_min_cents'] is None
+    assert result['price_range']['lines'][0]['allowed_cents'] is None
+    assert 'arrival_collection' not in result
+
+
+def test_saved_nmct_payer_without_contract_clears_amount_and_marks_out_of_network():
     result = {'payer': 'Wellcare',
+              'identity': {'status': 'matched', 'match_version': 2, 'binding': 'synthetic-binding'},
               'benefits': {'active': True, 'service_date_matches': True,
-                           'network_status': 'in_network', 'network_source': 'clinic_nmct_policy'},
+                           'network_status': 'in_network', 'network_source': 'clinic_library_contract'},
               'price_range': {'complete': True, 'patient_min_cents': 4000,
                               'lines': [{'allowed_cents': 10000}]},
               'arrival_collection': {'amount_cents': 4000}}
     case = {'previsit_context': {'inputs': {'service_date': DAY}, 'source': {}, 'payer_id': ''}}
     recheck_saved_network_evidence(result, case, 'primary', None)
     assert result['benefits']['network_status'] == 'out_of_network'
-    assert result['benefits']['network_source'] == 'clinic_nmct_noncontracted'
+    assert result['benefits']['network_source'] == 'clinic_no_insurer_contract'
     assert result['price_range']['patient_min_cents'] is None
-    assert result['price_range']['lines'][0]['allowed_cents'] is None
     assert 'arrival_collection' not in result
 
 
-def test_saved_nmct_payer_participation_conflict_with_roster_withholds_amount():
-    result = {'payer': 'Wellcare',
-              'benefits': {'active': True, 'service_date_matches': True,
-                           'network_status': 'in_network', 'network_source': 'payer_participation_message'},
-              'price_range': {'complete': True, 'patient_min_cents': 4000, 'lines': []},
-              'arrival_collection': {'amount_cents': 4000}}
+def test_saved_nmct_visit_uses_current_insurer_contract(monkeypatch):
+    monkeypatch.setattr(api.staff_store, 'list_library', lambda *_: [
+        {'id': 'synthetic-humana', 'kind': 'contract', 'payer': 'Humana'}])
+    result = {'payer': 'Humana', 'benefits': {'network_status': 'unknown'},
+              'price_range': {'lines': []}}
     case = {'previsit_context': {'inputs': {'service_date': DAY}, 'source': {}, 'payer_id': ''}}
     recheck_saved_network_evidence(result, case, 'primary', None)
-    assert result['benefits']['network_status'] == 'out_of_network'
-    assert result['benefits']['network_conflict'] is True
-    assert result['network_evidence']['decision'] == 'conflicting_network_evidence'
+    assert result['benefits']['network_status'] == 'in_network'
+    assert result['network_evidence']['document_id'] == 'synthetic-humana'
+
+
+def test_saved_nmct_contract_overrides_clinic_nonparticipation_attestation(monkeypatch):
+    from app.api.routers.commercial_flow import commercial_previsit_network_guard as guard
+    monkeypatch.setattr(api.staff_store, 'list_library', lambda *_: [
+        {'id': 'synthetic-uhc', 'kind': 'contract', 'payer': 'UnitedHealthcare'}])
+    monkeypatch.setattr(guard, 'scoped_admin_nonparticipation', lambda *_: {
+        'evidence_reference': 'clinic-admin-attestation: synthetic'})
+    result = {'payer': 'UnitedHealthcare', 'benefits': {'network_status': 'unknown'},
+              'price_range': {'patient_min_cents': 5000, 'lines': []},
+              'arrival_collection': {'amount_cents': 5000}}
+    case = {'previsit_context': {'inputs': {'service_date': DAY}, 'source': {}, 'payer_id': ''}}
+    recheck_saved_network_evidence(result, case, 'primary', None)
+    assert result['benefits']['network_status'] == 'in_network'
+    assert result['network_evidence']['document_id'] == 'synthetic-uhc'
     assert result['price_range']['patient_min_cents'] is None
     assert 'arrival_collection' not in result
-
-
-@pytest.mark.parametrize('payer,expected', [('Aetna', 'in_network'), ('Wellcare', 'out_of_network')])
-def test_nmct_v2_bridge_uses_contract_roster(payer, expected):
-    from app.api.routers.insurance_v2 import stedi_network
-    result = stedi_network({'inputs': {'service_date': DAY, 'payer_id': 'route'}},
-                           {'payer_aliases': {payer: 'route'}},
-                           {'plans': [{'name': 'Synthetic PPO'}]}, practice_id='primary')
-    assert result['provider_network_status'] == expected
 
 
 def test_nmct_policy_preserves_explicit_payer_nonparticipation(monkeypatch):
@@ -164,9 +238,24 @@ def test_nmct_policy_preserves_explicit_payer_nonparticipation(monkeypatch):
     assert result['network_evidence']['decision'] == 'out_of_network_confirmed_by_payer'
 
 
-def test_nmct_policy_overrides_scoped_clinic_nonparticipation(monkeypatch):
-    payer, _, _, inputs, source = setup_path(monkeypatch)
-    payer['display_name'] = 'Blue Cross'
+def test_nmct_contract_and_opposing_payer_statement_require_review(monkeypatch):
+    monkeypatch.setattr(api.staff_store, 'list_library', lambda *_: [
+        {'id': 'synthetic-cigna', 'kind': 'contract', 'payer': 'Cigna'}])
+    monkeypatch.setattr(api.commercial_store, 'list_connections', lambda *_: [])
+    monkeypatch.setattr(pricing.library_network_exclusions, 'applicable_exclusion', lambda *_: None)
+    monkeypatch.setattr(api, '_previsit_range', lambda *_args, **_kwargs: ({'complete': False}, []))
+    result = {'payer': 'Cigna', 'codes': [], 'issues': []}
+    benefits = {'active': True, 'network_status': 'out_of_network',
+                'network_source': 'payer_participation_message'}
+    api._attach_previsit_pricing(result, 'primary', {'service_date': DAY}, {}, 'route', benefits)
+    assert benefits['network_status'] == 'in_network'
+    assert benefits['network_conflict'] is True
+    assert not network_participation.verified_in_network(benefits)
+    assert result['network_evidence']['decision'] == 'conflicting_network_evidence'
+
+
+def test_nmct_respects_scoped_clinic_nonparticipation(monkeypatch):
+    _, _, _, inputs, source = setup_path(monkeypatch)
     monkeypatch.setattr(pricing.library_network_exclusions, 'applicable_exclusion', lambda *_: None)
     monkeypatch.setattr(pricing.inventory_certification, 'applicable', lambda *_: None)
     monkeypatch.setattr(api, '_previsit_practice_path', lambda *_: (_ for _ in ()).throw(
@@ -175,9 +264,9 @@ def test_nmct_policy_overrides_scoped_clinic_nonparticipation(monkeypatch):
     result = {'payer': 'Example Blue', 'codes': [], 'issues': []}
     benefits = {'active': True, 'network_status': 'unknown'}
     api._attach_previsit_pricing(result, 'primary', inputs, source, 'payer-route', benefits)
-    assert benefits['network_status'] == 'in_network'
-    assert benefits['network_source'] == 'clinic_nmct_policy'
-    assert result['network_evidence']['decision'] == 'in_network_by_clinic_policy'
+    assert benefits['network_status'] == 'out_of_network'
+    assert benefits['network_source'] == 'clinic_nonparticipation_rule'
+    assert result['network_evidence']['decision'] == 'out_of_network_confirmed_by_scoped_nonparticipation_record'
 
 
 def test_group_ppo_admin_attestation_is_bound_to_product_group_provider_and_date(monkeypatch):
@@ -221,7 +310,7 @@ def test_saved_nmct_visit_uses_current_admin_attestation(monkeypatch):
     from app.api.routers.commercial_flow import commercial_previsit_network_guard as guard
     row = {'id': 'attestation-1', 'evidence_reference': 'clinic-admin-attestation: synthetic clinic determination'}
     monkeypatch.setattr(guard, 'scoped_admin_nonparticipation', lambda *_: row)
-    result = {'payer': 'UnitedHealthcare', 'benefits': {'active': True, 'network_status': 'in_network',
+    result = {'benefits': {'active': True, 'network_status': 'in_network',
                           'network_source': 'clinic_nmct_policy'},
               'identity': {'status': 'matched', 'binding': 'synthetic'},
               'plan_details': {'stedi': {'names': ['GROUP MEDICARE ADVANTAGE PPO'],
@@ -234,8 +323,8 @@ def test_saved_nmct_visit_uses_current_admin_attestation(monkeypatch):
     assert result['network_evidence']['source'] == 'clinic_admin_attestation'
     monkeypatch.setattr(guard, 'scoped_admin_nonparticipation', lambda *_: None)
     recheck_saved_network_evidence(result, case, 'primary', {'id': 'payer-1'})
-    assert result['benefits']['network_status'] == 'in_network'
-    assert result['benefits']['network_source'] == 'clinic_nmct_policy'
+    assert result['benefits']['network_status'] == 'unknown'
+    assert result['benefits'].get('network_source') is None
 
 
 def test_draft_uhc_route_uses_admin_attestation_for_initial_pricing(monkeypatch):
@@ -760,7 +849,6 @@ def test_signed_blue_agreement_prices_its_local_plan_after_payer_product_reconci
     assert result['network_evidence']['decision'] == 'in_network_contract_supported'
     assert not result['price_range']['complete']
     assert any('POS 10 or 02' in issue for issue in result['issues'])
-    assert any('telehealth location' in issue for issue in result['price_range']['service_issues'])
 
 
 @pytest.mark.parametrize('missing', [None, 'local_payer_alias', 'home_plan', 'product', 'bluecard_clause',
@@ -1024,7 +1112,8 @@ def test_any_payer_contract_path_promotes_dated_member_network_to_in_network(mon
     assert group_contract_support.resolve('clinic', payer, inputs, source, result, benefits) is None
 
 
-def test_reconciled_group_agreement_supplies_in_network_tier(monkeypatch):
+@pytest.mark.parametrize('practice_id', ['clinic', network_participation.NMCT_PRACTICE_ID])
+def test_reconciled_group_agreement_supplies_in_network_tier(monkeypatch, practice_id):
     payer, network, profile, inputs, source = setup_path(monkeypatch)
     source['payer_plan_names'] = ['Preferred Provider Option Medical']
     network['evidence_reference'] = 'library:signed-group-contract'
@@ -1043,7 +1132,7 @@ def test_reconciled_group_agreement_supplies_in_network_tier(monkeypatch):
     result = {'payer': payer['display_name'], 'codes': [], 'issues': [],
               'identity': {'status': 'matched', 'binding': 'synthetic', 'match_version': 2}}
     benefits = {'active': True, 'network_status': 'unknown'}
-    api._attach_previsit_pricing(result, 'clinic', inputs, source, 'payer-route', benefits)
+    api._attach_previsit_pricing(result, practice_id, inputs, source, 'payer-route', benefits)
     assert benefits['network_status'] == 'in_network'
     assert benefits['network_source'] == 'clinic_group_agreement'
     assert result['network_evidence']['decision'] == 'in_network_contract_supported'

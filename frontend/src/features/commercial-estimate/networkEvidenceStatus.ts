@@ -11,19 +11,16 @@ export function networkEvidenceStatus(result: PrevisitEstimate | null) {
   const networkConfirmed =
     benefits?.network_status === 'in_network' &&
     !participationConflict &&
-    [
-      'clinic_library_contract',
-      'clinic_group_agreement',
-      'clinic_nmct_policy',
-      'payer_participation_message',
-    ].includes(benefits.network_source || '')
+    ['clinic_library_contract', 'clinic_group_agreement', 'payer_participation_message'].includes(
+      benefits.network_source || '',
+    )
   const outOfNetworkConfirmed =
     benefits?.network_status === 'out_of_network' &&
     [
       'payer_participation_message',
       'clinic_nonparticipation_rule',
       'clinic_contract_inventory',
-      'clinic_nmct_noncontracted',
+      'clinic_no_insurer_contract',
     ].includes(benefits.network_source || '') &&
     !participationConflict
   const outOfNetworkAllowance =

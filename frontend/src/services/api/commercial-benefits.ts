@@ -19,12 +19,11 @@ export type PrevisitBenefits = null | {
     | 'clinic_record'
     | 'clinic_library_contract'
     | 'clinic_group_agreement'
-    | 'clinic_nmct_policy'
-    | 'clinic_nmct_noncontracted'
     | 'clinic_library_absent'
     | 'payer_participation_message'
     | 'clinic_nonparticipation_rule'
     | 'clinic_contract_inventory'
+    | 'clinic_no_insurer_contract'
     | null
   network_evidence_ids?: string[]
   selected_benefit_ids?: string[]

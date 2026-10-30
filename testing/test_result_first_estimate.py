@@ -10,8 +10,8 @@ from fastapi import HTTPException
 from app.api.routers import commercial_estimator as api, staff
 from app.api.routers.commercial_flow.commercial_previsit_catalog import build_catalog
 from app.api.routers.commercial_flow.commercial_previsit_finish import _payer_plan_pricing_source
-from app.api.routers.commercial_flow.commercial_previsit_pricing import NMCT_PRACTICE_ID, _previsit_range
-from app.insurance import commercial, ecw_backend, identity, visit_estimate
+from app.api.routers.commercial_flow.commercial_previsit_pricing import _previsit_range
+from app.insurance import commercial, ecw_backend, identity, network_participation, visit_estimate
 
 DAY = date.today().isoformat()
 
@@ -637,7 +637,7 @@ def test_current_library_contract_decides_network_independently_of_price(monkeyp
 
 @pytest.mark.parametrize('payer_label, practice_id', [
     ('United Healthcare', 'clinic'), ('United Health Care', 'clinic'),
-    ('Aetna', NMCT_PRACTICE_ID), ('Cigna', 'clinic'), ('phcs', 'clinic'),
+    ('Aetna', network_participation.NMCT_PRACTICE_ID), ('Cigna', 'clinic'), ('phcs', 'clinic'),
 ])
 def test_other_payers_use_scoped_blue_cross_library_rate_only_as_temporary_reference(monkeypatch, payer_label, practice_id):
     payer = {'id': 'bcbs', 'display_name': 'Blue Cross and Blue Shield of Texas',
@@ -654,6 +654,7 @@ def test_other_payers_use_scoped_blue_cross_library_rate_only_as_temporary_refer
     monkeypatch.setattr(api.commercial_store, 'list_connections', lambda *_: [payer])
     monkeypatch.setattr(api.commercial_store, 'list_networks', lambda *_: [network])
     monkeypatch.setattr(api.commercial_store, 'list_profiles', lambda *_: [profile])
+    monkeypatch.setattr(api.staff_store, 'list_library', lambda *_: [])
     monkeypatch.setattr(api.commercial_store, 'matching_rates', lambda *_, **__: [
         {'code': '99203', 'modifier': '', 'allowed_cents': 10117,
          'source_reference': 'library:synthetic-fee-schedule'}])
@@ -666,7 +667,7 @@ def test_other_payers_use_scoped_blue_cross_library_rate_only_as_temporary_refer
         assert result['temporary_rate_reference']['lines'][0]['unit_reference_cents'] == 10117
         assert result['temporary_rate_reference']['complete'] is True
     assert result['price_range']['lines'][0]['allowed_cents'] is None
-    assert benefits['network_status'] == ('in_network' if payer_label == 'Aetna' else 'unknown')
+    assert benefits['network_status'] == 'unknown'
     source['location_id'] = 'different-office'
     result = {'payer': payer_label, 'codes': [{'code': '99203', 'units': 1}], 'issues': []}
     api._attach_previsit_pricing(result, practice_id, inputs, source, 'uhc-route', benefits)

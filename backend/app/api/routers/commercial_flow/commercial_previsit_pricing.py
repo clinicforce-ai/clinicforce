@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from app.api.routers import commercial_estimator as _api
 from app.api.routers.commercial_flow.commercial_previsit_rate_reference import _attach_temporary_aetna_rates, _attach_temporary_uhc_rates, _attach_temporary_blue_cross_rates
-from app.api.routers.commercial_flow.commercial_previsit_network_guard import NMCT_PRACTICE_ID, apply_nmct_network_policy, apply_admin_nonparticipation, scoped_admin_nonparticipation, record_confirmed_out_of_network, resolve_unlinked_blue_route
+from app.api.routers.commercial_flow.commercial_previsit_network_guard import apply_admin_nonparticipation, apply_nmct_library_contract, apply_nmct_contract_absence, scoped_admin_nonparticipation, record_confirmed_out_of_network, resolve_unlinked_blue_route
 from app.api.routers.commercial_flow.commercial_previsit_service_scope import reviewed_service_types as _reviewed_service_types
 from app.insurance import botox_review, cms_locality, cms_pfs, cpt_rules, insurance_product, inventory_certification, library_network_exclusions, group_contract_support
 def _ecw_case_data(inputs: dict, source: dict, conflicts: list[str]) -> dict[str, _api.Any]:
@@ -12,7 +12,6 @@ def _ecw_case_data(inputs: dict, source: dict, conflicts: list[str]) -> dict[str
             "suggested_lines": [{"code": row.get("code"), "units": row.get("units"), "description": row.get("description")}
                                 for row in inputs.get("lines", []) if row.get("code")],
             "reason": inputs.get("reason"), "conflicts": conflicts}
-
 
 def _past_visit_with_saved_estimate(visit: dict[str, _api.Any], case: dict | None) -> dict[str, _api.Any]:
     """Attach only an estimate already saved for this exact eCW encounter."""
@@ -28,10 +27,8 @@ def _past_visit_with_saved_estimate(visit: dict[str, _api.Any], case: dict | Non
         "disclaimer": estimate.get("disclaimer"),
     }}
 
-
 def _commercial_slot(appointment_id: str) -> str:
     return "commercial:" + _api.hashlib.sha256(appointment_id.encode()).hexdigest()
-
 
 def _previsit_service_types(inputs: dict) -> list[str]:
     """Ask for the booked categories, including explicitly combined care."""
@@ -60,7 +57,6 @@ def _previsit_service_types(inputs: dict) -> list[str]:
         ordered.insert(0, '98')
     return list(dict.fromkeys([*ordered, '30']))
 
-
 def _eligibility_timing(service_date: str, check_from_date: str | None = None) -> dict | None:
     service_day = _api.date.fromisoformat(service_date)
     today = _api.datetime.now(_api.ZoneInfo(_api.os.getenv("COMMERCIAL_PRACTICE_TIMEZONE", "America/New_York"))).date()
@@ -69,7 +65,6 @@ def _eligibility_timing(service_date: str, check_from_date: str | None = None) -
         return None
     return {'status': 'too_early', 'appointment_date': service_date, 'check_from': check_from.isoformat(),
         'message': f"Appointment found on {service_day.strftime('%B %d, %Y')}. Insurance checking opens {check_from.strftime('%B %d, %Y')}. No Stedi request is made before then."}
-
 
 def _previsit_codes(inputs: dict) -> list[dict[str, _api.Any]]:
     """Office E/M alternatives are coding standards, not a selected service."""
@@ -100,11 +95,9 @@ def _previsit_codes(inputs: dict) -> list[dict[str, _api.Any]]:
     return [{"id": f"{code}:{index}", "code": str(code), "source": "conditional office E/M alternative", "units": 1}
             for index, code in enumerate(family)] if family else []
 
-
 def _office_service_types(practice_id: str, source: dict) -> list[str]:
     specialist = _api.provider_specialty.office_role((source.get('rendering_provider') or {}).get('roles', [])) == 'specialist'
     return ['98', 'BQ', 'BY', '1'] if specialist else ['98', 'BY', '1']
-
 
 def _benefit_context(inputs: dict, source: dict) -> dict:
     rendering = source.get('rendering_provider') or {}
@@ -364,6 +357,9 @@ def _attach_previsit_pricing(result: dict, practice_id: str, inputs: dict, sourc
     connections = [row for row in route_connections if row.get('status') == 'staff_guidance_enabled']
     route_payer = route_connections[0] if len(route_connections) == 1 else None
     service_date, payer_name = str(inputs.get('service_date') or ''), str((route_payer or {}).get('display_name') or result.get('payer') or '')
+    nmct_contract = (_api.network_participation.nmct_library_contract(
+        _api.staff_store.list_library(practice_id), payer_name, service_date)
+        if nmct and payer_name else None)
     exclusion = library_network_exclusions.applicable_exclusion(
         practice_id, (route_payer or {}).get('display_name') or result.get('payer') or '',
         [*((source.get('payer_plan_names') or []) if source.get('payer_plan_bound') else []),
@@ -373,8 +369,6 @@ def _attach_previsit_pricing(result: dict, practice_id: str, inputs: dict, sourc
     apply_admin_nonparticipation(result, benefits, scoped_admin_nonparticipation(
         practice_id, route_payer, inputs, source,
         source.get('payer_plan_names') or [], str((source.get('payer_plan_scope') or {}).get('group_number') or '')))
-    if nmct and not inventory:
-        apply_nmct_network_policy(result, practice_id, benefits, payer_name)
     if exclusion:
         result['agreement_exclusion'] = exclusion
         result['network_evidence'] = {**exclusion,
@@ -391,7 +385,11 @@ def _attach_previsit_pricing(result: dict, practice_id: str, inputs: dict, sourc
             r'blue cross|bcbstx|blue shield|aetna', rate_payer_name, _api.re.I):
         _attach_temporary_blue_cross_rates(result, practice_id, inputs, source, rate_payer_name)
     if len(connections) != 1:
-        if inventory:
+        apply_nmct_library_contract(result, benefits, nmct_contract)
+        if nmct:
+            apply_nmct_contract_absence(result, benefits, payer_name, nmct_contract,
+                                        service_date, source.get('payer_plan_bound'))
+        if inventory and not nmct_contract:
             _apply_inventory_tier(result, benefits, inventory, exclusion)
         if _api.network_participation.verified_out_of_network(benefits):
             priced_source = {**source, **((result.get('network_evidence') or {}).get('scope') or {})}
@@ -428,7 +426,7 @@ def _attach_previsit_pricing(result: dict, practice_id: str, inputs: dict, sourc
     try:
         if source.get('payer_plan_bound') is False and source.get('payer_plan_names'):
             raise _api.HTTPException(409, 'The payer response has not linked this member product to the visit.')
-        if benefits.get('network_status') == 'out_of_network':
+        if benefits.get('network_status') == 'out_of_network' and not nmct_contract:
             raise _api.HTTPException(422, 'Out-of-network participation is established; in-network contract prices do not apply.')
         _, network, profile = _api._previsit_practice_path(practice_id, {**inputs, "payer_id": connection["id"]}, source)
         evidence = _api._network_contract_evidence(practice_id, network, profile, service_date)
@@ -481,11 +479,13 @@ def _attach_previsit_pricing(result: dict, practice_id: str, inputs: dict, sourc
             and group_contract_support.no_blue_contract(practice_id, connection, service_date)):
         benefits['network_status'] = 'out_of_network'
         benefits['network_source'] = 'clinic_no_blue_contract'
-    if (inventory and benefits.get('network_source') != 'clinic_library_contract'
+    if (inventory and not nmct_contract and benefits.get('network_source') != 'clinic_library_contract'
             and not _api.network_participation.verified_out_of_network(benefits)):
         _apply_inventory_tier(result, benefits, inventory, exclusion)
-    if nmct and not inventory:
-        apply_nmct_network_policy(result, practice_id, benefits, payer_name)
+    apply_nmct_library_contract(result, benefits, nmct_contract)
+    if nmct:
+        apply_nmct_contract_absence(result, benefits, payer_name, nmct_contract,
+                                    service_date, source.get('payer_plan_bound'))
     if _api.network_participation.verified_out_of_network(benefits):
         record_confirmed_out_of_network(result, benefits)
     priced_source = {**source, **((result.get('network_evidence') or {}).get('scope') or {})}
