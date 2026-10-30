@@ -89,6 +89,7 @@ export type CollectionGuidance = {
   patient_actions: string[]
   policy_setup_required?: boolean
   positive_advance_policy_missing?: boolean
+  diagnostic_copay_reference_cents?: number
   published_copay_policy_missing?: boolean
   unconfirmed_zero_oop?: boolean
   deferred_supported_share?: boolean

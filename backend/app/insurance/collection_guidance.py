@@ -248,6 +248,8 @@ def build(result: dict, review: dict | None = None) -> dict:
     )
     if (amount is not None and amount > 0 and guidance['basis'] != 'ecw_billing_note'
             and not (oon_advance and (policy_allows_advance or calculated_in_network_advance))):
+        if guidance['basis'] == 'diagnostic_day_copay' and not policy_approved and not unconfirmed_zero_oop:
+            guidance['diagnostic_copay_reference_cents'] = amount
         amount = None
         guidance['published_copay_policy_missing' if published_copay else 'positive_advance_policy_missing'] = True
     if (amount is not None and amount > 0 and 'cigna' in str(result.get('payer') or '').casefold()
