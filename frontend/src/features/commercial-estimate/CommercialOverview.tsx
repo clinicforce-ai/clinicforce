@@ -12,6 +12,7 @@ import { openServiceDetails } from './openServiceDetails'
 import ArrivalAmountSummary from './ArrivalAmountSummary'
 import {
   aetnaOfficePlanningCopay,
+  aetnaPendingOfficeCopay,
   aetnaOfficeReferenceCopay,
   cardOfficePlanningCopay,
   payerReportedPartialCopay,
@@ -66,6 +67,7 @@ export default function CommercialOverview({
   const humanaReferenceCopay = publishedHumanaOfficeCopay(result, model)
   const payerReportedPartialCents =
     aetnaReferenceCopay ?? humanaReferenceCopay ?? payerReportedPartialCopay(result, model)
+  const pendingAetnaCopay = aetnaPendingOfficeCopay(result, model)
   const cardPlanningCents =
     payerReportedPartialCents == null ? cardOfficePlanningCopay(result, model) : null
   const combinedPlan = !cash && !previousEstimate ? result.combined_emg_plan : null
@@ -88,6 +90,7 @@ export default function CommercialOverview({
     !!model.estimatedShare ||
     aetnaOfficePlanningCopay(result, model, result.price_range?.lines || []) != null ||
     payerReportedPartialCents != null ||
+    pendingAetnaCopay != null ||
     cardPlanningCents != null
   const patientBenefitsBound = hasPatientBinding(result.identity)
   const networkWarnings = (result.network_evidence?.mismatch_warnings || []).filter(

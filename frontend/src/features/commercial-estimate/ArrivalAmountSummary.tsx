@@ -1,7 +1,7 @@
 import type { PrevisitEstimate } from '../../services/api/commercial-estimator'
 import type { CommercialEstimateModel } from './useCommercialEstimateModel'
 import { money } from './format'
-import { aetnaOfficePlanningCopay } from './payerReportedPartialCopay'
+import { aetnaOfficePlanningCopay, aetnaPendingOfficeCopay } from './payerReportedPartialCopay'
 
 function nextStep(model: CommercialEstimateModel, result: PrevisitEstimate) {
   const lines = result.price_range?.mode === 'services' ? result.price_range.lines || [] : []
@@ -87,6 +87,7 @@ export default function ArrivalAmountSummary({
     officePlan == null
       ? null
       : Math.max(0, officePlan - (result.encounter_summary?.payments_verified_cents || 0))
+  const pendingAetnaCopay = aetnaPendingOfficeCopay(result, model)
   const needsAction = model.amountText === 'Insured amount unavailable'
   const additionalServicesPending = result.price_range?.lines?.some(
     (line) => !/^992(?:0[2-5]|1[2-5])$/.test(line.code),
@@ -106,15 +107,17 @@ export default function ArrivalAmountSummary({
                   ? 'Diagnostic copay · collection pending'
                   : officeBalance != null
                     ? 'Planned amount to collect at visit'
-                    : partialCopay != null
-                      ? referenceOnly
-                        ? 'Office-only reference · collection pending'
-                        : 'Suggested amount to collect at visit'
-                      : cardPlanningCopay != null
-                        ? 'Card-based office suggestion · collection pending'
-                        : needsAction
-                          ? 'Next step'
-                          : model.amountLabel}
+                    : pendingAetnaCopay != null
+                      ? 'Amount to collect at visit · pending verification'
+                      : partialCopay != null
+                        ? referenceOnly
+                          ? 'Office-only reference · collection pending'
+                          : 'Suggested amount to collect at visit'
+                        : cardPlanningCopay != null
+                          ? 'Card-based office suggestion · collection pending'
+                          : needsAction
+                            ? 'Next step'
+                            : model.amountLabel}
       </span>
       <strong
         className={
@@ -122,7 +125,8 @@ export default function ArrivalAmountSummary({
           !botoxPlanning &&
           !cignaPlanning &&
           !aetnaPlanning &&
-          officeBalance == null
+          officeBalance == null &&
+          pendingAetnaCopay == null
             ? 'amount-pending'
             : undefined
         }
@@ -140,13 +144,15 @@ export default function ArrivalAmountSummary({
                   ? money(diagnosticCopayReference)
                   : officeBalance != null
                     ? money(officeBalance)
-                    : partialCopay != null
-                      ? money(partialCopay)
-                      : cardPlanningCopay != null
-                        ? money(cardPlanningCopay)
-                        : needsAction
-                          ? action.title
-                          : model.amountText}
+                    : pendingAetnaCopay != null
+                      ? `Pending · ${money(pendingAetnaCopay)}`
+                      : partialCopay != null
+                        ? money(partialCopay)
+                        : cardPlanningCopay != null
+                          ? money(cardPlanningCopay)
+                          : needsAction
+                            ? action.title
+                            : model.amountText}
       </strong>
       {plan ? (
         <p>
@@ -188,6 +194,11 @@ export default function ArrivalAmountSummary({
             : ''}{' '}
           = {money(officeBalance)} planning estimate. Confirm the final allowed charge and Medicare
           billing protection before collection.
+        </p>
+      ) : pendingAetnaCopay != null ? (
+        <p>
+          Stedi reported this specialist office copay. Confirm remaining deductible and
+          out-of-pocket balances, conditional benefit terms, and prior payments before charging.
         </p>
       ) : partialCopay != null ? (
         <p>

@@ -15,7 +15,7 @@ BCBSTX_PAYER_NAMES = {'bcbstx', 'bcbstexas', 'bluecrossblueshieldoftexas',
                       'bluecrossblueshieldtexas'}
 
 # Saved estimates re-evaluate requirement decisions when a published rule changes.
-PUBLISHED_RULESET_VERSION = '2026-10-29-humana-value-choice-057-v9'
+PUBLISHED_RULESET_VERSION = '2026-10-30-aetna-oxy-office-99204-v10'
 
 HUMANA_VALUE_CHOICE_057_SOURCE = {
     'label': '2026 Humana Value Choice (PPO) H7617-057 Summary of Benefits',
@@ -140,11 +140,23 @@ AETNA_MEDICARE_PPO_REFERRAL_SOURCE = {
     'source_version': '2026 PPO guidance, checked 2026-10-28', 'verified_at': '2026-10-28',
     'effective_from': '2026-01-01', 'effective_to': '2026-12-31',
 }
+AETNA_PPO_REFERRAL_SOURCE = {
+    'label': 'Aetna medical PPO specialist access guidance',
+    'url': 'https://www.aetna.com/health-guide/hmo-pos-ppo-hdhp-whats-the-difference.html',
+    'source_version': 'PPO guide checked 2026-10-30', 'verified_at': '2026-10-30',
+    'effective_from': '2026-01-01', 'effective_to': '2026-12-31',
+}
 AETNA_2026_PRECERT_SOURCE = {
     'label': 'Aetna 2026 participating-provider precertification list and code search',
     'url': 'https://www.aetna.com/health-care-professionals/precertification/precertification-lists.html',
     'source_version': '2026 list checked 2026-10-28', 'verified_at': '2026-10-28',
     'effective_from': '2026-01-01', 'effective_to': '2026-12-31',
+}
+AETNA_2026_OFFICE_PRECERT_SOURCE = {
+    'label': 'Aetna 2026 participating-provider precertification list, April edition',
+    'url': 'https://www.aetna.com/content/dam/aetna/pdfs/aetnacom/healthcare-professionals/2026_Precert_List.pdf',
+    'source_version': 'April 1, 2026 list checked 2026-10-30', 'verified_at': '2026-10-30',
+    'effective_from': '2026-04-01', 'effective_to': '2026-12-31',
 }
 MEDICARE_REFERRAL_SOURCE = {
     'label': 'Medicare.gov Original Medicare specialist access',
@@ -289,6 +301,11 @@ def _published_rule(kind: str, result: dict, context: dict, plans: list[str], co
         if kind == 'referral':
             return rule('Not required', 'This Aetna Medicare PPO permits direct specialist care without a PCP referral.', AETNA_MEDICARE_PPO_REFERRAL_SOURCE)
         return rule('Verification required', 'These diagnostic CPTs are not identified on the published precertification list; confirm the member-specific requirement in Aetna or Availity.', AETNA_2026_PRECERT_SOURCE, check=True)
+    if ('aetna' in names and in_network and str(context.get('pos') or '') == '11'
+            and product == 'oxyppowithrx' and codes == {'99204'}):
+        if kind == 'referral':
+            return rule('Not required', 'Aetna PPO guidance permits direct specialist office visits without a PCP referral.', AETNA_PPO_REFERRAL_SOURCE)
+        return rule('Not required', 'Routine office CPT 99204 is absent from Aetna’s 2026 participating-provider precertification list.', AETNA_2026_OFFICE_PRECERT_SOURCE)
     if (bcbstx_ppo_follow_up and kind == 'authorization' and codes == {'99213'}
             and str(context.get('pos') or '') == '11'):
         product = next(iter(exact), 'preferredprovideroptionmedical')

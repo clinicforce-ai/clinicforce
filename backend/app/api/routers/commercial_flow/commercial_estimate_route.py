@@ -43,7 +43,7 @@ from app.api.routers.commercial_flow.commercial_previsit_submit import submit_pr
     "each service category uses its own 270 inquiry; linked responses must match the member, medical "
     "plan and visit date before combined pricing. A missing second response leaves collection unresolved. "
     "A matching exact-CPT "
-    "Stedi inquiry automatically resolves authorization for the bound member and visit setting. A signed "
+    "Stedi inquiry automatically resolves authorization for the bound member and visit setting. A current Aetna Oxy PPO with Rx in-network office CPT 99204 may use the published 2026 no-referral and no-precertification rules; other CPTs need separate decisions. A signed "
     "same-payer clinic agreement may set benefits.network_source to clinic_group_agreement and "
     "return mismatch_warnings for differing product or provider details. A matching in-network UHC "
     "Group LPPO diagnostic visit may show a provisional per-CPT Blue Cross fee proxy when payer "

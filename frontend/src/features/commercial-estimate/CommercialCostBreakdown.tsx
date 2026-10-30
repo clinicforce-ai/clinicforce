@@ -10,6 +10,7 @@ import { requirementStatus } from './commercialRequirementStatus'
 import {
   aetnaOfficeReferenceCopay,
   aetnaOfficePlanningCopay,
+  aetnaPendingOfficeCopay,
   cardOfficePlanningCopay,
   payerReportedPartialCopay,
   publishedHumanaOfficeCopay,
@@ -67,6 +68,7 @@ export default function CommercialCostBreakdown({
   const officeReferenceCopay = aetnaOfficeReferenceCopay(result, model)
   const humanaReferenceCopay = publishedHumanaOfficeCopay(result, model)
   const partialOfficeCopay = payerReportedPartialCopay(result, model)
+  const pendingAetnaCopay = aetnaPendingOfficeCopay(result, model)
   const cardPlanningCopay =
     partialOfficeCopay == null && officeReferenceCopay == null && humanaReferenceCopay == null
       ? cardOfficePlanningCopay(result, model)
@@ -476,6 +478,7 @@ export default function CommercialCostBreakdown({
       aetnaCopayPlanning,
       officeReferenceCopay,
       partialOfficeCopay,
+      pendingAetnaCopay,
       cardPlanningCopay,
       automaticCashFallback,
       cignaFeeProxy,

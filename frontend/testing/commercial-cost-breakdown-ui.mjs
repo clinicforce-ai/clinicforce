@@ -166,6 +166,49 @@ try {
   }))
   assert(pendingCignaTable.includes('Pending · $60.00 office copay if verified'))
   assert(pendingCignaTable.includes('Full patient share remains unresolved'))
+  const aetnaPending = {
+    payer: 'Aetna', service_date: '2026-10-30', reason: 'Synthetic office consultation',
+    benefit_source: 'Stedi',
+    plan_details: { stedi: { names: ['Oxy PPO with Rx'] } },
+    identity: { status: 'matched', binding: 'synthetic', match_version: 2 },
+    benefits: { active: true, service_date_matches: true, network_status: 'in_network',
+      network_source: 'payer_participation_message', copay_cents: 4000,
+      deductible_remaining_cents: null, oop_remaining_cents: null, coinsurance_percent: '0' },
+    price_range: { mode: 'services', complete: false, lines: [{
+      id: 'office', code: '99204', units: 1, allowed_cents: null,
+      benefits: { active: true, service_date_matches: true, network_status: 'in_network',
+        copay_cents: 4000, coinsurance_percent: '0', deductible_applies: null,
+        oop_remaining_cents: null, selected_benefit_ids: ['payer-copay'],
+        reported_options: [{ id: 'payer-copay', kind: 'copay', service_type_code: '98',
+          coverage_level: 'INDIVIDUAL', network: 'IN_AND_OUT_OF_NETWORK',
+          places_of_service: ['11'], payer_note: 'Specialist Visit or Evaluation',
+          plan_association: 'unassigned', amount_cents: 4000 }] },
+    }] },
+    collection_guidance: { amount_cents: null, basis: 'missing_collection_inputs' },
+  }
+  const { aetnaPendingOfficeCopay } = await server.ssrLoadModule(
+    '/src/features/commercial-estimate/payerReportedPartialCopay.ts',
+  )
+  assert.equal(aetnaPendingOfficeCopay(aetnaPending, model), 4000)
+  const aetnaPendingTable = renderToStaticMarkup(React.createElement(
+    CommercialCostBreakdown, { model, result: aetnaPending },
+  ))
+  assert(aetnaPendingTable.includes('Pending · $40.00 office copay if verified'))
+  const aetnaPendingHeadline = renderToStaticMarkup(React.createElement(ArrivalAmountSummary, {
+    model: { ...model, amountText: 'Insured amount unavailable' }, result: aetnaPending,
+    partialCopay: null, visibleAmount: true,
+  }))
+  assert(aetnaPendingHeadline.includes('Pending · $40.00'))
+  assert.equal(aetnaPendingOfficeCopay({ ...aetnaPending,
+    encounter_summary: { payments_verified_cents: 1000 } }, model), 3000)
+  for (const changed of [
+    { benefits: { ...aetnaPending.benefits, service_date_matches: false } },
+    { benefits: { ...aetnaPending.benefits, oop_remaining_cents: 0 } },
+    { plan_details: { stedi: { names: ['Other PPO'] } } },
+    { price_range: { ...aetnaPending.price_range,
+      lines: [...aetnaPending.price_range.lines, { code: '95908', units: 1 }] } },
+    { encounter_summary: { payments_verified_cents: 4000 } },
+  ]) assert.equal(aetnaPendingOfficeCopay({ ...aetnaPending, ...changed }, model), null)
   const paidCignaTable = renderToStaticMarkup(React.createElement(CommercialCostBreakdown, {
     model, result: { ...pendingCigna, encounter_summary: { payments_verified_cents: 1500 } },
   }))
