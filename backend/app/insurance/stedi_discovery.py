@@ -7,7 +7,7 @@ import json
 from datetime import date, datetime, timedelta, timezone
 
 from app.insurance import commercial
-from app.insurance.identity import birth_date, normalized, one_name_edit
+from app.insurance.identity import birth_date, normalized, one_name_edit, card_name_matches
 
 URL = 'https://healthcare.us.stedi.com/2024-04-01/insurance-discovery/check/v1'
 MBI_URL = 'https://healthcare.us.stedi.com/2024-04-01/change/medicalnetwork/eligibility/v3'
@@ -314,14 +314,14 @@ def card_candidate(fields: dict, inputs: dict, source: dict | None = None) -> di
     # Coverage.subscriber is an explicit policy link, even if its self label is stale.
     linked = ((source or {}).get('subscriber_evidence') or {}).get('patient_linked') is True
     if (linked and subscriber.get('firstName') and subscriber.get('lastName')
-            and normalized(fields['member_name']) == normalized(f"{subscriber['firstName']} {subscriber['lastName']}")
-            and normalized(fields['member_name']) != normalized(f"{patient.get('patient_first_name')} {patient.get('patient_last_name')}")
+            and card_name_matches(fields['member_name'], subscriber['firstName'], subscriber['lastName'])
+            and not card_name_matches(fields['member_name'], patient.get('patient_first_name'), patient.get('patient_last_name'))
             and inputs.get('member_id') and normalized(fields['member_id']) == normalized(inputs['member_id'])):
         dependent = True
     first = subscriber.get('firstName') if dependent else patient.get('patient_first_name')
     last = subscriber.get('lastName') if dependent else patient.get('patient_last_name')
     dob = subscriber.get('birthDate') if dependent else patient.get('patient_birth_date')
-    if not first or not last or normalized(fields['member_name']) != normalized(f'{first} {last}'):
+    if not card_name_matches(fields['member_name'], first, last):
         # The patient-bound card may name a different subscriber on this same policy.
         # Only an unambiguous two-part printed name is a request hint, never enrollment proof.
         parts = str(fields['member_name']).split()

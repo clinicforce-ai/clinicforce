@@ -7,6 +7,7 @@ import type {
 } from './commercial-common'
 import type {
   BotoxReview,
+  BotoxPreview,
   PayerAllowanceSummary,
   TemporaryRateReference,
   AetnaDiagnosticReference,
@@ -18,11 +19,13 @@ import type { PaymentExplanation } from './commercial-explanation'
 import type { CommercialNetworkEvidence } from './commercial-network-evidence'
 
 export type PrevisitEstimate = {
+  telehealth?: { place_of_service: '10' | '02'; modality: 'audio_video' | 'audio_only' }
   established_for_planning?: boolean
   requested_service_types?: string[]
   separate_em_planned?: boolean
   combined_emg_plan?: CombinedEmgPlan | null
   botox_review?: BotoxReview
+  botox_preview?: BotoxPreview | null
   billing_protection?: {
     status?: 'qmb' | 'not_qmb'
     reference?: string
@@ -47,6 +50,10 @@ export type PrevisitEstimate = {
     alternative_supported?: boolean
     payer_comparison?: { ecw: string; card: string }
     office_copay_cents?: number
+    patient_name_matches?: boolean
+    cms_plan_id?: string
+    plan_name?: string
+    published_office_copay_cents?: number
   }
   cash_fallback?: { reason: string }
   temporary_rate_reference?: TemporaryRateReference
@@ -54,7 +61,7 @@ export type PrevisitEstimate = {
   fee_proxy_estimate?: {
     basis: 'bcbstx_fee_proxy' | 'bcbstx_uhc_in_network_fee_proxy' | 'bcbstx_cigna_fee_proxy'
     status: 'provisional'
-    scenario_kind?: 'oap_office_copay_general_coinsurance'
+    scenario_kind?: 'oap_office_copay_general_coinsurance' | 'oap_diagnostic_office_copay'
     reference_total_cents: number
     coinsurance_percent: string
     copay_cents: number
@@ -64,7 +71,7 @@ export type PrevisitEstimate = {
     oop_reduction_cents: number
     patient_share_cents: number
     oop_remaining_cents: number
-    lines?: { code: string; reference_cents: number; coinsurance_cents: number }[]
+    lines?: { code: string; units?: number; reference_cents: number; coinsurance_cents: number }[]
     rate_source: string
     deductible_source: string
     deductible_url?: string

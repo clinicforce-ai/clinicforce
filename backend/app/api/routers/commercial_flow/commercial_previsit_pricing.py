@@ -6,16 +6,12 @@ from app.api.routers.commercial_flow.commercial_previsit_rate_reference import _
 from app.api.routers.commercial_flow.commercial_previsit_network_guard import apply_admin_nonparticipation, apply_nmct_library_contract, apply_nmct_contract_absence, scoped_admin_nonparticipation, record_confirmed_out_of_network, resolve_unlinked_blue_route
 from app.api.routers.commercial_flow.commercial_previsit_service_scope import reviewed_service_types as _reviewed_service_types
 from app.insurance import botox_review, cms_locality, cms_pfs, cpt_rules, insurance_product, inventory_certification, library_network_exclusions, group_contract_support
-
-NMCT_PRACTICE_ID = _api.network_participation.NMCT_PRACTICE_ID
-
 def _ecw_case_data(inputs: dict, source: dict, conflicts: list[str]) -> dict[str, _api.Any]:
     return {"appointment_id": source.get("appointment_id"), "appointment_date": source.get("appointment_date"),
             "retrieved_at": source.get("retrieved_at"), "appointment_status": source.get("appointment_status"),
             "suggested_lines": [{"code": row.get("code"), "units": row.get("units"), "description": row.get("description")}
                                 for row in inputs.get("lines", []) if row.get("code")],
             "reason": inputs.get("reason"), "conflicts": conflicts}
-
 
 def _past_visit_with_saved_estimate(visit: dict[str, _api.Any], case: dict | None) -> dict[str, _api.Any]:
     """Attach only an estimate already saved for this exact eCW encounter."""
@@ -31,10 +27,8 @@ def _past_visit_with_saved_estimate(visit: dict[str, _api.Any], case: dict | Non
         "disclaimer": estimate.get("disclaimer"),
     }}
 
-
 def _commercial_slot(appointment_id: str) -> str:
     return "commercial:" + _api.hashlib.sha256(appointment_id.encode()).hexdigest()
-
 
 def _previsit_service_types(inputs: dict) -> list[str]:
     """Ask for the booked categories, including explicitly combined care."""
@@ -42,6 +36,7 @@ def _previsit_service_types(inputs: dict) -> list[str]:
     categories = [_api.visit_estimate.service_type(code, {}) for code in scheduled]
     categories.extend(inputs.get('_selected_service_types') or [])
     if botox_review.is_botox_visit(inputs):
+        categories.insert(0, '98')  # BCBSTX returns office-injection terms from this inquiry.
         categories.extend(category for family in ('botulinum_drug', 'chemodenervation')
                           for category in cpt_rules.SERVICE_FAMILIES[family]['eligibility_service_types'])
     if not scheduled:
@@ -62,7 +57,6 @@ def _previsit_service_types(inputs: dict) -> list[str]:
         ordered.insert(0, '98')
     return list(dict.fromkeys([*ordered, '30']))
 
-
 def _eligibility_timing(service_date: str, check_from_date: str | None = None) -> dict | None:
     service_day = _api.date.fromisoformat(service_date)
     today = _api.datetime.now(_api.ZoneInfo(_api.os.getenv("COMMERCIAL_PRACTICE_TIMEZONE", "America/New_York"))).date()
@@ -71,7 +65,6 @@ def _eligibility_timing(service_date: str, check_from_date: str | None = None) -
         return None
     return {'status': 'too_early', 'appointment_date': service_date, 'check_from': check_from.isoformat(),
         'message': f"Appointment found on {service_day.strftime('%B %d, %Y')}. Insurance checking opens {check_from.strftime('%B %d, %Y')}. No Stedi request is made before then."}
-
 
 def _previsit_codes(inputs: dict) -> list[dict[str, _api.Any]]:
     """Office E/M alternatives are coding standards, not a selected service."""
@@ -102,11 +95,9 @@ def _previsit_codes(inputs: dict) -> list[dict[str, _api.Any]]:
     return [{"id": f"{code}:{index}", "code": str(code), "source": "conditional office E/M alternative", "units": 1}
             for index, code in enumerate(family)] if family else []
 
-
 def _office_service_types(practice_id: str, source: dict) -> list[str]:
     specialist = _api.provider_specialty.office_role((source.get('rendering_provider') or {}).get('roles', [])) == 'specialist'
     return ['98', 'BQ', 'BY', '1'] if specialist else ['98', 'BY', '1']
-
 
 def _benefit_context(inputs: dict, source: dict) -> dict:
     rendering = source.get('rendering_provider') or {}
@@ -196,12 +187,17 @@ def _previsit_range(practice_id: str, inputs: dict, source: dict, payer_id: str,
             rules = {**rules, **profile['rules']}
         except (_api.HTTPException, _api.commercial.CommercialError) as exc:
             issues.append(str(exc.detail) if isinstance(exc, _api.HTTPException) else str(exc))
-    if _api.visit_estimate.telehealth_pos_unresolved(inputs):
+    telehealth_pos_unresolved = _api.visit_estimate.telehealth_pos_unresolved(inputs)
+    if _api.visit_estimate.is_telehealth(inputs):
         rates = []
-        issues.append('Confirm the patient telehealth location (POS 10 or 02), visit modality and matching contract rate before pricing this visit; the clinic office POS 11 does not apply.')
+        rules['place_of_service'] = inputs.get('place_of_service')
+        issues.append('A contract rate for telehealth POS 10 or 02 is not established; the clinic office rate is not used.')
     rules['aetna_payer_verified'] = str(payer_route_id or payer_id).upper() == 'HPQRS'
     priced = _api.visit_estimate.price_lines(selected, rates, benefits, rules, payload=payload,
         service_date=inputs.get('service_date', ''), reviews=review.get('lines'), alternatives=alternatives)
+    if telehealth_pos_unresolved:
+        priced['service_issues'] = [*(priced.get('service_issues') or []),
+            'Confirm the patient telehealth location and obtain benefits for that place of service before collection.']
     if options:
         priced['mode'] = 'options'
         priced['collection'] = {'action': 'choose_services', 'amount_cents': None,
@@ -237,6 +233,8 @@ def _previsit_benefits(payload: dict, coverage: dict, service_date: str | None =
         procedure_code=codes[0]['code'] if office_only and len(codes) == 1 else None,
         office_visit=office_only,
         office_service_types=_api._office_service_types('', source or {}), **context)
+    if diagnostic_payload := (payload.get('_service_payloads') or {}).get('73'):
+        benefits['reported_options'].extend({**row, 'id': f"stc73:{row['id']}"} for row in _api.commercial.reported_stedi_options(diagnostic_payload, '73') if row.get('service_type_code') == '73')
     benefits['benefit_source'] = (payload.get('benefit_source') or 'Stedi') if payload else None
     if (inputs and source and not coverage.get('other_active_coverage')
             and _api.stedi_discovery.corroborates_patient_policy(payload, inputs, source)
@@ -358,8 +356,7 @@ def _attach_previsit_pricing(result: dict, practice_id: str, inputs: dict, sourc
     route_connections = [row for row in payer_connections if row.get('stedi_payer_id') == payer_id]
     connections = [row for row in route_connections if row.get('status') == 'staff_guidance_enabled']
     route_payer = route_connections[0] if len(route_connections) == 1 else None
-    service_date = str(inputs.get('service_date') or '')
-    payer_name = str((route_payer or {}).get('display_name') or result.get('payer') or '')
+    service_date, payer_name = str(inputs.get('service_date') or ''), str((route_payer or {}).get('display_name') or result.get('payer') or '')
     nmct_contract = (_api.network_participation.nmct_library_contract(
         _api.staff_store.list_library(practice_id), payer_name, service_date)
         if nmct and payer_name else None)
@@ -384,9 +381,9 @@ def _attach_previsit_pricing(result: dict, practice_id: str, inputs: dict, sourc
     elif nmct and _api.re.search(r'\baetna\b', ' '.join((str(result.get('payer') or ''),
             str((route_payer or {}).get('display_name') or ''))), _api.re.I):
         _attach_temporary_aetna_rates(result, practice_id, inputs, source)
-    elif (payer_name := str(result.get('payer') or (route_payer or {}).get('display_name') or '')) and not _api.re.search(
-            r'blue cross|bcbstx|blue shield', payer_name, _api.re.I):
-        _attach_temporary_blue_cross_rates(result, practice_id, inputs, source, payer_name)
+    elif (rate_payer_name := str(result.get('payer') or (route_payer or {}).get('display_name') or '')) and not _api.re.search(
+            r'blue cross|bcbstx|blue shield|aetna', rate_payer_name, _api.re.I):
+        _attach_temporary_blue_cross_rates(result, practice_id, inputs, source, rate_payer_name)
     if len(connections) != 1:
         apply_nmct_library_contract(result, benefits, nmct_contract)
         if nmct:
@@ -430,7 +427,7 @@ def _attach_previsit_pricing(result: dict, practice_id: str, inputs: dict, sourc
         if source.get('payer_plan_bound') is False and source.get('payer_plan_names'):
             raise _api.HTTPException(409, 'The payer response has not linked this member product to the visit.')
         if benefits.get('network_status') == 'out_of_network' and not nmct_contract:
-            raise _api.HTTPException(422, 'Payer confirmed out-of-network participation; in-network contract prices do not apply.')
+            raise _api.HTTPException(422, 'Out-of-network participation is established; in-network contract prices do not apply.')
         _, network, profile = _api._previsit_practice_path(practice_id, {**inputs, "payer_id": connection["id"]}, source)
         evidence = _api._network_contract_evidence(practice_id, network, profile, service_date)
         if exclusion and evidence.get('document_id') == exclusion['document_id']:

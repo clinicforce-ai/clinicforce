@@ -63,3 +63,16 @@
   font-size: 15px;
   font-weight: 700;
 }
+
+.cigna-planning-table th {
+  width: auto;
+}
+.cigna-planning-table td {
+  font-weight: 400;
+}
+.cigna-planning-note {
+  margin: 0;
+  padding: 12px 16px;
+  font-size: 13px;
+  color: var(--ve-muted, #5c6870);
+}

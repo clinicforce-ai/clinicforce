@@ -15,14 +15,15 @@ def nmct_library_contract(documents: list[dict], payer: str, service_date: str) 
     """A current Library insurer contract covers NMCT's HMO, PPO and Medicare products."""
     def payer_key(value: str) -> str:
         name = str(value or '').casefold()
+        matches = []
         if re.search(r'\b(?:bcbs\s*(?:of\s*)?(?:tx|texas)|blue\s+cross(?:\s+and)?\s+blue\s+shield\s+(?:of\s+)?(?:tx|texas))\b', name):
-            return 'bcbstx'
+            matches.append('bcbstx')
         if re.search(r'\bunited\s*health(?:care)?\b|\buhc\b', name):
-            return 'unitedhealthcare'
+            matches.append('unitedhealthcare')
         for brand in ('wellpoint', 'healthsmart', 'cigna', 'humana', 'multiplan', 'aetna', 'wellcare'):
             if re.search(r'\b' + brand + r'\b', name):
-                return brand
-        return re.sub(r'[^a-z0-9]', '', name)
+                matches.append(brand)
+        return matches[0] if len(matches) == 1 else '' if matches else re.sub(r'[^a-z0-9]', '', name)
 
     key = payer_key(payer)
     if not key or not service_date:

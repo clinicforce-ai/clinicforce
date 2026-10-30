@@ -33,6 +33,7 @@ def _codes(*entries):
 def test_booking_and_bedrock_candidates_never_select_billed_care():
     assert api._previsit_codes(BOOKING) == []
     assert api._previsit_service_types(BOOKING) == ['98', '1', '2', '30']
+    assert api._previsit_service_types({'reason': 'Botox injection received from pharmacy', 'lines': []}) == ['98', '1', '2', '30']
     available = _codes(('99214', 1), ('64612', 1), ('J0585', 80))
     for row in available:
         row['source'] = 'eCW scheduled service'
@@ -40,6 +41,45 @@ def test_booking_and_bedrock_candidates_never_select_billed_care():
         plan = cpt_suggester.recommend_visit_plan(BOOKING, {}, available)
         assert plan['kind'] == 'botox' and plan['recommended_ids'] == []
         bedrock.assert_not_called()
+
+
+def test_provisional_office_injection_uses_exact_fee_and_injection_benefit_only():
+    result = {'payment_mode': 'insurance', 'service_selection_status': 'preview', 'codes': [],
+              'service_plan': {'kind': 'botox'}, 'stedi_payer': {'id': 'QDTRP'},
+              'requested_service_types': ['98', '1', '2'],
+              'benefits': {'active': True, 'network_status': 'in_network',
+                           'network_source': 'clinic_group_agreement',
+                           'identity': {'binding': 'synthetic', 'status': 'matched', 'match_version': 2}, 'has_secondary': False},
+              'collection_policy': {'mode': 'collect_supported_advance'},
+              'suggestions': {'groups': [{'codes': [{'code': '64612'}, {'code': '64613'}]}]},
+              'available_codes': [{'code': '64612', 'units': 1, 'modifiers': [],
+                                   'unit_allowed_cents': 13114, 'rate_source': 'Synthetic clinic fee row'}]}
+    note = 'INJECTIONS - PROFESSIONAL'
+    options = [
+        {'kind': 'coinsurance', 'service_type_code': 'BY', 'coverage_level': 'INDIVIDUAL',
+         'places_of_service': ['11'], 'network': 'IN_NETWORK', 'percent': '20', 'payer_note': note},
+    ]
+    options.extend({'kind': kind, 'service_type_code': '30', 'coverage_level': 'FAMILY',
+                    'time_period': 'REMAINING', 'network': 'IN_NETWORK', 'amount_cents': amount,
+                    'payer_note': note} for kind, amount in [('deductible', 0), ('out_of_pocket', 128382)])
+    scenario = botox_review.provisional_office_injection(result, options)
+    assert scenario['patient_share_cents'] == 2623
+    assert scenario['allowed_cents'] == 13114
+    alternatives = {**result,
+                    'suggestions': {'groups': [{'codes': [{'code': '64612'}, {'code': '64615'}]}]},
+                    'available_codes': [*result['available_codes'],
+                                        {'code': '64615', 'units': 1, 'modifiers': [],
+                                         'unit_allowed_cents': None, 'rate_source': None}]}
+    assert botox_review.provisional_office_injection(alternatives, options)['code'] == '64612'
+    assert botox_review.provisional_office_injection({**alternatives, 'available_codes': [
+        *result['available_codes'], {'code': '64615', 'units': 1, 'modifiers': [],
+                                     'unit_allowed_cents': 20000, 'rate_source': 'Second clinic fee'}]}, options) is None
+    assert botox_review.provisional_office_injection(result, options + [{**options[0], 'kind': 'copay'}]) is None
+    individual_limit = {**options[-1], 'coverage_level': 'INDIVIDUAL', 'amount_cents': 0}
+    assert botox_review.provisional_office_injection(result, options + [individual_limit])['patient_share_cents'] == 0
+    assert botox_review.provisional_office_injection({**result, 'available_codes': []}, options) is None
+    assert botox_review.provisional_office_injection({**result, 'benefits': {**result['benefits'], 'has_secondary': True}}, options) is None
+    assert botox_review.provisional_office_injection(result, options, {'payments': {'amount_cents': 100}}) is None
 
 
 def test_clinical_review_requires_documented_drug_procedure_dose_and_separate_em():

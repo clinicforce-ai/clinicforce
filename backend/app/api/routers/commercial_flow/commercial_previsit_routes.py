@@ -74,13 +74,18 @@ async def saved_previsit(case_id: str, request: _api.Request) -> dict:
     from a likely published $50-per-test benefit, capped by the draft fee
     reference and reported remaining out-of-pocket balance. This is not an
     authorized collection amount; saved scenarios are recalculated on read.
+    botox_preview, when present, shows the sole priced BCBSTX office-injection
+    candidate from a scoped clinic fee and the returned injection term, even
+    when other suggested candidates remain unpriced.
+    It is a conditional planning amount, not a selected CPT or collection order.
     For Cigna, separate exact-CPT
     Stedi inquiries may supply authorization and financial terms. When every
     selected line has compatible terms, fee_proxy_estimate shows a provisional
     BCBS-priced share; an absent copay is treated as $0 in that calculation.
     For an in-network Cigna Open Access Plus office visit with selected EMG/NCS
-    codes, a separate conditional scenario can show one reported specialist
-    copay plus assumed general coinsurance on matching BCBS reference fees.
+    codes, a separate matched STC 73 inquiry can support one diagnostic
+    specialist copay plus diagnostic 0% coinsurance on matching BCBS reference
+    fees. Without those terms, the general 0% office-copay scenario remains.
     The UI displays the formula and marks collection pending until Cigna's
     Explanation of Estimate is available; fee_proxy_estimate is not a Cigna allowance.
     The UHC group-plan proxy keeps its separate

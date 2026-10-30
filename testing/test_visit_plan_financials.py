@@ -299,7 +299,7 @@ def test_generic_televisit_uses_prior_same_clinic_office_visit_for_provisional_p
     model.converse.return_value = model_reply([])
     with patch.object(cpt_suggester.boto3, 'client', return_value=model):
         plan = cpt_suggester.recommend_visit_plan(
-            {'reason': 'Televisit', 'visit_type': None},
+            {'reason': 'Visit type: Televisit', 'visit_type': None},
             {'recent_completed_appointments': history}, available)
     assert plan['recommended_ids'] == ['planning:99213']
     assert plan['method'] == 'history'
@@ -320,6 +320,8 @@ def test_televisit_at_clinic_mapped_office_pos_needs_patient_location():
     assert visit_estimate.telehealth_pos_unresolved({
         'reason': 'Televisit', 'place_of_service': '11'})
     assert not visit_estimate.telehealth_pos_unresolved({
+        'reason': 'Televisit', 'place_of_service': '10', 'telehealth_modality': 'audio_video'})
+    assert visit_estimate.telehealth_pos_unresolved({
         'reason': 'Televisit', 'place_of_service': '10'})
 
 

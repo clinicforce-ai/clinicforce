@@ -65,6 +65,26 @@ class SourceTests(unittest.TestCase):
                          {"member_name": "PAT EXAMPLE", "member_id": "UHC123456", "group_number": "704321",
                           "birth_date": "1980-01-02", "payer": "UnitedHealthcare"})
 
+    def test_humana_card_binds_unlabeled_name_and_cms_plan_id(self):
+        text = ("HUMANA VALUE CHOICE (PPO)\nA Medicare Health Plan\n"
+                "PAT Q EXAMPLE\nMember ID: H12345678\nCMS H7617 057")
+        fields, evidence = v1_sources.card_fields([(1, text)])
+        self.assertEqual(fields['member_name'], 'PAT Q EXAMPLE')
+        self.assertEqual(fields['cms_plan_id'], 'H7617-057')
+        self.assertEqual(fields['plan_name'], 'Humana Value Choice (PPO)')
+        self.assertEqual(fields['payer'].casefold(), 'humana')
+        self.assertIn('CMS H7617 057', evidence['cms_plan_id']['quote'])
+
+    def test_conflicting_humana_cms_id_across_ocr_layouts_is_not_used(self):
+        image = BytesIO()
+        Image.new('RGB', (500, 300), 'white').save(image, format='PNG')
+        def ocr(_, **kwargs):
+            suffix = '064' if kwargs.get('local_mode') == '6' else '057'
+            return f'HUMANA VALUE CHOICE (PPO)\nPAT Q EXAMPLE\nMember ID: H12345678\nCMS H7617 {suffix}'
+        with patch('app.insurance.golden._image_text', side_effect=ocr):
+            fields, _, _ = v1_sources.read_card_fields([image.getvalue()])
+        self.assertNotIn('cms_plan_id', fields)
+
     def test_card_reader_combines_missing_fields_from_alternate_ocr_layouts(self):
         image = BytesIO()
         Image.new("RGB", (500, 300), "white").save(image, format="PNG")

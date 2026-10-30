@@ -3,6 +3,20 @@ from __future__ import annotations
 
 from app.api.routers import commercial_estimator as _api
 
+def refresh_saved_temporary_rates(result: dict, practice_id: str, inputs: dict, source: dict,
+                                  route_payer: dict | None) -> None:
+    """Rebuild saved cross-payer references from the current scoped clinic rates."""
+    payer_name = str(result.get('payer') or (route_payer or {}).get('display_name') or '')
+    if _api.commercial.is_united_healthcare_payer(
+            result, {'displayName': route_payer.get('display_name')} if route_payer else None):
+        _attach_temporary_uhc_rates(result, practice_id, inputs, source)
+    elif _api.re.search(r'\bcigna\b', payer_name, _api.re.I):
+        _attach_temporary_blue_cross_rates(result, practice_id, inputs, source, 'Cigna')
+    elif _api.re.search(r'\baetna\b', payer_name, _api.re.I):
+        _attach_temporary_aetna_rates(result, practice_id, inputs, source)
+    elif payer_name and not _api.re.search(r'blue cross|bcbstx|blue shield', payer_name, _api.re.I):
+        _attach_temporary_blue_cross_rates(result, practice_id, inputs, source, payer_name)
+
 def _attach_temporary_blue_cross_rates(result: dict, practice_id: str, inputs: dict, source: dict,
                                        payer_name: str) -> None:
     """Expose scoped BCBS rates as a planning reference, never a payer allowance."""

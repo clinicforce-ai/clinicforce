@@ -3,6 +3,13 @@ from __future__ import annotations
 
 from app.api.routers import commercial_estimator as _api
 
+
+def _unique_ecw_member_conflict(card_check: dict, coverage: dict) -> bool:
+    return (card_check['status'] == 'conflict' and card_check['conflicts'] == ['member_id']
+            and not card_check['differences'] and coverage['active_coverages'] == 1
+            and not coverage.get('other_active_coverage') and coverage['patient_id']
+            and coverage['coverage_id'] and coverage['member_id'])
+
 def _compare_card_hints(card: dict, inputs: dict, source: dict) -> dict:
     """Fill absent eCW inquiry fields only when OCR names the linked patient/policy."""
     status = card['status']
@@ -20,18 +27,17 @@ def _compare_card_hints(card: dict, inputs: dict, source: dict) -> dict:
                 and _api.stedi_discovery.normalized(inputs[field]) != _api.stedi_discovery.normalized(fields[field])):
             result['conflicts'].append(field)
     payer_difference = bool(source.get('payer') and fields.get('payer') and
-        _api.stedi_discovery.normalized(source['payer']) != _api.stedi_discovery.normalized(fields['payer']))
+        _api.stedi_discovery.normalized(source['payer']) != _api.stedi_discovery.normalized(fields['payer']) and
+        not (fields['payer'].casefold() == 'humana' and source['payer'].casefold() == 'humana health plan'))
     if payer_difference:
         result['differences'].append('payer_name')
         result['payer_comparison'] = {'ecw': source['payer'], 'card': fields['payer']}
     candidate = _api.stedi_discovery.card_candidate({**fields, 'payer': fields.get('payer') or source.get('payer')}, inputs, source)
     patient = inputs.get('patient') or {}
     subscriber = inputs.get('subscriber') or {}
-    printed_name = _api.stedi_discovery.normalized(fields.get('member_name'))
-    names = {_api.stedi_discovery.normalized(f"{person.get(first) or ''} {person.get(last) or ''}")
-             for person, first, last in ((patient, 'patient_first_name', 'patient_last_name'),
-                                         (subscriber, 'firstName', 'lastName'))}
-    name_matches = bool(printed_name and printed_name in names)
+    name_matches = any(_api.stedi_discovery.card_name_matches(fields.get('member_name'), person.get(first), person.get(last))
+                       for person, first, last in ((patient, 'patient_first_name', 'patient_last_name'),
+                                                   (subscriber, 'firstName', 'lastName')))
     expected_dobs = {_api.insurance_identity.birth_date(value) for value in
                      (patient.get('patient_birth_date'), subscriber.get('birthDate')) if value}
     card_dob = _api.insurance_identity.birth_date(fields['birth_date']) if fields.get('birth_date') else None
@@ -42,6 +48,10 @@ def _compare_card_hints(card: dict, inputs: dict, source: dict) -> dict:
         _api.stedi_discovery.normalized(inputs['member_id']) == _api.stedi_discovery.normalized(fields['member_id']))
     patient_bound = bool(card.get('count') in {1, 2} and source.get('_patient_id') and
                          source.get('coverage_id') and source.get('active_coverages') == 1)
+    result['patient_name_matches'] = bool(patient_bound and name_matches and (not card_dob or dob_matches))
+    if result['patient_name_matches'] and fields.get('cms_plan_id'):
+        result['cms_plan_id'] = fields['cms_plan_id']
+        result['plan_name'] = fields.get('plan_name')
     printed_copay = _api.re.fullmatch(r'\$\s*(\d{1,4})(?:\.(\d{2}))?', str(fields.get('specialist_copay') or ''))
     if (patient_bound and member_matches and name_matches and (not card_dob or dob_matches)
             and not result['conflicts'] and printed_copay):
@@ -74,12 +84,14 @@ def _compare_card_hints(card: dict, inputs: dict, source: dict) -> dict:
         source['subscriber_evidence'] = {**(source.get('subscriber_evidence') or {}), 'member_id_source': 'card_ocr'}
     if fields.get('birth_date') and not (inputs.get('subscriber') or {}).get('birthDate'):
         subscriber = inputs.get('subscriber') or {}
-        name = f"{subscriber.get('firstName') or ''} {subscriber.get('lastName') or ''}"
-        if _api.stedi_discovery.normalized(name) == _api.stedi_discovery.normalized(fields.get('member_name')):
+        if _api.stedi_discovery.card_name_matches(fields.get('member_name'), subscriber.get('firstName'), subscriber.get('lastName')):
             subscriber['birthDate'] = fields['birth_date']
             inputs['subscriber'] = subscriber
             result['fields_added'].append('subscriber_birth_date')
     result['status'] = 'filled_missing' if result['fields_added'] else 'matched'
+    if fields.get('cms_plan_id'):
+        result['cms_plan_id'] = fields['cms_plan_id']
+        result['plan_name'] = fields.get('plan_name')
     return result
 
 

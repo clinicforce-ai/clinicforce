@@ -1343,7 +1343,7 @@ try {
   })
   assert.equal(clinicNonparticipation.networkLabel, 'Out of network')
   assert.equal(clinicNonparticipation.amountText, 'Insured amount unavailable')
-  const absentContractView = deriveCommercialEstimateView({
+  const noncontractedView = deriveCommercialEstimateView({
     result: {
       ...base,
       identity: currentIdentity,
@@ -1360,8 +1360,9 @@ try {
     readOnly: false,
     recovering: false,
   })
-  assert.equal(absentContractView.networkLabel, 'Out of network')
-  assert.equal(absentContractView.networkSource, 'No current insurer contract in the NMCT Clinical Library')
+  assert.equal(noncontractedView.networkLabel, 'Out of network')
+  assert.equal(noncontractedView.networkSource, 'No current insurer contract registered in the NMCT Clinical Library')
+  assert.equal(noncontractedView.amountText, 'Insured amount unavailable')
   const scopedOonResult = {
     ...base,
     identity: currentIdentity,

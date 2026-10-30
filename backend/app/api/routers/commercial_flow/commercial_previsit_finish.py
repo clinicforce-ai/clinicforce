@@ -8,17 +8,20 @@ from app.insurance.identity import patient_benefits_bound, patient_plan_applies
 from app.insurance import blue_cross_proxy, botox_review, evidence_resolution, published_plan_benefits
 
 def _visit_context_parts(inputs: dict, source: dict) -> dict:
-    return {'coverage': {k: v for k, v in _api._coverage_snapshot(inputs, source).items() if k != 'other_active_coverage'},
+    context = {'coverage': {k: v for k, v in _api._coverage_snapshot(inputs, source).items() if k != 'other_active_coverage'},
                'codes': _api._previsit_codes(inputs),
                'provider': inputs.get('rendering_provider'),
                'provider_evidence': {key: (source.get('rendering_provider') or {}).get(key) for key in ('npi', 'roles')},
                'diagnoses': inputs.get('diagnoses'), 'billing': source.get('billing_provider'),
                'reason': inputs.get('reason'), 'location': source.get('location_id'), 'pos': inputs.get('place_of_service'), 'date': inputs.get('service_date')}
+    if inputs.get('telehealth_modality'):
+        context['telehealth_modality'] = inputs['telehealth_modality']
+    return context
 
 
 def _visit_context_changes(saved_inputs: dict, saved_source: dict, current_inputs: dict, current_source: dict) -> list[str]:
     saved, current = _visit_context_parts(saved_inputs, saved_source), _visit_context_parts(current_inputs, current_source)
-    return [key for key in saved if saved[key] != current[key]]
+    return [key for key in dict.fromkeys([*saved, *current]) if saved.get(key) != current.get(key)]
 
 
 def _clinical_context_refreshable(changed: list[str]) -> bool:
@@ -78,6 +81,16 @@ def _finish_previsit(result: dict, case: dict, inputs: dict, source: dict, paylo
         result['benefits']['requires_review'] = True
     payer_plan = _api.commercial.plan_details(payload or {})
     payer_plan_bound = patient_plan_applies(result['benefits'], comparison, inputs['service_date'])
+    payer_plan = published_plan_benefits.identify_card_plan(
+        payer_plan, result.get('card_check') or {}, str(result.get('payer') or source.get('payer') or ''), payer_plan_bound)
+    card_check = result.get('card_check') or {}
+    card_reference = published_plan_benefits.conflicting_card_plan_reference(
+        payer_plan, card_check, str(result.get('payer') or source.get('payer') or ''),
+        result['benefits'], payer_plan_bound, inputs['service_date'])
+    if card_reference is not None:
+        card_check['published_office_copay_cents'] = card_reference
+    if payer_plan.get('cms_plan_id') == 'H7617-057':
+        result['benefits']['plan_details'] = payer_plan
     published_plan_benefits.apply_plan_terms(result['benefits'], payer_plan,
                                              inputs['service_date'], payer_plan_bound)
     protection = review.get('billing_protection') or {}
@@ -99,6 +112,24 @@ def _finish_previsit(result: dict, case: dict, inputs: dict, source: dict, paylo
     payer_id, connections, codes, available, uploaded_cash = build_catalog(
         _api, result, session, planning_inputs, source, pricing_source, exact_source, payer_id, payload,
     )
+    # Switching a planned procedure can replace a catalog row's ID while keeping its CPT.
+    previous = {row['id']: row for row in result.get('available_codes') or []}
+    current = {row['id']: row for row in available}
+    for old_id in list(review.get('selected_ids') or []):
+        if old_id in current or old_id not in previous:
+            continue
+        old = previous[old_id]
+        matches = [row for row in available if row['code'] == old['code']
+                   and (row.get('modifiers') or []) == (old.get('modifiers') or [])]
+        if len(matches) != 1:
+            continue
+        new_id = matches[0]['id']
+        review['selected_ids'] = [new_id if key == old_id else key for key in review['selected_ids']]
+        for key in ('confirmed_units', 'confirmed_modifiers'):
+            if old_id in (review.get(key) or {}):
+                review[key][new_id] = review[key].pop(old_id)
+        for key in ('lines', 'payer_allowances'):
+            (review.get(key) or {}).pop(old_id, None)
     _api.commercial.discard_stale_directory_payer(result, payer_id)
     plan_key = _api.hashlib.sha256(_api.json.dumps([token, review.get('emg_required'), review.get('separate_em_planned'), source.get('recent_completed_appointments', []),
         [(row['id'], row.get('units')) for row in available]], sort_keys=True).encode()).hexdigest()
@@ -185,7 +216,7 @@ def _finish_previsit(result: dict, case: dict, inputs: dict, source: dict, paylo
         payer_coverage_period=((dependent or subscriber).get('dates') or {}).get('plan') or {})
     result.update(ecw_coverage_active=source.get('active_coverages', 0) > 0, calculated_at=_api._now(), context_token=token, revision=case.get('revision', 0), plan_details={
         'ecw': source.get('plan_details') or {'plan': [source['plan']] if source.get('plan') else []},
-        'stedi': _api.commercial.plan_details(payload) if payload else {}}, ecw_retrieved_at=source.get('retrieved_at'),
+        'stedi': payer_plan if payload else {}}, ecw_retrieved_at=source.get('retrieved_at'),
         response_reference=(payload or {}).get('id'), selected_ids=selected_ids or [])
     cpt_check = case.get('cpt_authorization') or {}
     result['cpt_authorization'] = {key: cpt_check[key] for key in
@@ -237,7 +268,7 @@ def _finish_previsit(result: dict, case: dict, inputs: dict, source: dict, paylo
                 result.pop('mapping_candidate', None)
         except _api.HTTPException:
             result.pop('mapping_candidate', None)
-    if uploaded_cash and not _api.visit_estimate.telehealth_pos_unresolved(planning_inputs):
+    if uploaded_cash and not _api.visit_estimate.is_telehealth(planning_inputs):
         _api.practice_prices.apply(result, uploaded_cash, review)
     _api.practice_prices.apply_visit_quote(result, review)
     attach_requirements(_api, result, case, planning_inputs, source, session, connections, payer_id)
@@ -247,6 +278,10 @@ def _finish_previsit(result: dict, case: dict, inputs: dict, source: dict, paylo
                  or blue_cross_proxy.cigna_oap_office_scenario(result, inputs['service_date'])):
         result['fee_proxy_estimate'] = proxy
     result['collection_guidance'] = _api.collection_guidance.build(result, review)
+    result.pop('botox_preview', None)
+    if botox_review.is_botox_visit(inputs) and payload:
+        result['botox_preview'] = botox_review.provisional_office_injection(
+            result, _api.commercial.reported_stedi_options(payload, '98'), review)
     result['combined_emg_plan'] = _api.visit_estimate.combined_emg_plan(result, review)
     result.pop('emg_option', None)
     if inputs.get('visit_type') == 'new' and result['payment_mode'] == 'insurance':

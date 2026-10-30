@@ -141,7 +141,7 @@ export function deriveCommercialEstimateView({
     result?.collection_guidance?.status !== 'deferred' ? result?.collection_guidance : undefined
   const contractCandidate =
     benefits?.network_status === 'unknown' ? result?.mapping_candidate?.network : null
-  let networkLabel =
+  const networkLabel =
     result?.network_evidence?.decision === 'out_of_network_by_clinic_contract_inventory'
       ? 'Out of network for estimation · clinic inventory'
       : result?.network_evidence?.decision === 'excluded_under_available_agreement'
@@ -169,16 +169,14 @@ export function deriveCommercialEstimateView({
       ? 'Current signed clinic agreement · review member product and clinician tier'
       : benefits?.network_source === 'clinic_library_contract'
         ? 'Current Clinical Library contract'
-        : benefits?.network_source === 'clinic_nmct_policy'
-          ? 'Legacy NMCT policy · recalculate against current contracts'
-          : benefits?.network_source === 'clinic_library_absent'
-            ? 'No contract linked to this exact payer product and provider'
+        : benefits?.network_source === 'clinic_library_absent'
+          ? 'No contract linked to this exact payer product and provider'
+          : benefits?.network_source === 'clinic_no_insurer_contract'
+            ? 'No current insurer contract registered in the NMCT Clinical Library'
             : benefits?.network_source === 'clinic_nonparticipation_rule'
               ? 'Current scoped clinic nonparticipation rule'
               : benefits?.network_source === 'clinic_contract_inventory'
                 ? 'Certified clinic contract inventory · not payer-confirmed'
-                : benefits?.network_source === 'clinic_no_insurer_contract'
-                  ? 'No current insurer contract in the NMCT Clinical Library'
                 : guidance?.network_source
   let networkTone =
     !result || tooEarly || result.recovery?.state === 'pending'
@@ -291,6 +289,7 @@ export function deriveCommercialEstimateView({
     calculating,
     supportedAmount,
     patientBenefitsBound,
+    networkConfirmed,
     outOfNetworkConfirmed,
     selectedCptIssue: !!selectedCptIssue,
     servicePlanAction: !!servicePlanAction,

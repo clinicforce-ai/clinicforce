@@ -63,7 +63,7 @@ async def attach_payer_reference(case_id: str, value: PayerReferenceInput, reque
     name and birth date must match the saved case. At most one first-name
     character may differ. The reference alone does not verify identity, replace
     eCW coverage, establish network participation, or authorize collection.
-    On saved reads, a current NMCT Library insurer contract covers that payer's HMO, PPO and Medicare Advantage network tier.
+    On saved reads, the reference alone does not establish NMCT's Library contract tier.
     It does not send
     another paid eligibility request. Repeating the same ID is idempotent.
     """

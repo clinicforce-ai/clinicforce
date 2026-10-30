@@ -130,9 +130,10 @@ async def submit_previsit_eligibility(api: ModuleType, *, payer: dict, provider:
         case = await api.run_in_threadpool(api._save, case, session, "previsit-stedi-rejected")
         return await api._start_previsit_recovery(case, session, provider, background_tasks)
     inquiry_state = 'complete'
-    if payer_id == 'QDTRP' and len(requested_stc) > 1:
+    if ((payer_id == 'QDTRP' and len(requested_stc) > 1)
+            or (payer_id == 'HGJLR' and '73' in requested_stc)):
         linked = {}
-        for stc in requested_stc[1:]:
+        for stc in (requested_stc[1:] if payer_id == 'QDTRP' else ['73']):
             next_body, next_basic = deepcopy(body), deepcopy(basic_body)
             for request_body in (next_body, next_basic):
                 request_body['encounter']['services'] = [{'system': 'STC', 'value': stc}]
@@ -180,7 +181,7 @@ async def submit_previsit_eligibility(api: ModuleType, *, payer: dict, provider:
     if inquiry_state == 'complete' and (case.get('cpt_authorization') or {}).get('state') == 'complete':
         await api.run_in_threadpool(api._finish_previsit, result, case, inputs, source, payload, session, payer_id)
     saved_case = await api.run_in_threadpool(api._save, case, session, "previsit-stedi-complete")
-    if (benefits.get('identity') or {}).get('policy_differences'):
+    if api.insurance_identity.unresolved_policy_difference(benefits.get('identity')):
         saved_case['previsit_discovery'] = {'request_state': 'not_requested', 'recovery_requested': True}
         return await api._start_previsit_recovery(saved_case, session, provider, background_tasks)
     if benefits.get('active') is False:

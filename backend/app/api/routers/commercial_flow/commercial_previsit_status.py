@@ -1,15 +1,14 @@
 """Commercial previsit status workflow."""
 from __future__ import annotations
-
 from app.api.routers import commercial_estimator as _api
 from app.insurance.identity import patient_benefits_bound, patient_plan_applies, payer_identity_verified
 from app.insurance.network_participation import verified_in_network, verified_out_of_network
 from app.insurance import blue_cross_proxy, evidence_resolution, group_contract_support
 from app.api.routers.commercial_flow.commercial_previsit_finish import _payer_plan_pricing_source
 from app.api.routers.commercial_flow.commercial_previsit_network_guard import recheck_saved_network_evidence, recheck_saved_payer_message
-from app.api.routers.commercial_flow.commercial_previsit_saved_pricing import _reprice_saved_new_network
+from app.api.routers.commercial_flow.commercial_previsit_saved_pricing import _reprice_saved_new_network, guard_unresolved_telehealth, guard_telehealth_guidance
 from app.api.routers.commercial_flow.commercial_previsit_requirements import refresh_saved_requirements
-from app.api.routers.commercial_flow.commercial_previsit_rate_reference import _attach_temporary_aetna_rates, _attach_temporary_uhc_rates, _attach_temporary_blue_cross_rates
+from app.api.routers.commercial_flow.commercial_previsit_rate_reference import refresh_saved_temporary_rates
 from app.api.routers.commercial_flow.commercial_previsit_enrollment import _enrollment_failure
 from app.api.routers.commercial_flow.commercial_previsit_service_scope import retain_incomplete_service_evidence as _retain_incomplete_service_evidence
 from app.api.routers.commercial_flow.commercial_previsit_benefits import case_benefits as _case_benefits
@@ -370,7 +369,7 @@ def _previsit_result(case: dict, practice_id: str | None = None) -> dict:
         if (prior_network != ((result.get('benefits') or {}).get('network_status'),
                              (result.get('benefits') or {}).get('network_source'))
                 and (result.get('benefits') or {}).get('network_source') in {
-                    'clinic_group_agreement', 'clinic_nonparticipation_rule', 'clinic_nmct_policy'}):
+                    'clinic_group_agreement', 'clinic_nonparticipation_rule'}):
             _reprice_saved_new_network(result, case, practice_id,
                 group_contract_support.eligibility_route(result, str(payer_id or ''), route_payer))
         _recheck_saved_payer_allowance(result, case, practice_id)
@@ -379,20 +378,8 @@ def _previsit_result(case: dict, practice_id: str | None = None) -> dict:
         result.pop('temporary_rate_reference', None)
         result.pop('aetna_diagnostic_reference', None)
         context = case['previsit_context']
-        if _api.commercial.is_united_healthcare_payer(
-                result, {'displayName': route_payer.get('display_name')} if route_payer else None):
-            _attach_temporary_uhc_rates(result, practice_id, context.get('inputs') or {},
-                                        context.get('source') or {})
-        elif _api.re.search(r'\bcigna\b', str(result.get('payer') or ''), _api.re.I):
-            _attach_temporary_blue_cross_rates(result, practice_id, context.get('inputs') or {},
-                                               context.get('source') or {}, 'Cigna')
-        elif _api.re.search(r'\baetna\b', str(result.get('payer') or ''), _api.re.I):
-            _attach_temporary_aetna_rates(result, practice_id, context.get('inputs') or {},
-                                          context.get('source') or {})
-        elif (payer_name := str(result.get('payer') or (route_payer or {}).get('display_name') or '')) and not _api.re.search(
-                r'blue cross|bcbstx|blue shield', payer_name, _api.re.I):
-            _attach_temporary_blue_cross_rates(result, practice_id, context.get('inputs') or {},
-                                               context.get('source') or {}, payer_name)
+        refresh_saved_temporary_rates(result, practice_id, context.get('inputs') or {},
+                                      context.get('source') or {}, route_payer)
         if proxy := (blue_cross_proxy.estimate(result, str(result.get('service_date') or ''))
                      or blue_cross_proxy.cigna_estimate(result, str(result.get('service_date') or ''))
                      or blue_cross_proxy.cigna_oap_office_scenario(result, str(result.get('service_date') or ''))):
@@ -454,6 +441,7 @@ def _previsit_result(case: dict, practice_id: str | None = None) -> dict:
         # Reopen older UHC auto-cash saves on insurance, preserving an explicit cash choice.
         result['payment_mode'] = 'insurance'
         result.pop('cash_fallback', None)
+    unresolved_telehealth = guard_unresolved_telehealth(result, case)
     insurance_guidance = _api.collection_guidance.build(result, case.get('visit_review'))
     result['insurance_diagnosis'] = _api._insurance_diagnosis(case, result, insurance_guidance)
     pricing_unavailable = (result.get('payment_mode') != 'cash' and insurance_guidance.get('amount_cents') is None
@@ -477,6 +465,7 @@ def _previsit_result(case: dict, practice_id: str | None = None) -> dict:
     if 'cash_fallback' in result:
         result['cash_fallback']['reason'] = 'Clinic self-pay pricing is shown because ' + _api.amount_explanation.fallback_cause(result) + '.'
     result['collection_guidance'] = _api.collection_guidance.build(result, case.get('visit_review'))
+    guard_telehealth_guidance(result, unresolved_telehealth)
     result['established_for_planning'] = _api.cpt_suggester.established_visit_for_planning(
         {**(case['previsit_context'].get('inputs') or {}), 'separate_em_planned': result.get('separate_em_planned')}, source)
     result['combined_emg_plan'] = _api.visit_estimate.combined_emg_plan(result, case.get('visit_review'))
@@ -496,7 +485,6 @@ def _previsit_result(case: dict, practice_id: str | None = None) -> dict:
         result, result['collection_guidance'], case.get('visit_review'))
     result['evidence_resolution'] = evidence_resolution.build(result, source)
     return result
-
 
 def _recovery_event(case: dict, session: dict, stage: str, outcome: str, *, reason: str | None = None, count: int | None = None, http_status: int | None = None) -> None:
     _api.collection_event('coverage_recovery', practice_id=session['practice_id'], intake_id=(session.get('intake') or {}).get('id'),

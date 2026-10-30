@@ -10,8 +10,8 @@ from fastapi import HTTPException
 from app.api.routers import commercial_estimator as api, staff
 from app.api.routers.commercial_flow.commercial_previsit_catalog import build_catalog
 from app.api.routers.commercial_flow.commercial_previsit_finish import _payer_plan_pricing_source
-from app.api.routers.commercial_flow.commercial_previsit_pricing import NMCT_PRACTICE_ID, _previsit_range
-from app.insurance import commercial, ecw_backend, identity, visit_estimate
+from app.api.routers.commercial_flow.commercial_previsit_pricing import _previsit_range
+from app.insurance import commercial, ecw_backend, identity, network_participation, visit_estimate
 
 DAY = date.today().isoformat()
 
@@ -65,6 +65,18 @@ def test_dependent_patient_is_compared_separately_from_policyholder():
     raw = response('Mór-gan')
     raw['dependent']['dateOfBirth'] = '20010203'
     assert identity.compare(raw, policy())['status'] == 'matched'
+
+
+def test_payer_matched_dependent_does_not_trigger_repeat_policy_recovery():
+    recorded = {**policy(), 'subscriber_first': 'Alex', 'subscriber_last': 'Morgan', 'relationship': '18'}
+    matched = identity.compare(response(), recorded)
+    assert matched['reconciliation_rule'] == 'payer_matched_patient'
+    assert matched['policy_differences']
+    assert not identity.unresolved_policy_difference(matched)
+
+    different_patient = response()
+    different_patient['dependent']['dateOfBirth'] = '2001-02-04'
+    assert identity.unresolved_policy_difference(identity.compare(different_patient, recorded))
 
 
 def test_missing_payer_member_or_patient_anchors_cannot_bind_benefits():
@@ -625,7 +637,7 @@ def test_current_library_contract_decides_network_independently_of_price(monkeyp
 
 @pytest.mark.parametrize('payer_label, practice_id', [
     ('United Healthcare', 'clinic'), ('United Health Care', 'clinic'),
-    ('Aetna', NMCT_PRACTICE_ID), ('Cigna', 'clinic'), ('phcs', 'clinic'),
+    ('Aetna', network_participation.NMCT_PRACTICE_ID), ('Cigna', 'clinic'), ('phcs', 'clinic'),
 ])
 def test_other_payers_use_scoped_blue_cross_library_rate_only_as_temporary_reference(monkeypatch, payer_label, practice_id):
     payer = {'id': 'bcbs', 'display_name': 'Blue Cross and Blue Shield of Texas',

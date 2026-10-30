@@ -11,11 +11,9 @@ export function networkEvidenceStatus(result: PrevisitEstimate | null) {
   const networkConfirmed =
     benefits?.network_status === 'in_network' &&
     !participationConflict &&
-    [
-      'clinic_library_contract',
-      'clinic_group_agreement',
-      'payer_participation_message',
-    ].includes(benefits.network_source || '')
+    ['clinic_library_contract', 'clinic_group_agreement', 'payer_participation_message'].includes(
+      benefits.network_source || '',
+    )
   const outOfNetworkConfirmed =
     benefits?.network_status === 'out_of_network' &&
     [

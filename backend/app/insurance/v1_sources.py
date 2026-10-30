@@ -9,7 +9,7 @@ import fitz
 from app.insurance import golden
 
 
-EXTRACTION_VERSION = "v1-upload-evidence-4"
+EXTRACTION_VERSION = "v1-upload-evidence-5"
 MONEY = r"(?<![-\w])\$\s*(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d{2})?(?![\d,.])"
 
 
@@ -51,6 +51,12 @@ def card_fields(pages: list[tuple[int, str]]) -> tuple[dict, dict]:
             # OCR often flattens a card's three-column header into one label
             # row followed by one value row. Accept only the labeled layout.
             following = lines[index + 1] if index + 1 < len(lines) else ""
+            if re.search(r'\bHumana\b', text, re.I) and re.match(r'Member\s+ID\s*:', line, re.I) and index:
+                printed = lines[index - 1]
+                if re.fullmatch(r"[A-Z][A-Z'-]+(?:\s+[A-Z])?\s+[A-Z][A-Z'-]+", printed):
+                    add('member_name', printed, page, printed)
+            if match := re.fullmatch(r'CMS\s+(H\d{4})[\s-]+(\d{3})', line, re.I):
+                add('cms_plan_id', f'{match[1].upper()}-{match[2]}', page, line)
             if re.search(r"\bPlan Type:.*\bMember ID:.*\bGroup #:", line, re.I):
                 match = re.fullmatch(r"(Medical|Dental|Vision|Pharmacy)\s+([A-Z0-9-]{3,40})\s+([A-Z0-9-]{3,40})", following, re.I)
                 if match:
@@ -133,13 +139,16 @@ def card_fields(pages: list[tuple[int, str]]) -> tuple[dict, dict]:
                 section = ""
         # Recognize printed insurer wordmarks, retaining the source quote.
         joined = " ".join(lines)
+        if match := re.search(r'\bHUMANA\s+VALUE\s+CHOICE\s*\(PPO\)', joined, re.I):
+            add('plan_name', 'Humana Value Choice (PPO)', page, match[0])
+            add('plan_type', 'PPO', page, match[0])
         hpi = re.search(r"Health\s+Plans,?\s+Inc\.?\s*\(HPI\)", joined, re.I)
         if hpi:
             add("payer", "Health Plans Incorporated", page, hpi[0])
             for line in lines:
                 if match := re.fullmatch(r"([A-Z][A-Z'-]+):\s*([A-Z][A-Z'-]+)", line, re.I):
                     add("member_name", f"{match[2]} {match[1]}", page, line)
-        if not hpi:
+        else:
             blue = re.search(r"Blue\s*Cross\s*(?:and\s*)?Blue\s*Shield\s*(?:of\s+)?([A-Za-z]+)", joined, re.I)
             if blue and blue[1].casefold() in {"texas", "tx"}:
                 add("payer", "Blue Cross Blue Shield of Texas", page, blue[0])
@@ -168,6 +177,7 @@ def read_card_fields(contents: list[bytes]) -> tuple[dict, dict, list[int]]:
         counts.append(len(extracted))
         offset += len(extracted)
     fields, evidence = card_fields(pages)
+    ambiguous = set()
     has_birth_label = any(re.search(r"\b(?:DOB|Date of Birth|Birth Date)\b", text, re.I) for _, text in pages)
     for mode in ("6", "11"):
         if all(fields.get(key) for key in ("member_name", "member_id", "group_number", "payer")) and (fields.get("birth_date") or not has_birth_label):
@@ -182,7 +192,11 @@ def read_card_fields(contents: list[bytes]) -> tuple[dict, dict, list[int]]:
                 offset += count
             proposed, citations = card_fields(alternate)
             for key, value in proposed.items():
-                if key not in fields:
+                if key == 'cms_plan_id' and key in fields and fields[key] != value:
+                    fields.pop(key, None)
+                    evidence.pop(key, None)
+                    ambiguous.add(key)
+                elif key not in fields and key not in ambiguous:
                     fields[key], evidence[key] = value, citations[key]
         except (golden.GoldenCaseError, golden.OCRServiceError):
             continue  # The primary OCR evidence remains available for review.

@@ -129,6 +129,11 @@ def test_nmct_expired_contract_does_not_establish_network():
     assert network_participation.nmct_library_contract([document], 'Cigna', DAY) is None
 
 
+def test_nmct_ambiguous_insurer_name_does_not_select_a_library_contract():
+    documents = [{'id': 'synthetic-humana', 'kind': 'contract', 'payer': 'Humana'}]
+    assert network_participation.nmct_library_contract(documents, 'Aetna / Humana', DAY) is None
+
+
 def test_nmct_v2_bridge_does_not_infer_participation_from_plan_name():
     from app.api.routers.insurance_v2 import stedi_network
     result = stedi_network({'inputs': {'service_date': DAY}}, {},

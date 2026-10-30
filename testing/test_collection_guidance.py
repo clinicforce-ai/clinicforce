@@ -75,16 +75,17 @@ def test_cigna_calculated_share_defers_deductible_and_coinsurance_collection():
     assert guidance['services'][0]['patient_cents'] is None
 
 
-def test_cigna_office_copay_is_reported_but_not_collected_without_estimate_document():
+def test_cigna_office_copay_uses_approved_policy_without_estimate_document():
     result = scenario(4000)
     result['payer'] = 'Cigna'
     result['price_range']['lines'][0]['benefits'].update(
         copay_cents=4000, copay_period='VISIT', coinsurance_percent='0',
         deductible_applies=False, oop_remaining_cents=10000)
     guidance = collection_guidance.build(result)
-    assert guidance['amount_cents'] is None
-    assert guidance['basis'] == 'missing_collection_inputs'
-    assert 'Explanation of Estimate' in guidance['reason']
+    assert guidance['amount_cents'] == 4000
+    assert guidance['basis'] == 'office_copay'
+    result.pop('collection_policy')
+    assert collection_guidance.build(result)['amount_cents'] is None
 
 
 def test_one_diagnostic_day_copay_is_a_partial_advance_when_full_share_is_unknown():

@@ -5,14 +5,18 @@ import { money, range, visitDate } from './format'
 import { patientBenefitsBound as hasPatientBinding } from './identityBinding'
 import PayerReportedPlanFigures from './PayerReportedPlanFigures'
 import SelectedServiceRequirements from './SelectedServiceRequirements'
+import { shouldShowSelectedRequirements } from './selectedRequirementsVisibility'
 import TemporaryRateReference from './TemporaryRateReference'
 import EstimateSources from './EstimateSources'
 import { openServiceDetails } from './openServiceDetails'
 import ArrivalAmountSummary from './ArrivalAmountSummary'
 import {
+  aetnaOfficePlanningCopay,
+  aetnaPendingOfficeCopay,
   aetnaOfficeReferenceCopay,
   cardOfficePlanningCopay,
   payerReportedPartialCopay,
+  publishedHumanaOfficeCopay,
 } from './payerReportedPartialCopay'
 import PublishedPlanBenefit from './PublishedPlanBenefit'
 import UhcMedicarePpoBenefitTable from './UhcMedicarePpoBenefitTable'
@@ -60,24 +64,19 @@ export default function CommercialOverview({
       : []
   const plannedCodeLabel = plannedCodes.map((code) => `CPT ${code}`).join(', ')
   const aetnaReferenceCopay = aetnaOfficeReferenceCopay(result, model)
-  const payerReportedPartialCents = aetnaReferenceCopay ?? payerReportedPartialCopay(result, model)
+  const humanaReferenceCopay = publishedHumanaOfficeCopay(result, model)
+  const payerReportedPartialCents =
+    aetnaReferenceCopay ?? humanaReferenceCopay ?? payerReportedPartialCopay(result, model)
+  const pendingAetnaCopay = aetnaPendingOfficeCopay(result, model)
   const cardPlanningCents =
     payerReportedPartialCents == null ? cardOfficePlanningCopay(result, model) : null
   const combinedPlan = !cash && !previousEstimate ? result.combined_emg_plan : null
-  const showSelectedRequirements =
-    !cash &&
-    !previousEstimate &&
-    plannedCodes.length > 0 &&
-    result.benefits?.active === true &&
-    result.benefits.service_date_matches !== false &&
-    !result.benefits.coverage_status_conflict &&
-    !result.benefits.coverage_dates_invalid &&
-    !result.benefits.network_conflict &&
-    !result.benefits.historical_only &&
-    !result.benefits.source_errors?.length &&
-    !result.benefits.has_secondary &&
-    result.recovery?.reason_code !== 'multiple_active_policies' &&
-    hasPatientBinding(result.identity)
+  const showSelectedRequirements = shouldShowSelectedRequirements(
+    result,
+    plannedCodes,
+    cash,
+    previousEstimate,
+  )
   const staleInsuredGuidance = !cash && guidance?.amount_cents != null && !amount
   const showAssumptions = Boolean(
     amount ||
@@ -89,7 +88,9 @@ export default function CommercialOverview({
     combinedPlan != null ||
     provisionalAmount != null ||
     !!model.estimatedShare ||
+    aetnaOfficePlanningCopay(result, model, result.price_range?.lines || []) != null ||
     payerReportedPartialCents != null ||
+    pendingAetnaCopay != null ||
     cardPlanningCents != null
   const patientBenefitsBound = hasPatientBinding(result.identity)
   const networkWarnings = (result.network_evidence?.mismatch_warnings || []).filter(
@@ -246,25 +247,25 @@ export default function CommercialOverview({
             result={result}
             partialCopay={payerReportedPartialCents}
             cardPlanningCopay={cardPlanningCents}
-            referenceOnly={aetnaReferenceCopay != null}
+            referenceOnly={aetnaReferenceCopay != null || humanaReferenceCopay != null}
             visibleAmount={visibleAmount}
           />
-          {payerReportedPartialCents != null && aetnaReferenceCopay == null && (
-            <details className="financial-breakdown">
-              <summary>Additional payer response details</summary>
-              <UhcMedicarePpoBenefitTable result={result} />
-            </details>
-          )}
-          {!cash &&
-            result.plan_details?.stedi?.identified_product === 'FEP Blue Basic PSHB' &&
-            result.benefits?.active === true &&
-            result.benefits.published_plan_rule &&
-            result.benefits.published_preferred_office_copay_cents != null && (
+          {payerReportedPartialCents != null &&
+            aetnaReferenceCopay == null &&
+            humanaReferenceCopay == null && (
               <details className="financial-breakdown">
-                <summary>Published plan rule</summary>
-                <PublishedPlanBenefit result={result} />
+                <summary>Additional payer response details</summary>
+                <UhcMedicarePpoBenefitTable result={result} />
               </details>
             )}
+          <PublishedPlanBenefit
+            result={result}
+            show={
+              (!cash || automaticCashFallback) &&
+              (result.plan_details?.stedi?.identified_product === 'FEP Blue Basic PSHB' ||
+                humanaReferenceCopay != null)
+            }
+          />
           {(!cash || automaticCashFallback) &&
             !previousEstimate &&
             result.benefits?.active === true &&

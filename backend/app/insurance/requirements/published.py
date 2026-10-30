@@ -15,7 +15,20 @@ BCBSTX_PAYER_NAMES = {'bcbstx', 'bcbstexas', 'bluecrossblueshieldoftexas',
                       'bluecrossblueshieldtexas'}
 
 # Saved estimates re-evaluate requirement decisions when a published rule changes.
-PUBLISHED_RULESET_VERSION = '2026-10-29-uhc-lppo-office-v8'
+PUBLISHED_RULESET_VERSION = '2026-10-30-aetna-oxy-office-99204-v10'
+
+HUMANA_VALUE_CHOICE_057_SOURCE = {
+    'label': '2026 Humana Value Choice (PPO) H7617-057 Summary of Benefits',
+    'url': 'https://assets.humana.com/is/content/humana/H7617057000SB26pdf',
+    'source_version': '2026 H7617-057 summary', 'verified_at': '2026-10-29',
+    'effective_from': '2026-01-01', 'effective_to': '2026-12-31',
+}
+HUMANA_2026_MA_PAL = {
+    'label': 'Humana Medicare Advantage and D-SNP Prior Authorization and Notification List',
+    'url': 'https://assets.humana.com/is/content/humana/FINAL_Medicare%20and%20DSNP%20Prior%20Authorization%20and%20Notification%20List%20-%207-1-2026pdf',
+    'source_version': 'July 1, 2026 list, revised October 1, 2026', 'verified_at': '2026-10-29',
+    'effective_from': '2026-10-01', 'effective_to': '2026-12-31',
+}
 
 UHC_GROUP_PPO_OON_SOURCE = {
     'label': 'UnitedHealthcare Group Medicare Advantage PPO out-of-network provider guide',
@@ -127,11 +140,23 @@ AETNA_MEDICARE_PPO_REFERRAL_SOURCE = {
     'source_version': '2026 PPO guidance, checked 2026-10-28', 'verified_at': '2026-10-28',
     'effective_from': '2026-01-01', 'effective_to': '2026-12-31',
 }
+AETNA_PPO_REFERRAL_SOURCE = {
+    'label': 'Aetna medical PPO specialist access guidance',
+    'url': 'https://www.aetna.com/health-guide/hmo-pos-ppo-hdhp-whats-the-difference.html',
+    'source_version': 'PPO guide checked 2026-10-30', 'verified_at': '2026-10-30',
+    'effective_from': '2026-01-01', 'effective_to': '2026-12-31',
+}
 AETNA_2026_PRECERT_SOURCE = {
     'label': 'Aetna 2026 participating-provider precertification list and code search',
     'url': 'https://www.aetna.com/health-care-professionals/precertification/precertification-lists.html',
     'source_version': '2026 list checked 2026-10-28', 'verified_at': '2026-10-28',
     'effective_from': '2026-01-01', 'effective_to': '2026-12-31',
+}
+AETNA_2026_OFFICE_PRECERT_SOURCE = {
+    'label': 'Aetna 2026 participating-provider precertification list, April edition',
+    'url': 'https://www.aetna.com/content/dam/aetna/pdfs/aetnacom/healthcare-professionals/2026_Precert_List.pdf',
+    'source_version': 'April 1, 2026 list checked 2026-10-30', 'verified_at': '2026-10-30',
+    'effective_from': '2026-04-01', 'effective_to': '2026-12-31',
 }
 MEDICARE_REFERRAL_SOURCE = {
     'label': 'Medicare.gov Original Medicare specialist access',
@@ -276,6 +301,11 @@ def _published_rule(kind: str, result: dict, context: dict, plans: list[str], co
         if kind == 'referral':
             return rule('Not required', 'This Aetna Medicare PPO permits direct specialist care without a PCP referral.', AETNA_MEDICARE_PPO_REFERRAL_SOURCE)
         return rule('Verification required', 'These diagnostic CPTs are not identified on the published precertification list; confirm the member-specific requirement in Aetna or Availity.', AETNA_2026_PRECERT_SOURCE, check=True)
+    if ('aetna' in names and in_network and str(context.get('pos') or '') == '11'
+            and product == 'oxyppowithrx' and codes == {'99204'}):
+        if kind == 'referral':
+            return rule('Not required', 'Aetna PPO guidance permits direct specialist office visits without a PCP referral.', AETNA_PPO_REFERRAL_SOURCE)
+        return rule('Not required', 'Routine office CPT 99204 is absent from Aetna’s 2026 participating-provider precertification list.', AETNA_2026_OFFICE_PRECERT_SOURCE)
     if (bcbstx_ppo_follow_up and kind == 'authorization' and codes == {'99213'}
             and str(context.get('pos') or '') == '11'):
         product = next(iter(exact), 'preferredprovideroptionmedical')
@@ -283,6 +313,12 @@ def _published_rule(kind: str, result: dict, context: dict, plans: list[str], co
                     BCBSTX_PPO_99213_AUTH_SOURCE, source_type='clinic_confirmation')
     if len(exact) != 1:
         return None
+    if product == 'humanavaluechoiceppoh7617057' and 'humana' in names:
+        if kind == 'referral' and office and codes <= {'99202', '99203', '99204', '99205', '99212', '99213', '99214', '99215'}:
+            return rule('Not required', 'This PPO permits direct specialist visits without a PCP referral.', HUMANA_VALUE_CHOICE_057_SOURCE)
+        if (kind == 'authorization' and office and codes <= {'99202', '99203', '99204', '99205', '99212', '99213', '99214', '99215'}
+                and str(context.get('pos') or '') == '11' and day >= '2026-10-01'):
+            return rule('Not required', 'Routine office E/M is absent from the current Medicare Advantage prior authorization list; additional services need separate review.', HUMANA_2026_MA_PAL)
     if product == 'fepbluebasicpshb':
         if kind == 'referral':
             return rule('Not required', 'The 2026 PSHB Service Benefit Plan does not require a PCP referral to see a specialist.', FEP_PSHB_2026_SOURCE)

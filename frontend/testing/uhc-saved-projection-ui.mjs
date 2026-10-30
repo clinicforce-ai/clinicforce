@@ -36,6 +36,16 @@ try {
     { result: visit, busy: false, save: async () => true, viewEstimate: () => {} }))
   assert(planner(planningVisit).includes('Include a separate established-patient follow-up'))
   assert(!planner({ ...planningVisit, visit_type: 'new' }).includes('Include a separate established-patient follow-up'))
+  const memoryCorrection = planner({ ...planningVisit, visit_type: 'new',
+    available_codes: [
+      { id: 'ncs', code: '95908', units: 1 },
+      { id: 'emg', code: '95886', units: 1 },
+      { id: 'office', code: '99204', units: 1 },
+    ],
+    selected_ids: ['ncs', 'emg'],
+  })
+  assert(memoryCorrection.includes('Remove EMG / nerve testing'))
+  assert(memoryCorrection.includes('Office visit'))
   const { coinsuranceFormula, feeProxyFormula } = await server.ssrLoadModule(
     '/src/features/commercial-estimate/coinsuranceFormula.ts',
   )
@@ -266,10 +276,10 @@ try {
     React.createElement(CommercialOverview, { model: localPpoModel, result: localPpo }),
   )
   assert.equal(localPpoModel.amountText, 'Insured amount unavailable')
-  assert(localPpoOverview.includes('Payer-reported office copay · collection pending'))
+  assert(localPpoOverview.includes('Suggested amount to collect at visit'))
   assert(localPpoOverview.includes('<strong role="status">$5.00</strong>'))
   assert(localPpoOverview.includes('Office copay reported; other service costs pending.'))
-  assert(localPpoOverview.includes('Payer-reported office copay · collection pending'))
+  assert(localPpoOverview.includes('Suggested amount to collect at visit'))
   const futurePpo = structuredClone(localPpo)
   delete futurePpo.agreement_exclusion
   futurePpo.plan_details.stedi.names = ['UnitedHealthcare Local Medicare Advantage PPO']
@@ -301,7 +311,7 @@ try {
   const futurePpoOverview = renderToStaticMarkup(
     React.createElement(CommercialOverview, { model: futurePpoModel, result: futurePpo }),
   )
-  assert(futurePpoOverview.includes('Payer-reported office copay · collection pending'))
+  assert(futurePpoOverview.includes('Suggested amount to collect at visit'))
   assert(futurePpoOverview.includes('<strong role="status">$5.00</strong>'))
   assert(futurePpoOverview.includes('Insurance details for this visit'))
   assert(futurePpoOverview.indexOf('<strong role="status">$5.00</strong>') < futurePpoOverview.indexOf('Insurance details for this visit'))
@@ -320,13 +330,13 @@ try {
   const unmatchedPpoOverview = renderToStaticMarkup(
     React.createElement(CommercialOverview, { model: unmatchedPpoModel, result: unmatchedPpo }),
   )
-  assert(!unmatchedPpoOverview.includes('Payer-reported office copay · collection pending'))
+  assert(!unmatchedPpoOverview.includes('Suggested amount to collect at visit'))
   const futureHmo = structuredClone(futurePpo)
   futureHmo.plan_details.stedi.names = ['UnitedHealthcare Medicare Advantage HMO']
   const futureHmoOverview = renderToStaticMarkup(
     React.createElement(CommercialOverview, { model: futurePpoModel, result: futureHmo }),
   )
-  assert(!futureHmoOverview.includes('Payer-reported office copay · collection pending'))
+  assert(!futureHmoOverview.includes('Suggested amount to collect at visit'))
   const regionalPpo = structuredClone(localPpo)
   regionalPpo.agreement_exclusion.product_kind = 'regional_medicare_advantage_ppo'
   const regionalPpoModel = deriveCommercialEstimateView({
@@ -336,7 +346,7 @@ try {
   const regionalPpoOverview = renderToStaticMarkup(
     React.createElement(CommercialOverview, { model: regionalPpoModel, result: regionalPpo }),
   )
-  assert(regionalPpoOverview.includes('Payer-reported office copay · collection pending'))
+  assert(regionalPpoOverview.includes('Suggested amount to collect at visit'))
   assert(regionalPpoOverview.includes('<strong role="status">$5.00</strong>'))
   const diagnostic = structuredClone(localPpo)
   diagnostic.reason = 'Bilateral hand'
@@ -413,10 +423,19 @@ try {
   assert(feeProxyFormula(followUpProxy).total.includes('$10.00 copay + $0.00 deductible + ($105.11 × 5% = $5.26) + ($89.18 × 5% = $4.46) = $19.72'))
   const inNetworkModel = deriveCommercialEstimateView({ result: inNetworkDiagnostic,
     appointments: [], selectedVisit: '', busy: null, error: '', readOnly: false, recovering: false })
+  assert.equal(inNetworkModel.amountText, '$9.72')
+  const unverifiedNetwork = structuredClone(inNetworkDiagnostic)
+  unverifiedNetwork.benefits.network_source = 'clinic_record'
+  const unverifiedModel = deriveCommercialEstimateView({ result: unverifiedNetwork,
+    appointments: [], selectedVisit: '', busy: null, error: '', readOnly: false, recovering: false })
+  assert.notEqual(unverifiedModel.amountText, '$9.72')
   const inNetworkOverview = renderToStaticMarkup(
     React.createElement(CommercialOverview, { model: inNetworkModel, result: inNetworkDiagnostic }),
   )
-  for (const value of ['$400.00 annual', '$0.00 remaining', '$9.72',
+  for (const value of ['Visit cost and collection',
+    'LPPO-UNITEDHEALTHCARE GROUP MEDICARE ADVANTAGE (PP', '$194.29',
+    '$2,704.30 remaining', 'Planned amount to collect at visit',
+    '$400.00 annual', '$0.00 remaining', '$9.72',
     '$105.11 × 5% = $5.26', '$89.18 × 5% = $4.46',
     'CPT 95908: not required; CPT 95886: not required']) assert(inNetworkOverview.includes(value), value)
   const { ApplicableBenefits } = await server.ssrLoadModule(

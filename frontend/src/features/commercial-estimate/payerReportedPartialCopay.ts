@@ -122,17 +122,71 @@ export function aetnaOfficeReferenceCopay(
     : copay
 }
 
+export function publishedHumanaOfficeCopay(
+  result: PrevisitEstimate,
+  model: CommercialEstimateModel,
+): number | null {
+  const benefits = result.benefits
+  const lines = result.price_range?.mode === 'services' ? result.price_range.lines || [] : []
+  const cardPlanReference =
+    result.card_check?.status === 'conflict' &&
+    result.card_check.conflicts?.length === 1 &&
+    result.card_check.conflicts[0] === 'member_id' &&
+    result.card_check.cms_plan_id === 'H7617-057' &&
+    result.card_check.plan_name === 'Humana Value Choice (PPO)' &&
+    result.card_check.patient_name_matches === true &&
+    result.plan_details?.stedi?.names?.length === 1 &&
+    result.plan_details.stedi.names[0].toLowerCase() === 'humana value choice'
+  const copay = cardPlanReference
+    ? result.card_check?.published_office_copay_cents
+    : benefits?.published_preferred_office_copay_cents
+  return !model.previousEstimate &&
+    !model.amount &&
+    (!model.cash || !!result.cash_fallback) &&
+    (result.plan_details?.stedi?.identified_product === 'Humana Value Choice PPO H7617-057' ||
+      cardPlanReference) &&
+    benefits?.active === true &&
+    benefits.service_date_matches !== false &&
+    !benefits.coverage_status_conflict &&
+    !benefits.coverage_dates_invalid &&
+    !benefits.network_conflict &&
+    benefits.network_status !== 'out_of_network' &&
+    !benefits.historical_only &&
+    !benefits.source_errors?.length &&
+    !benefits.has_secondary &&
+    benefits.qmb_status !== 'protected' &&
+    result.billing_protection?.status !== 'qmb' &&
+    (benefits.copay_cents == null || benefits.copay_cents === copay) &&
+    (specialistOfficeCopay(result) == null || specialistOfficeCopay(result) === copay) &&
+    patientBenefitsBound(result.identity) &&
+    lines.length === 1 &&
+    /^992(?:0[2-5]|1[2-5])$/.test(lines[0].code) &&
+    Number(lines[0].units) === 1 &&
+    !lines[0].modifiers?.length &&
+    !result.price_range?.service_issues?.length &&
+    !firstSelectedCptIssue(result) &&
+    Number.isInteger(copay) &&
+    copay! >= 0
+    ? copay!
+    : null
+}
+
 export function aetnaOfficePlanningCopay(
   result: PrevisitEstimate,
   model: CommercialEstimateModel,
-  calculated: boolean,
   lines: VisitPricedLine[],
 ): number | null {
   const benefits = result.reference_benefits ?? result.benefits
   const officeLine = lines.length === 1 ? lines[0] : null
   const terms = officeLine?.benefits
   return !model.cash &&
-    !calculated &&
+    !model.previousEstimate &&
+    !(
+      result.price_range?.complete === true &&
+      !result.encounter_summary?.integrity_error &&
+      (result.encounter_summary?.complete === true || model.supportedAmount === true)
+    ) &&
+    result.collection_guidance?.amount_cents == null &&
     /^aetna$/i.test(result.payer || '') &&
     officeLine?.units === 1 &&
     /^(9920[2-5]|9921[2-5])$/.test(officeLine.code) &&
@@ -144,6 +198,9 @@ export function aetnaOfficePlanningCopay(
     !benefits.coverage_status_conflict &&
     !benefits.coverage_dates_invalid &&
     !benefits.source_errors?.length &&
+    benefits.qmb_status !== 'protected' &&
+    result.benefits?.qmb_status !== 'protected' &&
+    result.billing_protection?.status !== 'qmb' &&
     terms?.active === true &&
     terms.network_status === 'in_network' &&
     terms.service_date_matches !== false &&
@@ -159,6 +216,71 @@ export function aetnaOfficePlanningCopay(
     terms.oop_remaining_cents >= terms.copay_cents
     ? terms.copay_cents
     : null
+}
+
+export function aetnaPendingOfficeCopay(
+  result: PrevisitEstimate,
+  model: CommercialEstimateModel,
+): number | null {
+  const benefits = result.benefits
+  const lines = result.price_range?.mode === 'services' ? result.price_range.lines || [] : []
+  const line = lines.length === 1 ? lines[0] : null
+  const terms = line?.benefits
+  const copay = terms?.copay_cents
+  if (
+    model.cash ||
+    model.calculating ||
+    model.previousEstimate ||
+    model.amount ||
+    model.requirementIssue ||
+    model.estimatedShare ||
+    model.provisionalAmount != null ||
+    result.reference_only ||
+    result.aetna_diagnostic_reference ||
+    result.benefit_source !== 'Stedi' ||
+    result.collection_guidance?.amount_cents != null ||
+    result.collection_guidance?.basis !== 'missing_collection_inputs' ||
+    !/^aetna$/i.test(result.payer?.trim() || '') ||
+    result.plan_details?.stedi.names?.length !== 1 ||
+    result.plan_details.stedi.names[0].trim().toLowerCase() !== 'oxy ppo with rx' ||
+    benefits?.active !== true ||
+    benefits.service_date_matches !== true ||
+    !networkEvidenceStatus(result).networkConfirmed ||
+    benefits.coverage_status_conflict ||
+    benefits.coverage_dates_invalid ||
+    benefits.historical_only ||
+    benefits.source_errors?.length ||
+    benefits.has_secondary ||
+    result.recovery?.reason_code === 'multiple_active_policies' ||
+    benefits.qmb_status === 'protected' ||
+    result.billing_protection?.status === 'qmb' ||
+    line?.code !== '99204' ||
+    line.units !== 1 ||
+    line.modifiers?.length ||
+    !patientBenefitsBound(result.identity) ||
+    firstSelectedCptIssue(result) ||
+    result.encounter_summary?.integrity_error ||
+    result.price_range?.service_issues?.length ||
+    terms?.active !== true ||
+    terms.service_date_matches !== true ||
+    terms.network_status !== 'in_network' ||
+    terms.source_errors?.length ||
+    !terms.selected_benefit_ids?.length ||
+    !Number.isInteger(copay) ||
+    copay! <= 0 ||
+    (benefits.copay_cents != null && benefits.copay_cents !== copay) ||
+    (benefits.deductible_applies === true && benefits.deductible_remaining_cents !== 0) ||
+    (benefits.oop_remaining_cents != null && benefits.oop_remaining_cents < copay!) ||
+    specialistOfficeCopay({ ...result, benefits: terms }) !== copay ||
+    Number(terms.coinsurance_percent) !== 0 ||
+    (terms.deductible_applies === true && terms.deductible_remaining_cents !== 0) ||
+    ((terms.deductible_applies === false || terms.deductible_remaining_cents === 0) &&
+      terms.oop_remaining_cents != null) ||
+    (terms.oop_remaining_cents != null && terms.oop_remaining_cents < copay!)
+  )
+    return null
+  const remaining = copay! - Math.max(0, result.encounter_summary?.payments_verified_cents || 0)
+  return remaining > 0 ? remaining : null
 }
 
 export function payerReportedPartialCopay(
