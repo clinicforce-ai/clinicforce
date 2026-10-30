@@ -46,6 +46,50 @@ export function collectionAtVisitRow(
   const officeBalance =
     aetnaCopayPlanning == null ? null : Math.max(0, aetnaCopayPlanning - aetnaPaid)
   const botoxPreview = !model.cash && !model.previousEstimate ? result.botox_preview : null
+  const officeLine =
+    result.price_range?.mode === 'services' && result.price_range.lines?.length === 1
+      ? result.price_range.lines[0]
+      : null
+  const pendingCignaCopay =
+    !model.cash &&
+    !model.previousEstimate &&
+    !model.requirementIssue &&
+    result.collection_guidance?.amount_cents == null &&
+    /\bcigna\b/i.test(result.payer || '') &&
+    result.benefits?.active !== false &&
+    result.benefits?.network_status === 'in_network' &&
+    !result.benefits?.network_conflict &&
+    result.benefits?.service_date_matches !== false &&
+    !result.benefits?.coverage_status_conflict &&
+    !result.benefits?.coverage_dates_invalid &&
+    !result.benefits?.has_secondary &&
+    !result.benefits?.source_errors?.length &&
+    !result.benefits?.historical_only &&
+    !result.price_range?.service_issues?.length &&
+    result.recovery?.reason_code !== 'multiple_active_policies' &&
+    result.identity?.status !== 'review' &&
+    result.billing_protection?.status !== 'qmb' &&
+    officeLine?.units === 1 &&
+    /^992(?:0[2-5]|1[2-5])$/.test(officeLine.code) &&
+    officeLine.benefits?.active !== false &&
+    officeLine.benefits?.network_status !== 'out_of_network' &&
+    !officeLine.benefits?.coverage_status_conflict &&
+    !officeLine.benefits?.coverage_dates_invalid &&
+    officeLine.benefits?.service_date_matches !== false &&
+    !officeLine.benefits?.source_errors?.length &&
+    (officeLine.benefits?.deductible_applies !== true ||
+      officeLine.benefits?.deductible_remaining_cents === 0) &&
+    [undefined, null, '0', '0.0', '0.00'].includes(officeLine.benefits?.coinsurance_percent) &&
+    (officeLine.benefits?.oop_remaining_cents == null ||
+      officeLine.benefits.oop_remaining_cents >= officeLine.benefits.copay_cents!) &&
+    Number.isInteger(officeLine.benefits?.copay_cents) &&
+    officeLine.benefits!.copay_cents! > 0
+      ? Math.max(
+          0,
+          officeLine.benefits.copay_cents! -
+            Math.max(0, result.encounter_summary?.payments_verified_cents || 0),
+        )
+      : null
   return {
     label: botoxPreview
       ? 'Planned amount to collect at visit'
@@ -89,7 +133,9 @@ export function collectionAtVisitRow(
                           ? money(partialOfficeCopay)
                           : cardPlanningCopay != null
                             ? `${money(cardPlanningCopay)} office-only card suggestion`
-                            : 'Not established',
+                            : pendingCignaCopay != null
+                              ? `Pending · ${money(pendingCignaCopay)} office copay if verified`
+                              : 'Not established',
     detail: combinedPlan
       ? `${money(combinedPlan.office_copay_cents)} + ${combinedPlan.coinsurance_percent}% × ${money(combinedPlan.diagnostic_allowed_cents)} = ${money(combinedPlan.patient_share_cents)}${combinedPlan.payments_cents ? `; less ${money(combinedPlan.payments_cents)} already paid` : ''}. Separate follow-up E/M is planned; deductible and out-of-pocket adjustments remain assumptions until payer balances are returned.`
       : result.collection_guidance?.basis === 'qmb_protection'
@@ -114,21 +160,24 @@ export function collectionAtVisitRow(
                         ? 'Suggested office visit copay after recorded payments. Separately performed DBS device services may add cost.'
                         : cardPlanningCopay != null
                           ? 'Printed specialist copay for one office visit; verify before charging. Planned imaging and final payer share are unresolved.'
-                          : automaticCashFallback
-                            ? 'Insurance collection is unresolved; any cash quote is listed separately'
-                            : result.collection_guidance?.unconfirmed_zero_oop
-                              ? 'Confirm the reported $0 out-of-pocket balance with the payer before collection'
-                              : model.supportedAmount
-                                ? result.collection_guidance?.basis === 'office_copay'
-                                  ? 'Office copay advance; other services may have a later balance'
-                                  : result.collection_guidance?.basis === 'out_of_pocket_limit'
-                                    ? 'Applicable out-of-pocket maximum has no remaining balance for covered care'
-                                    : result.collection_guidance?.basis === 'diagnostic_day_copay'
-                                      ? 'One diagnostic copay advance; other costs may follow the claim'
-                                      : result.collection_guidance?.basis === 'claim_after_service'
-                                        ? 'Clinic policy defers collection until after the claim'
-                                        : undefined
-                                : undefined,
+                          : pendingCignaCopay != null
+                            ? 'Complete the visit-date payer check, confirm this copay and the clinic collection policy, and account for verified payments before charging. Full patient share remains unresolved.'
+                            : automaticCashFallback
+                              ? 'Insurance collection is unresolved; any cash quote is listed separately'
+                              : result.collection_guidance?.unconfirmed_zero_oop
+                                ? 'Confirm the reported $0 out-of-pocket balance with the payer before collection'
+                                : model.supportedAmount
+                                  ? result.collection_guidance?.basis === 'office_copay'
+                                    ? 'Office copay advance; other services may have a later balance'
+                                    : result.collection_guidance?.basis === 'out_of_pocket_limit'
+                                      ? 'Applicable out-of-pocket maximum has no remaining balance for covered care'
+                                      : result.collection_guidance?.basis === 'diagnostic_day_copay'
+                                        ? 'One diagnostic copay advance; other costs may follow the claim'
+                                        : result.collection_guidance?.basis ===
+                                            'claim_after_service'
+                                          ? 'Clinic policy defers collection until after the claim'
+                                          : undefined
+                                  : undefined,
     emphasis: true,
   }
 }
