@@ -111,6 +111,21 @@ class PatientUploadTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((await self.client.get("/api/staff/upload-links")).json()["upload_links"], [])
         self.assertEqual((await self.client.post(f"/api/staff/upload-links/{link['id']}/revoke")).status_code, 404)
 
+    async def test_patient_specific_pending_card_is_only_a_reference_for_that_patient(self):
+        with staff_store._connection() as connection:
+            connection.execute("INSERT INTO staff_patients(id,practice_id,given_name,family_name,birth_date,created_at) VALUES ('matching-patient',%s,'Pat','Example','1990-01-01',%s)",
+                               (self.actor['practice_id'], staff_store.now()))
+        link = await self.new_link('matching-patient')
+        response = await self.upload(link)
+        self.assertEqual(response.status_code, 201, response.text)
+        matching = staff_store.patient_pending_card_references(self.actor['practice_id'], 'matching-patient')
+        self.assertEqual(len(matching), 1)
+        self.assertEqual(matching[0]['fields']['given_name'], 'Pat')
+        self.assertEqual(staff_store.patient_pending_card_references(self.other['id'], 'matching-patient'), [])
+        generic = await self.new_link()
+        self.assertEqual((await self.upload(generic)).status_code, 201)
+        self.assertEqual(len(staff_store.patient_pending_card_references(self.actor['practice_id'], 'matching-patient')), 1)
+
     async def test_retry_and_concurrent_different_submission_cannot_replace_saved_original(self):
         link = await self.new_link(); content = card_pdf()
         first = await self.upload(link, content=content)

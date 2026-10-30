@@ -53,6 +53,12 @@ def test_humana_card_member_mismatch_is_reference_only():
             plan, {**card, **changed}, 'Humana Health Plan', benefits, True, '2026-10-30') is None
     assert published_plan_benefits.conflicting_card_plan_reference(
         plan, card, 'Humana Health Plan', benefits, False, '2026-10-30') is None
+    pending = {**card, 'status': 'unverified', 'reference_only': True, 'conflicts': []}
+    assert published_plan_benefits.conflicting_card_plan_reference(
+        plan, pending, 'Humana Health Plan', benefits, True, '2026-10-30') == 3000
+    assert published_plan_benefits.identify_card_plan(plan, pending, 'Humana Health Plan', True) == plan
+    assert published_plan_benefits.conflicting_card_plan_reference(
+        plan, {**pending, 'reference_only': False}, 'Humana Health Plan', benefits, True, '2026-10-30') is None
 
 
 def test_humana_exact_ppo_office_visit_has_scoped_referral_and_authorization_rules():

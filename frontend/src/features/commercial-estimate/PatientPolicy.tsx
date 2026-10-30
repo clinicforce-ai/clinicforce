@@ -217,8 +217,9 @@ export default function PatientPolicy({
                         : result.card_check.alternative_supported
                           ? 'The card and eCW differ. The card-based check did not confirm this policy. Review both sources.'
                           : 'The card and eCW differ. There was not enough matching evidence to send a card-based check.',
-                  unverified:
-                    'The card text could not be matched to the eCW patient or policy. No card fields were added.',
+                  unverified: result.card_check.reference_only
+                    ? 'The patient-specific card upload awaits staff confirmation. Its plan details are a conditional reference only; no card fields were used for the payer check.'
+                    : 'The card text could not be matched to the eCW patient or policy. No card fields were added.',
                   not_found:
                     result.card_check.failure_reason === 'ecw_no_matching_card_document'
                       ? uhcCard

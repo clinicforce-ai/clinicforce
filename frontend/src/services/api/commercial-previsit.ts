@@ -43,6 +43,7 @@ export type PrevisitEstimate = {
       | 'multiple_cards'
       | 'unavailable'
     source?: string | null
+    reference_only?: boolean
     failure_reason?: string | null
     fields_added?: string[]
     conflicts: string[]

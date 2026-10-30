@@ -46,7 +46,9 @@ def conflicting_card_plan_reference(plan: dict, card: dict, payer: str, benefits
                                     patient_bound: bool, service_date: str) -> int | None:
     """Show the printed plan's published office term without treating it as a verified member benefit."""
     if (patient_bound and benefits.get('active') is True and not benefits.get('has_secondary')
-            and card.get('status') == 'conflict' and card.get('conflicts') == ['member_id']
+            and ((card.get('status') == 'conflict' and card.get('conflicts') == ['member_id'])
+                 or (card.get('status') == 'unverified' and card.get('reference_only') is True
+                     and card.get('conflicts') in ([], ['member_id'])))
             and not card.get('differences') and card.get('patient_name_matches') is True
             and card.get('cms_plan_id') == 'H7617-057'
             and card.get('plan_name') == 'Humana Value Choice (PPO)'

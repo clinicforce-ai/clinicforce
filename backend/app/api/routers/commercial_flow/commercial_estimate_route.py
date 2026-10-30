@@ -74,7 +74,10 @@ async def previsit_estimate(value: _api.PrevisitInput, request: _api.Request, ba
     Patient-bound card OCR fills only matching missing eCW fields. An exact HPI card match replaces an eCW PHCS or MultiPlan network label for payer routing. If only the
     member ID differs and eCW has one active policy, Stedi checks the eCW ID.
     Other conflicts use a uniquely supported card route or wait for review; no
-    path edits eCW or retries an indeterminate paid request. card_check omits
+    path edits eCW or retries an indeterminate paid request. A patient-specific
+    upload awaiting staff confirmation may set card_check.reference_only and
+    show a conditional published plan reference, but supplies no payer inquiry
+    fields or approved collection amount. card_check omits
     image bytes, reports ecw_no_matching_card_document, and may show a matched HPI card's printed specialist copay for office-only planning.
     payment_explanation gives one doctor-only sentence, a reason code, network
     tier, pricing basis, unpriced CPTs and an optional resolved-mismatch note.
