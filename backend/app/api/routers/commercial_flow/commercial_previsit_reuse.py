@@ -9,6 +9,24 @@ SAVED_RESPONSE_UNAVAILABLE = ('The protected saved payer response could not be r
                               'These saved benefit terms are for review only. Rerun the payer check before collection.')
 
 
+async def saved_visit_cases(api: ModuleType, session: dict) -> list[dict]:
+    workflows = list(((session.get('intake') or {}).get('workflows') or {}).values())
+    return await api.run_in_threadpool(
+        api.store.get_cases, workflows, session['patient_id'], session['share_manifest_id'], **api._scope(session)
+    ) if workflows else []
+
+
+def saved_visit_review_date(cases: list[dict], appointment_id: str) -> str | None:
+    dates = {
+        (row.get('previsit_context') or {}).get('inputs', {}).get('service_date')
+        for row in cases
+        if row.get('source_mode') == 'commercial_previsit'
+        and (row.get('previsit_context') or {}).get('source', {}).get('appointment_id') == appointment_id
+        and (row.get('previsit_context') or {}).get('inputs', {}).get('service_date')
+    }
+    return next(iter(dates)) if len(dates) == 1 else None
+
+
 def telehealth_setting(api: ModuleType, value, inputs: dict, cases: list[dict], original_token: str):
     if value.telehealth_pos:
         return {'place_of_service': value.telehealth_pos, 'modality': value.telehealth_modality}, api._now()
