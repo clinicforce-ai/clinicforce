@@ -2,6 +2,7 @@ import type { PrevisitEstimate } from '../../services/api/commercial-estimator'
 import type { CommercialEstimateModel } from './useCommercialEstimateModel'
 import { money } from './format'
 import { aetnaOfficePlanningCopay, aetnaPendingOfficeCopay } from './payerReportedPartialCopay'
+import { pendingCignaOfficeCopay } from './collectionAtVisitRow'
 
 function nextStep(model: CommercialEstimateModel, result: PrevisitEstimate) {
   const lines = result.price_range?.mode === 'services' ? result.price_range.lines || [] : []
@@ -88,6 +89,7 @@ export default function ArrivalAmountSummary({
       ? null
       : Math.max(0, officePlan - (result.encounter_summary?.payments_verified_cents || 0))
   const pendingAetnaCopay = aetnaPendingOfficeCopay(result, model)
+  const pendingCignaCopay = pendingCignaOfficeCopay(result, model)
   const needsAction = model.amountText === 'Insured amount unavailable'
   const additionalServicesPending = result.price_range?.lines?.some(
     (line) => !/^992(?:0[2-5]|1[2-5])$/.test(line.code),
@@ -107,7 +109,7 @@ export default function ArrivalAmountSummary({
                   ? 'Diagnostic copay · collection pending'
                   : officeBalance != null
                     ? 'Planned amount to collect at visit'
-                    : pendingAetnaCopay != null
+                    : pendingAetnaCopay != null || pendingCignaCopay != null
                       ? 'Amount to collect at visit · pending verification'
                       : partialCopay != null
                         ? referenceOnly
@@ -126,7 +128,8 @@ export default function ArrivalAmountSummary({
           !cignaPlanning &&
           !aetnaPlanning &&
           officeBalance == null &&
-          pendingAetnaCopay == null
+          pendingAetnaCopay == null &&
+          pendingCignaCopay == null
             ? 'amount-pending'
             : undefined
         }
@@ -146,6 +149,8 @@ export default function ArrivalAmountSummary({
                     ? money(officeBalance)
                     : pendingAetnaCopay != null
                       ? `Pending · ${money(pendingAetnaCopay)}`
+                      : pendingCignaCopay != null
+                        ? `Pending · ${money(pendingCignaCopay)}`
                       : partialCopay != null
                         ? money(partialCopay)
                         : cardPlanningCopay != null
@@ -199,6 +204,12 @@ export default function ArrivalAmountSummary({
         <p>
           Stedi reported this specialist office copay. Confirm remaining deductible and
           out-of-pocket balances, conditional benefit terms, and prior payments before charging.
+        </p>
+      ) : pendingCignaCopay != null ? (
+        <p>
+          The reported office copay is conditional. Confirm it with the payer for this visit and
+          CPT, the clinic collection policy, and any payments or credits before charging. Cigna’s
+          allowed amount and full patient share remain unknown.
         </p>
       ) : partialCopay != null ? (
         <p>

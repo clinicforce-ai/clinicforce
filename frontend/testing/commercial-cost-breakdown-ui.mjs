@@ -154,9 +154,10 @@ try {
 
   const pendingCigna = {
     payer: 'Cigna', service_date: '2026-10-30', reason: 'Office consultation',
-    benefits: { network_status: 'in_network' },
+    benefits: { active: true, network_status: 'in_network' },
     price_range: { mode: 'services', complete: false, lines: [{
       id: 'office', code: '99204', units: 1, allowed_cents: null,
+      rate_resolution: { status: 'RATE_UNAVAILABLE' },
       benefits: { copay_cents: 6000 },
     }] },
     collection_guidance: { amount_cents: null, basis: 'missing_collection_inputs' },
@@ -166,6 +167,14 @@ try {
   }))
   assert(pendingCignaTable.includes('Pending · $60.00 office copay if verified'))
   assert(pendingCignaTable.includes('Full patient share remains unresolved'))
+  const pendingCignaHeadline = renderToStaticMarkup(React.createElement(ArrivalAmountSummary, {
+    model: { ...model, amountText: 'Insured amount unavailable' }, result: pendingCigna,
+    partialCopay: null, visibleAmount: false,
+  }))
+  assert(pendingCignaHeadline.includes('Amount to collect at visit · pending verification'))
+  assert(pendingCignaHeadline.includes('Pending · $60.00'))
+  assert(pendingCignaHeadline.includes('full patient share remain unknown'))
+  assert(!pendingCignaHeadline.includes('Check CPT prices'))
   const aetnaPending = {
     payer: 'Aetna', service_date: '2026-10-30', reason: 'Synthetic office consultation',
     benefit_source: 'Stedi',
@@ -213,6 +222,12 @@ try {
     model, result: { ...pendingCigna, encounter_summary: { payments_verified_cents: 1500 } },
   }))
   assert(paidCignaTable.includes('Pending · $45.00 office copay if verified'))
+  const paidCignaHeadline = renderToStaticMarkup(React.createElement(ArrivalAmountSummary, {
+    model: { ...model, amountText: 'Insured amount unavailable' },
+    result: { ...pendingCigna, encounter_summary: { payments_verified_cents: 1500 } },
+    partialCopay: null, visibleAmount: false,
+  }))
+  assert(paidCignaHeadline.includes('Pending · $45.00'))
   const inactiveCignaTable = renderToStaticMarkup(React.createElement(CommercialCostBreakdown, {
     model, result: { ...pendingCigna, benefits: { active: false, network_status: 'in_network' } },
   }))
