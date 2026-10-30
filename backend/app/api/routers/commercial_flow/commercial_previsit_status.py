@@ -337,7 +337,7 @@ def _previsit_result(case: dict, practice_id: str | None = None) -> dict:
             and reference.get('service_date') == result.get('service_date')):
         result['reference_benefits'] = _api.deepcopy(reference['benefits'])
         if practice_id and result['reference_benefits'].get('active') is True:
-            apply_nmct_network_policy({}, practice_id, result['reference_benefits'])
+            apply_nmct_network_policy({}, practice_id, result['reference_benefits'], str(result.get('payer') or ''))
         result['reference_subscriber'] = _api.deepcopy(reference.get('subscriber') or {})
         result['reference_only'] = True
     # Legacy discovery wrote a detail-only failure after a successful 271.

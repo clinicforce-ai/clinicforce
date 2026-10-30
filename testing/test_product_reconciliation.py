@@ -25,15 +25,23 @@ from app.insurance.identity import patient_plan_applies
 DAY = '2026-10-21'
 
 
+def test_nmct_contract_roster_does_not_guess_an_ambiguous_insurer():
+    assert network_participation.nmct_contract_roster('') is None
+    assert network_participation.nmct_contract_roster('Aetna / Humana') is None
+    assert network_participation.nmct_contract_roster('Wellcare / Aetna') is None
+
+
 @pytest.mark.parametrize('practice_id', [
     network_participation.NMCT_PRACTICE_ID,
     network_participation.NMCT_REGISTERED_PRACTICE_ID,
 ])
 @pytest.mark.parametrize('payer,plan', [
-    ('Cigna', 'HMO'), ('Blue Cross', 'PPO'), ('Aetna', 'HMO'),
-    ('UnitedHealthcare', 'Regional Medicare Advantage PPO'), ('Other insurer', 'Other product'),
+    ('Cigna', 'HMO'), ('Blue Cross', 'PPO'), ('Aetna', 'HMO'), ('Humana', 'PPO'),
+    ('UnitedHealthcare', 'Regional Medicare Advantage PPO'), ('Medicare of Texas', 'Medicare'),
+    ('HealthSmart', 'PPO'), ('Wellpoint', 'HMO'), ('MultiPlan', 'PPO'),
+    ('BCBSTX', 'PPO'), ('UHC', 'Medicare Advantage PPO'),
 ])
-def test_nmct_all_plan_policy_without_clinic_contract(monkeypatch, practice_id, payer, plan):
+def test_nmct_confirmed_contract_roster_is_in_network(monkeypatch, practice_id, payer, plan):
     monkeypatch.setattr(api.commercial_store, 'list_connections', lambda *_: [])
     monkeypatch.setattr(pricing.library_network_exclusions, 'applicable_exclusion',
                         lambda *_: None)
@@ -53,16 +61,82 @@ def test_nmct_all_plan_policy_without_clinic_contract(monkeypatch, practice_id, 
     assert result['price_range']['complete'] is False
 
 
+@pytest.mark.parametrize('payer', ['Wellcare', 'WellCare Health Plans', 'Other insurer'])
+def test_nmct_payers_outside_contract_roster_are_out_of_network(monkeypatch, payer):
+    monkeypatch.setattr(api.commercial_store, 'list_connections', lambda *_: [])
+    monkeypatch.setattr(pricing.library_network_exclusions, 'applicable_exclusion', lambda *_: None)
+    monkeypatch.setattr(pricing.inventory_certification, 'applicable', lambda *_: None)
+    monkeypatch.setattr(api, '_previsit_range', lambda *_args, **_kwargs: ({'complete': False}, []))
+    result = {'payer': payer, 'codes': [], 'issues': []}
+    benefits = {'active': True, 'network_status': 'unknown'}
+    api._attach_previsit_pricing(result, 'primary', {'service_date': DAY}, {}, 'route', benefits)
+    assert benefits['network_status'] == 'out_of_network'
+    assert network_participation.verified_out_of_network(benefits)
+
+
+def test_connected_nmct_noncontracted_payer_keeps_roster_evidence(monkeypatch):
+    payer, _, _, inputs, source = setup_path(monkeypatch)
+    payer['display_name'] = 'Wellcare'
+    monkeypatch.setattr(pricing.library_network_exclusions, 'applicable_exclusion', lambda *_: None)
+    monkeypatch.setattr(pricing.inventory_certification, 'applicable', lambda *_: None)
+    monkeypatch.setattr(api, '_previsit_range', lambda *_args, **_kwargs: ({'complete': False}, []))
+    result = {'payer': 'Wellcare', 'codes': [], 'issues': []}
+    benefits = {'active': True, 'network_status': 'unknown'}
+    api._attach_previsit_pricing(result, 'primary', inputs, source, 'payer-route', benefits)
+    assert benefits['network_status'] == 'out_of_network'
+    assert result['network_evidence']['decision'] == 'out_of_network_by_clinic_contract_roster'
+
+
 def test_registered_nmct_reference_network_policy_preserves_date_warning():
     benefits = {'active': True, 'service_date_matches': False, 'network_status': 'unknown'}
-    assert apply_nmct_network_policy({}, network_participation.NMCT_REGISTERED_PRACTICE_ID, benefits)
+    assert apply_nmct_network_policy({}, network_participation.NMCT_REGISTERED_PRACTICE_ID, benefits, 'Cigna')
     assert benefits['network_status'] == 'in_network'
     assert benefits['network_source'] == 'clinic_nmct_policy'
     assert benefits['service_date_matches'] is False
 
     conflicting = {'active': True, 'network_status': 'unknown', 'network_conflict': True}
-    assert not apply_nmct_network_policy({}, network_participation.NMCT_REGISTERED_PRACTICE_ID, conflicting)
+    assert not apply_nmct_network_policy({}, network_participation.NMCT_REGISTERED_PRACTICE_ID, conflicting, 'Cigna')
     assert conflicting['network_status'] == 'unknown'
+
+
+def test_saved_nmct_noncontracted_insurer_clears_old_insured_amount():
+    result = {'payer': 'Wellcare',
+              'benefits': {'active': True, 'service_date_matches': True,
+                           'network_status': 'in_network', 'network_source': 'clinic_nmct_policy'},
+              'price_range': {'complete': True, 'patient_min_cents': 4000,
+                              'lines': [{'allowed_cents': 10000}]},
+              'arrival_collection': {'amount_cents': 4000}}
+    case = {'previsit_context': {'inputs': {'service_date': DAY}, 'source': {}, 'payer_id': ''}}
+    recheck_saved_network_evidence(result, case, 'primary', None)
+    assert result['benefits']['network_status'] == 'out_of_network'
+    assert result['benefits']['network_source'] == 'clinic_nmct_noncontracted'
+    assert result['price_range']['patient_min_cents'] is None
+    assert result['price_range']['lines'][0]['allowed_cents'] is None
+    assert 'arrival_collection' not in result
+
+
+def test_saved_nmct_payer_participation_conflict_with_roster_withholds_amount():
+    result = {'payer': 'Wellcare',
+              'benefits': {'active': True, 'service_date_matches': True,
+                           'network_status': 'in_network', 'network_source': 'payer_participation_message'},
+              'price_range': {'complete': True, 'patient_min_cents': 4000, 'lines': []},
+              'arrival_collection': {'amount_cents': 4000}}
+    case = {'previsit_context': {'inputs': {'service_date': DAY}, 'source': {}, 'payer_id': ''}}
+    recheck_saved_network_evidence(result, case, 'primary', None)
+    assert result['benefits']['network_status'] == 'out_of_network'
+    assert result['benefits']['network_conflict'] is True
+    assert result['network_evidence']['decision'] == 'conflicting_network_evidence'
+    assert result['price_range']['patient_min_cents'] is None
+    assert 'arrival_collection' not in result
+
+
+@pytest.mark.parametrize('payer,expected', [('Aetna', 'in_network'), ('Wellcare', 'out_of_network')])
+def test_nmct_v2_bridge_uses_contract_roster(payer, expected):
+    from app.api.routers.insurance_v2 import stedi_network
+    result = stedi_network({'inputs': {'service_date': DAY, 'payer_id': 'route'}},
+                           {'payer_aliases': {payer: 'route'}},
+                           {'plans': [{'name': 'Synthetic PPO'}]}, practice_id='primary')
+    assert result['provider_network_status'] == expected
 
 
 def test_nmct_policy_preserves_explicit_payer_nonparticipation(monkeypatch):
@@ -78,7 +152,8 @@ def test_nmct_policy_preserves_explicit_payer_nonparticipation(monkeypatch):
 
 
 def test_nmct_policy_overrides_scoped_clinic_nonparticipation(monkeypatch):
-    _, _, _, inputs, source = setup_path(monkeypatch)
+    payer, _, _, inputs, source = setup_path(monkeypatch)
+    payer['display_name'] = 'Blue Cross'
     monkeypatch.setattr(pricing.library_network_exclusions, 'applicable_exclusion', lambda *_: None)
     monkeypatch.setattr(pricing.inventory_certification, 'applicable', lambda *_: None)
     monkeypatch.setattr(api, '_previsit_practice_path', lambda *_: (_ for _ in ()).throw(
@@ -133,7 +208,7 @@ def test_saved_nmct_visit_uses_current_admin_attestation(monkeypatch):
     from app.api.routers.commercial_flow import commercial_previsit_network_guard as guard
     row = {'id': 'attestation-1', 'evidence_reference': 'clinic-admin-attestation: synthetic clinic determination'}
     monkeypatch.setattr(guard, 'scoped_admin_nonparticipation', lambda *_: row)
-    result = {'benefits': {'active': True, 'network_status': 'in_network',
+    result = {'payer': 'UnitedHealthcare', 'benefits': {'active': True, 'network_status': 'in_network',
                           'network_source': 'clinic_nmct_policy'},
               'identity': {'status': 'matched', 'binding': 'synthetic'},
               'plan_details': {'stedi': {'names': ['GROUP MEDICARE ADVANTAGE PPO'],

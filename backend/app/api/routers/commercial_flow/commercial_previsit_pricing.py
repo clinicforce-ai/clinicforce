@@ -363,7 +363,7 @@ def _attach_previsit_pricing(result: dict, practice_id: str, inputs: dict, sourc
     route_connections = [row for row in payer_connections if row.get('stedi_payer_id') == payer_id]
     connections = [row for row in route_connections if row.get('status') == 'staff_guidance_enabled']
     route_payer = route_connections[0] if len(route_connections) == 1 else None
-    service_date = str(inputs.get('service_date') or '')
+    service_date, payer_name = str(inputs.get('service_date') or ''), str((route_payer or {}).get('display_name') or result.get('payer') or '')
     exclusion = library_network_exclusions.applicable_exclusion(
         practice_id, (route_payer or {}).get('display_name') or result.get('payer') or '',
         [*((source.get('payer_plan_names') or []) if source.get('payer_plan_bound') else []),
@@ -374,7 +374,7 @@ def _attach_previsit_pricing(result: dict, practice_id: str, inputs: dict, sourc
         practice_id, route_payer, inputs, source,
         source.get('payer_plan_names') or [], str((source.get('payer_plan_scope') or {}).get('group_number') or '')))
     if nmct and not inventory:
-        apply_nmct_network_policy(result, practice_id, benefits)
+        apply_nmct_network_policy(result, practice_id, benefits, payer_name)
     if exclusion:
         result['agreement_exclusion'] = exclusion
         result['network_evidence'] = {**exclusion,
@@ -387,9 +387,9 @@ def _attach_previsit_pricing(result: dict, practice_id: str, inputs: dict, sourc
     elif nmct and _api.re.search(r'\baetna\b', ' '.join((str(result.get('payer') or ''),
             str((route_payer or {}).get('display_name') or ''))), _api.re.I):
         _attach_temporary_aetna_rates(result, practice_id, inputs, source)
-    elif (payer_name := str(result.get('payer') or (route_payer or {}).get('display_name') or '')) and not _api.re.search(
-            r'blue cross|bcbstx|blue shield|aetna', payer_name, _api.re.I):
-        _attach_temporary_blue_cross_rates(result, practice_id, inputs, source, payer_name)
+    elif (rate_payer_name := str(result.get('payer') or (route_payer or {}).get('display_name') or '')) and not _api.re.search(
+            r'blue cross|bcbstx|blue shield|aetna', rate_payer_name, _api.re.I):
+        _attach_temporary_blue_cross_rates(result, practice_id, inputs, source, rate_payer_name)
     if len(connections) != 1:
         if inventory:
             _apply_inventory_tier(result, benefits, inventory, exclusion)
@@ -429,7 +429,7 @@ def _attach_previsit_pricing(result: dict, practice_id: str, inputs: dict, sourc
         if source.get('payer_plan_bound') is False and source.get('payer_plan_names'):
             raise _api.HTTPException(409, 'The payer response has not linked this member product to the visit.')
         if benefits.get('network_status') == 'out_of_network':
-            raise _api.HTTPException(422, 'Payer confirmed out-of-network participation; in-network contract prices do not apply.')
+            raise _api.HTTPException(422, 'Out-of-network participation is established; in-network contract prices do not apply.')
         _, network, profile = _api._previsit_practice_path(practice_id, {**inputs, "payer_id": connection["id"]}, source)
         evidence = _api._network_contract_evidence(practice_id, network, profile, service_date)
         if exclusion and evidence.get('document_id') == exclusion['document_id']:
@@ -485,7 +485,7 @@ def _attach_previsit_pricing(result: dict, practice_id: str, inputs: dict, sourc
             and not _api.network_participation.verified_out_of_network(benefits)):
         _apply_inventory_tier(result, benefits, inventory, exclusion)
     if nmct and not inventory:
-        apply_nmct_network_policy(result, practice_id, benefits)
+        apply_nmct_network_policy(result, practice_id, benefits, payer_name)
     if _api.network_participation.verified_out_of_network(benefits):
         record_confirmed_out_of_network(result, benefits)
     priced_source = {**source, **((result.get('network_evidence') or {}).get('scope') or {})}

@@ -23,6 +23,7 @@ export function networkEvidenceStatus(result: PrevisitEstimate | null) {
       'payer_participation_message',
       'clinic_nonparticipation_rule',
       'clinic_contract_inventory',
+      'clinic_nmct_noncontracted',
     ].includes(benefits.network_source || '') &&
     !participationConflict
   const outOfNetworkAllowance =

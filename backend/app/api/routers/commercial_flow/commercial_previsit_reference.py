@@ -63,7 +63,7 @@ async def attach_payer_reference(case_id: str, value: PayerReferenceInput, reque
     name and birth date must match the saved case. At most one first-name
     character may differ. The reference alone does not verify identity, replace
     eCW coverage, establish network participation, or authorize collection.
-    On saved reads, NMCT's separate all-plan policy can label the network tier.
+    On saved reads, NMCT's separate contracted-insurer roster can label the network tier.
     It does not send
     another paid eligibility request. Repeating the same ID is idempotent.
     """

@@ -62,13 +62,14 @@ def build(result: dict, review: dict | None = None) -> dict:
                                    if (result.get('network_evidence') or {}).get('decision') == 'in_network_contract_supported' else
                                    'Payer statement about the requesting provider' if verified_in_network(benefits) and benefits.get('network_source') == 'payer_participation_message' else
                                    'Current Clinical Library contract and clinic provider-network record' if verified_in_network(benefits) and benefits.get('network_source') == 'clinic_library_contract' else
-                                   'NMCT all-plan in-network policy; payer-specific nonparticipation takes precedence' if benefits.get('network_source') == 'clinic_nmct_policy' else
+                                   'NMCT contracted-insurer roster; payer-specific nonparticipation takes precedence' if benefits.get('network_source') == 'clinic_nmct_policy' else
                                    'No contract linked to this exact payer product and provider' if benefits.get('network_source') == 'clinic_library_absent' else
                                    'Payer and clinic provider participation evidence conflict' if participation_conflict(benefits) else
                                    'In-network label has no current product/provider participation source' if benefits.get('network_status') == 'in_network' else
                                    'Payer statement about the requesting provider' if verified_out_of_network(benefits) and benefits.get('network_source') == 'payer_participation_message' else
                                    'Certified clinic agreement inventory; payer participation not independently confirmed' if verified_out_of_network(benefits) and benefits.get('network_source') == 'clinic_contract_inventory' else
                                    'No current Blue contract registered in the clinic Library' if verified_out_of_network(benefits) and benefits.get('network_source') == 'clinic_no_blue_contract' else
+                                   'Insurer outside NMCT’s confirmed contract roster' if benefits.get('network_source') == 'clinic_nmct_noncontracted' else
                                    'Clinic administrator attestation for this product and provider; payer participation not independently confirmed' if verified_out_of_network(benefits) and (result.get('network_evidence') or {}).get('source') == 'clinic_admin_attestation' else
                                    'Current scoped clinic nonparticipation rule' if verified_out_of_network(benefits) else
                                    'The plan returned out-of-network benefit terms without establishing this provider tier' if benefits.get('network_status') == 'out_of_network' else

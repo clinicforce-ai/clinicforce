@@ -1343,6 +1343,26 @@ try {
   })
   assert.equal(clinicNonparticipation.networkLabel, 'Out of network')
   assert.equal(clinicNonparticipation.amountText, 'Insured amount unavailable')
+  const noncontractedView = deriveCommercialEstimateView({
+    result: {
+      ...base,
+      identity: currentIdentity,
+      benefits: {
+        ...base.benefits,
+        network_status: 'out_of_network',
+        network_source: 'clinic_nmct_noncontracted',
+      },
+    },
+    appointments: [],
+    selectedVisit: '',
+    busy: null,
+    error: '',
+    readOnly: false,
+    recovering: false,
+  })
+  assert.equal(noncontractedView.networkLabel, 'Out of network')
+  assert.equal(noncontractedView.networkSource, 'Insurer outside NMCT’s confirmed contract roster')
+  assert.equal(noncontractedView.amountText, 'Insured amount unavailable')
   const scopedOonResult = {
     ...base,
     identity: currentIdentity,
