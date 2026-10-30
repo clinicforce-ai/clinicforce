@@ -34,6 +34,25 @@ def test_humana_plan_requires_card_and_payer_match_before_publishing_office_rule
                                                       rules, '2026-10-29', '99214') == {}
     assert published_plan_benefits.apply_office_terms({'copay_cents': 2000}, case_benefits,
                                                       rules, '2026-10-29', '99214')['requires_review'] is True
+    assert published_plan_benefits.apply_office_terms({}, case_benefits, rules, '2026-10-29', '99203')['copay_cents'] == 3000
+
+
+def test_humana_card_member_mismatch_is_reference_only():
+    plan = {'names': ['Humana Value Choice']}
+    card = {'status': 'conflict', 'conflicts': ['member_id'], 'differences': [],
+            'patient_name_matches': True, 'cms_plan_id': 'H7617-057',
+            'plan_name': 'Humana Value Choice (PPO)'}
+    benefits = {'active': True, 'has_secondary': False}
+    reference = published_plan_benefits.conflicting_card_plan_reference(
+        plan, card, 'Humana Health Plan', benefits, True, '2026-10-30')
+    assert reference == 3000
+    assert published_plan_benefits.identify_card_plan(plan, card, 'Humana Health Plan', True) == plan
+    for changed in ({'patient_name_matches': False}, {'cms_plan_id': 'H7617-064'},
+                    {'conflicts': ['member_id', 'group_number']}, {'differences': ['payer_name']}):
+        assert published_plan_benefits.conflicting_card_plan_reference(
+            plan, {**card, **changed}, 'Humana Health Plan', benefits, True, '2026-10-30') is None
+    assert published_plan_benefits.conflicting_card_plan_reference(
+        plan, card, 'Humana Health Plan', benefits, False, '2026-10-30') is None
 
 
 def test_humana_exact_ppo_office_visit_has_scoped_referral_and_authorization_rules():
@@ -41,6 +60,10 @@ def test_humana_exact_ppo_office_visit_has_scoped_referral_and_authorization_rul
     decisions = evaluate(result, context, [])
     assert decisions['referral']['status'] == 'Not required'
     assert decisions['authorization']['status'] == 'Not required'
+    new_visit, new_context = case('Humana', 'Humana Value Choice PPO H7617-057', '99203', day='2026-10-30')
+    new_decisions = evaluate(new_visit, new_context, [])
+    assert new_decisions['referral']['status'] == 'Not required'
+    assert new_decisions['authorization']['status'] == 'Not required'
     for other_plan in ['Humana Value Choice', 'Humana Value Choice PPO H7617-064', 'Humana HMO']:
         assert evaluate(result, {**context, 'plans': [other_plan]}, [])['authorization']['status'] != 'Not required'
     assert evaluate(result, {**context, 'pos': '22'}, [])['authorization']['status'] != 'Not required'

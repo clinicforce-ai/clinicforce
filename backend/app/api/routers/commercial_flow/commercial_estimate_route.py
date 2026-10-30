@@ -379,7 +379,14 @@ async def previsit_estimate(value: _api.PrevisitInput, request: _api.Request, ba
     result['payer'] = source.get('payer')
     _api.collection_event('card_precheck', practice_id=session['practice_id'], intake_id=(session.get('intake') or {}).get('id'),
                      stage='before_eligibility', outcome=result['card_check']['status'], count=card.get('count', 0))
-    if result['card_check']['status'] in {'conflict', 'multiple_cards'}:
+    card_member_conflict_only = (result['card_check']['status'] == 'conflict'
+        and result['card_check']['conflicts'] == ['member_id']
+        and not result['card_check']['differences']
+        and coverage['active_coverages'] == 1 and not coverage.get('other_active_coverage')
+        and coverage['patient_id'] and coverage['coverage_id'] and coverage['member_id'])
+    if card_member_conflict_only:
+        result['issues'].append('The card member ID differs from eCW; checking the unique eCW policy without using the card number.')
+    if result['card_check']['status'] in {'conflict', 'multiple_cards'} and not card_member_conflict_only:
         conflicting = result['card_check']['status'] == 'conflict'
         kind = 'card_conflict' if conflicting else 'multiple_cards'
         result.update(eligibility_error=kind, eligibility_failure={

@@ -42,6 +42,21 @@ def identify_card_plan(plan: dict, card: dict, payer: str, patient_bound: bool) 
                                                             'payer': 'patient-bound Stedi plan name'}}
 
 
+def conflicting_card_plan_reference(plan: dict, card: dict, payer: str, benefits: dict,
+                                    patient_bound: bool, service_date: str) -> int | None:
+    """Show the printed plan's published office term without treating it as a verified member benefit."""
+    if (patient_bound and benefits.get('active') is True and not benefits.get('has_secondary')
+            and card.get('status') == 'conflict' and card.get('conflicts') == ['member_id']
+            and not card.get('differences') and card.get('patient_name_matches') is True
+            and card.get('cms_plan_id') == 'H7617-057'
+            and card.get('plan_name') == 'Humana Value Choice (PPO)'
+            and [name.casefold() for name in plan.get('names') or []] == ['humana value choice']
+            and 'humana' in payer.casefold()
+            and HUMANA_VALUE_CHOICE_057_2026['effective_from'] <= service_date <= HUMANA_VALUE_CHOICE_057_2026['effective_to']):
+        return HUMANA_VALUE_CHOICE_057_2026['office_specialist_copay_cents']
+    return None
+
+
 def aetna_signature_diagnostic(benefits: dict, service_date: str, code: str,
                                *, payer_verified: bool) -> bool:
     """Use the published diagnostic benefit only for the exact member product."""
@@ -123,7 +138,7 @@ def apply_office_terms(raw: dict, case_benefits: dict, rules: dict,
             and not case_benefits.get('has_secondary')
             and str(rules.get('place_of_service') or '') == '11'
             and rules.get('provider_office_role') == 'specialist'
-            and code in {'99212', '99213', '99214', '99215'}):
+            and code in {'99202', '99203', '99204', '99205', '99212', '99213', '99214', '99215'}):
         copay = HUMANA_VALUE_CHOICE_057_2026['office_specialist_copay_cents']
         if (raw.get('copay_cents') not in {None, copay}
                 or raw.get('coinsurance_percent') not in {None, '0', '0.0', '0.00'}

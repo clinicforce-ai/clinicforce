@@ -128,11 +128,23 @@ export function publishedHumanaOfficeCopay(
 ): number | null {
   const benefits = result.benefits
   const lines = result.price_range?.mode === 'services' ? result.price_range.lines || [] : []
-  const copay = benefits?.published_preferred_office_copay_cents
+  const cardPlanReference =
+    result.card_check?.status === 'conflict' &&
+    result.card_check.conflicts?.length === 1 &&
+    result.card_check.conflicts[0] === 'member_id' &&
+    result.card_check.cms_plan_id === 'H7617-057' &&
+    result.card_check.plan_name === 'Humana Value Choice (PPO)' &&
+    result.card_check.patient_name_matches === true &&
+    result.plan_details?.stedi?.names?.length === 1 &&
+    result.plan_details.stedi.names[0].toLowerCase() === 'humana value choice'
+  const copay = cardPlanReference
+    ? result.card_check?.published_office_copay_cents
+    : benefits?.published_preferred_office_copay_cents
   return !model.previousEstimate &&
     !model.amount &&
     (!model.cash || !!result.cash_fallback) &&
-    result.plan_details?.stedi?.identified_product === 'Humana Value Choice PPO H7617-057' &&
+    (result.plan_details?.stedi?.identified_product === 'Humana Value Choice PPO H7617-057' ||
+      cardPlanReference) &&
     benefits?.active === true &&
     benefits.service_date_matches !== false &&
     !benefits.coverage_status_conflict &&
@@ -148,7 +160,7 @@ export function publishedHumanaOfficeCopay(
     (specialistOfficeCopay(result) == null || specialistOfficeCopay(result) === copay) &&
     patientBenefitsBound(result.identity) &&
     lines.length === 1 &&
-    /^9921[2-5]$/.test(lines[0].code) &&
+    /^992(?:0[2-5]|1[2-5])$/.test(lines[0].code) &&
     Number(lines[0].units) === 1 &&
     !lines[0].modifiers?.length &&
     !result.price_range?.service_issues?.length &&

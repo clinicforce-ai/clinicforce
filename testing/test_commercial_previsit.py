@@ -133,7 +133,7 @@ class PrevisitFlowTest(unittest.IsolatedAsyncioTestCase):
             card_fields={'payer': 'Blue Cross Blue Shield Tx', 'member_name': 'Pat Example',
                          'member_id': 'CARD-123', 'group_number': 'GROUP-9'})
 
-    async def test_card_member_conflict_holds_first_stedi_request(self):
+    async def test_card_member_conflict_checks_unique_ecw_policy(self):
         await self._flow(date.today().isoformat(), card_conflict=True,
             card_fields={'payer': 'Blue Cross Blue Shield Tx', 'member_name': 'Pat Example',
                          'member_id': 'CARD-999'})
@@ -361,7 +361,8 @@ class PrevisitFlowTest(unittest.IsolatedAsyncioTestCase):
              patch("app.api.routers.commercial_estimator._ecw_practice_config", return_value={}), \
              patch("app.api.routers.commercial_estimator.ecw_backend.fetch_saved_eligibility", AsyncMock(return_value=saved_ecw)), \
              patch("app.api.routers.commercial_estimator._read_card_hints", new=AsyncMock(return_value={
-                 'status': card_status or ('read' if card_fields else 'not_found'), 'fields': card_fields or {}}), create=True), \
+                 'status': card_status or ('read' if card_fields else 'not_found'), 'fields': card_fields or {},
+                 'count': 1 if card_fields else 0}), create=True), \
              patch("app.api.routers.commercial_estimator.cpt_suggester.suggest_preliminary_cpt_codes", return_value={"groups": [], "notes": []}) as preliminary_suggestions, \
              patch("app.api.routers.commercial_estimator.stedi_payers.search_payer", new=AsyncMock(return_value=None if payer_missing else {"stediId": "QDTRP", "displayName": "Blue Cross and Blue Shield of Texas", 'transactionSupport': {'eligibilityCheck': 'ENROLLMENT_REQUIRED' if enrollment_missing else 'SUPPORTED'}})), \
              patch("app.api.routers.commercial_estimator.stedi_payers.eligibility_enrollment", new=AsyncMock(return_value={'status': 'MISSING', 'reason_code': 'enrollment_missing'})), \
@@ -533,8 +534,8 @@ class PrevisitFlowTest(unittest.IsolatedAsyncioTestCase):
                 return
             if card_conflict:
                 self.assertEqual(result['card_check']['status'], 'conflict')
-                self.assertEqual(result['eligibility_failure']['kind'], 'card_conflict')
-                client.post.assert_not_awaited()
+                client.post.assert_awaited()
+                self.assertEqual(client.post.await_args.kwargs['json']['subscriber']['memberId'], 'M123')
                 return
             if card_status == 'multiple_cards':
                 self.assertEqual(result['card_check']['status'], 'multiple_cards')

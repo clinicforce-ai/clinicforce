@@ -83,6 +83,12 @@ def _finish_previsit(result: dict, case: dict, inputs: dict, source: dict, paylo
     payer_plan_bound = patient_plan_applies(result['benefits'], comparison, inputs['service_date'])
     payer_plan = published_plan_benefits.identify_card_plan(
         payer_plan, result.get('card_check') or {}, str(result.get('payer') or source.get('payer') or ''), payer_plan_bound)
+    card_check = result.get('card_check') or {}
+    card_reference = published_plan_benefits.conflicting_card_plan_reference(
+        payer_plan, card_check, str(result.get('payer') or source.get('payer') or ''),
+        result['benefits'], payer_plan_bound, inputs['service_date'])
+    if card_reference is not None:
+        card_check['published_office_copay_cents'] = card_reference
     if payer_plan.get('cms_plan_id') == 'H7617-057':
         result['benefits']['plan_details'] = payer_plan
     published_plan_benefits.apply_plan_terms(result['benefits'], payer_plan,
