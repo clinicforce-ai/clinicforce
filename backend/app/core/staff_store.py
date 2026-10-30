@@ -252,6 +252,20 @@ def patient_card_intakes(practice_id: str, patient_id: str) -> list[dict]:
     return [dict(row) for row in rows]
 
 
+def patient_pending_card_references(practice_id: str, patient_id: str) -> list[dict]:
+    """Only a patient-specific upload with matching submitted identity can supply a plan reference."""
+    with _connection() as connection:
+        rows = connection.execute("""SELECT i.id,i.documents,i.fields FROM staff_intakes i
+            JOIN staff_patients p ON p.id=%s AND p.practice_id=i.practice_id
+            WHERE i.practice_id=%s AND i.expected_patient_id=p.id AND i.auto_patient_id=p.id
+              AND i.patient_id IS NULL AND i.source='patient_upload' AND i.status='needs_confirmation'
+              AND lower(trim(i.fields->>'given_name'))=lower(trim(p.given_name))
+              AND lower(trim(i.fields->>'family_name'))=lower(trim(p.family_name))
+              AND i.fields->>'birth_date'=p.birth_date AND jsonb_array_length(i.documents)>0
+            ORDER BY i.updated_at DESC""", (patient_id, practice_id)).fetchall()
+    return [dict(row) for row in rows]
+
+
 def patient_for_intake_request(intake_id: str, practice_id: str) -> str:
     """A staff request may target an already shared, unconfirmed clinic identity."""
     with _connection() as connection:

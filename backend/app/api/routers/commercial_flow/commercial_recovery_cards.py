@@ -13,13 +13,13 @@ def _unique_ecw_member_conflict(card_check: dict, coverage: dict) -> bool:
 def _compare_card_hints(card: dict, inputs: dict, source: dict) -> dict:
     """Fill absent eCW inquiry fields only when OCR names the linked patient/policy."""
     status = card['status']
-    result = {'status': status, 'source': card.get('source'),
+    result = {'status': status, 'source': card.get('source'), 'reference_only': card.get('reference_only', False),
               'failure_reason': card.get('failure_reason'), 'fields_added': [], 'conflicts': [],
               'differences': [], 'alternative_supported': False}
     if status != 'read':
         return result
     fields = card['fields']
-    if not fields.get('member_id'):
+    if not fields.get('member_id') and not card.get('reference_only'):
         result['status'] = 'unverified'
         return result
     for field in ('member_id', 'group_number'):
@@ -32,7 +32,6 @@ def _compare_card_hints(card: dict, inputs: dict, source: dict) -> dict:
     if payer_difference:
         result['differences'].append('payer_name')
         result['payer_comparison'] = {'ecw': source['payer'], 'card': fields['payer']}
-    candidate = _api.stedi_discovery.card_candidate({**fields, 'payer': fields.get('payer') or source.get('payer')}, inputs, source)
     patient = inputs.get('patient') or {}
     subscriber = inputs.get('subscriber') or {}
     name_matches = any(_api.stedi_discovery.card_name_matches(fields.get('member_name'), person.get(first), person.get(last))
@@ -56,6 +55,10 @@ def _compare_card_hints(card: dict, inputs: dict, source: dict) -> dict:
     if result['patient_name_matches'] and fields.get('cms_plan_id'):
         result['cms_plan_id'] = fields['cms_plan_id']
         result['plan_name'] = fields.get('plan_name')
+    if card.get('reference_only'):
+        result['status'] = 'unverified'
+        return result
+    candidate = _api.stedi_discovery.card_candidate({**fields, 'payer': fields.get('payer') or source.get('payer')}, inputs, source)
     printed_copay = _api.re.fullmatch(r'\$\s*(\d{1,4})(?:\.(\d{2}))?', str(fields.get('specialist_copay') or ''))
     if (patient_bound and member_matches and name_matches and (not card_dob or dob_matches)
             and not result['conflicts'] and printed_copay):
@@ -121,7 +124,9 @@ async def _recover_card(case: dict, session: dict, provider: dict) -> bool:
         unavailable = card['status'] == 'unavailable'
         if unavailable:
             recovery['card_failure_reason'] = card.get('failure_reason') or 'card_unavailable'
-        if card['status'] == 'read':
+        if card.get('reference_only'):
+            recovery['card_status'] = 'unverified'
+        elif card['status'] == 'read':
             fields, evidence = card['fields'], card['evidence']
             if (recovery.get('card_conflict') and
                     _api.hashlib.sha256(_api.json.dumps(fields, sort_keys=True).encode()).hexdigest() != recovery.get('card_fingerprint')):

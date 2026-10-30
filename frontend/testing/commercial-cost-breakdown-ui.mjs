@@ -829,6 +829,23 @@ try {
     'Pending · $30.00 office copay if confirmed', 'card member number differs']) {
     assert(humanaConflictTable.includes(value), `Missing conflicting card reference ${value}`)
   }
+  const humanaPending = { ...humanaConflict,
+    card_check: { ...humanaConflict.card_check, status: 'unverified', reference_only: true,
+      conflicts: [] },
+    temporary_rate_reference: { source: 'NMCT Clinical Library Blue Cross fee schedule',
+      lines: [{ id: 'office', code: '99203', units: 1, modifiers: [], unit_reference_cents: 10117 }],
+      message: 'Blue Cross planning reference' },
+  }
+  assert.equal(publishedHumanaOfficeCopay(humanaPending, model), 3000)
+  const humanaPendingTable = renderToStaticMarkup(React.createElement(CommercialCostBreakdown,
+    { model, result: humanaPending }))
+  for (const value of ['$30.00 in-network specialist office visit',
+    'Pending · $30.00 office copay if confirmed', 'upload awaiting staff confirmation',
+    'Total payer allowed</th><td><span>Not established']) {
+    assert(humanaPendingTable.includes(value), `Missing pending card reference ${value}`)
+  }
+  assert(!humanaPendingTable.includes('BCBS Texas reference'))
+  assert(!humanaPendingTable.includes('Blue Cross fee reference'))
   assert(renderToStaticMarkup(React.createElement(PublishedPlanBenefit, { result: humana, show: true })).includes('Humana plan source'))
   assert(aetnaDiagnosticTable.includes('min(($50.00 per test × 2) + $0.00 deductible + $0.00 coinsurance, $218.76 Aetna fee reference, $6,390.00 remaining out-of-pocket) = $100.00'))
   const aetnaDiagnosticHeadline = renderToStaticMarkup(React.createElement(

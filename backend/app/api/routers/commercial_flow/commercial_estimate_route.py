@@ -51,7 +51,7 @@ from app.api.routers.commercial_flow.commercial_recovery_cards import _unique_ec
     "that insurer's HMO, PPO and Medicare Advantage products for the in-network tier; "
     "an exact product/provider rate is still required for a contracted CPT allowance. "
     "Contradictory provider-specific payer evidence requires review. evidence_resolution reports "
-    "unresolved facts; an in-network tier alone does not establish an amount to collect. A sole card member-ID conflict checks one active eCW policy using the eCW ID while preserving the conflict. A matched HPI card can expose card_check.office_copay_cents for office-only planning, not payer-confirmed liability or imaging costs. A matching HPI card replaces an eCW PHCS or MultiPlan network label for payer routing and clears its payer IDs before the Stedi directory search. The matched PHCS or MultiPlan label remains card evidence; NMCT still requires a current matching Clinical Library insurer contract to establish its network tier. "
+    "unresolved facts; an in-network tier alone does not establish an amount to collect. A sole card member-ID conflict checks one active eCW policy using the eCW ID while preserving the conflict. A matching patient-specific pending upload sets card_check.reference_only for a conditional published plan reference and never supplies inquiry fields or collection. A matched HPI card can expose card_check.office_copay_cents for office-only planning, not payer-confirmed liability or imaging costs. A matching HPI card replaces an eCW PHCS or MultiPlan network label for payer routing and clears its payer IDs before the Stedi directory search. The matched PHCS or MultiPlan label remains card evidence; NMCT still requires a current matching Clinical Library insurer contract to establish its network tier. "
     "A BCBSTX Botox booking asks for office injection benefits first. When exactly one current suggested "
     "chemodenervation CPT has a scoped clinic fee, even if other suggestions lack fees, and the "
     "office-injection term is unambiguous, "
@@ -74,7 +74,7 @@ async def previsit_estimate(value: _api.PrevisitInput, request: _api.Request, ba
     Patient-bound card OCR fills only matching missing eCW fields. An exact HPI card match replaces an eCW PHCS or MultiPlan network label for payer routing. If only the
     member ID differs and eCW has one active policy, Stedi checks the eCW ID.
     Other conflicts use a uniquely supported card route or wait for review; no
-    path edits eCW or retries an indeterminate paid request. card_check omits
+    path edits eCW or retries an indeterminate paid request. A matching patient-specific pending upload may set card_check.reference_only for a conditional plan reference, never payer inquiry fields or collection. card_check omits
     image bytes, reports ecw_no_matching_card_document, and may show a matched HPI card's printed specialist copay for office-only planning.
     payment_explanation gives one doctor-only sentence, a reason code, network
     tier, pricing basis, unpriced CPTs and an optional resolved-mismatch note.
@@ -358,7 +358,7 @@ async def previsit_estimate(value: _api.PrevisitInput, request: _api.Request, ba
         return await incomplete_result()
 
     try:
-        card = await _api.asyncio.wait_for(_api._read_card_hints(session, source.get('_patient_id')), timeout=8)
+        card = await _api.asyncio.wait_for(_api._read_card_hints(session, source.get('_patient_id'), allow_pending_reference=True), timeout=8)
     except _api.asyncio.TimeoutError:
         card = {'status': 'unavailable', 'fields': {}, 'count': 0}
     original_group = inputs.get('group_number')

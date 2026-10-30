@@ -17,7 +17,6 @@ import type {
 import type { PrevisitBenefits } from './commercial-benefits'
 import type { PaymentExplanation } from './commercial-explanation'
 import type { CommercialNetworkEvidence } from './commercial-network-evidence'
-
 export type PrevisitEstimate = {
   telehealth?: { place_of_service: '10' | '02'; modality: 'audio_video' | 'audio_only' }
   established_for_planning?: boolean
@@ -43,6 +42,7 @@ export type PrevisitEstimate = {
       | 'multiple_cards'
       | 'unavailable'
     source?: string | null
+    reference_only?: boolean
     failure_reason?: string | null
     fields_added?: string[]
     conflicts: string[]

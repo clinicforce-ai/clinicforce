@@ -67,8 +67,6 @@ export default function CommercialCostBreakdown({
   const reportedOfficeCopay = specialistOfficeCopay(reportedResult)
   const officeReferenceCopay = aetnaOfficeReferenceCopay(result, model)
   const humanaReferenceCopay = publishedHumanaOfficeCopay(result, model)
-  const humanaCardConflict =
-    result.card_check?.status === 'conflict' && humanaReferenceCopay != null
   const partialOfficeCopay = payerReportedPartialCopay(result, model)
   const pendingAetnaCopay = aetnaPendingOfficeCopay(result, model)
   const cardPlanningCopay =
@@ -92,8 +90,10 @@ export default function CommercialCostBreakdown({
     price?.complete === true &&
     (summary?.complete === true || model.supportedAmount === true)
   const temporaryRateReference =
-    /\baetna\b/i.test(result.payer || '') &&
-    !result.temporary_rate_reference?.source?.startsWith('Aetna MEPPO')
+    (/\baetna\b/i.test(result.payer || '') &&
+      !result.temporary_rate_reference?.source?.startsWith('Aetna MEPPO')) ||
+    (/\bhumana\b/i.test(result.payer || '') &&
+      /blue cross/i.test(result.temporary_rate_reference?.source || ''))
       ? null
       : result.temporary_rate_reference
   const aetnaRateReference = Boolean(temporaryRateReference?.source?.startsWith('Aetna MEPPO'))
@@ -161,7 +161,9 @@ export default function CommercialCostBreakdown({
                 ? money(lineAllowedTotal)
                 : botoxPreview
                   ? `${money(botoxPreview.allowed_cents)} · clinic fee row`
-                  : 'Not fully priced',
+                  : /\bhumana\b/i.test(result.payer || '')
+                    ? 'Not established'
+                    : 'Not fully priced',
     },
     ...(temporaryRateReference?.lines.length
       ? [
@@ -223,9 +225,11 @@ export default function CommercialCostBreakdown({
       detail: botoxPreview
         ? 'No injection copay was included in this provisional calculation'
         : humanaReferenceCopay != null
-          ? humanaCardConflict
-            ? 'Published Humana H7617-057 plan reference; the card member number differs from the active eCW policy. Confirm the correct card and Medicare billing protection before collection.'
-            : 'Published Humana H7617-057 benefit; confirm provider participation and visit conditions before collection'
+          ? result.card_check?.reference_only
+            ? 'Published Humana H7617-057 plan reference from an upload awaiting staff confirmation. The printed member number has not been verified against the active eCW policy. Confirm the card and Medicare billing protection before collection.'
+            : result.card_check?.status === 'conflict'
+              ? 'Published Humana H7617-057 plan reference; the card member number differs from the active eCW policy. Confirm the correct card and Medicare billing protection before collection.'
+              : 'Published Humana H7617-057 benefit; confirm provider participation and visit conditions before collection'
           : aetnaPlanning
             ? aetnaPlanning.benefit_source.label
             : cignaOfficeScenario

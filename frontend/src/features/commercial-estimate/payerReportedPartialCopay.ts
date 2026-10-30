@@ -129,9 +129,14 @@ export function publishedHumanaOfficeCopay(
   const benefits = result.benefits
   const lines = result.price_range?.mode === 'services' ? result.price_range.lines || [] : []
   const cardPlanReference =
-    result.card_check?.status === 'conflict' &&
-    result.card_check.conflicts?.length === 1 &&
-    result.card_check.conflicts[0] === 'member_id' &&
+    ((result.card_check?.status === 'conflict' &&
+      result.card_check.conflicts?.length === 1 &&
+      result.card_check.conflicts[0] === 'member_id') ||
+      (result.card_check?.status === 'unverified' &&
+        result.card_check.reference_only === true &&
+        (result.card_check.conflicts?.length === 0 ||
+          (result.card_check.conflicts?.length === 1 &&
+            result.card_check.conflicts[0] === 'member_id')))) &&
     result.card_check.cms_plan_id === 'H7617-057' &&
     result.card_check.plan_name === 'Humana Value Choice (PPO)' &&
     result.card_check.patient_name_matches === true &&
