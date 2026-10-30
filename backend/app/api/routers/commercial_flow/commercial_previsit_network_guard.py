@@ -85,10 +85,28 @@ def apply_nmct_library_contract(result: dict, benefits: dict, document: dict | N
 
 def apply_nmct_contract_absence(result: dict, benefits: dict, payer: str, document: dict | None,
                                 service_date: str, plan_bound: bool) -> bool:
+    card = result.get('card_check') or {}
+    if (not document and service_date >= '2026-10-30' and plan_bound is True
+            and result.get('payer') == 'Health Plans Incorporated'
+            and card.get('status') == 'filled_missing' and 'payer' in (card.get('fields_added') or [])
+            and not card.get('conflicts')
+            and re.match(r'^\s*(?:PHCS|MultiPlan)\b', str(card.get('network_label') or ''), re.I)
+            and benefits.get('active') is True and benefits.get('service_date_matches') is not False
+            and benefits.get('network_source') != 'payer_participation_message'
+            and (benefits.get('network_source') == 'clinic_no_insurer_contract'
+                 or not network_participation.verified_out_of_network(benefits))
+            and not network_participation.participation_conflict(benefits)):
+        # shortcut: dated clinic-stated PHCS participation; replace with a scoped contract record when supplied.
+        benefits.update(network_status='in_network', network_source='clinic_attested_phcs_roster',
+                        network_evidence_ids=[], network_provider_npi=None)
+        result['network_evidence'] = {'decision': 'in_network_by_clinic_attestation',
+            'source': 'clinic_attested_phcs_roster', 'reference': 'clinic-attestation:2026-10-30',
+            'reason': 'The clinic states that its PHCS and MultiPlan network arrangements are in network. Payer-specific provider participation was not returned.'}
+        return True
     if (document or not payer or not service_date
             or plan_bound is not True or benefits.get('active') is not True
             or benefits.get('service_date_matches') is False
-            or benefits.get('network_source') == 'payer_participation_message'
+            or benefits.get('network_source') in {'payer_participation_message', 'clinic_attested_phcs_roster'}
             or network_participation.verified_out_of_network(benefits)
             or network_participation.participation_conflict(benefits)):
         return False

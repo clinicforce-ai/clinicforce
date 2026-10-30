@@ -674,6 +674,42 @@ def test_other_payers_use_scoped_blue_cross_library_rate_only_as_temporary_refer
     assert 'temporary_rate_reference' not in result
 
 
+def test_2026_unmodified_cta_uses_published_bcbstx_reference_only(monkeypatch):
+    from app.api.routers.commercial_flow import commercial_previsit_rate_reference as rate_reference
+    payer = {'id': 'bcbs', 'display_name': 'Blue Cross and Blue Shield of Texas',
+             'status': 'staff_guidance_enabled'}
+    network = {'id': 'network', 'payer_connection_id': 'bcbs', 'status': 'verified',
+               'billing_npi': '1111111111', 'rendering_npi': '2222222222',
+               'location_id': 'office', 'place_of_service': '11', 'effective_from': '2026-01-01'}
+    profile = {'payer_connection_id': 'bcbs', 'provider_network_id': 'network',
+               'status': 'staff_guidance_enabled'}
+    monkeypatch.setattr(api.commercial_store, 'list_connections', lambda *_: [payer])
+    monkeypatch.setattr(api.commercial_store, 'list_networks', lambda *_: [network])
+    monkeypatch.setattr(api.commercial_store, 'list_profiles', lambda *_: [profile])
+    monkeypatch.setattr(api.commercial_store, 'matching_rates', lambda *_, **__: [
+        {'code': '99214', 'modifier': '', 'allowed_cents': 11156,
+         'source_reference': 'library:synthetic-fee-schedule'}])
+    inputs = {'service_date': '2026-10-30', 'rendering_provider': {'npi': '2222222222'},
+              'place_of_service': '11'}
+    source = {'billing_provider': {'npi': '1111111111'}, 'location_id': 'office'}
+    result = {'payer': 'Health Plans Incorporated', 'codes': [
+        {'id': 'office', 'code': '99214', 'units': 1},
+        {'id': 'head', 'code': '70496', 'units': 1},
+        {'id': 'neck', 'code': '70498', 'units': 1}]}
+    rate_reference._attach_temporary_blue_cross_rates(result, 'primary', inputs, source, result['payer'])
+    reference = result['temporary_rate_reference']
+    assert reference['complete'] is True
+    assert [row['unit_reference_cents'] for row in reference['lines']] == [11156, 22719, 22693]
+    assert reference['lines'][1]['source_reference'] == rate_reference.BCBSTX_2026_OTHER_CODES_SOURCE
+    assert 'not Health Plans Incorporated contracted allowances' in reference['message']
+    result['codes'][1]['modifiers'] = ['26']
+    rate_reference._attach_temporary_blue_cross_rates(result, 'primary', inputs, source, result['payer'])
+    assert [row['code'] for row in result['temporary_rate_reference']['lines']] == ['99214', '70498']
+    inputs['service_date'] = '2027-01-01'
+    rate_reference._attach_temporary_blue_cross_rates(result, 'primary', inputs, source, result['payer'])
+    assert [row['code'] for row in result['temporary_rate_reference']['lines']] == ['99214']
+
+
 def test_requirement_candidates_include_suggested_cpts_without_expanding_the_selected_visit():
     rows = [{'id': 'office', 'code': '99204'}, {'id': 'test', 'code': '95911'},
             {'id': 'alternative', 'code': '99205'}, {'id': 'catalog', 'code': '95886'}]

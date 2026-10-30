@@ -12,7 +12,7 @@ from unittest.mock import patch
 from app.api.routers import commercial_estimator as api
 from app.api.routers.commercial_flow import commercial_previsit_pricing as pricing
 from app.api.routers.commercial_flow import commercial_previsit_requirements as requirements
-from app.api.routers.commercial_flow.commercial_previsit_network_guard import recheck_saved_network_evidence, scoped_admin_nonparticipation
+from app.api.routers.commercial_flow.commercial_previsit_network_guard import apply_nmct_contract_absence, recheck_saved_network_evidence, scoped_admin_nonparticipation
 from app.api.routers.commercial_flow.commercial_previsit_status import _reprice_saved_new_network
 from app.insurance import amount_explanation
 from app.insurance import collection_guidance
@@ -139,6 +139,40 @@ def test_hpi_card_network_label_does_not_replace_nmct_insurer_contract():
     hpi = {'id': 'synthetic-hpi', 'kind': 'contract', 'payer': 'Health Plans Incorporated'}
     assert network_participation.nmct_library_contract([multiplan], 'Health Plans Incorporated', DAY) is None
     assert network_participation.nmct_library_contract([hpi], 'Health Plans Incorporated', DAY) == hpi
+
+
+def test_matching_hpi_phcs_card_uses_dated_clinic_attestation_without_overriding_payer_conflict():
+    card = {'status': 'filled_missing', 'fields_added': ['payer'],
+            'network_label': 'PHCS Extended PPO', 'conflicts': []}
+    result = {'payer': 'Health Plans Incorporated', 'card_check': card}
+    benefits = {'active': True, 'service_date_matches': True, 'network_status': 'unknown'}
+    assert apply_nmct_contract_absence(result, benefits, result['payer'], None, '2026-10-30', True)
+    assert benefits['network_source'] == 'clinic_attested_phcs_roster'
+    assert network_participation.verified_in_network(benefits)
+    for change in ({'network_source': 'payer_participation_message'}, {'network_conflict': True}):
+        blocked = {**benefits, 'network_status': 'unknown', **change}
+        assert not apply_nmct_contract_absence(result, blocked, result['payer'], None, '2026-10-30', True)
+        assert blocked['network_source'] != 'clinic_attested_phcs_roster' or change.get('network_conflict')
+    old = {'active': True, 'service_date_matches': True, 'network_status': 'unknown'}
+    assert apply_nmct_contract_absence(result, old, result['payer'], None, '2026-10-29', True)
+    assert old['network_source'] == 'clinic_no_insurer_contract'
+
+
+def test_saved_hpi_phcs_visit_reprojects_clinic_attested_tier(monkeypatch):
+    from app.api.routers.commercial_flow import commercial_previsit_network_guard as guard
+    monkeypatch.setattr(guard, 'patient_plan_applies', lambda *_: True)
+    result = {'payer': 'Health Plans Incorporated',
+              'card_check': {'status': 'filled_missing', 'fields_added': ['payer'],
+                             'network_label': 'PHCS', 'conflicts': []},
+              'benefits': {'active': True, 'service_date_matches': True,
+                           'network_status': 'out_of_network',
+                           'network_source': 'clinic_no_insurer_contract'},
+              'price_range': {'lines': []}}
+    case = {'previsit_context': {'inputs': {'service_date': '2026-10-30'},
+                                'source': {}, 'payer_id': ''}}
+    recheck_saved_network_evidence(result, case, 'primary', None)
+    assert result['benefits']['network_status'] == 'in_network'
+    assert result['benefits']['network_source'] == 'clinic_attested_phcs_roster'
 
 
 def test_nmct_v2_bridge_does_not_infer_participation_from_plan_name():
