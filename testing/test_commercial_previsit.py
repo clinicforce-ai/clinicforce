@@ -13,6 +13,29 @@ from app.api.routers.commercial_flow.commercial_previsit_reuse import retain_sav
 
 
 class PrevisitFlowTest(unittest.IsolatedAsyncioTestCase):
+    async def test_saved_visit_refresh_reads_original_date_only_for_same_appointment(self):
+        from fastapi import HTTPException
+        from app.insurance.ecw_backend import EcwBackendError
+
+        session = {'practice_id': 'clinic', 'patient_id': 'patient', 'share_manifest_id': 'share',
+                   'intake_id': 'intake', 'intake': {'id': 'intake', 'workflows': {'visit': 'case'}},
+                   'staff': {'id': 'staff', 'display_name': 'Staff'}}
+        saved = {'source_mode': 'commercial_previsit', 'previsit_context': {
+            'source': {'appointment_id': 'visit-1'}, 'inputs': {'service_date': '2026-10-30'}}}
+        with patch('app.api.routers.commercial_estimator._session', new=AsyncMock(return_value=session)), \
+             patch('app.api.routers.commercial_estimator._ecw_identity', return_value={}), \
+             patch('app.api.routers.commercial_estimator._ecw_practice_config', return_value={}), \
+             patch('app.api.routers.commercial_estimator.ecw_backend.configured', return_value=True), \
+             patch('app.api.routers.commercial_estimator.store.get_cases', return_value=[saved]), \
+             patch('app.api.routers.commercial_estimator.ecw_backend.fetch_inputs',
+                   new=AsyncMock(side_effect=EcwBackendError('synthetic stop'))) as fetch:
+            with self.assertRaises(HTTPException):
+                await previsit_estimate(PrevisitInput(appointment_id='visit-1'), MagicMock())
+            self.assertEqual(fetch.await_args.kwargs['review_service_date'], '2026-10-30')
+            with self.assertRaises(HTTPException):
+                await previsit_estimate(PrevisitInput(appointment_id='visit-2'), MagicMock())
+            self.assertIsNone(fetch.await_args.kwargs['review_service_date'])
+
     def test_telehealth_setting_requires_both_location_and_modality(self):
         from pydantic import ValidationError
         with self.assertRaises(ValidationError):
