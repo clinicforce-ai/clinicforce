@@ -53,6 +53,9 @@ export default function ArrivalAmountSummary({
   if (visitModel && !model.cash && !model.previousEstimate) {
     return (
       <>
+        {'staging_synthetic_fixture' in result && result.staging_synthetic_fixture === true && (
+          <p role="note">Synthetic staging test visit. No patient or payer was contacted.</p>
+        )}
         <span>Amount to Collect Now</span>
         <strong
           role="status"

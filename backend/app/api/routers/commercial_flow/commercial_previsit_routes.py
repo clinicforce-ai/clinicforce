@@ -75,6 +75,9 @@ async def saved_previsit(case_id: str, request: _api.Request) -> dict:
     separately reports the deterministic visit planning share and the approved
     collect_now_cents. A missing exact-scope visit policy leaves collection null;
     a modeled positive share never silently becomes a zero check-in decision.
+    Marked staging-only synthetic fixtures recalculate from invented saved
+    facts and display a test banner. They do not refresh live payer or Library
+    configuration and never authorize collection for a real NMCT patient.
     The exact two-code Aetna diagnostic case also exposes a $100 planning share
     from a likely published $50-per-test benefit, capped by the draft fee
     reference and reported remaining out-of-pocket balance. This is not an

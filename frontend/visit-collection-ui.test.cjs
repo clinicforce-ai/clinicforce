@@ -14,10 +14,10 @@ for (const ext of ['.ts', '.tsx']) {
 
 const ArrivalAmountSummary = require('./src/features/commercial-estimate/ArrivalAmountSummary.tsx').default
 
-function rendered(collect, modeled) {
+function rendered(collect, modeled, synthetic = false) {
   return renderToStaticMarkup(React.createElement(ArrivalAmountSummary, {
     model: { cash: false, previousEstimate: false },
-    result: { collection_guidance: { visit_model: {
+    result: { staging_synthetic_fixture: synthetic, collection_guidance: { visit_model: {
       collect_now_cents: collect, estimated_patient_responsibility_cents: modeled,
       pricing_basis: 'BCBSTX_CROSS_PAYER_REFERENCE', remaining_actions: [],
       selected_price_total_cents: 28347, reference_schedule_versions: ['reference-v1'],
@@ -43,4 +43,5 @@ assert.match(rendered(17669, 17669), /CPT 99204 × 1: \$200\.00/)
 assert.match(rendered(17669, 17669), /Selected benefit evidence: synthetic-specialist/)
 assert.match(rendered(17669, 17669), /Copay frequency: VISIT/)
 assert.match(rendered(17669, 17669), /Deductible applies: no/)
-console.log('Visit collection UI: 10 assertions passed')
+assert.match(rendered(17669, 17669, true), /Synthetic staging test visit/)
+console.log('Visit collection UI: 11 assertions passed')

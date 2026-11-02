@@ -3,7 +3,7 @@ from __future__ import annotations
 from app.api.routers import commercial_estimator as _api
 from app.insurance.identity import patient_benefits_bound, patient_plan_applies, payer_identity_verified
 from app.insurance.network_participation import verified_in_network, verified_out_of_network
-from app.insurance import blue_cross_proxy, canonical_evidence, evidence_resolution, group_contract_support
+from app.insurance import blue_cross_proxy, canonical_evidence, evidence_resolution, group_contract_support, staging_synthetic
 from app.api.routers.commercial_flow.commercial_previsit_finish import _payer_plan_pricing_source
 from app.api.routers.commercial_flow.commercial_previsit_network_guard import recheck_saved_network_evidence, recheck_saved_payer_message
 from app.api.routers.commercial_flow.commercial_previsit_saved_pricing import _reprice_saved_new_network, guard_unresolved_telehealth, guard_telehealth_guidance
@@ -331,6 +331,8 @@ def _recheck_saved_payer_allowance(result: dict, case: dict, practice_id: str) -
 
 def _previsit_result(case: dict, practice_id: str | None = None) -> dict:
     result = _api.deepcopy(case['previsit_context']['result'])
+    if staging_synthetic.is_fixture(case, practice_id):
+        return staging_synthetic.project_saved(case, result)
     _retain_incomplete_service_evidence(result.get('benefits') or {}, case)
     reference = case.get('previsit_reference') or {}
     if (reference.get('benefits') and reference.get('context_token') == case['previsit_context'].get('context_token')

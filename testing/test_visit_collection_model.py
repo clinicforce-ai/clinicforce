@@ -15,53 +15,7 @@ from app.core import patient_store, staff_store
 from testing.test_cigna_office_estimate import example as synthetic_eligibility
 
 
-def case(*, office=4000, diagnostic='copay', oop=100000, approved=True):
-    benefit = {'active': True, 'copay_cents': office, 'copay_period': 'VISIT',
-               'deductible_applies': False, 'coinsurance_percent': '0',
-               'oop_remaining_cents': oop, 'oop_id': 'individual-in',
-               'selected_benefit_ids': ['specialist-office']}
-    lines = [{'id': 'office', 'code': '99204', 'units': 1, 'modifiers': [],
-              'benefits': benefit, 'rate_resolution': {'status': 'RATE_UNAVAILABLE'}}]
-    references = [{'id': 'office', 'code': '99204', 'units': 1, 'modifiers': [],
-                   'unit_reference_cents': 20000, 'source_reference': 'library:synthetic',
-                   'reference_basis': 'BCBSTX_CROSS_PAYER_REFERENCE', 'rate_version': 'reference-v1',
-                   'place_of_service': '11'}]
-    if diagnostic:
-        for index, (code, units, cents) in enumerate([('95908', 1, 10511), ('95886', 2, 8918)]):
-            terms = ({'active': True, 'copay_cents': 7500, 'copay_period': 'DAY',
-                      'deductible_applies': False, 'coinsurance_percent': '0',
-                      'oop_remaining_cents': oop, 'oop_id': 'individual-in',
-                      'selected_benefit_ids': ['diagnostic-day']}
-                     if diagnostic == 'copay' else
-                     {'active': True, 'copay_cents': None, 'deductible_applies': True,
-                      'deductible_remaining_cents': 10000, 'deductible_id': 'individual-in',
-                      'coinsurance_percent': '20', 'oop_remaining_cents': oop,
-                      'oop_id': 'individual-in', 'selected_benefit_ids': ['diagnostic-share']})
-            line_id = f'diagnostic-{index}'
-            lines.append({'id': line_id, 'code': code, 'units': units, 'modifiers': [],
-                          'benefits': terms, 'rate_resolution': {'status': 'RATE_UNAVAILABLE'}})
-            references.append({'id': line_id, 'code': code, 'units': units, 'modifiers': [],
-                               'unit_reference_cents': cents, 'source_reference': 'library:synthetic',
-                               'reference_basis': 'BCBSTX_CROSS_PAYER_REFERENCE', 'rate_version': 'reference-v1',
-                               'place_of_service': '11'})
-    policy = ({'mode': 'collect_visit_model', 'version': 1, 'id': 'synthetic-policy',
-               'approved_by': 'synthetic-admin', 'approved_at': '2026-10-01',
-               'reference': 'synthetic approval', 'allow_benchmark_advance': True,
-               'product_binding': 'synthetic-product', 'network_tier': 'in_network',
-               'service_groups': ['specialist_office', *(['emg_ncs'] if diagnostic else [])],
-               'effective_from': '2026-01-01', 'effective_to': '2026-12-31',
-               'max_cents': 100000, 'disclosure': 'Synthetic estimate for check-in.'}
-              if approved else {})
-    return {'payment_mode': 'insurance', 'price_range': {'mode': 'services', 'lines': lines},
-            'temporary_rate_reference': {'lines': references},
-            'benefits': {'active': True, 'network_status': 'in_network',
-                         'network_source': 'clinic_library_contract',
-                         'identity': {'status': 'matched', 'binding': 'synthetic', 'match_version': 2}},
-            'collection_policy': policy, 'service_selection_status': 'approved',
-            'payer_product_binding': 'synthetic-product', 'service_date': '2026-10-01',
-            'place_of_service': '11',
-            'visit_review': {'payments': {'amount_cents': 0, 'reference': 'synthetic-ledger-check'}},
-            'arrival_collection': {'payments_received_cents': 0}}
+from app.insurance.staging_synthetic import case
 
 
 def test_office_copay_only():
