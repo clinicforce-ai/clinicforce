@@ -30,8 +30,12 @@ def test_october_inspired_fake_visit(name, share, collect, decision):
 
 
 @pytest.mark.skipif(not os.getenv('STAFF_TEST_DATABASE_URL'), reason='Requires disposable PostgreSQL')
-@pytest.mark.asyncio
-async def test_fake_patients_seed_save_reload_and_fastapi(monkeypatch):
+def test_fake_patients_seed_save_reload_and_fastapi(monkeypatch):
+    import asyncio
+    asyncio.run(_run_fake_patients_seed_save_reload_and_fastapi(monkeypatch))
+
+
+async def _run_fake_patients_seed_save_reload_and_fastapi(monkeypatch):
     """The staging-only admin action creates eight fake NMCT cases and HTTP reads."""
     from app.api.application import app
     from app.api.routers import commercial_estimator as api, staff as staff_api
