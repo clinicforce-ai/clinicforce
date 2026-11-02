@@ -94,7 +94,11 @@ jobs:
 
 
   build:
-    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && inputs.environment != 'production'
+    if: >-
+      github.event_name != 'pull_request' && inputs.environment != 'production' &&
+      (github.ref == 'refs/heads/main' ||
+       (github.event_name == 'workflow_dispatch' && inputs.environment == 'staging' &&
+        github.ref == 'refs/heads/feature/collection-engine-bcbstx-milestone'))
     needs: verify
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -146,7 +150,10 @@ jobs:
     name: Deploy ${{ inputs.environment || 'staging' }}
     if: >-
       always() && needs.verify.result == 'success' &&
-      github.event_name != 'pull_request' && github.ref == 'refs/heads/main' &&
+      github.event_name != 'pull_request' &&
+      (github.ref == 'refs/heads/main' ||
+       (github.event_name == 'workflow_dispatch' && inputs.environment == 'staging' &&
+        github.ref == 'refs/heads/feature/collection-engine-bcbstx-milestone')) &&
       (needs.build.result == 'success' ||
        (github.event_name == 'workflow_dispatch' && inputs.environment == 'production'))
     needs: [verify, build]
