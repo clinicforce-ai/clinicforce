@@ -70,6 +70,9 @@ async def _run_fake_patients_seed_save_reload_and_fastapi(monkeypatch):
                 raise AssertionError('A synthetic visit must not contact eCW or a payer')
             monkeypatch.setattr(api.ecw_backend, 'fetch_inputs', no_external_request)
             monkeypatch.setattr(api, '_post_stedi_eligibility', no_external_request)
+            monkeypatch.setattr(fixtures_api.insurance_research_agent, 'investigate',
+                lambda facts: {'status': 'complete', 'model_id': 'synthetic-sonnet-check',
+                               'findings': [{'code': '99204'}]})
             async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app),
                                          base_url='http://testserver') as client:
                 unsigned = await client.post('/api/staff/testing/collection-engine-scenarios',
@@ -79,6 +82,11 @@ async def _run_fake_patients_seed_save_reload_and_fastapi(monkeypatch):
                     headers={'Origin': 'http://testserver'},
                     json={'username': 'fake-october', 'password': password})
                 assert login.status_code == 200
+                research = await client.post('/api/staff/testing/collection-engine-research-check',
+                                             headers={'Origin': 'http://testserver'})
+                assert research.status_code == 200
+                assert research.json() == {'synthetic_only': True, 'status': 'complete',
+                    'finding_count': 1, 'model_id': 'synthetic-sonnet-check', 'reason': None}
                 seeded = await client.post('/api/staff/testing/collection-engine-scenarios',
                     headers={'Origin': 'http://testserver'})
                 assert seeded.status_code == 200

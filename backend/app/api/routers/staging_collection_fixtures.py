@@ -11,7 +11,7 @@ from fastapi.concurrency import run_in_threadpool
 
 from app.api.routers.staff import require_staff
 from app.core import staff_store
-from app.insurance import collection_guidance, previsit_cached_tasks, store
+from app.insurance import collection_guidance, insurance_research_agent, previsit_cached_tasks, store
 from app.insurance.staging_synthetic import SCENARIOS, STAGING_NMCT_PRACTICE_ID, journey, project_saved, visit
 
 
@@ -138,3 +138,25 @@ async def due_collection_engine_scenarios(request: Request, days: int = 30) -> d
         case['previsit_context']['result'] = project_saved(case, result)
         projected.append(case)
     return {'synthetic_only': True, **previsit_cached_tasks.worklist(projected)}
+
+
+@router.post('/collection-engine-research-check', description=(
+    'Staging NMCT administrator only. Make one bounded Sonnet 5 advisory request '
+    'with invented CPT and benefit facts, then return status and finding count. '
+    'No patient, eCW, payer or database request occurs; no collection decision is changed.'
+))
+async def check_collection_engine_research(request: Request) -> dict:
+    staff = await require_staff(request)
+    _staging_only(staff)
+    result = visit('specialist_271_conflict')
+    result['payer'] = 'Cigna Synthetic'
+    result['price_range']['lines'][0]['benefits']['review_reasons'] = [
+        'Prior authorization requirement needs source verification']
+    result['requirement_evidence'] = {'procedures': [{'code': '99204',
+        'authorization': {'status': 'Verification required', 'sources': [{
+            'url': 'https://www.cigna.com/health-care-providers/coverage-and-claims/precertification'}]},
+        'referral': {'status': 'Verification required', 'sources': []}}]}
+    answer = await run_in_threadpool(insurance_research_agent.investigate, result)
+    return {'synthetic_only': True, 'status': answer['status'],
+            'finding_count': len(answer.get('findings') or []),
+            'model_id': answer.get('model_id'), 'reason': answer.get('reason')}

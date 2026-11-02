@@ -26,6 +26,8 @@ The existing `contract_requirements.evaluate` remains the deterministic per-CPT 
 
 Sonnet 5 may now read saved per-CPT requirement decisions, cited clinic and official payer source references, verified product-and-date-scoped delegated administrator metadata, the official contact starting point and prior verified rule metadata when a controlled referral or authorization review flag is present. It may return a cited next action; the calculator and approval state ignore its recommendation. Only selected benefit IDs or vetted official/clinic source references may be cited. Saved Stedi check links and patient names are excluded from the model prompt. The three-tool, timeout and failure limits above still apply.
 
+The staging-only NMCT administrator can invoke `POST /api/staff/testing/collection-engine-research-check` with server-built invented facts. It returns advisory status and finding count without case or payer access. This verifies the deployed task's Bedrock path, while the deterministic requirement and collection decisions remain untouched.
+
 ## Phase 9: staging cached check and first proxy cutover
 
 The staging-only NMCT administrator can call `GET /api/staff/testing/collection-engine-due?days=30` after seeding. It reads at most 100 marked fake visits due within 30 days, recomputes their current saved decision in memory, fingerprints service/evidence/policy/rule inputs, and returns visit actions plus deduplicated clinic-level missing-rate tasks. It makes no external call or database write. It is a bounded acceptance harness; an automated schedule and live eCW linkage are not active in staging.
