@@ -37,3 +37,40 @@ def test_requirement_tools_use_official_citation_without_saved_check_link(monkey
     assert 'read_saved_requirement' in [tool['toolSpec']['name'] for tool in calls[0]['toolConfig']['tools']]
     assert 'Must stay local' not in json.dumps(calls)
     assert 'ec_private' not in json.dumps(calls)
+
+
+def test_requirement_source_tools_expose_only_scoped_saved_references():
+    value = case(diagnostic=None, approved=False)
+    value['payer_product_binding'] = 'synthetic-cigna-oap'
+    value['requirement_evidence'] = {'procedures': [{'code': '99204',
+        'authorization': {'status': 'Verification required', 'sources': [
+            {'document_id': 'synthetic-clinic-library', 'page': 2,
+             'approval_status': 'approved'},
+            {'url': 'https://www.cigna.com/health-care-providers/coverage-and-claims/precertification'},
+            {'url': 'https://portal.stedi.com/app/healthcare/eligibility/checks/ec_private'}]},
+        'referral': {'status': 'Verification required', 'sources': []}}]}
+    value['delegated_administrators'] = [{'name': 'Synthetic delegated group',
+        'codes': ['99204'], 'status': 'verified', 'product_binding': 'synthetic-cigna-oap',
+        'effective_from': '2026-01-01', 'effective_to': '2026-12-31',
+        'source_url': 'https://www.cigna.com/health-care-providers/coverage-and-claims/precertification'}]
+    facts = insurance_research_agent._input(value)
+    allowed = insurance_research_agent._tools_for({**facts, 'lines': [
+        {**facts['lines'][0], 'review_flags': ['authorization']}]})
+    assert 'read_delegated_administrator' in allowed
+    clinic = insurance_research_agent._tool_result(
+        'read_approved_clinic_requirement', '99204', facts, value)
+    official = insurance_research_agent._tool_result(
+        'read_official_payer_rule', '99204', facts, value)
+    delegated = insurance_research_agent._tool_result(
+        'read_delegated_administrator', '99204', facts, value)
+    assert clinic['finding'][0]['source_reference'] == 'synthetic-clinic-library:2'
+    assert official['finding'][0]['source_reference'].startswith('https://www.cigna.com/')
+    assert delegated['finding'][0]['name'] == 'Synthetic delegated group'
+    assert all(item['calculation_authority'] is False for item in (clinic, official, delegated))
+    assert 'ec_private' not in json.dumps((clinic, official, delegated))
+    value['delegated_administrators'][0]['product_binding'] = 'other-product'
+    assert insurance_research_agent._tool_result(
+        'read_delegated_administrator', '99204', facts, value)['status'] == 'unavailable'
+    value['requirement_evidence']['procedures'][0]['authorization']['sources'][0].pop('approval_status')
+    assert insurance_research_agent._tool_result(
+        'read_approved_clinic_requirement', '99204', facts, value)['status'] == 'unavailable'

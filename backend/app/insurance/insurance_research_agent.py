@@ -12,7 +12,9 @@ from botocore.config import Config
 MODEL_ID = os.getenv('INSURANCE_RESEARCH_MODEL_ID', 'us.anthropic.claude-sonnet-5')
 TOOL_NAMES = ('read_saved_ecw_context', 'read_selected_benefit', 'read_reference_price',
               'read_service_template', 'read_policy_scope', 'read_saved_requirement',
-              'read_official_contact', 'read_prior_verified_rule')
+              'read_official_contact', 'read_prior_verified_rule',
+              'read_approved_clinic_requirement', 'read_official_payer_rule',
+              'read_delegated_administrator')
 
 
 def _public_payer_url(value: object) -> bool:
@@ -41,7 +43,9 @@ def _tools_for(facts: dict) -> tuple[str, ...]:
     if 'benefit_scope' in flags:
         return ('read_selected_benefit', 'read_service_template', 'read_saved_ecw_context')
     if {'authorization', 'referral'} & flags:
-        return ('read_saved_requirement', 'read_official_contact', 'read_prior_verified_rule')
+        return ('read_saved_requirement', 'read_approved_clinic_requirement',
+                'read_official_payer_rule', 'read_delegated_administrator',
+                'read_official_contact', 'read_prior_verified_rule')
     return ('read_selected_benefit', 'read_saved_ecw_context', 'read_policy_scope')
 
 
@@ -108,6 +112,37 @@ def _tool_result(name: str, code: str, facts: dict, result: dict) -> dict:
                 'finding': [{'status': row['status'], 'source_url': row['source_url'],
                              'verified_at': row['verified_at'], 'product': row.get('product')}
                             for row in rows[:3]], 'calculation_authority': False}
+    if name in {'read_approved_clinic_requirement', 'read_official_payer_rule'}:
+        procedure = next((item for item in (result.get('requirement_evidence') or {}).get('procedures') or []
+                          if item.get('code') == code), None)
+        if not procedure:
+            return {'status': 'unavailable'}
+        matches = []
+        for kind in ('referral', 'authorization'):
+            decision = procedure.get(kind) or {}
+            for source in decision.get('sources') or []:
+                ref = (f"{source['document_id']}:{source.get('page') or ''}"
+                       if name == 'read_approved_clinic_requirement' and source.get('document_id')
+                       and source.get('approval_status') == 'approved' else
+                       source.get('url') if name == 'read_official_payer_rule'
+                       and _public_payer_url(source.get('url')) else None)
+                if ref:
+                    matches.append({'kind': kind, 'saved_status': decision.get('status'),
+                                    'source_reference': ref, 'effective_from': source.get('effective_from'),
+                                    'effective_to': source.get('effective_to')})
+        return {'status': 'available' if matches else 'unavailable',
+                'finding': matches[:5], 'calculation_authority': False}
+    if name == 'read_delegated_administrator':
+        rows = [row for row in result.get('delegated_administrators') or []
+                if isinstance(row, dict) and code in (row.get('codes') or [])
+                and row.get('status') == 'verified' and _public_payer_url(row.get('source_url'))
+                and row.get('product_binding') == result.get('payer_product_binding')
+                and str(row.get('effective_from') or '') <= str(result.get('service_date') or '')
+                <= str(row.get('effective_to') or '')]
+        return {'status': 'available' if rows else 'unavailable',
+                'finding': [{'name': row.get('name'), 'source_url': row['source_url'],
+                             'service_date': result.get('service_date')}
+                            for row in rows[:3]], 'calculation_authority': False}
     return {'status': 'unavailable'}
 
 
@@ -133,7 +168,7 @@ def _input(result: dict) -> dict:
         url = str(source.get('url') or '')
         if _public_payer_url(url):
             return url
-        if source.get('document_id'):
+        if source.get('document_id') and source.get('approval_status') == 'approved':
             return f"{source['document_id']}:{source.get('page') or ''}"
         return None
     def requirement_sources(code: str) -> list[str]:
