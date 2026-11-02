@@ -31,7 +31,7 @@ The staging-only NMCT administrator can invoke `POST /api/staff/testing/collecti
 
 ## Phase 9: staging cached check and first proxy cutover
 
-The staging-only NMCT administrator can call `GET /api/staff/testing/collection-engine-due?days=30` after seeding. It reads at most 100 marked fake visits due within 30 days, recomputes their current saved decision in memory, fingerprints service/evidence/policy/rule inputs, and returns visit actions plus deduplicated clinic-level missing-rate tasks. It makes no external call or database write. It is a bounded acceptance harness; an automated schedule and live eCW linkage are not active in staging.
+The staging-only NMCT administrator can call `GET /api/staff/testing/collection-engine-due?days=30` after seeding. It reads at most 100 marked fake visits due within 30 days, recomputes their current saved decision in memory, fingerprints service/evidence/policy/rule inputs, and returns visit actions plus deduplicated clinic-level missing-rate tasks. A daily staging-only EventBridge ECS task executes the same saved-fixture check and logs aggregate counts and one batch fingerprint. Both paths make no external call or database write. The schedule is an acceptance harness; live eCW linkage and real-visit scheduling are not active in staging.
 
 When V2 is on, the previsit finish no longer constructs the Cigna/UHC Blue Cross fee-proxy suggestion; the generic scoped reference matcher and visit policy decide the amount. The legacy proxy path remains under the flag-off compatibility route until original-evidence replay covers each supported case. No real payer positive collection is inferred from a fake fixture.
 

@@ -3,6 +3,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
+from copy import deepcopy
+from datetime import date, timedelta
 
 from app.insurance import visit_collection_model
 
@@ -47,3 +50,32 @@ def worklist(cases: list[dict]) -> dict:
             unique.setdefault(key, task)
     return {'visits': visits, 'clinic_price_tasks': list(unique.values()),
             'checked_count': len(visits), 'payer_requests': 0}
+
+
+def staging_schedule_summary(today: date | None = None) -> dict:
+    """Run the daily staging-only saved-fixture check; log aggregates only."""
+    if (os.getenv('PUBLIC_BASE_URL', '').rstrip('/') != 'https://staging.clinicforce.ai'
+            or os.getenv('COLLECTION_ENGINE_V2_ENABLED') != 'true'):
+        raise RuntimeError('Scheduled collection check is staging-only')
+    from app.insurance import store
+    from app.insurance.staging_synthetic import STAGING_NMCT_PRACTICE_ID, project_saved
+    today = today or date.today()
+    cases = store.staging_synthetic_due(STAGING_NMCT_PRACTICE_ID, today.isoformat(),
+                                        (today + timedelta(days=30)).isoformat())
+    projected = []
+    for case in cases:
+        copy = deepcopy(case)
+        copy['previsit_context']['result'] = project_saved(
+            copy, copy['previsit_context']['result'])
+        projected.append(copy)
+    tasks = worklist(projected)
+    fingerprint = hashlib.sha256(json.dumps(sorted(
+        visit['evidence_fingerprint'] for visit in tasks['visits'])).encode()).hexdigest()
+    return {'synthetic_only': True, 'checked_count': tasks['checked_count'],
+            'clinic_price_task_count': len(tasks['clinic_price_tasks']),
+            'visit_action_count': sum(bool(visit['visit_actions']) for visit in tasks['visits']),
+            'payer_requests': 0, 'batch_fingerprint': fingerprint}
+
+
+if __name__ == '__main__':
+    print(json.dumps(staging_schedule_summary(), sort_keys=True))
