@@ -20,7 +20,7 @@ No active row has a modifier or a non-office POS. A telehealth POS 02/10 or a re
 
 ## October case comparison
 
-The existing 57-patient audit denominator can be reproduced as 69 cases and 350 saved snapshots, but includes one last payer label containing “Medicare.” A strict commercial-label filter yields **56 patients, 67 cases and 338 snapshots**. Both counts are shown so that one historical classification discrepancy does not disappear into a coverage percentage.
+The existing 57-patient audit totals can be reproduced as 69 cases and 350 saved snapshots by including one last payer label containing “Medicare.” The original audit did not retain a cohort membership manifest, so identical membership cannot be proven from totals alone. A strict commercial-label filter yields **56 patients, 67 cases and 338 snapshots**. Both counts are shown so that the classification discrepancy does not disappear into a coverage percentage.
 
 Using each case's **last October saved selected CPTs**, patient-bound date and a context-token-matching saved workflow gives two different coverage measurements:
 
