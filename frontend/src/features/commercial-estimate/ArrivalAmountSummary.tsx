@@ -49,6 +49,42 @@ export default function ArrivalAmountSummary({
   referenceOnly?: boolean
   visibleAmount: boolean
 }) {
+  const visitModel = result.collection_guidance?.visit_model
+  if (visitModel && !model.cash && !model.previousEstimate) {
+    return (
+      <>
+        <span>Amount to Collect Now</span>
+        <strong
+          role="status"
+          className={visitModel.collect_now_cents == null ? 'amount-pending' : undefined}
+        >
+          {visitModel.collect_now_cents == null
+            ? 'Collection policy or evidence required'
+            : money(visitModel.collect_now_cents)}
+        </strong>
+        <p>
+          {visitModel.estimated_patient_responsibility_cents == null
+            ? 'The selected visit still needs a complete planning estimate.'
+            : `Modeled patient responsibility: ${money(visitModel.estimated_patient_responsibility_cents)}. ${visitModel.pricing_basis || 'Price basis unresolved'}.`}
+        </p>
+        {visitModel.service_groups.map((group) => (
+          <details key={group.service_group}>
+            <summary>
+              {group.service_group.replaceAll('_', ' ')} ·{' '}
+              {group.estimated_patient_share_cents == null
+                ? 'planning incomplete'
+                : money(group.estimated_patient_share_cents)}
+            </summary>
+            <p>
+              {group.cpts.map((item) => `${item.code} × ${item.units}`).join(', ')} ·{' '}
+              {group.interaction_rule.replaceAll('_', ' ').toLowerCase()}
+            </p>
+          </details>
+        ))}
+        {visitModel.remaining_actions.length > 0 && <p>{visitModel.remaining_actions.join(' ')}</p>}
+      </>
+    )
+  }
   const action = nextStep(model, result)
   const plan = !model.cash && !model.previousEstimate ? result.combined_emg_plan : null
   const cignaPlanning =

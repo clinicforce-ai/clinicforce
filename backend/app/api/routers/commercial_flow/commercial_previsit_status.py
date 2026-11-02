@@ -352,6 +352,7 @@ def _previsit_result(case: dict, practice_id: str | None = None) -> dict:
     if practice_id:
         # Use current clinic policy so disabled deferral cannot retain an old $0 decision.
         result.pop('collection_policy', None)
+        result.pop('visit_collection_policies', None)
         payer_id = case['previsit_context'].get('payer_id')
         if payer_id:
             matches = [row for row in _api.commercial_store.list_connections(practice_id)
@@ -359,9 +360,10 @@ def _previsit_result(case: dict, practice_id: str | None = None) -> dict:
             if len(matches) == 1:
                 route_payer = matches[0]
                 policy = (matches[0].get('rules') or {}).get('collection_policy') or {}
-                if (isinstance(policy, dict) and policy.get('mode') in {'defer_to_claim', 'collect_verified_copay', 'collect_supported_advance'} and policy.get('approved_by')
+                if (isinstance(policy, dict) and policy.get('mode') in {'defer_to_claim', 'collect_verified_copay', 'collect_supported_advance', 'collect_visit_model'} and policy.get('approved_by')
                         and policy.get('approved_at') and policy.get('reference')):
                     result['collection_policy'] = policy
+                result['visit_collection_policies'] = (matches[0].get('rules') or {}).get('visit_collection_policies') or []
         _recheck_saved_clinic_pricing(result, case, practice_id)
         prior_network = ((result.get('benefits') or {}).get('network_status'),
                          (result.get('benefits') or {}).get('network_source'))

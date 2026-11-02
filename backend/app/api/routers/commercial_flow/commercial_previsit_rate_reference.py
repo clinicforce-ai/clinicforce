@@ -18,7 +18,10 @@ def refresh_saved_temporary_rates(result: dict, practice_id: str, inputs: dict, 
         _attach_temporary_blue_cross_rates(result, practice_id, inputs, source, 'Cigna')
     elif _api.re.search(r'\baetna\b', payer_name, _api.re.I):
         _attach_temporary_aetna_rates(result, practice_id, inputs, source)
-    elif payer_name and not _api.re.search(r'blue cross|bcbstx|blue shield|humana', payer_name, _api.re.I):
+    elif payer_name and not _api.re.search(r'blue cross|bcbstx|blue shield', payer_name, _api.re.I):
+        _attach_temporary_blue_cross_rates(result, practice_id, inputs, source, payer_name)
+    if (payer_name and not _api.re.search(r'blue cross|bcbstx|blue shield', payer_name, _api.re.I)
+            and not result.get('temporary_rate_reference')):
         _attach_temporary_blue_cross_rates(result, practice_id, inputs, source, payer_name)
 
 def _attach_temporary_blue_cross_rates(result: dict, practice_id: str, inputs: dict, source: dict,
@@ -68,7 +71,11 @@ def _attach_temporary_blue_cross_rates(result: dict, practice_id: str, inputs: d
             lines.append({'id': code.get('id'), 'code': code['code'],
                           'units': code.get('units'), 'modifiers': code.get('modifiers') or [],
                           'unit_reference_cents': rate['allowed_cents'],
-                          'source_reference': rate['source_reference']})
+                          'source_reference': rate['source_reference'],
+                          'reference_basis': 'BCBSTX_CROSS_PAYER_REFERENCE',
+                          'rate_version': rate.get('version_id'),
+                          'effective_from': rate.get('effective_from'),
+                          'effective_to': rate.get('effective_to')})
     if lines:
         result['temporary_rate_reference'] = {'source': ('Blue Cross Texas clinic and published 2026 fee references'
             if published else 'NMCT Clinical Library Blue Cross fee schedule'),

@@ -1,11 +1,13 @@
 """Commercial previsit finish workflow."""
 from __future__ import annotations
 
+import os
+
 from app.api.routers import commercial_estimator as _api
 from app.api.routers.commercial_flow.commercial_previsit_catalog import build_catalog
 from app.api.routers.commercial_flow.commercial_previsit_requirements import attach_requirements
 from app.insurance.identity import patient_benefits_bound, patient_plan_applies
-from app.insurance import blue_cross_proxy, botox_review, evidence_resolution, published_plan_benefits
+from app.insurance import blue_cross_proxy, botox_review, evidence_resolution, insurance_research_agent, published_plan_benefits
 
 def _visit_context_parts(inputs: dict, source: dict) -> dict:
     context = {'coverage': {k: v for k, v in _api._coverage_snapshot(inputs, source).items() if k != 'other_active_coverage'},
@@ -95,6 +97,8 @@ def _finish_previsit(result: dict, case: dict, inputs: dict, source: dict, paylo
                                              inputs['service_date'], payer_plan_bound)
     protection = review.get('billing_protection') or {}
     product_binding = _api.payer_allowance.product_binding(payer_plan)
+    result['payer_product_binding'] = product_binding if payer_plan_bound else None
+    result['service_date'] = inputs['service_date']
     result['billing_protection'] = protection if (payer_plan_bound
         and protection.get('identity_binding') == comparison.get('binding')
         and protection.get('product_binding') == product_binding
@@ -277,6 +281,11 @@ def _finish_previsit(result: dict, case: dict, inputs: dict, source: dict, paylo
                  or blue_cross_proxy.cigna_estimate(result, inputs['service_date'])
                  or blue_cross_proxy.cigna_oap_office_scenario(result, inputs['service_date'])):
         result['fee_proxy_estimate'] = proxy
+    if os.getenv('COLLECTION_ENGINE_V2_ENABLED') == 'true':
+        prior_research = (((case.get('previsit_context') or {}).get('result') or {}).get('insurance_research'))
+        if isinstance(prior_research, dict):
+            result['insurance_research'] = prior_research
+        result['insurance_research'] = insurance_research_agent.investigate(result)
     result['collection_guidance'] = _api.collection_guidance.build(result, review)
     result.pop('botox_preview', None)
     if botox_review.is_botox_visit(inputs) and payload:

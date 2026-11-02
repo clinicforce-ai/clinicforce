@@ -67,9 +67,14 @@ async def saved_previsit(case_id: str, request: _api.Request) -> dict:
     A linked, applicable zero balance can return basis out_of_pocket_limit
     and a $0 covered office-visit collection.
     temporary_rate_reference identifies a dated CPT planning source: scoped
-    Blue Cross Clinical Library prices for eligible non-Aetna routes or draft
-    Aetna MEPPO portal values for the exact Signature PPO diagnostic scenario.
+    Blue Cross Clinical Library prices for eligible non-Blue commercial routes;
+    the exact Aetna Signature PPO diagnostic scenario may use its separate draft
+    MEPPO portal reference when present.
     Neither source establishes another payer's allowance or a collectible amount.
+    When COLLECTION_ENGINE_V2_ENABLED is true, collection_guidance.visit_model
+    separately reports the deterministic visit planning share and the approved
+    collect_now_cents. A missing exact-scope visit policy leaves collection null;
+    a modeled positive share never silently becomes a zero check-in decision.
     The exact two-code Aetna diagnostic case also exposes a $100 planning share
     from a likely published $50-per-test benefit, capped by the draft fee
     reference and reported remaining out-of-pocket balance. This is not an

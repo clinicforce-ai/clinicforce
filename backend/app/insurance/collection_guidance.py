@@ -1,6 +1,8 @@
 """Derive advance collection from visit evidence and approved clinic policy."""
 from __future__ import annotations
 
+import os
+
 from app.insurance.collection.cash import build as cash_guidance
 from app.insurance.collection.options import emg_option as _emg_option
 from app.insurance.collection.requirements import summarize_requirements
@@ -11,6 +13,7 @@ from app.insurance.benefit_review import (annual_oop_conflict_with_known_remaini
                                           selected_service_blocker, selected_service_detail)
 from app.insurance.network_participation import participation_conflict, verified_in_network, verified_out_of_network
 from app.insurance import encounter_summary
+from app.insurance import visit_collection_model
 from app.insurance.insurance_product import is_medicare_advantage
 
 
@@ -423,4 +426,18 @@ def build(result: dict, review: dict | None = None) -> dict:
                  and (99202 <= int(line['code']) <= 99205 or 99212 <= int(line['code']) <= 99215)])):
         guidance['office_visit_copay_advance'] = {'amount_cents': guidance['amount_cents'],
                                                     'source': 'selected_office_benefit'}
+    if os.getenv('COLLECTION_ENGINE_V2_ENABLED') == 'true' and result.get('payment_mode') != 'cash':
+        modeled = visit_collection_model.build(result, review)
+        guidance['visit_model'] = modeled
+        guidance['collect_now_cents'] = modeled['collect_now_cents']
+        guidance['estimated_patient_responsibility_cents'] = modeled['estimated_patient_responsibility_cents']
+        guidance['amount_cents'] = modeled['collect_now_cents']
+        guidance['basis'] = 'visit_collection_model'
+        guidance['status'] = ('estimated' if modeled['collect_now_cents'] is not None else 'action_required')
+        guidance['reason'] = ('Approved visit-level check-in decision using the selected service benefits and pricing basis.'
+                              if modeled['collect_now_cents'] is not None else
+                              'Visit collection needs the listed policy or evidence; any planning estimate is separate.')
+        guidance['patient_message'] = ('This is an estimated check-in payment; final responsibility follows the claim.'
+                                       if modeled['collect_now_cents'] is not None else
+                                       'A check-in amount needs additional evidence or clinic policy approval.')
     return guidance
