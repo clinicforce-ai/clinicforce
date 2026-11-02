@@ -156,7 +156,8 @@ def recent_missing_rate_inputs(practice_id: str, limit: int = 500) -> list[dict]
                 workflow_json::jsonb #>> '{previsit_context,result,calculated_at}' AS calculated_at,
                 workflow_json::jsonb #>> '{previsit_context,result,payment_mode}' AS payment_mode,
                 workflow_json::jsonb #>> '{previsit_context,result,price_range,mode}' AS mode,
-                workflow_json::jsonb #> '{previsit_context,result,price_range,lines}' AS lines
+                workflow_json::jsonb #> '{previsit_context,result,price_range,lines}' AS lines,
+                workflow_json::jsonb #> '{previsit_context,result,collection_guidance,visit_model,price_acquisition}' AS benchmark_tasks
                FROM insurance_cases WHERE practice_id=%s
                  AND workflow_json::jsonb #> '{previsit_context,result,price_range,lines}' IS NOT NULL
                ORDER BY created_at DESC,id DESC LIMIT %s""", (practice_id, limit)).fetchall()

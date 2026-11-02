@@ -49,6 +49,87 @@ export default function ArrivalAmountSummary({
   referenceOnly?: boolean
   visibleAmount: boolean
 }) {
+  const visitModel = result.collection_guidance?.visit_model
+  if (visitModel && !model.cash && !model.previousEstimate) {
+    return (
+      <>
+        {'staging_synthetic_fixture' in result && result.staging_synthetic_fixture === true && (
+          <p role="note">Synthetic staging test visit. No patient or payer was contacted.</p>
+        )}
+        <span>Amount to Collect Now</span>
+        <strong
+          role="status"
+          className={visitModel.collect_now_cents == null ? 'amount-pending' : undefined}
+        >
+          {visitModel.collect_now_cents == null
+            ? 'Collection policy or evidence required'
+            : money(visitModel.collect_now_cents)}
+        </strong>
+        <p>
+          {visitModel.estimated_patient_responsibility_cents == null
+            ? 'The selected visit still needs a complete planning estimate.'
+            : `Modeled patient responsibility: ${money(visitModel.estimated_patient_responsibility_cents)}. ${visitModel.pricing_basis || 'Price basis unresolved'}.`}
+        </p>
+        {visitModel.collection_disclosure && <p>{visitModel.collection_disclosure}</p>}
+        {visitModel.selected_price_total_cents != null && (
+          <p>
+            Selected CPT price total: {money(visitModel.selected_price_total_cents)}.{' '}
+            {visitModel.reference_schedule_versions.length > 0 &&
+              `BCBSTX reference version: ${visitModel.reference_schedule_versions.join(', ')}.`}
+          </p>
+        )}
+        {visitModel.service_groups.map((group) => (
+          <details key={group.service_group}>
+            <summary>
+              {group.service_group.replaceAll('_', ' ')} ·{' '}
+              {group.estimated_patient_share_cents == null
+                ? 'planning incomplete'
+                : money(group.estimated_patient_share_cents)}
+            </summary>
+            <p>
+              {group.cpts.map((item) => `${item.code} × ${item.units}`).join(', ')} ·{' '}
+              {group.interaction_rule.replaceAll('_', ' ').toLowerCase()}
+            </p>
+            {(group.benefit_evidence?.length ?? 0) > 0 && (
+              <p>Selected benefit evidence: {group.benefit_evidence.join(', ')}</p>
+            )}
+            {group.copay_frequency && <p>Copay frequency: {group.copay_frequency}</p>}
+            {group.deductible_applies != null && (
+              <p>Deductible applies: {group.deductible_applies ? 'yes' : 'no'}</p>
+            )}
+            {group.price_lines?.map((line, index) => (
+              <p key={`${line.code}-${index}`}>
+                CPT {line.code} × {line.units}:{' '}
+                {line.extended_cents == null
+                  ? 'reference price unavailable'
+                  : money(line.extended_cents)}
+                {line.pricing_basis
+                  ? ` · ${line.pricing_basis.replaceAll('_', ' ').toLowerCase()}`
+                  : ''}
+              </p>
+            ))}
+            {group.copay_cents != null && <p>Applied copay: {money(group.copay_cents)}</p>}
+            {group.deductible_cents != null && (
+              <p>Applied deductible: {money(group.deductible_cents)}</p>
+            )}
+            {group.coinsurance_cents != null && (
+              <p>
+                Applied coinsurance: {money(group.coinsurance_cents)}
+                {group.coinsurance_percent ? ` at ${group.coinsurance_percent}%` : ''}
+              </p>
+            )}
+          </details>
+        ))}
+        {visitModel.price_acquisition?.length ? (
+          <p>
+            Clinic reference price needed for CPT{' '}
+            {visitModel.price_acquisition.map((item) => item.code).join(', ')}.
+          </p>
+        ) : null}
+        {visitModel.remaining_actions.length > 0 && <p>{visitModel.remaining_actions.join(' ')}</p>}
+      </>
+    )
+  }
   const action = nextStep(model, result)
   const plan = !model.cash && !model.previousEstimate ? result.combined_emg_plan : null
   const cignaPlanning =

@@ -3,12 +3,12 @@ from __future__ import annotations
 from app.api.routers import commercial_estimator as _api
 from app.insurance.identity import patient_benefits_bound, patient_plan_applies, payer_identity_verified
 from app.insurance.network_participation import verified_in_network, verified_out_of_network
-from app.insurance import blue_cross_proxy, evidence_resolution, group_contract_support
+from app.insurance import blue_cross_proxy, canonical_evidence, evidence_resolution, group_contract_support, staging_synthetic
 from app.api.routers.commercial_flow.commercial_previsit_finish import _payer_plan_pricing_source
 from app.api.routers.commercial_flow.commercial_previsit_network_guard import recheck_saved_network_evidence, recheck_saved_payer_message
 from app.api.routers.commercial_flow.commercial_previsit_saved_pricing import _reprice_saved_new_network, guard_unresolved_telehealth, guard_telehealth_guidance
 from app.api.routers.commercial_flow.commercial_previsit_requirements import refresh_saved_requirements
-from app.api.routers.commercial_flow.commercial_previsit_rate_reference import refresh_saved_temporary_rates
+from app.api.routers.commercial_flow.commercial_previsit_rate_reference import refresh_saved_temporary_rates, visit_pricing_scope
 from app.api.routers.commercial_flow.commercial_previsit_enrollment import _enrollment_failure
 from app.api.routers.commercial_flow.commercial_previsit_service_scope import retain_incomplete_service_evidence as _retain_incomplete_service_evidence
 from app.api.routers.commercial_flow.commercial_previsit_benefits import case_benefits as _case_benefits
@@ -331,6 +331,8 @@ def _recheck_saved_payer_allowance(result: dict, case: dict, practice_id: str) -
 
 def _previsit_result(case: dict, practice_id: str | None = None) -> dict:
     result = _api.deepcopy(case['previsit_context']['result'])
+    if staging_synthetic.is_fixture(case, practice_id):
+        return staging_synthetic.project_saved(case, result)
     _retain_incomplete_service_evidence(result.get('benefits') or {}, case)
     reference = case.get('previsit_reference') or {}
     if (reference.get('benefits') and reference.get('context_token') == case['previsit_context'].get('context_token')
@@ -352,6 +354,7 @@ def _previsit_result(case: dict, practice_id: str | None = None) -> dict:
     if practice_id:
         # Use current clinic policy so disabled deferral cannot retain an old $0 decision.
         result.pop('collection_policy', None)
+        result.pop('visit_collection_policies', None)
         payer_id = case['previsit_context'].get('payer_id')
         if payer_id:
             matches = [row for row in _api.commercial_store.list_connections(practice_id)
@@ -359,9 +362,10 @@ def _previsit_result(case: dict, practice_id: str | None = None) -> dict:
             if len(matches) == 1:
                 route_payer = matches[0]
                 policy = (matches[0].get('rules') or {}).get('collection_policy') or {}
-                if (isinstance(policy, dict) and policy.get('mode') in {'defer_to_claim', 'collect_verified_copay', 'collect_supported_advance'} and policy.get('approved_by')
+                if (isinstance(policy, dict) and policy.get('mode') in {'defer_to_claim', 'collect_verified_copay', 'collect_supported_advance', 'collect_visit_model'} and policy.get('approved_by')
                         and policy.get('approved_at') and policy.get('reference')):
                     result['collection_policy'] = policy
+                result['visit_collection_policies'] = (matches[0].get('rules') or {}).get('visit_collection_policies') or []
         _recheck_saved_clinic_pricing(result, case, practice_id)
         prior_network = ((result.get('benefits') or {}).get('network_status'),
                          (result.get('benefits') or {}).get('network_source'))
@@ -464,6 +468,10 @@ def _previsit_result(case: dict, practice_id: str | None = None) -> dict:
         result.pop('emg_option', None)
     if 'cash_fallback' in result:
         result['cash_fallback']['reason'] = 'Clinic self-pay pricing is shown because ' + _api.amount_explanation.fallback_cause(result) + '.'
+    if _api.os.getenv('COLLECTION_ENGINE_V2_ENABLED') == 'true':
+        inputs = case['previsit_context'].get('inputs') or {}
+        result['pricing_scope'] = visit_pricing_scope(inputs, source)
+        result['canonical_evidence'] = canonical_evidence.build(result, case.get('visit_review'))
     result['collection_guidance'] = _api.collection_guidance.build(result, case.get('visit_review'))
     guard_telehealth_guidance(result, unresolved_telehealth)
     result['established_for_planning'] = _api.cpt_suggester.established_visit_for_planning(

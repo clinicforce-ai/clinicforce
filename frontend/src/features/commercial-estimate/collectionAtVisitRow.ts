@@ -71,6 +71,21 @@ export function collectionAtVisitRow(
     proxyFormula: ReturnType<typeof feeProxyFormula> | undefined
   },
 ): CostBreakdownRow {
+  const visitModel = result.collection_guidance?.visit_model
+  if (visitModel && !model.cash && !model.previousEstimate) {
+    return {
+      label: 'Amount to Collect Now',
+      value:
+        visitModel.collect_now_cents == null
+          ? 'Collection policy or evidence required'
+          : money(visitModel.collect_now_cents),
+      detail: `${
+        visitModel.estimated_patient_responsibility_cents == null
+          ? 'Visit planning estimate unavailable'
+          : `${money(visitModel.estimated_patient_responsibility_cents)} modeled patient share`
+      }. ${visitModel.pricing_basis || 'Price basis unresolved'}. ${visitModel.remaining_actions.join(' ')}`,
+    }
+  }
   const {
     combinedPlan,
     feeProxy,

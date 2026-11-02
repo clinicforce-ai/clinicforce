@@ -43,6 +43,28 @@ def build(result: dict, review: dict | None = None) -> dict:
         or selected_service_blocker(benefits.get('network_status') or 'unknown', identity, lines) is not None
         or participation_conflict(benefits) or benefits.get('historical_only') or benefits.get('source_errors')
         or any((line.get('benefits') or {}).get('source_errors') for line in lines))
+    model = guidance.get('visit_model') if guidance.get('basis') == 'visit_collection_model' else None
+    if isinstance(model, dict):
+        estimate = model.get('estimated_patient_responsibility_cents')
+        collect = model.get('collect_now_cents')
+        if unsupported_insurance or requirement_blocker(result) is not None:
+            collect = None
+        payments = (review or {}).get('payments') or {}
+        paid = payments.get('amount_cents') if payments.get('reference') else (
+            result.get('arrival_collection') or {}).get('payments_received_cents')
+        if type(paid) is not int or paid < 0:
+            paid = None
+        return {'collect_today_cents': collect, 'estimated_total_patient_min_cents': estimate,
+                'estimated_total_patient_max_cents': estimate, 'estimated_later_balance_cents':
+                max(0, estimate - collect - paid) if all(type(value) is int for value in (estimate, collect, paid)) else None,
+                'payments_verified_cents': paid, 'components': {}, 'coinsurance_base_cents': None,
+                'coinsurance_percent': None, 'coinsurance_rounded_per_line': False,
+                'unpriced_codes': [code.get('code') for group in model.get('service_groups') or []
+                                   if group.get('estimated_patient_share_cents') is None
+                                   for code in group.get('cpts') or []],
+                'complete': estimate is not None and not unsupported_insurance,
+                'conditional': bool(model.get('remaining_actions')),
+                'integrity_error': None}
     priced = bool(price.get('cash_complete') if cash else price.get('complete'))
     priced = priced and not price.get('service_issues') and not unsupported_insurance
     line_amounts = [(line.get('calculation') or {}).get('patient_cents') for line in lines]

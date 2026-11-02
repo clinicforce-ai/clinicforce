@@ -44,6 +44,26 @@ def test_cash_visit_does_not_create_an_insured_rate_gap():
     assert result['gaps'] == []
 
 
+def test_benchmark_acquisition_is_clinic_level_and_deduplicated_across_payers():
+    task = {'code': '95860', 'modifiers': [], 'place_of_service': '11'}
+    cases = [
+        {'payer': 'Private member text', 'lines': [], 'benchmark_tasks': [task, task]},
+        {'payer': 'Another insurer', 'lines': [], 'benchmark_tasks': [task]},
+    ]
+    result = missing_rates.summarize(cases, 500)
+    assert result['gaps'] == [{
+        'payer': 'NMCT BCBSTX reference', 'code': '95860', 'kind': 'bcbstx_reference',
+        'modifier': '', 'place_of_service': '11', 'estimate_count': 2,
+        'last_observed_at': ''}]
+    assert 'Private member text' not in str(result)
+
+
+def test_malformed_saved_modifier_cannot_break_admin_inventory():
+    result = missing_rates.summarize([{'lines': [], 'benchmark_tasks': [
+        {'code': '95860', 'modifiers': [42], 'place_of_service': '11'}]}], 500)
+    assert result['gaps'] == []
+
+
 def test_missing_rate_query_reads_only_practice_scoped_price_fields():
     with patch.object(store, '_connection') as connection:
         connection.return_value.__enter__.return_value.execute.return_value.fetchall.return_value = []
