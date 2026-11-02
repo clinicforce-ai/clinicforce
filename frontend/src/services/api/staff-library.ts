@@ -41,9 +41,7 @@ export interface MissingRateSummary {
   gaps: Array<{
     payer: string
     code: string
-    kind: 'insured_allowed' | 'clinic_cash' | 'bcbstx_reference'
-    modifier?: string
-    place_of_service?: string
+    kind: 'insured_allowed' | 'clinic_cash'
     estimate_count: number
     last_observed_at: string
   }>

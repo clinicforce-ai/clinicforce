@@ -77,49 +77,6 @@ export type RequirementEvidence = {
 export type CollectionGuidance = {
   billing_note?: BillingNote
   amount_cents: number | null
-  collect_now_cents?: number | null
-  estimated_patient_responsibility_cents?: number | null
-  visit_model?: {
-    rule_version: string
-    collect_now_cents: number | null
-    collection_decision_type: string
-    estimated_patient_responsibility_cents: number | null
-    estimated_low_cents: number | null
-    estimated_high_cents: number | null
-    pricing_basis: string | null
-    reference_schedule_versions: string[]
-    reference_total_cents?: number | null
-    selected_price_total_cents?: number | null
-    collection_disclosure?: string | null
-    price_acquisition?: Array<{
-      code: string
-      modifiers: string[]
-      place_of_service?: string | null
-    }>
-    cpt_source?: string | null
-    remaining_actions: string[]
-    service_groups: Array<{
-      service_group: string
-      cpts: Array<{ code: string; units: number; modifiers: string[] }>
-      interaction_rule: string
-      estimated_patient_share_cents: number | null
-      benefit_evidence: string[]
-      copay_frequency?: string | null
-      deductible_applies?: boolean | null
-      price_lines: Array<{
-        code: string
-        units: number
-        extended_cents: number | null
-        pricing_basis: string | null
-        source: string | null
-        rate_version: string | null
-      }>
-      deductible_cents?: number
-      copay_cents?: number
-      coinsurance_cents?: number
-      coinsurance_percent?: string
-    }>
-  }
   office_visit_copay_advance?: { amount_cents: number; source: 'selected_office_benefit' } | null
   range_min_cents?: number | null
   range_max_cents?: number | null

@@ -14,7 +14,7 @@ def summarize(cases: list[dict], limit: int, connections: list[dict] | None = No
     payers = {str(value).strip().casefold(): str(row['display_name'])[:200]
               for row in connections or [] for value in [row.get('display_name'), *(row.get('aliases') or [])]
               if value and row.get('display_name')}
-    grouped: dict[tuple[str, str, str, str, str], dict] = {}
+    grouped: dict[tuple[str, str, str], dict] = {}
     for case in cases:
         if case.get('mode') in {'alternatives', 'options'}:
             continue  # A possible code family is not an encountered billed CPT.
@@ -28,7 +28,7 @@ def summarize(cases: list[dict], limit: int, connections: list[dict] | None = No
             continue
         payer = payers.get(str(case.get('payer') or '').strip().casefold(), 'Unmapped payer')
         observed = str(case.get('calculated_at') or case.get('created_at') or '')[:35]
-        unique: set[tuple[str, str, str, str, str]] = set()
+        unique: set[tuple[str, str, str]] = set()
         for line in lines:
             if not isinstance(line, dict):
                 continue
@@ -40,7 +40,7 @@ def summarize(cases: list[dict], limit: int, connections: list[dict] | None = No
                     continue
                 if line.get(field) is not None:
                     continue
-                key = (payer, code, kind, '', '')
+                key = (payer, code, kind)
                 if key in unique:
                     continue
                 unique.add(key)
@@ -48,33 +48,6 @@ def summarize(cases: list[dict], limit: int, connections: list[dict] | None = No
                                                 'estimate_count': 0, 'last_observed_at': ''})
                 item['estimate_count'] += 1
                 item['last_observed_at'] = max(item['last_observed_at'], observed)
-        tasks = case.get('benchmark_tasks') or []
-        if isinstance(tasks, str):
-            try:
-                tasks = json.loads(tasks)
-            except ValueError:
-                tasks = []
-        for task in tasks if isinstance(tasks, list) else []:
-            if not isinstance(task, dict):
-                continue
-            code = str(task.get('code') or '').upper()
-            modifiers = task.get('modifiers') or []
-            pos = str(task.get('place_of_service') or '')
-            if not CODE.fullmatch(code) or not isinstance(modifiers, list) or len(modifiers) > 4:
-                continue
-            modifier = ','.join(str(value).upper() for value in modifiers)
-            if not all(isinstance(value, str) and re.fullmatch(r'[A-Z0-9]{2}', value.upper())
-                       for value in modifiers) or not re.fullmatch(r'\d{0,2}', pos):
-                continue
-            key = ('NMCT BCBSTX reference', code, 'bcbstx_reference', modifier, pos)
-            if key in unique:
-                continue
-            unique.add(key)
-            item = grouped.setdefault(key, {'payer': key[0], 'code': code, 'kind': key[2],
-                                            'modifier': modifier, 'place_of_service': pos,
-                                            'estimate_count': 0, 'last_observed_at': ''})
-            item['estimate_count'] += 1
-            item['last_observed_at'] = max(item['last_observed_at'], observed)
     gaps = sorted(grouped.values(), key=lambda item: (-item['estimate_count'], item['payer'], item['code'], item['kind']))
     return {'gaps': gaps[:50], 'group_count': len(gaps), 'scanned_case_count': len(cases),
             'scan_limit': limit, 'scan_limit_reached': len(cases) >= limit}

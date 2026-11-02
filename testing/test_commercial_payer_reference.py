@@ -5,7 +5,6 @@ from copy import deepcopy
 from app.api.routers import commercial_estimator  # noqa: F401 - initialize route imports
 from app.api.routers.commercial_flow.commercial_previsit_reference import _same_person_for_reference
 from app.api.routers.commercial_flow import commercial_previsit_status as status
-from app.api.routers.commercial_flow import commercial_previsit_rate_reference as rate_reference
 from app.insurance import network_participation
 
 
@@ -66,16 +65,3 @@ def test_registered_clinic_saved_reference_does_not_infer_network(monkeypatch):
     assert result['reference_benefits'].get('network_source') is None
     assert result['reference_benefits']['service_date_matches'] is False
     assert case['previsit_reference']['benefits']['network_status'] == 'unknown'
-
-
-def test_v2_aetna_uses_bcbstx_reference_even_when_legacy_portal_reference_exists(monkeypatch):
-    monkeypatch.setenv('COLLECTION_ENGINE_V2_ENABLED', 'true')
-    result = {'payer': 'Aetna', 'temporary_rate_reference': {'source': 'Aetna portal'}}
-    calls = []
-    monkeypatch.setattr(rate_reference, '_attach_temporary_aetna_rates',
-                        lambda *_: calls.append('legacy_aetna'))
-    monkeypatch.setattr(rate_reference, '_attach_temporary_blue_cross_rates',
-                        lambda result, *_: result.update(temporary_rate_reference={'source': 'NMCT BCBSTX'}))
-    rate_reference.refresh_saved_temporary_rates(result, 'synthetic-clinic', {}, {}, None)
-    assert result['temporary_rate_reference']['source'] == 'NMCT BCBSTX'
-    assert calls == []

@@ -381,9 +381,9 @@ def _attach_previsit_pricing(result: dict, practice_id: str, inputs: dict, sourc
     elif nmct and _api.re.search(r'\baetna\b', ' '.join((str(result.get('payer') or ''),
             str((route_payer or {}).get('display_name') or ''))), _api.re.I):
         _attach_temporary_aetna_rates(result, practice_id, inputs, source)
-    if (payer_name and not _api.re.search(r'blue cross|bcbstx|blue shield', payer_name, _api.re.I)
-            and not result.get('temporary_rate_reference')):
-        _attach_temporary_blue_cross_rates(result, practice_id, inputs, source, payer_name)
+    elif (rate_payer_name := str(result.get('payer') or (route_payer or {}).get('display_name') or '')) and not _api.re.search(
+            r'blue cross|bcbstx|blue shield|aetna', rate_payer_name, _api.re.I):
+        _attach_temporary_blue_cross_rates(result, practice_id, inputs, source, rate_payer_name)
     if len(connections) != 1:
         apply_nmct_library_contract(result, benefits, nmct_contract)
         if nmct:

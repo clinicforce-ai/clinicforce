@@ -33,12 +33,6 @@ def initialize_insurance(cursor) -> None:
         UNIQUE (practice_id, stedi_payer_id)
     )""")
     cursor.execute("CREATE INDEX IF NOT EXISTS commercial_payer_connections_practice_idx ON commercial_payer_connections (practice_id, status)")
-    cursor.execute("""CREATE TABLE IF NOT EXISTS commercial_collection_policy_versions (
-        id TEXT PRIMARY KEY, practice_id TEXT NOT NULL, payer_connection_id TEXT NOT NULL REFERENCES commercial_payer_connections(id),
-        version INTEGER NOT NULL, status TEXT NOT NULL, policy_json TEXT NOT NULL,
-        approved_by TEXT NOT NULL, approved_at TEXT NOT NULL,
-        UNIQUE (practice_id, payer_connection_id, version)
-    )""")
     cursor.execute("""CREATE TABLE IF NOT EXISTS commercial_provider_networks (
         id TEXT PRIMARY KEY, practice_id TEXT NOT NULL, payer_connection_id TEXT NOT NULL REFERENCES commercial_payer_connections(id),
         billing_npi TEXT NOT NULL, rendering_npi TEXT NOT NULL, organization_name TEXT NOT NULL DEFAULT '', tin TEXT NOT NULL, location_id TEXT NOT NULL,

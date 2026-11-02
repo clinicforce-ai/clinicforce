@@ -16,9 +16,7 @@ class Model(BaseModel):
 class MissingRateGap(Model):
     payer: str
     code: str
-    kind: Literal['insured_allowed', 'clinic_cash', 'bcbstx_reference']
-    modifier: str = ''
-    place_of_service: str = ''
+    kind: Literal['insured_allowed', 'clinic_cash']
     estimate_count: int = Field(ge=1)
     last_observed_at: str
 

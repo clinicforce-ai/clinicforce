@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 import os
 import re
-from datetime import date, datetime, timezone
+from datetime import datetime, timezone
 from typing import Any
 from uuid import uuid4
 
@@ -163,38 +163,12 @@ def add_connection_aliases(practice_id: str, connection_id: str, aliases: list[s
 def set_collection_policy(practice_id: str, connection_id: str, mode: str,
                           reference: str, actor_id: str, *, allow_supported_oon_advance: bool = False,
                           allow_cms_based_advance: bool = False,
-                          allow_blue_cross_proxy_advance: bool = False,
-                          product_binding: str | None = None, network_tier: str | None = None,
-                          service_groups: list[str] | None = None, effective_from: str | None = None,
-                          effective_to: str | None = None, allow_benchmark_advance: bool = False,
-                          max_cents: int | None = None, advance_percent: float | None = None,
-                          fixed_cents: int | None = None, excluded_cpts: list[str] | None = None,
-                          disclosure: str | None = None, allow_unknown_oop: bool = False) -> dict:
+                          allow_blue_cross_proxy_advance: bool = False) -> dict:
     """Set a practice-scoped payer policy with an administrator and source reference."""
-    if mode not in {'defer_to_claim', 'collect_verified_copay', 'collect_supported_advance', 'collect_visit_model', 'disabled'} or not reference.strip() or not actor_id:
+    if mode not in {'defer_to_claim', 'collect_verified_copay', 'collect_supported_advance', 'disabled'} or not reference.strip() or not actor_id:
         raise CommercialError('A collection policy mode, approval reference and administrator are required.')
     if allow_blue_cross_proxy_advance and (mode != 'collect_supported_advance' or not allow_supported_oon_advance):
         raise CommercialError('A Blue Cross fee proxy advance requires an approved out-of-network supported-advance policy.')
-    if mode == 'collect_visit_model':
-        groups = set(service_groups or [])
-        if (not product_binding or not network_tier or not groups
-                or groups - {'specialist_office', 'emg_ncs', 'skin_biopsy', 'other'}
-                or network_tier not in {'in_network', 'out_of_network'}
-                or not effective_from or not effective_to
-                or type(max_cents) is not int or max_cents < 0):
-            raise CommercialError('A visit policy needs exact product, network, service groups, dates and a maximum advance.')
-        if (advance_percent is not None and fixed_cents is not None
-                or not disclosure or not disclosure.strip()
-                or isinstance(advance_percent, bool)
-                or advance_percent is not None and not 0 <= advance_percent <= 100
-                or fixed_cents is not None and (type(fixed_cents) is not int or fixed_cents < 0)
-                or any(not str(code).isalnum() or len(str(code)) > 8 for code in excluded_cpts or [])):
-            raise CommercialError('Choose one valid advance formula and CPT exclusions.')
-        try:
-            if date.fromisoformat(effective_from) > date.fromisoformat(effective_to):
-                raise ValueError
-        except ValueError as exc:
-            raise CommercialError('The visit policy effective dates are invalid.') from exc
     now = _now()
     with _connection() as db:
         row = db.execute('SELECT rules_json FROM commercial_payer_connections WHERE id=%s AND practice_id=%s FOR UPDATE',
@@ -204,27 +178,6 @@ def set_collection_policy(practice_id: str, connection_id: str, mode: str,
         rules = json.loads(row['rules_json'])
         if mode == 'disabled':
             rules.pop('collection_policy', None)
-        elif mode == 'collect_visit_model':
-            version = db.execute('''SELECT COALESCE(MAX(version),0)+1 AS next_version
-                FROM commercial_collection_policy_versions WHERE practice_id=%s AND payer_connection_id=%s''',
-                (practice_id, connection_id)).fetchone()['next_version']
-            policy = {'id': uuid4().hex, 'version': version, 'mode': mode,
-                'reference': reference.strip(), 'approved_by': actor_id, 'approved_at': now,
-                'product_binding': product_binding.strip(), 'network_tier': network_tier,
-                'service_groups': sorted(groups), 'effective_from': effective_from,
-                'effective_to': effective_to, 'allow_benchmark_advance': allow_benchmark_advance,
-                'max_cents': max_cents, 'advance_percent': advance_percent,
-                'fixed_cents': fixed_cents, 'excluded_cpts': sorted(set(excluded_cpts or [])),
-                'disclosure': disclosure, 'allow_unknown_oop': allow_unknown_oop}
-            db.execute('''INSERT INTO commercial_collection_policy_versions
-                (id,practice_id,payer_connection_id,version,status,policy_json,approved_by,approved_at)
-                VALUES (%s,%s,%s,%s,'approved',%s,%s,%s)''',
-                (policy['id'], practice_id, connection_id, version, _json(policy), actor_id, now))
-            current = rules.get('visit_collection_policies') or []
-            rules['visit_collection_policies'] = [item for item in current if not (
-                item.get('product_binding') == product_binding and item.get('network_tier') == network_tier
-                and set(item.get('service_groups') or []) == groups
-                and item.get('effective_from') == effective_from and item.get('effective_to') == effective_to)] + [policy]
         else:
             rules['collection_policy'] = {'mode': mode, 'reference': reference.strip(),
                                           'approved_by': actor_id, 'approved_at': now,

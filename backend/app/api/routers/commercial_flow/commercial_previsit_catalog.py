@@ -61,15 +61,14 @@ def build_catalog(api: ModuleType, result: dict, session: dict, inputs: dict, so
                 available.append({'id': 'suggested:' + code, 'code': code, 'source': 'Clinician-confirmed candidate',
                                   'description': candidate.get('reason'), 'units': None, 'modifiers': []})
                 known.add(code)
-    for key in ('cash_schedule', 'cash_quote', 'practice_cash_source', 'collection_policy', 'visit_collection_policies'):
+    for key in ('cash_schedule', 'cash_quote', 'practice_cash_source', 'collection_policy'):
         result.pop(key, None)
     policy_connections = [row for row in configured_connections if row.get('stedi_payer_id') == payer_id]
     if len(policy_connections) == 1:
         policy = (policy_connections[0].get('rules') or {}).get('collection_policy') or {}
-        if (isinstance(policy, dict) and policy.get('mode') in {'defer_to_claim', 'collect_verified_copay', 'collect_supported_advance', 'collect_visit_model'} and policy.get('approved_by')
+        if (isinstance(policy, dict) and policy.get('mode') in {'defer_to_claim', 'collect_verified_copay', 'collect_supported_advance'} and policy.get('approved_by')
                 and policy.get('approved_at') and policy.get('reference')):
             result['collection_policy'] = policy
-        result['visit_collection_policies'] = (policy_connections[0].get('rules') or {}).get('visit_collection_policies') or []
     uploaded_cash = api.practice_prices.current(session['practice_id'], inputs['service_date'])
     if uploaded_cash:
         known_codes = {row['code'] for row in available}

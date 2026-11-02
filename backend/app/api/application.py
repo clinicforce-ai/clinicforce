@@ -226,8 +226,6 @@ from app.api.routers.commercial_estimator import router as commercial_estimator_
 app.include_router(commercial_estimator_router)
 from app.api.routers.staff import router as staff_router, from_share as staff_intake_from_share
 app.include_router(staff_router)
-from app.api.routers.staging_collection_fixtures import router as staging_collection_fixtures_router
-app.include_router(staging_collection_fixtures_router)
 from app.api.routers.staff_registration import router as staff_registration_router
 from app.api.routers.patient_uploads import router as patient_uploads_router
 from app.api.routers.patient_clinic_account import router as patient_clinic_account_router

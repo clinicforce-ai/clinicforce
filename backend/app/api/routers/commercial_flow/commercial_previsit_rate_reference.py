@@ -1,29 +1,16 @@
 """Temporary clinic fee reference for other payers' planning."""
 from __future__ import annotations
 
-import os
-
 from app.api.routers import commercial_estimator as _api
 
 BCBSTX_2026_OTHER_CODES = {'70496': 22719, '70498': 22693}
 BCBSTX_2026_OTHER_CODES_SOURCE = ('https://www.bcbstx.com/docs/provider/tx/standards/general-reimbursement-information/'
     'gri-info/professional-schedules/2026-internet-posting-notices/other-codes-2026-files/dft-2026-v1.pdf')
 
-
-def visit_pricing_scope(inputs: dict, source: dict) -> dict:
-    """The same provider, location and POS scope is used on save and reload."""
-    return {'place_of_service': inputs.get('place_of_service'),
-            'rendering_npi': (inputs.get('rendering_provider') or {}).get('npi'),
-            'billing_npi': (source.get('billing_provider') or {}).get('npi'),
-            'location_id': source.get('location_id')}
-
 def refresh_saved_temporary_rates(result: dict, practice_id: str, inputs: dict, source: dict,
                                   route_payer: dict | None) -> None:
     """Rebuild saved cross-payer references from the current scoped clinic rates."""
     payer_name = str(result.get('payer') or (route_payer or {}).get('display_name') or '')
-    if os.getenv('COLLECTION_ENGINE_V2_ENABLED') == 'true':
-        attach_benchmark_for_visit(result, practice_id, inputs, source, payer_name)
-        return
     if _api.commercial.is_united_healthcare_payer(
             result, {'displayName': route_payer.get('display_name')} if route_payer else None):
         _attach_temporary_uhc_rates(result, practice_id, inputs, source)
@@ -31,18 +18,7 @@ def refresh_saved_temporary_rates(result: dict, practice_id: str, inputs: dict, 
         _attach_temporary_blue_cross_rates(result, practice_id, inputs, source, 'Cigna')
     elif _api.re.search(r'\baetna\b', payer_name, _api.re.I):
         _attach_temporary_aetna_rates(result, practice_id, inputs, source)
-    elif payer_name and not _api.re.search(r'blue cross|bcbstx|blue shield', payer_name, _api.re.I):
-        _attach_temporary_blue_cross_rates(result, practice_id, inputs, source, payer_name)
-    if (payer_name and not _api.re.search(r'blue cross|bcbstx|blue shield', payer_name, _api.re.I)
-            and not result.get('temporary_rate_reference')):
-        _attach_temporary_blue_cross_rates(result, practice_id, inputs, source, payer_name)
-
-
-def attach_benchmark_for_visit(result: dict, practice_id: str, inputs: dict,
-                               source: dict, payer_name: str) -> None:
-    """Use the clinic BCBSTX version for every other commercial payer in V2."""
-    if payer_name and not _api.re.search(r'blue cross|bcbstx|blue shield', payer_name, _api.re.I):
-        result.pop('temporary_rate_reference', None)
+    elif payer_name and not _api.re.search(r'blue cross|bcbstx|blue shield|humana', payer_name, _api.re.I):
         _attach_temporary_blue_cross_rates(result, practice_id, inputs, source, payer_name)
 
 def _attach_temporary_blue_cross_rates(result: dict, practice_id: str, inputs: dict, source: dict,
@@ -92,13 +68,7 @@ def _attach_temporary_blue_cross_rates(result: dict, practice_id: str, inputs: d
             lines.append({'id': code.get('id'), 'code': code['code'],
                           'units': code.get('units'), 'modifiers': code.get('modifiers') or [],
                           'unit_reference_cents': rate['allowed_cents'],
-                          'source_reference': rate['source_reference'],
-                          'reference_basis': 'BCBSTX_CROSS_PAYER_REFERENCE',
-                          'rate_version': rate.get('version_id'),
-                          'effective_from': rate.get('effective_from'),
-                          'effective_to': rate.get('effective_to'),
-                          'place_of_service': pos, 'rendering_npi': rendering_npi,
-                          'billing_npi': billing_npi, 'location_id': location_id})
+                          'source_reference': rate['source_reference']})
     if lines:
         result['temporary_rate_reference'] = {'source': ('Blue Cross Texas clinic and published 2026 fee references'
             if published else 'NMCT Clinical Library Blue Cross fee schedule'),
