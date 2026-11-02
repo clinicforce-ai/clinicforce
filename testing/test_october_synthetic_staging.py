@@ -12,16 +12,21 @@ from psycopg.conninfo import make_conninfo
 
 from app.core import patient_store, staff_store
 from app.insurance import collection_guidance, store, visit_collection_model
-from app.insurance.staging_synthetic import SCENARIOS, visit
+from app.insurance.staging_synthetic import SCENARIOS, journey, visit
 from app.api.routers.staging_collection_fixtures import STAGING_NMCT_PRACTICE_ID
 
 
 @pytest.mark.parametrize('name,share,collect,decision', SCENARIOS)
 def test_october_inspired_fake_visit(name, share, collect, decision):
     result = visit(name)
-    modeled = visit_collection_model.build(result)
-    assert (modeled['estimated_patient_responsibility_cents'], modeled['collect_now_cents'],
-            modeled['collection_decision_type']) == (share, collect, decision)
+    if result['payment_mode'] == 'cash':
+        guidance = collection_guidance.build(result, result['visit_review'])
+        actual = (None, guidance['amount_cents'], guidance['basis'])
+    else:
+        modeled = visit_collection_model.build(result)
+        actual = (modeled['estimated_patient_responsibility_cents'], modeled['collect_now_cents'],
+                  modeled['collection_decision_type'])
+    assert actual == (share, collect, decision)
     assert result['benefits']['identity']['binding'].startswith('synthetic')
     if name == 'missing_benchmark_cpt':
         assert [row['code'] for row in modeled['price_acquisition']] == ['95886']
@@ -37,7 +42,7 @@ def test_fake_patients_seed_save_reload_and_fastapi(monkeypatch):
 
 
 async def _run_fake_patients_seed_save_reload_and_fastapi(monkeypatch):
-    """The staging-only admin action creates eight fake NMCT cases and HTTP reads."""
+    """The staging-only admin action saves each fake journey and HTTP reads its final state."""
     from app.api.application import app
     from app.api.routers import commercial_estimator as api, staff as staff_api
 
@@ -81,19 +86,31 @@ async def _run_fake_patients_seed_save_reload_and_fastapi(monkeypatch):
                                                 headers={'X-ClinicForce-Intake': row['intake_id']})
                     assert response.status_code == 200, (row['scenario'], response.status_code)
                     body = response.json()
-                    model = body['collection_guidance']['visit_model']
+                    guidance = body['collection_guidance']
+                    model = guidance.get('visit_model') or {}
                     assert body['staging_synthetic_fixture'] is True
-                    assert (model['estimated_patient_responsibility_cents'], model['collect_now_cents'],
-                            model['collection_decision_type']) == (share, collect, decision), (
-                                row['scenario'], model['remaining_actions'])
-                    assert body['collection_guidance']['amount_cents'] == collect
+                    assert (model.get('estimated_patient_responsibility_cents'),
+                            guidance['amount_cents'],
+                            model.get('collection_decision_type', guidance['basis'])) == (
+                                share, collect, decision), row['scenario']
+                    assert row['iterations'] == len(journey(row['scenario']))
                     with patient_store._connection() as db:
-                        event = db.execute("SELECT snapshot_json FROM insurance_case_events WHERE case_id=%s AND stage='synthetic-visit-estimated'", (case_id,)).fetchone()
-                    snapshot = json.loads(event['snapshot_json'])
-                    assert snapshot['result']['collection_guidance']['visit_model']['collect_now_cents'] == collect
+                        events = db.execute("SELECT stage,snapshot_json FROM insurance_case_events WHERE case_id=%s AND stage LIKE 'synthetic-%%' ORDER BY id", (case_id,)).fetchall()
+                    assert len(events) == row['iterations']
+                    if row['iterations'] > 1:
+                        first = json.loads(events[0]['snapshot_json'])['result']
+                        assert first['fixture_iteration'] == 'eligibility_pending'
+                        assert first['collection_guidance']['amount_cents'] is None
+                    snapshot = json.loads(events[-1]['snapshot_json'])
+                    assert snapshot['result']['collection_guidance']['amount_cents'] == collect
                 repeated = await client.post('/api/staff/testing/collection-engine-scenarios',
                     headers={'Origin': 'http://testserver'})
                 assert [row['case_id'] for row in repeated.json()['cases']] == [row['case_id'] for row in cases]
+                assert [row['iterations'] for row in repeated.json()['cases']] == [
+                    row['iterations'] for row in cases]
+                with patient_store._connection() as db:
+                    event_count = db.execute("SELECT count(*) AS n FROM insurance_case_events WHERE stage LIKE 'synthetic-%%'").fetchone()['n']
+                assert event_count == sum(row['iterations'] for row in cases)
     finally:
         with psycopg.connect(url, autocommit=True) as db:
             db.execute(sql.SQL('DROP SCHEMA {} CASCADE').format(sql.Identifier(schema)))

@@ -10,7 +10,7 @@ from fastapi.concurrency import run_in_threadpool
 from app.api.routers.staff import require_staff
 from app.core import staff_store
 from app.insurance import collection_guidance, store
-from app.insurance.staging_synthetic import SCENARIOS, STAGING_NMCT_PRACTICE_ID, visit
+from app.insurance.staging_synthetic import SCENARIOS, STAGING_NMCT_PRACTICE_ID, journey, visit
 
 
 router = APIRouter(prefix='/api/staff/testing', tags=['staging-test-fixtures'])
@@ -47,41 +47,49 @@ def _seed_one(staff: dict, name: str, index: int) -> dict:
                             (intake_id,)).fetchone()
         if not intake or (intake['practice_id'], intake['patient_id']) != (staff['practice_id'], patient_id):
             raise ValueError('Synthetic intake ID is already used by another record.')
+    stages = journey(name)
     result = visit(name)
-    result['staging_synthetic_fixture'] = True
-    lines = result['price_range']['lines']
-    result['codes'] = [{'id': line['id'], 'code': line['code'], 'units': line['units'],
-                        'modifiers': line['modifiers']} for line in lines]
-    result['selected_ids'] = [line['id'] for line in lines]
-    review = {'payments': {'amount_cents': 0, 'reference': 'synthetic-ledger-check'}}
-    result['collection_guidance'] = collection_guidance.build(result, review)
     source = {'appointment_id': f'synthetic-appointment-{index}',
               'coverage_id': f'synthetic-coverage-{index}',
               'coverage_period': {'start': '2026-01-01'}, 'location_id': 'synthetic-office'}
     workflow = {'source_mode': 'commercial_previsit', 'synthetic_fixture': True,
-                'previsit_context': {'result': result, 'context_token': f'synthetic-visit-{index}',
+                'previsit_context': {'result': {}, 'context_token': f'synthetic-visit-{index}',
                     'payer_id': f'synthetic-route-{name}',
                     'inputs': {'service_date': result['service_date'], 'place_of_service': '11'},
                     'source': source},
-                'previsit': {'request_state': 'complete'}, 'visit_review': review}
+                'previsit': {'request_state': 'complete'}, 'visit_review': result['visit_review']}
     saved = store.create_case(patient_id, '', 'staging-synthetic-only', workflow,
         practice_id=staff['practice_id'], intake_id=intake_id,
         workflow_slot=f'commercial:synthetic-{name.replace("_", "-")}')
     if saved.get('synthetic_fixture') is not True:
         raise ValueError('The existing case is not a synthetic fixture.')
-    if saved.get('revision', 0) == 0:
-        saved = store.save_case(saved, patient_id, '', 'synthetic-visit-estimated',
-            snapshot={'result': result, 'patient': {'given_name': 'Synthetic', 'family_name': family}},
+    for step_index, (stage, step_result) in enumerate(stages, 1):
+        if saved.get('revision', 0) >= step_index:
+            continue
+        step_result['staging_synthetic_fixture'] = True
+        lines = step_result['price_range']['lines']
+        step_result['codes'] = [{'id': line['id'], 'code': line['code'], 'units': line['units'],
+                                 'modifiers': line['modifiers']} for line in lines]
+        step_result['selected_ids'] = [line['id'] for line in lines]
+        review = step_result['visit_review']
+        step_result['collection_guidance'] = collection_guidance.build(step_result, review)
+        saved['previsit_context']['result'] = step_result
+        saved['visit_review'] = review
+        saved['synthetic_step_index'] = step_index
+        saved = store.save_case(saved, patient_id, '', f'synthetic-{stage}',
+            snapshot={'result': step_result, 'patient': {'given_name': 'Synthetic', 'family_name': family}},
             practice_id=staff['practice_id'], intake_id=intake_id)
+    guidance = saved['previsit_context']['result']['collection_guidance']
+    model = guidance.get('visit_model') or {}
     return {'scenario': name, 'intake_id': intake_id, 'case_id': saved['id'],
-            'expected_modeled_cents': result['collection_guidance']['visit_model'][
-                'estimated_patient_responsibility_cents'],
-            'expected_collect_now_cents': result['collection_guidance']['collect_now_cents']}
+            'iterations': len(stages),
+            'expected_modeled_cents': model.get('estimated_patient_responsibility_cents'),
+            'expected_collect_now_cents': guidance.get('collect_now_cents', guidance.get('amount_cents'))}
 
 
 @router.post('/collection-engine-scenarios', description=(
-    'Staging NMCT administrator only. Create eight visibly synthetic October-pattern '
-    'patients and saved collection cases using invented appointment, Coverage and benefit facts. '
+    'Staging NMCT administrator only. Create visibly synthetic October-pattern '
+    'patients and iterative saved cases using invented appointment, Coverage and benefit facts. '
     'No eCW, payer or Bedrock request occurs. Synthetic policy data is confined to these cases '
     'and has no authority for real NMCT patients. The route returns only fixture case IDs and totals.'
 ))
