@@ -34,8 +34,7 @@ def test_october_inspired_fake_visit(name, share, collect, decision):
 async def test_fake_patients_seed_save_reload_and_fastapi(monkeypatch):
     """The staging-only admin action creates eight fake NMCT cases and HTTP reads."""
     from app.api.application import app
-    from app.api.routers import commercial_estimator as api
-    from app.api.routers import staging_collection_fixtures as fixtures
+    from app.api.routers import commercial_estimator as api, staff as staff_api
 
     url = os.environ['STAFF_TEST_DATABASE_URL']
     schema = 'october_fake_' + uuid4().hex
@@ -48,31 +47,33 @@ async def test_fake_patients_seed_save_reload_and_fastapi(monkeypatch):
              patch.object(staff_store, '_schema_initialized', False):
             monkeypatch.setenv('COLLECTION_ENGINE_V2_ENABLED', 'true')
             monkeypatch.setenv('PUBLIC_BASE_URL', 'https://staging.clinicforce.ai')
-            staff = {'id': 'staff', 'practice_id': 'primary', 'role': 'admin',
-                     'display_name': 'Fake Test Staff'}
+            monkeypatch.setenv('INSURANCE_BETA_ENABLED', 'true')
+            monkeypatch.setattr(staff_api, 'PUBLIC_BASE_URL', 'http://testserver')
+            password = 'Synthetic-staging-only-123'
             with staff_store._connection() as db:
-                db.execute("INSERT INTO staff_members (id,username,display_name,practice_id,practice_name,role,password_hash,created_at) VALUES ('staff','fake-october','Fake Test Staff','primary','NMCT Staging','admin','unused','2026-10-01')")
-            async def fake_staff(_request):
-                return staff
-            monkeypatch.setattr(fixtures, 'require_staff', fake_staff)
-            lookup = {}
-            monkeypatch.setattr(api, '_session', _fake_session(lookup))
+                db.execute("INSERT INTO staff_members (id,username,display_name,practice_id,practice_name,role,password_hash,created_at) VALUES ('staff','fake-october','Fake Test Staff','primary','NMCT Staging','admin',%s,'2026-10-01')", (staff_store.hash_password(password),))
             def no_external_request(*_args, **_kwargs):
                 raise AssertionError('A synthetic visit must not contact eCW or a payer')
             monkeypatch.setattr(api.ecw_backend, 'fetch_inputs', no_external_request)
             monkeypatch.setattr(api, '_post_stedi_eligibility', no_external_request)
             async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app),
                                          base_url='http://testserver') as client:
+                unsigned = await client.post('/api/staff/testing/collection-engine-scenarios',
+                    headers={'Origin': 'http://testserver'})
+                assert unsigned.status_code == 401
+                login = await client.post('/api/staff/login',
+                    headers={'Origin': 'http://testserver'},
+                    json={'username': 'fake-october', 'password': password})
+                assert login.status_code == 200
                 seeded = await client.post('/api/staff/testing/collection-engine-scenarios',
-                    headers={'Origin': 'https://staging.clinicforce.ai'})
+                    headers={'Origin': 'http://testserver'})
                 assert seeded.status_code == 200
                 cases = seeded.json()['cases']
                 assert len(cases) == len(SCENARIOS)
                 for row, (_, share, collect, decision) in zip(cases, SCENARIOS):
                     case_id = row['case_id']
-                    lookup[case_id] = row['intake_id']
                     response = await client.get(f'/api/doctor/insurance/commercial/cases/{case_id}/previsit',
-                                                headers={'X-Synthetic-Case': case_id})
+                                                headers={'X-ClinicForce-Intake': row['intake_id']})
                     assert response.status_code == 200, (row['scenario'], response.status_code)
                     body = response.json()
                     model = body['collection_guidance']['visit_model']
@@ -86,22 +87,11 @@ async def test_fake_patients_seed_save_reload_and_fastapi(monkeypatch):
                     snapshot = json.loads(event['snapshot_json'])
                     assert snapshot['result']['collection_guidance']['visit_model']['collect_now_cents'] == collect
                 repeated = await client.post('/api/staff/testing/collection-engine-scenarios',
-                    headers={'Origin': 'https://staging.clinicforce.ai'})
+                    headers={'Origin': 'http://testserver'})
                 assert [row['case_id'] for row in repeated.json()['cases']] == [row['case_id'] for row in cases]
     finally:
         with psycopg.connect(url, autocommit=True) as db:
             db.execute(sql.SQL('DROP SCHEMA {} CASCADE').format(sql.Identifier(schema)))
-
-
-def _fake_session(lookup):
-    async def session(request):
-        case_id = request.headers.get('X-Synthetic-Case')
-        intake_id = lookup[case_id]
-        intake = staff_store.get_intake(intake_id, 'primary')
-        return {'practice_id': 'primary', 'intake_id': intake_id,
-                'patient_id': intake['patient']['id'], 'share_manifest_id': '',
-                'staff': {'id': 'staff', 'display_name': 'Fake Test Staff'}}
-    return session
 
 
 @pytest.mark.parametrize('host,flag,practice,role,code', [
