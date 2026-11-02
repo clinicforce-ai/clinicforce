@@ -10,7 +10,7 @@ from fastapi.concurrency import run_in_threadpool
 from app.api.routers.staff import require_staff
 from app.core import staff_store
 from app.insurance import collection_guidance, store
-from app.insurance.staging_synthetic import SCENARIOS, visit
+from app.insurance.staging_synthetic import SCENARIOS, STAGING_NMCT_PRACTICE_ID, visit
 
 
 router = APIRouter(prefix='/api/staff/testing', tags=['staging-test-fixtures'])
@@ -20,7 +20,7 @@ def _staging_only(staff: dict) -> None:
     if (os.getenv('PUBLIC_BASE_URL', '').rstrip('/') != 'https://staging.clinicforce.ai'
             or os.getenv('COLLECTION_ENGINE_V2_ENABLED') != 'true'):
         raise HTTPException(404, 'Staging collection fixtures are unavailable.')
-    if staff.get('practice_id') != 'primary' or staff.get('role') != 'admin':
+    if staff.get('practice_id') != STAGING_NMCT_PRACTICE_ID or staff.get('role') != 'admin':
         raise HTTPException(403, 'The staging NMCT administrator is required.')
 
 
@@ -90,4 +90,4 @@ async def seed_collection_engine_scenarios(request: Request) -> dict:
     _staging_only(staff)
     cases = [await run_in_threadpool(_seed_one, staff, name, index)
              for index, (name, *_expected) in enumerate(SCENARIOS, 1)]
-    return {'synthetic_only': True, 'practice_id': 'primary', 'cases': cases}
+    return {'synthetic_only': True, 'practice_id': STAGING_NMCT_PRACTICE_ID, 'cases': cases}

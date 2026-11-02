@@ -13,6 +13,7 @@ from psycopg.conninfo import make_conninfo
 from app.core import patient_store, staff_store
 from app.insurance import collection_guidance, store, visit_collection_model
 from app.insurance.staging_synthetic import SCENARIOS, visit
+from app.api.routers.staging_collection_fixtures import STAGING_NMCT_PRACTICE_ID
 
 
 @pytest.mark.parametrize('name,share,collect,decision', SCENARIOS)
@@ -55,7 +56,7 @@ async def _run_fake_patients_seed_save_reload_and_fastapi(monkeypatch):
             monkeypatch.setattr(staff_api, 'PUBLIC_BASE_URL', 'http://testserver')
             password = 'Synthetic-staging-only-123'
             with staff_store._connection() as db:
-                db.execute("INSERT INTO staff_members (id,username,display_name,practice_id,practice_name,role,password_hash,created_at) VALUES ('staff','fake-october','Fake Test Staff','primary','NMCT Staging','admin',%s,'2026-10-01')", (staff_store.hash_password(password),))
+                db.execute("INSERT INTO staff_members (id,username,display_name,practice_id,practice_name,role,password_hash,created_at) VALUES ('staff','fake-october','Fake Test Staff',%s,'NMCT Staging','admin',%s,'2026-10-01')", (STAGING_NMCT_PRACTICE_ID, staff_store.hash_password(password)))
             def no_external_request(*_args, **_kwargs):
                 raise AssertionError('A synthetic visit must not contact eCW or a payer')
             monkeypatch.setattr(api.ecw_backend, 'fetch_inputs', no_external_request)
@@ -99,10 +100,10 @@ async def _run_fake_patients_seed_save_reload_and_fastapi(monkeypatch):
 
 
 @pytest.mark.parametrize('host,flag,practice,role,code', [
-    ('https://app.clinicforce.ai', 'true', 'primary', 'admin', 404),
-    ('https://staging.clinicforce.ai', 'false', 'primary', 'admin', 404),
+    ('https://app.clinicforce.ai', 'true', STAGING_NMCT_PRACTICE_ID, 'admin', 404),
+    ('https://staging.clinicforce.ai', 'false', STAGING_NMCT_PRACTICE_ID, 'admin', 404),
     ('https://staging.clinicforce.ai', 'true', 'other', 'admin', 403),
-    ('https://staging.clinicforce.ai', 'true', 'primary', 'staff', 403),
+    ('https://staging.clinicforce.ai', 'true', STAGING_NMCT_PRACTICE_ID, 'staff', 403),
 ])
 def test_fixture_route_is_scoped_to_staging_nmct_admin(monkeypatch, host, flag, practice, role, code):
     from app.api.routers.staging_collection_fixtures import _staging_only

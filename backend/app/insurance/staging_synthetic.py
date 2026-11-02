@@ -4,9 +4,11 @@ from __future__ import annotations
 from copy import deepcopy
 import os
 
+STAGING_NMCT_PRACTICE_ID = '66eadd87-37e3-43c8-b34a-9012a53de4d3'
+
 
 def is_fixture(case: dict, practice_id: str | None) -> bool:
-    return (case.get('synthetic_fixture') is True and practice_id == 'primary'
+    return (case.get('synthetic_fixture') is True and practice_id == STAGING_NMCT_PRACTICE_ID
             and os.getenv('PUBLIC_BASE_URL', '').rstrip('/') == 'https://staging.clinicforce.ai'
             and os.getenv('COLLECTION_ENGINE_V2_ENABLED') == 'true')
 
