@@ -13,12 +13,21 @@ TOOL_NAMES = ('read_saved_ecw_context', 'read_selected_benefit', 'read_reference
               'read_service_template', 'read_policy_scope')
 
 
-def _tool_config() -> dict:
+def _tool_config(names: tuple[str, ...] = TOOL_NAMES) -> dict:
     return {'tools': [{'toolSpec': {'name': name,
         'description': 'Read one deidentified, already saved and selected visit fact. Never approve collection.',
         'inputSchema': {'json': {'type': 'object', 'properties': {'code': {'type': 'string'}},
                                  'required': ['code'], 'additionalProperties': False}}}}
-        for name in TOOL_NAMES]}
+        for name in names]}
+
+
+def _tools_for(facts: dict) -> tuple[str, ...]:
+    flags = {flag for row in facts['lines'] for flag in row['review_flags']}
+    if 'price_basis' in flags:
+        return ('read_selected_benefit', 'read_reference_price', 'read_service_template')
+    if 'benefit_scope' in flags:
+        return ('read_selected_benefit', 'read_service_template', 'read_saved_ecw_context')
+    return ('read_selected_benefit', 'read_saved_ecw_context', 'read_policy_scope')
 
 
 def _tool_result(name: str, code: str, facts: dict, result: dict) -> dict:
@@ -69,6 +78,7 @@ def _review_flags(benefits: dict) -> list[str]:
         'deductible_applicability': ('deductible',),
         'oop_applicability': ('out-of-pocket',),
         'benefit_scope': ('conditional', 'service', 'benefit'),
+        'price_basis': ('price', 'rate'),
     }.items() if any(term in reasons for term in terms)]
 
 
@@ -95,10 +105,13 @@ def investigate(result: dict) -> dict:
         return prior
     if not facts['lines'] or not any(row['review_flags'] for row in facts['lines']):
         return {'status': 'not_needed', 'fingerprint': fingerprint, 'findings': []}
+    allowed_tools = _tools_for(facts)
     prompt = ('Review these already selected, deidentified insurance benefit facts. '
               'You may call the provided read-only tools for these exact CPTs. At most three calls are supported. '
               'Return JSON only: {"findings":[{"code":"CPT","finding":"short explanation",'
               '"evidence_ids":["exact supplied benefit ID"],"next_action":"short action"}]}. '
+              'Each evidence_ids value must exactly match a benefit_evidence ID supplied for that CPT; '
+              'a CPT code is not an evidence ID. '
               'Do not invent a value, network participation, deductible waiver, copay interaction, or permission to collect. '
               'If source facts cannot decide, say what must be verified. Facts: ' + json.dumps(facts, sort_keys=True))
     try:
@@ -106,7 +119,7 @@ def investigate(result: dict) -> dict:
             connect_timeout=3, read_timeout=15, retries={'max_attempts': 0}))
         messages = [{'role': 'user', 'content': [{'text': prompt}]}]
         response = client.converse(modelId=MODEL_ID, messages=messages,
-            toolConfig=_tool_config(), inferenceConfig={'maxTokens': 500})
+            toolConfig=_tool_config(allowed_tools), inferenceConfig={'maxTokens': 900})
         tool_uses = [part['toolUse'] for part in response['output']['message']['content'] if 'toolUse' in part]
         if tool_uses:
             if len(tool_uses) > 3:
@@ -115,16 +128,20 @@ def investigate(result: dict) -> dict:
             results = []
             for call in tool_uses:
                 name, code = call.get('name'), (call.get('input') or {}).get('code')
-                if name not in TOOL_NAMES or code not in allowed_codes or not call.get('toolUseId'):
+                if name not in allowed_tools or code not in allowed_codes or not call.get('toolUseId'):
                     raise ValueError('invalid_research_tool')
                 results.append({'toolResult': {'toolUseId': call['toolUseId'],
                     'content': [{'json': _tool_result(name, code, facts, result)}]}})
             messages.extend([response['output']['message'], {'role': 'user', 'content': results}])
             response = client.converse(modelId=MODEL_ID, messages=messages,
-                toolConfig=_tool_config(), inferenceConfig={'maxTokens': 500})
+                toolConfig=_tool_config(allowed_tools), inferenceConfig={'maxTokens': 1200})
             if any('toolUse' in part for part in response['output']['message']['content']):
                 raise ValueError('research_tool_budget_exceeded')
-        content = ''.join(part.get('text', '') for part in response['output']['message']['content'])
+        if response.get('stopReason') == 'max_tokens':
+            raise ValueError('research_token_budget_exceeded')
+        content = ''.join(part.get('text', '') for part in response['output']['message']['content']).strip()
+        if content.startswith('```') and content.endswith('```'):
+            content = content.split('\n', 1)[1].rsplit('```', 1)[0].strip()
         proposed = json.loads(content)
         allowed = {str(row['code']): set(row['benefit_evidence']) for row in facts['lines']}
         findings = []
@@ -136,10 +153,12 @@ def investigate(result: dict) -> dict:
                 continue
             findings.append({'code': item['code'], 'finding': str(item.get('finding') or '')[:400],
                              'evidence_ids': citations, 'next_action': str(item.get('next_action') or '')[:240]})
+        if proposed.get('findings') and not findings:
+            raise ValueError('unsupported_research_evidence')
         return {'status': 'complete', 'fingerprint': fingerprint, 'model_id': MODEL_ID,
                 'findings': findings, 'calculation_authority': False}
     except Exception as exc:
         # Bedrock is advisory. Transport, quota, model-access and malformed JSON
         # leave the deterministic result intact and visible for staff review.
         return {'status': 'research_incomplete', 'fingerprint': fingerprint,
-                'findings': [], 'reason': type(exc).__name__}
+                'findings': [], 'reason': str(exc) if isinstance(exc, ValueError) else type(exc).__name__}

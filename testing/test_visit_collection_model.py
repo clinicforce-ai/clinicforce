@@ -28,6 +28,39 @@ def test_office_copay_only():
     assert result['service_groups'][0]['deductible_applies'] is False
 
 
+def test_missing_coinsurance_does_not_silently_make_a_copay_exclusive():
+    value = case(diagnostic=None)
+    value['price_range']['lines'][0]['benefits']['coinsurance_percent'] = None
+    modeled = visit_collection_model.build(value)
+    assert modeled['estimated_patient_responsibility_cents'] is None
+    assert modeled['collect_now_cents'] is None
+    assert 'Confirm the cost-sharing interaction for specialist_office.' in modeled['remaining_actions']
+    assert modeled['estimated_low_cents'] == 0
+    assert modeled['estimated_high_cents'] == 20000
+    assert modeled['estimate_assumptions']
+
+
+def test_explicit_copay_only_requires_selected_source_evidence():
+    value = case(diagnostic=None)
+    terms = value['price_range']['lines'][0]['benefits']
+    terms.update(coinsurance_percent=None, interaction_rule='COPAY_ONLY',
+                 interaction_evidence_id='unselected-row')
+    assert visit_collection_model.build(value)['estimated_patient_responsibility_cents'] is None
+    terms['interaction_evidence_id'] = 'specialist-office'
+    assert visit_collection_model.build(value)['estimated_patient_responsibility_cents'] == 4000
+
+
+def test_conditional_range_keeps_independently_resolved_office_copay():
+    value = case(diagnostic='deductible')
+    for line in value['price_range']['lines'][1:]:
+        line['benefits']['coinsurance_percent'] = None
+    modeled = visit_collection_model.build(value)
+    assert modeled['estimated_patient_responsibility_cents'] is None
+    assert modeled['estimated_low_cents'] == 0
+    assert modeled['estimated_high_cents'] == 32347  # $40 office + $283.47 diagnostic reference
+    assert modeled['collect_now_cents'] is None
+
+
 def test_copay_is_capped_by_supported_exact_price():
     value = case(diagnostic=None)
     line = value['price_range']['lines'][0]
@@ -221,6 +254,16 @@ def test_provider_scope_change_invalidates_reference():
     assert {task['code'] for task in modeled['price_acquisition']} == {'99204', '95908', '95886'}
 
 
+def test_missing_provider_scope_cannot_use_a_scoped_benchmark_rate():
+    value = case(diagnostic='deductible')
+    value['pricing_scope'].pop('rendering_npi')
+    modeled = visit_collection_model.build(value)
+    assert modeled['estimated_patient_responsibility_cents'] is None
+    assert modeled['collect_now_cents'] is None
+    assert not any(fact['field'] == 'reference_unit_price_cents'
+                   for fact in canonical_evidence.build(value)['facts'])
+
+
 def test_unapproved_aetna_portal_reference_is_not_mislabeled_as_bcbstx():
     value = case(diagnostic='deductible')
     for row in value['temporary_rate_reference']['lines']:
@@ -382,8 +425,8 @@ def test_sonnet_finding_is_cited_and_cannot_change_money(monkeypatch):
         def converse(self, **request):
             calls.append(request)
             return {'output': {'message': {'content': [{'text':
-                '{"findings":[{"code":"99204","finding":"Verify copay scope",'
-                '"evidence_ids":["specialist-office"],"next_action":"Check plan terms"}]}'}]}}}
+                '```json\n{"findings":[{"code":"99204","finding":"Verify copay scope",'
+                '"evidence_ids":["specialist-office"],"next_action":"Check plan terms"}]}\n```'}]}}}
 
     monkeypatch.setattr(insurance_research_agent.boto3, 'client', lambda *args, **kwargs: FakeBedrock())
     finding = insurance_research_agent.investigate(value)
@@ -394,6 +437,23 @@ def test_sonnet_finding_is_cited_and_cannot_change_money(monkeypatch):
     assert insurance_research_agent.investigate(value) == finding
     assert len(calls) == 1
     assert visit_collection_model.build(value)['collect_now_cents'] is None
+
+
+def test_sonnet_cpt_code_is_not_accepted_as_benefit_citation(monkeypatch):
+    value = case(diagnostic=None, approved=False)
+    value['price_range']['lines'][0]['benefits']['review_reasons'] = ['Copay interaction unclear']
+
+    class FakeBedrock:
+        def converse(self, **_request):
+            return {'output': {'message': {'content': [{'text':
+                '{"findings":[{"code":"99204","finding":"Collect office copay",'
+                '"evidence_ids":["99204"],"next_action":"None"}]}'}]}}}
+
+    monkeypatch.setattr(insurance_research_agent.boto3, 'client', lambda *args, **kwargs: FakeBedrock())
+    research = insurance_research_agent.investigate(value)
+    assert research['status'] == 'research_incomplete'
+    assert research['reason'] == 'unsupported_research_evidence'
+    assert research['findings'] == []
 
 
 def test_sonnet_tool_reads_only_selected_saved_fact(monkeypatch):

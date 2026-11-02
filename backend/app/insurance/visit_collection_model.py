@@ -8,6 +8,7 @@ from app.insurance.identity import patient_benefits_bound
 from app.insurance.network_participation import verified_in_network, verified_out_of_network
 from app.insurance.collection.requirements import requirement_blocker
 from app.insurance import canonical_evidence
+from app.insurance.reference_price import select_reference as _reference_for
 
 RULE_VERSION = 'visit-collection-1'
 
@@ -33,29 +34,11 @@ def _percent(value: object) -> Decimal | None:
     return number if number.is_finite() and 0 <= number <= 100 else None
 
 
-def _reference_for(line: dict, references: list[dict], service_date: str | None = None,
-                   scope: dict | None = None) -> dict | None:
-    scope = scope or {}
-    matching = [row for row in references if row.get('id') == line.get('id')
-                and row.get('code') == line.get('code')
-                and row.get('units') == line.get('units')
-                and (row.get('modifiers') or []) == (line.get('modifiers') or [])
-                and row.get('reference_basis') == 'BCBSTX_CROSS_PAYER_REFERENCE'
-                and row.get('rate_version')
-                and (not service_date or not row.get('effective_from') or row['effective_from'] <= service_date)
-                and (not service_date or not row.get('effective_to') or row['effective_to'] >= service_date)
-                and all(not scope.get(key) or row.get(key) == scope[key]
-                        for key in ('place_of_service', 'rendering_npi', 'billing_npi', 'location_id'))
-                and str(row.get('source_reference') or '').startswith('library:')
-                and type(row.get('unit_reference_cents')) is int and row['unit_reference_cents'] >= 0]
-    return matching[0] if len(matching) == 1 else None
-
-
 def _interaction(terms: dict) -> str:
     explicit = terms.get('interaction_rule')
-    if explicit in {'COPAY_ONLY', 'DEDUCTIBLE_PLUS_COINSURANCE', 'NO_PATIENT_COST_SHARE'}:
+    if explicit in {'DEDUCTIBLE_PLUS_COINSURANCE', 'NO_PATIENT_COST_SHARE'}:
         return explicit
-    if (explicit in {'DEDUCTIBLE_THEN_COPAY', 'COPAY_PLUS_COINSURANCE',
+    if (explicit in {'COPAY_ONLY', 'DEDUCTIBLE_THEN_COPAY', 'COPAY_PLUS_COINSURANCE',
                      'COPAY_PLUS_DEDUCTIBLE_COINSURANCE'}
             and terms.get('interaction_evidence_id') in (terms.get('selected_benefit_ids') or [])):
         return explicit
@@ -64,7 +47,7 @@ def _interaction(terms: dict) -> str:
     deductible = terms.get('deductible_remaining_cents')
     if type(terms.get('oop_remaining_cents')) is int and terms['oop_remaining_cents'] == 0:
         return 'NO_PATIENT_COST_SHARE'
-    if type(copay) is int and copay >= 0 and coinsurance in {None, Decimal(0)}:
+    if type(copay) is int and copay >= 0 and coinsurance == Decimal(0):
         if terms.get('deductible_applies') is False or deductible == 0:
             return 'COPAY_ONLY'
     if copay is None and coinsurance is not None and type(deductible) is int and deductible >= 0:
@@ -262,8 +245,6 @@ def build(result: dict, review: dict | None = None) -> dict:
         oop_pairs.update(oop_values)
         group_result['estimated_patient_share_cents'] = patient
         total += patient
-    if any(group['estimated_patient_share_cents'] is None for group in output['service_groups']):
-        return output
     output['reference_schedule_versions'] = sorted({str(item['rate_version']) for group in output['service_groups']
         for item in group['price_lines'] if item['pricing_basis'] == 'BCBSTX_CROSS_PAYER_REFERENCE'
         and item['rate_version']})
@@ -272,6 +253,26 @@ def build(result: dict, review: dict | None = None) -> dict:
         output['selected_price_total_cents'] = sum(item['extended_cents'] for item in priced)
         if all(item['pricing_basis'] == 'BCBSTX_CROSS_PAYER_REFERENCE' for item in priced):
             output['reference_total_cents'] = output['selected_price_total_cents']
+    if any(group['estimated_patient_share_cents'] is None for group in output['service_groups']):
+        if (output['selected_price_total_cents'] is not None
+                and all((line.get('benefits') or {}).get('active') is True
+                        and (line.get('benefits') or {}).get('selected_benefit_ids')
+                        and not (line.get('benefits') or {}).get('source_errors') for line in lines)
+                and (verified_in_network(benefits) or verified_out_of_network(benefits))):
+            upper = sum(group['estimated_patient_share_cents'] if type(group['estimated_patient_share_cents']) is int
+                        else sum(row['extended_cents'] for row in group['price_lines'])
+                        for group in output['service_groups'])
+            oop_values = {((line.get('benefits') or {}).get('oop_id'),
+                           (line.get('benefits') or {}).get('oop_remaining_cents')) for line in lines}
+            if len(oop_values) == 1:
+                _, oop_remaining = next(iter(oop_values))
+                if type(oop_remaining) is int and oop_remaining >= 0:
+                    upper = min(upper, oop_remaining)
+            output.update(estimated_low_cents=0, estimated_high_cents=upper,
+                          estimate_assumptions=[
+                              'Conditional planning range uses selected covered-service prices; '
+                              'payer allowance and benefit interaction still require verification.'])
+        return output
     oop_verified = False
     if len(oop_pairs) == 1:
         _, oop = next(iter(oop_pairs))

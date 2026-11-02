@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from app.insurance.identity import patient_benefits_bound
+from app.insurance.reference_price import select_reference
 
 RULE_VERSION = 'evidence-facts-1'
 FINANCIAL_FIELDS = ('copay_cents', 'copay_period', 'deductible_applies',
@@ -71,22 +72,12 @@ def build(result: dict, review: dict | None = None) -> dict:
                 line.get('rate_source'), service_scope, 'verified', 'exact_rate_match',
                 effective=line.get('rate_effective_from'), configuration_version=line.get('rate_version'))
         else:
-            reference = [row for row in (result.get('temporary_rate_reference') or {}).get('lines') or []
-                         if row.get('id') == line.get('id') and row.get('code') == line.get('code')
-                         and row.get('units') == line.get('units')
-                         and (row.get('modifiers') or []) == (line.get('modifiers') or [])
-                         and (not service_date or not row.get('effective_from') or row['effective_from'] <= service_date)
-                         and (not service_date or not row.get('effective_to') or row['effective_to'] >= service_date)
-                         and all(not (result.get('pricing_scope') or {}).get(key)
-                                 or row.get(key) == (result.get('pricing_scope') or {})[key]
-                                 for key in ('place_of_service', 'rendering_npi', 'billing_npi', 'location_id'))
-                         and (not (line.get('place_of_service') or result.get('place_of_service'))
-                              or row.get('place_of_service') == (line.get('place_of_service') or result.get('place_of_service')))]
-            if len(reference) == 1 and reference[0].get('rate_version'):
-                row = reference[0]
+            row = select_reference(line, (result.get('temporary_rate_reference') or {}).get('lines') or [],
+                                   service_date, pricing_scope)
+            if row:
                 add('reference_unit_price_cents', row.get('unit_reference_cents'),
                     'BCBSTX_reference', row.get('source_reference'), service_scope,
-                    'verified' if str(row.get('source_reference') or '').startswith('library:') else 'assumed',
+                    'verified',
                     'approved_reference_rate_match', configuration_version=row.get('rate_version'))
         resolutions.append({'field': 'benefits', 'line_id': line.get('id'),
                             'status': 'conflicting' if conflicts else 'resolved' if refs else 'unavailable',

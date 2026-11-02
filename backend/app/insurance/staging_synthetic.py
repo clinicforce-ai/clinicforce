@@ -5,6 +5,16 @@ from copy import deepcopy
 import os
 
 STAGING_NMCT_PRACTICE_ID = '66eadd87-37e3-43c8-b34a-9012a53de4d3'
+FIXTURE_PRICING_SCOPE = {'place_of_service': '11', 'rendering_npi': 'synthetic-rendering',
+                         'billing_npi': 'synthetic-billing', 'location_id': 'synthetic-office'}
+
+
+def _scoped_fixture_result(result: dict) -> dict:
+    # Older fake cases predate the full scope; complete only marked staging facts.
+    result['pricing_scope'] = FIXTURE_PRICING_SCOPE.copy()
+    for row in (result.get('temporary_rate_reference') or {}).get('lines') or []:
+        row.update(FIXTURE_PRICING_SCOPE)
+    return result
 
 
 def is_fixture(case: dict, practice_id: str | None) -> bool:
@@ -17,6 +27,7 @@ def project_saved(case: dict, result: dict) -> dict:
     """Recalculate marked fake facts without a live payer or Library refresh."""
     from app.insurance import amount_explanation, canonical_evidence, collection_guidance, encounter_summary
 
+    _scoped_fixture_result(result)
     result['revision'] = case.get('revision', 0)
     result['canonical_evidence'] = canonical_evidence.build(result, case.get('visit_review'))
     result['collection_guidance'] = collection_guidance.build(result, case.get('visit_review'))
@@ -56,6 +67,7 @@ def case(*, office=4000, diagnostic='copay', oop=100000, approved=True):
                                'unit_reference_cents': cents, 'source_reference': 'library:synthetic',
                                'reference_basis': 'BCBSTX_CROSS_PAYER_REFERENCE', 'rate_version': 'reference-v1',
                                'place_of_service': '11'})
+    references = [{**row, **FIXTURE_PRICING_SCOPE} for row in references]
     policy = ({'mode': 'collect_visit_model', 'version': 1, 'id': 'synthetic-policy',
                'approved_by': 'synthetic-admin', 'approved_at': '2026-10-01',
                'reference': 'synthetic approval', 'allow_benchmark_advance': True,
@@ -66,6 +78,7 @@ def case(*, office=4000, diagnostic='copay', oop=100000, approved=True):
               if approved else {})
     return {'payment_mode': 'insurance', 'price_range': {'mode': 'services', 'lines': lines},
             'temporary_rate_reference': {'lines': references},
+            'pricing_scope': FIXTURE_PRICING_SCOPE.copy(),
             'benefits': {'active': True, 'network_status': 'in_network',
                          'network_source': 'clinic_library_contract',
                          'identity': {'status': 'matched', 'binding': 'synthetic', 'match_version': 2}},
@@ -97,8 +110,7 @@ def visit(name: str) -> dict:
     value['payer'] = ('Cigna Synthetic' if name == 'cigna_reference_no_policy' else
                       'Aetna Synthetic' if name == 'aetna_draft_route' else 'BCBSTX Synthetic')
     value['fixture_scenario'] = name
-    for reference in value['temporary_rate_reference']['lines']:
-        reference['location_id'] = 'synthetic-office'
+    _scoped_fixture_result(value)
     if name == 'specialist_271_conflict':
         office = value['price_range']['lines'][0]['benefits']
         office.update(copay_cents=8000, oop_remaining_cents=None,
