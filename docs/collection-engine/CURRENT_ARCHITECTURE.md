@@ -7,7 +7,9 @@ flowchart LR
   eCW[eCW appointment, Coverage, saved eligibility] --> Route[FastAPI commercial previsit]
   Stedi[Saved Stedi 271 / CPT evidence] --> S3[Protected S3 payer objects]
   S3 --> Route
-  Bedrock[Bedrock CPT proposal and Sonnet 5 advisory] --> Route
+  Bedrock[Bedrock CPT proposal and bounded Sonnet 5 typed reads] --> Route
+  Route --> Facts[Canonical selected evidence facts]
+  Facts --> Visit
   Route --> Price[Exact or BCBSTX reference price]
   Route --> Benefits[Service-level benefit selection]
   Price --> Visit[Deterministic visit model]
@@ -29,7 +31,7 @@ flowchart LR
 | CPT proposal and editing | `cpt_suggester.py`, `ServicePlanner.tsx` | Existing Bedrock suggestion and clinician edit path retained. A selected procedure remains a planning service until confirmed. |
 | Rate lookup | `commercial_store.matching_rates`, `commercial_previsit_rate_reference.py` | BCBSTX scoped active rates can be a cross-payer reference independent of the target connection. |
 | Existing arithmetic | `pricing/visit.py`, `visit_estimate.py`, `collection/office_copay.py` | Legacy behavior remains behind the default-off flag; `visit_collection_model.py` computes one selected visit when enabled. |
-| Policy and saving | `commercial_store.py`, `collection_guidance.py`, `commercial_previsit_status.py` | Multiple exact-scope approved policy versions and saved/reloaded `visit_model`; no synthetic fixture grants real approval. |
+| Policy and saving | `commercial_store.py`, `canonical_evidence.py`, `collection_guidance.py`, `commercial_previsit_status.py` | Source-scoped selected facts, multiple exact-scope approved policy versions and saved/reloaded `visit_model`; no synthetic fixture grants real approval. |
 | Staff amount | `collectionAtVisitRow.ts`, `ArrivalAmountSummary.tsx` | If a visit model exists, both show backend `collect_now_cents`; planning stays separate. |
 
 The first milestone does not remove historical payer branches. Their behavior and replacement criteria are tracked in `WORKAROUND_REMOVAL_PLAN.md`.

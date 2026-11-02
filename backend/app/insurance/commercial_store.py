@@ -167,7 +167,9 @@ def set_collection_policy(practice_id: str, connection_id: str, mode: str,
                           product_binding: str | None = None, network_tier: str | None = None,
                           service_groups: list[str] | None = None, effective_from: str | None = None,
                           effective_to: str | None = None, allow_benchmark_advance: bool = False,
-                          max_cents: int | None = None) -> dict:
+                          max_cents: int | None = None, advance_percent: float | None = None,
+                          fixed_cents: int | None = None, excluded_cpts: list[str] | None = None,
+                          disclosure: str | None = None, allow_unknown_oop: bool = False) -> dict:
     """Set a practice-scoped payer policy with an administrator and source reference."""
     if mode not in {'defer_to_claim', 'collect_verified_copay', 'collect_supported_advance', 'collect_visit_model', 'disabled'} or not reference.strip() or not actor_id:
         raise CommercialError('A collection policy mode, approval reference and administrator are required.')
@@ -181,6 +183,13 @@ def set_collection_policy(practice_id: str, connection_id: str, mode: str,
                 or not effective_from or not effective_to
                 or type(max_cents) is not int or max_cents < 0):
             raise CommercialError('A visit policy needs exact product, network, service groups, dates and a maximum advance.')
+        if (advance_percent is not None and fixed_cents is not None
+                or not disclosure or not disclosure.strip()
+                or isinstance(advance_percent, bool)
+                or advance_percent is not None and not 0 <= advance_percent <= 100
+                or fixed_cents is not None and (type(fixed_cents) is not int or fixed_cents < 0)
+                or any(not str(code).isalnum() or len(str(code)) > 8 for code in excluded_cpts or [])):
+            raise CommercialError('Choose one valid advance formula and CPT exclusions.')
         try:
             if date.fromisoformat(effective_from) > date.fromisoformat(effective_to):
                 raise ValueError
@@ -204,7 +213,9 @@ def set_collection_policy(practice_id: str, connection_id: str, mode: str,
                 'product_binding': product_binding.strip(), 'network_tier': network_tier,
                 'service_groups': sorted(groups), 'effective_from': effective_from,
                 'effective_to': effective_to, 'allow_benchmark_advance': allow_benchmark_advance,
-                'max_cents': max_cents}
+                'max_cents': max_cents, 'advance_percent': advance_percent,
+                'fixed_cents': fixed_cents, 'excluded_cpts': sorted(set(excluded_cpts or [])),
+                'disclosure': disclosure, 'allow_unknown_oop': allow_unknown_oop}
             db.execute('''INSERT INTO commercial_collection_policy_versions
                 (id,practice_id,payer_connection_id,version,status,policy_json,approved_by,approved_at)
                 VALUES (%s,%s,%s,%s,'approved',%s,%s,%s)''',

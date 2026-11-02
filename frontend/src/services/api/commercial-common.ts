@@ -88,6 +88,14 @@ export type CollectionGuidance = {
     estimated_high_cents: number | null
     pricing_basis: string | null
     reference_schedule_versions: string[]
+    reference_total_cents?: number | null
+    selected_price_total_cents?: number | null
+    collection_disclosure?: string | null
+    price_acquisition?: Array<{
+      code: string
+      modifiers: string[]
+      place_of_service?: string | null
+    }>
     cpt_source?: string | null
     remaining_actions: string[]
     service_groups: Array<{
@@ -96,6 +104,8 @@ export type CollectionGuidance = {
       interaction_rule: string
       estimated_patient_share_cents: number | null
       benefit_evidence: string[]
+      copay_frequency?: string | null
+      deductible_applies?: boolean | null
       price_lines: Array<{
         code: string
         units: number
@@ -105,6 +115,7 @@ export type CollectionGuidance = {
         rate_version: string | null
       }>
       deductible_cents?: number
+      copay_cents?: number
       coinsurance_cents?: number
       coinsurance_percent?: string
     }>

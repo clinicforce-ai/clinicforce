@@ -72,7 +72,8 @@ def test_visit_policy_requires_exact_scope_and_writes_approved_version():
             'Synthetic clinic approval', 'administrator', product_binding='synthetic-product',
             network_tier='in_network', service_groups=['specialist_office', 'emg_ncs'],
             effective_from='2026-01-01', effective_to='2026-12-31',
-            allow_benchmark_advance=True, max_cents=20000)
+            allow_benchmark_advance=True, max_cents=20000,
+            disclosure='Synthetic check-in estimate.')
     calls = db.execute.call_args_list
     assert 'commercial_collection_policy_versions' in calls[2].args[0]
     assert calls[2].args[1][3] == 1
@@ -105,7 +106,8 @@ def test_visit_policies_persist_as_separate_scoped_versions():
                     'Synthetic test approval', 'test-admin', product_binding='synthetic-product',
                     network_tier='in_network', service_groups=groups,
                     effective_from='2026-01-01', effective_to='2026-12-31',
-                    allow_benchmark_advance=True, max_cents=20000)
+                    allow_benchmark_advance=True, max_cents=20000,
+                    disclosure='Synthetic check-in estimate.')
             stored = commercial_store.connection('clinic', payer['id'])['rules']
             assert len(stored['visit_collection_policies']) == 2
             with commercial_store._connection() as db:

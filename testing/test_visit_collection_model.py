@@ -9,7 +9,7 @@ import pytest
 from psycopg import sql
 from psycopg.conninfo import make_conninfo
 
-from app.insurance import collection_guidance, commercial, encounter_summary, insurance_research_agent, visit_collection_model
+from app.insurance import canonical_evidence, collection_guidance, commercial, encounter_summary, insurance_research_agent, visit_collection_model
 from app.insurance import store
 from app.core import patient_store, staff_store
 from testing.test_cigna_office_estimate import example as synthetic_eligibility
@@ -24,7 +24,8 @@ def case(*, office=4000, diagnostic='copay', oop=100000, approved=True):
               'benefits': benefit, 'rate_resolution': {'status': 'RATE_UNAVAILABLE'}}]
     references = [{'id': 'office', 'code': '99204', 'units': 1, 'modifiers': [],
                    'unit_reference_cents': 20000, 'source_reference': 'library:synthetic',
-                   'reference_basis': 'BCBSTX_CROSS_PAYER_REFERENCE', 'rate_version': 'reference-v1'}]
+                   'reference_basis': 'BCBSTX_CROSS_PAYER_REFERENCE', 'rate_version': 'reference-v1',
+                   'place_of_service': '11'}]
     if diagnostic:
         for index, (code, units, cents) in enumerate([('95908', 1, 10511), ('95886', 2, 8918)]):
             terms = ({'active': True, 'copay_cents': 7500, 'copay_period': 'DAY',
@@ -41,14 +42,15 @@ def case(*, office=4000, diagnostic='copay', oop=100000, approved=True):
                           'benefits': terms, 'rate_resolution': {'status': 'RATE_UNAVAILABLE'}})
             references.append({'id': line_id, 'code': code, 'units': units, 'modifiers': [],
                                'unit_reference_cents': cents, 'source_reference': 'library:synthetic',
-                               'reference_basis': 'BCBSTX_CROSS_PAYER_REFERENCE', 'rate_version': 'reference-v1'})
+                               'reference_basis': 'BCBSTX_CROSS_PAYER_REFERENCE', 'rate_version': 'reference-v1',
+                               'place_of_service': '11'})
     policy = ({'mode': 'collect_visit_model', 'version': 1, 'id': 'synthetic-policy',
                'approved_by': 'synthetic-admin', 'approved_at': '2026-10-01',
                'reference': 'synthetic approval', 'allow_benchmark_advance': True,
                'product_binding': 'synthetic-product', 'network_tier': 'in_network',
                'service_groups': ['specialist_office', *(['emg_ncs'] if diagnostic else [])],
                'effective_from': '2026-01-01', 'effective_to': '2026-12-31',
-               'max_cents': 100000}
+               'max_cents': 100000, 'disclosure': 'Synthetic estimate for check-in.'}
               if approved else {})
     return {'payment_mode': 'insurance', 'price_range': {'mode': 'services', 'lines': lines},
             'temporary_rate_reference': {'lines': references},
@@ -57,6 +59,8 @@ def case(*, office=4000, diagnostic='copay', oop=100000, approved=True):
                          'identity': {'status': 'matched', 'binding': 'synthetic', 'match_version': 2}},
             'collection_policy': policy, 'service_selection_status': 'approved',
             'payer_product_binding': 'synthetic-product', 'service_date': '2026-10-01',
+            'place_of_service': '11',
+            'visit_review': {'payments': {'amount_cents': 0, 'reference': 'synthetic-ledger-check'}},
             'arrival_collection': {'payments_received_cents': 0}}
 
 
@@ -65,6 +69,9 @@ def test_office_copay_only():
     assert result['estimated_patient_responsibility_cents'] == 4000
     assert result['collect_now_cents'] == 4000
     assert result['service_groups'][0]['interaction_rule'] == 'COPAY_ONLY'
+    assert result['service_groups'][0]['copay_cents'] == 4000
+    assert result['service_groups'][0]['copay_frequency'] == 'VISIT'
+    assert result['service_groups'][0]['deductible_applies'] is False
 
 
 def test_copay_is_capped_by_supported_exact_price():
@@ -82,6 +89,7 @@ def test_office_plus_one_diagnostic_day_copay_for_two_cpts():
     assert result['estimated_patient_responsibility_cents'] == 11500
     assert result['collect_now_cents'] == 11500
     assert result['service_groups'][1]['estimated_patient_share_cents'] == 7500
+    assert result['service_groups'][1]['copay_cents'] == 7500
 
 
 def test_one_route_can_select_distinct_office_and_combined_visit_policies():
@@ -113,6 +121,37 @@ def test_office_plus_shared_deductible_and_coinsurance():
     assert result['estimated_low_cents'] == result['estimated_high_cents'] == 17669
 
 
+@pytest.mark.parametrize(('pattern', 'extras', 'expected'), [
+    ('DEDUCTIBLE_THEN_COPAY', {'copay_cents': 7500, 'copay_period': 'DAY',
+        'copay_after_deductible': True, 'coinsurance_percent': None}, 21500),
+    ('COPAY_PLUS_COINSURANCE', {'copay_cents': 7500, 'copay_period': 'DAY',
+        'deductible_remaining_cents': None, 'coinsurance_percent': '20',
+        'coinsurance_base': 'AFTER_COPAY'}, 15669),
+    ('COPAY_PLUS_DEDUCTIBLE_COINSURANCE', {'copay_cents': 7500,
+        'copay_period': 'DAY', 'copay_component_price_cents': 10000,
+        'coinsurance_percent': '20'}, 23169),
+])
+def test_explicit_source_backed_combined_interactions(pattern, extras, expected):
+    value = case(diagnostic='deductible')
+    for line in value['price_range']['lines'][1:]:
+        line['benefits'].update(extras, interaction_rule=pattern,
+            interaction_evidence_id='diagnostic-share')
+    modeled = visit_collection_model.build(value)
+    assert modeled['estimated_patient_responsibility_cents'] == expected
+    assert modeled['collect_now_cents'] == expected
+    assert modeled['service_groups'][1]['interaction_rule'] == pattern
+
+
+def test_combined_interaction_without_selected_source_stays_unresolved():
+    value = case(diagnostic='deductible')
+    for line in value['price_range']['lines'][1:]:
+        line['benefits'].update(interaction_rule='COPAY_PLUS_COINSURANCE',
+            copay_cents=7500, copay_period='DAY', coinsurance_base='FULL_PRICE')
+    modeled = visit_collection_model.build(value)
+    assert modeled['estimated_patient_responsibility_cents'] is None
+    assert modeled['collect_now_cents'] is None
+
+
 def test_verified_oop_caps_visit_but_unverified_note_does_not():
     result = visit_collection_model.build(case(oop=2500))
     assert result['estimated_patient_responsibility_cents'] == 2500
@@ -124,11 +163,62 @@ def test_verified_oop_caps_visit_but_unverified_note_does_not():
     assert visit_collection_model.build(without_remaining)['estimated_patient_responsibility_cents'] == 11500
 
 
+def test_unknown_oop_requires_exact_policy_opt_in_for_positive_collection():
+    value = case()
+    for line in value['price_range']['lines']:
+        line['benefits']['oop_remaining_cents'] = None
+    assert visit_collection_model.build(value)['collect_now_cents'] is None
+    value['collection_policy']['allow_unknown_oop'] = True
+    assert visit_collection_model.build(value)['collect_now_cents'] == 11500
+
+
+def test_verified_applicable_family_oop_zero_caps_once():
+    value = case()
+    for line in value['price_range']['lines']:
+        line['benefits']['oop_remaining_cents'] = None
+    value['benefits'].update(family_oop_zero_applies=True, family_oop_remaining_cents=0)
+    modeled = visit_collection_model.build(value)
+    assert modeled['estimated_patient_responsibility_cents'] == 0
+    assert modeled['collect_now_cents'] == 0
+    assert modeled['collection_decision_type'] == 'DOCUMENTED_ZERO'
+
+
 def test_planning_amount_is_not_permission_to_collect():
     result = visit_collection_model.build(case(diagnostic='deductible', approved=False))
     assert result['estimated_patient_responsibility_cents'] == 17669
     assert result['collect_now_cents'] is None
     assert result['collection_decision_type'] == 'POLICY_APPROVAL_REQUIRED'
+
+
+def test_policy_percentage_and_exclusion_are_applied_after_modeling():
+    value = case(diagnostic='deductible')
+    value['collection_policy']['advance_percent'] = 50
+    value['collection_policy']['max_cents'] = 9000
+    modeled = visit_collection_model.build(value)
+    assert modeled['estimated_patient_responsibility_cents'] == 17669
+    assert modeled['collect_now_cents'] == 8835
+    value['collection_policy']['excluded_cpts'] = ['95908']
+    excluded = visit_collection_model.build(value)
+    assert excluded['collect_now_cents'] is None
+    assert excluded['collection_decision_type'] == 'POLICY_EXCLUSION'
+
+
+def test_policy_requires_disclosure_and_verified_payment_reference():
+    value = case(diagnostic=None)
+    value['collection_policy'].pop('disclosure')
+    assert visit_collection_model.build(value)['collect_now_cents'] is None
+    value['collection_policy']['disclosure'] = 'Synthetic estimate for check-in.'
+    value['visit_review']['payments'].pop('reference')
+    assert visit_collection_model.build(value)['collect_now_cents'] is None
+
+
+def test_verified_protection_is_zero_collection_not_zero_modeled_share():
+    value = case(diagnostic=None)
+    value['billing_protection'] = {'status': 'qmb'}
+    modeled = visit_collection_model.build(value)
+    assert modeled['estimated_patient_responsibility_cents'] == 4000
+    assert modeled['collect_now_cents'] == 0
+    assert modeled['collection_decision_type'] == 'PROHIBITED_COLLECTION'
 
 
 def test_verified_oop_exhaustion_is_documented_zero_without_advance_policy():
@@ -146,6 +236,37 @@ def test_missing_reference_cpt_never_invents_price():
     assert result['collect_now_cents'] is None
 
 
+def test_reference_scope_and_price_acquisition_remain_visible_during_benefit_conflict():
+    value = case(diagnostic='deductible')
+    value['temporary_rate_reference']['lines'][-1]['place_of_service'] = '02'
+    value['price_range']['lines'][-1]['benefits']['source_errors'] = [{'kind': 'conflict'}]
+    modeled = visit_collection_model.build(value)
+    assert modeled['estimated_patient_responsibility_cents'] is None
+    assert modeled['price_acquisition'] == [{
+        'code': '95886', 'modifiers': [], 'place_of_service': '11',
+        'effective_date': '2026-10-01', 'price_source': 'NMCT_BCBSTX_REFERENCE',
+        'action': 'Acquire and approve a scoped BCBSTX CPT rate in the Clinical Library.'}]
+    assert modeled['service_groups'][1]['price_lines'][-1]['extended_cents'] is None
+
+
+def test_expired_reference_version_is_not_used_for_new_service_date():
+    value = case(diagnostic='deductible')
+    value['temporary_rate_reference']['lines'][-1]['effective_to'] = '2026-09-30'
+    modeled = visit_collection_model.build(value)
+    assert modeled['estimated_patient_responsibility_cents'] is None
+    assert modeled['price_acquisition'][0]['code'] == '95886'
+
+
+def test_provider_scope_change_invalidates_reference():
+    value = case(diagnostic='deductible')
+    value['pricing_scope'] = {'place_of_service': '11', 'rendering_npi': 'synthetic-new-provider'}
+    for row in value['temporary_rate_reference']['lines']:
+        row['rendering_npi'] = 'synthetic-original-provider'
+    modeled = visit_collection_model.build(value)
+    assert modeled['estimated_patient_responsibility_cents'] is None
+    assert {task['code'] for task in modeled['price_acquisition']} == {'99204', '95908', '95886'}
+
+
 def test_unapproved_aetna_portal_reference_is_not_mislabeled_as_bcbstx():
     value = case(diagnostic='deductible')
     for row in value['temporary_rate_reference']['lines']:
@@ -161,6 +282,35 @@ def test_identity_conflict_cannot_authorize_positive():
     result = visit_collection_model.build(value)
     assert result['estimated_patient_responsibility_cents'] is None
     assert result['collect_now_cents'] is None
+
+
+def test_identity_conflict_still_identifies_independent_reference_gap():
+    value = case(diagnostic='deductible')
+    value['benefits']['identity']['status'] = 'review'
+    value['temporary_rate_reference']['lines'].pop()
+    modeled = visit_collection_model.build(value)
+    assert modeled['estimated_patient_responsibility_cents'] is None
+    assert modeled['collect_now_cents'] is None
+    assert [task['code'] for task in modeled['price_acquisition']] == ['95886']
+
+
+def test_canonical_evidence_preserves_conflict_and_selected_source_without_patient_identity():
+    value = case(diagnostic=None)
+    value['benefit_source'] = 'Stedi'
+    value['patient_name'] = 'Sensitive Example'
+    value['benefits']['identity']['status'] = 'review'
+    line = value['price_range']['lines'][0]
+    line['benefits']['source_errors'] = [{'kind': 'conflicting_copay'}]
+    facts = canonical_evidence.build(value, {'payments': {'amount_cents': 0,
+        'reference': 'synthetic-payment-check'}})
+    assert next(row for row in facts['resolutions'] if row['field'] == 'patient_policy_binding')['status'] == 'conflicting'
+    assert next(row for row in facts['resolutions'] if row['field'] == 'benefits')['status'] == 'conflicting'
+    copay = next(row for row in facts['facts'] if row['field'] == 'copay_cents')
+    assert copay['value'] == 4000
+    assert copay['verification_state'] == 'conflicting'
+    assert copay['scope']['cpt'] == '99204'
+    assert 'Sensitive Example' not in json.dumps(facts)
+    assert next(row for row in facts['facts'] if row['field'] == 'visit_payments_cents')['value'] == 0
 
 
 def test_unconfirmed_procedure_stays_planning_only():
@@ -290,6 +440,33 @@ def test_sonnet_finding_is_cited_and_cannot_change_money(monkeypatch):
     assert insurance_research_agent.investigate(value) == finding
     assert len(calls) == 1
     assert visit_collection_model.build(value)['collect_now_cents'] is None
+
+
+def test_sonnet_tool_reads_only_selected_saved_fact(monkeypatch):
+    value = case(diagnostic=None, approved=False)
+    value['price_range']['lines'][0]['benefits']['review_reasons'] = ['Copay interaction unclear']
+    value['patient_name'] = 'Sensitive Example'
+    calls = []
+
+    class FakeBedrock:
+        def converse(self, **request):
+            calls.append(request)
+            if len(calls) == 1:
+                return {'output': {'message': {'role': 'assistant', 'content': [
+                    {'toolUse': {'toolUseId': 'synthetic-use', 'name': 'read_selected_benefit',
+                                 'input': {'code': '99204'}}}]}}}
+            return {'output': {'message': {'role': 'assistant', 'content': [{'text':
+                '{"findings":[{"code":"99204","finding":"Verify office scope",'
+                '"evidence_ids":["specialist-office"],"next_action":"Check plan"}]}' }]}}}
+
+    monkeypatch.setattr(insurance_research_agent.boto3, 'client', lambda *args, **kwargs: FakeBedrock())
+    research = insurance_research_agent.investigate(value)
+    assert research['status'] == 'complete'
+    assert len(calls) == 2
+    tool_content = calls[1]['messages'][2]['content'][0]['toolResult']['content'][0]['json']
+    assert tool_content['finding']['copay_cents'] == 4000
+    assert 'Sensitive Example' not in json.dumps(calls)
+    assert research['calculation_authority'] is False
 
 
 @pytest.mark.skipif(not os.getenv('STAFF_TEST_DATABASE_URL'), reason='Requires disposable PostgreSQL')

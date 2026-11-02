@@ -214,11 +214,18 @@ export default function ClinicLibrary({
                 <>
                   <ul>
                     {currentMissingRates.gaps.slice(0, 12).map((item) => (
-                      <li key={`${item.payer}:${item.code}:${item.kind}`}>
-                        <strong>CPT {item.code}</strong> · {item.payer} ·{' '}
+                      <li
+                        key={`${item.payer}:${item.code}:${item.kind}:${item.modifier || ''}:${item.place_of_service || ''}`}
+                      >
+                        <strong>CPT {item.code}</strong>
+                        {item.modifier ? ` modifier ${item.modifier}` : ''}
+                        {item.place_of_service ? ` POS ${item.place_of_service}` : ''} ·{' '}
+                        {item.payer} ·{' '}
                         {item.kind === 'insured_allowed'
                           ? 'Insured allowed rate'
-                          : 'Clinic cash price'}{' '}
+                          : item.kind === 'bcbstx_reference'
+                            ? 'BCBSTX reference rate'
+                            : 'Clinic cash price'}{' '}
                         unavailable in {item.estimate_count} saved{' '}
                         {item.estimate_count === 1 ? 'estimate' : 'estimates'}
                       </li>

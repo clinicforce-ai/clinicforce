@@ -6,8 +6,9 @@ import os
 from app.api.routers import commercial_estimator as _api
 from app.api.routers.commercial_flow.commercial_previsit_catalog import build_catalog
 from app.api.routers.commercial_flow.commercial_previsit_requirements import attach_requirements
+from app.api.routers.commercial_flow.commercial_previsit_rate_reference import attach_benchmark_for_visit, visit_pricing_scope
 from app.insurance.identity import patient_benefits_bound, patient_plan_applies
-from app.insurance import blue_cross_proxy, botox_review, evidence_resolution, insurance_research_agent, published_plan_benefits
+from app.insurance import blue_cross_proxy, botox_review, canonical_evidence, evidence_resolution, insurance_research_agent, published_plan_benefits
 
 def _visit_context_parts(inputs: dict, source: dict) -> dict:
     context = {'coverage': {k: v for k, v in _api._coverage_snapshot(inputs, source).items() if k != 'other_active_coverage'},
@@ -99,6 +100,7 @@ def _finish_previsit(result: dict, case: dict, inputs: dict, source: dict, paylo
     product_binding = _api.payer_allowance.product_binding(payer_plan)
     result['payer_product_binding'] = product_binding if payer_plan_bound else None
     result['service_date'] = inputs['service_date']
+    result['pricing_scope'] = visit_pricing_scope(inputs, source)
     result['billing_protection'] = protection if (payer_plan_bound
         and protection.get('identity_binding') == comparison.get('binding')
         and protection.get('product_binding') == product_binding
@@ -243,6 +245,9 @@ def _finish_previsit(result: dict, case: dict, inputs: dict, source: dict, paylo
     result.pop('pricing_assumptions', None)
     _api._attach_previsit_pricing(result, session['practice_id'], planning_inputs, exact_source, payer_id, result['benefits'], payload=payload,
                             review=review)
+    if os.getenv('COLLECTION_ENGINE_V2_ENABLED') == 'true':
+        attach_benchmark_for_visit(result, session['practice_id'], planning_inputs,
+                                   exact_source, str(result.get('payer') or (route_payer or {}).get('display_name') or ''))
     clinical_issues = botox_review.clinical_issues(
         result['codes'], review, botox_visit=botox_review.is_botox_visit(inputs),
         completed=str(source.get('appointment_status') or '').lower() in {'finished', 'completed'},
@@ -286,6 +291,8 @@ def _finish_previsit(result: dict, case: dict, inputs: dict, source: dict, paylo
         if isinstance(prior_research, dict):
             result['insurance_research'] = prior_research
         result['insurance_research'] = insurance_research_agent.investigate(result)
+    if os.getenv('COLLECTION_ENGINE_V2_ENABLED') == 'true':
+        result['canonical_evidence'] = canonical_evidence.build(result, review)
     result['collection_guidance'] = _api.collection_guidance.build(result, review)
     result.pop('botox_preview', None)
     if botox_review.is_botox_visit(inputs) and payload:

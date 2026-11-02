@@ -59,7 +59,9 @@ async def add_connection_aliases(connection_id: str, value: _api.ConnectionAlias
 @_api.router.put("/connections/{connection_id}/collection-policy")
 async def set_collection_policy(connection_id: str, value: _api.CollectionPolicyInput, request: _api.Request) -> dict:
     """Approve a payer-route collection rule; the visit model requires exact product,
-    network, service groups, dates, cap and separate BCBSTX benchmark opt-in.
+    network, service groups, dates, cap, disclosure and separate BCBSTX benchmark opt-in.
+    Optional fixed/percentage formulas, CPT exclusions and unknown-OOP permission
+    require explicit administrator approval; none has a default positive value.
     The approved rule is versioned; no benchmark advance is authorized by default.
     """
     session = await _api._session(request)
@@ -74,7 +76,9 @@ async def set_collection_policy(connection_id: str, value: _api.CollectionPolicy
             product_binding=value.product_binding, network_tier=value.network_tier,
             service_groups=value.service_groups, effective_from=value.effective_from,
             effective_to=value.effective_to, allow_benchmark_advance=value.allow_benchmark_advance,
-            max_cents=value.max_cents)
+            max_cents=value.max_cents, advance_percent=value.advance_percent,
+            fixed_cents=value.fixed_cents, excluded_cpts=value.excluded_cpts,
+            disclosure=value.disclosure, allow_unknown_oop=value.allow_unknown_oop)
     except _api.commercial.CommercialError as exc:
         raise _api.HTTPException(422, str(exc)) from exc
 

@@ -36,8 +36,10 @@ class CollectionPolicyInput(BaseModel):
     """Clinic administrator's payer-specific check-in decision.
 
     ``collect_visit_model`` requires exact product/network/group/date scope and a
-    maximum advance; ``allow_benchmark_advance`` explicitly opts into BCBSTX
-    cross-payer reference pricing. Other modes retain their existing behavior.
+    maximum advance and disclosure; ``allow_benchmark_advance`` explicitly
+    opts into BCBSTX cross-payer reference pricing. Optional formula, exclusions
+    and unknown-OOP permission are stored in the approved version. Other modes
+    retain their existing behavior.
     """
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
     mode: Literal["defer_to_claim", "collect_verified_copay", "collect_supported_advance", "collect_visit_model", "disabled"]
@@ -52,6 +54,11 @@ class CollectionPolicyInput(BaseModel):
     effective_to: str | None = None
     allow_benchmark_advance: bool = False
     max_cents: StrictInt | None = Field(default=None, ge=0, le=100_000_000)
+    advance_percent: float | None = Field(default=None, ge=0, le=100)
+    fixed_cents: StrictInt | None = Field(default=None, ge=0, le=100_000_000)
+    excluded_cpts: list[str] = Field(default_factory=list)
+    disclosure: str | None = Field(default=None, max_length=500)
+    allow_unknown_oop: bool = False
 
 
 class AgreementInventoryScopeInput(BaseModel):

@@ -67,6 +67,14 @@ export default function ArrivalAmountSummary({
             ? 'The selected visit still needs a complete planning estimate.'
             : `Modeled patient responsibility: ${money(visitModel.estimated_patient_responsibility_cents)}. ${visitModel.pricing_basis || 'Price basis unresolved'}.`}
         </p>
+        {visitModel.collection_disclosure && <p>{visitModel.collection_disclosure}</p>}
+        {visitModel.selected_price_total_cents != null && (
+          <p>
+            Selected CPT price total: {money(visitModel.selected_price_total_cents)}.{' '}
+            {visitModel.reference_schedule_versions.length > 0 &&
+              `BCBSTX reference version: ${visitModel.reference_schedule_versions.join(', ')}.`}
+          </p>
+        )}
         {visitModel.service_groups.map((group) => (
           <details key={group.service_group}>
             <summary>
@@ -79,8 +87,42 @@ export default function ArrivalAmountSummary({
               {group.cpts.map((item) => `${item.code} × ${item.units}`).join(', ')} ·{' '}
               {group.interaction_rule.replaceAll('_', ' ').toLowerCase()}
             </p>
+            {(group.benefit_evidence?.length ?? 0) > 0 && (
+              <p>Selected benefit evidence: {group.benefit_evidence.join(', ')}</p>
+            )}
+            {group.copay_frequency && <p>Copay frequency: {group.copay_frequency}</p>}
+            {group.deductible_applies != null && (
+              <p>Deductible applies: {group.deductible_applies ? 'yes' : 'no'}</p>
+            )}
+            {group.price_lines?.map((line, index) => (
+              <p key={`${line.code}-${index}`}>
+                CPT {line.code} × {line.units}:{' '}
+                {line.extended_cents == null
+                  ? 'reference price unavailable'
+                  : money(line.extended_cents)}
+                {line.pricing_basis
+                  ? ` · ${line.pricing_basis.replaceAll('_', ' ').toLowerCase()}`
+                  : ''}
+              </p>
+            ))}
+            {group.copay_cents != null && <p>Applied copay: {money(group.copay_cents)}</p>}
+            {group.deductible_cents != null && (
+              <p>Applied deductible: {money(group.deductible_cents)}</p>
+            )}
+            {group.coinsurance_cents != null && (
+              <p>
+                Applied coinsurance: {money(group.coinsurance_cents)}
+                {group.coinsurance_percent ? ` at ${group.coinsurance_percent}%` : ''}
+              </p>
+            )}
           </details>
         ))}
+        {visitModel.price_acquisition?.length ? (
+          <p>
+            Clinic reference price needed for CPT{' '}
+            {visitModel.price_acquisition.map((item) => item.code).join(', ')}.
+          </p>
+        ) : null}
         {visitModel.remaining_actions.length > 0 && <p>{visitModel.remaining_actions.join(' ')}</p>}
       </>
     )
