@@ -54,8 +54,8 @@ def test_requirement_source_tools_expose_only_scoped_saved_references():
         'effective_from': '2026-01-01', 'effective_to': '2026-12-31',
         'source_url': 'https://www.cigna.com/health-care-providers/coverage-and-claims/precertification'}]
     facts = insurance_research_agent._input(value)
-    allowed = insurance_research_agent._tools_for({**facts, 'lines': [
-        {**facts['lines'][0], 'review_flags': ['authorization']}]})
+    assert {'authorization', 'referral'} <= set(facts['lines'][0]['review_flags'])
+    allowed = insurance_research_agent._tools_for(facts)
     assert 'read_delegated_administrator' in allowed
     clinic = insurance_research_agent._tool_result(
         'read_approved_clinic_requirement', '99204', facts, value)
@@ -74,3 +74,9 @@ def test_requirement_source_tools_expose_only_scoped_saved_references():
     value['requirement_evidence']['procedures'][0]['authorization']['sources'][0].pop('approval_status')
     assert insurance_research_agent._tool_result(
         'read_approved_clinic_requirement', '99204', facts, value)['status'] == 'unavailable'
+    value['requirement_evidence']['procedures'][0]['authorization'].update(
+        status='Required', approval_status='Verified')
+    value['requirement_evidence']['procedures'][0]['referral'].update(
+        status='Required', referral_obtained='YES')
+    assert not {'authorization', 'referral'} & set(
+        insurance_research_agent._input(value)['lines'][0]['review_flags'])

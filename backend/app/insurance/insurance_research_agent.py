@@ -177,6 +177,17 @@ def _input(result: dict) -> dict:
             for kind in ('referral', 'authorization')
             for source in (item.get(kind) or {}).get('sources') or []
             if (ref := source_ref(source))))[:8]
+    def review_flags(line: dict) -> list[str]:
+        flags = _review_flags(line.get('benefits') or {})
+        item = next((row for row in procedures if row.get('code') == line.get('code')), {})
+        for kind in ('referral', 'authorization'):
+            decision = item.get(kind) or {}
+            if decision.get('status') == 'Verification required' or (
+                    decision.get('status') == 'Required' and
+                    (decision.get('approval_status') != 'Verified' if kind == 'authorization'
+                     else decision.get('referral_obtained') != 'YES')):
+                flags.append(kind)
+        return list(dict.fromkeys(flags))
     return {'lines': [{'code': line.get('code'), 'units': line.get('units'),
                       'benefit_evidence': (line.get('benefits') or {}).get('selected_benefit_ids') or [],
                       'requirement_evidence': requirement_sources(str(line.get('code') or '')),
@@ -185,7 +196,7 @@ def _input(result: dict) -> dict:
                       'deductible_applies': (line.get('benefits') or {}).get('deductible_applies'),
                       'deductible_remaining_cents': (line.get('benefits') or {}).get('deductible_remaining_cents'),
                       'coinsurance_percent': (line.get('benefits') or {}).get('coinsurance_percent'),
-                      'review_flags': _review_flags(line.get('benefits') or {})}
+                      'review_flags': review_flags(line)}
                      for line in lines[:12]]}
 
 
