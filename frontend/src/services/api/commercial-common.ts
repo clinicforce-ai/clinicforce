@@ -39,6 +39,11 @@ export type RequirementEvidence = {
   verify_url?: string
   verification?: string
   contact?: string
+  contact_department?: string
+  contact_phone?: string
+  contact_source?: { label: string; url: string; retrieved_at: string }
+  call_script?: string
+  delegation_unverified?: boolean
   approval_status?: string
   referral_obtained?: 'YES' | 'NO' | 'UNKNOWN' | 'NOT APPLICABLE'
   pa_approval?: 'APPROVED' | 'PENDING' | 'DENIED' | 'EXPIRED' | 'UNVERIFIED' | 'NOT APPLICABLE'

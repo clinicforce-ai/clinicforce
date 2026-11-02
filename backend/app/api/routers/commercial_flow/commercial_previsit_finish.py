@@ -10,6 +10,17 @@ from app.api.routers.commercial_flow.commercial_previsit_rate_reference import a
 from app.insurance.identity import patient_benefits_bound, patient_plan_applies
 from app.insurance import blue_cross_proxy, botox_review, canonical_evidence, evidence_resolution, insurance_research_agent, published_plan_benefits
 
+
+def _attach_legacy_fee_proxy(result: dict, service_date: str) -> None:
+    result.pop('fee_proxy_estimate', None)
+    if os.getenv('COLLECTION_ENGINE_V2_ENABLED') == 'true':
+        return
+    proxy = (blue_cross_proxy.estimate(result, service_date)
+             or blue_cross_proxy.cigna_estimate(result, service_date)
+             or blue_cross_proxy.cigna_oap_office_scenario(result, service_date))
+    if proxy:
+        result['fee_proxy_estimate'] = proxy
+
 def _visit_context_parts(inputs: dict, source: dict) -> dict:
     context = {'coverage': {k: v for k, v in _api._coverage_snapshot(inputs, source).items() if k != 'other_active_coverage'},
                'codes': _api._previsit_codes(inputs),
@@ -281,11 +292,8 @@ def _finish_previsit(result: dict, case: dict, inputs: dict, source: dict, paylo
         _api.practice_prices.apply(result, uploaded_cash, review)
     _api.practice_prices.apply_visit_quote(result, review)
     attach_requirements(_api, result, case, planning_inputs, source, session, connections, payer_id)
-    result.pop('fee_proxy_estimate', None)
-    if proxy := (blue_cross_proxy.estimate(result, inputs['service_date'])
-                 or blue_cross_proxy.cigna_estimate(result, inputs['service_date'])
-                 or blue_cross_proxy.cigna_oap_office_scenario(result, inputs['service_date'])):
-        result['fee_proxy_estimate'] = proxy
+    # V2 prices selected lines through the generic scoped reference matcher.
+    _attach_legacy_fee_proxy(result, inputs['service_date'])
     if os.getenv('COLLECTION_ENGINE_V2_ENABLED') == 'true':
         prior_research = (((case.get('previsit_context') or {}).get('result') or {}).get('insurance_research'))
         if isinstance(prior_research, dict):

@@ -1,6 +1,7 @@
 """October-inspired fake patients through PostgreSQL and the saved FastAPI route."""
 import json
 import os
+from datetime import date
 from uuid import uuid4
 from unittest.mock import patch
 
@@ -45,6 +46,7 @@ async def _run_fake_patients_seed_save_reload_and_fastapi(monkeypatch):
     """The staging-only admin action saves each fake journey and HTTP reads its final state."""
     from app.api.application import app
     from app.api.routers import commercial_estimator as api, staff as staff_api
+    from app.api.routers import staging_collection_fixtures as fixtures_api
 
     url = os.environ['STAFF_TEST_DATABASE_URL']
     schema = 'october_fake_' + uuid4().hex
@@ -59,6 +61,8 @@ async def _run_fake_patients_seed_save_reload_and_fastapi(monkeypatch):
             monkeypatch.setenv('PUBLIC_BASE_URL', 'https://staging.clinicforce.ai')
             monkeypatch.setenv('INSURANCE_BETA_ENABLED', 'true')
             monkeypatch.setattr(staff_api, 'PUBLIC_BASE_URL', 'http://testserver')
+            monkeypatch.setattr(fixtures_api, 'date', type('FixtureDate', (), {
+                'today': staticmethod(lambda: date(2026, 11, 2))}))
             password = 'Synthetic-staging-only-123'
             with staff_store._connection() as db:
                 db.execute("INSERT INTO staff_members (id,username,display_name,practice_id,practice_name,role,password_hash,created_at) VALUES ('staff','fake-october','Fake Test Staff',%s,'NMCT Staging','admin',%s,'2026-10-01')", (STAGING_NMCT_PRACTICE_ID, staff_store.hash_password(password)))
@@ -111,6 +115,39 @@ async def _run_fake_patients_seed_save_reload_and_fastapi(monkeypatch):
                 with patient_store._connection() as db:
                     event_count = db.execute("SELECT count(*) AS n FROM insurance_case_events WHERE stage LIKE 'synthetic-%%'").fetchone()['n']
                 assert event_count == sum(row['iterations'] for row in cases)
+                due = await client.get('/api/staff/testing/collection-engine-due?days=30')
+                assert due.status_code == 200
+                assert due.json()['checked_count'] == len(SCENARIOS) - 8
+                assert due.json()['payer_requests'] == 0
+                assert all(row['service_date'] == '2026-11-10' for row in due.json()['visits'])
+                due_again = await client.get('/api/staff/testing/collection-engine-due?days=30')
+                assert [row['evidence_fingerprint'] for row in due_again.json()['visits']] == [
+                    row['evidence_fingerprint'] for row in due.json()['visits']]
+                with patient_store._connection() as db:
+                    after_due = db.execute("SELECT count(*) AS n FROM insurance_case_events WHERE stage LIKE 'synthetic-%%'").fetchone()['n']
+                assert after_due == event_count
+                # Recreate the first expanded release's October date in one fake
+                # case; reseeding must add exactly one upcoming-date revision.
+                older = cases[8]
+                with patient_store._connection() as db:
+                    row = db.execute('SELECT workflow_json FROM insurance_cases WHERE id=%s',
+                                     (older['case_id'],)).fetchone()
+                    workflow = json.loads(row['workflow_json'])
+                    workflow['previsit_context']['result']['service_date'] = '2026-10-01'
+                    workflow['previsit_context']['inputs']['service_date'] = '2026-10-01'
+                    db.execute('UPDATE insurance_cases SET workflow_json=%s WHERE id=%s',
+                               (json.dumps(workflow), older['case_id']))
+                migrated = await client.post('/api/staff/testing/collection-engine-scenarios',
+                                             headers={'Origin': 'http://testserver'})
+                assert migrated.status_code == 200
+                migrated_row = migrated.json()['cases'][8]
+                assert migrated_row['iterations'] == older['iterations'] + 1
+                with patient_store._connection() as db:
+                    events_after_migration = db.execute("SELECT count(*) AS n FROM insurance_case_events WHERE stage LIKE 'synthetic-%%'").fetchone()['n']
+                assert events_after_migration == event_count + 1
+                migrated_again = await client.post('/api/staff/testing/collection-engine-scenarios',
+                                                   headers={'Origin': 'http://testserver'})
+                assert migrated_again.json()['cases'][8]['iterations'] == migrated_row['iterations']
     finally:
         with psycopg.connect(url, autocommit=True) as db:
             db.execute(sql.SQL('DROP SCHEMA {} CASCADE').format(sql.Identifier(schema)))

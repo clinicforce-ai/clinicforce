@@ -164,6 +164,18 @@ def recent_missing_rate_inputs(practice_id: str, limit: int = 500) -> list[dict]
     return [dict(row) for row in rows]
 
 
+def staging_synthetic_due(practice_id: str, start: str, end: str, limit: int = 100) -> list[dict]:
+    """Read only marked fake upcoming visits for the staging acceptance worker."""
+    with _connection() as connection:
+        rows = connection.execute(
+            """SELECT workflow_json FROM insurance_cases WHERE practice_id=%s
+               AND workflow_json::jsonb ->> 'synthetic_fixture' = 'true'
+               AND workflow_json::jsonb #>> '{previsit_context,result,service_date}' BETWEEN %s AND %s
+               ORDER BY workflow_json::jsonb #>> '{previsit_context,result,service_date}', id
+               LIMIT %s""", (practice_id, start, end, min(max(limit, 1), 100))).fetchall()
+    return [json.loads(row['workflow_json']) for row in rows]
+
+
 def save_case(case: dict[str, Any], patient_id: str, share_manifest_id: str, event: str, *, snapshot: dict | None = None, **scope) -> dict[str, Any] | None:
     now = _now()
     owner, values = _owner(patient_id, share_manifest_id, **scope)

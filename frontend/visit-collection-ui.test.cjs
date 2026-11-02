@@ -13,6 +13,7 @@ for (const ext of ['.ts', '.tsx']) {
 }
 
 const ArrivalAmountSummary = require('./src/features/commercial-estimate/ArrivalAmountSummary.tsx').default
+const RequirementContact = require('./src/features/commercial-estimate/RequirementContact.tsx').default
 
 function rendered(collect, modeled, synthetic = false) {
   return renderToStaticMarkup(React.createElement(ArrivalAmountSummary, {
@@ -44,4 +45,14 @@ assert.match(rendered(17669, 17669), /Selected benefit evidence: synthetic-speci
 assert.match(rendered(17669, 17669), /Copay frequency: VISIT/)
 assert.match(rendered(17669, 17669), /Deductible applies: no/)
 assert.match(rendered(17669, 17669, true), /Synthetic staging test visit/)
-console.log('Visit collection UI: 11 assertions passed')
+const call = renderToStaticMarkup(React.createElement(RequirementContact, { evidence: {
+  status: 'Verification required', reason: 'Unknown for exact product', sources: [],
+  contact_department: 'Precertification', contact_phone: '800-882-4462',
+  contact_source: { label: 'Official payer provider contact', url: 'https://www.cigna.com/health-care-providers/coverage-and-claims/precertification', retrieved_at: '2026-11-02' },
+  call_script: 'Verify CPT 95908 for this member and location.',
+} }))
+assert.match(call, /tel:8008824462/)
+assert.match(call, /Official contact source/)
+assert.match(call, /Copyable provider call script/)
+assert.match(call, /Verify CPT 95908/)
+console.log('Visit collection UI: 15 assertions passed')

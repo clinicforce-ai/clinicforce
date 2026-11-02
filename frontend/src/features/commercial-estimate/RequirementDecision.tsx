@@ -1,5 +1,6 @@
 import type { RequirementEvidence } from '../../services/api/commercial-estimator'
 import RequirementSourceLink from './RequirementSourceLink'
+import RequirementContact from './RequirementContact'
 
 export function RequirementDecision({
   evidence,
@@ -71,6 +72,7 @@ export function RequirementDecision({
           {evidence.sources.map((source, index) => (
             <RequirementSourceLink key={index} source={source} />
           ))}
+          <RequirementContact evidence={evidence} />
         </details>
       )}
     </>

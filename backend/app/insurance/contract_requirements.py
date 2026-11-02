@@ -18,6 +18,7 @@ from app.insurance.requirements.published import (
 from app.insurance.requirements.matrix_merge import merge_matrix_research
 from app.insurance.requirements.approval import attach_approval_status
 from app.insurance.requirements.stored import decide as stored_decision
+from app.insurance.requirements.official_contact import attach as attach_official_contacts
 
 from app.insurance.requirements.evidence import (
     KINDS, CODE, PAGE, PROVISIONAL, OTHER_POLICY, CONDITIONAL, HEADERS,
@@ -324,4 +325,6 @@ def evaluate(result: dict, context: dict, documents: list[dict], *, include_proc
     for kind in KINDS:
         if output[kind]['status'] == 'Verification required':
             output[kind]['member_specific_check'] = True
+    if include_procedures:
+        attach_official_contacts(output, payer_names, context['service_date'])
     return output

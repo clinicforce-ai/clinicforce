@@ -148,6 +148,8 @@ def visit(name: str) -> dict:
     value['payer'] = ('Cigna Synthetic' if name == 'cigna_reference_no_policy' else
                       'Aetna Synthetic' if name == 'aetna_draft_route' else 'BCBSTX Synthetic')
     value['fixture_scenario'] = name
+    if name not in {row[0] for row in SCENARIOS[:8]}:
+        value['service_date'] = '2026-11-10'
     _scoped_fixture_result(value)
     if name == 'specialist_271_conflict':
         office = value['price_range']['lines'][0]['benefits']

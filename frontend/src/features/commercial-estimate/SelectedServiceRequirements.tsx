@@ -1,6 +1,7 @@
 import type { PrevisitEstimate } from '../../services/api/commercial-estimator'
 import { requirementForLine } from './requirementForLine'
 import RequirementSourceLink from './RequirementSourceLink'
+import RequirementContact from './RequirementContact'
 
 export default function SelectedServiceRequirements({ result }: { result: PrevisitEstimate }) {
   const lines = (result.price_range?.lines || []).filter((line) => line.code)
@@ -111,6 +112,8 @@ export default function SelectedServiceRequirements({ result }: { result: Previs
                   ))}
                 </small>
               )}
+              <RequirementContact evidence={decision?.referral} />
+              <RequirementContact evidence={decision?.authorization} />
             </li>
           )
         })}

@@ -4,13 +4,26 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+from urllib.parse import urlparse
 
 import boto3
 from botocore.config import Config
 
 MODEL_ID = os.getenv('INSURANCE_RESEARCH_MODEL_ID', 'us.anthropic.claude-sonnet-5')
 TOOL_NAMES = ('read_saved_ecw_context', 'read_selected_benefit', 'read_reference_price',
-              'read_service_template', 'read_policy_scope')
+              'read_service_template', 'read_policy_scope', 'read_saved_requirement',
+              'read_official_contact', 'read_prior_verified_rule')
+
+
+def _public_payer_url(value: object) -> bool:
+    url = str(value or '')
+    try:
+        host = urlparse(url).hostname or ''
+    except ValueError:
+        return False
+    return url.startswith('https://') and any(
+        host == domain or host.endswith('.' + domain)
+        for domain in ('bcbstx.com', 'cigna.com', 'aetna.com', 'uhcprovider.com'))
 
 
 def _tool_config(names: tuple[str, ...] = TOOL_NAMES) -> dict:
@@ -27,6 +40,8 @@ def _tools_for(facts: dict) -> tuple[str, ...]:
         return ('read_selected_benefit', 'read_reference_price', 'read_service_template')
     if 'benefit_scope' in flags:
         return ('read_selected_benefit', 'read_service_template', 'read_saved_ecw_context')
+    if {'authorization', 'referral'} & flags:
+        return ('read_saved_requirement', 'read_official_contact', 'read_prior_verified_rule')
     return ('read_selected_benefit', 'read_saved_ecw_context', 'read_policy_scope')
 
 
@@ -67,6 +82,32 @@ def _tool_result(name: str, code: str, facts: dict, result: dict) -> dict:
                              'allow_benchmark_advance': item.get('allow_benchmark_advance')}
                             for item in policies[:5] if isinstance(item, dict)],
                 'calculation_authority': False}
+    if name == 'read_saved_requirement':
+        procedure = next((item for item in (result.get('requirement_evidence') or {}).get('procedures') or []
+                          if item.get('code') == code), None)
+        if not procedure:
+            return {'status': 'unavailable'}
+        return {'status': 'available', 'finding': {kind: {
+            'status': (procedure.get(kind) or {}).get('status'),
+            'approval_status': (procedure.get(kind) or {}).get('approval_status'),
+            'source_count': len((procedure.get(kind) or {}).get('sources') or [])}
+            for kind in ('referral', 'authorization')}, 'calculation_authority': False}
+    if name == 'read_official_contact':
+        from app.insurance.requirements.official_contact import fallback
+        names = {str(result.get('payer') or '')}
+        contacts = {kind: fallback(names, kind, code, str(result.get('service_date') or ''))
+                    for kind in ('referral', 'authorization')}
+        return {'status': 'available' if any(contacts.values()) else 'unavailable',
+                'finding': contacts, 'calculation_authority': False}
+    if name == 'read_prior_verified_rule':
+        rows = [item for item in result.get('verified_requirement_research') or []
+                if isinstance(item, dict) and item.get('code') == code and item.get('verified_at')
+                and _public_payer_url(item.get('source_url'))
+                and item.get('status') in {'Required', 'Not required'}]
+        return {'status': 'available' if rows else 'unavailable',
+                'finding': [{'status': row['status'], 'source_url': row['source_url'],
+                             'verified_at': row['verified_at'], 'product': row.get('product')}
+                            for row in rows[:3]], 'calculation_authority': False}
     return {'status': 'unavailable'}
 
 
@@ -79,14 +120,31 @@ def _review_flags(benefits: dict) -> list[str]:
         'oop_applicability': ('out-of-pocket',),
         'benefit_scope': ('conditional', 'service', 'benefit'),
         'price_basis': ('price', 'rate'),
+        'authorization': ('prior authorization', 'precertification'),
+        'referral': ('referral',),
     }.items() if any(term in reasons for term in terms)]
 
 
 def _input(result: dict) -> dict:
     """Send selected financial facts only; never patient identity or raw payer objects."""
     lines = (result.get('price_range') or {}).get('lines') or []
+    procedures = (result.get('requirement_evidence') or {}).get('procedures') or []
+    def source_ref(source: dict) -> str | None:
+        url = str(source.get('url') or '')
+        if _public_payer_url(url):
+            return url
+        if source.get('document_id'):
+            return f"{source['document_id']}:{source.get('page') or ''}"
+        return None
+    def requirement_sources(code: str) -> list[str]:
+        item = next((row for row in procedures if row.get('code') == code), {})
+        return list(dict.fromkeys(ref
+            for kind in ('referral', 'authorization')
+            for source in (item.get(kind) or {}).get('sources') or []
+            if (ref := source_ref(source))))[:8]
     return {'lines': [{'code': line.get('code'), 'units': line.get('units'),
                       'benefit_evidence': (line.get('benefits') or {}).get('selected_benefit_ids') or [],
+                      'requirement_evidence': requirement_sources(str(line.get('code') or '')),
                       'copay_cents': (line.get('benefits') or {}).get('copay_cents'),
                       'copay_period': (line.get('benefits') or {}).get('copay_period'),
                       'deductible_applies': (line.get('benefits') or {}).get('deductible_applies'),
@@ -110,7 +168,7 @@ def investigate(result: dict) -> dict:
               'You may call the provided read-only tools for these exact CPTs. At most three calls are supported. '
               'Return JSON only: {"findings":[{"code":"CPT","finding":"short explanation",'
               '"evidence_ids":["exact supplied benefit ID"],"next_action":"short action"}]}. '
-              'Each evidence_ids value must exactly match a benefit_evidence ID supplied for that CPT; '
+              'Each evidence_ids value must exactly match a benefit_evidence or requirement_evidence ID supplied for that CPT; '
               'a CPT code is not an evidence ID. '
               'Do not invent a value, network participation, deductible waiver, copay interaction, or permission to collect. '
               'If source facts cannot decide, say what must be verified. Facts: ' + json.dumps(facts, sort_keys=True))
@@ -143,7 +201,8 @@ def investigate(result: dict) -> dict:
         if content.startswith('```') and content.endswith('```'):
             content = content.split('\n', 1)[1].rsplit('```', 1)[0].strip()
         proposed = json.loads(content)
-        allowed = {str(row['code']): set(row['benefit_evidence']) for row in facts['lines']}
+        allowed = {str(row['code']): set(row['benefit_evidence']) | set(row['requirement_evidence'])
+                   for row in facts['lines']}
         findings = []
         for item in proposed.get('findings', [])[:12]:
             if not isinstance(item, dict) or item.get('code') not in allowed:

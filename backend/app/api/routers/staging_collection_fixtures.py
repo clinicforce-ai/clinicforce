@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import os
+from copy import deepcopy
+from datetime import date, timedelta
 from uuid import NAMESPACE_URL, uuid5
 
 from fastapi import APIRouter, HTTPException, Request
@@ -9,11 +11,21 @@ from fastapi.concurrency import run_in_threadpool
 
 from app.api.routers.staff import require_staff
 from app.core import staff_store
-from app.insurance import collection_guidance, store
-from app.insurance.staging_synthetic import SCENARIOS, STAGING_NMCT_PRACTICE_ID, journey, visit
+from app.insurance import collection_guidance, previsit_cached_tasks, store
+from app.insurance.staging_synthetic import SCENARIOS, STAGING_NMCT_PRACTICE_ID, journey, project_saved, visit
 
 
 router = APIRouter(prefix='/api/staff/testing', tags=['staging-test-fixtures'])
+
+
+def _prepared_result(result: dict) -> dict:
+    result['staging_synthetic_fixture'] = True
+    lines = result['price_range']['lines']
+    result['codes'] = [{'id': line['id'], 'code': line['code'], 'units': line['units'],
+                        'modifiers': line['modifiers']} for line in lines]
+    result['selected_ids'] = [line['id'] for line in lines]
+    result['collection_guidance'] = collection_guidance.build(result, result['visit_review'])
+    return result
 
 
 def _staging_only(staff: dict) -> None:
@@ -66,23 +78,29 @@ def _seed_one(staff: dict, name: str, index: int) -> dict:
     for step_index, (stage, step_result) in enumerate(stages, 1):
         if saved.get('revision', 0) >= step_index:
             continue
-        step_result['staging_synthetic_fixture'] = True
-        lines = step_result['price_range']['lines']
-        step_result['codes'] = [{'id': line['id'], 'code': line['code'], 'units': line['units'],
-                                 'modifiers': line['modifiers']} for line in lines]
-        step_result['selected_ids'] = [line['id'] for line in lines]
+        step_result = _prepared_result(step_result)
         review = step_result['visit_review']
-        step_result['collection_guidance'] = collection_guidance.build(step_result, review)
         saved['previsit_context']['result'] = step_result
         saved['visit_review'] = review
         saved['synthetic_step_index'] = step_index
         saved = store.save_case(saved, patient_id, '', f'synthetic-{stage}',
             snapshot={'result': step_result, 'patient': {'given_name': 'Synthetic', 'family_name': family}},
             practice_id=staff['practice_id'], intake_id=intake_id)
+    # The first 38-case release used October dates. Move only those marked fake
+    # newer cases to an upcoming date so the due-visit harness can exercise them.
+    if (index > 8 and saved['previsit_context']['result'].get('service_date') != result['service_date']):
+        result = _prepared_result(result)
+        saved['previsit_context']['result'] = result
+        saved['previsit_context']['inputs']['service_date'] = result['service_date']
+        saved['visit_review'] = result['visit_review']
+        saved['synthetic_step_index'] = saved.get('synthetic_step_index', len(stages)) + 1
+        saved = store.save_case(saved, patient_id, '', 'synthetic-upcoming-rescope',
+            snapshot={'result': result, 'patient': {'given_name': 'Synthetic', 'family_name': family}},
+            practice_id=staff['practice_id'], intake_id=intake_id)
     guidance = saved['previsit_context']['result']['collection_guidance']
     model = guidance.get('visit_model') or {}
     return {'scenario': name, 'intake_id': intake_id, 'case_id': saved['id'],
-            'iterations': len(stages),
+            'iterations': saved.get('synthetic_step_index') or len(stages),
             'expected_modeled_cents': model.get('estimated_patient_responsibility_cents'),
             'expected_collect_now_cents': guidance.get('collect_now_cents', guidance.get('amount_cents'))}
 
@@ -99,3 +117,24 @@ async def seed_collection_engine_scenarios(request: Request) -> dict:
     cases = [await run_in_threadpool(_seed_one, staff, name, index)
              for index, (name, *_expected) in enumerate(SCENARIOS, 1)]
     return {'synthetic_only': True, 'practice_id': STAGING_NMCT_PRACTICE_ID, 'cases': cases}
+
+
+@router.get('/collection-engine-due', description=(
+    'Staging NMCT administrator only. Recalculate at most 100 already saved synthetic '
+    'upcoming visits from cached evidence. Return deidentified visit and deduplicated '
+    'clinic price tasks. No eCW, Stedi, Bedrock or database write occurs.'
+))
+async def due_collection_engine_scenarios(request: Request, days: int = 30) -> dict:
+    staff = await require_staff(request)
+    _staging_only(staff)
+    if not 1 <= days <= 30:
+        raise HTTPException(422, 'Choose a horizon of 1 to 30 days.')
+    today = date.today()
+    cases = await run_in_threadpool(store.staging_synthetic_due, staff['practice_id'],
+                                    today.isoformat(), (today + timedelta(days=days)).isoformat())
+    projected = []
+    for case in cases:
+        result = deepcopy(case['previsit_context']['result'])
+        case['previsit_context']['result'] = project_saved(case, result)
+        projected.append(case)
+    return {'synthetic_only': True, **previsit_cached_tasks.worklist(projected)}
