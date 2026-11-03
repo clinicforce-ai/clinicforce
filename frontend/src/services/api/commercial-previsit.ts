@@ -4,6 +4,7 @@ import type {
   CollectionGuidance,
   CombinedEmgPlan,
   PrevisitIdentity,
+  CommercialCardCheck,
 } from './commercial-common'
 import type {
   BotoxReview,
@@ -31,36 +32,7 @@ export type PrevisitEstimate = {
     verified_at?: string
   }
   payer_allowances?: PayerAllowanceSummary
-  card_check?: {
-    status:
-      | 'read'
-      | 'matched'
-      | 'filled_missing'
-      | 'conflict'
-      | 'unverified'
-      | 'not_found'
-      | 'multiple_cards'
-      | 'unavailable'
-    source?: string | null
-    reference_only?: boolean
-    failure_reason?: string | null
-    fields_added?: string[]
-    conflicts: string[]
-    differences: string[]
-    alternative_supported?: boolean
-    payer_comparison?: { ecw: string; card: string }
-    office_copay_cents?: number
-    cigna_card_reference?: {
-      tier1_specialist_copay_cents: number
-      nontier1_specialist_copay_cents: number
-      in_network_coinsurance_split?: string | null
-      specialist_referral_note?: string | null
-    }
-    patient_name_matches?: boolean
-    cms_plan_id?: string
-    plan_name?: string
-    published_office_copay_cents?: number
-  }
+  card_check?: CommercialCardCheck
   cash_fallback?: { reason: string }
   temporary_rate_reference?: TemporaryRateReference
   aetna_diagnostic_reference?: AetnaDiagnosticReference

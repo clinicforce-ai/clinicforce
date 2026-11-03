@@ -20,6 +20,27 @@ export function formatCopayLine(line: VisitPricedLine): string {
   return `CPT ${line.code}: ${line.benefits?.copay_cents != null ? money(line.benefits.copay_cents) : 'not returned'}`
 }
 
+export function reportedCoinsurance(
+  result: PrevisitEstimate,
+  lines: VisitPricedLine[],
+): string | number | null | undefined {
+  if (result.reference_benefits) {
+    return specialistOfficeCoinsurance({ ...result, benefits: result.reference_benefits })
+  }
+  if (!lines.length) return result.benefits?.coinsurance_percent
+  const values = [...new Set(lines.map((line) => line.benefits?.coinsurance_percent))]
+  return values.length === 1 ? values[0] : null
+}
+
+export function diagnosticCopay(result: PrevisitEstimate, lines: VisitPricedLine[]) {
+  return (result.collection_guidance?.basis === 'diagnostic_day_copay' ||
+    result.collection_guidance?.diagnostic_copay_reference_cents != null) &&
+    lines.length > 0 &&
+    lines.every((line) => line.benefits?.copay_cents === lines[0].benefits?.copay_cents)
+    ? lines[0].benefits?.copay_cents
+    : null
+}
+
 export function aetnaPriorDateReferenceCopay(
   result: PrevisitEstimate,
   model: CommercialEstimateModel,

@@ -1,5 +1,38 @@
 export type CommercialAppointment = { id: string; start: string; status: string; reason: string }
 
+export type CignaCardReference = {
+  tier1_specialist_copay_cents: number
+  nontier1_specialist_copay_cents: number
+  in_network_coinsurance_split?: string | null
+  specialist_referral_note?: string | null
+}
+
+export type CommercialCardCheck = {
+  status:
+    | 'read'
+    | 'matched'
+    | 'filled_missing'
+    | 'conflict'
+    | 'unverified'
+    | 'not_found'
+    | 'multiple_cards'
+    | 'unavailable'
+  source?: string | null
+  reference_only?: boolean
+  failure_reason?: string | null
+  fields_added?: string[]
+  conflicts: string[]
+  differences: string[]
+  alternative_supported?: boolean
+  payer_comparison?: { ecw: string; card: string }
+  office_copay_cents?: number
+  cigna_card_reference?: CignaCardReference
+  patient_name_matches?: boolean
+  cms_plan_id?: string
+  plan_name?: string
+  published_office_copay_cents?: number
+}
+
 export type CombinedEmgPlan = {
   amount_cents: number
   patient_share_cents: number
