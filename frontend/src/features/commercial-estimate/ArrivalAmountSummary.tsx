@@ -1,7 +1,11 @@
 import type { PrevisitEstimate } from '../../services/api/commercial-estimator'
 import type { CommercialEstimateModel } from './useCommercialEstimateModel'
 import { money } from './format'
-import { aetnaOfficePlanningCopay, aetnaPendingOfficeCopay } from './payerReportedPartialCopay'
+import {
+  aetnaOfficePlanningCopay,
+  aetnaPendingOfficeCopay,
+  aetnaPriorDateReferenceCopay,
+} from './payerReportedPartialCopay'
 import { pendingCignaOfficeCopay } from './collectionAtVisitRow'
 
 function nextStep(model: CommercialEstimateModel, result: PrevisitEstimate) {
@@ -89,6 +93,7 @@ export default function ArrivalAmountSummary({
       ? null
       : Math.max(0, officePlan - (result.encounter_summary?.payments_verified_cents || 0))
   const pendingAetnaCopay = aetnaPendingOfficeCopay(result, model)
+  const priorDateAetnaCopay = aetnaPriorDateReferenceCopay(result, model)
   const pendingCignaCopay = pendingCignaOfficeCopay(result, model)
   const needsAction = model.amountText === 'Insured amount unavailable'
   const additionalServicesPending = result.price_range?.lines?.some(
@@ -117,9 +122,11 @@ export default function ArrivalAmountSummary({
                           : 'Suggested amount to collect at visit'
                         : cardPlanningCopay != null
                           ? 'Card-based office suggestion · collection pending'
-                          : needsAction
-                            ? 'Next step'
-                            : model.amountLabel}
+                          : priorDateAetnaCopay != null
+                            ? 'Payer-reported office copay · pending verification'
+                            : needsAction
+                              ? 'Next step'
+                              : model.amountLabel}
       </span>
       <strong
         className={
@@ -129,7 +136,8 @@ export default function ArrivalAmountSummary({
           !aetnaPlanning &&
           officeBalance == null &&
           pendingAetnaCopay == null &&
-          pendingCignaCopay == null
+          pendingCignaCopay == null &&
+          priorDateAetnaCopay == null
             ? 'amount-pending'
             : undefined
         }
@@ -155,9 +163,11 @@ export default function ArrivalAmountSummary({
                           ? money(partialCopay)
                           : cardPlanningCopay != null
                             ? money(cardPlanningCopay)
-                            : needsAction
-                              ? action.title
-                              : model.amountText}
+                            : priorDateAetnaCopay != null
+                              ? money(priorDateAetnaCopay)
+                              : needsAction
+                                ? action.title
+                                : model.amountText}
       </strong>
       {plan ? (
         <p>
@@ -228,6 +238,12 @@ export default function ArrivalAmountSummary({
         <p>
           Printed specialist copay for one office visit. Payer benefits and separate imaging costs
           are unresolved; verify before charging.
+        </p>
+      ) : priorDateAetnaCopay != null ? (
+        <p>
+          The payer returned benefits for a different date. Confirm coverage for this visit,
+          network, billing protections, and prior payments before charging. The amount to collect
+          remains unestablished.
         </p>
       ) : needsAction ? (
         <p>{action.hint}</p>
