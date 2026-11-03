@@ -20,10 +20,7 @@ export function commercialCptRows(
   ]
   return {
     cpt: {
-      label:
-        result.service_selection_status === 'preview' && result.service_plan?.method === 'llm'
-          ? 'LLM-proposed CPTs'
-          : 'CPTs',
+      label: 'CPTs',
       value: lines.length
         ? lines
             .map(

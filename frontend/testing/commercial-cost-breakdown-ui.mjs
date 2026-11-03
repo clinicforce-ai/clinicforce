@@ -317,6 +317,84 @@ try {
   )
   assert.equal(aetnaOfficePlanningCopay({ ...officeOnlyResult,
     billing_protection: { status: 'qmb' } }, model, officeOnlyResult.price_range.lines), null)
+  const signatureOffice = {
+    ...officeOnlyResult,
+    service_date: '2026-11-03',
+    reason: 'Headache visit',
+    plan_details: {
+      stedi: {
+        names: ['Aetna Medicare Signature (PPO)'],
+        group_number: '000003-TX',
+        plan_number: '000003-TX000047',
+      },
+    },
+    benefits: {
+      ...officeOnlyResult.benefits,
+      service_date_matches: true,
+      deductible_annual_cents: 75000,
+      deductible_remaining_cents: 75000,
+    },
+    price_range: {
+      ...officeOnlyResult.price_range,
+      lines: [
+        {
+          ...officeOnlyResult.price_range.lines[0],
+          code: '99203',
+          benefits: {
+            ...officeOnlyResult.price_range.lines[0].benefits,
+            deductible_applies: undefined,
+            deductible_remaining_cents: 75000,
+            copay_cents: 7000,
+            service_date_matches: true,
+          },
+        },
+      ],
+    },
+    temporary_rate_reference: {
+      source: 'Aetna MEPPO portal table values supplied by clinic',
+      message: 'Dated fee reference, not an active allowance.',
+      complete: true,
+      lines: [
+        {
+          id: 'office',
+          code: '99203',
+          units: 1,
+          modifiers: [],
+          unit_reference_cents: 11960,
+          source_reference: 'Synthetic Aetna screen',
+        },
+      ],
+    },
+  }
+  const signatureTable = renderToStaticMarkup(
+    React.createElement(CommercialCostBreakdown, {
+      model: { ...model, networkLabel: 'In network' },
+      result: signatureOffice,
+    }),
+  )
+  for (const value of [
+    'CPT 99203 × 1',
+    '$119.60 Aetna fee reference',
+    '$0.00 for in-network specialist office visit',
+    '$70.00 provisional office copay',
+    '$70.00 planning estimate',
+  ])
+    assert(signatureTable.includes(value), value)
+  assert(!signatureTable.includes('LLM-proposed CPTs'))
+  assert.equal(
+    aetnaOfficePlanningCopay(
+      {
+        ...signatureOffice,
+        plan_details: {
+          stedi: { ...signatureOffice.plan_details.stedi, plan_number: 'different-plan' },
+        },
+      },
+      model,
+      signatureOffice.price_range.lines,
+    ),
+    null,
+  )
+
 
   const aetna = renderToStaticMarkup(
     React.createElement(CommercialCostBreakdown, {
