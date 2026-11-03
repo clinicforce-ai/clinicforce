@@ -674,6 +674,42 @@ try {
   }))
   assert(uhcQmb.includes('Amount to collect at visit</th><td><span>$0.00'))
 
+  const aarpLine = { ...uhcOfficeLine, code: '99203', benefits: {
+    ...uhcOfficeLine.benefits, copay_cents: 5000,
+  } }
+  const aarp = {
+    ...uhcOffice,
+    reason: 'New patient',
+    service_date: '2026-11-04',
+    insurance_details: { member_id: 'SYNTHETIC', group_number: '00000' },
+    plan_details: { stedi: { names: ['LPPO-AARP MEDICARE ADVANTAGE FROM UHC TX-0006 (PPO'] } },
+    benefits: {
+      ...uhcOffice.benefits,
+      reported_options: [
+        option(670000, 'INDIVIDUAL', 'CALENDAR_YEAR'),
+        option(604000, 'INDIVIDUAL', 'REMAINING'),
+        { ...option(1010000, 'INDIVIDUAL', 'CALENDAR_YEAR'), network: 'IN_AND_OUT_OF_NETWORK' },
+        { ...option(944000, 'INDIVIDUAL', 'REMAINING'), network: 'IN_AND_OUT_OF_NETWORK' },
+      ],
+    },
+    price_range: { ...uhcOffice.price_range, lines: [aarpLine] },
+    requirement_evidence: { procedures: [{ id: 'office', code: '99203',
+      referral: { status: 'Not required', reason: 'PPO specialist access' },
+      authorization: { status: 'Not required', reason: 'Routine office E/M' },
+    }] },
+  }
+  const aarpTable = renderToStaticMarkup(React.createElement(CommercialCostBreakdown, {
+    model: { ...uhcOfficeModel, officeCopayLine: aarpLine }, result: aarp,
+  }))
+  assert(aarpTable.includes('Individual combined in/out-of-network out-of-pocket maximum'))
+  assert(aarpTable.includes('Member SYNTHETIC · Group 00000'))
+  assert(aarpTable.includes('$10,100.00 annual'))
+  assert(aarpTable.includes('$9,440.00 remaining'))
+  assert(aarpTable.includes('$6,700.00 annual'))
+  assert(aarpTable.includes('$6,040.00 remaining'))
+  assert(aarpTable.includes('CPT 99203: not required'))
+  assert(aarpTable.includes('Routine office E/M'))
+
   const attachedReference = renderToStaticMarkup(
     React.createElement(CommercialCostBreakdown, {
       model: {

@@ -62,6 +62,19 @@ export function commercialRequirementRows(
     lines[0].code === '99203'
   const referral = requirementStatus(result, 'referral')
   const authorization = requirementStatus(result, 'authorization')
+  const reason = (kind: 'referral' | 'authorization') =>
+    [
+      ...new Set(
+        lines
+          .map(
+            (line) =>
+              requirementForLine(result.requirement_evidence?.procedures, line.id, line.code)?.[
+                kind
+              ]?.reason,
+          )
+          .filter(Boolean),
+      ),
+    ].join(' ') || undefined
   const referralResearch = aetnaOfficeResearch && referral === 'CPT 99203: not determined'
   const authorizationResearch = aetnaOfficeResearch && authorization === 'CPT 99203: not determined'
   return [
@@ -74,7 +87,7 @@ export function commercialRequirementRows(
         ? 'The card says no specialist referral is required; confirm any separate selected-CPT requirement.'
         : referralResearch
           ? 'Aetna Medicare Signature (PPO) H2293-016 2026 Summary of Benefits; the member’s exact plan ID has not been confirmed.'
-          : undefined,
+          : reason('referral'),
     },
     {
       label: 'Prior authorization',
@@ -83,7 +96,7 @@ export function commercialRequirementRows(
         : authorization,
       detail: authorizationResearch
         ? 'Aetna participating-provider precertification list updated 1 Nov 2026; this research is not member-specific approval.'
-        : undefined,
+        : reason('authorization'),
     },
   ]
 }

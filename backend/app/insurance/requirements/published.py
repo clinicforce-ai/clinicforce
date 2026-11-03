@@ -16,7 +16,7 @@ BCBSTX_PAYER_NAMES = {'bcbstx', 'bcbstexas', 'bluecrossblueshieldoftexas',
                       'bluecrossblueshieldtexas'}
 
 # Saved estimates re-evaluate requirement decisions when a published rule changes.
-PUBLISHED_RULESET_VERSION = '2026-11-03-bluecard-ppo-office-v11'
+PUBLISHED_RULESET_VERSION = '2026-11-03-aarp-lppo-office-v12'
 
 BLUECARD_PPO_REFERRAL_SOURCE = {
     'label': 'BCBSTX BlueCard provider manual, PPO definition',
@@ -70,7 +70,7 @@ UHC_TEXAS_CHOICE_PLUS_SOURCE = {
     'effective_from': '2026-01-01', 'effective_to': '2026-12-31',
 }
 UHC_MA_PPO_REFERRAL_SOURCE = {
-    'label': '2026 UnitedHealthcare Care Provider Administrative Guide, Group Medicare Advantage PPO referrals',
+    'label': '2026 UnitedHealthcare Care Provider Administrative Guide, Medicare Advantage PPO referrals',
     'url': 'https://www.uhcprovider.com/content/dam/provider/docs/public/admin-guides/2026-UHC-Administrative-Guide.pdf',
     'source_version': '2026 administrative guide', 'verified_at': '2026-10-21',
     'effective_from': '2026-01-01', 'effective_to': '2026-12-31',
@@ -299,15 +299,20 @@ def _published_rule(kind: str, result: dict, context: dict, plans: list[str], co
             return rule('Not required', 'UnitedHealthcare Group Medicare Advantage PPO does not require a PCP specialist referral.', UHC_MA_PPO_REFERRAL_SOURCE)
         if kind == 'authorization' and day >= '2026-10-27':
             return rule('Not required', 'Clinic-confirmed decision for the selected diagnostic CPTs under this group plan.', UHC_LPPO_DIAGNOSTIC_PA_SOURCE, source_type='clinic_confirmation')
+    aarp_lppo_office = (str(context.get('pos') or '') == '11' and office
+        and codes <= {str(n) for n in (*range(99202, 99205), *range(99212, 99216))}
+        and {'unitedhealthcare', 'uhc'} & names and len(exact) == 1
+        and product in {'lppoaarpmedicareadvantagefromuhctx0006pp',
+                        'lppoaarpmedicareadvantagefromuhctx0006ppo'})
     lppo_office = (in_network and str(context.get('pos') or '') == '11' and office
         and codes <= {str(n) for n in (*range(99202, 99205), *range(99212, 99216))}
         and {'unitedhealthcare', 'uhc'} & names and len(exact) == 1
         and product.startswith('lppounitedhealthcaregroupmedicareadvantagepp'))
-    if lppo_office:
+    if lppo_office or aarp_lppo_office:
         if kind == 'referral':
-            return rule('Not required', 'UnitedHealthcare Group Medicare Advantage PPO does not require a specialist referral.', UHC_MA_PPO_REFERRAL_SOURCE)
-        if kind == 'authorization' and day >= '2026-10-01':
-            return rule('Not required', 'The 2026 UnitedHealthcare Medicare Advantage participating-provider authorization list does not include these routine office E/M CPTs.', UHC_MA_2026_AUTH_SOURCE)
+            return rule('Not required', 'UnitedHealthcare Medicare Advantage PPO does not require a specialist referral.', UHC_MA_PPO_REFERRAL_SOURCE)
+        if kind == 'authorization' and in_network and day >= '2026-10-01':
+            return rule('Not required', 'The 2026 UnitedHealthcare Medicare Advantage participating-provider authorization list does not include these routine office E/M CPTs. Check delegated rules when applicable.', UHC_MA_2026_AUTH_SOURCE)
     bcbstx_ppo_follow_up = (exact <= {'bluechoiceppo'} and in_network and office and day >= '2026-10-26'
             and names & BCBSTX_PAYER_NAMES
             and ('preferredprovideroptionmedical' in {_key(plan) for plan in plans}

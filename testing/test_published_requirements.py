@@ -269,6 +269,22 @@ def test_uhc_group_lppo_routine_office_followup_requirements():
     assert evaluate(result, context, [])['authorization']['status'] == 'Not required'
 
 
+def test_uhc_aarp_lppo_routine_new_patient_office_requirements():
+    result, context = case('UnitedHealthcare',
+                           'LPPO-AARP MEDICARE ADVANTAGE FROM UHC TX-0006 (PPO',
+                           '99203', day='2026-11-04')
+    office = evaluate(result, context, [])['procedures'][0]
+    assert office['referral']['status'] == 'Not required'
+    assert office['authorization']['status'] == 'Not required'
+    assert evaluate(result, {**context, 'pos': '22'}, [])['authorization']['status'] == 'Verification required'
+    assert evaluate(result, {**context, 'plans': ['LPPO-AARP MEDICARE ADVANTAGE FROM UHC TX-0005 (PPO']}, [])['authorization']['status'] == 'Verification required'
+    result['benefits']['network_status'] = 'unknown'
+    assert evaluate(result, context, [])['referral']['status'] == 'Not required'
+    assert evaluate(result, context, [])['authorization']['status'] == 'Verification required'
+    result['benefits']['active'] = False
+    assert evaluate(result, context, [])['authorization']['status'] == 'Verification required'
+
+
 def test_99205_transplant_rule_requires_confirmed_indication():
     result, context = case('UnitedHealthcare', 'Choice Plus', '99205')
     ordinary = evaluate(result, context, [])['authorization']
