@@ -1,4 +1,5 @@
 import type { PrevisitEstimate } from '../../services/api/commercial-estimator'
+import type { CostBreakdownRow } from '../insurance-estimate/CostBreakdownTable'
 import { requirementForLine } from './requirementForLine'
 import { aetnaReferenceRequirement } from './aetnaReferenceRequirements'
 
@@ -45,4 +46,44 @@ export function requirementStatus(result: PrevisitEstimate, kind: 'referral' | '
       return `CPT ${line.code}: ${status}`
     })
     .join('; ')
+}
+
+export function commercialRequirementRows(
+  result: PrevisitEstimate,
+  aetnaRateReference: boolean,
+  cignaCardReferral: boolean,
+): CostBreakdownRow[] {
+  const lines = result.price_range?.mode === 'services' ? result.price_range.lines || [] : []
+  const aetnaOfficeResearch =
+    aetnaRateReference &&
+    result.service_date >= '2026-11-01' &&
+    result.service_date <= '2026-12-31' &&
+    lines.length === 1 &&
+    lines[0].code === '99203'
+  const referral = requirementStatus(result, 'referral')
+  const authorization = requirementStatus(result, 'authorization')
+  const referralResearch = aetnaOfficeResearch && referral === 'CPT 99203: not determined'
+  const authorizationResearch = aetnaOfficeResearch && authorization === 'CPT 99203: not determined'
+  return [
+    {
+      label: 'Referral',
+      value: referralResearch
+        ? 'CPT 99203: published PPO says no PCP referral; verify member plan'
+        : referral,
+      detail: cignaCardReferral
+        ? 'The card says no specialist referral is required; confirm any separate selected-CPT requirement.'
+        : referralResearch
+          ? 'Aetna Medicare Signature (PPO) H2293-016 2026 Summary of Benefits; the member’s exact plan ID has not been confirmed.'
+          : undefined,
+    },
+    {
+      label: 'Prior authorization',
+      value: authorizationResearch
+        ? 'CPT 99203: absent from Aetna precert list; verify member terms'
+        : authorization,
+      detail: authorizationResearch
+        ? 'Aetna participating-provider precertification list updated 1 Nov 2026; this research is not member-specific approval.'
+        : undefined,
+    },
+  ]
 }
