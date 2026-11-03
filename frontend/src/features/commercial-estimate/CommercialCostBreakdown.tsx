@@ -7,16 +7,7 @@ import CommercialCostTables from './CommercialCostTables'
 import { collectionAtVisitRow } from './collectionAtVisitRow'
 import { money, range } from './format'
 import { requirementStatus } from './commercialRequirementStatus'
-import {
-  aetnaOfficeReferenceCopay,
-  aetnaOfficePlanningCopay,
-  aetnaPendingOfficeCopay,
-  cardOfficePlanningCopay,
-  payerReportedPartialCopay,
-  publishedHumanaOfficeCopay,
-  specialistOfficeCoinsurance,
-  specialistOfficeCopay,
-} from './payerReportedPartialCopay'
+import * as copay from './payerReportedPartialCopay'
 import { referenceCoverageRow } from './referenceCoverageRow'
 import { limitSummary, unknown } from './limitSummary'
 import { resolvedAllowedTotal } from './resolvedAllowedTotal'
@@ -58,20 +49,21 @@ export default function CommercialCostBreakdown({
   const surgicalFamilyDeductible = limitSummary(reportedResult, 'deductible', 'FAMILY', '2')
   const lineCoinsurance = [...new Set(lines.map((line) => line.benefits?.coinsurance_percent))]
   const reportedCoinsurance = result.reference_benefits
-    ? specialistOfficeCoinsurance(reportedResult)
+    ? copay.specialistOfficeCoinsurance(reportedResult)
     : lines.length
       ? lineCoinsurance.length === 1
         ? lineCoinsurance[0]
         : null
       : benefits?.coinsurance_percent
-  const reportedOfficeCopay = specialistOfficeCopay(reportedResult)
-  const officeReferenceCopay = aetnaOfficeReferenceCopay(result, model)
-  const humanaReferenceCopay = publishedHumanaOfficeCopay(result, model)
-  const partialOfficeCopay = payerReportedPartialCopay(result, model)
-  const pendingAetnaCopay = aetnaPendingOfficeCopay(result, model)
+  const reportedOfficeCopay = copay.specialistOfficeCopay(reportedResult)
+  const singleOfficeCopayLine = copay.singleOfficeCopayLine(lines)
+  const officeReferenceCopay = copay.aetnaOfficeReferenceCopay(result, model)
+  const humanaReferenceCopay = copay.publishedHumanaOfficeCopay(result, model)
+  const partialOfficeCopay = copay.payerReportedPartialCopay(result, model)
+  const pendingAetnaCopay = copay.aetnaPendingOfficeCopay(result, model)
   const cardPlanningCopay =
     partialOfficeCopay == null && officeReferenceCopay == null && humanaReferenceCopay == null
-      ? cardOfficePlanningCopay(result, model)
+      ? copay.cardOfficePlanningCopay(result, model)
       : null
   const components = summary?.components
   const diagnosticCopay =
@@ -101,7 +93,7 @@ export default function CommercialCostBreakdown({
     !model.cash && !model.previousEstimate && result.collection_guidance?.amount_cents == null
       ? result.aetna_diagnostic_reference
       : null
-  const aetnaCopayPlanning = aetnaOfficePlanningCopay(result, model, lines)
+  const aetnaCopayPlanning = copay.aetnaOfficePlanningCopay(result, model, lines)
   const insuredRows: CostBreakdownRow[] = [
     referenceCoverageRow(result, model, benefits),
     { label: 'Network', value: model.networkLabel },
@@ -210,18 +202,15 @@ export default function CommercialCostBreakdown({
                         ? `${money(diagnosticCopay)} once per day`
                         : calculated && components?.copay_cents != null
                           ? money(components.copay_cents)
-                          : lines.some((line) => line.benefits?.copay_cents != null)
-                            ? lines
-                                .map(
-                                  (line) =>
-                                    `CPT ${line.code}: ${line.benefits.copay_cents != null ? money(line.benefits.copay_cents) : 'not returned'}`,
-                                )
-                                .join('; ')
-                            : !lines.length && reportedOfficeCopay != null
-                              ? `${money(reportedOfficeCopay)} specialist office visit · payer-reported`
-                              : cardPlanningCopay != null
-                                ? `${money(cardPlanningCopay)} specialist office visit · printed on card`
-                                : unknown,
+                          : singleOfficeCopayLine
+                            ? money(singleOfficeCopayLine.benefits.copay_cents!)
+                            : lines.some((line) => line.benefits?.copay_cents != null)
+                              ? lines.map(copay.formatCopayLine).join('; ')
+                              : !lines.length && reportedOfficeCopay != null
+                                ? `${money(reportedOfficeCopay)} specialist office visit · payer-reported`
+                                : cardPlanningCopay != null
+                                  ? `${money(cardPlanningCopay)} specialist office visit · printed on card`
+                                  : unknown,
       detail: botoxPreview
         ? 'No injection copay was included in this provisional calculation'
         : humanaReferenceCopay != null
@@ -244,11 +233,13 @@ export default function CommercialCostBreakdown({
                         components?.copay_cents === 0 &&
                         !lines.some((line) => line.benefits?.copay_cents != null)
                       ? 'No separate copay was applied to the priced CPTs'
-                      : !lines.length && reportedOfficeCopay != null
-                        ? 'Payer category term; applicability to planned CPTs and visit date is not confirmed'
-                        : cardPlanningCopay != null
-                          ? 'Card-based office suggestion; payer applicability and imaging cost are unresolved'
-                          : undefined,
+                      : singleOfficeCopayLine
+                        ? `CPT ${singleOfficeCopayLine.code} specialist office copay. Confirm visit-date coverage, applicable billing protections, and prior payments before collecting.`
+                        : !lines.length && reportedOfficeCopay != null
+                          ? 'Payer category term; applicability to planned CPTs and visit date is not confirmed'
+                          : cardPlanningCopay != null
+                            ? 'Card-based office suggestion; payer applicability and imaging cost are unresolved'
+                            : undefined,
     },
     {
       label: 'Individual deductible',

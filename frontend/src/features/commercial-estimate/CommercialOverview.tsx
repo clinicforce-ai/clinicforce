@@ -10,14 +10,7 @@ import TemporaryRateReference from './TemporaryRateReference'
 import EstimateSources from './EstimateSources'
 import { openServiceDetails } from './openServiceDetails'
 import ArrivalAmountSummary from './ArrivalAmountSummary'
-import {
-  aetnaOfficePlanningCopay,
-  aetnaPendingOfficeCopay,
-  aetnaOfficeReferenceCopay,
-  cardOfficePlanningCopay,
-  payerReportedPartialCopay,
-  publishedHumanaOfficeCopay,
-} from './payerReportedPartialCopay'
+import * as copay from './payerReportedPartialCopay'
 import PublishedPlanBenefit from './PublishedPlanBenefit'
 import UhcMedicarePpoBenefitTable from './UhcMedicarePpoBenefitTable'
 import CommercialCostBreakdown from './CommercialCostBreakdown'
@@ -63,13 +56,13 @@ export default function CommercialOverview({
       ? [...new Set(result.price_range.lines?.map((line) => line.code).filter(Boolean) || [])]
       : []
   const plannedCodeLabel = plannedCodes.map((code) => `CPT ${code}`).join(', ')
-  const aetnaReferenceCopay = aetnaOfficeReferenceCopay(result, model)
-  const humanaReferenceCopay = publishedHumanaOfficeCopay(result, model)
+  const aetnaReferenceCopay = copay.aetnaOfficeReferenceCopay(result, model)
+  const humanaReferenceCopay = copay.publishedHumanaOfficeCopay(result, model)
   const payerReportedPartialCents =
-    aetnaReferenceCopay ?? humanaReferenceCopay ?? payerReportedPartialCopay(result, model)
-  const pendingAetnaCopay = aetnaPendingOfficeCopay(result, model)
+    aetnaReferenceCopay ?? humanaReferenceCopay ?? copay.payerReportedPartialCopay(result, model)
+  const pendingAetnaCopay = copay.aetnaPendingOfficeCopay(result, model)
   const cardPlanningCents =
-    payerReportedPartialCents == null ? cardOfficePlanningCopay(result, model) : null
+    payerReportedPartialCents == null ? copay.cardOfficePlanningCopay(result, model) : null
   const combinedPlan = !cash && !previousEstimate ? result.combined_emg_plan : null
   const showSelectedRequirements = shouldShowSelectedRequirements(
     result,
@@ -88,9 +81,10 @@ export default function CommercialOverview({
     combinedPlan != null ||
     provisionalAmount != null ||
     !!model.estimatedShare ||
-    aetnaOfficePlanningCopay(result, model, result.price_range?.lines || []) != null ||
+    copay.aetnaOfficePlanningCopay(result, model, result.price_range?.lines || []) != null ||
     payerReportedPartialCents != null ||
     pendingAetnaCopay != null ||
+    copay.aetnaPriorDateReferenceCopay(result, model) != null ||
     cardPlanningCents != null
   const patientBenefitsBound = hasPatientBinding(result.identity)
   const networkWarnings = (result.network_evidence?.mismatch_warnings || []).filter(

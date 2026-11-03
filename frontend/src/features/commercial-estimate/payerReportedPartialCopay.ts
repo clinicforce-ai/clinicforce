@@ -4,6 +4,57 @@ import type { CommercialEstimateModel } from './useCommercialEstimateModel'
 import { patientBenefitsBound } from './identityBinding'
 import { firstSelectedCptIssue } from './selectedCptIssue'
 import { networkEvidenceStatus } from './networkEvidenceStatus'
+import { money } from './format'
+
+export function singleOfficeCopayLine(lines: VisitPricedLine[]): VisitPricedLine | null {
+  const line = lines.length === 1 ? lines[0] : null
+  return line &&
+    /^992(?:0[2-5]|1[2-5])$/.test(line.code) &&
+    line.units === 1 &&
+    line.benefits?.copay_cents != null
+    ? line
+    : null
+}
+
+export function formatCopayLine(line: VisitPricedLine): string {
+  return `CPT ${line.code}: ${line.benefits?.copay_cents != null ? money(line.benefits.copay_cents) : 'not returned'}`
+}
+
+export function aetnaPriorDateReferenceCopay(
+  result: PrevisitEstimate,
+  model: CommercialEstimateModel,
+): number | null {
+  const benefits = result.reference_benefits ?? result.benefits
+  const line = singleOfficeCopayLine(
+    result.price_range?.mode === 'services' ? result.price_range.lines || [] : [],
+  )
+  if (
+    model.cash ||
+    model.previousEstimate ||
+    model.calculating ||
+    model.amount ||
+    result.collection_guidance?.amount_cents != null ||
+    !/^aetna$/i.test(result.payer?.trim() || '') ||
+    benefits?.active !== true ||
+    benefits.service_date_matches !== false ||
+    benefits.coverage_status_conflict ||
+    benefits.coverage_dates_invalid ||
+    benefits.network_conflict ||
+    benefits.historical_only ||
+    benefits.source_errors?.length ||
+    benefits.has_secondary ||
+    benefits.qmb_status === 'protected' ||
+    result.benefits?.qmb_status === 'protected' ||
+    result.billing_protection?.status === 'qmb' ||
+    result.recovery?.reason_code === 'multiple_active_policies' ||
+    result.recovery?.reason_code === 'same_policy_evidence_conflict' ||
+    result.price_range?.service_issues?.length ||
+    !line
+  )
+    return null
+  const copay = specialistOfficeCopay({ ...result, benefits })
+  return copay === line.benefits.copay_cents ? copay : null
+}
 
 export function cardOfficePlanningCopay(
   result: PrevisitEstimate,
