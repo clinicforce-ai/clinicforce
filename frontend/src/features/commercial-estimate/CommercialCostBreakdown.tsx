@@ -17,7 +17,7 @@ import {
   commercialVisitReason,
 } from './commercialCptRows'
 import { commercialOopRows, familyOopLimitApplied } from './commercialOopRows'
-import { cignaCardReference } from './cignaCardReference'
+import { cignaCardReference, cignaCardRows } from './cignaCardReference'
 export default function CommercialCostBreakdown({
   model,
   result,
@@ -236,6 +236,7 @@ export default function CommercialCostBreakdown({
                               ? 'The card prints tiered office copays. Confirm the provider tier and a separately performed office visit; neither amount is a diagnostic CPT copay.'
                               : undefined,
     },
+    ...cignaCardRows(cignaCard, cignaFeeProxy),
     {
       label: 'Individual deductible',
       value: aetnaNoOfficeDeductible
