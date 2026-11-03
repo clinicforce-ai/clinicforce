@@ -42,7 +42,7 @@ from app.api.routers.commercial_flow.commercial_recovery_cards import _unique_ec
     "fresh payer check includes service categories from saved selected CPTs. For BCBSTX route QDTRP, "
     "each service category uses its own 270 inquiry; linked responses must match the member, medical "
     "plan and visit date before combined pricing. A missing second response leaves collection unresolved. "
-    "A matching exact-CPT Stedi inquiry automatically resolves authorization for the bound member and visit setting. A current Aetna Oxy PPO with Rx in-network office CPT 99204 may use the published 2026 no-referral and no-precertification rules; other CPTs need separate decisions. A signed "
+    "A matching exact-CPT Stedi inquiry automatically resolves authorization for the bound member and visit setting. A compatible fresh saved 271 can trigger a missing CPT inquiry without repeating the plan check; an uncertain CPT inquiry is held for review. A corroborated Cigna member suffix supports the member-specific rule check, and a single Cigna OAP product label uses the Open Access Plus office referral rule. A current Aetna Oxy PPO with Rx in-network office CPT 99204 may use the published 2026 no-referral and no-precertification rules; other CPTs need separate decisions. A signed "
     "same-payer clinic agreement may set benefits.network_source to clinic_group_agreement and "
     "return mismatch_warnings for differing product or provider details. A matching in-network UHC "
     "Group LPPO diagnostic visit may show a provisional per-CPT Blue Cross fee proxy when payer "
@@ -488,7 +488,7 @@ async def previsit_estimate(value: _api.PrevisitInput, request: _api.Request, ba
         _api, case=case, result=result, inputs=inputs, source=source,
         session=session, coverage=coverage, provider=provider,
         background_tasks=background_tasks, requested_stc=requested_stc,
-        payer_id=payer_id, refresh_benefits=value.refresh_benefits,
+        payer_id=payer_id, refresh_benefits=value.refresh_benefits, api_key=api_key,
     )
     if reused_result is not None:
         return reused_result

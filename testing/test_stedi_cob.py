@@ -244,6 +244,39 @@ def test_reused_fresh_271_rechecks_cob_preflight_without_repeating_eligibility(o
     assert followup.await_count == int(other_coverage)
 
 
+def test_reused_fresh_271_completes_missing_cpt_inquiry_without_repeating_plan_check():
+    case, session = _saved_case()
+    case['previsit'].update(checked_at=datetime.now(timezone.utc).isoformat(),
+                            requested_service_types=['30'], benefits=BENEFITS)
+    case['previsit_raw_object_key'] = 'protected-271'
+    result = {'issues': [], 'payer': 'Cigna'}
+
+    def finish(value, *_args):
+        value['codes'] = [{'id': 'office', 'code': '99203', 'units': 1}]
+
+    async def exact(_api, _result, saved_case, *_args):
+        saved_case['cpt_authorization'] = {'state': 'complete'}
+        return saved_case
+
+    with patch.object(api.visit_estimate, 'reconcile_eligibility', return_value={'requires_review': False}), \
+         patch.object(api.object_store, 'get_object_bytes', return_value=api.json.dumps(RESPONSE).encode()) as raw, \
+         patch.object(api, '_case_benefits', return_value={**BENEFITS, 'network_status': 'in_network'}), \
+         patch.object(api, '_finish_previsit', side_effect=finish) as finish_call, \
+         patch.object(api, '_save', side_effect=lambda value, *_: value), \
+         patch.object(api, '_previsit_result', return_value={'status': 'reused'}), \
+         patch('app.api.routers.commercial_flow.commercial_previsit_reuse.check_cpt_authorization',
+               new=AsyncMock(side_effect=exact), create=True) as exact_call:
+        reused = asyncio.run(reuse_previsit_case(api, case=case, result=result,
+            inputs={'service_date': date.today().isoformat()}, source={}, session=session,
+            coverage={}, provider=PROVIDER, background_tasks=None,
+            requested_stc=['30'], payer_id='62308', refresh_benefits=False,
+            api_key='synthetic-key'))
+    assert reused == {'status': 'reused'}
+    raw.assert_called_once_with('protected-271')
+    exact_call.assert_awaited_once()
+    assert finish_call.call_count == 2
+
+
 def test_wrong_service_date_271_is_not_reused_on_visit_day():
     case, session = _saved_case()
     case['previsit'].update(checked_at=datetime.now(timezone.utc).isoformat(),

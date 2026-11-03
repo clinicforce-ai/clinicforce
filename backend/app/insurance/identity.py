@@ -39,7 +39,7 @@ def payer_identity_verified(comparison: dict | None) -> bool:
     return patient_benefits_bound(comparison) and (
         comparison.get('status') in {'matched', 'reconciled'}
         or comparison.get('status') == 'warning'
-        and comparison.get('reconciliation_rule') == 'payer_matched_patient'
+        and comparison.get('reconciliation_rule') in {'payer_matched_patient', 'cigna_member_suffix'}
     )
 
 
