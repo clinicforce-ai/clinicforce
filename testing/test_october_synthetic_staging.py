@@ -116,6 +116,23 @@ async def _run_fake_patients_seed_save_reload_and_fastapi(monkeypatch):
                 assert seeded.status_code == 200
                 cases = seeded.json()['cases']
                 assert len(cases) == len(SCENARIOS)
+                dashboard = await client.get('/api/staff/patients/dashboard')
+                assert dashboard.status_code == 200
+                fake_patient = next(row for row in dashboard.json()['patients']
+                                    if row['family_name'] == 'CollectionFixture39')
+                assert fake_patient['ecw_linked'] is False
+                assert fake_patient['synthetic_appointment_date'] == '2026-11-03'
+                appointments = await client.get(
+                    f"/api/staff/patients/{fake_patient['clinic_patient_id']}/appointments?include_ecw=true")
+                assert appointments.status_code == 200
+                assert appointments.json()['ecw_status'] == 'not_linked'
+                assert [row['date'] for row in appointments.json()['appointments']] == ['2026-11-03']
+                monkeypatch.setenv('PUBLIC_BASE_URL', 'https://app.clinicforce.ai')
+                production_dashboard = await client.get('/api/staff/patients/dashboard')
+                assert 'synthetic_appointment_date' not in next(
+                    row for row in production_dashboard.json()['patients']
+                    if row['family_name'] == 'CollectionFixture39')
+                monkeypatch.setenv('PUBLIC_BASE_URL', 'https://staging.clinicforce.ai')
                 for row, (_, share, collect, decision) in zip(cases, SCENARIOS):
                     case_id = row['case_id']
                     response = await client.get(f'/api/doctor/insurance/commercial/cases/{case_id}/previsit',

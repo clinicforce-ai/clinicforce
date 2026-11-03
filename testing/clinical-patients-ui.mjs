@@ -29,6 +29,12 @@ const patients = Array.from({ length: 6 }, (_, index) => ({
   intakes: [],
   intake_ids: [],
 }))
+patients.push({
+  id: '7', clinic_patient_id: '7', given_name: 'Synthetic', family_name: 'CollectionFixture',
+  birth_date: '1990-01-01', account_status: 'clinic', card_status: 'missing',
+  identity_status: 'unverified', ecw_linked: false, synthetic_appointment_date: future,
+  intakes: [], intake_ids: [],
+})
 
 await page.route((url) => url.pathname.startsWith('/api/'), async (route) => {
   const path = new URL(route.request().url()).pathname
@@ -48,7 +54,7 @@ await page.route((url) => url.pathname.startsWith('/api/'), async (route) => {
   } else if (path === '/api/staff/patients/dashboard') {
     body = {
       patients,
-      counts: { all: 6, accounts_with_cards: 3, accounts_without_cards: 3, card_only: 0, other: 0 },
+      counts: { all: 7, accounts_with_cards: 3, accounts_without_cards: 3, card_only: 0, other: 1 },
     }
   } else if (path.endsWith('/appointments')) {
     const patientId = path.split('/')[4]
@@ -91,12 +97,14 @@ try {
   await page.getByRole('button', { name: 'Upcoming patients' }).click()
   assert.equal(await groups.count(), 1)
   const futureGroup = page.locator('section[aria-labelledby="clinical-selected-period-title"] .clinical-visit-group')
-  assert.match(await futureGroup.locator('summary').innerText(), /2 patients/)
+  assert.match(await futureGroup.locator('summary').innerText(), /3 patients/)
   await futureGroup.locator('summary').click()
   assert.deepEqual(await futureGroup.locator('.clinical-patient-open strong').allTextContents(), [
     'Patient 02',
     'Patient 01',
+    'Synthetic CollectionFixture',
   ])
+  assert.equal(await futureGroup.getByText('Synthetic staging appointment').count(), 1)
   await page.getByRole('button', { name: 'Today’s patients' }).click()
   await page.getByRole('button', { name: 'Previous patients' }).click()
   const pastGroups = page.locator('section[aria-labelledby="clinical-selected-period-title"] .clinical-visit-group')

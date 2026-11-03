@@ -178,7 +178,7 @@ export default function ClinicalPatientDashboard({
     ) || []
   const groups = new Map<string, ClinicalPatient[]>()
   for (const patient of patients) {
-    const day = visitResults[patient.id]?.day || 'undated'
+    const day = visitResults[patient.id]?.day || patient.synthetic_appointment_date || 'undated'
     const group = groups.get(day)
     if (group) group.push(patient)
     else groups.set(day, [patient])
@@ -229,6 +229,7 @@ export default function ClinicalPatientDashboard({
             >
               <span>
                 <strong>{name(patient)}</strong>
+                {patient.synthetic_appointment_date && <small>Synthetic staging appointment</small>}
                 <small>Date of birth: {patient.birth_date || 'Needs confirmation'}</small>
                 <small>
                   {accountLabel(patient.account_status)}

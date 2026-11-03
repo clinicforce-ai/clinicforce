@@ -176,6 +176,21 @@ def staging_synthetic_due(practice_id: str, start: str, end: str, limit: int = 1
     return [json.loads(row['workflow_json']) for row in rows]
 
 
+def staging_synthetic_appointment_dates(practice_id: str) -> dict[str, str]:
+    """Return dates only for marked staging fixtures with an invented appointment."""
+    with _connection() as connection:
+        rows = connection.execute(
+            """SELECT practice_patient_id AS patient_id,
+                      workflow_json::jsonb #>> '{previsit_context,result,service_date}' AS visit_date
+               FROM insurance_cases WHERE practice_id=%s
+                 AND workflow_json::jsonb ->> 'synthetic_fixture' = 'true'
+                 AND workflow_json::jsonb #>> '{previsit_context,source,appointment_id}'
+                     LIKE 'synthetic-appointment-%%'
+               ORDER BY id""", (practice_id,)).fetchall()
+    return {row['patient_id']: row['visit_date'] for row in rows
+            if row['patient_id'] and row['visit_date']}
+
+
 def save_case(case: dict[str, Any], patient_id: str, share_manifest_id: str, event: str, *, snapshot: dict | None = None, **scope) -> dict[str, Any] | None:
     now = _now()
     owner, values = _owner(patient_id, share_manifest_id, **scope)

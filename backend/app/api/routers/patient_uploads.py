@@ -1,6 +1,7 @@
 """Account-free, write-only insurance submissions and authenticated clinic link management."""
 
 import asyncio
+import os
 from datetime import date
 from pathlib import Path
 from typing import Annotated
@@ -120,7 +121,10 @@ async def create_link(body: Create, request: Request):
     return JSONResponse(created(row, code, for_staff=True), status_code=201, headers=HEADERS)
 
 
-@router.get("/api/staff/patients/dashboard")
+@router.get("/api/staff/patients/dashboard", description=(
+    "List practice-owned clinic patients. Confirmed eCW appointments are read separately. "
+    "On staging only, marked synthetic NMCT cases also include a synthetic_appointment_date "
+    "for the invented appointment shown in the Upcoming patients section."))
 async def patient_dashboard(request: Request):
     """List practice-owned patients, including whether a confirmed eCW link is available.
 
@@ -128,7 +132,18 @@ async def patient_dashboard(request: Request):
     each linked patient's appointment history through the scoped history route.
     """
     actor = await staff.require_staff(request)
-    return JSONResponse(await run_in_threadpool(staff_store.patient_dashboard, actor["practice_id"]), headers=HEADERS)
+    dashboard = await run_in_threadpool(staff_store.patient_dashboard, actor["practice_id"])
+    if (os.getenv('PUBLIC_BASE_URL', '').rstrip('/') == 'https://staging.clinicforce.ai'
+            and os.getenv('COLLECTION_ENGINE_V2_ENABLED') == 'true'):
+        from app.insurance import store
+        from app.insurance.staging_synthetic import STAGING_NMCT_PRACTICE_ID
+        if actor['practice_id'] == STAGING_NMCT_PRACTICE_ID:
+            dates = await run_in_threadpool(store.staging_synthetic_appointment_dates,
+                                            actor['practice_id'])
+            for patient in dashboard['patients']:
+                if day := dates.get(patient.get('clinic_patient_id')):
+                    patient['synthetic_appointment_date'] = day
+    return JSONResponse(dashboard, headers=HEADERS)
 
 
 @router.get("/api/staff/upload-links")
