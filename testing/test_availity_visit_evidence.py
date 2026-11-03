@@ -1,6 +1,8 @@
 """Dated portal evidence must bind to one saved specialist visit."""
 import fitz
 import pytest
+from io import BytesIO
+from starlette.datastructures import Headers, UploadFile
 
 from app.api.routers import commercial_estimator  # noqa: F401 - initialize route imports
 from app.insurance.availity_visit_evidence import parse_visit_pdf
@@ -76,3 +78,39 @@ def test_dated_availity_reference_exposes_only_office_fee_reference(monkeypatch)
     assert reference['lines'][0]['unit_reference_cents'] == 11960
     assert 'planning reference' in reference['message']
     assert 'allowed_cents' not in result
+
+
+@pytest.mark.asyncio
+async def test_admin_upload_binds_saved_visit_and_keeps_source_protected(monkeypatch):
+    from app.api.routers.commercial_flow import commercial_previsit_availity as route
+
+    case = {
+        'id': 'synthetic-case', 'source_mode': 'commercial_previsit', 'revision': 2,
+        'previsit_context': {'context_token': 'synthetic-token',
+            'inputs': {'service_date': '2026-11-03', 'place_of_service': '11',
+                       'rendering_provider': {'npi': '1234567890'}},
+            'source': {'rendering_provider': {'npi': '1234567890', 'roles': ['Neurology']}},
+            'result': {'service_date': '2026-11-03'}},
+    }
+    async def session(_):
+        return {'staff': {'role': 'admin'}, 'patient_id': 'synthetic-patient',
+                'share_manifest_id': None, 'practice_id': 'synthetic-practice'}
+    writes = []
+    monkeypatch.setattr(route._api, '_session', session)
+    monkeypatch.setattr(route._api, '_scope', lambda _: {})
+    monkeypatch.setattr(route._api.store, 'get_case', lambda *_args, **_kwargs: case)
+    monkeypatch.setattr(route._api, '_coverage_snapshot', lambda *_: {
+        'patient_first': 'Jane', 'patient_last': 'Sample', 'patient_birth_date': '1947-08-20'})
+    monkeypatch.setattr(route._api.object_store, 'put_staff_document',
+        lambda *_args: writes.append('source') or 'protected-object-key')
+    monkeypatch.setattr(route._api, '_save', lambda value, *_: value)
+    monkeypatch.setattr(route._api, '_previsit_result',
+        lambda value, *_: {'availity_visit_reference': value['availity_visit_reference']['evidence']})
+    upload = UploadFile(file=BytesIO(_pdf()), filename='synthetic.pdf',
+                        headers=Headers({'content-type': 'application/pdf'}))
+    result = await route.attach_availity_eligibility('synthetic-case', None,
+        revision=2, context_token='synthetic-token', file=upload)
+    assert result['availity_visit_reference']['copay_cents'] == 7000
+    assert 'raw_object_key' not in result['availity_visit_reference']
+    assert case['availity_visit_reference']['raw_object_key'] == 'protected-object-key'
+    assert writes == ['source']

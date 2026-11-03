@@ -36,9 +36,9 @@ async def attach_availity_eligibility(case_id: str, request: _api.Request,
     coverage = _api._coverage_snapshot(inputs, source)
     rendering = source.get('rendering_provider') or {}
     if (str(inputs.get('place_of_service') or '') != '11' or
-            _api.provider_specialty.office_role(rendering.get('roles') or []) != 'specialist' or
+            _api.provider_specialty.office_role(rendering.get('roles') or []) == 'primary_care' or
             str((inputs.get('rendering_provider') or {}).get('npi') or '') != str(rendering.get('npi') or '')):
-        raise _api.HTTPException(422, 'This reference requires a specialist office visit at place of service 11.')
+        raise _api.HTTPException(422, 'This specialist reference requires a matching provider and office place of service 11.')
     try:
         evidence = parse_visit_pdf(content,
             first=str(coverage.get('patient_first') or ''),
