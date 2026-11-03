@@ -95,6 +95,10 @@ export default function ArrivalAmountSummary({
   const pendingAetnaCopay = aetnaPendingOfficeCopay(result, model)
   const pendingBluecardCopay = pendingBluecardOfficeCopay(result, model)
   const priorDateAetnaCopay = aetnaPriorDateReferenceCopay(result, model)
+  const priorDateAetnaBalance =
+    priorDateAetnaCopay == null
+      ? null
+      : Math.max(0, priorDateAetnaCopay - (result.encounter_summary?.payments_verified_cents || 0))
   const pendingCignaCopay = pendingCignaOfficeCopay(result, model)
   const needsAction = model.amountText === 'Insured amount unavailable'
   const additionalServicesPending = result.price_range?.lines?.some(
@@ -170,7 +174,7 @@ export default function ArrivalAmountSummary({
                             : cardPlanningCopay != null
                               ? money(cardPlanningCopay)
                               : priorDateAetnaCopay != null
-                                ? money(priorDateAetnaCopay)
+                                ? money(priorDateAetnaBalance!)
                                 : needsAction
                                   ? action.title
                                   : model.amountText}

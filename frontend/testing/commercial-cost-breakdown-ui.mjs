@@ -439,6 +439,54 @@ try {
     null,
   )
 
+  const priorDateSignature = {
+    ...signatureOffice,
+    benefits: {
+      ...signatureOffice.benefits,
+      service_date_matches: false,
+      network_status: 'unknown',
+      reported_options: [{ kind: 'copay', service_type_code: '98', amount_cents: 7000,
+        coverage_level: 'INDIVIDUAL', network: 'IN_AND_OUT_OF_NETWORK',
+        places_of_service: ['11'], payer_note: 'Specialist Visit or Evaluation' }],
+    },
+    price_range: { ...signatureOffice.price_range, complete: false,
+      lines: [{ ...signatureOffice.price_range.lines[0],
+        benefits: { ...signatureOffice.price_range.lines[0].benefits,
+          service_date_matches: false, network_status: 'unknown' } }] },
+  }
+  const priorDateTable = renderToStaticMarkup(React.createElement(CommercialCostBreakdown, {
+    model: { ...model, networkLabel: 'Not determined', policyStatus: 'Coverage dates differ from visit' },
+    result: priorDateSignature,
+  }))
+  assert(priorDateTable.includes('$119.60 Aetna fee reference'))
+  assert(priorDateTable.includes('Estimated patient share</th><td><span>$70.00'))
+  assert(priorDateTable.includes('Amount to collect at visit · pending verification</th><td><span>$70.00</span>'))
+  assert(priorDateTable.includes('published PPO says no PCP referral; verify member plan'))
+  assert(priorDateTable.includes('absent from Aetna precert list; verify member terms'))
+  const payerRequirementTable = renderToStaticMarkup(React.createElement(CommercialCostBreakdown, {
+    model, result: { ...priorDateSignature, price_range: { ...priorDateSignature.price_range,
+      lines: [{ ...priorDateSignature.price_range.lines[0],
+        benefits: { ...priorDateSignature.price_range.lines[0].benefits,
+          requirements: { referral: { required: 'required' }, authorization: { required: 'required' } } } }] } },
+  }))
+  assert(payerRequirementTable.includes('CPT 99203: required; referral status unresolved'))
+  assert(payerRequirementTable.includes('CPT 99203: required; approval status unresolved'))
+  assert(!payerRequirementTable.includes('published PPO says no PCP referral'))
+  const paidPriorDateTable = renderToStaticMarkup(React.createElement(CommercialCostBreakdown, {
+    model, result: { ...priorDateSignature, encounter_summary: { payments_verified_cents: 2000 } },
+  }))
+  assert(paidPriorDateTable.includes('Estimated patient share</th><td><span>$70.00'))
+  assert(paidPriorDateTable.includes('Amount to collect at visit · pending verification</th><td><span>$50.00</span>'))
+  const paidPriorDateHeadline = renderToStaticMarkup(React.createElement(ArrivalAmountSummary, {
+    model, result: { ...priorDateSignature, encounter_summary: { payments_verified_cents: 2000 } },
+    partialCopay: null, visibleAmount: false,
+  }))
+  assert(paidPriorDateHeadline.includes('$50.00'))
+  const priorDateQmbTable = renderToStaticMarkup(React.createElement(CommercialCostBreakdown, {
+    model, result: { ...priorDateSignature, billing_protection: { status: 'qmb' } },
+  }))
+  assert(!priorDateQmbTable.includes('Amount to collect at visit · pending verification</th><td><span>$70.00'))
+
 
   const aetna = renderToStaticMarkup(
     React.createElement(CommercialCostBreakdown, {

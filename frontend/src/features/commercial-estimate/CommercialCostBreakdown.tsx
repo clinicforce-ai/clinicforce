@@ -6,7 +6,7 @@ import { coinsuranceFormula, feeProxyFormula } from './coinsuranceFormula'
 import CommercialCostTables from './CommercialCostTables'
 import { collectionAtVisitRow, pendingBluecardOfficeCopay } from './collectionAtVisitRow'
 import { money, range } from './format'
-import { requirementStatus } from './commercialRequirementStatus'
+import { commercialRequirementRows } from './commercialRequirementStatus'
 import * as copay from './payerReportedPartialCopay'
 import { referenceCoverageRow } from './referenceCoverageRow'
 import { limitSummary, unknown } from './limitSummary'
@@ -56,6 +56,7 @@ export default function CommercialCostBreakdown({
   const humanaReferenceCopay = copay.publishedHumanaOfficeCopay(result, model)
   const partialOfficeCopay = copay.payerReportedPartialCopay(result, model)
   const pendingAetnaCopay = copay.aetnaPendingOfficeCopay(result, model)
+  const priorDateAetnaCopay = copay.aetnaPriorDateReferenceCopay(result, model)
   const pendingBluecardCopay = pendingBluecardOfficeCopay(result, model)
   const cardPlanningCopay =
     partialOfficeCopay == null && officeReferenceCopay == null && humanaReferenceCopay == null
@@ -367,14 +368,7 @@ export default function CommercialCostBreakdown({
       calculated,
       humanaReferenceCopay,
     ),
-    {
-      label: 'Referral',
-      value: requirementStatus(result, 'referral'),
-      detail: cignaCard?.specialist_referral_note
-        ? 'The card says no specialist referral is required; confirm any separate selected-CPT requirement.'
-        : undefined,
-    },
-    { label: 'Prior authorization', value: requirementStatus(result, 'authorization') },
+    ...commercialRequirementRows(result, aetnaRateReference, !!cignaCard?.specialist_referral_note),
     commercialCashAlternativeRow(price, model.cashPrice, automaticCashFallback, pricedCashLines),
   ]
   const patientShare = automaticCashFallback
@@ -406,19 +400,21 @@ export default function CommercialCostBreakdown({
                   ? `${money(humanaReferenceCopay)} conditional in-network office copay · collection pending`
                   : aetnaCopayPlanning != null
                     ? `${money(aetnaCopayPlanning)} provisional office copay`
-                    : pendingBluecardCopay != null
-                      ? `${money(lines[0].benefits.copay_cents!)} office-only estimate`
-                      : model.estimatedShare ||
-                        (partialOfficeCopay != null
-                          ? `${money(model.officeCopayLine!.benefits.copay_cents!)} office-only planning estimate`
-                          : cardPlanningCopay != null
-                            ? `${money(cardPlanningCopay)} office-only card suggestion`
-                            : cignaCard
-                              ? `${money(cignaCard.nontier1_specialist_copay_cents)} non-Tier-1 office-only reference; diagnostic share pending`
-                              : null) ||
-                        (model.provisionalAmount != null
-                          ? money(model.provisionalAmount)
-                          : model.patientPrice || 'Not fully calculated')
+                    : priorDateAetnaCopay != null
+                      ? `${money(priorDateAetnaCopay)} office copay · pending verification`
+                      : pendingBluecardCopay != null
+                        ? `${money(lines[0].benefits.copay_cents!)} office-only estimate`
+                        : model.estimatedShare ||
+                          (partialOfficeCopay != null
+                            ? `${money(model.officeCopayLine!.benefits.copay_cents!)} office-only planning estimate`
+                            : cardPlanningCopay != null
+                              ? `${money(cardPlanningCopay)} office-only card suggestion`
+                              : cignaCard
+                                ? `${money(cignaCard.nontier1_specialist_copay_cents)} non-Tier-1 office-only reference; diagnostic share pending`
+                                : null) ||
+                          (model.provisionalAmount != null
+                            ? money(model.provisionalAmount)
+                            : model.patientPrice || 'Not fully calculated')
   const rows: CostBreakdownRow[] =
     model.cash && !automaticCashFallback
       ? [
@@ -464,15 +460,17 @@ export default function CommercialCostBreakdown({
                         ? feeProxy.message
                         : aetnaCopayPlanning != null
                           ? `${money(aetnaCopayPlanning)} copay + ${money(0)} deductible + 0% × Aetna allowed amount = ${money(aetnaCopayPlanning)} before the unknown allowance cap. Confirm the visit conditions and final claim amount.`
-                          : pendingBluecardCopay != null
-                            ? 'One payer-reported specialist office copay. The selected visit has no applicable deductible or additional coinsurance; the final share remains subject to the allowed charge and processed claim.'
-                            : calculated
-                              ? 'Copay + deductible applied + coinsurance − allowed and out-of-pocket reductions'
-                              : cardPlanningCopay != null
-                                ? 'Printed specialist copay for one office visit; planned imaging and final payer share are unresolved.'
-                                : cignaCard
-                                  ? 'Card-printed office copay only. Diagnostic CPT share remains unknown; Cigna allowed amounts and visit-date benefits are needed.'
-                                  : 'Full share awaits applicable deductible and out-of-pocket terms',
+                          : priorDateAetnaCopay != null
+                            ? 'Payer-reported office copay after recorded payments. The saved response is for another date; confirm visit-date coverage, provider network, Medicare billing protection and any other services before charging. Full patient responsibility remains unresolved.'
+                            : pendingBluecardCopay != null
+                              ? 'One payer-reported specialist office copay. The selected visit has no applicable deductible or additional coinsurance; the final share remains subject to the allowed charge and processed claim.'
+                              : calculated
+                                ? 'Copay + deductible applied + coinsurance − allowed and out-of-pocket reductions'
+                                : cardPlanningCopay != null
+                                  ? 'Printed specialist copay for one office visit; planned imaging and final payer share are unresolved.'
+                                  : cignaCard
+                                    ? 'Card-printed office copay only. Diagnostic CPT share remains unknown; Cigna allowed amounts and visit-date benefits are needed.'
+                                    : 'Full share awaits applicable deductible and out-of-pocket terms',
           },
           ...(summary?.payments_verified_cents != null && summary.payments_verified_cents > 0
             ? [{ label: 'Already paid', value: `−${money(summary.payments_verified_cents)}` }]
@@ -488,6 +486,7 @@ export default function CommercialCostBreakdown({
       humanaReferenceCopay,
       partialOfficeCopay,
       pendingAetnaCopay,
+      priorDateAetnaCopay,
       pendingBluecardCopay,
       cardPlanningCopay,
       cignaCard,
