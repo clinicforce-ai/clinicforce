@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 from types import ModuleType
+from app.api.routers.commercial_flow.commercial_previsit_requirements import check_cpt_authorization
 
 
 SAVED_RESPONSE_UNAVAILABLE = ('The protected saved payer response could not be reopened. '
@@ -153,7 +154,7 @@ async def reuse_previsit_case(api: ModuleType, *, case: dict, result: dict,
                               inputs: dict, source: dict, session: dict,
                               coverage: dict, provider: dict, background_tasks,
                               requested_stc: list[str], payer_id: str,
-                              refresh_benefits: bool) -> dict | None:
+                              refresh_benefits: bool, api_key: str | None = None) -> dict | None:
     """Return an existing or held case result when another request is unsafe."""
     saved = case.get("previsit") or {}
     if case.get('previsit_discovery', {}).get('request_state') in {'pending', 'indeterminate'}:
@@ -201,6 +202,10 @@ async def reuse_previsit_case(api: ModuleType, *, case: dict, result: dict,
                 result['benefits'] = saved_benefits_for_review(result['benefits']) or api._previsit_benefits({}, coverage, inputs['service_date'])
                 result['issues'].append(SAVED_RESPONSE_UNAVAILABLE)
             await api.run_in_threadpool(api._finish_previsit, result, case, inputs, source, payload, session, payer_id)
+            if (payload and api_key and (case.get('cpt_authorization') or {}).get('state') not in {'pending', 'indeterminate'}):
+                case = await check_cpt_authorization(api, result, case, payload, inputs, session, api_key)
+                if (case.get('cpt_authorization') or {}).get('state') == 'complete':
+                    await api.run_in_threadpool(api._finish_previsit, result, case, inputs, source, payload, session, payer_id)
             saved_case = await api.run_in_threadpool(api._save, case, session, "previsit-recalculated")
             if api.insurance_identity.unresolved_policy_difference(result['benefits'].get('identity')):
                 saved_case.setdefault('previsit_discovery', {'request_state': 'not_requested', 'recovery_requested': True})

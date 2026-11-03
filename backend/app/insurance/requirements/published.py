@@ -239,6 +239,8 @@ def _published_rule(kind: str, result: dict, context: dict, plans: list[str], co
              for plan in plans if not generic_plan_label(plan)}
     product = next(iter(exact), '') if len(exact) <= 1 else ''
     names = context.get('payer_names') or set()
+    cigna_oap = (product in {'openaccessplus', 'cignaopenaccessplus'}
+                 or len(exact) == 1 and any(re.search(r'\bOAP\b', str(plan or ''), re.I) for plan in plans))
     in_network = benefits.get('network_status') == 'in_network'
     family = {cpt_rules.service_definition(code)['family'] for code in codes}
     office = family == {'office_consultation'}
@@ -395,7 +397,7 @@ def _published_rule(kind: str, result: dict, context: dict, plans: list[str], co
     if kind == 'authorization' and 'cigna' in names and in_network and day >= '2026-07-01':
         if product in {'cignappo', 'openaccessplus', 'cignaopenaccessplus', 'cignahmo'} and codes & {'J0585', '64612', '64615'}:
             return rule('Required', 'Cigna lists this selected drug or chemodenervation code separately for precertification. Confirm this member’s applicable care management rules and obtain approval.', CIGNA_2026_PA_SOURCE, check=True)
-        if product in {'openaccessplus', 'cignaopenaccessplus'} and codes <= (cpt_rules.NCS_CODES | cpt_rules.EMG_ADD_ONS | cpt_rules.SERVICE_FAMILIES['office_consultation']['codes']):
+        if cigna_oap and codes <= (cpt_rules.NCS_CODES | cpt_rules.EMG_ADD_ONS | cpt_rules.SERVICE_FAMILIES['office_consultation']['codes']):
             return rule('Not required', 'These selected office and EMG/NCS CPTs are absent from Cigna’s 2026 Master Precertification List for Open Access Plus.', CIGNA_OAP_DIAGNOSTIC_PA_SOURCE)
         return rule('Verification required', 'The Cigna list does not establish authorization for this selected service under the member’s exact plan. Check the member-specific precertification tool.', CIGNA_2026_PA_SOURCE, check=True)
     if (kind == 'authorization' and 'bluecard' not in product
@@ -406,7 +408,7 @@ def _published_rule(kind: str, result: dict, context: dict, plans: list[str], co
     if kind != 'referral' or not in_network:
         return None
     if 'cigna' in names:
-        if product in {'cignappo', 'openaccessplus', 'cignaopenaccessplus'}:
+        if product == 'cignappo' or cigna_oap:
             return rule('Not required', 'Cigna PPO/Open Access Plus permits in-network specialist visits without a PCP referral.', CIGNA_REFERRAL_SOURCE)
         if product == 'cignahmo':
             return rule('Required', 'Cigna HMO requires a PCP specialist referral for this neurology office visit; verify the member and referral record.', CIGNA_REFERRAL_SOURCE, check=True)

@@ -9,6 +9,7 @@ import pytest
 
 from app.api.routers import commercial_estimator as api
 from app.insurance import collection_guidance, commercial, ecw_backend, identity, provider_specialty
+from app.insurance.requirements import published
 from testing.synthetic_policy import COPAY_POLICY
 
 
@@ -45,11 +46,13 @@ def example():
     return payload, inputs, source
 
 
-def finish(payload, inputs, source, review=None):
+def finish(payload, inputs, source, review=None, payer=None):
     case = {'id': 'synthetic-case', 'revision': 0}
     if review:
         case['visit_review'] = {'context_token': api._visit_context_token(inputs, source), **review}
     result = {'benefits': api._case_benefits(payload, inputs, source, case), 'issues': [], 'checked_at': DAY + 'T12:00:00+00:00'}
+    if payer:
+        result['payer'] = payer
     route = {'stedi_payer_id': '62308', 'rules': {'collection_policy': COPAY_POLICY}}
     with patch.object(api.commercial_store, 'list_connections', return_value=[route]), \
          patch.object(api.practice_prices, 'current', return_value=None), \
@@ -154,6 +157,52 @@ def test_suffix_comparison_preserves_identifiers_and_supports_reverse_representa
     result = identity.compare(payload, api._coverage_snapshot(inputs, source))
     assert result['status'] == 'warning' and result['reconciliation_rule'] == 'cigna_member_suffix'
     assert (payload, inputs, source) == original
+
+
+def test_corroborated_cigna_member_suffix_qualifies_for_member_specific_rules():
+    payload, inputs, source = example()
+    comparison = identity.compare(payload, api._coverage_snapshot(inputs, source))
+    assert comparison['reconciliation_rule'] == 'cigna_member_suffix'
+    assert identity.payer_identity_verified(comparison)
+
+    source['active_coverages'] = 2
+    other = identity.compare(payload, api._coverage_snapshot(inputs, source))
+    assert not identity.payer_identity_verified(other)
+
+
+def test_cigna_oap_product_label_resolves_office_referral_rule():
+    payload, inputs, source = example()
+    payload['plans'][0]['name'] = 'C-24 TX NBN OAP'
+    benefits = api._case_benefits(payload, inputs, source, {})
+    result = {'payer': 'Cigna', 'benefit_source': 'Stedi', 'benefits': benefits,
+              'identity': benefits['identity']}
+    context = {'service_date': DAY, 'payer_names': {'cigna'},
+               'member_id': inputs['member_id'], 'pos': '11'}
+    referral = published._published_rule('referral', result, context,
+                                         ['C-24 TX NBN OAP'], {'99203'})
+    assert referral is not None and referral['status'] == 'Not required'
+    authorization = published._published_rule('authorization', result, context,
+                                              ['C-24 TX NBN OAP'], {'99203'})
+    assert authorization is not None and authorization['status'] == 'Not required'
+
+
+def test_cigna_oap_memory_office_visit_shows_copay_without_cigna_rate():
+    payload, inputs, source = example()
+    inputs.update(visit_type='new', reason='Memory concern')
+    payload['plans'][0]['name'] = 'C-24 TX NBN OAP'
+    payload['plans'][0]['benefits']['coPayment'][1]['amount'] = '20'
+    payload['plans'][0]['benefits']['outOfPocket'][0]['amount'] = '2076.60'
+
+    result = finish(payload, inputs, source, review={'selected_ids': ['99203:1']}, payer='Cigna')
+
+    assert [row['code'] for row in result['codes']] == ['99203']
+    assert result['benefits']['network_status'] == 'in_network'
+    assert result['benefits']['network_source'] == 'payer_participation_message'
+    assert result['price_range'].get('allowed_min_cents') is None
+    assert result['collection_guidance']['basis'] == 'office_copay'
+    assert result['collection_guidance']['amount_cents'] == 2000
+    assert result['requirement_evidence']['referral']['status'] == 'Not required'
+    assert result['requirement_evidence']['authorization']['status'] == 'Not required'
 
 
 @pytest.mark.parametrize('change', ['tmj_diagnosis', 'jaw_diagnosis', 'tmj_reason', 'no_diagnoses', 'generic_diagnosis', 'generic_exclusion', 'explicit_cpt', 'missing_role', 'unknown_pos', 'dob'])
