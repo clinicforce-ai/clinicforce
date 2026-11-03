@@ -4,6 +4,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+from textwrap import shorten
 from urllib.parse import urlparse
 
 import boto3
@@ -40,6 +41,8 @@ def _tools_for(facts: dict) -> tuple[str, ...]:
     flags = {flag for row in facts['lines'] for flag in row['review_flags']}
     if 'price_basis' in flags:
         return ('read_selected_benefit', 'read_reference_price', 'read_service_template')
+    if 'benefit_scope' in flags and {'authorization', 'referral'} & flags:
+        return ('read_selected_benefit', 'read_saved_ecw_context', 'read_saved_requirement')
     if 'benefit_scope' in flags:
         return ('read_selected_benefit', 'read_service_template', 'read_saved_ecw_context')
     if {'authorization', 'referral'} & flags:
@@ -188,6 +191,12 @@ def _input(result: dict) -> dict:
                      else decision.get('referral_obtained') != 'YES')):
                 flags.append(kind)
         return list(dict.fromkeys(flags))
+    def requirement_status(code: str) -> dict:
+        item = next((row for row in procedures if row.get('code') == code), {})
+        allowed = {'Required', 'Not required', 'Verification required', 'Not confirmed',
+                   'Denied', 'Approved'}
+        return {kind: status if (status := (item.get(kind) or {}).get('status')) in allowed
+                else 'unknown' for kind in ('referral', 'authorization')}
     coverage = result.get('benefits') or {}
     network = coverage.get('network_status')
     return {'service_date_matches': coverage.get('service_date_matches'),
@@ -195,6 +204,7 @@ def _input(result: dict) -> dict:
             'lines': [{'code': line.get('code'), 'units': line.get('units'),
                       'benefit_evidence': (line.get('benefits') or {}).get('selected_benefit_ids') or [],
                       'requirement_evidence': requirement_sources(str(line.get('code') or '')),
+                      'requirement_status': requirement_status(str(line.get('code') or '')),
                       'copay_cents': (line.get('benefits') or {}).get('copay_cents'),
                       'copay_period': (line.get('benefits') or {}).get('copay_period'),
                       'deductible_applies': (line.get('benefits') or {}).get('deductible_applies'),
@@ -221,6 +231,8 @@ def investigate(result: dict) -> dict:
               'Each evidence_ids value must exactly match a benefit_evidence or requirement_evidence ID supplied for that CPT; '
               'a CPT code is not an evidence ID. '
               'Do not invent a value, network participation, deductible waiver, copay interaction, or permission to collect. '
+              'A requirement status of Verification required means it was evaluated but neither the requirement '
+              'nor member approval is confirmed; an empty requirement_evidence list means no citable rule source. '
               'If source facts cannot decide, say what must be verified. Facts: ' + json.dumps(facts, sort_keys=True))
     try:
         client = boto3.client('bedrock-runtime', config=Config(
@@ -260,8 +272,10 @@ def investigate(result: dict) -> dict:
             citations = item.get('evidence_ids') or []
             if not isinstance(citations, list) or not citations or not set(citations) <= allowed[item['code']]:
                 continue
-            findings.append({'code': item['code'], 'finding': str(item.get('finding') or '')[:400],
-                             'evidence_ids': citations, 'next_action': str(item.get('next_action') or '')[:240]})
+            findings.append({'code': item['code'],
+                             'finding': shorten(str(item.get('finding') or ''), width=400, placeholder='…'),
+                             'evidence_ids': citations,
+                             'next_action': shorten(str(item.get('next_action') or ''), width=240, placeholder='…')})
         if proposed.get('findings') and not findings:
             raise ValueError('unsupported_research_evidence')
         return {'status': 'complete', 'fingerprint': fingerprint, 'model_id': MODEL_ID,

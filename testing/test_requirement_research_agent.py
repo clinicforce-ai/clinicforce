@@ -13,6 +13,9 @@ def test_new_office_scope_flags_reach_agent_without_patient_identity():
     assert facts['provider_network_status'] == 'unknown'
     assert facts['lines'][0]['code'] == '99203'
     assert 'benefit_scope' in facts['lines'][0]['review_flags']
+    assert facts['lines'][0]['requirement_status'] == {
+        'referral': 'Verification required', 'authorization': 'Verification required'}
+    assert 'read_saved_requirement' in insurance_research_agent._tools_for(facts)
     assert 'patient_name' not in json.dumps(facts)
 
 
@@ -48,6 +51,29 @@ def test_requirement_tools_use_official_citation_without_saved_check_link(monkey
     assert 'read_saved_requirement' in [tool['toolSpec']['name'] for tool in calls[0]['toolConfig']['tools']]
     assert 'Must stay local' not in json.dumps(calls)
     assert 'ec_private' not in json.dumps(calls)
+
+
+def test_research_request_distinguishes_unconfirmed_requirement_from_absent_source(monkeypatch):
+    value = visit('aetna_new_office_date_mismatch')
+    calls = []
+
+    class FakeBedrock:
+        def converse(self, **request):
+            calls.append(request)
+            return {'output': {'message': {'role': 'assistant', 'content': [{'text':
+                json.dumps({'findings': [{'code': '99203',
+                    'finding': 'The visit-date benefit and provider network need confirmation.',
+                    'evidence_ids': ['synthetic-benefit-prior-date'],
+                    'next_action': 'Verify the visit date and network tier.'}]})}]}}}
+
+    monkeypatch.setattr(insurance_research_agent.boto3, 'client', lambda *args, **kwargs: FakeBedrock())
+    answer = insurance_research_agent.investigate(value)
+    assert answer['status'] == 'complete'
+    prompt = calls[0]['messages'][0]['content'][0]['text']
+    assert 'Verification required means it was evaluated' in prompt
+    assert 'read_saved_requirement' in [tool['toolSpec']['name']
+                                        for tool in calls[0]['toolConfig']['tools']]
+    assert 'Synthetic CollectionFixture' not in prompt
 
 
 def test_requirement_source_tools_expose_only_scoped_saved_references():
