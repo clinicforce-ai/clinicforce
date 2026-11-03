@@ -27,7 +27,7 @@ export function pendingBluecardOfficeCopay(
     !/\b(?:blue cross|bcbs(?:tx| texas)?)\b/i.test(result.payer || '') ||
     result.plan_details?.stedi?.names?.length !== 1 ||
     !/\bPPO\b/i.test(result.plan_details.stedi.names[0]) ||
-      !/\b(?:ALTNET|BlueCard)\b/i.test(result.plan_details.stedi.names[0]) ||
+    !/\b(?:ALTNET|BlueCard)\b/i.test(result.plan_details.stedi.names[0]) ||
     !result.plan_details.stedi.verification_payer ||
     result.benefits?.active !== true ||
     result.benefits.service_date_matches === false ||
