@@ -188,7 +188,11 @@ def _input(result: dict) -> dict:
                      else decision.get('referral_obtained') != 'YES')):
                 flags.append(kind)
         return list(dict.fromkeys(flags))
-    return {'lines': [{'code': line.get('code'), 'units': line.get('units'),
+    coverage = result.get('benefits') or {}
+    network = coverage.get('network_status')
+    return {'service_date_matches': coverage.get('service_date_matches'),
+            'provider_network_status': network if network in {'in_network', 'out_of_network', 'unknown'} else 'unknown',
+            'lines': [{'code': line.get('code'), 'units': line.get('units'),
                       'benefit_evidence': (line.get('benefits') or {}).get('selected_benefit_ids') or [],
                       'requirement_evidence': requirement_sources(str(line.get('code') or '')),
                       'copay_cents': (line.get('benefits') or {}).get('copay_cents'),

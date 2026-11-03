@@ -143,23 +143,39 @@ async def due_collection_engine_scenarios(request: Request, days: int = 30) -> d
 @router.post('/collection-engine-research-check', description=(
     'Staging NMCT administrator only. Make one bounded Sonnet 5 advisory request '
     'with invented CPT and benefit facts, then return status and finding count. '
+    'The aetna_new_office_date_mismatch option reports its synthetic findings and '
+    'independent collection decision. '
     'No patient, eCW, payer or database request occurs; no collection decision is changed.'
 ))
-async def check_collection_engine_research(request: Request) -> dict:
+async def check_collection_engine_research(request: Request,
+                                           scenario: str = 'specialist_271_conflict') -> dict:
     staff = await require_staff(request)
     _staging_only(staff)
-    result = visit('specialist_271_conflict')
-    result['payer'] = 'Cigna Synthetic'
-    result['price_range']['lines'][0]['benefits']['review_reasons'] = [
-        'Prior authorization requirement needs source verification']
-    result['requirement_evidence'] = {'procedures': [{'code': '99204',
-        'authorization': {'status': 'Verification required', 'sources': [{
-            'url': 'https://www.cigna.com/health-care-providers/coverage-and-claims/precertification'}]},
-        'referral': {'status': 'Verification required', 'sources': []}}]}
+    if scenario not in {'specialist_271_conflict', 'aetna_new_office_date_mismatch'}:
+        raise HTTPException(422, 'Unknown synthetic research scenario.')
+    result = visit(scenario)
+    if scenario == 'specialist_271_conflict':
+        result['payer'] = 'Cigna Synthetic'
+        result['price_range']['lines'][0]['benefits']['review_reasons'] = [
+            'Prior authorization requirement needs source verification']
+        result['requirement_evidence'] = {'procedures': [{'code': '99204',
+            'authorization': {'status': 'Verification required', 'sources': [{
+                'url': 'https://www.cigna.com/health-care-providers/coverage-and-claims/precertification'}]},
+            'referral': {'status': 'Verification required', 'sources': []}}]}
+    else:
+        result = _prepared_result(result)
     answer = await run_in_threadpool(insurance_research_agent.investigate, result)
-    return {'synthetic_only': True, 'status': answer['status'],
+    response = {'synthetic_only': True, 'status': answer['status'],
             'finding_count': len(answer.get('findings') or []),
             'model_id': answer.get('model_id'), 'reason': answer.get('reason')}
+    if scenario == 'aetna_new_office_date_mismatch':
+        model = (result['collection_guidance'].get('visit_model') or {})
+        response.update(findings=answer.get('findings') or [],
+            collect_now_cents=model.get('collect_now_cents'),
+            modeled_cents=model.get('estimated_patient_responsibility_cents'),
+            decision=model.get('collection_decision_type'),
+            remaining_actions=model.get('remaining_actions') or [])
+    return response
 
 
 @router.get('/collection-engine-requirement-check', description=(

@@ -130,13 +130,15 @@ SCENARIOS = (
     ('skin_biopsy_day', 11500, 11500, 'APPROVED_VISIT_ADVANCE'),
     ('out_of_network_no_policy', 17669, None, 'POLICY_APPROVAL_REQUIRED'),
     ('noncovered_procedure', None, None, 'EVIDENCE_REQUIRED'),
+    ('aetna_new_office_date_mismatch', None, None, 'EVIDENCE_REQUIRED'),
 )
 
 
 def visit(name: str) -> dict:
     """Return one complete synthetic saved result; no external service is used."""
     office_only = {'specialist_271_conflict', 'office_copay_approved', 'protected_qmb',
-                   'cash_quote_complete', 'cash_quote_missing', 'skin_biopsy_day'}
+                   'cash_quote_complete', 'cash_quote_missing', 'skin_biopsy_day',
+                   'aetna_new_office_date_mismatch'}
     diagnostic_copay = {'office_and_diagnostic_day', 'covered_oop_limit', 'encounter_copay_once',
         'unknown_oop_with_staff_note', 'family_oop_exhausted', 'prior_visit_payment',
         'payment_verification_missing', 'secondary_coverage_unresolved', 'provider_network_conflict',
@@ -146,10 +148,13 @@ def visit(name: str) -> dict:
     value = deepcopy(case(diagnostic=None if name in office_only else
                           'copay' if name in diagnostic_copay else 'deductible'))
     value['payer'] = ('Cigna Synthetic' if name == 'cigna_reference_no_policy' else
-                      'Aetna Synthetic' if name == 'aetna_draft_route' else 'BCBSTX Synthetic')
+                      'Aetna Synthetic' if name in {'aetna_draft_route', 'aetna_new_office_date_mismatch'}
+                      else 'BCBSTX Synthetic')
     value['fixture_scenario'] = name
     if name not in {row[0] for row in SCENARIOS[:8]}:
         value['service_date'] = '2026-11-10'
+    if name == 'aetna_new_office_date_mismatch':
+        value['service_date'] = '2026-11-03'
     _scoped_fixture_result(value)
     if name == 'specialist_271_conflict':
         office = value['price_range']['lines'][0]['benefits']
@@ -265,6 +270,23 @@ def visit(name: str) -> dict:
         value.pop('collection_policy')
     elif name == 'noncovered_procedure':
         value['price_range']['lines'][1]['benefits']['active'] = False
+    elif name == 'aetna_new_office_date_mismatch':
+        line = value['price_range']['lines'][0]
+        line['code'] = '99203'
+        line['benefits'].update(copay_cents=None, deductible_applies=None,
+            coinsurance_percent=None, selected_benefit_ids=['synthetic-benefit-prior-date'],
+            review_reasons=['Selected service benefit is for a different date; scope needs verification.',
+                            'Prior authorization and referral need verification.'])
+        value['benefits'].update(service_date_matches=False, network_status='unknown',
+                                 network_source=None)
+        value['service_selection_status'] = 'preview'
+        value['temporary_rate_reference']['lines'] = []
+        value.pop('collection_policy', None)
+        value['benefit_source'] = 'synthetic_saved_eligibility'
+        value['eligibility_reconciliation'] = {'status': 'service_date_mismatch'}
+        value['requirement_evidence'] = {'procedures': [{'code': '99203',
+            'authorization': {'status': 'Verification required', 'sources': []},
+            'referral': {'status': 'Verification required', 'sources': []}}]}
     return value
 
 

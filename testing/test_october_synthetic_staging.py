@@ -34,6 +34,12 @@ def test_october_inspired_fake_visit(name, share, collect, decision):
     if name == 'specialist_271_conflict':
         assert modeled['service_groups'][0]['benefit_evidence'] == ['synthetic-specialist-98']
         assert modeled['service_groups'][0]['estimated_patient_share_cents'] == 8000
+    if name == 'aetna_new_office_date_mismatch':
+        assert result['service_date'] == '2026-11-03'
+        assert result['price_range']['lines'][0]['code'] == '99203'
+        assert result['benefits']['service_date_matches'] is False
+        assert result['benefits']['network_status'] == 'unknown'
+        assert result['temporary_rate_reference']['lines'] == []
 
 
 @pytest.mark.skipif(not os.getenv('STAFF_TEST_DATABASE_URL'), reason='Requires disposable PostgreSQL')
@@ -70,9 +76,13 @@ async def _run_fake_patients_seed_save_reload_and_fastapi(monkeypatch):
                 raise AssertionError('A synthetic visit must not contact eCW or a payer')
             monkeypatch.setattr(api.ecw_backend, 'fetch_inputs', no_external_request)
             monkeypatch.setattr(api, '_post_stedi_eligibility', no_external_request)
-            monkeypatch.setattr(fixtures_api.insurance_research_agent, 'investigate',
-                lambda facts: {'status': 'complete', 'model_id': 'synthetic-sonnet-check',
-                               'findings': [{'code': '99204'}]})
+            def fake_research(facts):
+                new_office = facts.get('fixture_scenario') == 'aetna_new_office_date_mismatch'
+                return {'status': 'complete', 'model_id': 'synthetic-sonnet-check',
+                    'findings': [{'code': '99203' if new_office else '99204',
+                        'finding': 'Verify the visit-date benefit and provider tier',
+                        'evidence_ids': ['synthetic-benefit-prior-date'] if new_office else []}]}
+            monkeypatch.setattr(fixtures_api.insurance_research_agent, 'investigate', fake_research)
             async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app),
                                          base_url='http://testserver') as client:
                 unsigned = await client.post('/api/staff/testing/collection-engine-scenarios',
@@ -87,6 +97,13 @@ async def _run_fake_patients_seed_save_reload_and_fastapi(monkeypatch):
                 assert research.status_code == 200
                 assert research.json() == {'synthetic_only': True, 'status': 'complete',
                     'finding_count': 1, 'model_id': 'synthetic-sonnet-check', 'reason': None}
+                new_office_research = await client.post(
+                    '/api/staff/testing/collection-engine-research-check?scenario=aetna_new_office_date_mismatch',
+                    headers={'Origin': 'http://testserver'})
+                assert new_office_research.status_code == 200
+                assert new_office_research.json()['findings'][0]['code'] == '99203'
+                assert new_office_research.json()['collect_now_cents'] is None
+                assert new_office_research.json()['decision'] == 'EVIDENCE_REQUIRED'
                 requirement = await client.get('/api/staff/testing/collection-engine-requirement-check')
                 assert requirement.status_code == 200
                 assert requirement.json()['procedures'] == [{
@@ -134,7 +151,8 @@ async def _run_fake_patients_seed_save_reload_and_fastapi(monkeypatch):
                 assert due.status_code == 200
                 assert due.json()['checked_count'] == len(SCENARIOS) - 8
                 assert due.json()['payer_requests'] == 0
-                assert all(row['service_date'] == '2026-11-10' for row in due.json()['visits'])
+                assert {row['service_date'] for row in due.json()['visits']} == {
+                    '2026-11-03', '2026-11-10'}
                 due_again = await client.get('/api/staff/testing/collection-engine-due?days=30')
                 assert [row['evidence_fingerprint'] for row in due_again.json()['visits']] == [
                     row['evidence_fingerprint'] for row in due.json()['visits']]

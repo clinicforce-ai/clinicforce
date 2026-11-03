@@ -2,7 +2,18 @@
 import json
 
 from app.insurance import insurance_research_agent
-from app.insurance.staging_synthetic import case
+from app.insurance.staging_synthetic import case, visit
+
+
+def test_new_office_scope_flags_reach_agent_without_patient_identity():
+    value = visit('aetna_new_office_date_mismatch')
+    value['patient_name'] = 'Private name must stay local'
+    facts = insurance_research_agent._input(value)
+    assert facts['service_date_matches'] is False
+    assert facts['provider_network_status'] == 'unknown'
+    assert facts['lines'][0]['code'] == '99203'
+    assert 'benefit_scope' in facts['lines'][0]['review_flags']
+    assert 'patient_name' not in json.dumps(facts)
 
 
 def test_requirement_tools_use_official_citation_without_saved_check_link(monkeypatch):
