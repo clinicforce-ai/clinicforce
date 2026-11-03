@@ -11,6 +11,7 @@ import EstimateSources from './EstimateSources'
 import { openServiceDetails } from './openServiceDetails'
 import ArrivalAmountSummary from './ArrivalAmountSummary'
 import * as copay from './payerReportedPartialCopay'
+import { pendingBluecardOfficeCopay } from './collectionAtVisitRow'
 import PublishedPlanBenefit from './PublishedPlanBenefit'
 import UhcMedicarePpoBenefitTable from './UhcMedicarePpoBenefitTable'
 import CommercialCostBreakdown from './CommercialCostBreakdown'
@@ -61,6 +62,7 @@ export default function CommercialOverview({
   const payerReportedPartialCents =
     aetnaReferenceCopay ?? humanaReferenceCopay ?? copay.payerReportedPartialCopay(result, model)
   const pendingAetnaCopay = copay.aetnaPendingOfficeCopay(result, model)
+  const pendingBluecardCopay = pendingBluecardOfficeCopay(result, model)
   const cardPlanningCents =
     payerReportedPartialCents == null ? copay.cardOfficePlanningCopay(result, model) : null
   const combinedPlan = !cash && !previousEstimate ? result.combined_emg_plan : null
@@ -84,6 +86,7 @@ export default function CommercialOverview({
     copay.aetnaOfficePlanningCopay(result, model, result.price_range?.lines || []) != null ||
     payerReportedPartialCents != null ||
     pendingAetnaCopay != null ||
+    pendingBluecardCopay != null ||
     copay.aetnaPriorDateReferenceCopay(result, model) != null ||
     cardPlanningCents != null
   const patientBenefitsBound = hasPatientBinding(result.identity)

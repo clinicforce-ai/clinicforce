@@ -88,6 +88,25 @@ def case(payer, product, *codes, pos='11', day='2026-10-14', indication=None):
     return result, context
 
 
+def test_bluecard_ppo_office_referral_and_home_plan_authorization_are_distinct():
+    result, context = case('BCBSTX', 'Example PPO ALTNET', '99204', day='2026-11-03')
+    result['benefits']['plan_details'] = {'verification_payer': {
+        'name': 'Example Blue home plan', 'payer_id': '123'}}
+    decisions = evaluate(result, context, [])['procedures'][0]
+    assert decisions['referral']['status'] == 'Not required'
+    assert decisions['authorization']['status'] == 'Verification required'
+    assert 'bluecard-preauth' in decisions['authorization']['sources'][0]['url']
+    result['benefits']['plan_details'] = {}
+    without_home_plan = evaluate(result, context, [])['procedures'][0]
+    assert without_home_plan['referral']['status'] == 'Verification required'
+    for product in ('Example HMO ALTNET', 'Example PPOB ALTNET'):
+        other = evaluate(result, {**context, 'plans': [product]}, [])['procedures'][0]
+        assert other['referral']['status'] == 'Verification required'
+    local_ppo = evaluate(result, {**context, 'plans': ['Blue Choice PPO']}, [])['procedures'][0]
+    assert local_ppo['referral']['status'] == 'Not required'
+    assert local_ppo['referral']['sources'][0]['url'] != decisions['referral']['sources'][0]['url']
+
+
 @pytest.mark.parametrize('payer,product,code,referral,authorization', [
     ('UnitedHealthcare', 'Choice Plus', '99203', 'Not required', 'Verification required'),
     ('UnitedHealthcare', 'Choice Plus', 'J0585', 'Not required', 'Verification required'),

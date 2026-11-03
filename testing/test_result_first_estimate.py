@@ -11,7 +11,7 @@ from app.api.routers import commercial_estimator as api, staff
 from app.api.routers.commercial_flow.commercial_previsit_catalog import build_catalog
 from app.api.routers.commercial_flow.commercial_previsit_finish import _payer_plan_pricing_source
 from app.api.routers.commercial_flow.commercial_previsit_pricing import _previsit_range
-from app.insurance import commercial, ecw_backend, identity, network_participation, visit_estimate
+from app.insurance import collection_guidance, commercial, ecw_backend, identity, network_participation, visit_estimate
 
 DAY = date.today().isoformat()
 
@@ -77,6 +77,57 @@ def test_payer_matched_dependent_does_not_trigger_repeat_policy_recovery():
     different_patient = response()
     different_patient['dependent']['dateOfBirth'] = '2001-02-04'
     assert identity.unresolved_policy_difference(identity.compare(different_patient, recorded))
+
+
+def test_dependent_with_one_letter_surname_error_and_stale_subscriber_still_binds():
+    recorded = {**policy(), 'subscriber_first': 'Alex', 'subscriber_last': 'Morgan', 'relationship': '18',
+                'group_number': 'GROUP-A'}
+    payer = response('Morgaan')
+    payer['subscriber']['groupNumber'] = 'GROUP-A'
+    matched = identity.compare(payer, recorded)
+    assert matched['status'] == 'warning'
+    assert matched['reconciliation_rule'] == 'payer_matched_patient'
+    assert identity.patient_benefits_bound(matched)
+    assert not identity.unresolved_policy_difference(matched)
+    assert matched['differences'][0]['field'] == 'last_name'
+
+    another_person = response('Different')
+    assert identity.compare(another_person, recorded)['status'] == 'review'
+
+
+def test_payer_reported_specialist_copay_survives_the_same_identity_correction():
+    scope = {'coverageLevel': 'INDIVIDUAL', 'network': {'indicator': 'IN_NETWORK'},
+             'service': {'value': '98', 'system': 'STC'}}
+    payer = {'payerId': '84980',
+             'subscriber': {'name': {'person': {'firstName': 'Sam', 'lastName': 'Other'}},
+                            'memberId': 'ABC123', 'groupNumber': 'GROUP-A'},
+             'dependent': {'name': {'person': {'firstName': 'Alex', 'lastName': 'Morgaan'}},
+                           'dateOfBirth': '2001-02-03', 'relationToSubscriber': 'SPOUSE'},
+             'plans': [{'name': 'Example PPO', 'benefits': {
+                 'statuses': [{'status': 'ACTIVE_COVERAGE', 'coverageLevel': 'FAMILY',
+                               'service': {'value': '30', 'system': 'STC'}}],
+                 'coPayment': [{**scope, 'amount': 60, 'timePeriod': 'VISIT',
+                                'messages': ['SPECIALIST']}],
+                 'deductible': [{**scope, 'amount': 0, 'messages': ['SPECIALIST']}],
+                 'outOfPocket': [{**scope, 'amount': 4434.28, 'timePeriod': 'REMAINING'}],
+             }}]}
+    recorded = {**policy(), 'subscriber_first': 'Alex', 'subscriber_last': 'Morgan',
+                'relationship': '18', 'group_number': 'GROUP-A'}
+    benefits = api._previsit_benefits(payer, recorded, '2026-11-03')
+    assert benefits['identity']['status'] == 'warning'
+    assert benefits['active'] is True and benefits['copay_cents'] == 6000
+    assert benefits['deductible_applies'] is False
+    benefits.update(network_status='in_network', network_source='clinic_library_contract')
+    price = visit_estimate.price_lines([{'id': 'office', 'code': '99204', 'units': 1}],
+        [{'code': '99204', 'allowed_cents': 15160}], benefits,
+        {'cost_share': 'payer_returned', 'place_of_service': '11',
+         'provider_office_role': 'specialist'}, payload=payer, service_date='2026-11-03')
+    result = {'payer': 'BCBSTX', 'benefits': benefits, 'identity': benefits['identity'],
+              'price_range': price, 'collection_policy': {
+                  'mode': 'collect_verified_copay', 'approved_by': 'synthetic-admin',
+                  'approved_at': '2026-11-03', 'reference': 'synthetic policy'}}
+    assert price['patient_min_cents'] == 6000
+    assert collection_guidance.build(result)['amount_cents'] == 6000
 
 
 def test_missing_payer_member_or_patient_anchors_cannot_bind_benefits():

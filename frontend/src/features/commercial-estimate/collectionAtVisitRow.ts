@@ -3,6 +3,67 @@ import type { CostBreakdownRow } from '../insurance-estimate/CostBreakdownTable'
 import type { CommercialEstimateModel } from './useCommercialEstimateModel'
 import { feeProxyFormula } from './coinsuranceFormula'
 import { money } from './format'
+import { patientBenefitsBound } from './identityBinding'
+import { networkEvidenceStatus } from './networkEvidenceStatus'
+import { firstSelectedCptIssue } from './selectedCptIssue'
+
+export function pendingBluecardOfficeCopay(
+  result: PrevisitEstimate,
+  model: CommercialEstimateModel,
+): number | null {
+  const line =
+    result.price_range?.mode === 'services' && result.price_range.lines?.length === 1
+      ? result.price_range.lines[0]
+      : null
+  const terms = line?.benefits
+  const copay = terms?.copay_cents
+  if (
+    model.cash ||
+    model.calculating ||
+    model.previousEstimate ||
+    model.amount ||
+    model.requirementIssue ||
+    result.collection_guidance?.amount_cents != null ||
+    !/\b(?:blue cross|bcbs(?:tx| texas)?)\b/i.test(result.payer || '') ||
+    result.plan_details?.stedi?.names?.length !== 1 ||
+    !/\bPPO\b/i.test(result.plan_details.stedi.names[0]) ||
+      !/\b(?:ALTNET|BlueCard)\b/i.test(result.plan_details.stedi.names[0]) ||
+    !result.plan_details.stedi.verification_payer ||
+    result.benefits?.active !== true ||
+    result.benefits.service_date_matches === false ||
+    result.benefits.has_secondary ||
+    result.benefits.network_conflict ||
+    result.benefits.coverage_status_conflict ||
+    result.benefits.coverage_dates_invalid ||
+    result.benefits.historical_only ||
+    result.benefits.source_errors?.length ||
+    result.benefits.network_status !== 'in_network' ||
+    result.billing_protection?.status === 'qmb' ||
+    result.recovery?.reason_code === 'multiple_active_policies' ||
+    !patientBenefitsBound(result.identity) ||
+    !networkEvidenceStatus(result).networkConfirmed ||
+    result.price_range?.service_issues?.length ||
+    firstSelectedCptIssue(result) ||
+    line?.code !== '99204' ||
+    line.units !== 1 ||
+    line.modifiers?.length ||
+    terms?.active !== true ||
+    terms.network_status !== 'in_network' ||
+    terms.service_date_matches === false ||
+    terms.has_secondary ||
+    terms.coverage_status_conflict ||
+    terms.coverage_dates_invalid ||
+    terms.source_errors?.length ||
+    (terms.copay_period && !['VISIT', '27', 'DAY', '7'].includes(terms.copay_period)) ||
+    terms.deductible_applies === true ||
+    (terms.coinsurance_percent != null && Number(terms.coinsurance_percent) !== 0) ||
+    !Number.isInteger(copay) ||
+    copay! <= 0 ||
+    (terms.oop_remaining_cents != null && terms.oop_remaining_cents < copay!)
+  )
+    return null
+  return Math.max(0, copay! - (result.encounter_summary?.payments_verified_cents || 0))
+}
 
 export function pendingCignaOfficeCopay(
   result: PrevisitEstimate,
@@ -65,6 +126,7 @@ export function collectionAtVisitRow(
     humanaReferenceCopay: number | null
     partialOfficeCopay: number | null
     pendingAetnaCopay: number | null
+    pendingBluecardCopay: number | null
     cardPlanningCopay: number | null
     automaticCashFallback: boolean
     cignaFeeProxy: boolean
@@ -80,6 +142,7 @@ export function collectionAtVisitRow(
     humanaReferenceCopay,
     partialOfficeCopay,
     pendingAetnaCopay,
+    pendingBluecardCopay,
     cardPlanningCopay,
     automaticCashFallback,
     cignaFeeProxy,
@@ -113,7 +176,7 @@ export function collectionAtVisitRow(
       : null
   return {
     label:
-      pendingAetnaCopay != null
+      pendingAetnaCopay != null || pendingBluecardCopay != null
         ? 'Amount to collect at visit · pending verification'
         : botoxPreview
           ? 'Planned amount to collect at visit'
@@ -155,19 +218,21 @@ export function collectionAtVisitRow(
                       ? `${money(aetnaBalance!)} planning estimate`
                       : aetnaCopayPlanning != null
                         ? `${money(officeBalance!)} planning estimate`
-                        : officeReferenceCopay != null
-                          ? `${money(officeReferenceCopay)} office-only reference`
-                          : humanaReferenceCopay != null
-                            ? `Pending · ${money(humanaReferenceCopay)} office copay if confirmed`
-                            : partialOfficeCopay != null
-                              ? money(partialOfficeCopay)
-                              : pendingAetnaCopay != null
-                                ? `Pending · ${money(pendingAetnaCopay)} office copay if verified`
-                                : cardPlanningCopay != null
-                                  ? `${money(cardPlanningCopay)} office-only card suggestion`
-                                  : pendingCignaCopay != null
-                                    ? `Pending · ${money(pendingCignaCopay)} office copay if verified`
-                                    : 'Not established',
+                        : pendingBluecardCopay != null
+                          ? `Pending · ${money(pendingBluecardCopay)} office copay if verified`
+                          : officeReferenceCopay != null
+                            ? `${money(officeReferenceCopay)} office-only reference`
+                            : humanaReferenceCopay != null
+                              ? `Pending · ${money(humanaReferenceCopay)} office copay if confirmed`
+                              : partialOfficeCopay != null
+                                ? money(partialOfficeCopay)
+                                : pendingAetnaCopay != null
+                                  ? `Pending · ${money(pendingAetnaCopay)} office copay if verified`
+                                  : cardPlanningCopay != null
+                                    ? `${money(cardPlanningCopay)} office-only card suggestion`
+                                    : pendingCignaCopay != null
+                                      ? `Pending · ${money(pendingCignaCopay)} office copay if verified`
+                                      : 'Not established',
     detail: combinedPlan
       ? `${money(combinedPlan.office_copay_cents)} + ${combinedPlan.coinsurance_percent}% × ${money(combinedPlan.diagnostic_allowed_cents)} = ${money(combinedPlan.patient_share_cents)}${combinedPlan.payments_cents ? `; less ${money(combinedPlan.payments_cents)} already paid` : ''}. Separate follow-up E/M is planned; deductible and out-of-pocket adjustments remain assumptions until payer balances are returned.`
       : result.collection_guidance?.basis === 'qmb_protection'
@@ -188,36 +253,38 @@ export function collectionAtVisitRow(
                     ? `min((${money(aetnaPlanning.copay_cents / 2)} per test × 2) + ${money(aetnaPlanning.deductible_cents)} deductible + ${money(aetnaPlanning.coinsurance_cents)} coinsurance, ${money(aetnaPlanning.estimated_allowed_cents)} Aetna fee reference, ${money(aetnaPlanning.oop_remaining_cents)} remaining out-of-pocket) = ${money(aetnaPlanning.patient_share_cents)}${aetnaPaid ? `; less ${money(aetnaPaid)} already paid = ${money(aetnaBalance!)}` : ' before any prior payment'}. ${aetnaPlanning.message}`
                     : aetnaCopayPlanning != null
                       ? `${money(aetnaCopayPlanning)} specialist office copay + ${money(0)} deductible + 0% coinsurance = ${money(aetnaCopayPlanning)}${aetnaPaid ? `; less ${money(aetnaPaid)} already paid = ${money(officeBalance!)}` : ' before any prior payment'}. Planning amount; confirm the final allowed charge and Medicare billing protection before collection.`
-                      : officeReferenceCopay != null
-                        ? 'Planning figure for one specialist office visit on the appointment date; not an authorized collection instruction. Other services, prior payments and Medicare cost-sharing protection are not included.'
-                        : humanaReferenceCopay != null
-                          ? 'Published in-network specialist copay only. Confirm the member card, provider network, Medicare billing protection, clinic collection policy, and prior payments before charging.'
-                          : partialOfficeCopay != null
-                            ? 'Suggested office visit copay after recorded payments. Separately performed DBS device services may add cost.'
-                            : pendingAetnaCopay != null
-                              ? 'Stedi reported one specialist office copay for CPT 99204. Confirm the remaining deductible, out-of-pocket balance, conditional benefit, prior payments, and clinic collection policy before charging. Full patient share remains unresolved.'
-                              : cardPlanningCopay != null
-                                ? 'Printed specialist copay for one office visit; verify before charging. Planned imaging and final payer share are unresolved.'
-                                : pendingCignaCopay != null
-                                  ? 'Complete the visit-date payer check, confirm this copay and the clinic collection policy, and account for verified payments before charging. Full patient share remains unresolved.'
-                                  : automaticCashFallback
-                                    ? 'Insurance collection is unresolved; any cash quote is listed separately'
-                                    : result.collection_guidance?.unconfirmed_zero_oop
-                                      ? 'Confirm the reported $0 out-of-pocket balance with the payer before collection'
-                                      : model.supportedAmount
-                                        ? result.collection_guidance?.basis === 'office_copay'
-                                          ? 'Office copay advance; other services may have a later balance'
-                                          : result.collection_guidance?.basis ===
-                                              'out_of_pocket_limit'
-                                            ? 'Applicable out-of-pocket maximum has no remaining balance for covered care'
+                      : pendingBluecardCopay != null
+                        ? 'Payer-reported BlueCard specialist copay for one CPT 99204 office visit, less recorded payments. Confirm member plan, provider participation, home-plan authorization, and collection policy before charging.'
+                        : officeReferenceCopay != null
+                          ? 'Planning figure for one specialist office visit on the appointment date; not an authorized collection instruction. Other services, prior payments and Medicare cost-sharing protection are not included.'
+                          : humanaReferenceCopay != null
+                            ? 'Published in-network specialist copay only. Confirm the member card, provider network, Medicare billing protection, clinic collection policy, and prior payments before charging.'
+                            : partialOfficeCopay != null
+                              ? 'Suggested office visit copay after recorded payments. Separately performed DBS device services may add cost.'
+                              : pendingAetnaCopay != null
+                                ? 'Stedi reported one specialist office copay for CPT 99204. Confirm the remaining deductible, out-of-pocket balance, conditional benefit, prior payments, and clinic collection policy before charging. Full patient share remains unresolved.'
+                                : cardPlanningCopay != null
+                                  ? 'Printed specialist copay for one office visit; verify before charging. Planned imaging and final payer share are unresolved.'
+                                  : pendingCignaCopay != null
+                                    ? 'Complete the visit-date payer check, confirm this copay and the clinic collection policy, and account for verified payments before charging. Full patient share remains unresolved.'
+                                    : automaticCashFallback
+                                      ? 'Insurance collection is unresolved; any cash quote is listed separately'
+                                      : result.collection_guidance?.unconfirmed_zero_oop
+                                        ? 'Confirm the reported $0 out-of-pocket balance with the payer before collection'
+                                        : model.supportedAmount
+                                          ? result.collection_guidance?.basis === 'office_copay'
+                                            ? 'Office copay advance; other services may have a later balance'
                                             : result.collection_guidance?.basis ===
-                                                'diagnostic_day_copay'
-                                              ? 'One diagnostic copay advance; other costs may follow the claim'
+                                                'out_of_pocket_limit'
+                                              ? 'Applicable out-of-pocket maximum has no remaining balance for covered care'
                                               : result.collection_guidance?.basis ===
-                                                  'claim_after_service'
-                                                ? 'Clinic policy defers collection until after the claim'
-                                                : undefined
-                                        : undefined,
+                                                  'diagnostic_day_copay'
+                                                ? 'One diagnostic copay advance; other costs may follow the claim'
+                                                : result.collection_guidance?.basis ===
+                                                    'claim_after_service'
+                                                  ? 'Clinic policy defers collection until after the claim'
+                                                  : undefined
+                                          : undefined,
     emphasis: true,
   }
 }

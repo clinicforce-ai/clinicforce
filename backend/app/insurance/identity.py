@@ -193,9 +193,12 @@ def compare(payload: dict, coverage: dict, evidence: dict | None = None) -> dict
     # The payer can identify the patient as a dependent even when eCW still
     # calls that same patient the subscriber. Keep the registration difference
     # visible, but bind the returned benefits to the matched patient.
+    corrected_surname = bool(surname_warning and len(differences) == 1
+        and one_name_edit(normalized(expected['last_name']), normalized(returned['last_name']))
+        and group_matches)
     payer_patient_bound = bool(
-        policy_differences and enough_identity and anchored and last_matches
-        and not differences and bool(dependent)
+        policy_differences and enough_identity and anchored
+        and ((last_matches and not differences) or corrected_surname) and bool(dependent)
         and returned['relationship'] in {'spouse', 'child', 'other'}
         and coverage.get('active_coverages') == 1 and coverage.get('coverage_id')
         and (not coverage.get('group_number') or not payer_plan.get('group_number') or group_matches)
@@ -206,7 +209,7 @@ def compare(payload: dict, coverage: dict, evidence: dict | None = None) -> dict
             'match_version': 2,
             'binding': binding, 'differences': differences, 'policy_differences': policy_differences,
             'missing_fields': missing_fields,
-            'message': 'The payer matched this patient and member ID. Use the payer-reported policyholder and relationship for this estimate; eCW registration differs.' if payer_patient_bound else 'The subscriber relationship could not be verified automatically from eCW and payer evidence.' if policy_differences else 'The eCW and payer response lack enough matching member and patient identifiers to bind these benefits to this patient.' if not enough_identity else 'Cigna returned the same base member ID with a different suffix representation; patient, subscriber, relationship and group match.' if cigna_suffix else 'UnitedHealthcare returned the matching nine-digit member ID without the eCW 00 suffix; name and date of birth match.' if uhc_suffix else 'Payer surname differs; first name, date of birth and member ID match.' if surname_warning and not verified else '',
+            'message': 'The payer matched this patient, member ID, date of birth and group. Use the payer-reported spelling and policyholder for this estimate; eCW registration differs.' if payer_patient_bound and corrected_surname else 'The payer matched this patient and member ID. Use the payer-reported policyholder and relationship for this estimate; eCW registration differs.' if payer_patient_bound else 'The subscriber relationship could not be verified automatically from eCW and payer evidence.' if policy_differences else 'The eCW and payer response lack enough matching member and patient identifiers to bind these benefits to this patient.' if not enough_identity else 'Cigna returned the same base member ID with a different suffix representation; patient, subscriber, relationship and group match.' if cigna_suffix else 'UnitedHealthcare returned the matching nine-digit member ID without the eCW 00 suffix; name and date of birth match.' if uhc_suffix else 'Payer surname differs; first name, date of birth and member ID match.' if surname_warning and not verified else '',
             'reconciliation_rule': 'payer_matched_patient' if payer_patient_bound else 'cigna_member_suffix' if cigna_suffix else None,
             'can_confirm': bool(differences and anchored and not policy_differences),
             'evidence': evidence if verified else None}

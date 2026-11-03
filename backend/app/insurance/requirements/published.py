@@ -4,6 +4,7 @@ Workbook rows remain research leads; this catalogue is scoped to the checked
 source version and date, never member approval.
 """
 from __future__ import annotations
+import re
 
 from app.insurance import cpt_rules, stedi_cpt_authorization
 from app.insurance.identity import generic_plan_label, payer_identity_verified
@@ -15,7 +16,20 @@ BCBSTX_PAYER_NAMES = {'bcbstx', 'bcbstexas', 'bluecrossblueshieldoftexas',
                       'bluecrossblueshieldtexas'}
 
 # Saved estimates re-evaluate requirement decisions when a published rule changes.
-PUBLISHED_RULESET_VERSION = '2026-10-30-aetna-oxy-office-99204-v10'
+PUBLISHED_RULESET_VERSION = '2026-11-03-bluecard-ppo-office-v11'
+
+BLUECARD_PPO_REFERRAL_SOURCE = {
+    'label': 'BCBSTX BlueCard provider manual, PPO definition',
+    'url': 'https://www.bcbstx.com/content/dam/hcsc/docs/provider/tx/claims/bluecard/bluecard-program-prov-manual.pdf',
+    'source_version': 'March 2025 manual', 'verified_at': '2026-11-03',
+    'effective_from': '2026-01-01', 'effective_to': '2026-12-31',
+}
+BLUECARD_PA_SOURCE = {
+    'label': 'BCBSTX BlueCard prior authorization requirements',
+    'url': 'https://www.bcbstx.com/provider/claims/claims-eligibility/bluecard-preauth',
+    'source_version': 'Provider requirements checked November 2026', 'verified_at': '2026-11-03',
+    'effective_from': '2026-01-01', 'effective_to': '2026-12-31',
+}
 
 HUMANA_VALUE_CHOICE_057_SOURCE = {
     'label': '2026 Humana Value Choice (PPO) H7617-057 Summary of Benefits',
@@ -242,6 +256,16 @@ def _published_rule(kind: str, result: dict, context: dict, plans: list[str], co
                                      'location_id': context.get('location_id'),
                                      'place_of_service': context.get('pos'),
                                      'service_date': day}}
+    bluecard_ppo_office = (kind in {'referral', 'authorization'} and in_network and office
+        and str(context.get('pos') or '') == '11' and names & BCBSTX_PAYER_NAMES
+        and len(exact) == 1 and len(plans) == 1
+        and re.search(r'\bPPO\b', plans[0], re.I)
+        and re.search(r'\b(?:ALTNET|BlueCard)\b', plans[0], re.I)
+        and bool((benefits.get('plan_details') or {}).get('verification_payer')))
+    if bluecard_ppo_office:
+        if kind == 'referral':
+            return rule('Not required', 'This member product is labeled PPO; BlueCard PPO access does not require a PCP specialist referral.', BLUECARD_PPO_REFERRAL_SOURCE)
+        return rule('Verification required', 'Check CPT-specific authorization with the member’s BlueCard home plan before the visit.', BLUECARD_PA_SOURCE, check=True)
     group_13705_diagnostics = (
         {'unitedhealthcare', 'uhc'} & names
         and str(context.get('group_number') or '') == '13705'
