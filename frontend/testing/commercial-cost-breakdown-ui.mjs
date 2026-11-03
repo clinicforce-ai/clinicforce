@@ -152,6 +152,50 @@ try {
   assert(markup.includes('not used as a verified calculation input'))
   assert(markup.includes('Not established'))
 
+  const ehrReferenceMarkup = renderToStaticMarkup(
+    React.createElement(CommercialCostBreakdown, {
+      model,
+      result: {
+        ...result,
+        payer: 'Synthetic Blue Plan',
+        benefits: {
+          ...result.benefits,
+          oop_annual_cents: null,
+          oop_remaining_cents: 1015085,
+          reported_options: [],
+        },
+        ecw_eligibility_reference: {
+          report_date: '2026-11-03',
+          individual_oop_annual_cents: 1060000,
+          individual_oop_remaining_cents: 1015085,
+          family_oop_annual_cents: 2120000,
+          family_oop_remaining_cents: 2019362,
+        },
+      },
+    }),
+  )
+  assert(ehrReferenceMarkup.includes('$10,600.00 annual'))
+  assert(ehrReferenceMarkup.includes('$20,193.62 remaining'))
+  assert(ehrReferenceMarkup.includes('EHR eligibility report dated'))
+  const conflictingEhrMarkup = renderToStaticMarkup(
+    React.createElement(CommercialCostBreakdown, {
+      model,
+      result: {
+        ...result,
+        ecw_eligibility_reference: {
+          report_date: '2026-11-03',
+          individual_oop_annual_cents: 1060000,
+          individual_oop_remaining_cents: 1015085,
+          family_oop_annual_cents: 2120000,
+          family_oop_remaining_cents: 2019362,
+        },
+      },
+    }),
+  )
+  assert(conflictingEhrMarkup.includes('Saved payer evidence and the dated EHR report disagree'))
+  assert(conflictingEhrMarkup.includes('$8,000.00 annual'))
+
+
   const pendingCigna = {
     payer: 'Cigna', service_date: '2026-10-30', reason: 'Office consultation',
     benefits: { active: true, network_status: 'in_network' },

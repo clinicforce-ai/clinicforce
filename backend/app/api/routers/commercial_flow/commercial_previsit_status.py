@@ -335,6 +335,10 @@ def _previsit_result(case: dict, practice_id: str | None = None) -> dict:
     if (availity.get('evidence') and availity.get('context_token') == case['previsit_context'].get('context_token')
             and availity.get('service_date') == result.get('service_date')):
         result['availity_visit_reference'] = _api.deepcopy(availity['evidence'])
+    ecw_pdf = case.get('ecw_eligibility_reference') or {}
+    if (ecw_pdf.get('evidence') and ecw_pdf.get('context_token') == case['previsit_context'].get('context_token')
+            and ecw_pdf.get('service_date') == result.get('service_date')):
+        result['ecw_eligibility_reference'] = _api.deepcopy(ecw_pdf['evidence'])
     _retain_incomplete_service_evidence(result.get('benefits') or {}, case)
     reference = case.get('previsit_reference') or {}
     if (reference.get('benefits') and reference.get('context_token') == case['previsit_context'].get('context_token')

@@ -7,6 +7,7 @@ import { type StaffPatient, type StaffSession } from '../../services/api/staff-c
 import {
   commercialAppointments,
   commercialAttachAvaility,
+  commercialAttachEcwEligibility,
   commercialHistory,
   commercialPrevisit,
   commercialSavedPrevisit,
@@ -49,7 +50,7 @@ export function useCommercialEstimateActions({
   const [payerSuggestion, setPayerSuggestion] = useState('')
   const [loaded, setLoaded] = useState(false)
   const [busy, setBusy] = useState<
-    'visits' | 'estimate' | 'delete' | 'review' | 'coverage' | 'availity' | null
+    'visits' | 'estimate' | 'delete' | 'review' | 'coverage' | 'availity' | 'ecwPdf' | null
   >(readOnly ? null : 'visits')
   const [deleteError, setDeleteError] = useState('')
   const [cleanupPending, setCleanupPending] = useState(false)
@@ -71,6 +72,20 @@ export function useCommercialEstimateActions({
     try {
       setResult(await commercialAttachAvaility(result, file, intakeId))
       setNotice('Visit-date Availity eligibility attached for planning review.')
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : 'Eligibility upload failed.')
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  const attachEcwEligibility = async (file: File) => {
+    if (!result?.check_id || busy) return
+    setBusy('ecwPdf')
+    setError('')
+    try {
+      setResult(await commercialAttachEcwEligibility(result, file, intakeId))
+      setNotice('eCW eligibility report attached as dated reference evidence.')
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : 'Eligibility upload failed.')
     } finally {
@@ -401,6 +416,7 @@ export function useCommercialEstimateActions({
     estimate,
     saveReview,
     attachAvaility,
+    attachEcwEligibility,
     selectCoverage,
     deleteCheck,
     loadHistory,
