@@ -95,24 +95,22 @@ def _attach_temporary_aetna_rates(result: dict, practice_id: str, inputs: dict, 
     plan = benefits.get('plan_details') or {}
     if (result.get('payment_mode') != 'cash'
             and network_participation.is_nmct_practice(practice_id)
-            and day == '2026-11-03' and str(inputs.get('place_of_service') or '') == '11'
+            and str(inputs.get('place_of_service') or '') == '11'
             and len(codes) == 1 and codes[0].get('code') == '99203'
             and codes[0].get('units') == 1 and not codes[0].get('modifiers')
-            and ((benefits.get('active') is True and benefits.get('service_date_matches') is True
-                  and plan.get('names') == ['Aetna Medicare Signature (PPO)']
+            and ((plan.get('names') == ['Aetna Medicare Signature (PPO)']
                   and plan.get('group_number') == '000003-TX'
                   and plan.get('plan_number') == '000003-TX000047')
-                 or (availity.get('active') is True and availity.get('service_date') == day
-                     and availity.get('network_status') == 'in_network'
+                 or (availity.get('active') is True and availity.get('network_status') == 'in_network'
                      and availity.get('plan') == 'Aetna Medicare Signature (PPO)'))):
-        # shortcut: this dated portal screen lacks provider scope; replace it with an approved contract rate to price claims.
+        # shortcut: the portal screen has no effective period or provider scope; display only until an approved contract rate can price claims.
         result['temporary_rate_reference'] = {
             'source': 'Aetna MEPPO portal table values supplied by clinic',
             'lines': [{'id': codes[0].get('id'), 'code': '99203', 'units': 1,
                        'modifiers': [], 'unit_reference_cents': 11960,
                        'source_reference': 'Clinic-supplied Aetna MEPPO Office fee screen, 2026-11-02'}],
             'complete': True,
-            'message': 'Aetna MEPPO Office maximum shown on the clinic-supplied November 2 fee screen. Provider and contract scope are unverified; this is a planning reference, not an active allowed rate.'}
+            'message': 'Aetna MEPPO Office maximum from the clinic-supplied November 2 fee screen. No effective period or provider/contract scope was supplied; display this as a planning reference regardless of eligibility response date. It is not an active allowed rate.'}
         return
     if (result.get('payment_mode') == 'cash' or str(inputs.get('place_of_service') or '') != '11'
             or len(codes) != 2 or {row.get('code') for row in codes} != {'95908', '95886'}
