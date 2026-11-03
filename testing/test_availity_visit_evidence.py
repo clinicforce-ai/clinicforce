@@ -1,4 +1,5 @@
 """Dated portal evidence must bind to one saved specialist visit."""
+import asyncio
 import fitz
 import pytest
 from io import BytesIO
@@ -80,8 +81,7 @@ def test_dated_availity_reference_exposes_only_office_fee_reference(monkeypatch)
     assert 'allowed_cents' not in result
 
 
-@pytest.mark.asyncio
-async def test_admin_upload_binds_saved_visit_and_keeps_source_protected(monkeypatch):
+def test_admin_upload_binds_saved_visit_and_keeps_source_protected(monkeypatch):
     from app.api.routers.commercial_flow import commercial_previsit_availity as route
 
     case = {
@@ -108,8 +108,8 @@ async def test_admin_upload_binds_saved_visit_and_keeps_source_protected(monkeyp
         lambda value, *_: {'availity_visit_reference': value['availity_visit_reference']['evidence']})
     upload = UploadFile(file=BytesIO(_pdf()), filename='synthetic.pdf',
                         headers=Headers({'content-type': 'application/pdf'}))
-    result = await route.attach_availity_eligibility('synthetic-case', None,
-        revision=2, context_token='synthetic-token', file=upload)
+    result = asyncio.run(route.attach_availity_eligibility('synthetic-case', None,
+        revision=2, context_token='synthetic-token', file=upload))
     assert result['availity_visit_reference']['copay_cents'] == 7000
     assert 'raw_object_key' not in result['availity_visit_reference']
     assert case['availity_visit_reference']['raw_object_key'] == 'protected-object-key'
