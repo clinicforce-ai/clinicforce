@@ -20,7 +20,7 @@ from zoneinfo import ZoneInfo
 
 import httpx
 from fastapi.responses import JSONResponse
-from fastapi import BackgroundTasks, APIRouter, File, HTTPException, Request, UploadFile
+from fastapi import BackgroundTasks, APIRouter, File, Form, HTTPException, Request, UploadFile
 from fastapi.concurrency import run_in_threadpool
 from pydantic import StrictInt, BaseModel, ConfigDict, Field, ValidationError
 
@@ -195,6 +195,7 @@ from app.api.routers.commercial_flow.commercial_previsit_routes import (
 )
 
 from app.api.routers.commercial_flow.commercial_previsit_reference import attach_payer_reference
+from app.api.routers.commercial_flow.commercial_previsit_availity import attach_availity_eligibility
 
 
 from app.api.routers.commercial_flow.commercial_estimate_route import (

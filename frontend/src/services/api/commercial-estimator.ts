@@ -33,6 +33,22 @@ export const commercialPrevisit = (
 export const commercialSavedPrevisit = (id: string, intakeId?: string) =>
   staffRequest<PrevisitEstimate>(`${root}/cases/${encodeURIComponent(id)}/previsit`, {}, intakeId)
 
+export const commercialAttachAvaility = (
+  result: PrevisitEstimate,
+  file: File,
+  intakeId?: string,
+) => {
+  const body = new FormData()
+  body.set('revision', String(result.revision))
+  body.set('context_token', result.context_token || '')
+  body.set('file', file)
+  return staffRequest<PrevisitEstimate>(
+    `${root}/cases/${encodeURIComponent(result.check_id!)}/availity-eligibility`,
+    { method: 'POST', body },
+    intakeId,
+  )
+}
+
 export const commercialSelectCoverageCandidate = (
   result: PrevisitEstimate,
   candidate_id: string,
