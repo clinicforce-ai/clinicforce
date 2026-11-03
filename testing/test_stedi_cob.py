@@ -244,6 +244,21 @@ def test_reused_fresh_271_rechecks_cob_preflight_without_repeating_eligibility(o
     assert followup.await_count == int(other_coverage)
 
 
+def test_wrong_service_date_271_is_not_reused_on_visit_day():
+    case, session = _saved_case()
+    case['previsit'].update(checked_at=datetime.now(timezone.utc).isoformat(),
+                            requested_service_types=['30'],
+                            benefits={**BENEFITS, 'service_date_matches': False})
+    with patch.object(api.visit_estimate, 'reconcile_eligibility', return_value={'requires_review': False}), \
+         patch.object(api.object_store, 'get_object_bytes') as raw:
+        reused = asyncio.run(reuse_previsit_case(api, case=case, result={'issues': []},
+            inputs={'service_date': date.today().isoformat()}, source={}, session=session,
+            coverage={}, provider=PROVIDER, background_tasks=None,
+            requested_stc=['30'], payer_id='SYNTHETIC', refresh_benefits=False))
+    assert reused is None
+    raw.assert_not_called()
+
+
 def test_discovery_case_reuse_rechecks_cob_from_fresh_saved_271():
     case, session = _saved_case()
     session['intake']['updated_at'] = datetime.now(timezone.utc).isoformat()
