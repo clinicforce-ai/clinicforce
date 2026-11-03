@@ -2,6 +2,27 @@ import type { PrevisitEstimate } from '../../services/api/commercial-estimator'
 import type { VisitPricedLine } from '../../services/api/commercial-visit-types'
 import type { CostBreakdownRow } from '../insurance-estimate/CostBreakdownTable'
 import { aetnaSignatureOfficeNoDeductible } from './payerReportedPartialCopay'
+import { money, range } from './format'
+
+export function commercialCashAlternativeRow(
+  price: PrevisitEstimate['price_range'],
+  cashPrice: string | null,
+  automaticCashFallback: boolean,
+  pricedCashLines: VisitPricedLine[],
+): CostBreakdownRow {
+  return {
+    label: 'Cash alternative',
+    value:
+      automaticCashFallback && cashPrice
+        ? cashPrice
+        : price?.cash_complete && price.cash_min_cents != null && price.cash_max_cents != null
+          ? range(price.cash_min_cents, price.cash_max_cents)
+          : pricedCashLines.length === 1 && /^9920[2-5]$/.test(pricedCashLines[0].code)
+            ? `${money(pricedCashLines[0].cash_cents!)} new-patient office visit`
+            : 'Not quoted',
+    detail: 'Separate self-pay price; not used as the insurance allowed amount',
+  }
+}
 
 export function commercialCptRows(
   result: PrevisitEstimate,

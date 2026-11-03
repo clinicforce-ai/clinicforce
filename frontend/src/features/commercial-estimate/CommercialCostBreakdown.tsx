@@ -11,7 +11,7 @@ import * as copay from './payerReportedPartialCopay'
 import { referenceCoverageRow } from './referenceCoverageRow'
 import { limitSummary, unknown } from './limitSummary'
 import { resolvedAllowedTotal } from './resolvedAllowedTotal'
-import { commercialCptRows } from './commercialCptRows'
+import { commercialCashAlternativeRow, commercialCptRows } from './commercialCptRows'
 import { commercialOopRows } from './commercialOopRows'
 export default function CommercialCostBreakdown({
   model,
@@ -375,18 +375,7 @@ export default function CommercialCostBreakdown({
     ),
     { label: 'Referral', value: requirementStatus(result, 'referral') },
     { label: 'Prior authorization', value: requirementStatus(result, 'authorization') },
-    {
-      label: 'Cash alternative',
-      value:
-        automaticCashFallback && model.cashPrice
-          ? model.cashPrice
-          : price?.cash_complete && price.cash_min_cents != null && price.cash_max_cents != null
-            ? range(price.cash_min_cents, price.cash_max_cents)
-            : pricedCashLines.length === 1 && /^9920[2-5]$/.test(pricedCashLines[0].code)
-              ? `${money(pricedCashLines[0].cash_cents!)} new-patient office visit`
-              : 'Not quoted',
-      detail: 'Separate self-pay price; not used as the insurance allowed amount',
-    },
+    commercialCashAlternativeRow(price, model.cashPrice, automaticCashFallback, pricedCashLines),
   ]
   const patientShare = automaticCashFallback
     ? officeReferenceCopay != null || humanaReferenceCopay != null
