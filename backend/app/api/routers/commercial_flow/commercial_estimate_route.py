@@ -358,7 +358,7 @@ async def previsit_estimate(value: _api.PrevisitInput, request: _api.Request, ba
         return await incomplete_result()
 
     try:
-        card = await _api.asyncio.wait_for(_api._read_card_hints(session, source.get('_patient_id'), allow_pending_reference=True), timeout=8)
+        card = await _api.asyncio.wait_for(_api._read_card_hints(session, source.get('_patient_id'), allow_pending_reference=True), timeout=30)
     except _api.asyncio.TimeoutError:
         card = {'status': 'unavailable', 'fields': {}, 'count': 0}
     original_group = inputs.get('group_number')
