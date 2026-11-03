@@ -11,7 +11,7 @@ from fastapi.concurrency import run_in_threadpool
 
 from app.api.routers.staff import require_staff
 from app.core import staff_store
-from app.insurance import collection_guidance, insurance_research_agent, previsit_cached_tasks, store
+from app.insurance import collection_guidance, contract_requirements, insurance_research_agent, previsit_cached_tasks, store
 from app.insurance.staging_synthetic import SCENARIOS, STAGING_NMCT_PRACTICE_ID, journey, project_saved, visit
 
 
@@ -160,3 +160,26 @@ async def check_collection_engine_research(request: Request) -> dict:
     return {'synthetic_only': True, 'status': answer['status'],
             'finding_count': len(answer.get('findings') or []),
             'model_id': answer.get('model_id'), 'reason': answer.get('reason')}
+
+
+@router.get('/collection-engine-requirement-check', description=(
+    'Staging NMCT administrator only. Evaluate one invented Cigna office CPT '
+    'through the deterministic referral and authorization selector and report '
+    'general official contact availability. No member or payer request occurs.'
+))
+async def check_collection_engine_requirement(request: Request) -> dict:
+    staff = await require_staff(request)
+    _staging_only(staff)
+    result = visit('specialist_271_conflict')
+    result['codes'] = [{'id': line['id'], 'code': line['code'], 'units': line['units']}
+                       for line in result['price_range']['lines']]
+    context = {'service_date': result['service_date'], 'payer_names': ['Cigna'],
+               'plans': ['Synthetic OAP'], 'pos': '11'}
+    answer = contract_requirements.evaluate(result, context, [])
+    return {'synthetic_only': True, 'procedures': [
+        {'code': row['code'],
+         'authorization_status': row['authorization']['status'],
+         'referral_status': row['referral']['status'],
+         'authorization_contact_available': bool(row['authorization'].get('contact_source')),
+         'referral_contact_available': bool(row['referral'].get('contact_source'))}
+        for row in answer.get('procedures') or []]}

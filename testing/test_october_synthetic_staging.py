@@ -87,6 +87,13 @@ async def _run_fake_patients_seed_save_reload_and_fastapi(monkeypatch):
                 assert research.status_code == 200
                 assert research.json() == {'synthetic_only': True, 'status': 'complete',
                     'finding_count': 1, 'model_id': 'synthetic-sonnet-check', 'reason': None}
+                requirement = await client.get('/api/staff/testing/collection-engine-requirement-check')
+                assert requirement.status_code == 200
+                assert requirement.json()['procedures'] == [{
+                    'code': '99204', 'authorization_status': 'Verification required',
+                    'referral_status': 'Verification required',
+                    'authorization_contact_available': True,
+                    'referral_contact_available': True}]
                 seeded = await client.post('/api/staff/testing/collection-engine-scenarios',
                     headers={'Origin': 'http://testserver'})
                 assert seeded.status_code == 200
