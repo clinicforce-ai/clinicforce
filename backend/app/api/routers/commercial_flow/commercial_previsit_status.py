@@ -3,8 +3,8 @@ from __future__ import annotations
 from app.api.routers import commercial_estimator as _api
 from app.insurance.identity import patient_benefits_bound, patient_plan_applies, payer_identity_verified
 from app.insurance.network_participation import verified_in_network, verified_out_of_network
-from app.insurance import blue_cross_proxy, canonical_evidence, evidence_resolution, group_contract_support, staging_synthetic
-from app.api.routers.commercial_flow.commercial_previsit_finish import _payer_plan_pricing_source
+from app.insurance import canonical_evidence, evidence_resolution, group_contract_support, staging_synthetic
+from app.api.routers.commercial_flow.commercial_previsit_finish import _attach_legacy_fee_proxy, _payer_plan_pricing_source
 from app.api.routers.commercial_flow.commercial_previsit_network_guard import recheck_saved_network_evidence, recheck_saved_payer_message
 from app.api.routers.commercial_flow.commercial_previsit_saved_pricing import _reprice_saved_new_network, guard_unresolved_telehealth, guard_telehealth_guidance
 from app.api.routers.commercial_flow.commercial_previsit_requirements import refresh_saved_requirements
@@ -384,10 +384,7 @@ def _previsit_result(case: dict, practice_id: str | None = None) -> dict:
         context = case['previsit_context']
         refresh_saved_temporary_rates(result, practice_id, context.get('inputs') or {},
                                       context.get('source') or {}, route_payer)
-        if proxy := (blue_cross_proxy.estimate(result, str(result.get('service_date') or ''))
-                     or blue_cross_proxy.cigna_estimate(result, str(result.get('service_date') or ''))
-                     or blue_cross_proxy.cigna_oap_office_scenario(result, str(result.get('service_date') or ''))):
-            result['fee_proxy_estimate'] = proxy
+        _attach_legacy_fee_proxy(result, str(result.get('service_date') or ''))
     result['revision'] = case.get('revision', 0)
     check_from = max((case.get('visit_review') or {}).get('insurance_check_from') or '',
         ((case['previsit_context'].get('source', {}).get('coverage_period') or {}).get('start') or '')[:10])
