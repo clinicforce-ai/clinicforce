@@ -8,7 +8,7 @@ import { collectionAtVisitRow, pendingBluecardOfficeCopay } from './collectionAt
 import { money, range } from './format'
 import { commercialRequirementRows } from './commercialRequirementStatus'
 import * as copay from './payerReportedPartialCopay'
-import { referenceCoverageRow } from './referenceCoverageRow'
+import { memberGroupRow, referenceCoverageRow } from './referenceCoverageRow'
 import { limitSummary, unknown } from './limitSummary'
 import { resolvedAllowedTotal } from './resolvedAllowedTotal'
 import {
@@ -27,8 +27,7 @@ export default function CommercialCostBreakdown({
 }) {
   const benefits = result.reference_benefits ?? result.benefits
   const reportedResult = result.reference_benefits ? { ...result, benefits } : result
-  const price = result.price_range
-  const feeProxy = result.fee_proxy_estimate
+  const { price_range: price, fee_proxy_estimate: feeProxy } = result
   const botoxPreview = !model.cash && !model.previousEstimate ? result.botox_preview : null
   const combinedPlan = !model.cash && !model.previousEstimate ? result.combined_emg_plan : null
   const cignaFeeProxy = feeProxy?.basis === 'bcbstx_cigna_fee_proxy'
@@ -86,8 +85,10 @@ export default function CommercialCostBreakdown({
       ? result.aetna_diagnostic_reference
       : null
   const aetnaCopayPlanning = copay.aetnaOfficePlanningCopay(result, model, lines)
+  const memberGroup = memberGroupRow(result)
   const insuredRows: CostBreakdownRow[] = [
     referenceCoverageRow(result, model, benefits),
+    ...(memberGroup ? [memberGroup] : []),
     { label: 'Network', value: model.networkLabel },
     {
       label: result.reason ? 'Reason for visit' : 'Planned service',

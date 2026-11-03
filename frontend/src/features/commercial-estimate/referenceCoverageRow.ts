@@ -29,3 +29,14 @@ export function referenceCoverageRow(
         : model.policyStatus
   return { label: 'Coverage', value, detail }
 }
+
+export function memberGroupRow(result: PrevisitEstimate): CostBreakdownRow | null {
+  if (result.reference_benefits) return null
+  const member = result.insurance_details?.member_id
+  const group = result.insurance_details?.group_number || result.plan_details?.stedi?.group_number
+  if (!member && !group) return null
+  return {
+    label: 'Member and group',
+    value: [member && `Member ${member}`, group && `Group ${group}`].filter(Boolean).join(' · '),
+  }
+}

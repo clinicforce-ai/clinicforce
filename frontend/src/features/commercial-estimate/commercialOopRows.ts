@@ -65,6 +65,29 @@ export function commercialOopRows(
     `EHR eligibility report dated ${visitDate(ehr.report_date)}. Its figures are reference only and are not used in the patient-share calculation. Recheck visit-date terms.`
   const unconfirmedZeroOop =
     reportedIndividualRemainingOop.unassigned && reportedIndividualRemainingOop.amount === money(0)
+  const combinedRows =
+    benefits?.active === true && benefits.service_date_matches !== false
+      ? (reportedResult.benefits?.reported_options || []).filter(
+          (row) =>
+            row.kind === 'out_of_pocket' &&
+            row.service_type_code === '30' &&
+            row.coverage_level === 'INDIVIDUAL' &&
+            row.network === 'IN_AND_OUT_OF_NETWORK' &&
+            row.plan_association === 'medical' &&
+            row.amount_cents != null,
+        )
+      : []
+  const combinedAmount = (period: string) => {
+    if (new Set(combinedRows.map((row) => row.plan_index)).size !== 1) return null
+    const amounts = [
+      ...new Set(
+        combinedRows.filter((row) => row.time_period === period).map((row) => row.amount_cents!),
+      ),
+    ]
+    return amounts.length === 1 ? money(amounts[0]) : null
+  }
+  const combinedAnnual = combinedAmount('CALENDAR_YEAR')
+  const combinedRemaining = combinedAmount('REMAINING')
   const components = result.encounter_summary?.components
   return [
     {
@@ -100,6 +123,21 @@ export function commercialOopRows(
                       ? 'Payer-reported plan amount; medical applicability needs confirmation before use as a cap'
                       : 'Payer-reported limit; applicability to these CPTs depends on the completed estimate',
     },
+    ...(combinedAnnual || combinedRemaining
+      ? [
+          {
+            label: 'Individual combined in/out-of-network out-of-pocket maximum',
+            value: [
+              combinedAnnual && `${combinedAnnual} annual`,
+              combinedRemaining && `${combinedRemaining} remaining`,
+            ]
+              .filter(Boolean)
+              .join(' · '),
+            detail:
+              'Payer-reported combined limit; it does not establish provider participation or the amount to collect for this visit.',
+          },
+        ]
+      : []),
     {
       label: 'Family out-of-pocket maximum',
       value:
