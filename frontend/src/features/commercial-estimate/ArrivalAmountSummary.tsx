@@ -6,7 +6,7 @@ import {
   aetnaPendingOfficeCopay,
   aetnaPriorDateReferenceCopay,
 } from './payerReportedPartialCopay'
-import { pendingCignaOfficeCopay } from './collectionAtVisitRow'
+import { pendingBluecardOfficeCopay, pendingCignaOfficeCopay } from './collectionAtVisitRow'
 
 function nextStep(model: CommercialEstimateModel, result: PrevisitEstimate) {
   const lines = result.price_range?.mode === 'services' ? result.price_range.lines || [] : []
@@ -93,6 +93,7 @@ export default function ArrivalAmountSummary({
       ? null
       : Math.max(0, officePlan - (result.encounter_summary?.payments_verified_cents || 0))
   const pendingAetnaCopay = aetnaPendingOfficeCopay(result, model)
+  const pendingBluecardCopay = pendingBluecardOfficeCopay(result, model)
   const priorDateAetnaCopay = aetnaPriorDateReferenceCopay(result, model)
   const pendingCignaCopay = pendingCignaOfficeCopay(result, model)
   const needsAction = model.amountText === 'Insured amount unavailable'
@@ -114,7 +115,9 @@ export default function ArrivalAmountSummary({
                   ? 'Diagnostic copay · collection pending'
                   : officeBalance != null
                     ? 'Planned amount to collect at visit'
-                    : pendingAetnaCopay != null || pendingCignaCopay != null
+                    : pendingAetnaCopay != null ||
+                        pendingCignaCopay != null ||
+                        pendingBluecardCopay != null
                       ? 'Amount to collect at visit · pending verification'
                       : partialCopay != null
                         ? referenceOnly
@@ -136,6 +139,7 @@ export default function ArrivalAmountSummary({
           !aetnaPlanning &&
           officeBalance == null &&
           pendingAetnaCopay == null &&
+          pendingBluecardCopay == null &&
           pendingCignaCopay == null &&
           priorDateAetnaCopay == null
             ? 'amount-pending'
@@ -157,17 +161,19 @@ export default function ArrivalAmountSummary({
                     ? money(officeBalance)
                     : pendingAetnaCopay != null
                       ? `Pending · ${money(pendingAetnaCopay)}`
-                      : pendingCignaCopay != null
-                        ? `Pending · ${money(pendingCignaCopay)}`
-                        : partialCopay != null
-                          ? money(partialCopay)
-                          : cardPlanningCopay != null
-                            ? money(cardPlanningCopay)
-                            : priorDateAetnaCopay != null
-                              ? money(priorDateAetnaCopay)
-                              : needsAction
-                                ? action.title
-                                : model.amountText}
+                      : pendingBluecardCopay != null
+                        ? `Pending · ${money(pendingBluecardCopay)}`
+                        : pendingCignaCopay != null
+                          ? `Pending · ${money(pendingCignaCopay)}`
+                          : partialCopay != null
+                            ? money(partialCopay)
+                            : cardPlanningCopay != null
+                              ? money(cardPlanningCopay)
+                              : priorDateAetnaCopay != null
+                                ? money(priorDateAetnaCopay)
+                                : needsAction
+                                  ? action.title
+                                  : model.amountText}
       </strong>
       {plan ? (
         <p>
@@ -214,6 +220,11 @@ export default function ArrivalAmountSummary({
         <p>
           Stedi reported this specialist office copay. Confirm remaining deductible and
           out-of-pocket balances, conditional benefit terms, and prior payments before charging.
+        </p>
+      ) : pendingBluecardCopay != null ? (
+        <p>
+          Payer-reported specialist office copay after recorded payments. Confirm BlueCard provider
+          participation, home-plan authorization, and collection policy before charging.
         </p>
       ) : pendingCignaCopay != null ? (
         <p>
