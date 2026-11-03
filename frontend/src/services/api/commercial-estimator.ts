@@ -49,6 +49,23 @@ export const commercialAttachAvaility = (
   )
 }
 
+export const commercialAttachEcwEligibility = (
+  result: PrevisitEstimate,
+  file: File,
+  intakeId?: string,
+) => {
+  const body = new FormData()
+  body.set('revision', String(result.revision))
+  body.set('context_token', result.context_token || '')
+  body.set('confirmed_matches', 'true')
+  body.set('file', file)
+  return staffRequest<PrevisitEstimate>(
+    `${root}/cases/${encodeURIComponent(result.check_id!)}/ecw-eligibility-reference`,
+    { method: 'POST', body },
+    intakeId,
+  )
+}
+
 export const commercialSelectCoverageCandidate = (
   result: PrevisitEstimate,
   candidate_id: string,

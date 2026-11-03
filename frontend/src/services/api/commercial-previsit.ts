@@ -21,6 +21,15 @@ import type { PaymentExplanation } from './commercial-explanation'
 import type { CommercialNetworkEvidence } from './commercial-network-evidence'
 import type { AvailityVisitReference } from './availity-visit-reference'
 export type PrevisitEstimate = {
+  ecw_eligibility_reference?: {
+    source: string
+    report_date: string
+    service_date: string
+    individual_oop_annual_cents: number
+    individual_oop_remaining_cents: number
+    family_oop_annual_cents: number
+    family_oop_remaining_cents: number
+  }
   availity_visit_reference?: AvailityVisitReference
   telehealth?: { place_of_service: '10' | '02'; modality: 'audio_video' | 'audio_only' }
   established_for_planning?: boolean

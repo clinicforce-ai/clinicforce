@@ -110,6 +110,12 @@ async def saved_previsit(case_id: str, request: _api.Request) -> dict:
     requesting provider NPI and visit date. It supplies a separate specialist
     office planning table. It does not replace eCW/Stedi eligibility, establish
     QMB status, or change collection_guidance.
+    ecw_eligibility_reference, when present, is an administrator-uploaded eCW
+    eligibility printout for the same saved visit. Its patient header and
+    report date are checked, and the administrator confirms member, birth date,
+    payer and provider. The office individual and family out-of-pocket figures
+    can fill missing display rows as dated EHR reference evidence. They never
+    change the Stedi calculation or collection_guidance.
     benefits.oop_annual_cents is a unique plan-wide individual maximum when
     the payer returned one; it is distinct from oop_remaining_cents.
     Conflicting individual annual or remaining OOP rows leave that amount null

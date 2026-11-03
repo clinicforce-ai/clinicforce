@@ -15,6 +15,7 @@ import { pendingBluecardOfficeCopay } from './collectionAtVisitRow'
 import PublishedPlanBenefit from './PublishedPlanBenefit'
 import UhcMedicarePpoBenefitTable from './UhcMedicarePpoBenefitTable'
 import CommercialCostBreakdown from './CommercialCostBreakdown'
+import EcwEligibilityEvidenceUpload from './EcwEligibilityEvidenceUpload'
 import CommercialCashQuoteForm from './CommercialCashQuoteForm'
 import {
   AvailityArrivalAmount,
@@ -169,6 +170,7 @@ export default function CommercialOverview({
         </p>
       )}
       <AvailityEvidenceUpload result={result} model={model} />
+      <EcwEligibilityEvidenceUpload result={result} model={model} />
       <div className="overview-amounts">
         <div
           className={`arrival-total${!availity && !visibleAmount && !calculating && !tooEarly ? ' is-blocked' : ''}`}

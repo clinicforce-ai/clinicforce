@@ -196,6 +196,7 @@ from app.api.routers.commercial_flow.commercial_previsit_routes import (
 
 from app.api.routers.commercial_flow.commercial_previsit_reference import attach_payer_reference
 from app.api.routers.commercial_flow.commercial_previsit_availity import attach_availity_eligibility
+from app.api.routers.commercial_flow.commercial_previsit_ecw_pdf import attach_ecw_eligibility_reference
 
 
 from app.api.routers.commercial_flow.commercial_estimate_route import (

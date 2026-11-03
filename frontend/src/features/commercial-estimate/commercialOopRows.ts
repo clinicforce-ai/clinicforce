@@ -1,7 +1,7 @@
 import type { PrevisitEstimate } from '../../services/api/commercial-estimator'
 import type { PrevisitBenefits } from '../../services/api/commercial-benefits'
 import type { CostBreakdownRow } from '../insurance-estimate/CostBreakdownTable'
-import { money } from './format'
+import { money, visitDate } from './format'
 import { limitSummary } from './limitSummary'
 import { reportedLimit } from './reportedLimit'
 import { reportedMedicalLimit } from './reportedMedicalLimit'
@@ -23,6 +23,7 @@ export function commercialOopRows(
   calculated: boolean,
   humanaReferenceCopay: number | null,
 ): CostBreakdownRow[] {
+  const ehr = humanaReferenceCopay == null ? result.ecw_eligibility_reference : undefined
   const individualReportedOop = limitSummary(reportedResult, 'out_of_pocket', 'INDIVIDUAL')
   const reportedIndividualRemainingOop = reportedLimit(
     reportedResult,
@@ -30,16 +31,38 @@ export function commercialOopRows(
     'INDIVIDUAL',
     'REMAINING',
   )
-  const individualOopAnnual =
+  const reportedIndividualAnnual =
     benefits?.oop_annual_cents ??
     reportedMedicalLimit(reportedResult, 'INDIVIDUAL', 'CALENDAR_YEAR')
-  const individualOopRemaining =
+  const reportedIndividualRemaining =
     benefits?.oop_remaining_cents ?? reportedMedicalLimit(reportedResult, 'INDIVIDUAL', 'REMAINING')
+  const individualOopAnnual = reportedIndividualAnnual ?? ehr?.individual_oop_annual_cents
+  const individualOopRemaining = reportedIndividualRemaining ?? ehr?.individual_oop_remaining_cents
+  const ehrIndividualUsed =
+    ehr != null && (reportedIndividualAnnual == null || reportedIndividualRemaining == null)
+  const ehrIndividualConflict =
+    ehr != null &&
+    ((reportedIndividualAnnual != null &&
+      reportedIndividualAnnual !== ehr.individual_oop_annual_cents) ||
+      (reportedIndividualRemaining != null &&
+        reportedIndividualRemaining !== ehr.individual_oop_remaining_cents))
   const reportedOopOnly =
-    (benefits?.oop_annual_cents == null && individualOopAnnual != null) ||
-    (benefits?.oop_remaining_cents == null && individualOopRemaining != null)
-  const familyOopAnnual = reportedMedicalLimit(reportedResult, 'FAMILY', 'CALENDAR_YEAR')
-  const familyOopRemaining = reportedMedicalLimit(reportedResult, 'FAMILY', 'REMAINING')
+    (benefits?.oop_annual_cents == null && reportedIndividualAnnual != null) ||
+    (benefits?.oop_remaining_cents == null && reportedIndividualRemaining != null)
+  const reportedFamilyAnnual = reportedMedicalLimit(reportedResult, 'FAMILY', 'CALENDAR_YEAR')
+  const reportedFamilyRemaining = reportedMedicalLimit(reportedResult, 'FAMILY', 'REMAINING')
+  const familyOopAnnual = reportedFamilyAnnual ?? ehr?.family_oop_annual_cents
+  const familyOopRemaining = reportedFamilyRemaining ?? ehr?.family_oop_remaining_cents
+  const ehrFamilyUsed =
+    ehr != null && (reportedFamilyAnnual == null || reportedFamilyRemaining == null)
+  const ehrFamilyConflict =
+    ehr != null &&
+    ((reportedFamilyAnnual != null && reportedFamilyAnnual !== ehr.family_oop_annual_cents) ||
+      (reportedFamilyRemaining != null &&
+        reportedFamilyRemaining !== ehr.family_oop_remaining_cents))
+  const ehrDetail =
+    ehr &&
+    `EHR eligibility report dated ${visitDate(ehr.report_date)}. Its figures are reference only and are not used in the patient-share calculation. Recheck visit-date terms.`
   const unconfirmedZeroOop =
     reportedIndividualRemainingOop.unassigned && reportedIndividualRemainingOop.amount === money(0)
   const components = result.encounter_summary?.components
@@ -50,24 +73,32 @@ export function commercialOopRows(
         humanaReferenceCopay != null
           ? `${money(680000)} in-network annual · ${money(1190000)} combined annual (published plan)${individualOopRemaining != null ? ` · ${money(individualOopRemaining)} payer-reported remaining, tier unconfirmed` : ''}`
           : [
-              individualOopAnnual != null ? `${money(individualOopAnnual)} annual` : null,
-              individualOopRemaining != null ? `${money(individualOopRemaining)} remaining` : null,
+              individualOopAnnual != null
+                ? `${money(individualOopAnnual)} annual${reportedIndividualAnnual == null ? ' (EHR PDF)' : ''}`
+                : null,
+              individualOopRemaining != null
+                ? `${money(individualOopRemaining)} remaining${reportedIndividualRemaining == null ? ' (EHR PDF)' : ''}`
+                : null,
             ]
               .filter(Boolean)
               .join(' · ') || individualReportedOop.value,
       detail: familyOopApplied
         ? 'The individual balance can remain positive after the family limit is met'
-        : reportedOopOnly
-          ? 'Payer-reported medical limit; not used as a verified calculation input'
-          : benefits?.oop_remaining_cents === 0
-            ? 'Applicable in-network limit has $0 remaining for the selected covered care'
-            : calculated && components?.oop_adjustment_cents != null
-              ? `${money(components.oop_adjustment_cents)} reduction applied to this visit`
-              : unconfirmedZeroOop
-                ? 'Payer reports $0 remaining; confirm this is the applicable medical limit before collection'
-                : individualReportedOop.unassigned
-                  ? 'Payer-reported plan amount; medical applicability needs confirmation before use as a cap'
-                  : 'Payer-reported limit; applicability to these CPTs depends on the completed estimate',
+        : ehrIndividualConflict
+          ? 'Saved payer evidence and the dated EHR report disagree; verify current limits with the payer before using them.'
+          : ehrIndividualUsed
+            ? ehrDetail
+            : reportedOopOnly
+              ? 'Payer-reported medical limit; not used as a verified calculation input'
+              : benefits?.oop_remaining_cents === 0
+                ? 'Applicable in-network limit has $0 remaining for the selected covered care'
+                : calculated && components?.oop_adjustment_cents != null
+                  ? `${money(components.oop_adjustment_cents)} reduction applied to this visit`
+                  : unconfirmedZeroOop
+                    ? 'Payer reports $0 remaining; confirm this is the applicable medical limit before collection'
+                    : individualReportedOop.unassigned
+                      ? 'Payer-reported plan amount; medical applicability needs confirmation before use as a cap'
+                      : 'Payer-reported limit; applicability to these CPTs depends on the completed estimate',
     },
     {
       label: 'Family out-of-pocket maximum',
@@ -75,18 +106,26 @@ export function commercialOopRows(
         humanaReferenceCopay != null
           ? 'Not applicable to this Medicare Advantage individual plan'
           : [
-              familyOopAnnual != null ? `${money(familyOopAnnual)} annual` : null,
-              familyOopRemaining != null ? `${money(familyOopRemaining)} remaining` : null,
+              familyOopAnnual != null
+                ? `${money(familyOopAnnual)} annual${reportedFamilyAnnual == null ? ' (EHR PDF)' : ''}`
+                : null,
+              familyOopRemaining != null
+                ? `${money(familyOopRemaining)} remaining${reportedFamilyRemaining == null ? ' (EHR PDF)' : ''}`
+                : null,
             ]
               .filter(Boolean)
               .join(' · ') || limitSummary(reportedResult, 'out_of_pocket', 'FAMILY').value,
       detail: familyOopApplied
         ? 'Met in-network family medical limit applied to every selected covered CPT'
-        : familyOopAnnual != null || familyOopRemaining != null
-          ? 'Payer-reported medical limit; not used as a verified calculation input'
-          : limitSummary(reportedResult, 'out_of_pocket', 'FAMILY').unassigned
-            ? 'Payer-reported plan amount; medical applicability unverified and not used as a cap'
-            : undefined,
+        : ehrFamilyConflict
+          ? 'Saved payer evidence and the dated EHR report disagree; verify current limits with the payer before using them.'
+          : ehrFamilyUsed
+            ? ehrDetail
+            : familyOopAnnual != null || familyOopRemaining != null
+              ? 'Payer-reported medical limit; not used as a verified calculation input'
+              : limitSummary(reportedResult, 'out_of_pocket', 'FAMILY').unassigned
+                ? 'Payer-reported plan amount; medical applicability unverified and not used as a cap'
+                : undefined,
     },
   ]
 }
