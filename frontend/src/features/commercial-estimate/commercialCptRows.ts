@@ -48,12 +48,16 @@ export function commercialCptRows(
         ),
     ),
   ]
+  const aetnaOfficeCpt = aetnaSignatureOfficeNoDeductible(
+    result,
+    lines.length === 1 ? lines[0] : null,
+  )
   return {
     cpt: {
       label:
         result.service_selection_status === 'preview' &&
         result.service_plan?.method === 'llm' &&
-        !aetnaSignatureOfficeNoDeductible(result, lines.length === 1 ? lines[0] : null)
+        !aetnaOfficeCpt
           ? 'LLM-proposed CPTs'
           : 'CPTs',
       value: lines.length
@@ -65,7 +69,7 @@ export function commercialCptRows(
             .join('; ')
         : 'No CPTs selected',
       detail:
-        result.service_selection_status !== 'approved'
+        result.service_selection_status !== 'approved' && !aetnaOfficeCpt
           ? result.service_plan?.method === 'llm'
             ? 'Model proposal used for this estimate; billed codes follow the services actually performed'
             : 'Provisional service scenario used for this estimate'

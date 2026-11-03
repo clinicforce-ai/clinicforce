@@ -15,6 +15,13 @@ import { pendingBluecardOfficeCopay } from './collectionAtVisitRow'
 import PublishedPlanBenefit from './PublishedPlanBenefit'
 import UhcMedicarePpoBenefitTable from './UhcMedicarePpoBenefitTable'
 import CommercialCostBreakdown from './CommercialCostBreakdown'
+import CommercialCashQuoteForm from './CommercialCashQuoteForm'
+import {
+  AvailityArrivalAmount,
+  AvailityVisitTable,
+  AvailityEvidenceUpload,
+} from './AvailityVisitPlanning'
+import { availityVisitPlanning } from './availityVisitPlanning'
 export default function CommercialOverview({
   model,
   result,
@@ -114,15 +121,7 @@ export default function CommercialOverview({
     result.payment_explanation?.reason_code === 'out_of_network_allowance_missing' &&
     !!result.selected_ids?.length
   const automaticCashFallback = cash && result.cash_fallback != null
-  const quoteLines = result.price_range?.lines || []
-  const canQuoteFollowUp =
-    cash &&
-    result.service_selection_status === 'approved' &&
-    result.price_range?.mode === 'services' &&
-    quoteLines.length === 1 &&
-    quoteLines[0].code === '99213' &&
-    Number(quoteLines[0].units) === 1 &&
-    !quoteLines[0].modifiers?.length
+  const availity = availityVisitPlanning(result, model)
   return (
     <section id="visit-estimate" className="visit-overview" aria-labelledby="payment-heading">
       <div className="overview-heading">
@@ -160,73 +159,7 @@ export default function CommercialOverview({
           </div>
         )}
       </div>
-      {!readOnly && canQuoteFollowUp && (
-        <form
-          key={result.revision}
-          className="visit-cash-quote"
-          onSubmit={(event) => {
-            event.preventDefault()
-            const fields = new FormData(event.currentTarget)
-            const amountText = String(fields.get('cash_amount') || '')
-            const amount = Number(amountText)
-            const reason = String(fields.get('cash_reason') || '').trim()
-            if (
-              !/^\d+(?:\.\d{1,2})?$/.test(amountText) ||
-              !Number.isFinite(amount) ||
-              amount <= 0 ||
-              !reason
-            )
-              return
-            void saveReview({
-              payment_mode: 'cash',
-              cash_visit_quote: {
-                amount_cents: Math.round(amount * 100),
-                reason,
-              },
-            })
-          }}
-        >
-          <label>
-            Follow-up cash price
-            <input
-              name="cash_amount"
-              type="number"
-              min="0.01"
-              step="0.01"
-              required
-              defaultValue={
-                result.cash_quote?.reason ? (result.cash_quote.min_cents || 0) / 100 : ''
-              }
-            />
-          </label>
-          <label>
-            Reason
-            <input
-              name="cash_reason"
-              type="text"
-              minLength={3}
-              maxLength={200}
-              required
-              defaultValue={
-                result.cash_quote?.reason ||
-                (result.benefits?.active === false ? 'inactive general medical coverage' : '')
-              }
-            />
-          </label>
-          <button type="submit" disabled={!!busy || recovering}>
-            Save visit cash quote
-          </button>
-          {result.cash_quote?.reason && (
-            <button
-              type="button"
-              disabled={!!busy || recovering}
-              onClick={() => void saveReview({ clear_cash_visit_quote: true })}
-            >
-              Remove quote
-            </button>
-          )}
-        </form>
-      )}
+      <CommercialCashQuoteForm model={model} result={result} />
       {texasMedicareEnrollmentMissing && (
         <p className="visit-notice medicare-enrollment-notice" role="status">
           <strong>
@@ -235,18 +168,23 @@ export default function CommercialOverview({
           </strong>
         </p>
       )}
+      <AvailityEvidenceUpload result={result} model={model} />
       <div className="overview-amounts">
         <div
-          className={`arrival-total${!visibleAmount && !calculating && !tooEarly ? ' is-blocked' : ''}`}
+          className={`arrival-total${!availity && !visibleAmount && !calculating && !tooEarly ? ' is-blocked' : ''}`}
         >
-          <ArrivalAmountSummary
-            model={model}
-            result={result}
-            partialCopay={payerReportedPartialCents}
-            cardPlanningCopay={cardPlanningCents}
-            referenceOnly={aetnaReferenceCopay != null || humanaReferenceCopay != null}
-            visibleAmount={visibleAmount}
-          />
+          {availity ? (
+            <AvailityArrivalAmount result={result} />
+          ) : (
+            <ArrivalAmountSummary
+              model={model}
+              result={result}
+              partialCopay={payerReportedPartialCents}
+              cardPlanningCopay={cardPlanningCents}
+              referenceOnly={aetnaReferenceCopay != null || humanaReferenceCopay != null}
+              visibleAmount={visibleAmount}
+            />
+          )}
           {payerReportedPartialCents != null &&
             aetnaReferenceCopay == null &&
             humanaReferenceCopay == null && (
@@ -319,7 +257,7 @@ export default function CommercialOverview({
               <blockquote>{guidance.billing_note.text}</blockquote>
             </details>
           )}
-          {!cash && showAssumptions && (
+          {!cash && !availity && showAssumptions && (
             <details className="summary-assumptions">
               <summary>{amount ? 'Assumptions used' : 'Patient steps'}</summary>
               {amount && guidance?.basis === 'claim_after_service' && (
@@ -390,8 +328,12 @@ export default function CommercialOverview({
           )}
         </div>
         <div className="visit-cost-table">
-          <CommercialCostBreakdown model={model} result={result} />
-          {!cash && !calculating && model.summaryExplanation && (
+          {availity ? (
+            <AvailityVisitTable model={model} result={result} />
+          ) : (
+            <CommercialCostBreakdown model={model} result={result} />
+          )}
+          {!availity && !cash && !calculating && model.summaryExplanation && (
             <details className="financial-breakdown">
               <summary>
                 {combinedPlan
@@ -428,41 +370,45 @@ export default function CommercialOverview({
         </div>
       </div>
       <div className="visit-snapshots" aria-label="Coverage summary">
-        <div className={coverageTone}>
+        <div className={availity ? 'is-reported' : coverageTone}>
           <ShieldCheck size={20} aria-hidden="true" />
           <span>
-            Coverage<strong>{policyStatus}</strong>
+            Coverage<strong>{availity ? 'Active for visit date' : policyStatus}</strong>
             <small>
-              {result.reference_only && result.reference_benefits?.active === true
-                ? result.reference_benefits.service_date_matches === false
-                  ? `Stedi requested ${result.service_date ? visitDate(result.service_date) : 'visit date'}; Aetna returned service date ${result.reference_benefits.returned_service_dates?.start ? visitDate(result.reference_benefits.returned_service_dates.start) : 'unavailable'} · visit coverage unverified`
-                  : 'Stedi payer reference · appointment-date applicability unverified'
-                : result?.benefit_source
-                  ? `Checked via ${result.benefit_source}`
-                  : result?.benefits?.active
-                    ? 'Payer source not recorded'
-                    : 'Payer check needed'}
+              {availity
+                ? 'Availity Essentials eligibility PDF · ' + visitDate(availity.service_date)
+                : result.reference_only && result.reference_benefits?.active === true
+                  ? result.reference_benefits.service_date_matches === false
+                    ? `Stedi requested ${result.service_date ? visitDate(result.service_date) : 'visit date'}; Aetna returned service date ${result.reference_benefits.returned_service_dates?.start ? visitDate(result.reference_benefits.returned_service_dates.start) : 'unavailable'} · visit coverage unverified`
+                    : 'Stedi payer reference · appointment-date applicability unverified'
+                  : result?.benefit_source
+                    ? `Checked via ${result.benefit_source}`
+                    : result?.benefits?.active
+                      ? 'Payer source not recorded'
+                      : 'Payer check needed'}
             </small>
           </span>
         </div>
-        <div className={networkTone}>
+        <div className={availity ? 'is-reported' : networkTone}>
           <Network size={20} aria-hidden="true" />
           <span>
-            Network<strong>{networkLabel}</strong>
-            {networkWarnings.length ? (
+            Network<strong>{availity ? 'In network per Availity' : networkLabel}</strong>
+            {availity ? (
+              <small>Entered requesting provider participates in this patient’s network.</small>
+            ) : networkWarnings.length ? (
               <small className="network-mismatch-warning" role="note">
                 Agreement mismatch: {networkWarnings.join(' ')}
               </small>
             ) : (
               networkExplanation && <small>{networkExplanation}</small>
             )}
-            {result?.network_evidence?.product_source && (
+            {!availity && result?.network_evidence?.product_source && (
               <small>Contract plan lookup: {result.network_evidence.product_source}</small>
             )}
-            {contractCandidate && !result?.network_evidence?.reason && (
+            {!availity && contractCandidate && !result?.network_evidence?.reason && (
               <small>{contractCandidate} contract could not be matched to this visit</small>
             )}
-            {contractUrl && (
+            {!availity && contractUrl && (
               <small>
                 <a href={contractUrl} target="_blank" rel="noopener noreferrer">
                   {contractEvidence?.related_document_id
@@ -473,7 +419,8 @@ export default function CommercialOverview({
             )}
           </span>
         </div>
-        {!showSelectedRequirements &&
+        {!availity &&
+          !showSelectedRequirements &&
           !requirementIssue &&
           !(result.reference_only && result.reference_benefits?.active === true) && (
             <RequirementCards result={result} readOnly={readOnly} payerName={payerForAction} />
@@ -486,7 +433,7 @@ export default function CommercialOverview({
         <span>
           {cash && !automaticCashFallback
             ? 'Clinic self-pay schedule'
-            : planName || result.payer || 'Policy details not returned'}
+            : availity?.plan || planName || result.payer || 'Policy details not returned'}
         </span>
         {(!cash || automaticCashFallback) && cashPrice && (
           <span className="cash-comparison">Cash option {cashPrice}</span>

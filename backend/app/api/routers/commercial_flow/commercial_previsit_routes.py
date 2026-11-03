@@ -105,6 +105,11 @@ async def saved_previsit(case_id: str, request: _api.Request) -> dict:
     precedence over mismatched eCW values. This does not change collection_guidance.
     At NMCT, a payer reference alone does not establish the clinic contract tier;
     the payer-returned date and appointment-date coverage qualification remain visible.
+    availity_visit_reference, when present, is a dated administrator-uploaded
+    Availity Essentials eligibility PDF matched to patient, birth date,
+    requesting provider NPI and visit date. It supplies a separate specialist
+    office planning table. It does not replace eCW/Stedi eligibility, establish
+    QMB status, or change collection_guidance.
     benefits.oop_annual_cents is a unique plan-wide individual maximum when
     the payer returned one; it is distinct from oop_remaining_cents.
     Conflicting individual annual or remaining OOP rows leave that amount null

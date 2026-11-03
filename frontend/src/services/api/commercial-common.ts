@@ -33,6 +33,12 @@ export type CommercialCardCheck = {
   published_office_copay_cents?: number
 }
 
+export type BillingProtection = {
+  status?: 'qmb' | 'not_qmb'
+  reference?: string
+  verified_at?: string
+}
+
 export type CombinedEmgPlan = {
   amount_cents: number
   patient_share_cents: number

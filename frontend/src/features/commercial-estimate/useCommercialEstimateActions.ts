@@ -6,6 +6,7 @@ import { getStaffSession } from '../../services/api/staff-session'
 import { type StaffPatient, type StaffSession } from '../../services/api/staff-contracts'
 import {
   commercialAppointments,
+  commercialAttachAvaility,
   commercialHistory,
   commercialPrevisit,
   commercialSavedPrevisit,
@@ -47,15 +48,35 @@ export function useCommercialEstimateActions({
   const [candidateSuggestion, setCandidateSuggestion] = useState('')
   const [payerSuggestion, setPayerSuggestion] = useState('')
   const [loaded, setLoaded] = useState(false)
-  const [busy, setBusy] = useState<'visits' | 'estimate' | 'delete' | 'review' | 'coverage' | null>(
-    readOnly ? null : 'visits',
-  )
+  const [busy, setBusy] = useState<
+    'visits' | 'estimate' | 'delete' | 'review' | 'coverage' | 'availity' | null
+  >(readOnly ? null : 'visits')
   const [deleteError, setDeleteError] = useState('')
   const [cleanupPending, setCleanupPending] = useState(false)
   const [notice, setNotice] = useState('')
   const [panel, setPanel] = useState<DetailPanel | null>(null)
   const requestId = useRef(0)
   const automaticEstimate = useRef('')
+  useEffect(() => {
+    if (!readOnly) return
+    void getStaffSession()
+      .then((value) => setSession(value.staff))
+      .catch(() => {})
+  }, [readOnly])
+
+  const attachAvaility = async (file: File) => {
+    if (!result?.check_id || busy) return
+    setBusy('availity')
+    setError('')
+    try {
+      setResult(await commercialAttachAvaility(result, file, intakeId))
+      setNotice('Visit-date Availity eligibility attached for planning review.')
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : 'Eligibility upload failed.')
+    } finally {
+      setBusy(null)
+    }
+  }
 
   const load = useCallback(async () => {
     const current = ++requestId.current
@@ -379,6 +400,7 @@ export function useCommercialEstimateActions({
     load,
     estimate,
     saveReview,
+    attachAvaility,
     selectCoverage,
     deleteCheck,
     loadHistory,

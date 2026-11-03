@@ -1,5 +1,6 @@
 import type {
   BillingNote,
+  BillingProtection,
   RequirementEvidence,
   CollectionGuidance,
   CombinedEmgPlan,
@@ -18,7 +19,9 @@ import type {
 import type { PrevisitBenefits } from './commercial-benefits'
 import type { PaymentExplanation } from './commercial-explanation'
 import type { CommercialNetworkEvidence } from './commercial-network-evidence'
+import type { AvailityVisitReference } from './availity-visit-reference'
 export type PrevisitEstimate = {
+  availity_visit_reference?: AvailityVisitReference
   telehealth?: { place_of_service: '10' | '02'; modality: 'audio_video' | 'audio_only' }
   established_for_planning?: boolean
   requested_service_types?: string[]
@@ -26,11 +29,7 @@ export type PrevisitEstimate = {
   combined_emg_plan?: CombinedEmgPlan | null
   botox_review?: BotoxReview
   botox_preview?: BotoxPreview | null
-  billing_protection?: {
-    status?: 'qmb' | 'not_qmb'
-    reference?: string
-    verified_at?: string
-  }
+  billing_protection?: BillingProtection
   payer_allowances?: PayerAllowanceSummary
   card_check?: CommercialCardCheck
   cash_fallback?: { reason: string }
@@ -225,7 +224,6 @@ export type PrevisitEstimate = {
     status: string
     basis: string
   }
-
   practice_cash_source?: { filename: string; effective_from: string; version: string }
   payment_mode?: 'cash' | 'insurance'
   referral_evidence?: Array<{

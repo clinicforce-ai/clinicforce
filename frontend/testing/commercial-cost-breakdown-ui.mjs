@@ -362,6 +362,8 @@ try {
     ...officeOnlyResult,
     service_date: '2026-11-03',
     reason: 'Headache visit',
+    service_selection_status: 'preview',
+    service_plan: { method: 'llm' },
     plan_details: {
       stedi: {
         names: ['Aetna Medicare Signature (PPO)'],
@@ -422,6 +424,7 @@ try {
   ])
     assert(signatureTable.includes(value), value)
   assert(!signatureTable.includes('LLM-proposed CPTs'))
+  assert(!signatureTable.includes('Model proposal used for this estimate'))
   assert.equal(
     aetnaOfficePlanningCopay(
       {
