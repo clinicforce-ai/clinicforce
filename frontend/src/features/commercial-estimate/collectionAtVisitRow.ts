@@ -128,6 +128,7 @@ export function collectionAtVisitRow(
     pendingAetnaCopay: number | null
     pendingBluecardCopay: number | null
     cardPlanningCopay: number | null
+    cignaCard: NonNullable<PrevisitEstimate['card_check']>['cigna_card_reference'] | null | undefined
     automaticCashFallback: boolean
     cignaFeeProxy: boolean
     proxyFormula: ReturnType<typeof feeProxyFormula> | undefined
@@ -144,6 +145,7 @@ export function collectionAtVisitRow(
     pendingAetnaCopay,
     pendingBluecardCopay,
     cardPlanningCopay,
+    cignaCard,
     automaticCashFallback,
     cignaFeeProxy,
     proxyFormula,
@@ -178,6 +180,8 @@ export function collectionAtVisitRow(
     label:
       pendingAetnaCopay != null || pendingBluecardCopay != null
         ? 'Amount to collect at visit · pending verification'
+        : cignaCard
+          ? 'Amount to collect at visit · pending verification'
         : botoxPreview
           ? 'Planned amount to collect at visit'
           : diagnosticCopayReference != null
@@ -232,6 +236,8 @@ export function collectionAtVisitRow(
                                     ? `${money(cardPlanningCopay)} office-only card suggestion`
                                     : pendingCignaCopay != null
                                       ? `Pending · ${money(pendingCignaCopay)} office copay if verified`
+                                      : cignaCard
+                                        ? `Pending · ${money(cignaCard.nontier1_specialist_copay_cents)} non-Tier-1 office-only reference; diagnostic CPT amount requires verification`
                                       : 'Not established',
     detail: combinedPlan
       ? `${money(combinedPlan.office_copay_cents)} + ${combinedPlan.coinsurance_percent}% × ${money(combinedPlan.diagnostic_allowed_cents)} = ${money(combinedPlan.patient_share_cents)}${combinedPlan.payments_cents ? `; less ${money(combinedPlan.payments_cents)} already paid` : ''}. Separate follow-up E/M is planned; deductible and out-of-pocket adjustments remain assumptions until payer balances are returned.`
@@ -267,6 +273,8 @@ export function collectionAtVisitRow(
                                   ? 'Printed specialist copay for one office visit; verify before charging. Planned imaging and final payer share are unresolved.'
                                   : pendingCignaCopay != null
                                     ? 'Complete the visit-date payer check, confirm this copay and the clinic collection policy, and account for verified payments before charging. Full patient share remains unresolved.'
+                                    : cignaCard
+                                      ? 'Card reference only: confirm the visit-date coverage, provider tier, separately documented office E/M, clinic collection policy, and prior payments before charging. Diagnostic CPT share remains unknown.'
                                     : automaticCashFallback
                                       ? 'Insurance collection is unresolved; any cash quote is listed separately'
                                       : result.collection_guidance?.unconfirmed_zero_oop

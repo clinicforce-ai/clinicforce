@@ -50,6 +50,12 @@ export type PrevisitEstimate = {
     alternative_supported?: boolean
     payer_comparison?: { ecw: string; card: string }
     office_copay_cents?: number
+    cigna_card_reference?: {
+      tier1_specialist_copay_cents: number
+      nontier1_specialist_copay_cents: number
+      in_network_coinsurance_split?: string | null
+      specialist_referral_note?: string | null
+    }
     patient_name_matches?: boolean
     cms_plan_id?: string
     plan_name?: string

@@ -690,6 +690,20 @@ class RecoveryTest(IsolatedAsyncioTestCase):
         assert result['failure_reason'] == 'ecw_no_matching_card_document'
         assert api._compare_card_hints(result, {}, {})['failure_reason'] == result['failure_reason']
 
+    async def test_confirmed_card_uses_staff_member_id_when_ocr_cannot_read_it(self):
+        from app.insurance import v1_sources
+        _, session, _, _ = setup()
+        confirmed = [{'documents': [{'object_key': 'synthetic-card', 'size_bytes': 4}],
+                      'fields': {'member_id': 'ABC12345601'}}]
+        with patch.object(api.staff_store, 'patient_card_intakes', return_value=confirmed), \
+             patch.object(api.object_store, 'get_object_bytes', return_value=b'card'), \
+             patch('app.api.routers.staff.inspect_file'), \
+             patch.object(v1_sources, 'read_card_fields', return_value=({'payer': 'Cigna'}, [], None)):
+            card = await api._read_card_hints(session, 'synthetic-patient')
+        assert card['source'] == 'clinicforce_card'
+        assert card['fields']['member_id'] == 'ABC12345601'
+        assert card['reference_only'] is False
+
     async def test_followup_timeout_remains_indeterminate_without_another_post(self):
         case, session, provider, item = setup()
         recovery = case['previsit_discovery']

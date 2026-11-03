@@ -71,6 +71,20 @@ export default function CommercialCostBreakdown({
     partialOfficeCopay == null && officeReferenceCopay == null && humanaReferenceCopay == null
       ? copay.cardOfficePlanningCopay(result, model)
       : null
+  const cignaCard =
+    !model.cash && !model.previousEstimate && !model.calculating && !model.supportedAmount &&
+    !feeProxy && result.collection_guidance?.amount_cents == null &&
+    /\bcigna\b/i.test(result.payer || '') &&
+    result.card_check?.status !== 'conflict' &&
+    !result.card_check?.conflicts?.length && !result.card_check?.differences?.length &&
+    benefits?.active === true && benefits?.network_status === 'in_network' &&
+    !benefits?.coverage_status_conflict && !benefits?.network_conflict && !benefits?.has_secondary &&
+    result.identity?.status !== 'review' && benefits?.oop_remaining_cents !== 0 &&
+    !result.price_range?.service_issues?.length &&
+    !['multiple_active_policies', 'same_policy_evidence_conflict'].includes(result.recovery?.reason_code || '') &&
+    result.billing_protection?.status !== 'qmb'
+      ? result.card_check?.cigna_card_reference
+      : null
   const components = summary?.components
   const diagnosticCopay =
     (result.collection_guidance?.basis === 'diagnostic_day_copay' ||
@@ -216,6 +230,8 @@ export default function CommercialCostBreakdown({
                                 ? `${money(reportedOfficeCopay)} specialist office visit · payer-reported`
                                 : cardPlanningCopay != null
                                   ? `${money(cardPlanningCopay)} specialist office visit · printed on card`
+                                  : cignaCard
+                                    ? `${money(cignaCard.nontier1_specialist_copay_cents)} non-Tier-1 / ${money(cignaCard.tier1_specialist_copay_cents)} Tier 1 specialist office · card reference`
                                   : unknown,
       detail: botoxPreview
         ? 'No injection copay was included in this provisional calculation'
@@ -245,6 +261,8 @@ export default function CommercialCostBreakdown({
                           ? 'Payer category term; applicability to planned CPTs and visit date is not confirmed'
                           : cardPlanningCopay != null
                             ? 'Card-based office suggestion; payer applicability and imaging cost are unresolved'
+                            : cignaCard
+                              ? 'The card prints tiered office copays. Confirm the provider tier and a separately performed office visit; neither amount is a diagnostic CPT copay.'
                             : undefined,
     },
     {
@@ -336,6 +354,8 @@ export default function CommercialCostBreakdown({
                   ? money(components.coinsurance_cents)
                   : reportedCoinsurance != null
                     ? `${reportedCoinsurance}% reported; dollar amount pending`
+                    : cignaCard?.in_network_coinsurance_split
+                      ? `${cignaCard.in_network_coinsurance_split} printed in-network split · CPT share pending`
                     : humanaReferenceCopay != null
                       ? '40% out of network · in-network office benefit is a copay'
                       : unknown,
@@ -355,6 +375,8 @@ export default function CommercialCostBreakdown({
                     : undefined)
                 : !lines.length && reportedCoinsurance != null
                   ? 'Payer-reported office visit term; diagnostic testing share is not established'
+                  : cignaCard?.in_network_coinsurance_split
+                    ? 'Printed card split only; confirm which percentage and Cigna allowance apply to each selected diagnostic CPT.'
                   : undefined,
     },
     ...(calculated && (components?.allowed_cap_adjustment_cents ?? 0) > 0
@@ -373,7 +395,10 @@ export default function CommercialCostBreakdown({
       calculated,
       humanaReferenceCopay,
     ),
-    { label: 'Referral', value: requirementStatus(result, 'referral') },
+    { label: 'Referral', value: requirementStatus(result, 'referral'),
+      detail: cignaCard?.specialist_referral_note
+        ? 'The card says no specialist referral is required; confirm any separate selected-CPT requirement.'
+        : undefined },
     { label: 'Prior authorization', value: requirementStatus(result, 'authorization') },
     commercialCashAlternativeRow(price, model.cashPrice, automaticCashFallback, pricedCashLines),
   ]
@@ -413,6 +438,8 @@ export default function CommercialCostBreakdown({
                           ? `${money(model.officeCopayLine!.benefits.copay_cents!)} office-only planning estimate`
                           : cardPlanningCopay != null
                             ? `${money(cardPlanningCopay)} office-only card suggestion`
+                            : cignaCard
+                              ? `${money(cignaCard.nontier1_specialist_copay_cents)} non-Tier-1 office-only reference; diagnostic share pending`
                             : null) ||
                         (model.provisionalAmount != null
                           ? money(model.provisionalAmount)
@@ -468,6 +495,8 @@ export default function CommercialCostBreakdown({
                               ? 'Copay + deductible applied + coinsurance − allowed and out-of-pocket reductions'
                               : cardPlanningCopay != null
                                 ? 'Printed specialist copay for one office visit; planned imaging and final payer share are unresolved.'
+                                : cignaCard
+                                  ? 'Card-printed office copay only. Diagnostic CPT share remains unknown; Cigna allowed amounts and visit-date benefits are needed.'
                                 : 'Full share awaits applicable deductible and out-of-pocket terms',
           },
           ...(summary?.payments_verified_cents != null && summary.payments_verified_cents > 0
@@ -486,6 +515,7 @@ export default function CommercialCostBreakdown({
       pendingAetnaCopay,
       pendingBluecardCopay,
       cardPlanningCopay,
+      cignaCard,
       automaticCashFallback,
       cignaFeeProxy,
       proxyFormula,

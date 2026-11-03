@@ -22,7 +22,8 @@ async def _read_card_hints(session: dict, patient_id: str | None, *, allow_pendi
             return {'status': 'multiple_cards', 'fields': {}, 'count': 0}
         reference_only = bool(pending)
         docs = card_intakes[0]['documents'] if card_intakes else pending[0]['documents'] if pending else []
-        submitted_member_id = (pending[0].get('fields') or {}).get('member_id') if pending else None
+        selected_intake = card_intakes[0] if card_intakes else pending[0] if pending else {}
+        submitted_member_id = (selected_intake.get('fields') or {}).get('member_id')
         if len(docs) > 2:
             return {'status': 'multiple_cards', 'fields': {}, 'count': 0}
         for doc in docs:
@@ -48,7 +49,7 @@ async def _read_card_hints(session: dict, patient_id: str | None, *, allow_pendi
         for content in contents:
             await _api.run_in_threadpool(inspect_file, content)
         fields, evidence, _ = await _api.asyncio.wait_for(_api.asyncio.to_thread(v1_sources.read_card_fields, contents), timeout=20)
-        if reference_only and submitted_member_id:
+        if submitted_member_id and not fields.get('member_id'):
             fields['member_id'] = submitted_member_id
         return {'status': 'read', 'fields': fields, 'evidence': evidence, 'count': len(contents),
                 'source': source, 'reference_only': reference_only}

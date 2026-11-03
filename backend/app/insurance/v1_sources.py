@@ -158,6 +158,17 @@ def card_fields(pages: list[tuple[int, str]]) -> tuple[dict, dict]:
                 add("payer", "UnitedHealthcare", page, match[0])
             elif match := re.search(r"\b(Aetna|Cigna|Humana)\b", joined, re.I):
                 add("payer", match[0], page, match[0])
+        if re.search(r'\bCigna\b', joined, re.I):
+            # The two-column eCW printout can put another benefit after Name.
+            if match := re.search(r"\bN(?:a|o)me:\s*([A-Za-z][A-Za-z .'-]{2,80}?)(?=\s+(?:Urgent|Hospital|PCP|Rx|Network)\b|$)", joined, re.I):
+                add('member_name', match[1], page, match[0])
+            if match := re.search(r'\bSpecialist\s+Tier\s*(?:I|1)?\s*/\s*Non\s+\$(\d{1,4})\s*/\s*\$(\d{1,4})\b', joined, re.I):
+                add('specialist_tier1_copay', '$' + match[1], page, match[0])
+                add('specialist_nontier1_copay', '$' + match[2], page, match[0])
+            if match := re.search(r'\bNetwork\s+Coinsurance:\s*In\s+(\d{1,3})\s*%\s*/\s*(\d{1,3})\s*%', joined, re.I):
+                add('in_network_coinsurance_split', f'{match[1]}%/{match[2]}%', page, match[0])
+            if match := re.search(r'\bNo\s+Referral\s+Required\b', joined, re.I):
+                add('specialist_referral_note', 'No Referral Required', page, match[0])
         # Routing/phone fields only: require the captured value in the same page.
         for key, pattern in golden.CARD_DETAIL_PATTERNS.items():
             if not (key.endswith("_phone") or key.startswith("rx_")):

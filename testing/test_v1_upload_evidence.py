@@ -36,6 +36,22 @@ class SourceTests(unittest.TestCase):
         self.assertEqual(fields["member_id"], "ABC123")
         self.assertEqual(evidence["member_name"]["quote"], "Member Name\nPAT EXAMPLE")
 
+    def test_cigna_tiered_card_keeps_printed_terms_as_separate_references(self):
+        text = ("cigna\nOpen Access Plan OA Plus In-Network\n"
+                "Group: 3334562 No Referral Required\n"
+                "Specialist Tier I/Non $65/$80\n"
+                "ID: P12345678 OI Hospital ER 30%\n"
+                "Name: Pat Example Urgent Care $75\n"
+                "Network Coinsurance:\nIn 70%/30%")
+        fields, evidence = v1_sources.card_fields([(1, text)])
+        self.assertEqual(fields['member_name'], 'Pat Example')
+        self.assertEqual(fields['specialist_tier1_copay'], '$65')
+        self.assertEqual(fields['specialist_nontier1_copay'], '$80')
+        self.assertEqual(fields['in_network_coinsurance_split'], '70%/30%')
+        self.assertEqual(fields['specialist_referral_note'], 'No Referral Required')
+        self.assertNotIn('member_id', fields)  # OCR cannot safely turn OI into 01.
+        self.assertTrue(all(evidence[key]['page'] == 1 for key in fields))
+
     def test_three_column_card_header_keeps_identity_with_evidence(self):
         text = ("Plan Type: Member ID: Group #: scored\nMedical TEST12345 GRP678\nMember ID Cards\n"
                 "Name:_ Effective Dates:\nPAT EXAMPLE 01/01/2026 - 12/31/2026\n"

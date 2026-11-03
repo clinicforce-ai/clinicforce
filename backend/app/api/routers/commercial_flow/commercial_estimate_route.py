@@ -76,6 +76,12 @@ async def previsit_estimate(value: _api.PrevisitInput, request: _api.Request, ba
     Other conflicts use a uniquely supported card route or wait for review; no
     path edits eCW or retries an indeterminate paid request. A matching patient-specific pending upload may set card_check.reference_only for a conditional plan reference, never payer inquiry fields or collection. card_check omits
     image bytes, reports ecw_no_matching_card_document, and may show a matched HPI card's printed specialist copay for office-only planning.
+    A confirmed Cigna card with the same nine-character base ID and one numeric
+    person suffix can fill a missing eCW group without replacing the eCW inquiry
+    ID. card_check.cigna_card_reference exposes printed Tier 1/non-Tier-1 office
+    copays and the card's in-network split as references, not CPT cost sharing.
+    An exact Cigna STC 30 administrative attribution exclusion does not negate
+    separately reported active coverage; other exclusions still require review.
     payment_explanation gives one doctor-only sentence, a reason code, network
     tier, pricing basis, unpriced CPTs and an optional resolved-mismatch note.
     encounter_summary.coinsurance_rounded_per_line is true when individual CPT
