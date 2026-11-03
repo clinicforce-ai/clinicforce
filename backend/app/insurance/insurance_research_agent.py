@@ -32,7 +32,8 @@ def _public_payer_url(value: object) -> bool:
 def _tool_config(names: tuple[str, ...] = TOOL_NAMES) -> dict:
     return {'tools': [{'toolSpec': {'name': name,
         'description': 'Read one deidentified, already saved and selected visit fact. Never approve collection.',
-        'inputSchema': {'json': {'type': 'object', 'properties': {'code': {'type': 'string'}},
+        'inputSchema': {'json': {'type': 'object', 'properties': {'code': {
+            'type': 'string', 'description': 'Exact selected CPT code, not a benefit evidence ID.'}},
                                  'required': ['code'], 'additionalProperties': False}}}}
         for name in names]}
 
@@ -50,6 +51,18 @@ def _tools_for(facts: dict) -> tuple[str, ...]:
                 'read_official_payer_rule', 'read_delegated_administrator',
                 'read_official_contact', 'read_prior_verified_rule')
     return ('read_selected_benefit', 'read_saved_ecw_context', 'read_policy_scope')
+
+
+def _selected_tool_code(value: object, facts: dict) -> str | None:
+    """Resolve only a uniquely selected CPT or its supplied evidence reference."""
+    if not isinstance(value, str):
+        return None
+    selected = {str(row['code']) for row in facts['lines'] if row.get('code')}
+    if value in selected:
+        return str(value)
+    matches = {str(row['code']) for row in facts['lines']
+               if value in (row['benefit_evidence'] + row['requirement_evidence'])}
+    return next(iter(matches)) if len(matches) == 1 else None
 
 
 def _tool_result(name: str, code: str, facts: dict, result: dict) -> dict:
@@ -229,7 +242,7 @@ def investigate(result: dict) -> dict:
               'Return JSON only: {"findings":[{"code":"CPT","finding":"short explanation",'
               '"evidence_ids":["exact supplied benefit ID"],"next_action":"short action"}]}. '
               'Each evidence_ids value must exactly match a benefit_evidence or requirement_evidence ID supplied for that CPT; '
-              'a CPT code is not an evidence ID. '
+              'a CPT code is not an evidence ID. For tool calls, code must be the exact selected CPT, not an evidence ID. '
               'Do not invent a value, network participation, deductible waiver, copay interaction, or permission to collect. '
               'A requirement status of Verification required means it was evaluated but neither the requirement '
               'nor member approval is confirmed; an empty requirement_evidence list means no citable rule source. '
@@ -244,11 +257,11 @@ def investigate(result: dict) -> dict:
         if tool_uses:
             if len(tool_uses) > 3:
                 raise ValueError('too_many_research_tools')
-            allowed_codes = {str(row['code']) for row in facts['lines']}
             results = []
             for call in tool_uses:
-                name, code = call.get('name'), (call.get('input') or {}).get('code')
-                if name not in allowed_tools or code not in allowed_codes or not call.get('toolUseId'):
+                name = call.get('name')
+                code = _selected_tool_code((call.get('input') or {}).get('code'), facts)
+                if name not in allowed_tools or code is None or not call.get('toolUseId'):
                     raise ValueError('invalid_research_tool')
                 results.append({'toolResult': {'toolUseId': call['toolUseId'],
                     'content': [{'json': _tool_result(name, code, facts, result)}]}})

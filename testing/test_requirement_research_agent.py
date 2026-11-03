@@ -76,6 +76,42 @@ def test_research_request_distinguishes_unconfirmed_requirement_from_absent_sour
     assert 'Synthetic CollectionFixture' not in prompt
 
 
+def test_tool_evidence_alias_resolves_only_one_selected_cpt():
+    facts = insurance_research_agent._input(visit('aetna_new_office_date_mismatch'))
+    assert insurance_research_agent._selected_tool_code('99203', facts) == '99203'
+    assert insurance_research_agent._selected_tool_code('synthetic-benefit-prior-date', facts) == '99203'
+    assert insurance_research_agent._selected_tool_code('unrelated-id', facts) is None
+    assert insurance_research_agent._selected_tool_code({}, facts) is None
+    facts['lines'].append({**facts['lines'][0], 'code': '99204'})
+    assert insurance_research_agent._selected_tool_code('synthetic-benefit-prior-date', facts) is None
+
+
+def test_model_tool_call_using_selected_benefit_id_is_scoped_and_cited(monkeypatch):
+    value = visit('aetna_new_office_date_mismatch')
+    calls = []
+
+    class FakeBedrock:
+        def converse(self, **request):
+            calls.append(request)
+            if len(calls) == 1:
+                return {'output': {'message': {'role': 'assistant', 'content': [{
+                    'toolUse': {'toolUseId': 'one', 'name': 'read_selected_benefit',
+                                'input': {'code': 'synthetic-benefit-prior-date'}}}]}}}
+            return {'output': {'message': {'role': 'assistant', 'content': [{'text':
+                json.dumps({'findings': [{'code': '99203',
+                    'finding': 'Confirm visit-date benefits.',
+                    'evidence_ids': ['synthetic-benefit-prior-date'],
+                    'next_action': 'Recheck on visit date.'}]})}]}}}
+
+    monkeypatch.setattr(insurance_research_agent.boto3, 'client', lambda *args, **kwargs: FakeBedrock())
+    answer = insurance_research_agent.investigate(value)
+    assert answer['status'] == 'complete'
+    tool_result = calls[1]['messages'][-1]['content'][0]['toolResult']['content'][0]['json']
+    assert tool_result['status'] == 'available'
+    assert tool_result['finding']['code'] == '99203'
+    assert answer['findings'][0]['evidence_ids'] == ['synthetic-benefit-prior-date']
+
+
 def test_requirement_source_tools_expose_only_scoped_saved_references():
     value = case(diagnostic=None, approved=False)
     value['payer_product_binding'] = 'synthetic-cigna-oap'
