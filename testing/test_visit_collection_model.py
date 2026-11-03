@@ -387,6 +387,7 @@ def test_saved_case_reload_retains_approved_visit_policy(monkeypatch):
     import asyncio
     from unittest.mock import AsyncMock, MagicMock
     from app.api.routers.commercial_flow import commercial_previsit_status as status
+    from app.api.routers.commercial_flow import commercial_previsit_finish as finish
     from app.api.routers.commercial_flow import commercial_previsit_routes as routes
     value = case(diagnostic=None)
     policy = value.pop('collection_policy')
@@ -403,9 +404,11 @@ def test_saved_case_reload_retains_approved_visit_policy(monkeypatch):
     monkeypatch.setattr(status, 'refresh_saved_requirements', lambda *args: None)
     monkeypatch.setattr(status, 'refresh_saved_temporary_rates', lambda result, *args: result.update(
         temporary_rate_reference=case(diagnostic=None)['temporary_rate_reference']))
-    monkeypatch.setattr(status.blue_cross_proxy, 'estimate', lambda *args: None)
-    monkeypatch.setattr(status.blue_cross_proxy, 'cigna_estimate', lambda *args: None)
-    monkeypatch.setattr(status.blue_cross_proxy, 'cigna_oap_office_scenario', lambda *args: None)
+    def forbidden_proxy(*_args):
+        raise AssertionError('V2 saved reads must not run legacy fee proxies')
+    monkeypatch.setattr(finish.blue_cross_proxy, 'estimate', forbidden_proxy)
+    monkeypatch.setattr(finish.blue_cross_proxy, 'cigna_estimate', forbidden_proxy)
+    monkeypatch.setattr(finish.blue_cross_proxy, 'cigna_oap_office_scenario', forbidden_proxy)
     monkeypatch.setattr(routes._api, '_session', AsyncMock(return_value={
         'practice_id': 'synthetic-clinic', 'patient_id': 'synthetic-patient', 'share_manifest_id': ''}))
     monkeypatch.setattr(routes._api, '_scope', lambda *_: {})
