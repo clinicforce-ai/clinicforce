@@ -227,6 +227,23 @@ export function publishedHumanaOfficeCopay(
     : null
 }
 
+export function aetnaSignatureOfficeNoDeductible(
+  result: PrevisitEstimate,
+  line: VisitPricedLine | null,
+): boolean {
+  const plan = result.plan_details?.stedi
+  return (
+    !!line &&
+    /^992(?:0[2-5]|1[2-5])$/.test(line.code) &&
+    result.service_date >= '2026-01-01' &&
+    result.service_date <= '2026-12-31' &&
+    plan?.names?.length === 1 &&
+    plan.names[0] === 'Aetna Medicare Signature (PPO)' &&
+    plan.group_number === '000003-TX' &&
+    plan.plan_number === '000003-TX000047'
+  )
+}
+
 export function aetnaOfficePlanningCopay(
   result: PrevisitEstimate,
   model: CommercialEstimateModel,
@@ -267,7 +284,9 @@ export function aetnaOfficePlanningCopay(
     terms.copay_cents != null &&
     terms.coinsurance_percent != null &&
     Number(terms.coinsurance_percent) === 0 &&
-    (terms.deductible_applies === false || terms.deductible_remaining_cents === 0) &&
+    (terms.deductible_applies === false ||
+      terms.deductible_remaining_cents === 0 ||
+      aetnaSignatureOfficeNoDeductible(result, officeLine)) &&
     terms.oop_remaining_cents != null &&
     terms.oop_remaining_cents >= terms.copay_cents
     ? terms.copay_cents

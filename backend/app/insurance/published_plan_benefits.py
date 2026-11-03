@@ -18,6 +18,13 @@ AETNA_SIGNATURE_TX_2026 = {
     'diagnostic_copay_cents': 5000,
 }
 
+AETNA_SIGNATURE_H2293_016_2026 = {
+    'label': '2026 Aetna Medicare Signature (PPO) H2293-016 Summary of Benefits, specialist visits',
+    'url': 'https://content.medicareadvantage.com/2026/Aetna-Y0001-H2293-016-PP35-SB2026-M-SF20250923.pdf',
+    'effective_from': '2026-01-01', 'effective_to': '2026-12-31',
+    'office_specialist_copay_cents': 7000,
+}
+
 HUMANA_VALUE_CHOICE_057_2026 = {
     'label': '2026 Humana Value Choice (PPO) H7617-057 Summary of Benefits',
     'url': 'https://assets.humana.com/is/content/humana/H7617057000SB26pdf',
@@ -132,6 +139,34 @@ def apply_office_terms(raw: dict, case_benefits: dict, rules: dict,
                        service_date: str, code: str) -> dict:
     """Fill missing office terms; retain conflicting member-specific evidence."""
     plan = case_benefits.get('plan_details') or {}
+    if (plan.get('names') == ['Aetna Medicare Signature (PPO)']
+            and plan.get('group_number') == '000003-TX'
+            and plan.get('plan_number') == '000003-TX000047'
+            and AETNA_SIGNATURE_H2293_016_2026['effective_from'] <= service_date <= AETNA_SIGNATURE_H2293_016_2026['effective_to']
+            and case_benefits.get('active') is True and case_benefits.get('service_date_matches') is True
+            and verified_in_network(case_benefits)
+            and patient_benefits_bound(case_benefits.get('identity') or {})
+            and not case_benefits.get('has_secondary')
+            and str(rules.get('place_of_service') or '') == '11'
+            and rules.get('provider_office_role') == 'specialist'
+            and code in {'99202', '99203', '99204', '99205', '99212', '99213', '99214', '99215'}):
+        copay = AETNA_SIGNATURE_H2293_016_2026['office_specialist_copay_cents']
+        if (raw.get('copay_cents') not in {None, copay}
+                or raw.get('coinsurance_percent') not in {None, '0', '0.0', '0.00'}
+                or raw.get('deductible_applies') is True):
+            return {**raw, 'review_reasons': [*(raw.get('review_reasons') or []),
+                'The member-specific specialist office cost share conflicts with the published Aetna plan rule.'],
+                'requires_review': True}
+        reasons = [reason for reason in raw.get('review_reasons') or [] if reason not in {
+            'Confirm the remaining individual deductible that applies to this visit.',
+            'Confirm which copay or coinsurance term applies, including any visit-count conditions.',
+        }]
+        return {**raw, 'copay_cents': copay, 'copay_period': 'VISIT',
+            'coinsurance_percent': '0', 'deductible_applies': False,
+            'deductible_applicability': 'DOES_NOT_APPLY', 'deductible_remaining_cents': 0,
+            'deductible_annual_cents': 0, 'cost_share': 'copay',
+            'published_plan_rule': AETNA_SIGNATURE_H2293_016_2026,
+            'review_reasons': reasons, 'requires_review': bool(reasons)}
     if (plan.get('identified_product') == 'Humana Value Choice PPO H7617-057'
             and HUMANA_VALUE_CHOICE_057_2026['effective_from'] <= service_date <= HUMANA_VALUE_CHOICE_057_2026['effective_to']
             and case_benefits.get('active') is True and case_benefits.get('service_date_matches') is True

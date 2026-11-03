@@ -2,7 +2,7 @@
 from copy import deepcopy
 from unittest.mock import patch
 
-from app.insurance import visit_estimate
+from app.insurance import published_plan_benefits, visit_estimate
 from app.api.routers import commercial_estimator  # noqa: F401 - initialize route imports
 from app.api.routers.commercial_flow.commercial_previsit_rate_reference import _attach_temporary_aetna_rates
 
@@ -79,3 +79,39 @@ def test_draft_aetna_values_support_labelled_planning_amount():
     assert result['aetna_diagnostic_reference']['payer_share_cents'] == 11876
     assert result['temporary_rate_reference']['complete'] is True
     assert sum(line['unit_reference_cents'] for line in result['temporary_rate_reference']['lines']) == 21876
+
+
+def test_aetna_signature_office_fee_screen_is_only_a_scoped_reference():
+    member = benefits()
+    member['plan_details']['plan_number'] = '000003-TX000047'
+    result = {'payer': 'Aetna', 'payment_mode': 'insurance', 'benefits': member,
+              'codes': [{'id': 'office', 'code': '99203', 'units': 1, 'modifiers': []}]}
+    _attach_temporary_aetna_rates(result, 'primary',
+                                  {'service_date': '2026-11-03', 'place_of_service': '11'}, {})
+    assert result['temporary_rate_reference']['lines'][0]['unit_reference_cents'] == 11960
+    assert 'not an active allowed rate' in result['temporary_rate_reference']['message']
+    for practice, day, code in [('other-practice', '2026-11-03', '99203'),
+                                ('primary', '2026-11-04', '99203'),
+                                ('primary', '2026-11-03', '99213')]:
+        changed = {**result, 'codes': [{'id': 'office', 'code': code, 'units': 1, 'modifiers': []}]}
+        changed.pop('temporary_rate_reference', None)
+        _attach_temporary_aetna_rates(changed, practice,
+                                      {'service_date': day, 'place_of_service': '11'}, {})
+        assert 'temporary_rate_reference' not in changed
+
+
+def test_aetna_signature_office_uses_published_in_network_deductible_rule():
+    member = benefits()
+    member['plan_details']['plan_number'] = '000003-TX000047'
+    raw = {'copay_cents': 7000, 'coinsurance_percent': '0',
+           'deductible_remaining_cents': 75000,
+           'review_reasons': ['Confirm the remaining individual deductible that applies to this visit.']}
+    rules = {'place_of_service': '11', 'provider_office_role': 'specialist'}
+    office = published_plan_benefits.apply_office_terms(raw, member, rules, '2026-11-03', '99203')
+    assert office['copay_cents'] == 7000
+    assert office['deductible_applies'] is False
+    assert office['deductible_remaining_cents'] == 0
+    assert office['published_plan_rule']['office_specialist_copay_cents'] == 7000
+    conflict = published_plan_benefits.apply_office_terms(
+        {**raw, 'copay_cents': 9000}, member, rules, '2026-11-03', '99203')
+    assert conflict['requires_review'] is True
