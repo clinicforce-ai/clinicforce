@@ -830,6 +830,8 @@ try {
   cignaDiagnosticScenario.fee_proxy_estimate.scenario_kind = 'oap_diagnostic_office_copay'
   cignaDiagnosticScenario.fee_proxy_estimate.copay_cents = 8000
   cignaDiagnosticScenario.fee_proxy_estimate.patient_share_cents = 8000
+  cignaDiagnosticScenario.card_check = structuredClone(cignaCardReference.card_check)
+  cignaDiagnosticScenario.identity = { status: 'warning' }
   const diagnosticTable = renderToStaticMarkup(
     React.createElement(CommercialCostBreakdown, {
       model: { ...model, planName: 'Open Access Plus' },
@@ -840,6 +842,9 @@ try {
   assert(diagnosticTable.includes('Cigna diagnostic office benefit row'))
   assert(diagnosticTable.includes('One payer-reported diagnostic specialist copay'))
   assert(diagnosticTable.includes('Explanation of Estimate before collection'))
+  assert(diagnosticTable.includes('Insurance card specialist office copays'))
+  assert(diagnosticTable.includes('$65.00 Tier 1; $80.00 non-Tier-1'))
+  assert(diagnosticTable.includes('70%/30% printed card reference'))
   const singleCpt = structuredClone(cignaOfficeScenario)
   singleCpt.price_range.lines.pop()
   singleCpt.temporary_rate_reference.lines.pop()

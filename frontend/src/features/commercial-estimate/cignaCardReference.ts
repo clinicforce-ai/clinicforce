@@ -1,5 +1,7 @@
 import type { PrevisitEstimate } from '../../services/api/commercial-estimator'
+import type { CostBreakdownRow } from '../insurance-estimate/CostBreakdownTable'
 import type { CommercialEstimateModel } from './useCommercialEstimateModel'
+import { money } from './format'
 
 export function cignaCardReference(
   result: PrevisitEstimate,
@@ -10,7 +12,6 @@ export function cignaCardReference(
     !model.previousEstimate &&
     !model.calculating &&
     !model.supportedAmount &&
-    !result.fee_proxy_estimate &&
     result.collection_guidance?.amount_cents == null &&
     /\bcigna\b/i.test(result.payer || '') &&
     result.card_check?.status !== 'conflict' &&
@@ -30,4 +31,25 @@ export function cignaCardReference(
     result.billing_protection?.status !== 'qmb'
     ? result.card_check?.cigna_card_reference
     : null
+}
+
+export function cignaCardRows(
+  card: NonNullable<PrevisitEstimate['card_check']>['cigna_card_reference'] | null | undefined,
+  feeProxy: boolean,
+): CostBreakdownRow[] {
+  return card && feeProxy
+    ? [
+        {
+          label: 'Insurance card specialist office copays',
+          value: `${money(card.tier1_specialist_copay_cents)} Tier 1; ${money(card.nontier1_specialist_copay_cents)} non-Tier-1`,
+          detail:
+            'Card-printed office terms only; diagnostic CPT applicability and provider tier require verification.',
+        },
+        {
+          label: 'Insurance card in-network split',
+          value: `${card.in_network_coinsurance_split} printed card reference`,
+          detail: 'The exact CPT response and Cigna allowance determine the diagnostic share.',
+        },
+      ]
+    : []
 }
