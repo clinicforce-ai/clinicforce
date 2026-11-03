@@ -57,6 +57,11 @@ export default function CommercialCostBreakdown({
       : benefits?.coinsurance_percent
   const reportedOfficeCopay = copay.specialistOfficeCopay(reportedResult)
   const singleOfficeCopayLine = copay.singleOfficeCopayLine(lines)
+  const aetnaNoOfficeDeductible =
+    benefits?.active === true &&
+    benefits.service_date_matches === true &&
+    benefits.network_status === 'in_network' &&
+    copay.aetnaSignatureOfficeNoDeductible(result, singleOfficeCopayLine)
   const officeReferenceCopay = copay.aetnaOfficeReferenceCopay(result, model)
   const humanaReferenceCopay = copay.publishedHumanaOfficeCopay(result, model)
   const partialOfficeCopay = copay.payerReportedPartialCopay(result, model)
@@ -244,10 +249,11 @@ export default function CommercialCostBreakdown({
     },
     {
       label: 'Individual deductible',
-      value:
-        humanaReferenceCopay != null &&
-        benefits?.deductible_applies !== true &&
-        benefits?.deductible_annual_cents == null
+      value: aetnaNoOfficeDeductible
+        ? '$0.00 for in-network specialist office visit'
+        : humanaReferenceCopay != null &&
+            benefits?.deductible_applies !== true &&
+            benefits?.deductible_annual_cents == null
           ? '$0.00 annual · no medical deductible (published plan)'
           : feeProxy != null &&
               !cignaFeeProxy &&
@@ -268,28 +274,31 @@ export default function CommercialCostBreakdown({
                 : surgicalIndividualDeductible.value !== unknown
                   ? `${surgicalIndividualDeductible.value} · surgical services`
                   : unknown),
-      detail: botoxPreview
-        ? 'Individual balance not returned; provisional scenario uses the payer-reported met family deductible'
-        : cignaFeeProxy
-          ? cignaOfficeScenario
-            ? `${money(0)} applied in this provisional scenario from the general individual remaining balance; CPT applicability is not confirmed`
-            : `${money(feeProxy?.deductible_cents || 0)} applied in this provisional scenario; exact CPT Stedi responses reported no remaining individual deductible`
-          : feeProxy != null
-            ? feeProxy.deductible_source
-            : result.collection_guidance?.basis === 'out_of_pocket_limit'
-              ? individualDeductible.value === unknown && benefits?.deductible_annual_cents == null
-                ? 'No deductible payment due after the out-of-pocket limit; the payer did not report an office-specific deductible rule'
-                : 'No deductible payment due for this covered office visit after the out-of-pocket limit'
-              : calculated && components?.deductible_cents != null
-                ? `${money(components.deductible_cents)} applied to this visit`
-                : individualDeductible.unassigned
-                  ? 'Payer-reported plan amount; medical applicability needs confirmation'
-                  : surgicalIndividualDeductible.value !== unknown
-                    ? 'Payer did not report an office-specific deductible rule; surgical balance does not establish one'
-                    : lines.length &&
-                        lines.every((line) => line.benefits?.deductible_applies === false)
-                      ? 'Does not apply to the selected CPTs'
-                      : 'Office deductible applicability or amount is unresolved for the selected CPTs',
+      detail: aetnaNoOfficeDeductible
+        ? 'The 2026 Aetna Signature PPO H2293-016 plan has no in-network deductible. A payer-reported general deductible may apply to certain out-of-network services.'
+        : botoxPreview
+          ? 'Individual balance not returned; provisional scenario uses the payer-reported met family deductible'
+          : cignaFeeProxy
+            ? cignaOfficeScenario
+              ? `${money(0)} applied in this provisional scenario from the general individual remaining balance; CPT applicability is not confirmed`
+              : `${money(feeProxy?.deductible_cents || 0)} applied in this provisional scenario; exact CPT Stedi responses reported no remaining individual deductible`
+            : feeProxy != null
+              ? feeProxy.deductible_source
+              : result.collection_guidance?.basis === 'out_of_pocket_limit'
+                ? individualDeductible.value === unknown &&
+                  benefits?.deductible_annual_cents == null
+                  ? 'No deductible payment due after the out-of-pocket limit; the payer did not report an office-specific deductible rule'
+                  : 'No deductible payment due for this covered office visit after the out-of-pocket limit'
+                : calculated && components?.deductible_cents != null
+                  ? `${money(components.deductible_cents)} applied to this visit`
+                  : individualDeductible.unassigned
+                    ? 'Payer-reported plan amount; medical applicability needs confirmation'
+                    : surgicalIndividualDeductible.value !== unknown
+                      ? 'Payer did not report an office-specific deductible rule; surgical balance does not establish one'
+                      : lines.length &&
+                          lines.every((line) => line.benefits?.deductible_applies === false)
+                        ? 'Does not apply to the selected CPTs'
+                        : 'Office deductible applicability or amount is unresolved for the selected CPTs',
     },
     {
       label: 'Family deductible',

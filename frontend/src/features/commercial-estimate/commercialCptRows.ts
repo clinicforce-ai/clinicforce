@@ -1,6 +1,7 @@
 import type { PrevisitEstimate } from '../../services/api/commercial-estimator'
 import type { VisitPricedLine } from '../../services/api/commercial-visit-types'
 import type { CostBreakdownRow } from '../insurance-estimate/CostBreakdownTable'
+import { aetnaSignatureOfficeNoDeductible } from './payerReportedPartialCopay'
 
 export function commercialCptRows(
   result: PrevisitEstimate,
@@ -21,7 +22,9 @@ export function commercialCptRows(
   return {
     cpt: {
       label:
-        result.service_selection_status === 'preview' && result.service_plan?.method === 'llm'
+        result.service_selection_status === 'preview' &&
+        result.service_plan?.method === 'llm' &&
+        !aetnaSignatureOfficeNoDeductible(result, lines.length === 1 ? lines[0] : null)
           ? 'LLM-proposed CPTs'
           : 'CPTs',
       value: lines.length
