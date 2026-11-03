@@ -90,8 +90,13 @@ def test_aetna_signature_office_fee_screen_is_only_a_scoped_reference():
                                   {'service_date': '2026-11-03', 'place_of_service': '11'}, {})
     assert result['temporary_rate_reference']['lines'][0]['unit_reference_cents'] == 11960
     assert 'not an active allowed rate' in result['temporary_rate_reference']['message']
+    result['benefits'] = {**member, 'service_date_matches': False, 'active': False}
+    result.pop('temporary_rate_reference')
+    _attach_temporary_aetna_rates(result, 'primary',
+                                  {'service_date': '2026-11-04', 'place_of_service': '11'}, {})
+    assert result['temporary_rate_reference']['lines'][0]['unit_reference_cents'] == 11960
+    assert 'allowed_cents' not in result
     for practice, day, code in [('other-practice', '2026-11-03', '99203'),
-                                ('primary', '2026-11-04', '99203'),
                                 ('primary', '2026-11-03', '99213')]:
         changed = {**result, 'codes': [{'id': 'office', 'code': code, 'units': 1, 'modifiers': []}]}
         changed.pop('temporary_rate_reference', None)
