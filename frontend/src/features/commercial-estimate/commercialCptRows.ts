@@ -4,6 +4,14 @@ import type { CostBreakdownRow } from '../insurance-estimate/CostBreakdownTable'
 import { aetnaSignatureOfficeNoDeductible } from './payerReportedPartialCopay'
 import { money, range } from './format'
 
+export function commercialVisitReason(result: PrevisitEstimate, fallback: string): string {
+  const reason = result.reason || fallback || 'Not recorded'
+  return result.service_plan?.kind === 'emg_ncs' &&
+    !/\b(?:emg|ncs|electromyograph|nerve conduction)\b/i.test(reason)
+    ? `${reason} · EMG/NCS evaluation`
+    : reason
+}
+
 export function commercialCashAlternativeRow(
   price: PrevisitEstimate['price_range'],
   cashPrice: string | null,

@@ -60,6 +60,15 @@ def _stedi_entries(payload: dict[str, Any]) -> list[dict[str, Any]]:
             for i, row in enumerate(benefits.get(category) or []):
                 if not isinstance(row, dict):
                     continue
+                # Cigna reports attribution enrollment metadata as an EB exclusion.
+                # It is not a medical-service exclusion or an inactive plan status.
+                if (category == "exclusions" and str(payload.get("payerId") or "") == "62308"
+                        and not _procedure(row)
+                        and isinstance(row.get("service"), dict)
+                        and row["service"].get("value") == "30"
+                        and [note.strip().casefold() for note in _benefit_notes(row.get("messages"))]
+                            == ["attribution status - not applicable"]):
+                    continue
                 service = row.get("service") or {}
                 stcs = ([str(service["value"])] if isinstance(service, dict) and
                         str(service.get("system") or "").upper() == "STC" and service.get("value") else row.get("serviceTypeCodes") or [])

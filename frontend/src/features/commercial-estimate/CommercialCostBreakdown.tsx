@@ -11,8 +11,13 @@ import * as copay from './payerReportedPartialCopay'
 import { referenceCoverageRow } from './referenceCoverageRow'
 import { limitSummary, unknown } from './limitSummary'
 import { resolvedAllowedTotal } from './resolvedAllowedTotal'
-import { commercialCashAlternativeRow, commercialCptRows } from './commercialCptRows'
-import { commercialOopRows } from './commercialOopRows'
+import {
+  commercialCashAlternativeRow,
+  commercialCptRows,
+  commercialVisitReason,
+} from './commercialCptRows'
+import { commercialOopRows, familyOopLimitApplied } from './commercialOopRows'
+import { cignaCardReference } from './cignaCardReference'
 export default function CommercialCostBreakdown({
   model,
   result,
@@ -30,16 +35,8 @@ export default function CommercialCostBreakdown({
   const cignaOfficeScenario = cignaFeeProxy && !!feeProxy.scenario_kind
   const lines = price?.mode === 'services' ? price.lines || [] : []
   const cptRows = commercialCptRows(result, lines, botoxPreview)
-  const reason = result.reason || model.anticipatedService || 'Not recorded'
-  const visitReason =
-    result.service_plan?.kind === 'emg_ncs' &&
-    !/\b(?:emg|ncs|electromyograph|nerve conduction)\b/i.test(reason)
-      ? `${reason} · EMG/NCS evaluation`
-      : reason
-  const familyOopApplied =
-    result.collection_guidance?.basis === 'out_of_pocket_limit' &&
-    lines.length > 0 &&
-    lines.every((line) => line.benefits?.family_oop_zero_applies)
+  const visitReason = commercialVisitReason(result, model.anticipatedService || '')
+  const familyOopApplied = familyOopLimitApplied(result)
   const automaticCashFallback = model.cash && result.cash_fallback != null
   const summary = result.encounter_summary
   const proxyFormula = feeProxy && feeProxyFormula(feeProxy, summary?.payments_verified_cents || 0)
@@ -47,14 +44,7 @@ export default function CommercialCostBreakdown({
   const surgicalIndividualDeductible = limitSummary(reportedResult, 'deductible', 'INDIVIDUAL', '2')
   const familyDeductible = limitSummary(reportedResult, 'deductible', 'FAMILY')
   const surgicalFamilyDeductible = limitSummary(reportedResult, 'deductible', 'FAMILY', '2')
-  const lineCoinsurance = [...new Set(lines.map((line) => line.benefits?.coinsurance_percent))]
-  const reportedCoinsurance = result.reference_benefits
-    ? copay.specialistOfficeCoinsurance(reportedResult)
-    : lines.length
-      ? lineCoinsurance.length === 1
-        ? lineCoinsurance[0]
-        : null
-      : benefits?.coinsurance_percent
+  const reportedCoinsurance = copay.reportedCoinsurance(reportedResult, lines)
   const reportedOfficeCopay = copay.specialistOfficeCopay(reportedResult)
   const singleOfficeCopayLine = copay.singleOfficeCopayLine(lines)
   const aetnaNoOfficeDeductible =
@@ -71,14 +61,9 @@ export default function CommercialCostBreakdown({
     partialOfficeCopay == null && officeReferenceCopay == null && humanaReferenceCopay == null
       ? copay.cardOfficePlanningCopay(result, model)
       : null
+  const cignaCard = cignaCardReference(result, model, benefits)
   const components = summary?.components
-  const diagnosticCopay =
-    (result.collection_guidance?.basis === 'diagnostic_day_copay' ||
-      result.collection_guidance?.diagnostic_copay_reference_cents != null) &&
-    lines.length > 0 &&
-    lines.every((line) => line.benefits?.copay_cents === lines[0].benefits?.copay_cents)
-      ? lines[0].benefits?.copay_cents
-      : null
+  const diagnosticCopay = copay.diagnosticCopay(result, lines)
   const pricedCashLines = lines.filter((line) => line.cash_cents != null && !line.cash_included)
   const lineAllowedTotal = resolvedAllowedTotal(lines)
   const calculated =
@@ -216,7 +201,9 @@ export default function CommercialCostBreakdown({
                                 ? `${money(reportedOfficeCopay)} specialist office visit · payer-reported`
                                 : cardPlanningCopay != null
                                   ? `${money(cardPlanningCopay)} specialist office visit · printed on card`
-                                  : unknown,
+                                  : cignaCard
+                                    ? `${money(cignaCard.nontier1_specialist_copay_cents)} non-Tier-1 / ${money(cignaCard.tier1_specialist_copay_cents)} Tier 1 specialist office · card reference`
+                                    : unknown,
       detail: botoxPreview
         ? 'No injection copay was included in this provisional calculation'
         : humanaReferenceCopay != null
@@ -245,7 +232,9 @@ export default function CommercialCostBreakdown({
                           ? 'Payer category term; applicability to planned CPTs and visit date is not confirmed'
                           : cardPlanningCopay != null
                             ? 'Card-based office suggestion; payer applicability and imaging cost are unresolved'
-                            : undefined,
+                            : cignaCard
+                              ? 'The card prints tiered office copays. Confirm the provider tier and a separately performed office visit; neither amount is a diagnostic CPT copay.'
+                              : undefined,
     },
     {
       label: 'Individual deductible',
@@ -336,9 +325,11 @@ export default function CommercialCostBreakdown({
                   ? money(components.coinsurance_cents)
                   : reportedCoinsurance != null
                     ? `${reportedCoinsurance}% reported; dollar amount pending`
-                    : humanaReferenceCopay != null
-                      ? '40% out of network · in-network office benefit is a copay'
-                      : unknown,
+                    : cignaCard?.in_network_coinsurance_split
+                      ? `${cignaCard.in_network_coinsurance_split} printed in-network split · CPT share pending`
+                      : humanaReferenceCopay != null
+                        ? '40% out of network · in-network office benefit is a copay'
+                        : unknown,
       detail: aetnaPlanning
         ? 'The planning formula uses a fixed diagnostic copay rather than office visit coinsurance'
         : combinedPlan
@@ -355,7 +346,9 @@ export default function CommercialCostBreakdown({
                     : undefined)
                 : !lines.length && reportedCoinsurance != null
                   ? 'Payer-reported office visit term; diagnostic testing share is not established'
-                  : undefined,
+                  : cignaCard?.in_network_coinsurance_split
+                    ? 'Printed card split only; confirm which percentage and Cigna allowance apply to each selected diagnostic CPT.'
+                    : undefined,
     },
     ...(calculated && (components?.allowed_cap_adjustment_cents ?? 0) > 0
       ? [
@@ -373,7 +366,13 @@ export default function CommercialCostBreakdown({
       calculated,
       humanaReferenceCopay,
     ),
-    { label: 'Referral', value: requirementStatus(result, 'referral') },
+    {
+      label: 'Referral',
+      value: requirementStatus(result, 'referral'),
+      detail: cignaCard?.specialist_referral_note
+        ? 'The card says no specialist referral is required; confirm any separate selected-CPT requirement.'
+        : undefined,
+    },
     { label: 'Prior authorization', value: requirementStatus(result, 'authorization') },
     commercialCashAlternativeRow(price, model.cashPrice, automaticCashFallback, pricedCashLines),
   ]
@@ -413,7 +412,9 @@ export default function CommercialCostBreakdown({
                           ? `${money(model.officeCopayLine!.benefits.copay_cents!)} office-only planning estimate`
                           : cardPlanningCopay != null
                             ? `${money(cardPlanningCopay)} office-only card suggestion`
-                            : null) ||
+                            : cignaCard
+                              ? `${money(cignaCard.nontier1_specialist_copay_cents)} non-Tier-1 office-only reference; diagnostic share pending`
+                              : null) ||
                         (model.provisionalAmount != null
                           ? money(model.provisionalAmount)
                           : model.patientPrice || 'Not fully calculated')
@@ -468,7 +469,9 @@ export default function CommercialCostBreakdown({
                               ? 'Copay + deductible applied + coinsurance − allowed and out-of-pocket reductions'
                               : cardPlanningCopay != null
                                 ? 'Printed specialist copay for one office visit; planned imaging and final payer share are unresolved.'
-                                : 'Full share awaits applicable deductible and out-of-pocket terms',
+                                : cignaCard
+                                  ? 'Card-printed office copay only. Diagnostic CPT share remains unknown; Cigna allowed amounts and visit-date benefits are needed.'
+                                  : 'Full share awaits applicable deductible and out-of-pocket terms',
           },
           ...(summary?.payments_verified_cents != null && summary.payments_verified_cents > 0
             ? [{ label: 'Already paid', value: `−${money(summary.payments_verified_cents)}` }]
@@ -486,6 +489,7 @@ export default function CommercialCostBreakdown({
       pendingAetnaCopay,
       pendingBluecardCopay,
       cardPlanningCopay,
+      cignaCard,
       automaticCashFallback,
       cignaFeeProxy,
       proxyFormula,

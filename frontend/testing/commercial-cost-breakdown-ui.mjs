@@ -175,6 +175,47 @@ try {
   assert(pendingCignaHeadline.includes('Pending · $60.00'))
   assert(pendingCignaHeadline.includes('full patient share remain unknown'))
   assert(!pendingCignaHeadline.includes('Check CPT prices'))
+  const cignaCardReference = {
+    payer: 'Cigna', service_date: '2026-11-03', reason: 'Upper-extremity EMG/NCS evaluation',
+    established_for_planning: true,
+    card_check: { status: 'unverified', reference_only: true, conflicts: [], differences: [],
+      cigna_card_reference: { tier1_specialist_copay_cents: 6500,
+        nontier1_specialist_copay_cents: 8000,
+        in_network_coinsurance_split: '70%/30%',
+        specialist_referral_note: 'No Referral Required' } },
+    identity: { status: 'warning' },
+    benefits: { active: true, network_status: 'in_network', deductible_annual_cents: 85000,
+      deductible_remaining_cents: 0, oop_annual_cents: 870000, oop_remaining_cents: 612242 },
+    price_range: { mode: 'services', complete: false, lines: [
+      { id: 'ncs', code: '95908', units: 1, description: 'Nerve conduction, 3–4 studies' },
+      { id: 'emg', code: '95886', units: 1, description: 'Complete needle EMG' },
+    ] },
+    temporary_rate_reference: { source: 'BCBS Texas reference', complete: true,
+      message: 'BCBS Texas, not Cigna allowance', lines: [
+        { id: 'ncs', code: '95908', units: 1, modifiers: [], unit_reference_cents: 10511 },
+        { id: 'emg', code: '95886', units: 1, modifiers: [], unit_reference_cents: 8918 },
+      ] },
+    collection_guidance: { amount_cents: null, basis: 'missing_collection_inputs' },
+  }
+  const cignaCardTable = renderToStaticMarkup(React.createElement(CommercialCostBreakdown, {
+    model: { ...model, planName: 'Open Access Plus In-Network', networkLabel: 'Not determined',
+      policyStatus: 'eCW policy · payer check needed' }, result: cignaCardReference,
+  }))
+  for (const value of ['$80.00 non-Tier-1', '$65.00 Tier 1', '70%/30%',
+    '$850.00 annual', '$0.00 remaining', '$6,122.42 remaining',
+    'Pending · $80.00 non-Tier-1 office-only reference; diagnostic CPT amount requires verification']) {
+    assert(cignaCardTable.includes(value), `Missing Cigna card reference ${value}`)
+  }
+  assert(cignaCardTable.includes('Diagnostic CPT share remains unknown'))
+  assert(!cignaCardTable.includes('Amount to collect at visit</th><td><span>$0.00'))
+  assert(!renderToStaticMarkup(React.createElement(CommercialCostBreakdown, {
+    model, result: { ...cignaCardReference, card_check: { status: 'conflict', conflicts: ['member_id'],
+      differences: [], cigna_card_reference: cignaCardReference.card_check.cigna_card_reference } },
+  })).includes('Pending · $80.00 non-Tier-1'))
+  assert(!renderToStaticMarkup(React.createElement(CommercialCostBreakdown, {
+    model, result: { ...cignaCardReference, benefits: { ...cignaCardReference.benefits,
+      coverage_status_conflict: true } },
+  })).includes('Pending · $80.00 non-Tier-1'))
   const aetnaPending = {
     payer: 'Aetna', service_date: '2026-10-30', reason: 'Synthetic office consultation',
     benefit_source: 'Stedi',

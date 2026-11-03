@@ -6,6 +6,15 @@ import { limitSummary } from './limitSummary'
 import { reportedLimit } from './reportedLimit'
 import { reportedMedicalLimit } from './reportedMedicalLimit'
 
+export function familyOopLimitApplied(result: PrevisitEstimate): boolean {
+  const lines = result.price_range?.mode === 'services' ? result.price_range.lines || [] : []
+  return (
+    result.collection_guidance?.basis === 'out_of_pocket_limit' &&
+    lines.length > 0 &&
+    lines.every((line) => line.benefits?.family_oop_zero_applies)
+  )
+}
+
 export function commercialOopRows(
   result: PrevisitEstimate,
   reportedResult: PrevisitEstimate,

@@ -84,6 +84,27 @@ def test_named_cigna_result_keeps_approved_fixed_copay_without_allowed_rate():
     assert collection_guidance.build(result)['amount_cents'] is None
 
 
+def test_attribution_metadata_does_not_cancel_active_cigna_coverage():
+    payload, inputs, source = example()
+    payload['plans'][0]['benefits']['statuses'].append({
+        'status': 'Active Coverage', 'service': {'system': 'STC', 'value': '30'}})
+    payload['plans'][0]['benefits']['exclusions'] = [{
+        'service': {'system': 'STC', 'value': '30'},
+        'messages': ['Attribution Status - Not applicable']}]
+    result = finish(payload, inputs, source)
+    assert result['benefits']['active'] is True
+    assert result['benefits']['coverage_status_conflict'] is False
+    assert result['identity']['reconciliation_rule'] == 'cigna_member_suffix'
+
+    payload['plans'][0]['benefits']['exclusions'][0]['messages'] = ['Office visits not covered']
+    blocked = commercial.normalize_stedi_271(payload, '30', False, service_date=DAY)
+    assert blocked['coverage_status_conflict'] is True
+    payload['plans'][0]['benefits']['exclusions'][0]['messages'] = ['Attribution Status - Not applicable']
+    payload['payerId'] = 'OTHER'
+    other_payer = commercial.normalize_stedi_271(payload, '30', False, service_date=DAY)
+    assert other_payer['coverage_status_conflict'] is True
+
+
 @pytest.mark.parametrize('amount,cents', [('60', 6000), ('91.37', 9137)])
 def test_uses_returned_amount_even_with_a_remaining_plan_deductible(amount, cents):
     payload, inputs, source = example()

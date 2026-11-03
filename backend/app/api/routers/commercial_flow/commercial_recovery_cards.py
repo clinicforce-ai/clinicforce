@@ -22,10 +22,6 @@ def _compare_card_hints(card: dict, inputs: dict, source: dict) -> dict:
     if not fields.get('member_id') and not card.get('reference_only'):
         result['status'] = 'unverified'
         return result
-    for field in ('member_id', 'group_number'):
-        if (inputs.get(field) and fields.get(field)
-                and _api.stedi_discovery.normalized(inputs[field]) != _api.stedi_discovery.normalized(fields[field])):
-            result['conflicts'].append(field)
     payer_difference = bool(source.get('payer') and fields.get('payer') and
         _api.stedi_discovery.normalized(source['payer']) != _api.stedi_discovery.normalized(fields['payer']) and
         not (fields['payer'].casefold() == 'humana' and source['payer'].casefold() == 'humana health plan'))
@@ -47,6 +43,18 @@ def _compare_card_hints(card: dict, inputs: dict, source: dict) -> dict:
         _api.stedi_discovery.normalized(inputs['member_id']) == _api.stedi_discovery.normalized(fields['member_id']))
     patient_bound = bool(card.get('count') in {1, 2} and source.get('_patient_id') and
                          source.get('coverage_id') and source.get('active_coverages') == 1)
+    base, extended = sorted((_api.stedi_discovery.normalized(inputs.get('member_id')),
+                             _api.stedi_discovery.normalized(fields.get('member_id'))), key=len)
+    cigna_suffix_card = bool(patient_bound and name_matches and (not card_dob or dob_matches)
+        and _api.re.search(r'\bCigna\b', str(source.get('payer') or ''), _api.re.I)
+        and str(fields.get('payer') or '').casefold() == 'cigna'
+        and len(base) == 9 and len(extended) == 11 and extended.startswith(base)
+        and extended[-2:].isdigit())
+    for field in ('member_id', 'group_number'):
+        if (inputs.get(field) and fields.get(field)
+                and _api.stedi_discovery.normalized(inputs[field]) != _api.stedi_discovery.normalized(fields[field])
+                and not (field == 'member_id' and cigna_suffix_card)):
+            result['conflicts'].append(field)
     phcs_hpi_card = bool(patient_bound and member_matches and name_matches and
         (not card_dob or dob_matches) and not result['conflicts'] and
         _api.re.match(r'^\s*(?:PHCS|MultiPlan)\b', str(source.get('payer') or ''), _api.re.I) and
@@ -55,6 +63,19 @@ def _compare_card_hints(card: dict, inputs: dict, source: dict) -> dict:
     if result['patient_name_matches'] and fields.get('cms_plan_id'):
         result['cms_plan_id'] = fields['cms_plan_id']
         result['plan_name'] = fields.get('plan_name')
+    tier1 = _api.re.fullmatch(r'\$(\d{1,4})', str(fields.get('specialist_tier1_copay') or ''))
+    nontier1 = _api.re.fullmatch(r'\$(\d{1,4})', str(fields.get('specialist_nontier1_copay') or ''))
+    if (patient_bound and (member_matches or cigna_suffix_card)
+            and (group_matches or not inputs.get('group_number')) and fields.get('group_number') and name_matches
+            and (not card_dob or dob_matches) and not result['conflicts'] and not result['differences']
+            and _api.re.search(r'\bCigna\b', str(source.get('payer') or ''), _api.re.I)
+            and str(fields.get('payer') or '').casefold() == 'cigna' and tier1 and nontier1):
+        result['cigna_card_reference'] = {
+            'tier1_specialist_copay_cents': int(tier1[1]) * 100,
+            'nontier1_specialist_copay_cents': int(nontier1[1]) * 100,
+            'in_network_coinsurance_split': fields.get('in_network_coinsurance_split'),
+            'specialist_referral_note': fields.get('specialist_referral_note'),
+        }
     if card.get('reference_only'):
         result['status'] = 'unverified'
         return result
@@ -71,6 +92,11 @@ def _compare_card_hints(card: dict, inputs: dict, source: dict) -> dict:
         result['alternative_fingerprint'] = _api.hashlib.sha256(_api.json.dumps(fields, sort_keys=True).encode()).hexdigest()
     if result['conflicts']:
         result['status'] = 'conflict'
+        return result
+    if cigna_suffix_card and fields.get('group_number') and not inputs.get('group_number'):
+        inputs['group_number'] = fields['group_number']
+        result['fields_added'].append('group_number')
+        result['status'] = 'filled_missing'
         return result
     if not candidate:
         result['status'] = 'unverified'

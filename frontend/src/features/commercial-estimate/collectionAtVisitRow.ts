@@ -128,6 +128,8 @@ export function collectionAtVisitRow(
     pendingAetnaCopay: number | null
     pendingBluecardCopay: number | null
     cardPlanningCopay: number | null
+    cignaCard:
+      NonNullable<PrevisitEstimate['card_check']>['cigna_card_reference'] | null | undefined
     automaticCashFallback: boolean
     cignaFeeProxy: boolean
     proxyFormula: ReturnType<typeof feeProxyFormula> | undefined
@@ -144,6 +146,7 @@ export function collectionAtVisitRow(
     pendingAetnaCopay,
     pendingBluecardCopay,
     cardPlanningCopay,
+    cignaCard,
     automaticCashFallback,
     cignaFeeProxy,
     proxyFormula,
@@ -178,21 +181,23 @@ export function collectionAtVisitRow(
     label:
       pendingAetnaCopay != null || pendingBluecardCopay != null
         ? 'Amount to collect at visit · pending verification'
-        : botoxPreview
-          ? 'Planned amount to collect at visit'
-          : diagnosticCopayReference != null
-            ? 'Diagnostic copay · collection pending'
-            : (partialOfficeCopay != null || cardPlanningCopay != null) && feeProxyCheckin == null
-              ? 'Suggested amount to collect at visit'
-              : ((cignaFeeProxy && result.collection_guidance?.basis !== 'claim_after_service') ||
-                    feeProxyCheckin != null ||
-                    aetnaPlanning != null ||
-                    aetnaCopayPlanning != null) &&
-                  !['bcbstx_proxy_advance', 'qmb_protection'].includes(
-                    result.collection_guidance?.basis || '',
-                  )
-                ? 'Planned amount to collect at visit'
-                : 'Amount to collect at visit',
+        : cignaCard
+          ? 'Amount to collect at visit · pending verification'
+          : botoxPreview
+            ? 'Planned amount to collect at visit'
+            : diagnosticCopayReference != null
+              ? 'Diagnostic copay · collection pending'
+              : (partialOfficeCopay != null || cardPlanningCopay != null) && feeProxyCheckin == null
+                ? 'Suggested amount to collect at visit'
+                : ((cignaFeeProxy && result.collection_guidance?.basis !== 'claim_after_service') ||
+                      feeProxyCheckin != null ||
+                      aetnaPlanning != null ||
+                      aetnaCopayPlanning != null) &&
+                    !['bcbstx_proxy_advance', 'qmb_protection'].includes(
+                      result.collection_guidance?.basis || '',
+                    )
+                  ? 'Planned amount to collect at visit'
+                  : 'Amount to collect at visit',
     value: combinedPlan
       ? `${money(combinedPlan.amount_cents)} planning estimate`
       : result.collection_guidance?.basis === 'qmb_protection' &&
@@ -232,7 +237,9 @@ export function collectionAtVisitRow(
                                     ? `${money(cardPlanningCopay)} office-only card suggestion`
                                     : pendingCignaCopay != null
                                       ? `Pending · ${money(pendingCignaCopay)} office copay if verified`
-                                      : 'Not established',
+                                      : cignaCard
+                                        ? `Pending · ${money(cignaCard.nontier1_specialist_copay_cents)} non-Tier-1 office-only reference; diagnostic CPT amount requires verification`
+                                        : 'Not established',
     detail: combinedPlan
       ? `${money(combinedPlan.office_copay_cents)} + ${combinedPlan.coinsurance_percent}% × ${money(combinedPlan.diagnostic_allowed_cents)} = ${money(combinedPlan.patient_share_cents)}${combinedPlan.payments_cents ? `; less ${money(combinedPlan.payments_cents)} already paid` : ''}. Separate follow-up E/M is planned; deductible and out-of-pocket adjustments remain assumptions until payer balances are returned.`
       : result.collection_guidance?.basis === 'qmb_protection'
@@ -267,24 +274,26 @@ export function collectionAtVisitRow(
                                   ? 'Printed specialist copay for one office visit; verify before charging. Planned imaging and final payer share are unresolved.'
                                   : pendingCignaCopay != null
                                     ? 'Complete the visit-date payer check, confirm this copay and the clinic collection policy, and account for verified payments before charging. Full patient share remains unresolved.'
-                                    : automaticCashFallback
-                                      ? 'Insurance collection is unresolved; any cash quote is listed separately'
-                                      : result.collection_guidance?.unconfirmed_zero_oop
-                                        ? 'Confirm the reported $0 out-of-pocket balance with the payer before collection'
-                                        : model.supportedAmount
-                                          ? result.collection_guidance?.basis === 'office_copay'
-                                            ? 'Office copay advance; other services may have a later balance'
-                                            : result.collection_guidance?.basis ===
-                                                'out_of_pocket_limit'
-                                              ? 'Applicable out-of-pocket maximum has no remaining balance for covered care'
+                                    : cignaCard
+                                      ? 'Card reference only: confirm the visit-date coverage, provider tier, separately documented office E/M, clinic collection policy, and prior payments before charging. Diagnostic CPT share remains unknown.'
+                                      : automaticCashFallback
+                                        ? 'Insurance collection is unresolved; any cash quote is listed separately'
+                                        : result.collection_guidance?.unconfirmed_zero_oop
+                                          ? 'Confirm the reported $0 out-of-pocket balance with the payer before collection'
+                                          : model.supportedAmount
+                                            ? result.collection_guidance?.basis === 'office_copay'
+                                              ? 'Office copay advance; other services may have a later balance'
                                               : result.collection_guidance?.basis ===
-                                                  'diagnostic_day_copay'
-                                                ? 'One diagnostic copay advance; other costs may follow the claim'
+                                                  'out_of_pocket_limit'
+                                                ? 'Applicable out-of-pocket maximum has no remaining balance for covered care'
                                                 : result.collection_guidance?.basis ===
-                                                    'claim_after_service'
-                                                  ? 'Clinic policy defers collection until after the claim'
-                                                  : undefined
-                                          : undefined,
+                                                    'diagnostic_day_copay'
+                                                  ? 'One diagnostic copay advance; other costs may follow the claim'
+                                                  : result.collection_guidance?.basis ===
+                                                      'claim_after_service'
+                                                    ? 'Clinic policy defers collection until after the claim'
+                                                    : undefined
+                                            : undefined,
     emphasis: true,
   }
 }

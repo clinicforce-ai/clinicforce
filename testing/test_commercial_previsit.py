@@ -209,6 +209,57 @@ class PrevisitFlowTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(inputs['member_id'], 'ECW-123')
         self.assertEqual(source['payer'], 'Humana Health Plan')
 
+    def test_matching_pending_cigna_card_exposes_tiered_terms_as_reference_only(self):
+        from app.insurance.v1_sources import card_fields
+        fields, _ = card_fields([(1, 'cigna\nGroup: SYNTHETIC-GROUP\n'
+            'Name: Pat Example Urgent Care $75\nSpecialist Tier I/Non $65/$80\n'
+            'Network Coinsurance:\nIn 70%/30%\nNo Referral Required')])
+        fields['member_id'] = 'SYNTHETIC1'
+        inputs = {'member_id': 'SYNTHETIC1', 'group_number': 'SYNTHETIC-GROUP',
+            'patient': {'patient_first_name': 'Pat', 'patient_last_name': 'Example',
+                        'patient_birth_date': '1980-01-02'},
+            'subscriber': {'firstName': 'Pat', 'lastName': 'Example', 'birthDate': '1980-01-02'}}
+        source = {'payer': 'Cigna', '_patient_id': 'patient-1', 'coverage_id': 'coverage-1',
+                  'active_coverages': 1}
+        check = _compare_card_hints({'status': 'read', 'reference_only': True, 'count': 1,
+            'source': 'patient_upload_pending', 'fields': fields}, inputs, source)
+        self.assertEqual(check['status'], 'unverified')
+        self.assertEqual(check['cigna_card_reference'], {
+            'tier1_specialist_copay_cents': 6500,
+            'nontier1_specialist_copay_cents': 8000,
+            'in_network_coinsurance_split': '70%/30%',
+            'specialist_referral_note': 'No Referral Required',
+        })
+        self.assertEqual(inputs['member_id'], 'SYNTHETIC1')
+        self.assertNotIn('cigna_card_reference', _compare_card_hints(
+            {'status': 'read', 'reference_only': True, 'count': 1,
+             'source': 'patient_upload_pending', 'fields': fields},
+            {**inputs, 'group_number': 'OTHER'}, source.copy()))
+
+    def test_confirmed_cigna_card_fills_missing_group_without_replacing_base_member_id(self):
+        inputs = {'member_id': 'ABC123456', 'group_number': None,
+            'patient': {'patient_first_name': 'Pat', 'patient_last_name': 'Example',
+                        'patient_birth_date': '1980-01-02'},
+            'subscriber': {'firstName': 'Pat', 'lastName': 'Example', 'birthDate': '1980-01-02'}}
+        source = {'payer': 'Cigna', '_patient_id': 'patient-1', 'coverage_id': 'coverage-1',
+                  'active_coverages': 1}
+        card = {'status': 'read', 'count': 1, 'source': 'clinicforce_card', 'fields': {
+            'payer': 'Cigna', 'member_id': 'ABC12345601', 'group_number': 'SYNTHETIC-GROUP',
+            'member_name': 'Pat Example'}}
+        check = _compare_card_hints(card, inputs, source)
+        self.assertEqual(check['status'], 'filled_missing')
+        self.assertEqual(check['fields_added'], ['group_number'])
+        self.assertEqual(check['conflicts'], [])
+        self.assertEqual(inputs['group_number'], 'SYNTHETIC-GROUP')
+        self.assertEqual(inputs['member_id'], 'ABC123456')
+        pending_inputs = {**inputs, 'group_number': None}
+        pending = _compare_card_hints({**card, 'reference_only': True}, pending_inputs, source)
+        self.assertEqual(pending['status'], 'unverified')
+        self.assertIsNone(pending_inputs['group_number'])
+        wrong = _compare_card_hints({**card, 'fields': {**card['fields'], 'group_number': 'OTHER'}},
+                                    inputs.copy(), source)
+        self.assertEqual(wrong['status'], 'conflict')
+
     def test_hpi_card_copay_requires_matching_patient_and_member(self):
         from app.insurance.v1_sources import card_fields
         fields, _ = card_fields([(1, 'Health Plans, Inc. (HPI)\nEXAMPLE: PAT\nID# ABC12345\nSpecialist:\n$45')])

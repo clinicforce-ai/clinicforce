@@ -21,6 +21,10 @@ async def saved_previsit(case_id: str, request: _api.Request) -> dict:
     evidence_resolution reports each field's source findings and precise
     remaining action after the shared estimator evaluates saved evidence.
     A saved read projects the current network rule without a payer call or write.
+    Fresh saved Cigna responses are reparsed without treating an exact
+    "Attribution Status - Not applicable" STC 30 exclusion as inactive coverage.
+    Card-printed tiered office copays remain reference-only until the visit's
+    coverage, network, service and collection checks pass.
     NMCT (practice_id primary) uses a current Clinical Library insurer contract
     for its HMO, PPO and Medicare Advantage products' in-network tier.
     A patient-bound insurer plan is out of network when no current insurer
