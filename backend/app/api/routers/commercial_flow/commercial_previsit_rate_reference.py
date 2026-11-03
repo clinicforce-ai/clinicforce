@@ -90,6 +90,7 @@ def _attach_temporary_aetna_rates(result: dict, practice_id: str, inputs: dict, 
 
     day = str(inputs.get('service_date') or '')
     benefits = result.get('reference_benefits') or result.get('benefits') or {}
+    availity = result.get('availity_visit_reference') or {}
     codes = result.get('codes') or []
     plan = benefits.get('plan_details') or {}
     if (result.get('payment_mode') != 'cash'
@@ -97,10 +98,13 @@ def _attach_temporary_aetna_rates(result: dict, practice_id: str, inputs: dict, 
             and day == '2026-11-03' and str(inputs.get('place_of_service') or '') == '11'
             and len(codes) == 1 and codes[0].get('code') == '99203'
             and codes[0].get('units') == 1 and not codes[0].get('modifiers')
-            and benefits.get('active') is True and benefits.get('service_date_matches') is True
-            and plan.get('names') == ['Aetna Medicare Signature (PPO)']
-            and plan.get('group_number') == '000003-TX'
-            and plan.get('plan_number') == '000003-TX000047'):
+            and ((benefits.get('active') is True and benefits.get('service_date_matches') is True
+                  and plan.get('names') == ['Aetna Medicare Signature (PPO)']
+                  and plan.get('group_number') == '000003-TX'
+                  and plan.get('plan_number') == '000003-TX000047')
+                 or (availity.get('active') is True and availity.get('service_date') == day
+                     and availity.get('network_status') == 'in_network'
+                     and availity.get('plan') == 'Aetna Medicare Signature (PPO)'))):
         # shortcut: this dated portal screen lacks provider scope; replace it with an approved contract rate to price claims.
         result['temporary_rate_reference'] = {
             'source': 'Aetna MEPPO portal table values supplied by clinic',
