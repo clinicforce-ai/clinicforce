@@ -252,9 +252,12 @@ class VisitReviewTests(IsolatedAsyncioTestCase):
         self.addCleanup(self.cash_patch.stop)
 
     async def test_scoped_review_recalculates_without_stedi_and_rejects_stale_changes(self):
+        # A module-level "today" can become historical while CI crosses UTC
+        # midnight. Use a future visit for the stale-response branch.
+        current_service_date = (date.today() + timedelta(days=1)).isoformat()
         session = {'practice_id': 'clinic-b', 'intake_id': 'intake-b', 'patient_id': 'patient-b', 'share_manifest_id': '',
                    'staff': {'id': 'staff-b', 'display_name': 'Staff B'}, 'intake': {'updated_at': 'v', 'patient': {'given_name': 'Pat', 'family_name': 'Example', 'birth_date': '1980-01-01'}, 'fields': {}}}
-        inputs = {'service_date': DAY, 'member_id': 'M123', 'relationship': '18', 'subscriber': {'firstName': 'Pat', 'lastName': 'Example', 'birthDate': '1980-01-01'},
+        inputs = {'service_date': current_service_date, 'member_id': 'M123', 'relationship': '18', 'subscriber': {'firstName': 'Pat', 'lastName': 'Example', 'birthDate': '1980-01-01'},
                   'patient': {'patient_first_name': 'Pat', 'patient_last_name': 'Example', 'patient_birth_date': '1980-01-01'},
                   'visit_type': 'new', 'lines': [{**row, 'service_status': 'scheduled'} for row in lines()], 'place_of_service': '11', 'rendering_provider': {'npi': '1234567890'}}
         source = {'appointment_id': 'visit', 'active_coverages': 1, 'plan': 'Choice', 'coverage_id': 'coverage', 'location_id': 'office'}
