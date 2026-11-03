@@ -183,6 +183,9 @@ async def reuse_previsit_case(api: ModuleType, *, case: dict, result: dict,
         if api.visit_estimate.reconcile_eligibility(source.get('saved_eligibility') or {},
                 saved.get('benefits') or {}, saved.get('checked_at'))['requires_review']:
             fresh = False
+        # A payer may answer a future-date request with today's benefits; recheck on the visit day.
+        if (saved.get('benefits') or {}).get('service_date_matches') is False and inputs['service_date'] <= api.date.today().isoformat():
+            fresh = False
         if fresh and (saved.get("requested_service_types", [saved.get("requested_service_type", "98")]) == requested_stc):
             result["checked_at"] = saved.get("checked_at")
             result["benefits"] = dict(saved.get("benefits") or {})
