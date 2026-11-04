@@ -10,6 +10,7 @@ from uuid import uuid4
 from unittest.mock import AsyncMock, patch
 
 import httpx
+import fitz
 import pytest
 from fastapi import HTTPException
 
@@ -66,6 +67,102 @@ def test_inline_insurance_card_does_not_request_binary_scope():
             data, mime = await ecw.insurance_cards('synthetic', document_id=cards[0]['id'], transport=httpx.MockTransport(handler))
         assert data == b'synthetic-card' and mime == 'image/png'
         assert all('system/Binary.read' not in call.args[3] for call in token.call_args_list)
+    asyncio.run(run())
+
+
+def test_generic_ecw_patient_pdf_is_returned_only_when_its_bytes_are_a_card():
+    with fitz.open() as pdf:
+        page = pdf.new_page()
+        page.insert_text((40, 40), 'Member ID Card\nSubscriber Name: SAMPLE PATIENT\n'
+                         'Identification Number: ABC123456\nGroup Number: G12345\nRxBIN: 123456')
+        card_bytes = pdf.tobytes()
+    with fitz.open() as pdf:
+        page = pdf.new_page()
+        page.insert_text((40, 40), 'Member ID Card\nSubscriber Name: SAMPLE PATIENT\n'
+                         'Identification Number: ABC123456\nGroup Number: G12345')
+        note_bytes = pdf.tobytes()
+
+    def document(identifier, binary):
+        return {'resourceType': 'DocumentReference', 'id': identifier, 'status': 'current',
+                'subject': {'reference': 'Patient/synthetic'},
+                'type': {'coding': [{'system': 'http://loinc.org', 'code': '103140-0'}]},
+                'content': [{'attachment': {'contentType': 'application/pdf', 'url': 'Binary/' + binary}}]}
+
+    async def run():
+        documents = [document('card', 'card-file'), document('note', 'note-file')]
+        def handler(request):
+            if request.url.path == '/fhir/Binary/card-file':
+                payload = card_bytes
+            elif request.url.path == '/fhir/Binary/note-file':
+                payload = note_bytes
+            else:
+                rows = [] if request.url.params.get('type') == '64290-0' else documents
+                return httpx.Response(200, json={'resourceType': 'Bundle',
+                    'entry': [{'resource': row} for row in rows]})
+            return httpx.Response(200, json={'resourceType': 'Binary', 'contentType': 'application/pdf',
+                                            'data': base64.b64encode(payload).decode()})
+        with patch.object(ecw, 'settings', return_value=('client', 'https://ehr.example.test/fhir')), \
+             patch.object(ecw, '_access_token', AsyncMock(return_value='synthetic-token')):
+            cards = await ecw.insurance_cards('synthetic', transport=httpx.MockTransport(handler))
+            assert [item['id'] for item in cards] == ['card:0']
+            content, mime = await ecw.insurance_cards('synthetic', document_id='card:0',
+                                                       transport=httpx.MockTransport(handler))
+            assert content == card_bytes and mime == 'application/pdf'
+            with pytest.raises(ecw.EcwBackendError):
+                await ecw.insurance_cards('synthetic', document_id='note:0',
+                                          transport=httpx.MockTransport(handler))
+    asyncio.run(run())
+
+
+def test_card_lookup_inspects_all_patient_documents_even_after_a_typed_card():
+    with fitz.open() as pdf:
+        page = pdf.new_page()
+        page.insert_text((40, 40), 'Member ID Card\nSubscriber Name: SAMPLE PATIENT\n'
+                         'Identification Number: ABC123456\nGroup Number: G12345\nRxBIN: 123456')
+        card_bytes = pdf.tobytes()
+
+    def document(identifier, code, data, *, patient='synthetic'):
+        return {'resourceType': 'DocumentReference', 'id': identifier, 'status': 'current',
+                'subject': {'reference': 'Patient/' + patient},
+                'type': {'coding': [{'system': 'http://loinc.org', 'code': code}]},
+                'content': [{'attachment': {'contentType': 'application/pdf',
+                                            'data': base64.b64encode(data).decode()}}]}
+
+    async def run():
+        typed = document('typed', '64290-0', b'synthetic-typed-card')
+        untyped = [document(f'note-{index}', '99999-9', b'not-a-pdf') for index in range(5)]
+        untyped += [document('other-patient', '99999-9', card_bytes, patient='different'),
+                    document('unlabeled-card', '99999-9', card_bytes)]
+        untyped[-1]['type'] = None
+        queries = []
+        def handler(request):
+            queries.append(request.url.params.get('type'))
+            rows = [typed] if request.url.params.get('type') == '64290-0' else [] if request.url.params.get('type') else untyped
+            return httpx.Response(200, json={'resourceType': 'Bundle',
+                                             'entry': [{'resource': row} for row in rows]})
+        with patch.object(ecw, 'settings', return_value=('client', 'https://ehr.example.test/fhir')), \
+             patch.object(ecw, '_access_token', AsyncMock(return_value='synthetic-token')):
+            cards = await ecw.insurance_cards('synthetic', transport=httpx.MockTransport(handler))
+        assert [item['id'] for item in cards] == ['typed:0', 'unlabeled-card:0']
+        assert queries == ['64290-0', '103140-0', None]
+    asyncio.run(run())
+
+
+def test_unreadable_patient_document_is_not_reported_as_no_card():
+    async def run():
+        document = {'resourceType': 'DocumentReference', 'id': 'unknown', 'status': 'current',
+                    'subject': {'reference': 'Patient/synthetic'},
+                    'content': [{'attachment': {'contentType': 'application/pdf', 'url': 'Binary/file'}}]}
+        def handler(request):
+            if request.url.path == '/fhir/Binary/file':
+                return httpx.Response(403)
+            rows = [document] if request.url.params.get('type') is None else []
+            return httpx.Response(200, json={'resourceType': 'Bundle',
+                                             'entry': [{'resource': row} for row in rows]})
+        with patch.object(ecw, 'settings', return_value=('client', 'https://ehr.example.test/fhir')), \
+             patch.object(ecw, '_access_token', AsyncMock(return_value='synthetic-token')):
+            with pytest.raises(ecw.EcwBackendError, match='discovery is incomplete'):
+                await ecw.insurance_cards('synthetic', transport=httpx.MockTransport(handler))
     asyncio.run(run())
 
 
