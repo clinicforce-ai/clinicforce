@@ -77,10 +77,31 @@ await page.route((url) => url.pathname.startsWith('/api/'), async (route) => {
   } else if (path === '/api/staff/intakes/synthetic-intake/checks/saved-estimate') {
     body = { snapshots: [{
       saved_at: `${today}T12:30:00Z`, stage: 'previsit-complete', patient: patients[5],
-      result: { service_date: today, revision: 2, collection_guidance: { amount_cents: savedAmount, status: 'estimated', basis: 'office_copay', reason: 'Synthetic copay.' } },
+      result: {
+        check_id: 'saved-estimate', appointment_id: 'today-6', service_date: today,
+        revision: 2, visit_type: 'new', reason: 'Synthetic visit review',
+        payer: 'Example Health', plan: 'Example PPO', benefit_source: 'synthetic payer response',
+        checked_at: `${today}T12:25:00Z`, issues: [], suggestions: null,
+        patient_details: { ecw_account_number: '0006', address: { city: 'Example City', state: 'TX' } },
+        identity: { match_version: 2, status: 'matched', binding: 'synthetic identity match', can_confirm: true, differences: [] },
+        codes: [{ id: '99204', code: '99204', units: 1, source: 'synthetic visit' }],
+        service_plan: { kind: 'office', groups: [], recommended_ids: ['99204'], selection_source: 'clinician', recommendation_basis: 'Synthetic visit', history_count: 0, assumptions: [] },
+        insurance_details: { member_id: 'SYNTHETIC', payer_subscriber: { firstName: 'Patient', lastName: '06' }, payer_patient: { firstName: 'Patient', lastName: '06', dateOfBirth: '2000-01-01' }, payer_relationship: 'SELF' },
+        benefits: { active: true, network_status: 'in_network', network_source: 'clinic_library_contract', service_date_matches: true, copay_cents: 5000, deductible_remaining_cents: 10000, oop_remaining_cents: 20000, has_secondary: false, review_reasons: [] },
+        price_range: { complete: false, mode: 'services', lines: [], scenarios: [] },
+        collection_guidance: { amount_cents: savedAmount, status: 'estimated', basis: 'office_copay', reason: 'Synthetic office copay.', patient_message: 'Final responsibility follows the claim.', network: 'Example PPO', requirements: { referral: 'Not required', authorization: 'Not required' }, assumptions: [], patient_actions: [], services: [] },
+        appointment_context: { rendering_provider: { name: 'Dr. Example' }, timezone: 'America/Chicago' },
+        audit_trail: [],
+      },
     }] }
+    body.snapshots.push({
+      ...body.snapshots[0], saved_at: `${past}T12:30:00Z`, stage: 'earlier-review',
+      result: { ...body.snapshots[0].result, revision: 1, collection_guidance: { ...body.snapshots[0].result.collection_guidance, amount_cents: 2500 } },
+    })
   } else if (path === '/api/staff/intakes/synthetic-intake/checks/older-estimate') {
     body = { snapshots: [{ saved_at: `${past}T12:30:00Z`, stage: 'previsit-complete', patient: patients[5], result: { service_date: past, collection_guidance: { amount_cents: 2500, status: 'estimated' } } }] }
+  } else if (path === '/api/staff/intakes/synthetic-intake/cards') {
+    body = { cards: [], message: 'No synthetic card preview.' }
   } else {
     throw new Error(`Unexpected API ${path}`)
   }
@@ -132,17 +153,32 @@ try {
   await page.getByLabel('Find a clinical patient').fill('')
   await page.locator('.clinical-patient-open').filter({ hasText: 'Patient 06' }).click()
   const summary = page.getByRole('region', { name: 'Latest saved collection estimate' })
-  await summary.getByText('$50.00').waitFor()
+  await summary.locator('.visit-patient-bar').getByText('Patient 06').waitFor()
+  assert.match(await summary.locator('.visit-context-facts').innerText(), /Synthetic visit review/)
+  assert.match(await summary.locator('.visit-context-facts').innerText(), /Example Health/)
+  await summary.getByText('$50.00').first().waitFor()
+  assert.match(await summary.locator('.arrival-total').innerText(), /(?:US)?\$50\.00/)
+  assert.equal(await summary.getByRole('button', { name: 'Attach to this visit' }).count(), 0)
+  await summary.getByText('Visit cost and collection').waitFor()
+  assert.match(await summary.innerText(), /In network/)
+  assert.equal(await summary.getByText('Detailed benefits, insurance & card').locator('..').getAttribute('open'), '')
+  assert.equal(await summary.getByText('Saved service plan').locator('..').getAttribute('open'), '')
+  assert.match(await summary.getByText('Saved service plan').locator('..').innerText(), /CPT 99204 × 1/)
   assert.equal(await summary.locator('select').count(), 0)
+  if (process.env.SCREENSHOT_PATH) await page.screenshot({ path: process.env.SCREENSHOT_PATH, fullPage: true })
   assert.equal(await page.locator('.staff-narrow').evaluate((element) => {
     const summary = element.querySelector('.latest-saved-estimate')
     const history = element.querySelector('.patient-appointment-history')
     return [...element.children].indexOf(summary) < [...element.children].indexOf(history)
   }), true)
   assert.equal(await page.locator('.staff-narrow').evaluate((element) => element.lastElementChild?.classList.contains('patient-appointment-history')), true)
+  await page.getByText('View saved estimate results', { exact: true }).click()
+  await page.getByLabel('Recorded versions').selectOption('1')
+  assert.match(await page.locator('.staff-saved-checks').innerText(), /(?:US)?\$25\.00/)
+  assert.match(await summary.locator('.arrival-total').innerText(), /(?:US)?\$50\.00/)
   savedAmount = null
   await summary.getByRole('button', { name: 'Refresh' }).click()
-  await summary.getByText('Review before collecting').waitFor()
+  await summary.locator('.arrival-total').getByText('Select services').waitFor()
   assert.equal(await summary.getByText('$0.00').count(), 0)
   for (const width of [320, 375, 768, 1440]) {
     await page.setViewportSize({ width, height: 1000 })

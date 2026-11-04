@@ -15,7 +15,13 @@ import {
 import type { CommercialEstimateModel } from './useCommercialEstimateModel'
 import { range, memberSource, visitDate, visitTime } from './format'
 
-export default function CommercialEstimateView({ model }: { model: CommercialEstimateModel }) {
+export default function CommercialEstimateView({
+  model,
+  featured = false,
+}: {
+  model: CommercialEstimateModel
+  featured?: boolean
+}) {
   const {
     onBack,
     onResolvePatient,
@@ -67,7 +73,10 @@ export default function CommercialEstimateView({ model }: { model: CommercialEst
     .filter(Boolean)
     .join(', ')
   return (
-    <section className="visit-estimator visit-visual" aria-labelledby="visit-estimate-title">
+    <section
+      className="visit-estimator visit-visual"
+      aria-labelledby={featured ? 'latest-saved-estimate-title' : 'visit-estimate-title'}
+    >
       {!readOnly && (
         <header className="visit-page-header">
           <div>
@@ -85,7 +94,7 @@ export default function CommercialEstimateView({ model }: { model: CommercialEst
           <span className="visit-practice">{session?.practice_name}</span>
         </header>
       )}
-      {readOnly && (
+      {readOnly && !featured && (
         <header className="visit-page-header">
           <div>
             <h2 id="visit-estimate-title">
@@ -349,7 +358,7 @@ export default function CommercialEstimateView({ model }: { model: CommercialEst
           </div>
         ) : result ? (
           <>
-            <CommercialOverview model={model} result={result} />
+            <CommercialOverview model={model} result={result} featured={featured} />
             {emg && !cash && (
               <section
                 className={`visit-overview emg-option${emg.total_min_cents == null ? ' is-unpriced' : ''}`}
@@ -424,10 +433,10 @@ export default function CommercialEstimateView({ model }: { model: CommercialEst
               </p>
             )}
             <div className="visit-detail-sections">
-              <CommercialServicesDetail model={model} result={result} />
-              <CommercialCoverageDetail model={model} result={result} />
-              <CommercialCalculationDetail model={model} result={result} />
-              <CommercialSourcesDetail model={model} result={result} />
+              <CommercialServicesDetail model={model} result={result} expanded={featured} />
+              <CommercialCoverageDetail model={model} result={result} expanded={featured} />
+              <CommercialCalculationDetail model={model} result={result} featured={featured} />
+              <CommercialSourcesDetail model={model} result={result} featured={featured} />
             </div>
             <footer className="visit-result-footer">
               <span>

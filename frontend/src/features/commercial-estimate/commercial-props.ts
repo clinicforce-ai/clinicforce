@@ -7,4 +7,5 @@ export interface CommercialEstimatorProps {
   refreshBenefits?: boolean
   saved?: InsuranceCheckSnapshot
   currentAccountNumber?: string | null
+  featured?: boolean
 }
