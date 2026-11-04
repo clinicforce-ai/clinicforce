@@ -1,7 +1,8 @@
-import type { RefObject } from 'react'
+import { useState, type RefObject } from 'react'
 import { ArrowLeft, ChevronRight, Mail, Trash2 } from 'lucide-react'
 import { type ClinicalPatient } from '../../services/api/staff-patients'
 import PatientAppointmentHistory from './PatientAppointmentHistory'
+import LatestSavedEstimate from './LatestSavedEstimate'
 import { name, accountLabel, stateLabel } from './clinical-patient-labels'
 
 interface Props {
@@ -27,6 +28,7 @@ export default function ClinicalPatientDetail({
   onOpenIntake,
   onRequestCard,
 }: Props) {
+  const [estimateRefresh, setEstimateRefresh] = useState(0)
   return (
     <div className="staff-narrow">
       <button className="staff-text-button" disabled={deleting} onClick={onBack}>
@@ -83,14 +85,13 @@ export default function ClinicalPatientDetail({
           {error}
         </p>
       )}
+      {selected.clinic_patient_id && selected.identity_status === 'confirmed' && (
+        <LatestSavedEstimate
+          key={`${selected.clinic_patient_id}:${estimateRefresh}`}
+          patientId={selected.clinic_patient_id}
+        />
+      )}
       <>
-        {selected.clinic_patient_id && selected.identity_status === 'confirmed' && (
-          <PatientAppointmentHistory
-            key={selected.clinic_patient_id}
-            patientId={selected.clinic_patient_id}
-            patientName={name(selected)}
-          />
-        )}
         <details className="staff-panel">
           <summary>Insurance submissions</summary>
           <p className="staff-muted">
@@ -144,6 +145,14 @@ export default function ClinicalPatientDetail({
             : 'Patient identity must be confirmed by staff before insurance review.'}{' '}
           No patient login was created.
         </p>
+      )}
+      {selected.clinic_patient_id && selected.identity_status === 'confirmed' && (
+        <PatientAppointmentHistory
+          key={selected.clinic_patient_id}
+          patientId={selected.clinic_patient_id}
+          patientName={name(selected)}
+          onChecksChange={() => setEstimateRefresh((value) => value + 1)}
+        />
       )}
     </div>
   )

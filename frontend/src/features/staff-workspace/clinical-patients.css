@@ -208,3 +208,15 @@
 .patient-appointment .staff-saved-checks {
   margin-top: 12px;
 }
+
+.latest-saved-estimate {
+  border-color: #a9d7cf;
+}
+
+.latest-saved-estimate-amount {
+  display: block;
+  color: #087f72;
+  font-size: clamp(2rem, 5vw, 3.5rem);
+  line-height: 1.15;
+  margin: 12px 0;
+}

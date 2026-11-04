@@ -16,6 +16,12 @@ function day(offset) {
 const future = day(2)
 const past = day(-3)
 const today = day(0)
+const savedCheck = {
+  id: 'saved-estimate', intake_id: 'synthetic-intake', source_mode: 'commercial_previsit',
+  service_date: today, created_at: `${today}T12:00:00Z`, label: 'Visit estimate', pending: false,
+}
+const olderCheck = { ...savedCheck, id: 'older-estimate', created_at: `${past}T12:00:00Z` }
+let savedAmount = 5000
 const patients = Array.from({ length: 6 }, (_, index) => ({
   id: String(index + 1),
   clinic_patient_id: String(index + 1),
@@ -65,9 +71,16 @@ await page.route((url) => url.pathname.startsWith('/api/'), async (route) => {
             : patientId === '3'
               ? [{ id: 'past-planned', from_ecw: true, status: 'planned', date: past }]
               : patientId === '6'
-                ? [{ id: 'today-6', from_ecw: true, status: 'booked', date: today }]
+              ? [{ id: 'today-6', from_ecw: true, status: 'booked', date: today, checks: [olderCheck, savedCheck] }]
               : [],
     }
+  } else if (path === '/api/staff/intakes/synthetic-intake/checks/saved-estimate') {
+    body = { snapshots: [{
+      saved_at: `${today}T12:30:00Z`, stage: 'previsit-complete', patient: patients[5],
+      result: { service_date: today, revision: 2, collection_guidance: { amount_cents: savedAmount, status: 'estimated', basis: 'office_copay', reason: 'Synthetic copay.' } },
+    }] }
+  } else if (path === '/api/staff/intakes/synthetic-intake/checks/older-estimate') {
+    body = { snapshots: [{ saved_at: `${past}T12:30:00Z`, stage: 'previsit-complete', patient: patients[5], result: { service_date: past, collection_guidance: { amount_cents: 2500, status: 'estimated' } } }] }
   } else {
     throw new Error(`Unexpected API ${path}`)
   }
@@ -117,6 +130,20 @@ try {
   assert.match(await futureGroup.locator('summary').innerText(), /1 patient/)
   assert.equal(await groups.count(), 1)
   await page.getByLabel('Find a clinical patient').fill('')
+  await page.locator('.clinical-patient-open').filter({ hasText: 'Patient 06' }).click()
+  const summary = page.getByRole('region', { name: 'Latest saved collection estimate' })
+  await summary.getByText('$50.00').waitFor()
+  assert.equal(await summary.locator('select').count(), 0)
+  assert.equal(await page.locator('.staff-narrow').evaluate((element) => {
+    const summary = element.querySelector('.latest-saved-estimate')
+    const history = element.querySelector('.patient-appointment-history')
+    return [...element.children].indexOf(summary) < [...element.children].indexOf(history)
+  }), true)
+  assert.equal(await page.locator('.staff-narrow').evaluate((element) => element.lastElementChild?.classList.contains('patient-appointment-history')), true)
+  savedAmount = null
+  await summary.getByRole('button', { name: 'Refresh' }).click()
+  await summary.getByText('Review before collecting').waitFor()
+  assert.equal(await summary.getByText('$0.00').count(), 0)
   for (const width of [320, 375, 768, 1440]) {
     await page.setViewportSize({ width, height: 1000 })
     assert(

@@ -9,9 +9,11 @@ const PAGE_SIZE = 7
 export default function PatientAppointmentHistory({
   patientId,
   patientName,
+  onChecksChange,
 }: {
   patientId: string
   patientName: string
+  onChecksChange: () => void
 }) {
   const [history, setHistory] = useState<History | null>(null)
   const [page, setPage] = useState(1)
@@ -115,7 +117,10 @@ export default function PatientAppointmentHistory({
               patientName={patientName}
               checksForVisit={visit.checks}
               currentAccountNumber={history?.ecw_account_number}
-              onChange={async () => refresh()}
+              onChange={async () => {
+                refresh()
+                onChecksChange()
+              }}
             />
           ) : (
             <p className="staff-small staff-muted">
