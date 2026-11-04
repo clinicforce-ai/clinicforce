@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import base64
+import asyncio
 import re
 from datetime import datetime, timezone
 from types import ModuleType
@@ -10,6 +11,7 @@ from urllib.parse import urljoin
 
 import httpx
 
+from app.insurance import golden
 from app.insurance.ecw.ecw_fields import _concept_labels, _name, _norm, _reference
 from app.insurance.ecw.ecw_coverage import saved_eligibility_summary
 
@@ -156,7 +158,8 @@ async def probe_saved_eligibility(backend: ModuleType, profile: dict[str, Any], 
                             card_result['insurance_card_status'] = 'search_unavailable'
                         if card_result.get('insurance_card_status') not in {'available', 'forbidden'}:
                             try:
-                                discovered = await insurance_cards(backend, patient_id, transport=transport)
+                                discovered = await insurance_cards(backend, patient_id, transport=transport,
+                                                                   metadata_only=True)
                             except (backend.EcwBackendError, httpx.HTTPError):
                                 if card_result.get('insurance_card_status') == 'not_returned':
                                     card_result['insurance_card_status'] = 'search_unavailable'
@@ -169,18 +172,20 @@ async def probe_saved_eligibility(backend: ModuleType, profile: dict[str, Any], 
     return result
 
 async def insurance_cards(backend: ModuleType, patient_id: str, *, document_id: str | None = None,
-                          transport: httpx.AsyncBaseTransport | None = None):
-    """Read only explicitly labeled insurance cards belonging to this patient."""
+                          transport: httpx.AsyncBaseTransport | None = None,
+                          metadata_only: bool = False):
+    """Read patient-bound cards, including content-verified generic patient documents."""
     def card_content(row: dict, content: dict) -> bool:
+        document_type = row.get('type') or {}
         if (row.get('resourceType') != 'DocumentReference' or row.get('status') != 'current'
                 or _reference(row.get('subject')) != 'Patient/' + patient_id
-                or any(c.get('code') == '53245-7' for c in row.get('type', {}).get('coding', []))):
+                or any(c.get('code') == '53245-7' for c in document_type.get('coding', []))):
             return False
         attachment = content.get('attachment') or {}
-        label = ' '.join([str(row.get('description') or ''), *_concept_labels(row.get('type')),
+        label = ' '.join([str(row.get('description') or ''), *_concept_labels(document_type),
                           str(attachment.get('title') or '')])
         card_type = any(c.get('code') == '64290-0' and c.get('system') == 'http://loinc.org'
-                        for c in row.get('type', {}).get('coding', []))
+                        for c in document_type.get('coding', []))
         return (card_type or bool(re.search(r'\b(?:insurance|payer|member|health plan)\s*(?:id\s*)?card\b', label, re.I))) \
             and attachment.get('contentType') in {'image/png', 'image/jpeg', 'application/pdf'}
 
@@ -207,12 +212,11 @@ async def insurance_cards(backend: ModuleType, patient_id: str, *, document_id: 
                     raise
                 # Optional patient-document access must not hide a returned insurance card.
         rows = [row for group in groups for row in group]
-        # Patient documents can contain unrelated clinical records. Search the
-        # untyped patient view when neither typed query found a usable card.
-        if not any(card_content(row, content) for row in rows for content in row.get('content', [])):
-            fallback = await backend._search(client, issuer, token, 'DocumentReference', {'patient': patient_id})
-            groups.append(fallback)
-            rows.extend(fallback)
+        # eCW's typed and patient-wide views can expose different documents.
+        # Inspect their union even when a typed card was already found.
+        patient_documents = await backend._search(client, issuer, token, 'DocumentReference', {'patient': patient_id})
+        groups.append(patient_documents)
+        rows.extend(patient_documents)
         binaries = {row.get('id'): row for row in rows if row.get('resourceType') == 'Binary' and row.get('id')}
         unique_included = {}
         for group in groups:
@@ -220,6 +224,56 @@ async def insurance_cards(backend: ModuleType, patient_id: str, *, document_id: 
             images = [row for row in group if row.get('resourceType') == 'Binary']
             if len(documents) == len(images) == 1 and len(documents[0].get('content', [])) == 1:
                 unique_included[documents[0].get('id')] = images[0]
+
+        binary_token = None
+
+        async def attachment_bytes(row: dict, attachment: dict) -> bytes:
+            nonlocal binary_token
+            mime = attachment.get('contentType')
+            data = attachment.get('data')
+            if not data:
+                url = urljoin(issuer + '/', str(attachment.get('url') or ''))
+                # Never forward credentials to external attachment hosts or redirects.
+                if not url.startswith(issuer + '/Binary/') or '?' in url or '#' in url or '/..' in url:
+                    raise backend.EcwBackendError('This card attachment is not available through the authorized eCW connection.')
+                resource = binaries.get(url.rsplit('/', 1)[-1])
+                if resource is None:
+                    included = unique_included.get(row.get('id')) or {}
+                    if included.get('contentType') == mime:
+                        resource = included
+                if resource is None:
+                    if binary_token is None:
+                        binary_token = await backend._access_token(client, client_id, issuer, ('system/Binary.read',))
+                    with backend._stage('resource_read', resource='binary') as facts:
+                        response = await client.get(url, headers={'Authorization': 'Bearer ' + binary_token, 'Accept': 'application/fhir+json'})
+                        facts['http_status'] = response.status_code
+                        response.raise_for_status()
+                        resource = response.json()
+                if resource.get('resourceType') != 'Binary' or resource.get('contentType') != mime:
+                    raise backend.EcwBackendError('The eCW card attachment has an unexpected format.')
+                data = resource.get('data')
+            if not isinstance(data, str) or len(data) > 14_000_000:
+                raise backend.EcwBackendError('The card attachment exceeds the supported size.')
+            try:
+                return base64.b64decode(data, validate=True)
+            except ValueError as exc:
+                raise backend.EcwBackendError('The eCW card attachment could not be read.') from exc
+
+        async def verified_generic_card(mime: str, content: bytes) -> bool:
+            try:
+                if mime == 'application/pdf':
+                    text = await asyncio.to_thread(golden._pdf_text, content)
+                else:
+                    text = await asyncio.to_thread(golden._image_text, content, local_mode='6')
+                fields = golden._card_fields(text)
+                return (bool(re.search(r'\b(?:insurance|member(?:\s+id)?)\s+card\b', text, re.I))
+                        and all(fields.get(name) for name in golden.CARD_IDENTITY_PATTERNS)
+                        and bool(fields.get('rx_bin') or fields.get('rx_pcn') or re.search(
+                            r'\b(?:health\s+plan|health\s+insurance|copay|co-pay|ppo|hmo|urgent\s+care|emergency\s+room)\b',
+                            text, re.I)))
+            except (golden.GoldenCaseError, golden.OCRServiceError):
+                return False
+
         cards = []
         seen = set()
         for row in rows:
@@ -235,35 +289,43 @@ async def insurance_cards(backend: ModuleType, patient_id: str, *, document_id: 
                 if document_id is None:
                     cards.append({'id': key, 'title': attachment.get('title') or 'eCW insurance card', 'content_type': mime})
                 elif key == document_id:
-                    data = attachment.get('data')
-                    if not data:
-                        url = urljoin(issuer + '/', str(attachment.get('url') or ''))
-                        # Never forward credentials to external attachment hosts or redirects.
-                        if not url.startswith(issuer + '/Binary/') or '?' in url or '#' in url or '/..' in url:
-                            raise backend.EcwBackendError('This card attachment is not available through the authorized eCW connection.')
-                        resource = binaries.get(url.rsplit('/', 1)[-1])
-                        # eCW can include a Binary with a different ID from the attachment URL.
-                        # Pair it only with the sole document in that search response.
-                        if resource is None:
-                            included = unique_included.get(row.get('id')) or {}
-                            if included.get('contentType') == mime:
-                                resource = included
-                        if resource is None:
-                            binary_token = await backend._access_token(client, client_id, issuer, ('system/Binary.read',))
-                            with backend._stage('resource_read', resource='binary') as facts:
-                                response = await client.get(url, headers={'Authorization': 'Bearer ' + binary_token, 'Accept': 'application/fhir+json'})
-                                facts['http_status'] = response.status_code
-                                response.raise_for_status()
-                                resource = response.json()
-                        if resource.get('resourceType') != 'Binary' or resource.get('contentType') != mime:
-                            raise backend.EcwBackendError('The eCW card attachment has an unexpected format.')
-                        data = resource.get('data')
-                    if not isinstance(data, str) or len(data) > 14_000_000:
-                        raise backend.EcwBackendError('The card attachment exceeds the supported size.')
-                    try:
-                        return base64.b64decode(data, validate=True), mime
-                    except ValueError as exc:
-                        raise backend.EcwBackendError('The eCW card attachment could not be read.') from exc
+                    return await attachment_bytes(row, attachment), mime
+
+        if metadata_only:
+            return cards
+
+        # eCW can omit card wording and file cards under other document types.
+        # Inspect every supported patient-bound attachment before exposing it.
+        examined = set()
+        unreadable = False
+        for row in rows:
+            codes = {item.get('code') for item in (row.get('type') or {}).get('coding', []) if isinstance(item, dict)}
+            if (row.get('resourceType') != 'DocumentReference' or row.get('status') != 'current'
+                    or _reference(row.get('subject')) != 'Patient/' + patient_id
+                    or '53245-7' in codes):
+                continue
+            for index, content in enumerate(row.get('content', [])):
+                attachment = content.get('attachment') or {}
+                mime = attachment.get('contentType')
+                key = str(row.get('id')) + ':' + str(index)
+                if key in seen or key in examined or mime not in {'application/pdf', 'image/png', 'image/jpeg'}:
+                    continue
+                if document_id is not None and key != document_id:
+                    continue
+                examined.add(key)
+                try:
+                    data = await attachment_bytes(row, attachment)
+                except (backend.EcwBackendError, httpx.HTTPError):
+                    unreadable = True
+                    continue
+                if not await verified_generic_card(mime, data):
+                    continue
+                seen.add(key)
+                if document_id is not None:
+                    return data, mime
+                cards.append({'id': key, 'title': 'eCW insurance card', 'content_type': mime})
         if document_id is not None:
             raise backend.EcwBackendError('No matching insurance card was returned for this patient.')
+        if not cards and unreadable:
+            raise backend.EcwBackendError('Some eCW patient documents could not be read; card discovery is incomplete.')
         return cards
