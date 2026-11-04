@@ -10,6 +10,7 @@ from typing import Any
 from urllib.parse import urljoin
 
 import httpx
+import fitz
 
 from app.insurance import golden
 from app.insurance.ecw.ecw_fields import _concept_labels, _name, _norm, _reference
@@ -259,20 +260,60 @@ async def insurance_cards(backend: ModuleType, patient_id: str, *, document_id: 
             except ValueError as exc:
                 raise backend.EcwBackendError('The eCW card attachment could not be read.') from exc
 
-        async def verified_generic_card(mime: str, content: bytes) -> bool:
-            try:
-                if mime == 'application/pdf':
-                    text = await asyncio.to_thread(golden._pdf_text, content)
-                else:
-                    text = await asyncio.to_thread(golden._image_text, content, local_mode='6')
-                fields = golden._card_fields(text)
-                return (bool(re.search(r'\b(?:insurance|member(?:\s+id)?)\s+card\b', text, re.I))
+        def card_text(text: str) -> bool:
+            fields = golden._card_fields(text)
+            return (bool(re.search(r'\b(?:insurance|member(?:\s+id)?)\s+cards?\b', text, re.I))
                         and all(fields.get(name) for name in golden.CARD_IDENTITY_PATTERNS)
                         and bool(fields.get('rx_bin') or fields.get('rx_pcn') or re.search(
                             r'\b(?:health\s+plan|health\s+insurance|copay|co-pay|ppo|hmo|urgent\s+care|emergency\s+room)\b',
                             text, re.I)))
-            except (golden.GoldenCaseError, golden.OCRServiceError):
-                return False
+
+        def card_images(page: fitz.Page, text: str) -> list[dict]:
+            if not re.search(r'\bmember\s+id\s+cards?\b', text, re.I):
+                return []
+            fields = golden._card_fields(text)
+            if not (fields.get('member_id') and fields.get('group_number')):
+                return []
+            images = []
+            for item in page.get_image_info(xrefs=True):
+                rect = fitz.Rect(item['bbox'])
+                if (item['xref'] > 0 and item['width'] * item['height'] <= golden.MAX_PIXELS
+                        and rect.height > 0
+                        and .03 <= rect.get_area() / page.rect.get_area() <= .5
+                        and 1.2 <= rect.width / rect.height <= 2.5):
+                    images.append(item)
+            return images[:2]
+
+        def verified_generic_cards(mime: str, content: bytes) -> list[tuple[int | None, bytes]] | None:
+            try:
+                if mime != 'application/pdf':
+                    return [(None, content)] if card_text(golden._image_text(content, local_mode='6')) else []
+                with fitz.open(stream=content, filetype='pdf') as document:
+                    if document.needs_pass or document.page_count > 20:
+                        return None
+                    if document.page_count <= golden.MAX_PDF_PAGES:
+                        return [(None, content)] if card_text(golden._pdf_text(content)) else []
+                    cards = []
+                    for number in range(document.page_count):
+                        with fitz.open() as page_pdf:
+                            page_pdf.insert_pdf(document, from_page=number, to_page=number)
+                            page_bytes = page_pdf.tobytes()
+                        page = document[number]
+                        page_text = golden._pdf_text(page_bytes)
+                        if card_text(page_text):
+                            cards.append((number, page_bytes))
+                            continue
+                        images = card_images(page, page_text)
+                        if images:
+                            with fitz.open() as card_pdf:
+                                for item in images:
+                                    card_page = card_pdf.new_page(width=item['width'], height=item['height'])
+                                    card_page.insert_image(card_page.rect,
+                                                           stream=document.extract_image(item['xref'])['image'])
+                                cards.append((number, card_pdf.tobytes()))
+                    return cards
+            except (golden.GoldenCaseError, golden.OCRServiceError, fitz.FileDataError, fitz.EmptyFileError):
+                return []
 
         cards = []
         seen = set()
@@ -310,7 +351,7 @@ async def insurance_cards(backend: ModuleType, patient_id: str, *, document_id: 
                 key = str(row.get('id')) + ':' + str(index)
                 if key in seen or key in examined or mime not in {'application/pdf', 'image/png', 'image/jpeg'}:
                     continue
-                if document_id is not None and key != document_id:
+                if document_id is not None and document_id != key and not document_id.startswith(key + ':'):
                     continue
                 examined.add(key)
                 try:
@@ -318,12 +359,20 @@ async def insurance_cards(backend: ModuleType, patient_id: str, *, document_id: 
                 except (backend.EcwBackendError, httpx.HTTPError):
                     unreadable = True
                     continue
-                if not await verified_generic_card(mime, data):
+                matches = await asyncio.to_thread(verified_generic_cards, mime, data)
+                if matches is None:
+                    unreadable = True
                     continue
-                seen.add(key)
-                if document_id is not None:
-                    return data, mime
-                cards.append({'id': key, 'title': 'eCW insurance card', 'content_type': mime})
+                for page, card_bytes in matches:
+                    card_id = key if page is None else f'{key}:{page}'
+                    if document_id is not None and card_id != document_id:
+                        continue
+                    seen.add(card_id)
+                    if document_id is not None:
+                        return card_bytes, mime
+                    cards.append({'id': card_id, 'title': 'eCW insurance card', 'content_type': mime})
+                if matches and document_id is None:
+                    return cards
         if document_id is not None:
             raise backend.EcwBackendError('No matching insurance card was returned for this patient.')
         if not cards and unreadable:
