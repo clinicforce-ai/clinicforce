@@ -5,5 +5,5 @@ import './CommercialEstimator.css'
 
 export default function CommercialEstimator(props: CommercialEstimatorProps) {
   const model = useCommercialEstimateModel(props)
-  return <CommercialEstimateView model={model} />
+  return <CommercialEstimateView model={model} featured={props.featured} />
 }

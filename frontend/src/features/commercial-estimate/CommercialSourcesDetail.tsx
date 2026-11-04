@@ -6,9 +6,11 @@ import { visitDate, visitTime } from './format'
 export default function CommercialSourcesDetail({
   model,
   result,
+  featured = false,
 }: {
   model: CommercialEstimateModel
   result: NonNullable<CommercialEstimateModel['result']>
+  featured?: boolean
 }) {
   const {
     intakeId,
@@ -40,7 +42,7 @@ export default function CommercialSourcesDetail({
       : copayEvidenceId
   return (
     <details
-      id="visit-detail-sources"
+      id={featured ? 'latest-visit-detail-sources' : 'visit-detail-sources'}
       className="visit-detail-section"
       onToggle={(event) => {
         if (!readOnly && event.currentTarget.open) {

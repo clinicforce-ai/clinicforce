@@ -61,7 +61,9 @@ export default function SavedInsuranceChecks({
     try {
       const result = checksForVisit || (await getStaffInsuranceChecks(intakeId)).checks
       setChecks(result)
-      const latest = result.find((check) => check.source_mode === 'commercial_previsit')
+      const latest = result
+        .filter((check) => check.source_mode === 'commercial_previsit')
+        .sort((a, b) => b.created_at.localeCompare(a.created_at))[0]
       if (latest) void open(latest)
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : 'Saved checks could not be loaded.')

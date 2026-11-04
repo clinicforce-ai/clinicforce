@@ -4,10 +4,17 @@ import {
   getStaffInsuranceCheck,
   type InsuranceCheckSnapshot,
 } from '../../services/api/staff-history'
-import { money, visitDate } from '../commercial-estimate/format'
+import CommercialEstimator from '../commercial-estimate/CommercialEstimator'
+import { visitDate, visitTime } from '../commercial-estimate/format'
+
+type FeaturedEstimate = {
+  snapshot: InsuranceCheckSnapshot
+  intakeId: string
+  accountNumber?: string | null
+}
 
 export default function LatestSavedEstimate({ patientId }: { patientId: string }) {
-  const [snapshot, setSnapshot] = useState<InsuranceCheckSnapshot | null>(null)
+  const [featured, setFeatured] = useState<FeaturedEstimate | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(false)
   const [attempt, setAttempt] = useState(0)
@@ -25,10 +32,20 @@ export default function LatestSavedEstimate({ patientId }: { patientId: string }
           .flatMap((visit) => visit.checks)
           .filter((check) => check.source_mode === 'commercial_previsit' && check.intake_id)
           .sort((a, b) => b.created_at.localeCompare(a.created_at))[0]
-        return latest ? getStaffInsuranceCheck(latest.intake_id!, latest.id) : null
+        return latest
+          ? getStaffInsuranceCheck(latest.intake_id!, latest.id).then((result) =>
+              result.snapshots[0]
+                ? {
+                    snapshot: result.snapshots[0],
+                    intakeId: latest.intake_id!,
+                    accountNumber: history.ecw_account_number,
+                  }
+                : null,
+            )
+          : null
       })
       .then((result) => {
-        if (active) setSnapshot(result?.snapshots[0] || null)
+        if (active) setFeatured(result)
       })
       .catch(() => {
         if (active) setError(true)
@@ -41,27 +58,13 @@ export default function LatestSavedEstimate({ patientId }: { patientId: string }
     }
   }, [patientId, attempt])
 
-  const result = snapshot?.result
-  const guidance = result?.collection_guidance
-  const amount =
-    guidance?.amount_cents != null &&
-    Number.isFinite(guidance.amount_cents) &&
-    guidance.amount_cents >= 0 &&
-    !['deferred', 'deferred_billing', 'action_required'].includes(guidance.status) &&
-    !guidance.integrity_error &&
-    !result?.encounter_summary?.integrity_error &&
-    (result?.encounter_summary?.collect_today_cents === undefined ||
-      result.encounter_summary.collect_today_cents === guidance.amount_cents)
-      ? guidance.amount_cents
-      : null
-
   return (
     <section
       className="staff-panel latest-saved-estimate"
       aria-label="Latest saved collection estimate"
     >
       <div className="staff-section-heading">
-        <h2>Latest saved staff collection estimate</h2>
+        <h2 id="latest-saved-estimate-title">Latest saved visit estimate</h2>
         <button type="button" disabled={loading} onClick={refresh}>
           Refresh
         </button>
@@ -70,24 +73,23 @@ export default function LatestSavedEstimate({ patientId }: { patientId: string }
         <p role="status">Loading latest saved estimate…</p>
       ) : error ? (
         <p role="alert">The latest saved estimate could not be loaded. Select Refresh to retry.</p>
-      ) : !result ? (
+      ) : !featured ? (
         <p>No saved estimate is available for this patient.</p>
       ) : (
         <>
-          <strong className="latest-saved-estimate-amount">
-            {amount == null ? 'Review before collecting' : money(amount)}
-          </strong>
-          <p>
-            {amount == null
-              ? 'No supported collection amount was retained.'
-              : 'Recorded amount for staff to collect at this visit.'}{' '}
-            {result.service_date && `Visit: ${visitDate(result.service_date)}.`}
-          </p>
           <p className="staff-small staff-muted">
-            Saved recommendation{snapshot?.saved_at ? ` ${visitDate(snapshot.saved_at)}` : ''}.
-            Recheck the current visit before collecting today; final patient responsibility follows
-            the processed claim.
+            Recorded for {visitDate(featured.snapshot.result.service_date)}
+            {featured.snapshot.saved_at &&
+              ` · Saved ${visitDate(featured.snapshot.saved_at)} at ${visitTime(featured.snapshot.saved_at)}`}
+            . Recheck the current visit before collecting today; final responsibility follows the
+            processed claim.
           </p>
+          <CommercialEstimator
+            saved={featured.snapshot}
+            intakeId={featured.intakeId}
+            currentAccountNumber={featured.accountNumber}
+            featured
+          />
         </>
       )}
     </section>

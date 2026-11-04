@@ -26,9 +26,11 @@ import { availityVisitPlanning } from './availityVisitPlanning'
 export default function CommercialOverview({
   model,
   result,
+  featured = false,
 }: {
   model: CommercialEstimateModel
   result: NonNullable<CommercialEstimateModel['result']>
+  featured?: boolean
 }) {
   const {
     readOnly,
@@ -124,9 +126,13 @@ export default function CommercialOverview({
   const automaticCashFallback = cash && result.cash_fallback != null
   const availity = availityVisitPlanning(result, model)
   return (
-    <section id="visit-estimate" className="visit-overview" aria-labelledby="payment-heading">
+    <section
+      id={featured ? 'latest-visit-estimate' : 'visit-estimate'}
+      className="visit-overview"
+      aria-labelledby={featured ? 'latest-payment-heading' : 'payment-heading'}
+    >
       <div className="overview-heading">
-        <h2 id="payment-heading">
+        <h2 id={featured ? 'latest-payment-heading' : 'payment-heading'}>
           {readOnly
             ? 'Saved visit estimate'
             : automaticCashFallback
@@ -169,8 +175,8 @@ export default function CommercialOverview({
           </strong>
         </p>
       )}
-      <AvailityEvidenceUpload result={result} model={model} />
-      <EcwEligibilityEvidenceUpload result={result} model={model} />
+      {!featured && <AvailityEvidenceUpload result={result} model={model} />}
+      {!featured && <EcwEligibilityEvidenceUpload result={result} model={model} />}
       <div className="overview-amounts">
         <div
           className={`arrival-total${!availity && !visibleAmount && !calculating && !tooEarly ? ' is-blocked' : ''}`}

@@ -5,13 +5,19 @@ import { PayerAllowanceEntry } from './PayerAllowanceEntry'
 export default function CommercialServicesDetail({
   model,
   result,
+  expanded = false,
 }: {
   model: CommercialEstimateModel
   result: NonNullable<CommercialEstimateModel['result']>
+  expanded?: boolean
 }) {
   const { readOnly, busy, setNotice, recovering, saveReview, anticipatedService } = model
   return (
-    <details id="visit-detail-services" className="visit-detail-section">
+    <details
+      id={expanded ? 'latest-visit-detail-services' : 'visit-detail-services'}
+      className="visit-detail-section"
+      open={expanded || undefined}
+    >
       <summary>
         {readOnly ? 'Saved service plan' : 'Review planned CPTs and additional care'}
       </summary>

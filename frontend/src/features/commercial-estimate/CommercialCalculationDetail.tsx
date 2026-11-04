@@ -6,9 +6,11 @@ import { patientBenefitsBound } from './identityBinding'
 export default function CommercialCalculationDetail({
   model,
   result,
+  featured = false,
 }: {
   model: CommercialEstimateModel
   result: NonNullable<CommercialEstimateModel['result']>
+  featured?: boolean
 }) {
   const {
     price,
@@ -52,7 +54,10 @@ export default function CommercialCalculationDetail({
     !result.benefits?.has_secondary &&
     result.recovery?.reason_code !== 'multiple_active_policies'
   return (
-    <details id="visit-detail-calculation" className="visit-detail-section">
+    <details
+      id={featured ? 'latest-visit-detail-calculation' : 'visit-detail-calculation'}
+      className="visit-detail-section"
+    >
       <summary>Patient estimate</summary>
       <div className="visit-detail-body">
         <section>
