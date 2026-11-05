@@ -8,6 +8,7 @@ from fastapi import FastAPI, HTTPException
 
 from app.api.routers import staff
 from app.api.routers.staff_flow import staff_prebooking
+from app.api.schemas.staff import PrebookingEstimateResponse
 from app.insurance import prebooking, stedi, stedi_payers
 
 
@@ -117,4 +118,188 @@ def test_staff_route_checks_without_creating_a_patient_or_case():
                 invalid = await client.post("/api/staff/prebooking-eligibility/check", json={**PERSON, "payer_id": "OTHER"})
                 assert invalid.status_code == 422
                 assert check.await_count == 1
+    asyncio.run(run())
+
+
+def test_prospective_plan_never_selects_or_prices_a_suggestion():
+    suggestions = {"groups": [{"label": "Possible testing", "selection_mode": "multiple",
+        "codes": [{"code": "95909", "reason": "Nerve studies may be considered."},
+                  {"code": "invalid", "reason": "Bad code"}]}], "notes": []}
+    plan = prebooking.plan("Hand numbness; testing may be considered", "established", suggestions)
+    assert plan["groups"][0]["codes"][0]["code"] == "99212"
+    assert [row["code"] for row in plan["groups"][1]["codes"]] == ["95909"]
+    assert all("selected" not in row for group in plan["groups"] for row in group["codes"])
+    assert prebooking.validate_services([{"code": "95909", "units": 1}], "established", "Hand numbness")[0]["confirmed"]
+    try:
+        prebooking.validate_services([{"code": "95909", "units": 1}, {"code": "95908", "units": 1}],
+                                     "established", "Hand numbness")
+    except ValueError:
+        pass
+    else:
+        assert False, "Alternative nerve study levels must be rejected"
+
+
+def test_dependent_inquiry_requires_matching_policyholder_and_patient():
+    details = {**PERSON, "relationship": "dependent", "subscriber_given_name": "Sam",
+               "subscriber_family_name": "Example", "subscriber_birth_date": "1950-01-01"}
+    body = prebooking.request_body(details, PAYER, PROVIDER, service_type="73", service_date="2026-11-05")
+    assert body["encounter"] == {"services": [{"system": "STC", "value": "73"}],
+                                  "dates": {"service": {"start": "2026-11-05"}}}
+    assert body["dependent"]["name"]["person"]["firstName"] == "Pat"
+    reply = response()
+    reply["subscriber"]["name"]["person"]["firstName"] = "Sam"
+    reply["subscriber"]["dateOfBirth"] = "1950-01-01"
+    reply["dependent"] = {"name": {"person": {"firstName": "Pat", "lastName": "Example"}},
+                          "dateOfBirth": "1980-01-01"}
+    assert prebooking.matches_identity(reply, details)
+    reply["dependent"]["dateOfBirth"] = "1981-01-01"
+    assert not prebooking.matches_identity(reply, details)
+
+
+def test_patient_address_comes_only_from_the_matching_person():
+    reply = response()
+    reply["subscriber"]["address"] = {"addressLine1": "100 Example Ave", "city": "Albany",
+                                      "state": "NY", "postalCode": "12207"}
+    assert prebooking.patient_address(reply, PERSON) == {
+        "line1": "100 Example Ave", "city": "Albany", "state": "NY", "postal_code": "12207"}
+    assert prebooking.patient_address(reply, {**PERSON, "birth_date": "1981-01-01"}) is None
+
+    dependent = {**PERSON, "relationship": "dependent", "subscriber_given_name": "Sam",
+                 "subscriber_family_name": "Example", "subscriber_birth_date": "1950-01-01"}
+    reply["subscriber"]["name"]["person"]["firstName"] = "Sam"
+    reply["subscriber"]["dateOfBirth"] = "1950-01-01"
+    reply["dependent"] = {"name": {"person": {"firstName": "Pat", "lastName": "Example"}},
+                          "dateOfBirth": "1980-01-01"}
+    assert prebooking.patient_address(reply, dependent) is None  # policyholder address is not the patient's
+    reply["dependent"]["address"] = {"addressLine1": "200 Example St", "city": "Troy"}
+    assert prebooking.patient_address(reply, dependent) == {"line1": "200 Example St", "city": "Troy"}
+
+
+def test_estimate_route_checks_identity_and_services_before_pricing():
+    from app.api.routers import commercial_estimator
+    from app.insurance import library_network_exclusions
+
+    async def search(name, ids, key, *, candidates=None):
+        return PAYER if ids == ["EXAMPLE"] else None
+
+    async def run():
+        app = FastAPI()
+        app.include_router(staff.router)
+        payer_response = response()
+        payer_response["subscriber"]["address"] = {"addressLine1": "100 Example Ave", "city": "Albany"}
+        estimate = {**PERSON, "reason": "Planned office consultation", "visit_type": "established",
+                    "selected_services": [{"code": "99213", "units": 1}]}
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test",
+                                     headers={"Origin": "http://test"}) as client:
+            with patch.object(staff, "require_staff", AsyncMock(return_value={"practice_id": "clinic-1", "practice_name": "Example Clinic"})), \
+                 patch.object(staff_prebooking.clinic_store, "get_for_practice", return_value=PROVIDER), \
+                 patch.object(staff_prebooking.commercial_store, "list_networks", return_value=[]), \
+                 patch.object(staff_prebooking, "_today", return_value="2026-10-27"), \
+                 patch.object(staff_prebooking.stedi_financial, "credentials", return_value="synthetic-key"), \
+                 patch.object(staff_prebooking.stedi_payers, "search_payer", side_effect=search), \
+                 patch.object(stedi.Client, "check", AsyncMock(return_value={"outcome": "complete", "payload": payer_response})) as check, \
+                 patch.object(commercial_estimator.commercial_store, "list_connections", return_value=[]), \
+                 patch.object(library_network_exclusions, "applicable_exclusion", return_value=None), \
+                 patch.object(staff.staff_store, "create_intake") as create_intake, \
+                 patch.dict(os.environ, {"STEDI_EXECUTION_MODE": "commercial_pilot", "STEDI_LIVE_ELIGIBILITY_ENABLED": "true"}):
+                invalid = await client.post("/api/staff/prebooking-estimate/check", json={**estimate,
+                    "selected_services": [{"code": "95909", "units": 1}, {"code": "95908", "units": 1}]})
+                assert invalid.status_code == 422
+                assert check.await_count == 0
+                result = await client.post("/api/staff/prebooking-estimate/check", json=estimate)
+                assert result.status_code == 200, result.text
+                assert result.headers["cache-control"] == "no-store"
+                assert result.json()["coverage"]["status"] == "active_today"
+                assert result.json()["patient_address"]["line1"] == "100 Example Ave"
+                assert result.json()["patient_max_cents"] is None
+                assert result.json()["network_status"] == "unknown"
+                PrebookingEstimateResponse.model_validate(result.json())
+                assert check.await_count == 2
+                assert [call.args[0]["encounter"]["services"][0]["value"] for call in check.await_args_list] == ["30", "98"]
+                create_intake.assert_not_called()
+    asyncio.run(run())
+
+
+def test_prospective_amount_requires_member_binding_and_verified_network():
+    from app.api.routers import commercial_estimator
+
+    payload = response()
+    payload["plans"][0]["name"] = "Example PPO"
+    details = {**PERSON, "reason": "Planned office consultation", "visit_type": "established"}
+    context = {"billing_npi": PROVIDER["npi"], "rendering_npi": PROVIDER["npi"],
+               "location_id": "office-1", "place_of_service": "11"}
+    lines = prebooking.validate_services([{"code": "99213", "units": 1}], "established", details["reason"])
+
+    def priced(result, practice_id, inputs, source, payer_id, benefits, **kwargs):
+        benefits.update(network_status="in_network", network_source="clinic_library_contract")
+        result["network_evidence"] = {"decision": "confirmed_participating", "reason": "Synthetic contract."}
+        result["price_range"] = {"complete": True, "conditional": False,
+            "patient_min_cents": 2500, "patient_max_cents": 2500,
+            "lines": [{"code": "99213", "units": 1, "allowed_cents": 10000,
+                       "calculation": {"patient_cents": 2500}, "benefits": benefits,
+                       "issues": [], "conditions": []}]}
+
+    with patch.object(commercial_estimator, "_attach_previsit_pricing", side_effect=priced):
+        result = staff_prebooking._estimate_from_payer("clinic-1", details, context, PAYER,
+            PROVIDER, payload, "2026-10-27", lines)
+        assert result["estimate_status"] == "priced"
+        assert result["patient_max_cents"] == 2500
+        assert result["lines"][0]["benefits"]["copay_cents"] is None
+        PrebookingEstimateResponse.model_validate({"coverage": prebooking.evaluate(payload, details, "2026-10-27"),
+            "payer": PAYER["displayName"], "checked_at": "2026-10-27T12:00:00Z", "checked_on": "2026-10-27",
+            "check_ids": [], "patient_address": None, **result})
+
+        no_member = staff_prebooking._estimate_from_payer("clinic-1", {**details, "member_id": ""},
+            context, PAYER, PROVIDER, payload, "2026-10-27", lines)
+        assert no_member["estimate_status"] == "needs_review"
+        assert no_member["patient_max_cents"] is None
+
+    def unverified(result, practice_id, inputs, source, payer_id, benefits, **kwargs):
+        priced(result, practice_id, inputs, source, payer_id, benefits, **kwargs)
+        benefits.update(network_status="unknown", network_source=None)
+
+    with patch.object(commercial_estimator, "_attach_previsit_pricing", side_effect=unverified):
+        no_network = staff_prebooking._estimate_from_payer("clinic-1", details, context, PAYER,
+            PROVIDER, payload, "2026-10-27", lines)
+        assert no_network["network_status"] == "unknown"
+        assert no_network["patient_max_cents"] is None
+
+
+def test_uncertain_service_response_stops_further_inquiries_and_withholds_amount():
+    async def search(name, ids, key, *, candidates=None):
+        return PAYER
+
+    async def run():
+        app = FastAPI()
+        app.include_router(staff.router)
+        body = {**PERSON, "reason": "Planned office and nerve testing", "visit_type": "established",
+                "selected_services": [{"code": "99213", "units": 1}, {"code": "95909", "units": 1}]}
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test",
+                                     headers={"Origin": "http://test"}) as client:
+            with patch.object(staff, "require_staff", AsyncMock(return_value={"practice_id": "clinic-1", "practice_name": "Example Clinic"})), \
+                 patch.object(staff_prebooking.clinic_store, "get_for_practice", return_value=PROVIDER), \
+                 patch.object(staff_prebooking.commercial_store, "list_networks", return_value=[]), \
+                 patch.object(staff_prebooking, "_today", return_value="2026-10-27"), \
+                 patch.object(staff_prebooking.stedi_financial, "credentials", return_value="synthetic-key"), \
+                 patch.object(staff_prebooking.stedi_payers, "search_payer", side_effect=search), \
+                 patch.object(stedi.Client, "check", AsyncMock(side_effect=[
+                     {"outcome": "complete", "payload": response()},
+                     {"outcome": "unavailable", "payload": {"id": "ec_synthetic-uncertain"}},
+                 ])) as check, \
+                 patch.object(staff_prebooking, "_estimate_from_payer", return_value={
+                     "network_status": "in_network", "network_evidence": None, "plan_name": "Example PPO",
+                     "benefits": None, "lines": [{"code": "99213", "units": 1, "role": "visit",
+                         "service_type": "98", "allowed_cents": 10000, "patient_cents": 2500,
+                         "benefits": staff_prebooking._terms({}), "issues": [], "conditions": []}],
+                     "patient_min_cents": 2500, "patient_max_cents": 2500,
+                     "estimate_status": "priced", "issues": []}), \
+                 patch.dict(os.environ, {"STEDI_EXECUTION_MODE": "commercial_pilot", "STEDI_LIVE_ELIGIBILITY_ENABLED": "true"}):
+                result = await client.post("/api/staff/prebooking-estimate/check", json=body)
+                assert result.status_code == 200, result.text
+                assert check.await_count == 2
+                assert result.json()["check_ids"] == ["ec_synthetic-123", "ec_synthetic-uncertain"]
+                assert result.json()["patient_max_cents"] is None
+                assert result.json()["lines"][0]["patient_cents"] is None
+                assert result.json()["lines"][0]["allowed_cents"] is None
+                assert result.json()["estimate_status"] == "needs_review"
     asyncio.run(run())

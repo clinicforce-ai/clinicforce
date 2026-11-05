@@ -1,15 +1,20 @@
 import { useEffect, useState, type FormEvent } from 'react'
 import { ArrowLeft } from 'lucide-react'
 import { ApiError } from '../../services/api/client'
+import StaffPrebookingResult from './StaffPrebookingResult'
+import StaffPrebookingPlan from './StaffPrebookingPlan'
 import {
-  checkPrebookingEligibility,
+  checkPrebookingEstimate,
+  getPrebookingContexts,
   getPrebookingOptions,
+  planPrebookingServices,
   type PrebookingDetails,
-  type PrebookingResult,
+  type PrebookingEstimate,
+  type PrebookingPlan,
 } from '../../services/api/prebooking-eligibility'
 
 type Payer = Awaited<ReturnType<typeof getPrebookingOptions>>['payers'][number]
-
+type VisitType = 'new' | 'established' | 'unknown'
 const empty: PrebookingDetails = {
   payer_id: '',
   given_name: '',
@@ -17,17 +22,35 @@ const empty: PrebookingDetails = {
   birth_date: '',
   member_id: '',
 }
-
 export default function StaffPrebookingScreen({ onBack }: { onBack: () => void }) {
   const [payers, setPayers] = useState<Payer[]>([])
   const [insurer, setInsurer] = useState('')
   const [optionsState, setOptionsState] = useState<'idle' | 'loading' | 'ready' | 'failed'>('idle')
-  const [busy, setBusy] = useState(false)
+  const [contexts, setContexts] = useState<Array<{ id: string; label: string }>>([])
+  const [contextId, setContextId] = useState('')
+  const [busy, setBusy] = useState<'planning' | 'checking' | null>(null)
   const [error, setError] = useState('')
   const [form, setForm] = useState<PrebookingDetails>(empty)
-  const [result, setResult] = useState<PrebookingResult | null>(null)
+  const [reason, setReason] = useState('')
+  const [visitType, setVisitType] = useState<VisitType>('unknown')
+  const [serviceDate, setServiceDate] = useState('')
+  const [relationship, setRelationship] = useState<'self' | 'dependent'>('self')
+  const [subscriber, setSubscriber] = useState({ given: '', family: '', birth: '' })
+  const [plan, setPlan] = useState<PrebookingPlan | null>(null)
+  const [selected, setSelected] = useState<Record<string, number>>({})
+  const [manualCode, setManualCode] = useState('')
+  const [confirmed, setConfirmed] = useState(false)
+  const [result, setResult] = useState<PrebookingEstimate | null>(null)
   const today = new Date().toLocaleDateString('en-CA')
 
+  useEffect(() => {
+    getPrebookingContexts()
+      .then(({ contexts: choices }) => {
+        setContexts(choices)
+        if (choices.length === 1) setContextId(choices[0].id)
+      })
+      .catch(() => setContexts([]))
+  }, [])
   useEffect(() => {
     if (insurer.trim().length < 2 || form.payer_id) return
     let active = true
@@ -57,43 +80,117 @@ export default function StaffPrebookingScreen({ onBack }: { onBack: () => void }
     setResult(null)
     setError('')
   }
-
-  async function check(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault()
-    if (busy) return
-    if (!form.payer_id) {
-      setError('Choose an insurance company from the suggestions.')
+  function changeReason(value: string) {
+    setReason(value)
+    setPlan(null)
+    setSelected({})
+    setConfirmed(false)
+    setResult(null)
+  }
+  async function preparePlan() {
+    if (busy || reason.trim().length < 3) {
+      setError('Enter a visit reason of at least three characters.')
       return
     }
-    setBusy(true)
+    setBusy('planning')
+    setPlan(null)
+    setSelected({})
+    setConfirmed(false)
     setResult(null)
     setError('')
     try {
-      setResult(await checkPrebookingEligibility(form))
+      setPlan(await planPrebookingServices(reason.trim(), visitType))
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : 'Possible services could not be found.')
+    } finally {
+      setBusy(null)
+    }
+  }
+  function toggle(code: string, group?: PrebookingPlan['groups'][number]) {
+    setSelected((current) => {
+      const next = { ...current }
+      if (code in next) delete next[code]
+      else {
+        if (group?.selection_mode === 'single')
+          group.codes.forEach((item) => {
+            delete next[item.code]
+          })
+        next[code] = 1
+      }
+      return next
+    })
+    setConfirmed(false)
+    setResult(null)
+  }
+  function addManualCode() {
+    const code = manualCode.trim().toUpperCase()
+    if (!/^(?:[0-9]{5}|[A-Z][0-9]{4}|[0-9]{4}[A-Z])$/.test(code)) {
+      setError('Enter one valid five-character CPT or HCPCS code.')
+      return
+    }
+    setSelected((current) => ({ ...current, [code]: current[code] || 1 }))
+    setManualCode('')
+    setConfirmed(false)
+    setResult(null)
+    setError('')
+  }
+  async function check(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    if (busy || !plan) return
+    if (!form.payer_id || !confirmed || !Object.keys(selected).length) {
+      setError('Choose an insurer and confirm at least one planned service.')
+      return
+    }
+    if (
+      relationship === 'dependent' &&
+      (!form.member_id || !subscriber.given || !subscriber.family || !subscriber.birth)
+    ) {
+      setError('Enter the policyholder name, birth date and member ID for a dependent.')
+      return
+    }
+    setBusy('checking')
+    setResult(null)
+    setError('')
+    try {
+      setResult(
+        await checkPrebookingEstimate({
+          ...form,
+          reason: reason.trim(),
+          visit_type: visitType,
+          service_date: serviceDate || null,
+          network_context_id: contextId || null,
+          relationship,
+          subscriber_given_name: subscriber.given,
+          subscriber_family_name: subscriber.family,
+          subscriber_birth_date: subscriber.birth || null,
+          selected_services: Object.entries(selected).map(([code, units]) => ({ code, units })),
+        }),
+      )
     } catch (caught) {
       setError(
         caught instanceof ApiError && [0, 408].includes(caught.status)
           ? 'The request may have reached Stedi. Check Stedi activity before sending another inquiry.'
           : caught instanceof Error
             ? caught.message
-            : 'This check could not be completed.',
+            : 'This estimate could not be completed.',
       )
     } finally {
-      setBusy(false)
+      setBusy(null)
     }
   }
 
   return (
     <div className="staff-narrow">
-      <button type="button" className="staff-text-button" onClick={onBack} disabled={busy}>
+      <button type="button" className="staff-text-button" onClick={onBack} disabled={Boolean(busy)}>
         <ArrowLeft size={18} /> Back to clinical patients
       </button>
       <header className="staff-header">
         <div>
           <div className="staff-eyebrow">Prospective patient</div>
-          <h1>Check coverage before booking</h1>
+          <h1>Plan care and estimate cost before booking</h1>
           <p className="staff-muted">
-            Check general medical coverage today, before creating a patient or appointment in eCW.
+            Describe the visit, confirm possible services, then check coverage and estimated patient
+            share.
           </p>
         </div>
       </header>
@@ -103,6 +200,7 @@ export default function StaffPrebookingScreen({ onBack }: { onBack: () => void }
         </p>
       )}
       <form className="staff-panel" onSubmit={(event) => void check(event)} autoComplete="off">
+        <h2>1. Patient and visit</h2>
         <div className="staff-two-columns">
           <label className="staff-field">
             <span>Patient's first name *</span>
@@ -110,7 +208,7 @@ export default function StaffPrebookingScreen({ onBack }: { onBack: () => void }
               value={form.given_name}
               required
               maxLength={100}
-              disabled={busy}
+              disabled={Boolean(busy)}
               onChange={(event) => change('given_name', event.target.value)}
             />
           </label>
@@ -120,19 +218,19 @@ export default function StaffPrebookingScreen({ onBack }: { onBack: () => void }
               value={form.family_name}
               required
               maxLength={100}
-              disabled={busy}
+              disabled={Boolean(busy)}
               onChange={(event) => change('family_name', event.target.value)}
             />
           </label>
           <label className="staff-field">
-            <span>Patient's date of birth *</span>
+            <span>Patient's birth date *</span>
             <input
               type="date"
               value={form.birth_date}
               required
               min="1850-01-01"
               max={today}
-              disabled={busy}
+              disabled={Boolean(busy)}
               onChange={(event) => change('birth_date', event.target.value)}
             />
           </label>
@@ -143,7 +241,7 @@ export default function StaffPrebookingScreen({ onBack }: { onBack: () => void }
               value={insurer}
               required
               maxLength={200}
-              disabled={busy}
+              disabled={Boolean(busy)}
               aria-describedby="prebooking-insurer-help"
               placeholder="Search Aetna, BCBS, Cigna…"
               onChange={(event) => {
@@ -166,7 +264,7 @@ export default function StaffPrebookingScreen({ onBack }: { onBack: () => void }
                     type="button"
                     role="option"
                     aria-selected={false}
-                    disabled={busy}
+                    disabled={Boolean(busy)}
                     onClick={() => {
                       setInsurer(`${payer.name} (${payer.id})`)
                       setPayers([])
@@ -185,56 +283,176 @@ export default function StaffPrebookingScreen({ onBack }: { onBack: () => void }
                 : optionsState === 'loading'
                   ? 'Searching insurance companies…'
                   : optionsState === 'ready' && !payers.length
-                    ? 'No matching insurer found. Try a different name.'
+                    ? 'No matching insurer found.'
                     : optionsState === 'failed'
-                      ? 'Search unavailable. Try again shortly.'
-                      : 'Type at least two letters, then select the exact insurer below.'}
+                      ? 'Search unavailable.'
+                      : 'Type at least two letters and choose the exact insurer.'}
             </small>
           </div>
           <label className="staff-field">
-            <span>Insurance member ID (optional)</span>
+            <span>Insurance member ID (needed for a priced estimate)</span>
             <input
               value={form.member_id}
               maxLength={80}
-              disabled={busy}
+              disabled={Boolean(busy)}
               onChange={(event) => change('member_id', event.target.value)}
             />
           </label>
+          <label className="staff-field">
+            <span>Patient is</span>
+            <select
+              value={relationship}
+              disabled={Boolean(busy)}
+              onChange={(event) => {
+                setRelationship(event.target.value as 'self' | 'dependent')
+                setResult(null)
+              }}
+            >
+              <option value="self">Policyholder</option>
+              <option value="dependent">Dependent</option>
+            </select>
+          </label>
+          {relationship === 'dependent' && (
+            <>
+              <label className="staff-field">
+                <span>Policyholder's first name *</span>
+                <input
+                  value={subscriber.given}
+                  required
+                  maxLength={100}
+                  disabled={Boolean(busy)}
+                  onChange={(event) => {
+                    setSubscriber({ ...subscriber, given: event.target.value })
+                    setResult(null)
+                  }}
+                />
+              </label>
+              <label className="staff-field">
+                <span>Policyholder's last name *</span>
+                <input
+                  value={subscriber.family}
+                  required
+                  maxLength={100}
+                  disabled={Boolean(busy)}
+                  onChange={(event) => {
+                    setSubscriber({ ...subscriber, family: event.target.value })
+                    setResult(null)
+                  }}
+                />
+              </label>
+              <label className="staff-field">
+                <span>Policyholder's birth date *</span>
+                <input
+                  type="date"
+                  value={subscriber.birth}
+                  required
+                  min="1850-01-01"
+                  max={today}
+                  disabled={Boolean(busy)}
+                  onChange={(event) => {
+                    setSubscriber({ ...subscriber, birth: event.target.value })
+                    setResult(null)
+                  }}
+                />
+              </label>
+            </>
+          )}
+          <label className="staff-field">
+            <span>Patient visit status</span>
+            <select
+              value={visitType}
+              disabled={Boolean(busy)}
+              onChange={(event) => {
+                setVisitType(event.target.value as VisitType)
+                changeReason(reason)
+              }}
+            >
+              <option value="unknown">Unknown</option>
+              <option value="new">New patient</option>
+              <option value="established">Established patient</option>
+            </select>
+          </label>
+          <label className="staff-field">
+            <span>Possible service date</span>
+            <input
+              type="date"
+              value={serviceDate}
+              min={today}
+              disabled={Boolean(busy)}
+              onChange={(event) => {
+                setServiceDate(event.target.value)
+                setResult(null)
+              }}
+            />
+            <small>Leave blank to check today. Recheck after booking.</small>
+          </label>
+          <label className="staff-field">
+            <span>Clinic provider and location</span>
+            <select
+              value={contextId}
+              disabled={Boolean(busy)}
+              onChange={(event) => {
+                setContextId(event.target.value)
+                setResult(null)
+              }}
+            >
+              <option value="">Select if known</option>
+              {contexts.map((context) => (
+                <option key={context.id} value={context.id}>
+                  {context.label}
+                </option>
+              ))}
+            </select>
+            <small>
+              {contexts.length
+                ? 'Needed for an exact network and contracted rate match.'
+                : 'No configured provider/location found; a patient amount may be unavailable.'}
+            </small>
+          </label>
         </div>
-        <button className="staff-primary" disabled={busy || !form.payer_id}>
-          {busy ? 'Checking with payer…' : 'Check coverage today'}
-        </button>
-        <p className="staff-small staff-muted">
-          Some insurers need a member ID to find coverage. ClinicForce does not save this inquiry;
-          Stedi retains its own transaction record.
-        </p>
-      </form>
-      {result && (
-        <section
-          className={`staff-alert ${result.status === 'active_today' ? 'staff-success' : 'staff-warning'}`}
-          role="status"
-          aria-live="polite"
+        <label className="staff-field">
+          <span>Reason for visit and anticipated care *</span>
+          <textarea
+            value={reason}
+            required
+            rows={3}
+            maxLength={800}
+            disabled={Boolean(busy)}
+            onChange={(event) => changeReason(event.target.value)}
+            placeholder="Example: Follow-up for hand numbness; EMG/NCS may be considered"
+          />
+          <small>Possible tests stay unconfirmed until selected below.</small>
+        </label>
+        <button
+          type="button"
+          className="staff-primary"
+          disabled={Boolean(busy) || reason.trim().length < 3}
+          onClick={() => void preparePlan()}
         >
-          <h2>
-            {result.status === 'active_today'
-              ? 'General medical coverage active today'
-              : result.status === 'inactive_today'
-                ? 'No active general medical coverage reported today'
-                : 'Coverage needs review'}
-          </h2>
-          <p>{result.message}</p>
-          <p className="staff-small">
-            {result.payer} · Checked {result.checked_on}
-            {result.coverage_start && ` · Coverage starts ${result.coverage_start}`}
-            {result.coverage_end && ` · Coverage ends ${result.coverage_end}`}
-            {result.check_id && ` · Stedi check ${result.check_id}`}
-          </p>
-          <p className="staff-small">
-            This check does not establish this clinic's network status, coverage for a specific
-            service, or eligibility on a future appointment date.
-          </p>
-        </section>
-      )}
+          {busy === 'planning' ? 'Finding possible services…' : 'Find possible services'}
+        </button>
+        {plan && (
+          <StaffPrebookingPlan
+            plan={plan}
+            selected={selected}
+            busy={Boolean(busy)}
+            checking={busy === 'checking'}
+            manualCode={manualCode}
+            confirmed={confirmed}
+            payerSelected={Boolean(form.payer_id)}
+            onToggle={toggle}
+            onManualCode={setManualCode}
+            onAddCode={addManualCode}
+            onUnits={(code, units) => {
+              setSelected({ ...selected, [code]: units })
+              setConfirmed(false)
+              setResult(null)
+            }}
+            onConfirm={setConfirmed}
+          />
+        )}
+      </form>
+      {result && <StaffPrebookingResult result={result} />}
     </div>
   )
 }

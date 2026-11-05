@@ -111,7 +111,8 @@
 }
 
 .staff-field input,
-.staff-field select {
+.staff-field select,
+.staff-field textarea {
   border: 1px solid #aabbd1;
   border-radius: 7px;
   padding: 10px 12px;
@@ -121,6 +122,121 @@
   width: 100%;
   min-width: 0;
   font-size: 16px;
+}
+
+.staff-field textarea {
+  min-height: 100px;
+  resize: vertical;
+}
+
+.prebooking-plan {
+  margin-top: 30px;
+  padding-top: 24px;
+  border-top: 1px solid var(--staff-line);
+}
+
+.prebooking-service-group,
+.prebooking-result-line {
+  border-top: 1px solid var(--staff-line);
+  padding: 15px 0;
+}
+
+.prebooking-service-group h3 {
+  margin: 0 0 12px;
+}
+
+.prebooking-service-choice,
+.prebooking-confirm {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin: 10px 0;
+  line-height: 1.5;
+}
+
+.prebooking-service-choice input,
+.prebooking-confirm input {
+  width: 18px;
+  height: 18px;
+  margin-top: 3px;
+  flex: none;
+}
+
+.prebooking-procedure-label {
+  display: inline-block;
+  margin-left: 8px;
+  color: #805000;
+  font-size: 12px;
+  font-style: normal;
+  font-weight: 650;
+}
+
+.prebooking-manual-code,
+.prebooking-selected-services > div {
+  display: flex;
+  align-items: end;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+
+.prebooking-manual-code .staff-field {
+  flex: 1 1 220px;
+}
+
+.prebooking-selected-services > div {
+  align-items: center;
+  border-top: 1px solid var(--staff-line);
+  padding: 10px 0;
+}
+
+.prebooking-selected-services input {
+  width: 72px;
+  min-height: 40px;
+  margin-left: 8px;
+}
+
+.prebooking-benefits {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(155px, 1fr));
+  gap: 12px;
+  margin: 12px 0 20px;
+}
+
+.prebooking-benefits div {
+  background: #f3f7fc;
+  border-radius: 7px;
+  padding: 10px;
+}
+
+.prebooking-benefits dt {
+  font-size: 12px;
+  color: var(--staff-muted);
+}
+
+.prebooking-benefits dd {
+  margin: 4px 0 0;
+  font-weight: 650;
+}
+
+.prebooking-result-line > span {
+  display: block;
+  margin-top: 5px;
+}
+
+.prebooking-patient-address {
+  display: grid;
+  gap: 2px;
+  font-style: normal;
+  line-height: 1.5;
+}
+
+.prebooking-total {
+  display: flex;
+  justify-content: space-between;
+  gap: 15px;
+  padding: 18px 0;
+  border-top: 2px solid var(--staff-line);
+  font-size: 18px;
 }
 
 .staff-field input[type='file'] {
