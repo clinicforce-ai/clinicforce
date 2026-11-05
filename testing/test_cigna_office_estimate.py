@@ -52,7 +52,7 @@ def example():
 
 
 def finish(payload, inputs, source, review=None, payer=None, practice_id='synthetic-clinic',
-           configured_connections=None):
+           configured_connections=None, route_payer_id='62308'):
     case = {'id': 'synthetic-case', 'revision': 0}
     if review:
         case['visit_review'] = {'context_token': api._visit_context_token(inputs, source), **review}
@@ -65,7 +65,7 @@ def finish(payload, inputs, source, review=None, payer=None, practice_id='synthe
          patch.object(api.staff_store, 'list_library', return_value=[]), \
          patch.object(api.practice_prices, 'current', return_value=None), \
          patch.object(api.cpt_suggester.boto3, 'client', side_effect=RuntimeError('offline')):
-        api._finish_previsit(result, case, inputs, source, payload, {'practice_id': practice_id}, '62308')
+        api._finish_previsit(result, case, inputs, source, payload, {'practice_id': practice_id}, route_payer_id)
     return result
 
 
@@ -191,6 +191,27 @@ def test_cigna_missing_ecw_group_binds_exact_00_suffix_and_delegated_copay():
         'price_issues': (unconfigured.get('price_range') or {}).get('service_issues')}
     assert unconfigured['collection_guidance']['collection_rule']['mode'] == 'clinic_attested_cigna_delegated_copay'
     assert any('primary diagnosis' in note for note in collection_guidance.build(unconfigured)['assumptions'])
+    route_payload = deepcopy(payload)
+    route_payload['plans'][0]['benefits']['limitations'] = []
+    for delegated in route_payload['_service_payloads'].values():
+        delegated['plans'][0]['benefits']['limitations'] = []
+    stedi_route = finish(route_payload, inputs, source, payer='Cigna', practice_id='primary',
+                         configured_connections=[], route_payer_id='HGJLR')
+    assert stedi_route['benefits']['network_source'] == 'clinic_attested_cigna_tpa'
+    assert stedi_route['nmct_cigna_delegated_office'] is True
+    assert stedi_route['collection_guidance']['amount_cents'] == 4000
+    raw = api.json.dumps(route_payload).encode()
+    saved_route = {'previsit_context': {'inputs': inputs, 'source': source, 'payer_id': 'HGJLR'},
+                   'previsit_raw_object_key': 'synthetic-protected-response',
+                   'previsit_raw_sha256': api.hashlib.sha256(raw).hexdigest()}
+    with patch.object(api.staff_store, 'list_library', return_value=[]), \
+         patch.object(api.object_store, 'get_object_bytes', return_value=raw):
+        recheck_saved_network_evidence(stedi_route, saved_route, 'primary', {'display_name': 'Cigna'})
+    assert stedi_route['benefits']['network_source'] == 'clinic_attested_cigna_tpa'
+    unrelated = deepcopy(payload)
+    unrelated['payerId'] = 'OTHER'
+    assert finish(unrelated, inputs, source, payer='Other', practice_id='primary',
+                  configured_connections=[], route_payer_id='HGJLR')['nmct_cigna_delegated_office'] is False
     other_clinic = finish(payload, inputs, source, payer='Cigna', practice_id='unrelated', configured_connections=[])
     assert other_clinic['collection_guidance']['amount_cents'] is None
     deferred = finish(payload, inputs, source, payer='Cigna', practice_id='primary',

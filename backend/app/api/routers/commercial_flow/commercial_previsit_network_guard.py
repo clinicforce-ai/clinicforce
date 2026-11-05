@@ -8,6 +8,7 @@ import json
 from app.core import object_store, staff_store
 from app.insurance import commercial, commercial_store, group_contract_support, insurance_product, inventory_certification, library_network_exclusions, network_participation
 from app.insurance.identity import patient_benefits_bound, patient_plan_applies
+from app.api.routers.commercial_flow.commercial_previsit_tpa import cigna_primary_route
 
 
 def scoped_admin_nonparticipation(practice_id: str, payer: dict | None, inputs: dict,
@@ -86,7 +87,7 @@ def apply_nmct_library_contract(result: dict, benefits: dict, document: dict | N
 def apply_nmct_cigna_administrator_attestation(result: dict, benefits: dict, practice_id: str,
         payer_id: str, payload: dict | None, inputs: dict, source: dict) -> bool:
     """Use the clinic's Cigna participation assertion for this delegated route."""
-    if (not network_participation.is_nmct_practice(practice_id) or payer_id != '62308'
+    if (not network_participation.is_nmct_practice(practice_id) or not cigna_primary_route(payer_id, payload)
             or (payload or {}).get('_administrator_route') != '81040'
             or benefits.get('active') is not True or benefits.get('service_date_matches') is not True
             or not patient_benefits_bound(benefits.get('identity'))
