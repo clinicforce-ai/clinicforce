@@ -259,7 +259,11 @@ def build(result: dict, review: dict | None = None) -> dict:
          or policy.get('allow_cms_based_advance') is True))
     fixed_copay = guidance['basis'] == 'office_copay' or strict.get('status') == 'copay_only'
     published_copay = any((line.get('benefits') or {}).get('published_plan_rule') for line in lines)
-    policy_allows_advance = (policy_mode == 'collect_verified_copay' if published_copay else
+    clinic_delegated_copay = (not policy_approved and guidance['basis'] == 'office_copay'
+        and result.get('nmct_cigna_delegated_office') is True
+        and verified_in_network(benefits)
+        and result.get('benefit_source') == 'Stedi · plan administrator')
+    policy_allows_advance = clinic_delegated_copay or (policy_mode == 'collect_verified_copay' if published_copay else
         policy_mode == 'collect_supported_advance' or
         fixed_copay and policy_mode == 'collect_verified_copay' or
         verified_out_of_network(benefits) and policy_mode == 'defer_to_claim'
@@ -297,6 +301,9 @@ def build(result: dict, review: dict | None = None) -> dict:
     if amount is not None and amount > 0 and policy_approved and guidance['basis'] != 'ecw_billing_note':
         guidance['collection_rule'] = {'mode': policy_mode, 'reference': policy['reference'],
                                        'approved_at': policy['approved_at']}
+    elif amount is not None and amount > 0 and clinic_delegated_copay:
+        guidance['collection_rule'] = {'mode': 'clinic_attested_cigna_delegated_copay',
+            'reference': 'NMCT Cigna participation and same-patient Allegiance specialist office benefit'}
     failure_codes = set((result.get('eligibility_failure') or {}).get('codes') or [])
     if not active_payer_benefits and failure_codes & {'72', '73', '65', '67', '71', '75', '76'}:
         actions.append('Contact your insurer to confirm the member ID, policyholder name and date of birth. Bring the corrected insurance details.')
@@ -305,6 +312,10 @@ def build(result: dict, review: dict | None = None) -> dict:
         if (strict.get('amount_cents') is None or guidance['basis'] == 'ecw_billing_note') and payments.get('reference'):
             amount = max(0, amount - payments['amount_cents'])
         guidance['amount_cents'] = max(0, amount)
+        if (guidance['basis'] == 'office_copay'
+                and result.get('delegated_office_diagnosis_exception_pending') is True):
+            assumptions.append('The standard specialist copay is provisional because eCW did not return a primary diagnosis; '
+                               'an alcohol or mental-health diagnosis can change it.')
         if guidance.get('range_max_cents') is not None and payments.get('reference'):
             guidance['range_min_cents'] = guidance['amount_cents']
             guidance['range_max_cents'] = max(0, guidance['range_max_cents'] - payments['amount_cents'])

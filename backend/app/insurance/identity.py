@@ -156,10 +156,15 @@ def compare(payload: dict, coverage: dict, evidence: dict | None = None) -> dict
         if str(payload.get('payerId') or '') == '62308' else None)
     group_matches = bool(coverage.get('group_number') and returned_group
         and normalized(coverage['group_number']) == normalized(returned_group))
+    # Cigna may append the self-person suffix 00 when eCW has only the base ID
+    # and no group. Keep the payer's group as plan evidence, and require every
+    # available demographic anchor; a conflicting eCW group still blocks reuse.
+    missing_ecw_group_self_suffix = bool(not coverage.get('group_number') and returned_group
+        and expected_member == base and returned_member == extended and extended.endswith('00'))
     cigna_suffix = (str(payload.get('payerId') or '') == '62308'
         and len(base) in {9, 12} and len(extended) == len(base) + 2 and extended == base + extended[-2:]
         and extended[-2:].isdigit() and coverage.get('coverage_id') and coverage.get('active_coverages') == 1
-        and group_matches and not policy_differences
+        and (group_matches or missing_ecw_group_self_suffix) and not policy_differences
         and expected['relationship'] == returned['relationship'] in {'self', 'spouse', 'child', 'other'}
         and all(expected[k] and returned[k] and key(k, expected[k]) == key(k, returned[k])
                 for k in ('first_name', 'last_name', 'birth_date', 'subscriber_first', 'subscriber_last'))
@@ -214,7 +219,7 @@ def compare(payload: dict, coverage: dict, evidence: dict | None = None) -> dict
             'match_version': 2,
             'binding': binding, 'differences': differences, 'policy_differences': policy_differences,
             'missing_fields': missing_fields,
-            'message': 'The payer matched this patient, member ID, date of birth and group. Use the payer-reported spelling and policyholder for this estimate; eCW registration differs.' if payer_patient_bound and corrected_surname else 'The payer matched this patient and member ID. Use the payer-reported policyholder and relationship for this estimate; eCW registration differs.' if payer_patient_bound else 'The subscriber relationship could not be verified automatically from eCW and payer evidence.' if policy_differences else 'The eCW and payer response lack enough matching member and patient identifiers to bind these benefits to this patient.' if not enough_identity else 'Cigna returned the same base member ID with a different suffix representation; patient, subscriber, relationship and group match.' if cigna_suffix else 'UnitedHealthcare returned the matching nine-digit member ID without the eCW 00 suffix; name and date of birth match.' if uhc_suffix else 'Payer surname differs; first name, date of birth and member ID match.' if surname_warning and not verified else '',
+            'message': 'The payer matched this patient, member ID, date of birth and group. Use the payer-reported spelling and policyholder for this estimate; eCW registration differs.' if payer_patient_bound and corrected_surname else 'The payer matched this patient and member ID. Use the payer-reported policyholder and relationship for this estimate; eCW registration differs.' if payer_patient_bound else 'The subscriber relationship could not be verified automatically from eCW and payer evidence.' if policy_differences else 'The eCW and payer response lack enough matching member and patient identifiers to bind these benefits to this patient.' if not enough_identity else 'Cigna returned the matching base member ID with a two-digit suffix; patient and subscriber details match, and any eCW group agrees.' if cigna_suffix else 'UnitedHealthcare returned the matching nine-digit member ID without the eCW 00 suffix; name and date of birth match.' if uhc_suffix else 'Payer surname differs; first name, date of birth and member ID match.' if surname_warning and not verified else '',
             'reconciliation_rule': 'payer_matched_patient' if payer_patient_bound else 'cigna_member_suffix' if cigna_suffix else None,
             'can_confirm': bool(differences and anchored and not policy_differences),
             'evidence': evidence if verified else None}

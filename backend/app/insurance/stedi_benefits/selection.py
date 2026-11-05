@@ -104,11 +104,21 @@ def select_benefit_rows(payload: dict[str, Any], service_type_code: str,
         excluded_tmj_ids = [row['evidence_path'] for row in entries if unrelated_exclusion(row)]
         excluded_service_ids.extend(excluded_tmj_ids)
         entries = [row for row in entries if row['evidence_path'] not in excluded_tmj_ids]
-        # A named alcohol/mental-health diagnosis exception is not the normal
-        # specialist copay when the documented primary ICD-10 is outside F codes.
+        # Named alcohol/mental-health exceptions are conditional rows. For the
+        # delegated office route, retain the unconditional specialist default
+        # when eCW has no primary ICD and the visit reason does not name that
+        # care; a later primary diagnosis can change the amount.
         primary_diagnosis = diagnoses[0] if diagnoses else ''
-        if (primary_diagnosis and re.fullmatch(r'[A-Z][0-9][A-Z0-9]{1,5}', primary_diagnosis)
-                and primary_diagnosis[0] not in {'F', 'Z'}):
+        standard_specialist = any(row.get('code') == 'B' and
+            [note.strip().lower() for note in _benefit_notes([row.get('messages'), row.get('additionalInformation')])] == ['specialist']
+            for row in entries)
+        delegated_default = (not primary_diagnosis and payload.get('payerId') == '81040'
+            and standard_specialist and not re.search(
+                r'\b(?:mental|psychiatr\w*|behavioral|alcohol|substance|addiction)\b',
+                str(context.get('reason') or ''), re.I))
+        if (delegated_default or (primary_diagnosis
+                and re.fullmatch(r'[A-Z][0-9][A-Z0-9]{1,5}', primary_diagnosis)
+                and primary_diagnosis[0] not in {'F', 'Z'})):
             exceptions = [row['evidence_path'] for row in entries if row.get('code') in {'A', 'B'}
                 and any(re.fullmatch(r'Primary diagnosis in range- (?:ALCHOL|MENTAL) - (?:ALCHOL|MENTAL)', note.strip(), re.I)
                         for note in _benefit_notes([row.get('messages'), row.get('additionalInformation')]))]

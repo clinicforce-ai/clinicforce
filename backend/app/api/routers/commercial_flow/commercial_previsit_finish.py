@@ -80,6 +80,15 @@ def _finish_previsit(result: dict, case: dict, inputs: dict, source: dict, paylo
         result['benefits'].setdefault('review_reasons', []).append(result['eligibility_reconciliation']['message'])
         result['benefits']['requires_review'] = True
     administrator = ((payload or {}).get('_service_payloads') or {}) if (payload or {}).get('_administrator_route') == '81040' else {}
+    result['nmct_cigna_delegated_office'] = bool(
+        _api.network_participation.is_nmct_practice(session['practice_id'])
+        and payer_id == '62308' and administrator.get('98')
+        and str(inputs.get('place_of_service') or '') == '11')
+    office_rows = [row for plan in (administrator.get('98') or {}).get('plans') or []
+                   for row in (plan.get('benefits') or {}).get('coPayment') or []]
+    result['delegated_office_diagnosis_exception_pending'] = bool(not inputs.get('diagnoses')
+        and any('Primary diagnosis in range-' in str(note)
+                for row in office_rows for note in row.get('messages') or []))
     payer_plan = _api.commercial.plan_details(administrator.get('30') or administrator.get('98') or payload or {})
     payer_plan_bound = patient_plan_applies(result['benefits'], comparison, inputs['service_date'])
     payer_plan = published_plan_benefits.identify_card_plan(
