@@ -65,8 +65,11 @@ def test_inline_insurance_card_does_not_request_binary_scope():
         with patch.object(ecw, 'settings', return_value=('client', 'https://ehr.example.test/fhir')), \
              patch.object(ecw, '_access_token', AsyncMock(return_value='synthetic-token')) as token:
             cards = await ecw.insurance_cards('synthetic', transport=httpx.MockTransport(handler))
+            ready = await ecw.insurance_cards('synthetic', include_bytes=True,
+                                               transport=httpx.MockTransport(handler))
             data, mime = await ecw.insurance_cards('synthetic', document_id=cards[0]['id'], transport=httpx.MockTransport(handler))
         assert data == b'synthetic-card' and mime == 'image/png'
+        assert ready[0]['_content'] == data
         assert all('system/Binary.read' not in call.args[3] for call in token.call_args_list)
     asyncio.run(run())
 
@@ -149,6 +152,54 @@ def test_card_inside_ecw_patient_packet_returns_only_its_page():
                 assert card.page_count == 2
                 assert all(page.get_images() for page in card)
                 assert 'Private clinical summary' not in card[0].get_text()
+    asyncio.run(run())
+
+
+def test_unlabeled_scanned_card_with_participant_and_group_ids_is_listed():
+    def scan():
+        image = Image.new('RGB', (1400, 900), 'white')
+        output = io.BytesIO()
+        image.save(output, format='PNG')
+        return output.getvalue()
+
+    with fitz.open() as pdf:
+        front = pdf.new_page(width=700, height=450)
+        front.insert_image(front.rect, stream=scan())
+        back = pdf.new_page(width=700, height=450)
+        back.insert_image(back.rect, stream=scan())
+        card_bytes = pdf.tobytes()
+    with fitz.open() as pdf:
+        pdf.new_page().insert_text((40, 40), 'Group ID No.: G12345\nName: SAMPLE PATIENT\n'
+                                   'Participant ID#: ABC123456\nType of Coverage\nRxBIN: 123456')
+        plain_text_bytes = pdf.tobytes()
+
+    def document(identifier, content):
+        return {'resourceType': 'DocumentReference', 'id': identifier, 'status': 'current',
+                'subject': {'reference': 'Patient/synthetic'},
+                'type': {'coding': [{'system': 'http://loinc.org', 'code': '103140-0'}]},
+                'content': [{'attachment': {'contentType': 'application/pdf',
+                                            'data': base64.b64encode(content).decode()}}]}
+
+    async def run():
+        def handler(request):
+            rows = [] if request.url.params.get('type') == '64290-0' else [
+                document('plain', plain_text_bytes), document('scanned', card_bytes)]
+            return httpx.Response(200, json={'resourceType': 'Bundle',
+                                             'entry': [{'resource': row} for row in rows]})
+        recognized = ('Medical Network\nGroup ID No.: G12345\nName: SAMPLE PATIENT\n'
+                      'Participant ID#: ABC123456\nType of Coverage\nPharmacy Plan\nRxBIN: 123456')
+        with patch.object(ecw, 'settings', return_value=('client', 'https://ehr.example.test/fhir')), \
+             patch.object(ecw, '_access_token', AsyncMock(return_value='synthetic-token')), \
+             patch('app.insurance.golden._pdf_text', return_value=recognized):
+            cards = await ecw.insurance_cards('synthetic', transport=httpx.MockTransport(handler))
+            assert [item['id'] for item in cards] == ['scanned:0']
+            assert '_content' not in cards[0]
+            ready = await ecw.insurance_cards('synthetic', include_bytes=True,
+                                               transport=httpx.MockTransport(handler))
+            assert ready[0]['_content'] == card_bytes
+            content, mime = await ecw.insurance_cards('synthetic', document_id='scanned:0',
+                                                       transport=httpx.MockTransport(handler))
+            assert content == card_bytes and mime == 'application/pdf'
     asyncio.run(run())
 
 

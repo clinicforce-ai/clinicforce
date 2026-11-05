@@ -174,7 +174,7 @@ async def probe_saved_eligibility(backend: ModuleType, profile: dict[str, Any], 
 
 async def insurance_cards(backend: ModuleType, patient_id: str, *, document_id: str | None = None,
                           transport: httpx.AsyncBaseTransport | None = None,
-                          metadata_only: bool = False):
+                          metadata_only: bool = False, include_bytes: bool = False):
     """Read patient-bound cards, including content-verified generic patient documents."""
     def card_content(row: dict, content: dict) -> bool:
         document_type = row.get('type') or {}
@@ -284,6 +284,16 @@ async def insurance_cards(backend: ModuleType, patient_id: str, *, document_id: 
                     images.append(item)
             return images[:2]
 
+        def scanned_member_card(text: str) -> bool:
+            if not golden._card_fields(text).get('member_name'):
+                return False
+            if not (re.search(r'(?im)\bparticipant[ \t]*id[ \t]*#?[ \t]*:[ \t]*[A-Z0-9-]{5,30}\b', text)
+                    and re.search(r'(?im)\bgroup[ \t]*id[ \t]*no\.?[ \t]*:[ \t]*[A-Z0-9-]{3,30}\b', text)):
+                return False
+            return sum(bool(re.search(pattern, text, re.I)) for pattern in (
+                r'\btype\s+of\s+coverage\b', r'\bmedical\s+network\b',
+                r'\bpharmacy\s+plan\b', r'\brx\s*bin\b')) >= 2
+
         def verified_generic_cards(mime: str, content: bytes) -> list[tuple[int | None, bytes]] | None:
             try:
                 if mime != 'application/pdf':
@@ -292,7 +302,12 @@ async def insurance_cards(backend: ModuleType, patient_id: str, *, document_id: 
                     if document.needs_pass or document.page_count > 20:
                         return None
                     if document.page_count <= golden.MAX_PDF_PAGES:
-                        return [(None, content)] if card_text(golden._pdf_text(content)) else []
+                        text = golden._pdf_text(content)
+                        scanned_image = any(
+                            fitz.Rect(item['bbox']).get_area() >= page.rect.get_area() * .2
+                            for page in document for item in page.get_image_info(xrefs=True))
+                        return [(None, content)] if (card_text(text) or
+                            scanned_image and scanned_member_card(text)) else []
                     cards = []
                     for number in range(document.page_count):
                         with fitz.open() as page_pdf:
@@ -317,6 +332,7 @@ async def insurance_cards(backend: ModuleType, patient_id: str, *, document_id: 
 
         cards = []
         seen = set()
+        unreadable = False
         for row in rows:
             for index, content in enumerate(row.get('content', [])):
                 attachment = content.get('attachment') or {}
@@ -328,7 +344,14 @@ async def insurance_cards(backend: ModuleType, patient_id: str, *, document_id: 
                     continue
                 seen.add(key)
                 if document_id is None:
-                    cards.append({'id': key, 'title': attachment.get('title') or 'eCW insurance card', 'content_type': mime})
+                    card = {'id': key, 'title': attachment.get('title') or 'eCW insurance card', 'content_type': mime}
+                    if include_bytes:
+                        try:
+                            card['_content'] = await attachment_bytes(row, attachment)
+                        except (backend.EcwBackendError, httpx.HTTPError):
+                            unreadable = True
+                            continue
+                    cards.append(card)
                 elif key == document_id:
                     return await attachment_bytes(row, attachment), mime
 
@@ -338,7 +361,6 @@ async def insurance_cards(backend: ModuleType, patient_id: str, *, document_id: 
         # eCW can omit card wording and file cards under other document types.
         # Inspect every supported patient-bound attachment before exposing it.
         examined = set()
-        unreadable = False
         for row in rows:
             codes = {item.get('code') for item in (row.get('type') or {}).get('coding', []) if isinstance(item, dict)}
             if (row.get('resourceType') != 'DocumentReference' or row.get('status') != 'current'
@@ -370,7 +392,10 @@ async def insurance_cards(backend: ModuleType, patient_id: str, *, document_id: 
                     seen.add(card_id)
                     if document_id is not None:
                         return card_bytes, mime
-                    cards.append({'id': card_id, 'title': 'eCW insurance card', 'content_type': mime})
+                    card = {'id': card_id, 'title': 'eCW insurance card', 'content_type': mime}
+                    if include_bytes:
+                        card['_content'] = card_bytes
+                    cards.append(card)
                 if matches and document_id is None:
                     return cards
         if document_id is not None:

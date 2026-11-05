@@ -36,6 +36,15 @@ class SourceTests(unittest.TestCase):
         self.assertEqual(fields["member_id"], "ABC123")
         self.assertEqual(evidence["member_name"]["quote"], "Member Name\nPAT EXAMPLE")
 
+    def test_participant_and_group_id_no_card_labels(self):
+        text = ("Cigna\nGroup ID No.: G12345\nName: PAT EXAMPLE\n"
+                "Participant ID#: ABC123456\nType of Coverage\nPharmacy Plan\nRxBIN: 123456")
+        fields, evidence = v1_sources.card_fields([(1, text)])
+        self.assertEqual(fields['member_id'], 'ABC123456')
+        self.assertEqual(fields['group_number'], 'G12345')
+        self.assertEqual(fields['member_name'], 'PAT EXAMPLE')
+        self.assertEqual(evidence['member_id']['quote'], 'Participant ID#: ABC123456')
+
     def test_cigna_tiered_card_keeps_printed_terms_as_separate_references(self):
         text = ("cigna\nOpen Access Plan OA Plus In-Network\n"
                 "Group: 3334562 No Referral Required\n"
