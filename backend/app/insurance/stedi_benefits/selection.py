@@ -104,6 +104,16 @@ def select_benefit_rows(payload: dict[str, Any], service_type_code: str,
         excluded_tmj_ids = [row['evidence_path'] for row in entries if unrelated_exclusion(row)]
         excluded_service_ids.extend(excluded_tmj_ids)
         entries = [row for row in entries if row['evidence_path'] not in excluded_tmj_ids]
+        # A named alcohol/mental-health diagnosis exception is not the normal
+        # specialist copay when the documented primary ICD-10 is outside F codes.
+        primary_diagnosis = diagnoses[0] if diagnoses else ''
+        if (primary_diagnosis and re.fullmatch(r'[A-Z][0-9][A-Z0-9]{1,5}', primary_diagnosis)
+                and primary_diagnosis[0] not in {'F', 'Z'}):
+            exceptions = [row['evidence_path'] for row in entries if row.get('code') in {'A', 'B'}
+                and any(re.fullmatch(r'Primary diagnosis in range- (?:ALCHOL|MENTAL) - (?:ALCHOL|MENTAL)', note.strip(), re.I)
+                        for note in _benefit_notes([row.get('messages'), row.get('additionalInformation')]))]
+            excluded_service_ids.extend(exceptions)
+            entries = [row for row in entries if row['evidence_path'] not in exceptions]
         # Explicitly different services sometimes share an office STC. Retain
         # every raw row in reported_options, but exclude these from office math.
         unrelated = r'(?:injections?|diagnostic medical procedure|diagnostic lab(?:oratory)?|laboratory|cat scan|mri|psa tests?|sleep stud(?:y|ies)|(?:diagnostic )?x[ -]?ray|acupuncture|applied behavior analysis|chemotherapy)(?:\s*-\s*professional)?|(?:lifetime )?travel expenses?(?: for covered services)?(?: over| more than) \d+ miles.*'

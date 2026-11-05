@@ -70,7 +70,7 @@ def _finish_previsit(result: dict, case: dict, inputs: dict, source: dict, paylo
         result['benefits']['requires_review'] = bool(result['benefits']['review_reasons'])
     result['library_pricing'] = session.get('library_pricing', case.get('library_pricing', []))
     case['library_pricing'] = result['library_pricing']
-    result['benefit_source'] = (payload or {}).get('benefit_source') or ('Stedi' if result.get('checked_at') else None)
+    result['benefit_source'] = result['benefits'].get('benefit_source') or (payload or {}).get('benefit_source') or ('Stedi' if result.get('checked_at') else None)
     result['payer_source'] = (pricing_source or source).get('payer_source')
     result['identity'] = comparison
     result['benefits']['identity'] = comparison
@@ -79,7 +79,8 @@ def _finish_previsit(result: dict, case: dict, inputs: dict, source: dict, paylo
     if result['eligibility_reconciliation']['requires_review']:
         result['benefits'].setdefault('review_reasons', []).append(result['eligibility_reconciliation']['message'])
         result['benefits']['requires_review'] = True
-    payer_plan = _api.commercial.plan_details(payload or {})
+    administrator = ((payload or {}).get('_service_payloads') or {}) if (payload or {}).get('_administrator_route') == '81040' else {}
+    payer_plan = _api.commercial.plan_details(administrator.get('30') or administrator.get('98') or payload or {})
     payer_plan_bound = patient_plan_applies(result['benefits'], comparison, inputs['service_date'])
     payer_plan = published_plan_benefits.identify_card_plan(
         payer_plan, result.get('card_check') or {}, str(result.get('payer') or source.get('payer') or ''), payer_plan_bound)

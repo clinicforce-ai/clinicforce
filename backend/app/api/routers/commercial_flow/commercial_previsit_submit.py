@@ -4,6 +4,7 @@ from __future__ import annotations
 from copy import deepcopy
 from types import ModuleType
 from app.api.routers.commercial_flow.commercial_previsit_requirements import check_cpt_authorization
+from app.api.routers.commercial_flow.commercial_previsit_tpa import check_administrator
 
 
 def same_member_and_medical_plan(api: ModuleType, primary: dict, additional: dict) -> bool:
@@ -159,6 +160,15 @@ async def submit_previsit_eligibility(api: ModuleType, *, payer: dict, provider:
             linked[stc] = extra
         if linked:
             payload = {**payload, '_service_payloads': linked}
+    administrator, administrator_state = await check_administrator(api, primary=payload,
+        coverage=coverage, inputs=inputs, body=body, basic_body=basic_body,
+        api_key=api_key, case=case, session=session)
+    if administrator:
+        payload = {**payload, '_service_payloads': {**(payload.get('_service_payloads') or {}), **administrator},
+                   '_administrator_route': '81040'}
+    if administrator_state != 'complete':
+        inquiry_state = administrator_state
+        result['issues'].append('The delegated plan administrator did not return complete matching office and medical benefits for this visit.')
     raw_bytes = api.json.dumps(payload).encode()
     raw_key = await api.run_in_threadpool(api.object_store.put_staff_document, session["practice_id"], case["id"],
                                       "previsit-stedi-271.json", raw_bytes, "application/json")

@@ -8,6 +8,10 @@ import httpx
 import pytest
 
 from app.api.routers import commercial_estimator as api
+from app.api.routers.commercial_flow.commercial_previsit_tpa import (
+    administrator_route, check_administrator, same_administrator_patient,
+)
+from app.api.routers.commercial_flow.commercial_previsit_network_guard import recheck_saved_network_evidence
 from app.insurance import collection_guidance, commercial, ecw_backend, identity, provider_specialty
 from app.insurance.requirements import published
 from testing.synthetic_policy import COPAY_POLICY
@@ -46,7 +50,7 @@ def example():
     return payload, inputs, source
 
 
-def finish(payload, inputs, source, review=None, payer=None):
+def finish(payload, inputs, source, review=None, payer=None, practice_id='synthetic-clinic'):
     case = {'id': 'synthetic-case', 'revision': 0}
     if review:
         case['visit_review'] = {'context_token': api._visit_context_token(inputs, source), **review}
@@ -55,9 +59,10 @@ def finish(payload, inputs, source, review=None, payer=None):
         result['payer'] = payer
     route = {'stedi_payer_id': '62308', 'rules': {'collection_policy': COPAY_POLICY}}
     with patch.object(api.commercial_store, 'list_connections', return_value=[route]), \
+         patch.object(api.staff_store, 'list_library', return_value=[]), \
          patch.object(api.practice_prices, 'current', return_value=None), \
          patch.object(api.cpt_suggester.boto3, 'client', side_effect=RuntimeError('offline')):
-        api._finish_previsit(result, case, inputs, source, payload, {'practice_id': 'synthetic-clinic'}, '62308')
+        api._finish_previsit(result, case, inputs, source, payload, {'practice_id': practice_id}, '62308')
     return result
 
 
@@ -75,6 +80,135 @@ def test_automatic_specialist_estimate_without_card_contract_or_ledger():
     assert 'ledger is unavailable' in ' '.join(result['collection_guidance']['assumptions'])
     result = finish(*example(), review={'payments': {'reference': 'synthetic-receipt', 'amount_cents': 1500}})
     assert result['collection_guidance']['amount_cents'] == 4000
+
+
+def test_tpa_office_copay_with_long_cigna_member_suffix_and_distinct_admin_group():
+    payload, inputs, source = example()
+    inputs['member_id'] = '987654321000'
+    payload['subscriber']['memberId'] = '98765432100001'
+    payload['plans'][0]['benefits']['coPayment'] = []
+    payload['plans'][0]['benefits']['deductible'] = []
+    payload['plans'][0]['benefits']['outOfPocket'] = []
+    admin, _, _ = example()
+    admin['payerId'] = '81040'
+    admin['subscriber']['memberId'] = payload['subscriber']['memberId']
+    admin['subscriber']['groupNumber'] = 'ADMIN-GROUP'
+    admin['plans'][0]['benefits']['coPayment'][1]['amount'] = '40'
+    admin['plans'][0]['benefits']['coPayment'].append({
+        **deepcopy(admin['plans'][0]['benefits']['coPayment'][1]), 'amount': '20',
+        'messages': ['Primary diagnosis in range- MENTAL - MENTAL', 'SPECIALIST']})
+    admin['plans'][0]['benefits']['limitations'] = []
+    general = deepcopy(admin)
+    general['plans'][0]['benefits']['coPayment'] = []
+    general['plans'][0]['benefits']['deductible'] = [{
+        'service': {'system': 'STC', 'value': '30'}, 'coverageLevel': 'INDIVIDUAL',
+        'network': {'indicator': 'IN_NETWORK'}, 'amount': '1500', 'timePeriod': 'REMAINING'}]
+    payload['_service_payloads'] = {'98': admin, '30': general}
+    payload['_administrator_route'] = '81040'
+
+    result = finish(payload, inputs, source)
+    assert result['identity']['reconciliation_rule'] == 'cigna_member_suffix'
+    assert result['price_range']['lines'][0]['benefits']['copay_cents'] == 4000
+    assert result['benefits']['deductible_remaining_cents'] == 150000
+    assert result['collection_guidance']['amount_cents'] == 4000
+    assert result['collection_guidance']['basis'] == 'office_copay'
+
+    inputs['diagnoses'] = []
+    assert finish(payload, inputs, source)['collection_guidance']['amount_cents'] is None
+
+    inputs['diagnoses'] = ['G43.909']
+    payload['plans'][0]['benefits']['limitations'] = []
+    attested = finish(payload, inputs, source, payer='Cigna', practice_id='primary')
+    assert attested['benefits']['network_source'] == 'clinic_attested_cigna_tpa'
+    assert attested['collection_guidance']['amount_cents'] == 4000
+    organization_query = deepcopy(payload)
+    organization_query['provider']['npi'] = '9999999999'
+    for response in organization_query['_service_payloads'].values():
+        response['provider']['npi'] = '9999999999'
+    source['billing_provider'] = {'npi': '9999999999'}
+    organization = finish(organization_query, inputs, source, payer='Cigna', practice_id='primary')
+    assert organization['collection_guidance']['amount_cents'] == 4000
+    undated = deepcopy(payload)
+    for response in [undated, *(undated['_service_payloads'].values())]:
+        response['subscriber']['dates'] = {}
+    inputs['service_date'] = datetime.now(timezone.utc).date().isoformat()
+    same_day = finish(undated, inputs, source, payer='Cigna', practice_id='primary')
+    assert same_day['benefits']['service_date_matches'] is True
+    assert same_day['collection_guidance']['amount_cents'] == 4000
+    inputs['service_date'] = DAY
+    raw = api.json.dumps(payload).encode()
+    saved = {'previsit_context': {'inputs': inputs, 'source': source, 'payer_id': '62308'},
+             'previsit_raw_object_key': 'synthetic-protected-response',
+             'previsit_raw_sha256': api.hashlib.sha256(raw).hexdigest()}
+    with patch.object(api.staff_store, 'list_library', return_value=[]), \
+         patch.object(api.object_store, 'get_object_bytes', return_value=raw):
+        recheck_saved_network_evidence(attested, saved, 'primary', {'display_name': 'Cigna'})
+    assert attested['benefits']['network_source'] == 'clinic_attested_cigna_tpa'
+    assert attested['collection_guidance']['amount_cents'] == 4000
+
+
+def test_cigna_administrator_contact_requires_one_named_medical_route():
+    payload, _, _ = example()
+    contact = {'service': {'system': 'STC', 'value': '30'},
+               'relatedEntities': [{'type': 'PAYER',
+                   'name': {'organization': 'ALLEGIANCE BENEFIT PLAN MANAGEMENT'}}]}
+    payload['plans'][0]['benefits']['contactFollowingEntityForInformation'] = [contact]
+    assert administrator_route(payload) == '81040'
+    payload['plans'][0]['benefits']['contactFollowingEntityForInformation'].append({
+        **contact, 'relatedEntities': [{'type': 'PAYER', 'name': {'organization': 'Unrelated Plan'}}]})
+    assert administrator_route(payload) is None
+    payload['plans'][0]['benefits']['contactFollowingEntityForInformation'] = [contact]
+    payload['payerId'] = 'OTHER'
+    assert administrator_route(payload) is None
+
+
+def test_delegated_inquiry_uses_full_member_and_rejects_changed_patient():
+    primary, inputs, source = example()
+    inputs['member_id'] = '987654321000'
+    primary['subscriber'].update(memberId='98765432100001',
+        name={'person': {'firstName': 'Alex', 'lastName': 'Example'}})
+    primary['plans'][0]['benefits']['statuses'].append({
+        'status': 'Active Coverage', 'service': {'system': 'STC', 'value': '30'}})
+    primary['plans'][0]['benefits']['contactFollowingEntityForInformation'] = [{
+        'service': {'system': 'STC', 'value': '30'}, 'relatedEntities': [{
+            'type': 'PAYER', 'name': {'organization': 'ALLEGIANCE BENEFIT PLAN MANAGEMENT'}}]}]
+    office = deepcopy(primary)
+    office['payerId'] = '81040'
+    office['subscriber']['groupNumber'] = 'ADMIN-GROUP'
+    office['plans'][0]['benefits']['coPayment'][1]['amount'] = '40'
+    office['plans'][0]['benefits']['statuses'] = office['plans'][0]['benefits']['statuses'][:1]
+    office['plans'][0]['benefits']['nonCovered'] = []
+    general = deepcopy(office)
+    general['plans'][0]['benefits']['statuses'] = [{
+        'status': 'Active Coverage', 'service': {'system': 'STC', 'value': '30'}}]
+    body = {'payerId': '62308', 'subscriber': {'memberId': inputs['member_id']},
+            'encounter': {'services': [{'system': 'STC', 'value': '30'}]}}
+    sent = []
+
+    async def fake_post(_client, _headers, inquiry, _basic):
+        sent.append(deepcopy(inquiry))
+        response = httpx.Response(200, request=httpx.Request('POST', 'https://example.test'))
+        return response, office if len(sent) == 1 else general, False
+
+    async def in_threadpool(func, *args):
+        return func(*args)
+
+    case = {'previsit': {'request_state': 'pending'}}
+    async def run_check():
+        with patch.object(api, '_post_stedi_eligibility', side_effect=fake_post), \
+             patch.object(api, 'run_in_threadpool', side_effect=in_threadpool), \
+             patch.object(api, '_save', side_effect=lambda case, *_: case):
+            return await check_administrator(api, primary=primary,
+                coverage=api._coverage_snapshot(inputs, source), inputs=inputs, body=body,
+                basic_body=body, api_key='synthetic-key', case=case, session={})
+
+    linked, state = asyncio.run(run_check())
+    assert state == 'complete' and set(linked) == {'98', '30'}
+    assert [(row['payerId'], row['subscriber']['memberId'], row['encounter']['services'][0]['value'])
+            for row in sent] == [('81040', '98765432100001', '98'), ('81040', '98765432100001', '30')]
+    changed = deepcopy(office)
+    changed['subscriber']['dateOfBirth'] = '1981-01-15'
+    assert not same_administrator_patient(primary, changed, '81040')
 
 
 def test_named_cigna_result_keeps_approved_fixed_copay_without_allowed_rate():
@@ -157,6 +291,15 @@ def test_suffix_comparison_preserves_identifiers_and_supports_reverse_representa
     result = identity.compare(payload, api._coverage_snapshot(inputs, source))
     assert result['status'] == 'warning' and result['reconciliation_rule'] == 'cigna_member_suffix'
     assert (payload, inputs, source) == original
+
+
+def test_cigna_group_or_policy_number_corroborates_long_member_suffix():
+    payload, inputs, source = example()
+    inputs['member_id'] = '987654321000'
+    payload['subscriber']['memberId'] = '98765432100001'
+    payload['subscriber'].pop('groupNumber')
+    payload['subscriber']['additionalInformation'] = {'groupOrPolicyNumber': 'SYNTHETIC-GROUP'}
+    assert identity.compare(payload, api._coverage_snapshot(inputs, source))['reconciliation_rule'] == 'cigna_member_suffix'
 
 
 def test_corroborated_cigna_member_suffix_qualifies_for_member_specific_rules():
