@@ -1,9 +1,10 @@
 """Document prices remain explicit, versioned and isolated between practices."""
 import io
+import json
 import os
 from uuid import uuid4
 from zipfile import ZipFile
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 import psycopg
 from psycopg import sql
 from psycopg.conninfo import make_conninfo
@@ -13,6 +14,32 @@ from app.core import patient_store
 from app.insurance import commercial, practice_prices
 
 CSV = b'CPT,Description,Cash Price\n99202-99205,Consultation,$250\n95910,Nerve studies,$700\n'
+
+
+def test_cash_cpt_row_end_date_does_not_expire_its_price():
+    db = MagicMock()
+    db.__enter__.return_value = db
+    db.execute.return_value.fetchall.return_value = [{
+        'id': 'approved', 'actor_id': 'admin', 'filename': 'cash.csv',
+        'effective_from': '2026-01-01', 'rows_json': json.dumps([
+            {'code': '99213', 'cash_cents': 13000, 'effective_to': '2026-02-01'}])}]
+    with patch.object(practice_prices.commercial_store, '_connection', return_value=db):
+        schedule = practice_prices.current('practice', '2026-11-05')
+    assert schedule['rows'][0]['cash_cents'] == 13000
+    assert schedule['rows'][0]['effective_to'] == '2026-02-01'
+
+
+def test_library_document_end_date_still_limits_its_cash_schedule():
+    db = MagicMock()
+    db.__enter__.return_value = db
+    db.execute.return_value.fetchall.return_value = [{
+        'id': 'approved', 'actor_id': 'system:library', 'filename': 'cash.csv',
+        'effective_from': '2026-01-01', 'rows_json': json.dumps([
+            {'code': '99213', 'cash_cents': 13000, 'effective_to': '2026-02-01',
+             'source': {'effective_to': '2026-06-30'}}])}]
+    with patch.object(practice_prices.commercial_store, '_connection', return_value=db):
+        assert practice_prices.current('practice', '2026-05-01')['rows'][0]['cash_cents'] == 13000
+        assert practice_prices.current('practice', '2026-07-01')['rows'] == []
 
 
 def test_explicit_prices_from_csv_word_and_pdf_tables():

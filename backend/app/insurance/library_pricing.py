@@ -19,7 +19,7 @@ from app.insurance import (commercial, commercial_store, group_contract_support,
                            library_network_exclusions, plan_matrix)
 from app.insurance.identity import normalized
 
-VERSION = 'library-rules-4'
+VERSION = 'library-rules-5'
 from app.insurance.pricing.library_cash_tables import (
     PROVISIONAL,
     CODE,
@@ -238,11 +238,9 @@ def resolve_schedules(compiled: dict, documents: list[tuple[dict, dict]]) -> Non
             rates = [row for row in matches[0][1]['rates'] if all(
                 row.get(key, '') == values.get(column, '') for key, column in (
                     ('code', 'code'), ('network', 'network'), ('plan_matcher', 'plan'), ('pos', 'pos'),
-                    ('modifier', 'modifier'), ('provider_npi', 'providernpi'), ('tin', 'tin')))
-                and row['effective_from'] <= values['effectivefrom']
-                and (not row.get('effective_to') or row['effective_to'] >= values['effectivefrom'])]
+                    ('modifier', 'modifier'), ('provider_npi', 'providernpi'), ('tin', 'tin')))]
             if len(rates) != 1:
-                raise ValueError('Referenced schedule has no unique rate for the exact service, product, provider and date scope.')
+                raise ValueError('Referenced schedule has no unique rate for the exact service, product and provider scope.')
             rate = rates[0]
             amount = int((Decimal(rate['allowed_cents']) * factor).quantize(Decimal('1'), rounding=ROUND_HALF_UP))
             if not 0 <= amount <= 100_000_000:
@@ -254,7 +252,7 @@ def resolve_schedules(compiled: dict, documents: list[tuple[dict, dict]]) -> Non
                 if not ceiling.is_finite() or not 0 < ceiling <= 1:
                     raise ValueError('Lesser-of percentage is invalid.')
                 amount = min(amount, int((Decimal(dollars(values['billedcharge'])) * ceiling).quantize(Decimal('1'), rounding=ROUND_HALF_UP)))
-            ends = [value for value in (rate.get('effective_to'), values.get('effectiveto'), compiled['source'].get('effective_to')) if value]
+            ends = [value for value in (values.get('effectiveto'), compiled['source'].get('effective_to')) if value]
             for end in ends:
                 date.fromisoformat(end)
                 if end < values['effectivefrom']:
@@ -273,8 +271,8 @@ def source_conflicts(prepared: list[tuple[dict, dict, dict]]) -> None:
             for row in compiled[kind]:
                 key = (kind, compiled.get('payer_connection_id') if kind == 'rates' else None,
                        *(row.get(field, '') for field in ('code', 'modifier', 'network', 'pos', 'provider_npi', 'tin', 'plan_matcher')))
-                start = row.get('effective_from') or compiled.get('effective_from') or ''
-                end = row.get('effective_to') or document.get('effective_to') or '9999-12-31'
+                start = compiled.get('effective_from') or document['created_at'][:10]
+                end = document.get('effective_to') or '9999-12-31'
                 amount = tuple(row.get(field) for field in ('allowed_cents', 'cash_cents', 'base_cents', 'price_kind'))
                 for other, other_row, other_start, other_end, other_amount in indexed.get(key, []):
                     if start <= other_end and other_start <= end and amount != other_amount:
@@ -352,7 +350,7 @@ def publish(document: dict, extracted: dict, compiled: dict) -> None:
             db.execute('''INSERT INTO commercial_rate_versions (id,practice_id,payer_connection_id,source_type,status,source_reference,sha256,effective_from,effective_to,change_ceiling_bps,created_at,activated_at)
                 VALUES (%s,%s,%s,'contract_export','active',%s,%s,%s,%s,0,%s,%s) ON CONFLICT (id) DO NOTHING''',
                 (version, practice, compiled['payer_connection_id'], 'library:' + document['id'], extracted['sha256'],
-                 compiled['effective_from'] or min(row['effective_from'] for row in rates), document.get('effective_to'), timestamp, timestamp))
+                 compiled['effective_from'] or document['created_at'][:10], document.get('effective_to'), timestamp, timestamp))
             if not db.execute('SELECT 1 FROM commercial_rate_lines WHERE version_id=%s', (version,)).fetchone():
                 db.cursor().executemany('''INSERT INTO commercial_rate_lines (version_id,row_number,code,description,modifier,unit_rule,allowed_cents,cash_cents,network_name,plan_matcher,place_of_service,provider_npi,tin,effective_from,effective_to)
                     VALUES (%(version_id)s,%(row_number)s,%(code)s,%(description)s,%(modifier)s,%(unit_rule)s,%(allowed_cents)s,%(cash_cents)s,%(network)s,%(plan_matcher)s,%(pos)s,%(provider_npi)s,%(tin)s,%(effective_from)s,%(effective_to)s)''',

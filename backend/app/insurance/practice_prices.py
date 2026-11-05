@@ -52,9 +52,11 @@ def current(practice_id: str, service_date: str) -> dict | None:
     rows = []
     for record in records:
         for row in json.loads(record['rows_json']):
-            if not row.get('effective_to') or service_date <= row['effective_to']:
-                rows.append({**row, 'schedule_id': record['id'], 'schedule_filename': record['filename'],
-                             'schedule_effective_from': record['effective_from']})
+            source_end = (row.get('source') or {}).get('effective_to')
+            if source_end and service_date > source_end:
+                continue
+            rows.append({**row, 'schedule_id': record['id'], 'schedule_filename': record['filename'],
+                         'schedule_effective_from': record['effective_from']})
     return {**records[0], 'rows': rows, 'versions': [row['id'] for row in records]}
 
 
