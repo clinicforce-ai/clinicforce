@@ -51,7 +51,8 @@ def example():
     return payload, inputs, source
 
 
-def finish(payload, inputs, source, review=None, payer=None, practice_id='synthetic-clinic'):
+def finish(payload, inputs, source, review=None, payer=None, practice_id='synthetic-clinic',
+           configured_connections=None):
     case = {'id': 'synthetic-case', 'revision': 0}
     if review:
         case['visit_review'] = {'context_token': api._visit_context_token(inputs, source), **review}
@@ -59,7 +60,8 @@ def finish(payload, inputs, source, review=None, payer=None, practice_id='synthe
     if payer:
         result['payer'] = payer
     route = {'stedi_payer_id': '62308', 'rules': {'collection_policy': COPAY_POLICY}}
-    with patch.object(api.commercial_store, 'list_connections', return_value=[route]), \
+    with patch.object(api.commercial_store, 'list_connections',
+                      return_value=[route] if configured_connections is None else configured_connections), \
          patch.object(api.staff_store, 'list_library', return_value=[]), \
          patch.object(api.practice_prices, 'current', return_value=None), \
          patch.object(api.cpt_suggester.boto3, 'client', side_effect=RuntimeError('offline')):
@@ -146,6 +148,67 @@ def test_tpa_office_copay_with_long_cigna_member_suffix_and_distinct_admin_group
         recheck_saved_network_evidence(attested, saved, 'primary', {'display_name': 'Cigna'})
     assert attested['benefits']['network_source'] == 'clinic_attested_cigna_tpa'
     assert attested['collection_guidance']['amount_cents'] == 4000
+
+
+def test_cigna_missing_ecw_group_binds_exact_00_suffix_and_delegated_copay():
+    payload, inputs, source = example()
+    inputs['member_id'] = '987654321000'
+    inputs['group_number'] = None
+    payload['subscriber']['memberId'] = '98765432100000'
+    payload['subscriber'].pop('groupNumber')
+    payload['subscriber']['additionalInformation'] = {'groupOrPolicyNumber': 'SYNTHETIC-GROUP'}
+    coverage = api._coverage_snapshot(inputs, source)
+    comparison = identity.compare(payload, coverage)
+    assert comparison['status'] == 'warning'
+    assert comparison['reconciliation_rule'] == 'cigna_member_suffix'
+    assert 'any eCW group agrees' in comparison['message']
+    assert identity.patient_benefits_bound(comparison)
+
+    administrator = deepcopy(payload)
+    administrator['payerId'] = '81040'
+    administrator['plans'][0]['benefits']['coPayment'][1]['amount'] = '40'
+    administrator['plans'][0]['benefits']['coPayment'].append({
+        **deepcopy(administrator['plans'][0]['benefits']['coPayment'][1]), 'amount': '20',
+        'messages': ['Primary diagnosis in range- MENTAL - MENTAL', 'SPECIALIST']})
+    administrator['plans'][0]['benefits']['nonCovered'] = []
+    administrator['subscriber']['additionalInformation'] = {'groupOrPolicyNumber': 'ADMIN-GROUP'}
+    payload['_service_payloads'] = {'98': administrator, '30': deepcopy(administrator)}
+    payload['_administrator_route'] = '81040'
+    result = finish(payload, inputs, source, payer='Cigna', practice_id='primary')
+    assert result['collection_guidance']['basis'] == 'office_copay'
+    assert result['collection_guidance']['amount_cents'] == 4000
+
+    inputs['diagnoses'] = []
+    result = finish(payload, inputs, source, payer='Cigna', practice_id='primary')
+    assert result['collection_guidance']['amount_cents'] == 4000
+    assert any('primary diagnosis' in note for note in result['collection_guidance']['assumptions'])
+    unconfigured = finish(payload, inputs, source, payer='Cigna', practice_id='primary', configured_connections=[])
+    assert unconfigured.get('collection_policy') is None
+    assert unconfigured['collection_guidance']['amount_cents'] == 4000, {
+        'guidance': unconfigured['collection_guidance'],
+        'network': (unconfigured.get('benefits') or {}).get('network_source'),
+        'benefit_source': unconfigured.get('benefit_source'),
+        'price_issues': (unconfigured.get('price_range') or {}).get('service_issues')}
+    assert unconfigured['collection_guidance']['collection_rule']['mode'] == 'clinic_attested_cigna_delegated_copay'
+    assert any('primary diagnosis' in note for note in collection_guidance.build(unconfigured)['assumptions'])
+    other_clinic = finish(payload, inputs, source, payer='Cigna', practice_id='unrelated', configured_connections=[])
+    assert other_clinic['collection_guidance']['amount_cents'] is None
+    deferred = finish(payload, inputs, source, payer='Cigna', practice_id='primary',
+        configured_connections=[{'stedi_payer_id': '62308', 'rules': {'collection_policy': {
+            **COPAY_POLICY, 'mode': 'defer_to_claim'}}}])
+    assert deferred['collection_guidance']['amount_cents'] == 0
+    inputs['reason'] = 'Mental health follow-up'
+    assert finish(payload, inputs, source, payer='Cigna', practice_id='primary')['collection_guidance']['amount_cents'] is None
+
+    conflicting_group = deepcopy(inputs)
+    conflicting_group['group_number'] = 'OTHER-GROUP'
+    assert not identity.patient_benefits_bound(identity.compare(payload, api._coverage_snapshot(conflicting_group, source)))
+    missing_payer_group = deepcopy(payload)
+    missing_payer_group['subscriber'].pop('additionalInformation')
+    assert not identity.patient_benefits_bound(identity.compare(missing_payer_group, coverage))
+    different_suffix = deepcopy(payload)
+    different_suffix['subscriber']['memberId'] = '98765432100001'
+    assert not identity.patient_benefits_bound(identity.compare(different_suffix, coverage))
 
 
 def test_cigna_administrator_contact_requires_one_named_medical_route():
