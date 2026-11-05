@@ -4,6 +4,20 @@ from __future__ import annotations
 from app.api.routers import commercial_estimator as _api
 
 
+def cash_preview_selection(result: dict, available: dict) -> list[str] | None:
+    """Confirm only the exact saved nerve-testing preview for a package-only review."""
+    selected = result.get('selected_ids') or []
+    price = result.get('price_range') or {}
+    lines = price.get('lines') or []
+    if (not selected or len(selected) != len(set(selected)) or price.get('mode') != 'services'
+            or set(selected) != {row.get('id') for row in lines}
+            or any(key not in available for key in selected)
+            or not any(_api.visit_estimate.clinical_group(available[key]['code']) == 'nerve'
+                       for key in selected)):
+        return None
+    return selected
+
+
 def reviewed_service_types(cases: list[dict], appointment_id: str, service_date: str,
                            context_token: str) -> list[str]:
     """Carry selected or provisional combined-care CPT categories into a fresh inquiry."""

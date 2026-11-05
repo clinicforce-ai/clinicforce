@@ -6,12 +6,15 @@ from uuid import uuid4
 from app.api.routers import commercial_estimator as _api
 from app.insurance import botox_review, cpt_rules
 from app.api.routers.commercial_flow.commercial_previsit_requirements import check_cpt_authorization
+from app.api.routers.commercial_flow.commercial_previsit_service_scope import cash_preview_selection
 
 @_api.router.post("/cases/{case_id}/visit-review")
 async def update_visit_review(case_id: str, value: _api.VisitReviewInput, request: _api.Request) -> dict:
     """Reprice a saved visit after service, payment or evidence review.
 
-    A clinician can select a named cash package from the active schedule or
+    A clinician can select a named cash package from the active schedule; a
+    package-only review confirms saved nerve services or asks staff to confirm
+    them. It never replaces the preview with an office visit. A clinician can also
     approve a visit-only cash price for one selected CPT 99213 follow-up;
     included care is priced once and source CPT examples are never auto-selected.
     A verified payment is deducted once from the displayed cash or insured
@@ -130,6 +133,11 @@ async def update_visit_review(case_id: str, value: _api.VisitReviewInput, reques
             'payer_id': context['payer_id'], 'service_date': inputs['service_date'],
             'verified_at': _api._now(), 'actor_id': session['staff']['id']}
     available = {row['id']: row for row in result.get('available_codes', result['codes'])}
+    if value.cash_selection and value.selected_ids is None and 'selected_ids' not in review:
+        selected = cash_preview_selection(result, available)
+        if selected is None:
+            raise _api.HTTPException(422, 'Confirm the planned nerve study before choosing a cash package.')
+        review['selected_ids'] = selected
     if value.botox is not None:
         if not botox_review.is_botox_visit(inputs) and not any(
                 row['code'] in botox_review.SELECTABLE_CODES for row in available.values()):

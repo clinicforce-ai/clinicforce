@@ -222,7 +222,7 @@ class VisitReviewInput(BaseModel):
     emg_required: bool | None = None
     separate_em_planned: bool | None = Field(default=None, description='For an established EMG/NCS visit, include a separate planned follow-up office assessment. The review adds provisional CPT 99213 when no office CPT is selected; clearing it removes the added office selection. Final level, distinct documentation and modifier remain clinician decisions.')
     insurance_check_from: date | None = None
-    cash_selection: str | None = Field(default=None, max_length=40, description="ID of a named package in the active cash schedule, or an empty string to clear the selection. Package selection is a clinician choice; example CPTs in the source are not automatically selected.")
+    cash_selection: str | None = Field(default=None, max_length=40, description="ID of a named package in the active cash schedule, or an empty string to clear the selection. Package selection is a clinician choice; a package-only review confirms the saved preview's selected nerve-testing services, or requires staff to confirm them first. Example CPTs in the source are not automatically selected.")
     confirmed_units: dict[str, StrictInt] | None = Field(default=None, max_length=20)
     confirmed_modifiers: dict[str, list[str]] | None = Field(default=None, max_length=20, description='Clinician-reviewed CPT/HCPCS modifiers by selected service line ID. Empty list confirms none; a code is not inferred from discarded units.')
     botox: BotoxReviewInput | None = Field(default=None, description='Clinician-reviewed Botox indication, anatomy, drug source, administered/discarded units and any separately documented E/M. Appointment wording and received stock do not establish billable care.')
