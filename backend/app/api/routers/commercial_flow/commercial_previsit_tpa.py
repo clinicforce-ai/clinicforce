@@ -115,7 +115,7 @@ async def check_administrator(api: ModuleType, *, primary: dict, coverage: dict,
     if not all(subscriber.get(field) for field in ('memberId', 'dateOfBirth', 'name')):
         return {}, 'complete'
     case['previsit']['administrator_request_state'] = 'pending'
-    await api.run_in_threadpool(api._save, case, session, 'previsit-administrator-pending')
+    case.update(await api.run_in_threadpool(api._save, case, session, 'previsit-administrator-pending'))
     linked = {}
     for stc in ('98', '30'):
         next_body, next_basic = deepcopy(body), deepcopy(basic_body)
@@ -131,7 +131,7 @@ async def check_administrator(api: ModuleType, *, primary: dict, coverage: dict,
                     {'Authorization': api_key, 'Content-Type': 'application/json'}, next_body, next_basic)
         except (api.httpx.HTTPError, ValueError):
             case['previsit']['administrator_request_state'] = 'indeterminate'
-            await api.run_in_threadpool(api._save, case, session, 'previsit-administrator-indeterminate')
+            case.update(await api.run_in_threadpool(api._save, case, session, 'previsit-administrator-indeterminate'))
             return linked, 'indeterminate'
         normalized_benefits = (api.commercial.normalize_stedi_271(extra, stc, False,
             service_date=inputs['service_date']) if isinstance(extra, dict) else {})
@@ -141,7 +141,7 @@ async def check_administrator(api: ModuleType, *, primary: dict, coverage: dict,
                 or normalized_benefits.get('active') is not True
                 or normalized_benefits.get('service_date_matches') is False):
             case['previsit']['administrator_request_state'] = 'partial'
-            await api.run_in_threadpool(api._save, case, session, 'previsit-administrator-partial')
+            case.update(await api.run_in_threadpool(api._save, case, session, 'previsit-administrator-partial'))
             return linked, 'partial'
         linked[stc] = extra
     def administrator_group(response: dict) -> str:

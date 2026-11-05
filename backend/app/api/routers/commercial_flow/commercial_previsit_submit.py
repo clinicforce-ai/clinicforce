@@ -177,6 +177,9 @@ async def submit_previsit_eligibility(api: ModuleType, *, payer: dict, provider:
         benefits.setdefault('review_reasons', []).append(
             'Separate requested service inquiry evidence is unavailable for the combined visit.')
         benefits['requires_review'] = True
+        benefits.setdefault('source_errors', []).append({
+            'path': 'separate_service_inquiry', 'kind': 'incomplete',
+            'message': 'A required service inquiry did not return complete matching benefit evidence.'})
     result["benefits"] = benefits
     result["checked_at"] = api._now()
     api.collection_event('eligibility_received', practice_id=session['practice_id'], intake_id=(session.get('intake') or {}).get('id'),
