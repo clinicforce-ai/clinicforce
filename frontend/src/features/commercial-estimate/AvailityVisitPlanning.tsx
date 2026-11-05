@@ -4,38 +4,6 @@ import type { CommercialEstimateModel } from './useCommercialEstimateModel'
 import { money, visitDate } from './format'
 import { requirementStatus } from './commercialRequirementStatus'
 
-export function AvailityEvidenceUpload({
-  result,
-  model,
-}: {
-  result: PrevisitEstimate
-  model: CommercialEstimateModel
-}) {
-  if (model.session?.role !== 'admin' || !result.check_id) return null
-  return (
-    <form
-      className="visit-cash-quote"
-      onSubmit={(event) => {
-        event.preventDefault()
-        const file = (event.currentTarget.elements.namedItem('availity_file') as HTMLInputElement)
-          ?.files?.[0]
-        if (file) void model.attachAvaility(file)
-      }}
-    >
-      <label>
-        Visit-date Availity eligibility PDF
-        <input name="availity_file" type="file" accept="application/pdf,.pdf" required />
-      </label>
-      <button type="submit" disabled={!!model.busy || model.recovering}>
-        Attach to this visit
-      </button>
-      {result.availity_visit_reference && (
-        <small>Current visit-date Availity reference attached.</small>
-      )}
-    </form>
-  )
-}
-
 function plannedCollection(result: PrevisitEstimate, copay: number): number {
   if (
     result.billing_protection?.status === 'qmb' ||
