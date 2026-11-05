@@ -233,7 +233,8 @@ async def reuse_previsit_case(api: ModuleType, *, case: dict, result: dict,
                 result['benefits'] = saved_benefits_for_review(result['benefits']) or api._previsit_benefits({}, coverage, inputs['service_date'])
                 result['issues'].append(SAVED_RESPONSE_UNAVAILABLE)
             await api.run_in_threadpool(api._finish_previsit, result, case, inputs, source, payload, session, payer_id)
-            case['previsit']['benefits'] = result['benefits']
+            if administrator_state is not None:
+                case['previsit']['benefits'] = result['benefits']
             if (payload and api_key and administrator_state not in {'pending', 'partial', 'indeterminate'}
                     and (case.get('cpt_authorization') or {}).get('state') not in {'pending', 'indeterminate'}):
                 case = await check_cpt_authorization(api, result, case, payload, inputs, session, api_key)
