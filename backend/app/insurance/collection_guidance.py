@@ -4,7 +4,8 @@ from __future__ import annotations
 from app.insurance.collection.cash import build as cash_guidance
 from app.insurance.collection.options import emg_option as _emg_option
 from app.insurance.collection.requirements import summarize_requirements
-from app.insurance.collection.office_copay import diagnostic_day_copay_amount, office_copay_amount
+from app.insurance.collection.office_copay import (cigna_oap_televisit_office_copay,
+    diagnostic_day_copay_amount, office_copay_amount)
 from app.insurance.collection.billing_note import apply_billing_note
 from app.insurance.identity import patient_benefits_bound
 from app.insurance.benefit_review import (annual_oop_conflict_with_known_remaining,
@@ -150,9 +151,13 @@ def build(result: dict, review: dict | None = None) -> dict:
     amount = None
     office_copay = (office_copay_amount(result, collection_benefits, price, lines, guidance, assumptions)
                     if safe and lines and price.get('mode') != 'options' else None)
+    cigna_oap_televisit = False
     if office_copay is not None:
         amount = office_copay
-    elif safe:
+    elif safe and lines:
+        amount = cigna_oap_televisit_office_copay(result, collection_benefits, price, lines, guidance, assumptions)
+        cigna_oap_televisit = amount is not None
+    if amount is None and safe:
         amount = diagnostic_day_copay_amount(price, lines, guidance, assumptions)
     if amount is None and (strict.get('amount_cents') is not None and safe and verified_in_network(benefits)
             and not price.get('conditional')):
@@ -263,7 +268,7 @@ def build(result: dict, review: dict | None = None) -> dict:
         and result.get('nmct_cigna_delegated_office') is True
         and verified_in_network(benefits)
         and result.get('benefit_source') == 'Stedi · plan administrator')
-    policy_allows_advance = clinic_delegated_copay or (policy_mode == 'collect_verified_copay' if published_copay else
+    policy_allows_advance = clinic_delegated_copay or (cigna_oap_televisit and not policy_approved) or (policy_mode == 'collect_verified_copay' if published_copay else
         policy_mode == 'collect_supported_advance' or
         fixed_copay and policy_mode == 'collect_verified_copay' or
         verified_out_of_network(benefits) and policy_mode == 'defer_to_claim'
@@ -304,6 +309,9 @@ def build(result: dict, review: dict | None = None) -> dict:
     elif amount is not None and amount > 0 and clinic_delegated_copay:
         guidance['collection_rule'] = {'mode': 'clinic_attested_cigna_delegated_copay',
             'reference': 'NMCT Cigna participation and same-patient Allegiance specialist office benefit'}
+    elif amount is not None and amount > 0 and cigna_oap_televisit:
+        guidance['collection_rule'] = {'mode': 'cigna_oap_televisit_office_copay',
+            'reference': 'Current member-bound Cigna specialist office benefit and virtual-care billing guidance'}
     failure_codes = set((result.get('eligibility_failure') or {}).get('codes') or [])
     if not active_payer_benefits and failure_codes & {'72', '73', '65', '67', '71', '75', '76'}:
         actions.append('Contact your insurer to confirm the member ID, policyholder name and date of birth. Bring the corrected insurance details.')

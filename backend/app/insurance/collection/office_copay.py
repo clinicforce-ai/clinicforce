@@ -5,6 +5,80 @@ import re
 from app.insurance.benefit_review import annual_oop_conflict_with_known_remaining
 from app.insurance.cpt_rules import EMG_ADD_ONS, NCS_CODES
 from app.insurance.library_network_exclusions import product_kind
+from app.insurance.network_participation import verified_in_network
+from app.insurance.provider_specialty import office_role
+
+
+def cigna_oap_televisit_office_copay(result: dict, benefits: dict, price: dict,
+                                     lines: list[dict], guidance: dict,
+                                     assumptions: list[str]) -> int | None:
+    """Apply Cigna's specialist office benefit to a regular-provider video visit."""
+    card = result.get('card_check') or {}
+    names = (((result.get('plan_details') or {}).get('stedi') or {}).get('names') or [])
+    telehealth = result.get('telehealth') or {}
+    provider = (result.get('appointment_context') or {}).get('rendering_provider') or {}
+    if not (
+        'cigna' in str(result.get('payer') or '').casefold()
+        and len(names) == 1 and re.sub(r'[^a-z]', '', str(names[0]).casefold()) == 'openaccessplus'
+        and telehealth.get('place_of_service') == '10'
+        and telehealth.get('modality') == 'audio_video'
+        and office_role(provider.get('roles') or []) == 'specialist'
+        and verified_in_network(benefits)
+        and price.get('mode') == 'services' and not price.get('conditional')
+        and len(lines) == 1 and lines[0].get('code') in
+            {str(n) for n in (*range(99202, 99206), *range(99212, 99216))}
+        and lines[0].get('units') == 1
+        and (lines[0].get('benefits') or {}).get('active') is True
+        and not card.get('conflicts') and not card.get('differences')
+        and card.get('status') != 'conflict'
+    ):
+        return None
+    service_date = str(result.get('service_date') or '')
+    def current(row: dict) -> bool:
+        dates = re.findall(r'\d{4}-\d{2}-\d{2}', ' '.join(
+            str(value) for value in (row.get('effective_dates') or {}).values()))
+        return (not dates or len(dates) <= 2 and dates[0] <= service_date
+                and (len(dates) == 1 or service_date <= dates[1]))
+    rows = benefits.get('reported_options') or []
+    def office_rows(kind: str) -> list[dict]:
+        return [row for row in rows if row.get('kind') == kind
+                and row.get('service_type_code') == '98'
+                and row.get('coverage_level') == 'INDIVIDUAL'
+                and row.get('network') == 'IN_NETWORK'
+                and '11' in (row.get('places_of_service') or [])
+                and row.get('plan_association') in {'medical', 'medical_candidate', 'unassigned'}
+                and current(row)]
+    copays = [row for row in office_rows('copay')
+              if re.search(r'\bspecialist\b', str(row.get('payer_note') or ''), re.I)
+              and not re.search(r'\b(?:vendor|teladoc|telemedicine|virtual|diagnos|mental|substance)\b',
+                                str(row.get('payer_note') or ''), re.I)
+              and row.get('time_period') in {'VISIT', '27'}]
+    if (len(copays) != 1 or type(copays[0].get('amount_cents')) is not int
+            or not 0 < copays[0]['amount_cents'] <= 100_000
+            or not any(row.get('amount_cents') == 0 and
+                       re.search(r'\bspecialist\b', str(row.get('payer_note') or ''), re.I)
+                       for row in office_rows('deductible'))
+            or not any(row.get('percent') in {'0', '0.0', '0.00'} and
+                       re.search(r'\bspecialist\b', str(row.get('payer_note') or ''), re.I)
+                       for row in office_rows('coinsurance'))):
+        return None
+    card_amount = card.get('office_copay_cents')
+    if card_amount is not None and (card.get('status') not in {'matched', 'filled_missing'}
+            or card.get('source') not in {'clinicforce_card', 'ecw_card'}
+            or card.get('reference_only') is True or card_amount != copays[0]['amount_cents']):
+        return None
+    amount = copays[0]['amount_cents']
+    oop_remaining = benefits.get('oop_remaining_cents')
+    if type(oop_remaining) is int:
+        amount = min(amount, oop_remaining)
+    allowed = lines[0].get('allowed_cents')
+    if type(allowed) is int:
+        amount = min(amount, allowed)
+    guidance['payer_reported_office_copay_cents'] = copays[0]['amount_cents']
+    assumptions.append('The current payer response reports one in-network specialist office copay, $0 office deductible and 0% office coinsurance. A separately listed contracted-vendor telehealth benefit does not apply to this regular-provider visit. Final responsibility follows the claim.')
+    guidance.update(status='estimated', basis='office_copay',
+                    reason='Collect the payer-reported specialist copay for this audio-video visit. The CPT allowed amount and any later claim adjustment remain unresolved.')
+    return amount
 
 
 def office_copay_amount(result: dict, benefits: dict, price: dict, lines: list[dict],
