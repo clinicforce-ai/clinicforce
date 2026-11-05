@@ -102,8 +102,6 @@ from app.api.routers.commercial_flow.commercial_previsit_pricing import (
     _commercial_slot,
     _previsit_service_types,
     _reviewed_service_types,
-    _eligibility_timing,
-    _insurance_check_from,
     _previsit_codes,
     _office_service_types,
     _benefit_context,
@@ -113,6 +111,8 @@ from app.api.routers.commercial_flow.commercial_previsit_pricing import (
     _requirement_candidates,
     _attach_previsit_pricing,
 )
+
+from app.api.routers.commercial_flow.commercial_previsit_window import _eligibility_timing, _insurance_check_from
 
 
 from app.api.routers.commercial_flow.commercial_previsit_finish import (

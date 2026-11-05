@@ -24,10 +24,10 @@ export const commercialPrevisit = (
   intakeId?: string,
   telehealth?: { telehealth_pos: '10' | '02'; telehealth_modality: 'audio_video' | 'audio_only' },
 ) =>
-  staffRequest<PrevisitEstimate>(
+  request<PrevisitEstimate>(
     `${root}/appointments/previsit`,
     json({ appointment_id, refresh_benefits, ...telehealth }),
-    intakeId,
+    { staffIntakeId: intakeId, timeoutMs: 130_000 },
   )
 
 export const commercialSavedPrevisit = (id: string, intakeId?: string) =>

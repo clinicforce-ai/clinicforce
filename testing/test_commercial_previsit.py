@@ -1,3 +1,4 @@
+import asyncio
 import json
 import unittest
 from contextlib import ExitStack
@@ -13,6 +14,36 @@ from app.api.routers.commercial_flow.commercial_previsit_reuse import retain_sav
 
 
 class PrevisitFlowTest(unittest.IsolatedAsyncioTestCase):
+    async def test_confirmed_card_read_overlaps_ecw_appointment_read(self):
+        from fastapi import HTTPException
+        from app.insurance.ecw_backend import EcwBackendError
+
+        session = {'practice_id': 'clinic', 'patient_id': 'patient', 'share_manifest_id': '',
+                   'intake': {'id': 'intake', 'workflows': {}, 'patient': {
+                       'given_name': 'Pat', 'family_name': 'Example', 'birth_date': '1980-01-01',
+                       'ecw_patient_id': 'ecw-patient'}, 'fields': {}}, 'staff': {'id': 'staff'}}
+        card_started = asyncio.Event()
+
+        async def card_read(*args, **kwargs):
+            card_started.set()
+            await asyncio.sleep(0.05)
+            return {'status': 'not_found', 'fields': {}, 'count': 0}
+
+        async def appointment_read(*args, **kwargs):
+            await asyncio.wait_for(card_started.wait(), timeout=0.1)
+            raise EcwBackendError('synthetic stop')
+
+        with patch('app.api.routers.commercial_estimator._session', new=AsyncMock(return_value=session)), \
+             patch('app.api.routers.commercial_estimator._ecw_practice_config', return_value={}), \
+             patch('app.api.routers.commercial_estimator.ecw_backend.configured', return_value=True), \
+             patch('app.api.routers.commercial_estimator.ecw_backend.fetch_inputs',
+                   new=AsyncMock(side_effect=appointment_read)), \
+             patch('app.api.routers.commercial_estimator._read_card_hints',
+                   new=AsyncMock(side_effect=card_read)) as read:
+            with self.assertRaises(HTTPException):
+                await previsit_estimate(PrevisitInput(appointment_id='visit-1'), MagicMock())
+            read.assert_awaited_once_with(session, 'ecw-patient', allow_pending_reference=True)
+
     async def test_saved_visit_refresh_reads_original_date_only_for_same_appointment(self):
         from fastapi import HTTPException
         from app.insurance.ecw_backend import EcwBackendError
@@ -155,6 +186,11 @@ class PrevisitFlowTest(unittest.IsolatedAsyncioTestCase):
         await self._flow(date.today().isoformat(), member_id_missing=True,
             card_fields={'payer': 'Blue Cross Blue Shield Tx', 'member_name': 'Pat Example',
                          'member_id': 'CARD-123', 'group_number': 'GROUP-9'})
+
+    async def test_prefetched_card_still_fills_member_before_stedi(self):
+        await self._flow(date.today().isoformat(), member_id_missing=True,
+            card_fields={'payer': 'Blue Cross Blue Shield Tx', 'member_name': 'Pat Example',
+                         'member_id': 'CARD-123', 'group_number': 'GROUP-9'}, confirmed_card=True)
 
     async def test_card_member_conflict_checks_unique_ecw_policy(self):
         await self._flow(date.today().isoformat(), card_conflict=True,
@@ -377,7 +413,7 @@ class PrevisitFlowTest(unittest.IsolatedAsyncioTestCase):
     async def test_newer_conflicting_ecw_check_refreshes_cached_stedi_evidence(self):
         await self._flow(date.today().isoformat(), newer_ecw=True)
 
-    async def _flow(self, service_date, reject=False, retry_basic=False, payer_missing=False, refresh=False, newer_ecw=False, too_early=False, self_pay=False, coverage_start=None, saved_hold=False, enrollment_missing=False, ecw_saved=False, ecw_incomplete=False, medicare_secondary=False, billing_note=None, member_id_missing=False, card_fields=None, card_conflict=False, card_status=None, pos=None, scheduled_code=None, emg_review=False, expect_preliminary=False, visit_type='new', combined_emg=False, secondary_mismatch=False, cash_office=False, telehealth=False):
+    async def _flow(self, service_date, reject=False, retry_basic=False, payer_missing=False, refresh=False, newer_ecw=False, too_early=False, self_pay=False, coverage_start=None, saved_hold=False, enrollment_missing=False, ecw_saved=False, ecw_incomplete=False, medicare_secondary=False, billing_note=None, member_id_missing=False, card_fields=None, card_conflict=False, card_status=None, pos=None, scheduled_code=None, emg_review=False, expect_preliminary=False, visit_type='new', combined_emg=False, secondary_mismatch=False, cash_office=False, telehealth=False, confirmed_card=False):
         if cash_office:
             self.cash_current.return_value = {'id': 'synthetic-cash', 'filename': 'synthetic.csv',
                 'effective_from': '2026-01-01', 'rows': [{'code': '99204', 'cash_cents': 25000,
@@ -386,6 +422,8 @@ class PrevisitFlowTest(unittest.IsolatedAsyncioTestCase):
                    "share_manifest_id": "", "staff": {"id": "staff", "display_name": "Staff", "practice_name": "Clinic"},
                    "intake": {"updated_at": "version", "patient": {"given_name": "Pat", "family_name": "Example",
                                                                    "birth_date": "1980-01-01"}, "fields": {}}}
+        if confirmed_card:
+            session['intake']['patient']['ecw_patient_id'] = 'p'
         inputs = {"service_date": service_date, "visit_type": visit_type,
                   "reason": "Follow up consultation" if visit_type == 'established' else "New patient consultation",
                   "lines": [], "member_id": None if member_id_missing else "M123", "relationship": "18",

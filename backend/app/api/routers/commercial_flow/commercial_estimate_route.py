@@ -6,9 +6,10 @@ from app.api.routers.commercial_flow.commercial_previsit_saved import reuse_save
 from app.api.routers.commercial_flow.commercial_previsit_reuse import reuse_previsit_case, retain_saved_group_binding, saved_visit_cases, saved_visit_review_date, telehealth_inquiry_coverage, telehealth_setting
 from app.api.routers.commercial_flow.commercial_previsit_submit import submit_previsit_eligibility
 from app.api.routers.commercial_flow.commercial_recovery_cards import _unique_ecw_member_conflict
+from app.api.routers.commercial_flow.commercial_previsit_appointment import load_previsit_appointment
 
 @_api.router.post("/appointments/previsit", description=(
-    "Estimate a patient-bound eCW visit. Insurance checking opens 31 calendar days before the appointment in the practice timezone; later coverage start dates and staff holds can defer it. An existing saved visit can be re-read by its original service date after its start time; cancelled encounters remain excluded. Compatible saved payer evidence is reused without another "
+    "Estimate a patient-bound eCW visit. For a confirmed eCW patient, card retrieval and OCR overlap the appointment read, but card comparison still finishes before a new Stedi request. Insurance checking opens 31 calendar days before the appointment in the practice timezone; later coverage start dates and staff holds can defer it. An existing saved visit can be re-read by its original service date after its start time; cancelled encounters remain excluded. Compatible saved payer evidence is reused without another "
     "eligibility request. A card-supplied group that matches a fresh, patient-bound saved payer "
     "response and member ID preserves that visit binding for reuse. A recent single discovery "
     "candidate with an address conflict can trigger "
@@ -61,6 +62,8 @@ from app.api.routers.commercial_flow.commercial_recovery_cards import _unique_ec
 async def previsit_estimate(value: _api.PrevisitInput, request: _api.Request, background_tasks: _api.BackgroundTasks = None) -> dict:
     """Estimate suggested or edited visit CPTs from current eligibility and clinic prices.
 
+    A confirmed patient's card read overlaps the eCW appointment read, while
+    the card comparison still precedes any new paid eligibility request.
     A visit 31 calendar days away is eligible for checking unless a later hold applies.
     Uses applicable saved eCW or Stedi benefits, verified network mappings and
     active clinic rate schedules. A disclosed clinic-price reference may support
@@ -264,42 +267,10 @@ async def previsit_estimate(value: _api.PrevisitInput, request: _api.Request, ba
     session = await _api._session(request)
     prior_cases = await saved_visit_cases(_api, session)
     review_service_date = saved_visit_review_date(prior_cases, value.appointment_id)
-    library_documents = await _api.run_in_threadpool(_api.library_pricing.prepare, session['practice_id'])
-    session['_library_documents'] = library_documents
-    session['library_pricing'] = [{'document_id': row['id'], 'label': row['label'], 'payer': row.get('payer'), 'summary': row.get('extraction_summary')} for row in library_documents]
-    _api.collection_event('previsit_started', practice_id=session['practice_id'], intake_id=(session.get('intake') or {}).get('id'),
-                     staff_id=(session.get('staff') or {}).get('id'), stage='appointment')
-    if not _api.ecw_backend.configured():
-        _api.collection_event('previsit_blocked', practice_id=session['practice_id'], intake_id=(session.get('intake') or {}).get('id'),
-                         stage='appointment', reason_code='ecw_not_configured')
-        raise _api.HTTPException(503, "The eClinicalWorks backend connection is not configured.")
-    try:
-        inputs, _, source = await _api.ecw_backend.fetch_inputs(
-            _api._ecw_identity(session, _api.date.today().isoformat()),
-            _api._ecw_practice_config(session["practice_id"]), value.appointment_id,
-            review_service_date=review_service_date)
-    except _api.ecw_backend.EcwBackendError as exc:
-        _api.collection_event('previsit_failed', practice_id=session['practice_id'], intake_id=(session.get('intake') or {}).get('id'),
-                         stage='appointment', reason_code='ecw_error')
-        if exc.reason_code in {"no_match", "ambiguous_match"}:
-            return _api.JSONResponse({"detail": "Confirm the eCW patient to continue.", "code": "ecw_patient_selection_required"},
-                                status_code=409, headers={"Cache-Control": "no-store"})
-        raise _api.HTTPException(502, str(exc)) from exc
-    if source.get("appointment_id") != value.appointment_id:
-        _api.collection_event('previsit_failed', practice_id=session['practice_id'], intake_id=(session.get('intake') or {}).get('id'),
-                         stage='appointment', reason_code='appointment_mismatch')
-        raise _api.HTTPException(409, "The selected upcoming eClinicalWorks appointment could not be verified.")
-    if value.telehealth_pos and not _api.visit_estimate.is_telehealth(inputs):
-        raise _api.HTTPException(422, 'Confirm a telehealth appointment before recording its location and modality.')
-    source['_request_ip_chain'] = _api._request_ip_chain(request)
-    _api.collection_event('previsit_appointment_loaded', practice_id=session['practice_id'], intake_id=(session.get('intake') or {}).get('id'),
-                     stage='appointment', count=len(inputs.get('lines') or []), source='ecw')
-
-    try:
-        source['saved_eligibility'] = await _api.asyncio.wait_for(
-            _api.ecw_backend.fetch_saved_eligibility(source, inputs['service_date']), timeout=6)
-    except _api.asyncio.TimeoutError:
-        source['saved_eligibility'] = {'status': 'check_with_stedi', 'message': 'The saved eCW check took too long to load. Continue with Stedi verification and retry eCW later.'}
+    appointment = await load_previsit_appointment(session, value, request, review_service_date)
+    if isinstance(appointment, _api.JSONResponse):
+        return appointment
+    inputs, source, card_task, confirmed_patient_id = appointment
 
     codes = _api._previsit_codes(inputs)
     result: dict[str, _api.Any] = {"appointment_id": value.appointment_id, "service_date": inputs["service_date"],
@@ -348,18 +319,28 @@ async def previsit_estimate(value: _api.PrevisitInput, request: _api.Request, ba
         _api._visit_context_token(inputs, source))
     timing = _api._eligibility_timing(inputs['service_date'], check_from)
     if timing:
+        if card_task:
+            card_task.cancel()
         result['eligibility_timing'] = timing
         _api.collection_event('previsit_deferred', practice_id=session['practice_id'], intake_id=(session.get('intake') or {}).get('id'),
                          stage='eligibility', reason_code='outside_check_window')
         return await incomplete_result()
     billing_note = _api.ecw_billing.collection_note(source.get('appointment_fields') or [])
     if source.get('self_pay_recorded') or (billing_note or {}).get('kind') == 'self_pay':
+        if card_task:
+            card_task.cancel()
         _api.collection_event('previsit_deferred', practice_id=session['practice_id'], intake_id=(session.get('intake') or {}).get('id'),
                          stage='eligibility', reason_code='self_pay_recorded')
         return await incomplete_result()
 
     try:
-        card = await _api.asyncio.wait_for(_api._read_card_hints(session, source.get('_patient_id'), allow_pending_reference=True), timeout=30)
+        if card_task and str(source.get('_patient_id')) == str(confirmed_patient_id):
+            card = await card_task
+        else:
+            if card_task:
+                card_task.cancel()
+            card = await _api.asyncio.wait_for(_api._read_card_hints(
+                session, source.get('_patient_id'), allow_pending_reference=True), timeout=30)
     except _api.asyncio.TimeoutError:
         card = {'status': 'unavailable', 'fields': {}, 'count': 0}
     original_group = inputs.get('group_number')

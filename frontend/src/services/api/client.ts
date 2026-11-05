@@ -16,6 +16,7 @@ export const REQUEST_TIMEOUT_MS = 45_000
 
 export interface RequestContext {
   staffIntakeId?: string
+  timeoutMs?: number
 }
 
 export function detailFrom(body: unknown, fallback: string): string {
@@ -40,7 +41,10 @@ export async function request<T>(
   context: RequestContext = {},
 ): Promise<T> {
   const controller = new AbortController()
-  const timeout = window.setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS)
+  const timeout = window.setTimeout(
+    () => controller.abort(),
+    context.timeoutMs ?? REQUEST_TIMEOUT_MS,
+  )
   try {
     const headers = new Headers(init.headers)
     if (context.staffIntakeId && path.startsWith('/api/doctor/insurance'))
