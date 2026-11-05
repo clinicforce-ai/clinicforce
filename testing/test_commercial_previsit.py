@@ -4,6 +4,7 @@ import unittest
 from contextlib import ExitStack
 from datetime import date, datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
+from zoneinfo import ZoneInfo
 
 import httpx
 
@@ -383,7 +384,8 @@ class PrevisitFlowTest(unittest.IsolatedAsyncioTestCase):
             await self._flow((date.today() + timedelta(days=offset)).isoformat(), refresh=True, too_early=True)
 
     async def test_visit_31_days_away_can_check_eligibility(self):
-        await self._flow((date.today() + timedelta(days=31)).isoformat())
+        practice_today = datetime.now(ZoneInfo('America/New_York')).date()
+        await self._flow((practice_today + timedelta(days=31)).isoformat())
 
     async def test_future_visit_uses_documented_service_date_object(self):
         await self._flow((date.today() + timedelta(days=2)).isoformat())
