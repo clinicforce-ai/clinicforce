@@ -134,7 +134,7 @@ def _finish_previsit(result: dict, case: dict, inputs: dict, source: dict, paylo
     plan_key = _api.hashlib.sha256(_api.json.dumps([token, review.get('emg_required'), review.get('separate_em_planned'), source.get('recent_completed_appointments', []),
         [(row['id'], row.get('units')) for row in available]], sort_keys=True).encode()).hexdigest()
     prior_plan = case.get('previsit_plan') or {}
-    if (prior_plan.get('key') != plan_key or prior_plan.get('plan', {}).get('version') != 16
+    if (prior_plan.get('key') != plan_key or prior_plan.get('plan', {}).get('version') != 17
             or prior_plan.get('plan', {}).get('method') == 'unavailable'):
         prior_plan = {'key': plan_key, 'plan': _api.cpt_suggester.recommend_visit_plan(
             planning_inputs, source, available)}

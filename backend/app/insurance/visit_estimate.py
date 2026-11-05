@@ -43,10 +43,15 @@ def is_emg_visit(inputs: dict) -> bool:
     # A possible future test is not today's booked procedure. Explicit orders win above.
     optional = r'\b(?:possible|potential|consider\w*|discuss\w*|may need|may require|if needed|if indicated|no|not)\b'
     for clause in re.split(r'[.;\n]', reason):
-        match = re.search(procedure, clause, re.I)
-        if (match and not re.search(optional, clause[:match.start()], re.I)
-                and not re.search(r'\b(?:if needed|if indicated|only if|as needed|may be needed)\b', clause[match.end():], re.I)):
-            return True
+        for match in re.finditer(procedure, clause, re.I):
+            before, after = clause[:match.start()], clause[match.end():]
+            # Past testing and records to review do not schedule another study.
+            prior_test = (re.search(r'\b(?:had|prior|previous|past|completed|performed|history(?:\s+of)?|review(?:\s+of)?)\b'
+                                    r'(?:\s+(?:a|an|the|right|left|bilateral|hand|hands|arm|arms|leg|legs|nerve|conduction|needle|outside)){0,4}\s*$', before, re.I)
+                          or re.search(r'^\s*(?:results?|reports?|records?|completed|done|performed)\b', after, re.I))
+            if (not prior_test and not re.search(optional, before, re.I)
+                    and not re.search(r'\b(?:if needed|if indicated|only if|as needed|may be needed)\b', after, re.I)):
+                return True
     return False
 
 
