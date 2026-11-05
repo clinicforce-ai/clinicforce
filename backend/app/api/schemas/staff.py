@@ -247,6 +247,17 @@ class PrebookingEstimateLine(Model):
     conditions: list[str]
 
 
+class PrebookingPatientAddress(Model):
+    """Address returned for the identity-bound patient by Stedi, when supplied by the payer."""
+
+    line1: str | None = None
+    line2: str | None = None
+    city: str | None = None
+    state: str | None = None
+    postal_code: str | None = None
+    country: str | None = None
+
+
 class PrebookingEstimateResponse(Model):
     """Unknown financial values are null, never assumed to be zero."""
 
@@ -255,6 +266,8 @@ class PrebookingEstimateResponse(Model):
     checked_at: datetime
     checked_on: date
     check_ids: list[str]
+    patient_address: PrebookingPatientAddress | None = Field(
+        description="Patient address returned by the matched Stedi response; null if absent or identity is unverified")
     network_status: Literal["in_network", "out_of_network", "unknown"]
     network_evidence: dict[str, Any] | None
     plan_name: str | None

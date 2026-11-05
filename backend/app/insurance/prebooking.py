@@ -54,6 +54,24 @@ def matches_identity(payload: dict, details: dict) -> bool:
     return matched
 
 
+def patient_address(payload: dict, details: dict) -> dict | None:
+    """Return only the payer address of the matched patient, never the policyholder's by default."""
+    if not matches_identity(payload, details):
+        return None
+    person = payload.get("dependent") or payload.get("subscriber") or {}
+    source = person.get("address") if isinstance(person, dict) else None
+    if not isinstance(source, dict):
+        return None
+    fields = {"line1": "addressLine1", "line2": "addressLine2", "city": "city",
+              "state": "state", "postal_code": "postalCode", "country": "country"}
+    address = {}
+    for target, key in fields.items():
+        value = source.get(key)
+        if isinstance(value, str) and value.strip() and not any(ord(char) < 32 for char in value):
+            address[target] = value.strip()[:100]
+    return address or None
+
+
 def evaluate(payload: dict, details: dict, service_date: str) -> dict:
     """Only a person-bound STC 30 response can establish current medical coverage."""
     result = {"status": "needs_review", "coverage_start": None, "coverage_end": None,

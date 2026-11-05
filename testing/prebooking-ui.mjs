@@ -24,6 +24,7 @@ await page.route((url) => url.pathname.startsWith('/api/'), async (route) => {
     assert.deepEqual(route.request().postDataJSON().selected_services, [{ code: '99213', units: 1 }])
     body = { coverage: { status: 'active_today', message: 'Synthetic coverage response.', coverage_start: null, coverage_end: null },
       payer: 'Example Health', checked_at: '2026-10-29T12:00:00Z', checked_on: '2026-10-29', check_ids: ['ec_synthetic'],
+      patient_address: { line1: '100 Example Ave', line2: null, city: 'Albany', state: 'NY', postal_code: '12207', country: null },
       network_status: 'unknown', network_evidence: null, plan_name: null, benefits: null, lines: [],
       patient_min_cents: null, patient_max_cents: null, estimate_status: 'needs_review', issues: ['Verify network.'] }
   } else if (url.pathname === '/api/staff/intakes/search') {
@@ -53,6 +54,7 @@ try {
   await page.getByRole('button', { name: 'Check benefits and estimate cost' }).click()
   assert.equal(checks, 1)
   await page.getByText('Network participation unverified').waitFor()
+  await page.getByText('100 Example Ave').waitFor()
   console.log('PASS: staff confirm a prospective service before a synthetic payer check')
 } finally {
   await browser.close()

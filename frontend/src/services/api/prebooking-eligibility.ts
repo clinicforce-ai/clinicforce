@@ -68,6 +68,14 @@ export type PrebookingEstimate = {
   checked_at: string
   checked_on: string
   check_ids: string[]
+  patient_address: {
+    line1: string | null
+    line2: string | null
+    city: string | null
+    state: string | null
+    postal_code: string | null
+    country: string | null
+  } | null
   network_status: 'in_network' | 'out_of_network' | 'unknown'
   network_evidence: { reason?: string; decision?: string } | null
   plan_name: string | null

@@ -156,6 +156,25 @@ def test_dependent_inquiry_requires_matching_policyholder_and_patient():
     assert not prebooking.matches_identity(reply, details)
 
 
+def test_patient_address_comes_only_from_the_matching_person():
+    reply = response()
+    reply["subscriber"]["address"] = {"addressLine1": "100 Example Ave", "city": "Albany",
+                                      "state": "NY", "postalCode": "12207"}
+    assert prebooking.patient_address(reply, PERSON) == {
+        "line1": "100 Example Ave", "city": "Albany", "state": "NY", "postal_code": "12207"}
+    assert prebooking.patient_address(reply, {**PERSON, "birth_date": "1981-01-01"}) is None
+
+    dependent = {**PERSON, "relationship": "dependent", "subscriber_given_name": "Sam",
+                 "subscriber_family_name": "Example", "subscriber_birth_date": "1950-01-01"}
+    reply["subscriber"]["name"]["person"]["firstName"] = "Sam"
+    reply["subscriber"]["dateOfBirth"] = "1950-01-01"
+    reply["dependent"] = {"name": {"person": {"firstName": "Pat", "lastName": "Example"}},
+                          "dateOfBirth": "1980-01-01"}
+    assert prebooking.patient_address(reply, dependent) is None  # policyholder address is not the patient's
+    reply["dependent"]["address"] = {"addressLine1": "200 Example St", "city": "Troy"}
+    assert prebooking.patient_address(reply, dependent) == {"line1": "200 Example St", "city": "Troy"}
+
+
 def test_estimate_route_checks_identity_and_services_before_pricing():
     from app.api.routers import commercial_estimator
     from app.insurance import library_network_exclusions
@@ -166,6 +185,8 @@ def test_estimate_route_checks_identity_and_services_before_pricing():
     async def run():
         app = FastAPI()
         app.include_router(staff.router)
+        payer_response = response()
+        payer_response["subscriber"]["address"] = {"addressLine1": "100 Example Ave", "city": "Albany"}
         estimate = {**PERSON, "reason": "Planned office consultation", "visit_type": "established",
                     "selected_services": [{"code": "99213", "units": 1}]}
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test",
@@ -176,7 +197,7 @@ def test_estimate_route_checks_identity_and_services_before_pricing():
                  patch.object(staff_prebooking, "_today", return_value="2026-10-27"), \
                  patch.object(staff_prebooking.stedi_financial, "credentials", return_value="synthetic-key"), \
                  patch.object(staff_prebooking.stedi_payers, "search_payer", side_effect=search), \
-                 patch.object(stedi.Client, "check", AsyncMock(return_value={"outcome": "complete", "payload": response()})) as check, \
+                 patch.object(stedi.Client, "check", AsyncMock(return_value={"outcome": "complete", "payload": payer_response})) as check, \
                  patch.object(commercial_estimator.commercial_store, "list_connections", return_value=[]), \
                  patch.object(library_network_exclusions, "applicable_exclusion", return_value=None), \
                  patch.object(staff.staff_store, "create_intake") as create_intake, \
@@ -189,6 +210,7 @@ def test_estimate_route_checks_identity_and_services_before_pricing():
                 assert result.status_code == 200, result.text
                 assert result.headers["cache-control"] == "no-store"
                 assert result.json()["coverage"]["status"] == "active_today"
+                assert result.json()["patient_address"]["line1"] == "100 Example Ave"
                 assert result.json()["patient_max_cents"] is None
                 assert result.json()["network_status"] == "unknown"
                 PrebookingEstimateResponse.model_validate(result.json())
@@ -225,7 +247,7 @@ def test_prospective_amount_requires_member_binding_and_verified_network():
         assert result["lines"][0]["benefits"]["copay_cents"] is None
         PrebookingEstimateResponse.model_validate({"coverage": prebooking.evaluate(payload, details, "2026-10-27"),
             "payer": PAYER["displayName"], "checked_at": "2026-10-27T12:00:00Z", "checked_on": "2026-10-27",
-            "check_ids": [], **result})
+            "check_ids": [], "patient_address": None, **result})
 
         no_member = staff_prebooking._estimate_from_payer("clinic-1", {**details, "member_id": ""},
             context, PAYER, PROVIDER, payload, "2026-10-27", lines)

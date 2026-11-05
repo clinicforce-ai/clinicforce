@@ -187,7 +187,7 @@ def _estimate_from_payer(practice_id: str, details: dict, context: dict | None, 
             "issues": issues[:20]}
 
 
-@router.post("/prebooking-estimate/check", response_model=PrebookingEstimateResponse, description="Run an unsaved Stedi 270/271 check for a staff-confirmed prospective service scenario and estimate date. Return payer benefits, NMCT network evidence and a conditional patient-cost estimate only when member, plan, provider, service and rate evidence agree. A reason alone never confirms a procedure or collectible amount. No patient, case or appointment is created; recheck after booking.")
+@router.post("/prebooking-estimate/check", response_model=PrebookingEstimateResponse, description="Run an unsaved Stedi 270/271 check for a staff-confirmed prospective service scenario and estimate date. Return payer benefits, the matched patient address when Stedi supplies one, NMCT network evidence and a conditional patient-cost estimate only when member, plan, provider, service and rate evidence agree. A reason alone never confirms a procedure or collectible amount. No patient, case or appointment is created; recheck after booking.")
 async def prebooking_estimate_check(value: PrebookingEstimateRequest, request: Request):
     staff = await _staff.require_staff(request)
     if (os.getenv("STEDI_EXECUTION_MODE", "off") != "commercial_pilot"
@@ -233,7 +233,9 @@ async def prebooking_estimate_check(value: PrebookingEstimateRequest, request: R
                 else {"status": "needs_review", "message": "The payer check did not complete. Review Stedi activity before another inquiry.",
                       "coverage_start": None, "coverage_end": None})
     base = {"coverage": coverage, "payer": payer["displayName"], "checked_at": checked_at,
-            "checked_on": service_date, "check_ids": check_ids, "network_status": "unknown",
+            "checked_on": service_date, "check_ids": check_ids,
+            "patient_address": prebooking.patient_address(payload, details) if response.get("outcome") == "complete" else None,
+            "network_status": "unknown",
             "network_evidence": None, "plan_name": None, "benefits": None, "lines": [],
             "patient_min_cents": None, "patient_max_cents": None, "estimate_status": "needs_review",
             "issues": []}

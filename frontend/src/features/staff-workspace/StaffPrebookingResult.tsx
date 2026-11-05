@@ -39,6 +39,9 @@ function BenefitTerms({ terms }: { terms: PrebookingTerms }) {
 }
 
 export default function StaffPrebookingResult({ result }: { result: PrebookingEstimate }) {
+  const address = result.patient_address
+  const locality = [address?.city, address?.state].filter(Boolean).join(', ')
+  const localityAndPostal = [locality, address?.postal_code].filter(Boolean).join(' ')
   const amount =
     result?.patient_min_cents != null && result.patient_max_cents != null
       ? result.patient_min_cents === result.patient_max_cents
@@ -68,6 +71,17 @@ export default function StaffPrebookingResult({ result }: { result: PrebookingEs
         {result.plan_name ? ` · ${result.plan_name}` : ''} · Checked for {result.checked_on}
         {result.check_ids.length ? ` · Stedi ${result.check_ids.join(', ')}` : ''}
       </p>
+      <h3>Patient address from Stedi</h3>
+      {address ? (
+        <address className="prebooking-patient-address">
+          {address.line1 && <span>{address.line1}</span>}
+          {address.line2 && <span>{address.line2}</span>}
+          {localityAndPostal && <span>{localityAndPostal}</span>}
+          {address.country && <span>{address.country}</span>}
+        </address>
+      ) : (
+        <p className="staff-muted">Not available from a matched Stedi response.</p>
+      )}
       <h3>Clinic network</h3>
       <p>
         {result.network_status === 'in_network'
