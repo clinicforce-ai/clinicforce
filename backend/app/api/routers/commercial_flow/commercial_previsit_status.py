@@ -393,7 +393,7 @@ def _previsit_result(case: dict, practice_id: str | None = None) -> dict:
                      or blue_cross_proxy.cigna_oap_office_scenario(result, str(result.get('service_date') or ''))):
             result['fee_proxy_estimate'] = proxy
     result['revision'] = case.get('revision', 0)
-    check_from = max((case.get('visit_review') or {}).get('insurance_check_from') or '',
+    check_from = max(_api._insurance_check_from(case) or '',
         ((case['previsit_context'].get('source', {}).get('coverage_period') or {}).get('start') or '')[:10])
     timing = _api._eligibility_timing(result['service_date'], check_from or None) if result.get('service_date') else None
     if timing:

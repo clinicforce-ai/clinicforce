@@ -8,7 +8,7 @@ from app.api.routers.commercial_flow.commercial_previsit_submit import submit_pr
 from app.api.routers.commercial_flow.commercial_recovery_cards import _unique_ecw_member_conflict
 
 @_api.router.post("/appointments/previsit", description=(
-    "Estimate a patient-bound eCW visit. An existing saved visit can be re-read by its original service date after its start time; cancelled encounters remain excluded. Compatible saved payer evidence is reused without another "
+    "Estimate a patient-bound eCW visit. Insurance checking opens 31 calendar days before the appointment in the practice timezone; later coverage start dates and staff holds can defer it. An existing saved visit can be re-read by its original service date after its start time; cancelled encounters remain excluded. Compatible saved payer evidence is reused without another "
     "eligibility request. A card-supplied group that matches a fresh, patient-bound saved payer "
     "response and member ID preserves that visit binding for reuse. A recent single discovery "
     "candidate with an address conflict can trigger "
@@ -61,6 +61,7 @@ from app.api.routers.commercial_flow.commercial_recovery_cards import _unique_ec
 async def previsit_estimate(value: _api.PrevisitInput, request: _api.Request, background_tasks: _api.BackgroundTasks = None) -> dict:
     """Estimate suggested or edited visit CPTs from current eligibility and clinic prices.
 
+    A visit 31 calendar days away is eligible for checking unless a later hold applies.
     Uses applicable saved eCW or Stedi benefits, verified network mappings and
     active clinic rate schedules. A disclosed clinic-price reference may support
     a provisional advance when no contracted allowance is available. The optional
@@ -337,9 +338,9 @@ async def previsit_estimate(value: _api.PrevisitInput, request: _api.Request, ba
 
     check_from = ((source.get('coverage_period') or {}).get('start') or '')[:10] or None
     if prior_cases:
-        holds = [row['visit_review']['insurance_check_from'] for row in prior_cases
+        holds = [_api._insurance_check_from(row) for row in prior_cases
                  if row.get('previsit_context', {}).get('source', {}).get('appointment_id') == value.appointment_id
-                 and row.get('visit_review', {}).get('insurance_check_from')]
+                 and _api._insurance_check_from(row)]
         if holds:
             check_from = max([*holds, *([check_from] if check_from else [])])
     inputs['_selected_service_types'] = _api._reviewed_service_types(

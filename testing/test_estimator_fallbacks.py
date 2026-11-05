@@ -109,8 +109,21 @@ def test_pending_coverage_and_appointment_window_use_later_opening_date():
     opening = (today + timedelta(days=1)).isoformat()
     assert api._eligibility_timing(visit, opening)['check_from'] == opening
     assert api._eligibility_timing(visit, today.isoformat()) is None
-    far = (today + timedelta(days=20)).isoformat()
-    assert api._eligibility_timing(far, opening)['check_from'] == (today + timedelta(days=13)).isoformat()
+    far = (today + timedelta(days=40)).isoformat()
+    assert api._eligibility_timing(far, opening)['check_from'] == (today + timedelta(days=9)).isoformat()
+
+
+def test_old_automatic_opening_does_not_keep_a_visit_blocked():
+    today = datetime.now(ZoneInfo('America/New_York')).date()
+    service_date = (today + timedelta(days=20)).isoformat()
+    old_opening = (today + timedelta(days=13)).isoformat()
+    case = {'visit_review': {'insurance_check_from': old_opening},
+            'previsit_context': {'inputs': {'service_date': service_date},
+                                 'result': {'eligibility_timing': {'status': 'too_early', 'check_from': old_opening}}}}
+    assert api._insurance_check_from(case) is None
+    assert api._eligibility_timing(service_date, api._insurance_check_from(case)) is None
+    case['visit_review']['insurance_check_from'] = (today + timedelta(days=1)).isoformat()
+    assert api._insurance_check_from(case) == (today + timedelta(days=1)).isoformat()
 
 
 def test_secondary_policy_can_be_queried_without_claiming_it_is_only_coverage():

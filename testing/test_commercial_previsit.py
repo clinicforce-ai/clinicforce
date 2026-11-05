@@ -343,8 +343,11 @@ class PrevisitFlowTest(unittest.IsolatedAsyncioTestCase):
         await self._flow(date.today().isoformat(), emg_review=True)
 
     async def test_far_future_visit_does_not_query_stedi_even_on_refresh(self):
-        for offset in (8, 56):
+        for offset in (32, 56):
             await self._flow((date.today() + timedelta(days=offset)).isoformat(), refresh=True, too_early=True)
+
+    async def test_visit_31_days_away_can_check_eligibility(self):
+        await self._flow((date.today() + timedelta(days=31)).isoformat())
 
     async def test_future_visit_uses_documented_service_date_object(self):
         await self._flow((date.today() + timedelta(days=2)).isoformat())

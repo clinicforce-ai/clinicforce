@@ -52,8 +52,9 @@ def test_unsized_skin_biopsy_starts_with_editable_one_site_plan():
 
 def test_eligibility_window_boundary_and_service_categories():
     today = datetime.now(ZoneInfo('America/New_York')).date()
-    assert api._eligibility_timing((today + timedelta(days=7)).isoformat()) is None
-    assert api._eligibility_timing((today + timedelta(days=8)).isoformat())['check_from'] == (today + timedelta(days=1)).isoformat()
+    assert api._eligibility_timing((today + timedelta(days=30)).isoformat()) is None
+    assert api._eligibility_timing((today + timedelta(days=31)).isoformat()) is None
+    assert api._eligibility_timing((today + timedelta(days=32)).isoformat())['check_from'] == (today + timedelta(days=1)).isoformat()
     assert api._previsit_service_types({'reason': 'Visit type: EMG Visit'}) == ['73', '30']
     assert api._previsit_service_types({'lines': [{'code': code, 'service_status': 'scheduled'} for code in ['99213', '95910', '95886']]}) == ['98', '73', '30']
 
