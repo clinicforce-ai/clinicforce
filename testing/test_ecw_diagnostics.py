@@ -13,7 +13,7 @@ import httpx
 import fitz
 import pytest
 from fastapi import HTTPException
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image
 
 from app.insurance import ecw_backend as ecw
 from app.logs.collection_audit import logger, request_id
@@ -156,24 +156,21 @@ def test_card_inside_ecw_patient_packet_returns_only_its_page():
 
 
 def test_unlabeled_scanned_card_with_participant_and_group_ids_is_listed():
-    def scan(lines):
+    def scan():
         image = Image.new('RGB', (1400, 900), 'white')
-        draw = ImageDraw.Draw(image)
-        font = ImageFont.truetype('/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf', 42)
-        for index, line in enumerate(lines):
-            draw.text((45, 45 + index * 72), line, fill='black', font=font)
         output = io.BytesIO()
         image.save(output, format='PNG')
         return output.getvalue()
 
     with fitz.open() as pdf:
         front = pdf.new_page(width=700, height=450)
-        front.insert_image(front.rect, stream=scan([
-            'Medical Network', 'Group ID No.: G12345', 'Name: SAMPLE PATIENT',
-            'Participant ID#: ABC123456', 'Type of Coverage', 'Pharmacy Plan', 'RxBIN: 123456',
-        ]))
+        front.insert_image(front.rect, stream=scan())
+        front.insert_text((30, 50), 'Medical Network\nGroup ID No.: G12345\n'
+                          'Name: SAMPLE PATIENT\nParticipant ID#: ABC123456\n'
+                          'Type of Coverage\nPharmacy Plan\nRxBIN: 123456', fontsize=22)
         back = pdf.new_page(width=700, height=450)
-        back.insert_image(back.rect, stream=scan(['Medical Network', 'Copay: PCP $20; SP $40']))
+        back.insert_image(back.rect, stream=scan())
+        back.insert_text((30, 50), 'Medical Network\nCopay: PCP $20; SP $40', fontsize=22)
         card_bytes = pdf.tobytes()
     with fitz.open() as pdf:
         pdf.new_page().insert_text((40, 40), 'Group ID No.: G12345\nName: SAMPLE PATIENT\n'
