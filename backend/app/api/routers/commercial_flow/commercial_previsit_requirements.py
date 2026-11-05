@@ -66,8 +66,7 @@ async def check_cpt_authorization(api: ModuleType, result: dict, case: dict, pay
     dependent = payload.get('dependent') or {}
     if dependent:
         body['dependent'] = {key: dependent[key] for key in ('dateOfBirth', 'name') if dependent.get(key)}
-    if cigna or inputs['service_date'] != api.date.today().isoformat():
-        body['encounter']['dates'] = {'service': {'start': inputs['service_date']}}
+    body['encounter']['dates'] = {'service': {'start': inputs['service_date']}}
     def same_name(left: dict, right: dict) -> bool:
         first = (left.get('name') or {}).get('person') or {}
         second = (right.get('name') or {}).get('person') or {}

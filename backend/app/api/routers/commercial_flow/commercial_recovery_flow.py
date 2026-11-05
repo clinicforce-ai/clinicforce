@@ -208,9 +208,6 @@ async def _recheck_discovery_candidate(case: dict, session: dict, provider: dict
         basic_body = _api.stedi_request_body({'stedi_payer_id': payer['stediId']}, provider, coverage, inputs['service_date'], _api._previsit_service_types(inputs),
                                         include_identity_hints=False, allow_demographic=not coverage.get('member_id'), inquiry_only=inquiry_only,
                                         place_of_service=inquiry_pos)
-        if inputs['service_date'] == _api.date.today().isoformat():
-            body['encounter'].pop('dates', None)
-            basic_body['encounter'].pop('dates', None)
         fingerprint = _api.hashlib.sha256(_api.json.dumps(body, sort_keys=True).encode()).hexdigest()
         attempts = discovery.setdefault('eligibility_attempts', [])
         if any(row['fingerprint'] == fingerprint for row in attempts):
