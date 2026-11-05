@@ -190,7 +190,6 @@ def _insurance_diagnosis(case: dict, result: dict, guidance: dict) -> dict:
             'pricingReasons': details, 'enrollment': enrollment, 'ecwCoverage': retrieval,
             'discoveryEnrollment': raw_recovery.get('discovery_enrollment'), 'mbiEnrollment': raw_recovery.get('mbi_enrollment')}
 
-
 def _recheck_saved_clinic_pricing(result: dict, case: dict, practice_id: str) -> None:
     """Do not quote a saved insured total after its clinic contract or rate changes."""
     context = case['previsit_context']
@@ -450,13 +449,7 @@ def _previsit_result(case: dict, practice_id: str | None = None) -> dict:
         result['payment_mode'] = 'insurance'
         result.pop('cash_fallback', None)
     unresolved_telehealth = guard_unresolved_telehealth(result, case)
-    # Saved GET projects current published terms from its retained patient-bound
-    # payer plan. It never changes the historical snapshot or calls the payer.
-    benefits = result.get('benefits') or {}
-    published_plan_benefits.apply_geha_plan_terms(
-        benefits, ((result.get('plan_details') or {}).get('stedi') or {}),
-        str(result.get('service_date') or ''),
-        patient_plan_applies(benefits, result.get('identity'), str(result.get('service_date') or '')))
+    published_plan_benefits.apply_saved_geha_plan_terms(result)
     insurance_guidance = _api.collection_guidance.build(result, case.get('visit_review'))
     result['insurance_diagnosis'] = _api._insurance_diagnosis(case, result, insurance_guidance)
     pricing_unavailable = (result.get('payment_mode') != 'cash' and insurance_guidance.get('amount_cents') is None

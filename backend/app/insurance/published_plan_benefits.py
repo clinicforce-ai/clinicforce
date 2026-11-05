@@ -1,6 +1,6 @@
 """Date-effective published plan terms, applied only to a bound product and tier."""
 
-from app.insurance.identity import patient_benefits_bound
+from app.insurance.identity import patient_benefits_bound, patient_plan_applies
 from app.insurance.network_participation import verified_in_network
 
 
@@ -66,6 +66,15 @@ def apply_geha_plan_terms(benefits: dict, plan: dict, service_date: str,
         return False
     benefits['published_plan_rule'] = GEHA_HIGH_PSHB_MA_16615_2026
     return True
+
+
+def apply_saved_geha_plan_terms(result: dict) -> None:
+    """Project current terms from retained payer evidence, without changing its snapshot."""
+    benefits = result.get('benefits') or {}
+    service_date = str(result.get('service_date') or '')
+    plan = ((result.get('plan_details') or {}).get('stedi') or {})
+    apply_geha_plan_terms(benefits, plan, service_date,
+                          patient_plan_applies(benefits, result.get('identity'), service_date))
 
 
 def identify_card_plan(plan: dict, card: dict, payer: str, patient_bound: bool) -> dict:
