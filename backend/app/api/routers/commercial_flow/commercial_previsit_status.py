@@ -3,7 +3,7 @@ from __future__ import annotations
 from app.api.routers import commercial_estimator as _api
 from app.insurance.identity import patient_benefits_bound, patient_plan_applies, payer_identity_verified
 from app.insurance.network_participation import verified_in_network, verified_out_of_network
-from app.insurance import blue_cross_proxy, evidence_resolution, group_contract_support
+from app.insurance import blue_cross_proxy, evidence_resolution, group_contract_support, published_plan_benefits
 from app.api.routers.commercial_flow.commercial_previsit_finish import _payer_plan_pricing_source
 from app.api.routers.commercial_flow.commercial_previsit_network_guard import recheck_saved_network_evidence, recheck_saved_payer_message
 from app.api.routers.commercial_flow.commercial_previsit_saved_pricing import _reprice_saved_new_network, guard_unresolved_telehealth, guard_telehealth_guidance
@@ -189,7 +189,6 @@ def _insurance_diagnosis(case: dict, result: dict, guidance: dict) -> dict:
             'reasonCodes': list(dict.fromkeys(reasons)), 'states': list(dict.fromkeys(states)),
             'pricingReasons': details, 'enrollment': enrollment, 'ecwCoverage': retrieval,
             'discoveryEnrollment': raw_recovery.get('discovery_enrollment'), 'mbiEnrollment': raw_recovery.get('mbi_enrollment')}
-
 
 def _recheck_saved_clinic_pricing(result: dict, case: dict, practice_id: str) -> None:
     """Do not quote a saved insured total after its clinic contract or rate changes."""
@@ -450,6 +449,7 @@ def _previsit_result(case: dict, practice_id: str | None = None) -> dict:
         result['payment_mode'] = 'insurance'
         result.pop('cash_fallback', None)
     unresolved_telehealth = guard_unresolved_telehealth(result, case)
+    published_plan_benefits.apply_saved_geha_plan_terms(result)
     insurance_guidance = _api.collection_guidance.build(result, case.get('visit_review'))
     result['insurance_diagnosis'] = _api._insurance_diagnosis(case, result, insurance_guidance)
     pricing_unavailable = (result.get('payment_mode') != 'cash' and insurance_guidance.get('amount_cents') is None

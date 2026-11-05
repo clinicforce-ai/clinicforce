@@ -3,6 +3,7 @@ from copy import deepcopy
 
 import pytest
 
+from app.api.routers import commercial_estimator as api
 from app.insurance import collection_guidance, published_plan_benefits
 
 
@@ -38,6 +39,28 @@ def test_published_zero_office_without_payer_deductible_oop_or_allowance():
     guidance = collection_guidance.build(result)
     assert (guidance['amount_cents'], guidance['basis'], guidance['status']) == (
         0, 'published_geha_pshb_zero_office', 'zero_advance')
+
+
+def test_saved_previsit_reprojects_published_terms_without_a_new_payer_check():
+    result = case()
+    result['benefits'].pop('published_plan_rule')
+    result['benefits'].update(service_date_matches=None, coverage_evidence={
+        'status': 'ACTIVE', 'start': '2026-01-01', 'end': '2026-12-31'})
+    result['payment_mode'] = 'insurance'
+    saved = {'previsit_context': {'result': result, 'source': {}, 'inputs': {}, 'payer_id': ''}}
+    projected = api._previsit_result(saved)
+    assert projected['collection_guidance']['basis'] == 'published_geha_pshb_zero_office'
+    assert projected['collection_guidance']['amount_cents'] == 0
+    assert projected['benefits']['published_plan_rule']['in_network_deductible_cents'] == 0
+    assert 'published_plan_rule' not in saved['previsit_context']['result']['benefits']
+
+    changed = deepcopy(saved)
+    changed['previsit_context']['result']['plan_details']['stedi']['group_number'] = '99999'
+    changed['previsit_context']['result']['benefits']['published_plan_rule'] = (
+        published_plan_benefits.GEHA_HIGH_PSHB_MA_16615_2026)
+    invalid = api._previsit_result(changed)
+    assert invalid['collection_guidance']['basis'] != 'published_geha_pshb_zero_office'
+    assert 'published_plan_rule' not in invalid['benefits']
 
 
 @pytest.mark.parametrize('change', [

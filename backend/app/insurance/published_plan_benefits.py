@@ -1,6 +1,6 @@
 """Date-effective published plan terms, applied only to a bound product and tier."""
 
-from app.insurance.identity import patient_benefits_bound
+from app.insurance.identity import patient_benefits_bound, patient_plan_applies
 from app.insurance.network_participation import verified_in_network
 
 
@@ -55,6 +55,28 @@ def geha_high_pshb_group(plan: dict, service_date: str, patient_bound: bool) -> 
             <= GEHA_HIGH_PSHB_MA_16615_2026['effective_to'])
 
 
+def apply_geha_plan_terms(benefits: dict, plan: dict, service_date: str,
+                          patient_bound: bool) -> bool:
+    """Refresh a saved projection without retaining an obsolete GEHA match."""
+    if benefits.get('published_plan_rule') == GEHA_HIGH_PSHB_MA_16615_2026:
+        benefits.pop('published_plan_rule')
+    if (not geha_high_pshb_group(plan, service_date, patient_bound)
+            or benefits.get('active') is not True
+            or benefits.get('service_date_matches') is False):
+        return False
+    benefits['published_plan_rule'] = GEHA_HIGH_PSHB_MA_16615_2026
+    return True
+
+
+def apply_saved_geha_plan_terms(result: dict) -> None:
+    """Project current terms from retained payer evidence, without changing its snapshot."""
+    benefits = result.get('benefits') or {}
+    service_date = str(result.get('service_date') or '')
+    plan = ((result.get('plan_details') or {}).get('stedi') or {})
+    apply_geha_plan_terms(benefits, plan, service_date,
+                          patient_plan_applies(benefits, result.get('identity'), service_date))
+
+
 def identify_card_plan(plan: dict, card: dict, payer: str, patient_bound: bool) -> dict:
     """Use a matched card's CMS ID only when the member's 271 names the same product."""
     if (not patient_bound or card.get('status') not in {'matched', 'filled_missing'}
@@ -102,10 +124,7 @@ def aetna_signature_diagnostic(benefits: dict, service_date: str, code: str,
 
 def apply_plan_terms(benefits: dict, plan: dict, service_date: str, patient_bound: bool) -> None:
     """Attach a dated published plan term only to an exact, patient-bound product."""
-    if (geha_high_pshb_group(plan, service_date, patient_bound)
-            and benefits.get('active') is True
-            and benefits.get('service_date_matches') is not False):
-        benefits['published_plan_rule'] = GEHA_HIGH_PSHB_MA_16615_2026
+    if apply_geha_plan_terms(benefits, plan, service_date, patient_bound):
         return
     if (patient_bound and plan.get('identified_product') == 'Humana Value Choice PPO H7617-057'
             and HUMANA_VALUE_CHOICE_057_2026['effective_from'] <= service_date <= HUMANA_VALUE_CHOICE_057_2026['effective_to']
