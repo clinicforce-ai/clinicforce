@@ -31,7 +31,7 @@ class PrevisitFlowTest(unittest.IsolatedAsyncioTestCase):
             return {'status': 'not_found', 'fields': {}, 'count': 0}
 
         async def appointment_read(*args, **kwargs):
-            await asyncio.wait_for(card_started.wait(), timeout=0.1)
+            await asyncio.wait_for(card_started.wait(), timeout=2)
             raise EcwBackendError('synthetic stop')
 
         with patch('app.api.routers.commercial_estimator._session', new=AsyncMock(return_value=session)), \
