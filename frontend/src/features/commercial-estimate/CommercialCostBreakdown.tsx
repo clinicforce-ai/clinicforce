@@ -18,6 +18,7 @@ import {
 } from './commercialCptRows'
 import { commercialOopRows, familyOopLimitApplied } from './commercialOopRows'
 import { cignaCardReference, cignaCardRows } from './cignaCardReference'
+import * as costState from './commercialCostState'
 export default function CommercialCostBreakdown({
   model,
   result,
@@ -28,16 +29,13 @@ export default function CommercialCostBreakdown({
   const benefits = result.reference_benefits ?? result.benefits
   const reportedResult = result.reference_benefits ? { ...result, benefits } : result
   const { price_range: price, fee_proxy_estimate: feeProxy } = result
-  const gehaZero =
-    result.collection_guidance?.basis === 'published_geha_pshb_zero_office' &&
-    result.collection_guidance.amount_cents === 0
+  const gehaZero = costState.publishedGehaZero(result)
   const botoxPreview = !model.cash && !model.previousEstimate ? result.botox_preview : null
   const combinedPlan = !model.cash && !model.previousEstimate ? result.combined_emg_plan : null
   const cignaFeeProxy = feeProxy?.basis === 'bcbstx_cigna_fee_proxy'
   const cignaOfficeScenario = cignaFeeProxy && !!feeProxy.scenario_kind
   const lines = price?.mode === 'services' ? price.lines || [] : []
   const cptRows = commercialCptRows(result, lines, botoxPreview)
-  const visitReason = commercialVisitReason(result, model.anticipatedService || '')
   const familyOopApplied = familyOopLimitApplied(result)
   const automaticCashFallback = model.cash && result.cash_fallback != null
   const summary = result.encounter_summary
@@ -69,20 +67,8 @@ export default function CommercialCostBreakdown({
   const diagnosticCopay = copay.diagnosticCopay(result, lines)
   const pricedCashLines = lines.filter((line) => line.cash_cents != null && !line.cash_included)
   const lineAllowedTotal = resolvedAllowedTotal(lines)
-  const calculated =
-    !automaticCashFallback &&
-    !model.previousEstimate &&
-    !summary?.integrity_error &&
-    price?.complete === true &&
-    (summary?.complete === true || model.supportedAmount === true)
-  const temporaryRateReference =
-    (/\baetna\b/i.test(result.payer || '') &&
-      !result.temporary_rate_reference?.source?.startsWith('Aetna MEPPO')) ||
-    (/\bhumana\b/i.test(result.payer || '') &&
-      /blue cross/i.test(result.temporary_rate_reference?.source || ''))
-      ? null
-      : result.temporary_rate_reference
-  const aetnaRateReference = Boolean(temporaryRateReference?.source?.startsWith('Aetna MEPPO'))
+  const calculated = costState.calculatedShare(result, model, automaticCashFallback)
+  const { temporaryRateReference, aetnaRateReference } = costState.visibleRateReference(result)
   const aetnaPlanning =
     !model.cash && !model.previousEstimate && result.collection_guidance?.amount_cents == null
       ? result.aetna_diagnostic_reference
@@ -95,7 +81,7 @@ export default function CommercialCostBreakdown({
     { label: 'Network', value: model.networkLabel },
     {
       label: result.reason ? 'Reason for visit' : 'Planned service',
-      value: visitReason,
+      value: commercialVisitReason(result, model.anticipatedService || ''),
     },
     cptRows.cpt,
     ...cptRows.candidates,
