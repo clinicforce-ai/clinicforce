@@ -52,11 +52,17 @@ def example():
 
 
 def finish(payload, inputs, source, review=None, payer=None, practice_id='synthetic-clinic',
-           configured_connections=None, route_payer_id='62308'):
+           configured_connections=None, route_payer_id='62308', card_check=None):
     case = {'id': 'synthetic-case', 'revision': 0}
     if review:
         case['visit_review'] = {'context_token': api._visit_context_token(inputs, source), **review}
-    result = {'benefits': api._case_benefits(payload, inputs, source, case), 'issues': [], 'checked_at': DAY + 'T12:00:00+00:00'}
+    result = {'benefits': api._case_benefits(payload, inputs, source, case), 'issues': [],
+              'service_date': inputs['service_date'], 'checked_at': DAY + 'T12:00:00+00:00'}
+    if inputs.get('telehealth_modality'):
+        result['telehealth'] = {'place_of_service': inputs['place_of_service'],
+                                'modality': inputs['telehealth_modality']}
+    if card_check:
+        result['card_check'] = card_check
     if payer:
         result['payer'] = payer
     route = {'stedi_payer_id': '62308', 'rules': {'collection_policy': COPAY_POLICY}}
@@ -83,6 +89,86 @@ def test_automatic_specialist_estimate_without_card_contract_or_ledger():
     assert 'ledger is unavailable' in ' '.join(result['collection_guidance']['assumptions'])
     result = finish(*example(), review={'payments': {'reference': 'synthetic-receipt', 'amount_cents': 1500}})
     assert result['collection_guidance']['amount_cents'] == 4000
+
+
+def oap_televisit():
+    payload, inputs, source = example()
+    payload['plans'][0]['name'] = 'Open Access Plus'
+    benefits = payload['plans'][0]['benefits']
+    benefits['coPayment'][1]['amount'] = '60'
+    benefits['coPayment'][1]['dates'] = {'benefit': {'start': '2026-04-01'}}
+    benefits['coPayment'][2]['messages'] = ['Telehealth through contracted vendor']
+    benefits['coPayment'][2]['placesOfService'] = [{'code': '02'}]
+    benefits['coInsurance'] = [{
+        'service': {'system': 'STC', 'value': '98'}, 'coverageLevel': 'INDIVIDUAL',
+        'network': {'indicator': 'IN_NETWORK'}, 'percent': '0',
+        'placesOfService': [{'code': '11'}], 'messages': ['PCP AND Specialist']}]
+    benefits['coInsurance'][0]['dates'] = {'benefit': {'start': '2026-04-01'}}
+    benefits['deductible'][0]['placesOfService'] = [{'code': '11'}]
+    benefits['deductible'].append({
+        'service': {'system': 'STC', 'value': '30'}, 'coverageLevel': 'INDIVIDUAL',
+        'network': {'indicator': 'IN_NETWORK'}, 'amount': '4162.28',
+        'timePeriod': 'REMAINING'})
+    inputs.update(place_of_service='10', telehealth_modality='audio_video')
+    source['appointment_type'] = 'Televisit'
+    card = {'status': 'matched', 'source': 'clinicforce_card',
+            'office_copay_cents': 6000, 'conflicts': [], 'differences': []}
+    return payload, inputs, source, card
+
+
+def test_cigna_oap_specialist_televisit_collects_matched_card_copay_without_allowed_rate():
+    payload, inputs, source, card = oap_televisit()
+    result = finish(payload, inputs, source, payer='Cigna', card_check=card,
+                    configured_connections=[])
+    assert result['benefits']['active'] is True
+    assert result['benefits']['network_status'] == 'in_network'
+    assert result['price_range']['lines'][0]['allowed_cents'] is None
+    assert result['collection_guidance']['amount_cents'] == 6000
+    assert result['collection_guidance']['basis'] == 'office_copay'
+    assert result['collection_guidance']['collection_rule']['mode'] == 'cigna_oap_televisit_office_copay'
+    assert result['collection_guidance']['office_visit_copay_advance']['amount_cents'] == 6000
+    assert result['collection_guidance']['payer_reported_office_copay_cents'] == 6000
+    paid = finish(payload, inputs, source, payer='Cigna', card_check=card,
+                  configured_connections=[], review={'payments': {'reference': 'synthetic-receipt',
+                                                                  'amount_cents': 1500}})
+    assert paid['collection_guidance']['amount_cents'] == 4500
+    card_unavailable = finish(payload, inputs, source, payer='Cigna',
+                              card_check={'status': 'unavailable', 'failure_reason': 'card_read_timeout'},
+                              configured_connections=[])
+    assert card_unavailable['collection_guidance']['amount_cents'] == 6000
+
+
+@pytest.mark.parametrize('change', ['card_mismatch', 'unverified_card', 'expired_copay', 'pos02',
+    'wrong_plan', 'audio_only', 'primary_care', 'office_deductible', 'office_coinsurance',
+    'out_of_network', 'secondary'])
+def test_cigna_oap_televisit_requires_matching_office_evidence(change):
+    payload, inputs, source, card = oap_televisit()
+    if change == 'card_mismatch':
+        card['office_copay_cents'] = 5000
+    elif change == 'unverified_card':
+        card['status'] = 'unverified'
+    elif change == 'expired_copay':
+        payload['plans'][0]['benefits']['coPayment'][1]['dates'] = {
+            'benefit': {'start': '2026-04-01', 'end': '2026-10-01'}}
+    elif change == 'pos02':
+        inputs['place_of_service'] = '02'
+    elif change == 'wrong_plan':
+        payload['plans'][0]['name'] = 'PPO'
+    elif change == 'audio_only':
+        inputs['telehealth_modality'] = 'audio_only'
+    elif change == 'primary_care':
+        source['rendering_provider']['roles'] = ['Family Medicine']
+    elif change == 'office_deductible':
+        payload['plans'][0]['benefits']['deductible'][0]['amount'] = '100'
+    elif change == 'office_coinsurance':
+        payload['plans'][0]['benefits']['coInsurance'][0]['percent'] = '20'
+    elif change == 'out_of_network':
+        payload['plans'][0]['benefits']['limitations'] = []
+    else:
+        source['active_coverages'] = 2
+    result = finish(payload, inputs, source, payer='Cigna', card_check=card,
+                    configured_connections=[])
+    assert result['collection_guidance']['amount_cents'] is None
 
 
 def test_tpa_office_copay_with_long_cigna_member_suffix_and_distinct_admin_group():

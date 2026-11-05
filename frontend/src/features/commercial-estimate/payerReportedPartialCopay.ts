@@ -16,6 +16,55 @@ export function singleOfficeCopayLine(lines: VisitPricedLine[]): VisitPricedLine
     : null
 }
 
+export function cignaTelevisitCopay(
+  result: PrevisitEstimate,
+  model: CommercialEstimateModel,
+  lines: VisitPricedLine[],
+) {
+  const copay =
+    model.supportedAmount &&
+    result.collection_guidance?.collection_rule?.mode === 'cigna_oap_televisit_office_copay'
+      ? result.collection_guidance.payer_reported_office_copay_cents
+      : null
+  return copay == null
+    ? null
+    : {
+        copay,
+        share: Math.min(
+          copay,
+          result.benefits?.oop_remaining_cents ?? copay,
+          lines[0]?.allowed_cents ?? copay,
+        ),
+      }
+}
+
+export function aetnaNoOfficeDeductible(result: PrevisitEstimate, line: VisitPricedLine | null) {
+  const benefits = result.reference_benefits ?? result.benefits
+  return (
+    benefits?.active === true &&
+    benefits.service_date_matches === true &&
+    benefits.network_status === 'in_network' &&
+    aetnaSignatureOfficeNoDeductible(result, line)
+  )
+}
+
+export function visibleCardOfficePlanningCopay(
+  result: PrevisitEstimate,
+  model: CommercialEstimateModel,
+  references: Array<number | null>,
+) {
+  return references.some((value) => value != null) ? null : cardOfficePlanningCopay(result, model)
+}
+
+export function visibleAetnaDiagnosticPlanning(
+  result: PrevisitEstimate,
+  model: CommercialEstimateModel,
+) {
+  return !model.cash && !model.previousEstimate && result.collection_guidance?.amount_cents == null
+    ? result.aetna_diagnostic_reference
+    : null
+}
+
 export function formatCopayLine(line: VisitPricedLine): string {
   return `CPT ${line.code}: ${line.benefits?.copay_cents != null ? money(line.benefits.copay_cents) : 'not returned'}`
 }

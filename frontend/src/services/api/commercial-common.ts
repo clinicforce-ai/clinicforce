@@ -117,6 +117,7 @@ export type CollectionGuidance = {
   billing_note?: BillingNote
   amount_cents: number | null
   office_visit_copay_advance?: { amount_cents: number; source: 'selected_office_benefit' } | null
+  payer_reported_office_copay_cents?: number
   range_min_cents?: number | null
   range_max_cents?: number | null
   status: string
@@ -132,7 +133,7 @@ export type CollectionGuidance = {
   published_copay_policy_missing?: boolean
   unconfirmed_zero_oop?: boolean
   deferred_supported_share?: boolean
-  collection_rule?: { mode: string; reference: string; approved_at: string }
+  collection_rule?: { mode: string; reference: string; approved_at?: string }
   network: string
   network_source?: string
   requirement_sources?: { referral?: string; authorization?: string }

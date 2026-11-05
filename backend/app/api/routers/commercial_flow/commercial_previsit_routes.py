@@ -25,6 +25,9 @@ async def saved_previsit(case_id: str, request: _api.Request) -> dict:
     "Attribution Status - Not applicable" STC 30 exclusion as inactive coverage.
     Card-printed tiered office copays remain reference-only until the visit's
     coverage, network, service and collection checks pass.
+    A saved Cigna OAP specialist video visit can reapply the current member-bound
+    payer office copay with zero office deductible and coinsurance without a new
+    Stedi call; a readable matched card must agree with the payer copay.
     NMCT (practice_id primary) uses a current Clinical Library insurer contract
     for its HMO, PPO and Medicare Advantage products' in-network tier.
     A patient-bound insurer plan is out of network when no current insurer
