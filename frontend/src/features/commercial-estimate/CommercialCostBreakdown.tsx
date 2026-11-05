@@ -28,7 +28,8 @@ export default function CommercialCostBreakdown({
   const benefits = result.reference_benefits ?? result.benefits
   const reportedResult = result.reference_benefits ? { ...result, benefits } : result
   const { price_range: price, fee_proxy_estimate: feeProxy } = result
-  const gehaZero = result.collection_guidance?.basis === 'published_geha_pshb_zero_office' &&
+  const gehaZero =
+    result.collection_guidance?.basis === 'published_geha_pshb_zero_office' &&
     result.collection_guidance.amount_cents === 0
   const botoxPreview = !model.cash && !model.previousEstimate ? result.botox_preview : null
   const combinedPlan = !model.cash && !model.previousEstimate ? result.combined_emg_plan : null
@@ -212,35 +213,35 @@ export default function CommercialCostBreakdown({
         ? 'No injection copay was included in this provisional calculation'
         : gehaZero
           ? 'Stedi reported a $0 office copay. The matched 2026 G.E.H.A High PSHB Medicare Advantage plan also publishes a $0 in-network specialist visit.'
-        : humanaReferenceCopay != null
-          ? result.card_check?.reference_only
-            ? 'Published Humana H7617-057 plan reference from an upload awaiting staff confirmation. The printed member number has not been verified against the active eCW policy. Confirm the card and Medicare billing protection before collection.'
-            : result.card_check?.status === 'conflict'
-              ? 'Published Humana H7617-057 plan reference; the card member number differs from the active eCW policy. Confirm the correct card and Medicare billing protection before collection.'
-              : 'Published Humana H7617-057 benefit; confirm provider participation and visit conditions before collection'
-          : aetnaPlanning
-            ? aetnaPlanning.benefit_source.label
-            : cignaOfficeScenario
-              ? 'Cigna reported this office copay; applicability to the selected diagnostic services is an assumption'
-              : cignaFeeProxy && feeProxy?.copay_unconfirmed
-                ? 'No CPT copay row was returned; this calculation uses $0'
-                : diagnosticCopay != null
-                  ? 'One payer diagnostic copay for the selected testing; final share follows the claim'
-                  : result.collection_guidance?.basis === 'out_of_pocket_limit'
-                    ? 'Plan copay before the applicable out-of-pocket limit; $0 due for covered care'
-                    : calculated &&
-                        components?.copay_cents === 0 &&
-                        !lines.some((line) => line.benefits?.copay_cents != null)
-                      ? 'No separate copay was applied to the priced CPTs'
-                      : singleOfficeCopayLine
-                        ? `CPT ${singleOfficeCopayLine.code} specialist office copay. Confirm visit-date coverage, applicable billing protections, and prior payments before collecting.`
-                        : !lines.length && reportedOfficeCopay != null
-                          ? 'Payer category term; applicability to planned CPTs and visit date is not confirmed'
-                          : cardPlanningCopay != null
-                            ? 'Card-based office suggestion; payer applicability and imaging cost are unresolved'
-                            : cignaCard
-                              ? 'The card prints tiered office copays. Confirm the provider tier and a separately performed office visit; neither amount is a diagnostic CPT copay.'
-                              : undefined,
+          : humanaReferenceCopay != null
+            ? result.card_check?.reference_only
+              ? 'Published Humana H7617-057 plan reference from an upload awaiting staff confirmation. The printed member number has not been verified against the active eCW policy. Confirm the card and Medicare billing protection before collection.'
+              : result.card_check?.status === 'conflict'
+                ? 'Published Humana H7617-057 plan reference; the card member number differs from the active eCW policy. Confirm the correct card and Medicare billing protection before collection.'
+                : 'Published Humana H7617-057 benefit; confirm provider participation and visit conditions before collection'
+            : aetnaPlanning
+              ? aetnaPlanning.benefit_source.label
+              : cignaOfficeScenario
+                ? 'Cigna reported this office copay; applicability to the selected diagnostic services is an assumption'
+                : cignaFeeProxy && feeProxy?.copay_unconfirmed
+                  ? 'No CPT copay row was returned; this calculation uses $0'
+                  : diagnosticCopay != null
+                    ? 'One payer diagnostic copay for the selected testing; final share follows the claim'
+                    : result.collection_guidance?.basis === 'out_of_pocket_limit'
+                      ? 'Plan copay before the applicable out-of-pocket limit; $0 due for covered care'
+                      : calculated &&
+                          components?.copay_cents === 0 &&
+                          !lines.some((line) => line.benefits?.copay_cents != null)
+                        ? 'No separate copay was applied to the priced CPTs'
+                        : singleOfficeCopayLine
+                          ? `CPT ${singleOfficeCopayLine.code} specialist office copay. Confirm visit-date coverage, applicable billing protections, and prior payments before collecting.`
+                          : !lines.length && reportedOfficeCopay != null
+                            ? 'Payer category term; applicability to planned CPTs and visit date is not confirmed'
+                            : cardPlanningCopay != null
+                              ? 'Card-based office suggestion; payer applicability and imaging cost are unresolved'
+                              : cignaCard
+                                ? 'The card prints tiered office copays. Confirm the provider tier and a separately performed office visit; neither amount is a diagnostic CPT copay.'
+                                : undefined,
     },
     ...cignaCardRows(cignaCard, cignaFeeProxy),
     {
@@ -249,63 +250,62 @@ export default function CommercialCostBreakdown({
         ? '$0.00 for in-network specialist office visit'
         : gehaZero
           ? '$0.00 in-network annual · published plan; Stedi did not return a member deductible row'
-        : humanaReferenceCopay != null &&
-            benefits?.deductible_applies !== true &&
-            benefits?.deductible_annual_cents == null
-          ? '$0.00 annual · no medical deductible (published plan)'
-          : feeProxy != null &&
-              !cignaFeeProxy &&
-              feeProxy.basis !== 'bcbstx_uhc_in_network_fee_proxy'
-            ? `${money(feeProxy.deductible_cents)} annual · published group plan`
-            : [
-                benefits?.deductible_annual_cents != null
-                  ? `${money(benefits.deductible_annual_cents)} annual`
-                  : null,
-                benefits?.deductible_remaining_cents != null
-                  ? `${money(benefits.deductible_remaining_cents)} remaining`
-                  : null,
-              ]
-                .filter(Boolean)
-                .join(' · ') ||
-              (individualDeductible.value !== unknown
-                ? individualDeductible.value
-                : surgicalIndividualDeductible.value !== unknown
-                  ? `${surgicalIndividualDeductible.value} · surgical services`
-                  : unknown),
+          : humanaReferenceCopay != null &&
+              benefits?.deductible_applies !== true &&
+              benefits?.deductible_annual_cents == null
+            ? '$0.00 annual · no medical deductible (published plan)'
+            : feeProxy != null &&
+                !cignaFeeProxy &&
+                feeProxy.basis !== 'bcbstx_uhc_in_network_fee_proxy'
+              ? `${money(feeProxy.deductible_cents)} annual · published group plan`
+              : [
+                  benefits?.deductible_annual_cents != null
+                    ? `${money(benefits.deductible_annual_cents)} annual`
+                    : null,
+                  benefits?.deductible_remaining_cents != null
+                    ? `${money(benefits.deductible_remaining_cents)} remaining`
+                    : null,
+                ]
+                  .filter(Boolean)
+                  .join(' · ') ||
+                (individualDeductible.value !== unknown
+                  ? individualDeductible.value
+                  : surgicalIndividualDeductible.value !== unknown
+                    ? `${surgicalIndividualDeductible.value} · surgical services`
+                    : unknown),
       detail: aetnaNoOfficeDeductible
         ? 'The 2026 Aetna Signature PPO H2293-016 plan has no in-network deductible. A payer-reported general deductible may apply to certain out-of-network services.'
         : gehaZero
           ? 'The published G.E.H.A High Medicare Advantage benefit lists no in-network medical deductible for covered care.'
-        : botoxPreview
-          ? 'Individual balance not returned; provisional scenario uses the payer-reported met family deductible'
-          : cignaFeeProxy
-            ? cignaOfficeScenario
-              ? `${money(0)} applied in this provisional scenario from the general individual remaining balance; CPT applicability is not confirmed`
-              : `${money(feeProxy?.deductible_cents || 0)} applied in this provisional scenario; exact CPT Stedi responses reported no remaining individual deductible`
-            : feeProxy != null
-              ? feeProxy.deductible_source
-              : result.collection_guidance?.basis === 'out_of_pocket_limit'
-                ? individualDeductible.value === unknown &&
-                  benefits?.deductible_annual_cents == null
-                  ? 'No deductible payment due after the out-of-pocket limit; the payer did not report an office-specific deductible rule'
-                  : 'No deductible payment due for this covered office visit after the out-of-pocket limit'
-                : calculated && components?.deductible_cents != null
-                  ? `${money(components.deductible_cents)} applied to this visit`
-                  : individualDeductible.unassigned
-                    ? 'Payer-reported plan amount; medical applicability needs confirmation'
-                    : surgicalIndividualDeductible.value !== unknown
-                      ? 'Payer did not report an office-specific deductible rule; surgical balance does not establish one'
-                      : lines.length &&
-                          lines.every((line) => line.benefits?.deductible_applies === false)
-                        ? 'Does not apply to the selected CPTs'
-                        : 'Office deductible applicability or amount is unresolved for the selected CPTs',
+          : botoxPreview
+            ? 'Individual balance not returned; provisional scenario uses the payer-reported met family deductible'
+            : cignaFeeProxy
+              ? cignaOfficeScenario
+                ? `${money(0)} applied in this provisional scenario from the general individual remaining balance; CPT applicability is not confirmed`
+                : `${money(feeProxy?.deductible_cents || 0)} applied in this provisional scenario; exact CPT Stedi responses reported no remaining individual deductible`
+              : feeProxy != null
+                ? feeProxy.deductible_source
+                : result.collection_guidance?.basis === 'out_of_pocket_limit'
+                  ? individualDeductible.value === unknown &&
+                    benefits?.deductible_annual_cents == null
+                    ? 'No deductible payment due after the out-of-pocket limit; the payer did not report an office-specific deductible rule'
+                    : 'No deductible payment due for this covered office visit after the out-of-pocket limit'
+                  : calculated && components?.deductible_cents != null
+                    ? `${money(components.deductible_cents)} applied to this visit`
+                    : individualDeductible.unassigned
+                      ? 'Payer-reported plan amount; medical applicability needs confirmation'
+                      : surgicalIndividualDeductible.value !== unknown
+                        ? 'Payer did not report an office-specific deductible rule; surgical balance does not establish one'
+                        : lines.length &&
+                            lines.every((line) => line.benefits?.deductible_applies === false)
+                          ? 'Does not apply to the selected CPTs'
+                          : 'Office deductible applicability or amount is unresolved for the selected CPTs',
     },
     {
       label: 'Family deductible',
-      value:
-        gehaZero
-          ? 'Not applicable to this Medicare Advantage individual plan'
-          : humanaReferenceCopay != null
+      value: gehaZero
+        ? 'Not applicable to this Medicare Advantage individual plan'
+        : humanaReferenceCopay != null
           ? 'Not applicable to this Medicare Advantage individual plan'
           : familyDeductible.value !== unknown
             ? familyDeductible.value
@@ -326,25 +326,25 @@ export default function CommercialCostBreakdown({
         ? `0% applied · ${money(0)}`
         : gehaZero
           ? '0% reported · $0.00 for this covered office visit'
-        : combinedPlan
-          ? `${combinedPlan.coinsurance_percent}% · ${money(combinedPlan.diagnostic_coinsurance_cents)}`
-          : botoxPreview
-            ? `${botoxPreview.coinsurance_percent}% · ${money(botoxPreview.patient_share_cents)} provisional`
-            : feeProxy != null
-              ? `${feeProxy.coinsurance_percent}%${cignaOfficeScenario ? ' assumed' : ''} · ${money(feeProxy.coinsurance_cents)} on the fee proxy`
-              : result.collection_guidance?.basis === 'out_of_pocket_limit'
-                ? reportedCoinsurance != null
-                  ? `${reportedCoinsurance}% reported; $0 payable after out-of-pocket limit`
-                  : '$0 payable after out-of-pocket limit'
-                : calculated && components?.coinsurance_cents != null
-                  ? money(components.coinsurance_cents)
-                  : reportedCoinsurance != null
-                    ? `${reportedCoinsurance}% reported; dollar amount pending`
-                    : cignaCard?.in_network_coinsurance_split
-                      ? `${cignaCard.in_network_coinsurance_split} printed in-network split · CPT share pending`
-                      : humanaReferenceCopay != null
-                        ? '40% out of network · in-network office benefit is a copay'
-                        : unknown,
+          : combinedPlan
+            ? `${combinedPlan.coinsurance_percent}% · ${money(combinedPlan.diagnostic_coinsurance_cents)}`
+            : botoxPreview
+              ? `${botoxPreview.coinsurance_percent}% · ${money(botoxPreview.patient_share_cents)} provisional`
+              : feeProxy != null
+                ? `${feeProxy.coinsurance_percent}%${cignaOfficeScenario ? ' assumed' : ''} · ${money(feeProxy.coinsurance_cents)} on the fee proxy`
+                : result.collection_guidance?.basis === 'out_of_pocket_limit'
+                  ? reportedCoinsurance != null
+                    ? `${reportedCoinsurance}% reported; $0 payable after out-of-pocket limit`
+                    : '$0 payable after out-of-pocket limit'
+                  : calculated && components?.coinsurance_cents != null
+                    ? money(components.coinsurance_cents)
+                    : reportedCoinsurance != null
+                      ? `${reportedCoinsurance}% reported; dollar amount pending`
+                      : cignaCard?.in_network_coinsurance_split
+                        ? `${cignaCard.in_network_coinsurance_split} printed in-network split · CPT share pending`
+                        : humanaReferenceCopay != null
+                          ? '40% out of network · in-network office benefit is a copay'
+                          : unknown,
       detail: aetnaPlanning
         ? 'The planning formula uses a fixed diagnostic copay rather than office visit coinsurance'
         : combinedPlan
@@ -465,27 +465,27 @@ export default function CommercialCostBreakdown({
                 ? `${money(combinedPlan.office_copay_cents)} office copay + ${combinedPlan.coinsurance_percent}% × ${money(combinedPlan.diagnostic_allowed_cents)} diagnostic allowance. No additional deductible or out-of-pocket reduction was applied where remaining balances were not returned.`
                 : gehaZero
                   ? 'Published 2026 G.E.H.A High PSHB Medicare Advantage benefit for one covered in-network office visit. Stedi omitted member deductible and out-of-pocket rows; the UHC allowed amount remains unknown.'
-                : result.collection_guidance?.basis === 'out_of_pocket_limit'
-                  ? 'Covered in-network share is capped by the applicable out-of-pocket limit'
-                  : aetnaPlanning
-                    ? `min(${money(aetnaPlanning.copay_cents)} diagnostic copays + ${money(aetnaPlanning.deductible_cents)} deductible + ${money(aetnaPlanning.coinsurance_cents)} coinsurance, ${money(aetnaPlanning.estimated_allowed_cents)} fee reference, ${money(aetnaPlanning.oop_remaining_cents)} remaining out-of-pocket) = ${money(aetnaPlanning.patient_share_cents)} before prior payments. ${aetnaPlanning.message}`
-                    : botoxPreview
-                      ? `One procedure unit at ${money(botoxPreview.allowed_cents)} from ${botoxPreview.rate_source}; ${botoxPreview.coinsurance_percent}% office-injection coinsurance from Stedi. Confirm coding and individual benefit limits before charging.`
-                      : feeProxy != null
-                        ? feeProxy.message
-                        : aetnaCopayPlanning != null
-                          ? `${money(aetnaCopayPlanning)} copay + ${money(0)} deductible + 0% × Aetna allowed amount = ${money(aetnaCopayPlanning)} before the unknown allowance cap. Confirm the visit conditions and final claim amount.`
-                          : priorDateAetnaCopay != null
-                            ? 'Payer-reported office copay after recorded payments. The saved response is for another date; confirm visit-date coverage, provider network, Medicare billing protection and any other services before charging. Full patient responsibility remains unresolved.'
-                            : pendingBluecardCopay != null
-                              ? 'One payer-reported specialist office copay. The selected visit has no applicable deductible or additional coinsurance; the final share remains subject to the allowed charge and processed claim.'
-                              : calculated
-                                ? 'Copay + deductible applied + coinsurance − allowed and out-of-pocket reductions'
-                                : cardPlanningCopay != null
-                                  ? 'Printed specialist copay for one office visit; planned imaging and final payer share are unresolved.'
-                                  : cignaCard
-                                    ? 'Card-printed office copay only. Diagnostic CPT share remains unknown; Cigna allowed amounts and visit-date benefits are needed.'
-                                    : 'Full share awaits applicable deductible and out-of-pocket terms',
+                  : result.collection_guidance?.basis === 'out_of_pocket_limit'
+                    ? 'Covered in-network share is capped by the applicable out-of-pocket limit'
+                    : aetnaPlanning
+                      ? `min(${money(aetnaPlanning.copay_cents)} diagnostic copays + ${money(aetnaPlanning.deductible_cents)} deductible + ${money(aetnaPlanning.coinsurance_cents)} coinsurance, ${money(aetnaPlanning.estimated_allowed_cents)} fee reference, ${money(aetnaPlanning.oop_remaining_cents)} remaining out-of-pocket) = ${money(aetnaPlanning.patient_share_cents)} before prior payments. ${aetnaPlanning.message}`
+                      : botoxPreview
+                        ? `One procedure unit at ${money(botoxPreview.allowed_cents)} from ${botoxPreview.rate_source}; ${botoxPreview.coinsurance_percent}% office-injection coinsurance from Stedi. Confirm coding and individual benefit limits before charging.`
+                        : feeProxy != null
+                          ? feeProxy.message
+                          : aetnaCopayPlanning != null
+                            ? `${money(aetnaCopayPlanning)} copay + ${money(0)} deductible + 0% × Aetna allowed amount = ${money(aetnaCopayPlanning)} before the unknown allowance cap. Confirm the visit conditions and final claim amount.`
+                            : priorDateAetnaCopay != null
+                              ? 'Payer-reported office copay after recorded payments. The saved response is for another date; confirm visit-date coverage, provider network, Medicare billing protection and any other services before charging. Full patient responsibility remains unresolved.'
+                              : pendingBluecardCopay != null
+                                ? 'One payer-reported specialist office copay. The selected visit has no applicable deductible or additional coinsurance; the final share remains subject to the allowed charge and processed claim.'
+                                : calculated
+                                  ? 'Copay + deductible applied + coinsurance − allowed and out-of-pocket reductions'
+                                  : cardPlanningCopay != null
+                                    ? 'Printed specialist copay for one office visit; planned imaging and final payer share are unresolved.'
+                                    : cignaCard
+                                      ? 'Card-printed office copay only. Diagnostic CPT share remains unknown; Cigna allowed amounts and visit-date benefits are needed.'
+                                      : 'Full share awaits applicable deductible and out-of-pocket terms',
           },
           ...(summary?.payments_verified_cents != null && summary.payments_verified_cents > 0
             ? [{ label: 'Already paid', value: `−${money(summary.payments_verified_cents)}` }]
