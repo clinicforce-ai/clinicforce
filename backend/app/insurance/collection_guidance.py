@@ -63,6 +63,7 @@ def build(result: dict, review: dict | None = None) -> dict:
                                    'Payer statement about the requesting provider' if verified_in_network(benefits) and benefits.get('network_source') == 'payer_participation_message' else
                                    'Current Clinical Library contract' if verified_in_network(benefits) and benefits.get('network_source') == 'clinic_library_contract' else
                                    'Clinic-stated PHCS/MultiPlan participation; payer-specific provider tier not returned' if benefits.get('network_source') == 'clinic_attested_phcs_roster' else
+                                   'Clinic-stated Cigna participation for this Allegiance-administered office visit; provider tier not independently confirmed by the administrator' if benefits.get('network_source') == 'clinic_attested_cigna_tpa' else
                                    'Legacy NMCT clinic policy; recalculate against current Clinical Library contracts' if benefits.get('network_source') == 'clinic_nmct_policy' else
                                    'No contract linked to this exact payer product and provider' if benefits.get('network_source') == 'clinic_library_absent' else
                                    'Payer and clinic provider participation evidence conflict' if participation_conflict(benefits) else

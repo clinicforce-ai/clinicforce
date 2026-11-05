@@ -149,10 +149,15 @@ def compare(payload: dict, coverage: dict, evidence: dict | None = None) -> dict
     # Never equate two different explicit suffixes or use demographics alone.
     base, extended = sorted((expected_member, returned_member), key=len)
     payer_plan = plan_details(payload)
-    group_matches = bool(coverage.get('group_number') and payer_plan.get('group_number')
-        and normalized(coverage['group_number']) == normalized(payer_plan['group_number']))
+    # Stedi may leave the Cigna 271 REF group qualifier as groupOrPolicyNumber.
+    # Use it only as an exact corroborating identifier when no typed group was returned.
+    returned_group = payer_plan.get('group_number') or (
+        ((payload.get('subscriber') or {}).get('additionalInformation') or {}).get('groupOrPolicyNumber')
+        if str(payload.get('payerId') or '') == '62308' else None)
+    group_matches = bool(coverage.get('group_number') and returned_group
+        and normalized(coverage['group_number']) == normalized(returned_group))
     cigna_suffix = (str(payload.get('payerId') or '') == '62308'
-        and len(base) == 9 and len(extended) == 11 and extended == base + extended[-2:]
+        and len(base) in {9, 12} and len(extended) == len(base) + 2 and extended == base + extended[-2:]
         and extended[-2:].isdigit() and coverage.get('coverage_id') and coverage.get('active_coverages') == 1
         and group_matches and not policy_differences
         and expected['relationship'] == returned['relationship'] in {'self', 'spouse', 'child', 'other'}

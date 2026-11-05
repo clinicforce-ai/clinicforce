@@ -172,6 +172,12 @@ async def previsit_estimate(value: _api.PrevisitInput, request: _api.Request, ba
     identifies an optional public NPPES fallback. Unknown ledger values remain
     unknown, and missing cards or contract rates do not alone block a verified
     fixed office copay.
+    A Cigna 271 that explicitly directs medical benefit questions to Allegiance
+    can trigger separate administrator office and plan inquiries. Matched
+    administrator terms retain their own source and group; a patient-bound
+    twelve-character Cigna base ID can reconcile with its two-digit suffix.
+    For NMCT POS 11 visits, clinic-attested Cigna participation on this route
+    is labeled clinic_attested_cigna_tpa and yields to contrary provider evidence.
     Coverage source is benefit_source for returned eligibility, otherwise the
     eCW policy or discovery state. network_evidence includes document_id,
     document_label and locator only when the applied clinic network profile

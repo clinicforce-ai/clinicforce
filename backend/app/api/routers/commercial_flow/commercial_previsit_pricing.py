@@ -3,29 +3,12 @@ from __future__ import annotations
 
 from app.api.routers import commercial_estimator as _api
 from app.api.routers.commercial_flow.commercial_previsit_rate_reference import _attach_temporary_aetna_rates, _attach_temporary_uhc_rates, _attach_temporary_blue_cross_rates
-from app.api.routers.commercial_flow.commercial_previsit_network_guard import apply_admin_nonparticipation, apply_nmct_library_contract, apply_nmct_contract_absence, scoped_admin_nonparticipation, record_confirmed_out_of_network, resolve_unlinked_blue_route
+from app.api.routers.commercial_flow.commercial_previsit_network_guard import apply_admin_nonparticipation, apply_nmct_cigna_administrator_attestation, apply_nmct_library_contract, apply_nmct_contract_absence, scoped_admin_nonparticipation, record_confirmed_out_of_network, resolve_unlinked_blue_route
 from app.api.routers.commercial_flow.commercial_previsit_service_scope import reviewed_service_types as _reviewed_service_types
+from app.api.routers.commercial_flow.commercial_previsit_context import ecw_case_data as _ecw_case_data
+from app.api.routers.commercial_flow.commercial_previsit_context import past_visit_with_saved_estimate as _past_visit_with_saved_estimate
+from app.api.routers.commercial_flow.commercial_previsit_tpa import merge_administrator_benefits
 from app.insurance import botox_review, cms_locality, cms_pfs, cpt_rules, insurance_product, inventory_certification, library_network_exclusions, group_contract_support
-def _ecw_case_data(inputs: dict, source: dict, conflicts: list[str]) -> dict[str, _api.Any]:
-    return {"appointment_id": source.get("appointment_id"), "appointment_date": source.get("appointment_date"),
-            "retrieved_at": source.get("retrieved_at"), "appointment_status": source.get("appointment_status"),
-            "suggested_lines": [{"code": row.get("code"), "units": row.get("units"), "description": row.get("description")}
-                                for row in inputs.get("lines", []) if row.get("code")],
-            "reason": inputs.get("reason"), "conflicts": conflicts}
-
-def _past_visit_with_saved_estimate(visit: dict[str, _api.Any], case: dict | None) -> dict[str, _api.Any]:
-    """Attach only an estimate already saved for this exact eCW encounter."""
-    ecw = ((case or {}).get("commercial") or {}).get("ecw") or {}
-    estimate = (case or {}).get("estimate")
-    if (case or {}).get("source_mode") != "commercial" or ecw.get("appointment_id") != visit.get("id") or not isinstance(estimate, dict):
-        return {**visit, "saved_estimate": None}
-    return {**visit, "saved_estimate": {
-        "created_at": case.get("created_at"),
-        "allowed_cents": estimate.get("allowed_cents"),
-        "patient_cents": estimate.get("patient_cents"),
-        "plan_cents": estimate.get("plan_cents"),
-        "disclaimer": estimate.get("disclaimer"),
-    }}
 
 def _commercial_slot(appointment_id: str) -> str:
     return "commercial:" + _api.hashlib.sha256(appointment_id.encode()).hexdigest()
@@ -226,14 +209,19 @@ def _previsit_benefits(payload: dict, coverage: dict, service_date: str | None =
     # Scope the summary to office care and each CPT to the complete saved 271.
     summary_service = ('98' if office_only and '98' in requested else
                        next((code for code in requested if code != '30'), requested[0] if requested else '98'))
-    benefits = _api.commercial.normalize_stedi_271(payload, summary_service, False,
+    delegated = (payload.get('_service_payloads') or {}) if payload.get('_administrator_route') == '81040' else {}
+    office_payload = delegated.get('98') if office_only else None
+    benefit_payload = office_payload or payload
+    benefits = _api.commercial.normalize_stedi_271(benefit_payload, summary_service, False,
         coverage["active_coverages"] > 1 or coverage.get("other_active_coverage", False), service_date=service_date,
         procedure_code=codes[0]['code'] if office_only and len(codes) == 1 else None,
         office_visit=office_only,
         office_service_types=_api._office_service_types('', source or {}), **context)
+    if office_payload:
+        merge_administrator_benefits(_api, payload, benefits, delegated, summary_service, service_date, _api._office_service_types('', source or {}), context)
     if diagnostic_payload := (payload.get('_service_payloads') or {}).get('73'):
         benefits['reported_options'].extend({**row, 'id': f"stc73:{row['id']}"} for row in _api.commercial.reported_stedi_options(diagnostic_payload, '73') if row.get('service_type_code') == '73')
-    benefits['benefit_source'] = (payload.get('benefit_source') or 'Stedi') if payload else None
+    benefits['benefit_source'] = ('Stedi · plan administrator' if office_payload else (payload.get('benefit_source') or 'Stedi') if payload else None)
     if (inputs and source and not coverage.get('other_active_coverage')
             and _api.stedi_discovery.corroborates_patient_policy(payload, inputs, source)
             and _api.stedi_discovery.automatic_match(payload, inputs, source)):
@@ -367,6 +355,7 @@ def _attach_previsit_pricing(result: dict, practice_id: str, inputs: dict, sourc
     apply_admin_nonparticipation(result, benefits, scoped_admin_nonparticipation(
         practice_id, route_payer, inputs, source,
         source.get('payer_plan_names') or [], str((source.get('payer_plan_scope') or {}).get('group_number') or '')))
+    apply_nmct_cigna_administrator_attestation(result, benefits, practice_id, payer_id, payload, inputs, source)
     if exclusion:
         result['agreement_exclusion'] = exclusion
         result['network_evidence'] = {**exclusion,
@@ -484,6 +473,7 @@ def _attach_previsit_pricing(result: dict, practice_id: str, inputs: dict, sourc
     if nmct:
         apply_nmct_contract_absence(result, benefits, payer_name, nmct_contract,
                                     service_date, source.get('payer_plan_bound'))
+    apply_nmct_cigna_administrator_attestation(result, benefits, practice_id, payer_id, payload, inputs, source)
     if _api.network_participation.verified_out_of_network(benefits):
         record_confirmed_out_of_network(result, benefits)
     priced_source = {**source, **((result.get('network_evidence') or {}).get('scope') or {})}
