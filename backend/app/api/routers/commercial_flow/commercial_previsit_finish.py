@@ -4,6 +4,7 @@ from __future__ import annotations
 from app.api.routers import commercial_estimator as _api
 from app.api.routers.commercial_flow.commercial_previsit_catalog import build_catalog
 from app.api.routers.commercial_flow.commercial_previsit_requirements import attach_requirements
+from app.api.routers.commercial_flow.commercial_previsit_tpa import cigna_primary_route
 from app.insurance.identity import patient_benefits_bound, patient_plan_applies
 from app.insurance import blue_cross_proxy, botox_review, evidence_resolution, published_plan_benefits
 
@@ -82,7 +83,7 @@ def _finish_previsit(result: dict, case: dict, inputs: dict, source: dict, paylo
     administrator = ((payload or {}).get('_service_payloads') or {}) if (payload or {}).get('_administrator_route') == '81040' else {}
     result['nmct_cigna_delegated_office'] = bool(
         _api.network_participation.is_nmct_practice(session['practice_id'])
-        and payer_id == '62308' and administrator.get('98')
+        and cigna_primary_route(payer_id, payload) and administrator.get('98')
         and str(inputs.get('place_of_service') or '') == '11')
     office_rows = [row for plan in (administrator.get('98') or {}).get('plans') or []
                    for row in (plan.get('benefits') or {}).get('coPayment') or []]

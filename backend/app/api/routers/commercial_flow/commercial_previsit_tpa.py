@@ -7,6 +7,11 @@ from types import ModuleType
 from app.insurance.identity import normalized, patient_benefits_bound
 
 
+def cigna_primary_route(payer_id: str, payload: dict | None) -> bool:
+    """Match Stedi's Cigna ID or its primary payer ID to a Cigna 271."""
+    return payer_id in {'HGJLR', '62308'} and (payload or {}).get('payerId') == '62308'
+
+
 def administrator_route(primary: dict) -> str | None:
     """Only follow the payer's explicit medical-benefit contact to a known route."""
     if primary.get('payerId') != '62308' or len(primary.get('plans') or []) != 1:
