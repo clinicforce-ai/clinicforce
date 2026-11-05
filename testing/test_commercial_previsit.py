@@ -345,6 +345,9 @@ class PrevisitFlowTest(unittest.IsolatedAsyncioTestCase):
     async def test_explicit_self_pay_skips_stedi_and_defaults_to_cash(self):
         await self._flow(date.today().isoformat(), self_pay=True)
 
+    async def test_cash_package_choice_keeps_previewed_diagnostic_services(self):
+        await self._flow(date.today().isoformat(), self_pay=True, cash_package=True)
+
     async def test_missing_provider_enrollment_prevents_paid_eligibility(self):
         await self._flow(date.today().isoformat(), enrollment_missing=True)
 
@@ -428,11 +431,17 @@ class PrevisitFlowTest(unittest.IsolatedAsyncioTestCase):
     async def test_newer_conflicting_ecw_check_refreshes_cached_stedi_evidence(self):
         await self._flow(date.today().isoformat(), newer_ecw=True)
 
-    async def _flow(self, service_date, reject=False, retry_basic=False, payer_missing=False, refresh=False, newer_ecw=False, too_early=False, self_pay=False, coverage_start=None, saved_hold=False, enrollment_missing=False, ecw_saved=False, ecw_incomplete=False, medicare_secondary=False, billing_note=None, member_id_missing=False, card_fields=None, card_conflict=False, card_status=None, pos=None, scheduled_code=None, emg_review=False, expect_preliminary=False, visit_type='new', combined_emg=False, secondary_mismatch=False, cash_office=False, telehealth=False, confirmed_card=False, aetna_payer_id=None):
+    async def _flow(self, service_date, reject=False, retry_basic=False, payer_missing=False, refresh=False, newer_ecw=False, too_early=False, self_pay=False, coverage_start=None, saved_hold=False, enrollment_missing=False, ecw_saved=False, ecw_incomplete=False, medicare_secondary=False, billing_note=None, member_id_missing=False, card_fields=None, card_conflict=False, card_status=None, pos=None, scheduled_code=None, emg_review=False, expect_preliminary=False, visit_type='new', combined_emg=False, secondary_mismatch=False, cash_office=False, telehealth=False, confirmed_card=False, aetna_payer_id=None, cash_package=False):
         if cash_office:
             self.cash_current.return_value = {'id': 'synthetic-cash', 'filename': 'synthetic.csv',
                 'effective_from': '2026-01-01', 'rows': [{'code': '99204', 'cash_cents': 25000,
                     'description': 'Office consultation'}]}
+        if cash_package:
+            self.cash_current.return_value = {'id': 'synthetic-cash', 'filename': 'synthetic.csv',
+                'effective_from': '2026-01-01', 'rows': [
+                    {'code': '99203', 'cash_cents': 25000, 'description': 'Office consultation'},
+                    {'code': 'named:onehand', 'cash_cents': 50000, 'price_kind': 'named_package',
+                     'label': 'One-hand carpal tunnel', 'description': 'One-hand carpal tunnel'}]}
         session = {"practice_id": "clinic", "intake_id": "intake", "patient_id": "patient",
                    "share_manifest_id": "", "staff": {"id": "staff", "display_name": "Staff", "practice_name": "Clinic"},
                    "intake": {"updated_at": "version", "patient": {"given_name": "Pat", "family_name": "Example",
@@ -449,6 +458,8 @@ class PrevisitFlowTest(unittest.IsolatedAsyncioTestCase):
             inputs['place_of_service'] = pos
         if telehealth:
             inputs['reason'] = 'Televisit'
+        if cash_package:
+            inputs['reason'] = 'One-hand carpal tunnel EMG/NCS'
         if scheduled_code:
             inputs['lines'] = [{'id': 'documented-service', 'code': scheduled_code,
                                 'service_status': 'scheduled', 'units': 1,
@@ -548,7 +559,11 @@ class PrevisitFlowTest(unittest.IsolatedAsyncioTestCase):
              patch("app.api.routers.commercial_estimator._read_card_hints", new=AsyncMock(return_value={
                  'status': card_status or ('read' if card_fields else 'not_found'), 'fields': card_fields or {},
                  'count': 1 if card_fields else 0}), create=True), \
-             patch("app.api.routers.commercial_estimator.cpt_suggester.suggest_preliminary_cpt_codes", return_value={"groups": [], "notes": []}) as preliminary_suggestions, \
+             patch("app.api.routers.commercial_estimator.cpt_suggester.suggest_preliminary_cpt_codes", return_value={"groups": [
+                 {"id": "nerve", "label": "Nerve test", "category": "nerve", "selection_mode": "single",
+                  "codes": [{"code": "95908", "reason": "Planned NCS"}]},
+                 {"id": "muscle", "label": "Needle EMG", "category": "muscle", "selection_mode": "multiple",
+                  "codes": [{"code": "95886", "reason": "Planned EMG"}]}] if cash_package else [], "notes": []}) as preliminary_suggestions, \
              patch("app.api.routers.commercial_estimator.stedi_payers.search_payer", new=AsyncMock(return_value=None if payer_missing else {"stediId": aetna_payer_id or "QDTRP", "displayName": "Aetna" if aetna_payer_id else "Blue Cross and Blue Shield of Texas", 'transactionSupport': {'eligibilityCheck': 'ENROLLMENT_REQUIRED' if enrollment_missing else 'SUPPORTED'}})), \
              patch("app.api.routers.commercial_estimator.stedi_payers.eligibility_enrollment", new=AsyncMock(return_value={'status': 'MISSING', 'reason_code': 'enrollment_missing'})), \
              patch("app.api.routers.commercial_estimator.store.get_cases", return_value=held_cases), \
@@ -579,6 +594,26 @@ class PrevisitFlowTest(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual([row['value'] for row in sent['encounter']['services']], ['98'])
                 self.assertEqual(sent['encounter']['dates']['service']['start'], service_date)
                 self.assertEqual(result['requested_service_types'], ['98'])
+                return
+            if cash_package:
+                from fastapi import HTTPException
+                with patch('app.api.routers.commercial_estimator.store.get_case', return_value=case):
+                    with self.assertRaises(HTTPException) as invalid:
+                        await update_visit_review('case-1', VisitReviewInput(
+                            context_token=result['context_token'], revision=0,
+                            cash_selection='named:onehand'), MagicMock())
+                self.assertEqual(invalid.exception.status_code, 422)
+                selected = [row['id'] for row in result['available_codes'] if row['code'] in {'95908', '95886'}]
+                self.assertEqual(len(selected), 2)
+                case['previsit_context']['result']['selected_ids'] = selected
+                case['previsit_context']['result']['price_range'] = {'mode': 'services', 'lines': [
+                    row for row in result['available_codes'] if row['id'] in selected]}
+                with patch('app.api.routers.commercial_estimator.store.get_case', return_value=case):
+                    edited = await update_visit_review('case-1', VisitReviewInput(
+                        context_token=result['context_token'], revision=0, cash_selection='named:onehand'), MagicMock())
+                self.assertEqual([row['code'] for row in edited['price_range']['lines']], ['95908', '95886'])
+                self.assertEqual(edited['cash_quote']['min_cents'], 50000)
+                self.assertEqual(edited['collection_guidance']['amount_cents'], 50000)
                 return
             if telehealth:
                 self.assertEqual(client.post.await_args_list[0].kwargs['json']['encounter']['placeOfService'], {'code': '10'})
