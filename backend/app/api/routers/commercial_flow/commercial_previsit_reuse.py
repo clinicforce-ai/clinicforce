@@ -4,6 +4,7 @@ from __future__ import annotations
 from copy import deepcopy
 from types import ModuleType
 from app.api.routers.commercial_flow.commercial_previsit_requirements import check_cpt_authorization
+from app.api.routers.commercial_flow.commercial_previsit_tpa import administrator_route, check_administrator
 
 
 SAVED_RESPONSE_UNAVAILABLE = ('The protected saved payer response could not be reopened. '
@@ -154,7 +155,8 @@ async def reuse_previsit_case(api: ModuleType, *, case: dict, result: dict,
                               inputs: dict, source: dict, session: dict,
                               coverage: dict, provider: dict, background_tasks,
                               requested_stc: list[str], payer_id: str,
-                              refresh_benefits: bool, api_key: str | None = None) -> dict | None:
+                              refresh_benefits: bool, api_key: str | None = None,
+                              body: dict | None = None, basic_body: dict | None = None) -> dict | None:
     """Return an existing or held case result when another request is unsafe."""
     saved = case.get("previsit") or {}
     if case.get('previsit_discovery', {}).get('request_state') in {'pending', 'indeterminate'}:
@@ -191,18 +193,49 @@ async def reuse_previsit_case(api: ModuleType, *, case: dict, result: dict,
             result["checked_at"] = saved.get("checked_at")
             result["benefits"] = dict(saved.get("benefits") or {})
             payload = None
+            administrator_state = saved.get('administrator_request_state')
             if case.get("previsit_raw_object_key"):
                 try:
                     raw = await api.run_in_threadpool(api.object_store.get_object_bytes, case["previsit_raw_object_key"])
                     payload = api.json.loads(raw)
-                    result["benefits"] = api._case_benefits(payload, inputs, source, case)
                 except Exception:
                     payload = None
+            if (payload and api_key and body and basic_body and not administrator_state
+                    and not payload.get('_administrator_route') and administrator_route(payload)):
+                linked, administrator_state = await check_administrator(api, primary=payload,
+                    coverage=coverage, inputs=inputs, body=body, basic_body=basic_body,
+                    api_key=api_key, case=case, session=session)
+                if linked:
+                    enriched = {**payload, '_service_payloads': {**(payload.get('_service_payloads') or {}), **linked},
+                                '_administrator_route': '81040'}
+                    enriched_raw = api.json.dumps(enriched).encode()
+                    try:
+                        new_key = await api.run_in_threadpool(api.object_store.put_staff_document,
+                            session['practice_id'], case['id'], 'previsit-stedi-271.json', enriched_raw, 'application/json')
+                    except Exception:
+                        administrator_state = 'indeterminate'
+                        case['previsit']['administrator_request_state'] = 'indeterminate'
+                    else:
+                        case['previsit_raw_object_key'] = new_key
+                        case['previsit_raw_sha256'] = api.hashlib.sha256(enriched_raw).hexdigest()
+                        payload = enriched
+                if administrator_state in {'partial', 'indeterminate'}:
+                    case['previsit']['request_state'] = administrator_state
+            if payload is not None:
+                result['benefits'] = api._case_benefits(payload, inputs, source, case)
+                if administrator_state in {'pending', 'partial', 'indeterminate'}:
+                    result['benefits']['requires_review'] = True
+                    result['benefits'].setdefault('source_errors', []).append({
+                        'path': 'delegated_administrator', 'kind': 'incomplete',
+                        'message': 'The delegated office and medical benefit checks are incomplete.'})
+                    result['issues'].append('Review the delegated administrator check before collection.')
             if payload is None:
                 result['benefits'] = saved_benefits_for_review(result['benefits']) or api._previsit_benefits({}, coverage, inputs['service_date'])
                 result['issues'].append(SAVED_RESPONSE_UNAVAILABLE)
             await api.run_in_threadpool(api._finish_previsit, result, case, inputs, source, payload, session, payer_id)
-            if (payload and api_key and (case.get('cpt_authorization') or {}).get('state') not in {'pending', 'indeterminate'}):
+            case['previsit']['benefits'] = result['benefits']
+            if (payload and api_key and administrator_state not in {'pending', 'partial', 'indeterminate'}
+                    and (case.get('cpt_authorization') or {}).get('state') not in {'pending', 'indeterminate'}):
                 case = await check_cpt_authorization(api, result, case, payload, inputs, session, api_key)
                 if (case.get('cpt_authorization') or {}).get('state') == 'complete':
                     await api.run_in_threadpool(api._finish_previsit, result, case, inputs, source, payload, session, payer_id)

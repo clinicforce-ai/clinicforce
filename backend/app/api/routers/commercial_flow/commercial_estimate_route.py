@@ -45,7 +45,7 @@ from app.api.routers.commercial_flow.commercial_previsit_appointment import load
     "each service category uses its own 270 inquiry; linked responses must match the member, medical "
     "plan and visit date before combined pricing. A missing second response leaves collection unresolved. "
     "A matching exact-CPT Stedi inquiry automatically resolves authorization for the bound member and visit setting. A compatible fresh saved 271 can trigger a missing CPT inquiry without repeating the plan check; an uncertain CPT inquiry is held for review. A corroborated Cigna member suffix supports the member-specific rule check, and a single Cigna OAP product label uses the Open Access Plus office referral rule. "
-    "When a patient-bound Cigna response names Allegiance as its medical-benefit contact, separate STC 98 office and STC 30 medical inquiries can supply matched cost sharing while retaining Cigna identity and network evidence. For a matching NMCT office visit, clinic-attested Cigna participation is labeled clinic_attested_cigna_tpa and yields to contrary provider evidence; a fixed copay still requires the clinic collection policy and payment checks. "
+    "When a patient-bound Cigna response names Allegiance as its medical-benefit contact, separate STC 98 office and STC 30 medical inquiries can supply matched cost sharing while retaining Cigna identity and network evidence. A fresh saved Cigna response missing those inquiries performs them once without repeating the Cigna check; incomplete results remain review-only. For a matching NMCT office visit, clinic-attested Cigna participation is labeled clinic_attested_cigna_tpa and yields to contrary provider evidence; a fixed copay still requires the clinic collection policy and payment checks. "
     "A current Aetna Oxy PPO with Rx in-network office CPT 99204 may use the published 2026 no-referral and no-precertification rules; other CPTs need separate decisions. A signed "
     "same-payer clinic agreement may set benefits.network_source to clinic_group_agreement and "
     "return mismatch_warnings for differing product or provider details. A matching in-network UHC "
@@ -476,6 +476,7 @@ async def previsit_estimate(value: _api.PrevisitInput, request: _api.Request, ba
         session=session, coverage=coverage, provider=provider,
         background_tasks=background_tasks, requested_stc=requested_stc,
         payer_id=payer_id, refresh_benefits=value.refresh_benefits, api_key=api_key,
+        body=body, basic_body=basic_body,
     )
     if reused_result is not None:
         return reused_result

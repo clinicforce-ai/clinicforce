@@ -17,13 +17,19 @@ function nextStep(model: CommercialEstimateModel, result: PrevisitEstimate) {
     }
   if (!lines.length && !result.selected_ids?.length)
     return { title: 'Select services', hint: 'Choose the planned CPTs for this visit.' }
-  if (lines.some((line) => line.rate_resolution?.status !== 'RESOLVED'))
-    return { title: 'Check CPT prices', hint: 'Match payer rates to the selected services.' }
   if (result.benefits?.active !== true)
     return { title: 'Check coverage', hint: 'Run eligibility for this visit.' }
   if (result.benefits.has_secondary || result.recovery?.reason_code === 'multiple_active_policies')
     return { title: 'Confirm payer order', hint: 'Resolve the active policies before collecting.' }
-  if (model.guidance?.policy_setup_required)
+  if (result.benefits.source_errors?.length)
+    return {
+      title: 'Check payer response',
+      hint: 'Review the incomplete benefit check for this visit.',
+    }
+  if (
+    model.guidance?.policy_setup_required ||
+    result.collection_guidance?.positive_advance_policy_missing
+  )
     return {
       title: 'Approve collection policy',
       hint: 'The clinic must approve this payer route’s advance rule.',
@@ -35,6 +41,18 @@ function nextStep(model: CommercialEstimateModel, result: PrevisitEstimate) {
     }
   if (!/^in network|^out of network/i.test(model.networkLabel || ''))
     return { title: 'Verify network', hint: 'Confirm this plan and provider’s network tier.' }
+  if (
+    result.benefit_source?.includes('plan administrator') &&
+    lines.length === 1 &&
+    /^992(?:0[2-5]|1[2-5])$/.test(lines[0].code) &&
+    lines[0].benefits?.copay_cents == null
+  )
+    return {
+      title: 'Review office copay',
+      hint: 'Confirm the diagnosis and applicable specialist copay.',
+    }
+  if (lines.some((line) => line.rate_resolution?.status !== 'RESOLVED'))
+    return { title: 'Check CPT prices', hint: 'Match payer rates to the selected services.' }
   return { title: 'Review estimate', hint: 'See the missing item in the table below.' }
 }
 

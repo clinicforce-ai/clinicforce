@@ -12,6 +12,7 @@ from app.api.routers.commercial_flow.commercial_previsit_tpa import (
     administrator_route, check_administrator, same_administrator_patient,
 )
 from app.api.routers.commercial_flow.commercial_previsit_network_guard import recheck_saved_network_evidence
+from app.api.routers.commercial_flow import commercial_previsit_reuse as reuse
 from app.insurance import collection_guidance, commercial, ecw_backend, identity, provider_specialty
 from app.insurance.requirements import published
 from testing.synthetic_policy import COPAY_POLICY
@@ -197,18 +198,100 @@ def test_delegated_inquiry_uses_full_member_and_rejects_changed_patient():
     async def run_check():
         with patch.object(api, '_post_stedi_eligibility', side_effect=fake_post), \
              patch.object(api, 'run_in_threadpool', side_effect=in_threadpool), \
-             patch.object(api, '_save', side_effect=lambda case, *_: case):
+             patch.object(api, '_save', side_effect=lambda case, *_: {**case, 'revision': case.get('revision', 0) + 1}):
             return await check_administrator(api, primary=primary,
                 coverage=api._coverage_snapshot(inputs, source), inputs=inputs, body=body,
                 basic_body=body, api_key='synthetic-key', case=case, session={})
 
     linked, state = asyncio.run(run_check())
     assert state == 'complete' and set(linked) == {'98', '30'}
+    assert case['revision'] == 1  # The pending write must advance the caller's optimistic lock.
     assert [(row['payerId'], row['subscriber']['memberId'], row['encounter']['services'][0]['value'])
             for row in sent] == [('81040', '98765432100001', '98'), ('81040', '98765432100001', '30')]
     changed = deepcopy(office)
     changed['subscriber']['dateOfBirth'] = '1981-01-15'
     assert not same_administrator_patient(primary, changed, '81040')
+    partial_case = {'previsit': {'request_state': 'complete'}}
+    async def partial_post(_client, _headers, _inquiry, _basic):
+        response = httpx.Response(200, request=httpx.Request('POST', 'https://example.test'))
+        if 'office_sent' not in partial_case:
+            partial_case['office_sent'] = True
+            return response, office, False
+        return response, changed, False
+    async def run_partial():
+        with patch.object(api, '_post_stedi_eligibility', side_effect=partial_post), \
+             patch.object(api, 'run_in_threadpool', side_effect=in_threadpool), \
+             patch.object(api, '_save', side_effect=lambda row, *_: {**row, 'revision': row.get('revision', 0) + 1}):
+            return await check_administrator(api, primary=primary,
+                coverage=api._coverage_snapshot(inputs, source), inputs=inputs, body=body,
+                basic_body=body, api_key='synthetic-key', case=partial_case, session={})
+    _, partial_state = asyncio.run(run_partial())
+    assert partial_state == 'partial'
+    assert partial_case['revision'] == 2
+    assert partial_case['previsit']['administrator_request_state'] == 'partial'
+
+
+def test_fresh_legacy_cigna_response_adds_delegated_office_terms_without_repeating_primary():
+    primary, inputs, source = example()
+    primary['plans'][0]['benefits']['coPayment'] = []
+    primary['plans'][0]['benefits']['contactFollowingEntityForInformation'] = [{
+        'service': {'system': 'STC', 'value': '30'}, 'relatedEntities': [{
+            'type': 'PAYER', 'name': {'organization': 'ALLEGIANCE BENEFIT PLAN MANAGEMENT'}}]}]
+    office = deepcopy(primary)
+    office['payerId'] = '81040'
+    office['subscriber']['groupNumber'] = 'ADMIN-GROUP'
+    office['plans'][0]['benefits']['coPayment'] = [{
+        'service': {'system': 'STC', 'value': '98'}, 'coverageLevel': 'INDIVIDUAL',
+        'network': {'indicator': 'IN_NETWORK'}, 'amount': '40',
+        'timePeriod': 'VISIT', 'messages': ['Specialist']}]
+    general = deepcopy(office)
+    general['plans'][0]['benefits']['coPayment'] = []
+    general['plans'][0]['benefits']['statuses'] = [{
+        'status': 'Active Coverage', 'service': {'system': 'STC', 'value': '30'}}]
+    raw_by_key = {'old-protected': api.json.dumps(primary).encode()}
+    case = {'id': 'synthetic-case', 'revision': 0,
+            'previsit': {'request_state': 'complete',
+                         'checked_at': datetime.now(timezone.utc).isoformat(),
+                         'requested_service_types': ['98'],
+                         'benefits': {'active': True, 'service_date_matches': True}},
+            'previsit_raw_object_key': 'old-protected', 'cpt_authorization': {'state': 'pending'}}
+    result = {'issues': [], 'payer': 'Cigna'}
+    captured = []
+
+    async def in_threadpool(func, *args):
+        return func(*args)
+
+    async def administrator_check(*_args, **kwargs):
+        kwargs['case']['previsit']['administrator_request_state'] = 'complete'
+        return {'98': office, '30': general}, 'complete'
+
+    def put_protected(_practice, _case, _name, raw, _type):
+        raw_by_key['new-protected'] = raw
+        return 'new-protected'
+
+    async def run_reuse():
+        with patch.object(reuse, 'check_administrator', new=AsyncMock(side_effect=administrator_check)) as check, \
+             patch.object(api, 'run_in_threadpool', side_effect=in_threadpool), \
+             patch.object(api.object_store, 'get_object_bytes', side_effect=raw_by_key.__getitem__), \
+             patch.object(api.object_store, 'put_staff_document', side_effect=put_protected), \
+             patch.object(api.visit_estimate, 'reconcile_eligibility', return_value={'requires_review': False}), \
+             patch.object(api, '_finish_previsit', side_effect=lambda _result, _case, _inputs, _source, payload, *_: captured.append(payload)), \
+             patch.object(api, '_save', side_effect=lambda row, *_: {**row, 'revision': row['revision'] + 1}), \
+             patch.object(api, '_previsit_result', side_effect=lambda *_: result), \
+             patch.object(api.insurance_identity, 'unresolved_policy_difference', return_value=False):
+            response = await reuse.reuse_previsit_case(api, case=case, result=result, inputs=inputs,
+                source=source, session={'practice_id': 'synthetic-clinic'},
+                coverage=api._coverage_snapshot(inputs, source), provider={}, background_tasks=None,
+                requested_stc=['98'], payer_id='62308', refresh_benefits=False,
+                api_key='synthetic-key', body={'payerId': '62308'}, basic_body={'payerId': '62308'})
+            assert response is result
+            check.assert_awaited_once()
+
+    asyncio.run(run_reuse())
+    assert case['previsit_raw_object_key'] == 'new-protected'
+    assert case['previsit_raw_sha256'] == api.hashlib.sha256(raw_by_key['new-protected']).hexdigest()
+    assert captured[0]['_administrator_route'] == '81040'
+    assert finish(captured[0], inputs, source, payer='Cigna')['collection_guidance']['amount_cents'] == 4000
 
 
 def test_named_cigna_result_keeps_approved_fixed_copay_without_allowed_rate():
