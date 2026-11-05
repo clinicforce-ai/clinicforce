@@ -902,6 +902,27 @@ def test_optional_test_mentions_do_not_replace_the_office_visit():
     assert visit_estimate.is_emg_visit({'reason': 'Consider EMG', 'lines': [{'code': '95909', 'service_status': 'scheduled'}]})
 
 
+def test_prior_hand_emg_records_price_as_new_patient_cash_consultation():
+    for reason in ('Had hand EMG will bring records', 'Had hand EMG; will bring records',
+                   'Review prior EMG results'):
+        inputs = {'visit_type': 'new', 'appointment_type': 'New patient', 'reason': reason, 'lines': []}
+        assert not visit_estimate.is_emg_visit(inputs)
+        codes = api._previsit_codes(inputs)
+        assert [row['code'] for row in codes] == ['99202', '99203', '99204', '99205']
+        result = {'available_codes': codes, 'price_range': {'mode': 'alternatives', 'lines': codes},
+                  'payment_mode': 'cash'}
+        cash_rows = [{'code': row['code'], 'cash_cents': 25000} for row in codes]
+        api.practice_prices.apply(result, {'id': 'synthetic', 'filename': 'cash.docx',
+            'effective_from': '2026-09-04', 'rows': cash_rows})
+        assert result['cash_quote']['complete']
+        assert result['cash_quote']['min_cents'] == result['cash_quote']['max_cents'] == 25000
+        assert collection_guidance.build(result)['amount_cents'] == 25000
+    assert visit_estimate.is_emg_visit({'reason': 'Had hand EMG; will bring records',
+        'lines': [{'code': '95908', 'service_status': 'scheduled'}]})
+    assert visit_estimate.is_emg_visit({'reason': 'Had hand EMG; repeat EMG today'})
+    assert visit_estimate.is_emg_visit({'reason': 'Had symptoms and now EMG is scheduled'})
+
+
 def test_saved_payer_response_is_scoped_and_never_cached(monkeypatch):
     session = {'patient_id': 'patient', 'share_manifest_id': '', 'practice_id': 'clinic', 'intake_id': 'intake', 'staff': {'id': 'staff', 'display_name': 'Clinician'}}
     monkeypatch.setattr(api, '_session', AsyncMock(return_value=session))
