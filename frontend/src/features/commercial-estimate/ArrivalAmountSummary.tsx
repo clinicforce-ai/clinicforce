@@ -262,6 +262,11 @@ export default function ArrivalAmountSummary({
         </p>
       ) : needsAction ? (
         <p>{action.hint}</p>
+      ) : model.guidance?.basis === 'published_geha_pshb_zero_office' && model.amount ? (
+        <p>
+          One covered in-network office visit has a $0 published plan share. The UHC allowed amount
+          remains unknown; final coding and claim adjudication control.
+        </p>
       ) : model.previousEstimate ? (
         <p>Recheck this saved visit before collecting.</p>
       ) : model.provisionalAmount != null || model.estimatedShare ? (
