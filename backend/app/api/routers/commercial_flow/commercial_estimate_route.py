@@ -40,7 +40,8 @@ from app.api.routers.commercial_flow.commercial_previsit_appointment import load
     "collection_guidance.unconfirmed_zero_oop. Later costs are estimated separately. "
     "collection_guidance.office_visit_copay_advance contains the approved single-office-visit "
     "advance after network, member, requirement and collection-policy checks; otherwise it is null. A "
-    "fresh payer check includes service categories from saved selected CPTs. For BCBSTX route QDTRP, "
+    "fresh payer check includes service categories from saved selected CPTs. For Aetna route 60054, "
+    "an office-only visit requests STC 98 without general STC 30 so remaining accumulators can be returned. For BCBSTX route QDTRP, "
     "each service category uses its own 270 inquiry; linked responses must match the member, medical "
     "plan and visit date before combined pricing. A missing second response leaves collection unresolved. "
     "A matching exact-CPT Stedi inquiry automatically resolves authorization for the bound member and visit setting. A compatible fresh saved 271 can trigger a missing CPT inquiry without repeating the plan check; an uncertain CPT inquiry is held for review. A corroborated Cigna member suffix supports the member-specific rule check, and a single Cigna OAP product label uses the Open Access Plus office referral rule. A current Aetna Oxy PPO with Rx in-network office CPT 99204 may use the published 2026 no-referral and no-precertification rules; other CPTs need separate decisions. A signed "
@@ -426,7 +427,7 @@ async def previsit_estimate(value: _api.PrevisitInput, request: _api.Request, ba
     payer_id = payer["stediId"]
     inquiry_coverage = (await telehealth_inquiry_coverage(_api, prior_cases, inputs, source,
         original_token, payer_id, coverage)) if setting else coverage
-    requested_stc = _api._previsit_service_types(inputs)
+    requested_stc = _api._payer_previsit_service_types(payer_id, inputs)
     if payer_id == 'QDTRP':
         # BCBSTX accepts one service type per 270 inquiry.
         requested_stc = [code for code in requested_stc if code != '30'] or ['30']

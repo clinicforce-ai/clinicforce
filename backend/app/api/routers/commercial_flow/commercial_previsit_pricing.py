@@ -57,6 +57,13 @@ def _previsit_service_types(inputs: dict) -> list[str]:
         ordered.insert(0, '98')
     return list(dict.fromkeys([*ordered, '30']))
 
+
+def _payer_previsit_service_types(payer_id: str, inputs: dict) -> list[str]:
+    requested = _previsit_service_types(inputs)
+    # Aetna 60054 returns the remaining office accumulators for STC 98 alone,
+    # but can omit them when the same inquiry also asks for general STC 30.
+    return ['98'] if payer_id == '60054' and requested == ['98', '30'] else requested
+
 def _previsit_codes(inputs: dict) -> list[dict[str, _api.Any]]:
     """Office E/M alternatives are coding standards, not a selected service."""
     if botox_review.is_botox_visit(inputs):
