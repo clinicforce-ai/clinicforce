@@ -19,6 +19,7 @@ export type CommercialCardCheck = {
     | 'unavailable'
   source?: string | null
   reference_only?: boolean
+  supplementary_plan?: string
   failure_reason?: string | null
   fields_added?: string[]
   conflicts: string[]

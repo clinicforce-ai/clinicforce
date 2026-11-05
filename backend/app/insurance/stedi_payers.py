@@ -20,6 +20,11 @@ def original_medicare_route(payer: dict | None) -> bool:
     return str((payer or {}).get('stediId') or '').upper() == 'CMS'
 
 
+def original_medicare_record(name: str, plan: str) -> bool:
+    """Recognize the explicit eCW Part B record without using patient age."""
+    return plan == 'MB' and bool(re.fullmatch(r'Medicare(?: of)? (?:Texas|TX)(?: Part B)?', name, re.I))
+
+
 def enrollment_required(payer: dict | None) -> bool:
     return original_medicare_route(payer) or (
         ((payer or {}).get('transactionSupport') or {}).get('eligibilityCheck') == 'ENROLLMENT_REQUIRED')
@@ -106,7 +111,7 @@ async def search_payer(name: str, identifiers: list[str], api_key: str,
     # Original Medicare Part B uses CMS/HETS for eligibility, including state
     # MAC labels. Never route Medicare Advantage or a supplement to CMS.
     identifiers = [value for value in identifiers if isinstance(value, str)]
-    if (plan == 'MB' and re.fullmatch(r'Medicare(?: of)? (?:Texas|TX)(?: Part B)?', name, re.I)
+    if (original_medicare_record(name, plan or '')
             and not any(value.strip().upper() not in {'CMS', 'CMSMED', 'MB'} for value in identifiers)):
         name, identifiers = 'CMS', ['CMSMED']
     async with httpx.AsyncClient(timeout=httpx.Timeout(10, connect=5), transport=transport) as client:
