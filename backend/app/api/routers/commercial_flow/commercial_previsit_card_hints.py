@@ -33,11 +33,13 @@ async def _read_card_hints(session: dict, patient_id: str | None, *, allow_pendi
             source = 'patient_upload_pending' if reference_only else 'clinicforce_card'
         elif patient_id:
             source = 'ecw_card'
-            cards = await _api.asyncio.wait_for(_api.ecw_backend.insurance_cards(patient_id), timeout=24)
+            cards = await _api.asyncio.wait_for(_api.ecw_backend.insurance_cards(patient_id, include_bytes=True), timeout=24)
             if len(cards) > 2:
                 return {'status': 'multiple_cards', 'fields': {}, 'count': 0}
             for card in cards:
-                data, _ = await _api.asyncio.wait_for(_api.ecw_backend.insurance_cards(patient_id, document_id=card['id']), timeout=24)
+                data = card.get('_content')
+                if not isinstance(data, bytes):
+                    raise ValueError('eCW card content was not returned')
                 contents.append(data)
             if contents:
                 source = 'ecw_card'

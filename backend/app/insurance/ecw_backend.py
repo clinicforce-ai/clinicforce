@@ -468,5 +468,7 @@ async def probe_saved_eligibility(profile: dict[str, Any], *,
 
 
 async def insurance_cards(patient_id: str, *, document_id: str | None = None,
-                          transport: httpx.AsyncBaseTransport | None = None):
-    return await _insurance_cards(sys.modules[__name__], patient_id, document_id=document_id, transport=transport)
+                          transport: httpx.AsyncBaseTransport | None = None,
+                          include_bytes: bool = False):
+    return await _insurance_cards(sys.modules[__name__], patient_id, document_id=document_id,
+                                  transport=transport, include_bytes=include_bytes)

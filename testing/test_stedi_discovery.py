@@ -453,7 +453,7 @@ class RecoveryTest(IsolatedAsyncioTestCase):
         client = MagicMock(); client.__aenter__ = AsyncMock(return_value=client); client.__aexit__ = AsyncMock(return_value=None)
         client.post = AsyncMock(return_value=httpx.Response(200, json=item))
         with patch.object(api.staff_store, 'patient_card_intakes', return_value=[]), \
-             patch.object(api.ecw_backend, 'insurance_cards', AsyncMock(side_effect=[[{'id': 'card:0'}], (b'synthetic', 'image/png')])), \
+             patch.object(api.ecw_backend, 'insurance_cards', AsyncMock(return_value=[{'id': 'card:0', '_content': b'synthetic'}])) as card_reader, \
              patch.object(staff, 'inspect_file', return_value=('image/png', 1)), \
              patch.object(v1_sources, 'read_card_fields', return_value=({'member_name': 'Pat Example', 'member_id': 'CARD-123', 'payer': 'Example Payer'}, {}, [1])), \
              patch.object(api.httpx, 'AsyncClient', return_value=client), \
@@ -463,6 +463,7 @@ class RecoveryTest(IsolatedAsyncioTestCase):
              patch.object(api, '_save', side_effect=lambda value, *_: value), \
              patch.object(api, '_recovery_event') as audit:
             await api._recover_previsit(case, session, provider)
+        card_reader.assert_awaited_once_with('synthetic', include_bytes=True)
         assert client.post.await_count == 1  # Eligibility from card; no discovery submission.
         assert client.post.call_args.args[0] != discovery.URL
         result = api._previsit_result(case)
@@ -637,7 +638,7 @@ class RecoveryTest(IsolatedAsyncioTestCase):
             revision += 1
             return {**value, 'revision': revision}
         with patch.object(api.staff_store, 'patient_card_intakes', return_value=[]), \
-             patch.object(api.ecw_backend, 'insurance_cards', AsyncMock(side_effect=[[{'id': 'card:0'}], (b'synthetic', 'image/png')])), \
+             patch.object(api.ecw_backend, 'insurance_cards', AsyncMock(return_value=[{'id': 'card:0', '_content': b'synthetic'}])), \
              patch.object(staff, 'inspect_file', return_value=('image/png', 1)), \
              patch.object(v1_sources, 'read_card_fields', return_value=(fields, {}, [1])), \
              patch.object(api.httpx, 'AsyncClient', return_value=client), \
@@ -685,7 +686,7 @@ class RecoveryTest(IsolatedAsyncioTestCase):
         with patch.object(api.staff_store, 'patient_card_intakes', return_value=[]), \
              patch.object(api.ecw_backend, 'insurance_cards', AsyncMock(return_value=[])) as cards:
             result = await api._read_card_hints(session, 'synthetic-patient')
-        cards.assert_awaited_once_with('synthetic-patient')
+            cards.assert_awaited_once_with('synthetic-patient', include_bytes=True)
         assert result['status'] == 'not_found'
         assert result['failure_reason'] == 'ecw_no_matching_card_document'
         assert api._compare_card_hints(result, {}, {})['failure_reason'] == result['failure_reason']

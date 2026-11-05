@@ -279,7 +279,8 @@ async def patient_cards(intake_id: str, request: Request):
     """List patient-bound ClinicForce cards and eCW health insurance card previews.
 
     Merge eCW card-type, patient-document and patient-wide DocumentReference views.
-    Labelled cards and content-verified PDF/images are listed; government IDs are excluded.
+    Labelled cards and content-verified PDF/images, including scanned cards without
+    an insurance-card heading, are listed; government IDs are excluded.
     Embedded cards in larger PDFs are returned as card-only PDF previews.
     Each card names its upload or current eCW source;
     the eCW preview may have changed since a saved estimate. A missing eCW card
@@ -309,7 +310,7 @@ async def patient_cards(intake_id: str, request: Request):
 
 @router.get("/intakes/{intake_id}/ecw-card")
 async def ecw_card(intake_id: str, document_id: str, request: Request):
-    """Read one patient-bound eCW insurance card image or PDF, including extracted cards in larger PDFs."""
+    """Read one patient-bound eCW card, including scanned cards and cards extracted from larger PDFs."""
     intake = await owned_intake(intake_id, await require_staff(request))
     patient_id = (intake.get('patient') or {}).get('ecw_patient_id') or intake.get('fields', {}).get('ecw_patient_id')
     if not patient_id:
