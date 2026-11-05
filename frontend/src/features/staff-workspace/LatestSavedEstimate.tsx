@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { getPatientAppointments } from '../../services/api/staff-patients'
+import { commercialSavedPrevisit } from '../../services/api/commercial-estimator'
 import {
   getStaffInsuranceCheck,
   type InsuranceCheckSnapshot,
@@ -11,6 +12,7 @@ type FeaturedEstimate = {
   snapshot: InsuranceCheckSnapshot
   intakeId: string
   accountNumber?: string | null
+  reprojected?: boolean
 }
 
 export default function LatestSavedEstimate({ patientId }: { patientId: string }) {
@@ -33,15 +35,36 @@ export default function LatestSavedEstimate({ patientId }: { patientId: string }
           .filter((check) => check.source_mode === 'commercial_previsit' && check.intake_id)
           .sort((a, b) => b.created_at.localeCompare(a.created_at))[0]
         return latest
-          ? getStaffInsuranceCheck(latest.intake_id!, latest.id).then((result) =>
-              result.snapshots[0]
-                ? {
-                    snapshot: result.snapshots[0],
-                    intakeId: latest.intake_id!,
-                    accountNumber: history.ecw_account_number,
+          ? getStaffInsuranceCheck(latest.intake_id!, latest.id).then(async (result) => {
+              const snapshot = result.snapshots[0]
+              if (!snapshot) return null
+              const featured: FeaturedEstimate = {
+                snapshot,
+                intakeId: latest.intake_id!,
+                accountNumber: history.ecw_account_number,
+              }
+              // A saved snapshot predating the published GEHA rule retains its original
+              // calculation. Read the current projection for this exact missing-input case.
+              const plan = snapshot.result.plan_details?.stedi
+              if (
+                snapshot.result.collection_guidance?.basis === 'missing_collection_inputs' &&
+                snapshot.result.service_date?.startsWith('2026-') &&
+                plan?.group_number === '16615' &&
+                plan.names?.length === 1 &&
+                plan.names[0]
+                  ?.toUpperCase()
+                  .startsWith('LPPO-UNITEDHEALTHCARE GROUP MEDICARE ADVANTAGE')
+              ) {
+                const projection = await commercialSavedPrevisit(latest.id, latest.intake_id!)
+                if (projection.collection_guidance?.basis === 'published_geha_pshb_zero_office')
+                  return {
+                    ...featured,
+                    snapshot: { ...snapshot, result: projection },
+                    reprojected: true,
                   }
-                : null,
-            )
+              }
+              return featured
+            })
           : null
       })
       .then((result) => {
@@ -81,7 +104,8 @@ export default function LatestSavedEstimate({ patientId }: { patientId: string }
             Recorded for {visitDate(featured.snapshot.result.service_date)}
             {featured.snapshot.saved_at &&
               ` · Saved ${visitDate(featured.snapshot.saved_at)} at ${visitTime(featured.snapshot.saved_at)}`}
-            . Recheck the current visit before collecting today; final responsibility follows the
+            {featured.reprojected && ' · Collection guidance refreshed from saved payer evidence'}.
+            Recheck the current visit before collecting today; final responsibility follows the
             processed claim.
           </p>
           <CommercialEstimator
