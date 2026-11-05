@@ -751,6 +751,47 @@ def test_provider_participation_message_without_benefit_network_indicator():
         assert benefits['network_evidence_ids'] == ['plans[0].benefits.limitations[0]']
 
 
+def test_visit_date_zero_oop_supports_zero_collection_without_clinic_allowed_rate():
+    payload = office_coinsurance_payload()
+    payload['provider'] = {'npi': '1234567890'}
+    payload['subscriber']['dates']['service']['start'] = '2026-11-05'
+    terms = payload['plans'][0]['benefits']
+    terms['statuses'][0]['service'] = {'system': 'STC', 'value': '30'}
+    for kind in ('coPayment', 'coInsurance', 'deductible', 'outOfPocket'):
+        for row in terms[kind]:
+            row['network'] = {'indicator': 'IN_AND_OUT_OF_NETWORK'}
+    for kind in ('deductible', 'outOfPocket'):
+        terms[kind][0].update(service={'system': 'STC', 'value': '30'}, amount='0')
+
+    def estimate():
+        benefits = commercial.normalize_stedi_271(
+            payload, '98', False, service_date='2026-11-05', provider_npi='1234567890',
+            place_of_service='11')
+        binding = {'status': 'matched', 'binding': 'synthetic-current-binding', 'match_version': 2}
+        result = {'identity': binding, 'benefits': benefits, 'issues': [],
+                  'codes': [{'id': 'office', 'code': '99203', 'units': 1}],
+                  'service_selection_status': 'preview', 'service_plan': {'recommended_ids': ['office']}}
+        with patch.object(api.commercial_store, 'list_connections', return_value=[]):
+            api._attach_previsit_pricing(result, 'synthetic-clinic',
+                {'service_date': '2026-11-05', 'place_of_service': '11'},
+                {'rendering_provider': {'npi': '1234567890', 'first_name': 'Synthetic',
+                                        'last_name': 'Clinician'}}, 'synthetic-payer', benefits, payload=payload)
+        result['planning_estimate'] = visit_estimate.planning_estimate(result['price_range'], benefits, binding)
+        return result, collection_guidance.build(result)
+
+    result, guidance = estimate()
+    assert result['price_range']['complete'] is False
+    assert result['price_range']['lines'][0]['allowed_cents'] is None
+    assert result['benefits']['network_source'] == 'payer_participation_message'
+    assert result['benefits']['oop_remaining_cents'] == 0
+    assert guidance['amount_cents'] == 0
+    assert guidance['basis'] == 'out_of_pocket_limit'
+
+    payload['subscriber']['dates']['service']['start'] = '2026-11-04'
+    _, wrong_date_guidance = estimate()
+    assert wrong_date_guidance['amount_cents'] is None
+
+
 @pytest.mark.parametrize(('copay', 'coinsurance', 'fee', 'deductible', 'expected'), [
     ('0', '0.20', 25000, '0', None), ('0', '0.20', 17321, '0', None),
     ('0', '0.20', 17321, '20', None), ('0', '0', 25000, '0', 0),

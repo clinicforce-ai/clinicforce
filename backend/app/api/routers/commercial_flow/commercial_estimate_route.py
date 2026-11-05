@@ -405,7 +405,6 @@ async def previsit_estimate(value: _api.PrevisitInput, request: _api.Request, ba
         _api.collection_event('previsit_deferred', practice_id=session['practice_id'], intake_id=(session.get('intake') or {}).get('id'),
                          stage='eligibility', reason_code='stedi_unavailable')
         return await incomplete_result('stedi_unavailable')
-    service_day = _api.date.fromisoformat(inputs["service_date"])
     usable_coverage = (coverage['active_coverages'] >= 1 and coverage['coverage_id'] and
                        coverage['relationship'] and all(coverage.get(key) for key in ('subscriber_first', 'subscriber_last')))
     if not usable_coverage or not source.get('payer'):
@@ -443,9 +442,6 @@ async def previsit_estimate(value: _api.PrevisitInput, request: _api.Request, ba
     except _api.commercial.CommercialError as exc:
         result["issues"].append(str(exc))
         return await incomplete_result()
-    if service_day == _api.date.today():
-        body["encounter"].pop("dates", None)
-        basic_body["encounter"].pop("dates", None)
     binding_data = {"coverage": coverage, "payer": payer_id,
         "provider": provider, "service_date": inputs["service_date"]}
     if setting:

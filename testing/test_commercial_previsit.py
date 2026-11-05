@@ -866,10 +866,7 @@ class PrevisitFlowTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(sent["encounter"]["services"], [{"system": "STC", "value": "98"}])
         if pos:
             self.assertEqual(sent['encounter']['placeOfService'], {'code': pos})
-        if service_date == date.today().isoformat():
-            self.assertNotIn("dates", sent["encounter"])
-        else:
-            self.assertEqual(sent["encounter"]["dates"], {"service": {"start": service_date}})
+        self.assertEqual(sent["encounter"]["dates"], {"service": {"start": service_date}})
         self.assertNotIn("procedure", str(sent["encounter"]).lower())
         self.assertEqual(case["previsit"]["request_state"], "complete")
         if retry_basic:

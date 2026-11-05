@@ -1055,6 +1055,8 @@ class RecoveryTest(IsolatedAsyncioTestCase):
         assert case['previsit_original_error_object_key'] == 'original-error'
         assert client.post.await_count == 2
         assert client.post.call_args.kwargs['json']['subscriber']['memberId'] == 'new-id'
+        assert client.post.call_args.kwargs['json']['encounter']['dates'] == {
+            'service': {'start': case['previsit_context']['inputs']['service_date']}}
         assert 'stedi-recovered-member-pending' in events
         result = api._previsit_result(case)
         assert 'eligibility_error' not in result and result['benefits']['active'] is True

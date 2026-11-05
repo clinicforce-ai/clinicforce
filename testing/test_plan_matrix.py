@@ -210,11 +210,15 @@ def test_selected_cpts_are_checked_once_and_saved_with_exact_stedi_scope():
     asyncio.run(check_cpt_authorization(api, result, case, payload, inputs,
                                          {'practice_id': 'synthetic'}, 'synthetic-key'))
     assert len(sent) == 2
+    aetna = {**result, 'payer': 'Aetna', 'codes': [{'code': '99203'}]}
+    asyncio.run(check_cpt_authorization(api, aetna, {'id': 'synthetic-aetna'}, payload, inputs,
+                                         {'practice_id': 'synthetic'}, 'synthetic-key'))
+    assert sent[-1]['encounter']['dates'] == {'service': {'start': inputs['service_date']}}
     outside = deepcopy(result)
     outside['benefits']['coverage_evidence']['start'] = '9999-01-01'
     asyncio.run(check_cpt_authorization(api, outside, {'id': 'synthetic-other'}, payload, inputs,
                                          {'practice_id': 'synthetic'}, 'synthetic-key'))
-    assert len(sent) == 2
+    assert len(sent) == 3
 
 
 def test_rental_network_missing_plan_and_checklist_gaps_fail_closed():
