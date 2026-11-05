@@ -269,6 +269,13 @@ def test_referenced_schedule_exact_payer_scope_and_lesser_of_operands():
     rules.resolve_schedules(term, [(document('fee_schedule', id='schedule'), base)])
     assert term['rates'][0]['allowed_cents'] == 21250
     assert term['rates'][0]['source']['schedule_source']['reference'] == 'library:schedule'
+    older_row = deepcopy(base)
+    older_row['rates'][0]['effective_from'] = '2025-01-01'
+    older_row['rates'][0]['effective_to'] = '2025-12-31'
+    again = deepcopy(term); again['rates'] = []; again['issues'] = []
+    rules.resolve_schedules(again, [(document('fee_schedule', id='schedule'), older_row)])
+    assert again['rates'][0]['allowed_cents'] == 21250
+    assert again['rates'][0]['effective_to'] is None
     missing = deepcopy(term); missing['rates'] = []; missing['issues'] = []
     missing['schedule_terms'][0]['values']['billedcharge'] = ''
     rules.resolve_schedules(missing, [(document('fee_schedule', id='schedule'), base)])
@@ -278,6 +285,35 @@ def test_referenced_schedule_exact_payer_scope_and_lesser_of_operands():
     assert not wrong['rates']
     assert not rules.compile_document(document('fee_schedule', payer='Different payer'), extracted([table([
         ['CPT', 'Allowed Amount', 'Network', 'POS', 'Effective From'], ['99213', '200', 'Preferred', '11', '2026-01-01']])]), connection)['rates']
+
+
+def test_price_conflicts_ignore_cpt_row_dates():
+    first = {'source': {}, 'effective_from': '2026-01-01', 'cash': [], 'rates': [
+        {'code': '99213', 'allowed_cents': 20000, 'effective_from': '2026-01-01',
+         'effective_to': '2026-02-01'}], 'issues': []}
+    second = deepcopy(first)
+    second['rates'][0].update(allowed_cents=25000, effective_from='2026-10-01', effective_to=None)
+    rules.source_conflicts([(document('fee_schedule', id='first'), {}, first),
+                            (document('fee_schedule', id='second'), {}, second)])
+    assert first['issues'][0]['status'] == second['issues'][0]['status'] == 'conflict'
+
+
+def test_cpt_row_start_date_does_not_become_schedule_start():
+    source = document('fee_schedule', effective_from=None)
+    evidence = extracted([table([
+        ['CPT', 'Allowed Amount', 'Network', 'Plan', 'POS', 'Effective From'],
+        ['99213', '200', 'Preferred', 'Example Product', '11', '2025-01-01']])])
+    compiled = rules.compile_document(source, evidence, [
+        {'id': 'payer', 'display_name': 'Example Payer'}])
+    assert compiled['rates'][0]['effective_from'] == '2025-01-01'
+    db = MagicMock()
+    db.__enter__.return_value = db
+    db.execute.return_value.fetchone.return_value = None
+    with patch.object(staff_store, '_connection', return_value=db):
+        rules.publish(source, evidence, compiled)
+    rate_insert = next(call for call in db.execute.call_args_list
+                       if 'INSERT INTO commercial_rate_versions' in call.args[0])
+    assert rate_insert.args[1][5] == '2026-10-01'  # Source upload, not CPT row date.
 
 
 def test_portal_fee_export_ignores_only_blank_and_metadata_footer_rows():
@@ -362,6 +398,10 @@ def test_automatic_publish_backfill_duplicate_retry_and_tenant_scope():
             source = {'billing_provider': {'npi': '1234567890'}, 'location_id': 'office', 'plan': 'Example Product'}
             _, network, profile = api._practice_path('practice', inputs, source)
             assert commercial_store.matching_rates('practice', profile, network, '2026-10-08', [{'code': '99213'}])[0]['allowed_cents'] == 20000
+            with staff_store._connection() as db:
+                db.execute("UPDATE commercial_rate_lines SET effective_to='2026-02-01' WHERE code='99213'")
+            assert commercial_store.matching_rates('practice', profile, network, '2026-10-08',
+                                                   [{'code': '99213'}])[0]['allowed_cents'] == 20000
             alias_profile = {**profile, 'rate_plan_matcher': 'POS CHOICE PLUS', 'require_exact_rate_plan': True}
             assert commercial_store.matching_rates('practice', alias_profile, network, '2026-10-08', [{'code': '99213'}]) == []
             version = commercial_store.list_rate_versions('practice')[0]['id']

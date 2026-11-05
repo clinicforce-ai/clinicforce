@@ -352,11 +352,11 @@ def matching_rates(practice_id: str, profile: dict, network: dict, service_date:
           FROM commercial_rate_lines l JOIN commercial_rate_versions v ON v.id=l.version_id
           WHERE v.practice_id=%s AND v.payer_connection_id=%s AND v.status='active' AND (%s::text[] IS NULL OR l.code = ANY(%s))
           AND v.effective_from<=%s AND (v.effective_to IS NULL OR v.effective_to>=%s)
-          AND l.network_name=%s AND l.place_of_service=%s AND l.effective_from<=%s AND (l.effective_to IS NULL OR l.effective_to>=%s)
+          AND l.network_name=%s AND l.place_of_service=%s
           AND l.unit_rule='per_unit' AND (l.provider_npi='' OR l.provider_npi=%s) AND (l.tin='' OR l.tin=%s)
           AND (l.plan_matcher='' OR lower(l.plan_matcher)=lower(%s)) AND (NOT %s OR l.plan_matcher<>'')
           ORDER BY l.code, match_rank DESC, l.id DESC""", (network["rendering_npi"], network["tin"], rate_plan,
-                                                               practice_id, profile["payer_connection_id"], codes, codes, service_date, service_date, network["network_name"], network["place_of_service"], service_date, service_date,
+                                                               practice_id, profile["payer_connection_id"], codes, codes, service_date, service_date, network["network_name"], network["place_of_service"],
                                                                network["rendering_npi"], network["tin"], rate_plan, exact_product)).fetchall()
     requested = {(str(line.get("code") or "").upper(), ",".join(line.get("modifiers") or [])) for line in lines or []}
     selected: dict[tuple[str, str], dict] = {}
@@ -387,10 +387,8 @@ def aetna_meppo_reference_rates(practice_id: str, payer_connection_id: str, serv
               AND v.source_type='manual' AND v.source_reference LIKE 'Aetna MEPPO portal table values supplied by clinic%%'
               AND l.network_name='MEPPO unverified' AND l.plan_matcher='Aetna Medicare Signature (PPO)'
               AND l.place_of_service='11' AND l.code=ANY(%s)
-              AND v.effective_from<=%s AND (v.effective_to IS NULL OR v.effective_to>=%s)
-              AND l.effective_from<=%s AND (l.effective_to IS NULL OR l.effective_to>=%s)""",
-            (practice_id, payer_connection_id, codes, service_date, service_date,
-             service_date, service_date)).fetchall()
+              AND v.effective_from<=%s AND (v.effective_to IS NULL OR v.effective_to>=%s)""",
+            (practice_id, payer_connection_id, codes, service_date, service_date)).fetchall()
     return [dict(row) for row in rows]
 
 

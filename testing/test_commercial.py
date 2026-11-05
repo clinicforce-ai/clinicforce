@@ -205,6 +205,27 @@ class CommercialRulesTest(unittest.TestCase):
         self.assertTrue(all(row["effective_from"] == "2026-10-23" and
                             row["effective_to"] is None for row in rows))
 
+    def test_active_rate_uses_cpt_row_outside_its_recorded_dates(self):
+        db = MagicMock()
+        db.__enter__.return_value = db
+        db.execute.return_value.fetchall.return_value = [{
+            'code': '99213', 'modifier': '', 'allowed_cents': 20000,
+            'effective_from': '2026-01-01', 'effective_to': '2026-02-01',
+            'match_rank': 0, 'source_reference': 'approved-schedule'}]
+        profile = {'payer_connection_id': 'payer', 'plan_matcher': 'Exact Product'}
+        network = {'rendering_npi': '1234567890', 'tin': '123456789',
+                   'network_name': 'Preferred', 'place_of_service': '11'}
+        with patch.object(commercial_store, '_connection', return_value=db):
+            matched = commercial_store.matching_rates('clinic', profile, network, '2026-11-05',
+                                                       [{'code': '99213'}])
+        query, params = db.execute.call_args.args
+        self.assertIn('v.effective_from<=%s', query)
+        self.assertIn('v.effective_to>=%s', query)
+        self.assertNotIn('l.effective_from', query)
+        self.assertNotIn('l.effective_to', query)
+        self.assertEqual(params.count('2026-11-05'), 2)  # Active version only.
+        self.assertEqual(matched[0]['allowed_cents'], 20000)
+
     def test_mixed_office_copay_and_confirmed_nerve_deductible_are_separate(self):
         common = {"active": True, "coverage_level": "individual",
                   "network_status": "in_network", "has_secondary": False,
