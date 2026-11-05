@@ -35,6 +35,25 @@ HUMANA_VALUE_CHOICE_057_2026 = {
     'out_of_network_coinsurance_percent': 40,
 }
 
+GEHA_HIGH_PSHB_MA_16615_2026 = {
+    'label': '2026 G.E.H.A PSHB Medicare Benefits, High Medicare Advantage, pages 8–9',
+    'url': 'https://www.geha.com/~/media93/Project/GEHA/GEHA/documents-files/medical/2026/pshb/2026-geha-pshb-medicare-benefits-guide.pdf',
+    'effective_from': '2026-01-01', 'effective_to': '2026-12-31',
+    'office_specialist_copay_cents': 0,
+    'in_network_deductible_cents': 0,
+    'in_network_oop_max_cents': 0,
+}
+
+
+def geha_high_pshb_group(plan: dict, service_date: str, patient_bound: bool) -> bool:
+    """Match the UHC group route and patient-bound 271, never a generic UHC PPO."""
+    names = plan.get('names') or []
+    return (patient_bound and plan.get('group_number') == '16615'
+            and len(names) == 1 and isinstance(names[0], str)
+            and names[0].upper().startswith('LPPO-UNITEDHEALTHCARE GROUP MEDICARE ADVANTAGE')
+            and GEHA_HIGH_PSHB_MA_16615_2026['effective_from'] <= service_date
+            <= GEHA_HIGH_PSHB_MA_16615_2026['effective_to'])
+
 
 def identify_card_plan(plan: dict, card: dict, payer: str, patient_bound: bool) -> dict:
     """Use a matched card's CMS ID only when the member's 271 names the same product."""
@@ -83,6 +102,11 @@ def aetna_signature_diagnostic(benefits: dict, service_date: str, code: str,
 
 def apply_plan_terms(benefits: dict, plan: dict, service_date: str, patient_bound: bool) -> None:
     """Attach a dated published plan term only to an exact, patient-bound product."""
+    if (geha_high_pshb_group(plan, service_date, patient_bound)
+            and benefits.get('active') is True
+            and benefits.get('service_date_matches') is not False):
+        benefits['published_plan_rule'] = GEHA_HIGH_PSHB_MA_16615_2026
+        return
     if (patient_bound and plan.get('identified_product') == 'Humana Value Choice PPO H7617-057'
             and HUMANA_VALUE_CHOICE_057_2026['effective_from'] <= service_date <= HUMANA_VALUE_CHOICE_057_2026['effective_to']
             and benefits.get('active') is True and benefits.get('service_date_matches') is not False):

@@ -28,6 +28,8 @@ export default function CommercialCostBreakdown({
   const benefits = result.reference_benefits ?? result.benefits
   const reportedResult = result.reference_benefits ? { ...result, benefits } : result
   const { price_range: price, fee_proxy_estimate: feeProxy } = result
+  const gehaZero = result.collection_guidance?.basis === 'published_geha_pshb_zero_office' &&
+    result.collection_guidance.amount_cents === 0
   const botoxPreview = !model.cash && !model.previousEstimate ? result.botox_preview : null
   const combinedPlan = !model.cash && !model.previousEstimate ? result.combined_emg_plan : null
   const cignaFeeProxy = feeProxy?.basis === 'bcbstx_cigna_fee_proxy'
@@ -208,6 +210,8 @@ export default function CommercialCostBreakdown({
                                     : unknown,
       detail: botoxPreview
         ? 'No injection copay was included in this provisional calculation'
+        : gehaZero
+          ? 'Stedi reported a $0 office copay. The matched 2026 G.E.H.A High PSHB Medicare Advantage plan also publishes a $0 in-network specialist visit.'
         : humanaReferenceCopay != null
           ? result.card_check?.reference_only
             ? 'Published Humana H7617-057 plan reference from an upload awaiting staff confirmation. The printed member number has not been verified against the active eCW policy. Confirm the card and Medicare billing protection before collection.'
@@ -243,6 +247,8 @@ export default function CommercialCostBreakdown({
       label: 'Individual deductible',
       value: aetnaNoOfficeDeductible
         ? '$0.00 for in-network specialist office visit'
+        : gehaZero
+          ? '$0.00 in-network annual · published plan; Stedi did not return a member deductible row'
         : humanaReferenceCopay != null &&
             benefits?.deductible_applies !== true &&
             benefits?.deductible_annual_cents == null
@@ -268,6 +274,8 @@ export default function CommercialCostBreakdown({
                   : unknown),
       detail: aetnaNoOfficeDeductible
         ? 'The 2026 Aetna Signature PPO H2293-016 plan has no in-network deductible. A payer-reported general deductible may apply to certain out-of-network services.'
+        : gehaZero
+          ? 'The published G.E.H.A High Medicare Advantage benefit lists no in-network medical deductible for covered care.'
         : botoxPreview
           ? 'Individual balance not returned; provisional scenario uses the payer-reported met family deductible'
           : cignaFeeProxy
@@ -295,7 +303,9 @@ export default function CommercialCostBreakdown({
     {
       label: 'Family deductible',
       value:
-        humanaReferenceCopay != null
+        gehaZero
+          ? 'Not applicable to this Medicare Advantage individual plan'
+          : humanaReferenceCopay != null
           ? 'Not applicable to this Medicare Advantage individual plan'
           : familyDeductible.value !== unknown
             ? familyDeductible.value
@@ -314,6 +324,8 @@ export default function CommercialCostBreakdown({
       label: 'Coinsurance',
       value: aetnaPlanning
         ? `0% applied · ${money(0)}`
+        : gehaZero
+          ? '0% reported · $0.00 for this covered office visit'
         : combinedPlan
           ? `${combinedPlan.coinsurance_percent}% · ${money(combinedPlan.diagnostic_coinsurance_cents)}`
           : botoxPreview
@@ -380,7 +392,7 @@ export default function CommercialCostBreakdown({
         : 'Not fully calculated'
     : combinedPlan
       ? `${money(combinedPlan.patient_share_cents)} planning estimate`
-      : ['qmb_protection', 'out_of_pocket_limit'].includes(
+      : ['qmb_protection', 'out_of_pocket_limit', 'published_geha_pshb_zero_office'].includes(
             result.collection_guidance?.basis || '',
           ) && result.collection_guidance?.amount_cents === 0
         ? money(0)
@@ -451,6 +463,8 @@ export default function CommercialCostBreakdown({
                 : 'Insured share awaits a matching payer check and selected CPTs'
               : combinedPlan
                 ? `${money(combinedPlan.office_copay_cents)} office copay + ${combinedPlan.coinsurance_percent}% × ${money(combinedPlan.diagnostic_allowed_cents)} diagnostic allowance. No additional deductible or out-of-pocket reduction was applied where remaining balances were not returned.`
+                : gehaZero
+                  ? 'Published 2026 G.E.H.A High PSHB Medicare Advantage benefit for one covered in-network office visit. Stedi omitted member deductible and out-of-pocket rows; the UHC allowed amount remains unknown.'
                 : result.collection_guidance?.basis === 'out_of_pocket_limit'
                   ? 'Covered in-network share is capped by the applicable out-of-pocket limit'
                   : aetnaPlanning

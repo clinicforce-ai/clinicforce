@@ -234,7 +234,10 @@ export function deriveCommercialEstimateView({
     guidance.amount_cents >= 0 &&
     (!requirementIssue || clinicInstructionAmount) &&
     (cash || clinicInstructionAmount || currentPayerAmount) &&
-    (result?.encounter_summary?.collect_today_cents === undefined ||
+    ((result?.encounter_summary?.collect_today_cents == null &&
+      guidance?.basis === 'published_geha_pshb_zero_office' &&
+      guidance.amount_cents === 0) ||
+      result?.encounter_summary?.collect_today_cents === undefined ||
       result.encounter_summary.collect_today_cents === guidance.amount_cents)
   const emgBase = result?.emg_option
   const emgCostSupported =

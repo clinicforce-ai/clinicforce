@@ -12,6 +12,7 @@ from app.insurance.benefit_review import (annual_oop_conflict_with_known_remaini
 from app.insurance.network_participation import participation_conflict, verified_in_network, verified_out_of_network
 from app.insurance import encounter_summary
 from app.insurance.insurance_product import is_medicare_advantage
+from app.insurance.published_plan_benefits import GEHA_HIGH_PSHB_MA_16615_2026
 
 
 def emg_option(result: dict, rates: list[dict], rules: dict, payload: dict | None,
@@ -188,6 +189,34 @@ def build(result: dict, review: dict | None = None) -> dict:
         amount = 0
         guidance.update(status='zero_advance', basis='qmb_protection',
             reason='Confirmed member-bound QMB protection prohibits collecting Medicare cost sharing at check-in.')
+    # Group 16615 identifies the published High PSHB MA product. A zero office
+    # benefit needs no payer allowance or member accumulator, but every selected
+    # service and the patient/network binding must still support that decision.
+    geha_zero_office = (
+        benefits.get('published_plan_rule') == GEHA_HIGH_PSHB_MA_16615_2026
+        and active_payer_benefits and verified_in_network(benefits)
+        and member_bound and not benefits.get('has_secondary')
+        and not benefits.get('network_conflict') and not benefits.get('coverage_status_conflict')
+        and not benefits.get('coverage_dates_invalid') and not benefits.get('historical_only')
+        and not unresolved_order and not same_policy_conflict and not line_blocker
+        and not source_errors and not adverse and not note
+        and result.get('refresh_requires_selection') is not True
+        and price.get('mode') == 'services' and not price.get('conditional')
+        and not price.get('service_issues') and len(lines) == 1
+        and len(result.get('selected_ids') or []) == 1
+        and lines[0].get('id') == result['selected_ids'][0]
+        and lines[0].get('code') in {'99202', '99203', '99204', '99205',
+                                     '99212', '99213', '99214', '99215'}
+        and lines[0].get('units') == 1
+        and (lines[0].get('benefits') or {}).get('active') is True
+        and (lines[0].get('benefits') or {}).get('copay_cents') == 0
+        and (lines[0].get('benefits') or {}).get('coinsurance_percent') in {'0', '0.0', '0.00'}
+        and (lines[0].get('benefits') or {}).get('deductible_applies') is not True
+    )
+    if geha_zero_office and not qmb_protected:
+        amount = 0
+        guidance.update(status='zero_advance', basis='published_geha_pshb_zero_office',
+            reason='The matched 2026 G.E.H.A High PSHB Medicare Advantage plan publishes a $0 in-network specialist office visit, $0 medical deductible and $0 in-network medical out-of-pocket maximum. No payment is due for this planned covered office visit; final coding and claim adjudication still control.')
     policy = result.get('collection_policy') if isinstance(result.get('collection_policy'), dict) else {}
     policy_approved = bool(policy.get('approved_by') and policy.get('approved_at') and policy.get('reference'))
     policy_mode = policy.get('mode') if policy_approved else None

@@ -204,7 +204,10 @@ export function collectionAtVisitRow(
                   : 'Amount to collect at visit',
     value: combinedPlan
       ? `${money(combinedPlan.amount_cents)} planning estimate`
-      : result.collection_guidance?.basis === 'qmb_protection' &&
+      : result.collection_guidance?.basis === 'published_geha_pshb_zero_office' &&
+          result.collection_guidance.amount_cents === 0
+        ? money(0)
+        : result.collection_guidance?.basis === 'qmb_protection' &&
           result.collection_guidance.amount_cents === 0
         ? money(0)
         : botoxPreview
@@ -248,7 +251,9 @@ export function collectionAtVisitRow(
                                           : 'Not established',
     detail: combinedPlan
       ? `${money(combinedPlan.office_copay_cents)} + ${combinedPlan.coinsurance_percent}% × ${money(combinedPlan.diagnostic_allowed_cents)} = ${money(combinedPlan.patient_share_cents)}${combinedPlan.payments_cents ? `; less ${money(combinedPlan.payments_cents)} already paid` : ''}. Separate follow-up E/M is planned; deductible and out-of-pocket adjustments remain assumptions until payer balances are returned.`
-      : result.collection_guidance?.basis === 'qmb_protection'
+      : result.collection_guidance?.basis === 'published_geha_pshb_zero_office'
+        ? result.collection_guidance.reason
+        : result.collection_guidance?.basis === 'qmb_protection'
         ? 'QMB protection prohibits collecting Medicare cost sharing for covered care'
         : botoxPreview
           ? `${botoxPreview.coinsurance_percent}% × ${money(botoxPreview.allowed_cents)} for CPT ${botoxPreview.code} = ${money(botoxPreview.patient_share_cents)}. Confirm the injection site, individual limits, and prior payments before charging.`
