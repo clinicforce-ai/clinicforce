@@ -9,7 +9,7 @@ from zoneinfo import ZoneInfo
 import httpx
 
 from app.api.routers.commercial_estimator import PrevisitInput, VisitReviewInput, _compare_card_hints, _previsit_benefits, _previsit_result, previsit_estimate, update_visit_review
-from app.api.routers.commercial_flow.commercial_previsit_pricing import _previsit_service_types, _reviewed_service_types
+from app.api.routers.commercial_flow.commercial_previsit_pricing import _previsit_service_types, _payer_previsit_service_types, _reviewed_service_types
 from app.api.routers.commercial_flow.commercial_previsit_submit import same_member_and_medical_plan
 from app.api.routers.commercial_flow.commercial_previsit_reuse import retain_saved_group_binding
 
@@ -367,6 +367,16 @@ class PrevisitFlowTest(unittest.IsolatedAsyncioTestCase):
     async def test_uncoded_new_visit_requests_real_office_benefits_before_pricing(self):
         await self._flow(date.today().isoformat(), expect_preliminary=True)
 
+    async def test_aetna_office_inquiry_keeps_remaining_accumulators_available(self):
+        await self._flow(date.today().isoformat(), aetna_office_only=True)
+
+    def test_aetna_office_scope_keeps_other_payer_and_combined_services(self):
+        office = {'lines': [], 'reason': 'office consultation'}
+        self.assertEqual(_payer_previsit_service_types('60054', office), ['98'])
+        self.assertEqual(_payer_previsit_service_types('OTHER', office), ['98', '30'])
+        combined = {**office, '_selected_service_types': ['73']}
+        self.assertEqual(_payer_previsit_service_types('60054', combined), ['73', '30'])
+
     async def test_uncoded_established_visit_selects_provisional_followup_cpt(self):
         await self._flow(date.today().isoformat(), visit_type='established')
 
@@ -415,7 +425,7 @@ class PrevisitFlowTest(unittest.IsolatedAsyncioTestCase):
     async def test_newer_conflicting_ecw_check_refreshes_cached_stedi_evidence(self):
         await self._flow(date.today().isoformat(), newer_ecw=True)
 
-    async def _flow(self, service_date, reject=False, retry_basic=False, payer_missing=False, refresh=False, newer_ecw=False, too_early=False, self_pay=False, coverage_start=None, saved_hold=False, enrollment_missing=False, ecw_saved=False, ecw_incomplete=False, medicare_secondary=False, billing_note=None, member_id_missing=False, card_fields=None, card_conflict=False, card_status=None, pos=None, scheduled_code=None, emg_review=False, expect_preliminary=False, visit_type='new', combined_emg=False, secondary_mismatch=False, cash_office=False, telehealth=False, confirmed_card=False):
+    async def _flow(self, service_date, reject=False, retry_basic=False, payer_missing=False, refresh=False, newer_ecw=False, too_early=False, self_pay=False, coverage_start=None, saved_hold=False, enrollment_missing=False, ecw_saved=False, ecw_incomplete=False, medicare_secondary=False, billing_note=None, member_id_missing=False, card_fields=None, card_conflict=False, card_status=None, pos=None, scheduled_code=None, emg_review=False, expect_preliminary=False, visit_type='new', combined_emg=False, secondary_mismatch=False, cash_office=False, telehealth=False, confirmed_card=False, aetna_office_only=False):
         if cash_office:
             self.cash_current.return_value = {'id': 'synthetic-cash', 'filename': 'synthetic.csv',
                 'effective_from': '2026-01-01', 'rows': [{'code': '99204', 'cash_cents': 25000,
@@ -536,7 +546,7 @@ class PrevisitFlowTest(unittest.IsolatedAsyncioTestCase):
                  'status': card_status or ('read' if card_fields else 'not_found'), 'fields': card_fields or {},
                  'count': 1 if card_fields else 0}), create=True), \
              patch("app.api.routers.commercial_estimator.cpt_suggester.suggest_preliminary_cpt_codes", return_value={"groups": [], "notes": []}) as preliminary_suggestions, \
-             patch("app.api.routers.commercial_estimator.stedi_payers.search_payer", new=AsyncMock(return_value=None if payer_missing else {"stediId": "QDTRP", "displayName": "Blue Cross and Blue Shield of Texas", 'transactionSupport': {'eligibilityCheck': 'ENROLLMENT_REQUIRED' if enrollment_missing else 'SUPPORTED'}})), \
+             patch("app.api.routers.commercial_estimator.stedi_payers.search_payer", new=AsyncMock(return_value=None if payer_missing else {"stediId": "60054" if aetna_office_only else "QDTRP", "displayName": "Aetna" if aetna_office_only else "Blue Cross and Blue Shield of Texas", 'transactionSupport': {'eligibilityCheck': 'ENROLLMENT_REQUIRED' if enrollment_missing else 'SUPPORTED'}})), \
              patch("app.api.routers.commercial_estimator.stedi_payers.eligibility_enrollment", new=AsyncMock(return_value={'status': 'MISSING', 'reason_code': 'enrollment_missing'})), \
              patch("app.api.routers.commercial_estimator.store.get_cases", return_value=held_cases), \
              patch("app.api.routers.commercial_estimator.store.create_case", return_value=case), \
@@ -561,6 +571,12 @@ class PrevisitFlowTest(unittest.IsolatedAsyncioTestCase):
                                                if combined_emg else []))
             setting = {'telehealth_pos': '10', 'telehealth_modality': 'audio_video'} if telehealth else {}
             result = await previsit_estimate(PrevisitInput(appointment_id="visit-1", refresh_benefits=refresh if too_early else False, **setting), MagicMock())
+            if aetna_office_only:
+                sent = client.post.await_args.kwargs['json']
+                self.assertEqual([row['value'] for row in sent['encounter']['services']], ['98'])
+                self.assertEqual(sent['encounter']['dates']['service']['start'], service_date)
+                self.assertEqual(result['requested_service_types'], ['98'])
+                return
             if telehealth:
                 self.assertEqual(client.post.await_args_list[0].kwargs['json']['encounter']['placeOfService'], {'code': '10'})
                 self.assertEqual(result['telehealth'], {'place_of_service': '10', 'modality': 'audio_video'})

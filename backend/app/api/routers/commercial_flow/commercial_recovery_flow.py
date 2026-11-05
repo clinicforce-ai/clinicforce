@@ -113,7 +113,7 @@ async def _accept_recovered_coverage(case: dict, session: dict, verified: dict, 
     guidance = result.get('collection_guidance') or _api.collection_guidance.build(result, case.get('visit_review'))
     _api._recovery_event(case, session, 'pricing', 'priced' if guidance.get('amount_cents') is not None else 'unavailable',
                     reason=guidance.get('basis') if guidance.get('amount_cents') is not None else 'benefits_or_rates_incomplete')
-    case['previsit'].update(request_state='complete', checked_at=result['checked_at'], benefits=result['benefits'], requested_service_types=_api._previsit_service_types(inputs))
+    case['previsit'].update(request_state='complete', checked_at=result['checked_at'], benefits=result['benefits'], requested_service_types=_api._payer_previsit_service_types(payer['stediId'], inputs))
     case['previsit_original_error_object_key'] = case.get('previsit_raw_object_key')
     case['previsit_raw_object_key'] = discovery['eligibility_object_key']
     if discovery.get('eligibility_sha256'):
@@ -202,10 +202,11 @@ async def _recheck_discovery_candidate(case: dict, session: dict, provider: dict
                 _api._recovery_event(case, session, 'eligibility', 'unavailable', reason=enrollment['reason_code'])
                 return
         inquiry_pos = None if _api.visit_estimate.telehealth_pos_unresolved(inputs) else inputs.get('place_of_service')
-        body = _api.stedi_request_body({'stedi_payer_id': payer['stediId']}, provider, coverage, inputs['service_date'], _api._previsit_service_types(inputs),
+        requested_stc = _api._payer_previsit_service_types(payer['stediId'], inputs)
+        body = _api.stedi_request_body({'stedi_payer_id': payer['stediId']}, provider, coverage, inputs['service_date'], requested_stc,
             include_identity_hints=not address_inquiry, allow_demographic=not coverage.get('member_id'),
             inquiry_only=inquiry_only, place_of_service=inquiry_pos)
-        basic_body = _api.stedi_request_body({'stedi_payer_id': payer['stediId']}, provider, coverage, inputs['service_date'], _api._previsit_service_types(inputs),
+        basic_body = _api.stedi_request_body({'stedi_payer_id': payer['stediId']}, provider, coverage, inputs['service_date'], requested_stc,
                                         include_identity_hints=False, allow_demographic=not coverage.get('member_id'), inquiry_only=inquiry_only,
                                         place_of_service=inquiry_pos)
         fingerprint = _api.hashlib.sha256(_api.json.dumps(body, sort_keys=True).encode()).hexdigest()
