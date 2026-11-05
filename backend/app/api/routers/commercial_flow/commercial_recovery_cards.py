@@ -19,6 +19,11 @@ def _compare_card_hints(card: dict, inputs: dict, source: dict) -> dict:
     if status != 'read':
         return result
     fields = card['fields']
+    if (fields.get('supplementary_plan') and _api.stedi_payers.original_medicare_record(
+            str(source.get('payer') or ''), str(source.get('plan') or ''))):
+        # A Medigap card describes secondary coverage; its ID cannot replace the Medicare MBI.
+        result.update(status='unverified', supplementary_plan=fields['supplementary_plan'])
+        return result
     if not fields.get('member_id') and not card.get('reference_only'):
         result['status'] = 'unverified'
         return result
@@ -40,7 +45,7 @@ def _compare_card_hints(card: dict, inputs: dict, source: dict) -> dict:
     group_matches = bool(inputs.get('group_number') and fields.get('group_number') and
                          _api.stedi_discovery.normalized(inputs['group_number']) == _api.stedi_discovery.normalized(fields['group_number']))
     member_matches = bool(inputs.get('member_id') and
-        _api.stedi_discovery.normalized(inputs['member_id']) == _api.stedi_discovery.normalized(fields['member_id']))
+        _api.stedi_discovery.normalized(inputs['member_id']) == _api.stedi_discovery.normalized(fields.get('member_id')))
     patient_bound = bool(card.get('count') in {1, 2} and source.get('_patient_id') and
                          source.get('coverage_id') and source.get('active_coverages') == 1)
     base, extended = sorted((_api.stedi_discovery.normalized(inputs.get('member_id')),
