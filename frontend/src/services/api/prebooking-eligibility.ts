@@ -26,3 +26,78 @@ export const getPrebookingOptions = (query: string) =>
 
 export const checkPrebookingEligibility = (details: PrebookingDetails) =>
   request<PrebookingResult>('/api/staff/prebooking-eligibility/check', json(details))
+
+export type PrebookingPlan = {
+  groups: Array<{
+    label: string
+    selection_mode: 'single' | 'multiple'
+    codes: Array<{ code: string; reason: string; role: string; service_type: string | null }>
+  }>
+  notes: string[]
+  message: string
+}
+
+export type PrebookingEstimateDetails = PrebookingDetails & {
+  reason: string
+  visit_type: 'new' | 'established' | 'unknown'
+  service_date: string | null
+  network_context_id: string | null
+  relationship: 'self' | 'dependent'
+  subscriber_given_name: string
+  subscriber_family_name: string
+  subscriber_birth_date: string | null
+  selected_services: Array<{ code: string; units: number }>
+}
+
+export type PrebookingTerms = {
+  copay_cents: number | null
+  coinsurance_percent: string | null
+  deductible_annual_cents: number | null
+  deductible_remaining_cents: number | null
+  oop_annual_cents: number | null
+  oop_remaining_cents: number | null
+  deductible_applicability: string | null
+  authorization_signal: string | null
+  referral_signal: string | null
+  resolved_service_type: string | null
+}
+
+export type PrebookingEstimate = {
+  coverage: Pick<PrebookingResult, 'status' | 'message' | 'coverage_start' | 'coverage_end'>
+  payer: string
+  checked_at: string
+  checked_on: string
+  check_ids: string[]
+  network_status: 'in_network' | 'out_of_network' | 'unknown'
+  network_evidence: { reason?: string; decision?: string } | null
+  plan_name: string | null
+  benefits: PrebookingTerms | null
+  lines: Array<{
+    code: string
+    units: number
+    role: string
+    service_type: string | null
+    allowed_cents: number | null
+    patient_cents: number | null
+    benefits: PrebookingTerms
+    issues: string[]
+    conditions: string[]
+  }>
+  patient_min_cents: number | null
+  patient_max_cents: number | null
+  estimate_status: 'priced' | 'conditional' | 'needs_review'
+  issues: string[]
+}
+
+export const getPrebookingContexts = () =>
+  request<{ contexts: Array<{ id: string; label: string }> }>(
+    '/api/staff/prebooking-estimate/contexts',
+  )
+
+export const planPrebookingServices = (
+  reason: string,
+  visit_type: PrebookingEstimateDetails['visit_type'],
+) => request<PrebookingPlan>('/api/staff/prebooking-estimate/plan', json({ reason, visit_type }))
+
+export const checkPrebookingEstimate = (details: PrebookingEstimateDetails) =>
+  request<PrebookingEstimate>('/api/staff/prebooking-estimate/check', json(details))
