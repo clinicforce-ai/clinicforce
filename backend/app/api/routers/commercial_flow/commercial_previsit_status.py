@@ -3,7 +3,7 @@ from __future__ import annotations
 from app.api.routers import commercial_estimator as _api
 from app.insurance.identity import patient_benefits_bound, patient_plan_applies, payer_identity_verified
 from app.insurance.network_participation import verified_in_network, verified_out_of_network
-from app.insurance import blue_cross_proxy, evidence_resolution, group_contract_support
+from app.insurance import blue_cross_proxy, evidence_resolution, group_contract_support, published_plan_benefits
 from app.api.routers.commercial_flow.commercial_previsit_finish import _payer_plan_pricing_source
 from app.api.routers.commercial_flow.commercial_previsit_network_guard import recheck_saved_network_evidence, recheck_saved_payer_message
 from app.api.routers.commercial_flow.commercial_previsit_saved_pricing import _reprice_saved_new_network, guard_unresolved_telehealth, guard_telehealth_guidance
@@ -450,6 +450,13 @@ def _previsit_result(case: dict, practice_id: str | None = None) -> dict:
         result['payment_mode'] = 'insurance'
         result.pop('cash_fallback', None)
     unresolved_telehealth = guard_unresolved_telehealth(result, case)
+    # Saved GET projects current published terms from its retained patient-bound
+    # payer plan. It never changes the historical snapshot or calls the payer.
+    benefits = result.get('benefits') or {}
+    published_plan_benefits.apply_geha_plan_terms(
+        benefits, ((result.get('plan_details') or {}).get('stedi') or {}),
+        str(result.get('service_date') or ''),
+        patient_plan_applies(benefits, result.get('identity'), str(result.get('service_date') or '')))
     insurance_guidance = _api.collection_guidance.build(result, case.get('visit_review'))
     result['insurance_diagnosis'] = _api._insurance_diagnosis(case, result, insurance_guidance)
     pricing_unavailable = (result.get('payment_mode') != 'cash' and insurance_guidance.get('amount_cents') is None

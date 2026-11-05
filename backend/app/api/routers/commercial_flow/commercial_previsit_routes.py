@@ -70,6 +70,13 @@ async def saved_previsit(case_id: str, request: _api.Request) -> dict:
     collection_guidance.unconfirmed_zero_oop and withholds a positive advance.
     A linked, applicable zero balance can return basis out_of_pocket_limit
     and a $0 covered office-visit collection.
+    A patient-bound 2026 UHC group 16615 saved plan can project the published
+    G.E.H.A High PSHB Medicare Advantage zero office benefit on read, without
+    a new eligibility call or a change to the historical saved snapshot. For
+    one covered in-network office E/M line with matching zero payer terms and
+    no conflicting evidence, collection_guidance uses basis
+    published_geha_pshb_zero_office and amount_cents 0; the missing 271
+    deductible/out-of-pocket rows remain missing member-specific evidence.
     temporary_rate_reference identifies a dated CPT planning source: scoped
     Blue Cross Clinical Library prices for eligible non-Aetna routes or draft
     Aetna MEPPO portal values for the exact Signature PPO diagnostic scenario.
