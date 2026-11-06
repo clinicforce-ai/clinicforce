@@ -256,6 +256,42 @@ def test_cigna_family_only_office_deductible_proxy_defers_check_in_collection():
     assert collection_guidance.build(result)['amount_cents'] is None
 
 
+def test_cigna_general_family_accumulators_give_conditional_office_scenario():
+    result = _result()
+    result.update(plan='Open Access Plus', service_date='2026-11-06',
+                  service_selection_status='approved')
+    result['benefits'].update(network_source='payer_participation_message',
+        coinsurance_percent='20.0', copay_cents=None, reported_options=[
+            {'kind': 'coinsurance', 'service_type_code': '30', 'coverage_level': 'INDIVIDUAL',
+             'network': 'IN_NETWORK', 'plan_index': 0, 'plan_association': 'unassigned',
+             'places_of_service': [], 'percent': '20.0', 'diagnosis_scoped': False},
+            *({'kind': kind, 'service_type_code': '30', 'coverage_level': 'FAMILY',
+               'network': 'IN_NETWORK', 'plan_index': 0, 'plan_association': 'medical',
+               'places_of_service': [], 'time_period': 'REMAINING', 'amount_cents': amount,
+               'payer_note': 'This plan has only family accumulators', 'diagnosis_scoped': False}
+              for kind, amount in (('deductible', 179682), ('out_of_pocket', 529682)))])
+    result['codes'] = result['price_range']['lines'] = [
+        {'id': 'office', 'code': '99203', 'units': 1, 'modifiers': []}]
+    result['temporary_rate_reference']['lines'] = [
+        {'id': 'office', 'code': '99203', 'units': 1, 'modifiers': [],
+         'unit_reference_cents': 10117, 'source_reference': 'library:synthetic'}]
+    result['cpt_authorization'].update(service_date='2026-11-06', check_ids=['synthetic'],
+        financial_terms={'99203': {'coinsurance_percent': None, 'copay_cents': None,
+            'deductible_remaining_cents': None, 'oop_remaining_cents': None}})
+    proxy = blue_cross_proxy.cigna_oap_family_office_estimate(result, '2026-11-06')
+    assert proxy['patient_share_cents'] == proxy['deductible_cents'] == 10117
+    assert proxy['deductible_applicability'] == 'assumed'
+    result['fee_proxy_estimate'] = proxy
+    assert collection_guidance.build(result)['amount_cents'] == 0
+    result['benefits']['reported_options'][1]['diagnosis_scoped'] = True
+    assert blue_cross_proxy.cigna_oap_family_office_estimate(result, '2026-11-06') is None
+    result['benefits']['reported_options'][1]['diagnosis_scoped'] = False
+    result['benefits']['reported_options'].append({
+        'kind': 'copay', 'service_type_code': '98', 'network': 'IN_NETWORK',
+        'places_of_service': ['11'], 'diagnosis_scoped': False, 'amount_cents': 3000})
+    assert blue_cross_proxy.cigna_oap_family_office_estimate(result, '2026-11-06') is None
+
+
 def test_cigna_fee_proxy_defers_for_exact_suggested_preview_plan():
     result = _result()
     result['benefits']['network_source'] = 'clinic_library_contract'

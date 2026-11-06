@@ -69,6 +69,7 @@ export type PrevisitEstimate = {
     }[]
     rate_source: string
     deductible_source: string
+    deductible_applicability?: 'assumed' | 'exact_cpt'
     deductible_url?: string
     message: string
   }

@@ -98,6 +98,10 @@ async def saved_previsit(case_id: str, request: _api.Request) -> dict:
     BCBS-priced share; an absent copay is treated as $0 in that calculation.
     For a single in-network Cigna OAP office E/M CPT, an explicit family-only
     payer statement permits exact-CPT family accumulator terms in that proxy.
+    Diagnosis-qualified exact-CPT terms are excluded from unrelated visits;
+    unqualified plan-wide family accumulators and matching general coinsurance
+    can instead show an explicitly assumed office-deductible planning scenario.
+    reported_options.diagnosis_scoped marks payer rows with diagnosis limits.
     The amount to collect is $0 at arrival when no fixed copay is reported;
     final liability remains open until a Cigna estimate or processed claim.
     Saved reads can re-read the protected exact-CPT 271 for this family-only

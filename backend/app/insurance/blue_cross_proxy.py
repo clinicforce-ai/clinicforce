@@ -8,7 +8,7 @@ from __future__ import annotations
 import re
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 
-from app.insurance import commercial, cpt_rules, insurance_product
+from app.insurance import cigna_family_terms, commercial, cpt_rules, insurance_product
 from app.insurance.benefit_review import selected_service_blocker
 from app.insurance.identity import patient_benefits_bound
 from app.insurance.network_participation import verified_in_network, verified_out_of_network
@@ -334,6 +334,9 @@ def cigna_oap_family_office_estimate(result: dict, service_date: str) -> dict | 
     code, line, rate = codes[0], lines[0], rates[0]
     cpt = str(code.get('code') or '')
     terms = (check.get('financial_terms') or {}).get(cpt) or {}
+    general_terms = (cigna_family_terms.general_family_terms(benefits, terms)
+                     if type(terms.get('deductible_remaining_cents')) is not int else None)
+    terms, assumed = general_terms or terms, general_terms is not None
     if (not re.fullmatch(r'992(?:0[2-5]|1[2-5])', cpt)
             or code.get('id') != line.get('id') or line.get('id') != rate.get('id')
             or code.get('units') != line.get('units') or line.get('units') != rate.get('units')
@@ -373,11 +376,9 @@ def cigna_oap_family_office_estimate(result: dict, service_date: str) -> dict | 
                        'coinsurance_base_cents': coinsurance_base,
                        'coinsurance_cents': coinsurance}],
             'rate_source': reference.get('source'),
-            'deductible_source': 'Exact CPT Stedi family-only accumulator',
-            'message': ('Provisional office visit share using the BCBS Texas fee reference and Cigna exact-CPT '
-                        'family-only benefits. The family deductible applies before coinsurance. No fixed office '
-                        'copay was returned. The Cigna allowed amount and any HRA payment are unknown; obtain '
-                        'Cigna’s Explanation of Estimate before collecting deductible or coinsurance.')}
+            'deductible_applicability': 'assumed' if assumed else 'exact_cpt',
+            'deductible_source': cigna_family_terms.deductible_source(assumed),
+            'message': cigna_family_terms.scenario_message(assumed)}
 
 
 def cigna_oap_office_scenario(result: dict, service_date: str) -> dict | None:

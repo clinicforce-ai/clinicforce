@@ -36,8 +36,7 @@ export default function CommercialCostBreakdown({
   const botoxPreview = !model.cash && !model.previousEstimate ? result.botox_preview : null
   const combinedPlan = !model.cash && !model.previousEstimate ? result.combined_emg_plan : null
   const cignaFeeProxy = feeProxy?.basis === 'bcbstx_cigna_fee_proxy'
-  const cignaFamilyOffice =
-    cignaFeeProxy && feeProxy.scenario_kind === 'oap_office_family_deductible'
+  const cignaFamilyOffice = feeProxy?.scenario_kind === 'oap_office_family_deductible'
   const cignaOfficeScenario = cignaFeeProxy && Boolean(feeProxy.scenario_kind) && !cignaFamilyOffice
   const lines = price?.mode === 'services' ? price.lines || [] : []
   const cptRows = commercialCptRows(result, lines, botoxPreview)
@@ -273,7 +272,7 @@ export default function CommercialCostBreakdown({
               ? cignaOfficeScenario
                 ? `${money(0)} applied in this provisional scenario from the general individual remaining balance; CPT applicability is not confirmed`
                 : cignaFamilyOffice
-                  ? `${money(feeProxy?.deductible_cents || 0)} applied from the exact CPT family-only remaining deductible`
+                  ? `${money(feeProxy?.deductible_cents || 0)} ${feeProxy?.deductible_applicability === 'assumed' ? 'assumed from the plan-wide family remaining deductible; office applicability is unconfirmed' : 'applied from the exact CPT family-only remaining deductible'}`
                   : `${money(feeProxy?.deductible_cents || 0)} applied in this provisional scenario; exact CPT Stedi responses reported no remaining individual deductible`
               : feeProxy != null
                 ? feeProxy.deductible_source
@@ -301,6 +300,7 @@ export default function CommercialCostBreakdown({
       humanaReferenceCopay,
       familyOopApplied,
       cignaFamilyOffice ? feeProxy!.deductible_cents : null,
+      cignaFamilyOffice && feeProxy!.deductible_applicability === 'assumed',
     ),
     {
       label: 'Coinsurance',
