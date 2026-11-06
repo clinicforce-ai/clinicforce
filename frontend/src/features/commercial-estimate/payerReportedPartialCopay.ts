@@ -158,7 +158,8 @@ export function specialistOfficeCopay(
   result: PrevisitEstimate,
   networks = ['IN_NETWORK', 'IN_AND_OUT_OF_NETWORK'],
 ): number | null {
-  const officeRequest = !result.telehealth &&
+  const officeRequest =
+    !result.telehealth &&
     (result.network_evidence?.place_of_service === '11' ||
       (!result.network_evidence?.place_of_service &&
         result.requested_service_types?.includes('98')))
