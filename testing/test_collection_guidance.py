@@ -1007,6 +1007,44 @@ def test_saved_legacy_default_zero_is_rebuilt_from_evidence():
     assert value['collection_guidance']['basis'] == 'missing_collection_inputs'
 
 
+def test_saved_active_blue_cross_fallback_reopens_as_insurance():
+    result = scenario()
+    result.update(payer='Blue Cross Blue Shield TX', payment_mode='cash',
+                  cash_fallback={'reason': 'old automatic fallback'},
+                  service_date='2026-10-20')
+    case = {'previsit': {'request_state': 'complete'},
+            'previsit_context': {'result': result, 'payer_id': 'blue-route',
+                                 'inputs': {'service_date': '2026-10-20'}, 'source': {}}}
+    with patch.object(api.commercial_store, 'list_connections', return_value=[]):
+        reopened = api._previsit_result(case, 'clinic')
+    assert reopened['payment_mode'] == 'insurance'
+    assert 'cash_fallback' not in reopened
+    assert reopened['benefits']['active'] is True
+    case['visit_review'] = {'payment_mode': 'cash'}
+    with patch.object(api.commercial_store, 'list_connections', return_value=[]):
+        assert api._previsit_result(case, 'clinic')['payment_mode'] == 'cash'
+    case.pop('visit_review')
+    result['benefits']['active'] = False
+    with patch.object(api.commercial_store, 'list_connections', return_value=[]):
+        assert api._previsit_result(case, 'clinic')['payment_mode'] == 'cash'
+
+
+def test_preview_office_copay_can_collect_once_across_em_alternatives():
+    result = scenario()
+    result['payer'] = 'Blue Cross Blue Shield TX'
+    result['collection_policy'] = COPAY_POLICY
+    result['service_selection_status'] = 'preview'
+    result['price_range'] = {'mode': 'alternatives', 'complete': False,
+        'lines': [{'id': str(code), 'code': str(code), 'units': 1,
+                   'benefits': {'active': True, 'network_status': 'in_network',
+                                'copay_cents': 2500, 'copay_period': 'VISIT',
+                                'coinsurance_percent': '0', 'oop_remaining_cents': 130439}}
+                  for code in range(99202, 99206)]}
+    guidance = collection_guidance.build(result)
+    assert guidance['amount_cents'] == 2500
+    assert guidance['basis'] == 'office_copay'
+
+
 @pytest.mark.parametrize('change', ['unchanged', 'contract_removed', 'rate_replaced', 'profile_changed'])
 def test_reopening_saved_estimate_rechecks_current_clinic_pricing(change):
     result = scenario(4800)

@@ -6,6 +6,15 @@ from app.api.routers.commercial_flow.commercial_previsit_finish import _payer_pl
 from app.insurance.identity import patient_plan_applies
 
 
+def restore_active_blue_cross_insurance(result: dict, case: dict) -> None:
+    if ((result.get('benefits') or {}).get('active') is True
+            and result.get('cash_fallback') is not None
+            and (case.get('visit_review') or {}).get('payment_mode') != 'cash'
+            and _api.re.search(r'blue cross.*blue shield|bcbstx', result.get('payer') or '', _api.re.I)):
+        result['payment_mode'] = 'insurance'
+        result.pop('cash_fallback', None)
+
+
 def guard_unresolved_telehealth(result: dict, case: dict) -> bool:
     if not _api.visit_estimate.telehealth_pos_unresolved(case['previsit_context'].get('inputs') or {}):
         return False
