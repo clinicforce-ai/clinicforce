@@ -36,8 +36,7 @@ export default function CommercialCostBreakdown({
   const botoxPreview = !model.cash && !model.previousEstimate ? result.botox_preview : null
   const combinedPlan = !model.cash && !model.previousEstimate ? result.combined_emg_plan : null
   const cignaFeeProxy = feeProxy?.basis === 'bcbstx_cigna_fee_proxy'
-  const cignaFamilyOffice =
-    cignaFeeProxy && feeProxy.scenario_kind === 'oap_office_family_deductible'
+  const cignaFamilyOffice = feeProxy?.scenario_kind === 'oap_office_family_deductible'
   const cignaOfficeScenario = cignaFeeProxy && Boolean(feeProxy.scenario_kind) && !cignaFamilyOffice
   const lines = price?.mode === 'services' ? price.lines || [] : []
   const cptRows = commercialCptRows(result, lines, botoxPreview)
