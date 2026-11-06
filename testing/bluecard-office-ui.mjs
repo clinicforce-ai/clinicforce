@@ -47,4 +47,24 @@ assert.equal(pendingBluecardOfficeCopay({ ...result, price_range: { mode: 'servi
   { id: 'test', code: '95910', units: 1, benefits: terms },
 ] } }, model), null)
 assert.equal(pendingBluecardOfficeCopay({ ...result, encounter_summary: { payments_verified_cents: 2000 } }, model), 4000)
+const unmatchedPlan = {
+  ...result,
+  price_range: { mode: 'services', lines: [{ id: 'office', code: '99203', units: 1,
+    allowed_cents: null, rate_resolution: { status: 'RATE_UNAVAILABLE' },
+    benefits: { active: true, network_status: 'in_network',
+      deductible_annual_cents: 400000, deductible_remaining_cents: 400000,
+      coinsurance_percent: '20', copay_cents: null } }] },
+  payment_explanation: { reason_code: 'clinic_product_mismatch',
+    sentence: 'Coverage is active. Link the member plan to the clinic agreement and rerun the estimate.' },
+}
+const unmatchedRow = collectionAtVisitRow(unmatchedPlan, model, { ...values, pendingBluecardCopay: null })
+assert.match(unmatchedRow.value, /match.*plan.*clinic/i)
+assert.match(unmatchedRow.detail, /link the member plan/i)
+assert.doesNotMatch(unmatchedRow.value, /not established|cannot be established/i)
+const missingRateRow = collectionAtVisitRow({ ...unmatchedPlan,
+  payment_explanation: { reason_code: 'contract_rate_missing',
+    sentence: 'Coverage is active. Verify the clinic rate for CPT 99203.' },
+}, model, { ...values, pendingBluecardCopay: null })
+assert.match(missingRateRow.value, /check plan-to-rate match/i)
+assert.match(missingRateRow.detail, /CPT 99203/)
 console.log('BlueCard office table: $60 pending; identity, payer-order, network, service, and payment guards passed')

@@ -192,7 +192,7 @@ def price_lines(codes: list[dict], rates: list[dict], benefits: dict, rules: dic
             line['issues'].append('Resolve the conflicting eCW rendering provider NPI before using this price.')
         if line['allowed_cents'] is None:
             line['issues'].append('Get the payer allowed amount for this out-of-network CPT and visit.' if out_of_network else
-                                  'Add an active clinic contract rate matching this code, modifier and visit.')
+                                  'Verify the active clinic contract rate and exact plan mapping for this code, modifier and visit.')
         if benefits.get('network_status') == 'unknown':
             line['issues'].append('Verify provider participation for this plan and visit location.')
         if benefits.get('requires_review') and not benefits.get('review_reasons'):

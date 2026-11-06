@@ -150,7 +150,7 @@ try {
     assert(markup.includes(value), `Missing ${value}`)
   }
   assert(markup.includes('not used as a verified calculation input'))
-  assert(markup.includes('Not established'))
+  assert(markup.includes('Review selected CPT, benefits and clinic rate before collecting'))
 
   const ehrReferenceMarkup = renderToStaticMarkup(
     React.createElement(CommercialCostBreakdown, {
@@ -799,7 +799,7 @@ try {
     }),
   )
   assert(rejected.includes('Coverage</th>') && rejected.includes('Coinsurance</th>'))
-  assert(rejected.includes('Amount to collect at visit</th><td><span>Not established'))
+  assert(rejected.includes('Amount to collect at visit</th><td><span>Review selected CPT, benefits and clinic rate before collecting'))
   assert(!rejected.includes('$40.00 specialist office visit'))
 
   const conflictingCopay = renderToStaticMarkup(
