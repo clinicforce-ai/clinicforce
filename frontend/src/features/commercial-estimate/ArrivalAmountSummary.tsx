@@ -76,6 +76,7 @@ export default function ArrivalAmountSummary({
   const cignaPlanning =
     !model.cash &&
     !model.previousEstimate &&
+    !model.supportedAmount &&
     !['claim_after_service', 'qmb_protection'].includes(result.collection_guidance?.basis || '') &&
     result.fee_proxy_estimate?.basis === 'bcbstx_cigna_fee_proxy'
       ? result.fee_proxy_estimate

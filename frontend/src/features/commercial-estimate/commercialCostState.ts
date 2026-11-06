@@ -1,5 +1,6 @@
 import type { PrevisitEstimate } from '../../services/api/commercial-estimator'
 import type { CommercialEstimateModel } from './useCommercialEstimateModel'
+import { money } from './format'
 
 export function publishedGehaZero(result: PrevisitEstimate) {
   return (
@@ -20,6 +21,18 @@ export function calculatedShare(
     result.price_range?.complete === true &&
     (result.encounter_summary?.complete === true || model.supportedAmount === true)
   )
+}
+
+export function supportedOfficeCopayShare(
+  result: PrevisitEstimate,
+  model: CommercialEstimateModel,
+) {
+  const guidance = result.collection_guidance
+  return model.supportedAmount &&
+    guidance?.basis === 'office_copay' &&
+    guidance.amount_cents != null
+    ? `${money(guidance.amount_cents)} office copay advance; final share pending`
+    : null
 }
 
 export function visibleRateReference(result: PrevisitEstimate) {
