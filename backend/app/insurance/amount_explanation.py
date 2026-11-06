@@ -235,16 +235,11 @@ def build(result: dict, guidance: dict, review: dict | None = None) -> dict:
                     f"NMCT has no cash rate for {', '.join(unpriced) if unpriced else 'the selected services'}, and insurance pricing is unavailable because {cause}")
     elif amount is not None:
         if basis == 'claim_after_service':
-            cause, code = _cash_cause(result, failure, recovery, card, network, benefits, unpriced, missing,
-                                      guidance.get('source_errors'))
+            cause, code = _cash_cause(result, failure, recovery, card, network, benefits, unpriced, missing, guidance.get('source_errors'))
             if (guidance.get('collection_rule') or {}).get('mode') == 'cigna_cost_estimate_deferral':
-                sentence = ('Collect $0 at arrival: Cigna did not return a fixed office copay, and its '
-                            'Explanation of Estimate is needed before collecting deductible or coinsurance. '
-                            'The BCBS Texas planning share is separate; final liability follows the claim')
-                code = 'collection_deferred'
+                sentence, code = ('Collect $0 at arrival: Cigna did not return a fixed office copay. Obtain its Explanation of Estimate before collecting deductible or coinsurance; the BCBS Texas planning share is separate and final liability follows the claim', 'collection_deferred')
             elif guidance.get('deferred_supported_share'):
-                sentence = ('Collect $0 today under NMCT’s approved defer-to-claim policy; '
-                            'the estimated patient share is separate and final liability follows the processed claim')
+                sentence = 'Collect $0 today under NMCT’s approved defer-to-claim policy; the estimated patient share is separate and final liability follows the processed claim'
                 code = 'collection_deferred'
             elif guidance.get('positive_advance_policy_missing'):
                 sentence = ('Collect $0 today under NMCT’s approved defer-to-claim policy; '

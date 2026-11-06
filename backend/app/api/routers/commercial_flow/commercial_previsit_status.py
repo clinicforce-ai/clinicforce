@@ -381,9 +381,8 @@ def _previsit_result(case: dict, practice_id: str | None = None) -> dict:
                 group_contract_support.eligibility_route(result, str(payer_id or ''), route_payer))
         _recheck_saved_payer_allowance(result, case, practice_id)
         refresh_saved_requirements(_api, result, case, practice_id)
-        result.pop('fee_proxy_estimate', None)
-        result.pop('temporary_rate_reference', None)
-        result.pop('aetna_diagnostic_reference', None)
+        for key in ('fee_proxy_estimate', 'temporary_rate_reference', 'aetna_diagnostic_reference'):
+            result.pop(key, None)
         context = case['previsit_context']
         refresh_saved_temporary_rates(result, practice_id, context.get('inputs') or {},
                                       context.get('source') or {}, route_payer)
