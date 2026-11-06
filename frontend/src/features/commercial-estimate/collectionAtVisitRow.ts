@@ -166,6 +166,16 @@ export function collectionAtVisitRow(
     : null
   const officeBalance =
     aetnaCopayPlanning == null ? null : Math.max(0, aetnaCopayPlanning - aetnaPaid)
+  const aetnaOfficeTerms =
+    result.price_range?.mode === 'services' && result.price_range.lines?.length === 1
+      ? result.price_range.lines[0].benefits
+      : null
+  const aetnaSeparateCopayCap = aetnaOfficeTerms?.separate_copay_limit
+    ? aetnaOfficeTerms.copay_remaining_cents
+    : null
+  const aetnaPolicyPending =
+    aetnaCopayPlanning != null &&
+    result.collection_guidance?.positive_advance_policy_missing === true
   const priorDateAetnaBalance =
     priorDateAetnaCopay == null ? null : Math.max(0, priorDateAetnaCopay - aetnaPaid)
   const botoxPreview = !model.cash && !model.previousEstimate ? result.botox_preview : null
@@ -211,7 +221,9 @@ export function collectionAtVisitRow(
                     !['bcbstx_proxy_advance', 'qmb_protection'].includes(
                       result.collection_guidance?.basis || '',
                     )
-                  ? 'Planned amount to collect at visit'
+                  ? aetnaPolicyPending
+                    ? 'Amount to collect at visit · pending policy approval'
+                    : 'Planned amount to collect at visit'
                   : 'Amount to collect at visit',
     value: combinedPlan
       ? `${money(combinedPlan.amount_cents)} planning estimate`
@@ -240,7 +252,9 @@ export function collectionAtVisitRow(
                       : aetnaPlanning
                         ? `${money(aetnaBalance!)} planning estimate`
                         : aetnaCopayPlanning != null
-                          ? `${money(officeBalance!)} planning estimate`
+                          ? aetnaPolicyPending
+                            ? `Pending · ${money(officeBalance!)} specialist office copay`
+                            : `${money(officeBalance!)} planning estimate`
                           : pendingBluecardCopay != null
                             ? `Pending · ${money(pendingBluecardCopay)} office copay if verified`
                             : officeReferenceCopay != null
@@ -281,7 +295,11 @@ export function collectionAtVisitRow(
                     : aetnaPlanning
                       ? `min((${money(aetnaPlanning.copay_cents / 2)} per test × 2) + ${money(aetnaPlanning.deductible_cents)} deductible + ${money(aetnaPlanning.coinsurance_cents)} coinsurance, ${money(aetnaPlanning.estimated_allowed_cents)} Aetna fee reference, ${money(aetnaPlanning.oop_remaining_cents)} remaining out-of-pocket) = ${money(aetnaPlanning.patient_share_cents)}${aetnaPaid ? `; less ${money(aetnaPaid)} already paid = ${money(aetnaBalance!)}` : ' before any prior payment'}. ${aetnaPlanning.message}`
                       : aetnaCopayPlanning != null
-                        ? `${money(aetnaCopayPlanning)} specialist office copay + ${money(0)} deductible + 0% coinsurance = ${money(aetnaCopayPlanning)}${aetnaPaid ? `; less ${money(aetnaPaid)} already paid = ${money(officeBalance!)}` : ' before any prior payment'}. Planning amount; confirm the final allowed charge and Medicare billing protection before collection.`
+                        ? `${
+                            aetnaSeparateCopayCap != null
+                              ? `min(${money(aetnaOfficeTerms?.copay_cents || 0)} specialist office copay, ${money(aetnaSeparateCopayCap)} separate copay maximum remaining) = ${money(aetnaCopayPlanning)}. The general out-of-pocket balance does not reduce this separate copay.`
+                              : `${money(aetnaCopayPlanning)} specialist office copay + ${money(0)} deductible + 0% coinsurance = ${money(aetnaCopayPlanning)}.`
+                          }${aetnaPaid ? ` Less ${money(aetnaPaid)} already paid = ${money(officeBalance!)}.` : ' Confirm prior payments.'} ${aetnaPolicyPending ? 'Collection is pending clinic policy approval.' : 'Planning amount.'} Confirm the final allowed charge before collection.`
                         : pendingBluecardCopay != null
                           ? 'Payer-reported BlueCard specialist copay for one CPT 99204 office visit, less recorded payments. Confirm member plan, provider participation, home-plan authorization, and collection policy before charging.'
                           : officeReferenceCopay != null

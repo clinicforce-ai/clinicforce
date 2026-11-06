@@ -110,6 +110,15 @@ export default function ArrivalAmountSummary({
     officePlan == null
       ? null
       : Math.max(0, officePlan - (result.encounter_summary?.payments_verified_cents || 0))
+  const officeTerms =
+    result.price_range?.mode === 'services' && result.price_range.lines?.length === 1
+      ? result.price_range.lines[0].benefits
+      : null
+  const separateOfficeCopayRemaining = officeTerms?.separate_copay_limit
+    ? officeTerms.copay_remaining_cents
+    : null
+  const officePolicyPending =
+    officePlan != null && result.collection_guidance?.positive_advance_policy_missing === true
   const pendingAetnaCopay = aetnaPendingOfficeCopay(result, model)
   const pendingBluecardCopay = pendingBluecardOfficeCopay(result, model)
   const priorDateAetnaCopay = aetnaPriorDateReferenceCopay(result, model)
@@ -136,7 +145,9 @@ export default function ArrivalAmountSummary({
                 : diagnosticCopayReference != null
                   ? 'Diagnostic copay · collection pending'
                   : officeBalance != null
-                    ? 'Planned amount to collect at visit'
+                    ? officePolicyPending
+                      ? 'Amount to collect at visit · pending policy approval'
+                      : 'Planned amount to collect at visit'
                     : pendingAetnaCopay != null ||
                         pendingCignaCopay != null ||
                         pendingBluecardCopay != null
@@ -180,7 +191,9 @@ export default function ArrivalAmountSummary({
                 : diagnosticCopayReference != null
                   ? money(diagnosticCopayReference)
                   : officeBalance != null
-                    ? money(officeBalance)
+                    ? officePolicyPending
+                      ? `Pending · ${money(officeBalance)}`
+                      : money(officeBalance)
                     : pendingAetnaCopay != null
                       ? `Pending · ${money(pendingAetnaCopay)}`
                       : pendingBluecardCopay != null
@@ -231,12 +244,15 @@ export default function ArrivalAmountSummary({
         </p>
       ) : officeBalance != null ? (
         <p>
-          {money(officePlan!)} specialist office copay + {money(0)} deductible + 0% coinsurance
+          {separateOfficeCopayRemaining != null
+            ? `min(${money(officeTerms?.copay_cents || 0)} specialist office copay, ${money(separateOfficeCopayRemaining)} separate copay maximum remaining) = ${money(officePlan!)}. The general out-of-pocket balance does not reduce this separate copay.`
+            : `${money(officePlan!)} specialist office copay + ${money(0)} deductible + 0% coinsurance.`}
           {result.encounter_summary?.payments_verified_cents
-            ? `; less ${money(result.encounter_summary.payments_verified_cents)} already paid`
-            : ''}{' '}
-          = {money(officeBalance)} planning estimate. Confirm the final allowed charge and Medicare
-          billing protection before collection.
+            ? ` Less ${money(result.encounter_summary.payments_verified_cents)} already paid = ${money(officeBalance)}.`
+            : ' Confirm prior payments.'}{' '}
+          {officePolicyPending
+            ? 'Clinic policy approval is required before collection.'
+            : 'Planning estimate; confirm the final allowed charge before collection.'}
         </p>
       ) : pendingAetnaCopay != null ? (
         <p>
