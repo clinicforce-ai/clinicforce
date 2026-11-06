@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from app.api.routers import commercial_estimator as _api
-from app.api.routers.commercial_flow.commercial_previsit_rate_reference import _attach_temporary_aetna_rates, _attach_temporary_uhc_rates, _attach_temporary_blue_cross_rates
+from app.api.routers.commercial_flow.commercial_previsit_rate_reference import _attach_temporary_aetna_rates, _attach_temporary_uhc_rates, _attach_temporary_blue_cross_rates, attach_prudent_buyer_office_reference, prudent_buyer_office_reference
 from app.api.routers.commercial_flow.commercial_previsit_network_guard import apply_admin_nonparticipation, apply_nmct_cigna_administrator_attestation, apply_nmct_library_contract, apply_nmct_contract_absence, scoped_admin_nonparticipation, record_confirmed_out_of_network, resolve_unlinked_blue_route
 from app.api.routers.commercial_flow.commercial_previsit_service_scope import reviewed_service_types as _reviewed_service_types
 from app.api.routers.commercial_flow.commercial_previsit_context import ecw_case_data as _ecw_case_data
@@ -368,6 +368,8 @@ def _attach_previsit_pricing(result: dict, practice_id: str, inputs: dict, sourc
     elif nmct and _api.re.search(r'\baetna\b', ' '.join((str(result.get('payer') or ''),
             str((route_payer or {}).get('display_name') or ''))), _api.re.I):
         _attach_temporary_aetna_rates(result, practice_id, inputs, source)
+    elif prudent_buyer_office_reference(result):
+        attach_prudent_buyer_office_reference(result, practice_id, inputs, source)
     elif (rate_payer_name := str(result.get('payer') or (route_payer or {}).get('display_name') or '')) and not _api.re.search(
             r'blue cross|bcbstx|blue shield|aetna', rate_payer_name, _api.re.I):
         _attach_temporary_blue_cross_rates(result, practice_id, inputs, source, rate_payer_name)

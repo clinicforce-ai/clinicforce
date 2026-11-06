@@ -7,6 +7,7 @@ import {
   aetnaPriorDateReferenceCopay,
 } from './payerReportedPartialCopay'
 import { pendingBluecardOfficeCopay, pendingCignaOfficeCopay } from './collectionAtVisitRow'
+import { bluecardOfficeDeductibleScenario } from './bluecardOfficeDeductibleScenario'
 
 function nextStep(model: CommercialEstimateModel, result: PrevisitEstimate) {
   const lines = result.price_range?.mode === 'services' ? result.price_range.lines || [] : []
@@ -128,6 +129,8 @@ export default function ArrivalAmountSummary({
       ? null
       : Math.max(0, priorDateAetnaCopay - (result.encounter_summary?.payments_verified_cents || 0))
   const pendingCignaCopay = pendingCignaOfficeCopay(result, model)
+  const bluecardDeductible =
+    !model.cash && !model.previousEstimate ? bluecardOfficeDeductibleScenario(result) : null
   const needsAction = model.amountText === 'Insured amount unavailable'
   const additionalServicesPending = result.price_range?.lines?.some(
     (line) => !/^992(?:0[2-5]|1[2-5])$/.test(line.code),
@@ -141,35 +144,38 @@ export default function ArrivalAmountSummary({
             ? 'Planned amount to collect · provisional CPT scenario'
             : cignaPlanning
               ? 'Cigna planning estimate · collection pending'
-              : aetnaPlanning
-                ? 'Planned amount to collect at visit'
-                : diagnosticCopayReference != null
-                  ? 'Diagnostic copay · collection pending'
-                  : officeBalance != null
-                    ? officePolicyPending
-                      ? 'Amount to collect at visit · pending policy approval'
-                      : 'Planned amount to collect at visit'
-                    : pendingAetnaCopay != null ||
-                        pendingCignaCopay != null ||
-                        pendingBluecardCopay != null
-                      ? 'Amount to collect at visit · pending verification'
-                      : partialCopay != null
-                        ? referenceOnly
-                          ? 'Office-only reference · collection pending'
-                          : 'Suggested amount to collect at visit'
-                        : cardPlanningCopay != null
-                          ? 'Card-based office suggestion · collection pending'
-                          : priorDateAetnaCopay != null
-                            ? 'Payer-reported office copay · pending verification'
-                            : needsAction
-                              ? 'Next step'
-                              : model.amountLabel}
+              : bluecardDeductible
+                ? 'Amount to collect at visit · estimated'
+                : aetnaPlanning
+                  ? 'Planned amount to collect at visit'
+                  : diagnosticCopayReference != null
+                    ? 'Diagnostic copay · collection pending'
+                    : officeBalance != null
+                      ? officePolicyPending
+                        ? 'Amount to collect at visit · pending policy approval'
+                        : 'Planned amount to collect at visit'
+                      : pendingAetnaCopay != null ||
+                          pendingCignaCopay != null ||
+                          pendingBluecardCopay != null
+                        ? 'Amount to collect at visit · pending verification'
+                        : partialCopay != null
+                          ? referenceOnly
+                            ? 'Office-only reference · collection pending'
+                            : 'Suggested amount to collect at visit'
+                          : cardPlanningCopay != null
+                            ? 'Card-based office suggestion · collection pending'
+                            : priorDateAetnaCopay != null
+                              ? 'Payer-reported office copay · pending verification'
+                              : needsAction
+                                ? 'Next step'
+                                : model.amountLabel}
       </span>
       <strong
         className={
           !visibleAmount &&
           !botoxPlanning &&
           !cignaPlanning &&
+          !bluecardDeductible &&
           !aetnaPlanning &&
           officeBalance == null &&
           pendingAetnaCopay == null &&
@@ -187,29 +193,31 @@ export default function ArrivalAmountSummary({
             ? money(botoxPlanning.patient_share_cents)
             : cignaPlanning
               ? money(cignaPlanning.patient_share_cents)
-              : aetnaPlanning
-                ? money(aetnaBalance!)
-                : diagnosticCopayReference != null
-                  ? money(diagnosticCopayReference)
-                  : officeBalance != null
-                    ? officePolicyPending
-                      ? `Pending · ${money(officeBalance)}`
-                      : money(officeBalance)
-                    : pendingAetnaCopay != null
-                      ? `Pending · ${money(pendingAetnaCopay)}`
-                      : pendingBluecardCopay != null
-                        ? `Pending · ${money(pendingBluecardCopay)}`
-                        : pendingCignaCopay != null
-                          ? `Pending · ${money(pendingCignaCopay)}`
-                          : partialCopay != null
-                            ? money(partialCopay)
-                            : cardPlanningCopay != null
-                              ? money(cardPlanningCopay)
-                              : priorDateAetnaCopay != null
-                                ? money(priorDateAetnaBalance!)
-                                : needsAction
-                                  ? action.title
-                                  : model.amountText}
+              : bluecardDeductible
+                ? money(bluecardDeductible.collect)
+                : aetnaPlanning
+                  ? money(aetnaBalance!)
+                  : diagnosticCopayReference != null
+                    ? money(diagnosticCopayReference)
+                    : officeBalance != null
+                      ? officePolicyPending
+                        ? `Pending · ${money(officeBalance)}`
+                        : money(officeBalance)
+                      : pendingAetnaCopay != null
+                        ? `Pending · ${money(pendingAetnaCopay)}`
+                        : pendingBluecardCopay != null
+                          ? `Pending · ${money(pendingBluecardCopay)}`
+                          : pendingCignaCopay != null
+                            ? `Pending · ${money(pendingCignaCopay)}`
+                            : partialCopay != null
+                              ? money(partialCopay)
+                              : cardPlanningCopay != null
+                                ? money(cardPlanningCopay)
+                                : priorDateAetnaCopay != null
+                                  ? money(priorDateAetnaBalance!)
+                                  : needsAction
+                                    ? action.title
+                                    : model.amountText}
       </strong>
       {plan ? (
         <p>
@@ -228,6 +236,12 @@ export default function ArrivalAmountSummary({
         <p>
           Conditional patient share using BCBS Texas fee references. Review the per-CPT formula
           below and obtain Cigna’s Explanation of Estimate before collection.
+        </p>
+      ) : bluecardDeductible ? (
+        <p>
+          CPT 99203 uses a {money(bluecardDeductible.reference)} clinic fee reference. The table
+          below shows the deductible and coinsurance formula. This estimate assumes the fee and
+          plan-wide deductible apply to this office visit.
         </p>
       ) : aetnaPlanning ? (
         <p>
