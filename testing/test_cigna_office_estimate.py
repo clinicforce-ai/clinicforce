@@ -138,6 +138,20 @@ def test_cigna_oap_specialist_televisit_collects_matched_card_copay_without_allo
     assert card_unavailable['collection_guidance']['amount_cents'] == 6000
 
 
+def test_cigna_oap_televisit_keeps_verified_copay_when_selected_line_reports_it():
+    payload, inputs, source, card = oap_televisit()
+    result = finish(payload, inputs, source, payer='Cigna', card_check=card,
+                    configured_connections=[])
+    result['price_range']['lines'][0]['benefits'].update(
+        copay_cents=6000, copay_period='VISIT', deductible_applies=False,
+        coinsurance_percent='0', oop_remaining_cents=864094)
+
+    guidance = collection_guidance.build(result)
+    assert guidance['amount_cents'] == 6000
+    assert guidance['basis'] == 'office_copay'
+    assert guidance['collection_rule']['mode'] == 'cigna_oap_televisit_office_copay'
+
+
 @pytest.mark.parametrize('change', ['card_mismatch', 'unverified_card', 'expired_copay', 'pos02',
     'wrong_plan', 'audio_only', 'primary_care', 'office_deductible', 'office_coinsurance',
     'out_of_network', 'secondary'])
@@ -472,6 +486,22 @@ def test_named_cigna_result_keeps_approved_fixed_copay_without_allowed_rate():
     assert paid['amount_cents'] == 4000
     result.pop('collection_policy')
     assert collection_guidance.build(result)['amount_cents'] is None
+
+
+def test_oap_followup_collects_fixed_copay_without_cigna_allowed_rate():
+    payload, inputs, source = example()
+    payload['plans'][0]['name'] = 'Open Access Plus'
+    payload['plans'][0]['benefits']['coPayment'][1]['amount'] = '60'
+    inputs['reason'] = 'Eight week follow-up'
+    result = finish(payload, inputs, source, review={'selected_ids': ['99213:1']}, payer='Cigna')
+    result['temporary_rate_reference'] = {'source': 'BCBS Texas clinic schedule',
+        'lines': [{'code': '99213', 'units': 1, 'unit_reference_cents': 7615}]}
+
+    assert [line['code'] for line in result['price_range']['lines']] == ['99213']
+    assert result['price_range']['lines'][0]['allowed_cents'] is None
+    assert result['collection_guidance']['basis'] == 'office_copay'
+    assert result['collection_guidance']['amount_cents'] == 6000
+    assert result['encounter_summary']['collect_today_cents'] == 6000
 
 
 def test_attribution_metadata_does_not_cancel_active_cigna_coverage():

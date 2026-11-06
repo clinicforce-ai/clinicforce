@@ -149,14 +149,12 @@ def build(result: dict, review: dict | None = None) -> dict:
                                       'message': 'Invalid financial evidence: calculation returned an invalid amount.'})
     safe = safe and not source_errors
     amount = None
-    office_copay = (office_copay_amount(result, collection_benefits, price, lines, guidance, assumptions)
-                    if safe and lines and price.get('mode') != 'options' else None)
     cigna_oap_televisit = False
-    if office_copay is not None:
-        amount = office_copay
-    elif safe and lines:
+    if safe and lines:
         amount = cigna_oap_televisit_office_copay(result, collection_benefits, price, lines, guidance, assumptions)
         cigna_oap_televisit = amount is not None
+    if amount is None and safe and lines and price.get('mode') != 'options':
+        amount = office_copay_amount(result, collection_benefits, price, lines, guidance, assumptions)
     if amount is None and safe:
         amount = diagnostic_day_copay_amount(price, lines, guidance, assumptions)
     if amount is None and (strict.get('amount_cents') is not None and safe and verified_in_network(benefits)

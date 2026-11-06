@@ -204,7 +204,10 @@ export function collectionAtVisitRow(
               ? 'Diagnostic copay · collection pending'
               : (partialOfficeCopay != null || cardPlanningCopay != null) && feeProxyCheckin == null
                 ? 'Suggested amount to collect at visit'
-                : ((cignaFeeProxy && result.collection_guidance?.basis !== 'claim_after_service') ||
+                : ((cignaFeeProxy &&
+                      !['claim_after_service', 'office_copay'].includes(
+                        result.collection_guidance?.basis || '',
+                      )) ||
                       feeProxyCheckin != null ||
                       aetnaPlanning != null ||
                       aetnaCopayPlanning != null) &&
@@ -272,9 +275,9 @@ export function collectionAtVisitRow(
               ? result.collection_guidance.reason
               : diagnosticCopayReference != null
                 ? 'Payer-reported diagnostic copay for the selected testing. Approve the clinic collection policy and account for prior payments before charging; the full patient share remains unresolved.'
-                : cignaFeeProxy
+                : cignaFeeProxy && result.collection_guidance?.basis !== 'office_copay'
                   ? `${proxyFormula?.total} ${feeProxy!.message || result.collection_guidance?.reason || ''}`
-                  : feeProxy != null
+                  : feeProxy != null && result.collection_guidance?.basis !== 'office_copay'
                     ? result.collection_guidance?.basis === 'bcbstx_proxy_advance'
                       ? `${proxyFormula?.total} Clinic-approved BCBS Texas fee proxy advance; final responsibility follows the UHC claim.`
                       : `${proxyFormula?.total} Provisional BCBS Texas fee proxy; collect only after clinic policy and Medicare billing-protection clearance.`
@@ -307,7 +310,7 @@ export function collectionAtVisitRow(
                                               : model.supportedAmount
                                                 ? result.collection_guidance?.basis ===
                                                   'office_copay'
-                                                  ? 'Office copay advance; other services may have a later balance'
+                                                  ? 'Office copay advance; the payer allowed amount and final share remain unresolved'
                                                   : result.collection_guidance?.basis ===
                                                       'out_of_pocket_limit'
                                                     ? 'Applicable out-of-pocket maximum has no remaining balance for covered care'

@@ -86,6 +86,7 @@ jobs:
           node testing/member-benefits-ui.mjs
           node testing/uhc-saved-projection-ui.mjs
           node testing/televisit-collection-ui.mjs
+          node ../testing/cigna-office-collection-ui.mjs
           node testing/historical-replay-ui.mjs
           npm run format:check
           npm run check:size

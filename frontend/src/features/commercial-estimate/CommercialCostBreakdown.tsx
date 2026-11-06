@@ -65,13 +65,13 @@ export default function CommercialCostBreakdown({
   const pricedCashLines = lines.filter((line) => line.cash_cents != null && !line.cash_included)
   const lineAllowedTotal = resolvedAllowedTotal(lines)
   const calculated = costState.calculatedShare(result, model, automaticCashFallback)
+  const copayShare = costState.supportedOfficeCopayShare(result, model)
   const { temporaryRateReference, aetnaRateReference } = costState.visibleRateReference(result)
   const aetnaPlanning = copay.visibleAetnaDiagnosticPlanning(result, model)
   const aetnaCopayPlanning = copay.aetnaOfficePlanningCopay(result, model, lines)
-  const memberGroup = memberGroupRow(result)
   const insuredRows: CostBreakdownRow[] = [
     referenceCoverageRow(result, model, benefits),
-    ...(memberGroup ? [memberGroup] : []),
+    ...[memberGroupRow(result)].filter((row): row is CostBreakdownRow => row != null),
     { label: 'Network', value: model.networkLabel },
     {
       label: result.reason ? 'Reason for visit' : 'Planned service',
@@ -411,7 +411,7 @@ export default function CommercialCostBreakdown({
                                   : null) ||
                             (model.provisionalAmount != null
                               ? money(model.provisionalAmount)
-                              : model.patientPrice || 'Not fully calculated')
+                              : copayShare || model.patientPrice || 'Not fully calculated')
   const rows: CostBreakdownRow[] =
     model.cash && !automaticCashFallback
       ? [
