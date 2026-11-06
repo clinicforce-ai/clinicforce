@@ -70,6 +70,80 @@ try {
   assert(table.includes('99213'))
   assert(table.includes('Not fully priced'))
 
+  const orderedBenefits = {
+    ...benefits,
+    has_secondary: true,
+    oop_remaining_cents: 100000,
+    primary_secondary_order: {
+      status: 'verified',
+      primary_payer_id: '84980',
+      secondary_payer: 'Medicare',
+      evidence_paths: ['plans[0].benefits.otherOrAdditionalPayer[0]'],
+    },
+  }
+  const ordered = {
+    ...result,
+    payer: 'Synthetic Blue Cross',
+    benefits: orderedBenefits,
+    recovery: { reason_code: 'multiple_active_policies', active_policy_count: 2 },
+    price_range: {
+      ...result.price_range,
+      lines: [
+        {
+          ...line,
+          benefits: {
+            ...orderedBenefits,
+            copay_cents: 4000,
+            copay_period: 'DAY',
+            coinsurance_percent: '0',
+          },
+        },
+      ],
+    },
+    collection_guidance: {
+      ...result.collection_guidance,
+      status: 'estimated',
+      basis: 'office_copay',
+      amount_cents: 4000,
+      primary_secondary_copay: true,
+    },
+    encounter_summary: { collect_today_cents: 4000, complete: false, unpriced_codes: ['99213'] },
+  }
+  const orderedModel = deriveCommercialEstimateView({
+    result: ordered,
+    appointments: [],
+    selectedVisit: '',
+    busy: null,
+    error: '',
+    readOnly: false,
+    recovering: false,
+  })
+  const orderedTable = renderToStaticMarkup(
+    React.createElement(CommercialCostBreakdown, { model: orderedModel, result: ordered }),
+  )
+  assert(orderedTable.includes('Amount to collect at visit</th><td><span>$40.00'))
+  assert(orderedTable.includes('Medicare secondary'))
+  assert(orderedTable.includes('Provisional primary office copay'))
+  const uncertain = {
+    ...ordered,
+    collection_guidance: {
+      ...ordered.collection_guidance,
+      amount_cents: null,
+      primary_secondary_copay: false,
+    },
+    encounter_summary: { ...ordered.encounter_summary, collect_today_cents: null },
+  }
+  const uncertainModel = deriveCommercialEstimateView({
+    result: uncertain,
+    appointments: [],
+    selectedVisit: '',
+    busy: null,
+    error: '',
+    readOnly: false,
+    recovering: false,
+  })
+  assert.equal(uncertainModel.supportedAmount, false)
+
   const unresolved = {
     ...result,
     price_range: {

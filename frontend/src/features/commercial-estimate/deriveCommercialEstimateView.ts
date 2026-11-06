@@ -218,8 +218,8 @@ export function deriveCommercialEstimateView({
     financialSourceValid &&
     !participationConflict &&
     patientBenefitsBound &&
-    !benefits.has_secondary &&
-    result?.recovery?.reason_code !== 'multiple_active_policies' &&
+    ((!benefits.has_secondary && result?.recovery?.reason_code !== 'multiple_active_policies') ||
+      guidance?.primary_secondary_copay === true) &&
     (networkConfirmed || outOfNetworkCollection || independentOfficeCopay)
   const clinicInstructionAmount =
     guidance?.basis === 'claim_after_service' ||

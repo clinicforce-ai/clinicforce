@@ -26,7 +26,7 @@ def _cash_cause(result: dict, failure: dict, recovery: dict, card: dict, network
         return 'the same medical policy returned conflicting subscriber, date or office benefit evidence', 'same_policy_evidence_conflict'
     if not active_benefits and (failure.get('kind') == 'provider_enrollment' or reason in {'provider_enrollment_missing', 'enrollment_required'}):
         return ENROLLMENT_REASON_ACTION.get(failure.get('reason_code'), ENROLLMENT_DEFAULT)[0], 'provider_enrollment'
-    if reason == 'multiple_active_policies' or benefits.get('has_secondary'):
+    if (reason == 'multiple_active_policies' or benefits.get('has_secondary')) and (benefits.get('primary_secondary_order') or {}).get('status') != 'verified':
         count = recovery.get('active_policy_count')
         if type(count) is not int:
             count = sum(row.get('active_medical') is True for row in recovery.get('candidates') or [])

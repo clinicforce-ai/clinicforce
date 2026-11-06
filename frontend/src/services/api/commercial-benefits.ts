@@ -12,6 +12,12 @@ export type PrevisitBenefits = null | {
   active?: boolean | null
   plan_details?: { names?: string[] }
   has_secondary?: boolean
+  primary_secondary_order?: {
+    status: 'verified'
+    primary_payer_id?: string
+    secondary_payer: string
+    evidence_paths: string[]
+  }
   network_conflict?: boolean
   network_independent?: boolean
   network_status?: string

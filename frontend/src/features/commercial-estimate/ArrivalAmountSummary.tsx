@@ -19,7 +19,11 @@ function nextStep(model: CommercialEstimateModel, result: PrevisitEstimate) {
     return { title: 'Select services', hint: 'Choose the planned CPTs for this visit.' }
   if (result.benefits?.active !== true)
     return { title: 'Check coverage', hint: 'Run eligibility for this visit.' }
-  if (result.benefits.has_secondary || result.recovery?.reason_code === 'multiple_active_policies')
+  if (
+    (result.benefits.has_secondary ||
+      result.recovery?.reason_code === 'multiple_active_policies') &&
+    result.benefits.primary_secondary_order?.status !== 'verified'
+  )
     return { title: 'Confirm payer order', hint: 'Resolve the active policies before collecting.' }
   if (result.benefits.source_errors?.length)
     return {

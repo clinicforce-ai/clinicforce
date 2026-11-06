@@ -27,7 +27,15 @@ export function referenceCoverageRow(
       : result.service_date
         ? `${model.policyStatus} · Visit ${requestedDate}`
         : model.policyStatus
-  return { label: 'Coverage', value, detail }
+  const order = benefits?.primary_secondary_order
+  return {
+    label: 'Coverage',
+    value,
+    detail:
+      order?.status === 'verified'
+        ? `${detail} · ${result.payer || 'Selected plan'} primary · ${order.secondary_payer} secondary`
+        : detail,
+  }
 }
 
 export function memberGroupRow(result: PrevisitEstimate): CostBreakdownRow | null {
