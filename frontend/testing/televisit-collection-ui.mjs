@@ -97,7 +97,40 @@ try {
   const unresolvedTable = renderToStaticMarkup(
     React.createElement(CommercialCostBreakdown, { model: unresolvedModel, result: unresolved }),
   )
-  assert(unresolvedTable.includes('Amount to collect at visit</th><td><span>Not established'))
+  assert(unresolvedTable.includes('Amount to collect at visit</th><td><span>Review selected CPT, benefits and clinic rate before collecting'))
+
+  const bluecardBenefits = {
+    ...benefits,
+    oop_remaining_cents: 500000,
+    deductible_annual_cents: 400000,
+    deductible_remaining_cents: 400000,
+    reported_options: [{
+      kind: 'deductible', service_type_code: '30', coverage_level: 'INDIVIDUAL',
+      network: 'IN_NETWORK', time_period: 'REMAINING', amount_cents: 400000,
+    }],
+  }
+  const bluecardResult = {
+    ...unresolved,
+    reason: 'New patient headache visit',
+    benefits: bluecardBenefits,
+    price_range: { mode: 'services', complete: false, lines: [{
+      ...line, code: '99203', benefits: bluecardBenefits,
+    }] },
+    payment_explanation: {
+      reason_code: 'clinic_product_mismatch',
+      sentence: 'Link this member plan to the clinic agreement and rerun the estimate.',
+    },
+  }
+  const bluecardModel = deriveCommercialEstimateView({
+    result: bluecardResult, appointments: [], selectedVisit: '', busy: null,
+    error: '', readOnly: false, recovering: false,
+  })
+  const bluecardTable = renderToStaticMarkup(
+    React.createElement(CommercialCostBreakdown, { model: bluecardModel, result: bluecardResult }),
+  )
+  assert(bluecardTable.includes('$4,000.00 annual · $4,000.00 remaining'))
+  assert(bluecardTable.includes('plan-wide deductible under STC 30'))
+  assert(bluecardTable.includes('Match member plan to clinic agreement'))
 
   const cignaResult = {
     ...result,

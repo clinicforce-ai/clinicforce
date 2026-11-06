@@ -181,6 +181,17 @@ export function collectionAtVisitRow(
     result.collection_guidance.diagnostic_copay_reference_cents != null
       ? result.collection_guidance.diagnostic_copay_reference_cents
       : null
+  const collectionBlocker = result.payment_explanation
+  const namedCollectionAction =
+    collectionBlocker?.reason_code === 'clinic_product_mismatch'
+      ? 'Match member plan to clinic agreement'
+      : collectionBlocker?.reason_code === 'contract_rate_missing'
+        ? 'Check plan-to-rate match for selected CPT'
+        : null
+  const pendingCollectionAction =
+    namedCollectionAction ||
+    collectionBlocker?.sentence ||
+    'Review selected CPT, benefits and clinic rate before collecting'
   return {
     label:
       pendingAetnaCopay != null || priorDateAetnaBalance != null || pendingBluecardCopay != null
@@ -248,7 +259,7 @@ export function collectionAtVisitRow(
                                           ? `Pending · ${money(pendingCignaCopay)} office copay if verified`
                                           : cignaCard
                                             ? `Pending · ${money(cignaCard.nontier1_specialist_copay_cents)} non-Tier-1 office-only reference; diagnostic CPT amount requires verification`
-                                            : 'Not established',
+                                            : pendingCollectionAction,
     detail: combinedPlan
       ? `${money(combinedPlan.office_copay_cents)} + ${combinedPlan.coinsurance_percent}% × ${money(combinedPlan.diagnostic_allowed_cents)} = ${money(combinedPlan.patient_share_cents)}${combinedPlan.payments_cents ? `; less ${money(combinedPlan.payments_cents)} already paid` : ''}. Separate follow-up E/M is planned; deductible and out-of-pocket adjustments remain assumptions until payer balances are returned.`
       : result.collection_guidance?.basis === 'published_geha_pshb_zero_office'
@@ -307,7 +318,9 @@ export function collectionAtVisitRow(
                                                           'claim_after_service'
                                                         ? 'Clinic policy defers collection until after the claim'
                                                         : undefined
-                                                : undefined,
+                                                : namedCollectionAction
+                                                  ? collectionBlocker?.sentence
+                                                  : undefined,
     emphasis: true,
   }
 }

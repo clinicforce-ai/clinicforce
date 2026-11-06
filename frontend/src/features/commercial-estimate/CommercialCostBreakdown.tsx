@@ -20,6 +20,7 @@ import { commercialOopRows, familyOopLimitApplied } from './commercialOopRows'
 import { familyDeductibleRow } from './familyDeductibleRow'
 import { suggestedDiagnosisRows } from './suggestedDiagnosisRows'
 import { cignaCardReference, cignaCardRows } from './cignaCardReference'
+import { hasGeneralOnlyOfficeDeductible } from './deductibleSource'
 import * as costState from './commercialCostState'
 export default function CommercialCostBreakdown({
   model,
@@ -290,7 +291,9 @@ export default function CommercialCostBreakdown({
                         : lines.length &&
                             lines.every((line) => line.benefits?.deductible_applies === false)
                           ? 'Does not apply to the selected CPTs'
-                          : 'Office deductible applicability or amount is unresolved for the selected CPTs',
+                          : hasGeneralOnlyOfficeDeductible(benefits)
+                            ? 'Stedi returned this plan-wide deductible under STC 30. Its office-visit STC 98 rows did not say whether the deductible applies to the selected CPTs.'
+                            : 'Office deductible applicability or amount is unresolved for the selected CPTs',
     },
     familyDeductibleRow(
       reportedResult,
