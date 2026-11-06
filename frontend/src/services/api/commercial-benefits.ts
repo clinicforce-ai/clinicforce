@@ -45,6 +45,8 @@ export type PrevisitBenefits = null | {
   oop_quarantined_ids?: string[]
   copay_cents?: number | null
   copay_id?: string | null
+  copay_remaining_cents?: number | null
+  separate_copay_limit?: boolean
   coinsurance_percent?: string | null
   authorization_basis?: string
   authorization_signal?: string

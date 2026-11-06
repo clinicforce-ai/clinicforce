@@ -5,6 +5,7 @@ import { money, visitDate } from './format'
 import { limitSummary } from './limitSummary'
 import { reportedLimit } from './reportedLimit'
 import { reportedMedicalLimit } from './reportedMedicalLimit'
+import { patientBenefitsBound } from './identityBinding'
 
 export function familyOopLimitApplied(result: PrevisitEstimate): boolean {
   const lines = result.price_range?.mode === 'services' ? result.price_range.lines || [] : []
@@ -25,6 +26,22 @@ export function commercialOopRows(
 ): CostBreakdownRow[] {
   const ehr = humanaReferenceCopay == null ? result.ecw_eligibility_reference : undefined
   const individualReportedOop = limitSummary(reportedResult, 'out_of_pocket', 'INDIVIDUAL')
+  const selectedOfficeLine =
+    result.price_range?.mode === 'services' &&
+    result.price_range.lines?.length === 1 &&
+    /^992(?:0[2-5]|1[2-5])$/.test(result.price_range.lines[0].code)
+      ? result.price_range.lines[0]
+      : null
+  const separateCopayRemaining =
+    patientBenefitsBound(result.identity) &&
+    benefits?.active === true &&
+    benefits.service_date_matches === true &&
+    benefits.network_status === 'in_network' &&
+    selectedOfficeLine?.benefits?.separate_copay_limit &&
+    Number.isInteger(selectedOfficeLine.benefits.copay_remaining_cents) &&
+    (selectedOfficeLine.benefits.copay_remaining_cents ?? -1) >= 0
+      ? selectedOfficeLine.benefits.copay_remaining_cents
+      : null
   const reportedIndividualRemainingOop = reportedLimit(
     reportedResult,
     'out_of_pocket',
@@ -125,16 +142,28 @@ export function commercialOopRows(
                 ? ehrDetail
                 : reportedOopOnly
                   ? 'Payer-reported medical limit; not used as a verified calculation input'
-                  : benefits?.oop_remaining_cents === 0
-                    ? 'Applicable in-network limit has $0 remaining for the selected covered care'
-                    : calculated && components?.oop_adjustment_cents != null
-                      ? `${money(components.oop_adjustment_cents)} reduction applied to this visit`
-                      : unconfirmedZeroOop
-                        ? 'Payer reports $0 remaining; confirm this is the applicable medical limit before collection'
-                        : individualReportedOop.unassigned
-                          ? 'Payer-reported plan amount; medical applicability needs confirmation before use as a cap'
-                          : 'Payer-reported limit; applicability to these CPTs depends on the completed estimate',
+                  : separateCopayRemaining != null
+                    ? 'The selected office copay has a separate copay maximum; the general limit does not erase that copay'
+                    : benefits?.oop_remaining_cents === 0
+                      ? 'Applicable in-network limit has $0 remaining for the selected covered care'
+                      : calculated && components?.oop_adjustment_cents != null
+                        ? `${money(components.oop_adjustment_cents)} reduction applied to this visit`
+                        : unconfirmedZeroOop
+                          ? 'Payer reports $0 remaining; confirm this is the applicable medical limit before collection'
+                          : individualReportedOop.unassigned
+                            ? 'Payer-reported plan amount; medical applicability needs confirmation before use as a cap'
+                            : 'Payer-reported limit; applicability to these CPTs depends on the completed estimate',
     },
+    ...(separateCopayRemaining != null
+      ? [
+          {
+            label: 'Separate office copay maximum',
+            value: `${money(separateCopayRemaining)} remaining`,
+            detail:
+              'The selected office copay uses this separate remaining balance; the general out-of-pocket balance does not erase it.',
+          },
+        ]
+      : []),
     ...(combinedAnnual || combinedRemaining
       ? [
           {

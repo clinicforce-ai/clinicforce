@@ -322,6 +322,9 @@ export function aetnaOfficePlanningCopay(
   const benefits = result.reference_benefits ?? result.benefits
   const officeLine = lines.length === 1 ? lines[0] : null
   const terms = officeLine?.benefits
+  const remainingCopayCap = terms?.separate_copay_limit
+    ? terms.copay_remaining_cents
+    : terms?.oop_remaining_cents
   return !model.cash &&
     !model.previousEstimate &&
     !(
@@ -341,6 +344,7 @@ export function aetnaOfficePlanningCopay(
     !benefits.coverage_status_conflict &&
     !benefits.coverage_dates_invalid &&
     !benefits.source_errors?.length &&
+    (!terms?.separate_copay_limit || patientBenefitsBound(result.identity)) &&
     benefits.qmb_status !== 'protected' &&
     result.benefits?.qmb_status !== 'protected' &&
     result.billing_protection?.status !== 'qmb' &&
@@ -357,9 +361,12 @@ export function aetnaOfficePlanningCopay(
     (terms.deductible_applies === false ||
       terms.deductible_remaining_cents === 0 ||
       aetnaSignatureOfficeNoDeductible(result, officeLine)) &&
-    terms.oop_remaining_cents != null &&
-    terms.oop_remaining_cents >= terms.copay_cents
-    ? terms.copay_cents
+    remainingCopayCap != null &&
+    Number.isInteger(remainingCopayCap) &&
+    (terms.separate_copay_limit ? remainingCopayCap >= 0 : remainingCopayCap >= terms.copay_cents)
+    ? terms.separate_copay_limit
+      ? Math.min(terms.copay_cents, remainingCopayCap)
+      : terms.copay_cents
     : null
 }
 
