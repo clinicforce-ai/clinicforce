@@ -56,7 +56,8 @@ def _stedi_entries(payload: dict[str, Any]) -> list[dict[str, Any]]:
             continue
         for category, code in (("statuses", "status"), ("coInsurance", "A"), ("coPayment", "B"),
                                ("deductible", "C"), ("outOfPocket", "G"), ("limitations", "F"),
-                               ("exclusions", "I"), ("nonCovered", "I"), ("benefitDescription", "D"), ("coverageBasis", "D")):
+                               ("exclusions", "I"), ("nonCovered", "I"), ("benefitDescription", "D"),
+                               ("coverageBasis", "D"), ("otherOrAdditionalPayer", "R")):
             for i, row in enumerate(benefits.get(category) or []):
                 if not isinstance(row, dict):
                     continue

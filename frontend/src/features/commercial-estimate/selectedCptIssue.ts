@@ -19,7 +19,13 @@ export function firstSelectedCptIssue(result?: PrevisitEstimate | null): string 
           return `${code} has an unreadable coverage date. Obtain the correct payer date for this visit.`
         if (terms.historical_only === true)
           return `${code} has historical-only payer evidence. Rerun the payer check before collecting.`
-        if (terms.has_secondary === true)
+        if (
+          terms.has_secondary === true &&
+          !(
+            result?.benefits?.primary_secondary_order?.status === 'verified' &&
+            /^992(?:0[2-5]|1[2-5])$/.test(line.code)
+          )
+        )
           return `${code} has other coverage. Establish payer order and secondary benefits before collecting.`
         if (
           (terms.active !== null || line.calculation != null) &&

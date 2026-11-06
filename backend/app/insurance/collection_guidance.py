@@ -14,6 +14,7 @@ from app.insurance.network_participation import participation_conflict, verified
 from app.insurance import encounter_summary
 from app.insurance.insurance_product import is_medicare_advantage
 from app.insurance.published_plan_benefits import GEHA_HIGH_PSHB_MA_16615_2026
+from app.insurance.stedi_benefits.payer_order import verified_primary_order
 
 
 def emg_option(result: dict, rates: list[dict], rules: dict, payload: dict | None,
@@ -96,6 +97,7 @@ def build(result: dict, review: dict | None = None) -> dict:
     line_blocker = selected_service_blocker(benefits.get('network_status') or 'unknown', identity, lines)
     unresolved_order = (result.get('recovery') or {}).get('reason_code') == 'multiple_active_policies'
     same_policy_conflict = (result.get('recovery') or {}).get('reason_code') == 'same_policy_evidence_conflict'
+    primary_secondary_copay = verified_primary_order(result) and not same_policy_conflict
     medical_names = (((result.get('plan_details') or {}).get('stedi') or {}).get('names')
                      or (benefits.get('plan_details') or {}).get('names') or [])
     ma_ppo = is_medicare_advantage(medical_names)
@@ -132,7 +134,8 @@ def build(result: dict, review: dict | None = None) -> dict:
             and benefits.get('historical_only') is not True
             and (collection_benefits.get('network_status') != 'out_of_network' or verified_out_of_network(benefits))
             and not benefits.get('network_conflict')
-            and not benefits.get('has_secondary') and not unresolved_order and not same_policy_conflict
+            and (not benefits.get('has_secondary') and not unresolved_order or primary_secondary_copay)
+            and not same_policy_conflict and not (primary_secondary_copay and qmb_protected)
             and patient_benefits_bound(identity) and not price.get('service_issues') and not adverse
             and not qmb_unresolved
             and not any(('evidence' in str(reason).lower() or 'date' in str(reason).lower())
@@ -150,25 +153,35 @@ def build(result: dict, review: dict | None = None) -> dict:
     safe = safe and not source_errors
     amount = None
     cigna_oap_televisit = False
-    if safe and lines:
+    if safe and lines and not primary_secondary_copay:
         amount = cigna_oap_televisit_office_copay(result, collection_benefits, price, lines, guidance, assumptions)
         cigna_oap_televisit = amount is not None
-    if amount is None and safe and lines and price.get('mode') != 'options':
+    if (amount is None and safe and lines and price.get('mode') != 'options'
+            and (not primary_secondary_copay or
+                 (price.get('mode') == 'services' and len(lines) == 1
+                  and verified_in_network(benefits)))):
         amount = office_copay_amount(result, collection_benefits, price, lines, guidance, assumptions)
-    if amount is None and safe:
+        if amount is not None and primary_secondary_copay and guidance['basis'] == 'office_copay':
+            guidance['primary_secondary_copay'] = True
+            guidance['reason'] = ('Provisional copay from the verified primary office benefit. '
+                                  'The secondary plan may change final responsibility after the claims process.')
+            assumptions.append('Reconcile the primary and secondary claims and refund any excess collection.')
+        elif primary_secondary_copay:
+            amount = None
+    if amount is None and safe and not primary_secondary_copay:
         amount = diagnostic_day_copay_amount(price, lines, guidance, assumptions)
-    if amount is None and (strict.get('amount_cents') is not None and safe and verified_in_network(benefits)
+    if amount is None and not primary_secondary_copay and (strict.get('amount_cents') is not None and safe and verified_in_network(benefits)
             and not price.get('conditional')):
         amount = strict['amount_cents']
         guidance.update(status='estimate', basis=strict.get('basis', 'patient_obligations'),
                         reason='Applicable copay, deductible and coinsurance for the anticipated services.' if strict.get('status') != 'copay_only' else
                                'Applicable office-visit copay. Other service shares are outside this advance and follow the processed claim and member protections.')
-    elif amount is None and safe and verified_in_network(benefits) and planning.get('basis') == 'out_of_pocket_limit':
+    elif amount is None and safe and not primary_secondary_copay and verified_in_network(benefits) and planning.get('basis') == 'out_of_pocket_limit':
         amount = 0
         assumptions.extend(planning.get('assumptions') or [])
         guidance.update(status='estimated', basis='out_of_pocket_limit',
                         reason='The payer reports $0 remaining on the applicable in-network out-of-pocket limit for the selected covered services. No advance payment is needed.')
-    elif (amount is None and safe and (verified_in_network(benefits) or benefits.get('network_status') == 'out_of_network')
+    elif (amount is None and safe and not primary_secondary_copay and (verified_in_network(benefits) or benefits.get('network_status') == 'out_of_network')
           and price.get('complete') and not price.get('conditional') and price.get('mode') != 'options'
           and (not unapproved_services or suggested_plan)):
         amount = price.get('patient_min_cents')
@@ -224,7 +237,7 @@ def build(result: dict, review: dict | None = None) -> dict:
     policy_approved = bool(policy.get('approved_by') and policy.get('approved_at') and policy.get('reference'))
     policy_mode = policy.get('mode') if policy_approved else None
     fee_proxy = result.get('fee_proxy_estimate') or {}
-    if (amount is None and safe and not qmb_protected and not qmb_unresolved
+    if (amount is None and safe and not primary_secondary_copay and not qmb_protected and not qmb_unresolved
             and fee_proxy.get('basis') == 'bcbstx_cigna_fee_proxy'
             and type(fee_proxy.get('patient_share_cents')) is int
             and 0 <= fee_proxy['patient_share_cents'] <= 100_000_000
@@ -234,7 +247,7 @@ def build(result: dict, review: dict | None = None) -> dict:
             reason='Cigna requires an Explanation of Estimate before collecting this estimated visit share; the BCBS Texas fee proxy is only a planning reference.')
         if fee_proxy.get('message'):
             assumptions.append(fee_proxy['message'])
-    if (amount is None and safe and not qmb_protected and not qmb_unresolved
+    if (amount is None and safe and not primary_secondary_copay and not qmb_protected and not qmb_unresolved
             and fee_proxy.get('basis') == 'bcbstx_fee_proxy'
             and type(fee_proxy.get('patient_share_cents')) is int
             and policy_mode == 'collect_supported_advance'
@@ -245,7 +258,7 @@ def build(result: dict, review: dict | None = None) -> dict:
         guidance.update(status='estimated', basis='bcbstx_proxy_advance',
             reason='Provisional advance from the clinic-approved BCBS Texas fee proxy and the member diagnostic benefit. The UHC allowed amount is unknown.')
         assumptions.append('The advance uses clinic BCBS Texas fee references, not a payer-confirmed UHC allowance. Final responsibility follows the processed claim.')
-    if (amount is None and safe and not qmb_protected and not qmb_unresolved
+    if (amount is None and safe and not primary_secondary_copay and not qmb_protected and not qmb_unresolved
             and fee_proxy.get('basis') == 'bcbstx_uhc_in_network_fee_proxy'
             and type(fee_proxy.get('patient_share_cents')) is int
             and 0 <= fee_proxy['patient_share_cents'] <= 100_000_000
@@ -374,6 +387,8 @@ def build(result: dict, review: dict | None = None) -> dict:
             guidance['reason'] = 'A referral or authorization issue affects the selected care. The collection amount depends on resolving that coverage requirement.'
         elif price.get('conditional'):
             guidance['reason'] = 'The visit estimate depends on unresolved coverage or approval conditions. Verify them before collecting.'
+        elif primary_secondary_copay:
+            guidance['reason'] = 'The primary and secondary payer order is verified, but a supported office copay or approved collection policy is still needed.'
         elif benefits.get('has_secondary') or unresolved_order:
             guidance['reason'] = 'More than one plan may pay for this visit. The collection amount depends on how those plans coordinate benefits.'
             if not active_payer_benefits and (result.get('eligibility_failure') or {}).get('kind') == 'provider_enrollment':

@@ -333,19 +333,22 @@ export function collectionAtVisitRow(
                                               : result.collection_guidance?.unconfirmed_zero_oop
                                                 ? 'Confirm the reported $0 out-of-pocket balance with the payer before collection'
                                                 : model.supportedAmount
-                                                  ? result.collection_guidance?.basis ===
-                                                    'office_copay'
-                                                    ? 'Office copay advance; the payer allowed amount and final share remain unresolved'
+                                                  ? result.collection_guidance
+                                                      ?.primary_secondary_copay
+                                                    ? 'Provisional primary office copay; the secondary claim may change final responsibility'
                                                     : result.collection_guidance?.basis ===
-                                                        'out_of_pocket_limit'
-                                                      ? 'Applicable out-of-pocket maximum has no remaining balance for covered care'
+                                                        'office_copay'
+                                                      ? 'Office copay advance; the payer allowed amount and final share remain unresolved'
                                                       : result.collection_guidance?.basis ===
-                                                          'diagnostic_day_copay'
-                                                        ? 'One diagnostic copay advance; other costs may follow the claim'
+                                                          'out_of_pocket_limit'
+                                                        ? 'Applicable out-of-pocket maximum has no remaining balance for covered care'
                                                         : result.collection_guidance?.basis ===
-                                                            'claim_after_service'
-                                                          ? 'Clinic policy defers collection until after the claim'
-                                                          : undefined
+                                                            'diagnostic_day_copay'
+                                                          ? 'One diagnostic copay advance; other costs may follow the claim'
+                                                          : result.collection_guidance?.basis ===
+                                                              'claim_after_service'
+                                                            ? 'Clinic policy defers collection until after the claim'
+                                                            : undefined
                                                   : namedCollectionAction
                                                     ? collectionBlocker?.sentence
                                                     : undefined,

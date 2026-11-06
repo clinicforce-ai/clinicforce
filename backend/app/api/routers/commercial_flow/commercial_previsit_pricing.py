@@ -9,6 +9,7 @@ from app.api.routers.commercial_flow.commercial_previsit_context import ecw_case
 from app.api.routers.commercial_flow.commercial_previsit_context import past_visit_with_saved_estimate as _past_visit_with_saved_estimate
 from app.api.routers.commercial_flow.commercial_previsit_tpa import merge_administrator_benefits
 from app.insurance import botox_review, cms_locality, cms_pfs, cpt_rules, insurance_product, inventory_certification, library_network_exclusions, group_contract_support
+from app.insurance.stedi_benefits.payer_order import primary_secondary_order
 
 def _commercial_slot(appointment_id: str) -> str:
     return "commercial:" + _api.hashlib.sha256(appointment_id.encode()).hexdigest()
@@ -234,6 +235,9 @@ def _previsit_benefits(payload: dict, coverage: dict, service_date: str | None =
                 'The payer linked this patient to the recorded member policy as a dependent. Subscriber details were matched automatically; eCW was not changed.')
     comparison = _api.insurance_identity.compare(payload, coverage)
     benefits['identity'] = comparison
+    if (payload and source and comparison['status'] != 'review'
+            and (order := primary_secondary_order(payload, coverage, source, service_date or ''))):
+        benefits['primary_secondary_order'] = order
     if not payload:
         # Normalization of an empty response is a safe pricing placeholder, not payer evidence.
         benefits['review_reasons'] = []
