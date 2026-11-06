@@ -355,6 +355,11 @@ def _previsit_result(case: dict, practice_id: str | None = None) -> dict:
         result.pop('eligibility_failure', None)
     recheck_saved_payer_message(result, case)
     _api.commercial.discard_stale_directory_payer(result, case['previsit_context'].get('payer_id'))
+    if ((result.get('benefits') or {}).get('active') is True
+            and result.get('cash_fallback') is not None
+            and (case.get('visit_review') or {}).get('payment_mode') != 'cash'):
+        result['payment_mode'] = 'insurance'
+        result.pop('cash_fallback', None)
     route_payer = None
     if practice_id:
         # Use current clinic policy so disabled deferral cannot retain an old $0 decision.

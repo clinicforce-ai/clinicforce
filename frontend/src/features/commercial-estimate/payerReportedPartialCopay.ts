@@ -158,6 +158,10 @@ export function specialistOfficeCopay(
   result: PrevisitEstimate,
   networks = ['IN_NETWORK', 'IN_AND_OUT_OF_NETWORK'],
 ): number | null {
+  const officeRequest = !result.telehealth &&
+    (result.network_evidence?.place_of_service === '11' ||
+      (!result.network_evidence?.place_of_service &&
+        result.requested_service_types?.includes('98')))
   const amounts = new Set(
     (result.benefits?.active === true ? result.benefits.reported_options || [] : [])
       .filter(
@@ -169,8 +173,9 @@ export function specialistOfficeCopay(
             .includes('98') &&
           row.coverage_level === 'INDIVIDUAL' &&
           networks.includes(row.network) &&
-          row.places_of_service?.includes('11') &&
-          /\bSpecialist Visit or Evaluation\b/i.test(row.payer_note || '') &&
+          (row.places_of_service?.includes('11') ||
+            (officeRequest && !row.places_of_service?.length)) &&
+          /\bSpecialist Visit or Evaluation\b|^SPECIALIST$/i.test(row.payer_note || '') &&
           !/telemedicine|teladoc|virtual/i.test(row.payer_note || '') &&
           row.plan_association !== 'supplementary' &&
           Number.isInteger(row.amount_cents) &&
