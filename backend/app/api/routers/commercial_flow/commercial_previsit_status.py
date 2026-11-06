@@ -6,7 +6,7 @@ from app.insurance.network_participation import verified_in_network, verified_ou
 from app.insurance import blue_cross_proxy, evidence_resolution, group_contract_support, published_plan_benefits
 from app.api.routers.commercial_flow.commercial_previsit_finish import _payer_plan_pricing_source
 from app.api.routers.commercial_flow.commercial_previsit_network_guard import recheck_saved_network_evidence, recheck_saved_payer_message
-from app.api.routers.commercial_flow.commercial_previsit_saved_pricing import _reprice_saved_new_network, guard_unresolved_telehealth, guard_telehealth_guidance
+from app.api.routers.commercial_flow.commercial_previsit_saved_pricing import _reprice_saved_new_network, guard_unresolved_telehealth, guard_telehealth_guidance, restore_active_blue_cross_insurance
 from app.api.routers.commercial_flow.commercial_previsit_requirements import refresh_saved_requirements
 from app.api.routers.commercial_flow.commercial_previsit_rate_reference import refresh_saved_temporary_rates
 from app.api.routers.commercial_flow.commercial_previsit_enrollment import _enrollment_failure
@@ -266,7 +266,6 @@ def _recheck_saved_clinic_pricing(result: dict, case: dict, practice_id: str) ->
     result.pop('arrival_collection', None)
     result.pop('planning_estimate', None)
 
-
 def _recheck_saved_payer_allowance(result: dict, case: dict, practice_id: str) -> None:
     """Invalidate a saved OON total if its visit quote or clinic rule no longer applies."""
     price = result.get('price_range') or {}
@@ -355,11 +354,7 @@ def _previsit_result(case: dict, practice_id: str | None = None) -> dict:
         result.pop('eligibility_failure', None)
     recheck_saved_payer_message(result, case)
     _api.commercial.discard_stale_directory_payer(result, case['previsit_context'].get('payer_id'))
-    if ((result.get('benefits') or {}).get('active') is True
-            and result.get('cash_fallback') is not None
-            and (case.get('visit_review') or {}).get('payment_mode') != 'cash'):
-        result['payment_mode'] = 'insurance'
-        result.pop('cash_fallback', None)
+    restore_active_blue_cross_insurance(result, case)
     route_payer = None
     if practice_id:
         # Use current clinic policy so disabled deferral cannot retain an old $0 decision.
