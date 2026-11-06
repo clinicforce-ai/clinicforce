@@ -1,10 +1,13 @@
 """Synthetic exact-CPT Cigna benefit and BCBS Texas planning-rate checks."""
 
+import json
 from copy import deepcopy
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from app.insurance import (amount_explanation, blue_cross_proxy, collection_guidance,
                            encounter_summary, stedi_cpt_authorization)
+from app.api.routers.commercial_flow.commercial_previsit_requirements import refresh_saved_family_terms
 
 
 def _result():
@@ -182,7 +185,7 @@ def test_cigna_family_only_office_deductible_proxy_defers_check_in_collection():
     common = {'service': {'system': 'CPT', 'value': '99203'},
               'coverageLevel': 'FAMILY', 'network': {'indicator': 'IN_NETWORK'},
               'placesOfService': [{'code': '11'}]}
-    payload = {'plans': [{'benefits': {
+    payload = {'id': 'synthetic-office', 'plans': [{'benefits': {
         'coInsurance': [{**common, 'percent': '0.2', 'timePeriod': 'VISIT',
                          'messages': ['This plan has only family accumulators']}],
         'deductible': [{**common, 'amount': '1796.82', 'timePeriod': 'REMAINING'}],
@@ -201,6 +204,23 @@ def test_cigna_family_only_office_deductible_proxy_defers_check_in_collection():
          'unit_reference_cents': 10117, 'source_reference': 'library:synthetic'}]
     result['cpt_authorization'].update(service_date='2026-11-06',
         check_ids=['synthetic-office'], financial_terms={'99203': terms})
+    saved_check = {**result['cpt_authorization'], 'codes': ['99203'],
+                   'raw_object_keys': {'99203': 'synthetic-protected-source'}}
+    result['cpt_authorization']['financial_terms'] = {'99203': {
+        'coinsurance_percent': None, 'copay_cents': None,
+        'deductible_remaining_cents': None, 'oop_remaining_cents': None}}
+    source = SimpleNamespace(object_store=SimpleNamespace(
+        get_object_bytes=lambda key: json.dumps(payload).encode()))
+    refresh_saved_family_terms(source, result, {'cpt_authorization': saved_check})
+    assert result['cpt_authorization']['financial_terms']['99203'] == terms
+    result['cpt_authorization']['financial_terms'] = {'99203': {
+        'deductible_remaining_cents': None, 'oop_remaining_cents': None,
+        'coinsurance_percent': None}}
+    wrong_source = SimpleNamespace(object_store=SimpleNamespace(
+        get_object_bytes=lambda key: json.dumps({**payload, 'id': 'different-check'}).encode()))
+    refresh_saved_family_terms(wrong_source, result, {'cpt_authorization': saved_check})
+    assert result['cpt_authorization']['financial_terms']['99203']['deductible_remaining_cents'] is None
+    refresh_saved_family_terms(source, result, {'cpt_authorization': saved_check})
     proxy = blue_cross_proxy.cigna_oap_family_office_estimate(result, '2026-11-06')
     assert proxy['patient_share_cents'] == proxy['deductible_cents'] == 10117
     assert proxy['coinsurance_cents'] == proxy['lines'][0]['coinsurance_base_cents'] == 0
