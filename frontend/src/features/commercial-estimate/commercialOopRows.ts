@@ -92,42 +92,48 @@ export function commercialOopRows(
   const gehaZero =
     result.collection_guidance?.basis === 'published_geha_pshb_zero_office' &&
     result.collection_guidance.amount_cents === 0
+  const cignaFamilyOffice =
+    result.fee_proxy_estimate?.scenario_kind === 'oap_office_family_deductible'
   return [
     {
       label: 'Individual out-of-pocket maximum',
-      value: gehaZero
-        ? '$0.00 in-network annual · published plan; Stedi did not return a member out-of-pocket row'
-        : humanaReferenceCopay != null
-          ? `${money(680000)} in-network annual · ${money(1190000)} combined annual (published plan)${individualOopRemaining != null ? ` · ${money(individualOopRemaining)} payer-reported remaining, tier unconfirmed` : ''}`
-          : [
-              individualOopAnnual != null
-                ? `${money(individualOopAnnual)} annual${reportedIndividualAnnual == null ? ' (EHR PDF)' : ''}`
-                : null,
-              individualOopRemaining != null
-                ? `${money(individualOopRemaining)} remaining${reportedIndividualRemaining == null ? ' (EHR PDF)' : ''}`
-                : null,
-            ]
-              .filter(Boolean)
-              .join(' · ') || individualReportedOop.value,
-      detail: familyOopApplied
-        ? 'The individual balance can remain positive after the family limit is met'
+      value: cignaFamilyOffice
+        ? 'Not applicable · family-only accumulator'
         : gehaZero
-          ? 'The 2026 G.E.H.A High Medicare Advantage guide lists a $0 in-network medical out-of-pocket maximum for covered care.'
-          : ehrIndividualConflict
-            ? 'Saved payer evidence and the dated EHR report disagree; verify current limits with the payer before using them.'
-            : ehrIndividualUsed
-              ? ehrDetail
-              : reportedOopOnly
-                ? 'Payer-reported medical limit; not used as a verified calculation input'
-                : benefits?.oop_remaining_cents === 0
-                  ? 'Applicable in-network limit has $0 remaining for the selected covered care'
-                  : calculated && components?.oop_adjustment_cents != null
-                    ? `${money(components.oop_adjustment_cents)} reduction applied to this visit`
-                    : unconfirmedZeroOop
-                      ? 'Payer reports $0 remaining; confirm this is the applicable medical limit before collection'
-                      : individualReportedOop.unassigned
-                        ? 'Payer-reported plan amount; medical applicability needs confirmation before use as a cap'
-                        : 'Payer-reported limit; applicability to these CPTs depends on the completed estimate',
+          ? '$0.00 in-network annual · published plan; Stedi did not return a member out-of-pocket row'
+          : humanaReferenceCopay != null
+            ? `${money(680000)} in-network annual · ${money(1190000)} combined annual (published plan)${individualOopRemaining != null ? ` · ${money(individualOopRemaining)} payer-reported remaining, tier unconfirmed` : ''}`
+            : [
+                individualOopAnnual != null
+                  ? `${money(individualOopAnnual)} annual${reportedIndividualAnnual == null ? ' (EHR PDF)' : ''}`
+                  : null,
+                individualOopRemaining != null
+                  ? `${money(individualOopRemaining)} remaining${reportedIndividualRemaining == null ? ' (EHR PDF)' : ''}`
+                  : null,
+              ]
+                .filter(Boolean)
+                .join(' · ') || individualReportedOop.value,
+      detail: cignaFamilyOffice
+        ? 'The exact CPT family out-of-pocket balance caps the provisional planning share.'
+        : familyOopApplied
+          ? 'The individual balance can remain positive after the family limit is met'
+          : gehaZero
+            ? 'The 2026 G.E.H.A High Medicare Advantage guide lists a $0 in-network medical out-of-pocket maximum for covered care.'
+            : ehrIndividualConflict
+              ? 'Saved payer evidence and the dated EHR report disagree; verify current limits with the payer before using them.'
+              : ehrIndividualUsed
+                ? ehrDetail
+                : reportedOopOnly
+                  ? 'Payer-reported medical limit; not used as a verified calculation input'
+                  : benefits?.oop_remaining_cents === 0
+                    ? 'Applicable in-network limit has $0 remaining for the selected covered care'
+                    : calculated && components?.oop_adjustment_cents != null
+                      ? `${money(components.oop_adjustment_cents)} reduction applied to this visit`
+                      : unconfirmedZeroOop
+                        ? 'Payer reports $0 remaining; confirm this is the applicable medical limit before collection'
+                        : individualReportedOop.unassigned
+                          ? 'Payer-reported plan amount; medical applicability needs confirmation before use as a cap'
+                          : 'Payer-reported limit; applicability to these CPTs depends on the completed estimate',
     },
     ...(combinedAnnual || combinedRemaining
       ? [
@@ -160,17 +166,19 @@ export function commercialOopRows(
             ]
               .filter(Boolean)
               .join(' · ') || limitSummary(reportedResult, 'out_of_pocket', 'FAMILY').value,
-      detail: familyOopApplied
-        ? 'Met in-network family medical limit applied to every selected covered CPT'
-        : ehrFamilyConflict
-          ? 'Saved payer evidence and the dated EHR report disagree; verify current limits with the payer before using them.'
-          : ehrFamilyUsed
-            ? ehrDetail
-            : familyOopAnnual != null || familyOopRemaining != null
-              ? 'Payer-reported medical limit; not used as a verified calculation input'
-              : limitSummary(reportedResult, 'out_of_pocket', 'FAMILY').unassigned
-                ? 'Payer-reported plan amount; medical applicability unverified and not used as a cap'
-                : undefined,
+      detail: cignaFamilyOffice
+        ? 'The exact CPT family out-of-pocket balance caps the provisional planning share; the final claim may differ.'
+        : familyOopApplied
+          ? 'Met in-network family medical limit applied to every selected covered CPT'
+          : ehrFamilyConflict
+            ? 'Saved payer evidence and the dated EHR report disagree; verify current limits with the payer before using them.'
+            : ehrFamilyUsed
+              ? ehrDetail
+              : familyOopAnnual != null || familyOopRemaining != null
+                ? 'Payer-reported medical limit; not used as a verified calculation input'
+                : limitSummary(reportedResult, 'out_of_pocket', 'FAMILY').unassigned
+                  ? 'Payer-reported plan amount; medical applicability unverified and not used as a cap'
+                  : undefined,
     },
   ]
 }

@@ -297,6 +297,89 @@ def cigna_estimate(result: dict, service_date: str) -> dict | None:
                            ) + 'This is a planning share only; Cigna allowed amounts are not supplied and the fee proxy does not authorize check-in collection.' + cap_note)}
 
 
+def cigna_oap_family_office_estimate(result: dict, service_date: str) -> dict | None:
+    """Price one office E/M against an explicitly family-only Cigna accumulator."""
+    benefits = result.get('benefits') or {}
+    identity = result.get('identity') or benefits.get('identity') or {}
+    check = result.get('cpt_authorization') or {}
+    reference = result.get('temporary_rate_reference') or {}
+    price = result.get('price_range') or {}
+    codes, lines, rates = (result.get('codes') or [], price.get('lines') or [],
+                           reference.get('lines') or [])
+    names = [result.get('plan'), *((result.get('plan_details') or {}).get('stedi') or {}).get('names', [])]
+    if (result.get('payment_mode') == 'cash' or not re.search(r'\bcigna\b', str(result.get('payer') or ''), re.I)
+            or not any(re.search(r'open access plus|\boap\b', str(name or ''), re.I) for name in names)
+            or not verified_in_network(benefits) or not visit_coverage_bound(benefits, service_date)
+            or not patient_benefits_bound(identity) or benefits.get('has_secondary')
+            or benefits.get('network_conflict') or benefits.get('coverage_status_conflict')
+            or benefits.get('coverage_dates_invalid') or benefits.get('source_errors')
+            or benefits.get('copay_cents') not in {None, 0}
+            or result.get('refresh_requires_selection') is True
+            or check.get('state') != 'complete' or check.get('service_date') != service_date
+            or check.get('pos') != '11' or check.get('network') != 'in_network'
+            or check.get('patient_binding') != identity.get('binding')
+            or len(check.get('check_ids') or []) != 1
+            or reference.get('complete') is not True or price.get('mode') != 'services'
+            or price.get('service_issues') or len(codes) != 1 or len(lines) != 1 or len(rates) != 1):
+        return None
+    if (type((result.get('card_check') or {}).get('office_copay_cents')) is int
+            and result['card_check']['office_copay_cents'] > 0
+            or any(row.get('kind') == 'copay' and row.get('service_type_code') == '98'
+                   and row.get('network') in {'IN_NETWORK', 'IN_AND_OUT_OF_NETWORK'}
+                   and not row.get('procedure_code')
+                   and (not row.get('places_of_service') or '11' in row['places_of_service'])
+                   and type(row.get('amount_cents')) is int and row['amount_cents'] > 0
+                   for row in benefits.get('reported_options') or [])):
+        return None
+    code, line, rate = codes[0], lines[0], rates[0]
+    cpt = str(code.get('code') or '')
+    terms = (check.get('financial_terms') or {}).get(cpt) or {}
+    if (not re.fullmatch(r'992(?:0[2-5]|1[2-5])', cpt)
+            or code.get('id') != line.get('id') or line.get('id') != rate.get('id')
+            or code.get('units') != line.get('units') or line.get('units') != rate.get('units')
+            or code.get('units') != 1 or code.get('modifiers') or line.get('modifiers')
+            or rate.get('modifiers') or line.get('code') != cpt or rate.get('code') != cpt
+            or type(rate.get('unit_reference_cents')) is not int
+            or not 0 < rate['unit_reference_cents'] <= 100_000_000
+            or not str(rate.get('source_reference') or '').startswith('library:')
+            or terms.get('coverage_level') != 'FAMILY'
+            or terms.get('family_only_accumulators') is not True
+            or terms.get('copay_cents') not in {None, 0} or terms.get('copay_unresolved')
+            or (line.get('benefits') or {}).get('copay_cents') not in {None, 0}
+            or type(terms.get('deductible_remaining_cents')) is not int
+            or type(terms.get('oop_remaining_cents')) is not int):
+        return None
+    try:
+        percent = Decimal(str(terms['coinsurance_percent']))
+    except (KeyError, TypeError, InvalidOperation):
+        return None
+    if not percent.is_finite() or not 0 <= percent <= 100:
+        return None
+    total = rate['unit_reference_cents']
+    deductible = min(total, terms['deductible_remaining_cents'])
+    coinsurance_base = total - deductible
+    coinsurance = int((Decimal(coinsurance_base) * percent / 100).quantize(
+        Decimal('1'), rounding=ROUND_HALF_UP))
+    share = min(deductible + coinsurance, terms['oop_remaining_cents'])
+    return {'basis': 'bcbstx_cigna_fee_proxy', 'status': 'provisional',
+            'scenario_kind': 'oap_office_family_deductible',
+            'reference_total_cents': total, 'coinsurance_percent': str(percent),
+            'copay_cents': 0, 'copay_unconfirmed': terms['copay_cents'] is None,
+            'deductible_cents': deductible, 'coinsurance_cents': coinsurance,
+            'oop_reduction_cents': deductible + coinsurance - share,
+            'oop_remaining_cents': terms['oop_remaining_cents'],
+            'patient_share_cents': share,
+            'lines': [{'code': cpt, 'units': 1, 'reference_cents': total,
+                       'coinsurance_base_cents': coinsurance_base,
+                       'coinsurance_cents': coinsurance}],
+            'rate_source': reference.get('source'),
+            'deductible_source': 'Exact CPT Stedi family-only accumulator',
+            'message': ('Provisional office visit share using the BCBS Texas fee reference and Cigna exact-CPT '
+                        'family-only benefits. The family deductible applies before coinsurance. No fixed office '
+                        'copay was returned. The Cigna allowed amount and any HRA payment are unknown; obtain '
+                        'Cigna’s Explanation of Estimate before collecting deductible or coinsurance.')}
+
+
 def cigna_oap_office_scenario(result: dict, service_date: str) -> dict | None:
     """Show a conditional office-copay scenario when exact CPT terms are unavailable."""
     benefits = result.get('benefits') or {}

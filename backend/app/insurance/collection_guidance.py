@@ -422,6 +422,15 @@ def build(result: dict, review: dict | None = None) -> dict:
                                            'approved_at': policy['approved_at']}
             guidance['deferred_supported_share'] = encounter_summary.build(
                 {**result, 'collection_guidance': guidance}, review)['complete']
+        elif (safe and fee_proxy.get('scenario_kind') == 'oap_office_family_deductible'
+              and fee_proxy.get('basis') == 'bcbstx_cigna_fee_proxy'
+              and type(fee_proxy.get('patient_share_cents')) is int
+              and verified_in_network(benefits) and not qmb_protected and not qmb_unresolved):
+            guidance.update(amount_cents=0, status='zero_advance', basis='claim_after_service',
+                reason='No fixed office copay was returned. Cigna requires an Explanation of Estimate before collecting an estimated deductible or coinsurance; defer collection and submit the claim.',
+                patient_message='No payment is requested at arrival. The displayed BCBS Texas amount is a planning reference; final responsibility follows the processed Cigna claim.')
+            guidance['collection_rule'] = {'mode': 'cigna_cost_estimate_deferral',
+                'reference': 'Cigna Open Access Plus cost-of-care estimate guidance'}
         elif active_payer_benefits:
             guidance['policy_setup_required'] = True
         if guidance.get('cigna_estimate_required') and guidance['basis'] != 'claim_after_service':

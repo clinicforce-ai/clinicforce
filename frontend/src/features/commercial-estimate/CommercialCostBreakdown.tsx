@@ -17,6 +17,8 @@ import {
   commercialVisitReason,
 } from './commercialCptRows'
 import { commercialOopRows, familyOopLimitApplied } from './commercialOopRows'
+import { familyDeductibleRow } from './familyDeductibleRow'
+import { suggestedDiagnosisRows } from './suggestedDiagnosisRows'
 import { cignaCardReference, cignaCardRows } from './cignaCardReference'
 import * as costState from './commercialCostState'
 export default function CommercialCostBreakdown({
@@ -33,7 +35,9 @@ export default function CommercialCostBreakdown({
   const botoxPreview = !model.cash && !model.previousEstimate ? result.botox_preview : null
   const combinedPlan = !model.cash && !model.previousEstimate ? result.combined_emg_plan : null
   const cignaFeeProxy = feeProxy?.basis === 'bcbstx_cigna_fee_proxy'
-  const cignaOfficeScenario = cignaFeeProxy && !!feeProxy.scenario_kind
+  const cignaFamilyOffice =
+    cignaFeeProxy && feeProxy.scenario_kind === 'oap_office_family_deductible'
+  const cignaOfficeScenario = cignaFeeProxy && Boolean(feeProxy.scenario_kind) && !cignaFamilyOffice
   const lines = price?.mode === 'services' ? price.lines || [] : []
   const cptRows = commercialCptRows(result, lines, botoxPreview)
   const familyOopApplied = familyOopLimitApplied(result)
@@ -42,8 +46,6 @@ export default function CommercialCostBreakdown({
   const proxyFormula = feeProxy && feeProxyFormula(feeProxy, summary?.payments_verified_cents || 0)
   const individualDeductible = limitSummary(reportedResult, 'deductible', 'INDIVIDUAL')
   const surgicalIndividualDeductible = limitSummary(reportedResult, 'deductible', 'INDIVIDUAL', '2')
-  const familyDeductible = limitSummary(reportedResult, 'deductible', 'FAMILY')
-  const surgicalFamilyDeductible = limitSummary(reportedResult, 'deductible', 'FAMILY', '2')
   const reportedCoinsurance = copay.reportedCoinsurance(reportedResult, lines)
   const reportedOfficeCopay = copay.specialistOfficeCopay(reportedResult)
   const singleOfficeCopayLine = copay.singleOfficeCopayLine(lines)
@@ -75,6 +77,7 @@ export default function CommercialCostBreakdown({
       label: result.reason ? 'Reason for visit' : 'Planned service',
       value: commercialVisitReason(result, model.anticipatedService || ''),
     },
+    ...suggestedDiagnosisRows(result.reason),
     cptRows.cpt,
     ...cptRows.candidates,
     ...(lines.length
@@ -165,7 +168,9 @@ export default function CommercialCostBreakdown({
                   ? `${money(0)} assumed for calculation · no CPT copay returned`
                   : feeProxy.copay_cents
                     ? `${money(feeProxy.copay_cents)} specialist follow-up; $0.00 diagnostic copay`
-                    : '$0.00 diagnostic copay'
+                    : cignaFamilyOffice
+                      ? `${money(0)} assumed for calculation · no fixed office copay returned`
+                      : '$0.00 diagnostic copay'
                 : botoxPreview
                   ? 'Not returned for office injection'
                   : officeReferenceCopay != null
@@ -228,33 +233,35 @@ export default function CommercialCostBreakdown({
     ...cignaCardRows(cignaCard, cignaFeeProxy),
     {
       label: 'Individual deductible',
-      value: aetnaNoOfficeDeductible
-        ? '$0.00 for in-network specialist office visit'
-        : gehaZero
-          ? '$0.00 in-network annual · published plan; Stedi did not return a member deductible row'
-          : humanaReferenceCopay != null &&
-              benefits?.deductible_applies !== true &&
-              benefits?.deductible_annual_cents == null
-            ? '$0.00 annual · no medical deductible (published plan)'
-            : feeProxy != null &&
-                !cignaFeeProxy &&
-                feeProxy.basis !== 'bcbstx_uhc_in_network_fee_proxy'
-              ? `${money(feeProxy.deductible_cents)} annual · published group plan`
-              : [
-                  benefits?.deductible_annual_cents != null
-                    ? `${money(benefits.deductible_annual_cents)} annual`
-                    : null,
-                  benefits?.deductible_remaining_cents != null
-                    ? `${money(benefits.deductible_remaining_cents)} remaining`
-                    : null,
-                ]
-                  .filter(Boolean)
-                  .join(' · ') ||
-                (individualDeductible.value !== unknown
-                  ? individualDeductible.value
-                  : surgicalIndividualDeductible.value !== unknown
-                    ? `${surgicalIndividualDeductible.value} · surgical services`
-                    : unknown),
+      value: cignaFamilyOffice
+        ? 'Not applicable · family-only accumulator'
+        : aetnaNoOfficeDeductible
+          ? '$0.00 for in-network specialist office visit'
+          : gehaZero
+            ? '$0.00 in-network annual · published plan; Stedi did not return a member deductible row'
+            : humanaReferenceCopay != null &&
+                benefits?.deductible_applies !== true &&
+                benefits?.deductible_annual_cents == null
+              ? '$0.00 annual · no medical deductible (published plan)'
+              : feeProxy != null &&
+                  !cignaFeeProxy &&
+                  feeProxy.basis !== 'bcbstx_uhc_in_network_fee_proxy'
+                ? `${money(feeProxy.deductible_cents)} annual · published group plan`
+                : [
+                    benefits?.deductible_annual_cents != null
+                      ? `${money(benefits.deductible_annual_cents)} annual`
+                      : null,
+                    benefits?.deductible_remaining_cents != null
+                      ? `${money(benefits.deductible_remaining_cents)} remaining`
+                      : null,
+                  ]
+                    .filter(Boolean)
+                    .join(' · ') ||
+                  (individualDeductible.value !== unknown
+                    ? individualDeductible.value
+                    : surgicalIndividualDeductible.value !== unknown
+                      ? `${surgicalIndividualDeductible.value} · surgical services`
+                      : unknown),
       detail: aetnaNoOfficeDeductible
         ? 'The 2026 Aetna Signature PPO H2293-016 plan has no in-network deductible. A payer-reported general deductible may apply to certain out-of-network services.'
         : gehaZero
@@ -264,7 +271,9 @@ export default function CommercialCostBreakdown({
             : cignaFeeProxy
               ? cignaOfficeScenario
                 ? `${money(0)} applied in this provisional scenario from the general individual remaining balance; CPT applicability is not confirmed`
-                : `${money(feeProxy?.deductible_cents || 0)} applied in this provisional scenario; exact CPT Stedi responses reported no remaining individual deductible`
+                : cignaFamilyOffice
+                  ? `${money(feeProxy?.deductible_cents || 0)} applied from the exact CPT family-only remaining deductible`
+                  : `${money(feeProxy?.deductible_cents || 0)} applied in this provisional scenario; exact CPT Stedi responses reported no remaining individual deductible`
               : feeProxy != null
                 ? feeProxy.deductible_source
                 : result.collection_guidance?.basis === 'out_of_pocket_limit'
@@ -283,25 +292,13 @@ export default function CommercialCostBreakdown({
                           ? 'Does not apply to the selected CPTs'
                           : 'Office deductible applicability or amount is unresolved for the selected CPTs',
     },
-    {
-      label: 'Family deductible',
-      value: gehaZero
-        ? 'Not applicable to this Medicare Advantage individual plan'
-        : humanaReferenceCopay != null
-          ? 'Not applicable to this Medicare Advantage individual plan'
-          : familyDeductible.value !== unknown
-            ? familyDeductible.value
-            : surgicalFamilyDeductible.value !== unknown
-              ? `${surgicalFamilyDeductible.value} · surgical services`
-              : unknown,
-      detail: familyOopApplied
-        ? 'No deductible payment due for the selected covered services after the family out-of-pocket limit'
-        : familyDeductible.unassigned
-          ? 'Payer-reported plan amount; medical applicability unverified'
-          : surgicalFamilyDeductible.value !== unknown
-            ? 'Payer did not report a family office-specific deductible rule; this surgical balance does not establish one'
-            : undefined,
-    },
+    familyDeductibleRow(
+      reportedResult,
+      gehaZero,
+      humanaReferenceCopay,
+      familyOopApplied,
+      cignaFamilyOffice ? feeProxy!.deductible_cents : null,
+    ),
     {
       label: 'Coinsurance',
       value: aetnaPlanning

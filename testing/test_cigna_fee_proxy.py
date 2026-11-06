@@ -178,6 +178,64 @@ def test_cigna_fee_proxy_defers_collection_without_cigna_explanation_of_estimate
     assert collection_guidance.build(result)['amount_cents'] is None
 
 
+def test_cigna_family_only_office_deductible_proxy_defers_check_in_collection():
+    common = {'service': {'system': 'CPT', 'value': '99203'},
+              'coverageLevel': 'FAMILY', 'network': {'indicator': 'IN_NETWORK'},
+              'placesOfService': [{'code': '11'}]}
+    payload = {'plans': [{'benefits': {
+        'coInsurance': [{**common, 'percent': '0.2', 'timePeriod': 'VISIT',
+                         'messages': ['This plan has only family accumulators']}],
+        'deductible': [{**common, 'amount': '1796.82', 'timePeriod': 'REMAINING'}],
+        'outOfPocket': [{**common, 'amount': '5296.82', 'timePeriod': 'REMAINING'}]}}]}
+    terms = stedi_cpt_authorization.financial_terms(payload, '99203', '11', 'in_network')
+    assert terms['coverage_level'] == 'FAMILY'
+    assert terms['deductible_remaining_cents'] == 179682
+    result = _result()
+    result.update(plan='Open Access Plus', service_date='2026-11-06',
+                  service_selection_status='approved')
+    result['benefits'].update(network_source='payer_participation_message')
+    result['codes'] = result['price_range']['lines'] = [
+        {'id': 'office', 'code': '99203', 'units': 1, 'modifiers': []}]
+    result['temporary_rate_reference']['lines'] = [
+        {'id': 'office', 'code': '99203', 'units': 1, 'modifiers': [],
+         'unit_reference_cents': 10117, 'source_reference': 'library:synthetic'}]
+    result['cpt_authorization'].update(service_date='2026-11-06',
+        check_ids=['synthetic-office'], financial_terms={'99203': terms})
+    proxy = blue_cross_proxy.cigna_oap_family_office_estimate(result, '2026-11-06')
+    assert proxy['patient_share_cents'] == proxy['deductible_cents'] == 10117
+    assert proxy['coinsurance_cents'] == proxy['lines'][0]['coinsurance_base_cents'] == 0
+    result['fee_proxy_estimate'] = proxy
+    guidance = collection_guidance.build(result)
+    assert guidance['amount_cents'] == 0
+    assert guidance['basis'] == 'claim_after_service'
+    assert 'No payment is requested' in guidance['patient_message']
+    result['collection_guidance'] = guidance
+    assert encounter_summary.build(result)['collect_today_cents'] == 0
+    assert 'Collect $0 at arrival' in amount_explanation.build(result, guidance)['sentence']
+
+    result['temporary_rate_reference']['lines'][0]['unit_reference_cents'] = 20000
+    result['cpt_authorization']['financial_terms']['99203']['deductible_remaining_cents'] = 5000
+    after_deductible = blue_cross_proxy.cigna_oap_family_office_estimate(result, '2026-11-06')
+    assert (after_deductible['deductible_cents'], after_deductible['coinsurance_cents'],
+            after_deductible['patient_share_cents']) == (5000, 3000, 8000)
+    result['cpt_authorization']['financial_terms']['99203']['oop_remaining_cents'] = 6000
+    capped = blue_cross_proxy.cigna_oap_family_office_estimate(result, '2026-11-06')
+    assert capped['patient_share_cents'] == 6000
+    assert capped['oop_reduction_cents'] == 2000
+    result['benefits']['reported_options'] = [
+        {'kind': 'copay', 'service_type_code': '98', 'network': 'IN_NETWORK',
+         'places_of_service': ['11'], 'amount_cents': 2500}]
+    assert blue_cross_proxy.cigna_oap_family_office_estimate(result, '2026-11-06') is None
+    result['benefits'].pop('reported_options')
+
+    without_message = deepcopy(payload)
+    without_message['plans'][0]['benefits']['coInsurance'][0]['messages'] = []
+    assert stedi_cpt_authorization.financial_terms(without_message, '99203', '11',
+                                                    'in_network')['deductible_remaining_cents'] is None
+    result['benefits']['has_secondary'] = True
+    assert collection_guidance.build(result)['amount_cents'] is None
+
+
 def test_cigna_fee_proxy_defers_for_exact_suggested_preview_plan():
     result = _result()
     result['benefits']['network_source'] = 'clinic_library_contract'

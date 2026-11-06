@@ -10,7 +10,7 @@ export function feeProxyFormula(
     ? proxy.lines
         .map(
           (line) =>
-            `(${money(line.reference_cents)} × ${proxy.coinsurance_percent}% = ${money(line.coinsurance_cents)})`,
+            `(${money(line.coinsurance_base_cents ?? line.reference_cents)} × ${proxy.coinsurance_percent}% = ${money(line.coinsurance_cents)})`,
         )
         .join(' + ')
     : money(proxy.coinsurance_cents)

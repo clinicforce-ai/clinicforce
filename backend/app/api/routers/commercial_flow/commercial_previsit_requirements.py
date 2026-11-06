@@ -50,7 +50,7 @@ async def check_cpt_authorization(api: ModuleType, result: dict, case: dict, pay
         subscriber['memberId'], identity.get('binding'), inputs['service_date'], pos,
         benefits['network_status'], codes]
     if cigna:
-        scope_values.insert(0, 'cigna-individual-cpt-v3')
+        scope_values.insert(0, 'cigna-family-cpt-v4')
     scope = api.hashlib.sha256(api.json.dumps(scope_values, sort_keys=True).encode()).hexdigest()
     prior = case.get('cpt_authorization') or {}
     if prior.get('scope') == scope:

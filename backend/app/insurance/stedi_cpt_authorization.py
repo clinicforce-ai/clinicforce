@@ -52,11 +52,16 @@ def decisions(payload: dict, codes: list[str], pos: str, network: str) -> dict[s
 
 
 def financial_terms(payload: dict, code: str, pos: str, network: str) -> dict:
-    """Read only unambiguous individual, exact-CPT office terms."""
+    """Read exact-CPT terms, including explicitly family-only accumulators."""
     if len(payload.get('plans') or []) != 1 or network not in {'in_network', 'out_of_network'}:
         return {}
     tier = 'IN_NETWORK' if network == 'in_network' else 'OUT_OF_NETWORK'
     benefits = payload['plans'][0].get('benefits') or {}
+    family_only = any('this plan has only family accumulators' in str(note).casefold()
+                      for rows in benefits.values() if isinstance(rows, list)
+                      for row in rows if isinstance(row, dict)
+                      for note in (row.get('messages') or []) if isinstance(note, str))
+    level = 'FAMILY' if family_only else 'INDIVIDUAL'
     def scoped(kind: str, period: str | None = None) -> list[dict]:
         return [row for row in benefits.get(kind) or [] if isinstance(row, dict)
                 and (row.get('service') or {}).get('system') == 'CPT'
@@ -65,8 +70,17 @@ def financial_terms(payload: dict, code: str, pos: str, network: str) -> dict:
                 and (row.get('network') or {}).get('indicator') == tier
                 and (not row.get('placesOfService') or pos in {
                     str(place.get('code')) for place in row['placesOfService'] if isinstance(place, dict)})
-                and str(row.get('coverageLevel') or '').upper() == 'INDIVIDUAL'
+                and str(row.get('coverageLevel') or '').upper() == level
                 and (period is None or str(row.get('timePeriod') or '').upper() == period)]
+    if family_only and any(isinstance(row, dict)
+                           and (row.get('service') or {}).get('system') == 'CPT'
+                           and str((row.get('service') or {}).get('value') or '') == code
+                           and not row.get('diagnosis')
+                           and (row.get('network') or {}).get('indicator') == tier
+                           and str(row.get('coverageLevel') or '').upper() == 'INDIVIDUAL'
+                           for kind in ('coPayment', 'coInsurance', 'deductible', 'outOfPocket')
+                           for row in benefits.get(kind) or []):
+        return {}
     def one(kind: str, field: str, period: str | None = None, *, percent: bool = False) -> int | str | None:
         values = set()
         for row in scoped(kind, period):
@@ -86,7 +100,8 @@ def financial_terms(payload: dict, code: str, pos: str, network: str) -> dict:
                 return None
         return next(iter(values)) if len(values) == 1 else None
     copay = one('coPayment', 'amount')
-    return {'coinsurance_percent': one('coInsurance', 'percent', percent=True),
+    return {**({'coverage_level': level, 'family_only_accumulators': True} if family_only else {}),
+            'coinsurance_percent': one('coInsurance', 'percent', percent=True),
             'copay_cents': copay, 'copay_unresolved': bool(scoped('coPayment')) and copay is None,
             'deductible_remaining_cents': one('deductible', 'amount', 'REMAINING'),
             'oop_remaining_cents': one('outOfPocket', 'amount', 'REMAINING')}

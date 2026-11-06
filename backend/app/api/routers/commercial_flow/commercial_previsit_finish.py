@@ -286,6 +286,7 @@ def _finish_previsit(result: dict, case: dict, inputs: dict, source: dict, paylo
     result.pop('fee_proxy_estimate', None)
     if proxy := (blue_cross_proxy.estimate(result, inputs['service_date'])
                  or blue_cross_proxy.cigna_estimate(result, inputs['service_date'])
+                 or blue_cross_proxy.cigna_oap_family_office_estimate(result, inputs['service_date'])
                  or blue_cross_proxy.cigna_oap_office_scenario(result, inputs['service_date'])):
         result['fee_proxy_estimate'] = proxy
     result['collection_guidance'] = _api.collection_guidance.build(result, review)
