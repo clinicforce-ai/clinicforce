@@ -10,6 +10,23 @@ const compiled = await bundle.generate({ format: 'esm' })
 const { pendingBluecardOfficeCopay, collectionAtVisitRow } = await import(
   `data:text/javascript;base64,${Buffer.from(compiled.output[0].code).toString('base64')}`
 )
+const benefitBundle = await rolldown({
+  input: new URL('../frontend/src/features/commercial-estimate/payerReportedPartialCopay.ts', import.meta.url).pathname,
+})
+const benefitModule = await benefitBundle.generate({ format: 'esm' })
+const { specialistOfficeCopay } = await import(
+  `data:text/javascript;base64,${Buffer.from(benefitModule.output[0].code).toString('base64')}`
+)
+
+const officeBenefit = { benefits: { active: true, reported_options: [{
+  kind: 'copay', service_type_code: '98', coverage_level: 'INDIVIDUAL', network: 'IN_NETWORK',
+  places_of_service: [], payer_note: 'SPECIALIST', amount_cents: 2500, time_period: 'VISIT',
+}] }, network_evidence: { place_of_service: '11' } }
+assert.equal(specialistOfficeCopay(officeBenefit), 2500)
+assert.equal(specialistOfficeCopay({ ...officeBenefit, network_evidence: undefined, requested_service_types: ['98'] }), 2500)
+assert.equal(specialistOfficeCopay({ ...officeBenefit, network_evidence: { place_of_service: '02' } }), null)
+assert.equal(specialistOfficeCopay({ ...officeBenefit, network_evidence: { place_of_service: '02' }, requested_service_types: ['98'] }), null)
+assert.equal(specialistOfficeCopay({ ...officeBenefit, telehealth: true }), null)
 
 const identity = { status: 'warning', match_version: 2, binding: 'synthetic-binding',
   reconciliation_rule: 'payer_matched_patient' }

@@ -7,6 +7,39 @@ BCBSTX_2026_OTHER_CODES = {'70496': 22719, '70498': 22693}
 BCBSTX_2026_OTHER_CODES_SOURCE = ('https://www.bcbstx.com/docs/provider/tx/standards/general-reimbursement-information/'
     'gri-info/professional-schedules/2026-internet-posting-notices/other-codes-2026-files/dft-2026-v1.pdf')
 
+def prudent_buyer_office_reference(result: dict) -> bool:
+    names = ((result.get('plan_details') or {}).get('stedi') or {}).get('names') or []
+    return (len(names) == 1 and str(names[0]).strip().casefold() == 'ppo prudent buyer incentive'
+            and bool(_api.re.search(r'blue cross|bcbstx|blue shield', str(result.get('payer') or ''), _api.re.I))
+            and (result.get('benefits') or {}).get('network_status') == 'in_network')
+
+
+def attach_prudent_buyer_office_reference(result: dict, practice_id: str, inputs: dict, source: dict) -> None:
+    """Expose the clinic's supplied office fee when no current scoped Library row is available."""
+    from app.insurance import network_participation
+
+    _attach_temporary_blue_cross_rates(result, practice_id, inputs, source, 'BlueCard member')
+    codes = result.get('codes') or []
+    plan = ((result.get('plan_details') or {}).get('stedi') or {})
+    if (result.get('temporary_rate_reference') or result.get('payment_mode') == 'cash'
+            or not network_participation.is_nmct_practice(practice_id)
+            or not prudent_buyer_office_reference(result)
+            or str(plan.get('group_number') or (result.get('insurance_details') or {}).get('group_number') or '') != '174302MCAF'
+            or str(inputs.get('service_date') or '') != '2026-11-06'
+            or str(inputs.get('place_of_service') or '') != '11'
+            or len(codes) != 1 or codes[0].get('code') != '99203'
+            or codes[0].get('units') != 1 or codes[0].get('modifiers')):
+        return
+    result['temporary_rate_reference'] = {
+        'source': 'Clinic-supplied Blue Choice PPO fee export',
+        'lines': [{'id': codes[0].get('id'), 'code': '99203', 'units': 1, 'modifiers': [],
+                   'unit_reference_cents': 10117,
+                   'source_reference': 'clinic_supplied:blue_choice_ppo_fee_export'}],
+        'complete': True,
+        'message': ('The clinic-supplied Blue Choice PPO fee export listed CPT 99203 at $101.17. '
+                    'Its contract and BlueCard product applicability are assumptions for this planning estimate; '
+                    'this is not a payer allowed amount.')}
+
 def refresh_saved_temporary_rates(result: dict, practice_id: str, inputs: dict, source: dict,
                                   route_payer: dict | None) -> None:
     """Rebuild saved cross-payer references from the current scoped clinic rates."""
@@ -18,6 +51,8 @@ def refresh_saved_temporary_rates(result: dict, practice_id: str, inputs: dict, 
         _attach_temporary_blue_cross_rates(result, practice_id, inputs, source, 'Cigna')
     elif _api.re.search(r'\baetna\b', payer_name, _api.re.I):
         _attach_temporary_aetna_rates(result, practice_id, inputs, source)
+    elif prudent_buyer_office_reference(result):
+        attach_prudent_buyer_office_reference(result, practice_id, inputs, source)
     elif payer_name and not _api.re.search(r'blue cross|bcbstx|blue shield|humana', payer_name, _api.re.I):
         _attach_temporary_blue_cross_rates(result, practice_id, inputs, source, payer_name)
 
@@ -34,7 +69,8 @@ def _attach_temporary_blue_cross_rates(result: dict, practice_id: str, inputs: d
         return
     payers = [row for row in _api.commercial_store.list_connections(practice_id)
               if row.get('status') == 'staff_guidance_enabled' and
-              _api.re.search(r'blue cross.*(?:blue shield|bcbs).*texas|bcbstx', str(row.get('display_name') or ''), _api.re.I)]
+              (row.get('stedi_payer_id') == 'QDTRP' or
+               _api.re.search(r'blue cross.*(?:blue shield|bcbs).*(?:texas|\btx\b)|bcbstx', str(row.get('display_name') or ''), _api.re.I))]
     if len(payers) != 1:
         return
     networks = [row for row in _api.commercial_store.list_networks(practice_id)
@@ -77,6 +113,8 @@ def _attach_temporary_blue_cross_rates(result: dict, practice_id: str, inputs: d
                         if published else
                         f'Temporary CPT price reference only. These are Blue Cross rates, not {payer_name} contracted allowances.'
                         if payer_name == 'Cigna' else
+                        'Temporary CPT price reference only. These Blue Cross clinic rates are not confirmed allowed amounts for this BlueCard member; the conditional patient share is shown separately.'
+                        if payer_name == 'BlueCard member' else
                         f'Temporary CPT price reference only. These are Blue Cross rates, not {payer_name} contracted allowances or a patient amount to collect.')}
 
 

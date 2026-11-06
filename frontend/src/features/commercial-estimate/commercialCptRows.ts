@@ -1,7 +1,9 @@
 import type { PrevisitEstimate } from '../../services/api/commercial-estimator'
 import type { VisitPricedLine } from '../../services/api/commercial-visit-types'
 import type { CostBreakdownRow } from '../insurance-estimate/CostBreakdownTable'
+import { serviceRowLabel } from '../insurance-estimate/serviceRowLabel'
 import { aetnaSignatureOfficeNoDeductible } from './payerReportedPartialCopay'
+import type { bluecardOfficeDeductibleScenario } from './bluecardOfficeDeductibleScenario'
 import { money, range } from './format'
 
 export function commercialVisitReason(result: PrevisitEstimate, fallback: string): string {
@@ -93,4 +95,61 @@ export function commercialCptRows(
         : undefined,
     },
   }
+}
+
+export function commercialPricedCptRows({
+  result,
+  lines,
+  fallback,
+  temporaryRateReference,
+  aetnaRateReference,
+  bluecardDeductible,
+  automaticCashFallback,
+  anticipatedService,
+}: {
+  result: PrevisitEstimate
+  lines: VisitPricedLine[]
+  fallback: CostBreakdownRow
+  temporaryRateReference: PrevisitEstimate['temporary_rate_reference'] | null | undefined
+  aetnaRateReference: boolean
+  bluecardDeductible: ReturnType<typeof bluecardOfficeDeductibleScenario>
+  automaticCashFallback: boolean
+  anticipatedService: string | null | undefined
+}): CostBreakdownRow[] {
+  if (!lines.length) return [fallback]
+  return lines.map((line) => {
+    const proxyRate = temporaryRateReference?.lines.find(
+      (rate) =>
+        rate.id === line.id &&
+        rate.code === line.code &&
+        rate.units === line.units &&
+        (rate.modifiers || []).join() === (line.modifiers || []).join(),
+    )
+    const resolved =
+      !automaticCashFallback &&
+      line.rate_resolution?.status === 'RESOLVED' &&
+      ['clinic_contract', 'payer_out_of_network', 'cms_original_medicare_estimate'].includes(
+        line.allowed_basis || '',
+      )
+    return {
+      label: serviceRowLabel({
+        description: line.description,
+        reason: result.reason || anticipatedService,
+        code: line.code,
+        units: line.units,
+      }),
+      value:
+        resolved && line.allowed_cents != null
+          ? money(line.allowed_cents)
+          : proxyRate
+            ? `${money(proxyRate.unit_reference_cents * (Number(line.units) || 1))} ${bluecardDeductible ? 'Blue Choice PPO fee reference' : aetnaRateReference ? 'Aetna fee reference' : 'BCBS Texas reference'}`
+            : 'Allowed amount unavailable',
+      detail:
+        resolved && line.unit_allowed_cents != null
+          ? `${money(line.unit_allowed_cents)} per unit × ${line.units || 1}`
+          : proxyRate
+            ? `${money(proxyRate.unit_reference_cents)} per unit × ${line.units || 1}; ${result.payer || 'payer'} allowed amount unknown`
+            : line.description || undefined,
+    }
+  })
 }

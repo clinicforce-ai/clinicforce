@@ -375,3 +375,16 @@ def test_pending_referral_is_not_an_obtained_referral():
     referral = evaluate(result, context, [])['referral']
     assert referral['status'] == 'Required'
     assert referral['referral_obtained'] == 'NO'
+
+
+def test_prudent_buyer_group_office_99203_needs_no_referral_or_pa():
+    result, context = case('BCBSTX', 'PPO PRUDENT BUYER INCENTIVE', '99203', day='2026-11-06')
+    context['group_number'] = '174302MCAF'
+    decisions = evaluate(result, context, [])['procedures'][0]
+    assert decisions['referral']['status'] == 'Not required'
+    assert decisions['authorization']['status'] == 'Not required'
+    assert decisions['authorization']['sources'][0]['source_type'] == 'clinic_confirmation'
+    for changes in ({'group_number': 'OTHER'}, {'pos': '22'},
+                    {'plans': ['PPO OTHER']}, {'service_date': '2027-01-01'}):
+        other = evaluate(result, {**context, **changes}, [])['procedures'][0]
+        assert other['authorization']['status'] != 'Not required'
