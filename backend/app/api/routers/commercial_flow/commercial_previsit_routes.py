@@ -96,6 +96,10 @@ async def saved_previsit(case_id: str, request: _api.Request) -> dict:
     Stedi inquiries may supply authorization and financial terms. When every
     selected line has compatible terms, fee_proxy_estimate shows a provisional
     BCBS-priced share; an absent copay is treated as $0 in that calculation.
+    For a single in-network Cigna OAP office E/M CPT, an explicit family-only
+    payer statement permits exact-CPT family accumulator terms in that proxy.
+    The amount to collect is $0 at arrival when no fixed copay is reported;
+    final liability remains open until a Cigna estimate or processed claim.
     For an in-network Cigna Open Access Plus office visit with selected EMG/NCS
     codes, a separate matched STC 73 inquiry can support one diagnostic
     specialist copay plus diagnostic 0% coinsurance on matching BCBS reference

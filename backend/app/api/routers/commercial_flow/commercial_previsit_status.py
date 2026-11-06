@@ -389,6 +389,7 @@ def _previsit_result(case: dict, practice_id: str | None = None) -> dict:
                                       context.get('source') or {}, route_payer)
         if proxy := (blue_cross_proxy.estimate(result, str(result.get('service_date') or ''))
                      or blue_cross_proxy.cigna_estimate(result, str(result.get('service_date') or ''))
+                     or blue_cross_proxy.cigna_oap_family_office_estimate(result, str(result.get('service_date') or ''))
                      or blue_cross_proxy.cigna_oap_office_scenario(result, str(result.get('service_date') or ''))):
             result['fee_proxy_estimate'] = proxy
     result['revision'] = case.get('revision', 0)

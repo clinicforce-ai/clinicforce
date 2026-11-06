@@ -237,7 +237,12 @@ def build(result: dict, guidance: dict, review: dict | None = None) -> dict:
         if basis == 'claim_after_service':
             cause, code = _cash_cause(result, failure, recovery, card, network, benefits, unpriced, missing,
                                       guidance.get('source_errors'))
-            if guidance.get('deferred_supported_share'):
+            if (guidance.get('collection_rule') or {}).get('mode') == 'cigna_cost_estimate_deferral':
+                sentence = ('Collect $0 at arrival: Cigna did not return a fixed office copay, and its '
+                            'Explanation of Estimate is needed before collecting deductible or coinsurance. '
+                            'The BCBS Texas planning share is separate; final liability follows the claim')
+                code = 'collection_deferred'
+            elif guidance.get('deferred_supported_share'):
                 sentence = ('Collect $0 today under NMCT’s approved defer-to-claim policy; '
                             'the estimated patient share is separate and final liability follows the processed claim')
                 code = 'collection_deferred'

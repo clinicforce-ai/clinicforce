@@ -47,7 +47,10 @@ export type PrevisitEstimate = {
   fee_proxy_estimate?: {
     basis: 'bcbstx_fee_proxy' | 'bcbstx_uhc_in_network_fee_proxy' | 'bcbstx_cigna_fee_proxy'
     status: 'provisional'
-    scenario_kind?: 'oap_office_copay_general_coinsurance' | 'oap_diagnostic_office_copay'
+    scenario_kind?:
+      | 'oap_office_copay_general_coinsurance'
+      | 'oap_diagnostic_office_copay'
+      | 'oap_office_family_deductible'
     reference_total_cents: number
     coinsurance_percent: string
     copay_cents: number
@@ -57,7 +60,13 @@ export type PrevisitEstimate = {
     oop_reduction_cents: number
     patient_share_cents: number
     oop_remaining_cents: number
-    lines?: { code: string; units?: number; reference_cents: number; coinsurance_cents: number }[]
+    lines?: {
+      code: string
+      units?: number
+      reference_cents: number
+      coinsurance_base_cents?: number
+      coinsurance_cents: number
+    }[]
     rate_source: string
     deductible_source: string
     deductible_url?: string
