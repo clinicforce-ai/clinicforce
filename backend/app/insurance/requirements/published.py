@@ -124,11 +124,8 @@ BCBSTX_PPO_99213_AUTH_SOURCE = {
     'effective_to': '2026-12-31',
 }
 PRUDENT_BUYER_99203_SOURCE = {
-    'label': 'Clinic-confirmed Prudent Buyer PPO CPT 99203 office requirement',
-    'source_version': 'Clinic confirmation received 2026-11-06',
-    'verified_at': '2026-11-06', 'effective_from': '2026-11-06',
-    'effective_to': '2026-12-31',
-}
+    'label': 'Clinic-confirmed Prudent Buyer PPO CPT 99203 office requirement', 'source_version': 'Clinic confirmation received 2026-11-06',
+    'verified_at': '2026-11-06', 'effective_from': '2026-11-06', 'effective_to': '2026-12-31'}
 UHC_TX_MA_REFERRAL_SOURCE = {
     'label': 'UnitedHealthcare Texas Medicare Advantage PPO specialist referrals',
     'url': 'https://www.uhcprovider.com/en/health-plans-by-state/texas-health-plans/tx-medicare-plans/tx-med-adv.html',
@@ -272,8 +269,7 @@ def _published_rule(kind: str, result: dict, context: dict, plans: list[str], co
         and bool((benefits.get('plan_details') or {}).get('verification_payer')))
     prudent_buyer_99203 = (in_network and office and codes == {'99203'}
         and str(context.get('pos') or '') == '11' and bool(context.get('rendering_npi'))
-        and names & BCBSTX_PAYER_NAMES and len(plans) == 1
-        and _key(plans[0]) == 'ppoprudentbuyerincentive'
+        and names & BCBSTX_PAYER_NAMES and len(plans) == 1 and _key(plans[0]) == 'ppoprudentbuyerincentive'
         and str(context.get('group_number') or '') == '174302MCAF'
         and '2026-11-06' <= day <= '2026-12-31')
     if prudent_buyer_99203:
