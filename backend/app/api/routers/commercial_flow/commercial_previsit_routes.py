@@ -100,6 +100,8 @@ async def saved_previsit(case_id: str, request: _api.Request) -> dict:
     payer statement permits exact-CPT family accumulator terms in that proxy.
     The amount to collect is $0 at arrival when no fixed copay is reported;
     final liability remains open until a Cigna estimate or processed claim.
+    Saved reads can re-read the protected exact-CPT 271 for this family-only
+    term when the stored patient, date, network and CPT scope still match.
     For an in-network Cigna Open Access Plus office visit with selected EMG/NCS
     codes, a separate matched STC 73 inquiry can support one diagnostic
     specialist copay plus diagnostic 0% coinsurance on matching BCBS reference

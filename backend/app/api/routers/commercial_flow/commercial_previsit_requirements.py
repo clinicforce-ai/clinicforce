@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from types import ModuleType
 from app.insurance.identity import patient_benefits_bound
 from app.insurance import stedi_cpt_authorization, visit_estimate
@@ -172,8 +173,46 @@ def attach_requirements(api: ModuleType, result: dict, case: dict, inputs: dict,
         result['candidate_requirements'] = []
 
 
+def refresh_saved_family_terms(api: ModuleType, result: dict, case: dict) -> None:
+    """Re-read a saved exact-CPT 271 when old code omitted family-only terms."""
+    benefits = result.get('benefits') or {}
+    identity = result.get('identity') or benefits.get('identity') or {}
+    check = case.get('cpt_authorization') or {}
+    codes = result.get('codes') or []
+    code = str(codes[0].get('code') or '') if len(codes) == 1 else ''
+    current = result.get('cpt_authorization') or {}
+    current_terms = (current.get('financial_terms') or {}).get(code) or {}
+    names = [result.get('plan'), *((result.get('plan_details') or {}).get('stedi') or {}).get('names', [])]
+    if (not re.search(r'\bcigna\b', str(result.get('payer') or ''), re.I)
+            or not any(re.search(r'open access plus|\boap\b', str(name or ''), re.I) for name in names)
+            or not re.fullmatch(r'992(?:0[2-5]|1[2-5])', code)
+            or not stedi_cpt_authorization.visit_coverage_bound(benefits, str(result.get('service_date') or ''))
+            or benefits.get('network_status') != 'in_network'
+            or not patient_benefits_bound(identity)
+            or check.get('state') != 'complete' or check.get('pos') != '11'
+            or check.get('network') != 'in_network'
+            or check.get('service_date') != result.get('service_date')
+            or check.get('patient_binding') != identity.get('binding')
+            or check.get('codes') != [code] or len(check.get('check_ids') or []) != 1
+            or any(current_terms.get(field) is not None for field in
+                   ('deductible_remaining_cents', 'oop_remaining_cents', 'coinsurance_percent'))
+            or not (check.get('raw_object_keys') or {}).get(code)):
+        return
+    try:
+        payload = json.loads(api.object_store.get_object_bytes(check['raw_object_keys'][code]))
+    except Exception:
+        return  # A missing protected source cannot establish new financial terms.
+    if payload.get('id') != check['check_ids'][0]:
+        return
+    terms = stedi_cpt_authorization.financial_terms(payload, code, '11', 'in_network')
+    if terms.get('family_only_accumulators') is True:
+        current.setdefault('financial_terms', {})[code] = terms
+        result['cpt_authorization'] = current
+
+
 def refresh_saved_requirements(api: ModuleType, result: dict, case: dict, practice_id: str) -> None:
     """Recheck new saves when source documents or the projected network changes."""
+    refresh_saved_family_terms(api, result, case)
     if 'requirement_sources' not in result and 'published_requirements_version' not in result:
         return
     documents = api.staff_store.list_library(practice_id)
