@@ -9,6 +9,7 @@ export function familyDeductibleRow(
   humanaReferenceCopay: number | null,
   familyOopApplied: boolean,
   cignaFamilyDeductibleCents: number | null,
+  cignaDeductibleAssumed = false,
 ): CostBreakdownRow {
   const family = limitSummary(reportedResult, 'deductible', 'FAMILY')
   const surgical = limitSummary(reportedResult, 'deductible', 'FAMILY', '2')
@@ -25,7 +26,7 @@ export function familyDeductibleRow(
     detail: familyOopApplied
       ? 'No deductible payment due for the selected covered services after the family out-of-pocket limit'
       : cignaFamilyDeductibleCents != null
-        ? `${money(cignaFamilyDeductibleCents)} applied to the BCBS Texas office fee reference; the actual Cigna allowed amount is unknown`
+        ? `${money(cignaFamilyDeductibleCents)} ${cignaDeductibleAssumed ? 'assumed to apply' : 'applied'} to the BCBS Texas office fee reference; the actual Cigna allowed amount is unknown`
         : family.unassigned
           ? 'Payer-reported plan amount; medical applicability unverified'
           : surgical.value !== unknown

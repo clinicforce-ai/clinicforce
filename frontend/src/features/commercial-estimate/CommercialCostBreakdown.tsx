@@ -273,7 +273,7 @@ export default function CommercialCostBreakdown({
               ? cignaOfficeScenario
                 ? `${money(0)} applied in this provisional scenario from the general individual remaining balance; CPT applicability is not confirmed`
                 : cignaFamilyOffice
-                  ? `${money(feeProxy?.deductible_cents || 0)} applied from the exact CPT family-only remaining deductible`
+                  ? `${money(feeProxy?.deductible_cents || 0)} ${feeProxy?.deductible_applicability === 'assumed' ? 'assumed from the plan-wide family remaining deductible; office applicability is unconfirmed' : 'applied from the exact CPT family-only remaining deductible'}`
                   : `${money(feeProxy?.deductible_cents || 0)} applied in this provisional scenario; exact CPT Stedi responses reported no remaining individual deductible`
               : feeProxy != null
                 ? feeProxy.deductible_source
@@ -301,6 +301,7 @@ export default function CommercialCostBreakdown({
       humanaReferenceCopay,
       familyOopApplied,
       cignaFamilyOffice ? feeProxy!.deductible_cents : null,
+      cignaFamilyOffice && feeProxy!.deductible_applicability === 'assumed',
     ),
     {
       label: 'Coinsurance',

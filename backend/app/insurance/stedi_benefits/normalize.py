@@ -303,7 +303,9 @@ def normalize_stedi_271(payload: dict[str, Any], service_type_code: str, provide
     participation = [row['evidence_path'] for row in provider_rows if any(
         _provider_participation(note, provider_npi)
         for note in notes([row.get('messages'), row.get('additionalInformation')]))]
-    conflicting_network = any(re.search(r'\b(?:not participating|not in[ -]network|non[- ]participating|out[- ]of[- ]network)\b', note, re.I)
+    # Shared accumulator accounting mentions both tiers without contradicting provider participation.
+    conflicting_network = any(re.search(r'\b(?:not participating|not in[ -]network|non[- ]participating|out[- ]of[- ]network)\b',
+        re.sub(r'\bout[- ]of[- ]network amounts apply to in[- ]network\b', '', note, flags=re.I), re.I)
                               for note in descriptions)
     # A contrary statement about this provider may sit on an out-of-network
     # row excluded from the in-network cost-sharing calculation above.

@@ -274,6 +274,7 @@ def reported_stedi_options(payload: dict[str, Any], service_type_code: str) -> l
         }
         result.append({"id": row["evidence_path"], "kind": kinds[code], "service_type_code": ", ".join(service_types),
                        "procedure_code": _procedure(row), "coverage_level": row.get("coverageLevel") or row.get("coverageLevelCode"),
+                       "diagnosis_scoped": bool(row.get("diagnosis")),
                        "places_of_service": [str(place["code"]) for place in row.get("placesOfService") or []
                                              if isinstance(place, dict) and place.get("code")],
                        "plan_index": row.get("plan_index"), "plan_name": row.get("planCoverage") or row.get("planCoverageDescription"),

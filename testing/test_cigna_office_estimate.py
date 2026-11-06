@@ -1,7 +1,7 @@
 """Synthetic Cigna office workflow, including the unresolved-evidence boundaries."""
 import asyncio
 from copy import deepcopy
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from unittest.mock import AsyncMock, patch
 
 import httpx
@@ -220,7 +220,7 @@ def test_tpa_office_copay_with_long_cigna_member_suffix_and_distinct_admin_group
     undated = deepcopy(payload)
     for response in [undated, *(undated['_service_payloads'].values())]:
         response['subscriber']['dates'] = {}
-    inputs['service_date'] = datetime.now(timezone.utc).date().isoformat()
+    inputs['service_date'] = date.today().isoformat()
     same_day = finish(undated, inputs, source, payer='Cigna', practice_id='primary')
     assert same_day['benefits']['service_date_matches'] is True
     assert same_day['collection_guidance']['amount_cents'] == 4000

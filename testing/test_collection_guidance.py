@@ -735,6 +735,20 @@ def office_coinsurance_payload():
             "Our records indicate the provider ID you entered is participating in this patient's network."]}]}}]}
 
 
+def test_cross_network_accumulator_note_does_not_negate_provider_participation():
+    payload = office_coinsurance_payload()
+    payload['plans'][0]['benefits']['deductible'][0]['messages'] = [
+        'Out of network amounts apply to in-network AND This plan has only family accumulators']
+    benefits = commercial.normalize_stedi_271(payload, '98', False,
+        service_date='2026-10-07', procedure_code='99203', provider_npi='1234567890')
+    assert benefits['network_status'] == 'in_network'
+    assert benefits['network_source'] == 'payer_participation_message'
+    payload['plans'][0]['benefits']['deductible'][0]['messages'][0] += '; The provider is out-of-network.'
+    conflicting = commercial.normalize_stedi_271(payload, '98', False,
+        service_date='2026-10-07', procedure_code='99203', provider_npi='1234567890')
+    assert conflicting['network_status'] == 'unknown'
+
+
 def test_provider_participation_message_without_benefit_network_indicator():
     payload = office_coinsurance_payload()
     message = payload['plans'][0]['benefits']['limitations'][0]
