@@ -6,6 +6,58 @@ from app.api.routers.commercial_flow.commercial_previsit_finish import _payer_pl
 from app.insurance.identity import patient_plan_applies
 
 
+def refresh_saved_cigna_office_benefits(result: dict, case: dict, practice_id: str) -> None:
+    """Reproject an older Cigna office check from its verified protected 271."""
+    context = case.get('previsit_context') or {}
+    inputs = context.get('inputs') or {}
+    price = result.get('price_range') or {}
+    lines = price.get('lines') or []
+    old = result.get('benefits') or {}
+    if (not _api.network_participation.is_nmct_practice(practice_id)
+            or str(result.get('payer') or '').casefold() != 'cigna'
+            or inputs.get('place_of_service') != '11'
+            or old.get('active') is not True or old.get('copay_cents') is not None
+            or old.get('coverage_status_conflict') or old.get('has_secondary')
+            or old.get('source_errors') or result.get('payment_mode') == 'cash'
+            or case.get('previsit', {}).get('request_state') != 'complete'
+            or str(result.get('checked_at') or '')[:10] != inputs.get('service_date')
+            or price.get('mode') != 'services' or price.get('complete') or len(lines) != 1
+            or lines[0].get('code') not in {str(n) for n in (*range(99202, 99206), *range(99212, 99216))}
+            or lines[0].get('units') != 1
+            or not case.get('previsit_raw_object_key') or not case.get('previsit_raw_sha256')):
+        return
+    try:
+        raw = _api.object_store.get_object_bytes(case['previsit_raw_object_key'])
+        if _api.hashlib.sha256(raw).hexdigest() != case['previsit_raw_sha256']:
+            return
+        payload = _api.json.loads(raw)
+        source = context.get('source') or {}
+        fresh = _api._case_benefits(payload, inputs, source, case)
+        if (fresh.get('active') is not True or fresh.get('coverage_status_conflict')
+                or fresh.get('source_errors') or fresh.get('copay_cents') is None
+                or not patient_plan_applies(fresh, fresh.get('identity') or {}, inputs['service_date'])):
+            return
+        selected = [code for code in result.get('codes') or [] if code.get('id') == lines[0].get('id')]
+        if len(selected) != 1:
+            return
+        rules = {'office_service_types': _api._office_service_types(practice_id, source),
+                 **_api._benefit_context(inputs, source)}
+        repriced = _api.visit_estimate.price_lines(selected, [], fresh, rules, payload=payload,
+            service_date=inputs['service_date'], reviews=(case.get('visit_review') or {}).get('lines'))
+        new_lines = (repriced or {}).get('lines') or []
+        if (len(new_lines) != 1 or new_lines[0].get('code') != lines[0].get('code')
+                or (new_lines[0].get('benefits') or {}).get('copay_cents') is None):
+            return
+    except Exception:
+        # Missing or changed protected evidence cannot create a collection amount.
+        return
+    result['benefits'] = fresh
+    result['identity'] = fresh.get('identity') or {}
+    lines[0]['benefits'] = new_lines[0]['benefits']
+    lines[0]['calculation'] = None
+    result.setdefault('appointment_context', {})['place_of_service'] = inputs['place_of_service']
+
+
 def restore_active_blue_cross_insurance(result: dict, case: dict) -> None:
     if ((result.get('benefits') or {}).get('active') is True
             and result.get('cash_fallback') is not None

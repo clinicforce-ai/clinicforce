@@ -30,6 +30,8 @@ async def saved_previsit(case_id: str, request: _api.Request) -> dict:
     Stedi call; a readable matched card must agree with the payer copay.
     Flat Stedi 271 ZZ industry codes are interpreted as benefit places of
     service; appointment_context.place_of_service reports the planned setting.
+    Older saved NMCT Cigna office checks with no copay are read-only reprojected
+    from their hash-verified protected 271 before collection is recalculated.
     An NMCT same-day Cigna specialist office response can return one POS 11
     copay as a refundable advance with basis cigna_refundable_office_copay
     while the provider network remains unknown. The advance is separate from

@@ -6,7 +6,7 @@ from app.insurance.network_participation import verified_in_network, verified_ou
 from app.insurance import blue_cross_proxy, evidence_resolution, group_contract_support, published_plan_benefits
 from app.api.routers.commercial_flow.commercial_previsit_finish import _payer_plan_pricing_source
 from app.api.routers.commercial_flow.commercial_previsit_network_guard import recheck_saved_network_evidence, recheck_saved_payer_message
-from app.api.routers.commercial_flow.commercial_previsit_saved_pricing import _reprice_saved_new_network, guard_unresolved_telehealth, guard_telehealth_guidance, restore_active_blue_cross_insurance, retain_conflicted_insurance
+from app.api.routers.commercial_flow.commercial_previsit_saved_pricing import _reprice_saved_new_network, guard_unresolved_telehealth, guard_telehealth_guidance, restore_active_blue_cross_insurance, retain_conflicted_insurance, refresh_saved_cigna_office_benefits
 from app.api.routers.commercial_flow.commercial_previsit_requirements import refresh_saved_requirements
 from app.api.routers.commercial_flow.commercial_previsit_rate_reference import refresh_saved_temporary_rates
 from app.api.routers.commercial_flow.commercial_previsit_enrollment import _enrollment_failure
@@ -325,9 +325,9 @@ def _recheck_saved_payer_allowance(result: dict, case: dict, practice_id: str) -
         line.update(allowed_cents=None, unit_allowed_cents=None, calculation=None)
     result.pop('arrival_collection', None)
     result.pop('planning_estimate', None)
-
 def _previsit_result(case: dict, practice_id: str | None = None) -> dict:
     result = _api.deepcopy(case['previsit_context']['result'])
+    refresh_saved_cigna_office_benefits(result, case, practice_id or '')
     availity = case.get('availity_visit_reference') or {}
     if (availity.get('evidence') and availity.get('context_token') == case['previsit_context'].get('context_token')
             and availity.get('service_date') == result.get('service_date')):
