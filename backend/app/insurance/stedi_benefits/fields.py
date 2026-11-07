@@ -43,14 +43,25 @@ def _stedi_cents(value: object) -> int | None:
 
 def _stedi_entries(payload: dict[str, Any]) -> list[dict[str, Any]]:
     """Keep source scope and paths while adapting both Stedi response layouts."""
-    entries = [{**row, "evidence_path": f"benefitsInformation[{i}]"}
+    def with_place(row: dict) -> dict:
+        if row.get('placesOfService'):
+            return row
+        additional = row.get('eligibilityAdditionalInformationList') or row.get('eligibilityAdditionalInformation') or []
+        if isinstance(additional, dict):
+            additional = [additional]
+        places = [str(item.get('industryCode')) for item in additional if isinstance(item, dict)
+                  and str(item.get('codeListQualifierCode') or '').upper() == 'ZZ'
+                  and re.fullmatch(r'\d{2}', str(item.get('industryCode') or ''))]
+        return {**row, 'placesOfService': [{'code': code} for code in places]} if places else row
+
+    entries = [{**with_place(row), "evidence_path": f"benefitsInformation[{i}]"}
                for i, row in enumerate(payload.get("benefitsInformation") or []) if isinstance(row, dict)]
     for index, plan in enumerate(payload.get("plans") or []):
         if not isinstance(plan, dict):
             continue
         for i, row in enumerate(plan.get("benefitsInformation") or []):
             if isinstance(row, dict):
-                entries.append({**row, "plan_index": index, "evidence_path": f"plans[{index}].benefitsInformation[{i}]"})
+                entries.append({**with_place(row), "plan_index": index, "evidence_path": f"plans[{index}].benefitsInformation[{i}]"})
         benefits = plan.get("benefits") or {}
         if not isinstance(benefits, dict):
             continue

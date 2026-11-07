@@ -5,8 +5,7 @@ from app.insurance.collection.cash import build as cash_guidance
 from app.insurance.collection.options import emg_option as _emg_option
 from app.insurance.collection.requirements import summarize_requirements
 from app.insurance.collection.refundable_advance import apply as apply_refundable_advance
-from app.insurance.collection.office_copay import (cigna_oap_televisit_office_copay,
-    diagnostic_day_copay_amount, office_copay_amount)
+from app.insurance.collection.office_copay import (cigna_oap_televisit_office_copay, diagnostic_day_copay_amount, office_copay_amount)
 from app.insurance.collection.billing_note import apply_billing_note
 from app.insurance.identity import patient_benefits_bound
 from app.insurance.benefit_review import (annual_oop_conflict_with_known_remaining,
@@ -16,7 +15,6 @@ from app.insurance import encounter_summary
 from app.insurance.insurance_product import is_medicare_advantage
 from app.insurance.published_plan_benefits import GEHA_HIGH_PSHB_MA_16615_2026
 from app.insurance.stedi_benefits.payer_order import verified_primary_order
-
 
 def emg_option(result: dict, rates: list[dict], rules: dict, payload: dict | None,
                service_date: str, review: dict) -> dict:
@@ -277,7 +275,7 @@ def build(result: dict, review: dict | None = None) -> dict:
         and result.get('nmct_cigna_delegated_office') is True
         and verified_in_network(benefits)
         and result.get('benefit_source') == 'Stedi · plan administrator')
-    policy_allows_advance = clinic_delegated_copay or (cigna_oap_televisit and not policy_approved) or (policy_mode == 'collect_verified_copay' if published_copay else
+    policy_allows_advance = clinic_delegated_copay or (cigna_oap_televisit and not policy_approved) or (guidance['basis'] == 'cigna_refundable_office_copay' and (not policy_approved or policy_mode in {'collect_verified_copay', 'collect_supported_advance'})) or (policy_mode == 'collect_verified_copay' if published_copay else
         policy_mode == 'collect_supported_advance' or
         fixed_copay and policy_mode == 'collect_verified_copay' or
         verified_out_of_network(benefits) and policy_mode == 'defer_to_claim'
@@ -300,7 +298,7 @@ def build(result: dict, review: dict | None = None) -> dict:
         amount = None
         guidance['published_copay_policy_missing' if published_copay else 'positive_advance_policy_missing'] = True
     if (amount is not None and amount > 0 and 'cigna' in str(result.get('payer') or '').casefold()
-            and guidance['basis'] not in {'ecw_billing_note', 'office_copay'}):
+            and guidance['basis'] not in {'ecw_billing_note', 'office_copay', 'cigna_refundable_office_copay'}):
         amount = None
         guidance.update(cigna_estimate_required=True,
             reason='Cigna requires an Explanation of Estimate from its cost estimator before collecting an estimated deductible or coinsurance advance.')
@@ -315,7 +313,7 @@ def build(result: dict, review: dict | None = None) -> dict:
     if amount is not None and amount > 0 and calculated_in_network_advance:
         guidance['collection_rule'] = {'mode': 'calculated_in_network_advance',
                                        'reference': 'Selected CPTs, active clinic contract rates and member benefits'}
-    if amount is not None and amount > 0 and policy_approved and guidance['basis'] != 'ecw_billing_note':
+    if amount is not None and amount > 0 and policy_approved and guidance['basis'] not in {'ecw_billing_note', 'cigna_refundable_office_copay'}:
         guidance['collection_rule'] = {'mode': policy_mode, 'reference': policy['reference'],
                                        'approved_at': policy['approved_at']}
     elif amount is not None and amount > 0 and clinic_delegated_copay:
@@ -339,7 +337,9 @@ def build(result: dict, review: dict | None = None) -> dict:
         if guidance.get('range_max_cents') is not None and payments.get('reference'):
             guidance['range_min_cents'] = guidance['amount_cents']
             guidance['range_max_cents'] = max(0, guidance['range_max_cents'] - payments['amount_cents'])
-        guidance['patient_message'] = ('This is a refundable advance based on a Blue Cross Texas fee reference, not your Cigna benefit or final bill. The clinic will apply it to the claim and refund any excess after processing.'
+        guidance['patient_message'] = ('This is a refundable advance based on the Cigna office copay. The clinic will apply it to the claim and refund any excess after processing.'
+            if guidance['basis'] == 'cigna_refundable_office_copay' else
+            'This is a refundable advance based on a Blue Cross Texas fee reference, not your Cigna benefit or final bill. The clinic will apply it to the claim and refund any excess after processing.'
             if guidance['basis'] == 'bcbstx_refundable_advance' else
             'This is an advance estimate for the planned care. The insurer determines final responsibility when it processes the claim.')
         if guidance['basis'] == 'claim_after_service' and 'cigna' in str(result.get('payer') or '').casefold():

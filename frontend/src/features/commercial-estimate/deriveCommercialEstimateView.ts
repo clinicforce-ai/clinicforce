@@ -212,8 +212,9 @@ export function deriveCommercialEstimateView({
     (outOfNetworkAllowance ||
       ['office_copay', 'qmb_protection', 'bcbstx_proxy_advance'].includes(guidance?.basis || ''))
   const refundableAdvance =
-    guidance?.basis === 'bcbstx_refundable_advance' &&
-    result?.encounter_summary?.collect_today_cents === guidance.amount_cents
+    ['bcbstx_refundable_advance', 'cigna_refundable_office_copay'].includes(
+      guidance?.basis || '',
+    ) && result?.encounter_summary?.collect_today_cents === guidance?.amount_cents
   const currentPayerAmount =
     benefits?.active === true &&
     benefits.service_date_matches !== false &&
@@ -353,7 +354,9 @@ export function deriveCommercialEstimateView({
               ? 'Estimated patient share · do not collect'
               : !amount && !cash
                 ? 'Collection decision needed'
-                : guidance?.basis === 'bcbstx_refundable_advance'
+                : ['bcbstx_refundable_advance', 'cigna_refundable_office_copay'].includes(
+                      guidance?.basis || '',
+                    )
                   ? 'Refundable advance to collect now'
                   : 'Amount to collect now'
   const amountParts = result?.encounter_summary?.components

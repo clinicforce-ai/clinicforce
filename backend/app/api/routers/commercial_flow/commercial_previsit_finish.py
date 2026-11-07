@@ -184,6 +184,7 @@ def _finish_previsit(result: dict, case: dict, inputs: dict, source: dict, paylo
     result['referral_evidence'] = source.get('referral_evidence', [])
     result['appointment_context'] = {key: source.get(key) for key in ('location', 'rendering_provider', 'appointment_status')}
     result['appointment_context'].update(appointment_type=inputs.get('appointment_type'), imported_fields=source.get('appointment_fields', []),
+                                         place_of_service=inputs.get('place_of_service'),
                                          notes_status=source.get('appointment_notes_status', 'not_exposed'),
                                          timezone=source.get('timezone') or _api.os.getenv('COMMERCIAL_PRACTICE_TIMEZONE', 'America/New_York'))
     result['coverage_records'] = source.get('coverage_records', [])

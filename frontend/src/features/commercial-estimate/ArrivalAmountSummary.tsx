@@ -46,7 +46,10 @@ function nextStep(model: CommercialEstimateModel, result: PrevisitEstimate) {
   )
     return {
       title: 'Check Cigna plan benefits',
-      hint: 'Request visit-date telehealth cost sharing and provider participation from the plan administrator.',
+      hint:
+        result.appointment_context?.place_of_service === '11'
+          ? 'Request visit-date office cost sharing and provider participation from the plan administrator.'
+          : 'Request visit-date cost sharing and provider participation from the plan administrator.',
     }
   if (
     model.guidance?.policy_setup_required ||
@@ -343,6 +346,11 @@ export default function ArrivalAmountSummary({
         <p>Planning estimate only. See the collection decision below.</p>
       ) : model.guidance?.basis === 'claim_after_service' && model.amount ? (
         <p>Claim first. Patient responsibility follows the processed claim.</p>
+      ) : model.guidance?.basis === 'cigna_refundable_office_copay' && model.amount ? (
+        <p>
+          Refundable Cigna office copay advance; provider network and final share remain
+          unconfirmed.
+        </p>
       ) : model.guidance?.basis === 'office_copay' && model.amount ? (
         <p>Office copay advance; other service costs may follow the claim.</p>
       ) : model.guidance?.basis === 'diagnostic_day_copay' && model.amount ? (

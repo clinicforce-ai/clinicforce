@@ -57,7 +57,7 @@ def finish(payload, inputs, source, review=None, payer=None, practice_id='synthe
     if review:
         case['visit_review'] = {'context_token': api._visit_context_token(inputs, source), **review}
     result = {'benefits': api._case_benefits(payload, inputs, source, case), 'issues': [],
-              'service_date': inputs['service_date'], 'checked_at': DAY + 'T12:00:00+00:00'}
+              'service_date': inputs['service_date'], 'checked_at': inputs['service_date'] + 'T12:00:00+00:00'}
     if inputs.get('telehealth_modality'):
         result['telehealth'] = {'place_of_service': inputs['place_of_service'],
                                 'modality': inputs['telehealth_modality']}
@@ -736,6 +736,84 @@ def test_legacy_response_layout_uses_the_same_scoped_rules():
     payload.pop('plans')
     payload['benefitsInformation'] = rows
     assert finish(payload, inputs, source)['collection_guidance']['amount_cents'] == 5500
+
+
+def test_legacy_zz_place_of_service_selects_office_copay():
+    payload, inputs, source = example()
+    rows = commercial._stedi_entries(payload)
+    for row in rows:
+        row.pop('plan_index', None)
+        if row['code'] == 'status':
+            row['code'] = '1'
+        places = row.pop('placesOfService', [])
+        if places:
+            row['eligibilityAdditionalInformationList'] = [
+                {'codeListQualifierCode': 'ZZ', 'industryCode': place['code']}
+                for place in places]
+    payload.pop('plans')
+    payload['benefitsInformation'] = rows
+    assert finish(payload, inputs, source)['collection_guidance']['amount_cents'] == 5500
+
+
+def test_current_cigna_office_copay_is_refundable_when_provider_tier_is_unconfirmed():
+    payload, inputs, source = example()
+    inputs.update(service_date='2026-11-07', visit_type='new')
+    payload['subscriber']['dates']['service']['start'] = inputs['service_date']
+    payload['plans'][0]['name'] = 'C-24 TX NBN OAP'
+    payload['plans'][0]['benefits']['limitations'] = []
+    payload.pop('provider')
+    source['payer_plan_bound'] = True
+    source['rendering_provider']['roles'] = ['Neurology']
+    rows = commercial._stedi_entries(payload)
+    for row in rows:
+        row.pop('plan_index', None)
+        row['planCoverage'] = 'C-24 TX NBN OAP'
+        if row['code'] == 'status':
+            row['code'] = '1'
+        places = row.pop('placesOfService', [])
+        if places:
+            row['eligibilityAdditionalInformationList'] = [
+                {'codeListQualifierCode': 'ZZ', 'industryCode': place['code']}
+                for place in places]
+        if row['code'] == 'B' and 'Specialist' in row.get('messages', []):
+            row['benefitAmount'] = '100'
+    payload.pop('plans')
+    rows.append({**next(row for row in rows if row['code'] == '1'),
+                 'serviceTypeCodes': ['30'], 'evidence_path': 'benefitsInformation[7]'})
+    payload['benefitsInformation'] = rows
+    result = finish(payload, inputs, source, payer='Cigna', practice_id='primary',
+                    review={'selected_ids': ['99205:3']}, configured_connections=[])
+    assert result['benefits']['network_status'] == 'unknown'
+    assert result['benefits']['copay_cents'] == 10000
+    assert result['collection_guidance']['amount_cents'] == 10000
+    assert result['collection_guidance']['basis'] == 'cigna_refundable_office_copay'
+    assert result['collection_guidance']['network'] != 'In network'
+    assert result['encounter_summary']['collect_today_cents'] == 10000
+    paid = finish(payload, inputs, source, payer='Cigna', practice_id='primary',
+                  review={'selected_ids': ['99205:3'],
+                          'payments': {'reference': 'synthetic-receipt', 'amount_cents': 2500}},
+                  configured_connections=[])
+    assert paid['collection_guidance']['amount_cents'] == 7500
+    assert paid['encounter_summary']['collect_today_cents'] == 7500
+
+    for change in ('wrong_pos', 'primary_care', 'missing_payer_row', 'oop_exhausted',
+                   'network_conflict', 'source_error', 'card_conflict'):
+        other = deepcopy(result)
+        if change == 'wrong_pos':
+            other['appointment_context']['place_of_service'] = '02'
+        elif change == 'primary_care':
+            other['appointment_context']['rendering_provider']['roles'] = ['Family Medicine']
+        elif change == 'missing_payer_row':
+            other['benefits']['reported_options'] = []
+        elif change == 'oop_exhausted':
+            other['price_range']['lines'][0]['benefits']['oop_remaining_cents'] = 0
+        elif change == 'network_conflict':
+            other['benefits']['network_conflict'] = True
+        elif change == 'card_conflict':
+            other['card_check'] = {'status': 'conflict', 'conflicts': ['synthetic']}
+        else:
+            other['benefits']['source_errors'] = [{'kind': 'invalid_financial_source'}]
+        assert collection_guidance.build(other)['amount_cents'] is None, change
 
 
 @pytest.mark.parametrize('change', [None, 'wrong_npi', 'organization', 'inactive', 'ambiguous', 'unknown', 'timeout'])

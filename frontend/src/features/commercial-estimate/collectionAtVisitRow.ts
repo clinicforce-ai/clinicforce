@@ -359,5 +359,10 @@ export function collectionAtVisitRow(
     row.detail =
       'The payer returned no financial terms. This refundable advance uses the selected CPTs’ BCBS Texas fee references; it is separate from estimated patient liability. Apply it to the processed claim and refund any excess.'
   }
+  if (result.collection_guidance?.basis === 'cigna_refundable_office_copay') {
+    row.label = 'Refundable Cigna copay advance at visit'
+    row.detail =
+      'Current Stedi benefits report this POS 11 specialist office copay. Provider participation for the exact product is still unconfirmed. Apply the advance to the processed claim and refund any excess.'
+  }
   return row
 }
