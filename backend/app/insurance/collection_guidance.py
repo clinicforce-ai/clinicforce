@@ -4,6 +4,7 @@ from __future__ import annotations
 from app.insurance.collection.cash import build as cash_guidance
 from app.insurance.collection.options import emg_option as _emg_option
 from app.insurance.collection.requirements import summarize_requirements
+from app.insurance.collection.refundable_advance import apply as apply_refundable_advance
 from app.insurance.collection.office_copay import (cigna_oap_televisit_office_copay,
     diagnostic_day_copay_amount, office_copay_amount)
 from app.insurance.collection.billing_note import apply_billing_note
@@ -26,8 +27,7 @@ def emg_option(result: dict, rates: list[dict], rules: dict, payload: dict | Non
 def build(result: dict, review: dict | None = None) -> dict:
     benefits = result.get('benefits') or {}
     active_payer_benefits = benefits.get('active') is True and benefits.get('service_date_matches') is not False
-    # Old snapshots may retain an in-network label without the product/provider
-    # source that produced it. Treat that label as unknown for collection.
+    # An old in-network label needs current product/provider evidence.
     collection_benefits = (benefits if benefits.get('network_status') != 'in_network'
                            or verified_in_network(benefits) else {**benefits, 'network_status': 'unknown'})
     price = result.get('price_range') or {}
@@ -205,9 +205,7 @@ def build(result: dict, review: dict | None = None) -> dict:
         amount = 0
         guidance.update(status='zero_advance', basis='qmb_protection',
             reason='Confirmed member-bound QMB protection prohibits collecting Medicare cost sharing at check-in.')
-    # Group 16615 identifies the published High PSHB MA product. A zero office
-    # benefit needs no payer allowance or member accumulator, but every selected
-    # service and the patient/network binding must still support that decision.
+    # The published zero office benefit still needs selected-service and patient/network binding.
     geha_zero_office = (
         benefits.get('published_plan_rule') == GEHA_HIGH_PSHB_MA_16615_2026
         and active_payer_benefits and verified_in_network(benefits)
@@ -284,9 +282,7 @@ def build(result: dict, review: dict | None = None) -> dict:
         fixed_copay and policy_mode == 'collect_verified_copay' or
         verified_out_of_network(benefits) and policy_mode == 'defer_to_claim'
         and policy.get('allow_supported_oon_advance') is True)
-    # A fully priced in-network visit can present the calculated check-in
-    # amount on an otherwise unconfigured route. Explicit clinic policies
-    # still control copay-only, deferred and out-of-network collection.
+    # A fully priced in-network visit may advance without route policy; explicit policies still control.
     calculated_in_network_advance = (
         not policy_approved and not published_copay and verified_in_network(benefits)
         and guidance['basis'] in {'patient_obligations', 'anticipated_services'}
@@ -308,6 +304,11 @@ def build(result: dict, review: dict | None = None) -> dict:
         amount = None
         guidance.update(cigna_estimate_required=True,
             reason='Cigna requires an Explanation of Estimate from its cost estimator before collecting an estimated deductible or coinsurance advance.')
+    if amount is None:
+        amount = apply_refundable_advance(result, lines, guidance, assumptions,
+            safe and not note and not primary_secondary_copay and not qmb_protected and not qmb_unresolved
+            and not verified_out_of_network(benefits)
+            and (not policy_approved or policy_mode == 'collect_supported_advance'))
     if amount is not None and amount > 0 and unconfirmed_zero_oop and verified_in_network(benefits):
         amount = None
         guidance['unconfirmed_zero_oop'] = True
@@ -338,7 +339,9 @@ def build(result: dict, review: dict | None = None) -> dict:
         if guidance.get('range_max_cents') is not None and payments.get('reference'):
             guidance['range_min_cents'] = guidance['amount_cents']
             guidance['range_max_cents'] = max(0, guidance['range_max_cents'] - payments['amount_cents'])
-        guidance['patient_message'] = 'This is an advance estimate for the planned care. The insurer determines final responsibility when it processes the claim.'
+        guidance['patient_message'] = ('This is a refundable advance based on a Blue Cross Texas fee reference, not your Cigna benefit or final bill. The clinic will apply it to the claim and refund any excess after processing.'
+            if guidance['basis'] == 'bcbstx_refundable_advance' else
+            'This is an advance estimate for the planned care. The insurer determines final responsibility when it processes the claim.')
         if guidance['basis'] == 'claim_after_service' and 'cigna' in str(result.get('payer') or '').casefold():
             guidance['patient_message'] = 'No payment is requested at arrival without a Cigna Explanation of Estimate. Final responsibility follows the processed claim.'
         if amount > 0 and not payments.get('reference') and strict.get('payments_received_cents') is None:
@@ -474,7 +477,7 @@ def build(result: dict, review: dict | None = None) -> dict:
             if note['kind'] == 'no_collection' else 'This advance uses the office copay recorded by the clinic. Additional services and final responsibility follow claim processing.')
         for service in guidance['services']:
             service['patient_cents'] = None
-    if guidance['amount_cents'] is not None and guidance['basis'] in {'patient_obligations', 'anticipated_services', 'bcbstx_proxy_advance', 'cigna_fee_proxy_advance'}:
+    if guidance['amount_cents'] is not None and guidance['basis'] in {'patient_obligations', 'anticipated_services', 'bcbstx_proxy_advance', 'cigna_fee_proxy_advance', 'bcbstx_refundable_advance'}:
         error = encounter_summary.build({**result, 'collection_guidance': guidance}, review)['integrity_error']
         if error:
             reasons = {

@@ -122,8 +122,13 @@ def build(result: dict, review: dict | None = None) -> dict:
     if (guidance.get('basis') in {'bcbstx_proxy_advance', 'cigna_fee_proxy_advance'} and collect is not None
             and collect != max(0, (result.get('fee_proxy_estimate') or {}).get('patient_share_cents', -1) - (paid or 0))):
         integrity_error = 'collection_amount_mismatch'
+    refundable_advance = guidance.get('basis') == 'bcbstx_refundable_advance'
+    if (refundable_advance and collect is not None
+            and (type(guidance.get('reference_total_cents')) is not int
+                 or collect != max(0, guidance['reference_total_cents'] - (paid or 0)))):
+        integrity_error = 'collection_amount_mismatch'
     if (integrity_error and guidance.get('basis') in {'patient_obligations', 'anticipated_services', 'bcbstx_proxy_advance', 'cigna_fee_proxy_advance',
-                                                      'calculation_conflict'} and not clinic_zero_instruction):
+                                                      'bcbstx_refundable_advance', 'calculation_conflict'} and not clinic_zero_instruction):
         collect = None
     if (unsupported_insurance or requirement_blocker(result) is not None) and collect is not None and not clinic_zero_instruction:
         collect = None
@@ -136,7 +141,8 @@ def build(result: dict, review: dict | None = None) -> dict:
                      and (result.get('fee_proxy_estimate') or {}).get('basis') == 'bcbstx_fee_proxy')
     if (not cash and collect is not None and collect > 0 and not verified_in_network(benefits)
             and not independent_office_copay and not out_of_network_share
-            and not out_of_network_office_copay and not proxy_advance):
+            and not out_of_network_office_copay and not proxy_advance
+            and not (refundable_advance and not verified_out_of_network(benefits))):
         collect = None
     if guidance.get('basis') == 'office_copay' and components['copay_cents'] is None:
         amounts = {line.get('benefits', {}).get('copay_cents') for line in office}

@@ -75,6 +75,50 @@ def test_cigna_calculated_share_defers_deductible_and_coinsurance_collection():
     assert guidance['services'][0]['patient_cents'] is None
 
 
+def test_cigna_no_financial_terms_uses_refundable_bcbstx_reference_advance():
+    result = scenario()
+    result.pop('collection_policy')
+    result.update(payer='Cigna', checked_at='2026-11-07T12:00:00Z',
+        nmct_bcbstx_refundable_advance_enabled=True, service_selection_status='preview',
+        codes=[{'id': 'office', 'code': '99213', 'units': 1, 'modifiers': []}],
+        service_plan={'recommended_ids': ['office']},
+        temporary_rate_reference={'complete': True, 'source': 'BCBS Texas clinic schedule',
+            'lines': [{'id': 'office', 'code': '99213', 'units': 1, 'modifiers': [],
+                       'unit_reference_cents': 7615, 'source_reference': 'library:synthetic-bcbstx'}]})
+    result['benefits'].update(network_status='unknown', network_source=None)
+    result['price_range'].update(complete=False, patient_min_cents=None, patient_max_cents=None)
+    result['price_range']['lines'][0].update(code='99213', calculation=None,
+        allowed_cents=None, rate_resolution={'status': 'RATE_UNAVAILABLE'})
+    guidance = collection_guidance.build(result)
+    assert guidance['amount_cents'] == 7615
+    assert guidance['basis'] == 'bcbstx_refundable_advance'
+    assert 'refundable' in guidance['patient_message'].lower()
+    summary = encounter_summary.build({**result, 'collection_guidance': guidance})
+    assert summary['collect_today_cents'] == 7615
+    assert summary['estimated_total_patient_min_cents'] is None
+    assert collection_guidance.build(result, {'payments': {'reference': 'synthetic-receipt',
+        'amount_cents': 2000}})['amount_cents'] == 5615
+    result['benefits']['copay_cents'] = 0
+    assert collection_guidance.build(result)['amount_cents'] is None
+    result['benefits'].pop('copay_cents')
+    result['card_check'] = {'cigna_card_reference': {'tier1_specialist_copay_cents': 3500}}
+    assert collection_guidance.build(result)['amount_cents'] is None
+    result.pop('card_check')
+    for row in (result['codes'][0], result['price_range']['lines'][0],
+                result['temporary_rate_reference']['lines'][0]):
+        row['code'] = '99214'
+    result['temporary_rate_reference']['lines'][0]['unit_reference_cents'] = 11156
+    assert collection_guidance.build(result)['amount_cents'] == 11156
+    result['benefits']['reported_options'] = [{'kind': 'copay', 'amount_cents': 3500}]
+    assert collection_guidance.build(result)['basis'] != 'bcbstx_refundable_advance'
+    result['benefits'].pop('reported_options')
+    result['payment_mode'] = 'cash'
+    assert collection_guidance.build(result)['basis'] != 'bcbstx_refundable_advance'
+    result.pop('payment_mode')
+    result['payer'] = 'Blue Cross Blue Shield Tx'
+    assert collection_guidance.build(result)['basis'] != 'bcbstx_refundable_advance'
+
+
 def test_cigna_office_copay_uses_approved_policy_without_estimate_document():
     result = scenario(4000)
     result['payer'] = 'Cigna'
