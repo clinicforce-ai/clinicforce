@@ -11,7 +11,7 @@ import httpx
 from app.api.routers.commercial_estimator import PrevisitInput, VisitReviewInput, _compare_card_hints, _previsit_benefits, _previsit_result, previsit_estimate, update_visit_review
 from app.api.routers.commercial_flow.commercial_previsit_pricing import _previsit_service_types, _payer_previsit_service_types, _reviewed_service_types
 from app.api.routers.commercial_flow.commercial_previsit_submit import same_member_and_medical_plan
-from app.api.routers.commercial_flow.commercial_previsit_reuse import retain_saved_group_binding
+from app.api.routers.commercial_flow.commercial_previsit_reuse import retain_saved_group_binding, telehealth_setting
 
 
 class PrevisitFlowTest(unittest.IsolatedAsyncioTestCase):
@@ -74,6 +74,15 @@ class PrevisitFlowTest(unittest.IsolatedAsyncioTestCase):
             PrevisitInput(appointment_id='visit-1', telehealth_pos='10')
         with self.assertRaises(ValidationError):
             PrevisitInput(appointment_id='visit-1', telehealth_modality='audio_video')
+
+    def test_televisit_defaults_to_home_audio_video_without_selection(self):
+        api = MagicMock()
+        api.visit_estimate.is_telehealth.return_value = True
+        api._now.return_value = 'now'
+        setting, checked_at = telehealth_setting(api, PrevisitInput(appointment_id='visit-1'),
+            {'appointment_type': 'Televisit'}, [], 'visit-token')
+        self.assertEqual(setting, {'place_of_service': '10', 'modality': 'audio_video'})
+        self.assertEqual(checked_at, 'now')
 
     def test_matching_card_group_reuses_only_fresh_patient_bound_payer_evidence(self):
         from app.api.routers import commercial_estimator as api

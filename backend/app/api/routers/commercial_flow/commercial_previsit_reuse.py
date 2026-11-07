@@ -46,7 +46,8 @@ def telehealth_setting(api: ModuleType, value, inputs: dict, cases: list[dict], 
     saved.sort(key=lambda item: item[0], reverse=True)
     if saved and (len(saved) == 1 or saved[0][0] != saved[1][0]):
         return saved[0][1], saved[0][0]
-    return None, None
+    # A Televisit starts as a home audio-video visit unless an explicit or saved setting exists.
+    return {'place_of_service': '10', 'modality': 'audio_video'}, api._now()
 
 
 async def telehealth_inquiry_coverage(api: ModuleType, cases: list[dict], inputs: dict,
