@@ -99,4 +99,23 @@ const depositSummary = renderToStaticMarkup(React.createElement(ArrivalAmountSum
 }))
 assert.match(depositSummary, /Refundable advance to collect now/)
 assert.match(depositSummary, /\$76\.15/)
+const unconfirmedCopay = { ...deposit,
+  price_range: { mode: 'services', lines: [{ id: 'office', code: '99205', units: 1,
+    benefits: { active: true, copay_cents: 10000 } }] },
+  collection_guidance: { amount_cents: 10000, status: 'estimated',
+    basis: 'cigna_refundable_office_copay', payer_reported_office_copay_cents: 10000,
+    reason: 'Refundable payer copay; provider tier remains unconfirmed.', services: [] },
+  encounter_summary: { collect_today_cents: 10000, estimated_total_patient_min_cents: null },
+}
+const derivedUnconfirmedCopay = deriveCommercialEstimateView({
+  result: unconfirmedCopay, appointments: [], selectedVisit: null, busy: false,
+  error: null, readOnly: false, recovering: false,
+})
+assert.equal(derivedUnconfirmedCopay.supportedAmount, true)
+assert.equal(derivedUnconfirmedCopay.amountLabel, 'Refundable advance to collect now')
+const unconfirmedRow = collectionAtVisitRow(unconfirmedCopay,
+  { ...depositModel, amount: '$100.00', amountText: '$100.00' },
+  { ...values, feeProxy: null, cignaFeeProxy: false })
+assert.equal(unconfirmedRow.value, '$100.00')
+assert.match(unconfirmedRow.detail, /Provider participation.*unconfirmed/)
 console.log('Cigna office collection: approved $60 copay wins over BCBS fee proxy; pending cases stay pending')

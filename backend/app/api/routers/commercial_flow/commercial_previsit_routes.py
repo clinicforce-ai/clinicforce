@@ -28,10 +28,16 @@ async def saved_previsit(case_id: str, request: _api.Request) -> dict:
     A saved Cigna OAP specialist video visit can reapply the current member-bound
     payer office copay with zero office deductible and coinsurance without a new
     Stedi call; a readable matched card must agree with the payer copay.
+    Flat Stedi 271 ZZ industry codes are interpreted as benefit places of
+    service; appointment_context.place_of_service reports the planned setting.
+    An NMCT same-day Cigna specialist office response can return one POS 11
+    copay as a refundable advance with basis cigna_refundable_office_copay
+    while the provider network remains unknown. The advance is separate from
+    final patient liability and is reconciled and refunded after the claim.
     NMCT (practice_id primary) uses a current Clinical Library insurer contract
     for its HMO, PPO and Medicare Advantage products' in-network tier.
-    A patient-bound insurer plan is out of network when no current insurer
-    contract is in that Library.
+    A Cigna product without current provider contract evidence remains network
+    unknown; other payer paths can use a scoped clinic nonparticipation rule.
     Old clinic-derived out-of-network prices are cleared for recalculation.
     Other practices still use dated group-network contracts; absent Blue
     agreements can select clinic_no_blue_contract. Network tier alone does not

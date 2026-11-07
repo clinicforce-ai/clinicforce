@@ -134,7 +134,61 @@ def office_copay_amount(result: dict, benefits: dict, price: dict, lines: list[d
         guidance.update(status='estimated', basis='out_of_pocket_limit' if oop_met else 'office_copay',
                         reason=('The payer reports $0 remaining on the applicable individual in-network out-of-pocket maximum for this covered office visit.'
                                 if oop_met else 'The applicable office-visit copay is collected once. Any additional service responsibility will follow the claim.'))
-    return amount
+    return amount if amount is not None else cigna_refundable_office_copay(
+        result, benefits, price, lines, guidance, assumptions)
+
+
+def cigna_refundable_office_copay(result: dict, benefits: dict, price: dict,
+                                  lines: list[dict], guidance: dict,
+                                  assumptions: list[str]) -> int | None:
+    """Collect one payer-reported office copay as a refundable advance when tier is unknown."""
+    visit = result.get('appointment_context') or {}
+    card = result.get('card_check') or {}
+    if (result.get('nmct_bcbstx_refundable_advance_enabled') is not True
+            or str(result.get('payer') or '').casefold() != 'cigna'
+            or (result.get('network_evidence') or {}).get('decision') != 'lacking_applicable_network_evidence'
+            or benefits.get('network_status') != 'unknown'
+            or visit.get('place_of_service') != '11'
+            or office_role((visit.get('rendering_provider') or {}).get('roles') or []) != 'specialist'
+            or card.get('status') in {'conflict', 'mismatch'} or card.get('conflicts')
+            or card.get('differences')
+            or result.get('service_date') != str(result.get('checked_at') or '')[:10]
+            or len((((result.get('plan_details') or {}).get('stedi') or {}).get('names') or [])) != 1
+            or price.get('mode') != 'services' or price.get('conditional')
+            or len(lines) != 1 or lines[0].get('code') not in
+                {str(n) for n in (*range(99202, 99206), *range(99212, 99216))}
+            or lines[0].get('units') != 1):
+        return None
+    terms = lines[0].get('benefits') or {}
+    copay = terms.get('copay_cents')
+    if (terms.get('active') is not True or terms.get('network_status') == 'out_of_network'
+            or type(copay) is not int or not 0 < copay <= 100_000
+            or terms.get('copay_period') not in {'', 'VISIT', '27', 'DAY', '7'}
+            or terms.get('deductible_applies') is True and terms.get('deductible_remaining_cents') != 0
+            or terms.get('coinsurance_percent') not in {None, '0', '0.0', '0.00'}
+            or terms.get('oop_remaining_cents') is not None and terms['oop_remaining_cents'] < copay
+            or benefits.get('oop_remaining_cents') is not None and benefits['oop_remaining_cents'] < copay
+            or any(row.get('kind') == 'out_of_pocket' and row.get('amount_cents') == 0
+                   and row.get('service_type_code') == '30' and row.get('time_period') in {'REMAINING', '29'}
+                   and row.get('network') in {'IN_NETWORK', 'Y'}
+                   and str(row.get('coverage_level') or '').upper() in {'INDIVIDUAL', 'IND'}
+                   for row in benefits.get('reported_options') or [])):
+        return None
+    rows = [row for row in benefits.get('reported_options') or []
+            if row.get('kind') == 'copay' and row.get('service_type_code') == '98'
+            and str(row.get('coverage_level') or '').upper() in {'INDIVIDUAL', 'IND'}
+            and row.get('network') in {'IN_NETWORK', 'Y'}
+            and row.get('places_of_service') == ['11']
+            and row.get('amount_cents') == copay
+            and re.search(r'\bspecialist\b', str(row.get('payer_note') or ''), re.I)]
+    if len(rows) != 1:
+        return None
+    guidance.update(status='estimated', basis='cigna_refundable_office_copay',
+        payer_reported_office_copay_cents=copay,
+        collection_rule={'mode': 'cigna_refundable_office_copay', 'reference': 'Clinic-directed refundable Cigna office copay advance'},
+        reason='Collect the payer-reported specialist office copay as a refundable advance. Provider participation for this exact product is still unconfirmed; reconcile the processed claim and refund any excess.')
+    assumptions.append('The payer returned this in-network POS 11 specialist copay for the member. Provider network participation and the final patient liability remain unconfirmed.')
+    return copay
 
 
 def diagnostic_day_copay_amount(price: dict, lines: list[dict], guidance: dict,

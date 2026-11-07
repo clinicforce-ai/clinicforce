@@ -303,6 +303,7 @@ export type PrevisitEstimate = {
   }
   appointment_context?: {
     appointment_type?: string
+    place_of_service?: string
     timezone?: string
     notes_status?: string
     imported_fields?: Array<{ label: string; text: string; source: string; updated_at?: string }>
