@@ -31,6 +31,23 @@ function nextStep(model: CommercialEstimateModel, result: PrevisitEstimate) {
       title: 'Check payer response',
       hint: 'Review the incomplete benefit check for this visit.',
     }
+  const cignaTerms = [result.benefits, ...lines.map((line) => line.benefits)]
+  if (
+    /^Cigna$/i.test(result.payer || '') &&
+    result.collection_guidance?.amount_cents == null &&
+    cignaTerms.every(
+      (term) =>
+        term?.copay_cents == null &&
+        term?.deductible_annual_cents == null &&
+        term?.deductible_remaining_cents == null &&
+        term?.coinsurance_percent == null &&
+        term?.oop_remaining_cents == null,
+    )
+  )
+    return {
+      title: 'Check Cigna plan benefits',
+      hint: 'Request visit-date telehealth cost sharing and provider participation from the plan administrator.',
+    }
   if (
     model.guidance?.policy_setup_required ||
     result.collection_guidance?.positive_advance_policy_missing
