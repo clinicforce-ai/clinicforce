@@ -22,6 +22,8 @@ const savedCheck = {
 }
 const olderCheck = { ...savedCheck, id: 'older-estimate', created_at: `${past}T12:00:00Z` }
 let savedAmount = 5000
+let projectedAmount = 5000
+let savedResult
 const patients = Array.from({ length: 6 }, (_, index) => ({
   id: String(index + 1),
   clinic_patient_id: String(index + 1),
@@ -98,8 +100,15 @@ await page.route((url) => url.pathname.startsWith('/api/'), async (route) => {
       ...body.snapshots[0], saved_at: `${past}T12:30:00Z`, stage: 'earlier-review',
       result: { ...body.snapshots[0].result, revision: 1, collection_guidance: { ...body.snapshots[0].result.collection_guidance, amount_cents: 2500 } },
     })
+    savedResult = body.snapshots[0].result
   } else if (path === '/api/staff/intakes/synthetic-intake/checks/older-estimate') {
     body = { snapshots: [{ saved_at: `${past}T12:30:00Z`, stage: 'previsit-complete', patient: patients[5], result: { service_date: past, collection_guidance: { amount_cents: 2500, status: 'estimated' } } }] }
+  } else if (path === '/api/doctor/insurance/commercial/cases/saved-estimate/previsit') {
+    body = {
+      ...savedResult,
+      collection_guidance: { ...savedResult.collection_guidance, amount_cents: projectedAmount },
+      encounter_summary: { collect_today_cents: projectedAmount },
+    }
   } else if (path === '/api/staff/intakes/synthetic-intake/cards') {
     body = { cards: [], message: 'No synthetic card preview.' }
   } else {
@@ -177,8 +186,9 @@ try {
   assert.match(await page.locator('.staff-saved-checks').innerText(), /(?:US)?\$25\.00/)
   assert.match(await summary.locator('.arrival-total').innerText(), /(?:US)?\$50\.00/)
   savedAmount = null
+  projectedAmount = 3500
   await summary.getByRole('button', { name: 'Refresh' }).click()
-  await summary.locator('.arrival-total').getByText('Select services').waitFor()
+  await summary.locator('.arrival-total').getByText('$35.00').waitFor()
   assert.equal(await summary.getByText('$0.00').count(), 0)
   for (const width of [320, 375, 768, 1440]) {
     await page.setViewportSize({ width, height: 1000 })

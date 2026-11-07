@@ -43,45 +43,13 @@ export default function LatestSavedEstimate({ patientId }: { patientId: string }
                 intakeId: latest.intake_id!,
                 accountNumber: history.ecw_account_number,
               }
-              // A saved snapshot predating the published GEHA rule retains its original
-              // calculation. Read the current projection for this exact missing-input case.
-              const plan = snapshot.result.plan_details?.stedi
-              const officeLine = snapshot.result.price_range?.lines?.[0]
-              const cignaOfficeCopayPending =
-                snapshot.result.collection_guidance?.amount_cents == null &&
-                /\bcigna\b/i.test(snapshot.result.payer || '') &&
-                plan?.names?.length === 1 &&
-                /\b(?:open access plus|oap)\b/i.test(plan.names[0]) &&
-                snapshot.result.price_range?.mode === 'services' &&
-                snapshot.result.price_range.lines?.length === 1 &&
-                officeLine?.units === 1 &&
-                /^992(?:0[2-5]|1[2-5])$/.test(officeLine.code)
-              if (
-                cignaOfficeCopayPending ||
-                (snapshot.result.collection_guidance?.basis === 'missing_collection_inputs' &&
-                  snapshot.result.service_date?.startsWith('2026-') &&
-                  plan?.group_number === '16615' &&
-                  plan.names?.length === 1 &&
-                  plan.names[0]
-                    ?.toUpperCase()
-                    .startsWith('LPPO-UNITEDHEALTHCARE GROUP MEDICARE ADVANTAGE'))
-              ) {
-                const projection = await commercialSavedPrevisit(latest.id, latest.intake_id!)
-                if (
-                  projection.collection_guidance?.basis === 'published_geha_pshb_zero_office' ||
-                  (cignaOfficeCopayPending &&
-                    projection.collection_guidance?.basis === 'office_copay' &&
-                    projection.collection_guidance.amount_cents != null &&
-                    projection.collection_guidance.collection_rule?.mode ===
-                      'cigna_oap_televisit_office_copay')
-                )
-                  return {
-                    ...featured,
-                    snapshot: { ...snapshot, result: projection },
-                    reprojected: true,
-                  }
+              if (latest.pending) return featured
+              const projection = await commercialSavedPrevisit(latest.id, latest.intake_id!)
+              return {
+                ...featured,
+                snapshot: { ...snapshot, result: projection },
+                reprojected: true,
               }
-              return featured
             })
           : null
       })
