@@ -59,8 +59,11 @@ async def saved_previsit(case_id: str, request: _api.Request) -> dict:
     payer-allowance gap. A prior enrollment failure is retained for audit but
     is not a current blocker after a current active Stedi 271. An active,
     patient-bound 271 stays verified after inconclusive discovery; its recovery
-    status is separate. Active payer benefits stay in insurance mode when an
-    insured price is unresolved unless staff explicitly choose cash. Missing
+    status is separate. Active payer benefits and a conflict between active
+    coverage and a service-specific restriction stay in insurance review,
+    including older automatic cash saves, unless staff explicitly chose cash.
+    A differing eCW and payer member ID starts recovery on a fresh or
+    recalculated check; this saved read never submits a payer transaction. Missing
     collection inputs return collection_guidance with a null
     amount, status action_required and basis missing_collection_inputs; the reason
     names the next staff action. A supported diagnostic per-day copay without an

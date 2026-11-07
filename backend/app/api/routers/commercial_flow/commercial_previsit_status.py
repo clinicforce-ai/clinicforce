@@ -6,7 +6,7 @@ from app.insurance.network_participation import verified_in_network, verified_ou
 from app.insurance import blue_cross_proxy, evidence_resolution, group_contract_support, published_plan_benefits
 from app.api.routers.commercial_flow.commercial_previsit_finish import _payer_plan_pricing_source
 from app.api.routers.commercial_flow.commercial_previsit_network_guard import recheck_saved_network_evidence, recheck_saved_payer_message
-from app.api.routers.commercial_flow.commercial_previsit_saved_pricing import _reprice_saved_new_network, guard_unresolved_telehealth, guard_telehealth_guidance, restore_active_blue_cross_insurance
+from app.api.routers.commercial_flow.commercial_previsit_saved_pricing import _reprice_saved_new_network, guard_unresolved_telehealth, guard_telehealth_guidance, restore_active_blue_cross_insurance, retain_conflicted_insurance
 from app.api.routers.commercial_flow.commercial_previsit_requirements import refresh_saved_requirements
 from app.api.routers.commercial_flow.commercial_previsit_rate_reference import refresh_saved_temporary_rates
 from app.api.routers.commercial_flow.commercial_previsit_enrollment import _enrollment_failure
@@ -441,11 +441,11 @@ def _previsit_result(case: dict, practice_id: str | None = None) -> dict:
     if explicit_payment_mode in {'cash', 'insurance'}:
         result['payment_mode'] = explicit_payment_mode
         result.pop('cash_fallback', None)
+    coverage_conflict = retain_conflicted_insurance(result, case)
     united_healthcare = _api.commercial.is_united_healthcare_payer(
         result, {'displayName': route_payer.get('display_name')} if route_payer else None)
     if (united_healthcare and result.get('cash_fallback') is not None
             and (case.get('visit_review') or {}).get('payment_mode') != 'cash'):
-        # Reopen older UHC auto-cash saves on insurance, preserving an explicit cash choice.
         result['payment_mode'] = 'insurance'
         result.pop('cash_fallback', None)
     unresolved_telehealth = guard_unresolved_telehealth(result, case)
@@ -455,7 +455,7 @@ def _previsit_result(case: dict, practice_id: str | None = None) -> dict:
     pricing_unavailable = (result.get('payment_mode') != 'cash' and insurance_guidance.get('amount_cents') is None
         and case.get('previsit', {}).get('request_state') in {'complete', 'rejected', 'not_requested'}
         and not recovery)
-    if (not united_healthcare and (result.get('benefits') or {}).get('active') is not True
+    if (not united_healthcare and (result.get('benefits') or {}).get('active') is not True and not coverage_conflict
             and not timing and recovery.get('state') in {'complete', 'rejected'}
             and recovery.get('outcome') != 'recovered'
             and recovery.get('exhausted') is not False
@@ -463,7 +463,7 @@ def _previsit_result(case: dict, practice_id: str | None = None) -> dict:
         result['payment_mode'] = 'cash'
         result['cash_fallback'] = {}
         result.pop('emg_option', None)
-    elif (not united_healthcare and (result.get('benefits') or {}).get('active') is not True
+    elif (not united_healthcare and (result.get('benefits') or {}).get('active') is not True and not coverage_conflict
             and not timing and (pricing_unavailable or (recovery.get('state') == 'complete' and recovery.get('outcome') == 'recovered'
             and insurance_guidance.get('amount_cents') is None))
             and explicit_payment_mode is None):
