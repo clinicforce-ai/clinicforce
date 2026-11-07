@@ -15,6 +15,15 @@ def restore_active_blue_cross_insurance(result: dict, case: dict) -> None:
         result.pop('cash_fallback', None)
 
 
+def retain_conflicted_insurance(result: dict, case: dict) -> bool:
+    """Keep conflicting payer coverage in insured review, including old cash saves."""
+    conflict = bool((result.get('benefits') or {}).get('coverage_status_conflict'))
+    if conflict and result.get('cash_fallback') is not None and (case.get('visit_review') or {}).get('payment_mode') != 'cash':
+        result.update(payment_mode='insurance')
+        result.pop('cash_fallback', None)
+    return conflict
+
+
 def guard_unresolved_telehealth(result: dict, case: dict) -> bool:
     if not _api.visit_estimate.telehealth_pos_unresolved(case['previsit_context'].get('inputs') or {}):
         return False

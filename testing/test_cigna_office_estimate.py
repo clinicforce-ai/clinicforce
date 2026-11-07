@@ -81,6 +81,7 @@ def test_automatic_specialist_estimate_without_card_contract_or_ledger():
     assert result['benefits']['active'] is True
     assert result['benefits']['network_source'] == 'payer_participation_message'
     assert result['collection_guidance']['amount_cents'] == 5500
+    assert identity.unresolved_policy_difference(result['identity']) is False
     assert result['collection_guidance']['basis'] == 'office_copay'
     assert result['arrival_collection']['prior_balance_cents'] is None
     assert result['arrival_collection']['payments_received_cents'] is None
@@ -89,6 +90,35 @@ def test_automatic_specialist_estimate_without_card_contract_or_ledger():
     assert 'ledger is unavailable' in ' '.join(result['collection_guidance']['assumptions'])
     result = finish(*example(), review={'payments': {'reference': 'synthetic-receipt', 'amount_cents': 1500}})
     assert result['collection_guidance']['amount_cents'] == 4000
+
+
+def test_mismatched_member_and_narrow_tmj_exclusion_stay_in_insurance_review():
+    payload, inputs, source = example()
+    inputs['diagnoses'] = []
+    inputs['member_id'] = 'STALE-MEMBER'
+    result = finish(payload, inputs, source, payer='Cigna')
+    assert result['benefits']['coverage_status_conflict'] is True
+    assert result['identity']['status'] == 'review'
+    assert identity.unresolved_policy_difference(result['identity']) is True
+
+    case = {'previsit_context': {'result': result, 'source': source, 'inputs': inputs,
+                                'context_token': result['context_token'], 'payer_id': '62308'},
+            'previsit': {'request_state': 'complete', 'checked_at': result['checked_at'],
+                         'benefits': result['benefits']}}
+    for older_cash_save in (False, True):
+        if older_cash_save:
+            result['payment_mode'] = 'cash'
+            result['cash_fallback'] = {'reason': 'Old automatic cash offer'}
+            result['cash_quote'] = {'complete': True, 'min_cents': 25000, 'max_cents': 25000}
+            result['price_range'].update(cash_complete=True, cash_min_cents=25000, cash_max_cents=25000)
+        projected = api._previsit_result(case)
+        assert projected['payment_mode'] == 'insurance'
+        assert 'cash_fallback' not in projected
+        assert projected['collection_guidance']['amount_cents'] is None
+        assert projected['benefits']['copay_cents'] == 5500
+        assert projected['encounter_summary']['collect_today_cents'] is None
+    case['visit_review'] = {'payment_mode': 'cash'}
+    assert api._previsit_result(case)['payment_mode'] == 'cash'
 
 
 def oap_televisit():

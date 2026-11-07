@@ -44,11 +44,12 @@ def payer_identity_verified(comparison: dict | None) -> bool:
 
 
 def unresolved_policy_difference(comparison: dict | None) -> bool:
-    """A payer-matched dependent can retain an eCW registration warning without rediscovery."""
+    """Recover a different member ID; bound payer identities need no rediscovery."""
     comparison = comparison or {}
-    return bool(comparison.get('policy_differences') and not (
-        comparison.get('reconciliation_rule') == 'payer_matched_patient'
-        and payer_identity_verified(comparison)))
+    return comparison.get('status') == 'review' and bool(
+        comparison.get('policy_differences') or any(
+            isinstance(row, dict) and row.get('field') == 'member_id'
+            for row in comparison.get('differences') or []))
 
 
 def normalized(value: object) -> str:
