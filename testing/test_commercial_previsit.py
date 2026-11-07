@@ -84,6 +84,24 @@ class PrevisitFlowTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(setting, {'place_of_service': '10', 'modality': 'audio_video'})
         self.assertEqual(checked_at, 'now')
 
+    def test_stedi_group_and_plan_hints_use_documented_additional_information(self):
+        from app.api.routers.commercial_flow.commercial_ecw_evidence import stedi_request_body
+
+        body = stedi_request_body(
+            {'stedi_payer_id': '62308'},
+            {'rendering_first': 'Ada', 'rendering_last': 'Clinician', 'rendering_npi': '1234567890'},
+            {'active_coverages': 1, 'relationship': 'child', 'member_id': 'SYNTHETIC-MEMBER',
+             'group_number': 'SYNTHETIC-GROUP', 'plan_number': 'SYNTHETIC-PLAN',
+             'subscriber_first': 'Sam', 'subscriber_last': 'Example',
+             'subscriber_birth_date': '1980-01-01',
+             'patient_first': 'Pat', 'patient_last': 'Example', 'patient_birth_date': '2010-01-01'},
+            '2026-11-07', '98',
+        )
+        self.assertEqual(body['subscriber']['additionalInformation'],
+                         {'groupNumber': 'SYNTHETIC-GROUP', 'planNumber': 'SYNTHETIC-PLAN'})
+        self.assertNotIn('groupNumber', body['subscriber'])
+        self.assertNotIn('planNumber', body['subscriber'])
+
     def test_matching_card_group_reuses_only_fresh_patient_bound_payer_evidence(self):
         from app.api.routers import commercial_estimator as api
         from copy import deepcopy
@@ -781,7 +799,7 @@ class PrevisitFlowTest(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(result['card_check']['status'], 'filled_missing')
                 sent = client.post.await_args.kwargs['json']
                 self.assertEqual(sent['subscriber']['memberId'], 'CARD-123')
-                self.assertEqual(sent['subscriber']['groupNumber'], 'GROUP-9')
+                self.assertEqual(sent['subscriber']['additionalInformation']['groupNumber'], 'GROUP-9')
                 self.assertEqual(result['insurance_details']['member_source'], 'card_ocr')
                 return
             if ecw_saved and not ecw_incomplete:
@@ -937,8 +955,7 @@ class PrevisitFlowTest(unittest.IsolatedAsyncioTestCase):
             enriched, basic = [call.kwargs['json'] for call in client.post.await_args_list]
             self.assertEqual(enriched['subscriber']['address']['addressLine1'], '1 Main St')
             self.assertEqual(enriched['subscriber']['gender'], 'FEMALE')
-            self.assertNotIn('groupNumber', basic['subscriber'])
-            self.assertNotIn('planNumber', basic['subscriber'])
+            self.assertNotIn('additionalInformation', basic['subscriber'])
             self.assertNotIn('address', basic['subscriber'])
 
     def test_member_identity_check_is_shared_by_fresh_and_cached_responses(self):

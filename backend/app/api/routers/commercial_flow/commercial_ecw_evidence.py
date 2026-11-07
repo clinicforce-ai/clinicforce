@@ -206,10 +206,13 @@ def stedi_request_body(payer: dict, network: dict, coverage: dict, service_date:
     # without these optional hints when Stedi rejects their request shape.
     if include_identity_hints:
         subscriber = body['subscriber']
+        additional = {}
         if coverage.get('group_number'):
-            subscriber['groupNumber'] = coverage['group_number']
+            additional['groupNumber'] = coverage['group_number']
         if coverage.get('plan_number'):
-            subscriber['planNumber'] = coverage['plan_number']
+            additional['planNumber'] = coverage['plan_number']
+        if additional:
+            subscriber['additionalInformation'] = additional
         patient_identity = body.get('dependent') or subscriber
         address = _api._stedi_address(coverage.get('patient_address'))
         if address:
