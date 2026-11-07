@@ -326,7 +326,6 @@ def _recheck_saved_payer_allowance(result: dict, case: dict, practice_id: str) -
     result.pop('arrival_collection', None)
     result.pop('planning_estimate', None)
 
-
 def _previsit_result(case: dict, practice_id: str | None = None) -> dict:
     result = _api.deepcopy(case['previsit_context']['result'])
     availity = case.get('availity_visit_reference') or {}
@@ -357,6 +356,7 @@ def _previsit_result(case: dict, practice_id: str | None = None) -> dict:
     restore_active_blue_cross_insurance(result, case)
     route_payer = None
     if practice_id:
+        result['nmct_bcbstx_refundable_advance_enabled'] = _api.network_participation.is_nmct_practice(practice_id)
         # Use current clinic policy so disabled deferral cannot retain an old $0 decision.
         result.pop('collection_policy', None)
         payer_id = case['previsit_context'].get('payer_id')

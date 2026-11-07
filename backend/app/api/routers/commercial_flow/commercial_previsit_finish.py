@@ -289,6 +289,7 @@ def _finish_previsit(result: dict, case: dict, inputs: dict, source: dict, paylo
                  or blue_cross_proxy.cigna_oap_family_office_estimate(result, inputs['service_date'])
                  or blue_cross_proxy.cigna_oap_office_scenario(result, inputs['service_date'])):
         result['fee_proxy_estimate'] = proxy
+    result['nmct_bcbstx_refundable_advance_enabled'] = _api.network_participation.is_nmct_practice(session['practice_id'])
     result['collection_guidance'] = _api.collection_guidance.build(result, review)
     result.pop('botox_preview', None)
     if botox_review.is_botox_visit(inputs) and payload:

@@ -118,8 +118,8 @@ class EcwStartInput(BaseModel):
 
 class PrevisitInput(EcwStartInput):
     refresh_benefits: bool = False
-    telehealth_pos: Literal['10', '02'] | None = Field(default=None, description='Confirmed patient location for this televisit: home (10) or other location (02).')
-    telehealth_modality: Literal['audio_video', 'audio_only'] | None = Field(default=None, description='Confirmed live visit modality; final coding remains clinician-reviewed.')
+    telehealth_pos: Literal['10', '02'] | None = Field(default=None, description='Optional override for a televisit, which defaults to patient at home (10) with audio-video; other location is (02).')
+    telehealth_modality: Literal['audio_video', 'audio_only'] | None = Field(default=None, description='Optional override for a televisit; supply with telehealth_pos. The default is audio_video and final coding remains clinician-reviewed.')
 
     @model_validator(mode='after')
     def complete_telehealth_setting(self):

@@ -79,6 +79,27 @@ def test_nmct_payer_without_current_contract_is_out_of_network(monkeypatch, paye
     assert result['network_evidence']['decision'] == 'out_of_network_by_clinic_contract_record'
 
 
+@pytest.mark.parametrize('previous_source,previous_status', [
+    (None, 'unknown'), ('clinic_no_insurer_contract', 'out_of_network'),
+])
+def test_cigna_clinic_roster_without_plan_contract_does_not_assert_nonparticipation(previous_source, previous_status):
+    result = {'payer': 'Cigna'}
+    benefits = {'active': True, 'service_date_matches': True,
+                'network_status': previous_status, 'network_source': previous_source}
+    assert apply_nmct_contract_absence(result, benefits, 'Cigna', None, '2026-11-07', True)
+    assert benefits['network_status'] == 'unknown'
+    assert not network_participation.verified_out_of_network(benefits)
+    assert result['network_evidence']['decision'] == 'lacking_applicable_network_evidence'
+
+
+def test_cigna_payer_specific_nonparticipation_is_not_overridden_by_roster():
+    result = {'payer': 'Cigna'}
+    benefits = {'active': True, 'service_date_matches': True,
+                'network_status': 'out_of_network', 'network_source': 'payer_participation_message'}
+    assert not apply_nmct_contract_absence(result, benefits, 'Cigna', None, '2026-11-07', True)
+    assert network_participation.verified_out_of_network(benefits)
+
+
 def test_nmct_connected_payer_without_current_contract_is_out_of_network(monkeypatch):
     monkeypatch.setattr(api.commercial_store, 'list_connections', lambda *_: [
         {'id': 'wellcare-route', 'display_name': 'Wellcare', 'status': 'staff_guidance_enabled',
@@ -229,6 +250,23 @@ def test_saved_nmct_payer_without_contract_clears_amount_and_marks_out_of_networ
     assert result['benefits']['network_status'] == 'out_of_network'
     assert result['benefits']['network_source'] == 'clinic_no_insurer_contract'
     assert result['price_range']['patient_min_cents'] is None
+    assert 'arrival_collection' not in result
+
+
+def test_saved_cigna_contract_absence_clears_stale_out_of_network_amount():
+    result = {'payer': 'Cigna',
+              'identity': {'status': 'matched', 'match_version': 2, 'binding': 'synthetic-binding'},
+              'benefits': {'active': True, 'service_date_matches': True,
+                           'network_status': 'out_of_network', 'network_source': 'clinic_no_insurer_contract'},
+              'price_range': {'complete': True, 'patient_min_cents': 4000,
+                              'lines': [{'allowed_cents': 10000}]},
+              'arrival_collection': {'amount_cents': 4000}}
+    case = {'previsit_context': {'inputs': {'service_date': '2026-11-07'}, 'source': {}, 'payer_id': ''}}
+    recheck_saved_network_evidence(result, case, 'primary', None)
+    assert result['benefits']['network_status'] == 'unknown'
+    assert result['network_evidence']['decision'] == 'lacking_applicable_network_evidence'
+    assert result['price_range']['patient_min_cents'] is None
+    assert result['price_range']['lines'][0]['allowed_cents'] is None
     assert 'arrival_collection' not in result
 
 

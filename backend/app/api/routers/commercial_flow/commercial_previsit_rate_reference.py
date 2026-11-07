@@ -73,11 +73,17 @@ def _attach_temporary_blue_cross_rates(result: dict, practice_id: str, inputs: d
                _api.re.search(r'blue cross.*(?:blue shield|bcbs).*(?:texas|\btx\b)|bcbstx', str(row.get('display_name') or ''), _api.re.I))]
     if len(payers) != 1:
         return
-    networks = [row for row in _api.commercial_store.list_networks(practice_id)
+    scoped_networks = [row for row in _api.commercial_store.list_networks(practice_id)
                 if row.get('payer_connection_id') == payers[0]['id'] and row.get('status') == 'verified'
                 and row.get('rendering_npi') == rendering_npi and row.get('billing_npi') == billing_npi
-                and row.get('location_id') == location_id and row.get('place_of_service') == pos
+                and row.get('location_id') == location_id
                 and row.get('effective_from', '') <= date <= (row.get('effective_to') or '9999-12-31')]
+    networks = [row for row in scoped_networks if row.get('place_of_service') == pos]
+    reference_pos = pos
+    if not networks and payer_name == 'Cigna' and pos == '10':
+        # shortcut: office fee is a disclosed telehealth deposit reference until a POS 10 fee source exists.
+        networks = [row for row in scoped_networks if row.get('place_of_service') == '11']
+        reference_pos = '11'
     if len(networks) != 1:
         return
     profiles = [row for row in _api.commercial_store.list_profiles(practice_id)
@@ -109,13 +115,16 @@ def _attach_temporary_blue_cross_rates(result: dict, practice_id: str, inputs: d
         result['temporary_rate_reference'] = {'source': ('Blue Cross Texas clinic and published 2026 fee references'
             if published else 'NMCT Clinical Library Blue Cross fee schedule'),
             'lines': lines, 'complete': len(lines) == len(codes),
+            'reference_place_of_service': reference_pos,
             'message': (f'Temporary CPT price reference only. Published unmodified CTA amounts are from the BCBSTX 2026 professional Other Codes schedule. These are not {payer_name} contracted allowances or a patient amount to collect.'
                         if published else
                         f'Temporary CPT price reference only. These are Blue Cross rates, not {payer_name} contracted allowances.'
                         if payer_name == 'Cigna' else
                         'Temporary CPT price reference only. These Blue Cross clinic rates are not confirmed allowed amounts for this BlueCard member; the conditional patient share is shown separately.'
                         if payer_name == 'BlueCard member' else
-                        f'Temporary CPT price reference only. These are Blue Cross rates, not {payer_name} contracted allowances or a patient amount to collect.')}
+                        f'Temporary CPT price reference only. These are Blue Cross rates, not {payer_name} contracted allowances or a patient amount to collect.')
+                       + (' The source is an office POS 11 fee used as a reference for home televisit POS 10.'
+                          if reference_pos != pos else '')}
 
 
 def _attach_temporary_uhc_rates(result: dict, practice_id: str, inputs: dict, source: dict) -> None:

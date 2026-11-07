@@ -116,6 +116,18 @@ def apply_nmct_cigna_administrator_attestation(result: dict, benefits: dict, pra
 def apply_nmct_contract_absence(result: dict, benefits: dict, payer: str, document: dict | None,
                                 service_date: str, plan_bound: bool) -> bool:
     card = result.get('card_check') or {}
+    if (not document and not result.get('agreement_exclusion')
+            and re.fullmatch(r'\s*Cigna\s*', payer, re.I)
+            and service_date >= '2026-10-30' and plan_bound is True
+            and benefits.get('active') is True and benefits.get('service_date_matches') is not False
+            and benefits.get('network_source') in {None, 'clinic_no_insurer_contract'}
+            and not network_participation.participation_conflict(benefits)):
+        benefits.update(network_status='unknown', network_source=None,
+                        network_evidence_ids=[], network_provider_npi=None)
+        result['network_evidence'] = {
+            'decision': 'lacking_applicable_network_evidence',
+            'reason': 'The clinic reports Cigna participation, but this member product and provider are not verified by the administrator or a current clinic contract.'}
+        return True
     if (not document and service_date >= '2026-10-30' and plan_bound is True
             and result.get('payer') == 'Health Plans Incorporated'
             and card.get('status') == 'filled_missing' and 'payer' in (card.get('fields_added') or [])
@@ -288,7 +300,8 @@ def recheck_saved_network_evidence(result: dict, case: dict, practice_id: str, p
                 and (benefits.get('network_source') == 'clinic_no_insurer_contract'
                      or not network_participation.verified_out_of_network(benefits))
                 and not network_participation.participation_conflict(benefits)):
-            if (benefits.get('network_source') != 'clinic_no_insurer_contract'
+            if ((benefits.get('network_source') != 'clinic_no_insurer_contract'
+                    or re.fullmatch(r'\s*Cigna\s*', payer_name, re.I))
                     and ((result.get('price_range') or {}).get('complete')
                          or (result.get('price_range') or {}).get('patient_min_cents') is not None
                          or (result.get('price_range') or {}).get('patient_max_cents') is not None

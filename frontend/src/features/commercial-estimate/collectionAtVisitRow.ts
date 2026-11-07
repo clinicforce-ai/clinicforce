@@ -205,7 +205,7 @@ export function collectionAtVisitRow(
     namedCollectionAction ||
     collectionBlocker?.sentence ||
     'Review selected CPT, benefits and clinic rate before collecting'
-  return {
+  const row = {
     label:
       pendingAetnaCopay != null || priorDateAetnaBalance != null || pendingBluecardCopay != null
         ? 'Amount to collect at visit · pending verification'
@@ -354,4 +354,10 @@ export function collectionAtVisitRow(
                                                     : undefined,
     emphasis: true,
   }
+  if (result.collection_guidance?.basis === 'bcbstx_refundable_advance') {
+    row.label = 'Refundable advance at visit'
+    row.detail =
+      'The payer returned no financial terms. This refundable advance uses the selected CPTs’ BCBS Texas fee references; it is separate from estimated patient liability. Apply it to the processed claim and refund any excess.'
+  }
+  return row
 }
