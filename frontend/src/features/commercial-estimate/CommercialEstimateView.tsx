@@ -67,6 +67,19 @@ export default function CommercialEstimateView({
   const address = Object.values(result?.patient_details?.address || {})
     .filter(Boolean)
     .join(', ')
+  const secondaryPayers = [
+    ...new Set(
+      result?.coverage_records
+        ?.filter(
+          (row) =>
+            row.status === 'active' &&
+            (row.order || 0) > 1 &&
+            (!row.period?.start || row.period.start.slice(0, 10) <= result.service_date) &&
+            (!row.period?.end || result.service_date <= row.period.end.slice(0, 10)),
+        )
+        .flatMap((row) => row.payer || []) || [],
+    ),
+  ]
   return (
     <section
       className="visit-estimator visit-visual"
@@ -236,6 +249,17 @@ export default function CommercialEstimateView({
               {result.payer && <small>Insurer source: {memberSource(payerSource)}</small>}
               <small>{planName}</small>
               {planSource && <small>Plan source: {planSource}</small>}
+              {!!secondaryPayers.length && (
+                <small>Secondary eCW policy: {secondaryPayers.join(' · ')}</small>
+              )}
+              {result.card_check?.supplementary_plan && (
+                <small>
+                  Supplement card: {result.card_check.supplementary_plan} ·{' '}
+                  {result.card_check.reference_only
+                    ? 'awaiting staff confirmation'
+                    : 'verify active coverage'}
+                </small>
+              )}
               {planType && (
                 <small>Plan type: {planType} · inferred from the reported plan description</small>
               )}
