@@ -139,6 +139,9 @@ def card_fields(pages: list[tuple[int, str]]) -> tuple[dict, dict]:
                 section = ""
         # Recognize printed insurer wordmarks, retaining the source quote.
         joined = " ".join(lines)
+        if re.search(r'\bCigna\b', joined, re.I):
+            if match := re.search(r'\bMedicare\s+Supplement\s+Plan\s+([A-N])\b', joined, re.I):
+                add('supplementary_plan', f'Cigna Medicare Supplement Plan {match[1].upper()}', page, match[0])
         if match := re.search(r'\bHUMANA\s+VALUE\s+CHOICE\s*\(PPO\)', joined, re.I):
             add('plan_name', 'Humana Value Choice (PPO)', page, match[0])
             add('plan_type', 'PPO', page, match[0])

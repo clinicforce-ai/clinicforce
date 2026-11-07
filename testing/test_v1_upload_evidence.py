@@ -29,6 +29,16 @@ class SourceTests(unittest.TestCase):
         self.assertEqual(set(fields), {"member_name", "member_id"})
         self.assertEqual(set(fields), set(evidence))
 
+    def test_medicare_supplement_card_stays_separate_from_medicare_card(self):
+        fields, evidence = v1_sources.card_fields([
+            (1, 'Cigna Medicare Supplement Insurance\nMEDICARE SUPPLEMENT PLAN G\nNAME OF INSURED(S): PAT EXAMPLE'),
+            (2, 'MEDICARE HEALTH INSURANCE\nPAT EXAMPLE\nMEDICAL (PART B)'),
+        ])
+        self.assertEqual(fields['supplementary_plan'], 'Cigna Medicare Supplement Plan G')
+        self.assertEqual(evidence['supplementary_plan']['page'], 1)
+        self.assertNotIn('supplementary_plan', v1_sources.card_fields([
+            (1, 'Cigna Open Access Plus\nMember Name: PAT EXAMPLE')])[0])
+
     def test_split_card_identity_labels(self):
         fields, evidence = v1_sources.card_fields([(1, "Member Name\nPAT EXAMPLE\nDate of Birth: 01/02/1980\nIdentification Number ABC123\nGroup Number: XYZ123")])
         self.assertEqual(fields["member_name"], "PAT EXAMPLE")

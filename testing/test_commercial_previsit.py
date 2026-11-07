@@ -300,6 +300,34 @@ class PrevisitFlowTest(unittest.IsolatedAsyncioTestCase):
              'source': 'patient_upload_pending', 'fields': fields},
             {**inputs, 'group_number': 'OTHER'}, source.copy()))
 
+    def test_pending_cigna_medigap_card_does_not_replace_original_medicare(self):
+        inputs = {'member_id': 'SYNTHETIC-MBI', 'patient': {
+            'patient_first_name': 'Pat', 'patient_last_name': 'Example', 'patient_birth_date': '1980-01-02'},
+            'subscriber': {}}
+        source = {'payer': 'Medicare of Texas', 'plan': 'MB', '_patient_id': 'patient-1',
+                  'coverage_id': 'coverage-1', 'active_coverages': 1}
+        card = {'status': 'read', 'reference_only': True, 'count': 2,
+                'source': 'patient_upload_pending', 'fields': {
+                    'payer': 'Cigna', 'supplementary_plan': 'Cigna Medicare Supplement Plan G'}}
+        check = _compare_card_hints(card, inputs, source)
+        self.assertEqual(check['status'], 'unverified')
+        self.assertEqual(check['supplementary_plan'], 'Cigna Medicare Supplement Plan G')
+        self.assertEqual(source['payer'], 'Medicare of Texas')
+        self.assertEqual(inputs['member_id'], 'SYNTHETIC-MBI')
+        self.assertFalse(check['alternative_supported'])
+
+    def test_pending_card_without_readable_member_id_does_not_raise(self):
+        inputs = {'member_id': 'SYNTHETIC-ID', 'patient': {
+            'patient_first_name': 'Pat', 'patient_last_name': 'Example'}, 'subscriber': {}}
+        source = {'payer': 'Example Plan', '_patient_id': 'patient-1',
+                  'coverage_id': 'coverage-1', 'active_coverages': 1}
+        card = {'status': 'read', 'reference_only': True, 'count': 1,
+                'source': 'patient_upload_pending', 'fields': {'payer': 'Example Plan'}}
+        check = _compare_card_hints(card, inputs, source)
+        self.assertEqual(check['status'], 'unverified')
+        self.assertFalse(check['alternative_supported'])
+        self.assertEqual(inputs['member_id'], 'SYNTHETIC-ID')
+
     def test_confirmed_cigna_card_fills_missing_group_without_replacing_base_member_id(self):
         inputs = {'member_id': 'ABC123456', 'group_number': None,
             'patient': {'patient_first_name': 'Pat', 'patient_last_name': 'Example',
