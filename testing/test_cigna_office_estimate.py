@@ -1,5 +1,6 @@
 """Synthetic Cigna office workflow, including the unresolved-evidence boundaries."""
 import asyncio
+import json
 from copy import deepcopy
 from datetime import date, datetime, timedelta, timezone
 from unittest.mock import AsyncMock, patch
@@ -814,6 +815,37 @@ def test_current_cigna_office_copay_is_refundable_when_provider_tier_is_unconfir
         else:
             other['benefits']['source_errors'] = [{'kind': 'invalid_financial_source'}]
         assert collection_guidance.build(other)['amount_cents'] is None, change
+
+    # A saved check made before POS metadata was parsed must recover from its
+    # protected 271 when reopened, without submitting another payer inquiry.
+    raw = json.dumps(payload).encode()
+    stale = deepcopy(result)
+    stale['benefits']['copay_cents'] = None
+    stale['benefits']['reported_options'] = [
+        {**row, 'places_of_service': []} for row in stale['benefits']['reported_options']]
+    stale['price_range']['lines'][0]['benefits']['copay_cents'] = None
+    stale['appointment_context'].pop('place_of_service', None)
+    case = {'previsit_context': {'result': stale, 'source': source, 'inputs': inputs,
+                                'context_token': result['context_token'], 'payer_id': '62308'},
+            'previsit': {'request_state': 'complete'},
+            'previsit_raw_object_key': 'fixture',
+            'previsit_raw_sha256': api.hashlib.sha256(raw).hexdigest(),
+            'visit_review': {'selected_ids': ['99205:3']}}
+    with patch.object(api.object_store, 'get_object_bytes', return_value=raw), \
+         patch.object(api.commercial_store, 'list_connections', return_value=[]), \
+         patch.object(api.staff_store, 'list_library', return_value=[]), \
+         patch.object(api.practice_prices, 'current', return_value=None):
+        reopened = api._previsit_result(case, 'primary')
+    assert reopened['benefits']['copay_cents'] == 10000
+    assert reopened['collection_guidance']['amount_cents'] == 10000
+    assert reopened['encounter_summary']['collect_today_cents'] == 10000
+    case['previsit_raw_sha256'] = '0' * 64
+    with patch.object(api.object_store, 'get_object_bytes', return_value=raw), \
+         patch.object(api.commercial_store, 'list_connections', return_value=[]), \
+         patch.object(api.staff_store, 'list_library', return_value=[]), \
+         patch.object(api.practice_prices, 'current', return_value=None):
+        unverified = api._previsit_result(case, 'primary')
+    assert unverified['collection_guidance']['amount_cents'] is None
 
 
 @pytest.mark.parametrize('change', [None, 'wrong_npi', 'organization', 'inactive', 'ambiguous', 'unknown', 'timeout'])
