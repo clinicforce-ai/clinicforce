@@ -193,8 +193,8 @@ def evaluate(result: dict, context: dict, documents: list[dict], *, include_proc
                             'sources': [_source(document) for document in matched if document['id'] == linked_id]}
         else:
             output[kind] = payer
-    research = plan_matrix.evaluate(result, {**context, 'plans': reported_plans},
-                                    plan_matrix.uploaded(documents, context['service_date']))
+    matrix_data = plan_matrix.uploaded(documents, context['service_date'])
+    research = plan_matrix.evaluate(result, {**context, 'plans': reported_plans}, matrix_data)
     merge_matrix_research(output, research, rules, linked_id, KINDS)
     choice_plus = _uhc_choice_plus_referral(result, context, reported_plans)
     ma_ppo = _uhc_ma_ppo_referral(result, context, reported_plans)
@@ -234,6 +234,18 @@ def evaluate(result: dict, context: dict, documents: list[dict], *, include_proc
             output[kind] = {'status': 'Verification required',
                             'reason': 'A stored CPT rule differs from the payer or contract evidence for this visit.',
                             'sources': [*current['sources'], *stored['sources']]}
+    web_rules = result.get('public_source_rules') or {}
+    for kind, decision in web_rules.items():
+        current = output[kind]
+        if current['status'] == 'Verification required' and 'conflict' not in current['reason'].casefold() and not rules[kind]:
+            output[kind] = {**current, **decision,
+                            'sources': [*decision['sources'], *current['sources']]}
+        elif current['status'] == decision['status']:
+            output[kind] = {**current, 'sources': [*current['sources'], *decision['sources']]}
+        elif current['status'] != 'Verification required':
+            output[kind] = {'status': 'Verification required',
+                            'reason': 'Current official web guidance differs from stored or payer evidence; check the member.',
+                            'sources': [*current['sources'], *decision['sources']]}
     if (output['authorization']['status'] == 'Verification required'
             and {'unitedhealthcare', 'uhc'} & payer_names
             and any(product_kind(plan) for plan in reported_plans)

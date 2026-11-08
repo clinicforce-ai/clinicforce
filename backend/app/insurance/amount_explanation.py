@@ -373,9 +373,9 @@ def build(result: dict, guidance: dict, review: dict | None = None) -> dict:
         cause, cause_code = _cash_cause(result, failure, recovery, card, network, benefits, unpriced, missing,
                                         guidance.get('source_errors'))
         proxy = result.get('fee_proxy_estimate') or {}
-        if proxy.get('basis') in {'bcbstx_fee_proxy', 'bcbstx_uhc_in_network_fee_proxy'} and type(proxy.get('patient_share_cents')) is int:
-            sentence, code = (f'The provisional patient share is {_money(proxy["patient_share_cents"])} using the BCBS Texas fee proxy; do not collect until the clinic policy and Medicare billing-protection checks clear this member',
-                              'bcbstx_proxy_provisional')
+        if proxy.get('basis') in {'bcbstx_fee_proxy', 'bcbstx_uhc_in_network_fee_proxy', 'bcbstx_uhc_choice_plus_fee_proxy'} and type(proxy.get('patient_share_cents')) is int:
+            condition = ('confirm deductible applicability, clinic collection policy and the UHC allowance before charging' if proxy.get('basis') == 'bcbstx_uhc_choice_plus_fee_proxy' else 'do not collect until the clinic policy and Medicare billing-protection checks clear this member')
+            sentence, code = f'The provisional patient share is {_money(proxy["patient_share_cents"])} using the BCBS Texas fee proxy; {condition}', 'bcbstx_proxy_provisional'
         elif proxy.get('basis') == 'bcbstx_cigna_fee_proxy' and type(proxy.get('patient_share_cents')) is int:
             scope = ('the reported diagnostic specialist office copay and 0% diagnostic coinsurance' if proxy.get('scenario_kind') == 'oap_diagnostic_office_copay'
                      else 'the reported specialist office copay and assumed general 0% diagnostic coinsurance' if proxy.get('scenario_kind') == 'oap_office_copay_general_coinsurance'

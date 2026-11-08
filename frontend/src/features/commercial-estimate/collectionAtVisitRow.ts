@@ -156,8 +156,17 @@ export function collectionAtVisitRow(
     proxyFormula,
     bluecardDeductible,
   } = values
+  const choicePlusEmg = feeProxy?.basis === 'bcbstx_uhc_choice_plus_fee_proxy'
   const feeProxyCheckin =
-    feeProxy && !cignaFeeProxy
+    feeProxy &&
+    !cignaFeeProxy &&
+    (!choicePlusEmg ||
+      (!model.previousEstimate &&
+        !model.calculating &&
+        !model.requirementIssue &&
+        !['claim_after_service', 'qmb_protection'].includes(
+          result.collection_guidance?.basis || '',
+        )))
       ? Math.max(
           0,
           feeProxy.patient_share_cents - (result.encounter_summary?.payments_verified_cents || 0),
@@ -321,7 +330,11 @@ export function collectionAtVisitRow(
                       : feeProxy != null && result.collection_guidance?.basis !== 'office_copay'
                         ? result.collection_guidance?.basis === 'bcbstx_proxy_advance'
                           ? `${proxyFormula?.total} Clinic-approved BCBS Texas fee proxy advance; final responsibility follows the UHC claim.`
-                          : `${proxyFormula?.total} Provisional BCBS Texas fee proxy; collect only after clinic policy and Medicare billing-protection clearance.`
+                          : `${proxyFormula?.total} ${
+                              choicePlusEmg
+                                ? 'Provisional BCBSTX clinic fee scenario; deductible applicability and UHC allowance require confirmation before charging.'
+                                : 'Provisional BCBS Texas fee proxy; collect only after clinic policy and Medicare billing-protection clearance.'
+                            }`
                         : aetnaPlanning
                           ? `min((${money(aetnaPlanning.copay_cents / 2)} per test × 2) + ${money(aetnaPlanning.deductible_cents)} deductible + ${money(aetnaPlanning.coinsurance_cents)} coinsurance, ${money(aetnaPlanning.estimated_allowed_cents)} Aetna fee reference, ${money(aetnaPlanning.oop_remaining_cents)} remaining out-of-pocket) = ${money(aetnaPlanning.patient_share_cents)}${aetnaPaid ? `; less ${money(aetnaPaid)} already paid = ${money(aetnaBalance!)}` : ' before any prior payment'}. ${aetnaPlanning.message}`
                           : aetnaCopayPlanning != null

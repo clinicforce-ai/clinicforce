@@ -34,3 +34,18 @@ export function familyDeductibleRow(
             : undefined,
   }
 }
+
+export function choicePlusDeductibleRows(
+  proxy: PrevisitEstimate['fee_proxy_estimate'],
+): CostBreakdownRow[] {
+  return proxy?.basis === 'bcbstx_uhc_choice_plus_fee_proxy'
+    ? [
+        {
+          label: 'Deductible applied to this scenario',
+          value: money(proxy.deductible_cents),
+          detail:
+            'Applied before coinsurance to the BCBSTX fee reference; CPT-specific applicability is assumed.',
+        },
+      ]
+    : []
+}

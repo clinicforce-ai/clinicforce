@@ -95,6 +95,11 @@ async def saved_previsit(case_id: str, request: _api.Request) -> dict:
     Blue Cross Clinical Library prices for eligible non-Aetna routes or draft
     Aetna MEPPO portal values for the exact Signature PPO diagnostic scenario.
     Neither source establishes another payer's allowance or a collectible amount.
+    A matched in-network UHC Choice Plus hand-EMG scenario may propose editable
+    CPT 95908 and 95886 and expose a provisional BCBSTX fee proxy. It applies
+    the returned individual deductible before coinsurance, then the reported
+    remaining out-of-pocket cap; the UHC allowance remains unknown. Referral
+    and authorization decisions are shown per CPT with current official sources.
     The exact two-code Aetna diagnostic case also exposes a $100 planning share
     from a likely published $50-per-test benefit, capped by the draft fee
     reference and reported remaining out-of-pocket balance. This is not an

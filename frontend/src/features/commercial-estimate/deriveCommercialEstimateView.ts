@@ -299,6 +299,7 @@ export function deriveCommercialEstimateView({
     networkConfirmed,
     outOfNetworkConfirmed,
     selectedCptIssue: !!selectedCptIssue,
+    requirementIssue: !!requirementIssue,
     servicePlanAction: !!servicePlanAction,
     readOnly,
     currentPayerAmount,

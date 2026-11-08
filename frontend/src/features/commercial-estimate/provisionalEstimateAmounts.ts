@@ -10,6 +10,7 @@ export function provisionalEstimateAmounts({
   networkConfirmed,
   outOfNetworkConfirmed,
   selectedCptIssue,
+  requirementIssue,
   servicePlanAction,
   readOnly,
   currentPayerAmount,
@@ -23,6 +24,7 @@ export function provisionalEstimateAmounts({
   networkConfirmed: boolean
   outOfNetworkConfirmed: boolean
   selectedCptIssue: boolean
+  requirementIssue: boolean
   servicePlanAction: boolean
   readOnly: boolean
   currentPayerAmount: boolean
@@ -36,10 +38,13 @@ export function provisionalEstimateAmounts({
     result?.collection_guidance?.basis !== 'qmb_protection' &&
     result?.fee_proxy_estimate &&
     patientBenefitsBound &&
-    (result.fee_proxy_estimate.basis === 'bcbstx_uhc_in_network_fee_proxy'
+    (['bcbstx_uhc_in_network_fee_proxy', 'bcbstx_uhc_choice_plus_fee_proxy'].includes(
+      result.fee_proxy_estimate.basis,
+    )
       ? networkConfirmed
       : outOfNetworkConfirmed) &&
     !selectedCptIssue &&
+    (result.fee_proxy_estimate.basis !== 'bcbstx_uhc_choice_plus_fee_proxy' || !requirementIssue) &&
     !servicePlanAction
       ? Math.max(
           0,
