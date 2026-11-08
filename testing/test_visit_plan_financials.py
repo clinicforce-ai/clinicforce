@@ -77,7 +77,7 @@ def test_booked_bilateral_hand_emg_uses_the_model_proposal_without_manual_select
     assert visit_estimate.is_emg_visit(booked)
     assert plan['recommended_ids'] == ['95908', '95886']
     assert plan['recommended_units'] == {'95908': 1, '95886': 2}
-    assert plan['method'] == 'llm' and plan['version'] == 17
+    assert plan['method'] == 'llm' and plan['version'] == 18
     assert '"appointment_type": "EMG Visit"' in model.converse.call_args.kwargs['messages'][0]['content'][0]['text']
     assert not visit_estimate.is_emg_visit({'reason': 'Bilateral hand'})
     assert not visit_estimate.is_emg_visit({'reason': 'Bilateral hand', 'appointment_type': 'Possible EMG'})

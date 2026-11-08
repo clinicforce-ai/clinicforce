@@ -15,6 +15,19 @@ export type TemporaryRateReference = {
   }>
 }
 
+export type UhcBiopsyCollectionTarget = {
+  basis: 'bcbstx_uhc_biopsy_deductible_target'
+  status: 'provisional'
+  amount_cents: number
+  reference_cents: number
+  oop_remaining_cents: number
+  included_codes: string[]
+  pending_codes: string[]
+  assumption: 'full_deductible_applies'
+  rate_source?: string
+  message: string
+}
+
 export type AetnaDiagnosticReference = {
   estimated_allowed_cents: number
   copay_cents: number

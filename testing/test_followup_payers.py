@@ -26,7 +26,7 @@ def test_biopsy_catalog_and_combined_visit_preserve_all_procedures_and_units():
     available = [*api._previsit_codes(inputs), *[{'id': c, 'code': c, 'units': 1, 'source': 'CPT planning catalog'} for c in ('11104', '11105', '95907', '95910', '95886')]]
     plan = cpt_suggester.recommend_visit_plan(inputs, {}, available)
     rows = {r['id']: r for r in available}
-    assert [(rows[key]['code'], plan['recommended_units'][key]) for key in plan['recommended_ids']] == [('11104', 1), ('11105', 2)]
+    assert [(rows[key]['code'], plan['recommended_units'][key]) for key in plan['recommended_ids']] == [('99213', 1), ('11104', 1), ('11105', 2)]
     assert api._previsit_service_types(inputs) == ['2', '98', '30']
     inputs['reason'] = 'Skin punch biopsy; 2 sites'
     plan = cpt_suggester.recommend_visit_plan(inputs, {}, available)
@@ -48,6 +48,17 @@ def test_unsized_skin_biopsy_starts_with_editable_one_site_plan():
     assert plan['recommended_ids'] == ['planning:11104']
     assert plan['recommended_units'] == {'planning:11104': 1}
     assert 'confirm' in plan['assumptions'][0].lower()
+
+
+def test_established_followup_and_biopsy_have_two_planned_cpts():
+    inputs = {'visit_type': 'established', 'reason': '3 month fu + Skin Biopsy'}
+    available = [*api._previsit_codes(inputs),
+                 {'id': 'planning:11104', 'code': '11104', 'units': 1,
+                  'source': 'CPT planning catalog'}]
+    plan = cpt_suggester.recommend_visit_plan(inputs, {}, available)
+    by_id = {row['id']: row['code'] for row in available}
+    assert [by_id[key] for key in plan['recommended_ids']] == ['99213', '11104']
+    assert any('modifier 25' in note.lower() for note in plan['assumptions'])
 
 
 def test_eligibility_window_boundary_and_service_categories():

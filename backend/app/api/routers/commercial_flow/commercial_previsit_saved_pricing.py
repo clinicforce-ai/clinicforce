@@ -3,7 +3,43 @@ from __future__ import annotations
 
 from app.api.routers import commercial_estimator as _api
 from app.api.routers.commercial_flow.commercial_previsit_finish import _payer_plan_pricing_source
+from app.api.routers.commercial_flow.commercial_previsit_rate_reference import refresh_saved_temporary_rates
+from app.insurance import blue_cross_proxy
 from app.insurance.identity import patient_plan_applies
+
+
+def upgrade_saved_biopsy_preview(result: dict, case: dict) -> None:
+    """Project the new follow-up suggestion onto an unedited saved biopsy preview."""
+    context = case.get('previsit_context') or {}
+    inputs = context.get('inputs') or {}
+    review = case.get('visit_review') or {}
+    codes = result.get('codes') or []
+    price = result.get('price_range') or {}
+    available = result.get('available_codes') or []
+    if ('selected_ids' in review or inputs.get('visit_type') != 'established'
+            or not _api.re.search(r'\b(?:follow[ -]?up|f/u|fu)\b', str(inputs.get('reason') or ''), _api.re.I)
+            or len(codes) != 1 or codes[0].get('code') != '11104'
+            or price.get('mode') != 'services' or len(price.get('lines') or []) != 1
+            or not any(row.get('code') == '99213' for row in available)
+            or (result.get('service_plan') or {}).get('selection_source') == 'clinician'):
+        return
+    plan = _api.cpt_suggester.recommend_visit_plan(inputs, context.get('source') or {}, available)
+    by_id = {row['id']: row for row in available}
+    selected = [by_id[key] for key in plan.get('recommended_ids') or [] if key in by_id]
+    if ([row['code'] for row in selected] != ['99213', '11104']
+            or selected[1]['id'] != codes[0].get('id')):
+        return
+    office = {**selected[0], 'units': 1, 'modifiers': [], 'confirmed': False}
+    biopsy_line = price['lines'][0]
+    price['lines'] = [{'id': office['id'], 'code': '99213', 'units': 1, 'modifiers': [],
+                       'benefits': {}, 'issues': ['Office CPT benefit terms require a refreshed payer check'],
+                       'rate_resolution': {'status': 'MISSING'}}, biopsy_line]
+    price.update(complete=False, allowed_min_cents=None, allowed_max_cents=None,
+                 patient_min_cents=None, patient_max_cents=None)
+    result['codes'] = [office, codes[0]]
+    result['selected_ids'] = plan['recommended_ids']
+    result['selected_service_count'] = 2
+    result['service_plan'] = {**plan, 'selection_source': 'suggested'}
 
 
 def refresh_saved_cigna_office_benefits(result: dict, case: dict, practice_id: str) -> None:
@@ -138,3 +174,20 @@ def _reprice_saved_new_network(result: dict, case: dict, practice_id: str, payer
         # clinic pricing configuration is temporarily unavailable.
         return
     result['price_range'] = price
+
+
+def refresh_saved_cross_payer_planning(result: dict, case: dict, practice_id: str, route_payer: dict | None) -> None:
+    """Rebuild a saved visit's current fee references and conditional target."""
+    for key in ('fee_proxy_estimate', 'temporary_rate_reference', 'aetna_diagnostic_reference',
+                'provisional_collection_target'):
+        result.pop(key, None)
+    context = case['previsit_context']
+    refresh_saved_temporary_rates(result, practice_id, context.get('inputs') or {},
+                                  context.get('source') or {}, route_payer)
+    if proxy := (blue_cross_proxy.estimate(result, str(result.get('service_date') or ''))
+                 or blue_cross_proxy.cigna_estimate(result, str(result.get('service_date') or ''))
+                 or blue_cross_proxy.cigna_oap_family_office_estimate(result, str(result.get('service_date') or ''))
+                 or blue_cross_proxy.cigna_oap_office_scenario(result, str(result.get('service_date') or ''))):
+        result['fee_proxy_estimate'] = proxy
+    if target := blue_cross_proxy.biopsy_collection_target(result, str(result.get('service_date') or '')):
+        result['provisional_collection_target'] = target

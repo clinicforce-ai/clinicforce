@@ -1,23 +1,18 @@
 """Verified published payer rules used by the shared requirement evaluator.
-
 Workbook rows remain research leads; this catalogue is scoped to the checked
 source version and date, never member approval.
 """
 from __future__ import annotations
 import re
-
 from app.insurance import cpt_rules, stedi_cpt_authorization
 from app.insurance.identity import generic_plan_label, payer_identity_verified
 from app.insurance.library_network_exclusions import product_kind
 from app.insurance.requirements.evidence import _key
-
 BCBSTX_PAYER_NAMES = {'bcbstx', 'bcbstexas', 'bluecrossblueshieldoftexas',
                       'bluecrossandblueshieldoftexas', 'bluecrossblueshieldtx',
                       'bluecrossblueshieldtexas'}
-
 # Saved estimates re-evaluate requirement decisions when a published rule changes.
 PUBLISHED_RULESET_VERSION = '2026-11-06-prudent-buyer-office-v13'
-
 BLUECARD_PPO_REFERRAL_SOURCE = {
     'label': 'BCBSTX BlueCard provider manual, PPO definition',
     'url': 'https://www.bcbstx.com/content/dam/hcsc/docs/provider/tx/claims/bluecard/bluecard-program-prov-manual.pdf',
@@ -30,7 +25,6 @@ BLUECARD_PA_SOURCE = {
     'source_version': 'Provider requirements checked November 2026', 'verified_at': '2026-11-03',
     'effective_from': '2026-01-01', 'effective_to': '2026-12-31',
 }
-
 HUMANA_VALUE_CHOICE_057_SOURCE = {
     'label': '2026 Humana Value Choice (PPO) H7617-057 Summary of Benefits',
     'url': 'https://assets.humana.com/is/content/humana/H7617057000SB26pdf',
@@ -43,7 +37,6 @@ HUMANA_2026_MA_PAL = {
     'source_version': 'July 1, 2026 list, revised October 1, 2026', 'verified_at': '2026-10-29',
     'effective_from': '2026-10-01', 'effective_to': '2026-12-31',
 }
-
 UHC_GROUP_PPO_OON_SOURCE = {
     'label': 'UnitedHealthcare Group Medicare Advantage PPO out-of-network provider guide',
     'url': 'https://www.uhcprovider.com/content/dam/provider/docs/public/health-plans/UHC-Group-Med_Adv-OON-Care-Provider_QRG.pdf',
@@ -61,7 +54,6 @@ UHC_LPPO_DIAGNOSTIC_PA_SOURCE = {
     'source_version': 'Clinic confirmation for CPT 95908 and 95886, received 2026-10-27',
     'verified_at': '2026-10-27', 'effective_from': '2026-10-27', 'effective_to': '2026-12-31',
 }
-
 UHC_TEXAS_CHOICE_PLUS_SOURCE = {
     'label': 'UnitedHealthcare Texas Choice Plus plan description',
     'url': 'https://www.uhcprovider.com/en/health-plans-by-state/texas-health-plans/tx-commercial-plans.html',
@@ -82,7 +74,6 @@ UHC_MA_2026_AUTH_SOURCE = {
     'verified_at': '2026-10-21',
     'effective_from': '2026-10-01', 'effective_to': '2026-12-31',
 }
-
 UHC_2026_GUIDE = {
     'label': 'UnitedHealthcare 2026 administrative guide, commercial product and Medicare PPO referral tables',
     'url': 'https://www.uhcprovider.com/content/dam/provider/docs/public/admin-guides/2026-UHC-Administrative-Guide.pdf',
@@ -206,7 +197,6 @@ FEP_PSHB_2026_SOURCE = {
     'effective_from': '2026-01-01', 'effective_to': '2026-12-31',
 }
 
-
 def _published_rule(kind: str, result: dict, context: dict, plans: list[str], codes: set[str]) -> dict | None:
     """Promote only independently checked, exact-scope research from the matrix."""
     benefits = result.get('benefits') or {}
@@ -324,6 +314,15 @@ def _published_rule(kind: str, result: dict, context: dict, plans: list[str], co
             return rule('Not required', 'UnitedHealthcare Medicare Advantage PPO does not require a specialist referral.', UHC_MA_PPO_REFERRAL_SOURCE)
         if kind == 'authorization' and in_network and day >= '2026-10-01':
             return rule('Not required', 'The 2026 UnitedHealthcare Medicare Advantage participating-provider authorization list does not include these routine office E/M CPTs. Check delegated rules when applicable.', UHC_MA_2026_AUTH_SOURCE)
+    lppo_biopsy = (in_network and str(context.get('pos') or '') == '11'
+        and codes <= {'11104', '11105'} and bool(codes)
+        and {'unitedhealthcare', 'uhc'} & names and len(exact) == 1
+        and product.startswith('lppounitedhealthcaregroupmedicareadvantagepp'))
+    if lppo_biopsy:
+        if kind == 'referral':
+            return rule('Not required', 'UnitedHealthcare Group Medicare Advantage PPO does not require a PCP specialist referral for this visit.', UHC_MA_PPO_REFERRAL_SOURCE)
+        if kind == 'authorization' and day >= '2026-10-01':
+            return rule('Verification required', 'CPT 11104/11105 is absent from the central October 2026 participating-provider list; confirm the member and any delegated authorization rule.', UHC_MA_2026_AUTH_SOURCE, check=True)
     bcbstx_ppo_follow_up = (exact <= {'bluechoiceppo'} and in_network and office and day >= '2026-10-26'
             and names & BCBSTX_PAYER_NAMES
             and ('preferredprovideroptionmedical' in {_key(plan) for plan in plans}
