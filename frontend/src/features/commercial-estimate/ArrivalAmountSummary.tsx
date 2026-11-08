@@ -98,6 +98,17 @@ export default function ArrivalAmountSummary({
 }) {
   const action = nextStep(model, result)
   const plan = !model.cash && !model.previousEstimate ? result.combined_emg_plan : null
+  const biopsyTarget =
+    !model.cash && !model.previousEstimate && !model.calculating
+      ? result.provisional_collection_target
+      : null
+  const biopsyBalance = biopsyTarget
+    ? Math.max(
+        0,
+        biopsyTarget.amount_cents - (result.encounter_summary?.payments_verified_cents || 0),
+      )
+    : null
+  const biopsyOfficePending = !!biopsyTarget?.pending_codes?.length
   const cignaPlanning =
     !model.cash &&
     !model.previousEstimate &&
@@ -164,39 +175,44 @@ export default function ArrivalAmountSummary({
       <span>
         {plan
           ? 'Amount to collect at visit · planning estimate'
-          : botoxPlanning
-            ? 'Planned amount to collect · provisional CPT scenario'
-            : cignaPlanning
-              ? 'Cigna planning estimate · collection pending'
-              : bluecardDeductible
-                ? 'Amount to collect at visit · estimated'
-                : aetnaPlanning
-                  ? 'Planned amount to collect at visit'
-                  : diagnosticCopayReference != null
-                    ? 'Diagnostic copay · collection pending'
-                    : officeBalance != null
-                      ? officePolicyPending
-                        ? 'Amount to collect at visit · pending policy approval'
-                        : 'Planned amount to collect at visit'
-                      : pendingAetnaCopay != null ||
-                          pendingCignaCopay != null ||
-                          pendingBluecardCopay != null
-                        ? 'Amount to collect at visit · pending verification'
-                        : partialCopay != null
-                          ? referenceOnly
-                            ? 'Office-only reference · collection pending'
-                            : 'Suggested amount to collect at visit'
-                          : cardPlanningCopay != null
-                            ? 'Card-based office suggestion · collection pending'
-                            : priorDateAetnaCopay != null
-                              ? 'Payer-reported office copay · pending verification'
-                              : needsAction
-                                ? 'Next step'
-                                : model.amountLabel}
+          : biopsyBalance != null
+            ? biopsyOfficePending
+              ? 'Provisional biopsy target · office share pending'
+              : 'Provisional collection target · confirmation pending'
+            : botoxPlanning
+              ? 'Planned amount to collect · provisional CPT scenario'
+              : cignaPlanning
+                ? 'Cigna planning estimate · collection pending'
+                : bluecardDeductible
+                  ? 'Amount to collect at visit · estimated'
+                  : aetnaPlanning
+                    ? 'Planned amount to collect at visit'
+                    : diagnosticCopayReference != null
+                      ? 'Diagnostic copay · collection pending'
+                      : officeBalance != null
+                        ? officePolicyPending
+                          ? 'Amount to collect at visit · pending policy approval'
+                          : 'Planned amount to collect at visit'
+                        : pendingAetnaCopay != null ||
+                            pendingCignaCopay != null ||
+                            pendingBluecardCopay != null
+                          ? 'Amount to collect at visit · pending verification'
+                          : partialCopay != null
+                            ? referenceOnly
+                              ? 'Office-only reference · collection pending'
+                              : 'Suggested amount to collect at visit'
+                            : cardPlanningCopay != null
+                              ? 'Card-based office suggestion · collection pending'
+                              : priorDateAetnaCopay != null
+                                ? 'Payer-reported office copay · pending verification'
+                                : needsAction
+                                  ? 'Next step'
+                                  : model.amountLabel}
       </span>
       <strong
         className={
           !visibleAmount &&
+          biopsyBalance == null &&
           !botoxPlanning &&
           !cignaPlanning &&
           !bluecardDeductible &&
@@ -213,35 +229,37 @@ export default function ArrivalAmountSummary({
       >
         {plan
           ? money(plan.amount_cents)
-          : botoxPlanning
-            ? money(botoxPlanning.patient_share_cents)
-            : cignaPlanning
-              ? money(cignaPlanning.patient_share_cents)
-              : bluecardDeductible
-                ? money(bluecardDeductible.collect)
-                : aetnaPlanning
-                  ? money(aetnaBalance!)
-                  : diagnosticCopayReference != null
-                    ? money(diagnosticCopayReference)
-                    : officeBalance != null
-                      ? officePolicyPending
-                        ? `Pending · ${money(officeBalance)}`
-                        : money(officeBalance)
-                      : pendingAetnaCopay != null
-                        ? `Pending · ${money(pendingAetnaCopay)}`
-                        : pendingBluecardCopay != null
-                          ? `Pending · ${money(pendingBluecardCopay)}`
-                          : pendingCignaCopay != null
-                            ? `Pending · ${money(pendingCignaCopay)}`
-                            : partialCopay != null
-                              ? money(partialCopay)
-                              : cardPlanningCopay != null
-                                ? money(cardPlanningCopay)
-                                : priorDateAetnaCopay != null
-                                  ? money(priorDateAetnaBalance!)
-                                  : needsAction
-                                    ? action.title
-                                    : model.amountText}
+          : biopsyBalance != null
+            ? `${money(biopsyBalance)}${biopsyOfficePending ? ' biopsy only' : ''}`
+            : botoxPlanning
+              ? money(botoxPlanning.patient_share_cents)
+              : cignaPlanning
+                ? money(cignaPlanning.patient_share_cents)
+                : bluecardDeductible
+                  ? money(bluecardDeductible.collect)
+                  : aetnaPlanning
+                    ? money(aetnaBalance!)
+                    : diagnosticCopayReference != null
+                      ? money(diagnosticCopayReference)
+                      : officeBalance != null
+                        ? officePolicyPending
+                          ? `Pending · ${money(officeBalance)}`
+                          : money(officeBalance)
+                        : pendingAetnaCopay != null
+                          ? `Pending · ${money(pendingAetnaCopay)}`
+                          : pendingBluecardCopay != null
+                            ? `Pending · ${money(pendingBluecardCopay)}`
+                            : pendingCignaCopay != null
+                              ? `Pending · ${money(pendingCignaCopay)}`
+                              : partialCopay != null
+                                ? money(partialCopay)
+                                : cardPlanningCopay != null
+                                  ? money(cardPlanningCopay)
+                                  : priorDateAetnaCopay != null
+                                    ? money(priorDateAetnaBalance!)
+                                    : needsAction
+                                      ? action.title
+                                      : model.amountText}
       </strong>
       {plan ? (
         <p>
@@ -249,6 +267,15 @@ export default function ArrivalAmountSummary({
           {money(plan.diagnostic_allowed_cents)} diagnostic allowance ={' '}
           {money(plan.patient_share_cents)} before any recorded payment. Deductible and
           out-of-pocket balances were not returned.
+        </p>
+      ) : biopsyBalance != null ? (
+        <p>
+          {money(biopsyTarget!.reference_cents)} BCBS Texas reference for{' '}
+          {biopsyTarget!.included_codes.includes('99213') ? 'CPT 99213 + CPT 11104' : 'CPT 11104'},
+          capped by the reported out-of-pocket balance. This provisional target assumes the full
+          deductible applies because UHC did not return a deductible rule. Confirm payer order,
+          Medicare billing protection, and any prior payment before charging.{' '}
+          {biopsyOfficePending ? 'The follow-up share is not included. ' : ''}Pathology is excluded.
         </p>
       ) : botoxPlanning ? (
         <p>

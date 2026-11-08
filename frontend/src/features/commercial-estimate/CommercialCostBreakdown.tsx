@@ -37,6 +37,10 @@ export default function CommercialCostBreakdown({
   const gehaZero = costState.publishedGehaZero(result)
   const botoxPreview = !model.cash && !model.previousEstimate ? result.botox_preview : null
   const combinedPlan = !model.cash && !model.previousEstimate ? result.combined_emg_plan : null
+  const biopsyTarget =
+    !model.cash && !model.previousEstimate && !model.calculating
+      ? result.provisional_collection_target
+      : null
   const cignaFeeProxy = feeProxy?.basis === 'bcbstx_cigna_fee_proxy'
   const cignaFamilyOffice = feeProxy?.scenario_kind === 'oap_office_family_deductible'
   const cignaOfficeScenario = cignaFeeProxy && Boolean(feeProxy.scenario_kind) && !cignaFamilyOffice
@@ -367,40 +371,42 @@ export default function CommercialCostBreakdown({
               result.collection_guidance?.basis || '',
             ) && result.collection_guidance?.amount_cents === 0
           ? money(0)
-          : cignaTelevisit != null
-            ? `${money(cignaTelevisit.share)} office copay estimate`
-            : calculated &&
-                summary?.estimated_total_patient_min_cents != null &&
-                summary.estimated_total_patient_max_cents != null
-              ? range(
-                  summary.estimated_total_patient_min_cents,
-                  summary.estimated_total_patient_max_cents,
-                )
-              : aetnaPlanning
-                ? `${money(aetnaPlanning.patient_share_cents)} planning estimate`
-                : botoxPreview
-                  ? `${money(botoxPreview.patient_share_cents)} provisional · CPT ${botoxPreview.code} scenario`
-                  : feeProxy != null
-                    ? `${money(feeProxy.patient_share_cents)} provisional · BCBS Texas fee proxy`
-                    : humanaReferenceCopay != null
-                      ? `${money(humanaReferenceCopay)} conditional in-network office copay · collection pending`
-                      : aetnaCopayPlanning != null
-                        ? `${money(aetnaCopayPlanning)} provisional office copay`
-                        : priorDateAetnaCopay != null
-                          ? `${money(priorDateAetnaCopay)} office copay · pending verification`
-                          : pendingBluecardCopay != null
-                            ? `${money(lines[0].benefits.copay_cents!)} office-only estimate`
-                            : model.estimatedShare ||
-                              (partialOfficeCopay != null
-                                ? `${money(model.officeCopayLine!.benefits.copay_cents!)} office-only planning estimate`
-                                : cardPlanningCopay != null
-                                  ? `${money(cardPlanningCopay)} office-only card suggestion`
-                                  : cignaCard
-                                    ? `${money(cignaCard.nontier1_specialist_copay_cents)} non-Tier-1 office-only reference; diagnostic share pending`
-                                    : null) ||
-                              (model.provisionalAmount != null
-                                ? money(model.provisionalAmount)
-                                : copayShare || model.patientPrice || 'Not fully calculated')
+          : biopsyTarget
+            ? `${money(biopsyTarget.amount_cents)} provisional · full deductible assumed${biopsyTarget.pending_codes.length ? ' · partial visit' : ''}`
+            : cignaTelevisit != null
+              ? `${money(cignaTelevisit.share)} office copay estimate`
+              : calculated &&
+                  summary?.estimated_total_patient_min_cents != null &&
+                  summary.estimated_total_patient_max_cents != null
+                ? range(
+                    summary.estimated_total_patient_min_cents,
+                    summary.estimated_total_patient_max_cents,
+                  )
+                : aetnaPlanning
+                  ? `${money(aetnaPlanning.patient_share_cents)} planning estimate`
+                  : botoxPreview
+                    ? `${money(botoxPreview.patient_share_cents)} provisional · CPT ${botoxPreview.code} scenario`
+                    : feeProxy != null
+                      ? `${money(feeProxy.patient_share_cents)} provisional · BCBS Texas fee proxy`
+                      : humanaReferenceCopay != null
+                        ? `${money(humanaReferenceCopay)} conditional in-network office copay · collection pending`
+                        : aetnaCopayPlanning != null
+                          ? `${money(aetnaCopayPlanning)} provisional office copay`
+                          : priorDateAetnaCopay != null
+                            ? `${money(priorDateAetnaCopay)} office copay · pending verification`
+                            : pendingBluecardCopay != null
+                              ? `${money(lines[0].benefits.copay_cents!)} office-only estimate`
+                              : model.estimatedShare ||
+                                (partialOfficeCopay != null
+                                  ? `${money(model.officeCopayLine!.benefits.copay_cents!)} office-only planning estimate`
+                                  : cardPlanningCopay != null
+                                    ? `${money(cardPlanningCopay)} office-only card suggestion`
+                                    : cignaCard
+                                      ? `${money(cignaCard.nontier1_specialist_copay_cents)} non-Tier-1 office-only reference; diagnostic share pending`
+                                      : null) ||
+                                (model.provisionalAmount != null
+                                  ? money(model.provisionalAmount)
+                                  : copayShare || model.patientPrice || 'Not fully calculated')
   const rows: CostBreakdownRow[] =
     model.cash && !automaticCashFallback
       ? [
@@ -436,33 +442,35 @@ export default function CommercialCostBreakdown({
                 : 'Insured share awaits a matching payer check and selected CPTs'
               : bluecardDeductible
                 ? 'Assumes the supplied clinic rate applies to this BlueCard product and the office visit uses the plan-wide remaining deductible.'
-                : combinedPlan
-                  ? `${money(combinedPlan.office_copay_cents)} office copay + ${combinedPlan.coinsurance_percent}% × ${money(combinedPlan.diagnostic_allowed_cents)} diagnostic allowance. No additional deductible or out-of-pocket reduction was applied where remaining balances were not returned.`
-                  : gehaZero
-                    ? 'Published 2026 G.E.H.A High PSHB Medicare Advantage benefit for one covered in-network office visit. Stedi omitted member deductible and out-of-pocket rows; the UHC allowed amount remains unknown.'
-                    : cignaTelevisit != null
-                      ? 'One specialist copay with $0 office deductible and 0% office coinsurance. Final patient liability is capped by the processed allowed charge and may change after the claim.'
-                      : result.collection_guidance?.basis === 'out_of_pocket_limit'
-                        ? 'Covered in-network share is capped by the applicable out-of-pocket limit'
-                        : aetnaPlanning
-                          ? `min(${money(aetnaPlanning.copay_cents)} diagnostic copays + ${money(aetnaPlanning.deductible_cents)} deductible + ${money(aetnaPlanning.coinsurance_cents)} coinsurance, ${money(aetnaPlanning.estimated_allowed_cents)} fee reference, ${money(aetnaPlanning.oop_remaining_cents)} remaining out-of-pocket) = ${money(aetnaPlanning.patient_share_cents)} before prior payments. ${aetnaPlanning.message}`
-                          : botoxPreview
-                            ? `One procedure unit at ${money(botoxPreview.allowed_cents)} from ${botoxPreview.rate_source}; ${botoxPreview.coinsurance_percent}% office-injection coinsurance from Stedi. Confirm coding and individual benefit limits before charging.`
-                            : feeProxy != null
-                              ? feeProxy.message
-                              : aetnaCopayPlanning != null
-                                ? `${money(aetnaCopayPlanning)} copay + ${money(0)} deductible + 0% × Aetna allowed amount = ${money(aetnaCopayPlanning)} before the unknown allowance cap. Confirm the visit conditions and final claim amount.`
-                                : priorDateAetnaCopay != null
-                                  ? 'Payer-reported office copay after recorded payments. The saved response is for another date; confirm visit-date coverage, provider network, Medicare billing protection and any other services before charging. Full patient responsibility remains unresolved.'
-                                  : pendingBluecardCopay != null
-                                    ? 'One payer-reported specialist office copay. The selected visit has no applicable deductible or additional coinsurance; the final share remains subject to the allowed charge and processed claim.'
-                                    : calculated
-                                      ? 'Copay + deductible applied + coinsurance − allowed and out-of-pocket reductions'
-                                      : cardPlanningCopay != null
-                                        ? 'Printed specialist copay for one office visit; planned imaging and final payer share are unresolved.'
-                                        : cignaCard
-                                          ? 'Card-printed office copay only. Diagnostic CPT share remains unknown; Cigna allowed amounts and visit-date benefits are needed.'
-                                          : 'Full share awaits applicable deductible and out-of-pocket terms',
+                : biopsyTarget
+                  ? biopsyTarget.message
+                  : combinedPlan
+                    ? `${money(combinedPlan.office_copay_cents)} office copay + ${combinedPlan.coinsurance_percent}% × ${money(combinedPlan.diagnostic_allowed_cents)} diagnostic allowance. No additional deductible or out-of-pocket reduction was applied where remaining balances were not returned.`
+                    : gehaZero
+                      ? 'Published 2026 G.E.H.A High PSHB Medicare Advantage benefit for one covered in-network office visit. Stedi omitted member deductible and out-of-pocket rows; the UHC allowed amount remains unknown.'
+                      : cignaTelevisit != null
+                        ? 'One specialist copay with $0 office deductible and 0% office coinsurance. Final patient liability is capped by the processed allowed charge and may change after the claim.'
+                        : result.collection_guidance?.basis === 'out_of_pocket_limit'
+                          ? 'Covered in-network share is capped by the applicable out-of-pocket limit'
+                          : aetnaPlanning
+                            ? `min(${money(aetnaPlanning.copay_cents)} diagnostic copays + ${money(aetnaPlanning.deductible_cents)} deductible + ${money(aetnaPlanning.coinsurance_cents)} coinsurance, ${money(aetnaPlanning.estimated_allowed_cents)} fee reference, ${money(aetnaPlanning.oop_remaining_cents)} remaining out-of-pocket) = ${money(aetnaPlanning.patient_share_cents)} before prior payments. ${aetnaPlanning.message}`
+                            : botoxPreview
+                              ? `One procedure unit at ${money(botoxPreview.allowed_cents)} from ${botoxPreview.rate_source}; ${botoxPreview.coinsurance_percent}% office-injection coinsurance from Stedi. Confirm coding and individual benefit limits before charging.`
+                              : feeProxy != null
+                                ? feeProxy.message
+                                : aetnaCopayPlanning != null
+                                  ? `${money(aetnaCopayPlanning)} copay + ${money(0)} deductible + 0% × Aetna allowed amount = ${money(aetnaCopayPlanning)} before the unknown allowance cap. Confirm the visit conditions and final claim amount.`
+                                  : priorDateAetnaCopay != null
+                                    ? 'Payer-reported office copay after recorded payments. The saved response is for another date; confirm visit-date coverage, provider network, Medicare billing protection and any other services before charging. Full patient responsibility remains unresolved.'
+                                    : pendingBluecardCopay != null
+                                      ? 'One payer-reported specialist office copay. The selected visit has no applicable deductible or additional coinsurance; the final share remains subject to the allowed charge and processed claim.'
+                                      : calculated
+                                        ? 'Copay + deductible applied + coinsurance − allowed and out-of-pocket reductions'
+                                        : cardPlanningCopay != null
+                                          ? 'Printed specialist copay for one office visit; planned imaging and final payer share are unresolved.'
+                                          : cignaCard
+                                            ? 'Card-printed office copay only. Diagnostic CPT share remains unknown; Cigna allowed amounts and visit-date benefits are needed.'
+                                            : 'Full share awaits applicable deductible and out-of-pocket terms',
           },
           ...(summary?.payments_verified_cents != null && summary.payments_verified_cents > 0
             ? [{ label: 'Already paid', value: `−${money(summary.payments_verified_cents)}` }]

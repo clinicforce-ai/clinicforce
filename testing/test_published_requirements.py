@@ -269,6 +269,18 @@ def test_uhc_group_lppo_routine_office_followup_requirements():
     assert evaluate(result, context, [])['authorization']['status'] == 'Not required'
 
 
+def test_uhc_group_lppo_followup_and_biopsy_keep_separate_requirement_answers():
+    result, context = case('UnitedHealthcare',
+                           'LPPO-UNITEDHEALTHCARE GROUP MEDICARE ADVANTAGE (PP',
+                           '99213', '11104', day='2026-11-09')
+    decision = evaluate(result, context, [])
+    by_code = {row['code']: row for row in decision['procedures']}
+    assert by_code['99213']['referral']['status'] == 'Not required'
+    assert by_code['11104']['referral']['status'] == 'Not required'
+    assert by_code['99213']['authorization']['status'] == 'Not required'
+    assert by_code['11104']['authorization']['status'] == 'Verification required'
+
+
 def test_uhc_aarp_lppo_routine_new_patient_office_requirements():
     result, context = case('UnitedHealthcare',
                            'LPPO-AARP MEDICARE ADVANTAGE FROM UHC TX-0006 (PPO',

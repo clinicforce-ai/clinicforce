@@ -15,6 +15,7 @@ import type {
   AetnaDiagnosticReference,
   VisitCode,
   VisitPricedLine,
+  UhcBiopsyCollectionTarget,
 } from './commercial-visit-types'
 import type { PrevisitBenefits } from './commercial-benefits'
 import type { PaymentExplanation } from './commercial-explanation'
@@ -73,6 +74,7 @@ export type PrevisitEstimate = {
     deductible_url?: string
     message: string
   }
+  provisional_collection_target?: UhcBiopsyCollectionTarget
   payment_explanation?: PaymentExplanation
   evidence_resolution?: Array<{
     field: string

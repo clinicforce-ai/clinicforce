@@ -13,6 +13,7 @@ from app.insurance.benefit_review import selected_service_blocker
 from app.insurance.identity import patient_benefits_bound
 from app.insurance.network_participation import verified_in_network, verified_out_of_network
 from app.insurance.stedi_cpt_authorization import visit_coverage_bound
+from app.insurance.uhc_biopsy_target import _oop_remaining, biopsy_collection_target
 
 
 FRB_2026_BENEFITS = {
@@ -28,23 +29,6 @@ TRS_2026_SPECIALIST_COPAY = {
     'source': '2026 TRS-Care Medicare Advantage Plan Highlights',
     'url': 'https://trs.texas.gov/files/documents/plan-highlights-trs-care-2026.pdf',
 }
-
-
-def _oop_remaining(benefits: dict, network: str = 'out_of_network') -> int | None:
-    direct = benefits.get('oop_remaining_cents')
-    if type(direct) is int and 0 <= direct <= 100_000_000:
-        return direct
-    values = {row.get('amount_cents') for row in benefits.get('reported_options') or []
-              if row.get('kind') == 'out_of_pocket'
-              and row.get('service_type_code') == '30'
-              and row.get('coverage_level') in {'INDIVIDUAL', 'IND'}
-              and row.get('time_period') in {'REMAINING', '29'}
-              and row.get('network') in ({'IN_NETWORK', 'Y', 'IN_AND_OUT_OF_NETWORK', 'W'}
-                                         if network == 'in_network' else
-                                         {'OUT_OF_NETWORK', 'N', 'IN_AND_OUT_OF_NETWORK', 'W'})
-              and row.get('plan_association') in {'medical', 'medical_candidate'}
-              and type(row.get('amount_cents')) is int}
-    return next(iter(values)) if len(values) == 1 else None
 
 
 def _saved_diagnostic_terms(benefits: dict, codes: list[str], network: str) -> dict | None:

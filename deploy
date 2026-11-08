@@ -14,16 +14,21 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("environment", choices=["staging", "production"])
     parser.add_argument("--staging-run", help="Successful staging Actions run ID to promote")
+    parser.add_argument("--direct", action="store_true", help="Build verified main for production without staging deployment")
     parser.add_argument("--verified", help="Non-sensitive reference to successful representative workflow verification")
     args = parser.parse_args()
-    if args.environment == "production" and (not args.staging_run or not args.verified):
-        parser.error("production requires --staging-run and --verified; failing workflows block release")
+    if args.direct and (args.environment != "production" or args.staging_run):
+        parser.error("--direct is production-only and cannot be combined with --staging-run")
+    if args.environment == "production" and (not (args.staging_run or args.direct) or not args.verified):
+        parser.error("production requires --staging-run or --direct, plus --verified")
     repo = "clinicforce-ai/clinicforce"
     nonce = uuid.uuid4().hex
     command = ["gh", "workflow", "run", "deploy.yml", "--repo", repo, "--ref", "main",
                "-f", f"environment={args.environment}", "-f", f"request_id={nonce}"]
     if args.staging_run:
         command += ["-f", f"staging_run_id={args.staging_run}"]
+    if args.direct:
+        command += ["-f", "direct_production=true"]
     if args.verified:
         command += ["-f", f"verification_reference={args.verified}"]
     subprocess.run(command, check=True)

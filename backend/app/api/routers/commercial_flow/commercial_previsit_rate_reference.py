@@ -99,8 +99,21 @@ def _attach_temporary_blue_cross_rates(result: dict, practice_id: str, inputs: d
                if str(row.get('source_reference') or '').startswith('library:')}
     lines = []
     published = False
+    clinic_export = False
+    plan_names = ((result.get('plan_details') or {}).get('stedi') or {}).get('names') or []
+    biopsy_group_ppo = (payer_name == 'UnitedHealthcare' and len(plan_names) == 1
+        and _api.re.fullmatch(r'LPPO\s*[- ]\s*UNITED\s*HEALTHCARE\s+GROUP\s+MEDICARE\s+ADVANTAGE\s*\(?PPO?\)?',
+                              str(plan_names[0]).strip(), _api.re.I))
     for code in codes:
         rate = by_code.get((code['code'], ','.join(code.get('modifiers') or [])))
+        if (not rate and biopsy_group_ppo and _api.network_participation.is_nmct_practice(practice_id)
+                and pos == '11' and '2026-01-01' <= date <= '2026-12-31'
+                and any(row.get('code') == '11104' for row in codes)
+                and ('11104', '') in by_code and code['code'] == '99213'
+                and code.get('units') == 1 and not code.get('modifiers')):
+            rate = {'allowed_cents': 7615,
+                    'source_reference': 'clinic_supplied:blue_choice_ppo_fee_export'}
+            clinic_export = True
         if (not rate and not code.get('modifiers') and '2026-05-01' <= date <= '2026-12-31'
                 and code['code'] in BCBSTX_2026_OTHER_CODES):
             rate = {'allowed_cents': BCBSTX_2026_OTHER_CODES[code['code']],
@@ -113,7 +126,8 @@ def _attach_temporary_blue_cross_rates(result: dict, practice_id: str, inputs: d
                           'source_reference': rate['source_reference']})
     if lines:
         result['temporary_rate_reference'] = {'source': ('Blue Cross Texas clinic and published 2026 fee references'
-            if published else 'NMCT Clinical Library Blue Cross fee schedule'),
+            if published else 'NMCT Clinical Library and clinic-supplied Blue Choice PPO fee export'
+            if clinic_export else 'NMCT Clinical Library Blue Cross fee schedule'),
             'lines': lines, 'complete': len(lines) == len(codes),
             'reference_place_of_service': reference_pos,
             'message': (f'Temporary CPT price reference only. Published unmodified CTA amounts are from the BCBSTX 2026 professional Other Codes schedule. These are not {payer_name} contracted allowances or a patient amount to collect.'
@@ -122,6 +136,8 @@ def _attach_temporary_blue_cross_rates(result: dict, practice_id: str, inputs: d
                         if payer_name == 'Cigna' else
                         'Temporary CPT price reference only. These Blue Cross clinic rates are not confirmed allowed amounts for this BlueCard member; the conditional patient share is shown separately.'
                         if payer_name == 'BlueCard member' else
+                        'Temporary CPT price reference only. These Blue Cross rates are not UnitedHealthcare contracted allowances. A separately labeled provisional target may use them with its stated full-deductible assumption.'
+                        if payer_name == 'UnitedHealthcare' else
                         f'Temporary CPT price reference only. These are Blue Cross rates, not {payer_name} contracted allowances or a patient amount to collect.')
                        + (' The source is an office POS 11 fee used as a reference for home televisit POS 10.'
                           if reference_pos != pos else '')}

@@ -3,12 +3,11 @@ from __future__ import annotations
 from app.api.routers import commercial_estimator as _api
 from app.insurance.identity import patient_benefits_bound, patient_plan_applies, payer_identity_verified
 from app.insurance.network_participation import verified_in_network, verified_out_of_network
-from app.insurance import blue_cross_proxy, evidence_resolution, group_contract_support, published_plan_benefits
+from app.insurance import evidence_resolution, group_contract_support, published_plan_benefits
 from app.api.routers.commercial_flow.commercial_previsit_finish import _payer_plan_pricing_source
 from app.api.routers.commercial_flow.commercial_previsit_network_guard import recheck_saved_network_evidence, recheck_saved_payer_message
-from app.api.routers.commercial_flow.commercial_previsit_saved_pricing import _reprice_saved_new_network, guard_unresolved_telehealth, guard_telehealth_guidance, restore_active_blue_cross_insurance, retain_conflicted_insurance, refresh_saved_cigna_office_benefits
+from app.api.routers.commercial_flow.commercial_previsit_saved_pricing import _reprice_saved_new_network, guard_unresolved_telehealth, guard_telehealth_guidance, restore_active_blue_cross_insurance, retain_conflicted_insurance, refresh_saved_cigna_office_benefits, upgrade_saved_biopsy_preview, refresh_saved_cross_payer_planning
 from app.api.routers.commercial_flow.commercial_previsit_requirements import refresh_saved_requirements
-from app.api.routers.commercial_flow.commercial_previsit_rate_reference import refresh_saved_temporary_rates
 from app.api.routers.commercial_flow.commercial_previsit_enrollment import _enrollment_failure
 from app.api.routers.commercial_flow.commercial_previsit_service_scope import retain_incomplete_service_evidence as _retain_incomplete_service_evidence
 from app.api.routers.commercial_flow.commercial_previsit_benefits import case_benefits as _case_benefits
@@ -327,6 +326,7 @@ def _recheck_saved_payer_allowance(result: dict, case: dict, practice_id: str) -
     result.pop('planning_estimate', None)
 def _previsit_result(case: dict, practice_id: str | None = None) -> dict:
     result = _api.deepcopy(case['previsit_context']['result'])
+    upgrade_saved_biopsy_preview(result, case)
     refresh_saved_cigna_office_benefits(result, case, practice_id or '')
     availity = case.get('availity_visit_reference') or {}
     if (availity.get('evidence') and availity.get('context_token') == case['previsit_context'].get('context_token')
@@ -381,16 +381,7 @@ def _previsit_result(case: dict, practice_id: str | None = None) -> dict:
                 group_contract_support.eligibility_route(result, str(payer_id or ''), route_payer))
         _recheck_saved_payer_allowance(result, case, practice_id)
         refresh_saved_requirements(_api, result, case, practice_id)
-        for key in ('fee_proxy_estimate', 'temporary_rate_reference', 'aetna_diagnostic_reference'):
-            result.pop(key, None)
-        context = case['previsit_context']
-        refresh_saved_temporary_rates(result, practice_id, context.get('inputs') or {},
-                                      context.get('source') or {}, route_payer)
-        if proxy := (blue_cross_proxy.estimate(result, str(result.get('service_date') or ''))
-                     or blue_cross_proxy.cigna_estimate(result, str(result.get('service_date') or ''))
-                     or blue_cross_proxy.cigna_oap_family_office_estimate(result, str(result.get('service_date') or ''))
-                     or blue_cross_proxy.cigna_oap_office_scenario(result, str(result.get('service_date') or ''))):
-            result['fee_proxy_estimate'] = proxy
+        refresh_saved_cross_payer_planning(result, case, practice_id, route_payer)
     result['revision'] = case.get('revision', 0)
     check_from = max(_api._insurance_check_from(case) or '',
         ((case['previsit_context'].get('source', {}).get('coverage_period') or {}).get('start') or '')[:10])

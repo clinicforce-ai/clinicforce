@@ -15,6 +15,10 @@ on:
       staging_run_id:
         description: Successful main-branch staging run to promote unchanged
         type: string
+      direct_production:
+        description: Build verified main and deploy production without a staging deployment
+        type: boolean
+        default: false
       verification_reference:
         description: Required for production; reference to successful representative workflow checks (no patient data)
         type: string
@@ -86,6 +90,7 @@ jobs:
           node ../testing/test_ecw_visit_dates.mjs
           node testing/member-benefits-ui.mjs
           node testing/uhc-saved-projection-ui.mjs
+          node ../testing/uhc-biopsy-target-ui.mjs
           node testing/televisit-collection-ui.mjs
           node ../testing/cigna-office-collection-ui.mjs
           node ../testing/bluecard-office-ui.mjs
@@ -97,7 +102,10 @@ jobs:
 
 
   build:
-    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && inputs.environment != 'production'
+    if: >-
+      github.event_name != 'pull_request' && github.ref == 'refs/heads/main' &&
+      (inputs.environment != 'production' || inputs.direct_production) &&
+      !(github.event_name == 'push' && contains(github.event.head_commit.message, '[direct-production]'))
     needs: verify
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -151,7 +159,7 @@ jobs:
       always() && needs.verify.result == 'success' &&
       github.event_name != 'pull_request' && github.ref == 'refs/heads/main' &&
       (needs.build.result == 'success' ||
-       (github.event_name == 'workflow_dispatch' && inputs.environment == 'production'))
+       (github.event_name == 'workflow_dispatch' && inputs.environment == 'production' && !inputs.direct_production))
     needs: [verify, build]
     runs-on: ubuntu-latest
     timeout-minutes: 60
@@ -169,17 +177,23 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           STAGING_RUN: ${{ inputs.staging_run_id }}
           VERIFICATION_REFERENCE: ${{ inputs.verification_reference }}
+          DIRECT_PRODUCTION: ${{ inputs.direct_production }}
         run: |
           set -euo pipefail
           test -n "${VERIFICATION_REFERENCE//[[:space:]]/}" || { echo 'Successful workflow verification is required'; exit 1; }
-          python3 scripts/check_release.py "$STAGING_RUN"
+          if [[ "$DIRECT_PRODUCTION" == "true" ]]; then
+            test -z "$STAGING_RUN" || { echo 'Direct production cannot take a staging run'; exit 1; }
+            echo "sha=$GITHUB_SHA" >> "$GITHUB_OUTPUT"
+          else
+            python3 scripts/check_release.py "$STAGING_RUN"
+          fi
       - uses: actions/download-artifact@v4
-        if: inputs.environment != 'production'
+        if: inputs.environment != 'production' || inputs.direct_production
         with:
           name: release
           path: release
       - uses: actions/download-artifact@v4
-        if: inputs.environment == 'production'
+        if: inputs.environment == 'production' && !inputs.direct_production
         with:
           name: release
           path: release
