@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from app.api.routers import commercial_estimator as _api
-from app.api.routers.commercial_flow.commercial_previsit_rate_reference import _attach_temporary_aetna_rates, _attach_temporary_uhc_rates, _attach_temporary_blue_cross_rates, attach_prudent_buyer_office_reference, prudent_buyer_office_reference
+from app.api.routers.commercial_flow.commercial_previsit_rate_reference import _attach_temporary_aetna_rates, _attach_temporary_uhc_rates, _attach_temporary_blue_cross_rates, attach_prudent_buyer_office_reference, attach_blue_cross_reference_if_unpriced, prudent_buyer_office_reference
 from app.api.routers.commercial_flow.commercial_previsit_network_guard import apply_admin_nonparticipation, apply_nmct_cigna_administrator_attestation, apply_nmct_library_contract, apply_nmct_contract_absence, scoped_admin_nonparticipation, record_confirmed_out_of_network, resolve_unlinked_blue_route
 from app.api.routers.commercial_flow.commercial_previsit_service_scope import reviewed_service_types as _reviewed_service_types
 from app.api.routers.commercial_flow.commercial_previsit_context import ecw_case_data as _ecw_case_data
@@ -390,6 +390,7 @@ def _attach_previsit_pricing(result: dict, practice_id: str, inputs: dict, sourc
                 practice_id, inputs, priced_source, payer_id, result['codes'], benefits,
                 payload=payload, review=review, payer_route_id=payer_id)
             result['issues'].extend(issues)
+            attach_blue_cross_reference_if_unpriced(result, practice_id, inputs, source, payer_name)
             return
         if (not nmct and not exclusion and len(route_connections) <= 1 and resolve_unlinked_blue_route(
                 result, practice_id, inputs, source, payer_id, route_payer, benefits)):
@@ -398,6 +399,7 @@ def _attach_previsit_pricing(result: dict, practice_id: str, inputs: dict, sourc
                 practice_id, inputs, priced_source, payer_id, result['codes'], benefits,
                 payload=payload, review=review, payer_route_id=payer_id)
             result['issues'].extend(issues)
+            attach_blue_cross_reference_if_unpriced(result, practice_id, inputs, source, payer_name)
             return
         draft = [row for row in payer_connections if row.get('stedi_payer_id') == payer_id
                  and row.get('status') == 'draft']
@@ -411,6 +413,7 @@ def _attach_previsit_pricing(result: dict, practice_id: str, inputs: dict, sourc
             service_date=inputs.get('service_date', ''), reviews=(review or {}).get('lines'),
             alternatives=not (review or {}).get('selected_ids') and bool(result['codes']) and all(row.get('source') in {
                 'conditional office E/M alternative', 'conditional NCS alternative'} for row in result['codes']))
+        attach_blue_cross_reference_if_unpriced(result, practice_id, inputs, source, payer_name)
         return
     connection = connections[0]
     scope_complete = all((service_date, (inputs.get('rendering_provider') or {}).get('npi'),
@@ -492,3 +495,4 @@ def _attach_previsit_pricing(result: dict, practice_id: str, inputs: dict, sourc
     result["price_range"], issues = _api._previsit_range(practice_id, inputs, priced_source, connection["id"], result["codes"], benefits,
                                                   payload=payload, review=review, payer_route_id=payer_id)
     result["issues"].extend(issues)
+    attach_blue_cross_reference_if_unpriced(result, practice_id, inputs, source, payer_name)

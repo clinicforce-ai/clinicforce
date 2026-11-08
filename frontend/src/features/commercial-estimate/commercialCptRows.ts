@@ -5,6 +5,7 @@ import { serviceRowLabel } from '../insurance-estimate/serviceRowLabel'
 import { aetnaSignatureOfficeNoDeductible } from './payerReportedPartialCopay'
 import type { bluecardOfficeDeductibleScenario } from './bluecardOfficeDeductibleScenario'
 import { money, range } from './format'
+import { ticTreatmentRows } from './ticTreatmentRows'
 
 export function commercialVisitReason(result: PrevisitEstimate, fallback: string): string {
   const reason = result.reason || fallback || 'Not recorded'
@@ -77,8 +78,9 @@ export function commercialCptRows(
             : 'Provisional service scenario used for this estimate'
           : undefined,
     },
-    candidates:
-      !lines.length && suggestedCodes.length
+    candidates: [
+      ...ticTreatmentRows(result),
+      ...(!lines.length && suggestedCodes.length
         ? [
             {
               label: 'Coding assistant candidates',
@@ -86,7 +88,8 @@ export function commercialCptRows(
               detail: 'Confirm the planned injection anatomy before selecting a billable CPT.',
             },
           ]
-        : [],
+        : []),
+    ],
     unpriced: {
       label: 'Planned CPTs',
       value: preview ? `CPT ${preview.code} × 1 · provisional` : 'No priced CPTs selected',

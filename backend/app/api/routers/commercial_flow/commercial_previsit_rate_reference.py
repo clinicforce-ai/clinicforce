@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from app.api.routers import commercial_estimator as _api
+from app.logs.logger import log_warning
 
 BCBSTX_2026_OTHER_CODES = {'70496': 22719, '70498': 22693}
 BCBSTX_2026_OTHER_CODES_SOURCE = ('https://www.bcbstx.com/docs/provider/tx/standards/general-reimbursement-information/'
@@ -53,8 +54,22 @@ def refresh_saved_temporary_rates(result: dict, practice_id: str, inputs: dict, 
         _attach_temporary_aetna_rates(result, practice_id, inputs, source)
     elif prudent_buyer_office_reference(result):
         attach_prudent_buyer_office_reference(result, practice_id, inputs, source)
+    elif _api.re.search(r'blue cross|bcbstx|blue shield', payer_name, _api.re.I):
+        attach_blue_cross_reference_if_unpriced(result, practice_id, inputs, source, payer_name)
     elif payer_name and not _api.re.search(r'blue cross|bcbstx|blue shield|humana', payer_name, _api.re.I):
         _attach_temporary_blue_cross_rates(result, practice_id, inputs, source, payer_name)
+
+def attach_blue_cross_reference_if_unpriced(result: dict, practice_id: str, inputs: dict,
+                                            source: dict, payer_name: str) -> None:
+    if not _api.re.search(r'blue cross|bcbstx|blue shield', payer_name, _api.re.I):
+        return
+    price = result.get('price_range') or {}
+    if price.get('complete') is True and all(row.get('allowed_cents') is not None for row in price.get('lines') or []):
+        return
+    try:
+        _attach_temporary_blue_cross_rates(result, practice_id, inputs, source, payer_name)
+    except Exception as exc:
+        log_warning('Blue Cross fee reference', 'Optional reference unavailable (%s).', type(exc).__name__)
 
 def _attach_temporary_blue_cross_rates(result: dict, practice_id: str, inputs: dict, source: dict,
                                        payer_name: str) -> None:
@@ -136,6 +151,8 @@ def _attach_temporary_blue_cross_rates(result: dict, practice_id: str, inputs: d
                         if payer_name == 'Cigna' else
                         'Temporary CPT price reference only. These Blue Cross clinic rates are not confirmed allowed amounts for this BlueCard member; the conditional patient share is shown separately.'
                         if payer_name == 'BlueCard member' else
+                        'BCBSTX clinic fee reference for the selected CPT. The member product and BlueCard pricing path still need confirmation before this can be called an insured allowed amount.'
+                        if _api.re.search(r'blue cross|bcbstx|blue shield', payer_name, _api.re.I) else
                         'Temporary CPT price reference only. These Blue Cross rates are not UnitedHealthcare contracted allowances. A separately labeled provisional target may use them with its stated full-deductible assumption.'
                         if payer_name == 'UnitedHealthcare' else
                         f'Temporary CPT price reference only. These are Blue Cross rates, not {payer_name} contracted allowances or a patient amount to collect.')

@@ -689,6 +689,7 @@ def test_current_library_contract_decides_network_independently_of_price(monkeyp
 @pytest.mark.parametrize('payer_label, practice_id', [
     ('United Healthcare', 'clinic'), ('United Health Care', 'clinic'),
     ('Aetna', network_participation.NMCT_PRACTICE_ID), ('Cigna', 'clinic'), ('phcs', 'clinic'),
+    ('Blue Cross Blue Shield of Texas · GA POS BLUECHOICE OA', 'clinic'),
 ])
 def test_other_payers_use_scoped_blue_cross_library_rate_only_as_temporary_reference(monkeypatch, payer_label, practice_id):
     payer = {'id': 'bcbs', 'display_name': 'Blue Cross and Blue Shield of Texas',
@@ -726,6 +727,12 @@ def test_other_payers_use_scoped_blue_cross_library_rate_only_as_temporary_refer
         inputs['place_of_service'] = '11'
     assert result['price_range']['lines'][0]['allowed_cents'] is None
     assert benefits['network_status'] == 'unknown'
+    if payer_label.startswith('Blue Cross'):
+        from app.api.routers.commercial_flow import commercial_previsit_rate_reference as rate_reference
+        result.pop('temporary_rate_reference')
+        rate_reference.refresh_saved_temporary_rates(result, practice_id, inputs, source, payer)
+        assert result['temporary_rate_reference']['lines'][0]['unit_reference_cents'] == 10117
+        assert 'member product' in result['temporary_rate_reference']['message']
     source['location_id'] = 'different-office'
     result = {'payer': payer_label, 'codes': [{'code': '99203', 'units': 1}], 'issues': []}
     api._attach_previsit_pricing(result, practice_id, inputs, source, 'uhc-route', benefits)

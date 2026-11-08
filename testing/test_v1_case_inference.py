@@ -51,6 +51,22 @@ def test_cpt_suggestions_passes_the_last_completed_visit_to_bedrock():
     assert request["available_codes"][0]["code"] == "95913"
 
 
+def test_fee_schedule_tic_review_receives_public_guidance_without_new_catalog_codes():
+    rates = [{'code': '99203', 'description': 'New patient office visit', 'allowed_cents': 10117}]
+    guidance = [{'label': 'CDC', 'url': 'https://www.cdc.gov/example',
+                 'status': 'retrieved', 'excerpt': 'CBIT may help impairing tics.'}]
+    payload = {'groups': [group('office', ['99203'], category='visit')],
+               'notes': ['Tic treatment requires an assessment.']}
+    with patch.object(cpt_suggester.boto3, 'client') as client, \
+            patch.object(cpt_suggester.tic_web_evidence, 'fetch_tic_guidance', return_value=guidance) as web:
+        client.return_value.converse.return_value = tool_response(payload)
+        assert cpt_suggester.suggest_cpt_codes('Reason: tics', rates) == payload
+    web.assert_called_once_with()
+    request = json.loads(client.return_value.converse.call_args.kwargs['messages'][0]['content'][0]['text'])
+    assert request['public_guidance'] == guidance
+    assert request['available_codes'] == [{'code': '99203', 'description': 'New patient office visit'}]
+
+
 def test_generic_televisit_gets_a_conditional_history_baseline_when_model_has_no_choice():
     history = [{"date": "2026-08-19", "reason": "Poss Neuropath; New Patient; Office Visit, New Pt., Level 4", "coded_services": []}]
     with patch.object(cpt_suggester.boto3, "client") as client:
@@ -58,6 +74,22 @@ def test_generic_televisit_gets_a_conditional_history_baseline_when_model_has_no
         suggestions = cpt_suggester.suggest_preliminary_cpt_codes("Visit type: Televisit\nPatient visit status: eClinicalWorks did not explicitly label this appointment new or established; do not infer it.", history)
     assert [candidate["code"] for candidate in suggestions["groups"][0]["codes"]] == ["99204", "99214"]
     assert "Confirm today's patient status" in suggestions["groups"][0]["codes"][0]["reason"]
+
+
+def test_preliminary_tic_review_receives_history_and_public_guidance():
+    history = [{'date': '2026-10-01', 'reason': 'Prior tic assessment',
+                'coded_services': ['99213'], 'diagnoses': ['F959']}]
+    guidance = [{'label': 'CDC', 'url': 'https://www.cdc.gov/example',
+                 'status': 'retrieved', 'excerpt': 'CBIT may help impairing tics.'}]
+    payload = {'groups': [], 'notes': ['Current visit documents no separate therapy service.']}
+    with patch.object(cpt_suggester.boto3, 'client') as client, \
+            patch.object(cpt_suggester.tic_web_evidence, 'fetch_tic_guidance', return_value=guidance) as web:
+        client.return_value.converse.return_value = preliminary_tool_response(payload)
+        assert cpt_suggester.suggest_preliminary_cpt_codes('Reason: tics', history) == payload
+    web.assert_called_once_with()
+    request = json.loads(client.return_value.converse.call_args.kwargs['messages'][0]['content'][0]['text'])
+    assert request['prior_completed_appointments'] == history
+    assert request['public_guidance'] == guidance
 
 
 def test_cpt_suggestions_fall_back_to_uploaded_description_matches():
