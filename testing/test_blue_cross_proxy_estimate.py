@@ -5,6 +5,7 @@ from copy import deepcopy
 from app.insurance import amount_explanation, collection_guidance, commercial, contract_requirements, cpt_rules, encounter_summary
 from app.api.schemas.commercial import CollectionPolicyInput
 from app.insurance.blue_cross_proxy import biopsy_collection_target, estimate
+from app.insurance.choice_plus_emg_proxy import choice_plus_emg_estimate
 from app.insurance.requirements.published import _published_rule
 from app.api.routers import commercial_estimator as api  # Register workflow imports.
 from app.api.routers.commercial_flow import commercial_previsit_status as saved_status
@@ -42,6 +43,37 @@ def test_same_day_ncs_and_standalone_emg_is_invalid():
     assert cpt_rules.service_definition('95861')['service_type'] == '73'
     assert cpt_rules.service_selection_issues(['95908', '95861'])
     assert not cpt_rules.service_selection_issues(['95908', '95886'])
+
+
+def test_choice_plus_emg_applies_deductible_before_coinsurance_and_oop_cap():
+    result = _result(group='synthetic-choice-plus', coinsurance='20', network='in_network')
+    result['plan_details']['stedi']['names'] = ['UNITEDHEALTHCARE CHOICE PLUS']
+    result['benefits'].update(network_source='clinic_library_contract',
+                              deductible_remaining_cents=330309,
+                              oop_remaining_cents=455369)
+    result['codes'][1]['units'] = 1
+    result['price_range']['lines'][1]['units'] = 1
+    result['temporary_rate_reference']['lines'][1]['units'] = 1
+    for line in result['price_range']['lines']:
+        line['benefits']['deductible_remaining_cents'] = 330309
+        line['benefits']['oop_remaining_cents'] = 455369
+    proxy = choice_plus_emg_estimate(result, '2026-11-09')
+    assert proxy['reference_total_cents'] == 19429
+    assert proxy['deductible_cents'] == 19429
+    assert proxy['coinsurance_cents'] == 0
+    assert proxy['patient_share_cents'] == 19429
+    assert [row['coinsurance_base_cents'] for row in proxy['lines']] == [0, 0]
+    result['benefits']['deductible_remaining_cents'] = 10000
+    for line in result['price_range']['lines']:
+        line['benefits']['deductible_remaining_cents'] = 10000
+    proxy = choice_plus_emg_estimate(result, '2026-11-09')
+    assert proxy['deductible_cents'] == 10000
+    assert proxy['coinsurance_cents'] == 1886
+    assert proxy['patient_share_cents'] == 11886
+    result['benefits']['oop_remaining_cents'] = 5000
+    assert choice_plus_emg_estimate(result, '2026-11-09')['patient_share_cents'] == 5000
+    result['benefits']['network_source'] = 'clinic_contract_inventory'
+    assert choice_plus_emg_estimate(result, '2026-11-09') is None
 
 
 def test_uhc_biopsy_proxy_uses_full_deductible_assumption_only_when_unresolved():

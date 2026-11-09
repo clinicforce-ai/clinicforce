@@ -1,6 +1,12 @@
 import type { CommercialAppointment } from './commercial-common'
 import type { PrevisitEstimate } from './commercial-previsit'
 
+export type FeeProxyBasis =
+  | 'bcbstx_fee_proxy'
+  | 'bcbstx_uhc_in_network_fee_proxy'
+  | 'bcbstx_uhc_choice_plus_fee_proxy'
+  | 'bcbstx_cigna_fee_proxy'
+
 export type TemporaryRateReference = {
   source: string
   message: string

@@ -6,7 +6,7 @@ from app.api.routers.commercial_flow.commercial_previsit_catalog import build_ca
 from app.api.routers.commercial_flow.commercial_previsit_requirements import attach_requirements
 from app.api.routers.commercial_flow.commercial_previsit_tpa import cigna_primary_route
 from app.insurance.identity import patient_benefits_bound, patient_plan_applies
-from app.insurance import blue_cross_proxy, botox_review, evidence_resolution, published_plan_benefits
+from app.insurance import blue_cross_proxy, botox_review, choice_plus_emg_proxy, evidence_resolution, published_plan_benefits
 
 def _visit_context_parts(inputs: dict, source: dict) -> dict:
     context = {'coverage': {k: v for k, v in _api._coverage_snapshot(inputs, source).items() if k != 'other_active_coverage'},
@@ -145,7 +145,7 @@ def _finish_previsit(result: dict, case: dict, inputs: dict, source: dict, paylo
     plan_key = _api.hashlib.sha256(_api.json.dumps([token, review.get('emg_required'), review.get('separate_em_planned'), source.get('recent_completed_appointments', []),
         [(row['id'], row.get('units')) for row in available]], sort_keys=True).encode()).hexdigest()
     prior_plan = case.get('previsit_plan') or {}
-    if (prior_plan.get('key') != plan_key or prior_plan.get('plan', {}).get('version') != 18
+    if (prior_plan.get('key') != plan_key or prior_plan.get('plan', {}).get('version') != 19
             or prior_plan.get('plan', {}).get('method') == 'unavailable'):
         prior_plan = {'key': plan_key, 'plan': _api.cpt_suggester.recommend_visit_plan(
             planning_inputs, source, available)}
@@ -285,7 +285,8 @@ def _finish_previsit(result: dict, case: dict, inputs: dict, source: dict, paylo
     _api.practice_prices.apply_visit_quote(result, review)
     attach_requirements(_api, result, case, planning_inputs, source, session, connections, payer_id)
     result.pop('fee_proxy_estimate', None)
-    if proxy := (blue_cross_proxy.estimate(result, inputs['service_date'])
+    if proxy := (choice_plus_emg_proxy.choice_plus_emg_estimate(result, inputs['service_date'])
+                 or blue_cross_proxy.estimate(result, inputs['service_date'])
                  or blue_cross_proxy.cigna_estimate(result, inputs['service_date'])
                  or blue_cross_proxy.cigna_oap_family_office_estimate(result, inputs['service_date'])
                  or blue_cross_proxy.cigna_oap_office_scenario(result, inputs['service_date'])):

@@ -18,7 +18,7 @@ import {
   commercialVisitReason,
 } from './commercialCptRows'
 import { commercialOopRows, familyOopLimitApplied } from './commercialOopRows'
-import { familyDeductibleRow } from './familyDeductibleRow'
+import { choicePlusDeductibleRows, familyDeductibleRow } from './familyDeductibleRow'
 import { suggestedDiagnosisRows } from './suggestedDiagnosisRows'
 import { cignaCardReference, cignaCardRows } from './cignaCardReference'
 import { hasGeneralOnlyOfficeDeductible } from './deductibleSource'
@@ -230,9 +230,7 @@ export default function CommercialCostBreakdown({
                 benefits?.deductible_applies !== true &&
                 benefits?.deductible_annual_cents == null
               ? '$0.00 annual · no medical deductible (published plan)'
-              : feeProxy != null &&
-                  !cignaFeeProxy &&
-                  feeProxy.basis !== 'bcbstx_uhc_in_network_fee_proxy'
+              : feeProxy?.basis === 'bcbstx_fee_proxy'
                 ? `${money(feeProxy.deductible_cents)} annual · published group plan`
                 : [
                     benefits?.deductible_annual_cents != null
@@ -289,6 +287,7 @@ export default function CommercialCostBreakdown({
       cignaFamilyOffice ? feeProxy!.deductible_cents : null,
       cignaFamilyOffice && feeProxy!.deductible_applicability === 'assumed',
     ),
+    ...choicePlusDeductibleRows(feeProxy),
     {
       label: 'Coinsurance',
       value: aetnaPlanning

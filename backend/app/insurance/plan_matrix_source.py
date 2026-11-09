@@ -45,7 +45,8 @@ def _names(value: str) -> set[str]:
             names.add(_key(item))
         if ' / ' in item:
             for part in item.split(' / '):
-                if len(part.strip()) >= 5 and (len(part.split()) > 1 or part.strip() == 'Choice'):
+                if len(part.strip()) >= 5 and (len(part.split()) > 1 or part.strip() == 'Choice'
+                                               or _key(part) in {'navigate', 'nexusaco'}):
                     names.add(_key(part))
     return names
 

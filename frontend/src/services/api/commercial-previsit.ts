@@ -16,6 +16,7 @@ import type {
   VisitCode,
   VisitPricedLine,
   UhcBiopsyCollectionTarget,
+  FeeProxyBasis,
 } from './commercial-visit-types'
 import type { PrevisitBenefits } from './commercial-benefits'
 import type { PaymentExplanation } from './commercial-explanation'
@@ -46,7 +47,7 @@ export type PrevisitEstimate = {
   temporary_rate_reference?: TemporaryRateReference
   aetna_diagnostic_reference?: AetnaDiagnosticReference
   fee_proxy_estimate?: {
-    basis: 'bcbstx_fee_proxy' | 'bcbstx_uhc_in_network_fee_proxy' | 'bcbstx_cigna_fee_proxy'
+    basis: FeeProxyBasis
     status: 'provisional'
     scenario_kind?:
       | 'oap_office_copay_general_coinsurance'
