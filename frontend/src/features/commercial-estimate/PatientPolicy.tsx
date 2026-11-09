@@ -210,7 +210,9 @@ export default function PatientPolicy({
                   matched:
                     'Card OCR matched the available eCW policy details before the payer check.',
                   conflict:
-                    result.recovery?.outcome === 'recovered'
+                    result.card_check.independent_ecw_check
+                      ? 'The saved card differs from eCW. ClinicForce checked the selected first eCW policy independently; review the card before changing policy details.'
+                    : result.recovery?.outcome === 'recovered'
                       ? 'The payer confirmed the card-based check. eCW was not changed.'
                       : result.recovery?.state === 'pending'
                         ? 'The card and eCW differ. A single card-based payer check is in progress.'

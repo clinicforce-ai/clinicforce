@@ -8,7 +8,16 @@ export function healthselectEvidenceRows(
 ): { card: CostBreakdownRow[]; coding: CostBreakdownRow[] } {
   return {
     card:
-      healthselectZero && result.card_check?.status === 'matched'
+      healthselectZero && result.card_check?.independent_ecw_check
+        ? [
+            {
+              label: 'Insurance card',
+              value: 'Saved card differs from the selected eCW policy',
+              detail:
+                'The payer check used the selected first eCW policy and its member ID. Review the card discrepancy; the $0 arrival amount comes from the matching payer response and published plan rule.',
+            },
+          ]
+        : healthselectZero && result.card_check?.status === 'matched'
         ? [
             {
               label: 'Insurance card',

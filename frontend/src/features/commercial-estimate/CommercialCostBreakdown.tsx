@@ -190,7 +190,9 @@ export default function CommercialCostBreakdown({
       detail: botoxPreview
         ? 'No injection copay was included in this provisional calculation'
         : healthselectZero
-          ? 'Fresh UHC virtual and specialist benefit: $0 copay. The card also prints $0 for a specialist.'
+          ? result.card_check?.independent_ecw_check
+            ? 'Fresh UHC virtual and specialist benefit: $0 copay. The saved card differs from the selected eCW policy and was not used for this payer check.'
+            : 'Fresh UHC virtual and specialist benefit: $0 copay. The card also prints $0 for a specialist.'
           : gehaZero
             ? 'Stedi reported a $0 office copay. The matched 2026 G.E.H.A High PSHB Medicare Advantage plan also publishes a $0 in-network specialist visit.'
             : humanaReferenceCopay != null

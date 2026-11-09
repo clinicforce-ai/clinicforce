@@ -94,3 +94,16 @@ def test_zero_arrival_requires_matching_card_and_zero_payer_terms():
         if 'plan_details' in change:
             changed['benefits'] = {**result['benefits'], 'published_plan_rule': None}
         assert collection_guidance.build(changed)['amount_cents'] is None
+
+
+def test_zero_arrival_from_independent_ecw_check_retains_card_discrepancy():
+    result = _visit()
+    result['card_check'] = {'status': 'conflict', 'conflicts': ['member_id', 'group_number'],
+                            'independent_ecw_check': True, 'patient_name_matches': False}
+    published_plan_benefits.apply_plan_terms(result['benefits'], result['plan_details']['stedi'],
+                                             result['service_date'], True)
+    guidance = collection_guidance.build(result)
+    assert guidance['basis'] == 'healthselect_ma_zero_televisit'
+    assert guidance['amount_cents'] == 0
+    result['price_range']['lines'][0]['benefits']['copay_cents'] = 2500
+    assert collection_guidance.build(result)['amount_cents'] is None

@@ -25,9 +25,10 @@ def applies(result: dict, *, member_bound: bool, source_errors: object,
         and (not line_blocker or line_blocker == ('service_secondary_coverage', str(lines[0].get('code'))))
         and not same_policy_conflict and not price.get('service_issues')
         and result.get('refresh_requires_selection') is not True
-        and card.get('status') not in {'conflict', 'multiple_cards'}
-        and not card.get('differences') and card.get('cms_plan_id') in {None, 'H2001-817'}
-        and card.get('patient_name_matches') is not False
+        and (card.get('status') == 'conflict' and card.get('independent_ecw_check') is True or
+             (card.get('status') not in {'conflict', 'multiple_cards'}
+              and not card.get('differences') and card.get('cms_plan_id') in {None, 'H2001-817'}
+              and card.get('patient_name_matches') is not False))
         and price.get('mode') == 'services'
         and len(lines) == len(result.get('codes') or []) == 1
         and lines[0].get('code') == result['codes'][0].get('code')

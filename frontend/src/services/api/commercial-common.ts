@@ -25,6 +25,7 @@ export type CommercialCardCheck = {
   conflicts: string[]
   differences: string[]
   alternative_supported?: boolean
+  independent_ecw_check?: boolean
   payer_comparison?: { ecw: string; card: string }
   office_copay_cents?: number
   cigna_card_reference?: CignaCardReference

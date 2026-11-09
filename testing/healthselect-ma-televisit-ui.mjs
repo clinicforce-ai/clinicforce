@@ -76,6 +76,16 @@ assert.ok(savedTable.includes('$0.00 at check-in'))
 const savedView = deriveCommercialEstimateView({ result: saved, appointments: [], selectedVisit: null,
   busy: null, error: null, readOnly: true, recovering: false })
 assert.equal(savedView.amountText, '$0.00')
+const independent = structuredClone(saved)
+independent.card_check = { status: 'conflict', conflicts: ['member_id', 'group_number'],
+  independent_ecw_check: true }
+const independentView = deriveCommercialEstimateView({ result: independent, appointments: [],
+  selectedVisit: null, busy: null, error: null, readOnly: false, recovering: false })
+assert.equal(independentView.amountText, '$0.00')
+const independentTable = renderToStaticMarkup(React.createElement(CommercialCostBreakdown,
+  { result: independent, model: independentView }))
+assert.ok(independentTable.includes('$0.00 at check-in'))
+assert.ok(independentTable.includes('Saved card differs from the selected eCW policy'))
 const summaryBundle = await rolldown({
   input: new URL('../frontend/src/features/commercial-estimate/ArrivalAmountSummary.tsx', import.meta.url).pathname,
 })

@@ -5,7 +5,7 @@ from app.api.routers import commercial_estimator as _api
 from app.api.routers.commercial_flow.commercial_previsit_saved import reuse_saved_eligibility
 from app.api.routers.commercial_flow.commercial_previsit_reuse import reuse_previsit_case, retain_saved_group_binding, support_saved_card_conflict, saved_visit_cases, saved_visit_review_date, telehealth_inquiry_coverage, telehealth_setting
 from app.api.routers.commercial_flow.commercial_previsit_submit import submit_previsit_eligibility
-from app.api.routers.commercial_flow.commercial_recovery_cards import _unique_ecw_member_conflict
+from app.api.routers.commercial_flow.commercial_recovery_cards import _independent_ecw_policy_check, _unique_ecw_member_conflict
 from app.api.routers.commercial_flow.commercial_previsit_appointment import load_previsit_appointment
 
 @_api.router.post("/appointments/previsit", description=(
@@ -66,7 +66,7 @@ from app.api.routers.commercial_flow.commercial_previsit_appointment import load
     "that insurer's HMO, PPO and Medicare Advantage products for the in-network tier; "
     "an exact product/provider rate is still required for a contracted CPT allowance. A missing Cigna contract PDF alone leaves a clinic-roster Cigna visit with unresolved provider participation instead of asserting out-of-network; administrator and product verification remain required. "
     "Contradictory provider-specific payer evidence requires review. evidence_resolution reports "
-    "unresolved facts; an in-network tier alone does not establish an amount to collect. A sole card member-ID conflict checks one active eCW policy using the eCW ID while preserving the conflict. A matching patient-specific pending upload sets card_check.reference_only for a conditional published plan reference and never supplies inquiry fields or collection. A matched HPI card can expose card_check.office_copay_cents for office-only planning, not payer-confirmed liability or imaging costs. A matching HPI card replaces an eCW PHCS or MultiPlan network label for payer routing and clears its payer IDs before the Stedi directory search. For NMCT on or after October 30, 2026, a matched active HPI/PHCS or HPI/MultiPlan card can use the dated clinic-stated in-network tier unless provider-specific payer evidence conflicts; this does not establish an HPI allowance. Unmodified 70496 and 70498 may use the published 2026 BCBSTX Other Codes fee as a labeled temporary reference, not another payer allowance or amount to collect. "
+    "unresolved facts; an in-network tier alone does not establish an amount to collect. A sole card member-ID conflict checks one active eCW policy using the eCW ID while preserving the conflict. With exactly two active ordered eCW policies, a saved card conflict that cannot support a card-directed check permits an independent inquiry of the selected first policy using its eCW member ID. card_check.independent_ecw_check records this path; the card discrepancy remains visible and cannot support a positive advance. A matched HealthSelect MA group 13546 virtual visit can show a $0 arrival amount only from a fresh patient-bound payer response with matching $0 copay, 0% coinsurance, no deductible and verified network. A matching patient-specific pending upload sets card_check.reference_only for a conditional published plan reference and never supplies inquiry fields or collection. A matched HPI card can expose card_check.office_copay_cents for office-only planning, not payer-confirmed liability or imaging costs. A matching HPI card replaces an eCW PHCS or MultiPlan network label for payer routing and clears its payer IDs before the Stedi directory search. For NMCT on or after October 30, 2026, a matched active HPI/PHCS or HPI/MultiPlan card can use the dated clinic-stated in-network tier unless provider-specific payer evidence conflicts; this does not establish an HPI allowance. Unmodified 70496 and 70498 may use the published 2026 BCBSTX Other Codes fee as a labeled temporary reference, not another payer allowance or amount to collect. "
     "A Cigna Medicare Supplement card paired with an Original Medicare eCW policy appears as card_check.supplementary_plan. It does not replace the primary payer or verify secondary benefits. A missing card member ID does not fail comparison. "
     "A BCBSTX Botox booking asks for office injection benefits first. When exactly one current suggested "
     "chemodenervation CPT has a scoped clinic fee, even if other suggestions lack fees, and the "
@@ -382,7 +382,13 @@ async def previsit_estimate(value: _api.PrevisitInput, request: _api.Request, ba
     card_member_conflict_only = _unique_ecw_member_conflict(result['card_check'], coverage)
     if card_member_conflict_only:
         result['issues'].append('The card member ID differs from eCW; checking the unique eCW policy without using the card number.')
-    if result['card_check']['status'] in {'conflict', 'multiple_cards'} and not card_member_conflict_only:
+    independent_ecw_check = _independent_ecw_policy_check(
+        result['card_check'], coverage, source, inputs['service_date'])
+    if independent_ecw_check:
+        result['card_check']['independent_ecw_check'] = True
+        result['issues'].append(
+            'The saved card differs from the selected first eCW policy. Checking that eCW member ID independently; the card discrepancy remains for review.')
+    if result['card_check']['status'] in {'conflict', 'multiple_cards'} and not (card_member_conflict_only or independent_ecw_check):
         conflicting = result['card_check']['status'] == 'conflict'
         kind = 'card_conflict' if conflicting else 'multiple_cards'
         result.update(eligibility_error=kind, eligibility_failure={

@@ -225,6 +225,25 @@ class PrevisitFlowTest(unittest.IsolatedAsyncioTestCase):
             card_fields={'payer': 'Blue Cross Blue Shield Tx', 'member_name': 'Pat Example',
                          'member_id': 'CARD-999'})
 
+    async def test_multiple_ecw_policies_check_selected_member_without_conflicting_card(self):
+        await self._flow(date.today().isoformat(), card_conflict=True, two_coverages=True,
+            card_fields={'payer': 'Blue Cross Blue Shield Tx', 'member_name': 'Pat Example',
+                         'member_id': 'OTHER-999', 'group_number': 'OTHER-GROUP'})
+
+    def test_card_conflict_does_not_promote_unordered_ecw_policies(self):
+        from app.api.routers.commercial_flow.commercial_recovery_cards import _independent_ecw_policy_check
+        coverage = {'patient_id': 'patient', 'coverage_id': 'first', 'member_id': 'M123',
+                    'relationship': '18', 'subscriber_first': 'Pat', 'subscriber_last': 'Example',
+                    'active_coverages': 2}
+        source = {'coverage_records': [
+            {'id': 'first', 'status': 'active', 'member_id': 'M123', 'order': 2},
+            {'id': 'second', 'status': 'active', 'member_id': 'OTHER', 'order': 1}]}
+        card = {'status': 'conflict', 'alternative_supported': False}
+        self.assertFalse(_independent_ecw_policy_check(card, coverage, source, '2026-11-09'))
+        source['coverage_records'][0]['order'] = 1
+        source['coverage_records'][1]['order'] = 2
+        self.assertTrue(_independent_ecw_policy_check(card, coverage, source, '2026-11-09'))
+
     async def test_multiple_card_sets_hold_first_stedi_request(self):
         await self._flow(date.today().isoformat(), card_status='multiple_cards')
 
@@ -543,7 +562,7 @@ class PrevisitFlowTest(unittest.IsolatedAsyncioTestCase):
     async def test_newer_conflicting_ecw_check_refreshes_cached_stedi_evidence(self):
         await self._flow(date.today().isoformat(), newer_ecw=True)
 
-    async def _flow(self, service_date, reject=False, retry_basic=False, payer_missing=False, refresh=False, newer_ecw=False, too_early=False, self_pay=False, coverage_start=None, saved_hold=False, enrollment_missing=False, ecw_saved=False, ecw_incomplete=False, medicare_secondary=False, billing_note=None, member_id_missing=False, card_fields=None, card_conflict=False, card_status=None, pos=None, scheduled_code=None, emg_review=False, expect_preliminary=False, visit_type='new', combined_emg=False, secondary_mismatch=False, cash_office=False, telehealth=False, confirmed_card=False, aetna_payer_id=None, cash_package=False):
+    async def _flow(self, service_date, reject=False, retry_basic=False, payer_missing=False, refresh=False, newer_ecw=False, too_early=False, self_pay=False, coverage_start=None, saved_hold=False, enrollment_missing=False, ecw_saved=False, ecw_incomplete=False, medicare_secondary=False, billing_note=None, member_id_missing=False, card_fields=None, card_conflict=False, card_status=None, pos=None, scheduled_code=None, emg_review=False, expect_preliminary=False, visit_type='new', combined_emg=False, secondary_mismatch=False, cash_office=False, telehealth=False, confirmed_card=False, aetna_payer_id=None, cash_package=False, two_coverages=False):
         if cash_office:
             self.cash_current.return_value = {'id': 'synthetic-cash', 'filename': 'synthetic.csv',
                 'effective_from': '2026-01-01', 'rows': [{'code': '99204', 'cash_cents': 25000,
@@ -582,6 +601,13 @@ class PrevisitFlowTest(unittest.IsolatedAsyncioTestCase):
         source = {"appointment_id": "visit-1", "_patient_id": "p", "coverage_id": "coverage-1", "active_coverages": 1,
                   "payer": "Blue Cross Blue Shield Tx", "plan": "CI", "rendering_provider": {"npi": "1234567890", "first_name": "Ada", "last_name": "Clinician"},
                   "billing_provider": {"name": "Clinic", "npi": "1811853260"}, "location_id": "office"}
+        if two_coverages:
+            source['active_coverages'] = 2
+            source['coverage_records'] = [
+                {'id': 'coverage-1', 'status': 'active', 'member_id': 'M123', 'order': 1,
+                 'payer': ['Blue Cross Blue Shield Tx']},
+                {'id': 'coverage-2', 'status': 'active', 'member_id': 'OTHER-456', 'order': 2,
+                 'payer': ['Other Insurer']}]
         saved_ecw = {'status': 'check_with_stedi'}
         if medicare_secondary:
             source.update(payer='Medicare of Texas', active_coverages=2)
@@ -874,6 +900,9 @@ class PrevisitFlowTest(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(result['card_check']['status'], 'conflict')
                 client.post.assert_awaited()
                 self.assertEqual(client.post.await_args.kwargs['json']['subscriber']['memberId'], 'M123')
+                if two_coverages:
+                    self.assertTrue(result['card_check']['independent_ecw_check'])
+                    self.assertIsNone(result['collection_guidance']['amount_cents'])
                 return
             if card_status == 'multiple_cards':
                 self.assertEqual(result['card_check']['status'], 'multiple_cards')

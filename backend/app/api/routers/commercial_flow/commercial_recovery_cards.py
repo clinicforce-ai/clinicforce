@@ -11,6 +11,27 @@ def _unique_ecw_member_conflict(card_check: dict, coverage: dict) -> bool:
             and coverage['coverage_id'] and coverage['member_id'])
 
 
+def _independent_ecw_policy_check(card_check: dict, coverage: dict, source: dict, day: str) -> bool:
+    """Check the selected first eCW policy without borrowing a conflicting card ID."""
+    if (card_check.get('status') != 'conflict' or card_check.get('alternative_supported')
+            or coverage.get('active_coverages') != 2 or not day
+            or not all(coverage.get(key) for key in ('patient_id', 'coverage_id', 'member_id',
+                                                     'relationship', 'subscriber_first', 'subscriber_last'))):
+        return False
+    records = [row for row in source.get('coverage_records') or []
+               if isinstance(row, dict) and row.get('status', '').casefold() == 'active'
+               and (not (row.get('period') or {}).get('start') or str(row['period']['start'])[:10] <= day)
+               and (not (row.get('period') or {}).get('end') or day <= str(row['period']['end'])[:10])]
+    if len(records) != 2:
+        return False
+    selected = next((row for row in records if row.get('id') == coverage['coverage_id']), None)
+    other = next((row for row in records if row.get('id') != coverage['coverage_id']), None)
+    return bool(selected and other and type(selected.get('order')) is int
+                and type(other.get('order')) is int and selected['order'] < other['order']
+                and _api.stedi_discovery.normalized(selected.get('member_id')) ==
+                    _api.stedi_discovery.normalized(coverage['member_id']))
+
+
 def _card_matches_other_ecw_coverage(fields: dict, source: dict, service_date: str) -> bool:
     """A different selected policy cannot hide one exact, active eCW card match."""
     normalized = _api.stedi_discovery.normalized
