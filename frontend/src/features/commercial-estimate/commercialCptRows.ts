@@ -51,6 +51,11 @@ export function commercialCptRows(
         ),
     ),
   ]
+  const officeAlternatives = !lines.length
+    ? (result.available_codes || [])
+        .filter((row) => row.source === 'conditional office E/M alternative')
+        .map((row) => row.code)
+    : []
   const aetnaOfficeCpt = aetnaSignatureOfficeNoDeductible(
     result,
     lines.length === 1 ? lines[0] : null,
@@ -80,12 +85,23 @@ export function commercialCptRows(
     },
     candidates: [
       ...ticTreatmentRows(result),
+      ...(!lines.length && officeAlternatives.length
+        ? [
+            {
+              label: 'Office visit options · choose one',
+              value: [...new Set(officeAlternatives)].map((code) => `CPT ${code}`).join('; '),
+              detail:
+                'These are alternatives for one visit. Select the level supported by planned medical decision making or time; the diagnosis alone does not set it.',
+            },
+          ]
+        : []),
       ...(!lines.length && suggestedCodes.length
         ? [
             {
               label: 'Coding assistant candidates',
               value: suggestedCodes.map((code) => `CPT ${code}`).join('; '),
-              detail: 'Confirm the planned injection anatomy before selecting a billable CPT.',
+              detail:
+                'Confirm the planned service and coding details before selecting a billable CPT.',
             },
           ]
         : []),

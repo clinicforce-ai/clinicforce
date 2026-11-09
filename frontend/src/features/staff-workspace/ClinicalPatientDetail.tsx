@@ -14,6 +14,7 @@ interface Props {
   onBack: () => void
   onDelete: () => void
   onOpenIntake: (id: string) => void
+  onRecheckEstimate: (intakeId: string, appointmentId: string) => void
   onRequestCard: (patient: ClinicalPatient) => void
 }
 
@@ -26,6 +27,7 @@ export default function ClinicalPatientDetail({
   onBack,
   onDelete,
   onOpenIntake,
+  onRecheckEstimate,
   onRequestCard,
 }: Props) {
   const [estimateRefresh, setEstimateRefresh] = useState(0)
@@ -89,6 +91,7 @@ export default function ClinicalPatientDetail({
         <LatestSavedEstimate
           key={`${selected.clinic_patient_id}:${estimateRefresh}`}
           patientId={selected.clinic_patient_id}
+          onRecheck={onRecheckEstimate}
         />
       )}
       <>

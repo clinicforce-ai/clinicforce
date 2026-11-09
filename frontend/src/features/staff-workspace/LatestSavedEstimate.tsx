@@ -15,7 +15,13 @@ type FeaturedEstimate = {
   reprojected?: boolean
 }
 
-export default function LatestSavedEstimate({ patientId }: { patientId: string }) {
+export default function LatestSavedEstimate({
+  patientId,
+  onRecheck,
+}: {
+  patientId: string
+  onRecheck: (intakeId: string, appointmentId: string) => void
+}) {
   const [featured, setFeatured] = useState<FeaturedEstimate | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(false)
@@ -94,6 +100,17 @@ export default function LatestSavedEstimate({ patientId }: { patientId: string }
             Recheck the current visit before collecting today; final responsibility follows the
             processed claim.
           </p>
+          {featured.snapshot.result.benefits?.active !== true &&
+            featured.snapshot.result.appointment_id && (
+              <button
+                type="button"
+                onClick={() =>
+                  onRecheck(featured.intakeId, featured.snapshot.result.appointment_id)
+                }
+              >
+                Check current coverage for this visit
+              </button>
+            )}
           <CommercialEstimator
             saved={featured.snapshot}
             intakeId={featured.intakeId}

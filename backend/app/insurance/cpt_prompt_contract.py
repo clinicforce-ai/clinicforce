@@ -98,10 +98,13 @@ The eClinicalWorks appointment context may be incomplete and there is no clinic 
 Return clinician-reviewable CPT/HCPCS candidates directly supported by the documented current
 service. Discuss possible diagnoses or treatments in notes when useful, without presenting them
 as performed or planned care. Do not invent units, modifiers, place of service, payer facts or prices.
-Do not choose an E/M level from a generic visit type, telehealth status, diagnosis or patient
-history alone. An E/M level requires documented medical decision
-making or qualifying time, and new versus established status must be explicitly supplied. If those
-facts are absent, explain what the clinician must document and return no E/M candidates.
+Do not choose one E/M level from a generic visit type, telehealth status, diagnosis or patient
+history alone. An E/M level requires documented medical decision making or qualifying time,
+and new versus established status must be explicitly supplied. When eCW supplies that status
+and the current reason supports an office assessment without a separately planned procedure,
+return the appropriate 99202–99205 or 99212–99215 family as mutually exclusive, unselected
+office-visit candidates. Explain that the clinician must document MDM or qualifying time before
+choosing a level. A diagnosis by itself does not support an additional procedure CPT.
 When a prior completed appointment is supplied, compare its reason and coded services with the
 current reason. A materially different current reason must be evaluated independently; you can copy
 a historical code only if it is directly supported by the current reason. If the only current context is a generic telehealth label, return a specifically

@@ -18,6 +18,7 @@ import { name, accountLabel } from './clinical-patient-labels'
 interface Props {
   initialPatientId?: string
   onOpenIntake: (id: string) => void
+  onRecheckEstimate: (intakeId: string, appointmentId: string) => void
   onRequestCard: (patient?: ClinicalPatient) => void
   onAddCard: () => void
   onPullEcw: () => void
@@ -26,6 +27,7 @@ type VisitResult = { day: string | null; time: number | null }
 export default function ClinicalPatientDashboard({
   initialPatientId,
   onOpenIntake,
+  onRecheckEstimate,
   onRequestCard,
   onAddCard,
   onPullEcw,
@@ -266,6 +268,7 @@ export default function ClinicalPatientDashboard({
         }}
         onDelete={() => void deletePatient()}
         onOpenIntake={onOpenIntake}
+        onRecheckEstimate={onRecheckEstimate}
         onRequestCard={onRequestCard}
       />
     )

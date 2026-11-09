@@ -11,6 +11,11 @@ import { bluecardOfficeDeductibleScenario } from './bluecardOfficeDeductibleScen
 
 function nextStep(model: CommercialEstimateModel, result: PrevisitEstimate) {
   const lines = result.price_range?.mode === 'services' ? result.price_range.lines || [] : []
+  if (result.benefits?.active !== true)
+    return {
+      title: 'Check coverage',
+      hint: 'Run eligibility for this visit before setting a collection amount.',
+    }
   if (!lines.length && result.service_plan?.method === 'unavailable')
     return {
       title: 'CPT suggestion unavailable',
@@ -18,8 +23,6 @@ function nextStep(model: CommercialEstimateModel, result: PrevisitEstimate) {
     }
   if (!lines.length && !result.selected_ids?.length)
     return { title: 'Select services', hint: 'Choose the planned CPTs for this visit.' }
-  if (result.benefits?.active !== true)
-    return { title: 'Check coverage', hint: 'Run eligibility for this visit.' }
   if (
     (result.benefits.has_secondary ||
       result.recovery?.reason_code === 'multiple_active_policies') &&
