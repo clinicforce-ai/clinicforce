@@ -106,7 +106,12 @@ export function AppShell() {
       setView('pin')
     }
   }
-  const openStaffInsurance = (id: string, version: 'v1' | 'v2' | 'commercial', refresh = false, appointmentId?: string) => {
+  const openStaffInsurance = (
+    id: string,
+    version: 'v1' | 'v2' | 'commercial',
+    refresh = false,
+    appointmentId?: string,
+  ) => {
     setResolveEcwPatient(false)
     setRefreshBenefits(refresh)
     setTargetCommercialVisit(appointmentId)

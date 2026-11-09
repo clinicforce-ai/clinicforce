@@ -281,7 +281,9 @@ export default function StaffWorkspaceView({ model }: { model: StaffWorkspaceMod
             initialPatientId={historyPatientId}
             onPullEcw={() => navigate('lookup')}
             onOpenIntake={openIntake}
-            onRecheckEstimate={(intakeId, appointmentId) => onOpenInsurance(intakeId, 'commercial', true, appointmentId)}
+            onRecheckEstimate={(intakeId, appointmentId) =>
+              onOpenInsurance(intakeId, 'commercial', true, appointmentId)
+            }
             onRequestCard={requestPatientCard}
             onAddCard={() => {
               setFiles([])

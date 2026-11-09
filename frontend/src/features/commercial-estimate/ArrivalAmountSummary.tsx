@@ -12,7 +12,10 @@ import { bluecardOfficeDeductibleScenario } from './bluecardOfficeDeductibleScen
 function nextStep(model: CommercialEstimateModel, result: PrevisitEstimate) {
   const lines = result.price_range?.mode === 'services' ? result.price_range.lines || [] : []
   if (result.benefits?.active !== true)
-    return { title: 'Check coverage', hint: 'Run eligibility for this visit before setting a collection amount.' }
+    return {
+      title: 'Check coverage',
+      hint: 'Run eligibility for this visit before setting a collection amount.',
+    }
   if (!lines.length && result.service_plan?.method === 'unavailable')
     return {
       title: 'CPT suggestion unavailable',

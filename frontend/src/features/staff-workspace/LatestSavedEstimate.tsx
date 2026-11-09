@@ -100,11 +100,17 @@ export default function LatestSavedEstimate({
             Recheck the current visit before collecting today; final responsibility follows the
             processed claim.
           </p>
-          {featured.snapshot.result.benefits?.active !== true && featured.snapshot.result.appointment_id && (
-            <button type="button" onClick={() => onRecheck(featured.intakeId, featured.snapshot.result.appointment_id)}>
-              Check current coverage for this visit
-            </button>
-          )}
+          {featured.snapshot.result.benefits?.active !== true &&
+            featured.snapshot.result.appointment_id && (
+              <button
+                type="button"
+                onClick={() =>
+                  onRecheck(featured.intakeId, featured.snapshot.result.appointment_id)
+                }
+              >
+                Check current coverage for this visit
+              </button>
+            )}
           <CommercialEstimator
             saved={featured.snapshot}
             intakeId={featured.intakeId}

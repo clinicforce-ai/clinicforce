@@ -119,9 +119,14 @@ export function useCommercialEstimateActions({
     }
     if (schedule.status === 'fulfilled') {
       setAppointments(schedule.value.appointments)
-      if (initialAppointmentId && !schedule.value.appointments.some((visit) => visit.id === initialAppointmentId)) {
+      if (
+        initialAppointmentId &&
+        !schedule.value.appointments.some((visit) => visit.id === initialAppointmentId)
+      ) {
         setSelectedVisit('')
-        setError('This saved appointment is no longer in the current eCW visit list. Select the correct visit before checking benefits.')
+        setError(
+          'This saved appointment is no longer in the current eCW visit list. Select the correct visit before checking benefits.',
+        )
         setLoaded(true)
         setBusy(null)
         return

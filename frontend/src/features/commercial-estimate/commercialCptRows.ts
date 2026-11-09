@@ -86,18 +86,22 @@ export function commercialCptRows(
     candidates: [
       ...ticTreatmentRows(result),
       ...(!lines.length && officeAlternatives.length
-        ? [{
-            label: 'Office visit options · choose one',
-            value: [...new Set(officeAlternatives)].map((code) => `CPT ${code}`).join('; '),
-            detail: 'These are alternatives for one visit. Select the level supported by planned medical decision making or time; the diagnosis alone does not set it.',
-          }]
+        ? [
+            {
+              label: 'Office visit options · choose one',
+              value: [...new Set(officeAlternatives)].map((code) => `CPT ${code}`).join('; '),
+              detail:
+                'These are alternatives for one visit. Select the level supported by planned medical decision making or time; the diagnosis alone does not set it.',
+            },
+          ]
         : []),
       ...(!lines.length && suggestedCodes.length
         ? [
             {
               label: 'Coding assistant candidates',
               value: suggestedCodes.map((code) => `CPT ${code}`).join('; '),
-              detail: 'Confirm the planned service and coding details before selecting a billable CPT.',
+              detail:
+                'Confirm the planned service and coding details before selecting a billable CPT.',
             },
           ]
         : []),
