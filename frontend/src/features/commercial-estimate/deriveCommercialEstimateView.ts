@@ -236,7 +236,8 @@ export function deriveCommercialEstimateView({
     !benefits.coverage_status_conflict &&
     !benefits.source_errors?.length &&
     (result?.card_check?.status !== 'conflict' ||
-      result.card_check.status === 'conflict' && result.card_check.independent_ecw_check === true) &&
+      (result.card_check.status === 'conflict' &&
+        result.card_check.independent_ecw_check === true)) &&
     result?.encounter_summary?.collect_today_cents === 0
   const clinicInstructionAmount =
     healthselectZeroArrival ||

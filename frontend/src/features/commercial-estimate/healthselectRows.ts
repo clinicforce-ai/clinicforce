@@ -2,6 +2,12 @@ import type { PrevisitEstimate } from '../../services/api/commercial-estimator'
 import type { CostBreakdownRow } from '../insurance-estimate/CostBreakdownTable'
 import { commercialRequirementRows } from './commercialRequirementStatus'
 
+export function healthselectCopayDetail(result: PrevisitEstimate): string {
+  return result.card_check?.independent_ecw_check
+    ? 'Fresh UHC virtual and specialist benefit: $0 copay. The saved card differs from the selected eCW policy and was not used for this payer check.'
+    : 'Fresh UHC virtual and specialist benefit: $0 copay. The card also prints $0 for a specialist.'
+}
+
 export function healthselectEvidenceRows(
   result: PrevisitEstimate,
   healthselectZero: boolean,
@@ -18,15 +24,15 @@ export function healthselectEvidenceRows(
             },
           ]
         : healthselectZero && result.card_check?.status === 'matched'
-        ? [
-            {
-              label: 'Insurance card',
-              value: 'HealthSelect MA PPO · H2001-817 · $0 specialist copay',
-              detail:
-                'Patient-bound card matched the member and group; the payer response supplies visit-date benefits.',
-            },
-          ]
-        : [],
+          ? [
+              {
+                label: 'Insurance card',
+                value: 'HealthSelect MA PPO · H2001-817 · $0 specialist copay',
+                detail:
+                  'Patient-bound card matched the member and group; the payer response supplies visit-date benefits.',
+              },
+            ]
+          : [],
     coding:
       healthselectZero && result.price_range?.lines?.[0]?.code === '98006'
         ? [

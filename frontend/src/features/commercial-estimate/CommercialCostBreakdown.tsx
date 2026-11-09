@@ -5,7 +5,7 @@ import { coinsuranceFormula, feeProxyFormula } from './coinsuranceFormula'
 import CommercialCostTables from './CommercialCostTables'
 import { collectionAtVisitRow, pendingBluecardOfficeCopay } from './collectionAtVisitRow'
 import { money, range } from './format'
-import { healthselectEvidenceRows, healthselectRequirementRows } from './healthselectRows'
+import * as healthselectHelpers from './healthselectRows'
 import * as copay from './payerReportedPartialCopay'
 import { memberGroupRow, referenceCoverageRow } from './referenceCoverageRow'
 import { limitSummary, unknown } from './limitSummary'
@@ -52,7 +52,7 @@ export default function CommercialCostBreakdown({
   const cignaOfficeScenario = cignaFeeProxy && Boolean(feeProxy.scenario_kind) && !cignaFamilyOffice
   const lines = price?.mode === 'services' ? price.lines || [] : []
   const cptRows = commercialCptRows(result, lines, botoxPreview)
-  const healthselectRows = healthselectEvidenceRows(result, healthselectZero)
+  const healthselectRows = healthselectHelpers.healthselectEvidenceRows(result, healthselectZero)
   const familyOopApplied = familyOopLimitApplied(result)
   const automaticCashFallback = model.cash && result.cash_fallback != null
   const summary = result.encounter_summary
@@ -190,9 +190,7 @@ export default function CommercialCostBreakdown({
       detail: botoxPreview
         ? 'No injection copay was included in this provisional calculation'
         : healthselectZero
-          ? result.card_check?.independent_ecw_check
-            ? 'Fresh UHC virtual and specialist benefit: $0 copay. The saved card differs from the selected eCW policy and was not used for this payer check.'
-            : 'Fresh UHC virtual and specialist benefit: $0 copay. The card also prints $0 for a specialist.'
+          ? healthselectHelpers.healthselectCopayDetail(result)
           : gehaZero
             ? 'Stedi reported a $0 office copay. The matched 2026 G.E.H.A High PSHB Medicare Advantage plan also publishes a $0 in-network specialist visit.'
             : humanaReferenceCopay != null
@@ -358,7 +356,7 @@ export default function CommercialCostBreakdown({
       calculated,
       humanaReferenceCopay,
     ),
-    ...healthselectRequirementRows(
+    ...healthselectHelpers.healthselectRequirementRows(
       result,
       aetnaRateReference,
       !!cignaCard?.specialist_referral_note,
