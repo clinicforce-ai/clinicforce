@@ -6,6 +6,42 @@ import { aetnaSignatureOfficeNoDeductible } from './payerReportedPartialCopay'
 import type { bluecardOfficeDeductibleScenario } from './bluecardOfficeDeductibleScenario'
 import { money, range } from './format'
 import { ticTreatmentRows } from './ticTreatmentRows'
+import type { CommercialEstimateModel } from './useCommercialEstimateModel'
+
+export function commercialCashRows(
+  result: PrevisitEstimate,
+  model: CommercialEstimateModel,
+  lines: VisitPricedLine[],
+): CostBreakdownRow[] {
+  return [
+    { label: 'Payment method', value: 'Self-pay' },
+    {
+      label: 'Planned services',
+      value: lines.length
+        ? lines
+            .map((line) =>
+              serviceRowLabel({
+                description: line.description,
+                reason: result.reason || model.anticipatedService,
+                code: line.code,
+                units: line.units,
+              }),
+            )
+            .join('; ')
+        : result.cash_quote?.package_label || 'Not selected',
+    },
+    { label: 'Clinic cash price', value: model.cashPrice || 'Not quoted' },
+  ]
+}
+
+export function allowedCapReductionRows(
+  cents: number | null | undefined,
+  calculated: boolean,
+): CostBreakdownRow[] {
+  return calculated && (cents ?? 0) > 0
+    ? [{ label: 'Payer allowed amount reduction', value: `−${money(cents!)}` }]
+    : []
+}
 
 export function commercialVisitReason(result: PrevisitEstimate, fallback: string): string {
   const reason = result.reason || fallback || 'Not recorded'

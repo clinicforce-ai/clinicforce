@@ -44,6 +44,46 @@ GEHA_HIGH_PSHB_MA_16615_2026 = {
     'in_network_oop_max_cents': 0,
 }
 
+HEALTHSELECT_MA_13546_2026 = {
+    'label': 'ERS HealthSelect Medicare Advantage plan benefits',
+    'url': 'https://ers.texas.gov/retirees/health-benefits/healthselect-medicare-advantage',
+    'effective_from': '2026-01-01', 'effective_to': '2026-12-31',
+    'medical_deductible_cents': 0,
+}
+
+
+def healthselect_ma_group(plan: dict, service_date: str, patient_bound: bool) -> bool:
+    names = plan.get('names') or []
+    return (patient_bound and str(plan.get('group_number') or '') == '13546'
+            and plan.get('plan_number') in {None, 'H2001-817-000'}
+            and len(names) == 1 and isinstance(names[0], str)
+            and names[0].upper().startswith('LPPO-UNITEDHEALTHCARE GROUP MEDICARE ADVANTAGE')
+            and HEALTHSELECT_MA_13546_2026['effective_from'] <= service_date
+            <= HEALTHSELECT_MA_13546_2026['effective_to'])
+
+
+def apply_healthselect_plan_terms(benefits: dict, plan: dict, service_date: str,
+                                  patient_bound: bool) -> bool:
+    if benefits.get('published_plan_rule') == HEALTHSELECT_MA_13546_2026:
+        benefits.pop('published_plan_rule')
+    if (not healthselect_ma_group(plan, service_date, patient_bound)
+            or benefits.get('active') is not True
+            or benefits.get('service_date_matches') is False):
+        return False
+    if (benefits.get('deductible_remaining_cents') not in {None, 0}
+            or benefits.get('deductible_annual_cents') not in {None, 0}
+            or benefits.get('deductible_applies') is True):
+        benefits.setdefault('review_reasons', []).append(
+            'The member deductible conflicts with the published HealthSelect MA no-deductible rule.')
+        benefits['requires_review'] = True
+        return False
+    benefits['published_plan_rule'] = HEALTHSELECT_MA_13546_2026
+    benefits.update(deductible_applies=False, deductible_applicability='DOES_NOT_APPLY',
+                    deductible_remaining_cents=0, deductible_annual_cents=0)
+    benefits['review_reasons'] = [reason for reason in benefits.get('review_reasons') or []
+                                  if reason != 'Confirm the remaining individual deductible that applies to this visit.']
+    return True
+
 
 def geha_high_pshb_group(plan: dict, service_date: str, patient_bound: bool) -> bool:
     """Match the UHC group route and patient-bound 271, never a generic UHC PPO."""
@@ -68,13 +108,15 @@ def apply_geha_plan_terms(benefits: dict, plan: dict, service_date: str,
     return True
 
 
-def apply_saved_geha_plan_terms(result: dict) -> None:
+def apply_saved_group_ma_plan_terms(result: dict) -> None:
     """Project current terms from retained payer evidence, without changing its snapshot."""
     benefits = result.get('benefits') or {}
     service_date = str(result.get('service_date') or '')
     plan = ((result.get('plan_details') or {}).get('stedi') or {})
     apply_geha_plan_terms(benefits, plan, service_date,
                           patient_plan_applies(benefits, result.get('identity'), service_date))
+    apply_healthselect_plan_terms(benefits, plan, service_date,
+                                  patient_plan_applies(benefits, result.get('identity'), service_date))
 
 
 def identify_card_plan(plan: dict, card: dict, payer: str, patient_bound: bool) -> dict:
@@ -125,6 +167,8 @@ def aetna_signature_diagnostic(benefits: dict, service_date: str, code: str,
 def apply_plan_terms(benefits: dict, plan: dict, service_date: str, patient_bound: bool) -> None:
     """Attach a dated published plan term only to an exact, patient-bound product."""
     if apply_geha_plan_terms(benefits, plan, service_date, patient_bound):
+        return
+    if apply_healthselect_plan_terms(benefits, plan, service_date, patient_bound):
         return
     if (patient_bound and plan.get('identified_product') == 'Humana Value Choice PPO H7617-057'
             and HUMANA_VALUE_CHOICE_057_2026['effective_from'] <= service_date <= HUMANA_VALUE_CHOICE_057_2026['effective_to']

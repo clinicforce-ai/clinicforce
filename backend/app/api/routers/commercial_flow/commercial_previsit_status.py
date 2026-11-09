@@ -440,7 +440,7 @@ def _previsit_result(case: dict, practice_id: str | None = None) -> dict:
         result['payment_mode'] = 'insurance'
         result.pop('cash_fallback', None)
     unresolved_telehealth = guard_unresolved_telehealth(result, case)
-    published_plan_benefits.apply_saved_geha_plan_terms(result)
+    published_plan_benefits.apply_saved_group_ma_plan_terms(result)
     insurance_guidance = _api.collection_guidance.build(result, case.get('visit_review'))
     result['insurance_diagnosis'] = _api._insurance_diagnosis(case, result, insurance_guidance)
     pricing_unavailable = (result.get('payment_mode') != 'cash' and insurance_guidance.get('amount_cents') is None

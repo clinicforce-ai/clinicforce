@@ -13,7 +13,6 @@ from app.insurance.insurance_product import is_medicare_advantage
 from app.insurance.amount_explanation_terms import choice_plus_reported_terms as _choice_plus_reported_terms
 def _money(cents: int) -> str:
     return f'${cents // 100:,}.{cents % 100:02d}'
-
 def _cash_cause(result: dict, failure: dict, recovery: dict, card: dict, network: str,
                 benefits: dict, unpriced: list[str], missing: str,
                 source_errors: list[dict] | None = None) -> tuple[str, str]:
@@ -290,6 +289,7 @@ def build(result: dict, guidance: dict, review: dict | None = None) -> dict:
         elif basis == 'qmb_protection':
             sentence, code = ('Collect $0 now because confirmed QMB protection prohibits Medicare cost-sharing collection; '
                               'any other liability requires separate covered-service and claim evidence', 'qmb_protected')
+        elif basis == 'healthselect_ma_zero_televisit': sentence, code = ('Collect $0 now: this matched UHC HealthSelect Medicare Advantage PPO reports a $0 virtual-visit copay and 0% coinsurance, with no annual medical deductible. The proposed code, payer order and final claim remain open', basis)
         elif basis in {'bcbstx_proxy_advance', 'bcbstx_refundable_advance'}:
             sentence = (f'Collect {_money(amount)} as the clinic-approved BCBS Texas fee proxy advance for the planned diagnostic services; the UHC allowed amount and final claim share remain unknown'
                         if basis == 'bcbstx_proxy_advance' else f'Collect {_money(amount)} as a refundable advance against the selected CPTs using the clinic BCBS Texas fee schedule; the payer returned no financial terms, and final patient liability follows the processed claim')

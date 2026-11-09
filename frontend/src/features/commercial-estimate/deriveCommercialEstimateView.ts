@@ -225,7 +225,20 @@ export function deriveCommercialEstimateView({
     ((!benefits.has_secondary && result?.recovery?.reason_code !== 'multiple_active_policies') ||
       guidance?.primary_secondary_copay === true) &&
     (networkConfirmed || outOfNetworkCollection || independentOfficeCopay || refundableAdvance)
+  const healthselectZeroArrival =
+    guidance?.basis === 'healthselect_ma_zero_televisit' &&
+    guidance.amount_cents === 0 &&
+    benefits?.active === true &&
+    benefits.service_date_matches !== false &&
+    patientBenefitsBound &&
+    networkConfirmed &&
+    !benefits.network_conflict &&
+    !benefits.coverage_status_conflict &&
+    !benefits.source_errors?.length &&
+    result?.card_check?.status !== 'conflict' &&
+    result?.encounter_summary?.collect_today_cents === 0
   const clinicInstructionAmount =
+    healthselectZeroArrival ||
     guidance?.basis === 'claim_after_service' ||
     (guidance?.basis === 'ecw_billing_note' &&
       (guidance.amount_cents === 0 || benefits?.active !== true))

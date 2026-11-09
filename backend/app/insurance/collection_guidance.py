@@ -7,6 +7,8 @@ from app.insurance.collection.requirements import summarize_requirements
 from app.insurance.collection.refundable_advance import apply as apply_refundable_advance
 from app.insurance.collection.office_copay import (cigna_oap_televisit_office_copay, diagnostic_day_copay_amount, office_copay_amount)
 from app.insurance.collection.billing_note import apply_billing_note
+from app.insurance.collection.benefit_gates import prepare_benefit_evidence
+from app.insurance.collection.healthselect_zero import applies as healthselect_zero_applies
 from app.insurance.identity import patient_benefits_bound
 from app.insurance.benefit_review import (annual_oop_conflict_with_known_remaining,
                                           selected_service_blocker, selected_service_detail)
@@ -15,7 +17,6 @@ from app.insurance import encounter_summary
 from app.insurance.insurance_product import is_medicare_advantage
 from app.insurance.published_plan_benefits import GEHA_HIGH_PSHB_MA_16615_2026
 from app.insurance.stedi_benefits.payer_order import verified_primary_order
-
 def emg_option(result: dict, rates: list[dict], rules: dict, payload: dict | None,
                service_date: str, review: dict) -> dict:
     """Compare EMG scenarios using the same collection rules as the visit."""
@@ -25,20 +26,9 @@ def emg_option(result: dict, rates: list[dict], rules: dict, payload: dict | Non
 def build(result: dict, review: dict | None = None) -> dict:
     benefits = result.get('benefits') or {}
     active_payer_benefits = benefits.get('active') is True and benefits.get('service_date_matches') is not False
-    # An old in-network label needs current product/provider evidence.
-    collection_benefits = (benefits if benefits.get('network_status') != 'in_network'
-                           or verified_in_network(benefits) else {**benefits, 'network_status': 'unknown'})
     price = result.get('price_range') or {}
     lines = price.get('lines') or []
-    unconfirmed_zero_oop = (benefits.get('oop_remaining_cents') is None and
-        all((line.get('benefits') or {}).get('oop_remaining_cents') is None for line in lines) and
-        any(row.get('kind') == 'out_of_pocket' and row.get('service_type_code') == '30'
-            and row.get('coverage_level') in {'INDIVIDUAL', 'IND'}
-            and row.get('time_period') in {'REMAINING', '29'}
-            and row.get('network') in {'IN_NETWORK', 'Y'}
-            and row.get('plan_association') in {'unassigned', 'medical_candidate'}
-            and row.get('amount_cents') == 0
-            for row in benefits.get('reported_options') or []))
+    collection_benefits, unconfirmed_zero_oop = prepare_benefit_evidence(benefits, lines)
     strict = result.get('arrival_collection') or {}
     planning = result.get('planning_estimate') or {}
     assumptions = list(result.get('pricing_assumptions') or [])
@@ -229,6 +219,14 @@ def build(result: dict, review: dict | None = None) -> dict:
         amount = 0
         guidance.update(status='zero_advance', basis='published_geha_pshb_zero_office',
             reason='The matched 2026 G.E.H.A High PSHB Medicare Advantage plan publishes a $0 in-network specialist office visit, $0 medical deductible and $0 in-network medical out-of-pocket maximum. No payment is due for this planned covered office visit; final coding and claim adjudication still control.')
+    healthselect_zero_televisit = healthselect_zero_applies(
+        result, member_bound=member_bound, source_errors=source_errors,
+        adverse=adverse, note=note, line_blocker=line_blocker,
+        same_policy_conflict=same_policy_conflict)
+    if healthselect_zero_televisit:
+        amount = 0
+        guidance.update(status='zero_advance', basis='healthselect_ma_zero_televisit',
+            reason='The matched HealthSelect Medicare Advantage PPO plan reports a $0 virtual or specialist visit copay and 0% coinsurance, and ERS publishes no annual medical deductible. Collect $0 upfront for this one proposed covered telehealth E/M visit; code selection, payer order and final claim liability remain open.')
     policy = result.get('collection_policy') if isinstance(result.get('collection_policy'), dict) else {}
     policy_approved = bool(policy.get('approved_by') and policy.get('approved_at') and policy.get('reference'))
     policy_mode = policy.get('mode') if policy_approved else None
@@ -344,6 +342,8 @@ def build(result: dict, review: dict | None = None) -> dict:
             'This is an advance estimate for the planned care. The insurer determines final responsibility when it processes the claim.')
         if guidance['basis'] == 'claim_after_service' and 'cigna' in str(result.get('payer') or '').casefold():
             guidance['patient_message'] = 'No payment is requested at arrival without a Cigna Explanation of Estimate. Final responsibility follows the processed claim.'
+        if guidance['basis'] == 'healthselect_ma_zero_televisit':
+            guidance['patient_message'] = 'No payment is requested at arrival for the proposed covered virtual visit. Final coding, payer order and the processed claim determine any later responsibility.'
         if amount > 0 and not payments.get('reference') and strict.get('payments_received_cents') is None:
             assumptions.append('No prior payments or credits were deducted because the clinic ledger is unavailable. Tell us if you already paid for this visit and show your receipt to avoid paying twice.')
         elif payments.get('reference') or strict.get('payments_received_cents') is not None:

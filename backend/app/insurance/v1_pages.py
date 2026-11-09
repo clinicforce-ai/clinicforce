@@ -49,10 +49,17 @@ def read_pages(content: bytes, max_pages: int = 100, *, detect_outlined_text: bo
                             if span.get("type") == 3 or span.get("opacity", 1) == 0:
                                 scanned = True
                                 break
-                    card_images = [item for item in page.get_image_info(xrefs=True)
+                    images = page.get_image_info(xrefs=True)
+                    card_images = [item for item in images
                                    if fitz.Rect(item["bbox"]).get_area() >= page.rect.get_area() * .2]
                     has_card_image = bool(card_images)
+                    # eCW exports the front and back as two smaller images beneath a text header.
+                    card_pair = (len(images) >= 2 and len(text) < 250
+                                 and sum(fitz.Rect(item['bbox']).get_area() for item in images
+                                         if fitz.Rect(item['bbox']).get_area() >= page.rect.get_area() * .05)
+                                 >= page.rect.get_area() * .12)
                     scanned = scanned or (has_card_image and not re.search(r"(?:member|subscriber|name|\bid)\s*[:#]", text, re.I))
+                    scanned = scanned or bool(card_pair)
                     scanned = scanned or detect_outlined_text and outlined_text(page)
                     if not text or scanned:
                         # A portal export often places one card image on a

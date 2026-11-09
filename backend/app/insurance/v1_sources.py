@@ -145,6 +145,14 @@ def card_fields(pages: list[tuple[int, str]]) -> tuple[dict, dict]:
         if match := re.search(r'\bHUMANA\s+VALUE\s+CHOICE\s*\(PPO\)', joined, re.I):
             add('plan_name', 'Humana Value Choice (PPO)', page, match[0])
             add('plan_type', 'PPO', page, match[0])
+        if (re.search(r'\bHealthSelect\s+Medicare\s+Advantage\s+PPO\s+Plan\b', joined, re.I)
+                and re.search(r'\bH2001-817-000\b', joined, re.I)
+                and re.search(r'\bPayer\s+ID\s*:\s*87726\b', joined, re.I)):
+            add('plan_name', 'HealthSelect Medicare Advantage PPO', page, 'HealthSelect Medicare Advantage PPO Plan')
+            add('cms_plan_id', 'H2001-817', page, 'H2001-817-000')
+            add('payer', 'UnitedHealthcare', page, 'HealthSelect Medicare Advantage PPO Plan · Payer ID: 87726')
+            if match := re.search(r'\bSpec\s+(\$\s*\d+(?:\.\d{2})?)\b', joined, re.I):
+                add('specialist_copay', match[1].replace(' ', ''), page, match[0])
         hpi = re.search(r"Health\s+Plans,?\s+Inc\.?\s*\(HPI\)", joined, re.I)
         if hpi:
             add("payer", "Health Plans Incorporated", page, hpi[0])
