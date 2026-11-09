@@ -35,6 +35,41 @@ export function commercialCashAlternativeRow(
   }
 }
 
+export function commercialFeeReferenceRows(
+  rate: PrevisitEstimate['temporary_rate_reference'] | null | undefined,
+  feeProxy: PrevisitEstimate['fee_proxy_estimate'],
+  dsnpOffice: boolean,
+  bluecardDeductible: ReturnType<typeof bluecardOfficeDeductibleScenario>,
+  aetnaRateReference: boolean,
+): CostBreakdownRow[] {
+  if (!rate?.lines.length) return []
+  const total = rate.lines.reduce(
+    (sum, line) => sum + line.unit_reference_cents * (Number(line.units) || 1),
+    0,
+  )
+  return [
+    {
+      label: dsnpOffice
+        ? 'BCBS Texas office fee reference'
+        : feeProxy
+          ? 'BCBS Texas diagnostic fee proxy total'
+          : bluecardDeductible
+            ? 'Blue Choice PPO fee reference'
+            : aetnaRateReference
+              ? 'Aetna fee reference'
+              : 'Blue Cross fee reference',
+      value: feeProxy
+        ? money(feeProxy.reference_total_cents)
+        : aetnaRateReference
+          ? `${money(total)} total reference`
+          : `${money(total)} total reference; ${rate.lines
+              .map((line) => `CPT ${line.code}: ${money(line.unit_reference_cents)} per unit`)
+              .join('; ')}`,
+      detail: rate.message,
+    },
+  ]
+}
+
 export function commercialCptRows(
   result: PrevisitEstimate,
   lines: VisitPricedLine[],
@@ -60,6 +95,10 @@ export function commercialCptRows(
     result,
     lines.length === 1 ? lines[0] : null,
   )
+  const dsnpScenario =
+    result.fee_proxy_estimate?.basis === 'bcbstx_uhc_dsnp_office_proxy'
+      ? result.fee_proxy_estimate
+      : null
   return {
     cpt: {
       label:
@@ -75,7 +114,9 @@ export function commercialCptRows(
                 `CPT ${line.code} × ${line.units || 1}${line.modifiers?.length ? ` · modifier ${line.modifiers.join(', ')}` : ''}`,
             )
             .join('; ')
-        : 'No CPTs selected',
+        : dsnpScenario
+          ? `No CPT selected · provisional CPT ${dsnpScenario.scenario_cpt} × 1 pricing scenario`
+          : 'No CPTs selected',
       detail:
         result.service_selection_status !== 'approved' && !aetnaOfficeCpt
           ? result.service_plan?.method === 'llm'
@@ -108,7 +149,11 @@ export function commercialCptRows(
     ],
     unpriced: {
       label: 'Planned CPTs',
-      value: preview ? `CPT ${preview.code} × 1 · provisional` : 'No priced CPTs selected',
+      value: preview
+        ? `CPT ${preview.code} × 1 · provisional`
+        : dsnpScenario
+          ? `CPT ${dsnpScenario.scenario_cpt} × 1 · BCBS Texas planning reference`
+          : 'No priced CPTs selected',
       detail: preview
         ? 'Procedure-only scenario; Botox drug and separate E/M are excluded'
         : undefined,

@@ -4,9 +4,10 @@ from __future__ import annotations
 from app.api.routers import commercial_estimator as _api
 from app.api.routers.commercial_flow.commercial_previsit_catalog import build_catalog
 from app.api.routers.commercial_flow.commercial_previsit_requirements import attach_requirements
+from app.api.routers.commercial_flow.commercial_previsit_rate_reference import _attach_uhc_dsnp_office_reference
 from app.api.routers.commercial_flow.commercial_previsit_tpa import cigna_primary_route
 from app.insurance.identity import patient_benefits_bound, patient_plan_applies
-from app.insurance import blue_cross_proxy, botox_review, choice_plus_emg_proxy, evidence_resolution, published_plan_benefits
+from app.insurance import blue_cross_proxy, botox_review, choice_plus_emg_proxy, evidence_resolution, published_plan_benefits, uhc_dsnp_office_proxy
 
 def _visit_context_parts(inputs: dict, source: dict) -> dict:
     context = {'coverage': {k: v for k, v in _api._coverage_snapshot(inputs, source).items() if k != 'other_active_coverage'},
@@ -61,6 +62,7 @@ def _finish_previsit(result: dict, case: dict, inputs: dict, source: dict, paylo
         case['visit_review'] = review
     planning_inputs = {**inputs, 'emg_required': review.get('emg_required'),
                        'separate_em_planned': review.get('separate_em_planned')}
+    result['visit_type'] = inputs.get('visit_type')
     comparison = result['benefits'].get('identity') or {}
     remembered = ((session.get('intake') or {}).get('patient') or {}).get('insurance_identities') or {}
     evidence = review.get('identity_confirmation') or remembered.get(comparison.get('binding'))
@@ -230,6 +232,7 @@ def _finish_previsit(result: dict, case: dict, inputs: dict, source: dict, paylo
         'ecw': source.get('plan_details') or {'plan': [source['plan']] if source.get('plan') else []},
         'stedi': payer_plan if payload else {}}, ecw_retrieved_at=source.get('retrieved_at'),
         response_reference=(payload or {}).get('id'), selected_ids=selected_ids or [])
+    _attach_uhc_dsnp_office_reference(result, inputs)
     cpt_check = case.get('cpt_authorization') or {}
     result['cpt_authorization'] = {key: cpt_check[key] for key in
         ('state', 'service_date', 'pos', 'network', 'patient_binding', 'decisions', 'financial_terms', 'check_id', 'check_ids')
@@ -287,6 +290,7 @@ def _finish_previsit(result: dict, case: dict, inputs: dict, source: dict, paylo
     result.pop('fee_proxy_estimate', None)
     if proxy := (choice_plus_emg_proxy.choice_plus_emg_estimate(result, inputs['service_date'])
                  or blue_cross_proxy.estimate(result, inputs['service_date'])
+                 or uhc_dsnp_office_proxy.estimate(result, inputs['service_date'])
                  or blue_cross_proxy.cigna_estimate(result, inputs['service_date'])
                  or blue_cross_proxy.cigna_oap_family_office_estimate(result, inputs['service_date'])
                  or blue_cross_proxy.cigna_oap_office_scenario(result, inputs['service_date'])):

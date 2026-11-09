@@ -120,6 +120,13 @@ export default function ArrivalAmountSummary({
     result.fee_proxy_estimate?.basis === 'bcbstx_cigna_fee_proxy'
       ? result.fee_proxy_estimate
       : null
+  const dsnpOffice =
+    !model.cash &&
+    !model.previousEstimate &&
+    !model.calculating &&
+    result.fee_proxy_estimate?.basis === 'bcbstx_uhc_dsnp_office_proxy'
+      ? result.fee_proxy_estimate
+      : null
   const aetnaPlanning =
     !model.cash && !model.previousEstimate && result.collection_guidance?.amount_cents == null
       ? result.aetna_diagnostic_reference
@@ -176,45 +183,48 @@ export default function ArrivalAmountSummary({
   return (
     <>
       <span>
-        {plan
-          ? 'Amount to collect at visit · planning estimate'
-          : biopsyBalance != null
-            ? biopsyOfficePending
-              ? 'Provisional biopsy target · office share pending'
-              : 'Provisional collection target · confirmation pending'
-            : botoxPlanning
-              ? 'Planned amount to collect · provisional CPT scenario'
-              : cignaPlanning
-                ? 'Cigna planning estimate · collection pending'
-                : bluecardDeductible
-                  ? 'Amount to collect at visit · estimated'
-                  : aetnaPlanning
-                    ? 'Planned amount to collect at visit'
-                    : diagnosticCopayReference != null
-                      ? 'Diagnostic copay · collection pending'
-                      : officeBalance != null
-                        ? officePolicyPending
-                          ? 'Amount to collect at visit · pending policy approval'
-                          : 'Planned amount to collect at visit'
-                        : pendingAetnaCopay != null ||
-                            pendingCignaCopay != null ||
-                            pendingBluecardCopay != null
-                          ? 'Amount to collect at visit · pending verification'
-                          : partialCopay != null
-                            ? referenceOnly
-                              ? 'Office-only reference · collection pending'
-                              : 'Suggested amount to collect at visit'
-                            : cardPlanningCopay != null
-                              ? 'Card-based office suggestion · collection pending'
-                              : priorDateAetnaCopay != null
-                                ? 'Payer-reported office copay · pending verification'
-                                : needsAction
-                                  ? 'Next step'
-                                  : model.amountLabel}
+        {dsnpOffice
+          ? 'Amount to collect at visit · dual status unresolved'
+          : plan
+            ? 'Amount to collect at visit · planning estimate'
+            : biopsyBalance != null
+              ? biopsyOfficePending
+                ? 'Provisional biopsy target · office share pending'
+                : 'Provisional collection target · confirmation pending'
+              : botoxPlanning
+                ? 'Planned amount to collect · provisional CPT scenario'
+                : cignaPlanning
+                  ? 'Cigna planning estimate · collection pending'
+                  : bluecardDeductible
+                    ? 'Amount to collect at visit · estimated'
+                    : aetnaPlanning
+                      ? 'Planned amount to collect at visit'
+                      : diagnosticCopayReference != null
+                        ? 'Diagnostic copay · collection pending'
+                        : officeBalance != null
+                          ? officePolicyPending
+                            ? 'Amount to collect at visit · pending policy approval'
+                            : 'Planned amount to collect at visit'
+                          : pendingAetnaCopay != null ||
+                              pendingCignaCopay != null ||
+                              pendingBluecardCopay != null
+                            ? 'Amount to collect at visit · pending verification'
+                            : partialCopay != null
+                              ? referenceOnly
+                                ? 'Office-only reference · collection pending'
+                                : 'Suggested amount to collect at visit'
+                              : cardPlanningCopay != null
+                                ? 'Card-based office suggestion · collection pending'
+                                : priorDateAetnaCopay != null
+                                  ? 'Payer-reported office copay · pending verification'
+                                  : needsAction
+                                    ? 'Next step'
+                                    : model.amountLabel}
       </span>
       <strong
         className={
           !visibleAmount &&
+          !dsnpOffice &&
           biopsyBalance == null &&
           !botoxPlanning &&
           !cignaPlanning &&
@@ -230,41 +240,50 @@ export default function ArrivalAmountSummary({
         }
         role="status"
       >
-        {plan
-          ? money(plan.amount_cents)
-          : biopsyBalance != null
-            ? `${money(biopsyBalance)}${biopsyOfficePending ? ' biopsy only' : ''}`
-            : botoxPlanning
-              ? money(botoxPlanning.patient_share_cents)
-              : cignaPlanning
-                ? money(cignaPlanning.patient_share_cents)
-                : bluecardDeductible
-                  ? money(bluecardDeductible.collect)
-                  : aetnaPlanning
-                    ? money(aetnaBalance!)
-                    : diagnosticCopayReference != null
-                      ? money(diagnosticCopayReference)
-                      : officeBalance != null
-                        ? officePolicyPending
-                          ? `Pending · ${money(officeBalance)}`
-                          : money(officeBalance)
-                        : pendingAetnaCopay != null
-                          ? `Pending · ${money(pendingAetnaCopay)}`
-                          : pendingBluecardCopay != null
-                            ? `Pending · ${money(pendingBluecardCopay)}`
-                            : pendingCignaCopay != null
-                              ? `Pending · ${money(pendingCignaCopay)}`
-                              : partialCopay != null
-                                ? money(partialCopay)
-                                : cardPlanningCopay != null
-                                  ? money(cardPlanningCopay)
-                                  : priorDateAetnaCopay != null
-                                    ? money(priorDateAetnaBalance!)
-                                    : needsAction
-                                      ? action.title
-                                      : model.amountText}
+        {dsnpOffice
+          ? `${money(0)} at check-in`
+          : plan
+            ? money(plan.amount_cents)
+            : biopsyBalance != null
+              ? `${money(biopsyBalance)}${biopsyOfficePending ? ' biopsy only' : ''}`
+              : botoxPlanning
+                ? money(botoxPlanning.patient_share_cents)
+                : cignaPlanning
+                  ? money(cignaPlanning.patient_share_cents)
+                  : bluecardDeductible
+                    ? money(bluecardDeductible.collect)
+                    : aetnaPlanning
+                      ? money(aetnaBalance!)
+                      : diagnosticCopayReference != null
+                        ? money(diagnosticCopayReference)
+                        : officeBalance != null
+                          ? officePolicyPending
+                            ? `Pending · ${money(officeBalance)}`
+                            : money(officeBalance)
+                          : pendingAetnaCopay != null
+                            ? `Pending · ${money(pendingAetnaCopay)}`
+                            : pendingBluecardCopay != null
+                              ? `Pending · ${money(pendingBluecardCopay)}`
+                              : pendingCignaCopay != null
+                                ? `Pending · ${money(pendingCignaCopay)}`
+                                : partialCopay != null
+                                  ? money(partialCopay)
+                                  : cardPlanningCopay != null
+                                    ? money(cardPlanningCopay)
+                                    : priorDateAetnaCopay != null
+                                      ? money(priorDateAetnaBalance!)
+                                      : needsAction
+                                        ? action.title
+                                        : model.amountText}
       </strong>
-      {plan ? (
+      {dsnpOffice ? (
+        <p>
+          {money(dsnpOffice.patient_share_cents)} provisional pre-Medicaid share for CPT{' '}
+          {dsnpOffice.scenario_cpt}. BCBS Texas fee reference × Stedi office coinsurance; the UHC
+          allowance and this member’s dual cost-sharing protection are unresolved. Do not collect
+          this share at check-in.
+        </p>
+      ) : plan ? (
         <p>
           {money(plan.office_copay_cents)} office copay + {plan.coinsurance_percent}% ×{' '}
           {money(plan.diagnostic_allowed_cents)} diagnostic allowance ={' '}

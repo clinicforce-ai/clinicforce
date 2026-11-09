@@ -5,6 +5,7 @@ export type FeeProxyBasis =
   | 'bcbstx_fee_proxy'
   | 'bcbstx_uhc_in_network_fee_proxy'
   | 'bcbstx_uhc_choice_plus_fee_proxy'
+  | 'bcbstx_uhc_dsnp_office_proxy'
   | 'bcbstx_cigna_fee_proxy'
 
 export type TemporaryRateReference = {

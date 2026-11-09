@@ -5,6 +5,7 @@ from app.api.routers import commercial_estimator as _api
 from app.logs.logger import log_warning
 
 BCBSTX_2026_OTHER_CODES = {'70496': 22719, '70498': 22693}
+BCBSTX_2026_OFFICE_CODES = {'99202': 5686, '99203': 8807, '99204': 13066, '99205': 17245}
 BCBSTX_2026_OTHER_CODES_SOURCE = ('https://www.bcbstx.com/docs/provider/tx/standards/general-reimbursement-information/'
     'gri-info/professional-schedules/2026-internet-posting-notices/other-codes-2026-files/dft-2026-v1.pdf')
 
@@ -48,6 +49,7 @@ def refresh_saved_temporary_rates(result: dict, practice_id: str, inputs: dict, 
     if _api.commercial.is_united_healthcare_payer(
             result, {'displayName': route_payer.get('display_name')} if route_payer else None):
         _attach_temporary_uhc_rates(result, practice_id, inputs, source)
+        _attach_uhc_dsnp_office_reference(result, inputs)
     elif _api.re.search(r'\bcigna\b', payer_name, _api.re.I):
         _attach_temporary_blue_cross_rates(result, practice_id, inputs, source, 'Cigna')
     elif _api.re.search(r'\baetna\b', payer_name, _api.re.I):
@@ -162,6 +164,58 @@ def _attach_temporary_blue_cross_rates(result: dict, practice_id: str, inputs: d
 
 def _attach_temporary_uhc_rates(result: dict, practice_id: str, inputs: dict, source: dict) -> None:
     _attach_temporary_blue_cross_rates(result, practice_id, inputs, source, 'UnitedHealthcare')
+
+
+def _attach_uhc_dsnp_office_reference(result: dict, inputs: dict) -> None:
+    """Expose a dated public BCBSTX office fee for UHC D-SNP planning only."""
+    from app.insurance import insurance_product
+
+    names = ((result.get('plan_details') or {}).get('stedi') or {}).get('names') or []
+    date = str(inputs.get('service_date') or result.get('service_date') or '')
+    codes = result.get('codes') or []
+    if (result.get('service_selection_status') == 'preview' and not result.get('selected_ids')
+            and codes and all(row.get('source') == 'conditional office E/M alternative'
+                              for row in codes)):
+        codes = []
+    if (result.get('payment_mode') == 'cash'
+            or not _api.commercial.is_united_healthcare_payer(result)
+            or insurance_product.classify(names) != 'medicare_advantage_dsnp'
+            or not '2026-05-01' <= date <= '2026-12-31'
+            or str(inputs.get('place_of_service') or '') != '11'
+            or len(codes) > 1):
+        return
+    if codes:
+        code = codes[0]
+        if (code.get('code') not in BCBSTX_2026_OFFICE_CODES
+                or code.get('units') != 1 or code.get('modifiers')):
+            return
+    elif result.get('visit_type') == 'new':
+        code = next((row for row in result.get('available_codes') or []
+                     if row.get('code') == '99203'), None)
+        if code is None:
+            return
+    else:
+        return
+    existing = result.get('temporary_rate_reference') or {}
+    matched = [row for row in existing.get('lines') or []
+               if row.get('code') == code['code'] and row.get('units') == 1
+               and (not codes or row.get('id') == code.get('id'))
+               and not row.get('modifiers') and type(row.get('unit_reference_cents')) is int
+               and str(row.get('source_reference') or '').startswith('library:')]
+    if len(matched) == 1:
+        result['temporary_rate_reference'] = {
+            **existing, 'complete': True, 'lines': matched,
+            'message': ('Scoped BCBSTX Clinical Library office fee for this CPT, used only as a '
+                        'UHC D-SNP planning reference. It is not a UHC contracted allowance '
+                        'or permission to collect.')}
+        return
+    result['temporary_rate_reference'] = {
+        'source': 'Published BCBSTX 2026 office fee schedule', 'complete': True,
+        'lines': [{'id': code.get('id'), 'code': code['code'], 'units': 1,
+                   'modifiers': [], 'unit_reference_cents': BCBSTX_2026_OFFICE_CODES[code['code']],
+                   'source_reference': BCBSTX_2026_OTHER_CODES_SOURCE}],
+        'message': ('Published BCBSTX 2026 maximum allowable for one office visit, used only as a '
+                    'UHC D-SNP planning reference. It is not a UHC contracted allowance or permission to collect.')}
 
 
 def _attach_temporary_aetna_rates(result: dict, practice_id: str, inputs: dict, source: dict) -> None:

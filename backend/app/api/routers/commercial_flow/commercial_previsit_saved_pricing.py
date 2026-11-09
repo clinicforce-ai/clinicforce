@@ -4,7 +4,7 @@ from __future__ import annotations
 from app.api.routers import commercial_estimator as _api
 from app.api.routers.commercial_flow.commercial_previsit_finish import _payer_plan_pricing_source
 from app.api.routers.commercial_flow.commercial_previsit_rate_reference import refresh_saved_temporary_rates
-from app.insurance import blue_cross_proxy, choice_plus_emg_proxy
+from app.insurance import blue_cross_proxy, choice_plus_emg_proxy, uhc_dsnp_office_proxy
 from app.insurance.identity import patient_plan_applies
 
 
@@ -182,10 +182,12 @@ def refresh_saved_cross_payer_planning(result: dict, case: dict, practice_id: st
                 'provisional_collection_target'):
         result.pop(key, None)
     context = case['previsit_context']
+    result['visit_type'] = (context.get('inputs') or {}).get('visit_type')
     refresh_saved_temporary_rates(result, practice_id, context.get('inputs') or {},
                                   context.get('source') or {}, route_payer)
     if proxy := (choice_plus_emg_proxy.choice_plus_emg_estimate(result, str(result.get('service_date') or ''))
                  or blue_cross_proxy.estimate(result, str(result.get('service_date') or ''))
+                 or uhc_dsnp_office_proxy.estimate(result, str(result.get('service_date') or ''))
                  or blue_cross_proxy.cigna_estimate(result, str(result.get('service_date') or ''))
                  or blue_cross_proxy.cigna_oap_family_office_estimate(result, str(result.get('service_date') or ''))
                  or blue_cross_proxy.cigna_oap_office_scenario(result, str(result.get('service_date') or ''))):
