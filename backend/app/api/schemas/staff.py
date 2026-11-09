@@ -242,6 +242,7 @@ class PrebookingEstimateLine(Model):
     service_type: str | None
     allowed_cents: int | None
     patient_cents: int | None
+    rate_source: str | None = Field(description="Matched NMCT contract-rate source for this selected service; null when the visit cannot be priced")
     benefits: PrebookingEstimateTerms
     issues: list[str]
     conditions: list[str]
@@ -273,6 +274,8 @@ class PrebookingEstimateResponse(Model):
     plan_name: str | None
     benefits: PrebookingEstimateTerms | None
     lines: list[PrebookingEstimateLine]
+    allowed_total_cents: int | None = Field(description="Total matched contract-allowed cost for selected services; null unless every line is priced")
+    plan_total_cents: int | None = Field(description="Estimated insurer share of the allowed total; null unless the complete visit is priced")
     patient_min_cents: int | None
     patient_max_cents: int | None
     estimate_status: Literal["priced", "conditional", "needs_review"]

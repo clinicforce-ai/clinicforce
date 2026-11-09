@@ -5,6 +5,7 @@ const { chromium } = await import(process.env.PLAYWRIGHT_MODULE || 'playwright')
 const browser = await chromium.launch({ headless: true, executablePath: process.env.CHROME_PATH })
 const page = await browser.newPage()
 let checks = 0
+let priced = false
 
 await page.route((url) => url.pathname.startsWith('/api/'), async (route) => {
   const url = new URL(route.request().url())
@@ -22,10 +23,23 @@ await page.route((url) => url.pathname.startsWith('/api/'), async (route) => {
   } else if (url.pathname === '/api/staff/prebooking-estimate/check') {
     checks++
     assert.deepEqual(route.request().postDataJSON().selected_services, [{ code: '99213', units: 1 }])
-    body = { coverage: { status: 'active_today', message: 'Synthetic coverage response.', coverage_start: null, coverage_end: null },
+    body = priced ? { coverage: { status: 'active_today', message: 'Synthetic coverage response.', coverage_start: null, coverage_end: null },
       payer: 'Example Health', checked_at: '2026-10-29T12:00:00Z', checked_on: '2026-10-29', check_ids: ['ec_synthetic'],
       patient_address: { line1: '100 Example Ave', line2: null, city: 'Albany', state: 'NY', postal_code: '12207', country: null },
-      network_status: 'unknown', network_evidence: null, plan_name: null, benefits: null, lines: [],
+      network_status: 'in_network', network_evidence: { source: 'clinic_library_contract', reason: 'Synthetic NMCT contract.' }, plan_name: 'Example PPO',
+      benefits: { copay_cents: 2500, coinsurance_percent: '0', deductible_annual_cents: 100000, deductible_remaining_cents: 40000,
+        oop_annual_cents: 300000, oop_remaining_cents: 120000 },
+      lines: [{ code: '99213', units: 1, role: 'visit', service_type: '98', allowed_cents: 10000, patient_cents: 2500,
+        rate_source: 'Synthetic signed rate', benefits: { copay_cents: 2500 }, issues: [], conditions: [] }],
+      allowed_total_cents: 10000, plan_total_cents: 7500,
+      patient_min_cents: 2500, patient_max_cents: 2500, estimate_status: 'priced', issues: [] }
+      : { coverage: { status: 'active_today', message: 'Synthetic coverage response.', coverage_start: null, coverage_end: null },
+      payer: 'Example Health', checked_at: '2026-10-29T12:00:00Z', checked_on: '2026-10-29', check_ids: ['ec_synthetic'],
+      patient_address: { line1: '100 Example Ave', line2: null, city: 'Albany', state: 'NY', postal_code: '12207', country: null },
+      network_status: 'unknown', network_evidence: { reason: 'Contract scope unresolved.' }, plan_name: null, benefits: null,
+      lines: [{ code: '99213', units: 1, role: 'visit', service_type: '98', allowed_cents: null, patient_cents: null,
+        rate_source: null, benefits: {}, issues: ['Verify contract rate.'], conditions: [] }],
+      allowed_total_cents: null, plan_total_cents: null,
       patient_min_cents: null, patient_max_cents: null, estimate_status: 'needs_review', issues: ['Verify network.'] }
   } else if (url.pathname === '/api/staff/intakes/search') {
     body = { intakes: [], has_more: false }
@@ -53,9 +67,26 @@ try {
   await page.getByLabel('I reviewed these anticipated services and units with the clinician.').check()
   await page.getByRole('button', { name: 'Check benefits and estimate cost' }).click()
   assert.equal(checks, 1)
-  await page.getByText('Network participation unverified').waitFor()
+  await page.getByText('Contract scope unresolved.').waitFor()
   await page.getByText('100 Example Ave').waitFor()
-  console.log('PASS: staff confirm a prospective service before a synthetic payer check')
+  assert.match(await page.locator('.prebooking-cost-grid').innerText(), /Needs review/)
+  assert.match(await page.locator('.prebooking-service-row').innerText(), /Verify contract rate/)
+
+  priced = true
+  await page.getByLabel('Insurance member ID').fill('SYNTHETIC2')
+  await page.getByRole('button', { name: 'Check benefits and estimate cost' }).click()
+  assert.equal(checks, 2)
+  await page.getByText('Synthetic NMCT contract.').waitFor()
+  const totals = await page.locator('.prebooking-cost-grid').innerText()
+  assert.match(totals, /\$100\.00/)
+  assert.match(totals, /\$25\.00/)
+  assert.match(await page.locator('.prebooking-share-labels').innerText(), /\$75\.00/)
+  assert.match(await page.locator('.prebooking-service-row').innerText(), /Synthetic signed rate/)
+  assert.equal(await page.locator('.prebooking-benefit-section').getByText('Deductible remaining').count(), 1)
+  if (process.env.PREBOOKING_SCREENSHOT) await page.screenshot({ path: process.env.PREBOOKING_SCREENSHOT, fullPage: true })
+  await page.setViewportSize({ width: 390, height: 844 })
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true)
+  console.log('PASS: prebooking review and priced totals reconcile in responsive staff UI')
 } finally {
   await browser.close()
 }

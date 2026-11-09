@@ -9,7 +9,7 @@ from fastapi import FastAPI, HTTPException
 from app.api.routers import staff
 from app.api.routers.staff_flow import staff_prebooking
 from app.api.schemas.staff import PrebookingEstimateResponse
-from app.insurance import prebooking, stedi, stedi_payers
+from app.insurance import network_participation, prebooking, stedi, stedi_payers
 
 
 PAYER = {"stediId": "EXAMPLE", "displayName": "Example Health", "transactionSupport": {"eligibilityCheck": "SUPPORTED"}}
@@ -232,37 +232,103 @@ def test_prospective_amount_requires_member_binding_and_verified_network():
 
     def priced(result, practice_id, inputs, source, payer_id, benefits, **kwargs):
         benefits.update(network_status="in_network", network_source="clinic_library_contract")
-        result["network_evidence"] = {"decision": "confirmed_participating", "reason": "Synthetic contract."}
+        result["network_evidence"] = {"decision": "confirmed_participating", "source": "clinic_library_contract",
+                                      "reason": "Synthetic contract."}
         result["price_range"] = {"complete": True, "conditional": False,
+            "allowed_min_cents": 10000, "allowed_max_cents": 10000,
+            "plan_min_cents": 7500, "plan_max_cents": 7500,
             "patient_min_cents": 2500, "patient_max_cents": 2500,
             "lines": [{"code": "99213", "units": 1, "allowed_cents": 10000,
-                       "calculation": {"patient_cents": 2500}, "benefits": benefits,
+                       "allowed_basis": "clinic_contract", "rate_source": "Synthetic signed rate",
+                       "rate_resolution": {"status": "RESOLVED"},
+                       "calculation": {"patient_cents": 2500, "plan_cents": 7500}, "benefits": benefits,
                        "issues": [], "conditions": []}]}
 
     with patch.object(commercial_estimator, "_attach_previsit_pricing", side_effect=priced):
-        result = staff_prebooking._estimate_from_payer("clinic-1", details, context, PAYER,
+        result = staff_prebooking._estimate_from_payer(network_participation.NMCT_PRACTICE_ID, details, context, PAYER,
             PROVIDER, payload, "2026-10-27", lines)
         assert result["estimate_status"] == "priced"
+        assert result["allowed_total_cents"] == 10000
+        assert result["plan_total_cents"] == 7500
         assert result["patient_max_cents"] == 2500
+        assert result["lines"][0]["rate_source"] == "Synthetic signed rate"
         assert result["lines"][0]["benefits"]["copay_cents"] is None
         PrebookingEstimateResponse.model_validate({"coverage": prebooking.evaluate(payload, details, "2026-10-27"),
             "payer": PAYER["displayName"], "checked_at": "2026-10-27T12:00:00Z", "checked_on": "2026-10-27",
             "check_ids": [], "patient_address": None, **result})
 
-        no_member = staff_prebooking._estimate_from_payer("clinic-1", {**details, "member_id": ""},
+        no_member = staff_prebooking._estimate_from_payer(network_participation.NMCT_PRACTICE_ID, {**details, "member_id": ""},
             context, PAYER, PROVIDER, payload, "2026-10-27", lines)
         assert no_member["estimate_status"] == "needs_review"
         assert no_member["patient_max_cents"] is None
+        assert no_member["allowed_total_cents"] is None
+
+        other_clinic = staff_prebooking._estimate_from_payer("clinic-1", details, context, PAYER,
+            PROVIDER, payload, "2026-10-27", lines)
+        assert other_clinic["allowed_total_cents"] is None
+        assert other_clinic["lines"][0]["rate_source"] is None
 
     def unverified(result, practice_id, inputs, source, payer_id, benefits, **kwargs):
         priced(result, practice_id, inputs, source, payer_id, benefits, **kwargs)
         benefits.update(network_status="unknown", network_source=None)
 
     with patch.object(commercial_estimator, "_attach_previsit_pricing", side_effect=unverified):
-        no_network = staff_prebooking._estimate_from_payer("clinic-1", details, context, PAYER,
+        no_network = staff_prebooking._estimate_from_payer(network_participation.NMCT_PRACTICE_ID, details, context, PAYER,
             PROVIDER, payload, "2026-10-27", lines)
         assert no_network["network_status"] == "unknown"
         assert no_network["patient_max_cents"] is None
+        assert no_network["network_evidence"]["reason"] == "Synthetic contract."
+
+    def out_of_network(result, practice_id, inputs, source, payer_id, benefits, **kwargs):
+        priced(result, practice_id, inputs, source, payer_id, benefits, **kwargs)
+        benefits.update(network_status="out_of_network", network_source="clinic_nonparticipation_rule")
+
+    with patch.object(commercial_estimator, "_attach_previsit_pricing", side_effect=out_of_network):
+        outside = staff_prebooking._estimate_from_payer(network_participation.NMCT_PRACTICE_ID,
+            details, context, PAYER, PROVIDER, payload, "2026-10-27", lines)
+        assert outside["network_status"] == "out_of_network"
+        assert outside["allowed_total_cents"] is None
+
+    def conflicting(result, practice_id, inputs, source, payer_id, benefits, **kwargs):
+        priced(result, practice_id, inputs, source, payer_id, benefits, **kwargs)
+        benefits["network_conflict"] = True
+
+    with patch.object(commercial_estimator, "_attach_previsit_pricing", side_effect=conflicting):
+        conflict = staff_prebooking._estimate_from_payer(network_participation.NMCT_PRACTICE_ID,
+            details, context, PAYER, PROVIDER, payload, "2026-10-27", lines)
+        assert conflict["network_status"] == "unknown"
+        assert conflict["allowed_total_cents"] is None
+
+    def mismatched_total(result, practice_id, inputs, source, payer_id, benefits, **kwargs):
+        priced(result, practice_id, inputs, source, payer_id, benefits, **kwargs)
+        result["price_range"]["plan_min_cents"] = 7600
+        result["price_range"]["plan_max_cents"] = 7600
+
+    with patch.object(commercial_estimator, "_attach_previsit_pricing", side_effect=mismatched_total):
+        mismatch = staff_prebooking._estimate_from_payer(network_participation.NMCT_PRACTICE_ID,
+            details, context, PAYER, PROVIDER, payload, "2026-10-27", lines)
+        assert mismatch["estimate_status"] == "needs_review"
+        assert mismatch["plan_total_cents"] is None
+
+    def missing_rate(result, practice_id, inputs, source, payer_id, benefits, **kwargs):
+        priced(result, practice_id, inputs, source, payer_id, benefits, **kwargs)
+        result["price_range"]["lines"][0]["rate_resolution"] = {"status": "RATE_UNAVAILABLE"}
+
+    with patch.object(commercial_estimator, "_attach_previsit_pricing", side_effect=missing_rate):
+        unpriced = staff_prebooking._estimate_from_payer(network_participation.NMCT_PRACTICE_ID,
+            details, context, PAYER, PROVIDER, payload, "2026-10-27", lines)
+        assert unpriced["allowed_total_cents"] is None
+
+    def missing_benefit(result, practice_id, inputs, source, payer_id, benefits, **kwargs):
+        priced(result, practice_id, inputs, source, payer_id, benefits, **kwargs)
+        result["price_range"]["complete"] = False
+        result["price_range"]["lines"][0]["calculation"] = None
+
+    with patch.object(commercial_estimator, "_attach_previsit_pricing", side_effect=missing_benefit):
+        unresolved = staff_prebooking._estimate_from_payer(network_participation.NMCT_PRACTICE_ID,
+            details, context, PAYER, PROVIDER, payload, "2026-10-27", lines)
+        assert unresolved["patient_max_cents"] is None
+        assert unresolved["lines"][0]["allowed_cents"] is None
 
 
 def test_uncertain_service_response_stops_further_inquiries_and_withholds_amount():
@@ -302,4 +368,39 @@ def test_uncertain_service_response_stops_further_inquiries_and_withholds_amount
                 assert result.json()["lines"][0]["patient_cents"] is None
                 assert result.json()["lines"][0]["allowed_cents"] is None
                 assert result.json()["estimate_status"] == "needs_review"
+    asyncio.run(run())
+
+
+def test_future_date_rejection_never_substitutes_today_or_creates_a_record():
+    async def search(name, ids, key, *, candidates=None):
+        return PAYER
+
+    async def run():
+        app = FastAPI()
+        app.include_router(staff.router)
+        body = {**PERSON, "reason": "Planned office consultation", "visit_type": "established",
+                "service_date": "2026-11-05", "selected_services": [{"code": "99213", "units": 1}]}
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test",
+                                     headers={"Origin": "http://test"}) as client:
+            with patch.object(staff, "require_staff", AsyncMock(return_value={"practice_id": "primary", "practice_name": "Example Clinic"})), \
+                 patch.object(staff_prebooking.clinic_store, "get_for_practice", return_value=PROVIDER), \
+                 patch.object(staff_prebooking.commercial_store, "list_networks", return_value=[]), \
+                 patch.object(staff_prebooking, "_today", return_value="2026-10-27"), \
+                 patch.object(staff_prebooking.stedi_financial, "credentials", return_value="synthetic-key"), \
+                 patch.object(staff_prebooking.stedi_payers, "search_payer", side_effect=search), \
+                 patch.object(stedi.Client, "check", AsyncMock(return_value={"outcome": "payer_error", "payload": {"id": "ec_synthetic-future"}})) as check, \
+                 patch.object(staff.staff_store, "create_intake") as create_intake, \
+                 patch.dict(os.environ, {"STEDI_EXECUTION_MODE": "commercial_pilot", "STEDI_LIVE_ELIGIBILITY_ENABLED": "true"}):
+                response = await client.post("/api/staff/prebooking-estimate/check", json=body)
+                assert response.status_code == 200, response.text
+                result = response.json()
+                assert result["checked_on"] == "2026-11-05"
+                assert result["coverage"]["status"] == "needs_review"
+                assert "No check for today was substituted" in result["coverage"]["message"]
+                assert result["allowed_total_cents"] is None
+                assert result["plan_total_cents"] is None
+                assert result["patient_max_cents"] is None
+                assert check.await_count == 1
+                assert check.await_args.args[0]["encounter"]["dates"]["service"]["start"] == "2026-11-05"
+                create_intake.assert_not_called()
     asyncio.run(run())

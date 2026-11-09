@@ -1,0 +1,202 @@
+.prebooking-result .prebooking-benefits {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.prebooking-result-header,
+.prebooking-share-labels {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 16px;
+}
+
+.prebooking-result-header .staff-eyebrow {
+  color: var(--staff-blue);
+  margin-bottom: 5px;
+}
+
+.prebooking-result-badge {
+  flex: none;
+  border-radius: 999px;
+  padding: 5px 11px;
+  font-size: 12px;
+  font-weight: 750;
+}
+
+.prebooking-result-badge.is-ready {
+  background: #e0f4ec;
+  color: var(--staff-green);
+}
+
+.prebooking-result-badge.needs-review {
+  background: #fff1d9;
+  color: #785100;
+}
+
+.prebooking-status-row,
+.prebooking-cost-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin: 18px 0;
+}
+
+.prebooking-status-row > div,
+.prebooking-cost-card {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
+  border: 1px solid var(--staff-line);
+  border-radius: 10px;
+  padding: 16px;
+}
+
+.prebooking-status-row > div > span,
+.prebooking-cost-card > span,
+.prebooking-service-row > div:not(.prebooking-service-name) > span {
+  color: var(--staff-muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.prebooking-status-row strong {
+  color: var(--staff-ink);
+}
+
+.prebooking-status-row small,
+.prebooking-cost-card small,
+.prebooking-rate-source {
+  color: var(--staff-muted);
+  line-height: 1.4;
+}
+
+.prebooking-cost-card {
+  background: #f3f7fc;
+  border-color: #d6e4f6;
+}
+
+.prebooking-cost-card.is-patient {
+  background: #eaf6f2;
+  border-color: #c6e8dc;
+}
+
+.prebooking-cost-card > strong {
+  color: var(--staff-blue);
+  font-size: clamp(23px, 3vw, 31px);
+  line-height: 1.2;
+}
+
+.prebooking-cost-card.is-patient > strong {
+  color: var(--staff-green);
+}
+
+.prebooking-share {
+  margin: 0 0 25px;
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.prebooking-share-track {
+  height: 12px;
+  margin-top: 8px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: #d7e3f3;
+}
+
+.prebooking-share-track > span {
+  display: block;
+  height: 100%;
+  background: var(--staff-green);
+}
+
+.prebooking-benefit-section,
+.prebooking-service-list,
+.prebooking-review {
+  border-top: 1px solid var(--staff-line);
+  padding-top: 20px;
+  margin-top: 24px;
+}
+
+.prebooking-service-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1.6fr) repeat(2, minmax(110px, 1fr));
+  gap: 6px 16px;
+  padding: 15px 0;
+  border-bottom: 1px solid var(--staff-line);
+}
+
+.prebooking-service-row > div {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.prebooking-service-name span,
+.prebooking-line-benefits,
+.prebooking-line-issues {
+  color: var(--staff-muted);
+  font-size: 13px;
+}
+
+.prebooking-rate-source,
+.prebooking-line-benefits,
+.prebooking-line-issues {
+  grid-column: 1 / -1;
+}
+
+.prebooking-line-benefits summary {
+  color: var(--staff-blue);
+  cursor: pointer;
+  font-weight: 650;
+}
+
+.prebooking-line-issues,
+.prebooking-review ul {
+  margin: 3px 0 0;
+  padding-left: 20px;
+}
+
+.prebooking-result-footnote {
+  border-top: 1px solid var(--staff-line);
+  padding-top: 17px;
+  margin-top: 24px;
+}
+
+@media (max-width: 600px) {
+  .prebooking-result-header,
+  .prebooking-share-labels {
+    flex-wrap: wrap;
+  }
+
+  .prebooking-status-row,
+  .prebooking-cost-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .prebooking-service-row {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .prebooking-service-name {
+    grid-column: 1 / -1;
+  }
+
+  .prebooking-result .prebooking-benefits {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+.prebooking-detail-row {
+  border-top: 1px solid var(--staff-line);
+  padding-top: 20px;
+  margin-top: 24px;
+}
+
+.prebooking-patient-address {
+  display: grid;
+  gap: 2px;
+  font-style: normal;
+  line-height: 1.5;
+}

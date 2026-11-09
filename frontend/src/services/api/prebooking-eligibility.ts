@@ -77,7 +77,7 @@ export type PrebookingEstimate = {
     country: string | null
   } | null
   network_status: 'in_network' | 'out_of_network' | 'unknown'
-  network_evidence: { reason?: string; decision?: string } | null
+  network_evidence: { reason?: string; decision?: string; source?: string } | null
   plan_name: string | null
   benefits: PrebookingTerms | null
   lines: Array<{
@@ -87,10 +87,13 @@ export type PrebookingEstimate = {
     service_type: string | null
     allowed_cents: number | null
     patient_cents: number | null
+    rate_source: string | null
     benefits: PrebookingTerms
     issues: string[]
     conditions: string[]
   }>
+  allowed_total_cents: number | null
+  plan_total_cents: number | null
   patient_min_cents: number | null
   patient_max_cents: number | null
   estimate_status: 'priced' | 'conditional' | 'needs_review'

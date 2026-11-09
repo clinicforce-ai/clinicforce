@@ -159,15 +159,44 @@ def _estimate_from_payer(practice_id: str, details: dict, context: dict | None, 
     network = benefits.get("network_status") or "unknown"
     verified = bool(context) and (network_participation.verified_in_network(benefits)
                                   or network_participation.verified_out_of_network(benefits))
+    priced_rows = {row["code"]: row for row in price.get("lines") or []}
+    contract_rates = len(priced_rows) == len(lines) and all(
+        (row := priced_rows.get(selected["code"]))
+        and row.get("units") == selected["units"]
+        and row.get("allowed_basis") == "clinic_contract"
+        and (row.get("rate_resolution") or {}).get("status") == "RESOLVED"
+        for selected in lines)
+    totals = (price.get("allowed_min_cents"), price.get("allowed_max_cents"),
+              price.get("plan_min_cents"), price.get("plan_max_cents"),
+              price.get("patient_min_cents"), price.get("patient_max_cents"))
+    priced_lines_complete = len(priced_rows) == len(lines) and all(
+        type(row.get("allowed_cents")) is int
+        and type((row.get("calculation") or {}).get("patient_cents")) is int
+        and type((row.get("calculation") or {}).get("plan_cents")) is int
+        and row["allowed_cents"] >= 0
+        and row["calculation"]["patient_cents"] >= 0
+        and row["calculation"]["plan_cents"] >= 0
+        and row["allowed_cents"] == row["calculation"]["patient_cents"] + row["calculation"]["plan_cents"]
+        for row in priced_rows.values())
+    reconciled = (priced_lines_complete and all(type(amount) is int and amount >= 0 for amount in totals)
+                  and totals[0] == totals[1] and totals[2] == totals[3]
+                  and totals[4] == totals[5] and totals[0] == totals[2] + totals[4]
+                  and totals[0] == sum(row["allowed_cents"] for row in priced_rows.values())
+                  and totals[2] == sum(row["calculation"]["plan_cents"] for row in priced_rows.values())
+                  and totals[4] == sum(row["calculation"]["patient_cents"] for row in priced_rows.values()))
     ready = (benefits.get("active") is True and identity.patient_benefits_bound(comparison)
-             and verified and price.get("complete") is True and bool(plan))
+             and network_participation.is_nmct_practice(practice_id)
+             and verified and network == "in_network" and bool(plan)
+             and contract_rates and reconciled and price.get("complete") is True)
     priced_lines = []
-    for row in price.get("lines") or []:
-        priced_lines.append({"code": row["code"], "units": row["units"],
-                             "role": visit_estimate.clinical_group(row["code"]),
-                             "service_type": visit_estimate.service_type(row["code"], {}),
+    for selected in lines:
+        row = priced_rows.get(selected["code"]) or {}
+        priced_lines.append({"code": selected["code"], "units": selected["units"],
+                             "role": visit_estimate.clinical_group(selected["code"]),
+                             "service_type": visit_estimate.service_type(selected["code"], {}),
                              "allowed_cents": row.get("allowed_cents") if ready else None,
                              "patient_cents": (row.get("calculation") or {}).get("patient_cents") if ready else None,
+                             "rate_source": row.get("rate_source") if ready else None,
                              "benefits": _terms(row.get("benefits") or {}),
                              "issues": row.get("issues") or [], "conditions": row.get("conditions") or []})
     issues = list(dict.fromkeys([*result["issues"], *(price.get("service_issues") or []),
@@ -178,16 +207,24 @@ def _estimate_from_payer(practice_id: str, details: dict, context: dict | None, 
         issues.insert(0, "The payer did not identify one plan product for this person; verify the exact product before pricing.")
     if not verified:
         issues.insert(0, "Choose a clinic provider and location, then confirm participation for this member's exact plan.")
+    if not network_participation.is_nmct_practice(practice_id):
+        issues.insert(0, "Priced prebooking estimates currently support NMCT contracted plans only.")
+    elif network != "in_network":
+        issues.insert(0, "An NMCT in-network contract price is not established for this visit.")
+    elif not contract_rates or not reconciled:
+        issues.insert(0, "Verify contract rates and benefit calculations for every selected service before showing a total.")
     return {"network_status": network if verified else "unknown",
-            "network_evidence": result.get("network_evidence") if verified else None, "plan_name": plan or None,
+            "network_evidence": result.get("network_evidence"), "plan_name": plan or None,
             "benefits": _terms(benefits), "lines": priced_lines,
+            "allowed_total_cents": totals[0] if ready else None,
+            "plan_total_cents": totals[2] if ready else None,
             "patient_min_cents": price.get("patient_min_cents") if ready else None,
             "patient_max_cents": price.get("patient_max_cents") if ready else None,
             "estimate_status": "conditional" if ready and price.get("conditional") else "priced" if ready else "needs_review",
             "issues": issues[:20]}
 
 
-@router.post("/prebooking-estimate/check", response_model=PrebookingEstimateResponse, description="Run an unsaved Stedi 270/271 check for a staff-confirmed prospective service scenario and estimate date. Return payer benefits, the matched patient address when Stedi supplies one, NMCT network evidence and a conditional patient-cost estimate only when member, plan, provider, service and rate evidence agree. A reason alone never confirms a procedure or collectible amount. No patient, case or appointment is created; recheck after booking.")
+@router.post("/prebooking-estimate/check", response_model=PrebookingEstimateResponse, description="Run an unsaved Stedi 270/271 check for staff-confirmed prospective services and date. Return coverage, payer terms and the matched patient address when available; provide NMCT contract-allowed visit cost, estimated plan share, patient share and per-service rate sources only when member, plan, provider, service, in-network contract rate and totals agree. Unknown values are null. Future-date checks can be unsupported by a payer and never fall back silently to today. No patient, case or appointment is created; recheck after booking.")
 async def prebooking_estimate_check(value: PrebookingEstimateRequest, request: Request):
     staff = await _staff.require_staff(request)
     if (os.getenv("STEDI_EXECUTION_MODE", "off") != "commercial_pilot"
@@ -230,13 +267,17 @@ async def prebooking_estimate_check(value: PrebookingEstimateRequest, request: R
     payload = response.get("payload") if isinstance(response.get("payload"), dict) else {}
     check_ids = [payload["id"]] if isinstance(payload.get("id"), str) and re.fullmatch(r"ec_[A-Za-z0-9-]{1,80}", payload["id"]) else []
     coverage = (prebooking.evaluate(payload, details, service_date) if response.get("outcome") == "complete"
-                else {"status": "needs_review", "message": "The payer check did not complete. Review Stedi activity before another inquiry.",
+                else {"status": "needs_review", "message": (
+                    "The payer did not complete eligibility for the selected future date. It may not support that date; review Stedi activity before another inquiry. No check for today was substituted."
+                    if service_date != today else
+                    "The payer check did not complete. Review Stedi activity before another inquiry."),
                       "coverage_start": None, "coverage_end": None})
     base = {"coverage": coverage, "payer": payer["displayName"], "checked_at": checked_at,
             "checked_on": service_date, "check_ids": check_ids,
             "patient_address": prebooking.patient_address(payload, details) if response.get("outcome") == "complete" else None,
             "network_status": "unknown",
             "network_evidence": None, "plan_name": None, "benefits": None, "lines": [],
+            "allowed_total_cents": None, "plan_total_cents": None,
             "patient_min_cents": None, "patient_max_cents": None, "estimate_status": "needs_review",
             "issues": []}
     if coverage["status"] != "active_today":
@@ -255,7 +296,7 @@ async def prebooking_estimate_check(value: PrebookingEstimateRequest, request: R
         if isinstance(service_payload.get("id"), str) and re.fullmatch(r"ec_[A-Za-z0-9-]{1,80}", service_payload["id"]):
             check_ids.append(service_payload["id"])
         if reply.get("outcome") != "complete" or not isinstance(reply.get("payload"), dict):
-            issues.append(f"Service category {category} was not confirmed. Review Stedi activity before another inquiry.")
+            issues.append(f"Service category {category} was not confirmed for the selected date. Review Stedi activity before another inquiry; no check for today was substituted.")
             break
         try:
             category_active = commercial.normalize_stedi_271(service_payload, category, False,
@@ -274,7 +315,9 @@ async def prebooking_estimate_check(value: PrebookingEstimateRequest, request: R
                             headers=_staff.NO_STORE)
     if issues:
         estimate["estimate_status"] = "needs_review"
+        estimate["allowed_total_cents"] = estimate["plan_total_cents"] = None
         estimate["patient_min_cents"] = estimate["patient_max_cents"] = None
-        estimate["lines"] = [{**row, "allowed_cents": None, "patient_cents": None} for row in estimate["lines"]]
+        estimate["lines"] = [{**row, "allowed_cents": None, "patient_cents": None, "rate_source": None}
+                             for row in estimate["lines"]]
     estimate["issues"] = list(dict.fromkeys([*issues, *estimate["issues"]]))[:20]
     return JSONResponse({**base, **estimate}, headers=_staff.NO_STORE)
