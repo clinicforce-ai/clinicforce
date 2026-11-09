@@ -5,6 +5,7 @@ export interface CommercialEstimatorProps {
   onResolvePatient?: () => void
   intakeId?: string
   refreshBenefits?: boolean
+  initialAppointmentId?: string
   saved?: InsuranceCheckSnapshot
   currentAccountNumber?: string | null
   featured?: boolean

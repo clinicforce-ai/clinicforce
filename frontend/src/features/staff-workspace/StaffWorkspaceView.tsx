@@ -32,6 +32,7 @@ export default function StaffWorkspaceView({ model }: { model: StaffWorkspaceMod
     onCreateClinic,
     onJoinClinic,
     onOpenPatientQr,
+    onOpenInsurance,
     historyPatientId,
     linkPatient,
     setLinkPatient,
@@ -280,6 +281,7 @@ export default function StaffWorkspaceView({ model }: { model: StaffWorkspaceMod
             initialPatientId={historyPatientId}
             onPullEcw={() => navigate('lookup')}
             onOpenIntake={openIntake}
+            onRecheckEstimate={(intakeId, appointmentId) => onOpenInsurance(intakeId, 'commercial', true, appointmentId)}
             onRequestCard={requestPatientCard}
             onAddCard={() => {
               setFiles([])

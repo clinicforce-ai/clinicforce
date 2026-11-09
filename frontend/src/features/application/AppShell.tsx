@@ -37,6 +37,7 @@ export function AppShell() {
   const [resolveEcwPatient, setResolveEcwPatient] = useState(false)
   const [staffQr, setStaffQr] = useState(false)
   const [refreshBenefits, setRefreshBenefits] = useState(false)
+  const [targetCommercialVisit, setTargetCommercialVisit] = useState<string | undefined>()
   useEffect(() => {
     if (view === 'staff') window.history.replaceState({}, '', '/?staff')
   }, [view])
@@ -105,9 +106,10 @@ export function AppShell() {
       setView('pin')
     }
   }
-  const openStaffInsurance = (id: string, version: 'v1' | 'v2' | 'commercial', refresh = false) => {
+  const openStaffInsurance = (id: string, version: 'v1' | 'v2' | 'commercial', refresh = false, appointmentId?: string) => {
     setResolveEcwPatient(false)
     setRefreshBenefits(refresh)
+    setTargetCommercialVisit(appointmentId)
     setStaffIntakeId(id)
     setView(version === 'v1' ? 'insurance' : 'commercial-estimator')
   }
@@ -248,6 +250,7 @@ export function AppShell() {
               onBack={returnStaff}
               intakeId={staffIntakeId}
               refreshBenefits={refreshBenefits}
+              initialAppointmentId={targetCommercialVisit}
             />
           )}
         </Suspense>

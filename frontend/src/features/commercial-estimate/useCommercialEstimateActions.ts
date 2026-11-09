@@ -28,6 +28,7 @@ export function useCommercialEstimateActions({
   onResolvePatient,
   intakeId,
   refreshBenefits = false,
+  initialAppointmentId,
   saved,
   currentAccountNumber,
 }: CommercialEstimatorProps) {
@@ -41,7 +42,7 @@ export function useCommercialEstimateActions({
   const [patientResolutionNeeded, setPatientResolutionNeeded] = useState(false)
   const [historyError, setHistoryError] = useState('')
   const [historyBusy, setHistoryBusy] = useState(false)
-  const [selectedVisit, setSelectedVisit] = useState('')
+  const [selectedVisit, setSelectedVisit] = useState(initialAppointmentId || '')
   const [candidateSuggestion, setCandidateSuggestion] = useState('')
   const [payerSuggestion, setPayerSuggestion] = useState('')
   const [loaded, setLoaded] = useState(false)
@@ -118,6 +119,13 @@ export function useCommercialEstimateActions({
     }
     if (schedule.status === 'fulfilled') {
       setAppointments(schedule.value.appointments)
+      if (initialAppointmentId && !schedule.value.appointments.some((visit) => visit.id === initialAppointmentId)) {
+        setSelectedVisit('')
+        setError('This saved appointment is no longer in the current eCW visit list. Select the correct visit before checking benefits.')
+        setLoaded(true)
+        setBusy(null)
+        return
+      }
       setSelectedVisit((previous) =>
         schedule.value.appointments.some((visit) => visit.id === previous)
           ? previous
@@ -139,7 +147,7 @@ export function useCommercialEstimateActions({
       setLoaded(false)
     }
     setBusy(null)
-  }, [intakeId])
+  }, [intakeId, initialAppointmentId])
   useEffect(() => {
     if (readOnly) return
     const requests = requestId

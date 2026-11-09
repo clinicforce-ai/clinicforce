@@ -4,6 +4,7 @@ export interface StaffWorkspaceProps {
     intakeId: string,
     version: 'v1' | 'v2' | 'commercial',
     refreshBenefits?: boolean,
+    appointmentId?: string,
   ) => void
   onScanQr: () => void
   onCreateClinic: () => void
