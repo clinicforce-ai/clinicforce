@@ -81,6 +81,22 @@
   border-color: #c6e8dc;
 }
 
+.prebooking-unavailable {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  margin-top: 20px;
+  padding: 18px 20px;
+  border: 1px solid #d6e1ee;
+  border-radius: 8px;
+  background: #f3f7fc;
+  color: var(--staff-ink);
+}
+
+.prebooking-unavailable span {
+  color: var(--staff-muted);
+}
+
 .prebooking-cost-card > strong {
   color: var(--staff-blue);
   font-size: clamp(23px, 3vw, 31px);

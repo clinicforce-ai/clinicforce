@@ -32,14 +32,12 @@ export default function StaffPrebookingScreen({ onBack }: { onBack: () => void }
   const [error, setError] = useState('')
   const [form, setForm] = useState<PrebookingDetails>(empty)
   const [reason, setReason] = useState('')
-  const [visitType, setVisitType] = useState<VisitType>('unknown')
+  const [visitType, setVisitType] = useState<VisitType>('new')
   const [serviceDate, setServiceDate] = useState('')
   const [relationship, setRelationship] = useState<'self' | 'dependent'>('self')
   const [subscriber, setSubscriber] = useState({ given: '', family: '', birth: '' })
   const [plan, setPlan] = useState<PrebookingPlan | null>(null)
   const [selected, setSelected] = useState<Record<string, number>>({})
-  const [manualCode, setManualCode] = useState('')
-  const [confirmed, setConfirmed] = useState(false)
   const [result, setResult] = useState<PrebookingEstimate | null>(null)
   const today = new Date().toLocaleDateString('en-CA')
 
@@ -47,7 +45,7 @@ export default function StaffPrebookingScreen({ onBack }: { onBack: () => void }
     getPrebookingContexts()
       .then(({ contexts: choices }) => {
         setContexts(choices)
-        if (choices.length === 1) setContextId(choices[0].id)
+        if (choices.length) setContextId(choices[0].id)
       })
       .catch(() => setContexts([]))
   }, [])
@@ -84,27 +82,7 @@ export default function StaffPrebookingScreen({ onBack }: { onBack: () => void }
     setReason(value)
     setPlan(null)
     setSelected({})
-    setConfirmed(false)
     setResult(null)
-  }
-  async function preparePlan() {
-    if (busy || reason.trim().length < 3) {
-      setError('Enter a visit reason of at least three characters.')
-      return
-    }
-    setBusy('planning')
-    setPlan(null)
-    setSelected({})
-    setConfirmed(false)
-    setResult(null)
-    setError('')
-    try {
-      setPlan(await planPrebookingServices(reason.trim(), visitType))
-    } catch (caught) {
-      setError(caught instanceof Error ? caught.message : 'Possible services could not be found.')
-    } finally {
-      setBusy(null)
-    }
   }
   function toggle(code: string, group?: PrebookingPlan['groups'][number]) {
     setSelected((current) => {
@@ -119,26 +97,17 @@ export default function StaffPrebookingScreen({ onBack }: { onBack: () => void }
       }
       return next
     })
-    setConfirmed(false)
     setResult(null)
-  }
-  function addManualCode() {
-    const code = manualCode.trim().toUpperCase()
-    if (!/^(?:[0-9]{5}|[A-Z][0-9]{4}|[0-9]{4}[A-Z])$/.test(code)) {
-      setError('Enter one valid five-character CPT or HCPCS code.')
-      return
-    }
-    setSelected((current) => ({ ...current, [code]: current[code] || 1 }))
-    setManualCode('')
-    setConfirmed(false)
-    setResult(null)
-    setError('')
   }
   async function check(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
-    if (busy || !plan) return
-    if (!form.payer_id || !confirmed || !Object.keys(selected).length) {
-      setError('Choose an insurer and confirm at least one planned service.')
+    if (busy) return
+    if (!form.payer_id) {
+      setError('Choose the insurer from the search results.')
+      return
+    }
+    if (!form.member_id.trim()) {
+      setError('Enter the member ID from the insurance card to match a policy and estimate cost.')
       return
     }
     if (
@@ -148,10 +117,29 @@ export default function StaffPrebookingScreen({ onBack }: { onBack: () => void }
       setError('Enter the policyholder name, birth date and member ID for a dependent.')
       return
     }
-    setBusy('checking')
+    setBusy(plan ? 'checking' : 'planning')
     setResult(null)
     setError('')
     try {
+      const planned = plan || (await planPrebookingServices(reason.trim(), visitType))
+      if (!plan) setPlan(planned)
+      const included = plan
+        ? selected
+        : Object.fromEntries(
+            planned.groups.flatMap((group) =>
+              group.codes
+                .filter((candidate) => candidate.selected_by_default)
+                .map(({ code }) => [code, 1]),
+            ),
+          )
+      if (!Object.keys(included).length) {
+        setError(
+          'An office visit estimate could not be prepared. Try again or change the visit type.',
+        )
+        return
+      }
+      if (!plan) setSelected(included)
+      setBusy('checking')
       setResult(
         await checkPrebookingEstimate({
           ...form,
@@ -163,7 +151,7 @@ export default function StaffPrebookingScreen({ onBack }: { onBack: () => void }
           subscriber_given_name: subscriber.given,
           subscriber_family_name: subscriber.family,
           subscriber_birth_date: subscriber.birth || null,
-          selected_services: Object.entries(selected).map(([code, units]) => ({ code, units })),
+          selected_services: Object.entries(included).map(([code, units]) => ({ code, units })),
         }),
       )
     } catch (caught) {
@@ -172,7 +160,7 @@ export default function StaffPrebookingScreen({ onBack }: { onBack: () => void }
           ? 'The request may have reached Stedi. Check Stedi activity before sending another inquiry.'
           : caught instanceof Error
             ? caught.message
-            : 'This estimate could not be completed.',
+            : 'The insurer check could not be completed.',
       )
     } finally {
       setBusy(null)
@@ -187,10 +175,10 @@ export default function StaffPrebookingScreen({ onBack }: { onBack: () => void }
       <header className="staff-header">
         <div>
           <div className="staff-eyebrow">Prospective patient</div>
-          <h1>Plan care and estimate cost before booking</h1>
+          <h1>Check insurance before booking</h1>
           <p className="staff-muted">
-            Describe the visit, confirm possible services, then check coverage and estimated patient
-            share.
+            Enter the insurance card and visit reason. ClinicForce will build a starting visit
+            estimate and check the payer.
           </p>
         </div>
       </header>
@@ -200,7 +188,7 @@ export default function StaffPrebookingScreen({ onBack }: { onBack: () => void }
         </p>
       )}
       <form className="staff-panel" onSubmit={(event) => void check(event)} autoComplete="off">
-        <h2>1. Patient and visit</h2>
+        <h2>Patient and insurance</h2>
         <div className="staff-two-columns">
           <label className="staff-field">
             <span>Patient's first name *</span>
@@ -290,75 +278,17 @@ export default function StaffPrebookingScreen({ onBack }: { onBack: () => void }
             </small>
           </div>
           <label className="staff-field">
-            <span>Insurance member ID (needed for a priced estimate)</span>
+            <span>Member ID from insurance card *</span>
             <input
               value={form.member_id}
+              required
               maxLength={80}
               disabled={Boolean(busy)}
               onChange={(event) => change('member_id', event.target.value)}
             />
           </label>
           <label className="staff-field">
-            <span>Patient is</span>
-            <select
-              value={relationship}
-              disabled={Boolean(busy)}
-              onChange={(event) => {
-                setRelationship(event.target.value as 'self' | 'dependent')
-                setResult(null)
-              }}
-            >
-              <option value="self">Policyholder</option>
-              <option value="dependent">Dependent</option>
-            </select>
-          </label>
-          {relationship === 'dependent' && (
-            <>
-              <label className="staff-field">
-                <span>Policyholder's first name *</span>
-                <input
-                  value={subscriber.given}
-                  required
-                  maxLength={100}
-                  disabled={Boolean(busy)}
-                  onChange={(event) => {
-                    setSubscriber({ ...subscriber, given: event.target.value })
-                    setResult(null)
-                  }}
-                />
-              </label>
-              <label className="staff-field">
-                <span>Policyholder's last name *</span>
-                <input
-                  value={subscriber.family}
-                  required
-                  maxLength={100}
-                  disabled={Boolean(busy)}
-                  onChange={(event) => {
-                    setSubscriber({ ...subscriber, family: event.target.value })
-                    setResult(null)
-                  }}
-                />
-              </label>
-              <label className="staff-field">
-                <span>Policyholder's birth date *</span>
-                <input
-                  type="date"
-                  value={subscriber.birth}
-                  required
-                  min="1850-01-01"
-                  max={today}
-                  disabled={Boolean(busy)}
-                  onChange={(event) => {
-                    setSubscriber({ ...subscriber, birth: event.target.value })
-                    setResult(null)
-                  }}
-                />
-              </label>
-            </>
-          )}
-          <label className="staff-field">
-            <span>Patient visit status</span>
+            <span>Office visit type</span>
             <select
               value={visitType}
               disabled={Boolean(busy)}
@@ -367,90 +297,152 @@ export default function StaffPrebookingScreen({ onBack }: { onBack: () => void }
                 changeReason(reason)
               }}
             >
-              <option value="unknown">Unknown</option>
-              <option value="new">New patient</option>
-              <option value="established">Established patient</option>
-            </select>
-          </label>
-          <label className="staff-field">
-            <span>Possible service date</span>
-            <input
-              type="date"
-              value={serviceDate}
-              min={today}
-              disabled={Boolean(busy)}
-              onChange={(event) => {
-                setServiceDate(event.target.value)
-                setResult(null)
-              }}
-            />
-            <small>Leave blank to check today. Recheck after booking.</small>
-          </label>
-          <label className="staff-field">
-            <span>Clinic provider and location</span>
-            <select
-              value={contextId}
-              disabled={Boolean(busy)}
-              onChange={(event) => {
-                setContextId(event.target.value)
-                setResult(null)
-              }}
-            >
-              <option value="">Select if known</option>
-              {contexts.map((context) => (
-                <option key={context.id} value={context.id}>
-                  {context.label}
-                </option>
-              ))}
+              <option value="new">New to NMCT</option>
+              <option value="established">Returning to NMCT</option>
             </select>
             <small>
-              {contexts.length
-                ? 'Needed for an exact network and contracted rate match.'
-                : 'No configured provider/location found; a patient amount may be unavailable.'}
+              Starts with a common office-visit level; the final billed level may differ.
             </small>
           </label>
         </div>
         <label className="staff-field">
-          <span>Reason for visit and anticipated care *</span>
+          <span>Reason for visit *</span>
           <textarea
             value={reason}
             required
-            rows={3}
+            rows={2}
             maxLength={800}
             disabled={Boolean(busy)}
             onChange={(event) => changeReason(event.target.value)}
-            placeholder="Example: Follow-up for hand numbness; EMG/NCS may be considered"
+            placeholder="Example: Headache consultation, or hand numbness with EMG planned"
           />
-          <small>Possible tests stay unconfirmed until selected below.</small>
         </label>
-        <button
-          type="button"
-          className="staff-primary"
-          disabled={Boolean(busy) || reason.trim().length < 3}
-          onClick={() => void preparePlan()}
-        >
-          {busy === 'planning' ? 'Finding possible services…' : 'Find possible services'}
-        </button>
+        <details className="prebooking-more-options">
+          <summary>Other details: dependent, visit date, provider</summary>
+          <div className="staff-two-columns">
+            <label className="staff-field">
+              <span>Insurance belongs to</span>
+              <select
+                value={relationship}
+                disabled={Boolean(busy)}
+                onChange={(event) => {
+                  setRelationship(event.target.value as 'self' | 'dependent')
+                  setResult(null)
+                }}
+              >
+                <option value="self">Patient</option>
+                <option value="dependent">Someone else (dependent)</option>
+              </select>
+            </label>
+            {relationship === 'dependent' && (
+              <>
+                <label className="staff-field">
+                  <span>Policyholder's first name *</span>
+                  <input
+                    value={subscriber.given}
+                    required
+                    maxLength={100}
+                    disabled={Boolean(busy)}
+                    onChange={(event) => {
+                      setSubscriber({ ...subscriber, given: event.target.value })
+                      setResult(null)
+                    }}
+                  />
+                </label>
+                <label className="staff-field">
+                  <span>Policyholder's last name *</span>
+                  <input
+                    value={subscriber.family}
+                    required
+                    maxLength={100}
+                    disabled={Boolean(busy)}
+                    onChange={(event) => {
+                      setSubscriber({ ...subscriber, family: event.target.value })
+                      setResult(null)
+                    }}
+                  />
+                </label>
+                <label className="staff-field">
+                  <span>Policyholder's birth date *</span>
+                  <input
+                    type="date"
+                    value={subscriber.birth}
+                    required
+                    min="1850-01-01"
+                    max={today}
+                    disabled={Boolean(busy)}
+                    onChange={(event) => {
+                      setSubscriber({ ...subscriber, birth: event.target.value })
+                      setResult(null)
+                    }}
+                  />
+                </label>
+              </>
+            )}
+            <label className="staff-field">
+              <span>Possible service date</span>
+              <input
+                type="date"
+                value={serviceDate}
+                min={today}
+                disabled={Boolean(busy)}
+                onChange={(event) => {
+                  setServiceDate(event.target.value)
+                  setResult(null)
+                }}
+              />
+              <small>Blank checks today. Some payers reject future dates.</small>
+            </label>
+            <label className="staff-field">
+              <span>Clinic provider and location</span>
+              <select
+                value={contextId}
+                disabled={Boolean(busy)}
+                onChange={(event) => {
+                  setContextId(event.target.value)
+                  setResult(null)
+                }}
+              >
+                <option value="">No configured provider selected</option>
+                {contexts.map((context) => (
+                  <option key={context.id} value={context.id}>
+                    {context.label}
+                  </option>
+                ))}
+              </select>
+              <small>
+                {contexts.length
+                  ? 'The first configured NMCT context is selected automatically.'
+                  : 'No configured provider/location found; a contract price may be unavailable.'}
+              </small>
+            </label>
+          </div>
+        </details>
         {plan && (
           <StaffPrebookingPlan
             plan={plan}
             selected={selected}
             busy={Boolean(busy)}
-            checking={busy === 'checking'}
-            manualCode={manualCode}
-            confirmed={confirmed}
-            payerSelected={Boolean(form.payer_id)}
             onToggle={toggle}
-            onManualCode={setManualCode}
-            onAddCode={addManualCode}
             onUnits={(code, units) => {
               setSelected({ ...selected, [code]: units })
-              setConfirmed(false)
               setResult(null)
             }}
-            onConfirm={setConfirmed}
           />
         )}
+        <button className="staff-primary prebooking-submit" disabled={Boolean(busy)}>
+          {busy === 'planning'
+            ? 'Finding visit services…'
+            : busy === 'checking'
+              ? 'Checking with insurer…'
+              : result
+                ? 'Update estimate'
+                : 'Check insurance and estimate visit'}
+        </button>
+        <p className="staff-small staff-muted">
+          The estimate uses the selected office visit and any added services. ClinicForce does not
+          save this check or create a patient record.
+        </p>
       </form>
       {result && <StaffPrebookingResult result={result} />}
     </div>

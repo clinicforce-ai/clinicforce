@@ -75,9 +75,9 @@ def patient_address(payload: dict, details: dict) -> dict | None:
 def evaluate(payload: dict, details: dict, service_date: str) -> dict:
     """Only a person-bound STC 30 response can establish current medical coverage."""
     result = {"status": "needs_review", "coverage_start": None, "coverage_end": None,
-              "message": "The payer did not confirm current medical coverage. Review the details with the payer."}
+              "message": "The insurer did not return a clear coverage answer for this date."}
     if not matches_identity(payload, details):
-        result["message"] = "The payer response did not confirm this person's identity and policy. Review the details with the payer."
+        result["message"] = "The insurer did not match this person and member ID. Check the card details or dependent option and try again."
         return result
     if commercial.eligibility_errors(payload) or str(payload.get("status") or "").upper() in {"ERROR", "FAILED", "REJECTED"}:
         return result
@@ -91,14 +91,14 @@ def evaluate(payload: dict, details: dict, service_date: str) -> dict:
             or benefits.get("service_date_matches") is False or benefits.get("source_errors")):
         return result
     if benefits.get("active") is True and coverage.get("status") == "ACTIVE":
-        result.update(status="active_today", message="General medical coverage is active for the checked date. Recheck for the booked visit.")
+        result.update(status="active_today", message="General medical coverage is active for the checked date.")
     elif benefits.get("active") is False and coverage.get("status") in {"INACTIVE", "EXPIRED", "FUTURE"}:
-        result.update(status="inactive_today", message="The payer reports no active general medical coverage for the checked date. Verify before deciding how to book.")
+        result.update(status="inactive_today", message="The insurer reports no active general medical coverage for the checked date.")
     return result
 
 
 def plan(reason: str, visit_type: str, suggestions: dict) -> dict:
-    """Sanitize preliminary coding ideas; nothing is selected or priced yet."""
+    """Pair optional AI ideas with one clearly labelled office-visit planning baseline."""
     groups = []
     seen = set()
     for group in (suggestions.get("groups") or [])[:8]:
@@ -109,23 +109,27 @@ def plan(reason: str, visit_type: str, suggestions: dict) -> dict:
             code = str(candidate.get("code") or "").upper() if isinstance(candidate, dict) else ""
             if not re.fullmatch(r"(?:\d{5}|[A-Z]\d{4}|\d{4}[A-Z])", code) or code in seen:
                 continue
+            if cpt_rules.service_definition(code)["group"] == "visit":
+                continue  # The planning visit has one explicit baseline, not an unchosen E/M family.
             seen.add(code)
             codes.append({"code": code, "reason": str(candidate.get("reason") or "Possible planned service")[:500],
                           "role": cpt_rules.service_definition(code)["role"],
-                          "service_type": visit_estimate.service_type(code, {})})
+                          "service_type": visit_estimate.service_type(code, {}),
+                          "selected_by_default": False})
         if codes:
             groups.append({"label": str(group.get("label") or "Possible services")[:120],
                            "selection_mode": "single" if group.get("selection_mode") == "single" else "multiple",
                            "codes": codes})
-    if visit_type in {"new", "established"} and not any(
-            cpt_rules.service_definition(row["code"])["group"] == "visit"
-            for group in groups for row in group["codes"]):
-        levels = range(99202, 99206) if visit_type == "new" else range(99212, 99216)
-        groups.insert(0, {"label": "Office visit level (choose only if planned)", "selection_mode": "single",
-                          "codes": [{"code": str(code), "reason": "Clinician must confirm the anticipated visit level.",
-                                     "role": "consultation", "service_type": "98"} for code in levels]})
+    if visit_type in {"new", "established"}:
+        code = "99203" if visit_type == "new" else "99213"
+        label = "new-patient" if visit_type == "new" else "returning-patient"
+        groups.insert(0, {"label": "Office visit included in estimate", "selection_mode": "single",
+                          "codes": [{"code": code,
+                                     "reason": f"Planning baseline for a {label} office visit; the billed level can differ.",
+                                     "role": "consultation", "service_type": "98",
+                                     "selected_by_default": True}]})
     return {"groups": groups, "notes": [str(note)[:500] for note in (suggestions.get("notes") or [])[:5]],
-            "message": "These are possible services from the visit reason. Confirm the clinical plan and code before checking cost."}
+            "message": "The office visit is included as a planning example. Optional services are ideas based on the visit reason, not a prediction of care."}
 
 
 def validate_services(services: list[dict], visit_type: str, reason: str) -> list[dict]:
@@ -144,5 +148,5 @@ def validate_services(services: list[dict], visit_type: str, reason: str) -> lis
     if issues:
         raise ValueError(issues[0])
     return [{"id": f"prospective:{row['code']}", "code": row["code"], "units": row["units"],
-             "modifiers": [], "source": "Clinician-confirmed prospective plan", "confirmed": True}
+             "modifiers": [], "source": "Prospective planning scenario", "confirmed": True}
             for row in services]

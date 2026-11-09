@@ -121,14 +121,15 @@ def test_staff_route_checks_without_creating_a_patient_or_case():
     asyncio.run(run())
 
 
-def test_prospective_plan_never_selects_or_prices_a_suggestion():
+def test_prospective_plan_selects_only_office_baseline_and_never_prices_ai_ideas():
     suggestions = {"groups": [{"label": "Possible testing", "selection_mode": "multiple",
         "codes": [{"code": "95909", "reason": "Nerve studies may be considered."},
                   {"code": "invalid", "reason": "Bad code"}]}], "notes": []}
     plan = prebooking.plan("Hand numbness; testing may be considered", "established", suggestions)
-    assert plan["groups"][0]["codes"][0]["code"] == "99212"
+    assert plan["groups"][0]["codes"][0]["code"] == "99213"
+    assert plan["groups"][0]["codes"][0]["selected_by_default"] is True
     assert [row["code"] for row in plan["groups"][1]["codes"]] == ["95909"]
-    assert all("selected" not in row for group in plan["groups"] for row in group["codes"])
+    assert plan["groups"][1]["codes"][0]["selected_by_default"] is False
     assert prebooking.validate_services([{"code": "95909", "units": 1}], "established", "Hand numbness")[0]["confirmed"]
     try:
         prebooking.validate_services([{"code": "95909", "units": 1}, {"code": "95908", "units": 1}],
@@ -137,6 +138,54 @@ def test_prospective_plan_never_selects_or_prices_a_suggestion():
         pass
     else:
         assert False, "Alternative nerve study levels must be rejected"
+
+
+def test_prebooking_headache_reason_produces_a_usable_office_visit_baseline():
+    plan = prebooking.plan("headache", "new", {"groups": [], "notes": ["No separate test is established."]})
+    assert len(plan["groups"]) == 1
+    assert plan["groups"][0]["codes"] == [{
+        "code": "99203", "reason": "Planning baseline for a new-patient office visit; the billed level can differ.",
+        "role": "consultation", "service_type": "98", "selected_by_default": True,
+    }]
+    assert "No separate test" in plan["notes"][0]
+
+
+def test_plan_api_keeps_office_baseline_when_ai_has_no_procedure_code():
+    async def run():
+        app = FastAPI()
+        app.include_router(staff.router)
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test",
+                                     headers={"Origin": "http://test"}) as client:
+            with patch.object(staff, "require_staff", AsyncMock(return_value={"practice_id": "clinic-1"})), \
+                 patch.object(staff_prebooking.cpt_suggester, "suggest_preliminary_cpt_codes",
+                              return_value={"groups": [], "notes": ["No separate test is established."]}) as suggest, \
+                 patch.object(stedi.Client, "check", AsyncMock()) as check:
+                result = await client.post("/api/staff/prebooking-estimate/plan",
+                                           json={"reason": "headache", "visit_type": "new"})
+                assert result.status_code == 200
+                assert result.json()["groups"][0]["codes"][0]["code"] == "99203"
+                assert result.json()["groups"][0]["codes"][0]["selected_by_default"] is True
+                assert suggest.call_count == 1
+                check.assert_not_called()
+    asyncio.run(run())
+
+
+def test_estimate_requires_member_id_before_a_payer_inquiry():
+    async def run():
+        app = FastAPI()
+        app.include_router(staff.router)
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test",
+                                     headers={"Origin": "http://test"}) as client:
+            with patch.object(staff, "require_staff", AsyncMock(return_value={"practice_id": "clinic-1"})), \
+                 patch.object(stedi.Client, "check", AsyncMock()) as check:
+                for member_id in ("", "   "):
+                    result = await client.post("/api/staff/prebooking-estimate/check", json={
+                        **PERSON, "member_id": member_id, "reason": "headache", "visit_type": "new",
+                        "selected_services": [{"code": "99203", "units": 1}],
+                    })
+                    assert result.status_code == 422
+                check.assert_not_called()
+    asyncio.run(run())
 
 
 def test_dependent_inquiry_requires_matching_policyholder_and_patient():

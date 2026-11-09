@@ -31,7 +31,13 @@ export type PrebookingPlan = {
   groups: Array<{
     label: string
     selection_mode: 'single' | 'multiple'
-    codes: Array<{ code: string; reason: string; role: string; service_type: string | null }>
+    codes: Array<{
+      code: string
+      reason: string
+      role: string
+      service_type: string | null
+      selected_by_default: boolean
+    }>
   }>
   notes: string[]
   message: string

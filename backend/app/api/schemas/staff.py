@@ -155,8 +155,9 @@ class PrebookingSelectedService(Model):
 
 
 class PrebookingEstimateRequest(PrebookingEligibility, PrebookingPlanRequest):
-    """Staff-confirmed prospective scenario; no eCW encounter is implied."""
+    """Prospective planning scenario; no eCW encounter is implied."""
 
+    member_id: str = Field(min_length=1, max_length=80, description="Required to match a member-bound plan before estimating cost")
     selected_services: list[PrebookingSelectedService] = Field(min_length=1, max_length=8)
     network_context_id: str | None = Field(default=None, max_length=100)
     service_date: date | None = Field(default=None, description="Tentative date; defaults to today")
@@ -164,6 +165,13 @@ class PrebookingEstimateRequest(PrebookingEligibility, PrebookingPlanRequest):
     subscriber_given_name: str = Field(default="", max_length=100)
     subscriber_family_name: str = Field(default="", max_length=100)
     subscriber_birth_date: date | None = None
+
+    @field_validator("member_id")
+    @classmethod
+    def member_id_from_card(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("Enter the member ID from the insurance card")
+        return value.strip()
 
     @field_validator("subscriber_given_name", "subscriber_family_name")
     @classmethod
@@ -192,6 +200,7 @@ class PrebookingPlanCandidate(Model):
     reason: str
     role: str
     service_type: str | None
+    selected_by_default: bool = Field(default=False, description="Planning baseline included automatically; optional ideas remain unselected")
 
 
 class PrebookingPlanGroup(Model):

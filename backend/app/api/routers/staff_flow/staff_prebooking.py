@@ -103,7 +103,7 @@ async def prebooking_estimate_contexts(request: Request):
     return JSONResponse({"contexts": choices}, headers=_staff.NO_STORE)
 
 
-@router.post("/prebooking-estimate/plan", response_model=PrebookingPlanResponse, description="Suggest possible CPT/HCPCS services from a prospective visit reason, for clinician review. This makes no Stedi request and does not create a patient, case or appointment. Suggestions are never an order or a price.")
+@router.post("/prebooking-estimate/plan", response_model=PrebookingPlanResponse, description="Build an unsaved office-visit planning baseline from new or returning patient status and ask the AI for optional CPT/HCPCS ideas from the visit reason. The baseline code is selected by default; optional ideas are not. This makes no Stedi request and creates no patient, case or appointment. A planning code is not a diagnosis, order, final billed level or price.")
 async def prebooking_estimate_plan(value: PrebookingPlanRequest, request: Request):
     await _staff.require_staff(request)
     suggestions = await run_in_threadpool(cpt_suggester.suggest_preliminary_cpt_codes,
@@ -202,17 +202,17 @@ def _estimate_from_payer(practice_id: str, details: dict, context: dict | None, 
     issues = list(dict.fromkeys([*result["issues"], *(price.get("service_issues") or []),
         *(reason for row in priced_lines for reason in row["issues"])]))
     if not identity.patient_benefits_bound(comparison):
-        issues.insert(0, "The payer did not bind these benefits to the entered member and patient. Confirm the member ID and identity.")
+        issues.insert(0, "Benefits did not match the entered member and patient.")
     if not plan:
-        issues.insert(0, "The payer did not identify one plan product for this person; verify the exact product before pricing.")
+        issues.insert(0, "The insurer did not identify one plan product for this person.")
     if not verified:
-        issues.insert(0, "Choose a clinic provider and location, then confirm participation for this member's exact plan.")
+        issues.insert(0, "A matching NMCT provider and location contract was not available.")
     if not network_participation.is_nmct_practice(practice_id):
         issues.insert(0, "Priced prebooking estimates currently support NMCT contracted plans only.")
     elif network != "in_network":
-        issues.insert(0, "An NMCT in-network contract price is not established for this visit.")
+        issues.insert(0, "An NMCT in-network contract price was not established for this plan.")
     elif not contract_rates or not reconciled:
-        issues.insert(0, "Verify contract rates and benefit calculations for every selected service before showing a total.")
+        issues.insert(0, "Complete contract rates and benefit calculations were not available for all included services.")
     return {"network_status": network if verified else "unknown",
             "network_evidence": result.get("network_evidence"), "plan_name": plan or None,
             "benefits": _terms(benefits), "lines": priced_lines,
@@ -224,7 +224,7 @@ def _estimate_from_payer(practice_id: str, details: dict, context: dict | None, 
             "issues": issues[:20]}
 
 
-@router.post("/prebooking-estimate/check", response_model=PrebookingEstimateResponse, description="Run an unsaved Stedi 270/271 check for staff-confirmed prospective services and date. Return coverage, payer terms and the matched patient address when available; provide NMCT contract-allowed visit cost, estimated plan share, patient share and per-service rate sources only when member, plan, provider, service, in-network contract rate and totals agree. Unknown values are null. Future-date checks can be unsupported by a payer and never fall back silently to today. No patient, case or appointment is created; recheck after booking.")
+@router.post("/prebooking-estimate/check", response_model=PrebookingEstimateResponse, description="Run an unsaved Stedi 270/271 check for an office-visit planning scenario and optional selected services. Member ID is required. Return coverage, payer terms and the matched patient address when available; provide NMCT contract-allowed visit cost, estimated plan share, patient share and per-service rate sources only when member, plan, provider, service, in-network contract rate and totals agree. Unknown values are null. Future-date checks can be unsupported by a payer and never fall back silently to today. No patient, case or appointment is created; recheck after booking.")
 async def prebooking_estimate_check(value: PrebookingEstimateRequest, request: Request):
     staff = await _staff.require_staff(request)
     if (os.getenv("STEDI_EXECUTION_MODE", "off") != "commercial_pilot"

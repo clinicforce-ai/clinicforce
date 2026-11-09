@@ -64,7 +64,22 @@ export default function StaffPrebookingResult({ result }: { result: PrebookingEs
       ? 'In network'
       : result.network_status === 'out_of_network'
         ? 'Out of network'
-        : 'Needs review'
+        : 'Not established'
+  const coverageLabel =
+    result.coverage.status === 'active_today'
+      ? 'Active for checked date'
+      : result.coverage.status === 'inactive_today'
+        ? 'Inactive for checked date'
+        : 'Not confirmed'
+  const resultLabel = priced
+    ? result.estimate_status === 'conditional'
+      ? 'Conditional estimate'
+      : 'Estimate ready'
+    : result.coverage.status === 'inactive_today'
+      ? 'Coverage inactive'
+      : result.coverage.status === 'needs_review'
+        ? 'Coverage not confirmed'
+        : 'Price unavailable'
   const networkSource =
     result.network_evidence?.source === 'clinic_library_contract'
       ? 'NMCT clinic contract'
@@ -89,47 +104,50 @@ export default function StaffPrebookingResult({ result }: { result: PrebookingEs
           </p>
         </div>
         <span className={`prebooking-result-badge ${priced ? 'is-ready' : 'needs-review'}`}>
-          {priced
-            ? result.estimate_status === 'conditional'
-              ? 'Conditional estimate'
-              : 'Estimate ready'
-            : 'Needs review'}
+          {resultLabel}
         </span>
       </header>
       <div className="prebooking-status-row">
         <div>
           <span>Coverage</span>
-          <strong>
-            {result.coverage.status === 'active_today'
-              ? 'Active for checked date'
-              : result.coverage.status === 'inactive_today'
-                ? 'Inactive for checked date'
-                : 'Needs review'}
-          </strong>
+          <strong>{coverageLabel}</strong>
           <small>{result.coverage.message}</small>
         </div>
         <div>
           <span>NMCT network</span>
           <strong>{networkLabel}</strong>
           {networkSource && <small>Source: {networkSource}</small>}
-          <small>
-            {result.network_evidence?.reason ||
-              'Provider participation is not established for this check.'}
-          </small>
+          {result.coverage.status === 'active_today' && (
+            <small>
+              {result.network_evidence?.reason || 'No matching provider contract was found.'}
+            </small>
+          )}
         </div>
       </div>
-      <div className="prebooking-cost-grid">
-        <div className="prebooking-cost-card">
-          <span>Total estimated visit cost</span>
-          <strong>{priced ? money(result.allowed_total_cents) : 'Needs review'}</strong>
-          <small>Contract-allowed cost for selected services</small>
+      {priced ? (
+        <div className="prebooking-cost-grid">
+          <div className="prebooking-cost-card">
+            <span>Total estimated visit cost</span>
+            <strong>{money(result.allowed_total_cents)}</strong>
+            <small>Contract-allowed cost for selected services</small>
+          </div>
+          <div className="prebooking-cost-card is-patient">
+            <span>Estimated patient share</span>
+            <strong>{patient}</strong>
+            <small>Not an amount to collect before the visit</small>
+          </div>
         </div>
-        <div className="prebooking-cost-card is-patient">
-          <span>Estimated patient share</span>
-          <strong>{priced ? patient : 'Needs review'}</strong>
-          <small>Not an amount to collect before the visit</small>
+      ) : (
+        <div className="prebooking-unavailable" role="note">
+          <strong>No reliable visit price is available from this check.</strong>
+          {result.coverage.status === 'active_today' && (
+            <span>
+              {result.issues[0] ||
+                'The insurer or NMCT contract did not return enough information to calculate a price.'}
+            </span>
+          )}
         </div>
-      </div>
+      )}
       {priced && result.plan_total_cents != null && (
         <div className="prebooking-share">
           <div className="prebooking-share-labels">
@@ -153,7 +171,7 @@ export default function StaffPrebookingResult({ result }: { result: PrebookingEs
       )}
       {result.lines.length > 0 && (
         <section aria-labelledby="prebooking-services-title">
-          <h3 id="prebooking-services-title">Clinician-confirmed planned services</h3>
+          <h3 id="prebooking-services-title">Services included in this estimate</h3>
           <div className="prebooking-service-list">
             {result.lines.map((line) => (
               <article className="prebooking-service-row" key={line.code}>
@@ -176,7 +194,7 @@ export default function StaffPrebookingResult({ result }: { result: PrebookingEs
                 <small className="prebooking-rate-source">
                   {line.rate_source
                     ? `Rate source: ${line.rate_source}`
-                    : 'Rate source needs review'}
+                    : 'No matched contract rate'}
                 </small>
                 {(line.issues.length > 0 || line.conditions.length > 0) && (
                   <ul className="prebooking-line-issues">
@@ -194,24 +212,22 @@ export default function StaffPrebookingResult({ result }: { result: PrebookingEs
           </div>
         </section>
       )}
-      <section className="prebooking-detail-row" aria-labelledby="prebooking-address-title">
-        <h3 id="prebooking-address-title">Patient address from Stedi</h3>
-        {address ? (
+      {address && (
+        <details className="prebooking-detail-row">
+          <summary>Patient address returned by insurer</summary>
           <address className="prebooking-patient-address">
             {address.line1 && <span>{address.line1}</span>}
             {address.line2 && <span>{address.line2}</span>}
             {localityAndPostal && <span>{localityAndPostal}</span>}
             {address.country && <span>{address.country}</span>}
           </address>
-        ) : (
-          <p className="staff-muted">Not available from a matched Stedi response.</p>
-        )}
-      </section>
-      {result.issues.length > 0 && (
+        </details>
+      )}
+      {result.coverage.status === 'active_today' && result.issues.length > 1 && (
         <section className="prebooking-review" aria-labelledby="prebooking-review-title">
-          <h3 id="prebooking-review-title">What to verify</h3>
+          <h3 id="prebooking-review-title">Other limits of this estimate</h3>
           <ul>
-            {result.issues.map((issue, index) => (
+            {result.issues.slice(1, 4).map((issue, index) => (
               <li key={index}>{issue}</li>
             ))}
           </ul>
@@ -219,7 +235,7 @@ export default function StaffPrebookingResult({ result }: { result: PrebookingEs
       )}
       {result.estimate_status === 'conditional' && (
         <p className="staff-small staff-muted">
-          Resolve the listed benefit or approval conditions before using this estimate.
+          Benefit or approval conditions may change the final amount.
         </p>
       )}
       <p className="staff-small staff-muted prebooking-result-footnote">

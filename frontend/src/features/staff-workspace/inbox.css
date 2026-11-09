@@ -130,68 +130,97 @@
 }
 
 .prebooking-plan {
-  margin-top: 30px;
-  padding-top: 24px;
+  margin-top: 20px;
+  padding-top: 18px;
   border-top: 1px solid var(--staff-line);
+}
+
+.prebooking-more-options {
+  margin: 0 0 20px;
+  border: 1px solid var(--staff-line);
+  border-radius: 8px;
+  padding: 12px 16px;
+}
+
+.prebooking-more-options summary,
+.prebooking-planning-notes summary {
+  color: var(--staff-blue);
+  cursor: pointer;
+  font-weight: 650;
+}
+
+.prebooking-more-options .staff-two-columns {
+  margin-top: 18px;
+}
+
+.prebooking-baseline {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 12px;
+  padding: 14px 16px;
+  border: 1px solid #b9d9cc;
+  border-radius: 8px;
+  background: #edf8f2;
+}
+
+.prebooking-baseline span {
+  color: var(--staff-muted);
+  font-size: 14px;
+}
+
+.prebooking-extras {
+  margin-top: 18px;
+}
+
+.prebooking-extras h3,
+.prebooking-service-group h4 {
+  margin: 0 0 8px;
 }
 
 .prebooking-service-group {
   border-top: 1px solid var(--staff-line);
-  padding: 15px 0;
+  padding: 14px 0;
 }
 
-.prebooking-service-group h3 {
-  margin: 0 0 12px;
-}
-
-.prebooking-service-choice,
-.prebooking-confirm {
+.prebooking-service-choice {
   display: flex;
   align-items: flex-start;
   gap: 10px;
-  margin: 10px 0;
   line-height: 1.5;
 }
 
-.prebooking-service-choice input,
-.prebooking-confirm input {
+.prebooking-service-choice input {
   width: 18px;
   height: 18px;
   margin-top: 3px;
   flex: none;
 }
 
-.prebooking-procedure-label {
-  display: inline-block;
-  margin-left: 8px;
-  color: #805000;
-  font-size: 12px;
-  font-style: normal;
-  font-weight: 650;
+.prebooking-extra-row {
+  margin: 10px 0;
 }
 
-.prebooking-manual-code,
-.prebooking-selected-services > div {
+.prebooking-extra-units {
   display: flex;
-  align-items: end;
-  gap: 14px;
-  flex-wrap: wrap;
-}
-
-.prebooking-manual-code .staff-field {
-  flex: 1 1 220px;
-}
-
-.prebooking-selected-services > div {
   align-items: center;
-  border-top: 1px solid var(--staff-line);
-  padding: 10px 0;
+  gap: 8px;
+  margin: 8px 0 0 28px;
+  font-size: 14px;
 }
 
-.prebooking-selected-services input {
+.prebooking-extra-units input {
   width: 72px;
-  min-height: 40px;
-  margin-left: 8px;
+  min-height: 38px;
+  padding: 6px;
+}
+
+.prebooking-planning-notes {
+  margin-top: 10px;
+}
+
+.prebooking-submit {
+  margin-top: 4px;
 }
 
 .prebooking-benefits {
