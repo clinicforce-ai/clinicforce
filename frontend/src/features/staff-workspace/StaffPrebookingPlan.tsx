@@ -66,16 +66,6 @@ export default function StaffPrebookingPlan({ plan, selected, busy, onToggle, on
           ))}
         </div>
       )}
-      {plan.notes.length > 0 && (
-        <details className="prebooking-planning-notes">
-          <summary>Why other services were not included</summary>
-          {plan.notes.map((note, index) => (
-            <p key={index} className="staff-small staff-muted">
-              {note}
-            </p>
-          ))}
-        </details>
-      )}
     </section>
   )
 }

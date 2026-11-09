@@ -76,10 +76,25 @@ def evaluate(payload: dict, details: dict, service_date: str) -> dict:
     """Only a person-bound STC 30 response can establish current medical coverage."""
     result = {"status": "needs_review", "coverage_start": None, "coverage_end": None,
               "message": "The insurer did not return a clear coverage answer for this date."}
+    errors = commercial.eligibility_errors(payload)
+    if errors:
+        codes = {str(row.get(key) or "").strip() for row in errors
+                 for key in ("code", "errorCode", "industryCode")}
+        messages = {
+            "71": "The insurer rejected the birth date. Check the subscriber birth date on the policy; if the patient is a dependent, enter the policyholder's details and try again.",
+            "72": "The insurer rejected the member ID. Check the full ID and prefix on the insurance card, then try again.",
+            "73": "The insurer rejected the subscriber name. Check the name on the insurance card, then try again.",
+            "75": "The insurer could not find the subscriber. Check the insurer, member ID and policyholder details, then try again.",
+        }
+        result.update(status="payer_rejected", message=next(
+            (messages[code] for code in ("71", "72", "73", "75") if code in codes),
+            "The insurer rejected the submitted member details. Check the insurance card and try again."))
+        return result
+    if str(payload.get("status") or "").upper() in {"ERROR", "FAILED", "REJECTED"}:
+        result.update(status="payer_rejected", message="The insurer rejected this inquiry. Check the card details and try again.")
+        return result
     if not matches_identity(payload, details):
         result["message"] = "The insurer did not match this person and member ID. Check the card details or dependent option and try again."
-        return result
-    if commercial.eligibility_errors(payload) or str(payload.get("status") or "").upper() in {"ERROR", "FAILED", "REJECTED"}:
         return result
     try:
         benefits = commercial.normalize_stedi_271(payload, "30", False, service_date=service_date)

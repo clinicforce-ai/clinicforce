@@ -125,7 +125,8 @@ class PrebookingOptions(Model):
 
 
 class PrebookingResult(Model):
-    status: Literal["active_today", "inactive_today", "needs_review"]
+    """Payer rejection is separate from inactive coverage and an unanswered inquiry."""
+    status: Literal["active_today", "inactive_today", "needs_review", "payer_rejected"]
     message: str
     checked_at: datetime
     checked_on: date
@@ -238,7 +239,8 @@ class PrebookingEstimateTerms(Model):
 
 
 class PrebookingEstimateCoverage(Model):
-    status: Literal["active_today", "inactive_today", "needs_review"]
+    """AAA rejection keeps all member network and financial results unknown."""
+    status: Literal["active_today", "inactive_today", "needs_review", "payer_rejected"]
     message: str
     coverage_start: date | None
     coverage_end: date | None

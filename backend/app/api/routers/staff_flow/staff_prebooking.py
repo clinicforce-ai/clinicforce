@@ -45,7 +45,7 @@ async def prebooking_options(request: Request, query: str = Query(min_length=2, 
     return JSONResponse({"payers": payers}, headers=_staff.NO_STORE)
 
 
-@router.post("/prebooking-eligibility/check", response_model=PrebookingResult, description="Check today's general medical coverage (STC 30) through Stedi using prospective patient name, birth date, selected insurer and optional member ID. The clinic's saved name and NPI supply the provider identity. A missing member ID or dependent identity may prevent a conclusive payer match. Returns active_today, inactive_today, or needs_review. No patient, intake, case, appointment, or saved eligibility result is created; repeat the check after booking for the visit date.")
+@router.post("/prebooking-eligibility/check", response_model=PrebookingResult, description="Check today's general medical coverage (STC 30) through Stedi using prospective patient name, birth date, selected insurer and optional member ID. The clinic's saved name and NPI supply the provider identity. Returns active_today, inactive_today, payer_rejected with an actionable payer error when available, or needs_review when the response is indeterminate. No patient, intake, case, appointment, or saved eligibility result is created; repeat the check after booking for the visit date.")
 async def prebooking_check(value: PrebookingEligibility, request: Request):
     staff = await _staff.require_staff(request)
     if (os.getenv("STEDI_EXECUTION_MODE", "off") != "commercial_pilot"
@@ -72,7 +72,9 @@ async def prebooking_check(value: PrebookingEligibility, request: Request):
     checked_at = datetime.now(timezone.utc).isoformat()
     payload = response.get("payload") if isinstance(response.get("payload"), dict) else {}
     check_id = payload.get("id") if isinstance(payload.get("id"), str) and re.fullmatch(r"ec_[A-Za-z0-9-]{1,80}", payload["id"]) else None
-    result = (prebooking.evaluate(payload, details, today) if response.get("outcome") == "complete"
+    interpretable = (response.get("outcome") == "complete" or response.get("outcome") == "payer_error"
+                     and bool(commercial.eligibility_errors(payload)))
+    result = (prebooking.evaluate(payload, details, today) if interpretable
               else {"status": "needs_review", "coverage_start": None, "coverage_end": None,
                     "message": "The payer check was not completed. Review Stedi activity before sending another inquiry."})
     return JSONResponse({**result, "checked_at": checked_at, "checked_on": today,
@@ -142,17 +144,22 @@ def _estimate_from_payer(practice_id: str, details: dict, context: dict | None, 
     product = benefits.get("plan_details") or {}
     names = product.get("names") or []
     plan = names[0] if len(names) == 1 else ""
-    source = {"billing_provider": {"npi": (context or {}).get("billing_npi")},
+    source = {"billing_provider": {"npi": (context or {}).get("billing_npi"),
+                                   "tin": (context or {}).get("tin")},
               "rendering_provider": {"npi": (context or {}).get("rendering_npi")},
               "location_id": (context or {}).get("location_id"),
               "plan": plan, "payer_plan_names": names,
               "payer_plan_bound": bool(plan and identity.patient_benefits_bound(comparison)),
-              "payer_network_names": product.get("network_names") or []}
+              "payer_network_names": product.get("network_names") or [],
+              "payer_verification_party": product.get("verification_payer")}
     inputs = {"reason": details["reason"], "visit_type": details["visit_type"],
               "service_date": service_date, "place_of_service": (context or {}).get("place_of_service"),
               "rendering_provider": {"npi": (context or {}).get("rendering_npi")},
               "lines": [], "payer_id": payer["stediId"]}
-    result = {"payer": payer["displayName"], "codes": lines, "issues": []}
+    result = {"payer": payer["displayName"],
+              "stedi_payer": {"id": payer["stediId"], "name": payer["displayName"]},
+              "plan_details": {"stedi": commercial.plan_details(payload)},
+              "codes": lines, "issues": []}
     commercial_estimator._attach_previsit_pricing(result, practice_id, inputs, source, payer["stediId"], benefits,
         payload=payload, review={"selected_ids": [row["id"] for row in lines]})
     price = result.get("price_range") or {}
@@ -224,7 +231,7 @@ def _estimate_from_payer(practice_id: str, details: dict, context: dict | None, 
             "issues": issues[:20]}
 
 
-@router.post("/prebooking-estimate/check", response_model=PrebookingEstimateResponse, description="Run an unsaved Stedi 270/271 check for an office-visit planning scenario and optional selected services. Member ID is required. Return coverage, payer terms and the matched patient address when available; provide NMCT contract-allowed visit cost, estimated plan share, patient share and per-service rate sources only when member, plan, provider, service, in-network contract rate and totals agree. Unknown values are null. Future-date checks can be unsupported by a payer and never fall back silently to today. No patient, case or appointment is created; recheck after booking.")
+@router.post("/prebooking-estimate/check", response_model=PrebookingEstimateResponse, description="Run an unsaved Stedi 270/271 check for an office-visit planning scenario and optional selected services. Member ID is required. Payer AAA rejection codes return payer_rejected with the card field to correct, before identity matching or pricing. An active member-bound out-of-state Blue plan can use NMCT's signed Texas BlueCard agreement, exact provider/location scope and local contracted rates when the home payer has no clinic estimator connection. Return coverage, payer terms and the matched patient address when available; provide NMCT contract-allowed visit cost, estimated plan share, patient share and per-service rate sources only when member, plan, provider, service, in-network contract rate and totals agree. Unknown values are null. Future-date checks can be unsupported by a payer and never fall back silently to today. No patient, case or appointment is created; recheck after booking.")
 async def prebooking_estimate_check(value: PrebookingEstimateRequest, request: Request):
     staff = await _staff.require_staff(request)
     if (os.getenv("STEDI_EXECUTION_MODE", "off") != "commercial_pilot"
@@ -266,7 +273,9 @@ async def prebooking_estimate_check(value: PrebookingEstimateRequest, request: R
     checked_at = datetime.now(timezone.utc).isoformat()
     payload = response.get("payload") if isinstance(response.get("payload"), dict) else {}
     check_ids = [payload["id"]] if isinstance(payload.get("id"), str) and re.fullmatch(r"ec_[A-Za-z0-9-]{1,80}", payload["id"]) else []
-    coverage = (prebooking.evaluate(payload, details, service_date) if response.get("outcome") == "complete"
+    interpretable = (response.get("outcome") == "complete" or response.get("outcome") == "payer_error"
+                     and bool(commercial.eligibility_errors(payload)))
+    coverage = (prebooking.evaluate(payload, details, service_date) if interpretable
                 else {"status": "needs_review", "message": (
                     "The payer did not complete eligibility for the selected future date. It may not support that date; review Stedi activity before another inquiry. No check for today was substituted."
                     if service_date != today else

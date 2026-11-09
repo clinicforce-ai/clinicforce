@@ -9,7 +9,7 @@ export type PrebookingDetails = {
 }
 
 export type PrebookingResult = {
-  status: 'active_today' | 'inactive_today' | 'needs_review'
+  status: 'active_today' | 'inactive_today' | 'needs_review' | 'payer_rejected'
   message: string
   checked_at: string
   checked_on: string
@@ -83,7 +83,12 @@ export type PrebookingEstimate = {
     country: string | null
   } | null
   network_status: 'in_network' | 'out_of_network' | 'unknown'
-  network_evidence: { reason?: string; decision?: string; source?: string } | null
+  network_evidence: {
+    reason?: string
+    decision?: string
+    source?: string
+    product_network_source?: string
+  } | null
   plan_name: string | null
   benefits: PrebookingTerms | null
   lines: Array<{

@@ -1033,7 +1033,8 @@ def test_blue_home_payer_route_uses_scoped_texas_bluecard_contract(monkeypatch, 
     assert group_contract_support.resolve('clinic', payer, inputs, source, result, benefits)['product'] == 'MED/SURG - HMO'
 
 
-def test_blue_home_route_without_own_connection_uses_texas_agreement(monkeypatch):
+@pytest.mark.parametrize('practice_id', ['clinic', 'primary'])
+def test_blue_home_route_without_own_connection_uses_texas_agreement(monkeypatch, practice_id):
     _, network, _, inputs, source = setup_path(monkeypatch)
     local = {'id': 'local-texas', 'display_name': 'BCBS Texas',
              'stedi_payer_id': 'texas-route', 'status': 'staff_guidance_enabled'}
@@ -1050,14 +1051,19 @@ def test_blue_home_route_without_own_connection_uses_texas_agreement(monkeypatch
             {'text': 'ATTACHMENT A TEXAS PROVIDER NETWORKS\nAuthorized Signature:\n'
                      'Blue Choice PPO Provider Network\nSigned by example\n06/16/2026\nDate: signed electronically'}]}})
     monkeypatch.setattr(pricing.library_network_exclusions, 'applicable_exclusion', lambda *_: None)
-    monkeypatch.setattr(api, '_previsit_range', lambda *_args, **_kwargs: ({'lines': [], 'complete': False}, []))
+    priced_routes = []
+    def capture_rate_route(*args, **_kwargs):
+        priced_routes.append((args[3], args[2].get('plan')))
+        return {'lines': [], 'complete': False}, []
+    monkeypatch.setattr(api, '_previsit_range', capture_rate_route)
     result = {'payer': 'BCBS MINNESOTA', 'stedi_payer': {'name': 'BCBS MINNESOTA', 'id': 'home-route'},
               'plan_details': {'stedi': {'names': ['MED/SURG - PPO']}},
               'codes': [], 'issues': [],
               'identity': {'status': 'matched', 'binding': 'synthetic', 'match_version': 2}}
     benefits = {'active': True, 'service_date_matches': True, 'network_status': 'unknown'}
-    api._attach_previsit_pricing(result, 'clinic', inputs, source, 'home-route', benefits)
+    api._attach_previsit_pricing(result, practice_id, inputs, source, 'home-route', benefits)
     assert benefits['network_status'] == 'in_network'
+    assert priced_routes[0] == ('local-texas', 'CI')
     assert result['network_evidence']['product_network_source'] == 'signed_bluecard_agreement'
     assert result['network_evidence']['home_plan'] == 'BCBS MINNESOTA'
     saved = {'stedi_payer': result['stedi_payer'], 'plan_details': result['plan_details'],

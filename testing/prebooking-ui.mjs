@@ -49,13 +49,13 @@ await page.route((url) => url.pathname.startsWith('/api/'), async (route) => {
           rate_source: 'Synthetic EMG rate', benefits: { coinsurance_percent: '25' }, issues: [], conditions: [] }] : [])],
       allowed_total_cents: addedEmg ? 30000 : 10000, plan_total_cents: addedEmg ? 22500 : 7500,
       patient_min_cents: addedEmg ? 7500 : 2500, patient_max_cents: addedEmg ? 7500 : 2500, estimate_status: 'priced', issues: [] }
-      : { coverage: { status: 'needs_review', message: 'The insurer did not match this person and member ID.', coverage_start: null, coverage_end: null },
+      : { coverage: { status: 'payer_rejected', message: 'The insurer rejected the birth date. Check the subscriber birth date on the policy.', coverage_start: null, coverage_end: null },
       payer: 'Example Health', checked_at: '2026-10-29T12:00:00Z', checked_on: '2026-10-29', check_ids: ['ec_synthetic'],
       patient_address: { line1: '100 Example Ave', line2: null, city: 'Albany', state: 'NY', postal_code: '12207', country: null },
       network_status: 'unknown', network_evidence: { reason: 'Contract scope unresolved.' }, plan_name: null, benefits: null,
       lines: [],
       allowed_total_cents: null, plan_total_cents: null,
-      patient_min_cents: null, patient_max_cents: null, estimate_status: 'needs_review', issues: ['The insurer did not match this person and member ID.'] }
+      patient_min_cents: null, patient_max_cents: null, estimate_status: 'needs_review', issues: ['The insurer rejected the birth date.'] }
   } else if (url.pathname === '/api/staff/intakes/search') {
     body = { intakes: [], has_more: false }
   } else {
@@ -81,13 +81,16 @@ try {
   await page.getByLabel('Member ID from insurance card').focus()
   assert.equal(await page.getByLabel('Member ID from insurance card').evaluate((input) => document.activeElement === input), true)
   await page.getByRole('button', { name: 'Check insurance and estimate visit' }).click()
-  await page.getByText('Coverage not confirmed').waitFor()
+  await page.getByText('Correct insurance details').waitFor()
   assert.equal(plans, 1)
   assert.equal(checks, 1)
-  assert.match(await page.locator('.prebooking-status-row').innerText(), /did not match this person/)
+  assert.match(await page.locator('.prebooking-status-row').innerText(), /rejected the birth date/)
+  assert.match(await page.locator('.prebooking-status-row').innerText(), /Cannot check member network/)
   assert.match(await page.locator('.prebooking-unavailable').innerText(), /No reliable visit price/)
   assert.equal(await page.getByText('Needs review').count(), 0)
   assert.equal(await page.getByLabel('Add a clinician-confirmed CPT/HCPCS code').count(), 0)
+  assert.equal(await page.getByText('Why other services were not included').count(), 0)
+  assert.equal(await page.getByText('No separate test is established.').count(), 0)
   assert.match(await page.locator('.prebooking-baseline').innerText(), /99203/)
 
   priced = true

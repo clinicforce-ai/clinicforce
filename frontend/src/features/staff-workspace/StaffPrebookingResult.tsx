@@ -64,28 +64,36 @@ export default function StaffPrebookingResult({ result }: { result: PrebookingEs
       ? 'In network'
       : result.network_status === 'out_of_network'
         ? 'Out of network'
-        : 'Not established'
+        : result.coverage.status === 'payer_rejected'
+          ? 'Cannot check member network'
+          : 'Network unavailable'
   const coverageLabel =
     result.coverage.status === 'active_today'
       ? 'Active for checked date'
       : result.coverage.status === 'inactive_today'
         ? 'Inactive for checked date'
-        : 'Not confirmed'
+        : result.coverage.status === 'payer_rejected'
+          ? 'Insurer rejected card details'
+          : 'Insurer gave no coverage answer'
   const resultLabel = priced
     ? result.estimate_status === 'conditional'
       ? 'Conditional estimate'
       : 'Estimate ready'
     : result.coverage.status === 'inactive_today'
       ? 'Coverage inactive'
-      : result.coverage.status === 'needs_review'
-        ? 'Coverage not confirmed'
-        : 'Price unavailable'
+      : result.coverage.status === 'payer_rejected'
+        ? 'Correct insurance details'
+        : result.coverage.status === 'needs_review'
+          ? 'No coverage answer'
+          : 'Price unavailable'
   const networkSource =
-    result.network_evidence?.source === 'clinic_library_contract'
-      ? 'NMCT clinic contract'
-      : result.network_evidence?.source === 'payer_participation_message'
-        ? 'Payer provider statement'
-        : null
+    result.network_evidence?.product_network_source === 'signed_bluecard_agreement'
+      ? 'NMCT signed BlueCard agreement'
+      : result.network_evidence?.source === 'clinic_library_contract'
+        ? 'NMCT clinic contract'
+        : result.network_evidence?.source === 'payer_participation_message'
+          ? 'Payer provider statement'
+          : null
 
   return (
     <section
@@ -117,6 +125,11 @@ export default function StaffPrebookingResult({ result }: { result: PrebookingEs
           <span>NMCT network</span>
           <strong>{networkLabel}</strong>
           {networkSource && <small>Source: {networkSource}</small>}
+          {result.coverage.status === 'payer_rejected' && (
+            <small>
+              The insurer must accept the member details before this plan's network can be checked.
+            </small>
+          )}
           {result.coverage.status === 'active_today' && (
             <small>
               {result.network_evidence?.reason || 'No matching provider contract was found.'}

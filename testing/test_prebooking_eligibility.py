@@ -76,7 +76,11 @@ def test_only_matching_current_medical_coverage_is_active():
     assert prebooking.evaluate(future_benefit, PERSON, "2026-10-27")["status"] == "needs_review"
     rejected = response()
     rejected["errors"] = [{"code": "72"}]
-    assert prebooking.evaluate(rejected, PERSON, "2026-10-27")["status"] == "needs_review"
+    assert prebooking.evaluate(rejected, PERSON, "2026-10-27")["status"] == "payer_rejected"
+    birth_rejected = {"errors": [{"code": "71"}]}
+    birth_result = prebooking.evaluate(birth_rejected, PERSON, "2026-10-27")
+    assert birth_result["status"] == "payer_rejected"
+    assert "subscriber birth date" in birth_result["message"]
     dependent = response()
     dependent["dependent"] = {"name": {"person": {"firstName": "Pat", "lastName": "Example"}},
                               "dateOfBirth": "1980-01-01"}
@@ -265,6 +269,42 @@ def test_estimate_route_checks_identity_and_services_before_pricing():
                 PrebookingEstimateResponse.model_validate(result.json())
                 assert check.await_count == 2
                 assert [call.args[0]["encounter"]["services"][0]["value"] for call in check.await_args_list] == ["30", "98"]
+                create_intake.assert_not_called()
+    asyncio.run(run())
+
+
+def test_payer_birth_date_rejection_is_explicit_and_stops_before_pricing():
+    async def search(name, ids, key, *, candidates=None):
+        return PAYER
+
+    async def run():
+        app = FastAPI()
+        app.include_router(staff.router)
+        body = {**PERSON, "reason": "Planned office consultation", "visit_type": "new",
+                "selected_services": [{"code": "99203", "units": 1}]}
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test",
+                                     headers={"Origin": "http://test"}) as client:
+            with patch.object(staff, "require_staff", AsyncMock(return_value={"practice_id": "primary", "practice_name": "Example Clinic"})), \
+                 patch.object(staff_prebooking.clinic_store, "get_for_practice", return_value=PROVIDER), \
+                 patch.object(staff_prebooking.commercial_store, "list_networks", return_value=[]), \
+                 patch.object(staff_prebooking, "_today", return_value="2026-10-27"), \
+                 patch.object(staff_prebooking.stedi_financial, "credentials", return_value="synthetic-key"), \
+                 patch.object(staff_prebooking.stedi_payers, "search_payer", side_effect=search), \
+                 patch.object(stedi.Client, "check", AsyncMock(return_value={"outcome": "payer_error", "payload": {
+                     "id": "ec_synthetic-rejected", "errors": [{"code": "71"}]}})) as check, \
+                 patch.object(staff_prebooking, "_estimate_from_payer") as price, \
+                 patch.object(staff.staff_store, "create_intake") as create_intake, \
+                 patch.dict(os.environ, {"STEDI_EXECUTION_MODE": "commercial_pilot", "STEDI_LIVE_ELIGIBILITY_ENABLED": "true"}):
+                reply = await client.post("/api/staff/prebooking-estimate/check", json=body)
+                assert reply.status_code == 200, reply.text
+                result = reply.json()
+                assert result["coverage"]["status"] == "payer_rejected"
+                assert "subscriber birth date" in result["coverage"]["message"]
+                assert result["network_status"] == "unknown"
+                assert result["allowed_total_cents"] is None
+                assert result["patient_max_cents"] is None
+                assert check.await_count == 1
+                price.assert_not_called()
                 create_intake.assert_not_called()
     asyncio.run(run())
 

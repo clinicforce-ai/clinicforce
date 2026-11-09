@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from app.api.routers import commercial_estimator as _api
 from app.api.routers.commercial_flow.commercial_previsit_rate_reference import _attach_temporary_aetna_rates, _attach_temporary_uhc_rates, _attach_temporary_blue_cross_rates, attach_prudent_buyer_office_reference, attach_blue_cross_reference_if_unpriced, prudent_buyer_office_reference
-from app.api.routers.commercial_flow.commercial_previsit_network_guard import apply_admin_nonparticipation, apply_nmct_cigna_administrator_attestation, apply_nmct_library_contract, apply_nmct_contract_absence, scoped_admin_nonparticipation, record_confirmed_out_of_network, resolve_unlinked_blue_route
+from app.api.routers.commercial_flow.commercial_previsit_network_guard import apply_admin_nonparticipation, apply_nmct_cigna_administrator_attestation, apply_nmct_library_contract, apply_nmct_contract_absence, scoped_admin_nonparticipation, record_confirmed_out_of_network, resolve_unlinked_blue_route, bluecard_pricing_route
 from app.api.routers.commercial_flow.commercial_previsit_service_scope import reviewed_service_types as _reviewed_service_types
 from app.api.routers.commercial_flow.commercial_previsit_context import ecw_case_data as _ecw_case_data
 from app.api.routers.commercial_flow.commercial_previsit_context import past_visit_with_saved_estimate as _past_visit_with_saved_estimate
@@ -379,21 +379,22 @@ def _attach_previsit_pricing(result: dict, practice_id: str, inputs: dict, sourc
         _attach_temporary_blue_cross_rates(result, practice_id, inputs, source, rate_payer_name)
     if len(connections) != 1:
         apply_nmct_library_contract(result, benefits, nmct_contract)
+        if (not exclusion and len(route_connections) <= 1 and resolve_unlinked_blue_route(
+                result, practice_id, inputs, source, payer_id, route_payer, benefits)):
+            priced_payer_id, priced_source = bluecard_pricing_route(
+                source, result.get('network_evidence') or {}, payer_connections, payer_id)
+            result['price_range'], issues = _api._previsit_range(
+                practice_id, inputs, priced_source, priced_payer_id, result['codes'], benefits,
+                payload=payload, review=review, payer_route_id=payer_id)
+            result['issues'].extend(issues)
+            attach_blue_cross_reference_if_unpriced(result, practice_id, inputs, source, payer_name)
+            return
         if nmct:
             apply_nmct_contract_absence(result, benefits, payer_name, nmct_contract,
                                         service_date, source.get('payer_plan_bound'))
         if inventory and not nmct_contract:
             _apply_inventory_tier(result, benefits, inventory, exclusion)
         if _api.network_participation.verified_out_of_network(benefits):
-            priced_source = {**source, **((result.get('network_evidence') or {}).get('scope') or {})}
-            result['price_range'], issues = _api._previsit_range(
-                practice_id, inputs, priced_source, payer_id, result['codes'], benefits,
-                payload=payload, review=review, payer_route_id=payer_id)
-            result['issues'].extend(issues)
-            attach_blue_cross_reference_if_unpriced(result, practice_id, inputs, source, payer_name)
-            return
-        if (not nmct and not exclusion and len(route_connections) <= 1 and resolve_unlinked_blue_route(
-                result, practice_id, inputs, source, payer_id, route_payer, benefits)):
             priced_source = {**source, **((result.get('network_evidence') or {}).get('scope') or {})}
             result['price_range'], issues = _api._previsit_range(
                 practice_id, inputs, priced_source, payer_id, result['codes'], benefits,

@@ -7,6 +7,7 @@ import json
 
 from app.core import object_store, staff_store
 from app.insurance import commercial, commercial_store, group_contract_support, insurance_product, inventory_certification, library_network_exclusions, network_participation
+from app.insurance import identity as insurance_identity
 from app.insurance.identity import patient_benefits_bound, patient_plan_applies
 from app.api.routers.commercial_flow.commercial_previsit_tpa import cigna_primary_route
 
@@ -200,6 +201,20 @@ def resolve_unlinked_blue_route(result: dict, practice_id: str, inputs: dict, so
         record_confirmed_out_of_network(result, benefits)
         return True
     return False
+
+
+def bluecard_pricing_route(source: dict, evidence: dict, connections: list[dict], payer_id: str) -> tuple[str, dict]:
+    """Use the local Texas contract only after signed BlueCard participation is resolved."""
+    priced_source = {**source, **(evidence.get('scope') or {})}
+    if evidence.get('product_network_source') != 'signed_bluecard_agreement':
+        return payer_id, priced_source
+    local = [row for row in connections if row.get('status') == 'staff_guidance_enabled'
+             and insurance_identity.normalized(row.get('display_name')) in group_contract_support.TEXAS_BLUE_NAMES]
+    if len(local) != 1:
+        return payer_id, priced_source
+    if evidence.get('contract_plan_matcher'):
+        priced_source.update(plan=evidence['contract_plan_matcher'], payer_plan_names=[])
+    return local[0]['id'], priced_source
 
 
 def _clear_saved_tier(result: dict, reason: str) -> None:
