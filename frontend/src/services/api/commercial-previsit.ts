@@ -49,6 +49,7 @@ export type PrevisitEstimate = {
   fee_proxy_estimate?: {
     basis: FeeProxyBasis
     status: 'provisional'
+    scenario_cpt?: string
     scenario_kind?:
       | 'oap_office_copay_general_coinsurance'
       | 'oap_diagnostic_office_copay'

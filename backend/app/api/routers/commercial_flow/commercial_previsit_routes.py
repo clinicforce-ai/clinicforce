@@ -95,6 +95,15 @@ async def saved_previsit(case_id: str, request: _api.Request) -> dict:
     Blue Cross Clinical Library prices for eligible non-Aetna routes or draft
     Aetna MEPPO portal values for the exact Signature PPO diagnostic scenario.
     Neither source establishes another payer's allowance or a collectible amount.
+    For an active patient-bound UHC D-SNP office visit with a $0 copay, $0
+    remaining individual deductible and a payer-reported coinsurance rate,
+    fee_proxy_estimate may show one new-patient E/M planning scenario. A
+    selected CPT 99202-99205 uses its scoped BCBSTX fee or the dated published
+    BCBSTX fee; without a selected CPT, 99203 is labeled an unselected pricing
+    scenario. The proxy applies coinsurance and the reported individual OOP
+    remaining balance. It is a pre-Medicaid planning share, not the UHC
+    allowance or an instruction to collect; the table holds check-in at $0
+    while member-specific dual cost-sharing protection is unresolved.
     A matched in-network UHC Choice Plus hand-EMG scenario may propose editable
     CPT 95908 and 95886 and expose a provisional BCBSTX fee proxy. It applies
     the returned individual deductible before coinsurance, then the reported

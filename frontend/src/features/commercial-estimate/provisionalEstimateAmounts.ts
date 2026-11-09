@@ -37,6 +37,7 @@ export function provisionalEstimateAmounts({
     !supportedAmount &&
     result?.collection_guidance?.basis !== 'qmb_protection' &&
     result?.fee_proxy_estimate &&
+    result.fee_proxy_estimate.basis !== 'bcbstx_uhc_dsnp_office_proxy' &&
     patientBenefitsBound &&
     (['bcbstx_uhc_in_network_fee_proxy', 'bcbstx_uhc_choice_plus_fee_proxy'].includes(
       result.fee_proxy_estimate.basis,
