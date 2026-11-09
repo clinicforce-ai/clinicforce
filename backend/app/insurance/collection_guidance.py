@@ -22,7 +22,6 @@ def emg_option(result: dict, rates: list[dict], rules: dict, payload: dict | Non
     """Compare EMG scenarios using the same collection rules as the visit."""
     return _emg_option(result, rates, rules, payload, service_date, review, build_collection=build)
 
-
 def build(result: dict, review: dict | None = None) -> dict:
     benefits = result.get('benefits') or {}
     active_payer_benefits = benefits.get('active') is True and benefits.get('service_date_matches') is not False
@@ -114,8 +113,7 @@ def build(result: dict, review: dict | None = None) -> dict:
         and len({(line.get('benefits') or {}).get('copay_cents') for line in lines}) == 1
         and (lines[0].get('benefits') or {}).get('copay_cents') is not None)
     safe = (benefits.get('active') is True and benefits.get('service_date_matches') is not False
-            and (result.get('card_check') or {}).get('independent_ecw_check') is not True
-            and result.get('refresh_requires_selection') is not True
+            and (result.get('card_check') or {}).get('independent_ecw_check') is not True and result.get('refresh_requires_selection') is not True
             and (not unapproved_services or suggested_plan or preview_office_copay)
             and not benefits.get('coverage_status_conflict')
             and not benefits.get('coverage_dates_invalid')
@@ -324,8 +322,7 @@ def build(result: dict, review: dict | None = None) -> dict:
     failure_codes = set((result.get('eligibility_failure') or {}).get('codes') or [])
     if not active_payer_benefits and failure_codes & {'72', '73', '65', '67', '71', '75', '76'}:
         actions.append('Contact your insurer to confirm the member ID, policyholder name and date of birth. Bring the corrected insurance details.')
-    if amount is not None and amount > 0 and (result.get('card_check') or {}).get('independent_ecw_check') is True:
-        amount = None
+    if amount is not None and amount > 0 and (result.get('card_check') or {}).get('independent_ecw_check') is True: amount = None
     if amount is not None:
         payments = (review or {}).get('payments') or {}
         if (strict.get('amount_cents') is None or guidance['basis'] == 'ecw_billing_note') and payments.get('reference'):

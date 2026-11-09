@@ -32,6 +32,16 @@ def _independent_ecw_policy_check(card_check: dict, coverage: dict, source: dict
                     _api.stedi_discovery.normalized(coverage['member_id']))
 
 
+def _prepare_independent_ecw_check(result: dict, coverage: dict, source: dict, day: str) -> bool:
+    card_check = result['card_check']
+    if not _independent_ecw_policy_check(card_check, coverage, source, day):
+        return False
+    card_check['independent_ecw_check'] = True
+    result['issues'].append(
+        'The saved card differs from the selected first eCW policy. Checking that eCW member ID independently; the card discrepancy remains for review.')
+    return True
+
+
 def _card_matches_other_ecw_coverage(fields: dict, source: dict, service_date: str) -> bool:
     """A different selected policy cannot hide one exact, active eCW card match."""
     normalized = _api.stedi_discovery.normalized

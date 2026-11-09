@@ -5,7 +5,7 @@ from app.api.routers import commercial_estimator as _api
 from app.api.routers.commercial_flow.commercial_previsit_saved import reuse_saved_eligibility
 from app.api.routers.commercial_flow.commercial_previsit_reuse import reuse_previsit_case, retain_saved_group_binding, support_saved_card_conflict, saved_visit_cases, saved_visit_review_date, telehealth_inquiry_coverage, telehealth_setting
 from app.api.routers.commercial_flow.commercial_previsit_submit import submit_previsit_eligibility
-from app.api.routers.commercial_flow.commercial_recovery_cards import _independent_ecw_policy_check, _unique_ecw_member_conflict
+from app.api.routers.commercial_flow.commercial_recovery_cards import _prepare_independent_ecw_check, _unique_ecw_member_conflict
 from app.api.routers.commercial_flow.commercial_previsit_appointment import load_previsit_appointment
 
 @_api.router.post("/appointments/previsit", description=(
@@ -382,13 +382,7 @@ async def previsit_estimate(value: _api.PrevisitInput, request: _api.Request, ba
     card_member_conflict_only = _unique_ecw_member_conflict(result['card_check'], coverage)
     if card_member_conflict_only:
         result['issues'].append('The card member ID differs from eCW; checking the unique eCW policy without using the card number.')
-    independent_ecw_check = _independent_ecw_policy_check(
-        result['card_check'], coverage, source, inputs['service_date'])
-    if independent_ecw_check:
-        result['card_check']['independent_ecw_check'] = True
-        result['issues'].append(
-            'The saved card differs from the selected first eCW policy. Checking that eCW member ID independently; the card discrepancy remains for review.')
-    if result['card_check']['status'] in {'conflict', 'multiple_cards'} and not (card_member_conflict_only or independent_ecw_check):
+    if result['card_check']['status'] in {'conflict', 'multiple_cards'} and not (card_member_conflict_only or _prepare_independent_ecw_check(result, coverage, source, inputs['service_date'])):
         conflicting = result['card_check']['status'] == 'conflict'
         kind = 'card_conflict' if conflicting else 'multiple_cards'
         result.update(eligibility_error=kind, eligibility_failure={
