@@ -11,7 +11,7 @@ import httpx
 from app.api.routers.commercial_estimator import PrevisitInput, VisitReviewInput, _compare_card_hints, _previsit_benefits, _previsit_result, previsit_estimate, update_visit_review
 from app.api.routers.commercial_flow.commercial_previsit_pricing import _previsit_service_types, _payer_previsit_service_types, _reviewed_service_types
 from app.api.routers.commercial_flow.commercial_previsit_submit import same_member_and_medical_plan
-from app.api.routers.commercial_flow.commercial_previsit_reuse import retain_saved_group_binding, telehealth_setting
+from app.api.routers.commercial_flow.commercial_previsit_reuse import retain_saved_group_binding, support_saved_card_conflict, telehealth_setting
 
 
 class PrevisitFlowTest(unittest.IsolatedAsyncioTestCase):
@@ -236,6 +236,63 @@ class PrevisitFlowTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(check['status'], 'conflict')
         self.assertEqual(check['conflicts'], ['member_id'])
         self.assertEqual(inputs['member_id'], 'ECW-123')
+
+    def test_card_matching_one_other_active_ecw_policy_starts_payer_recovery(self):
+        inputs = {'service_date': '2026-11-09', 'member_id': 'SELECTED-1',
+                  'group_number': 'SELECTED-GROUP', 'relationship': '18',
+                  'patient': {'patient_first_name': 'Pat', 'patient_last_name': 'Example',
+                              'patient_birth_date': '1980-01-02'}, 'subscriber': {}}
+        card = {'status': 'read', 'count': 1, 'fields': {'payer': 'UnitedHealthcare',
+                'member_name': 'Pat Example', 'birth_date': '1980-01-02',
+                'member_id': 'OTHER-2', 'group_number': 'OTHER-GROUP'}}
+        source = {'payer': 'United Healthcare', '_patient_id': 'patient-1',
+                  'coverage_id': 'selected-coverage', 'active_coverages': 2,
+                  'coverage_records': [{'id': 'selected-coverage', 'status': 'active',
+                                        'member_id': 'SELECTED-1', 'group_number': 'SELECTED-GROUP',
+                                        'payer': ['United Healthcare']},
+                                       {'id': 'other-coverage', 'status': 'active',
+                                        'member_id': 'OTHER-2', 'group_number': 'OTHER-GROUP',
+                                        'payer': ['United Healthcare'],
+                                        'period': {'start': '2026-01-01', 'end': '2026-12-31'}}]}
+        check = _compare_card_hints(card, inputs.copy(), source)
+        self.assertEqual(check['status'], 'conflict')
+        self.assertTrue(check['alternative_supported'])
+        self.assertEqual(check['conflicts'], ['member_id', 'group_number'])
+        source['coverage_records'][1]['status'] = 'inactive'
+        self.assertFalse(_compare_card_hints(card, inputs.copy(), source)['alternative_supported'])
+
+    def test_old_bound_uhc_response_and_card_allow_fresh_check_only(self):
+        from app.api.routers import commercial_estimator as api
+        inputs = {'service_date': '2026-11-09', 'member_id': 'SELECTED-1',
+                  'group_number': 'SELECTED-GROUP', 'relationship': '18',
+                  'patient': {'patient_first_name': 'Pat', 'patient_last_name': 'Example',
+                              'patient_birth_date': '1980-01-02'}, 'subscriber': {}}
+        card = {'status': 'read', 'count': 1, 'fields': {'payer': 'UnitedHealthcare',
+                'member_name': 'Pat Example', 'birth_date': '1980-01-02',
+                'member_id': 'CARD-2', 'group_number': 'CARD-GROUP'}}
+        source = {'payer': 'United Healthcare', '_patient_id': 'patient-1',
+                  'appointment_id': 'visit-1', 'coverage_id': 'selected-coverage',
+                  'active_coverages': 1}
+        case = {'source_mode': 'commercial_previsit', 'previsit_raw_object_key': 'protected',
+                'previsit': {'request_state': 'complete'}, 'previsit_context': {
+                    'inputs': {'service_date': '2026-11-09'},
+                    'source': {'appointment_id': 'visit-1'}, 'result': {
+                        'payer': 'United Healthcare', 'identity': {'status': 'matched',
+                            'binding': 'synthetic', 'match_version': 2},
+                        'benefits': {'active': True, 'service_date_matches': True},
+                        'plan_details': {'stedi': {'group_number': 'CARD-GROUP'}},
+                        'insurance_details': {'payer_subscriber': {'memberId': 'CARD-2'}}}}}
+        check = _compare_card_hints(card, inputs.copy(), source)
+        self.assertFalse(check['alternative_supported'])
+        support_saved_card_conflict(api, [case], card, check, inputs, source)
+        self.assertTrue(check['alternative_supported'])
+        self.assertEqual(check['saved_policy_support'], 'prior_patient_bound_271_for_fresh_check')
+        changed = {**case, 'previsit_context': {**case['previsit_context'],
+                   'result': {**case['previsit_context']['result'],
+                              'benefits': {'active': False}}}}
+        rejected = _compare_card_hints(card, inputs.copy(), source)
+        support_saved_card_conflict(api, [changed], card, rejected, inputs, source)
+        self.assertFalse(rejected['alternative_supported'])
 
     def test_humana_card_alias_and_member_conflict_keep_plan_reference(self):
         inputs = {'member_id': 'ECW-123', 'patient': {'patient_first_name': 'Pat',

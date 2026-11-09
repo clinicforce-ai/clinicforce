@@ -10,6 +10,26 @@ def _unique_ecw_member_conflict(card_check: dict, coverage: dict) -> bool:
             and not coverage.get('other_active_coverage') and coverage['patient_id']
             and coverage['coverage_id'] and coverage['member_id'])
 
+
+def _card_matches_other_ecw_coverage(fields: dict, source: dict, service_date: str) -> bool:
+    """A different selected policy cannot hide one exact, active eCW card match."""
+    normalized = _api.stedi_discovery.normalized
+    if not service_date or not all(fields.get(key) for key in ('member_id', 'group_number', 'payer')):
+        return False
+    matches = [row for row in source.get('coverage_records') or []
+               if row.get('id') and row['id'] != source.get('coverage_id')
+               and str(row.get('status') or '').casefold() == 'active'
+               and (not (row.get('period') or {}).get('start') or
+                    str(row['period']['start'])[:10] <= service_date)
+               and (not (row.get('period') or {}).get('end') or
+                    service_date <= str(row['period']['end'])[:10])
+               and normalized(row.get('member_id')) == normalized(fields['member_id'])
+               and normalized(row.get('group_number')) == normalized(fields['group_number'])
+               and any(normalized(payer) == normalized(fields['payer'])
+                       for payer in row.get('payer') or [])]
+    return len(matches) == 1
+
+
 def _compare_card_hints(card: dict, inputs: dict, source: dict) -> dict:
     """Fill absent eCW inquiry fields only when OCR names the linked patient/policy."""
     status = card['status']
@@ -85,14 +105,18 @@ def _compare_card_hints(card: dict, inputs: dict, source: dict) -> dict:
         result['status'] = 'unverified'
         return result
     candidate = _api.stedi_discovery.card_candidate({**fields, 'payer': fields.get('payer') or source.get('payer')}, inputs, source)
+    alternate_ecw_policy = bool(card.get('count') in {1, 2} and source.get('_patient_id')
+        and name_matches and (not card_dob or dob_matches) and
+        _card_matches_other_ecw_coverage(fields, source, str(inputs.get('service_date') or '')))
     printed_copay = _api.re.fullmatch(r'\$\s*(\d{1,4})(?:\.(\d{2}))?', str(fields.get('specialist_copay') or ''))
     if (patient_bound and member_matches and name_matches and (not card_dob or dob_matches)
             and not result['conflicts'] and printed_copay):
         result['office_copay_cents'] = int(printed_copay[1]) * 100 + int(printed_copay[2] or 0)
-    result['alternative_supported'] = bool(patient_bound and candidate and name_matches and
+    result['alternative_supported'] = bool(candidate and name_matches and
         (not card_dob or dob_matches) and not phcs_hpi_card and (
-            bool(result['conflicts']) and dob_matches and group_matches or
-            payer_difference and member_matches and (group_matches or dob_matches)))
+            alternate_ecw_policy or patient_bound and (
+                bool(result['conflicts']) and dob_matches and group_matches or
+                payer_difference and member_matches and (group_matches or dob_matches))))
     if result['alternative_supported']:
         result['alternative_fingerprint'] = _api.hashlib.sha256(_api.json.dumps(fields, sort_keys=True).encode()).hexdigest()
     if result['conflicts']:
@@ -175,7 +199,12 @@ async def _recover_card(case: dict, session: dict, provider: dict) -> bool:
                 recovery.update(card_status='read', card_object_key=key,
                     candidates=_api.stedi_discovery.candidates(payload, context['inputs'], context['source']))
                 recovery['card_candidates'] = recovery['candidates']
-                if recovery['candidates'] and context['source'].get('active_coverages', 0) <= 1:
+                if (len(recovery['candidates']) == 1 and
+                        (context['source'].get('active_coverages', 0) <= 1 or
+                         _card_matches_other_ecw_coverage(fields, context['source'],
+                             str(context['inputs'].get('service_date') or '')) or
+                         (context.get('result') or {}).get('card_check', {}).get('saved_policy_support')
+                             == 'prior_patient_bound_271_for_fresh_check')):
                     recovery.update(selected_candidate_id=recovery['candidates'][0]['id'], stage='eligibility',
                                     request_state='pending', evidence_source='insurance_card')
                     case.update(await _api.run_in_threadpool(_api._save, case, session, 'coverage-card-eligibility-pending'))

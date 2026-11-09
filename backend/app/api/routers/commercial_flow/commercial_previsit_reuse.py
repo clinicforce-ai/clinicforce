@@ -29,6 +29,51 @@ def saved_visit_review_date(cases: list[dict], appointment_id: str) -> str | Non
     return next(iter(dates)) if len(dates) == 1 else None
 
 
+def saved_policy_supports_card(api: ModuleType, cases: list[dict], card: dict,
+                               inputs: dict, source: dict) -> bool:
+    """An old bound 271 may justify a fresh card-directed check, never reuse."""
+    fields = card.get('fields') or {}
+    if (card.get('status') != 'read' or card.get('reference_only') or card.get('count') not in {1, 2}
+            or not all(fields.get(key) for key in ('member_id', 'group_number', 'payer'))
+            or not source.get('appointment_id') or not inputs.get('service_date')
+            or not api.stedi_discovery.card_candidate(fields, inputs, source)):
+        return False
+    normalize = api.stedi_discovery.normalized
+    matches = []
+    for case in cases:
+        context = case.get('previsit_context') or {}
+        prior = context.get('result') or {}
+        details = prior.get('insurance_details') or {}
+        member = (details.get('payer_subscriber') or {}).get('memberId') or details.get('member_id')
+        group = ((prior.get('plan_details') or {}).get('stedi') or {}).get('group_number')
+        payer = (prior.get('stedi_payer') or {}).get('name') or prior.get('payer')
+        if (case.get('source_mode') == 'commercial_previsit'
+                and (case.get('previsit') or {}).get('request_state') == 'complete'
+                and case.get('previsit_raw_object_key')
+                and (context.get('source') or {}).get('appointment_id') == source.get('appointment_id')
+                and (context.get('inputs') or {}).get('service_date') == inputs.get('service_date')
+                and (prior.get('benefits') or {}).get('active') is True
+                and (prior.get('benefits') or {}).get('service_date_matches') is not False
+                and api.insurance_identity.patient_benefits_bound(prior.get('identity'))
+                and normalize(member) == normalize(fields.get('member_id'))
+                and normalize(group) == normalize(fields.get('group_number'))
+                and payer and fields.get('payer')
+                and (normalize(fields['payer']) == normalize(payer)
+                     or api.stedi_payers._same_name(fields['payer'], payer, []))):
+            matches.append(case)
+    return len(matches) == 1
+
+
+def support_saved_card_conflict(api: ModuleType, cases: list[dict], card: dict,
+                                card_check: dict, inputs: dict, source: dict) -> None:
+    if (card_check['status'] == 'conflict' and not card_check.get('alternative_supported')
+            and saved_policy_supports_card(api, cases, card, inputs, source)):
+        card_check['alternative_supported'] = True
+        card_check['saved_policy_support'] = 'prior_patient_bound_271_for_fresh_check'
+        card_check['alternative_fingerprint'] = api.hashlib.sha256(
+            api.json.dumps(card['fields'], sort_keys=True).encode()).hexdigest()
+
+
 def telehealth_setting(api: ModuleType, value, inputs: dict, cases: list[dict], original_token: str):
     if value.telehealth_pos:
         return {'place_of_service': value.telehealth_pos, 'modality': value.telehealth_modality}, api._now()

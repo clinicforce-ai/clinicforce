@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from app.api.routers import commercial_estimator as _api
 from app.api.routers.commercial_flow.commercial_previsit_saved import reuse_saved_eligibility
-from app.api.routers.commercial_flow.commercial_previsit_reuse import reuse_previsit_case, retain_saved_group_binding, saved_visit_cases, saved_visit_review_date, telehealth_inquiry_coverage, telehealth_setting
+from app.api.routers.commercial_flow.commercial_previsit_reuse import reuse_previsit_case, retain_saved_group_binding, support_saved_card_conflict, saved_visit_cases, saved_visit_review_date, telehealth_inquiry_coverage, telehealth_setting
 from app.api.routers.commercial_flow.commercial_previsit_submit import submit_previsit_eligibility
 from app.api.routers.commercial_flow.commercial_recovery_cards import _unique_ecw_member_conflict
 from app.api.routers.commercial_flow.commercial_previsit_appointment import load_previsit_appointment
@@ -327,7 +327,6 @@ async def previsit_estimate(value: _api.PrevisitInput, request: _api.Request, ba
                 case['previsit_discovery']['identity_binding'] = _api._recovery_binding(inputs, source)
                 await _api._recover_saved_policy(case, session, provider, allow_query=False)
         return _api._previsit_result(await _api.run_in_threadpool(_api._save, case, session, 'previsit-awaiting-coverage'), session['practice_id'])
-
     check_from = ((source.get('coverage_period') or {}).get('start') or '')[:10] or None
     if prior_cases:
         holds = [_api._insurance_check_from(row) for row in prior_cases
@@ -367,6 +366,7 @@ async def previsit_estimate(value: _api.PrevisitInput, request: _api.Request, ba
     original_group = inputs.get('group_number')
     original_token = _api._visit_context_token(inputs, source)
     result['card_check'] = _api._compare_card_hints(card, inputs, source)
+    support_saved_card_conflict(_api, prior_cases, card, result['card_check'], inputs, source)
     retain_saved_group_binding(_api, inputs, card, result['card_check'], prior_cases, original_token, original_group)
     setting, confirmed_at = telehealth_setting(_api, value, inputs, prior_cases, original_token)
     if setting:

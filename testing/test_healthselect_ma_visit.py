@@ -68,6 +68,19 @@ def test_zero_arrival_is_visible_while_final_liability_and_cob_remain_open():
     assert 'payer' in explanation['sentence'].lower()
 
 
+def test_saved_visit_with_secondary_line_and_conditional_price_still_collects_zero():
+    result = _visit()
+    result['price_range']['conditional'] = True
+    result['price_range']['lines'][0]['benefits']['has_secondary'] = True
+    published_plan_benefits.apply_saved_group_ma_plan_terms(result)
+    guidance = collection_guidance.build(result)
+    assert guidance['basis'] == 'healthselect_ma_zero_televisit'
+    assert guidance['amount_cents'] == 0
+    summary = encounter_summary.build({**result, 'collection_guidance': guidance})
+    assert summary['collect_today_cents'] == 0
+    assert summary['estimated_total_patient_min_cents'] is None
+
+
 def test_zero_arrival_requires_matching_card_and_zero_payer_terms():
     result = _visit()
     published_plan_benefits.apply_plan_terms(result['benefits'], result['plan_details']['stedi'],

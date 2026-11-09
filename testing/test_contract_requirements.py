@@ -66,6 +66,14 @@ def test_generic_uhc_payer_label_does_not_match_an_excluded_exact_product():
     assert evidence['authorization']['status'] == 'Verification required'
 
 
+def test_missing_plan_name_keeps_incomplete_uhc_previsit_in_review():
+    visit_context = context(plan=None, payer='UnitedHealthcare')
+    visit_context['service_date'] = '2026-11-09'
+    evidence = rules.evaluate(estimate('98006', active=False), visit_context, [])
+    assert evidence['referral']['status'] == 'Verification required'
+    assert evidence['authorization']['status'] == 'Verification required'
+
+
 def test_database_date_objects_and_unconfirmed_procedure_options():
     pdf = contract([HEADERS, row('99213', 'Choice PPO', 'Not required', 'Required')])
     pdf.update(effective_from=date(2026, 1, 1), effective_to=date(2026, 12, 31))

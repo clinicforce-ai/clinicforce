@@ -30,7 +30,8 @@ async def saved_previsit(case_id: str, request: _api.Request) -> dict:
     Stedi call; a readable matched card must agree with the payer copay.
     A matched UHC HealthSelect MA PPO group 13546 virtual visit can show a $0
     arrival amount from zero payer copay/coinsurance and the published no-deductible
-    rule while the billed code, payer order, and final claim liability stay open.
+    rule even when a saved line records other coverage or an unpriced conditional
+    scenario; billed code, payer order, and final claim liability stay open.
     Flat Stedi 271 ZZ industry codes are interpreted as benefit places of
     service; appointment_context.place_of_service reports the planned setting.
     Older saved NMCT Cigna office checks with no copay are read-only reprojected

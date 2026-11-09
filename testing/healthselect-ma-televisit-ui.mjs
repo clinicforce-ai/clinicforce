@@ -66,4 +66,25 @@ const view = deriveCommercialEstimateView({ result, appointments: [], selectedVi
   busy: null, error: null, readOnly: false, recovering: false })
 assert.equal(view.amountText, '$0.00')
 assert.equal(view.amountLabel, 'Amount to collect now')
+const saved = structuredClone(result)
+saved.price_range.conditional = true
+saved.price_range.lines[0].benefits.has_secondary = true
+const savedTable = renderToStaticMarkup(React.createElement(CommercialCostBreakdown,
+  { result: saved, model }))
+assert.ok(savedTable.includes('Conditional patient share'))
+assert.ok(savedTable.includes('$0.00 at check-in'))
+const savedView = deriveCommercialEstimateView({ result: saved, appointments: [], selectedVisit: null,
+  busy: null, error: null, readOnly: true, recovering: false })
+assert.equal(savedView.amountText, '$0.00')
+const summaryBundle = await rolldown({
+  input: new URL('../frontend/src/features/commercial-estimate/ArrivalAmountSummary.tsx', import.meta.url).pathname,
+})
+const summaryBuilt = await summaryBundle.generate({ format: 'esm' })
+const { default: ArrivalAmountSummary } = await import(
+  `data:text/javascript;base64,${Buffer.from(summaryBuilt.output[0].code).toString('base64')}`
+)
+const savedSummary = renderToStaticMarkup(React.createElement(ArrivalAmountSummary,
+  { result: saved, model: savedView, partialCopay: null, visibleAmount: true }))
+assert.ok(savedSummary.includes('$0.00'))
+assert.ok(!savedSummary.includes('Confirm payer order'))
 console.log('HealthSelect MA virtual-visit table shows card, formula, conditional share and $0 arrival amount')

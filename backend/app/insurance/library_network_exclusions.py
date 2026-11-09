@@ -22,7 +22,9 @@ def is_uhc_contract(document: dict) -> bool:
         re.fullmatch(r'United\s*Health(?:care)?\s+contract', str(document.get('label') or ''), re.I))
 
 
-def product_kind(name: str) -> str | None:
+def product_kind(name: str | None) -> str | None:
+    if not isinstance(name, str):
+        return None
     value = re.sub(r"[^a-z0-9]+", " ", name.casefold()).strip()
     if not re.search(r"\b(?:medicare|advantage|complete care)\b", value):
         return None

@@ -21,13 +21,14 @@ def applies(result: dict, *, member_bound: bool, source_errors: object,
         and verified_in_network(benefits)
         and not benefits.get('network_conflict') and not benefits.get('coverage_status_conflict')
         and not benefits.get('coverage_dates_invalid') and not benefits.get('historical_only')
-        and not source_errors and not adverse and not note and not line_blocker
+        and not source_errors and not adverse and not note
+        and (not line_blocker or line_blocker == ('service_secondary_coverage', str(lines[0].get('code'))))
         and not same_policy_conflict and not price.get('service_issues')
         and result.get('refresh_requires_selection') is not True
         and card.get('status') not in {'conflict', 'multiple_cards'}
         and not card.get('differences') and card.get('cms_plan_id') in {None, 'H2001-817'}
         and card.get('patient_name_matches') is not False
-        and price.get('mode') == 'services' and not price.get('conditional')
+        and price.get('mode') == 'services'
         and len(lines) == len(result.get('codes') or []) == 1
         and lines[0].get('code') == result['codes'][0].get('code')
         and lines[0].get('code') in {'98006', '99212', '99213', '99214', '99215'}
