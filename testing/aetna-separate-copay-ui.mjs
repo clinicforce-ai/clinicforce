@@ -122,4 +122,44 @@ assert.equal(aetnaPriorDateReferenceCopay({ ...priorDay, benefits: {
 const requirementRows = commercialRequirementRows(priorDay, false, false)
 assert.match(requirementRows[0].value, /generally needs no referral/i)
 assert.match(requirementRows[1].value, /absent from Aetna precert list/i)
+const unknownNetworkPriorDay = {
+  ...priorDay,
+  benefit_source: 'Stedi',
+  benefits: { ...priorDay.benefits, has_secondary: false, primary_secondary_order: undefined,
+    network_status: 'unknown', network_source: undefined,
+    reported_options: [{ ...priorDay.benefits.reported_options[0],
+      coverage_level: 'EMPLOYEE_ONLY', amount_cents: 5500 }] },
+  recovery: undefined,
+  price_range: { ...priorDay.price_range, lines: [{ ...priorDay.price_range.lines[0],
+    benefits: { ...priorDay.price_range.lines[0].benefits,
+      copay_cents: 5500, copay_id: 'synthetic-stedi-office-copay',
+      selected_benefit_ids: ['synthetic-stedi-office-copay'], network_status: 'unknown' } }] },
+}
+const unknownNetworkReference = aetnaPriorDateReferenceCopay(unknownNetworkPriorDay, model)
+assert.equal(aetnaPriorDateReferenceCopay({ ...unknownNetworkPriorDay, benefits: {
+  ...unknownNetworkPriorDay.benefits, reported_options: [{
+    ...priorDay.benefits.reported_options[0], amount_cents: 6500 }] } }, model), null)
+assert.equal(aetnaPriorDateReferenceCopay({ ...unknownNetworkPriorDay, benefits: {
+  ...unknownNetworkPriorDay.benefits, reported_options: [{
+    ...priorDay.benefits.reported_options[0], amount_cents: 5500 }] } }, model), 5500)
+assert.equal(unknownNetworkReference, 5500)
+assert.equal(aetnaPriorDateReferenceCopay({ ...unknownNetworkPriorDay,
+  identity: { status: 'review' } }, model), null)
+assert.equal(aetnaPriorDateReferenceCopay({ ...unknownNetworkPriorDay,
+  benefit_source: 'eCW saved eligibility' }, model), null)
+assert.equal(aetnaPriorDateReferenceCopay({ ...unknownNetworkPriorDay,
+  price_range: { ...unknownNetworkPriorDay.price_range, lines: [{
+    ...unknownNetworkPriorDay.price_range.lines[0], benefits: {
+      ...unknownNetworkPriorDay.price_range.lines[0].benefits, copay_id: null,
+    } }] } }, model), null)
+const unknownNetworkRow = collectionAtVisitRow(unknownNetworkPriorDay, model, {
+  combinedPlan: null, feeProxy: null, aetnaPlanning: null, aetnaCopayPlanning: null,
+  officeReferenceCopay: null, priorDateAetnaCopay: unknownNetworkReference,
+  humanaReferenceCopay: null, partialOfficeCopay: null, pendingAetnaCopay: null,
+  cardPlanningCopay: null, automaticCashFallback: false, cignaFeeProxy: false,
+  proxyFormula: undefined,
+})
+assert.match(unknownNetworkRow.value, /Pending.*\$55\.00.*Aetna office copay reference/i)
+assert.match(unknownNetworkRow.label, /pending verification/i)
+assert.match(unknownNetworkRow.detail, /saved response covers another date/i)
 console.log('Aetna separate copay: $40 pending collection; $0 general OOP does not erase the separate cap')

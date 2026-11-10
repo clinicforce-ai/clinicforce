@@ -325,9 +325,7 @@ export function collectionAtVisitRow(
                                           : pendingAetnaCopay != null
                                             ? `Pending · ${money(pendingAetnaCopay)} office copay if verified`
                                             : priorDateAetnaBalance != null
-                                              ? result.benefits?.has_secondary
-                                                ? `Pending · ${money(priorDateAetnaBalance)} Aetna office copay reference`
-                                                : money(priorDateAetnaBalance)
+                                              ? `Pending · ${money(priorDateAetnaBalance)} Aetna office copay reference`
                                               : cardPlanningCopay != null
                                                 ? `${money(cardPlanningCopay)} office-only card suggestion`
                                                 : pendingCignaCopay != null
