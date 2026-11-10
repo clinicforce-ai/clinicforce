@@ -27,6 +27,7 @@ let savedResult
 let dashboardReads = 0
 let appointmentReads = 0
 let todayReads = 0
+const visitRequestOrder = []
 let useCache = false
 let releaseAppointments
 const appointmentsHeld = new Promise((resolve) => { releaseAppointments = resolve })
@@ -66,6 +67,7 @@ await page.route((url) => url.pathname.startsWith('/api/'), async (route) => {
     body = { appointments: [] }
   } else if (path === '/api/staff/patients/today-appointments') {
     todayReads += 1
+    visitRequestOrder.push('today')
     if (process.env.FAIL_TODAY) {
       await route.fulfill({ status: 503, json: { detail: 'Today unavailable' } })
       return
@@ -90,6 +92,7 @@ await page.route((url) => url.pathname.startsWith('/api/'), async (route) => {
     }
   } else if (path.endsWith('/appointments')) {
     appointmentReads += 1
+    visitRequestOrder.push('history')
     if (process.env.HOLD_APPOINTMENTS) await appointmentsHeld
     const patientId = path.split('/')[4]
     body = {
@@ -156,6 +159,7 @@ try {
     await page.getByRole('button', { name: 'Previous patients' }).waitFor({ timeout: 10_000 })
     await page.locator('#clinical-today-title + .clinical-visit-group .clinical-patient-open strong').getByText('Patient 06').waitFor()
     assert.equal(todayReads, 1)
+    assert.equal(visitRequestOrder[0], 'today')
     assert((await page.getByLabel('Patients awaiting appointment dates').locator('.clinical-patient-open').count()) <= 50)
     await page.getByText('eCW visit checks finished for 200 patients.').waitFor({ timeout: 10_000 })
     assert.equal(appointmentReads, 200)
@@ -179,6 +183,7 @@ try {
     else
       await page.locator('#clinical-today-title + .clinical-visit-group .clinical-patient-open strong').getByText('Patient 06').waitFor()
     assert.equal(todayReads, 1)
+    assert.equal(visitRequestOrder[0], 'today')
     await page.getByLabel('Find a clinical patient').fill(process.env.FAIL_TODAY ? 'Patient 06' : 'Patient 01')
     await page.getByText('Appointment date still being checked').click()
     assert.deepEqual(await page.locator('.clinical-patient-open strong').allTextContents(), [process.env.FAIL_TODAY ? 'Patient 06' : 'Patient 01'])
