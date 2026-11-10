@@ -5,9 +5,9 @@ from app.insurance.collection.cash import build as cash_guidance
 from app.insurance.collection.options import emg_option as _emg_option
 from app.insurance.collection.requirements import summarize_requirements
 from app.insurance.collection.refundable_advance import apply as apply_refundable_advance
-from app.insurance.collection.office_copay import (cigna_oap_televisit_office_copay, diagnostic_day_copay_amount, office_copay_amount)
+from app.insurance.collection.office_copay import (cigna_oap_televisit_office_copay, diagnostic_day_copay_amount, office_copay_amount, preview_office_copay_applies)
 from app.insurance.collection.billing_note import apply_billing_note
-from app.insurance.collection.benefit_gates import prepare_benefit_evidence
+from app.insurance.collection.benefit_gates import prepare_benefit_evidence, preview_zero_individual_oop_applies
 from app.insurance.collection.healthselect_zero import applies as healthselect_zero_applies
 from app.insurance.collection import secondary_order
 from app.insurance.identity import patient_benefits_bound
@@ -103,27 +103,8 @@ def build(result: dict, review: dict | None = None) -> dict:
     suggested_plan = (unapproved_services and price.get('mode') == 'services' and bool(recommended)
         and len(set(recommended)) == len(recommended)
         and set(recommended) == set(proposed_ids) == set(priced_ids))
-    # A common office copay can be independent of the eventual E/M level.
-    preview_office_copay = (unapproved_services and price.get('mode') == 'alternatives'
-        and benefits.get('network_source') != 'clinic_contract_inventory'
-        and bool(lines) and all(str(line.get('code')) in
-            {str(n) for n in (*range(99202, 99206), *range(99212, 99216))} for line in lines)
-        and len({(line.get('benefits') or {}).get('copay_cents') for line in lines}) == 1
-        and (lines[0].get('benefits') or {}).get('copay_cents') is not None)
-    preview_zero_oop = (unapproved_services and price.get('mode') == 'alternatives'
-        and price.get('complete') is True and not price.get('conditional') and bool(lines)
-        and benefits.get('oop_remaining_cents') == 0
-        and price.get('patient_min_cents') == price.get('patient_max_cents') == 0
-        and all(line.get('units') and line.get('allowed_basis') == 'clinic_contract'
-                and (line.get('rate_resolution') or {}).get('status') == 'RESOLVED'
-                and type(line.get('allowed_cents')) is int and line['allowed_cents'] > 0
-                and (line.get('calculation') or {}).get('patient_cents') == 0
-                and (line.get('calculation') or {}).get('plan_cents') == line['allowed_cents']
-                and (line.get('benefits') or {}).get('active') is True
-                and (line.get('benefits') or {}).get('network_status') == 'in_network'
-                and (line.get('benefits') or {}).get('oop_remaining_cents') == 0
-                and not (line.get('benefits') or {}).get('separate_copay_limit')
-                for line in lines))
+    preview_office_copay = unapproved_services and preview_office_copay_applies(benefits, price, lines)
+    preview_zero_oop = unapproved_services and preview_zero_individual_oop_applies(benefits, price, lines)
     safe = (benefits.get('active') is True and benefits.get('service_date_matches') is not False
             and (result.get('card_check') or {}).get('independent_ecw_check') is not True and result.get('refresh_requires_selection') is not True
             and (not unapproved_services or suggested_plan or preview_office_copay or preview_zero_oop)

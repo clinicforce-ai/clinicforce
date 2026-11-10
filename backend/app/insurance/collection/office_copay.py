@@ -9,6 +9,16 @@ from app.insurance.network_participation import verified_in_network
 from app.insurance.provider_specialty import office_role
 
 
+def preview_office_copay_applies(benefits: dict, price: dict, lines: list[dict]) -> bool:
+    """A common office copay can be independent of the eventual E/M level."""
+    return (price.get('mode') == 'alternatives'
+        and benefits.get('network_source') != 'clinic_contract_inventory'
+        and bool(lines) and all(str(line.get('code')) in
+            {str(n) for n in (*range(99202, 99206), *range(99212, 99216))} for line in lines)
+        and len({(line.get('benefits') or {}).get('copay_cents') for line in lines}) == 1
+        and (lines[0].get('benefits') or {}).get('copay_cents') is not None)
+
+
 def cigna_oap_televisit_office_copay(result: dict, benefits: dict, price: dict,
                                      lines: list[dict], guidance: dict,
                                      assumptions: list[str]) -> int | None:
