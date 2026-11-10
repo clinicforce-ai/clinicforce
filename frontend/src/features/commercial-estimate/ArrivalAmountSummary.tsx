@@ -54,6 +54,13 @@ function nextStep(model: CommercialEstimateModel, result: PrevisitEstimate) {
           ? 'Request visit-date office cost sharing and provider participation from the plan administrator.'
           : 'Request visit-date cost sharing and provider participation from the plan administrator.',
     }
+  if (!/^in network|^out of network/i.test(model.networkLabel || ''))
+    return { title: 'Verify network', hint: 'Confirm this plan and provider’s network tier.' }
+  if (model.requirementIssue)
+    return {
+      title: 'Review requirements',
+      hint: 'Check referral and authorization for the selected CPTs.',
+    }
   if (
     model.guidance?.policy_setup_required ||
     result.collection_guidance?.positive_advance_policy_missing
@@ -62,13 +69,6 @@ function nextStep(model: CommercialEstimateModel, result: PrevisitEstimate) {
       title: 'Approve collection policy',
       hint: 'The clinic must approve this payer route’s advance rule.',
     }
-  if (model.requirementIssue)
-    return {
-      title: 'Review requirements',
-      hint: 'Check referral and authorization for the selected CPTs.',
-    }
-  if (!/^in network|^out of network/i.test(model.networkLabel || ''))
-    return { title: 'Verify network', hint: 'Confirm this plan and provider’s network tier.' }
   if (
     result.benefit_source?.includes('plan administrator') &&
     lines.length === 1 &&

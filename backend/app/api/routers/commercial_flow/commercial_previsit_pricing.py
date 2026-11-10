@@ -10,6 +10,7 @@ from app.api.routers.commercial_flow.commercial_previsit_context import past_vis
 from app.api.routers.commercial_flow.commercial_previsit_tpa import merge_administrator_benefits
 from app.insurance import botox_review, cms_locality, cms_pfs, cpt_rules, insurance_product, inventory_certification, library_network_exclusions, group_contract_support
 from app.insurance.stedi_benefits.payer_order import primary_secondary_order
+from app.insurance.stedi_benefits.linked import merge_linked_medical_oop
 from app.api.routers.commercial_flow.commercial_previsit_medicare import bind as bind_medicare_part_b
 
 def _commercial_slot(appointment_id: str) -> str:
@@ -219,6 +220,8 @@ def _previsit_benefits(payload: dict, coverage: dict, service_date: str | None =
         procedure_code=codes[0]['code'] if office_only and len(codes) == 1 else None,
         office_visit=office_only,
         office_service_types=_api._office_service_types('', source or {}), **context)
+    if office_only and benefit_payload is payload:
+        benefits = merge_linked_medical_oop(payload, benefits, service_date)
     if office_payload:
         merge_administrator_benefits(_api, payload, benefits, delegated, summary_service, service_date, _api._office_service_types('', source or {}), context)
     if diagnostic_payload := (payload.get('_service_payloads') or {}).get('73'):

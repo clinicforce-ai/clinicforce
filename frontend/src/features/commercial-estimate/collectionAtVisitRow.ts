@@ -4,8 +4,6 @@ import type { CommercialEstimateModel } from './useCommercialEstimateModel'
 import { feeProxyFormula } from './coinsuranceFormula'
 import { money } from './format'
 import { patientBenefitsBound } from './identityBinding'
-import { networkEvidenceStatus } from './networkEvidenceStatus'
-import { firstSelectedCptIssue } from './selectedCptIssue'
 import type { bluecardOfficeDeductibleScenario } from './bluecardOfficeDeductibleScenario'
 
 export function pendingBluecardOfficeCopay(
@@ -23,13 +21,10 @@ export function pendingBluecardOfficeCopay(
     model.calculating ||
     model.previousEstimate ||
     model.amount ||
-    model.requirementIssue ||
     result.collection_guidance?.amount_cents != null ||
     !/\b(?:blue cross|bcbs(?:tx| texas)?)\b/i.test(result.payer || '') ||
     result.plan_details?.stedi?.names?.length !== 1 ||
-    !/\bPPO\b/i.test(result.plan_details.stedi.names[0]) ||
-    !/\b(?:ALTNET|BlueCard)\b/i.test(result.plan_details.stedi.names[0]) ||
-    !result.plan_details.stedi.verification_payer ||
+    !/\b(?:PPO|Preferred Provider Organization)\b/i.test(result.plan_details.stedi.names[0]) ||
     result.benefits?.active !== true ||
     result.benefits.service_date_matches === false ||
     result.benefits.has_secondary ||
@@ -38,29 +33,29 @@ export function pendingBluecardOfficeCopay(
     result.benefits.coverage_dates_invalid ||
     result.benefits.historical_only ||
     result.benefits.source_errors?.length ||
-    result.benefits.network_status !== 'in_network' ||
+    result.benefits.network_status === 'out_of_network' ||
     result.billing_protection?.status === 'qmb' ||
     result.recovery?.reason_code === 'multiple_active_policies' ||
     !patientBenefitsBound(result.identity) ||
-    !networkEvidenceStatus(result).networkConfirmed ||
-    result.price_range?.service_issues?.length ||
-    firstSelectedCptIssue(result) ||
-    line?.code !== '99204' ||
+    !line ||
+    !/^992(?:0[2-5]|1[2-5])$/.test(line.code) ||
     line.units !== 1 ||
     line.modifiers?.length ||
     terms?.active !== true ||
-    terms.network_status !== 'in_network' ||
+    terms.network_status === 'out_of_network' ||
     terms.service_date_matches === false ||
     terms.has_secondary ||
     terms.coverage_status_conflict ||
     terms.coverage_dates_invalid ||
     terms.source_errors?.length ||
     (terms.copay_period && !['VISIT', '27', 'DAY', '7'].includes(terms.copay_period)) ||
-    terms.deductible_applies === true ||
+    (terms.deductible_applies !== false && terms.deductible_remaining_cents !== 0) ||
     (terms.coinsurance_percent != null && Number(terms.coinsurance_percent) !== 0) ||
     !Number.isInteger(copay) ||
     copay! <= 0 ||
-    (terms.oop_remaining_cents != null && terms.oop_remaining_cents < copay!)
+    (terms.separate_copay_limit
+      ? terms.copay_remaining_cents == null || terms.copay_remaining_cents < copay!
+      : terms.oop_remaining_cents == null || terms.oop_remaining_cents < copay!)
   )
     return null
   return Math.max(0, copay! - (result.encounter_summary?.payments_verified_cents || 0))
