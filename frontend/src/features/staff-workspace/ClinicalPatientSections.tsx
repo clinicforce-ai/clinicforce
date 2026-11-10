@@ -24,6 +24,7 @@ export default function ClinicalPatientSections({
   onSelect,
   page,
   onPageChange,
+  pending,
 }: {
   groups: Record<Period, DateGroup[]>
   renderGroup: (day: string, patients: ClinicalPatient[]) => ReactNode
@@ -31,6 +32,7 @@ export default function ClinicalPatientSections({
   onSelect: (period: Exclude<Period, 'today'> | null) => void
   page: number
   onPageChange: (page: number) => void
+  pending: DateGroup | null
 }) {
   const selectedHeading = useRef<HTMLHeadingElement>(null)
   const returnTo = useRef<Period | null>(null)
@@ -50,8 +52,19 @@ export default function ClinicalPatientSections({
             {labels.today}
           </h3>
           {groups.today.map(([day, patients]) => renderGroup(day, patients))}
-          {!groups.today.length && <p className="staff-small staff-muted">{emptyLabels.today}</p>}
+          {!groups.today.length && (
+            <p className="staff-small staff-muted">
+              {pending
+                ? 'No verified appointments for today yet. Appointment dates are still being checked.'
+                : emptyLabels.today}
+            </p>
+          )}
         </section>
+        {pending && (
+          <section aria-label="Patients awaiting appointment dates">
+            {renderGroup(...pending)}
+          </section>
+        )}
         <nav className="clinical-period-links" aria-label="Other patient dates">
           {(['upcoming', 'past'] as const).map((period) => (
             <button

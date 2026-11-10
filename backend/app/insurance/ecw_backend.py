@@ -403,6 +403,7 @@ async def _patient_for_profile(client: httpx.AsyncClient, issuer: str, token: st
     )
 from app.insurance.ecw.ecw_appointments import (
     patient_appointment_history as _read_patient_appointment_history,
+    practice_appointment_date as _practice_appointment_date,
     lookup_patient_and_appointments as _lookup_patient_and_appointments,
     list_appointments as _list_appointments,
     list_completed_appointments as _list_completed_appointments,
@@ -426,6 +427,11 @@ from app.insurance.ecw.ecw_insurance_evidence import (
 async def patient_appointment_history(profile: dict[str, Any], practice: dict[str, Any], *,
                                       transport: httpx.AsyncBaseTransport | None = None) -> dict:
     return await _read_patient_appointment_history(sys.modules[__name__], profile, practice, transport=transport)
+
+
+async def practice_appointment_date(day: str, *,
+                                    transport: httpx.AsyncBaseTransport | None = None) -> list[dict[str, str]]:
+    return await _practice_appointment_date(sys.modules[__name__], day, transport=transport)
 
 
 async def lookup_patient_and_appointments(profile: dict[str, Any], practice: dict[str, Any], *,
