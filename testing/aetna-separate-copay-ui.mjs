@@ -4,7 +4,8 @@ import { createRequire } from 'node:module'
 const require = createRequire(new URL('../frontend/package.json', import.meta.url))
 const { rolldown } = require('rolldown')
 async function load(path) {
-  const bundle = await rolldown({ input: new URL(path, import.meta.url).pathname })
+  const bundle = await rolldown({ input: new URL(path, import.meta.url).pathname,
+    plugins: [{ name: 'ignore-css', load(id) { if (id.endsWith('.css')) return { code: 'export default {}', moduleType: 'js' } } }] })
   const compiled = await bundle.generate({ format: 'esm' })
   return import(`data:text/javascript;base64,${Buffer.from(compiled.output[0].code).toString('base64')}`)
 }
@@ -15,6 +16,11 @@ const { deriveCommercialEstimateView } = await load('../frontend/src/features/co
 const { commercialOopRows } = await load('../frontend/src/features/commercial-estimate/commercialOopRows.ts')
 const { suggestedDiagnosisRows } = await load('../frontend/src/features/commercial-estimate/suggestedDiagnosisRows.ts')
 const { commercialRequirementRows } = await load('../frontend/src/features/commercial-estimate/commercialRequirementStatus.ts')
+const { payerOrderRow } = await load('../frontend/src/features/commercial-estimate/referenceCoverageRow.ts')
+const { default: CommercialCostBreakdown } = await load('../frontend/src/features/commercial-estimate/CommercialCostBreakdown.tsx')
+const { default: ArrivalAmountSummary } = await load('../frontend/src/features/commercial-estimate/ArrivalAmountSummary.tsx')
+const React = require('react')
+const { renderToStaticMarkup } = require('react-dom/server')
 
 const terms = { active: true, network_status: 'in_network', service_date_matches: true,
   selected_benefit_ids: ['synthetic-office-copay'], copay_cents: 4000, coinsurance_percent: '0',
@@ -115,9 +121,10 @@ const priorDayRow = collectionAtVisitRow(priorDay, model, {
   cardPlanningCopay: null, automaticCashFallback: false, cignaFeeProxy: false,
   proxyFormula: undefined,
 })
-assert.equal(priorDayRow.value, '$40.00')
-assert.equal(priorDayRow.label, 'Amount to collect at visit · office copay reference')
-assert.match(priorDayRow.detail, /Medicare.*remittance/i)
+assert.match(priorDayRow.value, /\$40\.00 if Aetna is the only applicable payer/)
+assert.match(priorDayRow.value, /\$0\.00 if Medicare is confirmed secondary/)
+assert.equal(priorDayRow.label, 'Amount to collect at visit · Aetna / Medicare scenario')
+assert.match(priorDayRow.detail, /Medicare.*adjudication/i)
 assert.equal(aetnaPriorDateReferenceCopay({ ...priorDay, identity: { status: 'review' } }, model), null)
 assert.equal(aetnaPriorDateReferenceCopay({ ...priorDay, benefits: {
   ...priorDay.benefits, network_status: 'unknown' } }, model), null)
@@ -171,4 +178,49 @@ const unknownNetworkView = deriveCommercialEstimateView({ result: {
   appointments: [], selectedVisit: null, busy: null, error: null, readOnly: false,
   recovering: false })
 assert.equal(unknownNetworkView.coverageTone, 'is-review')
+
+const sharedOfficeMedicare = {
+  ...unknownNetworkPriorDay,
+  benefits: { ...unknownNetworkPriorDay.benefits, has_secondary: true,
+    reported_secondary_payer: { status: 'reported', payer: 'MEDICARE',
+      evidence_paths: ['synthetic-other-payer'] },
+    reported_options: [{ ...unknownNetworkPriorDay.benefits.reported_options[0],
+      id: 'synthetic-stedi-office-copay', coverage_level: 'EMPLOYEE_AND_SPOUSE',
+      amount_cents: 6000 }] },
+  recovery: { reason_code: 'multiple_active_policies', active_policy_count: 2 },
+  price_range: { ...unknownNetworkPriorDay.price_range, lines: [{
+    ...unknownNetworkPriorDay.price_range.lines[0], benefits: {
+      ...unknownNetworkPriorDay.price_range.lines[0].benefits, copay_cents: 6000,
+    } }] },
+}
+assert.equal(aetnaPriorDateReferenceCopay(sharedOfficeMedicare, model), 6000)
+const sharedOfficeRow = collectionAtVisitRow(sharedOfficeMedicare, model, {
+  combinedPlan: null, feeProxy: null, aetnaPlanning: null, aetnaCopayPlanning: null,
+  officeReferenceCopay: null, priorDateAetnaCopay: 6000,
+  humanaReferenceCopay: null, partialOfficeCopay: null, pendingAetnaCopay: null,
+  cardPlanningCopay: null, automaticCashFallback: false, cignaFeeProxy: false,
+  proxyFormula: undefined,
+})
+assert.match(sharedOfficeRow.value, /\$60\.00 if Aetna is the only applicable payer/)
+assert.match(sharedOfficeRow.value, /\$0\.00 if Medicare is confirmed secondary/)
+assert.match(sharedOfficeRow.detail, /Medicare.*adjudication/i)
+const sharedPayerOrder = payerOrderRow(sharedOfficeMedicare, sharedOfficeMedicare.benefits)
+assert.match(sharedPayerOrder.value, /Aetna 271 lists MEDICARE as secondary/)
+assert.match(sharedPayerOrder.detail, /not been independently verified/)
+const savedModel = { ...model, networkLabel: 'Not determined', anticipatedService: 'Office visit',
+  amountText: 'Confirm payer order', planName: 'Aetna Choice POS II',
+  policyStatus: 'Coverage dates differ from visit' }
+const savedResult = { ...sharedOfficeMedicare, reason: 'Dizziness', visit_type: 'new',
+  collection_guidance: { ...sharedOfficeMedicare.collection_guidance, services: [] } }
+const savedTable = renderToStaticMarkup(React.createElement(CommercialCostBreakdown,
+  { model: savedModel, result: savedResult }))
+assert.match(savedTable, /Payer order.*Aetna 271 lists MEDICARE as secondary/)
+assert.match(savedTable, /Calculated Aetna share for this office visit.*\$60\.00 before any Medicare secondary payment/)
+assert.match(savedTable, /Amount to collect at visit.*\$60\.00 if Aetna is the only applicable payer/)
+assert.match(savedTable, /\$0\.00 if Medicare is confirmed secondary/)
+const savedSummary = renderToStaticMarkup(React.createElement(ArrivalAmountSummary,
+  { model: savedModel, result: savedResult, partialCopay: null, visibleAmount: true }))
+assert.match(savedSummary, /Aetna office copay · Medicare review/)
+assert.match(savedSummary, /\$60\.00/)
+assert.doesNotMatch(savedSummary, /Confirm payer order/)
 console.log('Aetna separate copay: $40 office reference; $0 general OOP does not erase the separate cap')

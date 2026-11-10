@@ -1,5 +1,7 @@
 import type { PrevisitEstimate } from '../../services/api/commercial-estimator'
+import type { PrevisitBenefits } from '../../services/api/commercial-benefits'
 import type { CommercialEstimateModel } from './useCommercialEstimateModel'
+import { money } from './format'
 import { patientBenefitsBound } from './identityBinding'
 import { singleOfficeCopayLine, specialistOfficeCopay } from './payerReportedPartialCopay'
 
@@ -13,6 +15,19 @@ export function aetnaPriorDateReferenceCopay(
   )
   const otherCoverage =
     benefits?.has_secondary || result.recovery?.reason_code === 'multiple_active_policies'
+  const selectedId = line?.benefits.copay_id
+  const datedInNetworkOfficeRow = benefits?.reported_options?.some(
+    (row) =>
+      row.id === selectedId &&
+      row.kind === 'copay' &&
+      row.network === 'IN_NETWORK' &&
+      row.service_type_code
+        .split(',')
+        .map((code) => code.trim())
+        .includes('98') &&
+      /\bSpecialist Visit or Evaluation\b/i.test(row.payer_note || '') &&
+      row.amount_cents === line?.benefits.copay_cents,
+  )
   if (
     model.cash ||
     model.previousEstimate ||
@@ -29,8 +44,15 @@ export function aetnaPriorDateReferenceCopay(
     benefits.historical_only ||
     benefits.source_errors?.length ||
     (otherCoverage &&
-      (benefits.network_status !== 'in_network' ||
-        benefits.network_source !== 'payer_participation_message')) ||
+      !(
+        benefits.network_status === 'in_network' &&
+        benefits.network_source === 'payer_participation_message'
+      ) &&
+      !(
+        benefits.network_status === 'unknown' &&
+        result.benefit_source?.startsWith('Stedi') &&
+        datedInNetworkOfficeRow
+      )) ||
     benefits.qmb_status === 'protected' ||
     result.benefits?.qmb_status === 'protected' ||
     result.billing_protection?.status === 'qmb' ||
@@ -43,7 +65,6 @@ export function aetnaPriorDateReferenceCopay(
     return null
   const copay = specialistOfficeCopay({ ...result, benefits })
   if (copay != null) return copay === line.benefits.copay_cents ? copay : null
-  const selectedId = line.benefits.copay_id
   const individualOfficeRowPresent = benefits.reported_options?.some(
     (row) =>
       row.kind === 'copay' &&
@@ -62,4 +83,28 @@ export function aetnaPriorDateReferenceCopay(
     line.benefits.copay_cents! >= 0
     ? line.benefits.copay_cents!
     : null
+}
+
+export function aetnaPriorDateTable(
+  copay: number | null,
+  benefits: PrevisitBenefits,
+  officeCoinsurance?: string | null,
+) {
+  const medicare = /^medicare\b/i.test(
+    benefits?.reported_secondary_payer?.payer ||
+      benefits?.primary_secondary_order?.secondary_payer ||
+      '',
+  )
+  return {
+    coinsurance:
+      copay != null && officeCoinsurance === '0'
+        ? '0% in network · $0.00 for this office visit'
+        : null,
+    share:
+      copay == null
+        ? null
+        : medicare
+          ? `${money(copay)} before any Medicare secondary payment`
+          : `${money(copay)} office copay reference`,
+  }
 }

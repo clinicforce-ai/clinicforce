@@ -21,6 +21,8 @@ async def saved_previsit(case_id: str, request: _api.Request) -> dict:
     evidence_resolution reports each field's source findings and precise
     remaining action after the shared estimator evaluates saved evidence.
     A saved read projects the current network rule without a payer call or write.
+    benefits.reported_secondary_payer names one dated, patient-bound medical
+    271 secondary payer; it does not verify Medicare entitlement or claim order.
     Fresh saved Cigna responses are reparsed without treating an exact
     "Attribution Status - Not applicable" STC 30 exclusion as inactive coverage.
     Card-printed tiered office copays remain reference-only until the visit's

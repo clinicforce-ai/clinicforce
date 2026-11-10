@@ -208,6 +208,10 @@ export function collectionAtVisitRow(
   const medicareSecondary = /^medicare\b/i.test(
     result.benefits?.primary_secondary_order?.secondary_payer || '',
   )
+  const medicareReported = /^medicare\b/i.test(
+    (result.reference_benefits ?? result.benefits)?.reported_secondary_payer?.payer || '',
+  )
+  const aetnaMedicareScenario = medicareSecondary || medicareReported
   const payerOrderVerified = result.benefits?.primary_secondary_order?.status === 'verified'
   const priorDateAetnaBalance =
     priorDateAetnaCopay == null ? null : Math.max(0, priorDateAetnaCopay - aetnaPaid)
@@ -253,7 +257,9 @@ export function collectionAtVisitRow(
           : pendingAetnaCopay != null || pendingBluecardCopay != null
             ? 'Amount to collect at visit · pending verification'
             : priorDateAetnaBalance != null
-              ? 'Amount to collect at visit · office copay reference'
+              ? aetnaMedicareScenario
+                ? 'Amount to collect at visit · Aetna / Medicare scenario'
+                : 'Amount to collect at visit · office copay reference'
               : cignaCard
                 ? 'Amount to collect at visit · pending verification'
                 : botoxPreview
@@ -333,7 +339,9 @@ export function collectionAtVisitRow(
                                           : pendingAetnaCopay != null
                                             ? `Pending · ${money(pendingAetnaCopay)} office copay if verified`
                                             : priorDateAetnaBalance != null
-                                              ? money(priorDateAetnaBalance)
+                                              ? aetnaMedicareScenario
+                                                ? `${money(priorDateAetnaBalance)} if Aetna is the only applicable payer · ${money(0)} if Medicare is confirmed secondary`
+                                                : money(priorDateAetnaBalance)
                                               : cardPlanningCopay != null
                                                 ? `${money(cardPlanningCopay)} office-only card suggestion`
                                                 : pendingCignaCopay != null
@@ -394,7 +402,7 @@ export function collectionAtVisitRow(
                                         : pendingAetnaCopay != null
                                           ? 'Stedi reported one specialist office copay for CPT 99204. Confirm the remaining deductible, out-of-pocket balance, conditional benefit, prior payments, and clinic collection policy before charging. Full patient share remains unresolved.'
                                           : priorDateAetnaBalance != null
-                                            ? `Payer-reported specialist office copay after recorded payments. The saved response covers another date; confirm visit-date coverage and payer order. ${medicareSecondary ? 'Medicare is reported as secondary; submit the primary and Medicare claims, then collect only any balance after Medicare remittance.' : 'Confirm the secondary benefit and clinic collection policy before charging.'} This is not an authorized collection decision.`
+                                            ? `Payer-reported in-network specialist office copay after recorded payments. The saved response covers another date; confirm visit-date coverage and the provider's network. ${aetnaMedicareScenario ? 'Aetna reports Medicare as secondary; verify entitlement and payer order. If confirmed, collect $0 at check-in, submit the primary and Medicare secondary claims, and collect only any balance after adjudication.' : 'Confirm other coverage and clinic collection policy before charging.'} This reference does not authorize a charge.`
                                             : cardPlanningCopay != null
                                               ? 'Printed specialist copay for one office visit; verify before charging. Planned imaging and final payer share are unresolved.'
                                               : pendingCignaCopay != null

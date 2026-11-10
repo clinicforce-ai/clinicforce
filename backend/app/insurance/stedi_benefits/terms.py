@@ -39,11 +39,13 @@ def select_cost_share_rows(entries: list[dict[str, Any]], payload: dict[str, Any
         # fallback only when no specific counterpart exists.
         specificity = 3 if _procedure(row) and _procedure(row) == procedure_code else 2 if service_type_code in service_types else 1 if "30" in service_types else 0
         individual = level in {"INDIVIDUAL", "IND"} or (level in {"EMP", "EMPLOYEE_ONLY"} and not payload.get('dependent'))
-        # A per-service copay or percentage marked employee-and-children also
-        # applies to a covered child. It is not an individual accumulator.
-        shared_cost_share = row.get('code') in {'A', 'B'} and level in {'EMPLOYEE_AND_CHILDREN', 'ECH'}
+        # Household service terms cover the named subscriber (and an eligible
+        # child for ECH). They are not individual accumulator balances.
+        shared_service_level = (level in {'EMPLOYEE_AND_CHILDREN', 'ECH'} or
+                                level in {'EMPLOYEE_AND_SPOUSE', 'ESP'} and not payload.get('dependent'))
+        shared_cost_share = row.get('code') in {'A', 'B'} and shared_service_level
         shared_service_waiver = (row.get('code') == 'F' and specificity >= 2
-            and level in {'EMPLOYEE_AND_CHILDREN', 'ECH'}
+            and shared_service_level
             and any('Plan Ded Waived' in note for note in
                     _benefit_notes([row.get('messages'), row.get('additionalInformation')])))
         service_waiver = (not level and row.get('code') == 'C' and specificity >= 2

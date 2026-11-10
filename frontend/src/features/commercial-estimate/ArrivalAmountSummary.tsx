@@ -186,6 +186,11 @@ export default function ArrivalAmountSummary({
     priorDateAetnaCopay == null
       ? null
       : Math.max(0, priorDateAetnaCopay - (result.encounter_summary?.payments_verified_cents || 0))
+  const aetnaMedicareScenario = /^medicare\b/i.test(
+    (result.reference_benefits ?? result.benefits)?.reported_secondary_payer?.payer ||
+      result.benefits?.primary_secondary_order?.secondary_payer ||
+      '',
+  )
   const pendingCignaCopay = pendingCignaOfficeCopay(result, model)
   const pendingUhcHmoPosCopay =
     partialCopay != null &&
@@ -235,7 +240,9 @@ export default function ArrivalAmountSummary({
                               : cardPlanningCopay != null
                                 ? 'Card-based office suggestion · collection pending'
                                 : priorDateAetnaCopay != null
-                                  ? 'Payer-reported office copay'
+                                  ? aetnaMedicareScenario
+                                    ? 'Aetna office copay · Medicare review'
+                                    : 'Payer-reported office copay'
                                   : needsAction
                                     ? 'Next step'
                                     : model.amountLabel}
@@ -399,9 +406,9 @@ export default function ArrivalAmountSummary({
         </p>
       ) : priorDateAetnaCopay != null ? (
         <p>
-          The payer returned benefits for a different date. Confirm coverage for this visit,
-          network, billing protections, and prior payments before charging. The amount to collect
-          remains unestablished.
+          {aetnaMedicareScenario
+            ? `${money(priorDateAetnaBalance!)} if Aetna is the only applicable payer; ${money(0)} at check-in if Medicare is confirmed secondary. Aetna's response is for another date. Verify visit-date coverage, provider network, Medicare entitlement and payer order before charging.`
+            : 'The payer returned benefits for a different date. Confirm coverage for this visit, network, billing protections, and prior payments before charging. The amount to collect remains unestablished.'}
         </p>
       ) : needsAction ? (
         <p>{action.hint}</p>

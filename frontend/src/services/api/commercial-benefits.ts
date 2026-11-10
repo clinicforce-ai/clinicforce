@@ -17,6 +17,11 @@ export type PrevisitBenefits = null | {
     payer: string
     evidence_paths: string[]
   }
+  reported_secondary_payer?: {
+    status: 'reported'
+    payer: string
+    evidence_paths: string[]
+  }
   primary_secondary_order?: {
     status: 'verified'
     primary_payer_id?: string

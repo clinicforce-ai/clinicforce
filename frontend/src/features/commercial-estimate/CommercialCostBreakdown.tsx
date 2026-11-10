@@ -7,11 +7,18 @@ import { collectionAtVisitRow, pendingBluecardOfficeCopay } from './collectionAt
 import { money, range } from './format'
 import * as healthselectHelpers from './healthselectRows'
 import * as copay from './payerReportedPartialCopay'
-import { memberGroupRow, referenceCoverageRow } from './referenceCoverageRow'
+import {
+  memberGroupRow,
+  networkRow,
+  payerOrderRow,
+  referenceCoverageRow,
+} from './referenceCoverageRow'
+import { aetnaPriorDateTable } from './aetnaPriorDateReferenceCopay'
 import { limitSummary, unknown } from './limitSummary'
 import { resolvedAllowedTotal } from './resolvedAllowedTotal'
 import {
   allowedCapReductionRows,
+  commercialAllowedTotalRow,
   commercialCashAlternativeRow,
   commercialCashRows,
   commercialCptRows,
@@ -67,6 +74,11 @@ export default function CommercialCostBreakdown({
   const partialOfficeCopay = copay.payerReportedPartialCopay(result, model)
   const pendingAetnaCopay = copay.aetnaPendingOfficeCopay(result, model)
   const priorDateAetnaCopay = copay.aetnaPriorDateReferenceCopay(result, model)
+  const aetnaTable = aetnaPriorDateTable(
+    priorDateAetnaCopay,
+    benefits,
+    copay.singleOfficeCopayLine(lines)?.benefits.coinsurance_percent,
+  )
   const pendingBluecardCopay = pendingBluecardOfficeCopay(result, model)
   const cardReferences = [partialOfficeCopay, officeReferenceCopay, humanaReferenceCopay]
   const cardPlanningCopay = copay.visibleCardOfficePlanningCopay(result, model, cardReferences)
@@ -85,15 +97,10 @@ export default function CommercialCostBreakdown({
   const aetnaCopayPlanning = copay.aetnaOfficePlanningCopay(result, model, lines)
   const insuredRows: CostBreakdownRow[] = [
     referenceCoverageRow(result, model, benefits),
+    ...[payerOrderRow(result, benefits)].filter((row): row is CostBreakdownRow => row != null),
     ...[memberGroupRow(result)].filter((row): row is CostBreakdownRow => row != null),
     ...healthselectRows.card,
-    {
-      label: 'Network',
-      value:
-        dsnpOffice && model.networkLabel === 'Not determined'
-          ? 'Office benefit in/out of network · provider participation unknown'
-          : model.networkLabel,
-    },
+    networkRow(model, dsnpOffice),
     {
       label: result.reason ? 'Reason for visit' : 'Planned service',
       value: commercialVisitReason(result, model.anticipatedService || ''),
@@ -112,28 +119,15 @@ export default function CommercialCostBreakdown({
       automaticCashFallback,
       anticipatedService: model.anticipatedService,
     }),
-    {
-      label: 'Total payer allowed',
-      value: healthselectZero
-        ? 'Not returned · not needed for the conditional $0 cost share'
-        : cardPlanningCopay != null
-          ? 'Payer allowance pending'
-          : dsnpOffice
-            ? 'Not established · UHC allowance not returned'
-            : automaticCashFallback
-              ? 'Not established'
-              : price?.allowed_min_cents != null && price.allowed_max_cents != null
-                ? range(price.allowed_min_cents, price.allowed_max_cents)
-                : lineAllowedTotal != null
-                  ? money(lineAllowedTotal)
-                  : bluecardDeductible
-                    ? `Not established · ${money(bluecardDeductible.reference)} clinic fee reference`
-                    : botoxPreview
-                      ? `${money(botoxPreview.allowed_cents)} · clinic fee row`
-                      : /\bhumana\b/i.test(result.payer || '')
-                        ? 'Not established'
-                        : 'Not fully priced',
-    },
+    commercialAllowedTotalRow(result, {
+      healthselectZero,
+      cardPlanningCopay,
+      dsnpOffice,
+      automaticCashFallback,
+      lineAllowedTotal,
+      bluecardDeductible,
+      botoxPreview,
+    }),
     ...commercialFeeReferenceRows(
       temporaryRateReference,
       feeProxy,
@@ -318,13 +312,15 @@ export default function CommercialCostBreakdown({
                       : '$0 payable after out-of-pocket limit'
                     : calculated && components?.coinsurance_cents != null
                       ? money(components.coinsurance_cents)
-                      : reportedCoinsurance != null
-                        ? `${reportedCoinsurance}% reported; dollar amount pending`
-                        : cignaCard?.in_network_coinsurance_split
-                          ? `${cignaCard.in_network_coinsurance_split} printed in-network split · CPT share pending`
-                          : humanaReferenceCopay != null
-                            ? '40% out of network · in-network office benefit is a copay'
-                            : unknown,
+                      : aetnaTable.coinsurance != null
+                        ? aetnaTable.coinsurance
+                        : reportedCoinsurance != null
+                          ? `${reportedCoinsurance}% reported; dollar amount pending`
+                          : cignaCard?.in_network_coinsurance_split
+                            ? `${cignaCard.in_network_coinsurance_split} printed in-network split · CPT share pending`
+                            : humanaReferenceCopay != null
+                              ? '40% out of network · in-network office benefit is a copay'
+                              : unknown,
       detail: aetnaPlanning
         ? 'The planning formula uses a fixed diagnostic copay rather than office visit coinsurance'
         : bluecardDeductible
@@ -405,8 +401,8 @@ export default function CommercialCostBreakdown({
                           ? `${money(humanaReferenceCopay)} conditional in-network office copay · collection pending`
                           : aetnaCopayPlanning != null
                             ? `${money(aetnaCopayPlanning)} provisional office copay`
-                            : priorDateAetnaCopay != null
-                              ? `${money(priorDateAetnaCopay)} office copay reference`
+                            : aetnaTable.share != null
+                              ? aetnaTable.share
                               : pendingBluecardCopay != null
                                 ? `${money(lines[0].benefits.copay_cents!)} office-only estimate`
                                 : model.estimatedShare ||
@@ -432,7 +428,9 @@ export default function CommercialCostBreakdown({
                 ? 'Pre-Medicaid planning share'
                 : cignaFeeProxy || summary?.conditional
                   ? 'Conditional patient share'
-                  : 'Estimated patient share',
+                  : aetnaTable.share != null
+                    ? 'Calculated Aetna share for this office visit'
+                    : 'Estimated patient share',
             value: patientShare,
             detail: automaticCashFallback
               ? cardPlanningCopay != null
@@ -461,7 +459,7 @@ export default function CommercialCostBreakdown({
                                   : aetnaCopayPlanning != null
                                     ? `${money(aetnaCopayPlanning)} copay + ${money(0)} deductible + 0% × Aetna allowed amount = ${money(aetnaCopayPlanning)} before the unknown allowance cap. Confirm the visit conditions and final claim amount.`
                                     : priorDateAetnaCopay != null
-                                      ? 'Payer-reported office copay after recorded payments. The saved response is for another date; confirm visit-date coverage, provider network, Medicare billing protection and any other services before charging. Full patient responsibility remains unresolved.'
+                                      ? 'Fixed in-network specialist office copay before any secondary payment. The saved response is for another date; confirm visit-date coverage, provider network, Medicare billing protection and any other services before charging. Full patient responsibility remains unresolved.'
                                       : pendingBluecardCopay != null
                                         ? 'One payer-reported specialist office copay. The selected visit has no applicable deductible or additional coinsurance; the final share remains subject to the allowed charge and processed claim.'
                                         : calculated

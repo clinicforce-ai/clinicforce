@@ -8,6 +8,52 @@ import { money, range } from './format'
 import { ticTreatmentRows } from './ticTreatmentRows'
 import type { CommercialEstimateModel } from './useCommercialEstimateModel'
 
+export function commercialAllowedTotalRow(
+  result: PrevisitEstimate,
+  options: {
+    healthselectZero: boolean
+    cardPlanningCopay: number | null
+    dsnpOffice: boolean
+    automaticCashFallback: boolean
+    lineAllowedTotal: number | null
+    bluecardDeductible: ReturnType<typeof bluecardOfficeDeductibleScenario>
+    botoxPreview: PrevisitEstimate['botox_preview']
+  },
+): CostBreakdownRow {
+  const {
+    healthselectZero,
+    cardPlanningCopay,
+    dsnpOffice,
+    automaticCashFallback,
+    lineAllowedTotal,
+    bluecardDeductible,
+    botoxPreview,
+  } = options
+  const price = result.price_range
+  return {
+    label: 'Total payer allowed',
+    value: healthselectZero
+      ? 'Not returned · not needed for the conditional $0 cost share'
+      : cardPlanningCopay != null
+        ? 'Payer allowance pending'
+        : dsnpOffice
+          ? 'Not established · UHC allowance not returned'
+          : automaticCashFallback
+            ? 'Not established'
+            : price?.allowed_min_cents != null && price.allowed_max_cents != null
+              ? range(price.allowed_min_cents, price.allowed_max_cents)
+              : lineAllowedTotal != null
+                ? money(lineAllowedTotal)
+                : bluecardDeductible
+                  ? `Not established · ${money(bluecardDeductible.reference)} clinic fee reference`
+                  : botoxPreview
+                    ? `${money(botoxPreview.allowed_cents)} · clinic fee row`
+                    : /\bhumana\b/i.test(result.payer || '')
+                      ? 'Not established'
+                      : 'Not fully priced',
+  }
+}
+
 export function commercialCashRows(
   result: PrevisitEstimate,
   model: CommercialEstimateModel,
