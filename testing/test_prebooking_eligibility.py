@@ -56,6 +56,70 @@ def test_request_uses_only_five_fields_and_omits_missing_member_id():
     assert "dependent" not in own
 
 
+def test_estimate_request_uses_rendering_npi_without_an_organization_name():
+    body = prebooking.request_body(PERSON, PAYER, {"npi": "1720615453"})
+    assert body["provider"] == {"npi": "1720615453"}
+
+
+def test_generic_blue_product_uses_signed_scoped_contract_plan_for_prebooking():
+    from app.insurance.group_contract_support import prebooking_pricing_source, pricing_agreement_matches
+
+    source = {"prebooking": True, "plan": "PREFERRED PROVIDER OPTION MEDICAL",
+              "payer_plan_names": ["PREFERRED PROVIDER OPTION MEDICAL"], "payer_plan_bound": True}
+    evidence = {"decision": "in_network_contract_supported", "document_id": "synthetic-contract",
+                "product": "PREFERRED PROVIDER OPTION MEDICAL", "contract_plan_matcher": "CI"}
+    assert prebooking_pricing_source(source, evidence)["plan"] == "CI"
+    assert prebooking_pricing_source(source, evidence)["payer_plan_names"] == []
+    assert prebooking_pricing_source({**source, "prebooking": False}, evidence)["plan"] == source["plan"]
+    assert prebooking_pricing_source({**source, "plan": "Specific PPO",
+        "payer_plan_names": ["Specific PPO"]}, evidence)["plan"] == "Specific PPO"
+    assert prebooking_pricing_source(source, {**evidence, "document_id": None})["plan"] == source["plan"]
+    network = {"network_name": "Blue Choice PPO", "plan_matcher": "CI",
+               "billing_npi": "1234567893", "rendering_npi": "1720615453",
+               "tin": "123456789", "location_id": "office-1", "place_of_service": "11"}
+    scoped = {**evidence, "document_sha256": "synthetic-hash", "network_name": network["network_name"],
+              "billing_npi": network["billing_npi"], "rendering_npi": network["rendering_npi"],
+              "tin": network["tin"], "location_id": network["location_id"],
+              "place_of_service": network["place_of_service"], "service_date": "2026-10-27"}
+    inputs = {"service_date": "2026-10-27", "rendering_provider": {"npi": network["rendering_npi"]}}
+    assert pricing_agreement_matches(scoped, network, inputs)
+    assert not pricing_agreement_matches({**scoped, "document_sha256": None}, network, inputs)
+    assert not pricing_agreement_matches(scoped, {**network, "location_id": "other-office"}, inputs)
+    assert not pricing_agreement_matches(scoped, network, {**inputs, "service_date": "2026-10-28"})
+
+
+def test_signed_prebooking_agreement_unlocks_exact_rate_lookup_without_profile_document_link():
+    from app.api.routers import commercial_estimator as api
+    from app.insurance.group_contract_support import prebooking_pricing_source
+
+    network = {"network_name": "Blue Choice PPO", "plan_matcher": "CI",
+               "billing_npi": "1234567893", "rendering_npi": "1720615453",
+               "tin": "123456789", "location_id": "office-1", "place_of_service": "11"}
+    evidence = {"decision": "in_network_contract_supported", "document_id": "synthetic-contract",
+                "document_sha256": "synthetic-hash", "product": "PREFERRED PROVIDER OPTION MEDICAL",
+                "contract_plan_matcher": "CI", "service_date": "2026-10-27",
+                **{key: network[key] for key in ("network_name", "billing_npi", "rendering_npi",
+                                               "tin", "location_id", "place_of_service")}}
+    source = prebooking_pricing_source({"prebooking": True, "plan": evidence["product"],
+        "payer_plan_names": [evidence["product"]], "payer_plan_bound": True,
+        "rendering_provider": {"npi": network["rendering_npi"]}}, evidence)
+    inputs = {"service_date": "2026-10-27", "place_of_service": "11", "reason": "Office visit",
+              "rendering_provider": {"npi": network["rendering_npi"]}}
+    lines = [{"id": "prospective:99213", "code": "99213", "units": 1, "source": "Prospective planning scenario"}]
+    benefits = {"network_status": "in_network", "active": True}
+    with patch.object(api, "_previsit_practice_path", return_value=({}, network, {"rules": {}})), \
+         patch.object(api, "_network_contract_evidence", return_value={}), \
+         patch.object(api.commercial_store, "matching_rates", return_value=[{"code": "99213", "allowed_cents": 7615}]) as rates, \
+         patch.object(api.visit_estimate, "price_lines", return_value={"lines": []}):
+        _, issues = api._previsit_range("clinic", inputs, source, "blue-route", lines, benefits,
+                                       review={"selected_ids": [lines[0]["id"]]})
+        assert issues == []
+        rates.assert_called_once()
+        _, issues = api._previsit_range("clinic", inputs, {**source, "_prebooking_contract_evidence": None},
+                                       "blue-route", lines, benefits, review={"selected_ids": [lines[0]["id"]]})
+        assert "no contract linked" in issues[0]
+
+
 def test_only_matching_current_medical_coverage_is_active():
     assert prebooking.evaluate(response(), PERSON, "2026-10-27")["status"] == "active_today"
     assert prebooking.evaluate(response("INACTIVE"), PERSON, "2026-10-27")["status"] == "inactive_today"
@@ -273,6 +337,38 @@ def test_estimate_route_checks_identity_and_services_before_pricing():
     asyncio.run(run())
 
 
+def test_estimate_route_requests_benefits_for_selected_rendering_clinician():
+    async def run():
+        app = FastAPI()
+        app.include_router(staff.router)
+        context = {"id": "network-1", "status": "verified", "billing_npi": PROVIDER["npi"],
+                   "rendering_npi": "1720615453", "location_id": "office-1", "place_of_service": "11"}
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test",
+                                     headers={"Origin": "http://test"}) as client:
+            with patch.object(staff, "require_staff", AsyncMock(return_value={"practice_id": "clinic-1", "practice_name": "Example Clinic"})), \
+                 patch.object(staff_prebooking.clinic_store, "get_for_practice", return_value=PROVIDER), \
+                 patch.object(staff_prebooking.commercial_store, "list_networks", return_value=[context]), \
+                 patch.object(staff_prebooking, "_today", return_value="2026-10-27"), \
+                 patch.object(staff_prebooking.stedi_financial, "credentials", return_value="synthetic-key"), \
+                 patch.object(staff_prebooking.stedi_payers, "search_payer", AsyncMock(return_value=PAYER)), \
+                 patch.object(stedi.Client, "check", AsyncMock(side_effect=[
+                     {"outcome": "complete", "payload": response()},
+                     {"outcome": "complete", "payload": response(service="98")},
+                 ])) as check, \
+                 patch.object(staff_prebooking, "_estimate_from_payer", return_value={"issues": [], "lines": []}) as estimate, \
+                 patch.dict(os.environ, {"STEDI_EXECUTION_MODE": "commercial_pilot", "STEDI_LIVE_ELIGIBILITY_ENABLED": "true"}):
+                reply = await client.post("/api/staff/prebooking-estimate/check", json={**PERSON,
+                    "reason": "Office consultation", "visit_type": "established",
+                    "network_context_id": context["id"],
+                    "selected_services": [{"code": "99213", "units": 1}]})
+                assert reply.status_code == 200, reply.text
+                assert check.await_count == 2
+                assert all(call.args[0]["provider"] == {"npi": context["rendering_npi"]}
+                           for call in check.await_args_list)
+                assert estimate.call_args.args[2] == context
+    asyncio.run(run())
+
+
 def test_payer_birth_date_rejection_is_explicit_and_stops_before_pricing():
     async def search(name, ids, key, *, candidates=None):
         return PAYER
@@ -346,6 +442,18 @@ def test_prospective_amount_requires_member_binding_and_verified_network():
             "payer": PAYER["displayName"], "checked_at": "2026-10-27T12:00:00Z", "checked_on": "2026-10-27",
             "check_ids": [], "patient_address": None, **result})
 
+    def office_terms(result, practice_id, inputs, source, payer_id, benefits, **kwargs):
+        priced(result, practice_id, inputs, source, payer_id, benefits, **kwargs)
+        result["price_range"]["lines"][0]["benefits"] = {**benefits, "copay_cents": 2500,
+            "coinsurance_percent": 20, "deductible_remaining_cents": 10000}
+
+    with patch.object(commercial_estimator, "_attach_previsit_pricing", side_effect=office_terms):
+        result = staff_prebooking._estimate_from_payer(network_participation.NMCT_PRACTICE_ID, details, context, PAYER,
+            PROVIDER, payload, "2026-10-27", lines)
+        assert result["benefits"]["copay_cents"] == 2500
+        assert result["benefits"]["coinsurance_percent"] == 20
+        assert result["benefits"]["deductible_remaining_cents"] == 10000
+
         no_member = staff_prebooking._estimate_from_payer(network_participation.NMCT_PRACTICE_ID, {**details, "member_id": ""},
             context, PAYER, PROVIDER, payload, "2026-10-27", lines)
         assert no_member["estimate_status"] == "needs_review"
@@ -417,7 +525,10 @@ def test_prospective_amount_requires_member_binding_and_verified_network():
         unresolved = staff_prebooking._estimate_from_payer(network_participation.NMCT_PRACTICE_ID,
             details, context, PAYER, PROVIDER, payload, "2026-10-27", lines)
         assert unresolved["patient_max_cents"] is None
-        assert unresolved["lines"][0]["allowed_cents"] is None
+        assert unresolved["allowed_total_cents"] == 10000
+        assert unresolved["lines"][0]["allowed_cents"] == 10000
+        assert unresolved["lines"][0]["rate_source"] == "Synthetic signed rate"
+        assert unresolved["lines"][0]["patient_cents"] is None
 
 
 def test_uncertain_service_response_stops_further_inquiries_and_withholds_amount():

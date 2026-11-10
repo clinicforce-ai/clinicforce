@@ -13,12 +13,14 @@ def request_body(details: dict, payer: dict, provider: dict, *, service_type: st
     subscriber_birth = details.get("subscriber_birth_date") if details.get("relationship") == "dependent" else details["birth_date"]
     body = {
         "payerId": payer["stediId"],
-        "provider": {"name": {"organization": provider["name"]}, "npi": provider["npi"]},
+        "provider": {"npi": provider["npi"]},
         "subscriber": {"name": {"person": {"firstName": subscriber_first,
                                              "lastName": subscriber_last}},
                        "dateOfBirth": subscriber_birth},
         "encounter": {"services": [{"system": "STC", "value": service_type}]},
     }
+    if provider.get("name"):
+        body["provider"]["name"] = {"organization": provider["name"]}
     if details.get("member_id"):
         body["subscriber"]["memberId"] = details["member_id"]
     if details.get("relationship") == "dependent":

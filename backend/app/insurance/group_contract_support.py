@@ -22,6 +22,42 @@ TEXAS_BLUE_NAMES = {
 BLUE_PAYER = re.compile(r'\b(?:bcbs[a-z]*|blue\s*cross|blue\s*shield)\b', re.I)
 
 
+def prebooking_pricing_source(source: dict, evidence: dict) -> dict:
+    """Map a generic member product to the one signed clinic plan for pricing.
+
+    The scoped agreement resolver has already bound the member, provider,
+    location and date. A specific payer product still needs its own mapping.
+    """
+    names = source.get('payer_plan_names') or []
+    product = str(evidence.get('product') or '')
+    matcher = str(evidence.get('contract_plan_matcher') or '')
+    same_network_name = (insurance_identity.normalized(product) ==
+                         insurance_identity.normalized(evidence.get('network_name')))
+    generic_prebooking = (source.get('prebooking') is True and source.get('payer_plan_bound') is True
+            and evidence.get('decision') == 'in_network_contract_supported'
+            and evidence.get('document_id') and len(names) == 1
+            and insurance_identity.normalized(names[0]) == insurance_identity.normalized(product)
+            and insurance_identity.generic_plan_label(product))
+    priced = ({**source, 'plan': matcher, 'payer_plan_names': []}
+              if matcher and (same_network_name or generic_prebooking) else source)
+    if source.get('prebooking') is True and evidence.get('decision') == 'in_network_contract_supported':
+        return {**priced, '_prebooking_contract_evidence': evidence}
+    return priced
+
+
+def pricing_agreement_matches(evidence: dict | None, network: dict, inputs: dict) -> bool:
+    """Reuse the signed group finding only for its exact rate-network scope."""
+    if not evidence or evidence.get('decision') != 'in_network_contract_supported' or not all(
+            evidence.get(key) for key in ('document_id', 'document_sha256', 'service_date')):
+        return False
+    values = {'network_name': network.get('network_name'), 'contract_plan_matcher': network.get('plan_matcher'),
+              'billing_npi': network.get('billing_npi'), 'rendering_npi': network.get('rendering_npi'),
+              'tin': network.get('tin'), 'location_id': network.get('location_id'),
+              'place_of_service': network.get('place_of_service'), 'service_date': inputs.get('service_date')}
+    return (all(str(evidence.get(key) or '') == str(value or '') for key, value in values.items())
+            and str((inputs.get('rendering_provider') or {}).get('npi') or '') == str(network.get('rendering_npi') or ''))
+
+
 def eligibility_route(result: dict, payer_id: str, connection: dict | None = None) -> dict | None:
     """Use the Stedi directory route when the home plan has no clinic connection."""
     if connection and connection.get('status') == 'staff_guidance_enabled':
@@ -201,7 +237,8 @@ def resolve(practice_id: str, payer: dict | None, inputs: dict, source: dict,
         if (source.get('plan') and network.get('plan_matcher')
                 and insurance_identity.normalized(source['plan']) !=
                     insurance_identity.normalized(network['plan_matcher'])):
-            warnings.append('eCW plan code differs from the clinic agreement record.')
+            warnings.append('Payer plan label differs from the clinic agreement record.' if source.get('prebooking')
+                            else 'eCW plan code differs from the clinic agreement record.')
         candidates.append((network, relationship, warnings,
                            local_blue if bluecard_candidate and not relationship else payer,
                            bluecard_candidate))
@@ -259,7 +296,8 @@ def resolve(practice_id: str, payer: dict | None, inputs: dict, source: dict,
             'home_plan': relationship.get('home_plan'),
             'home_plan_evidence_path': relationship.get('home_plan_evidence_path'),
             'billing_npi': billing_npi, 'rendering_npi': rendering_npi, 'tin': tin,
-            'tin_source': 'eCW billing provider' if ecw_tin else 'scoped clinic network record',
+            'tin_source': ('clinic context' if source.get('prebooking') else 'eCW billing provider')
+                          if ecw_tin else 'scoped clinic network record',
             'location_id': location, 'place_of_service': pos, 'effective_from': network['effective_from'],
             'effective_to': network.get('effective_to'), 'service_date': service_date,
             'document_id': document['id'], 'document_label': document.get('label'),

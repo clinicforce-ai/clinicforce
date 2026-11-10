@@ -160,7 +160,7 @@ def _previsit_range(practice_id: str, inputs: dict, source: dict, payer_id: str,
             if network.get("plan_matcher") and not source.get("plan"):
                 raise _api.commercial.CommercialError("Clinic pricing: eCW did not return the contract plan identifier.")
             contract = _api._network_contract_evidence(practice_id, network, profile, inputs['service_date'])
-            if not contract.get('document_id'):
+            if not contract.get('document_id') and not group_contract_support.pricing_agreement_matches(source.get('_prebooking_contract_evidence'), network, inputs):
                 raise _api.commercial.CommercialError(
                     'The Clinical Library has no contract linked to this exact payer product and provider.')
             if (fep_product and 'fep' in str(network.get('network_name') or '').casefold()
@@ -486,12 +486,8 @@ def _attach_previsit_pricing(result: dict, practice_id: str, inputs: dict, sourc
     if _api.network_participation.verified_out_of_network(benefits):
         record_confirmed_out_of_network(result, benefits)
     priced_source = {**source, **((result.get('network_evidence') or {}).get('scope') or {})}
-    if (benefits.get('network_source') == 'clinic_group_agreement'
-            and (result.get('network_evidence') or {}).get('contract_plan_matcher') is not None
-            and _api.insurance_identity.normalized(result['network_evidence'].get('product')) ==
-                _api.insurance_identity.normalized(result['network_evidence'].get('network_name'))):
-        priced_source = {**priced_source,
-            'plan': result['network_evidence']['contract_plan_matcher'], 'payer_plan_names': []}
+    if benefits.get('network_source') == 'clinic_group_agreement':
+        priced_source = group_contract_support.prebooking_pricing_source(priced_source, result.get('network_evidence') or {})
     result["price_range"], issues = _api._previsit_range(practice_id, inputs, priced_source, connection["id"], result["codes"], benefits,
                                                   payload=payload, review=review, payer_route_id=payer_id)
     result["issues"].extend(issues)

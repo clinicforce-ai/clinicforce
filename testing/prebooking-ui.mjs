@@ -6,6 +6,7 @@ const browser = await chromium.launch({ headless: true, executablePath: process.
 const page = await browser.newPage()
 let checks = 0
 let priced = false
+let partial = false
 let plans = 0
 
 await page.route((url) => url.pathname.startsWith('/api/'), async (route) => {
@@ -15,6 +16,8 @@ await page.route((url) => url.pathname.startsWith('/api/'), async (route) => {
     body = { staff: { id: 'staff', practice_id: 'clinic', practice_name: 'Example Clinic', display_name: 'Clinician', role: 'admin' } }
   } else if (url.pathname === '/api/staff/patients/dashboard') {
     body = { patients: [], counts: { all: 0, accounts_with_cards: 0, accounts_without_cards: 0, card_only: 0, other: 0 } }
+  } else if (url.pathname === '/api/staff/patients/today-appointments') {
+    body = { date: '2026-10-29', visits: [] }
   } else if (url.pathname === '/api/staff/prebooking-eligibility/options') {
     body = { payers: [{ id: 'EXAMPLE', name: 'Example Health' }] }
   } else if (url.pathname === '/api/staff/prebooking-estimate/contexts') {
@@ -43,12 +46,13 @@ await page.route((url) => url.pathname.startsWith('/api/'), async (route) => {
       network_status: 'in_network', network_evidence: { source: 'clinic_library_contract', reason: 'Synthetic NMCT contract.' }, plan_name: 'Example PPO',
       benefits: { copay_cents: 2500, coinsurance_percent: '0', deductible_annual_cents: 100000, deductible_remaining_cents: 40000,
         oop_annual_cents: 300000, oop_remaining_cents: 120000 },
-      lines: [{ code: officeCode, units: 1, role: 'visit', service_type: '98', allowed_cents: 10000, patient_cents: 2500,
+      lines: [{ code: officeCode, units: 1, role: 'visit', service_type: '98', allowed_cents: 10000, patient_cents: partial ? null : 2500,
         rate_source: 'Synthetic signed rate', benefits: { copay_cents: 2500 }, issues: [], conditions: [] },
         ...(addedEmg ? [{ code: '95909', units: 1, role: 'diagnostic', service_type: '73', allowed_cents: 20000, patient_cents: 5000,
           rate_source: 'Synthetic EMG rate', benefits: { coinsurance_percent: '25' }, issues: [], conditions: [] }] : [])],
-      allowed_total_cents: addedEmg ? 30000 : 10000, plan_total_cents: addedEmg ? 22500 : 7500,
-      patient_min_cents: addedEmg ? 7500 : 2500, patient_max_cents: addedEmg ? 7500 : 2500, estimate_status: 'priced', issues: [] }
+      allowed_total_cents: addedEmg ? 30000 : 10000, plan_total_cents: partial ? null : addedEmg ? 22500 : 7500,
+      patient_min_cents: partial ? null : addedEmg ? 7500 : 2500, patient_max_cents: partial ? null : addedEmg ? 7500 : 2500,
+      estimate_status: partial ? 'needs_review' : 'priced', issues: partial ? ['Insurer did not return a usable remaining deductible.'] : [] }
       : { coverage: { status: 'payer_rejected', message: 'The insurer rejected the birth date. Check the subscriber birth date on the policy.', coverage_start: null, coverage_end: null },
       payer: 'Example Health', checked_at: '2026-10-29T12:00:00Z', checked_on: '2026-10-29', check_ids: ['ec_synthetic'],
       patient_address: { line1: '100 Example Ave', line2: null, city: 'Albany', state: 'NY', postal_code: '12207', country: null },
@@ -105,17 +109,26 @@ try {
   assert.match(await page.locator('.prebooking-share-labels').innerText(), /\$75\.00/)
   assert.match(await page.locator('.prebooking-service-row').innerText(), /Synthetic signed rate/)
   assert.equal(await page.locator('.prebooking-benefit-section').getByText('Deductible remaining').count(), 1)
+  partial = true
+  await page.getByLabel('Member ID from insurance card').fill('SYNTHETIC3')
+  await page.getByRole('button', { name: 'Check insurance and estimate visit' }).click()
+  await page.getByText('Visit cost available').waitFor()
+  assert.match(await page.locator('.prebooking-cost-grid').innerText(), /\$100\.00/)
+  assert.match(await page.locator('.prebooking-cost-grid').innerText(), /Unavailable from payer benefits/)
+  assert.equal(await page.locator('.prebooking-share').count(), 0)
+  assert.match(await page.locator('.prebooking-service-row').innerText(), /Synthetic signed rate/)
+  partial = false
   await page.getByLabel('Office visit type').selectOption('established')
   await page.getByLabel('Reason for visit').fill('hand numbness; EMG planned')
   await page.getByRole('button', { name: 'Check insurance and estimate visit' }).click()
   await page.getByText('Possible additions from the visit reason').waitFor()
   assert.equal(plans, 2)
-  assert.equal(checks, 3)
+  assert.equal(checks, 4)
   assert.match(await page.locator('.prebooking-baseline').innerText(), /99213/)
   await page.getByLabel(/95909.*Nerve study/).check()
   await page.getByRole('button', { name: 'Check insurance and estimate visit' }).click()
   await page.getByText('Synthetic EMG rate').waitFor()
-  assert.equal(checks, 4)
+  assert.equal(checks, 5)
   assert.match(await page.locator('.prebooking-cost-grid').innerText(), /\$300\.00/)
   assert.match(await page.locator('.prebooking-cost-grid').innerText(), /\$75\.00/)
   assert.match(await page.locator('.prebooking-share-labels').innerText(), /\$225\.00/)

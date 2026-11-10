@@ -144,7 +144,8 @@ def _estimate_from_payer(practice_id: str, details: dict, context: dict | None, 
     product = benefits.get("plan_details") or {}
     names = product.get("names") or []
     plan = names[0] if len(names) == 1 else ""
-    source = {"billing_provider": {"npi": (context or {}).get("billing_npi"),
+    source = {"prebooking": True,
+              "billing_provider": {"npi": (context or {}).get("billing_npi"),
                                    "tin": (context or {}).get("tin")},
               "rendering_provider": {"npi": (context or {}).get("rendering_npi")},
               "location_id": (context or {}).get("location_id"),
@@ -191,19 +192,22 @@ def _estimate_from_payer(practice_id: str, details: dict, context: dict | None, 
                   and totals[0] == sum(row["allowed_cents"] for row in priced_rows.values())
                   and totals[2] == sum(row["calculation"]["plan_cents"] for row in priced_rows.values())
                   and totals[4] == sum(row["calculation"]["patient_cents"] for row in priced_rows.values()))
-    ready = (benefits.get("active") is True and identity.patient_benefits_bound(comparison)
+    contract_ready = (benefits.get("active") is True and identity.patient_benefits_bound(comparison)
              and network_participation.is_nmct_practice(practice_id)
              and verified and network == "in_network" and bool(plan)
-             and contract_rates and reconciled and price.get("complete") is True)
+             and contract_rates and all(type(row.get("allowed_cents")) is int
+                                        and row["allowed_cents"] >= 0 for row in priced_rows.values()))
+    ready = contract_ready and reconciled and price.get("complete") is True
+    allowed_total = sum(row["allowed_cents"] for row in priced_rows.values()) if contract_ready else None
     priced_lines = []
     for selected in lines:
         row = priced_rows.get(selected["code"]) or {}
         priced_lines.append({"code": selected["code"], "units": selected["units"],
                              "role": visit_estimate.clinical_group(selected["code"]),
                              "service_type": visit_estimate.service_type(selected["code"], {}),
-                             "allowed_cents": row.get("allowed_cents") if ready else None,
+                             "allowed_cents": row.get("allowed_cents") if contract_ready else None,
                              "patient_cents": (row.get("calculation") or {}).get("patient_cents") if ready else None,
-                             "rate_source": row.get("rate_source") if ready else None,
+                             "rate_source": row.get("rate_source") if contract_ready else None,
                              "benefits": _terms(row.get("benefits") or {}),
                              "issues": row.get("issues") or [], "conditions": row.get("conditions") or []})
     issues = list(dict.fromkeys([*result["issues"], *(price.get("service_issues") or []),
@@ -218,12 +222,22 @@ def _estimate_from_payer(practice_id: str, details: dict, context: dict | None, 
         issues.insert(0, "Priced prebooking estimates currently support NMCT contracted plans only.")
     elif network != "in_network":
         issues.insert(0, "An NMCT in-network contract price was not established for this plan.")
-    elif not contract_rates or not reconciled:
-        issues.insert(0, "Complete contract rates and benefit calculations were not available for all included services.")
+    elif not contract_rates:
+        issues.insert(0, "No matching NMCT contract rate was available for every selected service.")
+    elif not reconciled:
+        issues.insert(0, "The insurer did not return enough applicable benefit terms to calculate the patient share.")
+    displayed_terms = _terms(benefits)
+    if (verified and network == "in_network" and identity.patient_benefits_bound(comparison)
+            and len(priced_lines) == 1 and priced_lines[0]["role"] == "visit"):
+        # General STC 30 can contain coverage while office STC 98 carries terms.
+        office_terms = priced_lines[0]["benefits"]
+        for key, value in office_terms.items():
+            if displayed_terms.get(key) is None and value is not None:
+                displayed_terms[key] = value
     return {"network_status": network if verified else "unknown",
             "network_evidence": result.get("network_evidence"), "plan_name": plan or None,
-            "benefits": _terms(benefits), "lines": priced_lines,
-            "allowed_total_cents": totals[0] if ready else None,
+            "benefits": displayed_terms, "lines": priced_lines,
+            "allowed_total_cents": allowed_total,
             "plan_total_cents": totals[2] if ready else None,
             "patient_min_cents": price.get("patient_min_cents") if ready else None,
             "patient_max_cents": price.get("patient_max_cents") if ready else None,
@@ -231,7 +245,7 @@ def _estimate_from_payer(practice_id: str, details: dict, context: dict | None, 
             "issues": issues[:20]}
 
 
-@router.post("/prebooking-estimate/check", response_model=PrebookingEstimateResponse, description="Run an unsaved Stedi 270/271 check for an office-visit planning scenario and optional selected services. Member ID is required. Payer AAA rejection codes return payer_rejected with the card field to correct, before identity matching or pricing. An active member-bound out-of-state Blue plan can use NMCT's signed Texas BlueCard agreement, exact provider/location scope and local contracted rates when the home payer has no clinic estimator connection. Return coverage, payer terms and the matched patient address when available; provide NMCT contract-allowed visit cost, estimated plan share, patient share and per-service rate sources only when member, plan, provider, service, in-network contract rate and totals agree. Unknown values are null. Future-date checks can be unsupported by a payer and never fall back silently to today. No patient, case or appointment is created; recheck after booking.")
+@router.post("/prebooking-estimate/check", response_model=PrebookingEstimateResponse, description="Run an unsaved Stedi 270/271 check for an office-visit planning scenario and optional selected services. Member ID is required. The selected clinic rendering NPI is sent as the requesting provider without an organization name, allowing Stedi to resolve the name from NPPES. Payer AAA rejection codes return payer_rejected with the card field to correct, before identity matching or pricing. An active member-bound out-of-state Blue plan can use NMCT's signed Texas BlueCard agreement, exact provider/location scope and local contracted rates when the home payer has no clinic estimator connection. A signed, scoped NMCT Blue agreement can map a member-bound generic PPO medical label to the clinic plan for contract rate lookup; a specific payer product still needs its own mapping. A hash-verified signed group agreement can stand in for a missing direct profile document link only when its provider, network, plan, location and date exactly match the rate scope. STC 98 office terms are shown when STC 30 reports coverage but no financial terms. Return coverage, payer terms and the matched patient address when available; provide the NMCT contract-allowed visit cost and per-service rate sources when member, plan, provider, service and in-network contract rates match. Estimated patient and plan shares require complete benefit calculations and reconciled totals; they remain null if unknown. Unknown values are null. Future-date checks can be unsupported by a payer and never fall back silently to today. No patient, case or appointment is created; recheck after booking.")
 async def prebooking_estimate_check(value: PrebookingEstimateRequest, request: Request):
     staff = await _staff.require_staff(request)
     if (os.getenv("STEDI_EXECUTION_MODE", "off") != "commercial_pilot"
@@ -255,10 +269,9 @@ async def prebooking_estimate_check(value: PrebookingEstimateRequest, request: R
                     and row.get("status") == "verified"), None)
     if details.get("network_context_id") and not context:
         raise HTTPException(422, "Choose a current clinic provider and location.")
-    provider = {"npi": (context or {}).get("billing_npi") or clinic.get("npi"),
-                "name": (context or {}).get("organization_name") or clinic.get("name")}
-    if not clinic_store.valid_npi(str(provider.get("npi") or "")) or not provider.get("name"):
-        raise HTTPException(503, "The clinic needs a valid saved provider NPI and name before checking coverage.")
+    provider = {"npi": (context or {}).get("rendering_npi") or clinic.get("npi")}
+    if not clinic_store.valid_npi(str(provider.get("npi") or "")):
+        raise HTTPException(503, "The clinic needs a valid saved provider NPI before checking coverage.")
     try:
         payer = await stedi_payers.search_payer("", [value.payer_id], api_key)
     except (httpx.HTTPError, ValueError, TypeError):

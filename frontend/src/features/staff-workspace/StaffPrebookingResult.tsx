@@ -52,6 +52,7 @@ export default function StaffPrebookingResult({ result }: { result: PrebookingEs
     result.estimate_status !== 'needs_review' &&
     result.allowed_total_cents != null &&
     patient != null
+  const allowedCostAvailable = result.allowed_total_cents != null
   const patientPercent =
     priced && result.allowed_total_cents! > 0
       ? Math.min(
@@ -79,17 +80,20 @@ export default function StaffPrebookingResult({ result }: { result: PrebookingEs
     ? result.estimate_status === 'conditional'
       ? 'Conditional estimate'
       : 'Estimate ready'
-    : result.coverage.status === 'inactive_today'
-      ? 'Coverage inactive'
-      : result.coverage.status === 'payer_rejected'
-        ? 'Correct insurance details'
-        : result.coverage.status === 'needs_review'
-          ? 'No coverage answer'
-          : 'Price unavailable'
+    : allowedCostAvailable
+      ? 'Visit cost available'
+      : result.coverage.status === 'inactive_today'
+        ? 'Coverage inactive'
+        : result.coverage.status === 'payer_rejected'
+          ? 'Correct insurance details'
+          : result.coverage.status === 'needs_review'
+            ? 'No coverage answer'
+            : 'Price unavailable'
   const networkSource =
     result.network_evidence?.product_network_source === 'signed_bluecard_agreement'
       ? 'NMCT signed BlueCard agreement'
-      : result.network_evidence?.source === 'clinic_library_contract'
+      : result.network_evidence?.decision === 'in_network_contract_supported' ||
+          result.network_evidence?.source === 'clinic_library_contract'
         ? 'NMCT clinic contract'
         : result.network_evidence?.source === 'payer_participation_message'
           ? 'Payer provider statement'
@@ -137,7 +141,7 @@ export default function StaffPrebookingResult({ result }: { result: PrebookingEs
           )}
         </div>
       </div>
-      {priced ? (
+      {allowedCostAvailable ? (
         <div className="prebooking-cost-grid">
           <div className="prebooking-cost-card">
             <span>Total estimated visit cost</span>
@@ -146,8 +150,12 @@ export default function StaffPrebookingResult({ result }: { result: PrebookingEs
           </div>
           <div className="prebooking-cost-card is-patient">
             <span>Estimated patient share</span>
-            <strong>{patient}</strong>
-            <small>Not an amount to collect before the visit</small>
+            <strong>{patient || 'Unavailable from payer benefits'}</strong>
+            <small>
+              {patient
+                ? 'Not an amount to collect before the visit'
+                : 'The selected service has a clinic rate, but member cost sharing could not be calculated.'}
+            </small>
           </div>
         </div>
       ) : (
@@ -178,7 +186,7 @@ export default function StaffPrebookingResult({ result }: { result: PrebookingEs
       )}
       {result.benefits && (
         <section className="prebooking-benefit-section" aria-labelledby="prebooking-benefit-title">
-          <h3 id="prebooking-benefit-title">General medical benefits</h3>
+          <h3 id="prebooking-benefit-title">Benefits returned for this visit</h3>
           <BenefitTerms terms={result.benefits} />
         </section>
       )}
