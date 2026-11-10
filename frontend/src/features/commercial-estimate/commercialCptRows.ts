@@ -202,7 +202,9 @@ export function commercialCptRows(
         ? `CPT ${preview.code} × 1 · provisional`
         : dsnpScenario
           ? `CPT ${dsnpScenario.scenario_cpt} × 1 · BCBS Texas planning reference`
-          : 'No priced CPTs selected',
+          : zeroOopAlternatives
+            ? 'No CPT selected · priced alternatives shown above'
+            : 'No priced CPTs selected',
       detail: preview
         ? 'Procedure-only scenario; Botox drug and separate E/M are excluded'
         : undefined,

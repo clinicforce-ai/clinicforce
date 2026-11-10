@@ -482,6 +482,8 @@ try {
   assert(metOopTable.includes('$105.11 clinic allowed'))
   assert(metOopTable.includes('$84.40 projected plan share'))
   assert(metOopTable.includes('$50.00 reported copay'))
+  assert(metOopTable.includes('No CPT selected · priced alternatives shown above'))
+  assert(!metOopTable.includes('No priced CPTs selected'))
   assert(metOopTable.includes('Amount to collect at visit'))
   assert(metOopTable.includes('family out-of-pocket remainder is a limit'))
   const { collectionAtVisitRow } = await server.ssrLoadModule(
