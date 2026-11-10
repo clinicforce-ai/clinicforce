@@ -89,6 +89,7 @@ jobs:
           node ../testing/aetna-separate-copay-ui.mjs
           node ../testing/test_ecw_visit_dates.mjs
           node testing/member-benefits-ui.mjs
+          node testing/uhc-hmopos-pending-ui.mjs
           node testing/uhc-saved-projection-ui.mjs
           node ../testing/tic-options-ui.mjs
           node ../testing/uhc-biopsy-target-ui.mjs

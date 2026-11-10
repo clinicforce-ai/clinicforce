@@ -38,6 +38,16 @@ def test_stedi_secondary_row_and_ecw_order_establish_primary_plan():
         'evidence_paths': ['plans[0].benefits.otherOrAdditionalPayer[0]']}
 
 
+def test_mbi_only_other_payer_row_does_not_create_secondary_medical_policy():
+    raw = response()
+    raw['plans'][0]['benefits']['otherOrAdditionalPayer'] = [
+        {'coverageLevel': 'INDIVIDUAL', 'additionalInformation': {'mbi': '1EG4TE5MK73'}}]
+    assert commercial.normalize_stedi_271(raw, '98', True)['has_secondary'] is False
+    raw['plans'][0]['benefits']['otherOrAdditionalPayer'][0]['relatedEntities'] = [
+        {'type': 'SECONDARY_PAYER', 'name': {'organization': 'MEDICARE'}}]
+    assert commercial.normalize_stedi_271(raw, '98', True)['has_secondary'] is True
+
+
 def test_primary_order_rejects_wrong_secondary_or_third_policy():
     raw = response()
     coverage = {'coverage_id': 'blue', 'active_coverages': 2}

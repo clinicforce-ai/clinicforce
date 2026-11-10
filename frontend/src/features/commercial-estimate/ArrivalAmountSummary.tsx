@@ -174,6 +174,9 @@ export default function ArrivalAmountSummary({
       ? null
       : Math.max(0, priorDateAetnaCopay - (result.encounter_summary?.payments_verified_cents || 0))
   const pendingCignaCopay = pendingCignaOfficeCopay(result, model)
+  const pendingUhcHmoPosCopay = partialCopay != null &&
+    /\bhmopos\b/i.test(result.plan_details?.stedi?.names?.[0] || '') &&
+    result.billing_protection?.status !== 'not_qmb'
   const bluecardDeductible =
     !model.cash && !model.previousEstimate ? bluecardOfficeDeductibleScenario(result) : null
   const needsAction = model.amountText === 'Insured amount unavailable'
@@ -210,7 +213,9 @@ export default function ArrivalAmountSummary({
                               pendingBluecardCopay != null
                             ? 'Amount to collect at visit · pending verification'
                             : partialCopay != null
-                              ? referenceOnly
+                              ? pendingUhcHmoPosCopay
+                                ? 'Amount to collect at visit · pending Medicare protection check'
+                              : referenceOnly
                                 ? 'Office-only reference · collection pending'
                                 : 'Suggested amount to collect at visit'
                               : cardPlanningCopay != null
@@ -267,7 +272,9 @@ export default function ArrivalAmountSummary({
                               : pendingCignaCopay != null
                                 ? `Pending · ${money(pendingCignaCopay)}`
                                 : partialCopay != null
-                                  ? money(partialCopay)
+                                  ? pendingUhcHmoPosCopay
+                                    ? `Pending · ${money(partialCopay)}`
+                                    : money(partialCopay)
                                   : cardPlanningCopay != null
                                     ? money(cardPlanningCopay)
                                     : priorDateAetnaCopay != null
@@ -365,7 +372,9 @@ export default function ArrivalAmountSummary({
         </p>
       ) : partialCopay != null ? (
         <p>
-          {referenceOnly
+          {pendingUhcHmoPosCopay
+            ? 'Stedi reported this specialist office copay. Confirm QMB protection and prior payments before charging; the UnitedHealthcare allowance and final claim share remain unknown.'
+            : referenceOnly
             ? 'Planning amount for this visit date; confirm payer date and Medicare cost-sharing protection before collection.'
             : additionalServicesPending
               ? 'Office copay reported; other service costs pending.'

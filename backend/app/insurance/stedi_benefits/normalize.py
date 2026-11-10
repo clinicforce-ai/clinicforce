@@ -191,7 +191,16 @@ def normalize_stedi_271(payload: dict[str, Any], service_type_code: str, provide
             coinsurance_percent = None
     except Exception:
         coinsurance_percent = None
-    other_active_coverage = other_active_coverage or any(row.get('code') == 'R' for row in relevant)
+    # Some payers put only the member's MBI in an R row. That identifier does
+    # not identify another active medical policy or establish payer order.
+    other_active_coverage = other_active_coverage or any(
+        row.get('code') == 'R' and not (
+            isinstance(row.get('additionalInformation'), dict)
+            and set(row['additionalInformation']) == {'mbi'}
+            and not any(row.get(field) for field in (
+                'relatedEntities', 'serviceTypeCodes', 'messages', 'dates',
+                'benefitAmount')))
+        for row in relevant)
     qmb_ids = [row['evidence_path'] for row in entries if any(
         re.search(r'\b(?:qualified medicare beneficiary|QMB)\b', note, re.I)
         and not re.search(r'\b(?:not|no|non[- ]?)\s+(?:a\s+)?(?:qualified medicare beneficiary|QMB)\b', note, re.I)
