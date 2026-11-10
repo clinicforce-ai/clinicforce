@@ -3,6 +3,7 @@
 from copy import deepcopy
 
 from app.insurance import commercial
+from app.api.routers import commercial_estimator as api
 from app.insurance.stedi_benefits.payer_order import primary_secondary_order, reported_medicare_part_b_secondary
 from app.insurance.identity import compare, patient_benefits_bound
 
@@ -67,8 +68,11 @@ def test_part_b_report_supports_zero_advance_with_three_policies_and_dependent()
                 'patient_birth_date': '1989-03-23', 'subscriber_first': 'Robin',
                 'subscriber_last': 'Example', 'relationship': '18'}
     comparison = compare(raw, coverage)
-    assert comparison['reconciliation_rule'] == 'payer_matched_patient'
-    assert patient_benefits_bound(comparison)
+    assert comparison['status'] == 'review'
+    benefits = api._previsit_benefits(raw, coverage, DAY, ['98', '30'], source=source())
+    assert benefits['identity']['reconciliation_rule'] == 'payer_matched_patient'
+    assert patient_benefits_bound(benefits['identity'])
+    assert benefits['medicare_part_b_secondary']['status'] == 'reported'
     assert primary_secondary_order(raw, coverage, source(), DAY) is None
     assert reported_medicare_part_b_secondary(raw, DAY) == {
         'status': 'reported', 'payer': 'Original Medicare Part B',

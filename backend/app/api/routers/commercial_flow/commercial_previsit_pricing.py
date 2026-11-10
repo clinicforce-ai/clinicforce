@@ -234,11 +234,17 @@ def _previsit_benefits(payload: dict, coverage: dict, service_date: str | None =
                 'recorded_differences': recorded['policy_differences']}
             benefits['normalization_notes'].append(
                 'The payer linked this patient to the recorded member policy as a dependent. Subscriber details were matched automatically; eCW was not changed.')
-    comparison = _api.insurance_identity.compare(payload, coverage)
+    part_b_report = reported_medicare_part_b_secondary(payload, service_date or '') if payload else None
+    # Only this dated Part B case may bind a directly matched dependent when
+    # eCW has other active policies; positive collection stays separately gated.
+    comparison_coverage = ({**coverage, 'active_coverages': 1}
+        if part_b_report and coverage.get('active_coverages', 0) > 1 and coverage.get('coverage_id')
+        else coverage)
+    comparison = _api.insurance_identity.compare(payload, comparison_coverage)
     benefits['identity'] = comparison
     if (payload and patient_benefits_bound(comparison) and
-            (reported := reported_medicare_part_b_secondary(payload, service_date or ''))):
-        benefits['medicare_part_b_secondary'] = reported
+            part_b_report):
+        benefits['medicare_part_b_secondary'] = part_b_report
     if (payload and source and comparison['status'] != 'review'
             and (order := primary_secondary_order(payload, coverage, source, service_date or ''))):
         benefits['primary_secondary_order'] = order
