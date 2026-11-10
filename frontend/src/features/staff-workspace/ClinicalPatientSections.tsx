@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react'
+import { useEffect, useRef, type ReactNode } from 'react'
 import { ChevronLeft, ChevronRight } from 'lucide-react'
 import type { ClinicalPatient } from '../../services/api/staff-patients'
 
@@ -20,12 +20,18 @@ const emptyLabels: Record<Period, string> = {
 export default function ClinicalPatientSections({
   groups,
   renderGroup,
+  selected,
+  onSelect,
+  page,
+  onPageChange,
 }: {
   groups: Record<Period, DateGroup[]>
   renderGroup: (day: string, patients: ClinicalPatient[]) => ReactNode
+  selected: Exclude<Period, 'today'> | null
+  onSelect: (period: Exclude<Period, 'today'> | null) => void
+  page: number
+  onPageChange: (page: number) => void
 }) {
-  const [selected, setSelected] = useState<Period | null>(null)
-  const [page, setPage] = useState(1)
   const selectedHeading = useRef<HTMLHeadingElement>(null)
   const returnTo = useRef<Period | null>(null)
   useEffect(() => {
@@ -52,8 +58,8 @@ export default function ClinicalPatientSections({
               key={period}
               id={`clinical-${period}-button`}
               onClick={() => {
-                setSelected(period)
-                setPage(1)
+                onSelect(period)
+                onPageChange(1)
               }}
             >
               {labels[period]}
@@ -74,7 +80,7 @@ export default function ClinicalPatientSections({
         className="staff-text-button clinical-back-to-periods"
         onClick={() => {
           returnTo.current = selected
-          setSelected(null)
+          onSelect(null)
         }}
       >
         <ChevronLeft size={17} aria-hidden="true" /> Today’s patients
@@ -101,7 +107,7 @@ export default function ClinicalPatientSections({
             <button
               aria-label="Previous visit date page"
               disabled={currentPage === 1}
-              onClick={() => setPage(currentPage - 1)}
+              onClick={() => onPageChange(currentPage - 1)}
             >
               <ChevronLeft size={18} aria-hidden="true" />
             </button>
@@ -110,7 +116,7 @@ export default function ClinicalPatientSections({
                 key={number}
                 aria-label={`Visit date page ${number}`}
                 aria-current={number === currentPage ? 'page' : undefined}
-                onClick={() => setPage(number)}
+                onClick={() => onPageChange(number)}
               >
                 {number}
               </button>
@@ -118,7 +124,7 @@ export default function ClinicalPatientSections({
             <button
               aria-label="Next visit date page"
               disabled={currentPage === pageCount}
-              onClick={() => setPage(currentPage + 1)}
+              onClick={() => onPageChange(currentPage + 1)}
             >
               <ChevronRight size={18} aria-hidden="true" />
             </button>

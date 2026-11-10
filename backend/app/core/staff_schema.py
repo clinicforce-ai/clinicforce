@@ -28,6 +28,9 @@ def initialize(connection) -> None:
     connection.execute("ALTER TABLE staff_patients ADD COLUMN IF NOT EXISTS ecw_patient_id TEXT")
     connection.execute("ALTER TABLE staff_patients ADD COLUMN IF NOT EXISTS ecw_account_number TEXT")
     connection.execute("ALTER TABLE staff_patients ADD COLUMN IF NOT EXISTS insurance_identities JSONB NOT NULL DEFAULT '{}'")
+    connection.execute("ALTER TABLE staff_patients ADD COLUMN IF NOT EXISTS ecw_visit_cache JSONB")
+    connection.execute("ALTER TABLE staff_patients ADD COLUMN IF NOT EXISTS ecw_visit_cache_patient_id TEXT")
+    connection.execute("ALTER TABLE staff_patients ADD COLUMN IF NOT EXISTS ecw_visit_cached_at TEXT")
     connection.execute("""CREATE TABLE IF NOT EXISTS staff_intakes (
         id TEXT PRIMARY KEY, practice_id TEXT NOT NULL, created_by TEXT NOT NULL REFERENCES staff_members(id),
         patient_id TEXT REFERENCES staff_patients(id), status TEXT NOT NULL,

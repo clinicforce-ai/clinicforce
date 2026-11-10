@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 
 from fastapi import HTTPException, Request
 from fastapi.concurrency import run_in_threadpool
@@ -15,9 +16,15 @@ from app.api.routers import staff as _staff
 
 router = _staff.router
 NO_STORE = _staff.NO_STORE
+logger = logging.getLogger(__name__)
 
 @router.get('/patients/{patient_id}/appointments')
 async def patient_appointments(patient_id: str, request: Request, include_ecw: bool = False):
+    """Read saved visits and optional verified eCW history for one practice patient.
+
+    A complete eCW read refreshes the minimal date-list cache. An incomplete read
+    preserves its previous snapshot and returns saved visits with incomplete status.
+    """
     from app.insurance import store
     from app.api.routers.commercial_estimator import _ecw_practice_config
     actor = await _staff.require_staff(request)
@@ -65,6 +72,12 @@ async def patient_appointments(patient_id: str, request: Request, include_ecw: b
                                    'from_ecw': True, 'checks': previous.get('checks', [])}
                 account_number = history.get('ecw_account_number') or account_number
                 ecw_status = 'complete'
+                try:
+                    await run_in_threadpool(staff_store.save_ecw_visit_cache, patient_id,
+                                            actor['practice_id'], ecw_patient_id,
+                                            [item for item in visits.values() if item.get('from_ecw')])
+                except Exception:
+                    logger.warning('Could not update practice-scoped eCW visit-date cache')
             except (ecw_backend.EcwBackendError, asyncio.TimeoutError):
                 # An optional history refresh must not hide saved recommendations.
                 ecw_status = 'incomplete'

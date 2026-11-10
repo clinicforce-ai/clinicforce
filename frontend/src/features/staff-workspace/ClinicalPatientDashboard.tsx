@@ -12,7 +12,7 @@ import {
 
 import ClinicalPatientDetail from './ClinicalPatientDetail'
 import ClinicalPatientSections from './ClinicalPatientSections'
-import { ecwVisit, localVisitDay } from './ecwVisitDates'
+import { ecwVisitDays, localVisitDay } from './ecwVisitDates'
 import { name, accountLabel } from './clinical-patient-labels'
 
 interface Props {
@@ -23,7 +23,8 @@ interface Props {
   onAddCard: () => void
   onPullEcw: () => void
 }
-type VisitResult = { day: string | null; time: number | null }
+type VisitResult = { day: string; time: number | null }
+const CACHE_AGE_MS = 15 * 60_000
 export default function ClinicalPatientDashboard({
   initialPatientId,
   onOpenIntake,
@@ -36,15 +37,21 @@ export default function ClinicalPatientDashboard({
   const [query, setQuery] = useState('')
   const [cardStatus, setCardStatus] = useState('')
   const [selected, setSelected] = useState<ClinicalPatient | null>(null)
+  const [selectedDay, setSelectedDay] = useState<string | null>(null)
   const [busy, setBusy] = useState(true)
   const [error, setError] = useState('')
   const [deleting, setDeleting] = useState(false)
   const [cleanupPending, setCleanupPending] = useState(false)
   const [notice, setNotice] = useState('')
-  const [visitResults, setVisitResults] = useState<Record<string, VisitResult>>({})
-  const [visitProgress, setVisitProgress] = useState({ done: 0, total: 0 })
-  const visitResultsRef = useRef<Record<string, VisitResult>>({})
+  const [visitResults, setVisitResults] = useState<Record<string, VisitResult[]>>({})
+  const [visitProgress, setVisitProgress] = useState({ done: 0, total: 0, failed: 0 })
+  const [visitsReady, setVisitsReady] = useState(false)
+  const visitResultsRef = useRef<Record<string, VisitResult[]>>({})
   const visitRun = useRef(0)
+  const forceVisitRefresh = useRef(false)
+  const [period, setPeriod] = useState<'upcoming' | 'past' | null>(null)
+  const [datePage, setDatePage] = useState(1)
+  const [expandedDay, setExpandedDay] = useState<string | null>(null)
   const heading = useRef<HTMLHeadingElement>(null)
   useEffect(() => {
     heading.current?.focus()
@@ -55,11 +62,13 @@ export default function ClinicalPatientDashboard({
       .then((result) => {
         if (active) {
           setDashboard(result)
-          if (initialPatientId)
+          if (initialPatientId) {
+            setSelectedDay(null)
             setSelected(
               result.patients.find((patient) => patient.clinic_patient_id === initialPatientId) ||
                 null,
             )
+          }
         }
       })
       .catch((caught) => {
@@ -75,29 +84,59 @@ export default function ClinicalPatientDashboard({
   }, [initialPatientId])
   useEffect(() => {
     if (!dashboard) return
-    const linked = dashboard.patients.filter(
-      (patient) =>
-        patient.ecw_linked && patient.clinic_patient_id && !visitResultsRef.current[patient.id],
+    const results = { ...visitResultsRef.current }
+    const now = Date.now()
+    const linked = dashboard.patients.filter((patient) => {
+      if (!patient.ecw_linked || !patient.clinic_patient_id) {
+        delete results[patient.id]
+        return false
+      }
+      if (patient.ecw_visit_cache && patient.ecw_visit_cached_at) {
+        results[patient.id] = ecwVisitDays({
+          ecw_status: 'complete',
+          appointments: patient.ecw_visit_cache.map((visit) => ({ ...visit, from_ecw: true })),
+        })
+      } else delete results[patient.id]
+      return (
+        forceVisitRefresh.current ||
+        !patient.ecw_visit_cached_at ||
+        !Number.isFinite(Date.parse(patient.ecw_visit_cached_at)) ||
+        now - Date.parse(patient.ecw_visit_cached_at) >= CACHE_AGE_MS
+      )
+    })
+    forceVisitRefresh.current = false
+    visitResultsRef.current = results
+    setVisitResults(results)
+    setVisitsReady(
+      linked.length === 0 ||
+        dashboard.patients.every(
+          (patient) =>
+            !patient.ecw_linked || Boolean(patient.ecw_visit_cache && patient.ecw_visit_cached_at),
+        ),
     )
-    setVisitProgress({ done: 0, total: linked.length })
+    setVisitProgress({ done: 0, total: linked.length, failed: 0 })
     const run = ++visitRun.current
     let next = 0
     let done = 0
+    let failed = 0
     async function loadNext() {
       while (run === visitRun.current && next < linked.length) {
         const patient = linked[next++]
-        let result: VisitResult = { day: null, time: null }
         try {
           const history = await getPatientAppointments(patient.clinic_patient_id!, true)
-          result = ecwVisit(history, localVisitDay(new Date()))
+          if (history.ecw_status !== 'complete') throw new Error('eCW history incomplete')
+          results[patient.id] = ecwVisitDays(history)
         } catch {
-          // Keep the patient visible when the appointment read fails.
+          failed += 1
         }
         if (run !== visitRun.current) return
-        visitResultsRef.current[patient.id] = result
-        setVisitResults((current) => ({ ...current, [patient.id]: result }))
         done += 1
-        setVisitProgress({ done, total: linked.length })
+        setVisitProgress({ done, total: linked.length, failed })
+        if (done === linked.length) {
+          visitResultsRef.current = results
+          setVisitResults({ ...results })
+          setVisitsReady(true)
+        }
       }
     }
     void Promise.all(Array.from({ length: Math.min(3, linked.length) }, () => loadNext()))
@@ -112,8 +151,7 @@ export default function ClinicalPatientDashboard({
       const updated = await getClinicalPatients()
       if (reloadVisits) {
         visitRun.current += 1
-        visitResultsRef.current = {}
-        setVisitResults({})
+        forceVisitRefresh.current = true
       }
       setDashboard(updated)
     } catch (caught) {
@@ -144,6 +182,7 @@ export default function ClinicalPatientDashboard({
         )
       } else {
         setSelected(null)
+        setSelectedDay(null)
         setCleanupPending(false)
         setNotice('Patient and linked insurance checks deleted from this clinic.')
         await refresh()
@@ -179,16 +218,23 @@ export default function ClinicalPatientDashboard({
           .includes(query.trim().toLowerCase()),
     ) || []
   const groups = new Map<string, ClinicalPatient[]>()
+  const groupTimes = new Map<string, number | null>()
   for (const patient of patients) {
-    const day = visitResults[patient.id]?.day || 'undated'
-    const group = groups.get(day)
-    if (group) group.push(patient)
-    else groups.set(day, [patient])
+    const visits = visitResults[patient.id]?.length
+      ? visitResults[patient.id]
+      : [{ day: 'undated', time: null }]
+    for (const visit of visits) {
+      const group = groups.get(visit.day)
+      if (group) group.push(patient)
+      else groups.set(visit.day, [patient])
+      groupTimes.set(`${patient.id}:${visit.day}`, visit.time)
+    }
   }
-  for (const group of groups.values())
+  for (const [day, group] of groups)
     group.sort(
       (first, second) =>
-        (visitResults[first.id]?.time ?? Infinity) - (visitResults[second.id]?.time ?? Infinity) ||
+        (groupTimes.get(`${first.id}:${day}`) ?? Infinity) -
+          (groupTimes.get(`${second.id}:${day}`) ?? Infinity) ||
         name(first).localeCompare(name(second)),
     )
   const today = localVisitDay(new Date())
@@ -208,8 +254,13 @@ export default function ClinicalPatientDashboard({
       year: 'numeric',
     })
   const renderGroup = (day: string, group: ClinicalPatient[]) => (
-    <details className="clinical-visit-group" key={day} open={day === today}>
-      <summary>
+    <details className="clinical-visit-group" key={day} open={day === today || day === expandedDay}>
+      <summary
+        onClick={(event) => {
+          event.preventDefault()
+          setExpandedDay((current) => (current === day ? null : day))
+        }}
+      >
         <span className="clinical-visit-date">
           {day === 'undated' ? 'Appointment date not available' : formatDay(day)}
         </span>
@@ -224,6 +275,7 @@ export default function ClinicalPatientDashboard({
               className="clinical-patient-open"
               onClick={() => {
                 setSelected(patient)
+                setSelectedDay(day)
                 setError('')
                 setNotice('')
                 setCleanupPending(false)
@@ -256,6 +308,11 @@ export default function ClinicalPatientDashboard({
     return (
       <ClinicalPatientDetail
         patient={selected}
+        returnLabel={
+          selectedDay && selectedDay !== 'undated'
+            ? `Back to ${formatDay(selectedDay)}`
+            : 'Clinical patients'
+        }
         heading={heading}
         deleting={deleting}
         cleanupPending={cleanupPending}
@@ -264,7 +321,6 @@ export default function ClinicalPatientDashboard({
           setSelected(null)
           setError('')
           setCleanupPending(false)
-          void refresh(false)
         }}
         onDelete={() => void deletePatient()}
         onOpenIntake={onOpenIntake}
@@ -323,6 +379,7 @@ export default function ClinicalPatientDashboard({
             value={query}
             onChange={(event) => {
               setQuery(event.target.value)
+              setDatePage(1)
             }}
           />
         </label>
@@ -332,6 +389,7 @@ export default function ClinicalPatientDashboard({
             value={cardStatus}
             onChange={(event) => {
               setCardStatus(event.target.value)
+              setDatePage(1)
             }}
           >
             <option value="">All card statuses</option>
@@ -368,21 +426,36 @@ export default function ClinicalPatientDashboard({
                 : 'Scan a card, request a patient upload, or open a patient’s ClinicForce QR to get started.'}
             </p>
           </div>
+        ) : !visitsReady ? (
+          <p className="staff-small staff-muted" role="status">
+            Loading appointment dates for {visitProgress.total} patients… {visitProgress.done}{' '}
+            checked.
+          </p>
         ) : (
           <div className="clinical-patient-list">
             <p className="staff-small staff-muted clinical-visit-note">
-              Each patient appears once: today, on their next appointment date, or on their most
-              recent past visit date. Refresh patients to check for newly booked appointments.
+              Each appointment date links to the same patient profile. Refresh patients to check for
+              newly booked appointments.
             </p>
             {visitProgress.total > 0 && (
               <p className="staff-small staff-muted" role="status">
                 {visitProgress.done < visitProgress.total
-                  ? `Checking eCW visits: ${visitProgress.done} of ${visitProgress.total} patient histories loaded…`
+                  ? `Checking eCW visits: ${visitProgress.done} of ${visitProgress.total} patient histories loaded… Dates may change when the refresh finishes.`
                   : `eCW visit checks finished for ${visitProgress.total} patients.`}
               </p>
             )}
+            {visitProgress.failed > 0 && visitProgress.done === visitProgress.total && (
+              <p className="staff-small staff-muted" role="alert">
+                {visitProgress.failed} patient{' '}
+                {visitProgress.failed === 1 ? 'history was' : 'histories were'} unavailable. Some
+                dates may be missing; select Refresh patients to retry.
+              </p>
+            )}
             <ClinicalPatientSections
-              key={JSON.stringify([query, cardStatus])}
+              selected={period}
+              onSelect={setPeriod}
+              page={datePage}
+              onPageChange={setDatePage}
               groups={{
                 today: todayGroup.length ? [[today, todayGroup]] : [],
                 upcoming: upcomingGroups,
