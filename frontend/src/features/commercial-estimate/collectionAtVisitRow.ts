@@ -213,7 +213,8 @@ export function collectionAtVisitRow(
     priorDateAetnaCopay == null ? null : Math.max(0, priorDateAetnaCopay - aetnaPaid)
   const botoxPreview = !model.cash && !model.previousEstimate ? result.botox_preview : null
   const pendingCignaCopay = pendingCignaOfficeCopay(result, model)
-  const pendingUhcHmoPosCopay = partialOfficeCopay != null &&
+  const pendingUhcHmoPosCopay =
+    partialOfficeCopay != null &&
     /\bhmopos\b/i.test(result.plan_details?.stedi?.names?.[0] || '') &&
     result.billing_protection?.status !== 'not_qmb'
   const diagnosticCopayReference =
@@ -261,23 +262,23 @@ export function collectionAtVisitRow(
                     ? 'Diagnostic copay · collection pending'
                     : pendingUhcHmoPosCopay
                       ? 'Amount to collect at visit · pending Medicare protection check'
-                    : (partialOfficeCopay != null || cardPlanningCopay != null) &&
-                        feeProxyCheckin == null
-                      ? 'Suggested amount to collect at visit'
-                      : ((cignaFeeProxy &&
-                            !['claim_after_service', 'office_copay'].includes(
+                      : (partialOfficeCopay != null || cardPlanningCopay != null) &&
+                          feeProxyCheckin == null
+                        ? 'Suggested amount to collect at visit'
+                        : ((cignaFeeProxy &&
+                              !['claim_after_service', 'office_copay'].includes(
+                                result.collection_guidance?.basis || '',
+                              )) ||
+                              feeProxyCheckin != null ||
+                              aetnaPlanning != null ||
+                              aetnaCopayPlanning != null) &&
+                            !['bcbstx_proxy_advance', 'qmb_protection'].includes(
                               result.collection_guidance?.basis || '',
-                            )) ||
-                            feeProxyCheckin != null ||
-                            aetnaPlanning != null ||
-                            aetnaCopayPlanning != null) &&
-                          !['bcbstx_proxy_advance', 'qmb_protection'].includes(
-                            result.collection_guidance?.basis || '',
-                          )
-                        ? aetnaPolicyPending
-                          ? 'Amount to collect at visit · pending policy approval'
-                          : 'Planned amount to collect at visit'
-                        : 'Amount to collect at visit',
+                            )
+                          ? aetnaPolicyPending
+                            ? 'Amount to collect at visit · pending policy approval'
+                            : 'Planned amount to collect at visit'
+                          : 'Amount to collect at visit',
     value: dsnpOffice
       ? `${money(0)} at check-in · ${money(feeProxy!.patient_share_cents)} pre-Medicaid planning share`
       : combinedPlan
