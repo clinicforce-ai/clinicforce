@@ -201,6 +201,14 @@ export function collectionAtVisitRow(
   const aetnaPolicyPending =
     aetnaCopayPlanning != null &&
     result.collection_guidance?.positive_advance_policy_missing === true
+  const aetnaOtherCoverage =
+    aetnaCopayPlanning != null &&
+    (result.benefits?.has_secondary === true ||
+      result.recovery?.reason_code === 'multiple_active_policies')
+  const medicareSecondary = /^medicare\b/i.test(
+    result.benefits?.primary_secondary_order?.secondary_payer || '',
+  )
+  const payerOrderVerified = result.benefits?.primary_secondary_order?.status === 'verified'
   const priorDateAetnaBalance =
     priorDateAetnaCopay == null ? null : Math.max(0, priorDateAetnaCopay - aetnaPaid)
   const botoxPreview = !model.cash && !model.previousEstimate ? result.botox_preview : null
@@ -234,31 +242,37 @@ export function collectionAtVisitRow(
         ? biopsyOfficePending
           ? 'Provisional biopsy target · office share pending'
           : 'Provisional collection target · confirmation pending'
-        : pendingAetnaCopay != null || priorDateAetnaBalance != null || pendingBluecardCopay != null
-          ? 'Amount to collect at visit · pending verification'
-          : cignaCard
+        : aetnaOtherCoverage
+          ? payerOrderVerified
+            ? 'Amount to collect at visit · pending secondary claim'
+            : 'Amount to collect at visit · pending payer order'
+          : pendingAetnaCopay != null ||
+              priorDateAetnaBalance != null ||
+              pendingBluecardCopay != null
             ? 'Amount to collect at visit · pending verification'
-            : botoxPreview
-              ? 'Planned amount to collect at visit'
-              : diagnosticCopayReference != null
-                ? 'Diagnostic copay · collection pending'
-                : (partialOfficeCopay != null || cardPlanningCopay != null) &&
-                    feeProxyCheckin == null
-                  ? 'Suggested amount to collect at visit'
-                  : ((cignaFeeProxy &&
-                        !['claim_after_service', 'office_copay'].includes(
+            : cignaCard
+              ? 'Amount to collect at visit · pending verification'
+              : botoxPreview
+                ? 'Planned amount to collect at visit'
+                : diagnosticCopayReference != null
+                  ? 'Diagnostic copay · collection pending'
+                  : (partialOfficeCopay != null || cardPlanningCopay != null) &&
+                      feeProxyCheckin == null
+                    ? 'Suggested amount to collect at visit'
+                    : ((cignaFeeProxy &&
+                          !['claim_after_service', 'office_copay'].includes(
+                            result.collection_guidance?.basis || '',
+                          )) ||
+                          feeProxyCheckin != null ||
+                          aetnaPlanning != null ||
+                          aetnaCopayPlanning != null) &&
+                        !['bcbstx_proxy_advance', 'qmb_protection'].includes(
                           result.collection_guidance?.basis || '',
-                        )) ||
-                        feeProxyCheckin != null ||
-                        aetnaPlanning != null ||
-                        aetnaCopayPlanning != null) &&
-                      !['bcbstx_proxy_advance', 'qmb_protection'].includes(
-                        result.collection_guidance?.basis || '',
-                      )
-                    ? aetnaPolicyPending
-                      ? 'Amount to collect at visit · pending policy approval'
-                      : 'Planned amount to collect at visit'
-                    : 'Amount to collect at visit',
+                        )
+                      ? aetnaPolicyPending
+                        ? 'Amount to collect at visit · pending policy approval'
+                        : 'Planned amount to collect at visit'
+                      : 'Amount to collect at visit',
     value: dsnpOffice
       ? `${money(0)} at check-in · ${money(feeProxy!.patient_share_cents)} pre-Medicaid planning share`
       : combinedPlan
@@ -295,9 +309,11 @@ export function collectionAtVisitRow(
                               : aetnaPlanning
                                 ? `${money(aetnaBalance!)} planning estimate`
                                 : aetnaCopayPlanning != null
-                                  ? aetnaPolicyPending
-                                    ? `Pending · ${money(officeBalance!)} specialist office copay`
-                                    : `${money(officeBalance!)} planning estimate`
+                                  ? aetnaOtherCoverage
+                                    ? `Pending · ${money(officeBalance!)} Aetna office copay before secondary processing`
+                                    : aetnaPolicyPending
+                                      ? `Pending · ${money(officeBalance!)} specialist office copay`
+                                      : `${money(officeBalance!)} planning estimate`
                                   : pendingBluecardCopay != null
                                     ? `Pending · ${money(pendingBluecardCopay)} office copay if verified`
                                     : officeReferenceCopay != null
@@ -309,7 +325,9 @@ export function collectionAtVisitRow(
                                           : pendingAetnaCopay != null
                                             ? `Pending · ${money(pendingAetnaCopay)} office copay if verified`
                                             : priorDateAetnaBalance != null
-                                              ? money(priorDateAetnaBalance)
+                                              ? result.benefits?.has_secondary
+                                                ? `Pending · ${money(priorDateAetnaBalance)} Aetna office copay reference`
+                                                : money(priorDateAetnaBalance)
                                               : cardPlanningCopay != null
                                                 ? `${money(cardPlanningCopay)} office-only card suggestion`
                                                 : pendingCignaCopay != null
@@ -350,11 +368,13 @@ export function collectionAtVisitRow(
                             : aetnaPlanning
                               ? `min((${money(aetnaPlanning.copay_cents / 2)} per test × 2) + ${money(aetnaPlanning.deductible_cents)} deductible + ${money(aetnaPlanning.coinsurance_cents)} coinsurance, ${money(aetnaPlanning.estimated_allowed_cents)} Aetna fee reference, ${money(aetnaPlanning.oop_remaining_cents)} remaining out-of-pocket) = ${money(aetnaPlanning.patient_share_cents)}${aetnaPaid ? `; less ${money(aetnaPaid)} already paid = ${money(aetnaBalance!)}` : ' before any prior payment'}. ${aetnaPlanning.message}`
                               : aetnaCopayPlanning != null
-                                ? `${
-                                    aetnaSeparateCopayCap != null
-                                      ? `min(${money(aetnaOfficeTerms?.copay_cents || 0)} specialist office copay, ${money(aetnaSeparateCopayCap)} separate copay maximum remaining) = ${money(aetnaCopayPlanning)}. The general out-of-pocket balance does not reduce this separate copay.`
-                                      : `${money(aetnaCopayPlanning)} specialist office copay + ${money(0)} deductible + 0% coinsurance = ${money(aetnaCopayPlanning)}.`
-                                  }${aetnaPaid ? ` Less ${money(aetnaPaid)} already paid = ${money(officeBalance!)}.` : ' Confirm prior payments.'} ${aetnaPolicyPending ? 'Collection is pending clinic policy approval.' : 'Planning amount.'} Confirm the final allowed charge before collection.`
+                                ? aetnaOtherCoverage
+                                  ? `${money(aetnaCopayPlanning)} Aetna specialist office copay + ${money(0)} office deductible + 0% office coinsurance = ${money(aetnaCopayPlanning)} before secondary processing. ${medicareSecondary ? 'Medicare is reported as secondary; send the primary claim, then Medicare, and collect only any balance after its remittance.' : 'Confirm payer order and the secondary benefit before collecting.'}`
+                                  : `${
+                                      aetnaSeparateCopayCap != null
+                                        ? `min(${money(aetnaOfficeTerms?.copay_cents || 0)} specialist office copay, ${money(aetnaSeparateCopayCap)} separate copay maximum remaining) = ${money(aetnaCopayPlanning)}. The general out-of-pocket balance does not reduce this separate copay.`
+                                        : `${money(aetnaCopayPlanning)} specialist office copay + ${money(0)} deductible + 0% coinsurance = ${money(aetnaCopayPlanning)}.`
+                                    }${aetnaPaid ? ` Less ${money(aetnaPaid)} already paid = ${money(officeBalance!)}.` : ' Confirm prior payments.'} ${aetnaPolicyPending ? 'Collection is pending clinic policy approval.' : 'Planning amount.'} Confirm the final allowed charge before collection.`
                                 : pendingBluecardCopay != null
                                   ? 'Payer-reported BlueCard specialist copay for one CPT 99204 office visit, less recorded payments. Confirm member plan, provider participation, home-plan authorization, and collection policy before charging.'
                                   : officeReferenceCopay != null
@@ -366,7 +386,7 @@ export function collectionAtVisitRow(
                                         : pendingAetnaCopay != null
                                           ? 'Stedi reported one specialist office copay for CPT 99204. Confirm the remaining deductible, out-of-pocket balance, conditional benefit, prior payments, and clinic collection policy before charging. Full patient share remains unresolved.'
                                           : priorDateAetnaBalance != null
-                                            ? 'Payer-reported specialist office copay after recorded payments. The saved response covers another date; confirm coverage, network, billing protections and clinic collection policy before charging. This is not an authorized collection decision.'
+                                            ? `Payer-reported specialist office copay after recorded payments. The saved response covers another date; confirm visit-date coverage and payer order. ${medicareSecondary ? 'Medicare is reported as secondary; submit the primary and Medicare claims, then collect only any balance after Medicare remittance.' : 'Confirm the secondary benefit and clinic collection policy before charging.'} This is not an authorized collection decision.`
                                             : cardPlanningCopay != null
                                               ? 'Printed specialist copay for one office visit; verify before charging. Planned imaging and final payer share are unresolved.'
                                               : pendingCignaCopay != null

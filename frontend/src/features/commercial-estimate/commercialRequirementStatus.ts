@@ -2,6 +2,7 @@ import type { PrevisitEstimate } from '../../services/api/commercial-estimator'
 import type { CostBreakdownRow } from '../insurance-estimate/CostBreakdownTable'
 import { requirementForLine } from './requirementForLine'
 import { aetnaReferenceRequirement } from './aetnaReferenceRequirements'
+import { patientBenefitsBound } from './identityBinding'
 
 export function requirementStatus(result: PrevisitEstimate, kind: 'referral' | 'authorization') {
   const lines = result.price_range?.mode === 'services' ? result.price_range.lines || [] : []
@@ -60,6 +61,18 @@ export function commercialRequirementRows(
     result.service_date <= '2026-12-31' &&
     lines.length === 1 &&
     lines[0].code === '99203'
+  const aetnaChoiceOffice =
+    /^aetna$/i.test(result.payer || '') &&
+    result.plan_details?.stedi?.names?.length === 1 &&
+    /^aetna choice pos ii$/i.test(result.plan_details.stedi.names[0].trim()) &&
+    result.benefits?.active === true &&
+    !result.benefits.coverage_dates_invalid &&
+    result.benefits.network_status === 'in_network' &&
+    patientBenefitsBound(result.identity) &&
+    result.service_date >= '2026-11-01' &&
+    result.service_date <= '2026-12-31' &&
+    lines.length === 1 &&
+    lines[0].code === '99203'
   const referral = requirementStatus(result, 'referral')
   const authorization = requirementStatus(result, 'authorization')
   const reason = (kind: 'referral' | 'authorization') =>
@@ -75,18 +88,24 @@ export function commercialRequirementRows(
           .filter(Boolean),
       ),
     ].join(' ') || undefined
-  const referralResearch = aetnaOfficeResearch && referral === 'CPT 99203: not determined'
-  const authorizationResearch = aetnaOfficeResearch && authorization === 'CPT 99203: not determined'
+  const referralResearch =
+    (aetnaOfficeResearch || aetnaChoiceOffice) && referral === 'CPT 99203: not determined'
+  const authorizationResearch =
+    (aetnaOfficeResearch || aetnaChoiceOffice) && authorization === 'CPT 99203: not determined'
   return [
     {
       label: 'Referral',
       value: referralResearch
-        ? 'CPT 99203: published PPO says no PCP referral; verify member plan'
+        ? aetnaChoiceOffice
+          ? 'CPT 99203: Aetna Choice POS II generally needs no referral; verify member terms'
+          : 'CPT 99203: published PPO says no PCP referral; verify member plan'
         : referral,
       detail: cignaCardReferral
         ? 'The card says no specialist referral is required; confirm any separate selected-CPT requirement.'
         : referralResearch
-          ? 'Aetna Medicare Signature (PPO) H2293-016 2026 Summary of Benefits; the member’s exact plan ID has not been confirmed.'
+          ? aetnaChoiceOffice
+            ? 'Aetna Choice POS II published specialist-access guidance; self-funded member terms may differ.'
+            : 'Aetna Medicare Signature (PPO) H2293-016 2026 Summary of Benefits; the member’s exact plan ID has not been confirmed.'
           : reason('referral'),
     },
     {

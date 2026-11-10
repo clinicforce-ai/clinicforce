@@ -568,12 +568,12 @@ def test_discovered_multiple_policies_block_collection_even_without_271_secondar
     assert collection_guidance.build(result)['amount_cents'] is None
 
 
-def test_verified_primary_plan_can_collect_only_its_office_copay_with_medicare_secondary():
+def test_verified_primary_plan_can_collect_only_its_office_copay_with_non_medicare_secondary():
     result = scenario(4000)
     result['payer'] = 'Blue Cross and Blue Shield of Texas'
     result['collection_policy'] = COPAY_POLICY
     result['benefits'].update(has_secondary=True, primary_secondary_order={
-        'status': 'verified', 'primary_payer_id': '84980', 'secondary_payer': 'Medicare',
+        'status': 'verified', 'primary_payer_id': '84980', 'secondary_payer': 'Other Plan',
         'evidence_paths': ['plans[0].benefits.otherOrAdditionalPayer[0]']})
     result['recovery'] = {'reason_code': 'multiple_active_policies', 'active_policy_count': 2}
     result['price_range']['complete'] = False
@@ -598,6 +598,29 @@ def test_verified_primary_plan_can_collect_only_its_office_copay_with_medicare_s
     result['price_range']['lines'].pop()
     result['benefits'].pop('primary_secondary_order')
     assert collection_guidance.build(result)['amount_cents'] is None
+
+
+def test_medicare_secondary_copay_remains_visible_but_is_not_collected_at_arrival():
+    result = scenario(4500)
+    result['payer'] = 'Aetna'
+    result['collection_policy'] = COPAY_POLICY
+    result['benefits'].update(has_secondary=True, primary_secondary_order={
+        'status': 'verified', 'primary_payer_id': '60054', 'secondary_payer': 'Medicare',
+        'evidence_paths': ['plans[0].benefits.otherOrAdditionalPayer[0]']})
+    result['recovery'] = {'reason_code': 'multiple_active_policies', 'active_policy_count': 2}
+    result['price_range']['complete'] = False
+    result['price_range']['lines'][0].update(code='99203', allowed_cents=None, benefits={
+        'active': True, 'copay_cents': 4500, 'copay_period': 'VISIT',
+        'coinsurance_percent': '0', 'deductible_applies': False,
+        'oop_remaining_cents': 100000,
+        'requirements': {kind: {'required': 'unknown', 'cleared': False}
+                         for kind in ('referral', 'authorization')}})
+    guidance = collection_guidance.build(result)
+    assert guidance['amount_cents'] is None
+    assert 'medicare' in guidance['reason'].lower()
+    assert result['price_range']['lines'][0]['benefits']['copay_cents'] == 4500
+    result.pop('collection_policy')
+    assert 'medicare' in collection_guidance.build(result)['reason'].lower()
 
 
 def test_oop_zero_is_case_evidence_not_a_universal_free_care_default():

@@ -84,7 +84,10 @@ def build(result: dict, review: dict | None = None) -> dict:
     line_blocker = selected_service_blocker(benefits.get('network_status') or 'unknown', identity, lines)
     unresolved_order = (result.get('recovery') or {}).get('reason_code') == 'multiple_active_policies'
     same_policy_conflict = (result.get('recovery') or {}).get('reason_code') == 'same_policy_evidence_conflict'
-    primary_secondary_copay = verified_primary_order(result) and not same_policy_conflict
+    verified_order = verified_primary_order(result) and not same_policy_conflict
+    secondary_name = str((benefits.get('primary_secondary_order') or {}).get('secondary_payer') or '')
+    medicare_secondary = verified_order and secondary_name.strip().casefold().startswith('medicare')
+    primary_secondary_copay = verified_order and not medicare_secondary
     medical_names = (((result.get('plan_details') or {}).get('stedi') or {}).get('names')
                      or (benefits.get('plan_details') or {}).get('names') or [])
     ma_ppo = is_medicare_advantage(medical_names)
@@ -262,6 +265,8 @@ def build(result: dict, review: dict | None = None) -> dict:
         guidance.update(status='estimated', basis='bcbstx_proxy_advance',
             reason='Provisional in-network advance from the clinic-approved BCBS Texas fee proxy and member diagnostic benefits. The UHC allowed amount is unknown.')
         assumptions.append('The advance uses clinic BCBS Texas fee references, not a payer-confirmed UHC allowance. Final responsibility follows the processed claim.')
+    if medicare_secondary and amount is not None and amount > 0:
+        amount = None
     oon_advance = (not verified_out_of_network(benefits) or
         policy.get('allow_supported_oon_advance') is True and
         (not any(line.get('allowed_basis') == 'cms_original_medicare_estimate' for line in lines)
@@ -350,9 +355,9 @@ def build(result: dict, review: dict | None = None) -> dict:
             guidance['reason'] += ' Recorded payments have been deducted.'
     else:
         guidance.update(status='action_required', basis='missing_collection_inputs')
-        if guidance.get('published_copay_policy_missing'):
+        if guidance.get('published_copay_policy_missing') and not medicare_secondary:
             guidance['reason'] = 'The published plan specialist copay is supported, but this payer route has no administrator-approved fixed-copay collection policy.'
-        elif guidance.get('positive_advance_policy_missing'):
+        elif guidance.get('positive_advance_policy_missing') and not medicare_secondary:
             guidance['reason'] = 'The patient share can be estimated, but this payer route has no approved policy for this check-in advance.'
         elif source_errors:
             guidance['reason'] = (
@@ -388,6 +393,10 @@ def build(result: dict, review: dict | None = None) -> dict:
             actions.append('Compare the saved payer patient, subscriber and member ID with eCW before using these benefit balances.')
         elif adverse:
             guidance['reason'] = 'A referral or authorization issue affects the selected care. The collection amount depends on resolving that coverage requirement.'
+        elif medicare_secondary:
+            guidance['reason'] = ('eCW and the primary payer list Medicare as secondary. Verify Medicare eligibility, '
+                                  'submit the primary claim, then the Medicare secondary claim; collect any patient '
+                                  'balance only after the remittance.')
         elif price.get('conditional'):
             guidance['reason'] = 'The visit estimate depends on unresolved coverage or approval conditions. Verify them before collecting.'
         elif primary_secondary_copay:

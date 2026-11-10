@@ -9,8 +9,11 @@ async function load(path) {
   return import(`data:text/javascript;base64,${Buffer.from(compiled.output[0].code).toString('base64')}`)
 }
 const { aetnaOfficePlanningCopay } = await load('../frontend/src/features/commercial-estimate/payerReportedPartialCopay.ts')
+const { aetnaPriorDateReferenceCopay } = await load('../frontend/src/features/commercial-estimate/aetnaPriorDateReferenceCopay.ts')
 const { collectionAtVisitRow } = await load('../frontend/src/features/commercial-estimate/collectionAtVisitRow.ts')
 const { commercialOopRows } = await load('../frontend/src/features/commercial-estimate/commercialOopRows.ts')
+const { suggestedDiagnosisRows } = await load('../frontend/src/features/commercial-estimate/suggestedDiagnosisRows.ts')
+const { commercialRequirementRows } = await load('../frontend/src/features/commercial-estimate/commercialRequirementStatus.ts')
 
 const terms = { active: true, network_status: 'in_network', service_date_matches: true,
   selected_benefit_ids: ['synthetic-office-copay'], copay_cents: 4000, coinsurance_percent: '0',
@@ -59,4 +62,64 @@ assert.match(paidRow.value, /\$30\.00/)
 const oopRows = commercialOopRows(result, result, result.benefits, false, false, null)
 assert.match(oopRows.find((entry) => entry.label === 'Individual out-of-pocket maximum').detail, /separate copay/i)
 assert.match(oopRows.find((entry) => entry.label === 'Separate office copay maximum').value, /\$900\.00/)
+const secondaryResult = {
+  ...result,
+  benefits: { ...result.benefits, has_secondary: true, primary_secondary_order: {
+    status: 'verified', primary_payer_id: '60054', secondary_payer: 'Medicare',
+    evidence_paths: ['synthetic-secondary-row'],
+  } },
+  recovery: { reason_code: 'multiple_active_policies', active_policy_count: 2 },
+  price_range: { ...result.price_range, lines: [{ ...result.price_range.lines[0],
+    benefits: { ...terms, oop_remaining_cents: 80000, separate_copay_limit: false,
+      copay_remaining_cents: null } }] },
+}
+const secondaryCopay = aetnaOfficePlanningCopay(
+  secondaryResult, model, secondaryResult.price_range.lines,
+)
+assert.equal(secondaryCopay, 4000)
+const secondaryRow = collectionAtVisitRow(secondaryResult, model, {
+  combinedPlan: null, feeProxy: null, aetnaPlanning: null,
+  aetnaCopayPlanning: secondaryCopay, officeReferenceCopay: null,
+  humanaReferenceCopay: null, partialOfficeCopay: null, pendingAetnaCopay: null,
+  cardPlanningCopay: null, automaticCashFallback: false, cignaFeeProxy: false,
+  proxyFormula: undefined,
+})
+assert.match(secondaryRow.label, /pending secondary claim/i)
+assert.match(secondaryRow.value, /\$40\.00.*copay/i)
+assert.match(secondaryRow.detail, /Medicare.*secondary|secondary.*Medicare/i)
+assert.equal(aetnaOfficePlanningCopay({ ...secondaryResult, identity: { status: 'review' } },
+  model, secondaryResult.price_range.lines), null)
+assert.equal(aetnaOfficePlanningCopay({ ...secondaryResult, benefits: {
+  ...secondaryResult.benefits, network_status: 'unknown' } },
+model, secondaryResult.price_range.lines), null)
+assert.match(suggestedDiagnosisRows('Dizziness, prior workup')[0].value, /R42/)
+const priorDay = {
+  ...secondaryResult,
+  service_date: '2026-11-10',
+  plan_details: { stedi: { names: ['Aetna Choice POS II'] } },
+  requested_service_types: ['98'],
+  benefits: { ...secondaryResult.benefits, service_date_matches: false,
+    reported_options: [{ kind: 'copay', service_type_code: '98', coverage_level: 'INDIVIDUAL',
+      network: 'IN_NETWORK', payer_note: 'Specialist Visit or Evaluation',
+      plan_association: 'medical', amount_cents: 4000 }] },
+  price_range: { ...secondaryResult.price_range, lines: [{ ...secondaryResult.price_range.lines[0],
+    code: '99203', benefits: { ...secondaryResult.price_range.lines[0].benefits,
+      service_date_matches: false } }] },
+}
+assert.equal(aetnaPriorDateReferenceCopay(priorDay, model), 4000)
+const priorDayRow = collectionAtVisitRow(priorDay, model, {
+  combinedPlan: null, feeProxy: null, aetnaPlanning: null,
+  aetnaCopayPlanning: null, officeReferenceCopay: null, priorDateAetnaCopay: 4000,
+  humanaReferenceCopay: null, partialOfficeCopay: null, pendingAetnaCopay: null,
+  cardPlanningCopay: null, automaticCashFallback: false, cignaFeeProxy: false,
+  proxyFormula: undefined,
+})
+assert.match(priorDayRow.value, /\$40\.00 Aetna office copay reference/i)
+assert.match(priorDayRow.detail, /Medicare.*remittance/i)
+assert.equal(aetnaPriorDateReferenceCopay({ ...priorDay, identity: { status: 'review' } }, model), null)
+assert.equal(aetnaPriorDateReferenceCopay({ ...priorDay, benefits: {
+  ...priorDay.benefits, network_status: 'unknown' } }, model), null)
+const requirementRows = commercialRequirementRows(priorDay, false, false)
+assert.match(requirementRows[0].value, /generally needs no referral/i)
+assert.match(requirementRows[1].value, /absent from Aetna precert list/i)
 console.log('Aetna separate copay: $40 pending collection; $0 general OOP does not erase the separate cap')

@@ -5,6 +5,7 @@ import { patientBenefitsBound } from './identityBinding'
 import { firstSelectedCptIssue } from './selectedCptIssue'
 import { networkEvidenceStatus } from './networkEvidenceStatus'
 import { money } from './format'
+export { aetnaPriorDateReferenceCopay } from './aetnaPriorDateReferenceCopay'
 
 export function singleOfficeCopayLine(lines: VisitPricedLine[]): VisitPricedLine | null {
   const line = lines.length === 1 ? lines[0] : null
@@ -88,42 +89,6 @@ export function diagnosticCopay(result: PrevisitEstimate, lines: VisitPricedLine
     lines.every((line) => line.benefits?.copay_cents === lines[0].benefits?.copay_cents)
     ? lines[0].benefits?.copay_cents
     : null
-}
-
-export function aetnaPriorDateReferenceCopay(
-  result: PrevisitEstimate,
-  model: CommercialEstimateModel,
-): number | null {
-  const benefits = result.reference_benefits ?? result.benefits
-  const line = singleOfficeCopayLine(
-    result.price_range?.mode === 'services' ? result.price_range.lines || [] : [],
-  )
-  if (
-    model.cash ||
-    model.previousEstimate ||
-    model.calculating ||
-    model.amount ||
-    result.collection_guidance?.amount_cents != null ||
-    !/^aetna$/i.test(result.payer?.trim() || '') ||
-    benefits?.active !== true ||
-    benefits.service_date_matches !== false ||
-    benefits.coverage_status_conflict ||
-    benefits.coverage_dates_invalid ||
-    benefits.network_conflict ||
-    benefits.historical_only ||
-    benefits.source_errors?.length ||
-    benefits.has_secondary ||
-    benefits.qmb_status === 'protected' ||
-    result.benefits?.qmb_status === 'protected' ||
-    result.billing_protection?.status === 'qmb' ||
-    result.recovery?.reason_code === 'multiple_active_policies' ||
-    result.recovery?.reason_code === 'same_policy_evidence_conflict' ||
-    result.price_range?.service_issues?.length ||
-    !line
-  )
-    return null
-  const copay = specialistOfficeCopay({ ...result, benefits })
-  return copay === line.benefits.copay_cents ? copay : null
 }
 
 export function cardOfficePlanningCopay(
@@ -331,6 +296,8 @@ export function aetnaOfficePlanningCopay(
   const remainingCopayCap = terms?.separate_copay_limit
     ? terms.copay_remaining_cents
     : terms?.oop_remaining_cents
+  const otherCoverage =
+    benefits?.has_secondary || result.recovery?.reason_code === 'multiple_active_policies'
   return !model.cash &&
     !model.previousEstimate &&
     !(
@@ -346,7 +313,9 @@ export function aetnaOfficePlanningCopay(
     benefits.network_status === 'in_network' &&
     benefits.network_source === 'payer_participation_message' &&
     benefits.service_date_matches !== false &&
-    !benefits.has_secondary &&
+    (!otherCoverage ||
+      (benefits.service_date_matches === true && patientBenefitsBound(result.identity))) &&
+    result.recovery?.reason_code !== 'same_policy_evidence_conflict' &&
     !benefits.coverage_status_conflict &&
     !benefits.coverage_dates_invalid &&
     !benefits.source_errors?.length &&

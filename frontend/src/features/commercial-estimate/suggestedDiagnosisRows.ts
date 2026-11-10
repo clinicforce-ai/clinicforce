@@ -10,7 +10,7 @@ export function suggestedDiagnosisRows(reason: string | null | undefined): CostB
           'The diagnosis does not create a separate procedure CPT. The clinician selects the office E/M level from documented decision making or time.',
       },
     ]
-  return /^\s*dizziness\s*$/i.test(reason || '')
+  return /^\s*dizziness\b/i.test(reason || '')
     ? [
         {
           label: 'Suggested diagnosis code',
