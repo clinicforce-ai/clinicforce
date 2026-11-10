@@ -77,12 +77,14 @@ export function commercialFeeReferenceRows(
   dsnpOffice: boolean,
   bluecardDeductible: ReturnType<typeof bluecardOfficeDeductibleScenario>,
   aetnaRateReference: boolean,
+  result: PrevisitEstimate,
 ): CostBreakdownRow[] {
   if (!rate?.lines.length) return []
   const total = rate.lines.reduce(
     (sum, line) => sum + line.unit_reference_cents * (Number(line.units) || 1),
     0,
   )
+  const scenarios = result.cigna_office_fee_scenarios
   return [
     {
       label: dsnpOffice
@@ -103,6 +105,17 @@ export function commercialFeeReferenceRows(
               .join('; ')}`,
       detail: rate.message,
     },
+    ...(scenarios?.lines.length
+      ? [
+          {
+            label: 'Cigna office fee scenarios',
+            value: scenarios.lines
+              .map((line) => `CPT ${line.code}: ${money(line.patient_share_cents)} conditional`)
+              .join('; '),
+            detail: `Family deductible remaining: ${money(scenarios.deductible_remaining_cents)}. Coinsurance after deductible: ${scenarios.coinsurance_percent}%. ${scenarios.message}`,
+          },
+        ]
+      : []),
   ]
 }
 

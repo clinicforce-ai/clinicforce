@@ -287,6 +287,9 @@ def _finish_previsit(result: dict, case: dict, inputs: dict, source: dict, paylo
         _api.practice_prices.apply(result, uploaded_cash, review)
     _api.practice_prices.apply_visit_quote(result, review)
     attach_requirements(_api, result, case, planning_inputs, source, session, connections, payer_id)
+    result.pop('cigna_office_fee_scenarios', None)
+    if office_scenarios := blue_cross_proxy.cigna_office_fee_scenarios(result, inputs['service_date']):
+        result['cigna_office_fee_scenarios'] = office_scenarios
     result.pop('fee_proxy_estimate', None)
     if proxy := (choice_plus_emg_proxy.choice_plus_emg_estimate(result, inputs['service_date'])
                  or blue_cross_proxy.estimate(result, inputs['service_date'])

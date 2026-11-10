@@ -185,6 +185,9 @@ def refresh_saved_cross_payer_planning(result: dict, case: dict, practice_id: st
     result['visit_type'] = (context.get('inputs') or {}).get('visit_type')
     refresh_saved_temporary_rates(result, practice_id, context.get('inputs') or {},
                                   context.get('source') or {}, route_payer)
+    result.pop('cigna_office_fee_scenarios', None)
+    if office_scenarios := blue_cross_proxy.cigna_office_fee_scenarios(result, str(result.get('service_date') or '')):
+        result['cigna_office_fee_scenarios'] = office_scenarios
     if proxy := (choice_plus_emg_proxy.choice_plus_emg_estimate(result, str(result.get('service_date') or ''))
                  or blue_cross_proxy.estimate(result, str(result.get('service_date') or ''))
                  or uhc_dsnp_office_proxy.estimate(result, str(result.get('service_date') or ''))

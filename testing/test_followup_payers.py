@@ -37,6 +37,18 @@ def test_biopsy_catalog_and_combined_visit_preserve_all_procedures_and_units():
     assert not any(rows[key]['code'] in {'11104', '11105'} for key in plan['recommended_ids'])
 
 
+def test_established_followup_with_biopsy_plans_office_and_procedure():
+    inputs = {'visit_type': 'established', 'reason': '3 month fu + Skin Biopsy'}
+    available = [*api._previsit_codes(inputs),
+                 {'id': 'planning:11104', 'code': '11104', 'units': 1,
+                  'source': 'CPT planning catalog'}]
+    plan = cpt_suggester.recommend_visit_plan(inputs, {}, available)
+    codes = {row['id']: row['code'] for row in available}
+    assert [codes[key] for key in plan['recommended_ids']] == ['99213', '11104']
+    assert all(plan['recommended_units'][key] == 1 for key in plan['recommended_ids'])
+    assert any('modifier 25' in note.lower() for note in plan['assumptions'])
+
+
 def test_unsized_skin_biopsy_starts_with_editable_one_site_plan():
     inputs = {'visit_type': 'established', 'reason': 'Skin Biopsy'}
     available = [*api._previsit_codes(inputs),
