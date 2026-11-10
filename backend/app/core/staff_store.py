@@ -307,6 +307,18 @@ def save_ecw_visit_cache(patient_id: str, practice_id: str, ecw_patient_id: str,
             (json.dumps(summary), ecw_patient_id, now(), patient_id, practice_id, ecw_patient_id))
 
 
+def linked_ecw_patient_ids(practice_id: str) -> dict[str, list[str]]:
+    """Map verified eCW links to this practice's existing clinic patient IDs."""
+    with _connection() as connection:
+        rows = connection.execute("""SELECT id,ecw_patient_id FROM staff_patients
+            WHERE practice_id=%s AND identity_status='confirmed' AND ecw_patient_id IS NOT NULL""",
+            (practice_id,)).fetchall()
+    linked: dict[str, list[str]] = {}
+    for row in rows:
+        linked.setdefault(row['ecw_patient_id'], []).append(row['id'])
+    return linked
+
+
 from app.core.staff_dashboard import patient_dashboard as _patient_dashboard
 
 

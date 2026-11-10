@@ -5,9 +5,11 @@ import {
   deleteStaffPatient,
   getClinicalPatients,
   getPatientAppointments,
+  getTodayAppointments,
   retryStaffDeletionCleanup,
   type ClinicalDashboard,
   type ClinicalPatient,
+  type TodayAppointments,
 } from '../../services/api/staff-patients'
 
 import ClinicalPatientDetail from './ClinicalPatientDetail'
@@ -47,6 +49,9 @@ export default function ClinicalPatientDashboard({
   const [notice, setNotice] = useState('')
   const [visitResults, setVisitResults] = useState<Record<string, VisitResult[]>>({})
   const [visitProgress, setVisitProgress] = useState({ done: 0, total: 0, failed: 0 })
+  const [todaySnapshot, setTodaySnapshot] = useState<TodayAppointments | null>(null)
+  const [todayReadFinished, setTodayReadFinished] = useState(false)
+  const [todayReadFailed, setTodayReadFailed] = useState(false)
   const [remainingDateChecks, setRemainingDateChecks] = useState(0)
   const [dateCheckBatch, setDateCheckBatch] = useState(0)
   const [visibleRows, setVisibleRows] = useState<Record<string, number>>({})
@@ -90,8 +95,44 @@ export default function ClinicalPatientDashboard({
   }, [initialPatientId])
   useEffect(() => {
     if (!dashboard) return
+    let active = true
+    getTodayAppointments()
+      .then((result) => {
+        if (active) setTodaySnapshot(result)
+      })
+      .catch(() => {
+        if (active) setTodayReadFailed(true)
+      })
+      .finally(() => {
+        if (active) setTodayReadFinished(true)
+      })
+    return () => {
+      active = false
+    }
+  }, [dashboard])
+  useEffect(() => {
+    if (!dashboard) return
     const results = { ...visitResultsRef.current }
     const now = Date.now()
+    const todayVisits = new Map<string, VisitResult>()
+    if (todaySnapshot) {
+      for (const visit of todaySnapshot.visits) {
+        const result = ecwVisitDays({
+          ecw_status: 'complete',
+          appointments: [{ ...visit, from_ecw: true }],
+        })[0]
+        if (!result) continue
+        const prior = todayVisits.get(visit.clinic_patient_id)
+        if (!prior || (result.time !== null && (prior.time === null || result.time < prior.time)))
+          todayVisits.set(visit.clinic_patient_id, result)
+      }
+    }
+    const withToday = (patient: ClinicalPatient, visits: VisitResult[]) => {
+      if (!todaySnapshot) return visits
+      const otherDays = visits.filter((visit) => visit.day !== todaySnapshot.date)
+      const todayVisit = todayVisits.get(patient.clinic_patient_id || '')
+      return todayVisit ? [...otherDays, todayVisit] : otherDays
+    }
     const linked = dashboard.patients.filter((patient) => {
       if (!patient.ecw_linked || !patient.clinic_patient_id) {
         delete results[patient.id]
@@ -107,6 +148,10 @@ export default function ClinicalPatientDashboard({
           appointments: patient.ecw_visit_cache.map((visit) => ({ ...visit, from_ecw: true })),
         })
       }
+      if (results[patient.id] !== undefined)
+        results[patient.id] = withToday(patient, results[patient.id])
+      else if (todayVisits.has(patient.clinic_patient_id))
+        results[patient.id] = [todayVisits.get(patient.clinic_patient_id)!]
       return (
         !checkedPatientIds.current.has(patient.id) &&
         (forceVisitRefresh.current ||
@@ -115,9 +160,15 @@ export default function ClinicalPatientDashboard({
           now - Date.parse(patient.ecw_visit_cached_at) >= CACHE_AGE_MS)
       )
     })
-    forceVisitRefresh.current = false
     visitResultsRef.current = results
     setVisitResults(results)
+    if (!todayReadFinished) return
+    forceVisitRefresh.current = false
+    linked.sort((first, second) => {
+      const priority = (patient: ClinicalPatient) =>
+        todayVisits.has(patient.clinic_patient_id || '') ? 0 : patient.ecw_visit_cache ? 2 : 1
+      return priority(first) - priority(second)
+    })
     const batch = linked.slice(0, DATE_CHECK_BATCH_SIZE)
     setRemainingDateChecks(linked.length - batch.length)
     setVisitProgress({ done: 0, total: batch.length, failed: 0 })
@@ -132,7 +183,7 @@ export default function ClinicalPatientDashboard({
           const history = await getPatientAppointments(patient.clinic_patient_id!, true)
           if (run !== visitRun.current) return
           if (history.ecw_status !== 'complete') throw new Error('eCW history incomplete')
-          results[patient.id] = ecwVisitDays(history)
+          results[patient.id] = withToday(patient, ecwVisitDays(history))
         } catch {
           failed += 1
         }
@@ -154,7 +205,7 @@ export default function ClinicalPatientDashboard({
     return () => {
       if (visitRun.current === run) visitRun.current += 1
     }
-  }, [dashboard, dateCheckBatch])
+  }, [dashboard, dateCheckBatch, todaySnapshot, todayReadFinished])
   async function refresh(reloadVisits = true) {
     setBusy(true)
     setError('')
@@ -166,6 +217,9 @@ export default function ClinicalPatientDashboard({
         checkedPatientIds.current.clear()
         visitResultsRef.current = {}
       }
+      setTodaySnapshot(null)
+      setTodayReadFinished(false)
+      setTodayReadFailed(false)
       setDashboard(updated)
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : 'Patients could not be loaded.')
@@ -259,7 +313,7 @@ export default function ClinicalPatientDashboard({
       )
     return grouped
   }, [patients, visitResults])
-  const today = localVisitDay(new Date())
+  const today = todaySnapshot?.date || localVisitDay(new Date())
   const upcomingGroups = [...groups]
     .filter(([day]) => day > today && day !== 'undated' && day !== 'pending')
     .sort(([first], [second]) => first.localeCompare(second))
@@ -468,9 +522,20 @@ export default function ClinicalPatientDashboard({
         ) : (
           <div className="clinical-patient-list">
             <p className="staff-small staff-muted clinical-visit-note">
-              Each appointment date links to the same patient profile. Refresh patients to check for
-              newly booked appointments.
+              Each appointment date links to the same patient profile. Today’s schedule is checked
+              first; older dates update as patient histories finish.
             </p>
+            {!todayReadFinished && (
+              <p className="staff-small staff-muted" role="status">
+                Checking today’s appointments first…
+              </p>
+            )}
+            {todayReadFailed && (
+              <p className="staff-small staff-muted" role="alert">
+                Today’s schedule could not be checked together. Patient dates will appear as
+                individual histories load.
+              </p>
+            )}
             {visitProgress.total > 0 && (
               <p className="staff-small staff-muted" role="status">
                 {visitProgress.done < visitProgress.total

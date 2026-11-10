@@ -42,6 +42,14 @@ export interface ClinicalDashboard {
 
 export const getClinicalPatients = () => request<ClinicalDashboard>('/api/staff/patients/dashboard')
 
+export type TodayAppointments = {
+  date: string
+  visits: Array<{ clinic_patient_id: string; date: string; start: string; status: string }>
+}
+
+export const getTodayAppointments = () =>
+  request<TodayAppointments>('/api/staff/patients/today-appointments')
+
 type PatientAppointment = {
   id: string
   appointment_id?: string

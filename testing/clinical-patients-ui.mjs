@@ -26,6 +26,7 @@ let projectedAmount = 5000
 let savedResult
 let dashboardReads = 0
 let appointmentReads = 0
+let todayReads = 0
 let useCache = false
 let releaseAppointments
 const appointmentsHeld = new Promise((resolve) => { releaseAppointments = resolve })
@@ -63,6 +64,16 @@ await page.route((url) => url.pathname.startsWith('/api/'), async (route) => {
     body = { id: 'synthetic-intake', patient: { ...patients[5], ecw_patient_id: 'ecw-6' }, fields: {}, status: 'reviewed' }
   } else if (path === '/api/doctor/insurance/commercial/appointments') {
     body = { appointments: [] }
+  } else if (path === '/api/staff/patients/today-appointments') {
+    todayReads += 1
+    if (process.env.FAIL_TODAY) {
+      await route.fulfill({ status: 503, json: { detail: 'Today unavailable' } })
+      return
+    }
+    body = { date: today, visits: [
+      { clinic_patient_id: '6', date: today, start: `${today}T09:00:00-05:00`, status: 'booked' },
+      { clinic_patient_id: '6', date: today, start: `${today}T10:00:00-05:00`, status: 'booked' },
+    ] }
   } else if (path === '/api/staff/patients/dashboard') {
     dashboardReads += 1
     body = {
@@ -143,7 +154,9 @@ try {
   await page.goto(process.env.UI_URL || 'http://127.0.0.1:5182/?staff')
   if (process.env.LARGE_DIRECTORY) {
     await page.getByRole('button', { name: 'Previous patients' }).waitFor({ timeout: 10_000 })
-    assert((await page.locator('.clinical-patient-open').count()) <= 50)
+    await page.locator('#clinical-today-title + .clinical-visit-group .clinical-patient-open strong').getByText('Patient 06').waitFor()
+    assert.equal(todayReads, 1)
+    assert((await page.getByLabel('Patients awaiting appointment dates').locator('.clinical-patient-open').count()) <= 50)
     await page.getByText('eCW visit checks finished for 200 patients.').waitFor({ timeout: 10_000 })
     assert.equal(appointmentReads, 200)
     await page.getByRole('button', { name: 'Check appointment dates for 200 more patients' }).click()
@@ -161,15 +174,20 @@ try {
   if (process.env.HOLD_APPOINTMENTS) {
     await page.getByRole('button', { name: 'Previous patients' }).waitFor({ timeout: 2000 })
     assert.equal(await page.getByText('Loading appointment dates for').count(), 0)
-    await page.getByLabel('Find a clinical patient').fill('Patient 06')
+    if (process.env.FAIL_TODAY)
+      await page.getByText('Today’s schedule could not be checked together.').waitFor()
+    else
+      await page.locator('#clinical-today-title + .clinical-visit-group .clinical-patient-open strong').getByText('Patient 06').waitFor()
+    assert.equal(todayReads, 1)
+    await page.getByLabel('Find a clinical patient').fill(process.env.FAIL_TODAY ? 'Patient 06' : 'Patient 01')
     await page.getByText('Appointment date still being checked').click()
-    assert.deepEqual(await page.locator('.clinical-patient-open strong').allTextContents(), ['Patient 06'])
+    assert.deepEqual(await page.locator('.clinical-patient-open strong').allTextContents(), [process.env.FAIL_TODAY ? 'Patient 06' : 'Patient 01'])
     await page.getByLabel('Find a clinical patient').fill('')
     releaseAppointments()
   }
   await page.getByText('eCW visit checks finished for 5 patients.').waitFor()
   assert.equal(appointmentReads, 5)
-  assert.match(await page.getByRole('alert').innerText(), /1 patient history was unavailable/)
+  assert.match(await page.getByRole('alert').filter({ hasText: 'patient history was unavailable' }).innerText(), /1 patient history was unavailable/)
   const groups = page.locator('.clinical-visit-group')
   assert.equal(await page.locator('.clinical-cohorts').count(), 0)
   assert.equal(await page.getByText('See more').count(), 0)

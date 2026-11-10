@@ -51,6 +51,35 @@ async def patient_appointment_history(backend: ModuleType, profile: dict[str, An
     return {'patient_id': patient_id, 'ecw_account_number': patient_account_number(patient),
             'appointments': sorted(visits, key=lambda row: (row['start'] or '', row['id']), reverse=True)}
 
+
+async def practice_appointment_date(backend: ModuleType, day: str, *,
+                                    transport: httpx.AsyncBaseTransport | None = None) -> list[dict[str, str]]:
+    """Read one practice-token date without patient demographics or full history."""
+    client_id, issuer = backend.settings()
+    try:
+        async with httpx.AsyncClient(timeout=12, follow_redirects=False, transport=transport) as client:
+            token = await backend._access_token(client, client_id, issuer)
+            encounters, timed_out = await backend._bounded_search(
+                client, issuer, token, 'Encounter', {'date': day}, timeout_seconds=8)
+            if timed_out:
+                raise backend.EcwBackendError('The eCW appointment date did not finish loading.')
+    except httpx.HTTPError as exc:
+        raise backend.EcwBackendError('The eCW appointment date did not finish loading.') from exc
+    visits = []
+    for encounter in encounters:
+        encounter_id = str(encounter.get('id') or '')
+        subject = _reference(encounter.get('subject')) or ''
+        if (encounter.get('resourceType') != 'Encounter'
+                or not re.fullmatch(r'Patient/[A-Za-z0-9.\-]{1,200}', subject)
+                or not re.fullmatch(r'[A-Za-z0-9.\-]{1,200}', encounter_id)
+                or _appointment_date(encounter) != day
+                or str(encounter.get('status') or '').casefold() in {'cancelled', 'entered-in-error'}):
+            continue
+        visits.append({'patient_id': subject.split('/', 1)[1], 'date': day,
+                       'start': str((encounter.get('period') or {}).get('start') or ''),
+                       'status': str(encounter.get('status') or '')})
+    return visits
+
 async def lookup_patient_and_appointments(backend: ModuleType, profile: dict[str, Any], practice: dict[str, Any], *,
                                           allow_suggestions: bool = False, transport: httpx.AsyncBaseTransport | None = None) -> dict[str, Any]:
     """Verify one eCW patient and return only current/future appointments; no eligibility request."""
