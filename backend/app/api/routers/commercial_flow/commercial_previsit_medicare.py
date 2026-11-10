@@ -1,7 +1,7 @@
 """Bind a dated payer Part B report to the selected previsit patient."""
 
 from app.insurance import identity
-from app.insurance.stedi_benefits.payer_order import reported_medicare_part_b_secondary
+from app.insurance.stedi_benefits.payer_order import reported_medicare_part_b_secondary, reported_secondary_payer
 
 
 def bind(payload: dict, coverage: dict, service_date: str, benefits: dict) -> dict:
@@ -13,6 +13,9 @@ def bind(payload: dict, coverage: dict, service_date: str, benefits: dict) -> di
         else coverage)
     comparison = identity.compare(payload, comparison_coverage)
     benefits['identity'] = comparison
-    if reported and identity.patient_benefits_bound(comparison):
-        benefits['medicare_part_b_secondary'] = reported
+    if identity.patient_benefits_bound(comparison):
+        if named := reported_secondary_payer(payload, service_date):
+            benefits['reported_secondary_payer'] = named
+        if reported:
+            benefits['medicare_part_b_secondary'] = reported
     return comparison

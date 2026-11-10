@@ -10,6 +10,7 @@ from app.api.routers.commercial_flow.commercial_previsit_context import past_vis
 from app.api.routers.commercial_flow.commercial_previsit_tpa import merge_administrator_benefits
 from app.insurance import botox_review, cms_locality, cms_pfs, cpt_rules, insurance_product, inventory_certification, library_network_exclusions, group_contract_support
 from app.insurance.stedi_benefits.payer_order import primary_secondary_order
+from app.insurance.stedi_benefits.linked import merge_linked_medical_oop
 from app.api.routers.commercial_flow.commercial_previsit_medicare import bind as bind_medicare_part_b
 
 def _commercial_slot(appointment_id: str) -> str:
@@ -41,7 +42,6 @@ def _previsit_service_types(inputs: dict) -> list[str]:
         ordered.remove('98')
         ordered.insert(0, '98')
     return list(dict.fromkeys([*ordered, '30']))
-
 
 def _payer_previsit_service_types(payer_id: str, inputs: dict) -> list[str]:
     requested = _previsit_service_types(inputs)
@@ -96,11 +96,14 @@ def _benefit_context(inputs: dict, source: dict) -> dict:
             'provider_office_role': _api.provider_specialty.office_role(rendering.get('roles') or []),
             'provider_npi': npi, 'provider_npi_conflict': conflict}
 
-
 def _previsit_range(practice_id: str, inputs: dict, source: dict, payer_id: str,
                     codes: list[dict], benefits: dict, *, payload: dict | None = None,
                     review: dict | None = None, payer_route_id: str | None = None) -> tuple[dict | None, list[str]]:
     review = review or {}
+    if (payload and benefits.get('network_status') == 'out_of_network'
+            and any(str(benefits.get(source) or '').startswith('stc30:')
+                    for source in ('oop_annual_id', 'oop_id'))):
+        merge_linked_medical_oop(payload, benefits, inputs.get('service_date'))
     options = bool(codes) and all(row.get('source') == 'Contract service option' for row in codes) and not review.get('selected_ids')
     alternatives = options or (bool(codes) and all(row.get("source") in {
         "conditional office E/M alternative", "conditional NCS alternative"} for row in codes)
@@ -195,7 +198,6 @@ def _previsit_range(practice_id: str, inputs: dict, source: dict, payer_id: str,
             'payment_reference': payments['reference'], 'verified_at': payments.get('verified_at')}
     return priced, issues
 
-
 def _previsit_benefits(payload: dict, coverage: dict, service_date: str | None = None, service_type: str | list[str] = "98",
                        *, inputs: dict | None = None, source: dict | None = None) -> dict:
     context = _api._benefit_context(inputs, source or {}) if inputs else {}
@@ -219,6 +221,8 @@ def _previsit_benefits(payload: dict, coverage: dict, service_date: str | None =
         procedure_code=codes[0]['code'] if office_only and len(codes) == 1 else None,
         office_visit=office_only,
         office_service_types=_api._office_service_types('', source or {}), **context)
+    if office_only and benefit_payload is payload:
+        benefits = merge_linked_medical_oop(payload, benefits, service_date)
     if office_payload:
         merge_administrator_benefits(_api, payload, benefits, delegated, summary_service, service_date, _api._office_service_types('', source or {}), context)
     if diagnostic_payload := (payload.get('_service_payloads') or {}).get('73'):
@@ -254,7 +258,6 @@ def _previsit_benefits(payload: dict, coverage: dict, service_date: str | None =
             'Confirm patient identity: the payer-returned patient details differ from eCW.')
     return benefits
 
-
 def _network_contract_evidence(practice_id: str, network: dict, profile: dict, service_date: str = '') -> dict:
     evidence = {key: network.get(key) for key in ('network_name', 'evidence_reference', 'effective_from', 'effective_to')}
     def current(document: dict) -> bool:
@@ -286,7 +289,6 @@ def _network_contract_evidence(practice_id: str, network: dict, profile: dict, s
     return evidence
 
 
-
 def _product_mapping_evidence(profile: dict, network: dict, source: dict, service_date: str) -> dict | None:
     """Retain the administrator record used to alias a payer product."""
     payer_names = source.get('payer_plan_names') or []
@@ -303,7 +305,6 @@ def _product_mapping_evidence(profile: dict, network: dict, source: dict, servic
                                               'rate_plan_matcher', 'network_identifiers')}
     return None
 
-
 def _requirement_candidates(result: dict) -> list[dict]:
     selected_ids = {row.get('id') for row in result.get('codes') or []}
     suggested_codes = {str(candidate.get('code') or '').upper()
@@ -313,7 +314,6 @@ def _requirement_candidates(result: dict) -> list[dict]:
     return [row for row in result.get('available_codes') or []
             if row.get('id') not in selected_ids and
             (row.get('id') in recommended_ids or row.get('code') in suggested_codes)]
-
 
 def _apply_inventory_tier(result: dict, benefits: dict, inventory: dict, exclusion: dict) -> None:
     """Use a certified clinic inventory as an operational, never payer-confirmed, tier."""
@@ -330,7 +330,6 @@ def _apply_inventory_tier(result: dict, benefits: dict, inventory: dict, exclusi
         'document_id': exclusion['document_id'], 'page': exclusion.get('page'),
         'locator': exclusion.get('locator'),
         'reason': 'NMCT’s certified complete agreement inventory excludes this Regional or Local Medicare Advantage PPO product; out-of-network benefits are used for estimation, without claiming payer confirmation.'}
-
 
 def _attach_previsit_pricing(result: dict, practice_id: str, inputs: dict, source: dict,
                              payer_id: str, benefits: dict, *, payload: dict | None = None,

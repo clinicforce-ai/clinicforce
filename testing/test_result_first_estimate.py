@@ -179,6 +179,44 @@ def test_true_duplicates_resolve_but_hidden_restrictions_remain_distinct():
     assert commercial.normalize_stedi_271(raw, '98', True)['copay_cents'] is None
 
 
+def test_subscriber_employee_and_spouse_office_terms_are_selected_without_reclassifying_accumulators():
+    raw = {'payerId': '60054', 'subscriber': {'memberId': 'SYN123',
+           'dates': {'service': {'start': '2026-11-09'}}}, 'plans': [{'name': 'Synthetic POS medical',
+           'benefits': {
+               'statuses': [{'status': 'ACTIVE_COVERAGE', 'coverageLevel': 'EMPLOYEE_AND_SPOUSE',
+                             'service': {'system': 'STC', 'value': '30'}}],
+               'coPayment': [{'amount': '60', 'coverageLevel': 'EMPLOYEE_AND_SPOUSE',
+                              'network': {'indicator': 'IN_NETWORK'},
+                              'service': {'system': 'STC', 'value': '98'},
+                              'messages': ['Specialist Visit or Evaluation,COPAY INCLUDED IN OOP']}],
+               'coInsurance': [{'percent': '0', 'coverageLevel': 'EMPLOYEE_AND_SPOUSE',
+                                'network': {'indicator': 'IN_NETWORK'},
+                                'service': {'system': 'STC', 'value': '98'},
+                                'messages': ['Specialist Visit or Evaluation']}],
+               'limitations': [{'coverageLevel': 'EMPLOYEE_AND_SPOUSE',
+                                'network': {'indicator': 'IN_NETWORK'},
+                                'service': {'system': 'STC', 'value': '98'},
+                                'messages': ['Specialist Visit or Evaluation/Plan Ded Waived']}],
+               'deductible': [{'amount': '0', 'coverageLevel': 'INDIVIDUAL',
+                               'network': {'indicator': 'IN_NETWORK'},
+                               'timePeriod': 'REMAINING',
+                               'service': {'system': 'STC', 'value': '30'}}],
+           }}]}
+    terms = commercial.normalize_stedi_271(raw, '98', True, office_visit=True,
+                                            procedure_code='99203', service_date='2026-11-10')
+    assert terms['active'] is True
+    assert terms['service_date_matches'] is False
+    assert terms['copay_cents'] == 6000
+    assert terms['coinsurance_percent'] == '0'
+    assert terms['deductible_applies'] is False
+    assert terms['copay_id'] == 'plans[0].benefits.coPayment[0]'
+
+    raw['dependent'] = {'relationToSubscriber': 'CHILD'}
+    child = commercial.normalize_stedi_271(raw, '98', True, office_visit=True,
+                                            procedure_code='99203', service_date='2026-11-10')
+    assert child['copay_cents'] is None
+
+
 def test_payer_policy_referral_sentence_is_a_required_signal():
     raw = response()
     raw['benefitsInformation'][-1]['additionalInformation'] = []

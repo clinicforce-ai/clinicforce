@@ -61,6 +61,32 @@ def primary_secondary_order(payload: dict, coverage: dict, source: dict, day: st
             'evidence_paths': list(dict.fromkeys(path for _, path in reported))}
 
 
+def reported_secondary_payer(payload: dict, day: str) -> dict | None:
+    """Expose one dated medical secondary-payer name without asserting claim order."""
+    if not day or not payload.get('payerId') or eligibility_errors(payload):
+        return None
+    reported = []
+    for row in _stedi_entries(payload):
+        if (row.get('code') != 'R' or coverage_kind(row, payload) != 'medical'
+                or not {'30', '98'} & set(row.get('serviceTypeCodes') or [])):
+            continue
+        dates = (row.get('dates') or {}).get('eligibility') or {}
+        if dates.get('start') and str(dates['start'])[:10] > day or dates.get('end') and str(dates['end'])[:10] < day:
+            continue
+        for entity in row.get('relatedEntities') or row.get('benefitsRelatedEntities') or []:
+            if (not isinstance(entity, dict) or
+                    str(entity.get('type') or entity.get('entityIdentifier') or '').upper().replace(' ', '_') != 'SECONDARY_PAYER'):
+                continue
+            name = ((entity.get('name') or {}).get('organization') if isinstance(entity.get('name'), dict)
+                    else entity.get('entityName'))
+            if isinstance(name, str) and name.strip():
+                reported.append((name.strip(), row['evidence_path']))
+    if len({_normal(name) for name, _ in reported}) != 1 or not reported:
+        return None
+    return {'status': 'reported', 'payer': reported[0][0],
+            'evidence_paths': list(dict.fromkeys(path for _, path in reported))}
+
+
 def reported_medicare_part_b_secondary(payload: dict, day: str) -> dict | None:
     """Keep a dated medical Part B report separate from verified claim order."""
     if not day or not payload.get('payerId') or eligibility_errors(payload):

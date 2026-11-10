@@ -4,7 +4,7 @@ from copy import deepcopy
 
 from app.insurance import commercial
 from app.api.routers import commercial_estimator as api
-from app.insurance.stedi_benefits.payer_order import primary_secondary_order, reported_medicare_part_b_secondary
+from app.insurance.stedi_benefits.payer_order import primary_secondary_order, reported_medicare_part_b_secondary, reported_secondary_payer
 from app.insurance.identity import compare, patient_benefits_bound
 
 
@@ -33,6 +33,9 @@ def source():
 
 def test_stedi_secondary_row_and_ecw_order_establish_primary_plan():
     raw = response()
+    assert reported_secondary_payer(raw, DAY) == {
+        'status': 'reported', 'payer': 'MEDICARE',
+        'evidence_paths': ['plans[0].benefits.otherOrAdditionalPayer[0]']}
     coverage = {'coverage_id': 'blue', 'active_coverages': 2}
     assert commercial.normalize_stedi_271(raw, '98', True)['has_secondary'] is True
     assert primary_secondary_order(raw, coverage, source(), DAY) == {
@@ -62,6 +65,26 @@ def test_primary_order_rejects_wrong_secondary_or_third_policy():
     assert primary_secondary_order(raw, {**coverage, 'active_coverages': 3}, third, DAY) is None
     raw['plans'][0]['benefits']['otherOrAdditionalPayer'][0]['relatedEntities'][0]['type'] = 'PAYER'
     assert primary_secondary_order(raw, coverage, source(), DAY) is None
+
+
+def test_unverified_reported_secondary_does_not_infer_part_b_or_claim_order():
+    from app.api.routers.commercial_flow.commercial_previsit_medicare import bind
+    raw = response()
+    raw['subscriber'] = {'memberId': 'SYN123', 'firstName': 'Alex',
+                         'lastName': 'Example', 'dateOfBirth': '1960-01-01'}
+    coverage = {'coverage_id': 'primary', 'active_coverages': 2, 'payer_id': '84980',
+                'member_id': 'SYN123', 'patient_first': 'Alex', 'patient_last': 'Example',
+                'patient_birth_date': '1960-01-01', 'subscriber_first': 'Alex',
+                'subscriber_last': 'Example', 'relationship': '18'}
+    benefits = {}
+    assert bind(raw, coverage, DAY, benefits)['status'] == 'matched'
+    assert benefits['reported_secondary_payer']['payer'] == 'MEDICARE'
+    assert 'medicare_part_b_secondary' not in benefits
+    raw['plans'][0]['benefits']['otherOrAdditionalPayer'].append({
+        **raw['plans'][0]['benefits']['otherOrAdditionalPayer'][0],
+        'relatedEntities': [{'type': 'SECONDARY_PAYER',
+                             'name': {'organization': 'Other Plan'}}]})
+    assert reported_secondary_payer(raw, DAY) is None
 
 
 def test_part_b_report_supports_zero_advance_with_three_policies_and_dependent():

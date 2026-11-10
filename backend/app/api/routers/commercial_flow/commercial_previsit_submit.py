@@ -5,41 +5,12 @@ from copy import deepcopy
 from types import ModuleType
 from app.api.routers.commercial_flow.commercial_previsit_requirements import check_cpt_authorization
 from app.api.routers.commercial_flow.commercial_previsit_tpa import check_administrator
+from app.insurance.stedi_benefits.linked import same_member_and_medical_plan as _same_member_and_medical_plan
 
 
 def same_member_and_medical_plan(api: ModuleType, primary: dict, additional: dict) -> bool:
     """Bind separate service inquiries before their benefits share a visit."""
-    def person(value: dict) -> tuple[str, ...]:
-        name_field = value.get('name') or {}
-        name = (name_field.get('person') or {}) if isinstance(name_field, dict) else {}
-        name = name if isinstance(name, dict) else {}
-        return tuple(str(item or '').strip().casefold() for item in (
-            value.get('memberId'), value.get('dateOfBirth'),
-            name.get('firstName'), name.get('lastName'), value.get('relationToSubscriber')))
-    if not isinstance(primary.get('subscriber'), dict) or not isinstance(additional.get('subscriber'), dict):
-        return False
-    if not all(person(primary['subscriber'])[index] for index in (0, 2, 3)):
-        return False
-    if person(primary['subscriber']) != person(additional['subscriber']):
-        return False
-    if bool(primary.get('dependent')) != bool(additional.get('dependent')):
-        return False
-    if primary.get('dependent') and (not isinstance(primary['dependent'], dict)
-            or not isinstance(additional['dependent'], dict)
-            or person(primary['dependent']) != person(additional['dependent'])):
-        return False
-    if ((primary.get('provider') or {}).get('npi') and (additional.get('provider') or {}).get('npi')
-            and primary['provider']['npi'] != additional['provider']['npi']):
-        return False
-    if primary.get('payerId') and additional.get('payerId') and primary['payerId'] != additional['payerId']:
-        return False
-    first, second = api.commercial.plan_details(primary), api.commercial.plan_details(additional)
-    if any(first.get(key) and second.get(key) and first[key] != second[key]
-           for key in ('group_number', 'plan_number')):
-        return False
-    names, other_names = first.get('names') or [], second.get('names') or []
-    return (len(names) == len(other_names) == 1
-            and names[0].strip().casefold() == other_names[0].strip().casefold())
+    return _same_member_and_medical_plan(primary, additional)
 
 
 async def submit_previsit_eligibility(api: ModuleType, *, payer: dict, provider: dict,
