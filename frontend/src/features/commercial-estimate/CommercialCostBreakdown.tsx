@@ -40,12 +40,11 @@ export default function CommercialCostBreakdown({
   const healthselectZero =
     result.collection_guidance?.basis === 'healthselect_ma_zero_televisit' &&
     result.collection_guidance.amount_cents === 0
-  const botoxPreview = !model.cash && !model.previousEstimate ? result.botox_preview : null
-  const combinedPlan = !model.cash && !model.previousEstimate ? result.combined_emg_plan : null
+  const planEnabled = !model.cash && !model.previousEstimate
+  const botoxPreview = planEnabled ? result.botox_preview : null
+  const combinedPlan = planEnabled ? result.combined_emg_plan : null
   const biopsyTarget =
-    !model.cash && !model.previousEstimate && !model.calculating
-      ? result.provisional_collection_target
-      : null
+    planEnabled && !model.calculating ? result.provisional_collection_target : null
   const cignaFeeProxy = feeProxy?.basis === 'bcbstx_cigna_fee_proxy'
   const dsnpOffice = feeProxy?.basis === 'bcbstx_uhc_dsnp_office_proxy'
   const cignaFamilyOffice = feeProxy?.scenario_kind === 'oap_office_family_deductible'
@@ -81,7 +80,7 @@ export default function CommercialCostBreakdown({
   const copayShare = costState.supportedOfficeCopayShare(result, model)
   const { temporaryRateReference, aetnaRateReference } = costState.visibleRateReference(result)
   const bluecardDeductible =
-    !model.cash && !model.previousEstimate ? bluecardOfficeDeductibleScenario(result) : null
+    model.cash || model.previousEstimate ? null : bluecardOfficeDeductibleScenario(result)
   const aetnaPlanning = copay.visibleAetnaDiagnosticPlanning(result, model)
   const aetnaCopayPlanning = copay.aetnaOfficePlanningCopay(result, model, lines)
   const insuredRows: CostBreakdownRow[] = [
@@ -141,6 +140,7 @@ export default function CommercialCostBreakdown({
       dsnpOffice,
       bluecardDeductible,
       aetnaRateReference,
+      result,
     ),
     {
       label: 'Copay',

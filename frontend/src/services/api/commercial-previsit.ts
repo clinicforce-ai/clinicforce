@@ -17,21 +17,15 @@ import type {
   VisitPricedLine,
   UhcBiopsyCollectionTarget,
   FeeProxyBasis,
+  CignaOfficeFeeScenarios,
+  EcwEligibilityReference,
 } from './commercial-visit-types'
 import type { PrevisitBenefits } from './commercial-benefits'
 import type { PaymentExplanation } from './commercial-explanation'
 import type { CommercialNetworkEvidence } from './commercial-network-evidence'
 import type { AvailityVisitReference } from './availity-visit-reference'
 export type PrevisitEstimate = {
-  ecw_eligibility_reference?: {
-    source: string
-    report_date: string
-    service_date: string
-    individual_oop_annual_cents: number
-    individual_oop_remaining_cents: number
-    family_oop_annual_cents: number
-    family_oop_remaining_cents: number
-  }
+  ecw_eligibility_reference?: EcwEligibilityReference
   availity_visit_reference?: AvailityVisitReference
   telehealth?: { place_of_service: '10' | '02'; modality: 'audio_video' | 'audio_only' }
   established_for_planning?: boolean
@@ -45,6 +39,7 @@ export type PrevisitEstimate = {
   card_check?: CommercialCardCheck
   cash_fallback?: { reason: string }
   temporary_rate_reference?: TemporaryRateReference
+  cigna_office_fee_scenarios?: CignaOfficeFeeScenarios
   aetna_diagnostic_reference?: AetnaDiagnosticReference
   fee_proxy_estimate?: {
     basis: FeeProxyBasis

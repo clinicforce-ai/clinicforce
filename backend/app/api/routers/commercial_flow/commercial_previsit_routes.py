@@ -101,6 +101,14 @@ async def saved_previsit(case_id: str, request: _api.Request) -> dict:
     temporary_rate_reference identifies a dated CPT planning source: scoped
     Blue Cross Clinical Library prices for eligible non-Aetna routes or draft
     Aetna MEPPO portal values for the exact Signature PPO diagnostic scenario.
+    For a Cigna office E/M visit, temporary_rate_reference.alternatives lists matching BCBSTX fee rows
+    for available, unselected levels in the same E/M family. These are separate
+    planning scenarios and are excluded from the selected visit total.
+    When Cigna explicitly reports family-only medical accumulators with an
+    unambiguous general coinsurance term, cigna_office_fee_scenarios applies
+    deductible then coinsurance to each fee reference and caps the conditional
+    share at the remaining family out-of-pocket balance. It does not alter
+    collection_guidance or authorize charging without Cigna's estimate.
     Neither source establishes another payer's allowance or a collectible amount.
     For an active patient-bound UHC D-SNP office visit with a $0 copay, $0
     remaining individual deductible and a payer-reported coinsurance rate,

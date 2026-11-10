@@ -20,6 +20,41 @@ export type TemporaryRateReference = {
     unit_reference_cents: number
     source_reference: string
   }>
+  alternatives?: Array<{
+    id?: string
+    code: string
+    units?: number
+    modifiers?: string[]
+    unit_reference_cents: number
+    source_reference: string
+  }>
+}
+
+export type CignaOfficeFeeScenarios = {
+  basis: 'bcbstx_cigna_family_only_office'
+  status: 'conditional'
+  deductible_remaining_cents: number
+  oop_remaining_cents: number
+  coinsurance_percent: string
+  message: string
+  lines: Array<{
+    code: string
+    selected: boolean
+    fee_reference_cents: number
+    deductible_cents: number
+    coinsurance_cents: number
+    patient_share_cents: number
+  }>
+}
+
+export type EcwEligibilityReference = {
+  source: string
+  report_date: string
+  service_date: string
+  individual_oop_annual_cents: number
+  individual_oop_remaining_cents: number
+  family_oop_annual_cents: number
+  family_oop_remaining_cents: number
 }
 
 export type UhcBiopsyCollectionTarget = {

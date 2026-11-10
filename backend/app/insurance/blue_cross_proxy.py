@@ -10,6 +10,7 @@ from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 
 from app.insurance import cigna_family_terms, commercial, cpt_rules, insurance_product
 from app.insurance.benefit_review import selected_service_blocker
+from app.insurance.cigna_office_scenarios import cigna_office_fee_scenarios
 from app.insurance.identity import patient_benefits_bound
 from app.insurance.network_participation import verified_in_network, verified_out_of_network
 from app.insurance.stedi_cpt_authorization import visit_coverage_bound
