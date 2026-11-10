@@ -27,7 +27,9 @@ let savedResult
 let dashboardReads = 0
 let appointmentReads = 0
 let useCache = false
-const patients = Array.from({ length: 6 }, (_, index) => ({
+let releaseAppointments
+const appointmentsHeld = new Promise((resolve) => { releaseAppointments = resolve })
+const patients = Array.from({ length: process.env.LARGE_DIRECTORY ? 10_000 : 6 }, (_, index) => ({
   id: String(index + 1),
   clinic_patient_id: String(index + 1),
   given_name: 'Patient',
@@ -77,6 +79,7 @@ await page.route((url) => url.pathname.startsWith('/api/'), async (route) => {
     }
   } else if (path.endsWith('/appointments')) {
     appointmentReads += 1
+    if (process.env.HOLD_APPOINTMENTS) await appointmentsHeld
     const patientId = path.split('/')[4]
     body = {
       ecw_status: patientId === '5' ? 'incomplete' : 'complete',
@@ -138,6 +141,32 @@ await page.route((url) => url.pathname.startsWith('/api/'), async (route) => {
 
 try {
   await page.goto(process.env.UI_URL || 'http://127.0.0.1:5182/?staff')
+  if (process.env.LARGE_DIRECTORY) {
+    await page.getByRole('button', { name: 'Previous patients' }).waitFor({ timeout: 10_000 })
+    assert((await page.locator('.clinical-patient-open').count()) <= 50)
+    await page.getByText('eCW visit checks finished for 200 patients.').waitFor({ timeout: 10_000 })
+    assert.equal(appointmentReads, 200)
+    await page.getByRole('button', { name: 'Check appointment dates for 200 more patients' }).click()
+    for (let attempt = 0; attempt < 200 && appointmentReads < 400; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 50))
+    }
+    assert.equal(appointmentReads, 400)
+    await page.getByLabel('Find a clinical patient').fill('Patient 10000')
+    await page.getByText('Appointment date still being checked').click()
+    assert.deepEqual(await page.locator('.clinical-patient-open strong').allTextContents(), ['Patient 10000'])
+    assert.deepEqual(errors, [])
+    console.log('PASS: 10,000 patients remain searchable and only 200 date checks are started')
+    process.exitCode = 0
+  } else {
+  if (process.env.HOLD_APPOINTMENTS) {
+    await page.getByRole('button', { name: 'Previous patients' }).waitFor({ timeout: 2000 })
+    assert.equal(await page.getByText('Loading appointment dates for').count(), 0)
+    await page.getByLabel('Find a clinical patient').fill('Patient 06')
+    await page.getByText('Appointment date still being checked').click()
+    assert.deepEqual(await page.locator('.clinical-patient-open strong').allTextContents(), ['Patient 06'])
+    await page.getByLabel('Find a clinical patient').fill('')
+    releaseAppointments()
+  }
   await page.getByText('eCW visit checks finished for 5 patients.').waitFor()
   assert.equal(appointmentReads, 5)
   assert.match(await page.getByRole('alert').innerText(), /1 patient history was unavailable/)
@@ -145,7 +174,7 @@ try {
   assert.equal(await page.locator('.clinical-cohorts').count(), 0)
   assert.equal(await page.getByText('See more').count(), 0)
   assert.equal(await page.locator('.clinical-period-links button').count(), 2)
-  assert.equal(await groups.count(), 1)
+  assert.equal(await groups.count(), 2)
   assert.deepEqual(await page.locator('.clinical-period-title').allTextContents(), ['Today’s patients'])
   assert.equal(await groups.first().getAttribute('open'), '')
   assert.deepEqual(await groups.first().locator('.clinical-patient-open strong').allTextContents(), [
@@ -183,7 +212,6 @@ try {
   await pastGroups.nth(1).locator('summary').click()
   assert.deepEqual(await pastGroups.nth(1).locator('.clinical-patient-open strong').allTextContents(), [
     'Patient 04',
-    'Patient 05',
   ])
 
   await page.getByRole('button', { name: 'Today’s patients' }).click()
@@ -251,6 +279,7 @@ try {
   assert.equal(await page.getByRole('button', { name: 'Visit date page 2' }).getAttribute('aria-current'), 'page')
   assert.deepEqual(errors, [])
   console.log('PASS: all visit dates, one profile, return navigation, warm cache, responsive layout')
+  }
 } finally {
   await browser.close()
 }

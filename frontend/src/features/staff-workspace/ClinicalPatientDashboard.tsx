@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { ChevronRight, Mail, Plus, RefreshCw, Users } from 'lucide-react'
 import { deleteStaffIntake } from '../../services/api/staff-intake'
 import {
@@ -25,6 +25,8 @@ interface Props {
 }
 type VisitResult = { day: string; time: number | null }
 const CACHE_AGE_MS = 15 * 60_000
+const DATE_CHECK_BATCH_SIZE = 200
+const PATIENTS_PER_GROUP = 50
 export default function ClinicalPatientDashboard({
   initialPatientId,
   onOpenIntake,
@@ -45,8 +47,11 @@ export default function ClinicalPatientDashboard({
   const [notice, setNotice] = useState('')
   const [visitResults, setVisitResults] = useState<Record<string, VisitResult[]>>({})
   const [visitProgress, setVisitProgress] = useState({ done: 0, total: 0, failed: 0 })
-  const [visitsReady, setVisitsReady] = useState(false)
+  const [remainingDateChecks, setRemainingDateChecks] = useState(0)
+  const [dateCheckBatch, setDateCheckBatch] = useState(0)
+  const [visibleRows, setVisibleRows] = useState<Record<string, number>>({})
   const visitResultsRef = useRef<Record<string, VisitResult[]>>({})
+  const checkedPatientIds = useRef(new Set<string>())
   const visitRun = useRef(0)
   const forceVisitRefresh = useRef(false)
   const [period, setPeriod] = useState<'upcoming' | 'past' | null>(null)
@@ -61,6 +66,7 @@ export default function ClinicalPatientDashboard({
     getClinicalPatients()
       .then((result) => {
         if (active) {
+          checkedPatientIds.current.clear()
           setDashboard(result)
           if (initialPatientId) {
             setSelectedDay(null)
@@ -91,59 +97,64 @@ export default function ClinicalPatientDashboard({
         delete results[patient.id]
         return false
       }
-      if (patient.ecw_visit_cache && patient.ecw_visit_cached_at) {
+      if (
+        patient.ecw_visit_cache &&
+        patient.ecw_visit_cached_at &&
+        !checkedPatientIds.current.has(patient.id)
+      ) {
         results[patient.id] = ecwVisitDays({
           ecw_status: 'complete',
           appointments: patient.ecw_visit_cache.map((visit) => ({ ...visit, from_ecw: true })),
         })
-      } else delete results[patient.id]
+      }
       return (
-        forceVisitRefresh.current ||
-        !patient.ecw_visit_cached_at ||
-        !Number.isFinite(Date.parse(patient.ecw_visit_cached_at)) ||
-        now - Date.parse(patient.ecw_visit_cached_at) >= CACHE_AGE_MS
+        !checkedPatientIds.current.has(patient.id) &&
+        (forceVisitRefresh.current ||
+          !patient.ecw_visit_cached_at ||
+          !Number.isFinite(Date.parse(patient.ecw_visit_cached_at)) ||
+          now - Date.parse(patient.ecw_visit_cached_at) >= CACHE_AGE_MS)
       )
     })
     forceVisitRefresh.current = false
     visitResultsRef.current = results
     setVisitResults(results)
-    setVisitsReady(
-      linked.length === 0 ||
-        dashboard.patients.every(
-          (patient) =>
-            !patient.ecw_linked || Boolean(patient.ecw_visit_cache && patient.ecw_visit_cached_at),
-        ),
-    )
-    setVisitProgress({ done: 0, total: linked.length, failed: 0 })
+    const batch = linked.slice(0, DATE_CHECK_BATCH_SIZE)
+    setRemainingDateChecks(linked.length - batch.length)
+    setVisitProgress({ done: 0, total: batch.length, failed: 0 })
     const run = ++visitRun.current
     let next = 0
     let done = 0
     let failed = 0
     async function loadNext() {
-      while (run === visitRun.current && next < linked.length) {
-        const patient = linked[next++]
+      while (run === visitRun.current && next < batch.length) {
+        const patient = batch[next++]
         try {
           const history = await getPatientAppointments(patient.clinic_patient_id!, true)
+          if (run !== visitRun.current) return
           if (history.ecw_status !== 'complete') throw new Error('eCW history incomplete')
           results[patient.id] = ecwVisitDays(history)
         } catch {
           failed += 1
         }
         if (run !== visitRun.current) return
+        checkedPatientIds.current.add(patient.id)
         done += 1
-        setVisitProgress({ done, total: linked.length, failed })
-        if (done === linked.length) {
-          visitResultsRef.current = results
+        if (
+          done % 10 === 0 ||
+          done === batch.length ||
+          results[patient.id]?.some((visit) => visit.day === localVisitDay(new Date()))
+        ) {
+          visitResultsRef.current = { ...results }
           setVisitResults({ ...results })
-          setVisitsReady(true)
+          setVisitProgress({ done, total: batch.length, failed })
         }
       }
     }
-    void Promise.all(Array.from({ length: Math.min(3, linked.length) }, () => loadNext()))
+    void Promise.all(Array.from({ length: Math.min(3, batch.length) }, () => loadNext()))
     return () => {
       if (visitRun.current === run) visitRun.current += 1
     }
-  }, [dashboard])
+  }, [dashboard, dateCheckBatch])
   async function refresh(reloadVisits = true) {
     setBusy(true)
     setError('')
@@ -152,6 +163,8 @@ export default function ClinicalPatientDashboard({
       if (reloadVisits) {
         visitRun.current += 1
         forceVisitRefresh.current = true
+        checkedPatientIds.current.clear()
+        visitResultsRef.current = {}
       }
       setDashboard(updated)
     } catch (caught) {
@@ -209,43 +222,53 @@ export default function ClinicalPatientDashboard({
       setDeleting(false)
     }
   }
-  const patients =
-    dashboard?.patients.filter(
-      (patient) =>
-        (!cardStatus || patient.card_status === cardStatus) &&
-        `${name(patient)} ${patient.email || ''} ${patient.birth_date} ${patient.ecw_account_number || ''}`
-          .toLowerCase()
-          .includes(query.trim().toLowerCase()),
-    ) || []
-  const groups = new Map<string, ClinicalPatient[]>()
-  const groupTimes = new Map<string, number | null>()
-  for (const patient of patients) {
-    const visits = visitResults[patient.id]?.length
-      ? visitResults[patient.id]
-      : [{ day: 'undated', time: null }]
-    for (const visit of visits) {
-      const group = groups.get(visit.day)
-      if (group) group.push(patient)
-      else groups.set(visit.day, [patient])
-      groupTimes.set(`${patient.id}:${visit.day}`, visit.time)
+  const patients = useMemo(
+    () =>
+      dashboard?.patients.filter(
+        (patient) =>
+          (!cardStatus || patient.card_status === cardStatus) &&
+          `${name(patient)} ${patient.email || ''} ${patient.birth_date} ${patient.ecw_account_number || ''}`
+            .toLowerCase()
+            .includes(query.trim().toLowerCase()),
+      ) || [],
+    [dashboard, cardStatus, query],
+  )
+  const groups = useMemo(() => {
+    const grouped = new Map<string, ClinicalPatient[]>()
+    const groupTimes = new Map<string, number | null>()
+    for (const patient of patients) {
+      const visits =
+        visitResults[patient.id] === undefined && patient.ecw_linked
+          ? [{ day: 'pending', time: null }]
+          : visitResults[patient.id]?.length
+            ? visitResults[patient.id]
+            : [{ day: 'undated', time: null }]
+      for (const visit of visits) {
+        const group = grouped.get(visit.day)
+        if (group) group.push(patient)
+        else grouped.set(visit.day, [patient])
+        groupTimes.set(`${patient.id}:${visit.day}`, visit.time)
+      }
     }
-  }
-  for (const [day, group] of groups)
-    group.sort(
-      (first, second) =>
-        (groupTimes.get(`${first.id}:${day}`) ?? Infinity) -
-          (groupTimes.get(`${second.id}:${day}`) ?? Infinity) ||
-        name(first).localeCompare(name(second)),
-    )
+    for (const [day, group] of grouped)
+      group.sort(
+        (first, second) =>
+          (groupTimes.get(`${first.id}:${day}`) ?? Infinity) -
+            (groupTimes.get(`${second.id}:${day}`) ?? Infinity) ||
+          name(first).localeCompare(name(second)),
+      )
+    return grouped
+  }, [patients, visitResults])
   const today = localVisitDay(new Date())
   const upcomingGroups = [...groups]
-    .filter(([day]) => day > today && day !== 'undated')
+    .filter(([day]) => day > today && day !== 'undated' && day !== 'pending')
     .sort(([first], [second]) => first.localeCompare(second))
   const todayGroup = groups.get(today) || []
   const pastGroups = [...groups]
     .filter(([day]) => day < today)
     .sort(([first], [second]) => second.localeCompare(first))
   if (groups.has('undated')) pastGroups.push(['undated', groups.get('undated')!])
+  const pendingGroup = groups.get('pending') || []
   const formatDay = (day: string) =>
     new Date(`${day}T12:00:00`).toLocaleDateString(undefined, {
       weekday: 'long',
@@ -262,14 +285,18 @@ export default function ClinicalPatientDashboard({
         }}
       >
         <span className="clinical-visit-date">
-          {day === 'undated' ? 'Appointment date not available' : formatDay(day)}
+          {day === 'pending'
+            ? 'Appointment date still being checked'
+            : day === 'undated'
+              ? 'Appointment date not available'
+              : formatDay(day)}
         </span>
         <span className="clinical-visit-count">
           {group.length} {group.length === 1 ? 'patient' : 'patients'}
         </span>
       </summary>
       <div>
-        {group.map((patient) => (
+        {group.slice(0, visibleRows[day] || PATIENTS_PER_GROUP).map((patient) => (
           <article className="clinical-patient-row" key={patient.id}>
             <button
               className="clinical-patient-open"
@@ -301,6 +328,18 @@ export default function ClinicalPatientDashboard({
             </button>
           </article>
         ))}
+        {group.length > (visibleRows[day] || PATIENTS_PER_GROUP) && (
+          <button
+            onClick={() =>
+              setVisibleRows((current) => ({
+                ...current,
+                [day]: (current[day] || PATIENTS_PER_GROUP) + PATIENTS_PER_GROUP,
+              }))
+            }
+          >
+            Show more patients
+          </button>
+        )}
       </div>
     </details>
   )
@@ -426,11 +465,6 @@ export default function ClinicalPatientDashboard({
                 : 'Scan a card, request a patient upload, or open a patient’s ClinicForce QR to get started.'}
             </p>
           </div>
-        ) : !visitsReady ? (
-          <p className="staff-small staff-muted" role="status">
-            Loading appointment dates for {visitProgress.total} patients… {visitProgress.done}{' '}
-            checked.
-          </p>
         ) : (
           <div className="clinical-patient-list">
             <p className="staff-small staff-muted clinical-visit-note">
@@ -451,6 +485,12 @@ export default function ClinicalPatientDashboard({
                 dates may be missing; select Refresh patients to retry.
               </p>
             )}
+            {remainingDateChecks > 0 && visitProgress.done === visitProgress.total && (
+              <button onClick={() => setDateCheckBatch((current) => current + 1)}>
+                Check appointment dates for {Math.min(remainingDateChecks, DATE_CHECK_BATCH_SIZE)}{' '}
+                more patients
+              </button>
+            )}
             <ClinicalPatientSections
               selected={period}
               onSelect={setPeriod}
@@ -461,6 +501,7 @@ export default function ClinicalPatientDashboard({
                 upcoming: upcomingGroups,
                 past: pastGroups,
               }}
+              pending={pendingGroup.length ? ['pending', pendingGroup] : null}
               renderGroup={renderGroup}
             />
           </div>
