@@ -43,7 +43,6 @@ def _previsit_service_types(inputs: dict) -> list[str]:
         ordered.insert(0, '98')
     return list(dict.fromkeys([*ordered, '30']))
 
-
 def _payer_previsit_service_types(payer_id: str, inputs: dict) -> list[str]:
     requested = _previsit_service_types(inputs)
     # These Aetna routes return remaining office accumulators for STC 98 alone,
@@ -96,7 +95,6 @@ def _benefit_context(inputs: dict, source: dict) -> dict:
             'visit_context': {key: inputs.get(key) for key in ('reason', 'diagnoses')},
             'provider_office_role': _api.provider_specialty.office_role(rendering.get('roles') or []),
             'provider_npi': npi, 'provider_npi_conflict': conflict}
-
 
 def _previsit_range(practice_id: str, inputs: dict, source: dict, payer_id: str,
                     codes: list[dict], benefits: dict, *, payload: dict | None = None,
@@ -200,7 +198,6 @@ def _previsit_range(practice_id: str, inputs: dict, source: dict, payer_id: str,
             'payment_reference': payments['reference'], 'verified_at': payments.get('verified_at')}
     return priced, issues
 
-
 def _previsit_benefits(payload: dict, coverage: dict, service_date: str | None = None, service_type: str | list[str] = "98",
                        *, inputs: dict | None = None, source: dict | None = None) -> dict:
     context = _api._benefit_context(inputs, source or {}) if inputs else {}
@@ -261,7 +258,6 @@ def _previsit_benefits(payload: dict, coverage: dict, service_date: str | None =
             'Confirm patient identity: the payer-returned patient details differ from eCW.')
     return benefits
 
-
 def _network_contract_evidence(practice_id: str, network: dict, profile: dict, service_date: str = '') -> dict:
     evidence = {key: network.get(key) for key in ('network_name', 'evidence_reference', 'effective_from', 'effective_to')}
     def current(document: dict) -> bool:
@@ -293,7 +289,6 @@ def _network_contract_evidence(practice_id: str, network: dict, profile: dict, s
     return evidence
 
 
-
 def _product_mapping_evidence(profile: dict, network: dict, source: dict, service_date: str) -> dict | None:
     """Retain the administrator record used to alias a payer product."""
     payer_names = source.get('payer_plan_names') or []
@@ -310,7 +305,6 @@ def _product_mapping_evidence(profile: dict, network: dict, source: dict, servic
                                               'rate_plan_matcher', 'network_identifiers')}
     return None
 
-
 def _requirement_candidates(result: dict) -> list[dict]:
     selected_ids = {row.get('id') for row in result.get('codes') or []}
     suggested_codes = {str(candidate.get('code') or '').upper()
@@ -320,7 +314,6 @@ def _requirement_candidates(result: dict) -> list[dict]:
     return [row for row in result.get('available_codes') or []
             if row.get('id') not in selected_ids and
             (row.get('id') in recommended_ids or row.get('code') in suggested_codes)]
-
 
 def _apply_inventory_tier(result: dict, benefits: dict, inventory: dict, exclusion: dict) -> None:
     """Use a certified clinic inventory as an operational, never payer-confirmed, tier."""
@@ -337,7 +330,6 @@ def _apply_inventory_tier(result: dict, benefits: dict, inventory: dict, exclusi
         'document_id': exclusion['document_id'], 'page': exclusion.get('page'),
         'locator': exclusion.get('locator'),
         'reason': 'NMCT’s certified complete agreement inventory excludes this Regional or Local Medicare Advantage PPO product; out-of-network benefits are used for estimation, without claiming payer confirmation.'}
-
 
 def _attach_previsit_pricing(result: dict, practice_id: str, inputs: dict, source: dict,
                              payer_id: str, benefits: dict, *, payload: dict | None = None,
