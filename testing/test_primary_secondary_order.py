@@ -3,7 +3,8 @@
 from copy import deepcopy
 
 from app.insurance import commercial
-from app.insurance.stedi_benefits.payer_order import primary_secondary_order
+from app.insurance.stedi_benefits.payer_order import primary_secondary_order, reported_medicare_part_b_secondary
+from app.insurance.identity import compare, patient_benefits_bound
 
 
 DAY = '2026-11-06'
@@ -50,3 +51,28 @@ def test_primary_order_rejects_wrong_secondary_or_third_policy():
     assert primary_secondary_order(raw, {**coverage, 'active_coverages': 3}, third, DAY) is None
     raw['plans'][0]['benefits']['otherOrAdditionalPayer'][0]['relatedEntities'][0]['type'] = 'PAYER'
     assert primary_secondary_order(raw, coverage, source(), DAY) is None
+
+
+def test_part_b_report_supports_zero_advance_with_three_policies_and_dependent():
+    raw = response()
+    rows = raw['plans'][0]['benefits']['otherOrAdditionalPayer']
+    rows[0]['relatedEntities'][0]['name']['organization'] = 'MEDICARE A'
+    rows.append(deepcopy(rows[0]))
+    rows[1]['relatedEntities'][0]['name']['organization'] = 'MEDICARE B'
+    raw['subscriber'] = {'memberId': 'SYN123', 'firstName': 'Alex', 'lastName': 'Example'}
+    raw['dependent'] = {'firstName': 'Robin', 'lastName': 'Example',
+                        'dateOfBirth': '1989-03-23', 'relationToSubscriberCode': '01'}
+    coverage = {'coverage_id': 'blue', 'active_coverages': 3, 'member_id': 'SYN123',
+                'patient_first': 'Robin', 'patient_last': 'Example',
+                'patient_birth_date': '1989-03-23', 'subscriber_first': 'Robin',
+                'subscriber_last': 'Example', 'relationship': '18'}
+    comparison = compare(raw, coverage)
+    assert comparison['reconciliation_rule'] == 'payer_matched_patient'
+    assert patient_benefits_bound(comparison)
+    assert primary_secondary_order(raw, coverage, source(), DAY) is None
+    assert reported_medicare_part_b_secondary(raw, DAY) == {
+        'status': 'reported', 'payer': 'Original Medicare Part B',
+        'evidence_paths': ['plans[0].benefits.otherOrAdditionalPayer[1]']}
+    assert reported_medicare_part_b_secondary(raw, '2016-01-01') is None
+    rows[1]['relatedEntities'][0]['name']['organization'] = 'Other Plan'
+    assert reported_medicare_part_b_secondary(raw, DAY) is None

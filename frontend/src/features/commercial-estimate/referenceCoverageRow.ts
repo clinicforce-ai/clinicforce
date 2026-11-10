@@ -34,7 +34,9 @@ export function referenceCoverageRow(
     detail:
       order?.status === 'verified'
         ? `${detail} · ${result.payer || 'Selected plan'} primary · ${order.secondary_payer} secondary`
-        : detail,
+        : benefits?.medicare_part_b_secondary?.status === 'reported'
+          ? `${detail} · Payer reports Original Medicare Part B as secondary; claim order not independently verified`
+          : detail,
   }
 }
 

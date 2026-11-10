@@ -211,7 +211,7 @@ def compare(payload: dict, coverage: dict, evidence: dict | None = None) -> dict
         policy_differences and enough_identity and anchored
         and ((last_matches and not differences) or corrected_surname) and bool(dependent)
         and returned['relationship'] in {'spouse', 'child', 'other'}
-        and coverage.get('active_coverages') == 1 and coverage.get('coverage_id')
+        and coverage.get('coverage_id')
         and (not coverage.get('group_number') or not payer_plan.get('group_number') or group_matches)
         and (not coverage.get('plan_number') or not payer_plan.get('plan_number')
              or normalized(coverage['plan_number']) == normalized(payer_plan['plan_number']))
