@@ -228,7 +228,7 @@ export default function ArrivalAmountSummary({
                             ? 'Amount to collect at visit · pending verification'
                             : partialCopay != null
                               ? pendingUhcHmoPosCopay
-                                ? 'Amount to collect at visit · pending Medicare protection check'
+                                ? 'Amount to collect at visit · verify Medicare protection'
                                 : referenceOnly
                                   ? 'Office-only reference · collection pending'
                                   : 'Suggested amount to collect at visit'
@@ -286,9 +286,7 @@ export default function ArrivalAmountSummary({
                               : pendingCignaCopay != null
                                 ? `Pending · ${money(pendingCignaCopay)}`
                                 : partialCopay != null
-                                  ? pendingUhcHmoPosCopay
-                                    ? `Pending · ${money(partialCopay)}`
-                                    : money(partialCopay)
+                                  ? money(partialCopay)
                                   : cardPlanningCopay != null
                                     ? money(cardPlanningCopay)
                                     : priorDateAetnaCopay != null
@@ -387,7 +385,7 @@ export default function ArrivalAmountSummary({
       ) : partialCopay != null ? (
         <p>
           {pendingUhcHmoPosCopay
-            ? 'Stedi reported this specialist office copay. Confirm QMB protection and prior payments before charging; the UnitedHealthcare allowance and final claim share remain unknown.'
+            ? 'Stedi reported this specialist office copay. Confirm QMB protection, prior payments, and the current clinic CPT rate before charging; the UnitedHealthcare allowance and final claim share remain unknown.'
             : referenceOnly
               ? 'Planning amount for this visit date; confirm payer date and Medicare cost-sharing protection before collection.'
               : additionalServicesPending

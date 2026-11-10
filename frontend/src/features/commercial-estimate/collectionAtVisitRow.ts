@@ -261,7 +261,7 @@ export function collectionAtVisitRow(
                   : diagnosticCopayReference != null
                     ? 'Diagnostic copay · collection pending'
                     : pendingUhcHmoPosCopay
-                      ? 'Amount to collect at visit · pending Medicare protection check'
+                      ? 'Amount to collect at visit · verify Medicare protection'
                       : (partialOfficeCopay != null || cardPlanningCopay != null) &&
                           feeProxyCheckin == null
                         ? 'Suggested amount to collect at visit'
@@ -328,7 +328,7 @@ export function collectionAtVisitRow(
                                         ? `Pending · ${money(humanaReferenceCopay)} office copay if confirmed`
                                         : partialOfficeCopay != null
                                           ? pendingUhcHmoPosCopay
-                                            ? `Pending · ${money(partialOfficeCopay)} specialist office copay`
+                                            ? `${money(partialOfficeCopay)} specialist office copay`
                                             : money(partialOfficeCopay)
                                           : pendingAetnaCopay != null
                                             ? `Pending · ${money(pendingAetnaCopay)} office copay if verified`
@@ -389,7 +389,7 @@ export function collectionAtVisitRow(
                                       ? 'Published in-network specialist copay only. Confirm the member card, provider network, Medicare billing protection, clinic collection policy, and prior payments before charging.'
                                       : partialOfficeCopay != null
                                         ? pendingUhcHmoPosCopay
-                                          ? 'Payer-reported specialist office copay after recorded payments. Confirm QMB protection and prior payments before charging; the UnitedHealthcare allowance and final claim share remain unknown.'
+                                          ? 'Payer-reported specialist office copay after recorded payments. Confirm QMB protection, prior payments, and the current clinic CPT rate before charging; the UnitedHealthcare allowance and final claim share remain unknown.'
                                           : 'Suggested office visit copay after recorded payments. Separately performed DBS device services may add cost.'
                                         : pendingAetnaCopay != null
                                           ? 'Stedi reported one specialist office copay for CPT 99204. Confirm the remaining deductible, out-of-pocket balance, conditional benefit, prior payments, and clinic collection policy before charging. Full patient share remains unresolved.'
