@@ -446,6 +446,60 @@ try {
     1,
   )
   assert(!alternativeServices.includes('$30.00'))
+  const metOopServices = renderToStaticMarkup(
+    React.createElement(VisitServices, {
+      insuredAmountSupported: true,
+      result: {
+        payment_mode: 'insurance',
+        payer: 'Synthetic PPO',
+        benefit_source: 'Stedi',
+        price_range: {
+          mode: 'alternatives',
+          lines: [
+            { id: 'low', code: '95907', units: 1, allowed_cents: 8440,
+              calculation: { patient_cents: 0, plan_cents: 8440 },
+              benefits: { active: true, copay_cents: 5000 } },
+            { id: 'high', code: '95908', units: 1, allowed_cents: 10511,
+              calculation: { patient_cents: 0, plan_cents: 10511 },
+              benefits: { active: true, copay_cents: 5000 } },
+          ],
+        },
+        collection_guidance: {
+          basis: 'out_of_pocket_limit', amount_cents: 0, status: 'estimated', services: [],
+        },
+      },
+    }),
+  )
+  assert(metOopServices.includes('Clinic allowed rate: $84.40'))
+  assert(metOopServices.includes('Clinic allowed rate: $105.11'))
+  assert(metOopServices.includes('projected plan share: $84.40'))
+  assert(metOopServices.includes('$50.00 reported copay'))
+  assert.equal((metOopServices.match(/individual out-of-pocket remaining/g) || []).length, 2)
+  assert(!metOopServices.includes('Select one CPT'))
+  const { collectionAtVisitRow } = await server.ssrLoadModule(
+    '/src/features/commercial-estimate/collectionAtVisitRow.ts',
+  )
+  const metOopRow = collectionAtVisitRow(
+    {
+      payer: 'Synthetic PPO', payment_mode: 'insurance',
+      benefits: { active: true, family_oop_remaining_cents: 350000 },
+      price_range: { mode: 'alternatives', lines: [] },
+      collection_guidance: {
+        basis: 'out_of_pocket_limit', amount_cents: 0, status: 'estimated', services: [],
+      },
+    },
+    { cash: false, supportedAmount: true, amount: 0 },
+    {
+      combinedPlan: null, feeProxy: null, aetnaPlanning: null, aetnaCopayPlanning: null,
+      officeReferenceCopay: null, humanaReferenceCopay: null, partialOfficeCopay: null,
+      pendingAetnaCopay: null, priorDateAetnaCopay: null, pendingBluecardCopay: null,
+      cardPlanningCopay: null, cignaCard: null, automaticCashFallback: false,
+      cignaFeeProxy: false, proxyFormula: undefined, bluecardDeductible: null,
+    },
+  )
+  assert.equal(metOopRow.value, '$0.00')
+  assert(metOopRow.detail.includes('= $0.00 patient share'))
+  assert(metOopRow.detail.includes('family out-of-pocket remainder is a limit'))
   const selectedService = renderToStaticMarkup(
     React.createElement(VisitServices, {
       insuredAmountSupported: true,

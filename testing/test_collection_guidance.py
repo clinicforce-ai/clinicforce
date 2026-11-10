@@ -638,6 +638,45 @@ def test_oop_zero_is_case_evidence_not_a_universal_free_care_default():
     assert collection_guidance.build(result)['status'] == 'action_required'
 
 
+def test_unselected_priced_ncs_alternatives_share_one_zero_oop_collection_amount():
+    result = scenario(0)
+    result.update(payer='BCBSTX', service_selection_status='preview', codes=[], selected_ids=[])
+    result['benefits'].update(network_source='clinic_group_agreement', oop_remaining_cents=0,
+                              oop_annual_cents=250000, family_oop_remaining_cents=350000)
+    result['price_range'] = {'mode': 'alternatives', 'complete': True, 'conditional': False,
+        'patient_min_cents': 0, 'patient_max_cents': 0,
+        'allowed_min_cents': 8440, 'allowed_max_cents': 10511,
+        'lines': [{'id': code, 'code': code, 'units': 1, 'allowed_cents': allowed,
+                   'allowed_basis': 'clinic_contract', 'rate_resolution': {'status': 'RESOLVED'},
+                   'calculation': {'patient_cents': 0, 'plan_cents': allowed},
+                   'benefits': {'active': True, 'network_status': 'in_network',
+                                'oop_remaining_cents': 0, 'copay_cents': 5000,
+                                'requirements': {kind: {'required': 'unknown', 'cleared': False}
+                                                 for kind in ('referral', 'authorization')}}}
+                  for code, allowed in [('95907', 8440), ('95908', 10511)]]}
+    result['arrival_collection'] = {'amount_cents': 0, 'status': 'estimate'}
+    guidance = collection_guidance.build(result)
+    assert guidance['amount_cents'] == 0
+    assert guidance['basis'] == 'out_of_pocket_limit'
+    assert 'individual' in guidance['reason'].lower()
+    assert encounter_summary.build({**result, 'collection_guidance': guidance})['collect_today_cents'] == 0
+
+    for change in ({'oop_remaining_cents': 5000}, {'has_secondary': True},
+                   {'network_status': 'unknown'}, {'source_errors': [{'kind': 'invalid_benefit'}]}):
+        altered = deepcopy(result)
+        altered['benefits'].update(change)
+        if 'oop_remaining_cents' in change:
+            for line in altered['price_range']['lines']:
+                line['benefits']['oop_remaining_cents'] = change['oop_remaining_cents']
+        assert collection_guidance.build(altered)['amount_cents'] is None
+    altered = deepcopy(result)
+    altered['price_range']['lines'][0]['rate_resolution']['status'] = 'MISSING'
+    assert collection_guidance.build(altered)['amount_cents'] is None
+    altered = deepcopy(result)
+    altered['price_range']['lines'][0]['benefits']['separate_copay_limit'] = True
+    assert collection_guidance.build(altered)['amount_cents'] is None
+
+
 def test_new_patient_alternatives_collect_the_lowest_estimate_and_explain_final_complexity():
     result = scenario()
     result['price_range'].update(mode='alternatives', patient_max_cents=12000)

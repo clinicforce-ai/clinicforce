@@ -422,6 +422,14 @@ export function collectionAtVisitRow(
                                                           : undefined,
     emphasis: true,
   }
+  if (
+    model.supportedAmount &&
+    result.price_range?.mode === 'alternatives' &&
+    result.collection_guidance?.basis === 'out_of_pocket_limit' &&
+    result.collection_guidance.amount_cents === 0
+  ) {
+    row.detail = `For each priced CPT: min(reported copay + any applicable deductible and coinsurance, ${money(0)} individual in-network out-of-pocket remaining) = ${money(0)} patient share. The family out-of-pocket remainder is a limit, not a visit charge. Choose the performed CPT before billing.`
+  }
   if (result.collection_guidance?.basis === 'bcbstx_refundable_advance') {
     row.label = 'Refundable advance at visit'
     row.detail =
