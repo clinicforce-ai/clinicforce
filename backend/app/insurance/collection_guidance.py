@@ -9,6 +9,7 @@ from app.insurance.collection.office_copay import (cigna_oap_televisit_office_co
 from app.insurance.collection.billing_note import apply_billing_note
 from app.insurance.collection.benefit_gates import prepare_benefit_evidence
 from app.insurance.collection.healthselect_zero import applies as healthselect_zero_applies
+from app.insurance.collection import secondary_order
 from app.insurance.identity import patient_benefits_bound
 from app.insurance.benefit_review import (annual_oop_conflict_with_known_remaining,
                                           selected_service_blocker, selected_service_detail)
@@ -16,7 +17,6 @@ from app.insurance.network_participation import participation_conflict, verified
 from app.insurance import encounter_summary
 from app.insurance.insurance_product import is_medicare_advantage
 from app.insurance.published_plan_benefits import GEHA_HIGH_PSHB_MA_16615_2026
-from app.insurance.stedi_benefits.payer_order import verified_primary_order
 def emg_option(result: dict, rates: list[dict], rules: dict, payload: dict | None,
                service_date: str, review: dict) -> dict:
     """Compare EMG scenarios using the same collection rules as the visit."""
@@ -82,12 +82,7 @@ def build(result: dict, review: dict | None = None) -> dict:
     adverse = summarize_requirements(result, lines, guidance, actions)
     identity = result.get('identity') or benefits.get('identity') or {}
     line_blocker = selected_service_blocker(benefits.get('network_status') or 'unknown', identity, lines)
-    unresolved_order = (result.get('recovery') or {}).get('reason_code') == 'multiple_active_policies'
-    same_policy_conflict = (result.get('recovery') or {}).get('reason_code') == 'same_policy_evidence_conflict'
-    verified_order = verified_primary_order(result) and not same_policy_conflict
-    secondary_name = str((benefits.get('primary_secondary_order') or {}).get('secondary_payer') or '')
-    medicare_secondary = verified_order and secondary_name.strip().casefold().startswith('medicare')
-    primary_secondary_copay = verified_order and not medicare_secondary
+    unresolved_order, same_policy_conflict, primary_secondary_copay, medicare_secondary = secondary_order.state(result)
     medical_names = (((result.get('plan_details') or {}).get('stedi') or {}).get('names')
                      or (benefits.get('plan_details') or {}).get('names') or [])
     ma_ppo = is_medicare_advantage(medical_names)
@@ -265,8 +260,7 @@ def build(result: dict, review: dict | None = None) -> dict:
         guidance.update(status='estimated', basis='bcbstx_proxy_advance',
             reason='Provisional in-network advance from the clinic-approved BCBS Texas fee proxy and member diagnostic benefits. The UHC allowed amount is unknown.')
         assumptions.append('The advance uses clinic BCBS Texas fee references, not a payer-confirmed UHC allowance. Final responsibility follows the processed claim.')
-    if medicare_secondary and amount is not None and amount > 0:
-        amount = None
+    amount = secondary_order.allowed_advance(amount, medicare_secondary)
     oon_advance = (not verified_out_of_network(benefits) or
         policy.get('allow_supported_oon_advance') is True and
         (not any(line.get('allowed_basis') == 'cms_original_medicare_estimate' for line in lines)
@@ -393,16 +387,13 @@ def build(result: dict, review: dict | None = None) -> dict:
             actions.append('Compare the saved payer patient, subscriber and member ID with eCW before using these benefit balances.')
         elif adverse:
             guidance['reason'] = 'A referral or authorization issue affects the selected care. The collection amount depends on resolving that coverage requirement.'
-        elif medicare_secondary:
-            guidance['reason'] = ('eCW and the primary payer list Medicare as secondary. Verify Medicare eligibility, '
-                                  'submit the primary claim, then the Medicare secondary claim; collect any patient '
-                                  'balance only after the remittance.')
+        elif medicare_secondary: guidance['reason'] = secondary_order.action(True)
         elif price.get('conditional'):
             guidance['reason'] = 'The visit estimate depends on unresolved coverage or approval conditions. Verify them before collecting.'
         elif primary_secondary_copay:
             guidance['reason'] = 'The primary and secondary payer order is verified, but a supported office copay or approved collection policy is still needed.'
         elif benefits.get('has_secondary') or unresolved_order:
-            guidance['reason'] = 'More than one plan may pay for this visit. The collection amount depends on how those plans coordinate benefits.'
+            guidance['reason'] = secondary_order.action(medicare_secondary)
             if not active_payer_benefits and (result.get('eligibility_failure') or {}).get('kind') == 'provider_enrollment':
                 guidance['reason'] += ' A current payer check also requires clinic provider enrollment.'
         elif not active_payer_benefits and (result.get('eligibility_failure') or {}).get('kind') == 'provider_enrollment':
