@@ -213,6 +213,10 @@ export function collectionAtVisitRow(
     priorDateAetnaCopay == null ? null : Math.max(0, priorDateAetnaCopay - aetnaPaid)
   const botoxPreview = !model.cash && !model.previousEstimate ? result.botox_preview : null
   const pendingCignaCopay = pendingCignaOfficeCopay(result, model)
+  const pendingUhcHmoPosCopay =
+    partialOfficeCopay != null &&
+    /\bhmopos\b/i.test(result.plan_details?.stedi?.names?.[0] || '') &&
+    result.billing_protection?.status !== 'not_qmb'
   const diagnosticCopayReference =
     !model.cash &&
     !model.previousEstimate &&
@@ -256,23 +260,25 @@ export function collectionAtVisitRow(
                   ? 'Planned amount to collect at visit'
                   : diagnosticCopayReference != null
                     ? 'Diagnostic copay · collection pending'
-                    : (partialOfficeCopay != null || cardPlanningCopay != null) &&
-                        feeProxyCheckin == null
-                      ? 'Suggested amount to collect at visit'
-                      : ((cignaFeeProxy &&
-                            !['claim_after_service', 'office_copay'].includes(
+                    : pendingUhcHmoPosCopay
+                      ? 'Amount to collect at visit · pending Medicare protection check'
+                      : (partialOfficeCopay != null || cardPlanningCopay != null) &&
+                          feeProxyCheckin == null
+                        ? 'Suggested amount to collect at visit'
+                        : ((cignaFeeProxy &&
+                              !['claim_after_service', 'office_copay'].includes(
+                                result.collection_guidance?.basis || '',
+                              )) ||
+                              feeProxyCheckin != null ||
+                              aetnaPlanning != null ||
+                              aetnaCopayPlanning != null) &&
+                            !['bcbstx_proxy_advance', 'qmb_protection'].includes(
                               result.collection_guidance?.basis || '',
-                            )) ||
-                            feeProxyCheckin != null ||
-                            aetnaPlanning != null ||
-                            aetnaCopayPlanning != null) &&
-                          !['bcbstx_proxy_advance', 'qmb_protection'].includes(
-                            result.collection_guidance?.basis || '',
-                          )
-                        ? aetnaPolicyPending
-                          ? 'Amount to collect at visit · pending policy approval'
-                          : 'Planned amount to collect at visit'
-                        : 'Amount to collect at visit',
+                            )
+                          ? aetnaPolicyPending
+                            ? 'Amount to collect at visit · pending policy approval'
+                            : 'Planned amount to collect at visit'
+                          : 'Amount to collect at visit',
     value: dsnpOffice
       ? `${money(0)} at check-in · ${money(feeProxy!.patient_share_cents)} pre-Medicaid planning share`
       : combinedPlan
@@ -321,7 +327,9 @@ export function collectionAtVisitRow(
                                       : humanaReferenceCopay != null
                                         ? `Pending · ${money(humanaReferenceCopay)} office copay if confirmed`
                                         : partialOfficeCopay != null
-                                          ? money(partialOfficeCopay)
+                                          ? pendingUhcHmoPosCopay
+                                            ? `Pending · ${money(partialOfficeCopay)} specialist office copay`
+                                            : money(partialOfficeCopay)
                                           : pendingAetnaCopay != null
                                             ? `Pending · ${money(pendingAetnaCopay)} office copay if verified`
                                             : priorDateAetnaBalance != null
@@ -380,7 +388,9 @@ export function collectionAtVisitRow(
                                     : humanaReferenceCopay != null
                                       ? 'Published in-network specialist copay only. Confirm the member card, provider network, Medicare billing protection, clinic collection policy, and prior payments before charging.'
                                       : partialOfficeCopay != null
-                                        ? 'Suggested office visit copay after recorded payments. Separately performed DBS device services may add cost.'
+                                        ? pendingUhcHmoPosCopay
+                                          ? 'Payer-reported specialist office copay after recorded payments. Confirm QMB protection and prior payments before charging; the UnitedHealthcare allowance and final claim share remain unknown.'
+                                          : 'Suggested office visit copay after recorded payments. Separately performed DBS device services may add cost.'
                                         : pendingAetnaCopay != null
                                           ? 'Stedi reported one specialist office copay for CPT 99204. Confirm the remaining deductible, out-of-pocket balance, conditional benefit, prior payments, and clinic collection policy before charging. Full patient share remains unresolved.'
                                           : priorDateAetnaBalance != null

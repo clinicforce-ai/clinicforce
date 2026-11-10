@@ -430,7 +430,10 @@ export function payerReportedPartialCopay(
     model.provisionalAmount != null ||
     !/\b(?:uhc|united\s*health(?:care)?)\b/i.test(payer) ||
     plans.length !== 1 ||
-    !/(?:\bmedicare(?:\s+advantage)?\s+ppo\b|\b(?:rppo|lppo)\b)/i.test(plans[0]) ||
+    !(
+      /(?:\bmedicare(?:\s+advantage)?\s+ppo\b|\b(?:rppo|lppo)\b)/i.test(plans[0]) ||
+      (/\bhmopos\b/i.test(plans[0]) && /\bmedicare\s+advantage\b/i.test(plans[0]))
+    ) ||
     result.price_range?.mode !== 'services' ||
     result.price_range.service_issues?.length ||
     officeLines?.length !== 1 ||
