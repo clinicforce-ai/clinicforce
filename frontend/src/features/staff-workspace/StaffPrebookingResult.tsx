@@ -2,37 +2,56 @@ import type { PrebookingEstimate, PrebookingTerms } from '../../services/api/pre
 
 const money = (cents: number | null | undefined) =>
   cents == null
-    ? 'Not reported'
+    ? 'Unavailable'
     : new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(cents / 100)
+
+const benefitMoney = (cents: number | null | undefined) =>
+  cents == null ? 'Not returned by insurer' : money(cents)
+
+function issueText(issue: string) {
+  const explanations: Record<string, string> = {
+    'Confirm the remaining individual deductible that applies to this visit.':
+      'The insurer did not return an applicable remaining individual deductible.',
+    'Confirm the remaining individual out-of-pocket maximum.':
+      'The insurer did not return a remaining individual out-of-pocket maximum.',
+    'Confirm which copay or coinsurance term applies, including any visit-count conditions.':
+      'The insurer did not establish one applicable copay or coinsurance term for this visit.',
+    'Verify the active clinic contract rate and exact plan mapping for this code, modifier and visit.':
+      'NMCT has no matched contract rate for this service and plan.',
+  }
+  return explanations[issue] || issue
+}
 
 function BenefitTerms({ terms }: { terms: PrebookingTerms }) {
   return (
     <dl className="prebooking-benefits">
       <div>
         <dt>Copay</dt>
-        <dd>{money(terms.copay_cents)}</dd>
+        <dd>{benefitMoney(terms.copay_cents)}</dd>
       </div>
       <div>
         <dt>Coinsurance</dt>
         <dd>
-          {terms.coinsurance_percent == null ? 'Not reported' : `${terms.coinsurance_percent}%`}
+          {terms.coinsurance_percent == null
+            ? 'Not returned by insurer'
+            : `${terms.coinsurance_percent}%`}
         </dd>
       </div>
       <div>
         <dt>Annual deductible</dt>
-        <dd>{money(terms.deductible_annual_cents)}</dd>
+        <dd>{benefitMoney(terms.deductible_annual_cents)}</dd>
       </div>
       <div>
         <dt>Deductible remaining</dt>
-        <dd>{money(terms.deductible_remaining_cents)}</dd>
+        <dd>{benefitMoney(terms.deductible_remaining_cents)}</dd>
       </div>
       <div>
         <dt>Annual out-of-pocket max</dt>
-        <dd>{money(terms.oop_annual_cents)}</dd>
+        <dd>{benefitMoney(terms.oop_annual_cents)}</dd>
       </div>
       <div>
         <dt>Out-of-pocket remaining</dt>
-        <dd>{money(terms.oop_remaining_cents)}</dd>
+        <dd>{benefitMoney(terms.oop_remaining_cents)}</dd>
       </div>
     </dl>
   )
@@ -163,8 +182,10 @@ export default function StaffPrebookingResult({ result }: { result: PrebookingEs
           <strong>No reliable visit price is available from this check.</strong>
           {result.coverage.status === 'active_today' && (
             <span>
-              {result.issues[0] ||
-                'The insurer or NMCT contract did not return enough information to calculate a price.'}
+              {issueText(
+                result.issues[0] ||
+                  'The insurer or NMCT contract did not return enough information to calculate a price.',
+              )}
             </span>
           )}
         </div>
@@ -220,7 +241,7 @@ export default function StaffPrebookingResult({ result }: { result: PrebookingEs
                 {(line.issues.length > 0 || line.conditions.length > 0) && (
                   <ul className="prebooking-line-issues">
                     {[...line.issues, ...line.conditions].map((issue, index) => (
-                      <li key={index}>{issue}</li>
+                      <li key={index}>{issueText(issue)}</li>
                     ))}
                   </ul>
                 )}
@@ -249,7 +270,7 @@ export default function StaffPrebookingResult({ result }: { result: PrebookingEs
           <h3 id="prebooking-review-title">Other limits of this estimate</h3>
           <ul>
             {result.issues.slice(1, 4).map((issue, index) => (
-              <li key={index}>{issue}</li>
+              <li key={index}>{issueText(issue)}</li>
             ))}
           </ul>
         </section>

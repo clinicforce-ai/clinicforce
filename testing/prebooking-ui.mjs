@@ -44,7 +44,7 @@ await page.route((url) => url.pathname.startsWith('/api/'), async (route) => {
       payer: 'Example Health', checked_at: '2026-10-29T12:00:00Z', checked_on: '2026-10-29', check_ids: ['ec_synthetic'],
       patient_address: { line1: '100 Example Ave', line2: null, city: 'Albany', state: 'NY', postal_code: '12207', country: null },
       network_status: 'in_network', network_evidence: { source: 'clinic_library_contract', reason: 'Synthetic NMCT contract.' }, plan_name: 'Example PPO',
-      benefits: { copay_cents: 2500, coinsurance_percent: '0', deductible_annual_cents: 100000, deductible_remaining_cents: 40000,
+      benefits: { copay_cents: 2500, coinsurance_percent: '0', deductible_annual_cents: partial ? null : 100000, deductible_remaining_cents: partial ? null : 40000,
         oop_annual_cents: 300000, oop_remaining_cents: 120000 },
       lines: [{ code: officeCode, units: 1, role: 'visit', service_type: '98', allowed_cents: 10000, patient_cents: partial ? null : 2500,
         rate_source: 'Synthetic signed rate', benefits: { copay_cents: 2500 }, issues: [], conditions: [] },
@@ -52,7 +52,7 @@ await page.route((url) => url.pathname.startsWith('/api/'), async (route) => {
           rate_source: 'Synthetic EMG rate', benefits: { coinsurance_percent: '25' }, issues: [], conditions: [] }] : [])],
       allowed_total_cents: addedEmg ? 30000 : 10000, plan_total_cents: partial ? null : addedEmg ? 22500 : 7500,
       patient_min_cents: partial ? null : addedEmg ? 7500 : 2500, patient_max_cents: partial ? null : addedEmg ? 7500 : 2500,
-      estimate_status: partial ? 'needs_review' : 'priced', issues: partial ? ['Insurer did not return a usable remaining deductible.'] : [] }
+      estimate_status: partial ? 'needs_review' : 'priced', issues: partial ? ['The insurer did not return enough applicable benefit terms to calculate the patient share.', 'Confirm the remaining individual deductible that applies to this visit.'] : [] }
       : { coverage: { status: 'payer_rejected', message: 'The insurer rejected the birth date. Check the subscriber birth date on the policy.', coverage_start: null, coverage_end: null },
       payer: 'Example Health', checked_at: '2026-10-29T12:00:00Z', checked_on: '2026-10-29', check_ids: ['ec_synthetic'],
       patient_address: { line1: '100 Example Ave', line2: null, city: 'Albany', state: 'NY', postal_code: '12207', country: null },
@@ -117,6 +117,9 @@ try {
   assert.match(await page.locator('.prebooking-cost-grid').innerText(), /Unavailable from payer benefits/)
   assert.equal(await page.locator('.prebooking-share').count(), 0)
   assert.match(await page.locator('.prebooking-service-row').innerText(), /Synthetic signed rate/)
+  assert.match(await page.locator('.prebooking-benefit-section').innerText(), /Not returned by insurer/)
+  assert.match(await page.locator('.prebooking-review').innerText(), /The insurer did not return an applicable remaining individual deductible/)
+  assert.equal(await page.getByText('Confirm the remaining individual deductible that applies to this visit.').count(), 0)
   partial = false
   await page.getByLabel('Office visit type').selectOption('established')
   await page.getByLabel('Reason for visit').fill('hand numbness; EMG planned')
