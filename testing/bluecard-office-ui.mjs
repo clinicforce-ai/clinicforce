@@ -54,8 +54,9 @@ assert.match(row.value, /\$60\.00/)
 assert.match(row.detail, /home-plan authorization/)
 assert.equal(pendingBluecardOfficeCopay({ ...result, identity: { ...identity, status: 'review' } }, model), null)
 assert.equal(pendingBluecardOfficeCopay({ ...result, benefits: { ...result.benefits, has_secondary: true } }, model), null)
-assert.equal(pendingBluecardOfficeCopay({ ...result, benefits: { ...result.benefits, network_source: null } }, model), null)
-assert.equal(pendingBluecardOfficeCopay(result, { ...model, requirementIssue: 'Check authorization' }), null)
+assert.equal(pendingBluecardOfficeCopay({ ...result, benefits: { ...result.benefits, network_source: null,
+  network_status: 'unknown' } }, model), 6000)
+assert.equal(pendingBluecardOfficeCopay(result, { ...model, requirementIssue: 'Check authorization' }), 6000)
 assert.equal(pendingBluecardOfficeCopay({ ...result, price_range: { mode: 'services', lines: [
   { id: 'office', code: '99204', units: 1, benefits: { ...terms, network_status: 'out_of_network' } },
 ] } }, model), null)
