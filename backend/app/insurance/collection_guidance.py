@@ -451,28 +451,7 @@ def build(result: dict, review: dict | None = None) -> dict:
         if guidance.get('cigna_estimate_required') and guidance['basis'] != 'claim_after_service':
             guidance.update(reason='The Cigna visit share needs its Explanation of Estimate before a check-in amount can be set.',
                 patient_message='Your visit payment is pending a Cigna estimate; this does not mean you owe $0.')
-    # CMS MSP physician billing defers collection when a patient-bound medical
-    # 271 reports Original Medicare Part B as secondary; claim order stays open.
-    if (active_payer_benefits and member_bound and not ma_ppo and
-            (benefits.get('medicare_part_b_secondary') or {}).get('status') == 'reported'
-            and not source_errors and not benefits.get('coverage_status_conflict')
-            and not benefits.get('coverage_dates_invalid') and not benefits.get('historical_only')
-            and not same_policy_conflict and not benefits.get('network_conflict')
-            and result.get('refresh_requires_selection') is not True
-            and price.get('mode') == 'services' and len(lines) == 1
-            and lines[0].get('code') in {'99202', '99203', '99204', '99205',
-                                        '99212', '99213', '99214', '99215'}
-            and lines[0].get('units') == 1):
-        guidance.update(amount_cents=0, status='zero_advance', basis='claim_after_service',
-            reason=('The payer reports Original Medicare Part B as secondary for this patient. '
-                    'Collect no office copay at check-in; submit the claims and use the remittances '
-                    'to determine any later patient balance.'),
-            patient_message=('No payment is requested at arrival. Final responsibility follows '
-                             'the primary and Medicare secondary claims.'))
-        guidance.pop('policy_setup_required', None)
-        guidance.pop('positive_advance_policy_missing', None)
-        guidance['collection_rule'] = {'mode': 'cms_msp_part_b_deferral',
-            'reference': 'CMS Medicare Secondary Payer Manual, Chapter 5, section 40.7.6'}
+    secondary_order.apply_part_b_deferral(result, guidance, source_errors, member_bound, ma_ppo)
     for line in lines:
         mapped = 'needs mapping' not in line.get('benefit_basis', '')
         terms = (line.get('benefits') or {}) if mapped else {}

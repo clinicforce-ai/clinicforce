@@ -9,8 +9,8 @@ from app.api.routers.commercial_flow.commercial_previsit_context import ecw_case
 from app.api.routers.commercial_flow.commercial_previsit_context import past_visit_with_saved_estimate as _past_visit_with_saved_estimate
 from app.api.routers.commercial_flow.commercial_previsit_tpa import merge_administrator_benefits
 from app.insurance import botox_review, cms_locality, cms_pfs, cpt_rules, insurance_product, inventory_certification, library_network_exclusions, group_contract_support
-from app.insurance.stedi_benefits.payer_order import primary_secondary_order, reported_medicare_part_b_secondary
-from app.insurance.identity import patient_benefits_bound
+from app.insurance.stedi_benefits.payer_order import primary_secondary_order
+from app.api.routers.commercial_flow.commercial_previsit_medicare import bind as bind_medicare_part_b
 
 def _commercial_slot(appointment_id: str) -> str:
     return "commercial:" + _api.hashlib.sha256(appointment_id.encode()).hexdigest()
@@ -234,17 +234,7 @@ def _previsit_benefits(payload: dict, coverage: dict, service_date: str | None =
                 'recorded_differences': recorded['policy_differences']}
             benefits['normalization_notes'].append(
                 'The payer linked this patient to the recorded member policy as a dependent. Subscriber details were matched automatically; eCW was not changed.')
-    part_b_report = reported_medicare_part_b_secondary(payload, service_date or '') if payload else None
-    # Only this dated Part B case may bind a directly matched dependent when
-    # eCW has other active policies; positive collection stays separately gated.
-    comparison_coverage = ({**coverage, 'active_coverages': 1}
-        if part_b_report and coverage.get('active_coverages', 0) > 1 and coverage.get('coverage_id')
-        else coverage)
-    comparison = _api.insurance_identity.compare(payload, comparison_coverage)
-    benefits['identity'] = comparison
-    if (payload and patient_benefits_bound(comparison) and
-            part_b_report):
-        benefits['medicare_part_b_secondary'] = part_b_report
+    comparison = bind_medicare_part_b(payload, coverage, service_date or '', benefits)
     if (payload and source and comparison['status'] != 'review'
             and (order := primary_secondary_order(payload, coverage, source, service_date or ''))):
         benefits['primary_secondary_order'] = order

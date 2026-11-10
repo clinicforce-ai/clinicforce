@@ -164,7 +164,6 @@ def _cash_cause(result: dict, failure: dict, recovery: dict, card: dict, network
         return 'the payer check has not finished', 'check_pending'
     return 'the estimate did not produce a collection calculation for the selected services', 'calculation_unavailable'
 
-
 def fallback_cause(result: dict) -> str:
     """One concrete reason shared by cash guidance and the headline sentence."""
     lines = (result.get('price_range') or {}).get('lines') or []
@@ -179,7 +178,6 @@ def fallback_cause(result: dict) -> str:
         network = 'unknown'
     return _cash_cause(result, result.get('eligibility_failure') or {}, result.get('recovery') or {},
                        result.get('card_check') or {}, network, benefits, unpriced, missing)[0]
-
 
 def build(result: dict, guidance: dict, review: dict | None = None) -> dict:
     price = result.get('price_range') or {}
