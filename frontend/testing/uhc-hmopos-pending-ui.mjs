@@ -56,8 +56,9 @@ try {
   const table = renderToStaticMarkup(
     React.createElement(CommercialCostBreakdown, { model, result }),
   )
-  assert(table.includes('pending Medicare protection check'))
-  assert(table.includes('Pending · $35.00 specialist office copay'))
+  assert(table.includes('verify Medicare protection'))
+  assert(table.includes('$35.00 specialist office copay'))
+  assert(!table.includes('Pending · $35.00 specialist office copay'))
   const headline = renderToStaticMarkup(
     React.createElement(ArrivalAmountSummary, {
       model,
@@ -66,7 +67,24 @@ try {
       visibleAmount: true,
     }),
   )
-  assert(headline.includes('Pending · $35.00'))
+  assert(headline.includes('verify Medicare protection'))
+  assert(headline.includes('$35.00'))
+  assert(!headline.includes('Pending · $35.00'))
+  const laterLine = { ...line, code: '99214', benefits: { ...line.benefits, copay_cents: 5000 } }
+  const laterResult = {
+    ...result,
+    plan_details: { stedi: { names: ['HMOPOS-UNITEDHEALTHCARE MEDICARE ADVANTAGE'] } },
+    price_range: { ...result.price_range, lines: [laterLine] },
+    encounter_summary: { payments_verified_cents: 1000 },
+  }
+  const laterModel = { ...model, officeCopayLine: laterLine }
+  const laterCopay = payerReportedPartialCopay(laterResult, laterModel)
+  assert.equal(laterCopay, 4000)
+  const laterTable = renderToStaticMarkup(
+    React.createElement(CommercialCostBreakdown, { model: laterModel, result: laterResult }),
+  )
+  assert(laterTable.includes('$40.00 specialist office copay'))
+  assert(!laterTable.includes('Pending · $40.00 specialist office copay'))
   assert.equal(
     payerReportedPartialCopay(
       { ...result, benefits: { ...result.benefits, has_secondary: true } },
