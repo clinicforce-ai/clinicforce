@@ -27,6 +27,7 @@ let savedResult
 let dashboardReads = 0
 let appointmentReads = 0
 let todayReads = 0
+let exactDateReads = 0
 const visitRequestOrder = []
 let useCache = false
 let releaseAppointments
@@ -76,6 +77,14 @@ await page.route((url) => url.pathname.startsWith('/api/'), async (route) => {
       { clinic_patient_id: '6', date: today, start: `${today}T09:00:00-05:00`, status: 'booked' },
       { clinic_patient_id: '6', date: today, start: `${today}T10:00:00-05:00`, status: 'booked' },
     ] }
+  } else if (path === '/api/staff/patients/appointment-date') {
+    exactDateReads += 1
+    const selectedDate = new URL(route.request().url()).searchParams.get('day')
+    body = { date: selectedDate, visits: selectedDate === past ? [
+      { clinic_patient_id: '1', date: past, start: `${past}T09:00:00-05:00`, status: 'finished' },
+      { clinic_patient_id: '3', date: past, start: `${past}T11:00:00-05:00`, status: 'finished' },
+      { clinic_patient_id: '6', date: past, start: `${past}T12:00:00-05:00`, status: 'finished' },
+    ] : [] }
   } else if (path === '/api/staff/patients/dashboard') {
     dashboardReads += 1
     body = {
@@ -188,6 +197,14 @@ try {
     await page.getByText('Appointment date still being checked').click()
     assert.deepEqual(await page.locator('.clinical-patient-open strong').allTextContents(), [process.env.FAIL_TODAY ? 'Patient 06' : 'Patient 01'])
     await page.getByLabel('Find a clinical patient').fill('')
+    await page.getByRole('button', { name: 'Previous patients' }).click()
+    await page.getByLabel('Previous appointment date').fill(past)
+    await page.getByRole('button', { name: 'Load this date from eCW' }).click()
+    const exactPast = page.locator('section[aria-labelledby="clinical-selected-period-title"] .clinical-visit-group').first()
+    await exactPast.locator('.clinical-patient-open').filter({ hasText: 'Patient 01' }).waitFor()
+    assert.equal(appointmentReads, 3)
+    assert(exactDateReads >= 2)
+    await page.getByRole('button', { name: 'Today’s patients' }).click()
     releaseAppointments()
   }
   await page.getByText('eCW visit checks finished for 5 patients.').waitFor()
@@ -219,18 +236,23 @@ try {
   assert.equal(await page.getByRole('heading', { name: 'Upcoming patients' }).count(), 1)
   await page.getByRole('button', { name: 'Today’s patients' }).click()
   await page.getByRole('button', { name: 'Previous patients' }).click()
+  await page.getByLabel('Previous appointment date').fill(past)
+  await page.getByRole('button', { name: 'Load this date from eCW' }).click()
   const pastGroups = page.locator('section[aria-labelledby="clinical-selected-period-title"] .clinical-visit-group')
-  await pastGroups.first().locator('summary').click()
+  await pastGroups.first().locator('summary').getByText('3 patients').waitFor()
+  if (await pastGroups.first().getAttribute('open') === null)
+    await pastGroups.first().locator('summary').click()
   assert.deepEqual(await pastGroups.first().locator('.clinical-patient-open strong').allTextContents(), [
     'Patient 01',
     'Patient 03',
+    'Patient 06',
   ])
   const readsBeforeDetail = dashboardReads
   await pastGroups.first().locator('.clinical-patient-open').filter({ hasText: 'Patient 01' }).click()
   await page.getByRole('heading', { name: 'Patient 01' }).waitFor()
   await page.locator('.staff-narrow > button').first().click()
   assert.equal(await page.getByRole('heading', { name: 'Previous patients' }).count(), 1)
-  assert.match(await pastGroups.first().locator('summary').innerText(), /2 patients/)
+  assert.match(await pastGroups.first().locator('summary').innerText(), /3 patients/)
   assert.equal(dashboardReads, readsBeforeDetail)
   await pastGroups.nth(1).locator('summary').click()
   assert.deepEqual(await pastGroups.nth(1).locator('.clinical-patient-open strong').allTextContents(), [
@@ -244,7 +266,10 @@ try {
   assert.equal(await groups.count(), 1)
   await page.getByLabel('Find a clinical patient').fill('')
   await page.getByRole('button', { name: 'Today’s patients' }).click()
-  await page.locator('.clinical-patient-open').filter({ hasText: 'Patient 06' }).click()
+  await page.getByRole('button', { name: 'Previous patients' }).click()
+  if (await pastGroups.first().getAttribute('open') === null)
+    await pastGroups.first().locator('summary').click()
+  await pastGroups.first().locator('.clinical-patient-open').filter({ hasText: 'Patient 06' }).click()
   const summary = page.getByRole('region', { name: 'Latest saved collection estimate' })
   await summary.locator('.visit-patient-bar').getByText('Patient 06').waitFor()
   assert.match(await summary.locator('.visit-context-facts').innerText(), /Synthetic visit review/)
@@ -259,12 +284,16 @@ try {
   assert.match(await summary.getByText('Saved service plan').locator('..').innerText(), /CPT 99204 × 1/)
   assert.equal(await summary.locator('select').count(), 0)
   const readsBeforeEstimate = dashboardReads
+  const dateReadsBeforeEstimate = exactDateReads
   await page.getByRole('button', { name: 'Open insurance review' }).first().click()
   await page.getByRole('button', { name: /Back to/i }).first().click()
   await page.getByRole('heading', { name: 'Patient 06' }).waitFor()
   await page.locator('.staff-narrow > button').first().click()
+  assert.equal(await page.getByRole('heading', { name: 'Previous patients' }).count(), 1)
+  assert.match(await pastGroups.first().locator('summary').innerText(), /3 patients/)
   assert.equal(dashboardReads, readsBeforeEstimate)
-  await page.locator('.clinical-patient-open').filter({ hasText: 'Patient 06' }).click()
+  assert.equal(exactDateReads, dateReadsBeforeEstimate)
+  await pastGroups.first().locator('.clinical-patient-open').filter({ hasText: 'Patient 06' }).click()
   if (process.env.SCREENSHOT_PATH) await page.screenshot({ path: process.env.SCREENSHOT_PATH, fullPage: true })
   assert.equal(await page.locator('.staff-narrow').evaluate((element) => {
     const summary = element.querySelector('.latest-saved-estimate')

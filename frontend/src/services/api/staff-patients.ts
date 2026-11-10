@@ -42,13 +42,16 @@ export interface ClinicalDashboard {
 
 export const getClinicalPatients = () => request<ClinicalDashboard>('/api/staff/patients/dashboard')
 
-export type TodayAppointments = {
+export type DateAppointments = {
   date: string
   visits: Array<{ clinic_patient_id: string; date: string; start: string; status: string }>
 }
 
 export const getTodayAppointments = () =>
-  request<TodayAppointments>('/api/staff/patients/today-appointments')
+  request<DateAppointments>('/api/staff/patients/today-appointments')
+
+export const getAppointmentDate = (day: string) =>
+  request<DateAppointments>(`/api/staff/patients/appointment-date?day=${encodeURIComponent(day)}`)
 
 type PatientAppointment = {
   id: string

@@ -22,19 +22,32 @@ NO_STORE = _staff.NO_STORE
 logger = logging.getLogger(__name__)
 
 
-class TodayVisit(BaseModel):
+class DateVisit(BaseModel):
     clinic_patient_id: str = Field(description='Existing confirmed clinic patient ID; no new profile is created.')
     date: Date
     start: str
     status: str
 
 
-class TodayAppointmentsResponse(BaseModel):
+class DateAppointmentsResponse(BaseModel):
     date: Date = Field(description='Practice-local day searched at eCW.')
-    visits: list[TodayVisit] = Field(description='Only encounters mapped to this clinic’s confirmed patient links.')
+    visits: list[DateVisit] = Field(description='Only encounters mapped to this clinic’s confirmed patient links.')
 
 
-@router.get('/patients/today-appointments', response_model=TodayAppointmentsResponse,
+async def _appointments_for_date(practice_id: str, day: str) -> JSONResponse:
+    linked = await run_in_threadpool(staff_store.linked_ecw_patient_ids, practice_id)
+    if not linked:
+        return JSONResponse({'date': day, 'visits': []}, headers=NO_STORE)
+    try:
+        encounters = await asyncio.wait_for(ecw_backend.practice_appointment_date(day), timeout=15)
+    except (ecw_backend.EcwBackendError, asyncio.TimeoutError):
+        raise HTTPException(503, 'The eCW appointment date could not be verified. Retry the date.') from None
+    visits = [{**{key: encounter[key] for key in ('date', 'start', 'status')}, 'clinic_patient_id': patient_id}
+              for encounter in encounters for patient_id in linked.get(encounter['patient_id'], [])]
+    return JSONResponse({'date': day, 'visits': visits}, headers=NO_STORE)
+
+
+@router.get('/patients/today-appointments', response_model=DateAppointmentsResponse,
             responses={503: {'description': 'The clinic timezone or complete eCW date read is unavailable.'}},
             description=(
     'Read today’s eCW encounters once for the practice and return only minimal dates for '
@@ -50,16 +63,17 @@ async def today_appointments(request: Request):
     except (KeyError, ValueError):
         raise HTTPException(503, 'The clinic timezone is not configured correctly.') from None
     day = datetime.now(timezone).date().isoformat()
-    linked = await run_in_threadpool(staff_store.linked_ecw_patient_ids, practice_id)
-    if not linked:
-        return JSONResponse({'date': day, 'visits': []}, headers=NO_STORE)
-    try:
-        encounters = await asyncio.wait_for(ecw_backend.practice_appointment_date(day), timeout=15)
-    except (ecw_backend.EcwBackendError, asyncio.TimeoutError):
-        raise HTTPException(503, 'Today’s eCW appointments could not be verified. Retry the list.') from None
-    visits = [{**{key: encounter[key] for key in ('date', 'start', 'status')}, 'clinic_patient_id': patient_id}
-              for encounter in encounters for patient_id in linked.get(encounter['patient_id'], [])]
-    return JSONResponse({'date': day, 'visits': visits}, headers=NO_STORE)
+    return await _appointments_for_date(practice_id, day)
+
+
+@router.get('/patients/appointment-date', response_model=DateAppointmentsResponse,
+            responses={503: {'description': 'The complete eCW date read is unavailable.'}},
+            description=('Read one selected eCW appointment date for this staff member’s clinic. '
+                         'Only confirmed existing clinic patient links are returned; no patient profile is created. '
+                         'A failed or incomplete provider read does not claim that the day has no patients.'))
+async def appointment_date(request: Request, day: Date):
+    actor = await _staff.require_staff(request)
+    return await _appointments_for_date(actor['practice_id'], day.isoformat())
 
 @router.get('/patients/{patient_id}/appointments')
 async def patient_appointments(patient_id: str, request: Request, include_ecw: bool = False):

@@ -2,7 +2,7 @@
 
 import asyncio
 import json
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from unittest.mock import MagicMock, patch
 
 from fastapi import Request
@@ -70,6 +70,23 @@ def test_today_route_maps_only_confirmed_practice_links(monkeypatch):
     assert body['visits'] == [{'clinic_patient_id': 'patient-a', 'date': body['date'],
                                'start': f"{body['date']}T09:00:00-05:00", 'status': 'booked'}]
     assert response.headers['cache-control'] == 'no-store'
+
+
+def test_selected_previous_date_uses_one_scoped_date_search(monkeypatch):
+    day = date(2026, 11, 7)
+    calls = []
+    async def actor(_request):
+        return {'practice_id': 'clinic-a'}
+    async def provider(requested_day):
+        calls.append(requested_day)
+        return [{'patient_id': 'ecw-a', 'date': requested_day,
+                 'start': f'{requested_day}T09:00:00-05:00', 'status': 'finished'}]
+    monkeypatch.setattr(_staff, 'require_staff', actor)
+    monkeypatch.setattr(staff_store, 'linked_ecw_patient_ids', lambda _id: {'ecw-a': ['patient-a']})
+    monkeypatch.setattr(ecw_backend, 'practice_appointment_date', provider)
+    response = asyncio.run(staff_appointments.appointment_date(Request({'type': 'http'}), day))
+    assert calls == ['2026-11-07']
+    assert json.loads(response.body)['visits'][0]['clinic_patient_id'] == 'patient-a'
 
 
 def test_linked_patient_lookup_is_practice_scoped_and_confirmed():
