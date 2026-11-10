@@ -51,7 +51,7 @@ export default function CommercialCostBreakdown({
   const cignaFamilyOffice = feeProxy?.scenario_kind === 'oap_office_family_deductible'
   const cignaOfficeScenario = cignaFeeProxy && Boolean(feeProxy.scenario_kind) && !cignaFamilyOffice
   const lines = price?.mode === 'services' ? price.lines || [] : []
-  const cptRows = commercialCptRows(result, lines, botoxPreview)
+  const cptRows = commercialCptRows(result, lines, botoxPreview, model.supportedAmount)
   const healthselectRows = healthselectHelpers.healthselectEvidenceRows(result, healthselectZero)
   const familyOopApplied = familyOopLimitApplied(result)
   const automaticCashFallback = model.cash && result.cash_fallback != null

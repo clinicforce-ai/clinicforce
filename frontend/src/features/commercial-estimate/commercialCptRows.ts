@@ -110,6 +110,7 @@ export function commercialCptRows(
   result: PrevisitEstimate,
   lines: VisitPricedLine[],
   preview: PrevisitEstimate['botox_preview'],
+  supportedAmount = false,
 ): { cpt: CostBreakdownRow; candidates: CostBreakdownRow[]; unpriced: CostBreakdownRow } {
   const suggestedCodes = [
     ...new Set(
@@ -135,6 +136,11 @@ export function commercialCptRows(
     result.fee_proxy_estimate?.basis === 'bcbstx_uhc_dsnp_office_proxy'
       ? result.fee_proxy_estimate
       : null
+  const zeroOopAlternatives =
+    supportedAmount &&
+    result.price_range?.mode === 'alternatives' &&
+    result.collection_guidance?.basis === 'out_of_pocket_limit' &&
+    result.collection_guidance.amount_cents === 0
   return {
     cpt: {
       label:
@@ -161,6 +167,13 @@ export function commercialCptRows(
           : undefined,
     },
     candidates: [
+      ...(zeroOopAlternatives
+        ? (result.price_range?.lines || []).map((line) => ({
+            label: `CPT ${line.code} · choose one`,
+            value: `${money(line.allowed_cents!)} clinic allowed · ${money(0)} patient`,
+            detail: `${money(line.allowed_cents!)} allowed = ${money(line.calculation!.plan_cents!)} projected plan share + ${money(0)} patient share; min(${line.benefits?.copay_cents != null ? `${money(line.benefits.copay_cents)} reported copay + ` : ''}any applicable deductible and coinsurance, ${money(0)} individual out-of-pocket remaining) = ${money(0)}. These CPTs are alternatives, not separate charges.`,
+          }))
+        : []),
       ...ticTreatmentRows(result),
       ...(!lines.length && officeAlternatives.length
         ? [

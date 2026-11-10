@@ -446,36 +446,44 @@ try {
     1,
   )
   assert(!alternativeServices.includes('$30.00'))
-  const metOopServices = renderToStaticMarkup(
-    React.createElement(VisitServices, {
-      insuredAmountSupported: true,
+  const { default: CommercialCostBreakdown } = await server.ssrLoadModule(
+    '/src/features/commercial-estimate/CommercialCostBreakdown.tsx',
+  )
+  const metOopTable = renderToStaticMarkup(
+    React.createElement(CommercialCostBreakdown, {
+      model: { cash: false, supportedAmount: true, networkLabel: 'In network',
+        anticipatedService: 'Nerve study' },
       result: {
-        payment_mode: 'insurance',
-        payer: 'Synthetic PPO',
-        benefit_source: 'Stedi',
-        price_range: {
-          mode: 'alternatives',
+        payment_mode: 'insurance', payer: 'Synthetic PPO', reason: 'Nerve study',
+        service_selection_status: 'preview', benefits: { active: true, network_status: 'in_network',
+          oop_remaining_cents: 0, family_oop_remaining_cents: 350000 },
+        price_range: { mode: 'alternatives', complete: true, conditional: false,
+          allowed_min_cents: 8440, allowed_max_cents: 10511,
+          patient_min_cents: 0, patient_max_cents: 0,
           lines: [
             { id: 'low', code: '95907', units: 1, allowed_cents: 8440,
+              allowed_basis: 'clinic_contract', rate_resolution: { status: 'RESOLVED' },
               calculation: { patient_cents: 0, plan_cents: 8440 },
-              benefits: { active: true, copay_cents: 5000 } },
+              benefits: { active: true, copay_cents: 5000, oop_remaining_cents: 0 } },
             { id: 'high', code: '95908', units: 1, allowed_cents: 10511,
+              allowed_basis: 'clinic_contract', rate_resolution: { status: 'RESOLVED' },
               calculation: { patient_cents: 0, plan_cents: 10511 },
-              benefits: { active: true, copay_cents: 5000 } },
-          ],
-        },
-        collection_guidance: {
-          basis: 'out_of_pocket_limit', amount_cents: 0, status: 'estimated', services: [],
-        },
+              benefits: { active: true, copay_cents: 5000, oop_remaining_cents: 0 } },
+          ] },
+        collection_guidance: { basis: 'out_of_pocket_limit', amount_cents: 0,
+          status: 'estimated', services: [] },
+        encounter_summary: { collect_today_cents: 0 },
       },
     }),
   )
-  assert(metOopServices.includes('Clinic allowed rate: $84.40'))
-  assert(metOopServices.includes('Clinic allowed rate: $105.11'))
-  assert(metOopServices.includes('projected plan share: $84.40'))
-  assert(metOopServices.includes('$50.00 reported copay'))
-  assert.equal((metOopServices.match(/individual out-of-pocket remaining/g) || []).length, 2)
-  assert(!metOopServices.includes('Select one CPT'))
+  assert(metOopTable.includes('CPT 95907'))
+  assert(metOopTable.includes('CPT 95908'))
+  assert(metOopTable.includes('$84.40 clinic allowed'))
+  assert(metOopTable.includes('$105.11 clinic allowed'))
+  assert(metOopTable.includes('$84.40 projected plan share'))
+  assert(metOopTable.includes('$50.00 reported copay'))
+  assert(metOopTable.includes('Amount to collect at visit'))
+  assert(metOopTable.includes('family out-of-pocket remainder is a limit'))
   const { collectionAtVisitRow } = await server.ssrLoadModule(
     '/src/features/commercial-estimate/collectionAtVisitRow.ts',
   )

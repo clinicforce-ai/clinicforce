@@ -22,11 +22,6 @@ export default function VisitServices({
     insuredAmountSupported &&
     result.collection_guidance?.basis !== 'claim_after_service' &&
     !['deferred_billing', 'action_required'].includes(result.collection_guidance?.status || '')
-  const zeroOopAlternatives =
-    alternatives &&
-    showInsuredShare &&
-    result.collection_guidance?.basis === 'out_of_pocket_limit' &&
-    result.collection_guidance.amount_cents === 0
   const patientMatched = patientBenefitsBound(result.identity)
   const payerOrderMissing = result.recovery?.reason_code === 'multiple_active_policies'
   const rateSource = (value?: string) =>
@@ -137,14 +132,6 @@ export default function VisitServices({
                                 : 'Not established for this CPT and visit scope'}
                           </small>
                         )}
-                        {zeroOopAlternatives && row.allowed_cents != null && (
-                          <small>
-                            Clinic allowed rate: {money(row.allowed_cents)} · projected plan share:{' '}
-                            {row.calculation?.plan_cents != null
-                              ? money(row.calculation.plan_cents)
-                              : 'Not calculated'}
-                          </small>
-                        )}
                       </>
                     )}
                   </th>
@@ -184,18 +171,6 @@ export default function VisitServices({
                       ) : (
                         'Price unavailable'
                       )
-                    ) : zeroOopAlternatives && row.calculation?.patient_cents === 0 ? (
-                      <>
-                        {money(0)}
-                        <small>
-                          min(
-                          {row.benefits?.copay_cents != null
-                            ? `${money(row.benefits.copay_cents)} reported copay + `
-                            : ''}
-                          any applicable deductible and coinsurance, {money(0)} individual
-                          out-of-pocket remaining) = {money(0)}
-                        </small>
-                      </>
                     ) : alternatives ? (
                       'Select one CPT'
                     ) : showInsuredShare && estimate?.patient_cents != null ? (
@@ -224,7 +199,8 @@ export default function VisitServices({
       </div>
       {alternatives && (
         <p>
-          Choose the performed CPT. These alternatives are not separate charges
+          One office consultation. Choose the documented CPT. These alternatives are not separate
+          charges
           {showInsuredShare && result.collection_guidance?.basis === 'office_copay'
             ? '. The office copay shown above applies once. Allowed rate is not needed for the office copay advance.'
             : '.'}
