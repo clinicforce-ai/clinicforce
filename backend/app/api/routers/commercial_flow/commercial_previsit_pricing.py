@@ -10,6 +10,7 @@ from app.api.routers.commercial_flow.commercial_previsit_context import past_vis
 from app.api.routers.commercial_flow.commercial_previsit_tpa import merge_administrator_benefits
 from app.insurance import botox_review, cms_locality, cms_pfs, cpt_rules, insurance_product, inventory_certification, library_network_exclusions, group_contract_support
 from app.insurance.stedi_benefits.payer_order import primary_secondary_order
+from app.api.routers.commercial_flow.commercial_previsit_medicare import bind as bind_medicare_part_b
 
 def _commercial_slot(appointment_id: str) -> str:
     return "commercial:" + _api.hashlib.sha256(appointment_id.encode()).hexdigest()
@@ -233,8 +234,7 @@ def _previsit_benefits(payload: dict, coverage: dict, service_date: str | None =
                 'recorded_differences': recorded['policy_differences']}
             benefits['normalization_notes'].append(
                 'The payer linked this patient to the recorded member policy as a dependent. Subscriber details were matched automatically; eCW was not changed.')
-    comparison = _api.insurance_identity.compare(payload, coverage)
-    benefits['identity'] = comparison
+    comparison = bind_medicare_part_b(payload, coverage, service_date or '', benefits)
     if (payload and source and comparison['status'] != 'review'
             and (order := primary_secondary_order(payload, coverage, source, service_date or ''))):
         benefits['primary_secondary_order'] = order

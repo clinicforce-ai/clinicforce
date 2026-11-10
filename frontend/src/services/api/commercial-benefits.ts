@@ -12,6 +12,11 @@ export type PrevisitBenefits = null | {
   active?: boolean | null
   plan_details?: { names?: string[] }
   has_secondary?: boolean
+  medicare_part_b_secondary?: {
+    status: 'reported'
+    payer: string
+    evidence_paths: string[]
+  }
   primary_secondary_order?: {
     status: 'verified'
     primary_payer_id?: string

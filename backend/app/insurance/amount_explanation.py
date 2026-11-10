@@ -164,7 +164,6 @@ def _cash_cause(result: dict, failure: dict, recovery: dict, card: dict, network
         return 'the payer check has not finished', 'check_pending'
     return 'the estimate did not produce a collection calculation for the selected services', 'calculation_unavailable'
 
-
 def fallback_cause(result: dict) -> str:
     """One concrete reason shared by cash guidance and the headline sentence."""
     lines = (result.get('price_range') or {}).get('lines') or []
@@ -179,7 +178,6 @@ def fallback_cause(result: dict) -> str:
         network = 'unknown'
     return _cash_cause(result, result.get('eligibility_failure') or {}, result.get('recovery') or {},
                        result.get('card_check') or {}, network, benefits, unpriced, missing)[0]
-
 
 def build(result: dict, guidance: dict, review: dict | None = None) -> dict:
     price = result.get('price_range') or {}
@@ -234,7 +232,9 @@ def build(result: dict, guidance: dict, review: dict | None = None) -> dict:
     elif amount is not None:
         if basis == 'claim_after_service':
             cause, code = _cash_cause(result, failure, recovery, card, network, benefits, unpriced, missing, guidance.get('source_errors'))
-            if (guidance.get('collection_rule') or {}).get('mode') == 'cigna_cost_estimate_deferral':
+            if (guidance.get('collection_rule') or {}).get('mode') == 'cms_msp_part_b_deferral':
+                sentence, code = ('Collect $0.00 at arrival: the payer reports Original Medicare Part B as secondary. Submit the claims and determine any patient balance from the remittances; the office copay is not due at check-in', 'collection_deferred')
+            elif (guidance.get('collection_rule') or {}).get('mode') == 'cigna_cost_estimate_deferral':
                 sentence, code = ('Collect $0 at arrival: Cigna did not return a fixed office copay. Obtain its Explanation of Estimate before collecting deductible or coinsurance; the BCBS Texas planning share is separate and final liability follows the claim', 'collection_deferred')
             elif guidance.get('deferred_supported_share'):
                 sentence = 'Collect $0 today under NMCT’s approved defer-to-claim policy; the estimated patient share is separate and final liability follows the processed claim'

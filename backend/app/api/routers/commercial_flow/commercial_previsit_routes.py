@@ -88,6 +88,9 @@ async def saved_previsit(case_id: str, request: _api.Request) -> dict:
     collection_guidance.unconfirmed_zero_oop and withholds a positive advance.
     A linked, applicable zero balance can return basis out_of_pocket_limit
     and a $0 covered office-visit collection.
+    A patient-bound office E/M response reporting Original Medicare Part B as
+    secondary returns a $0 check-in advance under cms_msp_part_b_deferral,
+    while preserving its copay and leaving final liability to the claims.
     A patient-bound 2026 UHC group 16615 saved plan can project the published
     G.E.H.A High PSHB Medicare Advantage zero office benefit on read, without
     a new eligibility call or a change to the historical saved snapshot. For

@@ -618,9 +618,23 @@ def test_medicare_secondary_copay_remains_visible_but_is_not_collected_at_arriva
     guidance = collection_guidance.build(result)
     assert guidance['amount_cents'] is None
     assert 'medicare' in guidance['reason'].lower()
+    result['benefits']['medicare_part_b_secondary'] = {
+        'status': 'reported', 'payer': 'Original Medicare Part B',
+        'evidence_paths': ['plans[0].benefits.otherOrAdditionalPayer[1]']}
+    guidance = collection_guidance.build(result)
+    assert guidance['amount_cents'] == 0
+    assert guidance['basis'] == 'claim_after_service'
+    assert guidance['collection_rule']['mode'] == 'cms_msp_part_b_deferral'
+    assert guidance['services'][0]['patient_cents'] is None
+    assert encounter_summary.build({**result, 'collection_guidance': guidance})['collect_today_cents'] == 0
+    explanation = amount_explanation.build(result, guidance)
+    assert explanation['reason_code'] == 'collection_deferred'
+    assert 'Collect $0.00' in explanation['sentence']
     assert result['price_range']['lines'][0]['benefits']['copay_cents'] == 4500
     result.pop('collection_policy')
-    assert 'medicare' in collection_guidance.build(result)['reason'].lower()
+    assert collection_guidance.build(result)['amount_cents'] == 0
+    result['benefits']['coverage_status_conflict'] = True
+    assert collection_guidance.build(result)['amount_cents'] is None
 
 
 def test_oop_zero_is_case_evidence_not_a_universal_free_care_default():

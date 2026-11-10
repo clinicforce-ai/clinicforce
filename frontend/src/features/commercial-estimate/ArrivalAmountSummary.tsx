@@ -99,6 +99,19 @@ export default function ArrivalAmountSummary({
   referenceOnly?: boolean
   visibleAmount: boolean
 }) {
+  if (
+    !model.cash &&
+    !model.previousEstimate &&
+    !model.calculating &&
+    result.collection_guidance?.collection_rule?.mode === 'cms_msp_part_b_deferral'
+  )
+    return (
+      <>
+        <span>Amount to collect at visit</span>
+        <strong role="status">{money(0)}</strong>
+        <p>{result.collection_guidance.reason}</p>
+      </>
+    )
   const action = nextStep(model, result)
   const plan = !model.cash && !model.previousEstimate ? result.combined_emg_plan : null
   const biopsyTarget =

@@ -451,6 +451,7 @@ def build(result: dict, review: dict | None = None) -> dict:
         if guidance.get('cigna_estimate_required') and guidance['basis'] != 'claim_after_service':
             guidance.update(reason='The Cigna visit share needs its Explanation of Estimate before a check-in amount can be set.',
                 patient_message='Your visit payment is pending a Cigna estimate; this does not mean you owe $0.')
+    secondary_order.apply_part_b_deferral(result, guidance, source_errors, member_bound, ma_ppo)
     for line in lines:
         mapped = 'needs mapping' not in line.get('benefit_basis', '')
         terms = (line.get('benefits') or {}) if mapped else {}

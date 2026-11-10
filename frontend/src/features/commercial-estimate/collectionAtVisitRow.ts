@@ -438,5 +438,15 @@ export function collectionAtVisitRow(
     row.detail =
       'Current Stedi benefits report this POS 11 specialist office copay. Provider participation for the exact product is still unconfirmed. Apply the advance to the processed claim and refund any excess.'
   }
+  if (
+    !model.cash &&
+    !model.previousEstimate &&
+    !model.calculating &&
+    result.collection_guidance?.collection_rule?.mode === 'cms_msp_part_b_deferral'
+  ) {
+    row.label = 'Amount to collect at visit'
+    row.value = money(0)
+    row.detail = result.collection_guidance.reason
+  }
   return row
 }
