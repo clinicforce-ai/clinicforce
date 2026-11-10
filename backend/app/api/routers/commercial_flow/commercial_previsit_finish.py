@@ -134,7 +134,7 @@ def _finish_previsit(result: dict, case: dict, inputs: dict, source: dict, paylo
     plan_key = _api.hashlib.sha256(_api.json.dumps([token, review.get('emg_required'), review.get('separate_em_planned'), source.get('recent_completed_appointments', []),
         [(row['id'], row.get('units')) for row in available]], sort_keys=True).encode()).hexdigest()
     prior_plan = case.get('previsit_plan') or {}
-    if (prior_plan.get('key') != plan_key or prior_plan.get('plan', {}).get('version') != 16
+    if (prior_plan.get('key') != plan_key or prior_plan.get('plan', {}).get('version') != 17
             or prior_plan.get('plan', {}).get('method') == 'unavailable'):
         prior_plan = {'key': plan_key, 'plan': _api.cpt_suggester.recommend_visit_plan(
             planning_inputs, source, available)}
@@ -277,6 +277,12 @@ def _finish_previsit(result: dict, case: dict, inputs: dict, source: dict, paylo
                  or blue_cross_proxy.cigna_estimate(result, inputs['service_date'])
                  or blue_cross_proxy.cigna_oap_office_scenario(result, inputs['service_date'])):
         result['fee_proxy_estimate'] = proxy
+    result.pop('provisional_collection_target', None)
+    if target := blue_cross_proxy.biopsy_collection_target(result, inputs['service_date']):
+        result['provisional_collection_target'] = target
+    result.pop('cigna_office_fee_scenarios', None)
+    if office_scenarios := blue_cross_proxy.cigna_office_fee_scenarios(result, inputs['service_date']):
+        result['cigna_office_fee_scenarios'] = office_scenarios
     result['collection_guidance'] = _api.collection_guidance.build(result, review)
     result.pop('botox_preview', None)
     if botox_review.is_botox_visit(inputs) and payload:

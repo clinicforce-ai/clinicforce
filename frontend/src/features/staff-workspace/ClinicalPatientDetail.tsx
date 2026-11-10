@@ -7,6 +7,7 @@ import { name, accountLabel, stateLabel } from './clinical-patient-labels'
 
 interface Props {
   patient: ClinicalPatient
+  returnLabel: string
   heading: RefObject<HTMLHeadingElement | null>
   deleting: boolean
   cleanupPending: boolean
@@ -19,6 +20,7 @@ interface Props {
 
 export default function ClinicalPatientDetail({
   patient: selected,
+  returnLabel,
   heading,
   deleting,
   cleanupPending,
@@ -32,7 +34,7 @@ export default function ClinicalPatientDetail({
   return (
     <div className="staff-narrow">
       <button className="staff-text-button" disabled={deleting} onClick={onBack}>
-        <ArrowLeft size={18} /> Clinical patients
+        <ArrowLeft size={18} /> {returnLabel}
       </button>
       <header className="staff-header">
         <div>

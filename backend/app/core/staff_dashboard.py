@@ -46,6 +46,7 @@ def patient_dashboard(practice_id: str, *, connection: Callable, hash_value: Cal
         has_card = any(item["has_card"] for item in history)
         account = "portal" if key.startswith("portal:") else "automatic" if any(item["source"] == "patient_upload" for item in history) or patient.get("identity_status") == "unverified" or not patient else "clinic"
         bucket = "accounts_with_cards" if account == "portal" and has_card else "accounts_without_cards" if account == "portal" else "card_only" if has_card else "other"
+        cache_linked = patient.get("identity_status") == "confirmed" and bool(patient.get("ecw_patient_id")) and patient.get("ecw_visit_cache_patient_id") == patient.get("ecw_patient_id")
         counts["all"] += 1; counts[bucket] += 1
         public_id = "portal:" + hash_value(practice_id + ":" + key)[:24] if key.startswith("portal:") else key
         rows.append({"id": public_id, "clinic_patient_id": patient.get("id"), "identity_status": patient.get("identity_status", "unverified"),
@@ -53,6 +54,8 @@ def patient_dashboard(practice_id: str, *, connection: Callable, hash_value: Cal
             "email": patient.get("email") or next((item["fields"].get("email") for item in history if item["fields"].get("email")), None),
             "ecw_account_number": patient.get("ecw_account_number"),
             "ecw_linked": patient.get("identity_status") == "confirmed" and bool(patient.get("ecw_patient_id")),
+            "ecw_visit_cache": patient.get("ecw_visit_cache") if cache_linked else None,
+            "ecw_visit_cached_at": patient.get("ecw_visit_cached_at") if cache_linked else None,
             "account_status": account, "card_status": "received" if has_card else "missing", "latest_intake_id": latest.get("id"),
             "intake_ids": [item["id"] for item in history], "intake_count": len(history),
             "updated_at": latest.get("updated_at") or patient["created_at"],

@@ -23,6 +23,8 @@ function nextStep(model: CommercialEstimateModel, result: PrevisitEstimate) {
     return { title: 'Check coverage', hint: 'Run eligibility for this visit.' }
   if (result.benefits.has_secondary || result.recovery?.reason_code === 'multiple_active_policies')
     return { title: 'Confirm payer order', hint: 'Resolve the active policies before collecting.' }
+  if (!/^in network|^out of network/i.test(model.networkLabel || ''))
+    return { title: 'Verify network', hint: 'Confirm this plan and provider’s network tier.' }
   if (model.guidance?.policy_setup_required)
     return {
       title: 'Approve collection policy',
@@ -33,8 +35,6 @@ function nextStep(model: CommercialEstimateModel, result: PrevisitEstimate) {
       title: 'Review requirements',
       hint: 'Check referral and authorization for the selected CPTs.',
     }
-  if (!/^in network|^out of network/i.test(model.networkLabel || ''))
-    return { title: 'Verify network', hint: 'Confirm this plan and provider’s network tier.' }
   return { title: 'Review estimate', hint: 'See the missing item in the table below.' }
 }
 
@@ -55,6 +55,12 @@ export default function ArrivalAmountSummary({
 }) {
   const action = nextStep(model, result)
   const plan = !model.cash && !model.previousEstimate ? result.combined_emg_plan : null
+  const biopsyTarget = !model.cash && !model.previousEstimate && !model.calculating
+    ? result.provisional_collection_target : null
+  const biopsyBalance = biopsyTarget
+    ? Math.max(0, biopsyTarget.amount_cents - (result.encounter_summary?.payments_verified_cents || 0))
+    : null
+  const biopsyOfficePending = !!biopsyTarget?.pending_codes?.length
   const cignaPlanning =
     !model.cash &&
     !model.previousEstimate &&
@@ -92,6 +98,12 @@ export default function ArrivalAmountSummary({
     officePlan == null
       ? null
       : Math.max(0, officePlan - (result.encounter_summary?.payments_verified_cents || 0))
+  const officeTerms = result.price_range?.mode === 'services' && result.price_range.lines?.length === 1
+    ? result.price_range.lines[0].benefits : null
+  const separateOfficeCopayRemaining = officeTerms?.separate_copay_limit
+    ? officeTerms.copay_remaining_cents : null
+  const officePolicyPending = officePlan != null &&
+    result.collection_guidance?.positive_advance_policy_missing === true
   const pendingAetnaCopay = aetnaPendingOfficeCopay(result, model)
   const pendingBluecardCopay = pendingBluecardOfficeCopay(result, model)
   const priorDateAetnaCopay = aetnaPriorDateReferenceCopay(result, model)
@@ -109,6 +121,10 @@ export default function ArrivalAmountSummary({
       <span>
         {plan
           ? 'Amount to collect at visit · planning estimate'
+          : biopsyBalance != null
+            ? biopsyOfficePending
+              ? 'Provisional biopsy target · office share pending'
+              : 'Provisional collection target · confirmation pending'
           : botoxPlanning
             ? 'Planned amount to collect · provisional CPT scenario'
             : cignaPlanning
@@ -118,7 +134,9 @@ export default function ArrivalAmountSummary({
                 : diagnosticCopayReference != null
                   ? 'Diagnostic copay · collection pending'
                   : officeBalance != null
-                    ? 'Planned amount to collect at visit'
+                    ? officePolicyPending
+                      ? 'Amount to collect at visit · pending policy approval'
+                      : 'Planned amount to collect at visit'
                     : pendingAetnaCopay != null ||
                         pendingCignaCopay != null ||
                         pendingBluecardCopay != null
@@ -138,6 +156,7 @@ export default function ArrivalAmountSummary({
       <strong
         className={
           !visibleAmount &&
+          biopsyBalance == null &&
           !botoxPlanning &&
           !cignaPlanning &&
           !aetnaPlanning &&
@@ -153,6 +172,8 @@ export default function ArrivalAmountSummary({
       >
         {plan
           ? money(plan.amount_cents)
+          : biopsyBalance != null
+            ? `${money(biopsyBalance)}${biopsyOfficePending ? ' biopsy only' : ''}`
           : botoxPlanning
             ? money(botoxPlanning.patient_share_cents)
             : cignaPlanning
@@ -162,7 +183,7 @@ export default function ArrivalAmountSummary({
                 : diagnosticCopayReference != null
                   ? money(diagnosticCopayReference)
                   : officeBalance != null
-                    ? money(officeBalance)
+                    ? officePolicyPending ? `Pending · ${money(officeBalance)}` : money(officeBalance)
                     : pendingAetnaCopay != null
                       ? `Pending · ${money(pendingAetnaCopay)}`
                       : pendingBluecardCopay != null
@@ -185,6 +206,15 @@ export default function ArrivalAmountSummary({
           {money(plan.diagnostic_allowed_cents)} diagnostic allowance ={' '}
           {money(plan.patient_share_cents)} before any recorded payment. Deductible and
           out-of-pocket balances were not returned.
+        </p>
+      ) : biopsyBalance != null ? (
+        <p>
+          {money(biopsyTarget!.reference_cents)} BCBS Texas reference for{' '}
+          {biopsyTarget!.included_codes?.includes('99213') ? 'CPT 99213 + CPT 11104' : 'CPT 11104'},
+          capped by the reported out-of-pocket balance. This target assumes the full deductible
+          applies because UHC did not return a deductible rule. Confirm payer order, Medicare
+          billing protection, and any prior payment before charging.{' '}
+          {biopsyOfficePending ? 'The follow-up share is not included. ' : ''}Pathology is excluded.
         </p>
       ) : botoxPlanning ? (
         <p>
@@ -213,12 +243,13 @@ export default function ArrivalAmountSummary({
         </p>
       ) : officeBalance != null ? (
         <p>
-          {money(officePlan!)} specialist office copay + {money(0)} deductible + 0% coinsurance
+          {separateOfficeCopayRemaining != null
+            ? `min(${money(officeTerms?.copay_cents || 0)} specialist office copay, ${money(separateOfficeCopayRemaining)} separate copay maximum remaining) = ${money(officePlan!)}. The general out-of-pocket balance does not reduce this separate copay.`
+            : `${money(officePlan!)} specialist office copay + ${money(0)} deductible + 0% coinsurance.`}
           {result.encounter_summary?.payments_verified_cents
-            ? `; less ${money(result.encounter_summary.payments_verified_cents)} already paid`
-            : ''}{' '}
-          = {money(officeBalance)} planning estimate. Confirm the final allowed charge and Medicare
-          billing protection before collection.
+            ? ` Less ${money(result.encounter_summary.payments_verified_cents)} already paid = ${money(officeBalance)}.`
+            : ' Confirm prior payments.'}{' '}
+          {officePolicyPending ? 'Clinic policy approval is required before collection.' : 'Planning estimate; confirm the final allowed charge before collection.'}
         </p>
       ) : pendingAetnaCopay != null ? (
         <p>

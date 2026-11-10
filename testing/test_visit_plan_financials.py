@@ -35,6 +35,62 @@ def test_emg_history_and_model_select_editable_study_scenario():
         model.converse.assert_called_once()
 
 
+def test_tics_only_visit_keeps_office_service_and_explains_conditional_cbit():
+    available = [{'id': code, 'code': code, 'source': 'CPT planning catalog', 'units': 1}
+                 for code in ('99203', '90834')]
+    model = MagicMock()
+    model.converse.return_value = model_reply([{'code': '99203', 'units': 1},
+                                               {'code': '90834', 'units': 1}])
+    public_guidance = [{'label': 'CDC tic treatment', 'url': 'https://www.cdc.gov/example',
+                        'status': 'retrieved', 'excerpt': 'CBIT helps people with impairing tics.'}]
+    history = [{'date': '2026-10-01', 'reason': 'Prior tic assessment',
+                'coded_services': ['99213'], 'diagnoses': ['F959']}]
+    with patch.object(cpt_suggester.boto3, 'client', return_value=model), \
+            patch.object(cpt_suggester.tic_web_evidence, 'fetch_tic_guidance', return_value=public_guidance) as web:
+        plan = cpt_suggester.recommend_visit_plan(
+            {'reason': 'tics', 'visit_type': 'new'},
+            {'recent_completed_appointments': history, 'history_status': 'loaded'}, available)
+    web.assert_called_once_with()
+    request = json.loads(model.converse.call_args.kwargs['messages'][0]['content'][0]['text'])
+    assert request['history'] == history
+    assert request['history_status'] == 'loaded'
+    assert request['public_guidance'] == public_guidance
+    assert plan['recommended_ids'] == ['99203']
+    assert any('CBIT' in note and 'botulinum' in note and '90834' in note
+               for note in plan['assumptions'])
+    with patch.object(cpt_suggester.boto3, 'client', return_value=model), \
+            patch.object(cpt_suggester.tic_web_evidence, 'fetch_tic_guidance', return_value=public_guidance):
+        described = cpt_suggester.recommend_visit_plan(
+            {'reason': 'New patient assessment for tics', 'visit_type': 'new'}, {}, available)
+    assert described['recommended_ids'] == ['99203']
+    scheduled = [{**row, 'source': 'eCW scheduled service'} if row['code'] == '90834' else row
+                 for row in available]
+    with patch.object(cpt_suggester.boto3, 'client', side_effect=AssertionError('no model needed')):
+        planned_therapy = cpt_suggester.recommend_visit_plan(
+            {'reason': 'tics', 'visit_type': 'new'}, {}, scheduled)
+    assert '90834' in planned_therapy['recommended_ids']
+
+
+def test_tic_research_can_explain_why_no_separate_service_is_selected():
+    model = MagicMock()
+    model.converse.return_value = {'output': {'message': {'content': [{'toolUse': {
+        'name': 'submit_visit_plan', 'input': {'services': [],
+        'reason': 'The available history does not document tic impairment or a current therapy plan.',
+        'assumptions': ['Review tic severity and treatment goals before choosing CBIT or another treatment.'],
+        'cash_package': ''}}}]}}}
+    available = [{'id': '99203', 'code': '99203', 'units': 1,
+                  'source': 'conditional office E/M alternative'}]
+    with patch.object(cpt_suggester.boto3, 'client', return_value=model), \
+            patch.object(cpt_suggester.tic_web_evidence, 'fetch_tic_guidance', return_value=[{
+                'label': 'CDC', 'url': 'https://www.cdc.gov/example', 'status': 'retrieved',
+                'excerpt': 'Some tics do not need treatment.'}]):
+        plan = cpt_suggester.recommend_visit_plan({'reason': 'tics', 'visit_type': 'new'}, {}, available)
+    assert plan['recommended_ids'] == []
+    assert plan['method'] == 'llm'
+    assert 'does not document tic impairment' in plan['recommendation_basis']
+    assert any('treatment goals' in note for note in plan['assumptions'])
+
+
 def test_emg_prior_completed_cpts_are_selected_when_model_unavailable():
     history = [{'date': '2026-09-01', 'reason': 'Similar arm symptoms',
                 'coded_services': ['95909', '95886']}]
@@ -77,7 +133,7 @@ def test_booked_bilateral_hand_emg_uses_the_model_proposal_without_manual_select
     assert visit_estimate.is_emg_visit(booked)
     assert plan['recommended_ids'] == ['95908', '95886']
     assert plan['recommended_units'] == {'95908': 1, '95886': 2}
-    assert plan['method'] == 'llm' and plan['version'] == 16
+    assert plan['method'] == 'llm' and plan['version'] == 17
     assert '"appointment_type": "EMG Visit"' in model.converse.call_args.kwargs['messages'][0]['content'][0]['text']
     assert not visit_estimate.is_emg_visit({'reason': 'Bilateral hand'})
     assert not visit_estimate.is_emg_visit({'reason': 'Bilateral hand', 'appointment_type': 'Possible EMG'})

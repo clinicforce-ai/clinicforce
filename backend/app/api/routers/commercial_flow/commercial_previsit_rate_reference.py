@@ -18,7 +18,7 @@ def refresh_saved_temporary_rates(result: dict, practice_id: str, inputs: dict, 
         _attach_temporary_blue_cross_rates(result, practice_id, inputs, source, 'Cigna')
     elif _api.re.search(r'\baetna\b', payer_name, _api.re.I):
         _attach_temporary_aetna_rates(result, practice_id, inputs, source)
-    elif payer_name and not _api.re.search(r'blue cross|bcbstx|blue shield|humana', payer_name, _api.re.I):
+    elif payer_name and not _api.re.search(r'aetna|humana', payer_name, _api.re.I):
         _attach_temporary_blue_cross_rates(result, practice_id, inputs, source, payer_name)
 
 def _attach_temporary_blue_cross_rates(result: dict, practice_id: str, inputs: dict, source: dict,
@@ -32,6 +32,16 @@ def _attach_temporary_blue_cross_rates(result: dict, practice_id: str, inputs: d
     codes = result.get('codes') or []
     if not all((rendering_npi, billing_npi, location_id, pos, date, codes)):
         return
+    selected_code = str(codes[0].get('code') or '') if len(codes) == 1 else ''
+    office_family = next((family for family in
+                          ({str(code) for code in range(99202, 99206)},
+                           {str(code) for code in range(99212, 99216)})
+                          if selected_code in family), set())
+    alternatives = ([row for row in result.get('available_codes') or []
+                     if row.get('code') in office_family and row.get('code') != selected_code
+                     and row.get('units') == 1 and not row.get('modifiers')]
+                    if payer_name == 'Cigna' and pos == '11' and codes[0].get('units') == 1
+                    and not codes[0].get('modifiers') else [])
     payers = [row for row in _api.commercial_store.list_connections(practice_id)
               if row.get('status') == 'staff_guidance_enabled' and
               _api.re.search(r'blue cross.*(?:blue shield|bcbs).*texas|bcbstx', str(row.get('display_name') or ''), _api.re.I)]
@@ -53,8 +63,15 @@ def _attach_temporary_blue_cross_rates(result: dict, practice_id: str, inputs: d
         rates = _api.commercial_store.matching_rates(practice_id, profiles[0], networks[0], date, codes)
     except _api.commercial.CommercialError:
         return
+    try:
+        alternative_rates = (_api.commercial_store.matching_rates(
+            practice_id, profiles[0], networks[0], date, alternatives) if alternatives else [])
+    except _api.commercial.CommercialError:
+        alternative_rates = []
     by_code = {(row['code'], row.get('modifier') or ''): row for row in rates
                if str(row.get('source_reference') or '').startswith('library:')}
+    alternative_by_code = {(row['code'], row.get('modifier') or ''): row for row in alternative_rates
+                           if str(row.get('source_reference') or '').startswith('library:')}
     lines = []
     published = False
     for code in codes:
@@ -69,14 +86,25 @@ def _attach_temporary_blue_cross_rates(result: dict, practice_id: str, inputs: d
                           'units': code.get('units'), 'modifiers': code.get('modifiers') or [],
                           'unit_reference_cents': rate['allowed_cents'],
                           'source_reference': rate['source_reference']})
-    if lines:
+    alternative_lines = [{'id': code.get('id'), 'code': code['code'], 'units': 1,
+                          'modifiers': [], 'unit_reference_cents': rate['allowed_cents'],
+                          'source_reference': rate['source_reference']}
+                         for code in alternatives
+                         if (rate := alternative_by_code.get((code['code'], '')))
+                         and rate.get('allowed_cents') is not None]
+    if lines or alternative_lines:
         result['temporary_rate_reference'] = {'source': ('Blue Cross Texas clinic and published 2026 fee references'
             if published else 'NMCT Clinical Library Blue Cross fee schedule'),
             'lines': lines, 'complete': len(lines) == len(codes),
+            **({'alternatives': alternative_lines} if alternative_lines else {}),
             'message': (f'Temporary CPT price reference only. Published unmodified CTA amounts are from the BCBSTX 2026 professional Other Codes schedule. These are not {payer_name} contracted allowances or a patient amount to collect.'
                         if published else
                         f'Temporary CPT price reference only. These are Blue Cross rates, not {payer_name} contracted allowances.'
                         if payer_name == 'Cigna' else
+                        'BCBSTX clinic fee reference for the selected CPT. The member product and BlueCard pricing path still need confirmation before this can be called an insured allowed amount.'
+                        if _api.re.search(r'blue cross|bcbstx|blue shield', payer_name, _api.re.I) else
+                        'Temporary CPT price reference only. These are Blue Cross rates, not UnitedHealthcare contracted allowances. A provisional collection target may use this reference with its stated deductible assumption.'
+                        if payer_name == 'UnitedHealthcare' else
                         f'Temporary CPT price reference only. These are Blue Cross rates, not {payer_name} contracted allowances or a patient amount to collect.')}
 
 

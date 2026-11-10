@@ -29,6 +29,14 @@ def _payer(row: dict, names: set[str]) -> bool:
                for name in names for alias in aliases)
 
 
+def _plan_keys(values: list[str], payer_names: set[str]) -> set[str]:
+    plans = {_key(value) for value in values if value and not generic_plan_label(value)}
+    if payer_names & {'unitedhealthcare', 'uhc'}:
+        if plans & {'unitedhealthcarechoiceplus', 'uhcchoiceplus'}:
+            plans.add('choiceplus')
+    return plans
+
+
 def _portal_reference(data: dict, row: dict, plan: str) -> dict:
     payer = row['Payer']
     return data['portals'].get('UnitedHealthcare (WellMed)' if 'wellmed' in plan and payer == 'UnitedHealthcare' else payer) or {}
@@ -92,6 +100,19 @@ def _patient_evidence(result: dict, context: dict, steps: dict) -> list[str]:
     return gaps
 
 
+def _matches(payer_rows: list[tuple[int, dict]], plans: set[str]) -> list[tuple[int, dict]]:
+    return [(number, row) for number, row in payer_rows
+            if plans & _names(row["Specific Plan / Network Names on NMCT's Accepted List"])]
+
+
+def matched_row(context: dict, data: dict) -> tuple[int, dict] | None:
+    """Find one exact payer/product workbook row for source-backed lookups."""
+    payer_names = {_key(value) for value in context.get('payer_names') or [] if value}
+    payer_rows = [(number, row) for number, row in data['rows'] if _payer(row, payer_names)]
+    matched = _matches(payer_rows, _plan_keys(context.get('plans') or [], payer_names))
+    return matched[0] if len(matched) == 1 else None
+
+
 def evaluate(result: dict, context: dict, data: dict) -> dict | None:
     """Return independent referral/auth research for an exact plan, or cautious lookup guidance."""
     payer_names = {_key(value) for value in context.get('payer_names') or [] if value}
@@ -99,13 +120,12 @@ def evaluate(result: dict, context: dict, data: dict) -> dict | None:
     if not payer_rows:
         return None
     reported_plans = [str(value) for value in context.get('plans') or [] if value]
-    plans = {_key(value) for value in reported_plans if not generic_plan_label(value)}
+    plans = _plan_keys(reported_plans, payer_names)
     if any('bluecard' in _key(value) for value in reported_plans) and any(
             row['Payer'] == 'Blue Cross Blue Shield of Texas' for _, row in payer_rows):
         payer_rows += [(number, row) for number, row in data['rows']
                        if row['Payer'] == 'Blue Cross Blue Shield (out-of-state BlueCard)']
-    matched = [(number, row) for number, row in payer_rows
-               if plans & _names(row["Specific Plan / Network Names on NMCT's Accepted List"])]
+    matched = _matches(payer_rows, plans)
     if len(matched) != 1:
         families = set()
         if any('bluecard' in _key(value) for value in reported_plans):
@@ -142,7 +162,8 @@ def evaluate(result: dict, context: dict, data: dict) -> dict | None:
                        'sources': [_research_source(data, label)],
                        'verify_url': _portal(data, row, '', kind), 'contact': None} for kind in ('referral', 'authorization')}
     number, row = matched[0]
-    plan = next((value for value in context.get('plans') or [] if _key(value) in _names(row["Specific Plan / Network Names on NMCT's Accepted List"])), '')
+    plan = next((value for value in context.get('plans') or []
+                 if _plan_keys([value], payer_names) & _names(row["Specific Plan / Network Names on NMCT's Accepted List"])), '')
     source = _research_source(data, f"{data['filename']} · Payer Plan Matrix, row {number} · {plan} (Excel research)")
     gaps = _patient_evidence(result, {**context, 'payer': row['Payer']}, data['steps'])
     uncertain = any(code.get('needs_confirmation') or code.get('source') == 'conditional office E/M alternative'

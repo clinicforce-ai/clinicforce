@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -133,6 +133,140 @@ class PrebookingResult(Model):
     check_id: str | None
     coverage_start: date | None
     coverage_end: date | None
+
+
+class PrebookingPlanRequest(Model):
+    """Reason-only clinical planning before any payer transaction."""
+
+    reason: str = Field(min_length=3, max_length=800)
+    visit_type: Literal["new", "established", "unknown"] = "unknown"
+
+    @field_validator("reason")
+    @classmethod
+    def valid_reason(cls, value: str) -> str:
+        if any(ord(char) < 32 and char not in "\n\t" for char in value):
+            raise ValueError("Remove control characters from the visit reason")
+        return value
+
+
+class PrebookingSelectedService(Model):
+    code: str = Field(pattern=r"^(?:[0-9]{5}|[A-Z][0-9]{4}|[0-9]{4}[A-Z])$")
+    units: int = Field(ge=1, le=4, strict=True)
+
+
+class PrebookingEstimateRequest(PrebookingEligibility, PrebookingPlanRequest):
+    """Staff-confirmed prospective scenario; no eCW encounter is implied."""
+
+    selected_services: list[PrebookingSelectedService] = Field(min_length=1, max_length=8)
+    network_context_id: str | None = Field(default=None, max_length=100)
+    service_date: date | None = Field(default=None, description="Tentative date; defaults to today")
+    relationship: Literal["self", "dependent"] = "self"
+    subscriber_given_name: str = Field(default="", max_length=100)
+    subscriber_family_name: str = Field(default="", max_length=100)
+    subscriber_birth_date: date | None = None
+
+    @field_validator("subscriber_given_name", "subscriber_family_name")
+    @classmethod
+    def valid_subscriber_name(cls, value: str) -> str:
+        if any(ord(char) < 32 for char in value):
+            raise ValueError("Remove control characters from policyholder details")
+        return value
+
+    @field_validator("subscriber_birth_date")
+    @classmethod
+    def valid_subscriber_birth_date(cls, value: date | None) -> date | None:
+        if value and not date(1850, 1, 1) <= value <= date.today():
+            raise ValueError("Enter a valid policyholder birth date")
+        return value
+
+    @model_validator(mode="after")
+    def validate_scenario(self):
+        if self.relationship == "dependent" and not (self.member_id and self.subscriber_given_name
+                                                       and self.subscriber_family_name and self.subscriber_birth_date):
+            raise ValueError("Enter the policyholder name, birth date and member ID for dependent coverage")
+        return self
+
+
+class PrebookingPlanCandidate(Model):
+    code: str
+    reason: str
+    role: str
+    service_type: str | None
+
+
+class PrebookingPlanGroup(Model):
+    label: str
+    selection_mode: Literal["single", "multiple"]
+    codes: list[PrebookingPlanCandidate]
+
+
+class PrebookingPlanResponse(Model):
+    groups: list[PrebookingPlanGroup]
+    notes: list[str]
+    message: str
+
+
+class PrebookingContextOption(Model):
+    id: str
+    label: str
+
+
+class PrebookingContextsResponse(Model):
+    contexts: list[PrebookingContextOption]
+
+
+class PrebookingEstimateTerms(Model):
+    copay_cents: int | None
+    coinsurance_percent: str | None
+    deductible_annual_cents: int | None
+    deductible_remaining_cents: int | None
+    oop_annual_cents: int | None
+    oop_remaining_cents: int | None
+    deductible_applicability: str | None
+    authorization_signal: str | None
+    referral_signal: str | None
+    resolved_service_type: str | None
+
+
+class PrebookingEstimateCoverage(Model):
+    status: Literal["active_today", "inactive_today", "needs_review"]
+    message: str
+    coverage_start: date | None
+    coverage_end: date | None
+
+
+class PrebookingEstimateLine(Model):
+    code: str
+    units: int
+    role: str
+    service_type: str | None
+    allowed_cents: int | None
+    patient_cents: int | None
+    rate_source: str | None
+    benefits: PrebookingEstimateTerms
+    issues: list[str]
+    conditions: list[str]
+
+
+class PrebookingEstimateResponse(Model):
+    """Unknown financial values are null, never assumed to be zero."""
+
+    coverage: PrebookingEstimateCoverage
+    payer: str
+    checked_at: datetime
+    checked_on: date
+    check_ids: list[str]
+    network_status: Literal["in_network", "out_of_network", "unknown"]
+    network_evidence: dict[str, Any] | None
+    plan_name: str | None
+    benefits: PrebookingEstimateTerms | None
+    lines: list[PrebookingEstimateLine]
+    allowed_total_cents: int | None
+    plan_total_cents: int | None
+    patient_min_cents: int | None
+    patient_max_cents: int | None
+    estimate_status: Literal["priced", "conditional", "needs_review"]
+    issues: list[str]
 
 
 class IntakeSearch(Model):

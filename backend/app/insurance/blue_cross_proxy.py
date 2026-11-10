@@ -77,6 +77,96 @@ def _saved_diagnostic_terms(benefits: dict, codes: list[str], network: str) -> d
     return benefits if copay.get('amount_cents') == 0 and same_percent else None
 
 
+def biopsy_collection_target(result: dict, service_date: str) -> dict | None:
+    """Show full deductible exposure on a scoped UHC biopsy fee reference."""
+    benefits = result.get('benefits') or {}
+    identity = result.get('identity') or benefits.get('identity') or {}
+    names = ((result.get('plan_details') or {}).get('stedi') or {}).get('names') or []
+    price = result.get('price_range') or {}
+    codes, lines = result.get('codes') or [], price.get('lines') or []
+    reference = result.get('temporary_rate_reference') or {}
+    rates = reference.get('lines') or []
+    if (result.get('payment_mode') == 'cash' or not commercial.is_united_healthcare_payer(result)
+            or len(names) != 1 or not re.fullmatch(
+                r'LPPO\s*[- ]\s*UNITED\s*HEALTHCARE\s+GROUP\s+MEDICARE\s+ADVANTAGE\s*\(?PPO?\)?',
+                str(names[0]).strip(), re.I)
+            or not visit_coverage_bound(benefits, service_date)
+            or not verified_in_network(benefits) or not patient_benefits_bound(identity)
+            or benefits.get('coverage_status_conflict') or benefits.get('network_conflict')
+            or benefits.get('source_errors') or benefits.get('deductible_applies') is False
+            or benefits.get('deductible_remaining_cents') is not None
+            or (result.get('billing_protection') or {}).get('status') == 'qmb'
+            or price.get('mode') != 'services' or len(codes) not in {1, 2}
+            or len(lines) != len(codes)):
+        return None
+    biopsies = [row for row in codes if row.get('code') == '11104']
+    if (len(biopsies) != 1 or any(row.get('code') != '11104'
+            and (row.get('code') not in {str(n) for n in range(99212, 99216)}
+                 or row.get('units') != 1) for row in codes)):
+        return None
+    code = biopsies[0]
+    matched_lines = [row for row in lines if row.get('id') == code.get('id')]
+    matched_rates = [row for row in rates if row.get('id') == code.get('id')]
+    if len(matched_lines) != 1 or len(matched_rates) != 1:
+        return None
+    line, rate = matched_lines[0], matched_rates[0]
+    terms = line.get('benefits') or {}
+    if (code.get('code') != '11104' or code.get('units') != 1 or code.get('modifiers')
+            or any(row.get('id') != code.get('id') or row.get('code') != '11104'
+                   or row.get('units') != 1 or row.get('modifiers') for row in (line, rate))
+            or terms.get('active') is not True or terms.get('service_date_matches') is False
+            or terms.get('network_status') != 'in_network' or terms.get('copay_cents') != 0
+            or terms.get('deductible_applies') is False
+            or terms.get('deductible_remaining_cents') is not None
+            or terms.get('coverage_status_conflict') or terms.get('source_errors')
+            or str(terms.get('coinsurance_percent') or '') not in {'0', '0.0', '0.00'}
+            or type(rate.get('unit_reference_cents')) is not int
+            or not 0 < rate['unit_reference_cents'] <= 100_000_000
+            or not str(rate.get('source_reference') or '').startswith('library:')):
+        return None
+    remaining = _oop_remaining(benefits, 'in_network')
+    if type(remaining) is not int or remaining <= 0:
+        return None
+    included = {'11104'}
+    total_reference = rate['unit_reference_cents']
+    office = next((row for row in codes if row.get('code') != '11104'), None)
+    if office:
+        office_lines = [row for row in lines if row.get('id') == office.get('id')]
+        office_rates = [row for row in rates if row.get('id') == office.get('id')]
+        if len(office_lines) == len(office_rates) == 1:
+            office_line, office_rate = office_lines[0], office_rates[0]
+            office_terms = office_line.get('benefits') or {}
+            if (office_line.get('code') == office_rate.get('code') == office['code']
+                    and office_line.get('units') == office_rate.get('units') == 1
+                    and (office_line.get('modifiers') or []) == (office_rate.get('modifiers') or []) == (office.get('modifiers') or [])
+                    and office_terms.get('active') is not False
+                    and office_terms.get('network_status') != 'out_of_network'
+                    and office_terms.get('service_date_matches') is not False
+                    and office_terms.get('copay_cents') in {None, 0}
+                    and str(office_terms.get('coinsurance_percent') or '0') in {'0', '0.0', '0.00'}
+                    and office_terms.get('deductible_applies') is not False
+                    and office_terms.get('deductible_remaining_cents') is None
+                    and not office_terms.get('coverage_status_conflict')
+                    and not office_terms.get('source_errors')
+                    and type(office_rate.get('unit_reference_cents')) is int
+                    and 0 < office_rate['unit_reference_cents'] <= 100_000_000
+                    and str(office_rate.get('source_reference') or '').startswith('library:')):
+                total_reference += office_rate['unit_reference_cents']
+                included.add(office['code'])
+    pending = [row['code'] for row in codes if row['code'] not in included]
+    return {'basis': 'bcbstx_uhc_biopsy_deductible_target', 'status': 'provisional',
+            'amount_cents': min(total_reference, remaining),
+            'reference_cents': total_reference, 'oop_remaining_cents': remaining,
+            'included_codes': [row['code'] for row in codes if row['code'] in included],
+            'pending_codes': pending,
+            'assumption': 'full_deductible_applies', 'rate_source': reference.get('source'),
+            'message': 'Planning target using the clinic BCBS Texas CPT fees as a proxy. '
+                       'Assumes the full deductible applies to the included services because UHC did not return a deductible rule. '
+                       'UHC allowance, payer order and final patient responsibility remain unverified; '
+                       + ('the office follow-up is excluded until its rate and benefit scope are checked. '
+                          if pending else '') + 'Pathology is excluded.'}
+
+
 def estimate(result: dict, service_date: str) -> dict | None:
     """Return an exact-line fee proxy only when diagnostic benefit terms agree."""
     benefits = result.get('benefits') or {}
@@ -295,6 +385,86 @@ def cigna_estimate(result: dict, service_date: str) -> dict | None:
                         + ('No CPT copay was returned; $0 additional copay is an assumption. '
                            if copay_assumed else 'The exact CPT copay is $0. '
                            ) + 'This is a planning share only; Cigna allowed amounts are not supplied and the fee proxy does not authorize check-in collection.' + cap_note)}
+
+
+def cigna_office_fee_scenarios(result: dict, service_date: str) -> dict | None:
+    """Price separate office E/M scenarios from family-only plan terms and BCBS fees."""
+    benefits = result.get('benefits') or {}
+    reference = result.get('temporary_rate_reference') or {}
+    selected = result.get('codes') or []
+    identity = result.get('identity') or benefits.get('identity') or {}
+    if (result.get('payment_mode') == 'cash' or not re.search(r'\bcigna\b', str(result.get('payer') or ''), re.I)
+            or not visit_coverage_bound(benefits, service_date) or not verified_in_network(benefits)
+            or not patient_benefits_bound(identity) or benefits.get('has_secondary')
+            or benefits.get('network_conflict') or benefits.get('coverage_status_conflict')
+            or benefits.get('source_errors') or result.get('refresh_requires_selection') is True
+            or len(selected) != 1 or selected[0].get('units') != 1
+            or selected[0].get('modifiers') or reference.get('complete') is not True
+            or len(reference.get('lines') or []) != 1):
+        return None
+    selected_code = str(selected[0].get('code') or '')
+    family = next((codes for codes in
+                   ({str(code) for code in range(99202, 99206)},
+                    {str(code) for code in range(99212, 99216)})
+                   if selected_code in codes), set())
+    if not family:
+        return None
+    exact = (result.get('cpt_authorization') or {}).get('financial_terms') or {}
+    if any(value is not None for terms in exact.values() for value in
+           (terms.get('copay_cents'), terms.get('coinsurance_percent'),
+            terms.get('deductible_remaining_cents'), terms.get('oop_remaining_cents'))):
+        return None
+    options = benefits.get('reported_options') or []
+    def one_row(kind: str, level: str, period: str | None = None) -> dict | None:
+        matches = [row for row in options if row.get('kind') == kind
+                   and row.get('service_type_code') == '30' and not row.get('procedure_code')
+                   and row.get('coverage_level') == level and row.get('network') == 'IN_NETWORK'
+                   and not row.get('places_of_service') and not row.get('effective_dates')
+                   and (period is None or row.get('time_period') == period)
+                   and row.get('plan_association') in {'medical', 'unassigned'}]
+        return matches[0] if len(matches) == 1 else None
+    deductible = one_row('deductible', 'FAMILY', 'REMAINING')
+    oop = one_row('out_of_pocket', 'FAMILY', 'REMAINING')
+    coinsurance = one_row('coinsurance', 'INDIVIDUAL')
+    if (not deductible or not oop or not coinsurance
+            or not all('only family accumulators' in str(row.get('payer_note') or '').casefold()
+                       for row in (deductible, oop))
+            or len({row.get('plan_index') for row in (deductible, oop, coinsurance)}) != 1
+            or type(deductible.get('plan_index')) is not int
+            or type(deductible.get('amount_cents')) is not int
+            or type(oop.get('amount_cents')) is not int
+            or not 0 <= deductible['amount_cents'] <= 100_000_000
+            or not 0 <= oop['amount_cents'] <= 100_000_000):
+        return None
+    try:
+        percent = Decimal(str(coinsurance['percent']))
+    except (KeyError, TypeError, InvalidOperation):
+        return None
+    if not percent.is_finite() or not 0 <= percent <= 100:
+        return None
+    rows = []
+    for line in [*reference['lines'], *(reference.get('alternatives') or [])]:
+        fee = line.get('unit_reference_cents')
+        if (line.get('code') not in family or line.get('units') != 1
+                or line.get('modifiers') or type(fee) is not int
+                or not 0 < fee <= 100_000_000
+                or not str(line.get('source_reference') or '').startswith('library:')):
+            return None
+        deductible_share = min(fee, deductible['amount_cents'])
+        coinsurance_share = int((Decimal(fee - deductible_share) * percent / 100)
+                                .quantize(Decimal('1'), rounding=ROUND_HALF_UP))
+        rows.append({'code': line['code'], 'selected': line['code'] == selected_code,
+                     'fee_reference_cents': fee, 'deductible_cents': deductible_share,
+                     'coinsurance_cents': coinsurance_share,
+                     'patient_share_cents': min(deductible_share + coinsurance_share,
+                                                oop['amount_cents'])})
+    if not rows or rows[0]['code'] != selected_code or len({row['code'] for row in rows}) != len(rows):
+        return None
+    return {'basis': 'bcbstx_cigna_family_only_office', 'status': 'conditional',
+            'deductible_remaining_cents': deductible['amount_cents'],
+            'oop_remaining_cents': oop['amount_cents'], 'coinsurance_percent': str(percent),
+            'lines': rows,
+            'message': 'Conditional check-in calculation using BCBSTX fees and Cigna family-only plan terms. Confirm the final CPT, deductible applicability, Cigna allowed amount, health-account payment and Explanation of Estimate before charging.'}
 
 
 def cigna_oap_office_scenario(result: dict, service_date: str) -> dict | None:

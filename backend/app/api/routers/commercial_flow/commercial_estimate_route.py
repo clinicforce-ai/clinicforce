@@ -33,7 +33,9 @@ from app.api.routers.commercial_flow.commercial_previsit_appointment import load
     "that setting and uses a separate payer inquiry slot. A fresh same-visit, patient-bound dependent "
     "response can supply the verified policyholder identity for the new inquiry. Office-only fee "
     "schedules do not price a telehealth visit. A skin-biopsy "
-    "booking without a site count starts with an editable three-site CPT 11104 + 11105 x2 scenario. A supported "
+    "booking without a site count starts with editable CPT 11104 x1. An explicit established-patient "
+    "follow-up with that biopsy also starts with provisional office CPT 99213; separate E/M billing needs "
+    "documented distinct evaluation and modifier review. A supported "
     "fixed office copay is the visit-time amount unless an applicable individual in-network "
     "out-of-pocket limit reduces the covered visit share to zero. A payer-reported zero balance "
     "whose medical scope cannot be confirmed withholds a positive advance and sets "
@@ -221,7 +223,12 @@ async def previsit_estimate(value: _api.PrevisitInput, request: _api.Request, ba
     authorization pa_approval report member-specific clearance separately from
     the published requirement; legacy approval_status remains for older clients.
     Official rule sources include URL, version, effective dates, verification
-    date and applied product/CPT scope. Its procedures array reports
+    date and applied product/CPT scope. Workbook-guided official web findings
+    support identified UHC Choice Plus or
+    Navigate plans and selected diagnostic CPTs when the dated source was
+    retrieved successfully. A failed fetch or generic payer name is unresolved.
+    Public source requests carry no patient identifiers; member approval remains
+    separate from the published requirement. The procedures array reports
     the same conservative decision for each returned planned or conditional CPT; a visit with any
     established required selected procedure remains Required while other CPTs can lack
     a sourced rule. candidate_requirements reports each unselected suggested or recommended CPT

@@ -13,6 +13,14 @@ export type TemporaryRateReference = {
     unit_reference_cents: number
     source_reference: string
   }>
+  alternatives?: Array<{
+    id?: string
+    code: string
+    units?: number
+    modifiers?: string[]
+    unit_reference_cents: number
+    source_reference: string
+  }>
 }
 
 export type AetnaDiagnosticReference = {

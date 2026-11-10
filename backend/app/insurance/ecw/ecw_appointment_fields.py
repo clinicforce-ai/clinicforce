@@ -115,7 +115,9 @@ def _history_summary(visit: dict[str, Any], procedures: list[dict[str, Any]], or
     # than on a linked Procedure or ServiceRequest.
     codes = list(dict.fromkeys([*_coding(visit, "procedure"),
                                 *(code for row in related for code in _coding(row, "procedure"))]))[:12]
+    diagnoses = list(dict.fromkeys([*_coding(visit, "diagnosis"),
+                                    *(code for row in related for code in _coding(row, "diagnosis"))]))[:12]
     return {"date": _appointment_date(visit), "status": str(visit.get("status") or "not_returned"),
             "visit_type": _visit_type(visit) or "not_returned",
             "reason": "; ".join(dict.fromkeys(" ".join(label.split()) for label in labels if label.strip()))[:500] or None,
-            "coded_services": codes}
+            "coded_services": codes, **({"diagnoses": diagnoses} if diagnoses else {})}

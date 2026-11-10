@@ -7,6 +7,9 @@ from types import ModuleType
 from app.insurance.identity import patient_benefits_bound
 from app.insurance import stedi_cpt_authorization, visit_estimate
 from app.insurance.requirements.published import PUBLISHED_RULESET_VERSION
+from app.insurance import plan_matrix
+from app.insurance.requirements.public_source_lookup import lookup as public_source_lookup
+from datetime import date
 
 
 def requirement_sources(documents: list[dict]) -> list[dict]:
@@ -145,6 +148,9 @@ def attach_requirements(api: ModuleType, result: dict, case: dict, inputs: dict,
         'plans': [approved_product] if approved_product else [identified_product] if identified_product and patient_benefits_bound(result.get('identity') or {}) else [source.get('plan'), result.get('plan'),
                   *(name for names in (source.get('plan_details') or {}).values() for name in names),
                   *(result['plan_details']['stedi'].get('names') or []),
+                  *((result['plan_details']['stedi'].get('network_names') or [])
+                    if patient_benefits_bound(result.get('identity') or {})
+                    and result.get('benefits', {}).get('network_status') == 'in_network' else []),
                   *([(result.get('network_evidence') or {}).get('network_name')]
                     if result.get('benefits', {}).get('network_status') == 'in_network' else [])],
         'network': (result.get('network_evidence') or {}).get('network_name'),
@@ -160,6 +166,9 @@ def attach_requirements(api: ModuleType, result: dict, case: dict, inputs: dict,
         'diagnoses': inputs.get('diagnoses'),
     }
     requirement_documents = [document for document in library_sources if document]
+    matrix_data = plan_matrix.uploaded(requirement_documents, inputs['service_date'])
+    result['public_source_rules'] = public_source_lookup(result, requirement_context, matrix_data)
+    result['public_source_checked_day'] = date.today().isoformat()
     result['requirement_evidence'] = api.contract_requirements.evaluate(result, requirement_context, requirement_documents)
     result['published_requirements_version'] = _rules_version(stored_rules)
     candidates = api._requirement_candidates(result)
@@ -167,6 +176,7 @@ def attach_requirements(api: ModuleType, result: dict, case: dict, inputs: dict,
         # Research the other suggested choices without changing the requirement
         # summary for the services actually selected for this visit.
         candidate_result = {**result, 'codes': candidates, 'price_range': {'lines': []}}
+        candidate_result['public_source_rules'] = public_source_lookup(candidate_result, requirement_context, matrix_data)
         result['candidate_requirements'] = api.contract_requirements.evaluate(
             candidate_result, requirement_context, requirement_documents)['procedures']
     else:
@@ -185,6 +195,7 @@ def refresh_saved_requirements(api: ModuleType, result: dict, case: dict, practi
         for field in ('network_status', 'network_source')
     ) or (result.get('network_evidence') or {}).get('network_name') != (saved_result.get('network_evidence') or {}).get('network_name')
     if (result.get('requirement_sources') == requirement_sources(documents) and not network_changed
+            and result.get('public_source_checked_day') == date.today().isoformat()
             and saved_result.get('published_requirements_version') == rules_version):
         return
     context = case['previsit_context']

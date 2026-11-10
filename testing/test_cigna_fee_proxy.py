@@ -37,6 +37,47 @@ def test_cigna_exact_cpt_fee_proxy_is_provisional_and_rounded_per_line():
     assert value['copay_unconfirmed'] is True
 
 
+def test_cigna_family_only_office_fee_scenarios_apply_deductible_before_coinsurance():
+    options = [
+        {'kind': 'deductible', 'service_type_code': '30', 'procedure_code': '',
+         'coverage_level': 'FAMILY', 'network': 'IN_NETWORK', 'plan_association': 'medical',
+         'time_period': 'REMAINING', 'plan_index': 0, 'amount_cents': 179682,
+         'payer_note': 'This plan has only family accumulators'},
+        {'kind': 'out_of_pocket', 'service_type_code': '30', 'procedure_code': '',
+         'coverage_level': 'FAMILY', 'network': 'IN_NETWORK', 'plan_association': 'medical',
+         'time_period': 'REMAINING', 'plan_index': 0, 'amount_cents': 529682,
+         'payer_note': 'This plan has only family accumulators'},
+        {'kind': 'coinsurance', 'service_type_code': '30', 'procedure_code': '',
+         'coverage_level': 'INDIVIDUAL', 'network': 'IN_NETWORK', 'plan_association': 'unassigned',
+         'plan_index': 0, 'percent': '20.0'},
+    ]
+    result = {'payer': 'Cigna', 'payment_mode': 'insurance', 'service_date': '2026-11-06',
+              'codes': [{'id': 'selected', 'code': '99203', 'units': 1}],
+              'identity': {'status': 'matched', 'binding': 'synthetic-binding', 'match_version': 2},
+              'benefits': {'active': True, 'service_date_matches': True,
+                           'network_status': 'in_network', 'network_source': 'payer_participation_message',
+                           'reported_options': options},
+              'temporary_rate_reference': {'complete': True,
+                  'lines': [{'id': 'selected', 'code': '99203', 'units': 1,
+                             'unit_reference_cents': 13000, 'source_reference': 'library:synthetic'}],
+                  'alternatives': [{'code': '99204', 'units': 1, 'unit_reference_cents': 18049,
+                                    'source_reference': 'library:synthetic'},
+                                   {'code': '99205', 'units': 1, 'unit_reference_cents': 24151,
+                                    'source_reference': 'library:synthetic'}]}}
+    scenario = blue_cross_proxy.cigna_office_fee_scenarios(result, '2026-11-06')
+    assert [(row['code'], row['deductible_cents'], row['coinsurance_cents'],
+             row['patient_share_cents']) for row in scenario['lines']] == [
+        ('99203', 13000, 0, 13000), ('99204', 18049, 0, 18049),
+        ('99205', 24151, 0, 24151)]
+    assert scenario['deductible_remaining_cents'] == 179682
+    result['benefits']['reported_options'][0]['amount_cents'] = 10000
+    scenario = blue_cross_proxy.cigna_office_fee_scenarios(result, '2026-11-06')
+    assert [(row['deductible_cents'], row['coinsurance_cents'], row['patient_share_cents'])
+            for row in scenario['lines'] if row['code'] == '99204'] == [(10000, 1610, 11610)]
+    result['benefits']['reported_options'][0]['payer_note'] = ''
+    assert blue_cross_proxy.cigna_office_fee_scenarios(result, '2026-11-06') is None
+
+
 def test_cigna_oap_office_scenario_uses_one_copay_and_reprices_selected_cpts():
     result = _result()
     result.update(plan='Open Access Plus', service_date='2026-10-28')

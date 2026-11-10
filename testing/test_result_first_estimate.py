@@ -689,6 +689,7 @@ def test_current_library_contract_decides_network_independently_of_price(monkeyp
 @pytest.mark.parametrize('payer_label, practice_id', [
     ('United Healthcare', 'clinic'), ('United Health Care', 'clinic'),
     ('Aetna', network_participation.NMCT_PRACTICE_ID), ('Cigna', 'clinic'), ('phcs', 'clinic'),
+    ('Blue Cross Blue Shield of Texas · GA POS BLUECHOICE OA', 'clinic'),
 ])
 def test_other_payers_use_scoped_blue_cross_library_rate_only_as_temporary_reference(monkeypatch, payer_label, practice_id):
     payer = {'id': 'bcbs', 'display_name': 'Blue Cross and Blue Shield of Texas',
@@ -719,6 +720,12 @@ def test_other_payers_use_scoped_blue_cross_library_rate_only_as_temporary_refer
         assert result['temporary_rate_reference']['complete'] is True
     assert result['price_range']['lines'][0]['allowed_cents'] is None
     assert benefits['network_status'] == 'unknown'
+    if payer_label.startswith('Blue Cross'):
+        from app.api.routers.commercial_flow import commercial_previsit_rate_reference as rate_reference
+        result.pop('temporary_rate_reference')
+        rate_reference.refresh_saved_temporary_rates(result, practice_id, inputs, source, payer)
+        assert result['temporary_rate_reference']['lines'][0]['unit_reference_cents'] == 10117
+        assert 'member product' in result['temporary_rate_reference']['message']
     source['location_id'] = 'different-office'
     result = {'payer': payer_label, 'codes': [{'code': '99203', 'units': 1}], 'issues': []}
     api._attach_previsit_pricing(result, practice_id, inputs, source, 'uhc-route', benefits)
@@ -759,6 +766,52 @@ def test_2026_unmodified_cta_uses_published_bcbstx_reference_only(monkeypatch):
     inputs['service_date'] = '2027-01-01'
     rate_reference._attach_temporary_blue_cross_rates(result, 'primary', inputs, source, result['payer'])
     assert [row['code'] for row in result['temporary_rate_reference']['lines']] == ['99214']
+
+
+def test_cigna_office_reference_prices_unselected_em_levels_separately(monkeypatch):
+    from app.api.routers.commercial_flow import commercial_previsit_rate_reference as rate_reference
+    payer = {'id': 'bcbs', 'display_name': 'Blue Cross and Blue Shield of Texas',
+             'status': 'staff_guidance_enabled'}
+    network = {'id': 'network', 'payer_connection_id': 'bcbs', 'status': 'verified',
+               'billing_npi': '1111111111', 'rendering_npi': '2222222222',
+               'location_id': 'office', 'place_of_service': '11', 'effective_from': '2026-01-01'}
+    profile = {'payer_connection_id': 'bcbs', 'provider_network_id': 'network',
+               'status': 'staff_guidance_enabled'}
+    monkeypatch.setattr(api.commercial_store, 'list_connections', lambda *_: [payer])
+    monkeypatch.setattr(api.commercial_store, 'list_networks', lambda *_: [network])
+    monkeypatch.setattr(api.commercial_store, 'list_profiles', lambda *_: [profile])
+    requested = []
+    def matching_rates(*args):
+        codes = [row['code'] for row in args[-1]]
+        requested.extend(codes)
+        return [{'code': code, 'modifier': '', 'allowed_cents': cents,
+                 'source_reference': 'library:synthetic-fee-schedule'}
+                for code, cents in [('99203', 13000), ('99204', 18049), ('99205', 24151)]
+                if code in codes]
+    monkeypatch.setattr(api.commercial_store, 'matching_rates', matching_rates)
+    result = {'payer': 'Cigna', 'codes': [{'id': 'selected', 'code': '99203', 'units': 1}],
+              'available_codes': [{'id': 'selected', 'code': '99203', 'units': 1},
+                                  {'id': 'level-four', 'code': '99204', 'units': 1},
+                                  {'id': 'level-five', 'code': '99205', 'units': 1}]}
+    inputs = {'service_date': '2026-11-06', 'rendering_provider': {'npi': '2222222222'},
+              'place_of_service': '11'}
+    source = {'billing_provider': {'npi': '1111111111'}, 'location_id': 'office'}
+    rate_reference._attach_temporary_blue_cross_rates(result, 'primary', inputs, source, 'Cigna')
+    reference = result['temporary_rate_reference']
+    assert requested == ['99203', '99204', '99205']
+    assert [(row['code'], row['unit_reference_cents']) for row in reference['lines']] == [('99203', 13000)]
+    assert [(row['code'], row['unit_reference_cents']) for row in reference['alternatives']] == [
+        ('99204', 18049), ('99205', 24151)]
+    assert reference['complete'] is True
+    def conflicting_alternative(*args):
+        if any(row['code'] == '99204' for row in args[-1]):
+            raise commercial.CommercialError('Conflicting alternative rate')
+        return [matching_rates(*args)[0]]
+    monkeypatch.setattr(api.commercial_store, 'matching_rates', conflicting_alternative)
+    result.pop('temporary_rate_reference')
+    rate_reference._attach_temporary_blue_cross_rates(result, 'primary', inputs, source, 'Cigna')
+    assert [row['code'] for row in result['temporary_rate_reference']['lines']] == ['99203']
+    assert 'alternatives' not in result['temporary_rate_reference']
 
 
 def test_requirement_candidates_include_suggested_cpts_without_expanding_the_selected_visit():

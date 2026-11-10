@@ -40,6 +40,20 @@ export default function CommercialCostBreakdown({
   const summary = result.encounter_summary
   const proxyFormula = feeProxy && feeProxyFormula(feeProxy, summary?.payments_verified_cents || 0)
   const individualDeductible = limitSummary(reportedResult, 'deductible', 'INDIVIDUAL')
+  const generalOnlyDeductible =
+    benefits?.reported_options?.some(
+      (row) =>
+        row.kind === 'deductible' &&
+        row.service_type_code === '30' &&
+        row.coverage_level === 'INDIVIDUAL' &&
+        row.network === 'IN_NETWORK' &&
+        row.time_period === 'REMAINING' &&
+        row.amount_cents === benefits.deductible_remaining_cents,
+    ) &&
+    !benefits.reported_options.some(
+      (row) =>
+        row.kind === 'deductible' && row.service_type_code === '98' && row.network === 'IN_NETWORK',
+    )
   const surgicalIndividualDeductible = limitSummary(reportedResult, 'deductible', 'INDIVIDUAL', '2')
   const familyDeductible = limitSummary(reportedResult, 'deductible', 'FAMILY')
   const surgicalFamilyDeductible = limitSummary(reportedResult, 'deductible', 'FAMILY', '2')
@@ -169,6 +183,32 @@ export default function CommercialCostBreakdown({
           },
         ]
       : []),
+    ...(temporaryRateReference?.alternatives?.length
+      ? [
+          {
+            label: 'Other office E/M levels · BCBSTX fee references',
+            value: temporaryRateReference.alternatives
+              .map((line) => `CPT ${line.code}: ${money(line.unit_reference_cents)} per unit`)
+              .join('; '),
+            detail:
+              'Unselected levels are separate scenarios. Confirm the documented CPT before quoting a visit amount; these BCBSTX fees are not Cigna allowed amounts.',
+          },
+        ]
+      : []),
+    ...(result.cigna_office_fee_scenarios?.lines.length
+      ? [
+          {
+            label: 'Cigna check-in scenarios · verify before charging',
+            value: result.cigna_office_fee_scenarios.lines
+              .map(
+                (line) =>
+                  `CPT ${line.code}: ${money(line.deductible_cents)} deductible + ${money(line.coinsurance_cents)} coinsurance = ${money(line.patient_share_cents)}${line.selected ? ' · selected' : ' · alternative'}`,
+              )
+              .join('; '),
+            detail: `Family deductible remaining: ${money(result.cigna_office_fee_scenarios.deductible_remaining_cents)}. Coinsurance after deductible: ${result.cigna_office_fee_scenarios.coinsurance_percent}%. ${result.cigna_office_fee_scenarios.message}`,
+          },
+        ]
+      : []),
     {
       label: 'Copay',
       value: aetnaPlanning
@@ -290,7 +330,9 @@ export default function CommercialCostBreakdown({
                       : lines.length &&
                           lines.every((line) => line.benefits?.deductible_applies === false)
                         ? 'Does not apply to the selected CPTs'
-                        : 'Office deductible applicability or amount is unresolved for the selected CPTs',
+                        : generalOnlyDeductible
+                          ? 'Stedi returned this plan-wide deductible under STC 30. Its office-visit STC 98 rows did not say whether the deductible applies to the selected CPTs.'
+                          : 'Office deductible applicability or amount is unresolved for the selected CPTs',
     },
     {
       label: 'Family deductible',

@@ -229,11 +229,15 @@ class StaffDeletionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(merged['ecw_status'], 'complete')
         self.assertEqual(len(merged['appointments']), 3)
         self.assertEqual(next(row for row in merged['appointments'] if row['appointment_id'] == 'older')['checks'], [])
+        cached = next(row for row in staff_store.patient_dashboard('clinic-a')['patients'] if row['clinic_patient_id'] == 'patient-a')
+        self.assertEqual([visit['date'] for visit in cached['ecw_visit_cache']], ['2020-01-02', '2010-01-02'])
+        self.assertTrue(cached['ecw_visit_cached_at'])
         with patch.object(ecw_backend, 'configured', return_value=True), \
              patch.object(ecw_backend, 'patient_appointment_history', AsyncMock(side_effect=ecw_backend.EcwBackendError('timeout'))):
             fallback = (await self.client.get(url + '?include_ecw=true')).json()
         self.assertEqual(fallback['ecw_status'], 'incomplete')
         self.assertEqual(fallback['appointments'], visits)
+        self.assertEqual(next(row for row in staff_store.patient_dashboard('clinic-a')['patients'] if row['clinic_patient_id'] == 'patient-a')['ecw_visit_cache'], cached['ecw_visit_cache'])
         self.assertEqual((await self.client.get('/api/staff/patients/patient-b/appointments')).json()['appointments'], [])
         with patch.object(staff_store, 'get_session', return_value={**self.actor, 'practice_id': 'clinic-b'}):
             self.assertEqual((await self.client.get(url)).status_code, 404)

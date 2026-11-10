@@ -160,12 +160,24 @@ export function collectionAtVisitRow(
           feeProxy.patient_share_cents - (result.encounter_summary?.payments_verified_cents || 0),
         )
       : null
+  const biopsyTarget = !model.cash && !model.previousEstimate && !model.calculating
+    ? result.provisional_collection_target : null
+  const biopsyBalance = biopsyTarget
+    ? Math.max(0, biopsyTarget.amount_cents - (result.encounter_summary?.payments_verified_cents || 0))
+    : null
+  const biopsyOfficePending = !!biopsyTarget?.pending_codes?.length
   const aetnaPaid = result.encounter_summary?.payments_verified_cents || 0
   const aetnaBalance = aetnaPlanning
     ? Math.max(0, aetnaPlanning.patient_share_cents - aetnaPaid)
     : null
   const officeBalance =
     aetnaCopayPlanning == null ? null : Math.max(0, aetnaCopayPlanning - aetnaPaid)
+  const aetnaOfficeTerms = result.price_range?.mode === 'services' && result.price_range.lines?.length === 1
+    ? result.price_range.lines[0].benefits : null
+  const aetnaSeparateCopayCap = aetnaOfficeTerms?.separate_copay_limit
+    ? aetnaOfficeTerms.copay_remaining_cents : null
+  const aetnaPolicyPending = aetnaCopayPlanning != null &&
+    result.collection_guidance?.positive_advance_policy_missing === true
   const priorDateAetnaBalance =
     priorDateAetnaCopay == null ? null : Math.max(0, priorDateAetnaCopay - aetnaPaid)
   const botoxPreview = !model.cash && !model.previousEstimate ? result.botox_preview : null
@@ -181,9 +193,26 @@ export function collectionAtVisitRow(
     result.collection_guidance.diagnostic_copay_reference_cents != null
       ? result.collection_guidance.diagnostic_copay_reference_cents
       : null
+  const collectionBlocker = result.payment_explanation
+  const namedCollectionAction =
+    collectionBlocker?.reason_code === 'clinic_product_mismatch'
+      ? 'Match member plan to clinic agreement'
+      : collectionBlocker?.reason_code === 'contract_rate_missing'
+        ? 'Check plan-to-rate match for selected CPT'
+        : null
+  const pendingCollectionAction =
+    namedCollectionAction ||
+    collectionBlocker?.sentence ||
+    result.collection_guidance?.reason ||
+    model.unavailableReason ||
+    'Review selected CPT, benefits and clinic rate before collecting'
   return {
     label:
-      pendingAetnaCopay != null || priorDateAetnaBalance != null || pendingBluecardCopay != null
+      biopsyBalance != null
+        ? biopsyOfficePending
+          ? 'Provisional biopsy target · office share pending'
+          : 'Provisional collection target · confirmation pending'
+        : pendingAetnaCopay != null || priorDateAetnaBalance != null || pendingBluecardCopay != null
         ? 'Amount to collect at visit · pending verification'
         : cignaCard
           ? 'Amount to collect at visit · pending verification'
@@ -200,13 +229,17 @@ export function collectionAtVisitRow(
                     !['bcbstx_proxy_advance', 'qmb_protection'].includes(
                       result.collection_guidance?.basis || '',
                     )
-                  ? 'Planned amount to collect at visit'
+                  ? aetnaPolicyPending
+                    ? 'Amount to collect at visit · pending policy approval'
+                    : 'Planned amount to collect at visit'
                   : 'Amount to collect at visit',
     value: combinedPlan
       ? `${money(combinedPlan.amount_cents)} planning estimate`
       : result.collection_guidance?.basis === 'qmb_protection' &&
           result.collection_guidance.amount_cents === 0
         ? money(0)
+        : biopsyBalance != null
+          ? `${money(biopsyBalance)} provisional${biopsyOfficePending ? ' biopsy only' : ''}`
         : botoxPreview
           ? `${money(botoxPreview.patient_share_cents)} provisional · confirm CPT`
           : cignaFeeProxy &&
@@ -226,7 +259,9 @@ export function collectionAtVisitRow(
                     : aetnaPlanning
                       ? `${money(aetnaBalance!)} planning estimate`
                       : aetnaCopayPlanning != null
-                        ? `${money(officeBalance!)} planning estimate`
+                        ? aetnaPolicyPending
+                          ? `Pending · ${money(officeBalance!)} specialist office copay`
+                          : `${money(officeBalance!)} planning estimate`
                         : pendingBluecardCopay != null
                           ? `Pending · ${money(pendingBluecardCopay)} office copay if verified`
                           : officeReferenceCopay != null
@@ -245,11 +280,13 @@ export function collectionAtVisitRow(
                                         ? `Pending · ${money(pendingCignaCopay)} office copay if verified`
                                         : cignaCard
                                           ? `Pending · ${money(cignaCard.nontier1_specialist_copay_cents)} non-Tier-1 office-only reference; diagnostic CPT amount requires verification`
-                                          : 'Not established',
+                                          : pendingCollectionAction,
     detail: combinedPlan
       ? `${money(combinedPlan.office_copay_cents)} + ${combinedPlan.coinsurance_percent}% × ${money(combinedPlan.diagnostic_allowed_cents)} = ${money(combinedPlan.patient_share_cents)}${combinedPlan.payments_cents ? `; less ${money(combinedPlan.payments_cents)} already paid` : ''}. Separate follow-up E/M is planned; deductible and out-of-pocket adjustments remain assumptions until payer balances are returned.`
       : result.collection_guidance?.basis === 'qmb_protection'
         ? 'QMB protection prohibits collecting Medicare cost sharing for covered care'
+        : biopsyBalance != null
+          ? `min(${money(biopsyTarget!.reference_cents)} BCBS Texas CPT reference, ${money(biopsyTarget!.oop_remaining_cents)} remaining out-of-pocket) = ${money(biopsyTarget!.amount_cents)}${result.encounter_summary?.payments_verified_cents ? `; less ${money(result.encounter_summary.payments_verified_cents)} already paid = ${money(biopsyBalance)}` : ''}. ${biopsyTarget!.message}`
         : botoxPreview
           ? `${botoxPreview.coinsurance_percent}% × ${money(botoxPreview.allowed_cents)} for CPT ${botoxPreview.code} = ${money(botoxPreview.patient_share_cents)}. Confirm the injection site, individual limits, and prior payments before charging.`
           : cignaFeeProxy && result.collection_guidance?.basis === 'claim_after_service'
@@ -265,7 +302,9 @@ export function collectionAtVisitRow(
                   : aetnaPlanning
                     ? `min((${money(aetnaPlanning.copay_cents / 2)} per test × 2) + ${money(aetnaPlanning.deductible_cents)} deductible + ${money(aetnaPlanning.coinsurance_cents)} coinsurance, ${money(aetnaPlanning.estimated_allowed_cents)} Aetna fee reference, ${money(aetnaPlanning.oop_remaining_cents)} remaining out-of-pocket) = ${money(aetnaPlanning.patient_share_cents)}${aetnaPaid ? `; less ${money(aetnaPaid)} already paid = ${money(aetnaBalance!)}` : ' before any prior payment'}. ${aetnaPlanning.message}`
                     : aetnaCopayPlanning != null
-                      ? `${money(aetnaCopayPlanning)} specialist office copay + ${money(0)} deductible + 0% coinsurance = ${money(aetnaCopayPlanning)}${aetnaPaid ? `; less ${money(aetnaPaid)} already paid = ${money(officeBalance!)}` : ' before any prior payment'}. Planning amount; confirm the final allowed charge and Medicare billing protection before collection.`
+                      ? `${aetnaSeparateCopayCap != null
+                          ? `min(${money(aetnaOfficeTerms?.copay_cents || 0)} specialist office copay, ${money(aetnaSeparateCopayCap)} separate copay maximum remaining) = ${money(aetnaCopayPlanning)}. The general out-of-pocket balance does not reduce this separate copay.`
+                          : `${money(aetnaCopayPlanning)} specialist office copay + ${money(0)} deductible + 0% coinsurance = ${money(aetnaCopayPlanning)}.`}${aetnaPaid ? ` Less ${money(aetnaPaid)} already paid = ${money(officeBalance!)}.` : ' Confirm prior payments.'} ${aetnaPolicyPending ? 'Collection is pending clinic policy approval.' : 'Planning amount.'} Confirm the final allowed charge before collection.`
                       : pendingBluecardCopay != null
                         ? 'Payer-reported BlueCard specialist copay for one CPT 99204 office visit, less recorded payments. Confirm member plan, provider participation, home-plan authorization, and collection policy before charging.'
                         : officeReferenceCopay != null
@@ -301,7 +340,9 @@ export function collectionAtVisitRow(
                                                         'claim_after_service'
                                                       ? 'Clinic policy defers collection until after the claim'
                                                       : undefined
-                                              : undefined,
+                                              : namedCollectionAction
+                                                ? collectionBlocker?.sentence
+                                                : undefined,
     emphasis: true,
   }
 }

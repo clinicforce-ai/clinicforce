@@ -6,6 +6,8 @@ export interface ClinicalPatient {
   clinic_patient_id: string | null
   ecw_account_number?: string | null
   ecw_linked: boolean
+  ecw_visit_cache?: Array<{ date?: string; start?: string | null; status: string }> | null
+  ecw_visit_cached_at?: string | null
   identity_status: 'unverified' | 'confirmed'
   given_name: string
   family_name: string

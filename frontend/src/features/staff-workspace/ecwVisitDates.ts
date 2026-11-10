@@ -6,30 +6,26 @@ export function localVisitDay(date: Date): string {
   return `${date.getFullYear()}-${month}-${day}`
 }
 
-export function ecwVisit(history: PatientAppointmentHistory, today: string) {
-  if (history.ecw_status !== 'complete') return { day: null, time: null }
-  const visits = history.appointments
-    .filter((visit) => visit.from_ecw)
-    .filter((visit) => {
-      const day = visit.date || visit.start?.slice(0, 10) || ''
-      if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) return false
-      const date = new Date(`${day}T00:00:00Z`)
-      if (Number.isNaN(date.valueOf()) || date.toISOString().slice(0, 10) !== day) return false
-      return !['cancelled', 'entered-in-error'].includes(visit.status.toLowerCase())
-    })
-    .map((visit) => ({
-      day: visit.date || visit.start?.slice(0, 10) || '',
-      time: visit.start?.includes('T') ? Date.parse(visit.start) : NaN,
-    }))
-  const dates = visits.map((visit) => visit.day)
-  const day = dates.includes(today)
-    ? today
-    : dates.filter((date) => date > today).sort()[0] ||
-      dates
-        .filter((day) => day < today)
-        .sort()
-        .at(-1) ||
-      null
-  const times = visits.filter((visit) => visit.day === day && Number.isFinite(visit.time))
-  return { day, time: times.length ? Math.min(...times.map((visit) => visit.time)) : null }
+export function ecwVisitDays(history: {
+  ecw_status: PatientAppointmentHistory['ecw_status']
+  appointments: Array<{ from_ecw: boolean; status: string; date?: string; start?: string | null }>
+}) {
+  if (history.ecw_status !== 'complete') return []
+  const days = new Map<string, number | null>()
+  for (const visit of history.appointments) {
+    if (!visit.from_ecw || ['cancelled', 'entered-in-error'].includes(visit.status.toLowerCase()))
+      continue
+    const day = visit.date || visit.start?.slice(0, 10) || ''
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) continue
+    const date = new Date(`${day}T00:00:00Z`)
+    if (Number.isNaN(date.valueOf()) || date.toISOString().slice(0, 10) !== day) continue
+    const parsedTime = visit.start?.includes('T') ? Date.parse(visit.start) : NaN
+    const time = Number.isFinite(parsedTime) ? parsedTime : null
+    const prior = days.get(day)
+    if (prior === undefined || (time !== null && (prior === null || time < prior)))
+      days.set(day, time)
+  }
+  return [...days]
+    .sort(([first], [second]) => first.localeCompare(second))
+    .map(([day, time]) => ({ day, time }))
 }

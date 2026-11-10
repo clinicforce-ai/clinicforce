@@ -34,6 +34,7 @@ export function AppShell() {
   const [summary, setSummary] = useState<DoctorSummary | null>(null)
   const [error, setError] = useState('')
   const [staffIntakeId, setStaffIntakeId] = useState<string | undefined>()
+  const [resumeStaffIntake, setResumeStaffIntake] = useState(false)
   const [resolveEcwPatient, setResolveEcwPatient] = useState(false)
   const [staffQr, setStaffQr] = useState(false)
   const [refreshBenefits, setRefreshBenefits] = useState(false)
@@ -98,6 +99,7 @@ export function AppShell() {
           method: 'POST',
         })
         setStaffIntakeId(intake.id)
+        setResumeStaffIntake(true)
         returnStaff()
       } else setView('dashboard')
     } catch (caught) {
@@ -107,6 +109,7 @@ export function AppShell() {
   }
   const openStaffInsurance = (id: string, version: 'v1' | 'v2' | 'commercial', refresh = false) => {
     setResolveEcwPatient(false)
+    setResumeStaffIntake(false)
     setRefreshBenefits(refresh)
     setStaffIntakeId(id)
     setView(version === 'v1' ? 'insurance' : 'commercial-estimator')
@@ -161,23 +164,25 @@ export function AppShell() {
               onJoin={(token) => openEntry('staff-join', `/?join=${encodeURIComponent(token)}`)}
             />
           )}
-          {view === 'staff' && (
-            <StaffWorkspace
-              onBack={returnHome}
-              onCreateClinic={() => openEntry('staff-create', '/?staff=create')}
-              onJoinClinic={() => openEntry('staff-join', '/?join')}
-              onOpenPatientQr={() => {
-                setStaffQr(false)
-                restart()
-              }}
-              initialIntakeId={staffIntakeId}
-              initialEcwLookup={resolveEcwPatient}
-              onOpenInsurance={openStaffInsurance}
-              onScanQr={() => {
-                setStaffQr(true)
-                restart()
-              }}
-            />
+          {(view === 'staff' || (view === 'commercial-estimator' && !!staffIntakeId)) && (
+            <div hidden={view !== 'staff'}>
+              <StaffWorkspace
+                onBack={returnHome}
+                onCreateClinic={() => openEntry('staff-create', '/?staff=create')}
+                onJoinClinic={() => openEntry('staff-join', '/?join')}
+                onOpenPatientQr={() => {
+                  setStaffQr(false)
+                  restart()
+                }}
+                initialIntakeId={resumeStaffIntake ? staffIntakeId : undefined}
+                initialEcwLookup={resolveEcwPatient}
+                onOpenInsurance={openStaffInsurance}
+                onScanQr={() => {
+                  setStaffQr(true)
+                  restart()
+                }}
+              />
+            </div>
           )}
           {view === 'scan' && (
             <Scanner
@@ -239,16 +244,19 @@ export function AppShell() {
             />
           )}
           {view === 'commercial-estimator' && (
-            <CommercialEstimator
-              key={staffIntakeId}
-              onResolvePatient={() => {
-                returnStaff()
-                setResolveEcwPatient(true)
-              }}
-              onBack={returnStaff}
-              intakeId={staffIntakeId}
-              refreshBenefits={refreshBenefits}
-            />
+            <Suspense fallback={<FeatureFallback />}>
+              <CommercialEstimator
+                key={staffIntakeId}
+                onResolvePatient={() => {
+                  returnStaff()
+                  setResumeStaffIntake(true)
+                  setResolveEcwPatient(true)
+                }}
+                onBack={returnStaff}
+                intakeId={staffIntakeId}
+                refreshBenefits={refreshBenefits}
+              />
+            </Suspense>
           )}
         </Suspense>
       </main>

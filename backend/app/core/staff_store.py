@@ -296,6 +296,17 @@ def save_ecw_account_number(patient_id: str, practice_id: str, ecw_patient_id: s
                            (account_number, patient_id, practice_id, ecw_patient_id))
 
 
+def save_ecw_visit_cache(patient_id: str, practice_id: str, ecw_patient_id: str, visits: list[dict]) -> None:
+    """Keep only date-list fields from a complete, verified eCW read."""
+    summary = [{"date": item.get("date"), "start": item.get("start"), "status": item.get("status")}
+               for item in visits if item.get("from_ecw")]
+    with _connection() as connection:
+        connection.execute("""UPDATE staff_patients SET ecw_visit_cache=%s::jsonb,
+            ecw_visit_cache_patient_id=%s, ecw_visit_cached_at=%s
+            WHERE id=%s AND practice_id=%s AND ecw_patient_id=%s AND identity_status='confirmed'""",
+            (json.dumps(summary), ecw_patient_id, now(), patient_id, practice_id, ecw_patient_id))
+
+
 from app.core.staff_dashboard import patient_dashboard as _patient_dashboard
 
 

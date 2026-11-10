@@ -4,7 +4,7 @@ from copy import deepcopy
 
 from app.insurance import amount_explanation, collection_guidance, commercial, contract_requirements, cpt_rules, encounter_summary
 from app.api.schemas.commercial import CollectionPolicyInput
-from app.insurance.blue_cross_proxy import estimate
+from app.insurance.blue_cross_proxy import biopsy_collection_target, estimate
 from app.insurance.requirements.published import _published_rule
 from app.api.routers import commercial_estimator as api  # Register workflow imports.
 from app.api.routers.commercial_flow import commercial_previsit_status as saved_status
@@ -41,6 +41,60 @@ def test_same_day_ncs_and_standalone_emg_is_invalid():
     assert cpt_rules.service_definition('95861')['service_type'] == '73'
     assert cpt_rules.service_selection_issues(['95908', '95861'])
     assert not cpt_rules.service_selection_issues(['95908', '95886'])
+
+
+def test_uhc_biopsy_proxy_uses_full_deductible_assumption_only_when_unresolved():
+    result = _result(group='synthetic-group', coinsurance='0', network='in_network')
+    result['plan_details']['stedi']['names'] = ['LPPO-UNITEDHEALTHCARE GROUP MEDICARE ADVANTAGE (PP']
+    result['benefits'].update(network_source='payer_participation_message',
+                              deductible_remaining_cents=None, oop_remaining_cents=100000)
+    result['codes'] = [{'id': 'biopsy', 'code': '11104', 'units': 1, 'modifiers': []}]
+    result['price_range']['lines'] = [{'id': 'biopsy', 'code': '11104', 'units': 1,
+        'modifiers': [], 'benefits': {'active': True, 'service_date_matches': True,
+        'network_status': 'in_network', 'copay_cents': 0, 'coinsurance_percent': '0',
+        'deductible_remaining_cents': None, 'oop_remaining_cents': 100000}}]
+    result['temporary_rate_reference']['lines'] = [{'id': 'biopsy', 'code': '11104',
+        'units': 1, 'modifiers': [], 'unit_reference_cents': 11660,
+        'source_reference': 'library:synthetic'}]
+    target = biopsy_collection_target(result, '2026-11-09')
+    assert target['amount_cents'] == 11660
+    assert target['assumption'] == 'full_deductible_applies'
+    assert result['price_range'].get('allowed_min_cents') is None
+    result['price_range']['lines'][0]['benefits']['deductible_remaining_cents'] = 0
+    assert biopsy_collection_target(result, '2026-11-09') is None
+    result['price_range']['lines'][0]['benefits']['deductible_remaining_cents'] = None
+    result['billing_protection'] = {'status': 'qmb'}
+    assert biopsy_collection_target(result, '2026-11-09') is None
+
+
+def test_uhc_biopsy_target_survives_separate_followup_without_claiming_its_price():
+    result = _result(group='synthetic-group', coinsurance='0', network='in_network')
+    result['plan_details']['stedi']['names'] = ['LPPO-UNITEDHEALTHCARE GROUP MEDICARE ADVANTAGE (PP']
+    result['benefits'].update(network_source='payer_participation_message',
+                              deductible_remaining_cents=None, oop_remaining_cents=100000)
+    result['codes'] = [{'id': 'office', 'code': '99213', 'units': 1, 'modifiers': []},
+                       {'id': 'biopsy', 'code': '11104', 'units': 1, 'modifiers': []}]
+    result['price_range']['lines'] = [
+        {'id': 'office', 'code': '99213', 'units': 1, 'modifiers': [], 'benefits': {}},
+        {'id': 'biopsy', 'code': '11104', 'units': 1, 'modifiers': [], 'benefits': {
+            'active': True, 'service_date_matches': True, 'network_status': 'in_network',
+            'copay_cents': 0, 'coinsurance_percent': '0', 'deductible_remaining_cents': None}}]
+    result['temporary_rate_reference']['lines'] = [{'id': 'biopsy', 'code': '11104',
+        'units': 1, 'modifiers': [], 'unit_reference_cents': 11660,
+        'source_reference': 'library:synthetic'}]
+    result['temporary_rate_reference']['complete'] = False
+    target = biopsy_collection_target(result, '2026-11-09')
+    assert target['amount_cents'] == 11660
+    assert target['pending_codes'] == ['99213']
+    result['temporary_rate_reference']['lines'].append({
+        'id': 'office', 'code': '99213', 'units': 1, 'modifiers': [],
+        'unit_reference_cents': 7615, 'source_reference': 'library:synthetic'})
+    result['temporary_rate_reference']['complete'] = True
+    target = biopsy_collection_target(result, '2026-11-09')
+    assert target['amount_cents'] == 19275
+    assert target['reference_cents'] == 19275
+    assert target['included_codes'] == ['99213', '11104']
+    assert target['pending_codes'] == []
 
 
 def test_diagnostic_stedi_terms_do_not_inherit_office_copay():

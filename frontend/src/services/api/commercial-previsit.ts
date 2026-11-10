@@ -43,6 +43,22 @@ export type PrevisitEstimate = {
   card_check?: CommercialCardCheck
   cash_fallback?: { reason: string }
   temporary_rate_reference?: TemporaryRateReference
+  cigna_office_fee_scenarios?: {
+    basis: 'bcbstx_cigna_family_only_office'
+    status: 'conditional'
+    deductible_remaining_cents: number
+    oop_remaining_cents: number
+    coinsurance_percent: string
+    message: string
+    lines: Array<{
+      code: string
+      selected: boolean
+      fee_reference_cents: number
+      deductible_cents: number
+      coinsurance_cents: number
+      patient_share_cents: number
+    }>
+  }
   aetna_diagnostic_reference?: AetnaDiagnosticReference
   fee_proxy_estimate?: {
     basis: 'bcbstx_fee_proxy' | 'bcbstx_uhc_in_network_fee_proxy' | 'bcbstx_cigna_fee_proxy'
@@ -61,6 +77,18 @@ export type PrevisitEstimate = {
     rate_source: string
     deductible_source: string
     deductible_url?: string
+    message: string
+  }
+  provisional_collection_target?: {
+    basis: 'bcbstx_uhc_biopsy_deductible_target'
+    status: 'provisional'
+    amount_cents: number
+    reference_cents: number
+    oop_remaining_cents: number
+    included_codes?: string[]
+    pending_codes?: string[]
+    assumption: 'full_deductible_applies'
+    rate_source?: string
     message: string
   }
   payment_explanation?: PaymentExplanation
