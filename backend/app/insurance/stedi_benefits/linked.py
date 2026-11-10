@@ -45,14 +45,28 @@ def merge_linked_medical_oop(primary: dict, office: dict, service_date: str | No
                        if primary.get('payerId') == 'QDTRP' else None)
     if not isinstance(general_payload, dict) or not same_member_and_medical_plan(primary, general_payload):
         return office
+    tier = 'out_of_network' if office.get('network_status') == 'out_of_network' else 'in_network'
+    if any(str(office.get(source) or '').startswith('stc30:')
+           for source in ('oop_annual_id', 'oop_id')):
+        for value, source in (('oop_annual_cents', 'oop_annual_id'),
+                              ('oop_remaining_cents', 'oop_id')):
+            if str(office.get(source) or '').startswith('stc30:'):
+                office.pop(value, None)
+                office.pop(source, None)
+        office['reported_options'] = [row for row in office.get('reported_options', [])
+                                      if not str(row.get('id') or '').startswith('stc30:')]
     general = normalize_stedi_271(general_payload, '30', False,
-        provider_out_of_network_verified=office.get('network_status') == 'out_of_network',
+        provider_out_of_network_verified=tier == 'out_of_network',
         service_date=service_date)
     if (general.get('active') is not True or general.get('service_date_matches') is False
             or general.get('coverage_status_conflict') or general.get('coverage_dates_invalid')
             or general.get('source_errors') or general.get('has_secondary')
             or general.get('oop_annual_conflict_ids') or general.get('oop_remaining_conflict_ids')
             or general.get('oop_medical_candidate_ids') or general.get('oop_quarantined_ids')):
+        if office.get('oop_remaining_cents') is None:
+            office.setdefault('review_reasons', []).append(
+                'Confirm the remaining individual out-of-pocket maximum.')
+            office['requires_review'] = True
         return office
     if any(office.get(key) is not None and general.get(key) is not None
            and office[key] != general[key] for key in ('oop_annual_cents', 'oop_remaining_cents')):
@@ -61,8 +75,7 @@ def merge_linked_medical_oop(primary: dict, office: dict, service_date: str | No
         office['requires_review'] = True
         return office
     for value, source in (('oop_annual_cents', 'oop_annual_id'),
-                          ('oop_remaining_cents', 'oop_id'),
-                          ('family_oop_remaining_cents', None)):
+                          ('oop_remaining_cents', 'oop_id')):
         if office.get(value) is None and general.get(value) is not None:
             office[value] = general[value]
             if source and general.get(source):
@@ -71,6 +84,11 @@ def merge_linked_medical_oop(primary: dict, office: dict, service_date: str | No
         office['review_reasons'] = [reason for reason in office.get('review_reasons', [])
             if reason != 'Confirm the remaining individual out-of-pocket maximum.']
         office['requires_review'] = bool(office['review_reasons'])
+    else:
+        reason = 'Confirm the remaining individual out-of-pocket maximum.'
+        if reason not in office.get('review_reasons', []):
+            office.setdefault('review_reasons', []).append(reason)
+            office['requires_review'] = True
     office.setdefault('reported_options', []).extend(
         {**row, 'id': 'stc30:' + row['id']} for row in general.get('reported_options', [])
         if row.get('kind') == 'out_of_pocket')

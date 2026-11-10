@@ -67,3 +67,20 @@ def test_conflicting_office_and_general_oop_requires_review():
     assert merged["oop_remaining_cents"] == 10000
     assert merged["requires_review"] is True
     assert "disagree" in merged["review_reasons"][0]
+
+
+def test_confirmed_out_of_network_reselects_general_limit():
+    payload = responses()
+    general = payload["_service_payloads"]["30"]
+    general["benefitsInformation"].extend([
+        {**row("G", "30", "10000", "23"), "inPlanNetworkIndicatorCode": "N"},
+        {**row("G", "30", "9000", "29"), "inPlanNetworkIndicatorCode": "N"},
+    ])
+    office = api._previsit_benefits(payload, {"active_coverages": 1}, DAY, ["98", "30"],
+        inputs={"service_date": DAY, "lines": [{"code": "99203", "units": 1, "service_status": "scheduled"}]}, source={})
+    assert office["oop_remaining_cents"] == 429053
+    office["network_status"] = "out_of_network"
+    merge_linked_medical_oop(payload, office, DAY)
+    assert office["oop_annual_cents"] == 1000000
+    assert office["oop_remaining_cents"] == 900000
+    assert office["deductible_remaining_cents"] == 0

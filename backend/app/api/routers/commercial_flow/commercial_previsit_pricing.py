@@ -102,6 +102,10 @@ def _previsit_range(practice_id: str, inputs: dict, source: dict, payer_id: str,
                     codes: list[dict], benefits: dict, *, payload: dict | None = None,
                     review: dict | None = None, payer_route_id: str | None = None) -> tuple[dict | None, list[str]]:
     review = review or {}
+    if (payload and benefits.get('network_status') == 'out_of_network'
+            and any(str(benefits.get(source) or '').startswith('stc30:')
+                    for source in ('oop_annual_id', 'oop_id'))):
+        merge_linked_medical_oop(payload, benefits, inputs.get('service_date'))
     options = bool(codes) and all(row.get('source') == 'Contract service option' for row in codes) and not review.get('selected_ids')
     alternatives = options or (bool(codes) and all(row.get("source") in {
         "conditional office E/M alternative", "conditional NCS alternative"} for row in codes)
