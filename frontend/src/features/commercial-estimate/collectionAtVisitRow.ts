@@ -246,33 +246,33 @@ export function collectionAtVisitRow(
           ? payerOrderVerified
             ? 'Amount to collect at visit · pending secondary claim'
             : 'Amount to collect at visit · pending payer order'
-          : pendingAetnaCopay != null ||
-              priorDateAetnaBalance != null ||
-              pendingBluecardCopay != null
+          : pendingAetnaCopay != null || pendingBluecardCopay != null
             ? 'Amount to collect at visit · pending verification'
-            : cignaCard
-              ? 'Amount to collect at visit · pending verification'
-              : botoxPreview
-                ? 'Planned amount to collect at visit'
-                : diagnosticCopayReference != null
-                  ? 'Diagnostic copay · collection pending'
-                  : (partialOfficeCopay != null || cardPlanningCopay != null) &&
-                      feeProxyCheckin == null
-                    ? 'Suggested amount to collect at visit'
-                    : ((cignaFeeProxy &&
-                          !['claim_after_service', 'office_copay'].includes(
+            : priorDateAetnaBalance != null
+              ? 'Amount to collect at visit · office copay reference'
+              : cignaCard
+                ? 'Amount to collect at visit · pending verification'
+                : botoxPreview
+                  ? 'Planned amount to collect at visit'
+                  : diagnosticCopayReference != null
+                    ? 'Diagnostic copay · collection pending'
+                    : (partialOfficeCopay != null || cardPlanningCopay != null) &&
+                        feeProxyCheckin == null
+                      ? 'Suggested amount to collect at visit'
+                      : ((cignaFeeProxy &&
+                            !['claim_after_service', 'office_copay'].includes(
+                              result.collection_guidance?.basis || '',
+                            )) ||
+                            feeProxyCheckin != null ||
+                            aetnaPlanning != null ||
+                            aetnaCopayPlanning != null) &&
+                          !['bcbstx_proxy_advance', 'qmb_protection'].includes(
                             result.collection_guidance?.basis || '',
-                          )) ||
-                          feeProxyCheckin != null ||
-                          aetnaPlanning != null ||
-                          aetnaCopayPlanning != null) &&
-                        !['bcbstx_proxy_advance', 'qmb_protection'].includes(
-                          result.collection_guidance?.basis || '',
-                        )
-                      ? aetnaPolicyPending
-                        ? 'Amount to collect at visit · pending policy approval'
-                        : 'Planned amount to collect at visit'
-                      : 'Amount to collect at visit',
+                          )
+                        ? aetnaPolicyPending
+                          ? 'Amount to collect at visit · pending policy approval'
+                          : 'Planned amount to collect at visit'
+                        : 'Amount to collect at visit',
     value: dsnpOffice
       ? `${money(0)} at check-in · ${money(feeProxy!.patient_share_cents)} pre-Medicaid planning share`
       : combinedPlan
@@ -325,7 +325,7 @@ export function collectionAtVisitRow(
                                           : pendingAetnaCopay != null
                                             ? `Pending · ${money(pendingAetnaCopay)} office copay if verified`
                                             : priorDateAetnaBalance != null
-                                              ? `Pending · ${money(priorDateAetnaBalance)} Aetna office copay reference`
+                                              ? money(priorDateAetnaBalance)
                                               : cardPlanningCopay != null
                                                 ? `${money(cardPlanningCopay)} office-only card suggestion`
                                                 : pendingCignaCopay != null

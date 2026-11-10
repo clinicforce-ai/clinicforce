@@ -406,7 +406,7 @@ export default function CommercialCostBreakdown({
                           : aetnaCopayPlanning != null
                             ? `${money(aetnaCopayPlanning)} provisional office copay`
                             : priorDateAetnaCopay != null
-                              ? `${money(priorDateAetnaCopay)} office copay · pending verification`
+                              ? `${money(priorDateAetnaCopay)} office copay reference`
                               : pendingBluecardCopay != null
                                 ? `${money(lines[0].benefits.copay_cents!)} office-only estimate`
                                 : model.estimatedShare ||

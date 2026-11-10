@@ -216,7 +216,7 @@ export default function ArrivalAmountSummary({
                               : cardPlanningCopay != null
                                 ? 'Card-based office suggestion · collection pending'
                                 : priorDateAetnaCopay != null
-                                  ? 'Payer-reported office copay · pending verification'
+                                  ? 'Payer-reported office copay'
                                   : needsAction
                                     ? 'Next step'
                                     : model.amountLabel}

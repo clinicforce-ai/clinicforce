@@ -126,13 +126,15 @@ export function deriveCommercialEstimateView({
   let coverageTone =
     policyStatus === 'Coverage active'
       ? 'is-confirmed'
-      : !result ||
-          tooEarly ||
-          result.recovery?.state === 'pending' ||
-          failure?.kind === 'provider_enrollment' ||
-          (cash && !result.cash_fallback)
-        ? ''
-        : 'is-missing'
+      : policyStatus === 'Coverage dates differ from visit'
+        ? 'is-review'
+        : !result ||
+            tooEarly ||
+            result.recovery?.state === 'pending' ||
+            failure?.kind === 'provider_enrollment' ||
+            (cash && !result.cash_fallback)
+          ? ''
+          : 'is-missing'
   if (referenceBenefits?.active === true) coverageTone = 'is-confirmed'
   const calculating =
     (!!busy && busy !== 'delete') || recovering || (!!selected && !result && !error)

@@ -11,6 +11,7 @@ async function load(path) {
 const { aetnaOfficePlanningCopay } = await load('../frontend/src/features/commercial-estimate/payerReportedPartialCopay.ts')
 const { aetnaPriorDateReferenceCopay } = await load('../frontend/src/features/commercial-estimate/aetnaPriorDateReferenceCopay.ts')
 const { collectionAtVisitRow } = await load('../frontend/src/features/commercial-estimate/collectionAtVisitRow.ts')
+const { deriveCommercialEstimateView } = await load('../frontend/src/features/commercial-estimate/deriveCommercialEstimateView.ts')
 const { commercialOopRows } = await load('../frontend/src/features/commercial-estimate/commercialOopRows.ts')
 const { suggestedDiagnosisRows } = await load('../frontend/src/features/commercial-estimate/suggestedDiagnosisRows.ts')
 const { commercialRequirementRows } = await load('../frontend/src/features/commercial-estimate/commercialRequirementStatus.ts')
@@ -114,7 +115,8 @@ const priorDayRow = collectionAtVisitRow(priorDay, model, {
   cardPlanningCopay: null, automaticCashFallback: false, cignaFeeProxy: false,
   proxyFormula: undefined,
 })
-assert.match(priorDayRow.value, /\$40\.00 Aetna office copay reference/i)
+assert.equal(priorDayRow.value, '$40.00')
+assert.equal(priorDayRow.label, 'Amount to collect at visit · office copay reference')
 assert.match(priorDayRow.detail, /Medicare.*remittance/i)
 assert.equal(aetnaPriorDateReferenceCopay({ ...priorDay, identity: { status: 'review' } }, model), null)
 assert.equal(aetnaPriorDateReferenceCopay({ ...priorDay, benefits: {
@@ -159,7 +161,14 @@ const unknownNetworkRow = collectionAtVisitRow(unknownNetworkPriorDay, model, {
   cardPlanningCopay: null, automaticCashFallback: false, cignaFeeProxy: false,
   proxyFormula: undefined,
 })
-assert.match(unknownNetworkRow.value, /Pending.*\$55\.00.*Aetna office copay reference/i)
-assert.match(unknownNetworkRow.label, /pending verification/i)
+assert.equal(unknownNetworkRow.value, '$55.00')
+assert.equal(unknownNetworkRow.label, 'Amount to collect at visit · office copay reference')
 assert.match(unknownNetworkRow.detail, /saved response covers another date/i)
-console.log('Aetna separate copay: $40 pending collection; $0 general OOP does not erase the separate cap')
+const unknownNetworkView = deriveCommercialEstimateView({ result: {
+  ...unknownNetworkPriorDay,
+  collection_guidance: { ...unknownNetworkPriorDay.collection_guidance, services: [] },
+},
+  appointments: [], selectedVisit: null, busy: null, error: null, readOnly: false,
+  recovering: false })
+assert.equal(unknownNetworkView.coverageTone, 'is-review')
+console.log('Aetna separate copay: $40 office reference; $0 general OOP does not erase the separate cap')
