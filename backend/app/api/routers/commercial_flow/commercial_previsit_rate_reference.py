@@ -66,9 +66,10 @@ def attach_blue_cross_reference_if_unpriced(result: dict, practice_id: str, inpu
     if not _api.re.search(r'blue cross|bcbstx|blue shield', payer_name, _api.re.I):
         return
     price = result.get('price_range') or {}
-    if price.get('lines') and all(row.get('allowed_cents') is not None
-                                  and (row.get('rate_resolution') or {}).get('status') == 'RESOLVED'
-                                  for row in price['lines']):
+    lines = price.get('lines') or []
+    priced = all(row.get('allowed_cents') is not None for row in lines)
+    if priced and (price.get('complete') is True or (lines and all(
+            (row.get('rate_resolution') or {}).get('status') == 'RESOLVED' for row in lines))):
         return
     try:
         _attach_temporary_blue_cross_rates(result, practice_id, inputs, source, payer_name)
