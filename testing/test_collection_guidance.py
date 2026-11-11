@@ -432,6 +432,45 @@ def test_verified_zero_individual_oop_explains_zero_office_collection():
     assert 'out-of-pocket maximum' in amount_explanation.build(result, guidance)['sentence']
 
 
+def test_choice_pos_emg_family_cap_gives_zero_check_in_with_unresolved_order():
+    result = scenario()
+    result.pop('collection_policy')
+    result.update(payer='Aetna', service_date='2026-11-11',
+                  plan_details={'stedi': {'names': ['Aetna Choice POS II']}},
+                  recovery={'reason_code': 'multiple_active_policies'})
+    result['benefits'].update(network_status='unknown', has_secondary=True,
+        service_date_matches=True, reported_options=[{
+            'kind': 'out_of_pocket', 'service_type_code': '30',
+            'coverage_level': 'FAMILY', 'time_period': 'REMAINING',
+            'network': 'IN_NETWORK', 'plan_association': 'medical', 'amount_cents': 0},
+            {'kind': 'deductible', 'service_type_code': '30',
+             'coverage_level': 'INDIVIDUAL', 'time_period': 'REMAINING',
+             'network': 'IN_NETWORK', 'plan_association': 'medical', 'amount_cents': 0},
+            {'kind': 'coinsurance', 'service_type_code': '73',
+             'network': 'IN_NETWORK', 'percent': '0'}])
+    result['price_range'].update(complete=False, patient_min_cents=None, patient_max_cents=None,
+        lines=[{'id': code, 'code': code, 'units': 1, 'benefits': {'active': True}}
+               for code in ('95908', '95886')])
+    guidance = collection_guidance.build(result)
+    assert guidance['amount_cents'] == 0
+    assert guidance['basis'] == 'claim_after_service'
+    assert guidance['collection_rule']['mode'] == 'aetna_choice_family_oop_deferral'
+    assert 'any applicable copay + $0 deductible + 0% × Aetna allowed amount' in guidance['reason']
+    assert all(service['patient_cents'] is None for service in guidance['services'])
+    explanation = amount_explanation.build(result, guidance)['sentence']
+    assert 'Collect $0 at check-in' in explanation
+    assert 'confirm payer order' not in explanation.lower()
+    echoed_yesterday = deepcopy(result)
+    echoed_yesterday['benefits'].update(service_date_matches=False,
+        returned_service_dates={'start': '2026-11-10'})
+    assert collection_guidance.build(echoed_yesterday)['amount_cents'] == 0
+    for change in ({'service_date_matches': False}, {'active': False},
+                   {'reported_options': []}, {'coverage_status_conflict': True}):
+        altered = deepcopy(result)
+        altered['benefits'].update(change)
+        assert collection_guidance.build(altered)['amount_cents'] is None
+
+
 def test_supported_copay_advance_does_not_promise_later_member_billing():
     result = scenario(3000)
     result['arrival_collection'] = {'amount_cents': 3000, 'status': 'copay_only'}

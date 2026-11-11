@@ -13,6 +13,50 @@ export default function CommercialCostTables({
   rows: CostBreakdownRow[]
 }) {
   const proxy = result.fee_proxy_estimate
+  const aetnaFamilyZero =
+    result.collection_guidance?.amount_cents === 0 &&
+    result.collection_guidance.collection_rule?.mode === 'aetna_choice_family_oop_deferral'
+  const reported = result.benefits?.reported_options || []
+  const diagnosticCopays = [
+    ...new Set(
+      reported
+        .filter(
+          (row) =>
+            row.kind === 'copay' &&
+            row.network === 'IN_NETWORK' &&
+            row.service_type_code === '73' &&
+            Number.isInteger(row.amount_cents),
+        )
+        .map((row) => row.amount_cents!),
+    ),
+  ].sort((a, b) => a - b)
+  const diagnosticCoinsurance = reported.filter(
+    (row) =>
+      row.kind === 'coinsurance' && row.network === 'IN_NETWORK' && row.service_type_code === '73',
+  )
+  const displayedRows = aetnaFamilyZero
+    ? rows.map((row) =>
+        row.label === 'Estimated patient share'
+          ? {
+              ...row,
+              label: 'Conditional patient share',
+              value: '$0.00 if covered in-network',
+              detail: result.collection_guidance?.reason,
+            }
+          : row.label === 'Copay' && diagnosticCopays.length
+            ? {
+                ...row,
+                value: `${diagnosticCopays.map(money).join(' / ')} returned by diagnostic category`,
+                detail:
+                  'No CPT-specific EMG copay was identified; the covered in-network share is capped by the reported family out-of-pocket balance.',
+              }
+            : row.label === 'Coinsurance' &&
+                diagnosticCoinsurance.length &&
+                diagnosticCoinsurance.every((entry) => Number(entry.percent) === 0)
+              ? { ...row, value: '0% across returned in-network diagnostic categories' }
+              : row,
+      )
+    : rows
   return (
     <>
       {!cash &&
@@ -25,7 +69,7 @@ export default function CommercialCostTables({
             payments={result.encounter_summary?.payments_verified_cents || 0}
           />
         )}
-      <CostBreakdownTable rows={rows} />
+      <CostBreakdownTable rows={displayedRows} />
     </>
   )
 }

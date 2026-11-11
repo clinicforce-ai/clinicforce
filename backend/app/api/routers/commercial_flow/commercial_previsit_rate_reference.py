@@ -251,6 +251,15 @@ def _attach_temporary_aetna_rates(result: dict, practice_id: str, inputs: dict, 
     availity = result.get('availity_visit_reference') or {}
     codes = result.get('codes') or []
     plan = benefits.get('plan_details') or {}
+    names = ((result.get('plan_details') or {}).get('stedi') or {}).get('names') or []
+    if (result.get('payment_mode') != 'cash'
+            and network_participation.is_nmct_practice(practice_id)
+            and len(names) == 1 and str(names[0]).strip().casefold() == 'aetna choice pos ii'
+            and str(inputs.get('place_of_service') or '') == '11'
+            and len(codes) == 2 and {row.get('code') for row in codes} == {'95908', '95886'}
+            and all(row.get('units') == 1 and not row.get('modifiers') for row in codes)):
+        _attach_temporary_blue_cross_rates(result, practice_id, inputs, source, 'Aetna')
+        return
     if (result.get('payment_mode') != 'cash'
             and network_participation.is_nmct_practice(practice_id)
             and str(inputs.get('place_of_service') or '') == '11'

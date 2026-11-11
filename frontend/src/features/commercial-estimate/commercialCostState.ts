@@ -37,10 +37,8 @@ export function supportedOfficeCopayShare(
 
 export function visibleRateReference(result: PrevisitEstimate) {
   const temporaryRateReference =
-    (/\baetna\b/i.test(result.payer || '') &&
-      !result.temporary_rate_reference?.source?.startsWith('Aetna MEPPO')) ||
-    (/\bhumana\b/i.test(result.payer || '') &&
-      /blue cross/i.test(result.temporary_rate_reference?.source || ''))
+    /\bhumana\b/i.test(result.payer || '') &&
+    /blue cross/i.test(result.temporary_rate_reference?.source || '')
       ? null
       : result.temporary_rate_reference
   return {

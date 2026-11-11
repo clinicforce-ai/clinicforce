@@ -81,6 +81,43 @@ def test_draft_aetna_values_support_labelled_planning_amount():
     assert sum(line['unit_reference_cents'] for line in result['temporary_rate_reference']['lines']) == 21876
 
 
+def test_choice_pos_ii_diagnostics_show_scoped_blue_cross_reference_only(monkeypatch):
+    monkeypatch.setattr(commercial_estimator.commercial_store, 'list_connections', lambda *_: [
+        {'id': 'blue', 'display_name': 'Blue Cross and Blue Shield of Texas',
+         'stedi_payer_id': 'QDTRP', 'status': 'staff_guidance_enabled'}])
+    monkeypatch.setattr(commercial_estimator.commercial_store, 'list_networks', lambda *_: [
+        {'id': 'network', 'payer_connection_id': 'blue', 'status': 'verified',
+         'billing_npi': '1111111111', 'rendering_npi': '2222222222',
+         'location_id': 'office', 'place_of_service': '11', 'effective_from': '2026-01-01'}])
+    monkeypatch.setattr(commercial_estimator.commercial_store, 'list_profiles', lambda *_: [
+        {'payer_connection_id': 'blue', 'provider_network_id': 'network',
+         'status': 'staff_guidance_enabled'}])
+    monkeypatch.setattr(commercial_estimator.commercial_store, 'matching_rates', lambda *_, **__: [
+        {'code': '95908', 'modifier': '', 'allowed_cents': 10511,
+         'source_reference': 'library:synthetic-blue-choice-ppo'},
+        {'code': '95886', 'modifier': '', 'allowed_cents': 8918,
+         'source_reference': 'library:synthetic-blue-choice-ppo'}])
+    result = {'payer': 'Aetna', 'payment_mode': 'insurance', 'codes': deepcopy(CODES),
+              'plan_details': {'stedi': {'names': ['Aetna Choice POS II']}},
+              'price_range': {'complete': False, 'allowed_min_cents': None}}
+    inputs = {'service_date': '2026-11-11', 'place_of_service': '11',
+              'rendering_provider': {'npi': '2222222222'}}
+    source = {'billing_provider': {'npi': '1111111111'}, 'location_id': 'office'}
+
+    _attach_temporary_aetna_rates(result, 'primary', inputs, source)
+    reference = result['temporary_rate_reference']
+    assert reference['complete'] is True
+    assert sum(row['unit_reference_cents'] for row in reference['lines']) == 19429
+    assert 'not Aetna contracted allowances or a patient amount to collect' in reference['message']
+    assert 'aetna_diagnostic_reference' not in result
+    assert result['price_range']['allowed_min_cents'] is None
+
+    result['plan_details']['stedi']['names'] = ['Another Aetna product']
+    result.pop('temporary_rate_reference')
+    _attach_temporary_aetna_rates(result, 'primary', inputs, source)
+    assert 'temporary_rate_reference' not in result
+
+
 def test_aetna_signature_office_fee_screen_is_only_a_scoped_reference():
     member = benefits()
     member['plan_details']['plan_number'] = '000003-TX000047'

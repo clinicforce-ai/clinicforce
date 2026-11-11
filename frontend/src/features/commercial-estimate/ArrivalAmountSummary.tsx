@@ -103,13 +103,15 @@ export default function ArrivalAmountSummary({
     !model.cash &&
     !model.previousEstimate &&
     !model.calculating &&
-    result.collection_guidance?.collection_rule?.mode === 'cms_msp_part_b_deferral'
+    ['cms_msp_part_b_deferral', 'aetna_choice_family_oop_deferral'].includes(
+      result.collection_guidance?.collection_rule?.mode || '',
+    )
   )
     return (
       <>
         <span>Amount to collect at visit</span>
         <strong role="status">{money(0)}</strong>
-        <p>{result.collection_guidance.reason}</p>
+        <p>{result.collection_guidance?.reason}</p>
       </>
     )
   const action = nextStep(model, result)

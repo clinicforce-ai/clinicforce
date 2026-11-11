@@ -5,7 +5,6 @@ export default function TemporaryRateReference({ result }: { result: PrevisitEst
   const reference = result.temporary_rate_reference
   if (
     (!reference?.lines.length && !reference?.alternatives?.length) ||
-    (/\baetna\b/i.test(result.payer || '') && !reference.source?.startsWith('Aetna MEPPO')) ||
     (/\bhumana\b/i.test(result.payer || '') && /blue cross/i.test(reference.source || ''))
   )
     return null
