@@ -16,6 +16,11 @@ def priced_payer_gap(result: dict, payer: str) -> tuple[str, str, str] | None:
             return (f'the payer gave conflicting deductible applicability for {cpt}',
                     'deductible_applicability_conflict',
                     f'ask {payer} whether the deductible applies to {cpt} and rerun the insured estimate')
+        if {'Confirm the remaining individual deductible that applies to this visit.',
+            'Confirm the remaining individual out-of-pocket maximum.'} <= issues:
+            return (f'the remaining individual deductible and out-of-pocket balances for {cpt} are unresolved',
+                    'cost_share_term_unresolved',
+                    f'obtain both balances from {payer} for {cpt} and rerun the insured estimate')
         if 'Confirm the remaining individual deductible that applies to this visit.' in issues:
             return (f'the applicable individual deductible balance for {cpt} is unresolved',
                     'individual_deductible_unresolved',

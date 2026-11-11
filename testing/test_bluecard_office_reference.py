@@ -2,6 +2,20 @@ from app.api.routers import commercial_estimator  # Load the route before its pr
 from app.api.routers.commercial_flow import commercial_previsit_rate_reference as reference
 
 
+def test_incomplete_benefits_do_not_duplicate_a_resolved_allowed_rate(monkeypatch):
+    calls = []
+    monkeypatch.setattr(reference, '_attach_temporary_blue_cross_rates',
+                        lambda *args: calls.append(args))
+    result = {'price_range': {'complete': False, 'lines': [
+        {'code': '99203', 'allowed_cents': 10117,
+         'allowed_basis': 'clinic_contract', 'rate_resolution': {'status': 'RESOLVED'}}]}}
+    reference.attach_blue_cross_reference_if_unpriced(result, 'synthetic', {}, {}, 'Blue Cross Blue Shield Tx')
+    assert calls == []
+    result['price_range']['lines'][0]['rate_resolution']['status'] = 'MISSING'
+    reference.attach_blue_cross_reference_if_unpriced(result, 'synthetic', {}, {}, 'Blue Cross Blue Shield Tx')
+    assert len(calls) == 1
+
+
 def test_prudent_buyer_uses_only_current_scoped_library_fee(monkeypatch):
     result = {'payer': 'Blue Cross Blue Shield Tx',
               'plan_details': {'stedi': {'names': ['PPO PRUDENT BUYER INCENTIVE']}},
