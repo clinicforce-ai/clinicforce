@@ -74,11 +74,8 @@ export default function CommercialCostBreakdown({
   const partialOfficeCopay = copay.payerReportedPartialCopay(result, model)
   const pendingAetnaCopay = copay.aetnaPendingOfficeCopay(result, model)
   const priorDateAetnaCopay = copay.aetnaPriorDateReferenceCopay(result, model)
-  const aetnaTable = aetnaPriorDateTable(
-    priorDateAetnaCopay,
-    benefits,
-    copay.singleOfficeCopayLine(lines)?.benefits.coinsurance_percent,
-  )
+  const aetnaCoinsurance = singleOfficeCopayLine?.benefits.coinsurance_percent
+  const aetnaTable = aetnaPriorDateTable(priorDateAetnaCopay, benefits, aetnaCoinsurance)
   const pendingBluecardCopay = pendingBluecardOfficeCopay(result, model)
   const cardReferences = [partialOfficeCopay, officeReferenceCopay, humanaReferenceCopay]
   const cardPlanningCopay = copay.visibleCardOfficePlanningCopay(result, model, cardReferences)
@@ -141,7 +138,9 @@ export default function CommercialCostBreakdown({
       value: aetnaPlanning
         ? `${money(aetnaPlanning.copay_cents / lines.length)} per diagnostic test × ${lines.length} = ${money(aetnaPlanning.copay_cents)}`
         : bluecardDeductible
-          ? 'No office copay returned'
+          ? bluecardDeductible.familyDeductible
+            ? '$0.00 office copay · payer-reported'
+            : 'No office copay returned'
           : familyOopApplied
             ? '$0 payable after family out-of-pocket limit'
             : combinedPlan
@@ -249,47 +248,49 @@ export default function CommercialCostBreakdown({
                     : surgicalIndividualDeductible.value !== unknown
                       ? `${surgicalIndividualDeductible.value} · surgical services`
                       : unknown),
-      detail: aetnaNoOfficeDeductible
-        ? 'The 2026 Aetna Signature PPO H2293-016 plan has no in-network deductible. A payer-reported general deductible may apply to certain out-of-network services.'
-        : healthselectZero
-          ? 'ERS HealthSelect Medicare Advantage PPO publishes no annual medical deductible.'
-          : gehaZero
-            ? 'The published G.E.H.A High Medicare Advantage benefit lists no in-network medical deductible for covered care.'
-            : botoxPreview
-              ? 'Individual balance not returned; provisional scenario uses the payer-reported met family deductible'
-              : cignaFeeProxy
-                ? cignaOfficeScenario
-                  ? `${money(0)} applied in this provisional scenario from the general individual remaining balance; CPT applicability is not confirmed`
-                  : cignaFamilyOffice
-                    ? `${money(feeProxy?.deductible_cents || 0)} ${feeProxy?.deductible_applicability === 'assumed' ? 'assumed from the plan-wide family remaining deductible; office applicability is unconfirmed' : 'applied from the exact CPT family-only remaining deductible'}`
-                    : `${money(feeProxy?.deductible_cents || 0)} applied in this provisional scenario; exact CPT Stedi responses reported no remaining individual deductible`
-                : feeProxy != null
-                  ? feeProxy.deductible_source
-                  : result.collection_guidance?.basis === 'out_of_pocket_limit'
-                    ? individualDeductible.value === unknown &&
-                      benefits?.deductible_annual_cents == null
-                      ? 'No deductible payment due after the out-of-pocket limit; the payer did not report an office-specific deductible rule'
-                      : 'No deductible payment due for this covered office visit after the out-of-pocket limit'
-                    : calculated && components?.deductible_cents != null
-                      ? `${money(components.deductible_cents)} applied to this visit`
-                      : individualDeductible.unassigned
-                        ? 'Payer-reported plan amount; medical applicability needs confirmation'
-                        : surgicalIndividualDeductible.value !== unknown
-                          ? 'Payer did not report an office-specific deductible rule; surgical balance does not establish one'
-                          : lines.length &&
-                              lines.every((line) => line.benefits?.deductible_applies === false)
-                            ? 'Does not apply to the selected CPTs'
-                            : hasGeneralOnlyOfficeDeductible(benefits)
-                              ? 'Stedi returned this plan-wide deductible under STC 30. Its office-visit STC 98 rows did not say whether the deductible applies to the selected CPTs.'
-                              : 'Office deductible applicability or amount is unresolved for the selected CPTs',
+      detail: bluecardDeductible?.familyDeductible
+        ? 'The payer returned a family remaining balance; this estimate assumes it applies to the office visit.'
+        : aetnaNoOfficeDeductible
+          ? 'The 2026 Aetna Signature PPO H2293-016 plan has no in-network deductible. A payer-reported general deductible may apply to certain out-of-network services.'
+          : healthselectZero
+            ? 'ERS HealthSelect Medicare Advantage PPO publishes no annual medical deductible.'
+            : gehaZero
+              ? 'The published G.E.H.A High Medicare Advantage benefit lists no in-network medical deductible for covered care.'
+              : botoxPreview
+                ? 'Individual balance not returned; provisional scenario uses the payer-reported met family deductible'
+                : cignaFeeProxy
+                  ? cignaOfficeScenario
+                    ? `${money(0)} applied in this provisional scenario from the general individual remaining balance; CPT applicability is not confirmed`
+                    : cignaFamilyOffice
+                      ? `${money(feeProxy?.deductible_cents || 0)} ${feeProxy?.deductible_applicability === 'assumed' ? 'assumed from the plan-wide family remaining deductible; office applicability is unconfirmed' : 'applied from the exact CPT family-only remaining deductible'}`
+                      : `${money(feeProxy?.deductible_cents || 0)} applied in this provisional scenario; exact CPT Stedi responses reported no remaining individual deductible`
+                  : feeProxy != null
+                    ? feeProxy.deductible_source
+                    : result.collection_guidance?.basis === 'out_of_pocket_limit'
+                      ? individualDeductible.value === unknown &&
+                        benefits?.deductible_annual_cents == null
+                        ? 'No deductible payment due after the out-of-pocket limit; the payer did not report an office-specific deductible rule'
+                        : 'No deductible payment due for this covered office visit after the out-of-pocket limit'
+                      : calculated && components?.deductible_cents != null
+                        ? `${money(components.deductible_cents)} applied to this visit`
+                        : individualDeductible.unassigned
+                          ? 'Payer-reported plan amount; medical applicability needs confirmation'
+                          : surgicalIndividualDeductible.value !== unknown
+                            ? 'Payer did not report an office-specific deductible rule; surgical balance does not establish one'
+                            : lines.length &&
+                                lines.every((line) => line.benefits?.deductible_applies === false)
+                              ? 'Does not apply to the selected CPTs'
+                              : hasGeneralOnlyOfficeDeductible(benefits)
+                                ? 'Stedi returned this plan-wide deductible under STC 30. Its office-visit STC 98 rows did not say whether the deductible applies to the selected CPTs.'
+                                : 'Office deductible applicability or amount is unresolved for the selected CPTs',
     },
     familyDeductibleRow(
       reportedResult,
       gehaZero || healthselectZero,
       humanaReferenceCopay,
       familyOopApplied,
-      cignaFamilyOffice ? feeProxy!.deductible_cents : null,
-      cignaFamilyOffice && feeProxy!.deductible_applicability === 'assumed',
+      bluecardDeductible,
+      feeProxy,
     ),
     ...choicePlusDeductibleRows(feeProxy),
     {
@@ -437,7 +438,7 @@ export default function CommercialCostBreakdown({
                 ? 'Printed specialist copay for one office visit; planned imaging and final payer share are unresolved.'
                 : 'Insured share awaits a matching payer check and selected CPTs'
               : bluecardDeductible
-                ? 'Assumes the supplied clinic rate applies to this BlueCard product and the office visit uses the plan-wide remaining deductible.'
+                ? 'BCBSTX fee and deductible applicability are assumed for this office visit.'
                 : biopsyTarget
                   ? biopsyTarget.message
                   : combinedPlan

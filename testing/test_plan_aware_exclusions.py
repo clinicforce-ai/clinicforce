@@ -421,3 +421,36 @@ def test_ma_advance_requires_patient_bound_qmb_clearance(name):
     protected = collection_guidance.build(result)
     assert protected['amount_cents'] == 0
     assert protected['basis'] == 'qmb_protection'
+
+
+def test_in_person_specialist_excludes_other_benefit_classes_from_cost_share():
+    def row(service='98', **fields):
+        return {'service': {'system': 'STC', 'value': service},
+                'coverageLevel': 'INDIVIDUAL', 'network': {'indicator': 'IN_NETWORK'}, **fields}
+
+    payload = {'plans': [{'name': 'Synthetic HDHP', 'benefits': {
+        'statuses': [row('30', status='ACTIVE_COVERAGE')],
+        'coPayment': [row(amount='0', messages=['BENEFITCLASS-SPECIALIST']),
+                      row(amount='0'),
+                      row(amount='0', messages=['BENEFITCLASS-TELEHEALTH SPECIALIST'])],
+        'coInsurance': [row(percent='0.2', messages=['BENEFITCLASS-SPECIALIST']),
+                        row(percent='0.2'),
+                        row(percent='0.0', messages=['BENEFITCLASS-NICOTINE DEPENDENCY'])],
+        'deductible': [row('30', amount='2500.00', timePeriod='REMAINING', coverageLevel='FAMILY'),
+                       row(amount='0', messages=['BENEFITCLASS-NICOTINE DEPENDENCY',
+                                                 'DEDUCTIBLE DOES NOT APPLY TO THIS BENEFIT'])],
+    }}]}
+    result = normalize_stedi_271(payload, '98', True, procedure_code='99203',
+        office_visit=True, office_service_types=['98', 'BQ', 'BY', '1'], place_of_service='11')
+    assert result['copay_cents'] == 0
+    assert result['coinsurance_percent'] == '20.0'
+    assert result.get('deductible_applies') is None
+    assert not any('conditional benefit' in reason for reason in result['review_reasons'])
+    assert result['selected_benefit_ids'] == [
+        'plans[0].benefits.coPayment[0]', 'plans[0].benefits.coInsurance[0]']
+    generic = normalize_stedi_271(payload, '98', True, procedure_code='99203',
+        office_visit=True, office_service_types=['98', 'BY', '1'], place_of_service='11')
+    assert generic['copay_cents'] == 0
+    assert generic['coinsurance_percent'] == '20.0'
+    assert generic['selected_benefit_ids'] == [
+        'plans[0].benefits.coPayment[1]', 'plans[0].benefits.coInsurance[1]']

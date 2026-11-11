@@ -6,6 +6,7 @@ import type {
   CombinedEmgPlan,
   PrevisitIdentity,
   CommercialCardCheck,
+  CptAuthorizationContext,
 } from './commercial-common'
 import type {
   BotoxReview,
@@ -37,6 +38,7 @@ export type PrevisitEstimate = {
   billing_protection?: BillingProtection
   payer_allowances?: PayerAllowanceSummary
   card_check?: CommercialCardCheck
+  cpt_authorization?: CptAuthorizationContext
   cash_fallback?: { reason: string }
   temporary_rate_reference?: TemporaryRateReference
   cigna_office_fee_scenarios?: CignaOfficeFeeScenarios

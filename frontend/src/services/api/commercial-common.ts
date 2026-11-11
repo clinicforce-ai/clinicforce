@@ -1,5 +1,12 @@
 export type CommercialAppointment = { id: string; start: string; status: string; reason: string }
 
+export type CptAuthorizationContext = {
+  state?: string
+  pos?: string
+  network?: string
+  patient_binding?: string | null
+}
+
 export type CignaCardReference = {
   tier1_specialist_copay_cents: number
   nontier1_specialist_copay_cents: number

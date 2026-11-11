@@ -62,8 +62,8 @@ function nextStep(model: CommercialEstimateModel, result: PrevisitEstimate) {
       hint: 'Check referral and authorization for the selected CPTs.',
     }
   if (
-    model.guidance?.policy_setup_required ||
-    result.collection_guidance?.positive_advance_policy_missing
+    result.collection_guidance?.positive_advance_policy_missing ||
+    result.collection_guidance?.published_copay_policy_missing
   )
     return {
       title: 'Approve collection policy',
@@ -218,7 +218,7 @@ export default function ArrivalAmountSummary({
                 : cignaPlanning
                   ? 'Cigna planning estimate · collection pending'
                   : bluecardDeductible
-                    ? 'Amount to collect at visit · estimated'
+                    ? 'Amount to collect at visit · provisional target'
                     : aetnaPlanning
                       ? 'Planned amount to collect at visit'
                       : diagnosticCopayReference != null
@@ -340,7 +340,9 @@ export default function ArrivalAmountSummary({
         <p>
           CPT 99203 uses a {money(bluecardDeductible.reference)} clinic fee reference. The table
           below shows the deductible and coinsurance formula. This estimate assumes the fee and
-          plan-wide deductible apply to this office visit.
+          {bluecardDeductible.familyDeductible ? ' family' : ' plan-wide'} deductible apply to this
+          office visit. Confirm the payer allowance, final CPT, prior payments and clinic proxy
+          collection rule before charging.
         </p>
       ) : aetnaPlanning ? (
         <p>

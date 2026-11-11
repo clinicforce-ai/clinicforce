@@ -77,6 +77,10 @@ def select_benefit_rows(payload: dict[str, Any], service_type_code: str,
                 return False
             clauses = [part.strip() for note in _benefit_notes([row.get('messages'), row.get('additionalInformation')])
                        for part in note.split(';') if part.strip()]
+            classes = [match.group(1).upper() for clause in clauses
+                       if (match := re.fullmatch(r'BENEFITCLASS-(.+)', clause, re.I))]
+            if classes:
+                return 'BQ' not in priorities or classes != ['SPECIALIST']
             unrelated = [bool(re.fullmatch(
                 r'(?:telemedicine|telehealth|e-?visit|doctor on demand|hinge health|retail clinic|preventive (?:adult )?care)\b.*'
                 r'|(?:prediabetes|diabetes management)\b.*\bomada health only'

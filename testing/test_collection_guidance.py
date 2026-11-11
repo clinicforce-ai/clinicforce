@@ -44,6 +44,18 @@ def test_patient_share_and_collection_policy_are_independent():
     assert encounter_summary.build({**result, 'collection_guidance': deferred})['estimated_total_patient_min_cents'] == 3800
 
 
+def test_missing_price_does_not_request_an_already_approved_policy():
+    result = scenario()
+    result['price_range'].update(complete=False, patient_min_cents=None, patient_max_cents=None)
+    result['price_range']['lines'][0].update(calculation=None, allowed_cents=None,
+        rate_resolution={'status': 'RATE_UNAVAILABLE'})
+    guidance = collection_guidance.build(result)
+    assert guidance['amount_cents'] is None
+    assert guidance.get('policy_setup_required') is not True
+    result.pop('collection_policy')
+    assert collection_guidance.build(result)['policy_setup_required'] is True
+
+
 def test_complete_contract_priced_in_network_visit_collects_calculated_share():
     result = scenario(22910)
     result.pop('collection_policy')

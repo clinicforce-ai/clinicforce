@@ -241,45 +241,47 @@ export function collectionAtVisitRow(
   const row = {
     label: dsnpOffice
       ? 'Amount to collect at visit · dual status unresolved'
-      : biopsyBalance != null
-        ? biopsyOfficePending
-          ? 'Provisional biopsy target · office share pending'
-          : 'Provisional collection target · confirmation pending'
-        : aetnaOtherCoverage
-          ? payerOrderVerified
-            ? 'Amount to collect at visit · pending secondary claim'
-            : 'Amount to collect at visit · pending payer order'
-          : pendingAetnaCopay != null || pendingBluecardCopay != null
-            ? 'Amount to collect at visit · pending verification'
-            : priorDateAetnaBalance != null
-              ? aetnaMedicareScenario
-                ? 'Amount to collect at visit · Aetna / Medicare scenario'
-                : 'Amount to collect at visit · office copay reference'
-              : cignaCard
-                ? 'Amount to collect at visit · pending verification'
-                : botoxPreview
-                  ? 'Planned amount to collect at visit'
-                  : diagnosticCopayReference != null
-                    ? 'Diagnostic copay · collection pending'
-                    : pendingUhcHmoPosCopay
-                      ? 'Amount to collect at visit · verify Medicare protection'
-                      : (partialOfficeCopay != null || cardPlanningCopay != null) &&
-                          feeProxyCheckin == null
-                        ? 'Suggested amount to collect at visit'
-                        : ((cignaFeeProxy &&
-                              !['claim_after_service', 'office_copay'].includes(
+      : bluecardDeductible?.familyDeductible
+        ? 'Amount to collect at visit · provisional target'
+        : biopsyBalance != null
+          ? biopsyOfficePending
+            ? 'Provisional biopsy target · office share pending'
+            : 'Provisional collection target · confirmation pending'
+          : aetnaOtherCoverage
+            ? payerOrderVerified
+              ? 'Amount to collect at visit · pending secondary claim'
+              : 'Amount to collect at visit · pending payer order'
+            : pendingAetnaCopay != null || pendingBluecardCopay != null
+              ? 'Amount to collect at visit · pending verification'
+              : priorDateAetnaBalance != null
+                ? aetnaMedicareScenario
+                  ? 'Amount to collect at visit · Aetna / Medicare scenario'
+                  : 'Amount to collect at visit · office copay reference'
+                : cignaCard
+                  ? 'Amount to collect at visit · pending verification'
+                  : botoxPreview
+                    ? 'Planned amount to collect at visit'
+                    : diagnosticCopayReference != null
+                      ? 'Diagnostic copay · collection pending'
+                      : pendingUhcHmoPosCopay
+                        ? 'Amount to collect at visit · verify Medicare protection'
+                        : (partialOfficeCopay != null || cardPlanningCopay != null) &&
+                            feeProxyCheckin == null
+                          ? 'Suggested amount to collect at visit'
+                          : ((cignaFeeProxy &&
+                                !['claim_after_service', 'office_copay'].includes(
+                                  result.collection_guidance?.basis || '',
+                                )) ||
+                                feeProxyCheckin != null ||
+                                aetnaPlanning != null ||
+                                aetnaCopayPlanning != null) &&
+                              !['bcbstx_proxy_advance', 'qmb_protection'].includes(
                                 result.collection_guidance?.basis || '',
-                              )) ||
-                              feeProxyCheckin != null ||
-                              aetnaPlanning != null ||
-                              aetnaCopayPlanning != null) &&
-                            !['bcbstx_proxy_advance', 'qmb_protection'].includes(
-                              result.collection_guidance?.basis || '',
-                            )
-                          ? aetnaPolicyPending
-                            ? 'Amount to collect at visit · pending policy approval'
-                            : 'Planned amount to collect at visit'
-                          : 'Amount to collect at visit',
+                              )
+                            ? aetnaPolicyPending
+                              ? 'Amount to collect at visit · pending policy approval'
+                              : 'Planned amount to collect at visit'
+                            : 'Amount to collect at visit',
     value: dsnpOffice
       ? `${money(0)} at check-in · ${money(feeProxy!.patient_share_cents)} pre-Medicaid planning share`
       : combinedPlan
@@ -306,7 +308,7 @@ export function collectionAtVisitRow(
                         result.collection_guidance?.amount_cents != null
                       ? money(result.collection_guidance.amount_cents)
                       : bluecardDeductible
-                        ? `${money(bluecardDeductible.collect)} estimated`
+                        ? `${money(bluecardDeductible.collect)} estimated · confirm before charging`
                         : diagnosticCopayReference != null
                           ? `${money(diagnosticCopayReference)} once per day · verify before charging`
                           : cignaFeeProxy
@@ -357,7 +359,7 @@ export function collectionAtVisitRow(
               : biopsyBalance != null
                 ? `min(${money(biopsyTarget!.reference_cents)} BCBS Texas CPT reference, ${money(biopsyTarget!.oop_remaining_cents)} remaining out-of-pocket) = ${money(biopsyTarget!.amount_cents)}${result.encounter_summary?.payments_verified_cents ? `; less ${money(result.encounter_summary.payments_verified_cents)} already paid = ${money(biopsyBalance)}` : ''}. ${biopsyTarget!.message}`
                 : bluecardDeductible
-                  ? `Deductible: min(${money(bluecardDeductible.reference)}, ${money(bluecardDeductible.deductibleRemaining)}) = ${money(bluecardDeductible.deductible)}; coinsurance: 20% × (${money(bluecardDeductible.reference)} − ${money(bluecardDeductible.deductible)}) = ${money(bluecardDeductible.coinsurance)}; total: min(${money(bluecardDeductible.deductible + bluecardDeductible.coinsurance)}, ${money(bluecardDeductible.oopRemaining)} out-of-pocket remaining) = ${money(bluecardDeductible.patientShare)}${bluecardDeductible.paid ? `; less ${money(bluecardDeductible.paid)} already paid = ${money(bluecardDeductible.collect)}` : ''}. Assumes the Blue Choice PPO clinic fee applies and the office visit uses the general deductible.`
+                  ? `Deductible: min(${money(bluecardDeductible.reference)}, ${money(bluecardDeductible.deductibleRemaining)}) = ${money(bluecardDeductible.deductible)}; coinsurance: 20% × (${money(bluecardDeductible.reference)} − ${money(bluecardDeductible.deductible)}) = ${money(bluecardDeductible.coinsurance)}; total: min(${money(bluecardDeductible.deductible + bluecardDeductible.coinsurance)}, ${money(bluecardDeductible.oopRemaining)} out-of-pocket remaining) = ${money(bluecardDeductible.patientShare)}${bluecardDeductible.paid ? `; less ${money(bluecardDeductible.paid)} already paid = ${money(bluecardDeductible.collect)}` : ''}. Assumes the BCBSTX clinic fee and ${bluecardDeductible.familyDeductible ? 'family' : 'general'} deductible apply to this visit; confirm the allowance, CPT and clinic collection rule before charging.`
                   : botoxPreview
                     ? `${botoxPreview.coinsurance_percent}% × ${money(botoxPreview.allowed_cents)} for CPT ${botoxPreview.code} = ${money(botoxPreview.patient_share_cents)}. Confirm the injection site, individual limits, and prior payments before charging.`
                     : cignaFeeProxy && result.collection_guidance?.basis === 'claim_after_service'

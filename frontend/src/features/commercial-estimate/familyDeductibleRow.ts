@@ -2,17 +2,26 @@ import type { PrevisitEstimate } from '../../services/api/commercial-estimator'
 import type { CostBreakdownRow } from '../insurance-estimate/CostBreakdownTable'
 import { money } from './format'
 import { limitSummary, unknown } from './limitSummary'
+import type { bluecardOfficeDeductibleScenario } from './bluecardOfficeDeductibleScenario'
 
 export function familyDeductibleRow(
   reportedResult: PrevisitEstimate,
   gehaZero: boolean,
   humanaReferenceCopay: number | null,
   familyOopApplied: boolean,
-  cignaFamilyDeductibleCents: number | null,
-  cignaDeductibleAssumed = false,
+  bluecard: ReturnType<typeof bluecardOfficeDeductibleScenario>,
+  feeProxy: PrevisitEstimate['fee_proxy_estimate'],
 ): CostBreakdownRow {
   const family = limitSummary(reportedResult, 'deductible', 'FAMILY')
   const surgical = limitSummary(reportedResult, 'deductible', 'FAMILY', '2')
+  const cignaFamily = feeProxy?.scenario_kind === 'oap_office_family_deductible'
+  const applied = bluecard?.familyDeductible
+    ? bluecard.deductible
+    : cignaFamily
+      ? feeProxy.deductible_cents
+      : null
+  const assumed =
+    bluecard?.familyDeductible || (cignaFamily && feeProxy.deductible_applicability === 'assumed')
   return {
     label: 'Family deductible',
     value:
@@ -25,8 +34,8 @@ export function familyDeductibleRow(
             : unknown,
     detail: familyOopApplied
       ? 'No deductible payment due for the selected covered services after the family out-of-pocket limit'
-      : cignaFamilyDeductibleCents != null
-        ? `${money(cignaFamilyDeductibleCents)} ${cignaDeductibleAssumed ? 'assumed to apply' : 'applied'} to the BCBS Texas office fee reference; the actual Cigna allowed amount is unknown`
+      : applied != null
+        ? `${money(applied)} ${assumed ? 'assumed to apply' : 'applied'} to the BCBS Texas office fee reference; the actual payer allowed amount is unknown`
         : family.unassigned
           ? 'Payer-reported plan amount; medical applicability unverified'
           : surgical.value !== unknown

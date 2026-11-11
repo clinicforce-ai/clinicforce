@@ -446,7 +446,7 @@ def build(result: dict, review: dict | None = None) -> dict:
                 patient_message='No payment is requested at arrival. The displayed BCBS Texas amount is a planning reference; final responsibility follows the processed Cigna claim.')
             guidance['collection_rule'] = {'mode': 'cigna_cost_estimate_deferral',
                 'reference': 'Cigna Open Access Plus cost-of-care estimate guidance'}
-        elif active_payer_benefits:
+        elif active_payer_benefits and not policy_approved:
             guidance['policy_setup_required'] = True
         if guidance.get('cigna_estimate_required') and guidance['basis'] != 'claim_after_service':
             guidance.update(reason='The Cigna visit share needs its Explanation of Estimate before a check-in amount can be set.',
