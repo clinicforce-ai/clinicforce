@@ -87,6 +87,68 @@ def test_cigna_calculated_share_defers_deductible_and_coinsurance_collection():
     assert guidance['services'][0]['patient_cents'] is None
 
 
+def test_approved_bluecard_family_office_deposit_uses_scoped_fee_and_refunds_excess():
+    result = scenario()
+    result.update(payer='Blue Cross Blue Shield Tx', service_date='2026-11-19',
+        stedi_payer={'id': 'QDTRP'}, plan_details={'stedi': {'verification_payer': {
+            'payer_id': 'synthetic-home-blue', 'evidence_path': 'synthetic:verification'}}},
+        selected_ids=['office'], codes=[{'id': 'office', 'code': '99203', 'units': 1, 'modifiers': []}],
+        cpt_authorization={'state': 'complete', 'pos': '11', 'network': 'in_network',
+                           'patient_binding': 'synthetic-current-binding'},
+        temporary_rate_reference={'complete': True, 'source': 'NMCT Clinical Library Blue Cross fee schedule',
+            'lines': [{'id': 'office', 'code': '99203', 'units': 1, 'modifiers': [],
+                       'unit_reference_cents': 12345, 'source_reference': 'library:synthetic-fee'}]})
+    result['collection_policy'] = {**ADVANCE_POLICY, 'allow_bluecard_office_refundable_deposit': False}
+    result['benefits'].update(service_date_matches=True, oop_remaining_cents=50000,
+        reported_options=[
+            {'kind': 'deductible', 'service_type_code': '30', 'coverage_level': 'FAMILY',
+             'network': 'IN_NETWORK', 'plan_association': 'medical', 'plan_index': 0,
+             'time_period': 'REMAINING', 'amount_cents': 300000},
+            {'kind': 'coinsurance', 'service_type_code': '98', 'coverage_level': 'INDIVIDUAL',
+             'network': 'IN_NETWORK', 'plan_association': 'medical', 'plan_index': 0,
+             'percent': '20.0', 'payer_note': 'BENEFITCLASS-SPECIALIST'},
+            {'kind': 'copay', 'service_type_code': '98', 'coverage_level': 'INDIVIDUAL',
+             'network': 'IN_NETWORK', 'plan_association': 'medical', 'plan_index': 0,
+             'amount_cents': 0, 'payer_note': ''},
+            {'kind': 'out_of_pocket', 'service_type_code': '30', 'coverage_level': 'INDIVIDUAL',
+             'network': 'IN_NETWORK', 'plan_association': 'medical', 'plan_index': 0,
+             'time_period': 'REMAINING', 'amount_cents': 50000},
+            {'kind': 'deductible', 'service_type_code': '98', 'coverage_level': 'INDIVIDUAL',
+             'network': 'IN_NETWORK', 'plan_association': 'medical', 'plan_index': 0,
+             'amount_cents': 0, 'payer_note': 'BENEFITCLASS-NUTRITIONAL THERAPY DEDUCTIBLE DOES NOT APPLY'},
+        ])
+    result['price_range'].update(complete=False, patient_min_cents=None, patient_max_cents=None)
+    line = result['price_range']['lines'][0]
+    line.update(calculation=None, allowed_cents=None, rate_resolution={'status': 'RATE_UNAVAILABLE'}, modifiers=[])
+    line['benefits'].update(network_status='in_network', copay_cents=None,
+                           coinsurance_percent=None, deductible_applies=False)
+    assert collection_guidance.build(result)['amount_cents'] is None
+    result['collection_policy']['allow_bluecard_office_refundable_deposit'] = True
+    guidance = collection_guidance.build(result)
+    assert guidance['amount_cents'] == 12345
+    assert guidance['basis'] == 'bcbstx_refundable_advance'
+    assert guidance['collection_rule']['mode'] == 'bluecard_family_office_refundable_deposit'
+    assert encounter_summary.build({**result, 'collection_guidance': guidance})['collect_today_cents'] == 12345
+    assert collection_guidance.build(result, {'payments': {'reference': 'synthetic-receipt',
+        'amount_cents': 2000}})['amount_cents'] == 10345
+    for mutation in (
+        lambda value: value['benefits']['reported_options'].append({
+            'kind': 'copay', 'service_type_code': '98', 'network': 'IN_NETWORK',
+            'plan_association': 'medical', 'plan_index': 0, 'amount_cents': 3500}),
+        lambda value: value['benefits']['reported_options'].append({
+            'kind': 'deductible', 'service_type_code': '98', 'network': 'IN_NETWORK',
+            'plan_association': 'medical', 'plan_index': 0,
+            'payer_note': 'BENEFITCLASS-SPECIALIST DEDUCTIBLE DOES NOT APPLY'}),
+        lambda value: value['cpt_authorization'].update(patient_binding='other-binding'),
+        lambda value: value['temporary_rate_reference']['lines'][0].update(code='99204'),
+        lambda value: value['benefits'].update(has_secondary=True),
+        lambda value: value['plan_details']['stedi'].pop('verification_payer'),
+    ):
+        blocked = deepcopy(result)
+        mutation(blocked)
+        assert collection_guidance.build(blocked)['amount_cents'] is None
+
+
 def test_trs_hd_office_missing_accumulators_uses_refundable_fee_deposit():
     result = scenario()
     result.pop('collection_policy')

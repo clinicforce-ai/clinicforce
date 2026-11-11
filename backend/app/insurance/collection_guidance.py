@@ -3,7 +3,8 @@ from __future__ import annotations
 from app.insurance.collection.cash import build as cash_guidance
 from app.insurance.collection.options import emg_option as _emg_option
 from app.insurance.collection.requirements import summarize_requirements
-from app.insurance.collection.refundable_advance import apply as apply_refundable_advance
+from app.insurance.collection.refundable_advance import apply as apply_refundable_advance, advance_patient_message
+from app.insurance.collection.bluecard_family_deposit import apply as apply_bluecard_family_deposit
 from app.insurance.collection.office_copay import (cigna_oap_televisit_office_copay, diagnostic_day_copay_amount, office_copay_amount, preview_office_copay_applies)
 from app.insurance.collection.billing_note import apply_billing_note
 from app.insurance.collection.benefit_gates import apply_aetna_choice_family_oop_deferral, apply_trs_hd_office_refundable_deposit, prepare_benefit_evidence, preview_zero_individual_oop_applies
@@ -331,11 +332,7 @@ def build(result: dict, review: dict | None = None) -> dict:
         if guidance.get('range_max_cents') is not None and payments.get('reference'):
             guidance['range_min_cents'] = guidance['amount_cents']
             guidance['range_max_cents'] = max(0, guidance['range_max_cents'] - payments['amount_cents'])
-        guidance['patient_message'] = ('This is a refundable advance based on the Cigna office copay. The clinic will apply it to the claim and refund any excess after processing.'
-            if guidance['basis'] == 'cigna_refundable_office_copay' else
-            'This is a refundable advance based on a Blue Cross Texas fee reference, not your Cigna benefit or final bill. The clinic will apply it to the claim and refund any excess after processing.'
-            if guidance['basis'] == 'bcbstx_refundable_advance' else
-            'This is an advance estimate for the planned care. The insurer determines final responsibility when it processes the claim.')
+        guidance['patient_message'] = advance_patient_message(guidance)
         if guidance['basis'] == 'claim_after_service' and 'cigna' in str(result.get('payer') or '').casefold():
             guidance['patient_message'] = 'No payment is requested at arrival without a Cigna Explanation of Estimate. Final responsibility follows the processed claim.'
         if guidance['basis'] == 'healthselect_ma_zero_televisit':
@@ -452,6 +449,8 @@ def build(result: dict, review: dict | None = None) -> dict:
     secondary_order.apply_part_b_deferral(result, guidance, source_errors, member_bound, ma_ppo)
     apply_aetna_choice_family_oop_deferral(result, guidance, member_bound=member_bound, source_errors=source_errors, adverse=bool(adverse), same_policy_conflict=same_policy_conflict)
     apply_trs_hd_office_refundable_deposit(result, guidance, member_bound=member_bound, source_errors=source_errors, adverse=bool(adverse), same_policy_conflict=same_policy_conflict, review=review)
+    apply_bluecard_family_deposit(result, guidance, review, safe=bool(safe),
+        qmb_protected=bool(qmb_protected), qmb_unresolved=bool(qmb_unresolved))
     for line in lines:
         mapped = 'needs mapping' not in line.get('benefit_basis', '')
         terms = (line.get('benefits') or {}) if mapped else {}

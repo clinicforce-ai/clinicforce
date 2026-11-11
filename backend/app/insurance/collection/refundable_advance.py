@@ -4,6 +4,17 @@ from __future__ import annotations
 import re
 
 
+def advance_patient_message(guidance: dict) -> str:
+    """Explain the collected advance without presenting it as final liability."""
+    if guidance['basis'] == 'cigna_refundable_office_copay':
+        return 'This is a refundable advance based on the Cigna office copay. The clinic will apply it to the claim and refund any excess after processing.'
+    if (guidance.get('collection_rule') or {}).get('mode') == 'bluecard_family_office_refundable_deposit':
+        return 'This is a refundable BlueCard office deposit based on a clinic fee reference, not your final insurance share. The clinic will apply it to the claim and refund any excess after processing.'
+    if guidance['basis'] == 'bcbstx_refundable_advance':
+        return 'This is a refundable advance based on a Blue Cross Texas fee reference, not your Cigna benefit or final bill. The clinic will apply it to the claim and refund any excess after processing.'
+    return 'This is an advance estimate for the planned care. The insurer determines final responsibility when it processes the claim.'
+
+
 def eligible_amount(result: dict, lines: list[dict]) -> int | None:
     """Use the clinic's exact CPT fee reference as a deposit only when no financial terms exist."""
     reference = result.get('temporary_rate_reference') or {}

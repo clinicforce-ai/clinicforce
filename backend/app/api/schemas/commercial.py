@@ -44,6 +44,10 @@ class CollectionPolicyInput(BaseModel):
     allow_supported_oon_advance: bool = False
     allow_cms_based_advance: bool = False
     allow_blue_cross_proxy_advance: bool = False
+    allow_bluecard_office_refundable_deposit: bool = Field(default=False, description=(
+        'Approve a refundable check-in deposit for one bound, in-network BlueCard CPT 99203 office visit '
+        'with matching family deductible, specialist coinsurance, out-of-pocket and scoped clinic fee evidence. '
+        'The fee reference is not the member-specific allowed amount.'))
 
 
 class AgreementInventoryScopeInput(BaseModel):

@@ -83,7 +83,9 @@ export function bluecardOfficeDeductibleScenario(result: PrevisitEstimate) {
   if (
     result.reference_benefits ||
     result.payment_mode === 'cash' ||
-    result.collection_guidance?.amount_cents != null ||
+    (result.collection_guidance?.amount_cents != null &&
+      result.collection_guidance.collection_rule?.mode !==
+        'bluecard_family_office_refundable_deposit') ||
     !/blue cross|bcbstx|blue shield/i.test(result.payer || '') ||
     (!legacyOffice && !familyOnlyOffice) ||
     (familyOnlyOffice &&

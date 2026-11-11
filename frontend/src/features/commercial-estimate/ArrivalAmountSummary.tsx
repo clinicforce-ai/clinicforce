@@ -200,6 +200,11 @@ export default function ArrivalAmountSummary({
     result.billing_protection?.status !== 'not_qmb'
   const bluecardDeductible =
     !model.cash && !model.previousEstimate ? bluecardOfficeDeductibleScenario(result) : null
+  const bluecardDeposit =
+    bluecardDeductible &&
+    result.collection_guidance?.collection_rule?.mode ===
+      'bluecard_family_office_refundable_deposit' &&
+    model.supportedAmount
   const needsAction = model.amountText === 'Insured amount unavailable'
   const additionalServicesPending = result.price_range?.lines?.some(
     (line) => !/^992(?:0[2-5]|1[2-5])$/.test(line.code),
@@ -220,7 +225,9 @@ export default function ArrivalAmountSummary({
                 : cignaPlanning
                   ? 'Cigna planning estimate · collection pending'
                   : bluecardDeductible
-                    ? 'Amount to collect at visit · provisional target'
+                    ? bluecardDeposit
+                      ? 'Refundable deposit to collect at visit'
+                      : 'Amount to collect at visit · provisional target'
                     : aetnaPlanning
                       ? 'Planned amount to collect at visit'
                       : diagnosticCopayReference != null
@@ -279,7 +286,11 @@ export default function ArrivalAmountSummary({
                 : cignaPlanning
                   ? money(cignaPlanning.patient_share_cents)
                   : bluecardDeductible
-                    ? money(bluecardDeductible.collect)
+                    ? money(
+                        bluecardDeposit
+                          ? result.collection_guidance!.amount_cents!
+                          : bluecardDeductible.collect,
+                      )
                     : aetnaPlanning
                       ? money(aetnaBalance!)
                       : diagnosticCopayReference != null
@@ -340,11 +351,9 @@ export default function ArrivalAmountSummary({
         </p>
       ) : bluecardDeductible ? (
         <p>
-          CPT 99203 uses a {money(bluecardDeductible.reference)} clinic fee reference. The table
-          below shows the deductible and coinsurance formula. This estimate assumes the fee and
-          {bluecardDeductible.familyDeductible ? ' family' : ' plan-wide'} deductible apply to this
-          office visit. Confirm the payer allowance, final CPT, prior payments and clinic proxy
-          collection rule before charging.
+          {bluecardDeposit
+            ? `Collect ${money(result.collection_guidance!.amount_cents!)} as a refundable deposit for CPT 99203. The table shows the fee-based calculation; apply the deposit to the processed claim and refund any excess. The payer allowance and final patient share remain unknown.`
+            : `CPT 99203 uses a ${money(bluecardDeductible.reference)} clinic fee reference. The table below shows the deductible and coinsurance formula. This estimate assumes the fee and ${bluecardDeductible.familyDeductible ? 'family' : 'plan-wide'} deductible apply to this office visit. Confirm the payer allowance, final CPT, prior payments and clinic proxy collection rule before charging.`}
         </p>
       ) : aetnaPlanning ? (
         <p>

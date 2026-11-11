@@ -62,6 +62,8 @@ async def set_collection_policy(connection_id: str, value: _api.CollectionPolicy
 
     A BCBS Texas fee proxy advance is a separate opt-in and still requires
     member-specific Medicare billing-protection clearance before collection.
+    The BlueCard family-deductible office refundable deposit is a separate
+    opt-in scoped to one office CPT, patient, visit date, network and clinic fee.
     """
     session = await _api._session(request)
     _api._admin(session)
@@ -71,7 +73,8 @@ async def set_collection_policy(connection_id: str, value: _api.CollectionPolicy
             str(session['staff']['id']),
             allow_supported_oon_advance=value.allow_supported_oon_advance,
             allow_cms_based_advance=value.allow_cms_based_advance,
-            allow_blue_cross_proxy_advance=value.allow_blue_cross_proxy_advance)
+            allow_blue_cross_proxy_advance=value.allow_blue_cross_proxy_advance,
+            allow_bluecard_office_refundable_deposit=value.allow_bluecard_office_refundable_deposit)
     except _api.commercial.CommercialError as exc:
         raise _api.HTTPException(422, str(exc)) from exc
 

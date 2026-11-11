@@ -100,6 +100,31 @@ try {
   assert.match(familyHtml, /\$123\.45/)
   assert.match(familyHtml, /provisional target/)
   assert.match(familyHtml, /clinic proxy collection rule before charging/)
+  const approvedFamilyDeposit = { ...familyCase, collection_guidance: {
+    amount_cents: 12345, status: 'estimated', basis: 'bcbstx_refundable_advance',
+    reason: 'Collect a refundable BlueCard office deposit; refund excess after the claim.',
+    collection_rule: { mode: 'bluecard_family_office_refundable_deposit' } },
+    encounter_summary: { collect_today_cents: 12345, payments_verified_cents: 0 } }
+  const approvedScenario = bluecardOfficeDeductibleScenario(approvedFamilyDeposit)
+  assert.equal(approvedScenario?.collect, 12345)
+  const approvedModel = { ...model, supportedAmount: true,
+    guidance: approvedFamilyDeposit.collection_guidance }
+  const approvedHtml = renderToStaticMarkup(React.createElement(ArrivalAmountSummary,
+    { result: approvedFamilyDeposit, model: approvedModel,
+      partialCopay: null, visibleAmount: true }))
+  assert.match(approvedHtml, /Refundable deposit to collect at visit/)
+  assert.match(approvedHtml, /\$123\.45/)
+  assert.doesNotMatch(approvedHtml, /Check CPT prices/)
+  const approvedRow = collectionAtVisitRow(approvedFamilyDeposit, approvedModel, {
+    combinedPlan: null, feeProxy: null, aetnaPlanning: null, aetnaCopayPlanning: null,
+    officeReferenceCopay: null, humanaReferenceCopay: null, partialOfficeCopay: null,
+    pendingAetnaCopay: null, priorDateAetnaCopay: null, pendingBluecardCopay: null,
+    cardPlanningCopay: null, cignaCard: null, automaticCashFallback: false,
+    cignaFeeProxy: false, proxyFormula: undefined, bluecardDeductible: approvedScenario })
+  assert.equal(approvedRow.label, 'Refundable deposit at visit')
+  assert.equal(approvedRow.value, '$123.45')
+  assert.match(approvedRow.detail, /Deductible: min/)
+  assert.match(approvedRow.detail, /refund excess after the claim/)
   familyCase.benefits.reported_options.push({ kind: 'copay', service_type_code: '98',
     network: 'IN_NETWORK', plan_association: 'medical', plan_index: 0,
     amount_cents: 3000, payer_note: 'BENEFITCLASS-SPECIALIST' })

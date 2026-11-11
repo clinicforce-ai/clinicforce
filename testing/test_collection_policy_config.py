@@ -52,3 +52,24 @@ def test_scoped_policy_update_stamps_actor_and_removal_preserves_other_rules():
                                                'Clinic policy withdrawn 2026', 'administrator')
     removed = json.loads(db.execute.call_args_list[1].args[1][0])
     assert removed == {'cost_share': 'payer_returned'}
+
+
+def test_bluecard_office_deposit_requires_separate_supported_advance_approval():
+    value = api.CollectionPolicyInput(mode='collect_supported_advance',
+        reference='Synthetic BlueCard office deposit approval',
+        allow_bluecard_office_refundable_deposit=True)
+    assert value.allow_bluecard_office_refundable_deposit is True
+    with pytest.raises(commercial_store.CommercialError):
+        commercial_store.set_collection_policy('clinic', 'payer', 'defer_to_claim',
+            value.reference, 'administrator', allow_bluecard_office_refundable_deposit=True)
+    db = MagicMock(spec=['execute', '__enter__', '__exit__'])
+    db.__enter__.return_value = db
+    db.execute.return_value.fetchone.return_value = {'rules_json': '{}'}
+    with patch.object(commercial_store, '_connection', return_value=db), \
+         patch.object(commercial_store, 'connection', return_value={'id': 'payer'}):
+        commercial_store.set_collection_policy('clinic', 'payer', value.mode,
+            value.reference, 'administrator',
+            allow_bluecard_office_refundable_deposit=value.allow_bluecard_office_refundable_deposit)
+    stored = json.loads(db.execute.call_args_list[1].args[1][0])
+    assert stored['collection_policy']['allow_bluecard_office_refundable_deposit'] is True
+    assert stored['collection_policy']['allow_supported_oon_advance'] is False
