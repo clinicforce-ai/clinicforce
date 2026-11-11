@@ -85,11 +85,11 @@ function CignaPlanningTable({
 }) {
   const balance = Math.max(0, proxy.patient_share_cents - payments)
   return (
-    <section
+    <details
       className="cost-breakdown cigna-planning-table"
       aria-label="Visit cost and collection planning scenario"
     >
-      <h3>Visit cost and collection · planning scenario</h3>
+      <summary>Visit cost and collection · planning scenario</summary>
       <div className="cost-breakdown-scroll">
         <table>
           <thead>
@@ -153,6 +153,6 @@ function CignaPlanningTable({
         Conditional estimate using BCBS Texas reference fees, not Cigna allowed amounts. Obtain
         Cigna’s Explanation of Estimate before collection.
       </p>
-    </section>
+    </details>
   )
 }
