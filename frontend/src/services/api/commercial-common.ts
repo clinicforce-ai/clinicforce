@@ -127,6 +127,7 @@ export type CollectionGuidance = {
   amount_cents: number | null
   office_visit_copay_advance?: { amount_cents: number; source: 'selected_office_benefit' } | null
   payer_reported_office_copay_cents?: number
+  reference_total_cents?: number
   primary_secondary_copay?: boolean
   range_min_cents?: number | null
   range_max_cents?: number | null

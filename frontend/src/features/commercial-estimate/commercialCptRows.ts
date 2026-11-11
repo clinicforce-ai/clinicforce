@@ -30,27 +30,31 @@ export function commercialAllowedTotalRow(
     botoxPreview,
   } = options
   const price = result.price_range
+  const trsDeposit =
+    result.collection_guidance?.collection_rule?.mode === 'trs_hd_office_refundable_deposit'
   return {
     label: 'Total payer allowed',
-    value: healthselectZero
-      ? 'Not returned · not needed for the conditional $0 cost share'
-      : cardPlanningCopay != null
-        ? 'Payer allowance pending'
-        : dsnpOffice
-          ? 'Not established · UHC allowance not returned'
-          : automaticCashFallback
-            ? 'Not established'
-            : price?.allowed_min_cents != null && price.allowed_max_cents != null
-              ? range(price.allowed_min_cents, price.allowed_max_cents)
-              : lineAllowedTotal != null
-                ? money(lineAllowedTotal)
-                : bluecardDeductible
-                  ? `Not established · ${money(bluecardDeductible.reference)} clinic fee reference`
-                  : botoxPreview
-                    ? `${money(botoxPreview.allowed_cents)} · clinic fee row`
-                    : /\bhumana\b/i.test(result.payer || '')
-                      ? 'Not established'
-                      : 'Not fully priced',
+    value: trsDeposit
+      ? `Not established · ${money(result.collection_guidance!.reference_total_cents!)} clinic fee reference`
+      : healthselectZero
+        ? 'Not returned · not needed for the conditional $0 cost share'
+        : cardPlanningCopay != null
+          ? 'Payer allowance pending'
+          : dsnpOffice
+            ? 'Not established · UHC allowance not returned'
+            : automaticCashFallback
+              ? 'Not established'
+              : price?.allowed_min_cents != null && price.allowed_max_cents != null
+                ? range(price.allowed_min_cents, price.allowed_max_cents)
+                : lineAllowedTotal != null
+                  ? money(lineAllowedTotal)
+                  : bluecardDeductible
+                    ? `Not established · ${money(bluecardDeductible.reference)} clinic fee reference`
+                    : botoxPreview
+                      ? `${money(botoxPreview.allowed_cents)} · clinic fee row`
+                      : /\bhumana\b/i.test(result.payer || '')
+                        ? 'Not established'
+                        : 'Not fully priced',
   }
 }
 
@@ -292,6 +296,8 @@ export function commercialPricedCptRows({
 }): CostBreakdownRow[] {
   if (!lines.length) return [fallback]
   return lines.map((line) => {
+    const trsDeposit =
+      result.collection_guidance?.collection_rule?.mode === 'trs_hd_office_refundable_deposit'
     const proxyRate = temporaryRateReference?.lines.find(
       (rate) =>
         rate.id === line.id &&
@@ -314,12 +320,15 @@ export function commercialPricedCptRows({
       }),
       value:
         resolved && line.allowed_cents != null
-          ? money(line.allowed_cents)
+          ? trsDeposit
+            ? `${money(result.collection_guidance!.reference_total_cents!)} clinic fee reference`
+            : money(line.allowed_cents)
           : proxyRate
             ? `${money(proxyRate.unit_reference_cents * (Number(line.units) || 1))} ${bluecardDeductible ? 'Blue Choice PPO fee reference' : aetnaRateReference ? 'Aetna fee reference' : 'BCBS Texas reference'}`
             : 'Allowed amount unavailable',
-      detail:
-        resolved && line.unit_allowed_cents != null
+      detail: trsDeposit
+        ? `${money(result.collection_guidance!.reference_total_cents!)} per unit × 1; insured allowed amount unknown`
+        : resolved && line.unit_allowed_cents != null
           ? `${money(line.unit_allowed_cents)} per unit × ${line.units || 1}`
           : proxyRate
             ? `${money(proxyRate.unit_reference_cents)} per unit × ${line.units || 1}; ${result.payer || 'payer'} allowed amount unknown`

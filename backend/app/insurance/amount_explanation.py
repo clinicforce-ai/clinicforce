@@ -291,9 +291,9 @@ def build(result: dict, guidance: dict, review: dict | None = None) -> dict:
                               'any other liability requires separate covered-service and claim evidence', 'qmb_protected')
         elif basis == 'healthselect_ma_zero_televisit': sentence, code = ('Collect $0 now: this matched UHC HealthSelect Medicare Advantage PPO reports a $0 virtual-visit copay and 0% coinsurance, with no annual medical deductible. The proposed code, payer order and final claim remain open', basis)
         elif basis in {'bcbstx_proxy_advance', 'bcbstx_refundable_advance'}:
-            sentence = (f'Collect {_money(amount)} as the clinic-approved BCBS Texas fee proxy advance for the planned diagnostic services; the UHC allowed amount and final claim share remain unknown'
-                        if basis == 'bcbstx_proxy_advance' else f'Collect {_money(amount)} as a refundable advance against the selected CPTs using the clinic BCBS Texas fee schedule; the payer returned no financial terms, and final patient liability follows the processed claim')
-            code = basis
+            sentence, code = (f'Collect {_money(amount)} as the clinic-approved BCBS Texas fee proxy advance for the planned diagnostic services; the UHC allowed amount and final claim share remain unknown' if basis == 'bcbstx_proxy_advance' else
+                f'Collect {_money(amount)} as a refundable deposit using the clinic BCBS Texas CPT 99203 fee reference; remaining balances were not returned and final patient liability follows the processed claim' if (guidance.get('collection_rule') or {}).get('mode') == 'trs_hd_office_refundable_deposit' else
+                f'Collect {_money(amount)} as a refundable advance against the selected CPTs using the clinic BCBS Texas fee schedule; the payer returned no financial terms, and final patient liability follows the processed claim', basis)
         elif basis == 'cigna_fee_proxy_advance':
             sentence, code = f'Collect {_money(amount)} for the planned diagnostic services using Cigna exact-CPT benefits and the clinic BCBS Texas fee schedule', 'cigna_fee_proxy_advance'
         elif basis == 'ecw_billing_note':

@@ -11,6 +11,15 @@ try {
   const { bluecardOfficeDeductibleScenario } = await server.ssrLoadModule(
     '/src/features/commercial-estimate/bluecardOfficeDeductibleScenario.ts',
   )
+  const { collectionAtVisitRow } = await server.ssrLoadModule(
+    '/src/features/commercial-estimate/collectionAtVisitRow.ts',
+  )
+  const { commercialAllowedTotalRow, commercialPricedCptRows } = await server.ssrLoadModule(
+    '/src/features/commercial-estimate/commercialCptRows.ts',
+  )
+  const { deriveCommercialEstimateView } = await server.ssrLoadModule(
+    '/src/features/commercial-estimate/deriveCommercialEstimateView.ts',
+  )
   const result = {
     payer: 'Blue Cross Blue Shield Tx',
     plan_details: { stedi: { names: ['Preferred Provider Organization'] } },
@@ -98,6 +107,42 @@ try {
   familyCase.benefits.reported_options.pop()
   familyCase.benefits.reported_options[3].payer_note = 'BENEFITCLASS-SPECIALIST DEDUCTIBLE DOES NOT APPLY'
   assert.equal(bluecardOfficeDeductibleScenario(familyCase), null)
+  const deposit = { ...familyCase, collection_guidance: {
+    amount_cents: 10117, status: 'estimated', basis: 'bcbstx_refundable_advance',
+    services: [],
+    reason: 'Refundable clinic CPT fee deposit; final patient share remains unknown.',
+    collection_rule: { mode: 'trs_hd_office_refundable_deposit' } },
+    encounter_summary: { collect_today_cents: 10117, payments_verified_cents: 0 } }
+  const row = collectionAtVisitRow(deposit, { ...model, supportedAmount: true }, {
+    combinedPlan: null, feeProxy: null, aetnaPlanning: null, aetnaCopayPlanning: null,
+    officeReferenceCopay: null, humanaReferenceCopay: null, partialOfficeCopay: null,
+    pendingAetnaCopay: null, priorDateAetnaCopay: null, pendingBluecardCopay: null,
+    cardPlanningCopay: null, cignaCard: null, automaticCashFallback: false,
+    cignaFeeProxy: false, proxyFormula: undefined, bluecardDeductible: null })
+  assert.equal(row.label, 'Refundable deposit at visit')
+  assert.equal(row.value, '$101.17')
+  assert.match(row.detail, /final patient share remains unknown/)
+  const pricedDeposit = { ...deposit, price_range: { ...deposit.price_range,
+    allowed_min_cents: 10117, allowed_max_cents: 10117, lines: [{
+      ...deposit.price_range.lines[0], allowed_cents: 10117,
+      allowed_basis: 'clinic_contract', rate_resolution: { status: 'RESOLVED' },
+      unit_allowed_cents: 10117 }] }, collection_guidance: {
+        ...deposit.collection_guidance, reference_total_cents: 10117 } }
+  const allowed = commercialAllowedTotalRow(pricedDeposit, {
+    healthselectZero: false, cardPlanningCopay: null, dsnpOffice: false,
+    automaticCashFallback: false, lineAllowedTotal: 10117, bluecardDeductible: null,
+    botoxPreview: null })
+  assert.match(allowed.value, /Not established.*clinic fee reference/)
+  const [pricedLine] = commercialPricedCptRows({ result: pricedDeposit,
+    lines: pricedDeposit.price_range.lines, fallback: row,
+    temporaryRateReference: null, aetnaRateReference: false,
+    bluecardDeductible: null, automaticCashFallback: false, anticipatedService: null })
+  assert.match(pricedLine.value, /clinic fee reference/)
+  const derived = deriveCommercialEstimateView({ result: pricedDeposit,
+    appointments: [], selectedVisit: null, busy: null, error: null,
+    readOnly: false, recovering: false })
+  assert.equal(derived.supportedAmount, true)
+  assert.equal(derived.amount, '$101.17')
 } finally {
   await server.close()
 }

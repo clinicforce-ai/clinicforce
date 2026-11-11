@@ -86,6 +86,12 @@ async def saved_previsit(case_id: str, request: _api.Request) -> dict:
     policy can give a $0 check-in advance
     with basis claim_after_service. It does not waive the later patient share or
     change coverage evidence. Saved reads apply the current practice policy.
+    For one active, patient-bound 2026-27 BCBSTX TRS-ActiveCare HD office
+    CPT 99203 visit with 30% coinsurance and no returned copay or remaining
+    deductible/out-of-pocket balance, collection_guidance may return the
+    scoped clinic fee reference less recorded payments as a refundable deposit
+    with basis bcbstx_refundable_advance. Patient responsibility remains
+    unresolved until claim adjudication.
     An unlinked payer-reported zero individual out-of-pocket balance sets
     collection_guidance.unconfirmed_zero_oop and withholds a positive advance.
     A linked, applicable zero balance can return basis out_of_pocket_limit

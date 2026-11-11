@@ -444,9 +444,14 @@ export function collectionAtVisitRow(
     row.detail = `For each priced CPT: min(reported copay + any applicable deductible and coinsurance, ${money(0)} individual in-network out-of-pocket remaining) = ${money(0)} patient share. The family out-of-pocket remainder is a limit, not a visit charge. Choose the performed CPT before billing.`
   }
   if (result.collection_guidance?.basis === 'bcbstx_refundable_advance') {
-    row.label = 'Refundable advance at visit'
+    row.label =
+      result.collection_guidance.collection_rule?.mode === 'trs_hd_office_refundable_deposit'
+        ? 'Refundable deposit at visit'
+        : 'Refundable advance at visit'
     row.detail =
-      'The payer returned no financial terms. This refundable advance uses the selected CPTs’ BCBS Texas fee references; it is separate from estimated patient liability. Apply it to the processed claim and refund any excess.'
+      result.collection_guidance.collection_rule?.mode === 'trs_hd_office_refundable_deposit'
+        ? result.collection_guidance.reason
+        : 'The payer returned no financial terms. This refundable advance uses the selected CPTs’ BCBS Texas fee references; it is separate from estimated patient liability. Apply it to the processed claim and refund any excess.'
   }
   if (result.collection_guidance?.basis === 'cigna_refundable_office_copay') {
     row.label = 'Refundable Cigna copay advance at visit'

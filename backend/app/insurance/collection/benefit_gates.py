@@ -104,3 +104,72 @@ def apply_aetna_choice_family_oop_deferral(result: dict, guidance: dict, *,
         collection_rule={'mode': 'aetna_choice_family_oop_deferral',
                          'reference': 'Aetna medical family in-network out-of-pocket balance; exact or prior-day service echo'})
     guidance.pop('policy_setup_required', None)
+
+
+def apply_trs_hd_office_refundable_deposit(result: dict, guidance: dict, *,
+                                          member_bound: bool, source_errors: list,
+                                          adverse: bool, same_policy_conflict: bool,
+                                          review: dict | None) -> None:
+    """Use the scoped clinic fee as a refundable deposit, not a patient share."""
+    benefits = result.get('benefits') or {}
+    price = result.get('price_range') or {}
+    lines = price.get('lines') or []
+    plan = ((result.get('plan_details') or {}).get('stedi') or {})
+    line_benefits = (lines[0].get('benefits') or {}) if len(lines) == 1 else {}
+    reference = result.get('temporary_rate_reference') or {}
+    if (guidance.get('amount_cents') is not None or guidance.get('unconfirmed_zero_oop')
+            or not member_bound or source_errors
+            or adverse or same_policy_conflict or benefits.get('active') is not True
+            or benefits.get('service_date_matches') is False
+            or benefits.get('has_secondary') or benefits.get('network_conflict')
+            or benefits.get('network_status') == 'out_of_network'
+            or (result.get('card_check') or {}).get('status') in {'conflict', 'mismatch'}
+            or benefits.get('coverage_status_conflict') or benefits.get('coverage_dates_invalid')
+            or benefits.get('historical_only') or result.get('refresh_requires_selection') is True
+            or result.get('payment_mode') == 'cash'
+            or not any(name in str(result.get('payer') or '').casefold()
+                       for name in ('blue cross', 'bcbstx'))
+            or plan.get('names') != ['PREFERRED PROVIDER OPTION MEDICAL']
+            or str(plan.get('group_number') or '') != '385000'
+            or not str((result.get('insurance_details') or {}).get('member_id') or '').upper().startswith('T2S')
+            or not '2026-09-01' <= str(result.get('service_date') or '') <= '2027-08-31'
+            or price.get('mode') != 'services' or price.get('service_issues')
+            or len(lines) != 1 or lines[0].get('code') != '99203'
+            or lines[0].get('units') != 1 or lines[0].get('modifiers')
+            or benefits.get('deductible_remaining_cents') is not None
+            or benefits.get('oop_remaining_cents') is not None
+            or line_benefits.get('copay_cents') is not None
+            or line_benefits.get('deductible_remaining_cents') is not None
+            or line_benefits.get('oop_remaining_cents') is not None
+            or str(line_benefits.get('coinsurance_percent') or '')
+            not in {'30', '30.0', '30.00'}):
+        return
+    fee_rows = reference.get('lines') or []
+    fee = (fee_rows[0].get('unit_reference_cents') if reference.get('complete') is True
+           and len(fee_rows) == 1 and fee_rows[0].get('id') == lines[0].get('id')
+           and fee_rows[0].get('code') == '99203' and fee_rows[0].get('units') == 1
+           and not fee_rows[0].get('modifiers')
+           and str(fee_rows[0].get('source_reference') or '').startswith('library:')
+           else None)
+    if fee is None and (lines[0].get('allowed_basis') == 'clinic_contract'
+            and (lines[0].get('rate_resolution') or {}).get('status') == 'RESOLVED'):
+        fee = lines[0].get('allowed_cents')
+    if type(fee) is not int or not 0 < fee <= 100_000_000:
+        return
+    payments = (review or {}).get('payments') or {}
+    paid = (payments.get('amount_cents') if payments.get('reference') else
+            (result.get('arrival_collection') or {}).get('payments_received_cents'))
+    if type(paid) is not int or paid < 0:
+        paid = 0
+    guidance.update(amount_cents=max(0, fee - paid), status='estimated',
+        basis='bcbstx_refundable_advance', reference_total_cents=fee,
+        reason=('Collect a refundable deposit based on the scoped BCBSTX clinic CPT 99203 fee reference. '
+                'The payer omitted the remaining deductible and out-of-pocket balances. This deposit is '
+                'not the insured allowed amount or patient share; apply it to the processed claim and '
+                'refund any excess within 30 days.'),
+        patient_message=('This is a refundable clinic deposit, not your final insurance share. '
+                         'Any excess will be refunded after your claim is processed.'),
+        collection_rule={'mode': 'trs_hd_office_refundable_deposit',
+                         'reference': 'Scoped BCBSTX clinic CPT 99203 fee reference'})
+    guidance.pop('policy_setup_required', None)
+    guidance.pop('positive_advance_policy_missing', None)

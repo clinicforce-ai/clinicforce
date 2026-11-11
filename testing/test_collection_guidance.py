@@ -87,6 +87,46 @@ def test_cigna_calculated_share_defers_deductible_and_coinsurance_collection():
     assert guidance['services'][0]['patient_cents'] is None
 
 
+def test_trs_hd_office_missing_accumulators_uses_refundable_fee_deposit():
+    result = scenario()
+    result.pop('collection_policy')
+    result.update(payer='Blue Cross Blue Shield Tx', service_date='2026-11-11',
+        insurance_details={'member_id': 'T2S000000000'},
+        plan_details={'stedi': {'names': ['PREFERRED PROVIDER OPTION MEDICAL'],
+                                'group_number': '385000'}})
+    result['benefits'].update(service_date_matches=True, deductible_annual_cents=340000,
+        oop_annual_cents=830000)
+    result['price_range'].update(complete=False, patient_min_cents=None, patient_max_cents=None,
+        allowed_min_cents=10117, allowed_max_cents=10117)
+    result['price_range']['lines'][0].update(calculation=None, allowed_cents=10117,
+        allowed_basis='clinic_contract', rate_resolution={'status': 'RESOLVED'})
+    result['price_range']['lines'][0]['benefits'].update(copay_cents=None,
+        deductible_applies=None, deductible_remaining_cents=None, coinsurance_percent='30')
+    guidance = collection_guidance.build(result)
+    assert guidance['amount_cents'] == 10117
+    assert guidance['basis'] == 'bcbstx_refundable_advance'
+    assert guidance['collection_rule']['mode'] == 'trs_hd_office_refundable_deposit'
+    assert guidance['services'][0]['patient_cents'] is None
+    assert encounter_summary.build({**result, 'collection_guidance': guidance})['collect_today_cents'] == 10117
+    assert 'not returned' in amount_explanation.build(result, guidance)['sentence']
+    assert collection_guidance.build(result, {'payments': {'reference': 'synthetic-receipt',
+        'amount_cents': 2000}})['amount_cents'] == 8117
+    other_plan = deepcopy(result)
+    other_plan['plan_details']['stedi']['names'] = ['UNRELATED PLAN']
+    assert collection_guidance.build(other_plan)['amount_cents'] is None
+    other_group = deepcopy(result)
+    other_group['plan_details']['stedi']['group_number'] = 'other'
+    assert collection_guidance.build(other_group)['amount_cents'] is None
+    returned_copay = deepcopy(result)
+    returned_copay['price_range']['lines'][0]['benefits']['copay_cents'] = 3000
+    assert (collection_guidance.build(returned_copay).get('collection_rule') or {}).get('mode') != 'trs_hd_office_refundable_deposit'
+    returned_balance = deepcopy(result)
+    returned_balance['price_range']['lines'][0]['benefits']['oop_remaining_cents'] = 10000
+    assert (collection_guidance.build(returned_balance).get('collection_rule') or {}).get('mode') != 'trs_hd_office_refundable_deposit'
+    result['benefits']['active'] = False
+    assert collection_guidance.build(result)['amount_cents'] is None
+
+
 def test_cigna_no_financial_terms_uses_refundable_bcbstx_reference_advance():
     result = scenario()
     result.pop('collection_policy')
