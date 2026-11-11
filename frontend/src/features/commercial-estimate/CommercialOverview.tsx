@@ -209,7 +209,7 @@ export default function CommercialOverview({
             !result.benefits.historical_only &&
             !result.benefits.source_errors?.length &&
             payerReportedPartialCents == null && (
-              <details className="financial-breakdown">
+              <details className="financial-breakdown" open>
                 <summary>Payer response source rows</summary>
                 <PayerReportedPlanFigures result={result} />
               </details>

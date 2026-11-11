@@ -7,12 +7,13 @@
   background: #fff;
 }
 
-.cost-breakdown h3 {
+.cost-breakdown > summary {
   margin: 0;
   padding: 12px 16px;
   background: var(--ve-canvas, #f5f8f8);
   font-size: 14px;
   font-weight: 700;
+  cursor: pointer;
 }
 
 .cost-breakdown-scroll {

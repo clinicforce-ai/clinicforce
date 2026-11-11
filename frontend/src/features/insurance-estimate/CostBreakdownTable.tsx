@@ -15,8 +15,8 @@ export default function CostBreakdownTable({
   rows: CostBreakdownRow[]
 }) {
   return (
-    <section className="cost-breakdown" aria-label={title}>
-      <h3>{title}</h3>
+    <details className="cost-breakdown" aria-label={title}>
+      <summary>{title}</summary>
       <div className="cost-breakdown-scroll">
         <table>
           <tbody>
@@ -32,6 +32,6 @@ export default function CostBreakdownTable({
           </tbody>
         </table>
       </div>
-    </section>
+    </details>
   )
 }
