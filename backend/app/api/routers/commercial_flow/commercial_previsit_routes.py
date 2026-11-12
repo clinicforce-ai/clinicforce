@@ -117,6 +117,7 @@ async def saved_previsit(case_id: str, request: _api.Request) -> dict:
     including the exact Choice POS II two-code diagnostic scenario, or draft
     Aetna MEPPO portal values for the exact Signature PPO diagnostic scenario.
     A Blue Cross reference never becomes an Aetna allowance or collect-now amount.
+    The NMCT Cigna PPO single-CPT 99203 refundable office quote may equal the matched clinic fee less prior payments when same-plan deductible and out-of-pocket balances exceed the fee and the 20% office benefit has no copay; it is not a Cigna allowance or final liability.
     For a Cigna office E/M visit, temporary_rate_reference.alternatives lists matching BCBSTX fee rows
     for available, unselected levels in the same E/M family. These are separate
     planning scenarios and are excluded from the selected visit total.
@@ -125,7 +126,6 @@ async def saved_previsit(case_id: str, request: _api.Request) -> dict:
     deductible then coinsurance to each fee reference and caps the conditional
     share at the remaining family out-of-pocket balance. It does not alter
     collection_guidance or authorize charging without Cigna's estimate.
-    Neither source establishes another payer's allowance or a collectible amount.
     For an active patient-bound UHC D-SNP office visit with a $0 copay, $0
     remaining individual deductible and a payer-reported coinsurance rate,
     fee_proxy_estimate may show one new-patient E/M planning scenario. A

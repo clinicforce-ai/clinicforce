@@ -445,7 +445,9 @@ export function collectionAtVisitRow(
   }
   if (result.collection_guidance?.basis === 'bcbstx_refundable_advance') {
     row.label =
-      result.collection_guidance.collection_rule?.mode === 'blue_ppo_family_deductible_quote'
+      ['blue_ppo_family_deductible_quote', 'cigna_ppo_deductible_quote'].includes(
+        result.collection_guidance.collection_rule?.mode || '',
+      )
         ? 'Amount to collect at visit'
         : [
               'trs_hd_office_refundable_deposit',
@@ -457,7 +459,9 @@ export function collectionAtVisitRow(
       result.collection_guidance.collection_rule?.mode ===
         'bluecard_family_office_refundable_deposit' && bluecardDeductible
         ? `Deductible: min(${money(bluecardDeductible!.reference)}, ${money(bluecardDeductible!.deductibleRemaining)}) = ${money(bluecardDeductible!.deductible)}; coinsurance: 20% × (${money(bluecardDeductible!.reference)} − ${money(bluecardDeductible!.deductible)}) = ${money(bluecardDeductible!.coinsurance)}; capped at ${money(bluecardDeductible!.oopRemaining)} out-of-pocket remaining${bluecardDeductible!.paid ? `; less ${money(bluecardDeductible!.paid)} already paid` : ''}. ${result.collection_guidance.reason}`
-        : result.collection_guidance.collection_rule?.mode === 'blue_ppo_family_deductible_quote'
+        : ['blue_ppo_family_deductible_quote', 'cigna_ppo_deductible_quote'].includes(
+            result.collection_guidance.collection_rule?.mode || '',
+          )
           ? result.collection_guidance.reason
           : [
                 'trs_hd_office_refundable_deposit',

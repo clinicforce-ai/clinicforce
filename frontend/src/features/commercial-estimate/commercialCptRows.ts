@@ -31,12 +31,14 @@ export function commercialAllowedTotalRow(
   } = options
   const price = result.price_range
   if (
-    result.collection_guidance?.collection_rule?.mode === 'blue_ppo_family_deductible_quote' &&
+    ['blue_ppo_family_deductible_quote', 'cigna_ppo_deductible_quote'].includes(
+      result.collection_guidance?.collection_rule?.mode || '',
+    ) &&
     lineAllowedTotal == null
   ) {
     return {
       label: 'Total payer allowed',
-      value: `Not established · ${money(result.collection_guidance.clinic_fee_reference_cents!)} clinic fee reference`,
+      value: `Not established · ${money(result.collection_guidance!.clinic_fee_reference_cents!)} clinic fee reference`,
     }
   }
   const trsDeposit =
