@@ -129,8 +129,8 @@ def apply_collection(result: dict, guidance: dict, review: dict | None,
                      assumptions: list[str], *, safe: bool) -> None:
     quote = result.get('fee_proxy_estimate') or {}
     policy = result.get('collection_policy') or {}
-    if (not safe or guidance.get('amount_cents') is not None
-            or quote.get('basis') != 'cigna_clinic_fee_quote'
+    if (not safe or quote.get('basis') != 'cigna_clinic_fee_quote'
+            or guidance.get('basis') in {'ecw_billing_note', 'qmb_protection'}
             or policy.get('mode') not in (None, 'collect_supported_advance')
             or type(quote.get('patient_share_cents')) is not int):
         return
@@ -140,16 +140,18 @@ def apply_collection(result: dict, guidance: dict, review: dict | None,
     if type(paid) is not int or paid < 0:
         paid = 0
     amount = max(0, quote['patient_share_cents'] - paid)
-    guidance.update(amount_cents=amount, status='estimated', basis='cigna_clinic_fee_quote',
+    guidance.update(amount_cents=None, status='action_required', basis='cigna_cost_estimate_pending',
         reference_total_cents=quote['reference_total_cents'],
-        reason=('Refundable clinic quote for the selected Cigna visit: apply the reported individual '
-                'deductible first, then coinsurance, then the remaining out-of-pocket cap. '
-                'Cigna contract rates are used where supplied; other codes use matched BCBS Texas '
-                'clinic fees as a proxy. Reconcile and refund any excess after the claim.'),
-        patient_message=('This is a refundable estimate for the planned services. The clinic will '
-                         'apply it to your claim and refund any excess after processing.'),
-        collection_rule={'mode': 'cigna_clinic_fee_quote',
-                         'reference': 'Clinic-supplied Cigna rates, matched BCBS Texas fees and member benefits'})
-    assumptions.append('No additional office copay was returned; the quote assumes none and is reconciled after the claim.')
+        provisional_patient_share_cents=amount,
+        reason=(f'The provisional patient share is ${amount / 100:.2f} after applying the individual '
+                'deductible first, then coinsurance and the out-of-pocket cap, less verified payments. '
+                'Clinic Cigna rates are used where supplied and matched BCBS Texas fees for other CPTs. '
+                'For this Open Access Plus visit, obtain Cigna’s Cost of Care Estimator result and give '
+                'the patient its Explanation of Estimate before collecting deductible or coinsurance.'),
+        patient_message=('This is a provisional estimate for the planned services. The clinic will '
+                         'confirm the amount with Cigna before requesting payment.'))
+    guidance.pop('collection_rule', None)
+    assumptions.append('No additional office copay was returned; the provisional share assumes none. '
+                       'Cigna’s Explanation of Estimate is needed before collecting deductible or coinsurance.')
     for key in ('cigna_estimate_required', 'policy_setup_required', 'positive_advance_policy_missing'):
         guidance.pop(key, None)

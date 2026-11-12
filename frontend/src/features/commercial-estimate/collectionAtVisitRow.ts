@@ -403,5 +403,10 @@ export function collectionAtVisitRow(
     row.value = money(0)
     row.detail = result.collection_guidance?.reason
   }
+  if (result.collection_guidance?.basis === 'cigna_cost_estimate_pending') {
+    row.label = 'Amount to collect at visit · Cigna estimate pending'
+    row.value = 'Pending Cigna Explanation of Estimate'
+    row.detail = result.collection_guidance.reason
+  }
   return row
 }

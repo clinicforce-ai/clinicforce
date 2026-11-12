@@ -28,7 +28,7 @@ def visit(code='99203', fee=10117):
                 'pos': '11', 'network': 'in_network', 'patient_binding': binding}}
 
 
-def test_deductible_precedes_zero_percent_coinsurance_and_collects_reference():
+def test_deductible_precedes_zero_percent_coinsurance_but_collection_needs_cigna_estimate():
     result = visit()
     quote = cigna_clinic_quote.estimate(result, result['service_date'])
     assert quote['reference_total_cents'] == 10117
@@ -37,8 +37,10 @@ def test_deductible_precedes_zero_percent_coinsurance_and_collects_reference():
     assert quote['lines'][0]['source'] == 'BCBS Texas clinic fee proxy'
     result['fee_proxy_estimate'] = quote
     guidance = collection_guidance.build(result)
-    assert guidance['amount_cents'] == 10117
-    assert guidance['collection_rule']['mode'] == 'cigna_clinic_fee_quote'
+    assert guidance['amount_cents'] is None
+    assert guidance['basis'] == 'cigna_cost_estimate_pending'
+    assert guidance['provisional_patient_share_cents'] == 10117
+    assert 'Explanation of Estimate' in guidance['reason']
 
 
 def test_clinic_cigna_rate_has_priority_and_oop_caps_share():
@@ -71,7 +73,8 @@ def test_mixed_cigna_and_blue_cross_lines_share_one_deductible_and_prior_payment
     result['fee_proxy_estimate'] = quote
     guidance = collection_guidance.build(result, {'payments': {'reference': 'synthetic-ledger',
                                                                'amount_cents': 2500}})
-    assert guidance['amount_cents'] == 16025
+    assert guidance['amount_cents'] is None
+    assert guidance['provisional_patient_share_cents'] == 16025
 
 
 def test_missing_rate_or_deductible_exclusion_blocks_quote():

@@ -99,6 +99,16 @@ export default function ArrivalAmountSummary({
   referenceOnly?: boolean
   visibleAmount: boolean
 }) {
+  if (result.collection_guidance?.basis === 'cigna_cost_estimate_pending')
+    return (
+      <>
+        <span>Provisional patient share</span>
+        <strong role="status">
+          {money(result.collection_guidance.provisional_patient_share_cents || 0)}
+        </strong>
+        <p>{result.collection_guidance.reason}</p>
+      </>
+    )
   if (
     !model.cash &&
     !model.previousEstimate &&
