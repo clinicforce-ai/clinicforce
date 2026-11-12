@@ -10,12 +10,21 @@ export function filterClinicalPatients(
   cardStatus: string,
 ) {
   const search = query.trim().toLowerCase()
+  const terms = query
+    .trim()
+    .toLowerCase()
+    .split(/[\s,.]+/)
+    .filter(Boolean)
+  // eCW displays "last, first middle-initial"; the clinic record may omit that initial.
+  const requiredTerms =
+    terms.length > 2 && terms[terms.length - 1].length === 1 ? terms.slice(0, -1) : terms
   return patients.filter(
     (patient) =>
       (!cardStatus || patient.card_status === cardStatus) &&
-      `${name(patient)} ${patient.email || ''} ${patient.birth_date} ${patient.ecw_account_number || ''}`
-        .toLowerCase()
-        .includes(search),
+      (requiredTerms.every((term) => name(patient).toLowerCase().includes(term)) ||
+        [patient.email, patient.birth_date, patient.ecw_account_number].some((value) =>
+          (value || '').toLowerCase().includes(search),
+        )),
   )
 }
 
