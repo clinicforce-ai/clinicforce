@@ -444,22 +444,27 @@ export function collectionAtVisitRow(
     row.detail = `For each priced CPT: min(reported copay + any applicable deductible and coinsurance, ${money(0)} individual in-network out-of-pocket remaining) = ${money(0)} patient share. The family out-of-pocket remainder is a limit, not a visit charge. Choose the performed CPT before billing.`
   }
   if (result.collection_guidance?.basis === 'bcbstx_refundable_advance') {
-    row.label = [
-      'trs_hd_office_refundable_deposit',
-      'bluecard_family_office_refundable_deposit',
-    ].includes(result.collection_guidance.collection_rule?.mode || '')
-      ? 'Refundable deposit at visit'
-      : 'Refundable advance at visit'
-    row.detail =
-      result.collection_guidance.collection_rule?.mode ===
-        'bluecard_family_office_refundable_deposit' && bluecardDeductible
-        ? `Deductible: min(${money(bluecardDeductible!.reference)}, ${money(bluecardDeductible!.deductibleRemaining)}) = ${money(bluecardDeductible!.deductible)}; coinsurance: 20% × (${money(bluecardDeductible!.reference)} − ${money(bluecardDeductible!.deductible)}) = ${money(bluecardDeductible!.coinsurance)}; capped at ${money(bluecardDeductible!.oopRemaining)} out-of-pocket remaining${bluecardDeductible!.paid ? `; less ${money(bluecardDeductible!.paid)} already paid` : ''}. ${result.collection_guidance.reason}`
+    row.label =
+      result.collection_guidance.collection_rule?.mode === 'blue_ppo_family_deductible_quote'
+        ? 'Amount to collect at visit'
         : [
               'trs_hd_office_refundable_deposit',
               'bluecard_family_office_refundable_deposit',
             ].includes(result.collection_guidance.collection_rule?.mode || '')
+          ? 'Refundable deposit at visit'
+          : 'Refundable advance at visit'
+    row.detail =
+      result.collection_guidance.collection_rule?.mode ===
+        'bluecard_family_office_refundable_deposit' && bluecardDeductible
+        ? `Deductible: min(${money(bluecardDeductible!.reference)}, ${money(bluecardDeductible!.deductibleRemaining)}) = ${money(bluecardDeductible!.deductible)}; coinsurance: 20% × (${money(bluecardDeductible!.reference)} − ${money(bluecardDeductible!.deductible)}) = ${money(bluecardDeductible!.coinsurance)}; capped at ${money(bluecardDeductible!.oopRemaining)} out-of-pocket remaining${bluecardDeductible!.paid ? `; less ${money(bluecardDeductible!.paid)} already paid` : ''}. ${result.collection_guidance.reason}`
+        : result.collection_guidance.collection_rule?.mode === 'blue_ppo_family_deductible_quote'
           ? result.collection_guidance.reason
-          : 'The payer returned no financial terms. This refundable advance uses the selected CPTs’ BCBS Texas fee references; it is separate from estimated patient liability. Apply it to the processed claim and refund any excess.'
+          : [
+                'trs_hd_office_refundable_deposit',
+                'bluecard_family_office_refundable_deposit',
+              ].includes(result.collection_guidance.collection_rule?.mode || '')
+            ? result.collection_guidance.reason
+            : 'The payer returned no financial terms. This refundable advance uses the selected CPTs’ BCBS Texas fee references; it is separate from estimated patient liability. Apply it to the processed claim and refund any excess.'
   }
   if (result.collection_guidance?.basis === 'cigna_refundable_office_copay') {
     row.label = 'Refundable Cigna copay advance at visit'

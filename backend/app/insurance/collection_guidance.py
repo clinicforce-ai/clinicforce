@@ -5,6 +5,7 @@ from app.insurance.collection.options import emg_option as _emg_option
 from app.insurance.collection.requirements import summarize_requirements
 from app.insurance.collection.refundable_advance import apply as apply_refundable_advance, advance_patient_message
 from app.insurance.collection.bluecard_family_deposit import apply as apply_bluecard_family_deposit
+from app.insurance.collection.blue_ppo_family_quote import apply as apply_blue_ppo_family_quote
 from app.insurance.collection.office_copay import (cigna_oap_televisit_office_copay, diagnostic_day_copay_amount, office_copay_amount, preview_office_copay_applies)
 from app.insurance.collection.billing_note import apply_billing_note
 from app.insurance.collection.benefit_gates import apply_aetna_choice_family_oop_deferral, apply_trs_hd_office_refundable_deposit, prepare_benefit_evidence, preview_zero_individual_oop_applies
@@ -274,7 +275,6 @@ def build(result: dict, review: dict | None = None) -> dict:
         fixed_copay and policy_mode == 'collect_verified_copay' or
         verified_out_of_network(benefits) and policy_mode == 'defer_to_claim'
         and policy.get('allow_supported_oon_advance') is True)
-    # A fully priced in-network visit may advance without route policy; explicit policies still control.
     calculated_in_network_advance = (
         not policy_approved and not published_copay and verified_in_network(benefits)
         and guidance['basis'] in {'patient_obligations', 'anticipated_services'}
@@ -451,6 +451,7 @@ def build(result: dict, review: dict | None = None) -> dict:
     apply_trs_hd_office_refundable_deposit(result, guidance, member_bound=member_bound, source_errors=source_errors, adverse=bool(adverse), same_policy_conflict=same_policy_conflict, review=review)
     apply_bluecard_family_deposit(result, guidance, review, safe=bool(safe),
         qmb_protected=bool(qmb_protected), qmb_unresolved=bool(qmb_unresolved))
+    apply_blue_ppo_family_quote(result, guidance, review, assumptions, safe=bool(safe))
     for line in lines:
         mapped = 'needs mapping' not in line.get('benefit_basis', '')
         terms = (line.get('benefits') or {}) if mapped else {}

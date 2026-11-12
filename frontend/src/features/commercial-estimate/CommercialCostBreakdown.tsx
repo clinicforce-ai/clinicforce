@@ -475,6 +475,7 @@ export default function CommercialCostBreakdown({
             ? [{ label: 'Already paid', value: `−${money(summary.payments_verified_cents)}` }]
             : []),
         ]
+  costState.applyBluePpoFamilyQuote(rows, result)
   rows.push(
     collectionAtVisitRow(result, model, {
       combinedPlan,
