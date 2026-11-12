@@ -78,6 +78,7 @@ export default function ClinicalPatientDashboard({
   const [period, setPeriod] = useState<'upcoming' | 'past' | null>(null)
   const [datePage, setDatePage] = useState(1)
   const [expandedDay, setExpandedDay] = useState<string | null>(null)
+  const [searchExpanded, setSearchExpanded] = useState(true)
   const heading = useRef<HTMLHeadingElement>(null)
   useEffect(() => {
     heading.current?.focus()
@@ -320,6 +321,7 @@ export default function ClinicalPatientDashboard({
     () => filterClinicalPatients(dashboard?.patients || [], query, cardStatus),
     [dashboard, cardStatus, query],
   )
+  const filtered = Boolean(query.trim() || cardStatus)
   const groups = useMemo(
     () => groupPatientDates(patients, visitResults, exactDates),
     [patients, visitResults, exactDates],
@@ -336,15 +338,19 @@ export default function ClinicalPatientDashboard({
       key={day}
       day={day}
       patients={group}
-      expanded={day === today || day === expandedDay}
+      expanded={day === 'search' ? searchExpanded : day === today || day === expandedDay}
       visibleRows={visibleRows[day] || 0}
-      onToggle={() => setExpandedDay((current) => (current === day ? null : day))}
+      onToggle={() =>
+        day === 'search'
+          ? setSearchExpanded((current) => !current)
+          : setExpandedDay((current) => (current === day ? null : day))
+      }
       onShowMore={() =>
         setVisibleRows((current) => ({ ...current, [day]: (current[day] || 50) + 50 }))
       }
       onOpen={(patient) => {
         setSelected(patient)
-        setSelectedDay(day)
+        setSelectedDay(day === 'search' ? null : day)
         setError('')
         setNotice('')
         setCleanupPending(false)
@@ -424,10 +430,12 @@ export default function ClinicalPatientDashboard({
         busy={busy}
         onQuery={(value) => {
           setQuery(value)
+          setSearchExpanded(true)
           setDatePage(1)
         }}
         onCardStatus={(value) => {
           setCardStatus(value)
+          setSearchExpanded(true)
           setDatePage(1)
         }}
         onRefresh={() => void refresh()}
@@ -446,7 +454,7 @@ export default function ClinicalPatientDashboard({
         {!dashboard && !busy ? (
           <p className="staff-muted">Patients could not be loaded. Select Refresh patients.</p>
         ) : dashboard && !busy && !patients.length ? (
-          <ClinicalPatientEmpty filtered={!!(query || cardStatus)} />
+          <ClinicalPatientEmpty filtered={filtered} />
         ) : (
           <div className="clinical-patient-list">
             <ClinicalPatientListStatus
@@ -469,28 +477,32 @@ export default function ClinicalPatientDashboard({
               onLookupDay={setLookupDay}
               onLoadDate={() => void loadExactDate(lookupDay)}
             />
-            <ClinicalPatientSections
-              selected={period}
-              onSelect={(next) => {
-                setPeriod(next)
-                if (next) {
-                  const adjacent = new Date(`${today}T12:00:00`)
-                  adjacent.setDate(adjacent.getDate() + (next === 'past' ? -1 : 1))
-                  const day = localVisitDay(adjacent)
-                  setLookupDay(day)
-                  if (!exactDates[day]) void loadExactDate(day)
-                }
-              }}
-              page={datePage}
-              onPageChange={setDatePage}
-              groups={{
-                today: todayGroup.length ? [[today, todayGroup]] : [],
-                upcoming: upcomingGroups,
-                past: pastGroups,
-              }}
-              pending={pendingGroup.length ? ['pending', pendingGroup] : null}
-              renderGroup={renderGroup}
-            />
+            {filtered ? (
+              renderGroup('search', patients)
+            ) : (
+              <ClinicalPatientSections
+                selected={period}
+                onSelect={(next) => {
+                  setPeriod(next)
+                  if (next) {
+                    const adjacent = new Date(`${today}T12:00:00`)
+                    adjacent.setDate(adjacent.getDate() + (next === 'past' ? -1 : 1))
+                    const day = localVisitDay(adjacent)
+                    setLookupDay(day)
+                    if (!exactDates[day]) void loadExactDate(day)
+                  }
+                }}
+                page={datePage}
+                onPageChange={setDatePage}
+                groups={{
+                  today: todayGroup.length ? [[today, todayGroup]] : [],
+                  upcoming: upcomingGroups,
+                  past: pastGroups,
+                }}
+                pending={pendingGroup.length ? ['pending', pendingGroup] : null}
+                renderGroup={renderGroup}
+              />
+            )}
           </div>
         )}
       </section>

@@ -33,11 +33,13 @@ export default function ClinicalPatientDateGroup({
         }}
       >
         <span className="clinical-visit-date">
-          {day === 'pending'
-            ? 'Appointment date still being checked'
-            : day === 'undated'
-              ? 'Appointment date not available'
-              : formatVisitDay(day)}
+          {day === 'search'
+            ? 'Search results'
+            : day === 'pending'
+              ? 'Appointment date still being checked'
+              : day === 'undated'
+                ? 'Appointment date not available'
+                : formatVisitDay(day)}
         </span>
         <span className="clinical-visit-count">
           {patients.length} {patients.length === 1 ? 'patient' : 'patients'}

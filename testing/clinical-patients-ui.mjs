@@ -7,6 +7,15 @@ const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } })
 const errors = []
 page.on('pageerror', (error) => errors.push(error.message))
 
+async function waitForSingleSearchResult(expected) {
+  await page.waitForFunction((name) => {
+    const group = document.querySelector('.clinical-visit-group[open]')
+    if (group?.querySelector('.clinical-visit-date')?.textContent?.trim() !== 'Search results') return false
+    const rows = [...group.querySelectorAll('.clinical-patient-open strong')]
+    return rows.length === 1 && rows[0].textContent?.trim() === name
+  }, expected)
+}
+
 function day(offset) {
   const now = new Date()
   const date = new Date(now.getFullYear(), now.getMonth(), now.getDate() + offset)
@@ -178,7 +187,7 @@ try {
     }
     assert.equal(appointmentReads, 400)
     await page.getByLabel('Find a clinical patient').fill('Patient 10000')
-    await page.getByText('Appointment date still being checked').click()
+    await waitForSingleSearchResult('Patient 10000')
     assert.deepEqual(await page.locator('.clinical-patient-open strong').allTextContents(), ['Patient 10000'])
     assert.deepEqual(errors, [])
     console.log('PASS: 10,000 patients remain searchable and only 200 date checks are started')
@@ -194,8 +203,9 @@ try {
     assert.equal(todayReads, 1)
     assert.equal(visitRequestOrder[0], 'today')
     await page.getByLabel('Find a clinical patient').fill(process.env.FAIL_TODAY ? 'Patient 06' : 'Patient 01')
-    await page.getByText('Appointment date still being checked').click()
-    assert.deepEqual(await page.locator('.clinical-patient-open strong').allTextContents(), [process.env.FAIL_TODAY ? 'Patient 06' : 'Patient 01'])
+    const expected = process.env.FAIL_TODAY ? 'Patient 06' : 'Patient 01'
+    await waitForSingleSearchResult(expected)
+    assert.deepEqual(await page.locator('.clinical-patient-open strong').allTextContents(), [expected])
     await page.getByLabel('Find a clinical patient').fill('')
     await page.getByRole('button', { name: 'Previous patients' }).click()
     await page.getByLabel('Previous appointment date').fill(past)
@@ -220,6 +230,16 @@ try {
   assert.deepEqual(await groups.first().locator('.clinical-patient-open strong').allTextContents(), [
     'Patient 06',
   ])
+
+  await page.getByLabel('Find a clinical patient').fill('04, Patient O')
+  await waitForSingleSearchResult('Patient 04')
+  assert.deepEqual(await page.locator('.clinical-patient-open strong').allTextContents(), ['Patient 04'])
+  await page.locator('.clinical-patient-open').click()
+  await page.getByRole('heading', { name: 'Patient 04' }).waitFor()
+  await page.locator('.staff-narrow > button').first().click()
+  await waitForSingleSearchResult('Patient 04')
+  assert.deepEqual(await page.locator('.clinical-patient-open strong').allTextContents(), ['Patient 04'])
+  await page.getByLabel('Find a clinical patient').fill('')
 
   await page.getByRole('button', { name: 'Upcoming patients' }).click()
   assert.equal(await groups.count(), 1)
@@ -248,6 +268,8 @@ try {
     'Patient 06',
   ])
   const readsBeforeDetail = dashboardReads
+  if (!(await pastGroups.first().locator('.clinical-patient-open').filter({ hasText: 'Patient 01' }).isVisible()))
+    await pastGroups.first().locator('summary').click()
   await pastGroups.first().locator('.clinical-patient-open').filter({ hasText: 'Patient 01' }).click()
   await page.getByRole('heading', { name: 'Patient 01' }).waitFor()
   await page.locator('.staff-narrow > button').first().click()
@@ -262,7 +284,7 @@ try {
   await page.getByRole('button', { name: 'Today’s patients' }).click()
   await page.getByRole('button', { name: 'Upcoming patients' }).click()
   await page.getByLabel('Find a clinical patient').fill('Patient 02')
-  assert.match(await futureGroup.locator('summary').innerText(), /1 patient/)
+  assert.match(await page.getByText('Search results').locator('..').innerText(), /1 patient/)
   assert.equal(await groups.count(), 1)
   await page.getByLabel('Find a clinical patient').fill('')
   await page.getByRole('button', { name: 'Today’s patients' }).click()
