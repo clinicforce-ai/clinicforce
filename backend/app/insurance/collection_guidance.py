@@ -459,7 +459,7 @@ def build(result: dict, review: dict | None = None) -> dict:
         guidance['services'].append({'id': line.get('id'), 'code': line.get('code'),
             'benefit_source': line.get('benefit_source') or result.get('benefit_source'),
             'benefit': (line.get('benefit_basis') or 'Applicable service benefits') if mapped else 'Benefit determined when claim is processed',
-            'patient_cents': (line.get('calculation') or {}).get('patient_cents') if safe and amount is not None and guidance['basis'] not in {'claim_after_service', 'cigna_cost_estimate_pending'} else None,
+            'patient_cents': (line.get('calculation') or {}).get('patient_cents') if safe and amount is not None and guidance['basis'] != 'claim_after_service' else None,
             'oop_remaining_cents': terms.get('oop_remaining_cents'),
             'copay_cents': terms.get('copay_cents'), 'coinsurance_percent': terms.get('coinsurance_percent'),
             'deductible_remaining_cents': terms.get('deductible_remaining_cents'),

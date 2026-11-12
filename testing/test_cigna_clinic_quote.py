@@ -28,7 +28,7 @@ def visit(code='99203', fee=10117):
                 'pos': '11', 'network': 'in_network', 'patient_binding': binding}}
 
 
-def test_deductible_precedes_zero_percent_coinsurance_but_collection_needs_cigna_estimate():
+def test_deductible_precedes_zero_percent_coinsurance_and_collects_clinic_advance():
     result = visit()
     quote = cigna_clinic_quote.estimate(result, result['service_date'])
     assert quote['reference_total_cents'] == 10117
@@ -37,10 +37,10 @@ def test_deductible_precedes_zero_percent_coinsurance_but_collection_needs_cigna
     assert quote['lines'][0]['source'] == 'BCBS Texas clinic fee proxy'
     result['fee_proxy_estimate'] = quote
     guidance = collection_guidance.build(result)
-    assert guidance['amount_cents'] is None
-    assert guidance['basis'] == 'cigna_cost_estimate_pending'
-    assert guidance['provisional_patient_share_cents'] == 10117
-    assert 'Explanation of Estimate' in guidance['reason']
+    assert guidance['amount_cents'] == 10117
+    assert guidance['basis'] == 'cigna_clinic_fee_quote'
+    assert guidance['collection_rule']['mode'] == 'cigna_clinic_fee_quote'
+    assert 'not a Cigna Cost of Care Estimator' in guidance['reason']
 
 
 def test_clinic_cigna_rate_has_priority_and_oop_caps_share():
@@ -73,8 +73,25 @@ def test_mixed_cigna_and_blue_cross_lines_share_one_deductible_and_prior_payment
     result['fee_proxy_estimate'] = quote
     guidance = collection_guidance.build(result, {'payments': {'reference': 'synthetic-ledger',
                                                                'amount_cents': 2500}})
-    assert guidance['amount_cents'] is None
-    assert guidance['provisional_patient_share_cents'] == 16025
+    assert guidance['amount_cents'] == 16025
+
+
+def test_confirmed_office_and_maneuver_use_clinic_blue_cross_fees():
+    result = visit()
+    result['codes'].append({'id': 'maneuver', 'code': '95992', 'units': 1, 'modifiers': []})
+    result['price_range']['lines'].append({
+        'id': 'maneuver', 'code': '95992', 'units': 1, 'modifiers': [],
+        'benefits': deepcopy(result['benefits']), 'conditions': [], 'issues': []})
+    result['temporary_rate_reference']['lines'].append({
+        'id': 'maneuver', 'code': '95992', 'units': 1, 'modifiers': [],
+        'unit_reference_cents': 3412,
+        'source_reference': 'https://www.bcbstx.com/docs/provider/tx/standards/general-reimbursement-information/'
+                            'gri-info/professional-schedules/2026-internet-posting-notices/other-codes-2026-files/dft-2026-v1.pdf'})
+    result['selected_ids'].append('maneuver')
+    quote = cigna_clinic_quote.estimate(result, result['service_date'])
+    assert quote['reference_total_cents'] == quote['patient_share_cents'] == 13529
+    result['fee_proxy_estimate'] = quote
+    assert collection_guidance.build(result)['amount_cents'] == 13529
 
 
 def test_missing_rate_or_deductible_exclusion_blocks_quote():

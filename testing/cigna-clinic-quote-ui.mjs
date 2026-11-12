@@ -30,17 +30,17 @@ const result = {
     rate_source: 'Clinic Cigna contract and BCBS Texas fee schedule',
     deductible_source: 'Current individual in-network medical benefit',
     message: 'Synthetic refundable clinic quote.' },
-  collection_guidance: { amount_cents: null, status: 'action_required', basis: 'cigna_cost_estimate_pending',
-    provisional_patient_share_cents: 10117, reason: 'Obtain Cigna Explanation of Estimate before collecting.' },
+  collection_guidance: { amount_cents: 10117, status: 'estimated', basis: 'cigna_clinic_fee_quote',
+    reason: 'Clinic-directed refundable advance; not a Cigna Cost of Care Estimator result.',
+    collection_rule: { mode: 'cigna_clinic_fee_quote' } },
 }
 const model = { cash: false, calculating: false, previousEstimate: false, supportedAmount: false,
   networkLabel: 'In network', estimatedShare: null, amountText: '$101.17', provisionalAmount: null }
 const html = renderToStaticMarkup(React.createElement(CommercialCostBreakdown, { result, model }))
 for (const expected of ['CPT 99203', '$101.17 BCBS Texas reference',
-  'Amount to collect at visit · Cigna estimate pending', 'Pending Cigna Explanation of Estimate',
-  '0% · $0.00 after deductible']) {
+  'Amount to collect at visit · refundable clinic quote', '0% · $0.00 after deductible']) {
   assert.ok(html.includes(expected), `Missing ${expected}`)
 }
 assert.ok(html.includes('BCBS Texas proxy used for other CPTs'))
 assert.ok(!html.includes('$101.17 Cigna contract allowance'))
-console.log('Cigna clinic quote UI: disclosed $101.17 share and pending Cigna collection estimate')
+console.log('Cigna clinic quote UI: disclosed BCBS proxy and $101.17 refundable advance')
