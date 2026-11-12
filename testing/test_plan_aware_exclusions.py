@@ -223,6 +223,70 @@ def test_explicit_medical_oop_annual_links_only_its_matching_remaining_row():
     assert options['plans[0].benefits.outOfPocket[3]']['amount_cents'] == 704135
 
 
+def test_zero_combined_individual_oop_with_positive_in_network_family_balance_needs_review():
+    def row(amount, period, level, network):
+        return {'amount': amount, 'timePeriod': period,
+                'service': {'system': 'STC', 'value': '30'}, 'coverageLevel': level,
+                'network': {'indicator': network}}
+
+    payload = {'plans': [{'benefits': {
+        'statuses': [{'status': 'ACTIVE_COVERAGE',
+                      'planCoverageDescription': 'Synthetic Medical POS II'}],
+        'outOfPocket': [
+            row('6400', 'CALENDAR_YEAR', 'FAMILY', 'IN_NETWORK'),
+            row('284.07', 'REMAINING', 'FAMILY', 'IN_NETWORK'),
+            row('0', 'CALENDAR_YEAR', 'INDIVIDUAL', 'IN_AND_OUT_OF_NETWORK'),
+            row('0', 'REMAINING', 'INDIVIDUAL', 'IN_AND_OUT_OF_NETWORK'),
+        ]}}]}
+    terms = normalize_stedi_271(payload, '98', True, office_visit=True)
+    assert terms['active'] is True
+    assert terms['family_oop_remaining_cents'] == 28407
+    assert terms['oop_annual_cents'] is None
+    assert terms['oop_remaining_cents'] is None
+    assert any('combined individual' in reason for reason in terms['review_reasons'])
+    assert len([row for row in terms['reported_options'] if row['kind'] == 'out_of_pocket']) == 4
+    payload['plans'][0]['benefits']['outOfPocket'][2]['amount'] = '3200'
+    met_limit = normalize_stedi_271(payload, '98', True, office_visit=True)
+    assert met_limit['oop_annual_cents'] == 320000
+    assert met_limit['oop_remaining_cents'] == 0
+
+
+def test_saved_zero_combined_limit_clears_cached_patient_share():
+    from app.api.routers.commercial_flow.commercial_previsit_status import _suppress_saved_ambiguous_combined_zero_oop
+
+    def option(level, period, network, amount):
+        return {'kind': 'out_of_pocket', 'service_type_code': '30',
+                'plan_association': 'medical', 'plan_index': 0,
+                'coverage_level': level, 'time_period': period,
+                'network': network, 'amount_cents': amount}
+
+    options = [option('INDIVIDUAL', 'CALENDAR_YEAR', 'IN_AND_OUT_OF_NETWORK', 0),
+               option('INDIVIDUAL', 'REMAINING', 'IN_AND_OUT_OF_NETWORK', 0),
+               option('FAMILY', 'REMAINING', 'IN_NETWORK', 28407)]
+    result = {'benefits': {'oop_annual_cents': 0, 'oop_remaining_cents': 0,
+                           'reported_options': options},
+              'price_range': {'complete': True, 'patient_min_cents': 0,
+                              'patient_max_cents': 0, 'lines': [
+                                  {'benefits': {'oop_annual_cents': 0, 'oop_remaining_cents': 0},
+                                   'calculation': {'patient_cents': 0}}]},
+              'arrival_collection': {'amount_cents': 0},
+              'planning_estimate': {'basis': 'out_of_pocket_limit'}}
+    _suppress_saved_ambiguous_combined_zero_oop(result)
+    assert result['benefits']['oop_remaining_cents'] is None
+    assert result['price_range']['complete'] is False
+    assert result['price_range']['patient_min_cents'] is None
+    assert result['price_range']['lines'][0]['calculation'] is None
+    assert result['price_range']['lines'][0]['benefits']['oop_remaining_cents'] is None
+    assert 'arrival_collection' not in result
+    assert 'planning_estimate' not in result
+    positive = {'benefits': {'oop_annual_cents': 320000, 'oop_remaining_cents': 0,
+                             'reported_options': [{**options[0], 'amount_cents': 320000}, *options[1:]]},
+                'price_range': {'complete': True, 'patient_min_cents': 0}}
+    _suppress_saved_ambiguous_combined_zero_oop(positive)
+    assert positive['price_range']['complete'] is True
+    assert positive['benefits']['oop_remaining_cents'] == 0
+
+
 def test_in_person_specialist_terms_ignore_remote_programs_and_bind_medical_limits():
     def row(service, **fields):
         return {'service': {'system': 'STC', 'value': service}, **fields}

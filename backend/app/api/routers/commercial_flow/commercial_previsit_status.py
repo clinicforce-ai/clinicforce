@@ -4,6 +4,7 @@ from app.api.routers import commercial_estimator as _api
 from app.insurance.identity import patient_benefits_bound, patient_plan_applies, payer_identity_verified
 from app.insurance.network_participation import verified_in_network, verified_out_of_network
 from app.insurance import evidence_resolution, group_contract_support, published_plan_benefits
+from app.insurance.stedi_benefits.normalize import ambiguous_combined_zero_oop
 from app.api.routers.commercial_flow.commercial_previsit_finish import _payer_plan_pricing_source
 from app.api.routers.commercial_flow.commercial_previsit_network_guard import recheck_saved_network_evidence, recheck_saved_payer_message
 from app.api.routers.commercial_flow.commercial_previsit_saved_pricing import _reprice_saved_new_network, guard_unresolved_telehealth, guard_telehealth_guidance, restore_active_blue_cross_insurance, retain_conflicted_insurance, refresh_saved_cigna_office_benefits, upgrade_saved_biopsy_preview, refresh_saved_cross_payer_planning
@@ -324,8 +325,32 @@ def _recheck_saved_payer_allowance(result: dict, case: dict, practice_id: str) -
         line.update(allowed_cents=None, unit_allowed_cents=None, calculation=None)
     result.pop('arrival_collection', None)
     result.pop('planning_estimate', None)
+def _suppress_saved_ambiguous_combined_zero_oop(result: dict) -> None:
+    benefits = result.get('benefits') or {}
+    if not ambiguous_combined_zero_oop(benefits.get('reported_options') or []):
+        return
+    reason = ('The payer reports a $0 combined individual out-of-pocket limit while the '
+              'in-network family balance is positive. Confirm the applicable office-visit limit with the payer.')
+    benefits.update(oop_annual_cents=None, oop_remaining_cents=None)
+    reasons = benefits.setdefault('review_reasons', [])
+    if reason not in reasons:
+        reasons.append(reason)
+    price = result.get('price_range') or {}
+    for line in price.get('lines') or []:
+        terms = line.get('benefits') or {}
+        terms.update(oop_annual_cents=None, oop_remaining_cents=None)
+        line['calculation'] = None
+    if price:
+        price.update(complete=False, patient_min_cents=None, patient_max_cents=None,
+                     plan_min_cents=None, plan_max_cents=None,
+                     collection={'action': 'rerun', 'amount_cents': None, 'reason': reason})
+    result.pop('arrival_collection', None)
+    result.pop('planning_estimate', None)
+
+
 def _previsit_result(case: dict, practice_id: str | None = None) -> dict:
     result = _api.deepcopy(case['previsit_context']['result'])
+    _suppress_saved_ambiguous_combined_zero_oop(result)
     upgrade_saved_biopsy_preview(result, case)
     refresh_saved_cigna_office_benefits(result, case, practice_id or '')
     availity = case.get('availity_visit_reference') or {}
