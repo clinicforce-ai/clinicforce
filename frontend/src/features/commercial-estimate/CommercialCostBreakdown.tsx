@@ -359,7 +359,16 @@ export default function CommercialCostBreakdown({
       !!cignaCard?.specialist_referral_note,
       healthselectZero,
     ),
-    commercialCashAlternativeRow(price, model.cashPrice, automaticCashFallback, pricedCashLines),
+    ...(model.cash
+      ? [
+          commercialCashAlternativeRow(
+            price,
+            model.cashPrice,
+            automaticCashFallback,
+            pricedCashLines,
+          ),
+        ]
+      : []),
   ]
   const patientShare = automaticCashFallback
     ? officeReferenceCopay != null || humanaReferenceCopay != null

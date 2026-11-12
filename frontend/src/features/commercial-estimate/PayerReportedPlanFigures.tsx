@@ -1,9 +1,11 @@
 import type { PrevisitEstimate } from '../../services/api/commercial-estimator'
 import { money } from './format'
+import { ambiguousCombinedZeroOop } from './commercialOopRows'
 
 export default function PayerReportedPlanFigures({ result }: { result: PrevisitEstimate }) {
   const benefits = result.benefits!
   const oopRows = (benefits.reported_options || []).filter((row) => row.kind === 'out_of_pocket')
+  const combinedZeroNeedsReview = ambiguousCombinedZeroOop(result)
   const lines = result.price_range?.mode === 'services' ? result.price_range.lines || [] : []
   const officeLines = lines.filter((line) => /^992(?:0[2-5]|1[2-5])$/.test(line.code))
   const officeCopays = officeLines.map((line) =>
@@ -96,7 +98,13 @@ export default function PayerReportedPlanFigures({ result }: { result: PrevisitE
             <dd>{Number(benefits.coinsurance_percent).toLocaleString()}%</dd>
           </div>
         ) : null}
-        {benefits.oop_remaining_cents != null && (
+        {combinedZeroNeedsReview && (
+          <div>
+            <dt>Individual out-of-pocket limit</dt>
+            <dd>Confirm combined $0 rows with payer</dd>
+          </div>
+        )}
+        {!combinedZeroNeedsReview && benefits.oop_remaining_cents != null && (
           <div>
             <dt>Individual out-of-pocket remaining</dt>
             <dd>{money(benefits.oop_remaining_cents)}</dd>
@@ -108,7 +116,7 @@ export default function PayerReportedPlanFigures({ result }: { result: PrevisitE
             <dd>Payer rows conflict</dd>
           </div>
         )}
-        {benefits.oop_annual_cents != null && (
+        {!combinedZeroNeedsReview && benefits.oop_annual_cents != null && (
           <div>
             <dt>Individual out-of-pocket maximum</dt>
             <dd>{money(benefits.oop_annual_cents)}</dd>
