@@ -30,6 +30,15 @@ export function commercialAllowedTotalRow(
     botoxPreview,
   } = options
   const price = result.price_range
+  if (
+    result.collection_guidance?.collection_rule?.mode === 'blue_ppo_family_deductible_quote' &&
+    lineAllowedTotal == null
+  ) {
+    return {
+      label: 'Total payer allowed',
+      value: `Not established · ${money(result.collection_guidance.clinic_fee_reference_cents!)} clinic fee reference`,
+    }
+  }
   const trsDeposit =
     result.collection_guidance?.collection_rule?.mode === 'trs_hd_office_refundable_deposit'
   return {

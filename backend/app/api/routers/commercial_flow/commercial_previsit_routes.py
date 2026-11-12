@@ -92,6 +92,12 @@ async def saved_previsit(case_id: str, request: _api.Request) -> dict:
     scoped clinic fee reference less recorded payments as a refundable deposit
     with basis bcbstx_refundable_advance. Patient responsibility remains
     unresolved until claim adjudication.
+    For one NMCT Texas Blue PPO office E/M with matched clinic pricing, family
+    deductible and out-of-pocket remaining, and 20% office coinsurance but no
+    individual remaining balances, a saved read may return an automatic
+    deductible-first refundable quote with collection_rule.mode
+    blue_ppo_family_deductible_quote. It subtracts recorded payments and
+    requires no staff benefit lookup; the processed claim controls final share.
     An unlinked payer-reported zero individual out-of-pocket balance sets
     collection_guidance.unconfirmed_zero_oop and withholds a positive advance.
     A linked, applicable zero balance can return basis out_of_pocket_limit

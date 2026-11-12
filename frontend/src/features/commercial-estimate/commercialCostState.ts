@@ -1,4 +1,5 @@
 import type { PrevisitEstimate } from '../../services/api/commercial-estimator'
+import type { CostBreakdownRow } from '../insurance-estimate/CostBreakdownTable'
 import type { CommercialEstimateModel } from './useCommercialEstimateModel'
 import { money } from './format'
 
@@ -45,4 +46,13 @@ export function visibleRateReference(result: PrevisitEstimate) {
     temporaryRateReference,
     aetnaRateReference: Boolean(temporaryRateReference?.source?.startsWith('Aetna MEPPO')),
   }
+}
+
+export function applyBluePpoFamilyQuote(rows: CostBreakdownRow[], result: PrevisitEstimate) {
+  const guidance = result.collection_guidance
+  if (guidance?.collection_rule?.mode !== 'blue_ppo_family_deductible_quote') return
+  const share = rows.find((row) => row.label.endsWith('patient share'))
+  if (!share) return
+  share.value = `${money(guidance.reference_total_cents!)} provisional · family deductible assumed`
+  share.detail = guidance.reason
 }

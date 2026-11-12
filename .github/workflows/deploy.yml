@@ -98,6 +98,7 @@ jobs:
           node ../testing/cigna-office-collection-ui.mjs
           node ../testing/bluecard-office-ui.mjs
           node testing/bluecard-office-collection-ui.mjs
+          node testing/blue-ppo-family-quote-ui.mjs
           node testing/aetna-choice-pos-reference-ui.mjs
           node ../testing/medicare-part-b-secondary-ui.mjs
           node testing/historical-replay-ui.mjs
