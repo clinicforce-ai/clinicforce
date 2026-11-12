@@ -171,6 +171,15 @@ def apply_aetna_choice_family_oop_deferral(result: dict, guidance: dict, *,
     guidance.pop('policy_setup_required', None)
 
 
+def apply_family_oop_deferrals(result: dict, guidance: dict, *, member_bound: bool,
+                               source_errors: list, adverse: bool,
+                               same_policy_conflict: bool) -> None:
+    apply_aetna_choice_family_oop_deferral(result, guidance, member_bound=member_bound,
+        source_errors=source_errors, adverse=adverse, same_policy_conflict=same_policy_conflict)
+    apply_uhc_choice_plus_family_oop_deferral(result, guidance, adverse=adverse,
+        same_policy_conflict=same_policy_conflict, source_errors=source_errors)
+
+
 def apply_trs_hd_office_refundable_deposit(result: dict, guidance: dict, *,
                                           member_bound: bool, source_errors: list,
                                           adverse: bool, same_policy_conflict: bool,
