@@ -125,6 +125,17 @@ const derivedPpoQuote = deriveCommercialEstimateView({
   error: null, readOnly: false, recovering: false,
 })
 assert.equal(derivedPpoQuote.supportedAmount, true)
+const recordedPpoQuote = deriveCommercialEstimateView({
+  result: ppoQuote, appointments: [], selectedVisit: null, busy: false,
+  error: null, readOnly: true, recovering: false,
+})
+assert.equal(recordedPpoQuote.supportedAmount, true)
+assert.equal(recordedPpoQuote.amountText, '$76.15')
+const recordedPpoSummary = renderToStaticMarkup(React.createElement(ArrivalAmountSummary, {
+  model: recordedPpoQuote, result: ppoQuote, partialCopay: null, visibleAmount: true,
+}))
+assert.match(recordedPpoSummary, /\$76\.15/)
+assert.doesNotMatch(recordedPpoSummary, /Verify network/)
 const ppoQuoteRow = collectionAtVisitRow(ppoQuote, depositModel,
   { ...values, feeProxy: null, cignaFeeProxy: false })
 assert.equal(ppoQuoteRow.label, 'Amount to collect at visit')

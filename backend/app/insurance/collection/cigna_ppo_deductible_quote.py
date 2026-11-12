@@ -72,7 +72,9 @@ def apply(result: dict, guidance: dict, review: dict | None, assumptions: list[s
             or terms.get('oop_remaining_cents') not in (None, balances['out_of_pocket', 'INDIVIDUAL'][1])):
         return
     plan = next(iter(balances.values()))[0]
-    office = [row for row in rows if row.get('plan_index') == plan
+    office = [row for row in benefits.get('reported_options') or []
+              if row.get('network') == 'IN_NETWORK' and row.get('plan_index') == plan
+              and row.get('plan_association') in {'medical', 'unassigned'}
               and (row.get('service_type_code') == '98' or row.get('procedure_code') == '99203')]
     coinsurance = [row for row in office if row.get('kind') == 'coinsurance']
     if (not coinsurance or any(str(row.get('percent')) not in {'20', '20.0', '20.00'}
