@@ -27,7 +27,10 @@ def apply(result: dict, guidance: dict, review: dict | None, assumptions: list[s
             or card.get('office_copay_cents') is not None
             or any(value is not None for key, value in (card.get('cigna_card_reference') or {}).items()
                    if key.endswith('_copay_cents'))
-            or benefits.get('network_status') != 'unknown' or benefits.get('has_secondary')
+            or not (benefits.get('network_status') == 'unknown'
+                    or (benefits.get('network_status') == 'in_network'
+                        and benefits.get('network_source') == 'clinic_attested_cigna_ppo'))
+            or benefits.get('has_secondary')
             or policy.get('mode') not in (None, 'collect_supported_advance')
             or price.get('mode') != 'services' or price.get('service_issues')
             or len(codes) != 1 or len(lines) != 1 or len(fee_rows) != 1
@@ -89,17 +92,20 @@ def apply(result: dict, guidance: dict, review: dict | None, assumptions: list[s
             (result.get('arrival_collection') or {}).get('payments_received_cents'))
     if type(paid) is not int or paid < 0:
         paid = 0
+    tier_note = ('The clinic reports this office provider in network, but the payer did not confirm '
+                 'the provider tier.' if benefits.get('network_source') == 'clinic_attested_cigna_ppo'
+                 else 'The provider network tier remains unconfirmed.')
     guidance.update(amount_cents=max(0, fee - paid), status='estimated',
         basis='bcbstx_refundable_advance', reference_total_cents=fee,
         clinic_fee_reference_cents=fee,
         reason=('Collect the clinic’s refundable Cigna PPO office quote using the matched BCBS Texas '
                 'clinic fee reference. The reported individual and family deductible and out-of-pocket '
-                'balances exceed this fee; the Cigna allowed amount and provider network tier remain '
-                'unconfirmed. Apply the payment to the processed claim and refund any excess.'),
+                'balances exceed this fee; the Cigna allowed amount remains unknown. '
+                f'{tier_note} Apply the payment to the processed claim and refund any excess.'),
         patient_message=('This is a refundable clinic quote for the planned office visit. '
                          'The clinic will apply it to the insurance claim and refund any excess.'),
         collection_rule={'mode': 'cigna_ppo_deductible_quote',
                          'reference': 'Matched clinic CPT fee and same-plan medical benefit balances'})
-    assumptions.append('The reported office deductible is assumed to apply before 20% coinsurance; the Cigna allowed amount and provider network tier are unconfirmed.')
+    assumptions.append('The reported office deductible is assumed to apply before 20% coinsurance; the Cigna allowed amount is unknown. ' + tier_note)
     for key in ('cigna_estimate_required', 'policy_setup_required', 'positive_advance_policy_missing'):
         guidance.pop(key, None)

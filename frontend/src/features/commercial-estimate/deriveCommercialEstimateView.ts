@@ -152,35 +152,39 @@ export function deriveCommercialEstimateView({
         : result?.network_evidence?.decision === 'in_network_contract_supported' &&
             patientBenefitsBound
           ? 'In network · clinic agreement'
-          : benefits?.active === true &&
-              !patientBenefitsBound &&
-              ['in_network', 'out_of_network'].includes(benefits.network_status || '')
-            ? 'Patient plan not matched'
-            : benefits?.network_status === 'in_network'
-              ? networkConfirmed
-                ? 'In network'
-                : 'Network not determined'
-              : benefits?.network_status === 'out_of_network'
-                ? outOfNetworkConfirmed
-                  ? 'Out of network'
+          : benefits?.network_source === 'clinic_attested_cigna_ppo' && patientBenefitsBound
+            ? 'In network · clinic attestation'
+            : benefits?.active === true &&
+                !patientBenefitsBound &&
+                ['in_network', 'out_of_network'].includes(benefits.network_status || '')
+              ? 'Patient plan not matched'
+              : benefits?.network_status === 'in_network'
+                ? networkConfirmed
+                  ? 'In network'
                   : 'Network not determined'
-                : contractCandidate
-                  ? 'Contract match unavailable'
-                  : 'Not determined'
+                : benefits?.network_status === 'out_of_network'
+                  ? outOfNetworkConfirmed
+                    ? 'Out of network'
+                    : 'Network not determined'
+                  : contractCandidate
+                    ? 'Contract match unavailable'
+                    : 'Not determined'
   const networkSource =
     result?.network_evidence?.decision === 'in_network_contract_supported'
       ? 'Current signed clinic agreement · review member product and clinician tier'
       : benefits?.network_source === 'clinic_library_contract'
         ? 'Current Clinical Library contract'
-        : benefits?.network_source === 'clinic_library_absent'
-          ? 'No contract linked to this exact payer product and provider'
-          : benefits?.network_source === 'clinic_no_insurer_contract'
-            ? 'No current insurer contract registered in the NMCT Clinical Library'
-            : benefits?.network_source === 'clinic_nonparticipation_rule'
-              ? 'Current scoped clinic nonparticipation rule'
-              : benefits?.network_source === 'clinic_contract_inventory'
-                ? 'Certified clinic contract inventory · not payer-confirmed'
-                : guidance?.network_source
+        : benefits?.network_source === 'clinic_attested_cigna_ppo'
+          ? 'Clinic attestation for matched Cigna PPO office provider · not payer confirmed'
+          : benefits?.network_source === 'clinic_library_absent'
+            ? 'No contract linked to this exact payer product and provider'
+            : benefits?.network_source === 'clinic_no_insurer_contract'
+              ? 'No current insurer contract registered in the NMCT Clinical Library'
+              : benefits?.network_source === 'clinic_nonparticipation_rule'
+                ? 'Current scoped clinic nonparticipation rule'
+                : benefits?.network_source === 'clinic_contract_inventory'
+                  ? 'Certified clinic contract inventory · not payer-confirmed'
+                  : guidance?.network_source
   let networkTone =
     !result || tooEarly || result.recovery?.state === 'pending'
       ? ''

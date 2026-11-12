@@ -136,6 +136,12 @@ def test_cigna_ppo_single_office_quote_uses_refundable_clinic_reference_only_for
     lower_fee = deepcopy(result)
     lower_fee['temporary_rate_reference']['lines'][0]['unit_reference_cents'] = 10117
     assert collection_guidance.build(lower_fee)['amount_cents'] == 10117
+    attested = deepcopy(lower_fee)
+    attested['benefits'].update(network_status='in_network', network_source='clinic_attested_cigna_ppo')
+    attested['cpt_authorization']['network'] = 'in_network'
+    assert collection_guidance.build(attested)['amount_cents'] == 10117
+    assert 'clinic reports this provider in network' in amount_explanation.build(
+        attested, collection_guidance.build(attested))['sentence']
     for mutation in (
         lambda value: value.update(payer='Aetna'),
         lambda value: value['plan_details']['stedi'].update(names=['Open Access Plus']),

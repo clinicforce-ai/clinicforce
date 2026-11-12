@@ -114,6 +114,42 @@ def apply_nmct_cigna_administrator_attestation(result: dict, benefits: dict, pra
     return True
 
 
+def apply_nmct_cigna_ppo_attestation(result: dict, benefits: dict, practice_id: str,
+        payer: str, payload: dict | None, inputs: dict, source: dict) -> bool:
+    """Apply NMCT's dated Cigna PPO office participation statement to a bound provider."""
+    plan = ((result.get('plan_details') or {}).get('stedi') or {})
+    if (not network_participation.is_nmct_practice(practice_id)
+            or not re.fullmatch(r'\s*Cigna\s*', payer, re.I)
+            or plan.get('names') != ['PPO']
+            or (payload or {}).get('_administrator_route')
+            or str(inputs.get('service_date') or '') < '2026-11-12'
+            or str(inputs.get('place_of_service') or '') != '11'
+            or benefits.get('service_date_matches') is not True
+            or not patient_plan_applies(benefits, benefits.get('identity') or result.get('identity'),
+                                        str(inputs.get('service_date') or ''))
+            or result.get('agreement_exclusion')
+            or benefits.get('network_conflict')
+            or benefits.get('network_source') == 'payer_participation_message'
+            or network_participation.verified_out_of_network(benefits)
+            or network_participation.participation_conflict(benefits)):
+        return False
+    returned_npi = str(((payload or {}).get('provider') or {}).get('npi') or '')
+    visit_npi = str((inputs.get('rendering_provider') or {}).get('npi') or '')
+    clinic_npi = str((source.get('rendering_provider') or {}).get('npi') or '')
+    if (not returned_npi or not visit_npi or not clinic_npi
+            or len({returned_npi, visit_npi, clinic_npi}) != 1):
+        return False
+    benefits.update(network_status='in_network', network_source='clinic_attested_cigna_ppo',
+                    network_evidence_ids=[], network_provider_npi=returned_npi)
+    result['network_evidence'] = {
+        'decision': 'in_network_by_clinic_attestation',
+        'source': 'clinic_attested_cigna_ppo',
+        'reference': 'clinic-cigna-ppo-participation-2026-11-12',
+        'reason': ('NMCT reports Cigna PPO participation for the matched office rendering provider. '
+                   'The payer response does not independently confirm this provider’s network tier.')}
+    return True
+
+
 def apply_nmct_contract_absence(result: dict, benefits: dict, payer: str, document: dict | None,
                                 service_date: str, plan_bound: bool) -> bool:
     card = result.get('card_check') or {}
@@ -149,7 +185,8 @@ def apply_nmct_contract_absence(result: dict, benefits: dict, payer: str, docume
     if (document or not payer or not service_date
             or plan_bound is not True or benefits.get('active') is not True
             or benefits.get('service_date_matches') is False
-            or benefits.get('network_source') in {'payer_participation_message', 'clinic_attested_phcs_roster', 'clinic_attested_cigna_tpa'}
+            or benefits.get('network_source') in {'payer_participation_message', 'clinic_attested_phcs_roster',
+                                                  'clinic_attested_cigna_tpa', 'clinic_attested_cigna_ppo'}
             or network_participation.verified_out_of_network(benefits)
             or network_participation.participation_conflict(benefits)):
         return False
@@ -298,6 +335,17 @@ def recheck_saved_network_evidence(result: dict, case: dict, practice_id: str, p
                 _clear_saved_tier(result, 'NMCT has a current insurer contract. Recalculate the saved out-of-network amount.')
             if apply_nmct_library_contract(result, benefits, nmct_document):
                 return
+        if not nmct_document and re.fullmatch(r'\s*Cigna\s*', payer_name, re.I):
+            try:
+                raw = object_store.get_object_bytes(case['previsit_raw_object_key'])
+                payload = json.loads(raw) if hashlib.sha256(raw).hexdigest() == case['previsit_raw_sha256'] else {}
+            except (KeyError, ValueError, OSError):
+                payload = {}
+            if apply_nmct_cigna_ppo_attestation(result, benefits, practice_id, payer_name,
+                    payload, context.get('inputs') or {}, source):
+                return
+            if benefits.get('network_source') == 'clinic_attested_cigna_ppo':
+                _clear_saved_tier(result, 'The saved Cigna PPO provider evidence no longer supports the clinic network assertion. Refresh the visit.')
         if not nmct_document and benefits.get('network_source') == 'clinic_attested_cigna_tpa':
             try:
                 raw = object_store.get_object_bytes(case['previsit_raw_object_key'])
