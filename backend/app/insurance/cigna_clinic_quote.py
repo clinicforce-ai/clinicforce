@@ -113,8 +113,9 @@ def estimate(result: dict, service_date: str) -> dict | None:
             'oop_remaining_cents': oop, 'oop_reduction_cents': calculation['oop_adjustment_cents'],
             'patient_share_cents': calculation['patient_cents'], 'lines': priced,
             'rate_source': 'Clinic Cigna contract and BCBS Texas fee schedule',
-            'deductible_source': ('Current individual in-network medical benefit; applicability assumed'
-                                  if deductible_assumed else 'Current individual in-network medical benefit'),
+            'deductible_source': (f"${calculation['deductible_cents'] / 100:.2f} applied before coinsurance from the "
+                                  'individual in-network medical balance; '
+                                  + ('applicability assumed' if deductible_assumed else 'applicability reported')),
             **({'deductible_applicability': 'assumed'} if deductible_assumed else {}),
             'message': ('Clinic Cigna contract rates are used for listed CPTs; other CPTs use matched BCBS Texas '
                         'clinic fees as a proxy. The individual medical deductible is '

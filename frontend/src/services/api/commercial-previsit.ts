@@ -41,7 +41,6 @@ export type PrevisitEstimate = {
   cpt_authorization?: CptAuthorizationContext
   cash_fallback?: { reason: string }
   temporary_rate_reference?: TemporaryRateReference
-  cigna_clinic_rates?: Array<{ code: string; allowed_cents: number; source_reference: string }>
   cigna_office_fee_scenarios?: CignaOfficeFeeScenarios
   aetna_diagnostic_reference?: AetnaDiagnosticReference
   fee_proxy_estimate?: {

@@ -53,7 +53,6 @@ export default function CommercialCostBreakdown({
   const biopsyTarget =
     planEnabled && !model.calculating ? result.provisional_collection_target : null
   const cignaFeeProxy = feeProxy?.basis === 'bcbstx_cigna_fee_proxy'
-  const cignaClinicQuote = feeProxy?.basis === 'cigna_clinic_fee_quote'
   const dsnpOffice = feeProxy?.basis === 'bcbstx_uhc_dsnp_office_proxy'
   const cignaFamilyOffice = feeProxy?.scenario_kind === 'oap_office_family_deductible'
   const cignaOfficeScenario = cignaFeeProxy && Boolean(feeProxy.scenario_kind) && !cignaFamilyOffice
@@ -149,17 +148,15 @@ export default function CommercialCostBreakdown({
               : cignaOfficeScenario
                 ? `${money(feeProxy!.copay_cents)} specialist office visit · assumed once`
                 : feeProxy != null
-                  ? cignaClinicQuote
-                    ? '$0.00 assumed · no office copay returned'
-                    : cignaFeeProxy && feeProxy.copay_unconfirmed
-                      ? `${money(0)} assumed for calculation · no CPT copay returned`
-                      : dsnpOffice
-                        ? '$0.00 office copay · Stedi'
-                        : feeProxy.copay_cents
-                          ? `${money(feeProxy.copay_cents)} specialist follow-up; $0.00 diagnostic copay`
-                          : cignaFamilyOffice
-                            ? `${money(0)} assumed for calculation · no fixed office copay returned`
-                            : '$0.00 diagnostic copay'
+                  ? feeProxy.basis.includes('cigna') && feeProxy.copay_unconfirmed
+                    ? `${money(0)} assumed for calculation · no CPT copay returned`
+                    : dsnpOffice
+                      ? '$0.00 office copay · Stedi'
+                      : feeProxy.copay_cents
+                        ? `${money(feeProxy.copay_cents)} specialist follow-up; $0.00 diagnostic copay`
+                        : cignaFamilyOffice
+                          ? `${money(0)} assumed for calculation · no fixed office copay returned`
+                          : '$0.00 diagnostic copay'
                   : botoxPreview
                     ? 'Not returned for office injection'
                     : officeReferenceCopay != null
@@ -261,33 +258,31 @@ export default function CommercialCostBreakdown({
               ? 'The published G.E.H.A High Medicare Advantage benefit lists no in-network medical deductible for covered care.'
               : botoxPreview
                 ? 'Individual balance not returned; provisional scenario uses the payer-reported met family deductible'
-                : cignaClinicQuote
-                  ? `${money(feeProxy!.deductible_cents)} applied to the clinic pricing basis before coinsurance`
-                  : cignaFeeProxy
-                    ? cignaOfficeScenario
-                      ? `${money(0)} applied in this provisional scenario from the general individual remaining balance; CPT applicability is not confirmed`
-                      : cignaFamilyOffice
-                        ? `${money(feeProxy?.deductible_cents || 0)} ${feeProxy?.deductible_applicability === 'assumed' ? 'assumed from the plan-wide family remaining deductible; office applicability is unconfirmed' : 'applied from the exact CPT family-only remaining deductible'}`
-                        : `${money(feeProxy?.deductible_cents || 0)} applied in this provisional scenario; exact CPT Stedi responses reported no remaining individual deductible`
-                    : feeProxy != null
-                      ? feeProxy.deductible_source
-                      : result.collection_guidance?.basis === 'out_of_pocket_limit'
-                        ? individualDeductible.value === unknown &&
-                          benefits?.deductible_annual_cents == null
-                          ? 'No deductible payment due after the out-of-pocket limit; the payer did not report an office-specific deductible rule'
-                          : 'No deductible payment due for this covered office visit after the out-of-pocket limit'
-                        : calculated && components?.deductible_cents != null
-                          ? `${money(components.deductible_cents)} applied to this visit`
-                          : individualDeductible.unassigned
-                            ? 'Payer-reported plan amount; medical applicability needs confirmation'
-                            : surgicalIndividualDeductible.value !== unknown
-                              ? 'Payer did not report an office-specific deductible rule; surgical balance does not establish one'
-                              : lines.length &&
-                                  lines.every((line) => line.benefits?.deductible_applies === false)
-                                ? 'Does not apply to the selected CPTs'
-                                : hasGeneralOnlyOfficeDeductible(benefits)
-                                  ? 'Stedi returned this plan-wide deductible under STC 30. Its office-visit STC 98 rows did not say whether the deductible applies to the selected CPTs.'
-                                  : 'Office deductible applicability or amount is unresolved for the selected CPTs',
+                : cignaFeeProxy
+                  ? cignaOfficeScenario
+                    ? `${money(0)} applied in this provisional scenario from the general individual remaining balance; CPT applicability is not confirmed`
+                    : cignaFamilyOffice
+                      ? `${money(feeProxy?.deductible_cents || 0)} ${feeProxy?.deductible_applicability === 'assumed' ? 'assumed from the plan-wide family remaining deductible; office applicability is unconfirmed' : 'applied from the exact CPT family-only remaining deductible'}`
+                      : `${money(feeProxy?.deductible_cents || 0)} applied in this provisional scenario; exact CPT Stedi responses reported no remaining individual deductible`
+                  : feeProxy != null
+                    ? feeProxy.deductible_source
+                    : result.collection_guidance?.basis === 'out_of_pocket_limit'
+                      ? individualDeductible.value === unknown &&
+                        benefits?.deductible_annual_cents == null
+                        ? 'No deductible payment due after the out-of-pocket limit; the payer did not report an office-specific deductible rule'
+                        : 'No deductible payment due for this covered office visit after the out-of-pocket limit'
+                      : calculated && components?.deductible_cents != null
+                        ? `${money(components.deductible_cents)} applied to this visit`
+                        : individualDeductible.unassigned
+                          ? 'Payer-reported plan amount; medical applicability needs confirmation'
+                          : surgicalIndividualDeductible.value !== unknown
+                            ? 'Payer did not report an office-specific deductible rule; surgical balance does not establish one'
+                            : lines.length &&
+                                lines.every((line) => line.benefits?.deductible_applies === false)
+                              ? 'Does not apply to the selected CPTs'
+                              : hasGeneralOnlyOfficeDeductible(benefits)
+                                ? 'Stedi returned this plan-wide deductible under STC 30. Its office-visit STC 98 rows did not say whether the deductible applies to the selected CPTs.'
+                                : 'Office deductible applicability or amount is unresolved for the selected CPTs',
     },
     familyDeductibleRow(
       reportedResult,
@@ -311,7 +306,7 @@ export default function CommercialCostBreakdown({
               : botoxPreview
                 ? `${botoxPreview.coinsurance_percent}% · ${money(botoxPreview.patient_share_cents)} provisional`
                 : feeProxy != null
-                  ? `${feeProxy.coinsurance_percent}%${cignaOfficeScenario ? ' assumed' : ''} · ${money(feeProxy.coinsurance_cents)} ${cignaClinicQuote ? 'after deductible' : 'on the fee proxy'}`
+                  ? `${feeProxy.coinsurance_percent}%${cignaOfficeScenario ? ' assumed' : ''} · ${money(feeProxy.coinsurance_cents)} ${feeProxy.basis === 'cigna_clinic_fee_quote' ? 'after deductible' : 'on the fee proxy'}`
                   : result.collection_guidance?.basis === 'out_of_pocket_limit'
                     ? reportedCoinsurance != null
                       ? `${reportedCoinsurance}% reported; $0 payable after out-of-pocket limit`
@@ -402,7 +397,7 @@ export default function CommercialCostBreakdown({
                     : botoxPreview
                       ? `${money(botoxPreview.patient_share_cents)} provisional · CPT ${botoxPreview.code} scenario`
                       : feeProxy != null
-                        ? `${money(feeProxy.patient_share_cents)} provisional · ${cignaClinicQuote ? 'Cigna rates and BCBS Texas proxy' : 'BCBS Texas fee proxy'}`
+                        ? `${money(feeProxy.patient_share_cents)} provisional · ${feeProxy.basis === 'cigna_clinic_fee_quote' ? 'Cigna rates and BCBS Texas proxy' : 'BCBS Texas fee proxy'}`
                         : humanaReferenceCopay != null
                           ? `${money(humanaReferenceCopay)} conditional in-network office copay · collection pending`
                           : aetnaCopayPlanning != null
@@ -432,7 +427,7 @@ export default function CommercialCostBreakdown({
               ? 'Conditional patient share'
               : dsnpOffice
                 ? 'Pre-Medicaid planning share'
-                : cignaFeeProxy || cignaClinicQuote || summary?.conditional
+                : feeProxy?.basis.includes('cigna') || summary?.conditional
                   ? 'Conditional patient share'
                   : aetnaTable.share != null
                     ? 'Calculated Aetna share for this office visit'
