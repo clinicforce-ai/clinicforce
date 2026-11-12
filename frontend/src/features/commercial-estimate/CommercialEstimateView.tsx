@@ -360,26 +360,29 @@ export default function CommercialEstimateView({
                     : 'planned for this visit'}
                 </label>
                 <p>{calculating ? 'Calculating additional testing cost…' : emg.message}</p>
-                {(emg.requested || emg.included) && !calculating && !error && (
-                  <dl className="collection-components">
-                    <div>
-                      <dt>Additional estimated patient cost</dt>
-                      <dd>
-                        {emg.additional_min_cents != null && emg.additional_max_cents != null
-                          ? range(emg.additional_min_cents, emg.additional_max_cents)
-                          : 'Not yet calculated'}
-                      </dd>
-                    </div>
-                    <div>
-                      <dt>Planning total with testing</dt>
-                      <dd>
-                        {emg.total_min_cents != null && emg.total_max_cents != null
-                          ? range(emg.total_min_cents, emg.total_max_cents)
-                          : 'Not yet calculated'}
-                      </dd>
-                    </div>
-                  </dl>
-                )}
+                {(emg.requested || emg.included) &&
+                  (!emg.included || emg.total_min_cents != null) &&
+                  !calculating &&
+                  !error && (
+                    <dl className="collection-components">
+                      <div>
+                        <dt>Additional estimated patient cost</dt>
+                        <dd>
+                          {emg.additional_min_cents != null && emg.additional_max_cents != null
+                            ? range(emg.additional_min_cents, emg.additional_max_cents)
+                            : 'Not yet calculated'}
+                        </dd>
+                      </div>
+                      <div>
+                        <dt>Planning total with testing</dt>
+                        <dd>
+                          {emg.total_min_cents != null && emg.total_max_cents != null
+                            ? range(emg.total_min_cents, emg.total_max_cents)
+                            : 'Not yet calculated'}
+                        </dd>
+                      </div>
+                    </dl>
+                  )}
                 {!readOnly && (emg.requested || emg.included) && (
                   <button
                     onClick={() => {

@@ -8,6 +8,7 @@ import { benefitPresentation } from './benefitPresentation'
 import { payerPlanDisplay } from './payerPlanDisplay'
 import { provisionalEstimateAmounts } from './provisionalEstimateAmounts'
 import { networkEvidenceStatus } from './networkEvidenceStatus'
+import { emgOptionPresentation } from './emgOptionPresentation'
 import type { CommercialEstimateActions } from './useCommercialEstimateActions'
 export function deriveCommercialEstimateView({
   result,
@@ -261,6 +262,9 @@ export function deriveCommercialEstimateView({
       result?.encounter_summary?.collect_today_cents === undefined ||
       result.encounter_summary.collect_today_cents === guidance.amount_cents)
   const emgBase = result?.emg_option
+  const testingIncludedInQuote =
+    emgBase?.included === true &&
+    guidance?.collection_rule?.mode === 'blue_ppo_family_deductible_quote'
   const emgCostSupported =
     emgBase?.calculation_version === 2 &&
     !previousEstimate &&
@@ -278,18 +282,7 @@ export function deriveCommercialEstimateView({
     ['patient_obligations', 'anticipated_services', 'out_of_pocket_limit'].includes(
       guidance?.basis || '',
     )
-  const emg =
-    emgBase && !emgCostSupported
-      ? {
-          ...emgBase,
-          additional_min_cents: null,
-          additional_max_cents: null,
-          total_min_cents: null,
-          total_max_cents: null,
-          message:
-            'Recalculate the testing scenario after resolving the payer or visit issue above.',
-        }
-      : emgBase
+  const emg = emgOptionPresentation(emgBase, emgCostSupported, testingIncludedInQuote)
   const billingInstruction = guidance?.billing_note?.kind === 'no_collection'
   const emgScenario = !billingInstruction && !cash && emg?.requested && !emg.included
   const cashAmount =

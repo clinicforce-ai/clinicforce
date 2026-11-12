@@ -69,6 +69,40 @@ try {
     selectedVisit: null, busy: null, error: null, readOnly: false, recovering: false })
   assert.equal(derived.supportedAmount, true)
   assert.equal(derived.amount, '$123.45')
+  const testing = structuredClone(result)
+  testing.codes = [{ id: 'ncs', code: '95908', units: 1, modifiers: [] },
+    { id: 'emg', code: '95886', units: 2, modifiers: [] }]
+  testing.selected_ids = ['ncs', 'emg']
+  testing.price_range.lines = testing.codes.map((code) => ({ ...code, allowed_cents: null,
+    benefits: { active: true, network_status: 'in_network', copay_cents: null,
+      coinsurance_percent: '20', deductible_applies: null } }))
+  testing.temporary_rate_reference.lines = [
+    { id: 'ncs', code: '95908', units: 1, modifiers: [], unit_reference_cents: 10511,
+      source_reference: 'library:synthetic-ncs' },
+    { id: 'emg', code: '95886', units: 2, modifiers: [], unit_reference_cents: 8918,
+      source_reference: 'library:synthetic-emg' },
+  ]
+  testing.collection_guidance.amount_cents = 28347
+  testing.collection_guidance.reference_total_cents = 28347
+  testing.collection_guidance.clinic_fee_reference_cents = 28347
+  testing.encounter_summary.collect_today_cents = 28347
+  testing.emg_option = { calculation_version: 2, requested: true, included: true,
+    additional_min_cents: null, additional_max_cents: null,
+    total_min_cents: null, total_max_cents: null }
+  const testingModel = { ...model, amount: '$283.47', amountText: '$283.47',
+    guidance: testing.collection_guidance }
+  const testingTable = renderToStaticMarkup(React.createElement(CommercialCostBreakdown,
+    { result: testing, model: testingModel }))
+  const testingArrival = renderToStaticMarkup(React.createElement(ArrivalAmountSummary,
+    { result: testing, model: testingModel, partialCopay: null, visibleAmount: true }))
+  assert.match(testingTable, /\$283\.47 provisional · family deductible assumed/)
+  assert.match(testingTable, /Amount to collect at visit/)
+  assert.match(testingArrival, /\$283\.47/)
+  assert.doesNotMatch(testingArrival, /Review estimate/)
+  const testingView = deriveCommercialEstimateView({ result: testing, appointments: [],
+    selectedVisit: null, busy: null, error: null, readOnly: true, recovering: false })
+  assert.equal(testingView.amount, '$283.47')
+  assert.match(testingView.emg.message, /included in the visit collection quote/)
 } finally {
   await server.close()
 }

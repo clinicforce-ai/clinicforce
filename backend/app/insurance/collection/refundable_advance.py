@@ -8,8 +8,9 @@ def advance_patient_message(guidance: dict) -> str:
     """Explain the collected advance without presenting it as final liability."""
     if guidance['basis'] == 'cigna_refundable_office_copay':
         return 'This is a refundable advance based on the Cigna office copay. The clinic will apply it to the claim and refund any excess after processing.'
-    if (guidance.get('collection_rule') or {}).get('mode') in {
-            'bluecard_family_office_refundable_deposit', 'blue_ppo_family_deductible_quote'}:
+    if (guidance.get('collection_rule') or {}).get('mode') == 'blue_ppo_family_deductible_quote':
+        return 'This is a refundable Blue PPO visit quote based on matched clinic fees and reported family benefits. The clinic will apply it to the claim and refund any excess after processing.'
+    if (guidance.get('collection_rule') or {}).get('mode') == 'bluecard_family_office_refundable_deposit':
         return 'This is a refundable BlueCard office deposit based on a clinic fee reference, not your final insurance share. The clinic will apply it to the claim and refund any excess after processing.'
     if guidance['basis'] == 'bcbstx_refundable_advance':
         return 'This is a refundable advance based on a Blue Cross Texas fee reference, not your Cigna benefit or final bill. The clinic will apply it to the claim and refund any excess after processing.'
