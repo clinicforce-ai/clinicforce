@@ -13,7 +13,7 @@ from app.api.routers import commercial_estimator as api
 from app.api.routers.commercial_flow import commercial_previsit_pricing as pricing
 from app.api.routers.commercial_flow import commercial_previsit_requirements as requirements
 from app.api.routers.commercial_flow.commercial_previsit_network_guard import apply_nmct_cigna_ppo_attestation, apply_nmct_contract_absence, recheck_saved_network_evidence, scoped_admin_nonparticipation
-from app.api.routers.commercial_flow.commercial_previsit_status import _reprice_saved_new_network
+from app.api.routers.commercial_flow.commercial_previsit_saved_pricing import _reprice_saved_new_network
 from app.insurance import amount_explanation
 from app.insurance import collection_guidance
 from app.insurance import contract_requirements
@@ -839,6 +839,28 @@ def test_identified_fep_basic_cannot_use_blue_choice_basic_ci_contract(monkeypat
     source['payer_plan_scope'] = {'plan_number': None, 'group_number': '33A'}
     with pytest.raises(api.HTTPException, match='exact payer product'):
         api._practice_path('clinic', inputs, source)
+
+
+def test_fep_standard_plan_label_matches_signed_blue_choice_network_without_warning(monkeypatch):
+    payer, network, _, inputs, source = setup_path(monkeypatch)
+    payer['display_name'] = 'Blue Cross Blue Shield of Texas'
+    source.update(plan='STANDARD', payer_plan_names=['FEP Blue Standard FEHB'],
+                  payer_plan_scope={'plan_number': None, 'group_number': '105'})
+    document = {'id': 'synthetic-fep-contract', 'kind': 'contract',
+                'content_type': 'application/pdf', 'payer': payer['display_name'],
+                'effective_from': '2026-01-01', 'sha256': 'synthetic-digest'}
+    monkeypatch.setattr(api.staff_store, 'list_library', lambda *_: [document])
+    monkeypatch.setattr(api.staff_store, 'get_library', lambda *_: {**document, 'extraction': {
+        'sha256': 'synthetic-digest',
+        'pages': [{'text': 'Executed group agreement. Attachment A: Blue Choice PPO network.'}]}})
+    result = {'plan_details': {'stedi': {'identified_product': 'FEP Blue Standard FEHB',
+                                        'names': ['STANDARD']}}}
+    benefits = {'active': True, 'service_date_matches': True, 'network_status': 'unknown'}
+    matched = group_contract_support.resolve('clinic', payer, inputs, source, result, benefits)
+    assert matched['decision'] == 'in_network_contract_supported'
+    assert matched['product_network_source'] == 'official_payer_provider_manual'
+    assert matched['mismatch_warnings'] == []
+    assert matched['rendering_npi'] == network['rendering_npi']
 
 
 @pytest.mark.parametrize('invalid', [None, 'missing_ecw_tin', 'missing_library_date', 'conflicting_library_date',

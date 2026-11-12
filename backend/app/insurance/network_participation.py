@@ -54,7 +54,7 @@ def product_network_relationship(payer: str, product: str, reported_networks: li
     reported = {normalized(name) for name in reported_networks if name}
     if network and reported == {network}:
         return {'source': 'patient_bound_payer_network', 'network_name': contract_network}
-    if (network == 'bluechoiceppo' and normalized(product) == 'fepbluebasicpshb'
+    if (network == 'bluechoiceppo' and normalized(product) in {'fepbluebasicpshb', 'fepbluestandardfehb'}
             and re.search(r'blue\s+cross.*blue\s+shield.*(?:texas|\btx\b)|bcbs\s*(?:of\s*)?(?:texas|tx)\b|bcbstx', payer, re.I)
             and '2026-01-01' <= service_date <= '2026-12-31' and not reported):
         return {'source': 'official_payer_provider_manual', 'reference': FEP_BLUE_CHOICE_SOURCE,

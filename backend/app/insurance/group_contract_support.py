@@ -179,14 +179,15 @@ def resolve(practice_id: str, payer: dict | None, inputs: dict, source: dict,
     plan_details = ((result.get('plan_details') or {}).get('stedi') or {})
     product = (plan_details.get('identified_product')
                or next(iter(source.get('payer_plan_names') or []), ''))
-    fep_basic = (product == 'FEP Blue Basic PSHB'
-                 and source.get('payer_plan_names') in (['BASIC'], ['FEP Blue Basic PSHB'])
-                 and plan_details.get('names') == ['BASIC'])
+    fep_option = ((product == 'FEP Blue Basic PSHB' and plan_details.get('names') == ['BASIC']
+                   and source.get('payer_plan_names') in (['BASIC'], ['FEP Blue Basic PSHB']))
+                  or (product == 'FEP Blue Standard FEHB' and plan_details.get('names') == ['STANDARD']
+                      and source.get('payer_plan_names') in (['STANDARD'], ['FEP Blue Standard FEHB'])))
     if BLUE_PAYER.search(str(payer.get('display_name') or '')) and (
             len(source.get('payer_plan_names') or []) != 1 or
-            (not fep_basic and insurance_identity.normalized(product) !=
+            (not fep_option and insurance_identity.normalized(product) !=
              insurance_identity.normalized(source['payer_plan_names'][0])) or
-            (not fep_basic and len(plan_details.get('names') or []) == 1 and
+            (not fep_option and len(plan_details.get('names') or []) == 1 and
              insurance_identity.normalized(product) !=
              insurance_identity.normalized(plan_details['names'][0]))):
         return None
@@ -235,6 +236,9 @@ def resolve(practice_id: str, payer: dict | None, inputs: dict, source: dict,
             continue
         warnings = []
         if (source.get('plan') and network.get('plan_matcher')
+                and not (fep_option and relationship
+                         and relationship.get('source') == 'official_payer_provider_manual'
+                         and insurance_identity.normalized(source['plan']) in {'basic', 'standard'})
                 and insurance_identity.normalized(source['plan']) !=
                     insurance_identity.normalized(network['plan_matcher'])):
             warnings.append('Payer plan label differs from the clinic agreement record.' if source.get('prebooking')

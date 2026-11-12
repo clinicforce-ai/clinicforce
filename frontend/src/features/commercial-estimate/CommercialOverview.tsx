@@ -198,7 +198,9 @@ export default function CommercialOverview({
             result={result}
             show={
               (!cash || automaticCashFallback) &&
-              (result.plan_details?.stedi?.identified_product === 'FEP Blue Basic PSHB' ||
+              (['FEP Blue Basic PSHB', 'FEP Blue Standard FEHB'].includes(
+                result.plan_details?.stedi?.identified_product || '',
+              ) ||
                 humanaReferenceCopay != null)
             }
           />

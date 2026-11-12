@@ -219,6 +219,10 @@ def plan_details(payload: dict) -> dict:
     fep_basic = (len(names) == 1 and names[0].strip().casefold() == 'basic'
                  and str(group or '').strip().upper() == '33A' and bool(fep_paths)
                  and str(subscriber.get('memberId') or '').upper().startswith('R'))
+    fep_standard = (len(names) == 1 and names[0].strip().casefold() == 'standard'
+                    and str(group or '').strip() == '105' and bool(fep_paths)
+                    and re.fullmatch(r'R\d{8}', str(subscriber.get('memberId') or '').upper()) is not None)
+    fep_product = 'FEP Blue Basic PSHB' if fep_basic else 'FEP Blue Standard FEHB' if fep_standard else None
     return {"names": names, "supplementary_names": supplementary,
             "plan_number": subscriber.get("planNumber") or info.get("planNumber") or (additional.get('plan') or {}).get('number'),
             "group_number": group,
@@ -226,13 +230,14 @@ def plan_details(payload: dict) -> dict:
             "verification_payer": ({'name': verifier[0], 'payer_id': verifier[1],
                                      'evidence_path': verifying_parties[verifier]} if verifier else None),
             "network_names": network_names, "source": "Stedi",
-            "identified_product": 'FEP Blue Basic PSHB' if fep_basic else None,
+            "identified_product": fep_product,
             "product_evidence": ({'plan': 'plans[0].name',
                                   'enrollment': 'subscriber.additionalInformation.group.number'
                                   if not subscriber.get('groupNumber') and not info.get('groupNumber') else
                                   'subscriber.groupNumber' if subscriber.get('groupNumber') else 'planInformation.groupNumber',
                                   'fep_reference': fep_paths[0],
-                                  'published_rule': '2026 OPM PSHB brochure 71-020'} if fep_basic else None)}
+                                  'published_rule': '2026 OPM PSHB brochure 71-020' if fep_basic
+                                  else '2026 OPM FEHB brochure 71-005'} if fep_product else None)}
 
 
 

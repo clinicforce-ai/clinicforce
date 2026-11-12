@@ -1,4 +1,5 @@
 """Date-effective published plan terms, applied only to a bound product and tier."""
+import re
 
 from app.insurance.identity import patient_benefits_bound, patient_plan_applies
 from app.insurance.network_participation import verified_in_network
@@ -9,6 +10,13 @@ FEP_PSHB_2026 = {
     'url': 'https://www.opm.gov/healthcare-insurance/healthcare/plan-information/plans/BrochureJson?brochureNumber=71-020&year=2026',
     'effective_from': '2026-01-01', 'effective_to': '2026-12-31',
     'office_specialist_copay_cents': 5000,
+}
+
+FEP_STANDARD_2026 = {
+    'label': '2026 FEP Blue Standard FEHB brochure, Sections 4 and 5(a)',
+    'url': 'https://www.fepblue.org/-/media/PDFs/Brochures/Standard-and-Basic-brochure-2026.pdf',
+    'effective_from': '2026-01-01', 'effective_to': '2026-12-31',
+    'office_specialist_copay_cents': 4000,
 }
 
 AETNA_SIGNATURE_TX_2026 = {
@@ -186,11 +194,15 @@ def apply_plan_terms(benefits: dict, plan: dict, service_date: str, patient_boun
             benefits['deductible_applicability'] = 'DOES_NOT_APPLY'
             benefits['deductible_remaining_cents'] = 0
         return
-    if (not patient_bound or plan.get('identified_product') != 'FEP Blue Basic PSHB'
-            or not FEP_PSHB_2026['effective_from'] <= service_date <= FEP_PSHB_2026['effective_to']):
+    if (not patient_bound or plan.get('identified_product') not in {'FEP Blue Basic PSHB', 'FEP Blue Standard FEHB'}):
         return
-    benefits['published_plan_rule'] = FEP_PSHB_2026
-    benefits['published_preferred_office_copay_cents'] = FEP_PSHB_2026['office_specialist_copay_cents']
+    rule = FEP_PSHB_2026 if plan['identified_product'] == 'FEP Blue Basic PSHB' else FEP_STANDARD_2026
+    if not rule['effective_from'] <= service_date <= rule['effective_to']:
+        return
+    benefits['published_plan_rule'] = rule
+    benefits['published_preferred_office_copay_cents'] = rule['office_specialist_copay_cents']
+    if rule is FEP_STANDARD_2026:
+        return
     if benefits.get('deductible_remaining_cents') not in {None, 0} or benefits.get('deductible_applies') is True:
         benefits.setdefault('review_reasons', []).append(
             'The member-specific deductible conflicts with the published FEP Basic no-deductible rule.')
@@ -210,16 +222,29 @@ def preferred_fep_office(benefits: dict, rules: dict, service_date: str, code: s
                       and verified_in_network(benefits)
                       and bool(rules.get('provider_npi'))
                       and benefits.get('network_provider_npi') == rules.get('provider_npi'))
-    return (plan.get('identified_product') == 'FEP Blue Basic PSHB'
+    product = plan.get('identified_product')
+    rule = FEP_PSHB_2026 if product == 'FEP Blue Basic PSHB' else FEP_STANDARD_2026
+    return (product in {'FEP Blue Basic PSHB', 'FEP Blue Standard FEHB'}
             and provider_bound and verified_in_network(benefits)
             and benefits.get('active') is True
-            and benefits.get('service_date_matches') is True
+            and (benefits.get('service_date_matches') is True or
+                 product == 'FEP Blue Standard FEHB' and benefits.get('service_date_matches') is None)
             and patient_benefits_bound(benefits.get('identity') or {})
             and not benefits.get('has_secondary')
-            and FEP_PSHB_2026['effective_from'] <= service_date <= FEP_PSHB_2026['effective_to']
+            and rule['effective_from'] <= service_date <= rule['effective_to']
             and str(rules.get('place_of_service') or '') == '11'
             and rules.get('provider_office_role') == 'specialist'
-            and code in {'99212', '99213', '99214', '99215'})
+            and code in ({'99212', '99213', '99214', '99215'} if product == 'FEP Blue Basic PSHB'
+                         else {'99202', '99203', '99204', '99205', '99212', '99213', '99214', '99215'}))
+
+
+def _office_telemedicine_note_only(raw: dict) -> bool:
+    """The exact FEP office copay note's video exception cannot change POS 11."""
+    matches = [row for row in raw.get('reported_options') or []
+               if row.get('id') == raw.get('copay_id') and row.get('kind') == 'copay']
+    return (len(matches) == 1 and raw.get('coinsurance_id') is None
+            and re.fullmatch(r'PREFERRED SPECIALIST\s*;\s*TELEMEDICINE EXCEPT WHEN PREVENTIVE\.?',
+                             str(matches[0].get('payer_note') or '').strip(), re.I) is not None)
 
 
 def apply_office_terms(raw: dict, case_benefits: dict, rules: dict,
@@ -304,21 +329,25 @@ def apply_office_terms(raw: dict, case_benefits: dict, rules: dict,
                 'review_reasons': reasons, 'requires_review': bool(reasons)}
     if not preferred_fep_office(case_benefits, rules, service_date, code):
         return raw
-    copay = FEP_PSHB_2026['office_specialist_copay_cents']
+    standard = plan.get('identified_product') == 'FEP Blue Standard FEHB'
+    rule = FEP_STANDARD_2026 if standard else FEP_PSHB_2026
+    copay = rule['office_specialist_copay_cents']
     if raw.get('copay_cents') not in {None, copay} or raw.get('coinsurance_percent') not in {None, '0', '0.0', '0.00'}:
         return {**raw, 'review_reasons': [*(raw.get('review_reasons') or []),
-            'The member-specific office cost share conflicts with the published FEP Basic Preferred specialist rule.']}
-    if raw.get('deductible_remaining_cents') not in {None, 0} or raw.get('deductible_applies') is True:
+            'The member-specific office cost share conflicts with the published FEP Preferred specialist rule.']}
+    if (not standard and raw.get('deductible_remaining_cents') not in {None, 0}) or raw.get('deductible_applies') is True:
         return {**raw, 'review_reasons': [*(raw.get('review_reasons') or []),
-            'The member-specific deductible conflicts with the published FEP Basic no-deductible rule.']}
+            'The member-specific office deductible conflicts with the published FEP Preferred visit rule.']}
     reasons = [reason for reason in raw.get('review_reasons') or [] if reason not in {
         'Confirm the remaining individual deductible that applies to this visit.',
         'Confirm which copay or coinsurance term applies, including any visit-count conditions.',
+        'Confirm whether authorization applies to this service and, if required, that it is approved.',
         "Confirm the plan's referral requirement and, if required, that a referral is on file.",
-    }]
+    } and not (standard and reason == 'Confirm which conditional benefit applies to the selected service.'
+               and _office_telemedicine_note_only(raw))]
     return {**raw, 'copay_cents': copay, 'copay_period': 'VISIT',
             'deductible_applies': False, 'deductible_applicability': 'DOES_NOT_APPLY',
-            'deductible_remaining_cents': 0, 'cost_share': 'copay',
+            'deductible_remaining_cents': 0, 'coinsurance_percent': '0', 'cost_share': 'copay',
             'referral_signal': 'not_required' if raw.get('referral_signal') != 'required' else 'required',
-            'published_plan_rule': FEP_PSHB_2026,
+            'published_plan_rule': rule,
             'review_reasons': reasons, 'requires_review': bool(reasons)}

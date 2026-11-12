@@ -18,7 +18,7 @@ from app.insurance.benefit_review import annual_oop_conflict_with_known_remainin
 from app.insurance.network_participation import participation_conflict, verified_in_network, verified_out_of_network
 from app.insurance import encounter_summary
 from app.insurance.insurance_product import is_medicare_advantage
-from app.insurance.published_plan_benefits import GEHA_HIGH_PSHB_MA_16615_2026
+from app.insurance.published_plan_benefits import FEP_STANDARD_2026, GEHA_HIGH_PSHB_MA_16615_2026
 def emg_option(result: dict, rates: list[dict], rules: dict, payload: dict | None, service_date: str, review: dict) -> dict:
     """Compare EMG scenarios using the same collection rules as the visit."""
     return _emg_option(result, rates, rules, payload, service_date, review, build_collection=build)
@@ -265,11 +265,12 @@ def build(result: dict, review: dict | None = None) -> dict:
          or policy.get('allow_cms_based_advance') is True))
     fixed_copay = guidance['basis'] == 'office_copay' or strict.get('status') == 'copay_only'
     published_copay = any((line.get('benefits') or {}).get('published_plan_rule') for line in lines)
+    published_fep_standard = any((line.get('benefits') or {}).get('published_plan_rule') == FEP_STANDARD_2026 for line in lines)
     clinic_delegated_copay = (not policy_approved and guidance['basis'] == 'office_copay'
         and result.get('nmct_cigna_delegated_office') is True
         and verified_in_network(benefits)
         and result.get('benefit_source') == 'Stedi · plan administrator')
-    policy_allows_advance = clinic_delegated_copay or (cigna_oap_televisit and not policy_approved) or (guidance['basis'] == 'cigna_refundable_office_copay' and (not policy_approved or policy_mode in {'collect_verified_copay', 'collect_supported_advance'})) or (policy_mode == 'collect_verified_copay' if published_copay else
+    policy_allows_advance = clinic_delegated_copay or (cigna_oap_televisit and not policy_approved) or (guidance['basis'] == 'cigna_refundable_office_copay' and (not policy_approved or policy_mode in {'collect_verified_copay', 'collect_supported_advance'})) or (policy_mode == 'collect_verified_copay' or published_fep_standard and fixed_copay and policy_mode == 'collect_supported_advance' if published_copay else
         policy_mode == 'collect_supported_advance' or
         fixed_copay and policy_mode == 'collect_verified_copay' or
         verified_out_of_network(benefits) and policy_mode == 'defer_to_claim'

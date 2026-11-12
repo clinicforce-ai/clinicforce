@@ -4,9 +4,48 @@ from __future__ import annotations
 from app.api.routers import commercial_estimator as _api
 from app.api.routers.commercial_flow.commercial_previsit_finish import _payer_plan_pricing_source
 from app.api.routers.commercial_flow.commercial_previsit_rate_reference import refresh_saved_temporary_rates
-from app.insurance import blue_cross_proxy, choice_plus_emg_proxy, uhc_dsnp_office_proxy
+from app.insurance import blue_cross_proxy, choice_plus_emg_proxy, group_contract_support, published_plan_benefits, uhc_dsnp_office_proxy
 from app.insurance.identity import patient_plan_applies
 from app.insurance.stedi_benefits.normalize import ambiguous_combined_zero_oop
+
+
+def restore_saved_fep_standard_product(result: dict, case: dict) -> None:
+    """Identify an older saved FEP response from its intact protected 271."""
+    plan = ((result.get('plan_details') or {}).get('stedi') or {})
+    if plan.get('identified_product') != 'FEP Blue Standard FEHB':
+        if (plan.get('identified_product') or plan.get('names') != ['STANDARD']
+                or not case.get('previsit_raw_object_key') or not case.get('previsit_raw_sha256')):
+            return
+        try:
+            raw = _api.object_store.get_object_bytes(case['previsit_raw_object_key'])
+            if _api.hashlib.sha256(raw).hexdigest() != case['previsit_raw_sha256']:
+                return
+            identified = _api.commercial.plan_details(_api.json.loads(raw))
+        except Exception:
+            return
+        if (identified.get('identified_product') != 'FEP Blue Standard FEHB'
+                or identified.get('names') != plan.get('names')):
+            return
+        plan = {**plan, **identified}
+        result['plan_details']['stedi'] = plan
+    benefits = result.get('benefits') or {}
+    benefits['plan_details'] = {**(benefits.get('plan_details') or {}), **plan}
+    service_date = str(((case.get('previsit_context') or {}).get('inputs') or {}).get('service_date') or '')
+    identity = result.get('identity') or benefits.get('identity') or {}
+    published_plan_benefits.apply_plan_terms(benefits, plan, service_date,
+        patient_plan_applies(benefits, identity, service_date))
+
+
+def saved_fep_standard_office_needs_reprice(result: dict) -> bool:
+    plan = ((result.get('plan_details') or {}).get('stedi') or {})
+    if plan.get('identified_product') != 'FEP Blue Standard FEHB':
+        return False
+    return any(
+        str(line.get('code') or '') in {str(code) for code in (*range(99202, 99206), *range(99212, 99216))}
+        and ((line.get('benefits') or {}).get('copay_cents') != 4000
+             or (line.get('benefits') or {}).get('deductible_applies') is not False
+             or (line.get('benefits') or {}).get('published_plan_rule') != published_plan_benefits.FEP_STANDARD_2026)
+        for line in ((result.get('price_range') or {}).get('lines') or []))
 
 
 def suppress_saved_ambiguous_combined_zero_oop(result: dict) -> None:
@@ -192,12 +231,25 @@ def _reprice_saved_new_network(result: dict, case: dict, practice_id: str, payer
         price, _ = _api._previsit_range(practice_id, inputs, exact, payer['id'],
                                        result.get('codes') or [], benefits, payload=payload,
                                        review=case.get('visit_review'),
-                                       payer_route_id=context.get('payer_id'))
+                                       payer_route_id=context.get('payer_id'),
+                                       network_evidence=result.get('network_evidence'))
     except Exception:
         # A saved view must not fail when its protected response or current
         # clinic pricing configuration is temporarily unavailable.
         return
     result['price_range'] = price
+
+
+def refresh_saved_network_pricing(result: dict, case: dict, practice_id: str,
+                                  route_payer: dict | None, prior_network: tuple) -> None:
+    benefits = result.get('benefits') or {}
+    current_network = (benefits.get('network_status'), benefits.get('network_source'))
+    network_changed = (prior_network != current_network and current_network[1] in {
+        'clinic_group_agreement', 'clinic_nonparticipation_rule', 'clinic_attested_phcs_roster'})
+    if network_changed or saved_fep_standard_office_needs_reprice(result):
+        payer_id = str((case.get('previsit_context') or {}).get('payer_id') or '')
+        route = group_contract_support.eligibility_route(result, payer_id, route_payer)
+        _reprice_saved_new_network(result, case, practice_id, route)
 
 
 def refresh_saved_cross_payer_planning(result: dict, case: dict, practice_id: str, route_payer: dict | None) -> None:

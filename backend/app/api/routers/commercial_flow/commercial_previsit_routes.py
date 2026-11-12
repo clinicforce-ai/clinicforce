@@ -20,7 +20,7 @@ async def saved_previsit(case_id: str, request: _api.Request) -> dict:
     Coverage verification does not imply that a price is available.
     evidence_resolution reports each field's source findings and precise
     remaining action after the shared estimator evaluates saved evidence.
-    A saved read projects the current network rule without a payer call or write.
+    Saved reads project current network rules; an intact protected 2026 FEP Blue Standard response can refresh a Preferred $40 office copay and deductible waiver under current clinic policy without a payer call or write.
     benefits.reported_secondary_payer names one dated, patient-bound medical
     271 secondary payer; it does not verify Medicare entitlement or claim order.
     Fresh saved Cigna responses are reparsed without treating an exact
