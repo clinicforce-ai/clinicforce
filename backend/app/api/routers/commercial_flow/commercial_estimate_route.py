@@ -7,7 +7,6 @@ from app.api.routers.commercial_flow.commercial_previsit_reuse import reuse_prev
 from app.api.routers.commercial_flow.commercial_previsit_submit import submit_previsit_eligibility
 from app.api.routers.commercial_flow.commercial_recovery_cards import _prepare_independent_ecw_check, _unique_ecw_member_conflict
 from app.api.routers.commercial_flow.commercial_previsit_appointment import load_previsit_appointment
-
 @_api.router.post("/appointments/previsit", description=(
     "Estimate a patient-bound eCW visit. For a confirmed eCW patient, card retrieval and OCR overlap the appointment read, but card comparison still finishes before a new Stedi request. Insurance checking opens 31 calendar days before the appointment in the practice timezone; later coverage start dates and staff holds can defer it. An existing saved visit can be re-read by its original service date after its start time; cancelled encounters remain excluded. Compatible saved payer evidence is reused without another "
     "eligibility request. A card-supplied group that matches a fresh, patient-bound saved payer "
