@@ -219,6 +219,88 @@ def test_blue_ppo_family_only_office_quote_collects_deductible_first_without_sta
         assert collection_guidance.build(blocked)['amount_cents'] is None
 
 
+def test_blue_ppo_family_only_emg_quote_prices_every_selected_unit():
+    result = scenario()
+    result.pop('collection_policy')
+    result.update(payer='Blue Cross Blue Shield Tx', service_date='2026-11-12',
+        nmct_bcbstx_refundable_advance_enabled=True, stedi_payer={'id': 'QDTRP'},
+        cpt_authorization={'state': 'complete', 'pos': '11', 'network': 'in_network',
+                           'patient_binding': 'synthetic-current-binding'},
+        plan_details={'stedi': {'names': ['PREFERRED PROVIDER OPTION MEDICAL']}},
+        selected_ids=['ncs', 'emg'],
+        codes=[{'id': 'ncs', 'code': '95908', 'units': 1, 'modifiers': []},
+               {'id': 'emg', 'code': '95886', 'units': 2, 'modifiers': []}],
+        temporary_rate_reference={'complete': True, 'lines': [
+            {'id': 'ncs', 'code': '95908', 'units': 1, 'modifiers': [],
+             'unit_reference_cents': 10511, 'source_reference': 'library:synthetic-ncs'},
+            {'id': 'emg', 'code': '95886', 'units': 2, 'modifiers': [],
+             'unit_reference_cents': 8918, 'source_reference': 'library:synthetic-emg'}]})
+    options = [
+        {'kind': 'deductible', 'service_type_code': '30', 'coverage_level': 'FAMILY',
+         'network': 'IN_NETWORK', 'plan_association': 'medical', 'plan_index': 0,
+         'time_period': 'REMAINING', 'amount_cents': 373975},
+        {'kind': 'out_of_pocket', 'service_type_code': '30', 'coverage_level': 'FAMILY',
+         'network': 'IN_NETWORK', 'plan_association': 'medical', 'plan_index': 0,
+         'time_period': 'REMAINING', 'amount_cents': 658975},
+        *[{'kind': 'coinsurance', 'service_type_code': '73', 'procedure_code': code,
+           'coverage_level': 'INDIVIDUAL', 'network': 'IN_NETWORK',
+           'plan_association': 'medical', 'plan_index': 0, 'percent': '20.0'}
+          for code in ('95908', '95886')]]
+    result['benefits'].update(service_date_matches=True, reported_options=options)
+    result['price_range'].update(complete=False, patient_min_cents=None,
+                                 patient_max_cents=None, lines=[])
+    for code in result['codes']:
+        result['price_range']['lines'].append({**code, 'calculation': None,
+            'allowed_cents': None, 'rate_resolution': {'status': 'RATE_UNAVAILABLE'},
+            'benefits': {'active': True, 'network_status': 'in_network',
+                         'coinsurance_percent': '20.0', 'copay_cents': None,
+                         'deductible_remaining_cents': None, 'oop_remaining_cents': None,
+                         'deductible_applies': None, 'reported_options': options}})
+    guidance = collection_guidance.build(result)
+    assert guidance['collection_rule']['mode'] == 'blue_ppo_family_deductible_quote'
+    assert guidance['amount_cents'] == 28347
+    assert encounter_summary.build({**result, 'collection_guidance': guidance})['collect_today_cents'] == 28347
+    assert collection_guidance.build(result, {'payments': {'reference': 'synthetic-receipt',
+        'amount_cents': 2000}})['amount_cents'] == 26347
+    no_inquiry = deepcopy(result)
+    no_inquiry['cpt_authorization'] = {}
+    no_inquiry['appointment_context'] = {'place_of_service': '11'}
+    no_inquiry['benefits']['service_date_matches'] = None
+    assert collection_guidance.build(no_inquiry)['amount_cents'] == 28347
+    with_office = deepcopy(result)
+    with_office['codes'].append({'id': 'office', 'code': '99203', 'units': 1, 'modifiers': []})
+    with_office['selected_ids'].append('office')
+    with_office['price_range']['lines'].append({
+        **with_office['codes'][-1], 'calculation': None, 'allowed_cents': None,
+        'rate_resolution': {'status': 'RATE_UNAVAILABLE'},
+        'benefits': {**result['price_range']['lines'][0]['benefits']}})
+    with_office['temporary_rate_reference']['lines'].append({
+        'id': 'office', 'code': '99203', 'units': 1, 'modifiers': [],
+        'unit_reference_cents': 10117, 'source_reference': 'library:synthetic-office'})
+    with_office['benefits']['reported_options'].append({
+        'kind': 'coinsurance', 'service_type_code': '98', 'coverage_level': 'INDIVIDUAL',
+        'network': 'IN_NETWORK', 'plan_association': 'medical', 'plan_index': 0,
+        'percent': '20.0', 'payer_note': 'BENEFITCLASS-SPECIALIST'})
+    assert collection_guidance.build(with_office)['amount_cents'] == 38464
+    for mutation in (
+        lambda value: value['temporary_rate_reference']['lines'].pop(),
+        lambda value: value['benefits']['reported_options'].append({
+            'kind': 'out_of_pocket', 'service_type_code': '30', 'coverage_level': 'INDIVIDUAL',
+            'network': 'IN_NETWORK', 'plan_association': 'medical', 'plan_index': 0,
+            'time_period': 'REMAINING', 'amount_cents': 0}),
+        lambda value: value['benefits']['reported_options'].append({
+            'kind': 'copay', 'service_type_code': '73', 'procedure_code': '95886',
+            'network': 'IN_NETWORK', 'plan_association': 'medical', 'plan_index': 0,
+            'amount_cents': 2000}),
+        lambda value: value['price_range']['lines'][1]['benefits'].update(
+            coinsurance_percent='30.0'),
+        lambda value: value['appointment_context'].update(place_of_service='02'),
+    ):
+        blocked = deepcopy(no_inquiry)
+        mutation(blocked)
+        assert collection_guidance.build(blocked)['amount_cents'] is None
+
+
 def test_trs_hd_office_missing_accumulators_uses_refundable_fee_deposit():
     result = scenario()
     result.pop('collection_policy')
