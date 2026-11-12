@@ -173,6 +173,8 @@ def _finish_previsit(result: dict, case: dict, inputs: dict, source: dict, paylo
     labels = {'refresh_context': 'Visit details', 'selected_ids': 'Services', 'confirmed_units': 'Service quantities', 'payment_mode': 'Payment method',
               'cash_selection': 'Cash package', 'cash_visit_quote': 'Visit cash quote',
               'clear_cash_visit_quote': 'Visit cash quote removed',
+              'insurance_office_deposit': 'Visit refundable office deposit',
+              'clear_insurance_office_deposit': 'Visit refundable office deposit removed',
               'emg_required': 'EMG testing', 'insurance_check_from': 'Insurance checking date', 'verification': 'Benefit or approval evidence',
               'identity_confirmation': 'Patient identity', 'product_mapping': 'Plan mapping',
               'payer_allowance': 'Payer allowed amount',
@@ -204,6 +206,11 @@ def _finish_previsit(result: dict, case: dict, inputs: dict, source: dict, paylo
     result['payer_allowances'] = {key: {field: quote.get(field) for field in
         ('unit_allowed_cents', 'channel', 'reference', 'valid_through', 'verified_at')}
         for key, quote in (review.get('payer_allowances') or {}).items() if isinstance(quote, dict)}
+    result.pop('insurance_office_deposit', None)
+    deposit = review.get('insurance_office_deposit') or {}
+    if deposit:
+        result['insurance_office_deposit'] = {key: deposit.get(key) for key in
+            ('amount_cents', 'reference', 'approved_at')}
     if selected_ids:
         for row in result['codes']:
             if row.get('source') in {'conditional office E/M alternative', 'Contract service option'}:

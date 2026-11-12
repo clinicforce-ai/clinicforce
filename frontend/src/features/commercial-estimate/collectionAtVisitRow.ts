@@ -473,6 +473,10 @@ export function collectionAtVisitRow(
     row.detail =
       'Current Stedi benefits report this POS 11 specialist office copay. Provider participation for the exact product is still unconfirmed. Apply the advance to the processed claim and refund any excess.'
   }
+  if (result.collection_guidance?.basis === 'aetna_office_refundable_deposit') {
+    row.label = 'Refundable deposit at visit'
+    row.detail = result.collection_guidance.reason
+  }
   if (
     !model.cash &&
     !model.previousEstimate &&

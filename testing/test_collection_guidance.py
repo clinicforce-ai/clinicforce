@@ -800,6 +800,64 @@ def test_choice_pos_emg_family_cap_gives_zero_check_in_with_unresolved_order():
         assert collection_guidance.build(altered)['amount_cents'] is None
 
 
+def test_aetna_choice_office_deposit_requires_visit_approval_and_stays_separate_from_patient_share():
+    result = scenario()
+    result.pop('collection_policy')
+    result.update(payer='Aetna', service_date='2026-11-12',
+        plan_details={'stedi': {'names': ['Aetna Choice POS II']}},
+        appointment_context={'place_of_service': '11'},
+        selected_ids=['office'], codes=[{'id': 'office', 'code': '99213', 'units': 1, 'modifiers': []}])
+    result['benefits'].update(service_date_matches=True, family_oop_remaining_cents=28407)
+    result['price_range'].update(complete=False, patient_min_cents=None, patient_max_cents=None)
+    result['price_range']['lines'][0].update(code='99213', modifiers=[], allowed_cents=None,
+        calculation=None, benefits={'active': True, 'service_date_matches': True,
+            'deductible_applies': False, 'family_oop_remaining_cents': 28407,
+            'requirements': {kind: {'required': 'unknown', 'cleared': False}
+                             for kind in ('referral', 'authorization')}})
+    review = {'context_token': 'synthetic-visit-token'}
+    assert collection_guidance.build(result, review)['amount_cents'] is None
+    review['insurance_office_deposit'] = {
+        'amount_cents': 7553, 'reference': 'Availity MPPO Office 99213 lookup 2026-11-12',
+        'approved_at': '2026-11-12T12:00:00Z', 'actor_id': 'synthetic-admin',
+        'schedule': 'MPPO', 'line_id': 'office', 'service_date': '2026-11-12',
+        'context_token': 'synthetic-visit-token', 'patient_binding': 'synthetic-current-binding'}
+    guidance = collection_guidance.build(result, review)
+    assert guidance['amount_cents'] == 7553
+    assert guidance['basis'] == 'aetna_office_refundable_deposit'
+    summary = encounter_summary.build({**result, 'collection_guidance': guidance}, review)
+    assert summary['collect_today_cents'] == 7553
+    assert summary['estimated_total_patient_min_cents'] is None
+    assert 'not this member' in amount_explanation.build({**result, 'encounter_summary': summary}, guidance, review)['sentence']
+    review['payments'] = {'amount_cents': 2000, 'reference': 'synthetic-receipt'}
+    paid_guidance = collection_guidance.build(result, review)
+    assert paid_guidance['amount_cents'] == 5553
+    assert encounter_summary.build({**result, 'collection_guidance': paid_guidance}, review)['collect_today_cents'] == 5553
+    for mutate in (
+        lambda case: case['plan_details']['stedi'].update(names=['Aetna Medicare PPO']),
+        lambda case: case['codes'][0].update(modifiers=['25']),
+        lambda case: case['benefits'].update(has_secondary=True),
+        lambda case: case['benefits'].update(family_oop_remaining_cents=5000),
+        lambda case: case['price_range']['lines'][0]['benefits'].update(copay_cents=3000),
+    ):
+        changed = deepcopy(result)
+        mutate(changed)
+        assert collection_guidance.build(changed, review)['amount_cents'] is None
+
+
+def test_aetna_office_deposit_input_requires_explicit_approval_and_positive_cents():
+    from pydantic import ValidationError
+    from app.api.schemas.commercial import InsuranceOfficeDepositInput
+
+    valid = {'amount_cents': 7553,
+             'reference': 'Availity MPPO Office 99213 lookup 2026-11-12',
+             'approve_refundable_deposit': True}
+    assert InsuranceOfficeDepositInput.model_validate(valid).amount_cents == 7553
+    for change in ({'amount_cents': 0}, {'amount_cents': 75.53},
+                   {'approve_refundable_deposit': False}, {'approve_refundable_deposit': None}):
+        with pytest.raises(ValidationError):
+            InsuranceOfficeDepositInput.model_validate({**valid, **change})
+
+
 def test_supported_copay_advance_does_not_promise_later_member_billing():
     result = scenario(3000)
     result['arrival_collection'] = {'amount_cents': 3000, 'status': 'copay_only'}

@@ -16,6 +16,7 @@ import PublishedPlanBenefit from './PublishedPlanBenefit'
 import UhcMedicarePpoBenefitTable from './UhcMedicarePpoBenefitTable'
 import CommercialCostBreakdown from './CommercialCostBreakdown'
 import CommercialCashQuoteForm from './CommercialCashQuoteForm'
+import CommercialInsuranceDepositForm from './CommercialInsuranceDepositForm'
 import { AvailityArrivalAmount, AvailityVisitTable } from './AvailityVisitPlanning'
 import { availityVisitPlanning } from './availityVisitPlanning'
 export default function CommercialOverview({
@@ -162,6 +163,7 @@ export default function CommercialOverview({
         )}
       </div>
       <CommercialCashQuoteForm model={model} result={result} />
+      <CommercialInsuranceDepositForm model={model} result={result} />
       {texasMedicareEnrollmentMissing && (
         <p className="visit-notice medicare-enrollment-notice" role="status">
           <strong>

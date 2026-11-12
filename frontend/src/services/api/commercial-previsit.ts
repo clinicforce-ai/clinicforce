@@ -107,6 +107,11 @@ export type PrevisitEstimate = {
     message: string
   }
   collection_guidance?: CollectionGuidance
+  insurance_office_deposit?: {
+    amount_cents: number
+    reference: string
+    approved_at: string
+  }
   encounter_summary?: {
     collect_today_cents: number | null
     estimated_total_patient_min_cents: number | null

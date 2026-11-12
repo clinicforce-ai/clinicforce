@@ -220,6 +220,12 @@ export type VisitReview = {
   payment_mode?: 'cash' | 'insurance'
   cash_visit_quote?: { amount_cents: number; reason: string }
   clear_cash_visit_quote?: boolean
+  insurance_office_deposit?: {
+    amount_cents: number
+    reference: string
+    approve_refundable_deposit: true
+  }
+  clear_insurance_office_deposit?: boolean
   cash_selection?: string
   selected_ids?: string[]
   confirmed_units?: Record<string, number>

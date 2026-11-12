@@ -1,6 +1,7 @@
 """Commercial review routes workflow."""
 from __future__ import annotations
 
+import re
 from uuid import uuid4
 
 from app.api.routers import commercial_estimator as _api
@@ -17,6 +18,9 @@ async def update_visit_review(case_id: str, value: _api.VisitReviewInput, reques
     them. It never replaces the preview with an office visit. A clinician can also
     approve a visit-only cash price for one selected CPT 99213 follow-up;
     included care is priced once and source CPT examples are never auto-selected.
+    For a confirmed Aetna Choice POS II office CPT 99213, an administrator can
+    approve a visit-only refundable deposit from a dated Availity MPPO office
+    fee reference. This is separate from the payer allowance and patient share.
     A verified payment is deducted once from the displayed cash or insured
     amount. The returned and saved payment_explanation describes only the
     known amount; unpriced CPTs stay unresolved. An administrator can record
@@ -60,7 +64,8 @@ async def update_visit_review(case_id: str, value: _api.VisitReviewInput, reques
         raise _api.HTTPException(409, 'Coverage recovery is still in progress. Wait for the result before changing the estimate.')
     if failed and (value.verification or value.payments_received_cents is not None or value.identity_confirmation
                    or value.billing_protection
-                   or value.product_mapping or value.payer_allowance or value.clear_payer_allowance_line_id):
+                   or value.product_mapping or value.payer_allowance or value.clear_payer_allowance_line_id
+                   or value.insurance_office_deposit):
         raise _api.HTTPException(409, 'Complete the eligibility check before verifying benefits or recording payments against an insurance estimate.')
     try:
         checked = _api.datetime.now(_api.timezone.utc) if failed else _api.datetime.fromisoformat(case['previsit']['checked_at'])
@@ -202,6 +207,8 @@ async def update_visit_review(case_id: str, value: _api.VisitReviewInput, reques
         review['insurance_check_from'] = value.insurance_check_from.isoformat()
     if value.payment_mode is not None:
         review['payment_mode'] = value.payment_mode
+        if value.payment_mode == 'cash':
+            review.pop('insurance_office_deposit', None)
     if value.cash_selection is None and (value.selected_ids is not None or value.confirmed_units is not None):
         review['cash_selection'] = ''
     if value.cash_selection is not None:
@@ -234,8 +241,10 @@ async def update_visit_review(case_id: str, value: _api.VisitReviewInput, reques
                 (review.get('payer_allowances') or {}).pop(key, None)
         review['confirmed_modifiers'] = {**previous, **value.confirmed_modifiers}
         review.pop('payments', None)
-    if any(item is not None for item in (value.selected_ids, value.confirmed_units, value.confirmed_modifiers)):
+    if any(item is not None for item in (value.selected_ids, value.confirmed_units, value.confirmed_modifiers,
+                                        value.emg_required, value.separate_em_planned)):
         review.pop('cash_visit_quote', None)
+        review.pop('insurance_office_deposit', None)
     if value.cash_visit_quote and value.clear_cash_visit_quote:
         raise _api.HTTPException(422, 'Set or remove the visit cash quote, not both.')
     if value.clear_cash_visit_quote:
@@ -258,6 +267,46 @@ async def update_visit_review(case_id: str, value: _api.VisitReviewInput, reques
             'service_date': inputs['service_date'], 'context_token': value.context_token,
             'approved_at': _api._now(), 'actor_id': session['staff']['id']}
         review.pop('payments', None)
+    if value.insurance_office_deposit or value.clear_insurance_office_deposit:
+        _api._admin(session)
+        if value.insurance_office_deposit and value.clear_insurance_office_deposit:
+            raise _api.HTTPException(422, 'Set or remove the office deposit, not both.')
+        if value.clear_insurance_office_deposit:
+            review.pop('insurance_office_deposit', None)
+        else:
+            current = _api._case_benefits(payload, inputs, source, case)
+            identity = current.get('identity') or {}
+            names = _api.commercial.plan_details(payload).get('names') or []
+            selected = review.get('selected_ids') or []
+            line = available.get(selected[0]) if len(selected) == 1 else None
+            units = (review.get('confirmed_units') or {}).get(selected[0], line.get('units')) if line else None
+            modifiers = (review.get('confirmed_modifiers') or {}).get(selected[0], line.get('modifiers') or []) if line else []
+            if (failed or review.get('payment_mode', result.get('payment_mode')) == 'cash'
+                    or str(result.get('payer') or '').strip().casefold() != 'aetna'
+                    or names != ['Aetna Choice POS II']
+                    or current.get('active') is not True or current.get('service_date_matches') is not True
+                    or not _api.insurance_identity.patient_benefits_bound(identity)
+                    or current.get('has_secondary') or current.get('network_conflict')
+                    or current.get('coverage_status_conflict') or current.get('coverage_dates_invalid')
+                    or current.get('source_errors') or inputs.get('place_of_service') != '11'
+                    or not line or line.get('code') != '99213' or units != 1 or modifiers):
+                raise _api.HTTPException(422, 'Confirm one covered, patient-bound Aetna Choice POS II office CPT 99213 without a modifier before approving a deposit.')
+            reference = value.insurance_office_deposit.reference.strip()
+            lookup_dates = re.findall(r'\b20\d{2}-\d{2}-\d{2}\b', reference)
+            if ('MPPO' not in reference.upper() or 'AVALITY' not in reference.upper()
+                    or len(lookup_dates) != 1):
+                raise _api.HTTPException(422, 'Reference the Availity MPPO Open Choice office fee lookup and one YYYY-MM-DD lookup date.')
+            try:
+                lookup_date = _api.date.fromisoformat(lookup_dates[0])
+            except ValueError:
+                raise _api.HTTPException(422, 'Enter a valid YYYY-MM-DD Availity lookup date.') from None
+            if lookup_date > _api.date.today():
+                raise _api.HTTPException(422, 'The Availity lookup date cannot be in the future.')
+            review['insurance_office_deposit'] = {
+                'line_id': selected[0], 'amount_cents': value.insurance_office_deposit.amount_cents,
+                'reference': reference, 'schedule': 'MPPO', 'service_date': inputs['service_date'],
+                'context_token': value.context_token, 'patient_binding': identity['binding'],
+                'approved_at': _api._now(), 'actor_id': session['staff']['id']}
     if value.payer_allowance or value.clear_payer_allowance_line_id:
         _api._admin(session)
         if value.payer_allowance and value.clear_payer_allowance_line_id:

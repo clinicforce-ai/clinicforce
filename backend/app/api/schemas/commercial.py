@@ -214,6 +214,13 @@ class CashVisitQuoteInput(BaseModel):
     reason: str = Field(min_length=3, max_length=200)
 
 
+class InsuranceOfficeDepositInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    amount_cents: StrictInt = Field(ge=1, le=100_000_000, description='Visit-only refundable clinic deposit for one office CPT 99213; not an Aetna allowed amount or patient share.')
+    reference: str = Field(min_length=10, max_length=300, description='Administrator-reviewed Availity MPPO office fee lookup reference, including lookup date.')
+    approve_refundable_deposit: Literal[True] = Field(description='Explicit administrator approval to collect this visit-only refundable deposit and refund any excess after the claim.')
+
+
 class VisitReviewInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
     context_token: str = Field(min_length=64, max_length=64)
@@ -223,6 +230,8 @@ class VisitReviewInput(BaseModel):
     payment_mode: Literal["insurance", "cash"] | None = None
     cash_visit_quote: CashVisitQuoteInput | None = Field(default=None, description='Clinician-approved cash price and reason for a single selected CPT 99213 follow-up. This visit-only quote does not change the practice cash schedule or establish insurance eligibility.')
     clear_cash_visit_quote: bool | None = None
+    insurance_office_deposit: InsuranceOfficeDepositInput | None = Field(default=None, description='Administrator-approved visit-only refundable deposit based on an Availity MPPO Open Choice office fee reference. It does not establish the Aetna Choice POS II allowed amount or final patient share.')
+    clear_insurance_office_deposit: bool | None = None
     emg_required: bool | None = None
     separate_em_planned: bool | None = Field(default=None, description='For an established EMG/NCS visit, include a separate planned follow-up office assessment. The review adds provisional CPT 99213 when no office CPT is selected; clearing it removes the added office selection. Final level, distinct documentation and modifier remain clinician decisions.')
     insurance_check_from: date | None = None

@@ -289,6 +289,8 @@ def build(result: dict, guidance: dict, review: dict | None = None) -> dict:
         elif basis == 'qmb_protection':
             sentence, code = ('Collect $0 now because confirmed QMB protection prohibits Medicare cost-sharing collection; any other liability requires separate covered-service and claim evidence', 'qmb_protected')
         elif basis == 'healthselect_ma_zero_televisit': sentence, code = ('Collect $0 now: this matched UHC HealthSelect Medicare Advantage PPO reports a $0 virtual-visit copay and 0% coinsurance, with no annual medical deductible. The proposed code, payer order and final claim remain open', basis)
+        elif basis == 'aetna_office_refundable_deposit':
+            sentence, code = (f'Collect {_money(amount)} as the administrator-approved refundable office deposit for CPT 99213. The Availity MPPO office fee maximum is a reference, not this member’s confirmed Aetna allowance or final patient share; apply the deposit to the processed claim and refund any excess', basis)
         elif basis in {'bcbstx_proxy_advance', 'bcbstx_refundable_advance'}:
             sentence, code = (f'Collect {_money(amount)} as the clinic-approved BCBS Texas fee proxy advance for the planned diagnostic services; the UHC allowed amount and final claim share remain unknown' if basis == 'bcbstx_proxy_advance' else
                 f'Collect {_money(amount)} as a refundable deposit using the clinic BCBS Texas CPT 99203 fee reference; remaining balances were not returned and final patient liability follows the processed claim' if (guidance.get('collection_rule') or {}).get('mode') == 'trs_hd_office_refundable_deposit' else
