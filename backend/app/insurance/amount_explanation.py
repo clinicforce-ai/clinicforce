@@ -52,9 +52,9 @@ def _cash_cause(result: dict, failure: dict, recovery: dict, card: dict, network
         return 'the payer returned both active and inactive or noncovered status for the planned service', 'coverage_status_conflict'
     if benefits.get('coverage_dates_invalid'):
         return 'the payer returned a coverage date that cannot be interpreted for this visit', 'coverage_date_invalid'
-    if (((result.get('plan_details') or {}).get('stedi') or {}).get('identified_product') == 'FEP Blue Basic PSHB'
-            and active_benefits and network == 'unknown'):
-        return ('FEP Blue Basic PSHB is identified, but this rendering provider has no verified FEP Preferred participation for the visit',
+    fep_product = ((result.get('plan_details') or {}).get('stedi') or {}).get('identified_product')
+    if fep_product in {'FEP Blue Basic PSHB', 'FEP Blue Standard FEHB'} and active_benefits and network == 'unknown':
+        return (f'{fep_product} is identified, but this rendering provider has no supported FEP Preferred participation for the visit',
                 'fep_preferred_unresolved')
     if reason in {'no_coverage_found', 'upstream_no_policies'} and not active_benefits:
         return 'the completed insurance search returned no policy for this patient', 'no_policy_returned'
@@ -280,8 +280,8 @@ def build(result: dict, guidance: dict, review: dict | None = None) -> dict:
             elif network == 'out_of_network' and not ma_ppo:
                 sentence += ', while any extra doctor charge remains unknown'
             code = 'office_copay_partial' if unpriced else 'office_copay'
-            if basis == 'office_copay' and identified_product == 'FEP Blue Basic PSHB' and amount > 0:
-                sentence = (f'Collect {_money(amount)} as the 2026 FEP Blue Basic PSHB Preferred specialist office copay; '
+            if basis == 'office_copay' and identified_product in {'FEP Blue Basic PSHB', 'FEP Blue Standard FEHB'} and amount > 0:
+                sentence = (f'Collect {_money(amount)} as the 2026 {identified_product} Preferred specialist office copay; '
                             'the final E/M level and any additional services follow the documented care and claim')
         elif basis == 'out_of_pocket_limit':
             sentence, code = (f"Collect $0 now because {guidance.get('reason', 'the applicable in-network out-of-pocket limit has no remaining balance').rstrip('.').lower()}", 'oop_limit_met')
@@ -383,10 +383,10 @@ def build(result: dict, guidance: dict, review: dict | None = None) -> dict:
             sentence, code = (f'The provisional patient share is {_money(proxy["patient_share_cents"])} using BCBS Texas fees and {scope}; the Cigna allowed amount and check-in charge remain unconfirmed, so no amount is authorized for collection',
                               'cigna_fee_proxy_provisional')
         elif guidance.get('published_copay_policy_missing'):
-            sentence, code = ('The 2026 FEP Blue Basic PSHB Preferred specialist copay is supported, but no approved clinic policy authorizes its collection at check-in',
+            sentence, code = (f'The 2026 {identified_product or "published plan"} Preferred specialist copay is supported, but no approved clinic policy authorizes its collection at check-in',
                               'collection_policy_approval_required')
-        elif identified_product == 'FEP Blue Basic PSHB' and network == 'unknown' and benefits.get('active') is True:
-            sentence, code = ('FEP Blue Basic PSHB coverage is active, but the rendering provider’s FEP Preferred status is not established for this visit, so no insured amount is ready',
+        elif identified_product in {'FEP Blue Basic PSHB', 'FEP Blue Standard FEHB'} and network == 'unknown' and benefits.get('active') is True:
+            sentence, code = (f'{identified_product} coverage is active, but the rendering provider’s FEP Preferred status is not established for this visit, so no insured amount is ready',
                               'fep_preferred_unresolved')
         elif guidance.get('positive_advance_policy_missing'):
             sentence, code = ('The patient share is estimated, but this payer route has no approved policy for that check-in advance',

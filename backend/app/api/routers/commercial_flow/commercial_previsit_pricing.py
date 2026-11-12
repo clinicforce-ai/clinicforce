@@ -8,7 +8,7 @@ from app.api.routers.commercial_flow.commercial_previsit_service_scope import re
 from app.api.routers.commercial_flow.commercial_previsit_context import ecw_case_data as _ecw_case_data
 from app.api.routers.commercial_flow.commercial_previsit_context import past_visit_with_saved_estimate as _past_visit_with_saved_estimate
 from app.api.routers.commercial_flow.commercial_previsit_tpa import merge_administrator_benefits
-from app.insurance import botox_review, cms_locality, cms_pfs, cpt_rules, insurance_product, inventory_certification, library_network_exclusions, group_contract_support
+from app.insurance import botox_review, cms_locality, cms_pfs, cpt_rules, fep_preferred, insurance_product, inventory_certification, library_network_exclusions, group_contract_support
 from app.insurance.stedi_benefits.payer_order import primary_secondary_order
 from app.insurance.stedi_benefits.linked import merge_linked_medical_oop
 from app.api.routers.commercial_flow.commercial_previsit_medicare import bind as bind_medicare_part_b
@@ -98,7 +98,8 @@ def _benefit_context(inputs: dict, source: dict) -> dict:
 
 def _previsit_range(practice_id: str, inputs: dict, source: dict, payer_id: str,
                     codes: list[dict], benefits: dict, *, payload: dict | None = None,
-                    review: dict | None = None, payer_route_id: str | None = None) -> tuple[dict | None, list[str]]:
+                    review: dict | None = None, payer_route_id: str | None = None,
+                    network_evidence: dict | None = None) -> tuple[dict | None, list[str]]:
     review = review or {}
     if (payload and benefits.get('network_status') == 'out_of_network'
             and any(str(benefits.get(source) or '').startswith('stc30:')
@@ -111,13 +112,12 @@ def _previsit_range(practice_id: str, inputs: dict, source: dict, payer_id: str,
     selected = [row for row in codes if 'selected_ids' not in review or row.get("id") in review['selected_ids']]
     office_types = _api._office_service_types(practice_id, source)
     rates, rules, issues = [], {'office_service_types': office_types, **_api._benefit_context(inputs, source)}, []
-    fep_product = ((benefits.get('plan_details') or {}).get('identified_product') == 'FEP Blue Basic PSHB'
+    fep_name = (benefits.get('plan_details') or {}).get('identified_product')
+    fep_product = (fep_name in {'FEP Blue Basic PSHB', 'FEP Blue Standard FEHB'}
                    and source.get('payer_plan_bound') is True
-                   and source.get('payer_plan_names') == ['FEP Blue Basic PSHB'])
-    rules['fep_preferred_verified'] = bool(fep_product and
-        benefits.get('network_source') == 'payer_participation_message' and
-        _api.network_participation.verified_in_network(benefits) and
-        benefits.get('network_provider_npi') == rules.get('provider_npi') and rules.get('provider_npi'))
+                   and source.get('payer_plan_names') == [fep_name])
+    rules['fep_preferred_verified'] = fep_preferred.provider_verified(
+        benefits, source, inputs, rules, network_evidence)
     if rules['provider_npi_conflict']:
         issues.append('The eCW rendering NPI conflicts with the selected visit provider; resolve it before pricing.')
     medical_names = (benefits.get('plan_details') or {}).get('names') or []
@@ -386,7 +386,8 @@ def _attach_previsit_pricing(result: dict, practice_id: str, inputs: dict, sourc
                 source, result.get('network_evidence') or {}, payer_connections, payer_id)
             result['price_range'], issues = _api._previsit_range(
                 practice_id, inputs, priced_source, priced_payer_id, result['codes'], benefits,
-                payload=payload, review=review, payer_route_id=payer_id)
+                payload=payload, review=review, payer_route_id=payer_id,
+                network_evidence=result.get('network_evidence'))
             result['issues'].extend(issues)
             attach_blue_cross_reference_if_unpriced(result, practice_id, inputs, source, payer_name)
             return
@@ -493,6 +494,7 @@ def _attach_previsit_pricing(result: dict, practice_id: str, inputs: dict, sourc
     if benefits.get('network_source') == 'clinic_group_agreement':
         priced_source = group_contract_support.prebooking_pricing_source(priced_source, result.get('network_evidence') or {})
     result["price_range"], issues = _api._previsit_range(practice_id, inputs, priced_source, connection["id"], result["codes"], benefits,
-                                                  payload=payload, review=review, payer_route_id=payer_id)
+                                                  payload=payload, review=review, payer_route_id=payer_id,
+                                                  network_evidence=result.get('network_evidence'))
     result["issues"].extend(issues)
     attach_blue_cross_reference_if_unpriced(result, practice_id, inputs, source, payer_name)

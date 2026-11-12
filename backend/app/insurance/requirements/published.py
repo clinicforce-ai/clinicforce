@@ -8,11 +8,12 @@ from app.insurance import cpt_rules, stedi_cpt_authorization
 from app.insurance.identity import generic_plan_label, payer_identity_verified
 from app.insurance.library_network_exclusions import product_kind
 from app.insurance.requirements.evidence import _key
+from app.insurance.requirements.fep_sources import FEP_PSHB_2026_SOURCE, FEP_STANDARD_2026_SOURCE
 BCBSTX_PAYER_NAMES = {'bcbstx', 'bcbstexas', 'bluecrossblueshieldoftexas',
                       'bluecrossandblueshieldoftexas', 'bluecrossblueshieldtx',
                       'bluecrossblueshieldtexas'}
 # Saved estimates re-evaluate requirement decisions when a published rule changes.
-PUBLISHED_RULESET_VERSION = '2026-11-06-prudent-buyer-office-v13'
+PUBLISHED_RULESET_VERSION = '2026-11-12-fep-standard-office-v14'
 BLUECARD_PPO_REFERRAL_SOURCE = {
     'label': 'BCBSTX BlueCard provider manual, PPO definition',
     'url': 'https://www.bcbstx.com/content/dam/hcsc/docs/provider/tx/claims/bluecard/bluecard-program-prov-manual.pdf',
@@ -190,13 +191,6 @@ BCBSTX_2026_PA_SOURCE = {
     'source_version': '2026 code list, updated October 2026', 'verified_at': '2026-10-21',
     'effective_from': '2026-01-01', 'effective_to': '2026-12-31',
 }
-FEP_PSHB_2026_SOURCE = {
-    'label': '2026 OPM PSHB Service Benefit Plan brochure, Sections 3 and 5(a)',
-    'url': 'https://www.opm.gov/healthcare-insurance/healthcare/plan-information/plans/BrochureJson?brochureNumber=71-020&year=2026',
-    'source_version': '2026 brochure 71-020', 'verified_at': '2026-10-21',
-    'effective_from': '2026-01-01', 'effective_to': '2026-12-31',
-}
-
 def _published_rule(kind: str, result: dict, context: dict, plans: list[str], codes: set[str]) -> dict | None:
     """Promote only independently checked, exact-scope research from the matrix."""
     benefits = result.get('benefits') or {}
@@ -360,13 +354,16 @@ def _published_rule(kind: str, result: dict, context: dict, plans: list[str], co
         if (kind == 'authorization' and office and codes <= {'99202', '99203', '99204', '99205', '99212', '99213', '99214', '99215'}
                 and str(context.get('pos') or '') == '11' and day >= '2026-10-01'):
             return rule('Not required', 'Routine office E/M is absent from the current Medicare Advantage prior authorization list; additional services need separate review.', HUMANA_2026_MA_PAL)
-    if product == 'fepbluebasicpshb':
+    if product in {'fepbluebasicpshb', 'fepbluestandardfehb'}:
+        source = FEP_PSHB_2026_SOURCE if product == 'fepbluebasicpshb' else FEP_STANDARD_2026_SOURCE
         if kind == 'referral':
-            return rule('Not required', 'The 2026 PSHB Service Benefit Plan does not require a PCP referral to see a specialist.', FEP_PSHB_2026_SOURCE)
-        if kind == 'authorization' and office and codes <= {'99212', '99213', '99214', '99215'} and str(context.get('pos') or '') == '11':
-            return rule('Not required', 'The 2026 PSHB brochure lists services requiring prior approval; a routine office E/M visit alone is outside those listed categories. Additional services require their own decision.', FEP_PSHB_2026_SOURCE)
+            return rule('Not required', 'The 2026 FEP Service Benefit Plan does not require a PCP referral to see a specialist.', source)
+        office_codes = ({'99212', '99213', '99214', '99215'} if product == 'fepbluebasicpshb' else
+                        {'99202', '99203', '99204', '99205', '99212', '99213', '99214', '99215'})
+        if kind == 'authorization' and office and codes <= office_codes and str(context.get('pos') or '') == '11':
+            return rule('Not required', 'The 2026 FEP brochure lists services requiring prior approval; a routine office E/M visit alone is outside those listed categories. Additional services require their own decision.', source)
         if kind == 'authorization':
-            return rule('Verification required', 'The 2026 PSHB brochure requires prior approval for selected services and drugs. Match each planned code and indication to its rule.', FEP_PSHB_2026_SOURCE, check=True)
+            return rule('Verification required', 'The 2026 FEP brochure requires prior approval for selected services and drugs. Match each planned code and indication to its rule.', source, check=True)
     if 'aetna' in names and in_network and day >= '2026-10-01' and product in {
             'openaccessmc', 'openaccessmanagedchoice', 'aetnaopenaccessmanagedchoice',
             'aetnaopenaccessmanagedchoicepos'}:

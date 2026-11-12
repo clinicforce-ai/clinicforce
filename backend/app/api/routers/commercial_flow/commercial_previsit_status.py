@@ -7,7 +7,7 @@ from app.insurance.collection.benefit_gates import uhc_choice_plus_zero_candidat
 from app.insurance import evidence_resolution, group_contract_support, published_plan_benefits
 from app.api.routers.commercial_flow.commercial_previsit_finish import _payer_plan_pricing_source
 from app.api.routers.commercial_flow.commercial_previsit_network_guard import recheck_saved_network_evidence, recheck_saved_payer_message
-from app.api.routers.commercial_flow.commercial_previsit_saved_pricing import _reprice_saved_new_network, guard_unresolved_telehealth, guard_telehealth_guidance, restore_active_blue_cross_insurance, retain_conflicted_insurance, refresh_saved_cigna_office_benefits, upgrade_saved_biopsy_preview, refresh_saved_cross_payer_planning, suppress_saved_ambiguous_combined_zero_oop
+from app.api.routers.commercial_flow.commercial_previsit_saved_pricing import guard_unresolved_telehealth, guard_telehealth_guidance, restore_active_blue_cross_insurance, restore_saved_fep_standard_product, retain_conflicted_insurance, refresh_saved_cigna_office_benefits, refresh_saved_network_pricing, upgrade_saved_biopsy_preview, refresh_saved_cross_payer_planning, suppress_saved_ambiguous_combined_zero_oop
 from app.api.routers.commercial_flow.commercial_previsit_requirements import refresh_saved_requirements
 from app.api.routers.commercial_flow.commercial_previsit_enrollment import _enrollment_failure
 from app.api.routers.commercial_flow.commercial_previsit_service_scope import retain_incomplete_service_evidence as _retain_incomplete_service_evidence
@@ -376,15 +376,11 @@ def _previsit_result(case: dict, practice_id: str | None = None) -> dict:
                         and policy.get('approved_at') and policy.get('reference')):
                     result['collection_policy'] = policy
         _recheck_saved_clinic_pricing(result, case, practice_id)
+        restore_saved_fep_standard_product(result, case)
         prior_network = ((result.get('benefits') or {}).get('network_status'),
                          (result.get('benefits') or {}).get('network_source'))
         recheck_saved_network_evidence(result, case, practice_id, route_payer)
-        if (prior_network != ((result.get('benefits') or {}).get('network_status'),
-                             (result.get('benefits') or {}).get('network_source'))
-                and (result.get('benefits') or {}).get('network_source') in {
-                    'clinic_group_agreement', 'clinic_nonparticipation_rule', 'clinic_attested_phcs_roster'}):
-            _reprice_saved_new_network(result, case, practice_id,
-                group_contract_support.eligibility_route(result, str(payer_id or ''), route_payer))
+        refresh_saved_network_pricing(result, case, practice_id, route_payer, prior_network)
         _recheck_saved_payer_allowance(result, case, practice_id)
         refresh_saved_requirements(_api, result, case, practice_id)
         refresh_saved_cross_payer_planning(result, case, practice_id, route_payer)

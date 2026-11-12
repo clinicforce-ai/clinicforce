@@ -13,7 +13,11 @@ export default function PublishedPlanBenefit({
   const product = result.plan_details?.stedi?.identified_product
   if (
     !show ||
-    !['FEP Blue Basic PSHB', 'Humana Value Choice PPO H7617-057'].includes(product || '') ||
+    ![
+      'FEP Blue Basic PSHB',
+      'FEP Blue Standard FEHB',
+      'Humana Value Choice PPO H7617-057',
+    ].includes(product || '') ||
     benefits?.active !== true ||
     !rule ||
     benefits.published_preferred_office_copay_cents == null
@@ -41,12 +45,15 @@ export default function PublishedPlanBenefit({
     <details className="financial-breakdown">
       <summary>Published plan rule</summary>
       <p className="visit-muted" aria-label="Published plan benefit">
-        Published 2026 FEP Blue Basic PSHB benefit:{' '}
+        Published 2026 {product} benefit:{' '}
         <strong>{money(benefits.published_preferred_office_copay_cents)}</strong> per Preferred
         specialist office visit. This applies only when the rendering provider is FEP Preferred and
         other plan conditions hold; it is not the confirmed amount to collect.
-        {benefits.deductible_applies === false &&
-          ' This plan has no annual medical deductible.'}{' '}
+        {product === 'FEP Blue Standard FEHB'
+          ? ' The office copay has no deductible; other services may.'
+          : benefits.deductible_applies === false
+            ? ' This plan has no annual medical deductible.'
+            : null}{' '}
         <a href={rule.url} target="_blank" rel="noreferrer">
           OPM plan source
         </a>

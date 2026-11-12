@@ -274,7 +274,7 @@ def _finish_previsit(result: dict, case: dict, inputs: dict, source: dict, paylo
                                                 {**exact_source, 'payer_plan_names': []})
             contract = _api._network_contract_evidence(session['practice_id'], network, profile, inputs['service_date'])
             if (network.get('network_name') and contract.get('document_id')
-                    and not (payer_plan.get('identified_product') == 'FEP Blue Basic PSHB'
+                    and not (payer_plan.get('identified_product') in {'FEP Blue Basic PSHB', 'FEP Blue Standard FEHB'}
                              and 'fep' not in network['network_name'].casefold())):
                 result['mapping_candidate'] = {'network': network['network_name'], 'products': exact_source['payer_plan_names'],
                                                'reference': network['evidence_reference'],

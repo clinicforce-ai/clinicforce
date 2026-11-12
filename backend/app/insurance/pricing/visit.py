@@ -171,7 +171,9 @@ def price_lines(codes: list[dict], rates: list[dict], benefits: dict, rules: dic
                                     'matched_candidate_count': len(matches),
                                     'source_checked': 'payer_out_of_network_rate_candidates' if out_of_network else 'scoped_active_contract_rate_candidates',
                                     'provider_network_verified': benefits.get('network_status') in {'in_network', 'out_of_network'}},
-                'benefit_source': '2026 OPM PSHB brochure' if applied.get('published_plan_rule') else
+                'benefit_source': ('2026 FEP Blue Standard brochure' if
+                                   (applied.get('published_plan_rule') or {}).get('label', '').startswith('2026 FEP Blue Standard') else
+                                   '2026 OPM PSHB brochure') if applied.get('published_plan_rule') else
                                   benefits.get('benefit_source') or (payload or {}).get('benefit_source') or ('Stedi' if payload is not None else None),
                 'benefit_verification': selection if selection_valid else None,
                 'benefit_basis': applied.get('benefit_label') or f'Service category {stc}' if stc else 'Service category needs mapping',
