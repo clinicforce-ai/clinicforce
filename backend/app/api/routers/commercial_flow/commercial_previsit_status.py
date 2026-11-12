@@ -3,6 +3,7 @@ from __future__ import annotations
 from app.api.routers import commercial_estimator as _api
 from app.insurance.identity import patient_benefits_bound, patient_plan_applies, payer_identity_verified
 from app.insurance.network_participation import verified_in_network, verified_out_of_network
+from app.insurance.collection.benefit_gates import uhc_choice_plus_zero_candidate
 from app.insurance import evidence_resolution, group_contract_support, published_plan_benefits
 from app.api.routers.commercial_flow.commercial_previsit_finish import _payer_plan_pricing_source
 from app.api.routers.commercial_flow.commercial_previsit_network_guard import recheck_saved_network_evidence, recheck_saved_payer_message
@@ -253,7 +254,11 @@ def _recheck_saved_clinic_pricing(result: dict, case: dict, practice_id: str) ->
     if not reason:
         return
     result.setdefault('issues', []).append(reason + ' Rerun the insured estimate with the current clinic configuration.')
-    if clinic_network:
+    # A changed CPT rate cannot change a zero check-in deferral supported by
+    # current contract participation and this member's family benefit cap.
+    rate_only_zero = (reason == 'The active clinic rate for a selected CPT changed since this saved estimate was calculated.'
+                      and uhc_choice_plus_zero_candidate(result))
+    if clinic_network and not rate_only_zero:
         benefits.update(network_status='unknown', network_source=None)
         result['network_evidence'] = {'reason': reason}
     price.update(complete=False, patient_min_cents=None, patient_max_cents=None,

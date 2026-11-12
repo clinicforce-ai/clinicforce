@@ -190,6 +190,19 @@ def test_met_family_oop_supports_zero_advance_without_copying_family_balances_to
     assert replay(raw)[0]['amount_cents'] is None
 
 
+def test_specific_office_network_copay_beats_mixed_network_duplicate():
+    raw = {'plans': [{'benefits': {'statuses': [row(stc='BY', status='ACTIVE_COVERAGE'),
+                                           row(stc='30', status='ACTIVE_COVERAGE')],
+        'coPayment': [row('0', stc='BY', messages=['HIGHEST BENEFIT']),
+                      row('0', stc='BY', network={'indicator': 'IN_AND_OUT_OF_NETWORK'})],
+        'outOfPocket': [row('0', stc='30', level='FAMILY', period='REMAINING')]}}]}
+    guidance, terms = replay(raw)
+    assert terms['copay_cents'] == 0
+    assert terms['copay_id'] == 'plans[0].benefits.coPayment[0]'
+    assert guidance['amount_cents'] == 0
+    assert guidance['basis'] == 'office_copay'
+
+
 def test_diagnostic_medical_family_oop_is_kept_away_from_office_care():
     raw = {'plans': [{'benefits': {'statuses': [
         {'status': 'ACTIVE_COVERAGE', 'service': {'system': 'STC', 'value': '30'},

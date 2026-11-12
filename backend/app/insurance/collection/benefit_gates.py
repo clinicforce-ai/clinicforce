@@ -3,6 +3,71 @@
 from datetime import date, timedelta
 
 from app.insurance.network_participation import verified_in_network
+from app.insurance.identity import patient_benefits_bound
+
+
+def uhc_choice_plus_zero_candidate(result: dict) -> bool:
+    """Recognize the one-office-visit Choice Plus family-cap deferral."""
+    benefits = result.get('benefits') or {}
+    price = result.get('price_range') or {}
+    lines = price.get('lines') or []
+    line_benefits = (lines[0].get('benefits') or {}) if len(lines) == 1 else {}
+    names = (((result.get('plan_details') or {}).get('stedi') or {}).get('names') or [])
+    identity = result.get('identity') or benefits.get('identity') or {}
+    options = benefits.get('reported_options') or []
+    card = result.get('card_check') or {}
+    office_copays = [row for row in options if row.get('kind') == 'copay'
+                     and row.get('service_type_code') == 'BY'
+                     and row.get('coverage_level') == 'INDIVIDUAL'
+                     and row.get('network') == 'IN_NETWORK']
+    family_deductibles = [row for row in options if row.get('kind') == 'deductible'
+                          and row.get('service_type_code') == '30'
+                          and row.get('coverage_level') == 'FAMILY'
+                          and row.get('time_period') in {'REMAINING', '29'}
+                          and row.get('network') == 'IN_NETWORK']
+    return (str(result.get('payer') or '').casefold().replace(' ', '') == 'unitedhealthcare'
+            and names == ['POS CHOICE PLUS']
+            and result.get('payment_mode') != 'cash'
+            and result.get('service_date') == str(result.get('checked_at') or '')[:10]
+            and (result.get('appointment_context') or {}).get('place_of_service') == '11'
+            and price.get('mode') == 'services' and not price.get('service_issues')
+            and len(lines) == 1 and lines[0].get('code') == '99203'
+            and lines[0].get('units') == 1 and not lines[0].get('modifiers')
+            and benefits.get('active') is True and benefits.get('service_date_matches') is not False
+            and line_benefits.get('active') is True
+            and line_benefits.get('service_date_matches') is not False
+            and line_benefits.get('network_status') != 'out_of_network'
+            and not line_benefits.get('coverage_status_conflict')
+            and line_benefits.get('family_oop_zero_applies') is True
+            and benefits.get('family_oop_zero_applies') is True
+            and benefits.get('family_oop_remaining_cents') == 0
+            and not benefits.get('separate_copay_limit')
+            and not benefits.get('has_secondary') and not benefits.get('network_conflict')
+            and not benefits.get('coverage_status_conflict') and not benefits.get('coverage_dates_invalid')
+            and not benefits.get('historical_only') and not benefits.get('source_errors')
+            and card.get('status') not in {'conflict', 'mismatch'}
+            and not card.get('conflicts') and not card.get('differences')
+            and result.get('refresh_requires_selection') is not True
+            and patient_benefits_bound(identity) and verified_in_network(benefits)
+            and office_copays and all(row.get('amount_cents') == 0 for row in office_copays)
+            and family_deductibles and all(row.get('amount_cents') == 0 for row in family_deductibles))
+
+
+def apply_uhc_choice_plus_family_oop_deferral(result: dict, guidance: dict, *,
+                                               adverse: bool, same_policy_conflict: bool,
+                                               source_errors: list) -> None:
+    if (not uhc_choice_plus_zero_candidate(result) or adverse or same_policy_conflict
+            or source_errors or guidance.get('amount_cents') not in {None, 0}):
+        return
+    guidance.update(amount_cents=0, status='zero_advance', basis='claim_after_service',
+        reason=('Collect $0 at check-in for the proposed CPT 99203 office visit. UHC reports a $0 office copay '
+                'and $0 remaining on the family in-network deductible and out-of-pocket maximum. '
+                'The BCBS Texas fee is a price reference, not a UHC allowance. Confirm that the performed '
+                'service is covered and counts toward the family maximum; final responsibility follows the claim.'),
+        patient_message='No payment is requested at arrival. Final responsibility follows the processed insurance claim.',
+        collection_rule={'mode': 'uhc_choice_plus_family_oop_deferral',
+                         'reference': 'UHC Choice Plus office and family medical benefits'})
+    guidance.pop('policy_setup_required', None)
 
 
 def prepare_benefit_evidence(benefits: dict, lines: list[dict]) -> tuple[dict, bool]:

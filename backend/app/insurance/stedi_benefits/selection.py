@@ -156,7 +156,10 @@ def select_benefit_rows(payload: dict[str, Any], service_type_code: str,
                 if place_of_service and any(row.get('placesOfService') for row in specialist):
                     specialist = [row for row in specialist if row.get('placesOfService')]
                 if specialist:
-                    entries = [row for row in entries if row.get('code') != kind or _procedure(row) or row in specialist]
+                    specialist_stcs = {stc for row in specialist for stc in row.get('serviceTypeCodes') or []}
+                    entries = [row for row in entries if row.get('code') != kind or _procedure(row)
+                               or row in specialist or row.get('serviceTypeCodes')
+                               and set(row['serviceTypeCodes']).isdisjoint(specialist_stcs)]
     def relevant_service(row: dict) -> bool:
         procedure = _procedure(row)
         if procedure:

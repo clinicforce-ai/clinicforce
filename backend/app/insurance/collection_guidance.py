@@ -9,7 +9,7 @@ from app.insurance.collection.blue_ppo_family_quote import apply as apply_blue_p
 from app.insurance.collection.cigna_ppo_deductible_quote import apply as apply_cigna_ppo_deductible_quote
 from app.insurance.collection.office_copay import (cigna_oap_televisit_office_copay, diagnostic_day_copay_amount, office_copay_amount, preview_office_copay_applies)
 from app.insurance.collection.billing_note import apply_billing_note
-from app.insurance.collection.benefit_gates import apply_aetna_choice_family_oop_deferral, apply_trs_hd_office_refundable_deposit, prepare_benefit_evidence, preview_zero_individual_oop_applies
+from app.insurance.collection.benefit_gates import apply_aetna_choice_family_oop_deferral, apply_trs_hd_office_refundable_deposit, apply_uhc_choice_plus_family_oop_deferral, prepare_benefit_evidence, preview_zero_individual_oop_applies
 from app.insurance.collection.healthselect_zero import applies as healthselect_zero_applies
 from app.insurance.collection import secondary_order
 from app.insurance.identity import patient_benefits_bound
@@ -449,6 +449,7 @@ def build(result: dict, review: dict | None = None) -> dict:
                 patient_message='Your visit payment is pending a Cigna estimate; this does not mean you owe $0.')
     secondary_order.apply_part_b_deferral(result, guidance, source_errors, member_bound, ma_ppo)
     apply_aetna_choice_family_oop_deferral(result, guidance, member_bound=member_bound, source_errors=source_errors, adverse=bool(adverse), same_policy_conflict=same_policy_conflict)
+    apply_uhc_choice_plus_family_oop_deferral(result, guidance, adverse=bool(adverse), same_policy_conflict=same_policy_conflict, source_errors=source_errors)
     apply_trs_hd_office_refundable_deposit(result, guidance, member_bound=member_bound, source_errors=source_errors, adverse=bool(adverse), same_policy_conflict=same_policy_conflict, review=review)
     apply_bluecard_family_deposit(result, guidance, review, safe=bool(safe),
         qmb_protected=bool(qmb_protected), qmb_unresolved=bool(qmb_unresolved))

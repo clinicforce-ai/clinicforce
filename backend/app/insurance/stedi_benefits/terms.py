@@ -6,7 +6,7 @@ import re
 from dataclasses import dataclass
 from typing import Any
 
-from app.insurance.stedi_benefits.fields import _benefit_notes, _procedure, _stedi_cents, _stedi_entries, oop_plan_association, coverage_kind
+from app.insurance.stedi_benefits.fields import _benefit_notes, _network_indicator, _procedure, _stedi_cents, _stedi_entries, oop_plan_association, coverage_kind
 
 
 @dataclass
@@ -119,6 +119,14 @@ def select_cost_share_rows(entries: list[dict[str, Any]], payload: dict[str, Any
                 return None
         best = max(score for score, _ in matches)
         selected = [row for score, row in matches if score == best]
+        if code in {'A', 'B'}:
+            # A tier-specific cost share takes precedence over a row covering
+            # both network tiers for the same service.
+            tier = ({'Y', 'YES', 'IN_NETWORK'} if 'IN_NETWORK' in accepted_networks
+                    else {'N', 'NO', 'OUT_OF_NETWORK'})
+            scoped = [row for row in selected if _network_indicator(row) in tier]
+            if scoped:
+                selected = scoped
         # Compare every source field, including unmodelled restrictions. Only
         # evidence location differs for an actual duplicate.
         # Authorization metadata is evaluated separately for the selected
