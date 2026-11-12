@@ -806,6 +806,58 @@ def test_choice_pos_emg_family_cap_gives_zero_check_in_with_unresolved_order():
         assert collection_guidance.build(altered)['amount_cents'] is None
 
 
+def test_choice_pos_99213_office_reference_sets_narrow_refundable_deposit():
+    result = scenario()
+    result.pop('collection_policy')
+    result.update(payer='Aetna', service_date='2026-11-12',
+        plan_details={'stedi': {'names': ['Aetna Choice POS II']}},
+        appointment_context={'place_of_service': '11'},
+        selected_ids=['office'], codes=[{'id': 'office', 'code': '99213', 'units': 1, 'modifiers': []}],
+        service_plan={'recommended_ids': ['office']},
+        service_selection_status='preview')
+    result['benefits'].update(service_date_matches=True, family_oop_remaining_cents=28407,
+        reported_options=[
+            {'kind': 'out_of_pocket', 'service_type_code': '30', 'coverage_level': 'INDIVIDUAL',
+             'network': 'IN_AND_OUT_OF_NETWORK', 'plan_association': 'medical',
+             'time_period': period, 'amount_cents': 0} for period in ('CALENDAR_YEAR', 'REMAINING')
+        ] + [{'kind': 'out_of_pocket', 'service_type_code': '30', 'coverage_level': 'FAMILY',
+              'network': 'IN_NETWORK', 'plan_association': 'medical', 'time_period': 'REMAINING',
+              'amount_cents': 28407}])
+    result['price_range'].update(complete=False, patient_min_cents=None, patient_max_cents=None)
+    result['price_range']['lines'][0].update(code='99213', modifiers=[], allowed_cents=None,
+        calculation=None, benefits={'active': True, 'service_date_matches': True,
+            'deductible_applies': False, 'family_oop_remaining_cents': 28407,
+            'requirements': {kind: {'required': 'unknown', 'cleared': False}
+                             for kind in ('referral', 'authorization')}})
+    guidance = collection_guidance.build(result)
+    assert guidance['amount_cents'] == 7553
+    assert guidance['basis'] == 'aetna_office_refundable_deposit'
+    summary = encounter_summary.build({**result, 'collection_guidance': guidance})
+    assert summary['collect_today_cents'] == 7553
+    assert summary['estimated_total_patient_min_cents'] is None
+    assert 'refundable' in amount_explanation.build({**result, 'encounter_summary': summary}, guidance)['sentence']
+    review = {'payments': {'amount_cents': 2000, 'reference': 'synthetic-receipt'}}
+    paid = collection_guidance.build(result, review)
+    assert paid['amount_cents'] == 5553
+    assert encounter_summary.build({**result, 'collection_guidance': paid}, review)['collect_today_cents'] == 5553
+    for mutate in (
+        lambda case: case.update(service_date='2026-11-13'),
+        lambda case: case.update(payer='Cigna'),
+        lambda case: case['plan_details']['stedi'].update(names=['Aetna Medicare PPO']),
+        lambda case: case['codes'][0].update(code='99214'),
+        lambda case: case['codes'][0].update(modifiers=['25']),
+        lambda case: case['appointment_context'].update(place_of_service='02'),
+        lambda case: case['benefits'].update(network_status='unknown'),
+        lambda case: case['benefits'].update(has_secondary=True),
+        lambda case: case['price_range']['lines'][0]['benefits'].update(family_oop_remaining_cents=5000),
+        lambda case: case['price_range']['lines'][0]['benefits'].update(copay_cents=3000),
+        lambda case: case['price_range']['lines'][0]['benefits'].update(deductible_applies=None),
+    ):
+        changed = deepcopy(result)
+        mutate(changed)
+        assert collection_guidance.build(changed)['amount_cents'] is None
+
+
 def test_supported_copay_advance_does_not_promise_later_member_billing():
     result = scenario(3000)
     result['arrival_collection'] = {'amount_cents': 3000, 'status': 'copay_only'}

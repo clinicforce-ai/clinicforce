@@ -7,7 +7,7 @@ from app.insurance.collection.benefit_gates import uhc_choice_plus_zero_candidat
 from app.insurance import evidence_resolution, group_contract_support, published_plan_benefits
 from app.api.routers.commercial_flow.commercial_previsit_finish import _payer_plan_pricing_source
 from app.api.routers.commercial_flow.commercial_previsit_network_guard import recheck_saved_network_evidence, recheck_saved_payer_message
-from app.api.routers.commercial_flow.commercial_previsit_saved_pricing import _reprice_saved_new_network, guard_unresolved_telehealth, guard_telehealth_guidance, restore_active_blue_cross_insurance, retain_conflicted_insurance, refresh_saved_cigna_office_benefits, upgrade_saved_biopsy_preview, refresh_saved_cross_payer_planning
+from app.api.routers.commercial_flow.commercial_previsit_saved_pricing import _reprice_saved_new_network, guard_unresolved_telehealth, guard_telehealth_guidance, restore_active_blue_cross_insurance, retain_conflicted_insurance, refresh_saved_cigna_office_benefits, upgrade_saved_biopsy_preview, refresh_saved_cross_payer_planning, suppress_saved_ambiguous_combined_zero_oop
 from app.api.routers.commercial_flow.commercial_previsit_requirements import refresh_saved_requirements
 from app.api.routers.commercial_flow.commercial_previsit_enrollment import _enrollment_failure
 from app.api.routers.commercial_flow.commercial_previsit_service_scope import retain_incomplete_service_evidence as _retain_incomplete_service_evidence
@@ -331,6 +331,7 @@ def _recheck_saved_payer_allowance(result: dict, case: dict, practice_id: str) -
     result.pop('planning_estimate', None)
 def _previsit_result(case: dict, practice_id: str | None = None) -> dict:
     result = _api.deepcopy(case['previsit_context']['result'])
+    suppress_saved_ambiguous_combined_zero_oop(result)
     upgrade_saved_biopsy_preview(result, case)
     refresh_saved_cigna_office_benefits(result, case, practice_id or '')
     availity = case.get('availity_visit_reference') or {}

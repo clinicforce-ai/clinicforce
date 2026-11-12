@@ -6,6 +6,30 @@ from app.api.routers.commercial_flow.commercial_previsit_finish import _payer_pl
 from app.api.routers.commercial_flow.commercial_previsit_rate_reference import refresh_saved_temporary_rates
 from app.insurance import blue_cross_proxy, choice_plus_emg_proxy, uhc_dsnp_office_proxy
 from app.insurance.identity import patient_plan_applies
+from app.insurance.stedi_benefits.normalize import ambiguous_combined_zero_oop
+
+
+def suppress_saved_ambiguous_combined_zero_oop(result: dict) -> None:
+    benefits = result.get('benefits') or {}
+    if not ambiguous_combined_zero_oop(benefits.get('reported_options') or []):
+        return
+    reason = ('The payer reports a $0 combined individual out-of-pocket limit while the '
+              'in-network family balance is positive. Confirm the applicable office-visit limit with the payer.')
+    benefits.update(oop_annual_cents=None, oop_remaining_cents=None)
+    reasons = benefits.setdefault('review_reasons', [])
+    if reason not in reasons:
+        reasons.append(reason)
+    price = result.get('price_range') or {}
+    for line in price.get('lines') or []:
+        terms = line.get('benefits') or {}
+        terms.update(oop_annual_cents=None, oop_remaining_cents=None)
+        line['calculation'] = None
+    if price:
+        price.update(complete=False, patient_min_cents=None, patient_max_cents=None,
+                     plan_min_cents=None, plan_max_cents=None,
+                     collection={'action': 'rerun', 'amount_cents': None, 'reason': reason})
+    result.pop('arrival_collection', None)
+    result.pop('planning_estimate', None)
 
 
 def upgrade_saved_biopsy_preview(result: dict, case: dict) -> None:

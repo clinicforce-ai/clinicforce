@@ -7,6 +7,45 @@ import { reportedLimit } from './reportedLimit'
 import { reportedMedicalLimit } from './reportedMedicalLimit'
 import { patientBenefitsBound } from './identityBinding'
 
+export function ambiguousCombinedZeroOop(result: PrevisitEstimate): boolean {
+  const rows = (result.benefits?.reported_options || []).filter(
+    (row) =>
+      row.kind === 'out_of_pocket' &&
+      row.service_type_code === '30' &&
+      row.plan_association === 'medical',
+  )
+  return rows.some(
+    (annual) =>
+      annual.coverage_level === 'INDIVIDUAL' &&
+      annual.time_period === 'CALENDAR_YEAR' &&
+      annual.network === 'IN_AND_OUT_OF_NETWORK' &&
+      annual.amount_cents === 0 &&
+      Number.isInteger(annual.plan_index) &&
+      rows.some(
+        (remaining) =>
+          remaining.plan_index === annual.plan_index &&
+          remaining.coverage_level === 'INDIVIDUAL' &&
+          remaining.time_period === 'REMAINING' &&
+          remaining.network === 'IN_AND_OUT_OF_NETWORK' &&
+          remaining.amount_cents === 0,
+      ) &&
+      rows.some(
+        (family) =>
+          family.plan_index === annual.plan_index &&
+          family.coverage_level === 'FAMILY' &&
+          family.time_period === 'REMAINING' &&
+          family.network === 'IN_NETWORK' &&
+          (family.amount_cents ?? 0) > 0,
+      ) &&
+      !rows.some(
+        (individual) =>
+          individual.plan_index === annual.plan_index &&
+          individual.coverage_level === 'INDIVIDUAL' &&
+          individual.network === 'IN_NETWORK',
+      ),
+  )
+}
+
 export function familyOopLimitApplied(result: PrevisitEstimate): boolean {
   const lines = result.price_range?.mode === 'services' ? result.price_range.lines || [] : []
   return (
@@ -48,11 +87,13 @@ export function commercialOopRows(
     'INDIVIDUAL',
     'REMAINING',
   )
+  const combinedZeroNeedsReview = ambiguousCombinedZeroOop(reportedResult)
   const reportedIndividualAnnual =
-    benefits?.oop_annual_cents ??
+    (combinedZeroNeedsReview ? null : benefits?.oop_annual_cents) ??
     reportedMedicalLimit(reportedResult, 'INDIVIDUAL', 'CALENDAR_YEAR')
   const reportedIndividualRemaining =
-    benefits?.oop_remaining_cents ?? reportedMedicalLimit(reportedResult, 'INDIVIDUAL', 'REMAINING')
+    (combinedZeroNeedsReview ? null : benefits?.oop_remaining_cents) ??
+    reportedMedicalLimit(reportedResult, 'INDIVIDUAL', 'REMAINING')
   const individualOopAnnual = reportedIndividualAnnual ?? ehr?.individual_oop_annual_cents
   const individualOopRemaining = reportedIndividualRemaining ?? ehr?.individual_oop_remaining_cents
   const ehrIndividualUsed =
@@ -129,30 +170,35 @@ export function commercialOopRows(
                   : null,
               ]
                 .filter(Boolean)
-                .join(' · ') || individualReportedOop.value,
+                .join(' · ') ||
+              (combinedZeroNeedsReview
+                ? 'Not returned for this visit'
+                : individualReportedOop.value),
       detail: cignaFamilyOffice
         ? 'The exact CPT family out-of-pocket balance caps the provisional planning share.'
         : familyOopApplied
           ? 'The individual balance can remain positive after the family limit is met'
-          : gehaZero
-            ? 'The 2026 G.E.H.A High Medicare Advantage guide lists a $0 in-network medical out-of-pocket maximum for covered care.'
-            : ehrIndividualConflict
-              ? 'Saved payer evidence and the dated EHR report disagree; verify current limits with the payer before using them.'
-              : ehrIndividualUsed
-                ? ehrDetail
-                : reportedOopOnly
-                  ? 'Payer-reported medical limit; not used as a verified calculation input'
-                  : separateCopayRemaining != null
-                    ? 'The selected office copay has a separate copay maximum; the general limit does not erase that copay'
-                    : benefits?.oop_remaining_cents === 0
-                      ? 'Applicable in-network limit has $0 remaining for the selected covered care'
-                      : calculated && components?.oop_adjustment_cents != null
-                        ? `${money(components.oop_adjustment_cents)} reduction applied to this visit`
-                        : unconfirmedZeroOop
-                          ? 'Payer reports $0 remaining; confirm this is the applicable medical limit before collection'
-                          : individualReportedOop.unassigned
-                            ? 'Payer-reported plan amount; medical applicability needs confirmation before use as a cap'
-                            : 'Payer-reported limit; applicability to these CPTs depends on the completed estimate',
+          : combinedZeroNeedsReview
+            ? 'The payer reports a $0 combined individual limit while the in-network family balance remains positive. Confirm which limit applies before using it for this office visit.'
+            : gehaZero
+              ? 'The 2026 G.E.H.A High Medicare Advantage guide lists a $0 in-network medical out-of-pocket maximum for covered care.'
+              : ehrIndividualConflict
+                ? 'Saved payer evidence and the dated EHR report disagree; verify current limits with the payer before using them.'
+                : ehrIndividualUsed
+                  ? ehrDetail
+                  : reportedOopOnly
+                    ? 'Payer-reported medical limit; not used as a verified calculation input'
+                    : separateCopayRemaining != null
+                      ? 'The selected office copay has a separate copay maximum; the general limit does not erase that copay'
+                      : benefits?.oop_remaining_cents === 0
+                        ? 'Applicable in-network limit has $0 remaining for the selected covered care'
+                        : calculated && components?.oop_adjustment_cents != null
+                          ? `${money(components.oop_adjustment_cents)} reduction applied to this visit`
+                          : unconfirmedZeroOop
+                            ? 'Payer reports $0 remaining; confirm this is the applicable medical limit before collection'
+                            : individualReportedOop.unassigned
+                              ? 'Payer-reported plan amount; medical applicability needs confirmation before use as a cap'
+                              : 'Payer-reported limit; applicability to these CPTs depends on the completed estimate',
     },
     ...(separateCopayRemaining != null
       ? [

@@ -208,6 +208,7 @@ async def saved_previsit(case_id: str, request: _api.Request) -> dict:
     plain sentence with the network/pricing basis and any unresolved CPTs. It
     also returns structured plan, network decision, contract source, selected
     services, allowed-rate provenance, arithmetic and collection-policy fields.
+    Dated Aetna Choice POS II office CPT 99213 may show a refundable MPPO fee-reference deposit, never a calculated patient share.
     encounter_summary retains per-CPT rounding and withholds a saved positive
     advance if a CPT's stated coinsurance rate and base contradict its amount.
     Saved insured amounts are withheld if the linked clinic contract, scoped

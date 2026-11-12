@@ -57,6 +57,7 @@ export default function CommercialCostTables({
               : row,
       )
     : rows
+  const visibleRows = displayedRows.filter((row) => cash || row.label !== 'Cash alternative')
   return (
     <>
       {!cash &&
@@ -69,7 +70,7 @@ export default function CommercialCostTables({
             payments={result.encounter_summary?.payments_verified_cents || 0}
           />
         )}
-      <CostBreakdownTable rows={displayedRows} />
+      <CostBreakdownTable rows={visibleRows} />
     </>
   )
 }

@@ -9,18 +9,17 @@ from app.insurance.collection.blue_ppo_family_quote import apply as apply_blue_p
 from app.insurance.collection.cigna_ppo_deductible_quote import apply as apply_cigna_ppo_deductible_quote
 from app.insurance.collection.office_copay import (cigna_oap_televisit_office_copay, diagnostic_day_copay_amount, office_copay_amount, preview_office_copay_applies)
 from app.insurance.collection.billing_note import apply_billing_note
+from app.insurance.collection.aetna_office_deposit import apply as apply_aetna_office_deposit
 from app.insurance.collection.benefit_gates import apply_aetna_choice_family_oop_deferral, apply_trs_hd_office_refundable_deposit, apply_uhc_choice_plus_family_oop_deferral, prepare_benefit_evidence, preview_zero_individual_oop_applies
 from app.insurance.collection.healthselect_zero import applies as healthselect_zero_applies
 from app.insurance.collection import secondary_order
 from app.insurance.identity import patient_benefits_bound
-from app.insurance.benefit_review import (annual_oop_conflict_with_known_remaining,
-                                          selected_service_blocker, selected_service_detail)
+from app.insurance.benefit_review import annual_oop_conflict_with_known_remaining, selected_service_blocker, selected_service_detail
 from app.insurance.network_participation import participation_conflict, verified_in_network, verified_out_of_network
 from app.insurance import encounter_summary
 from app.insurance.insurance_product import is_medicare_advantage
 from app.insurance.published_plan_benefits import GEHA_HIGH_PSHB_MA_16615_2026
-def emg_option(result: dict, rates: list[dict], rules: dict, payload: dict | None,
-               service_date: str, review: dict) -> dict:
+def emg_option(result: dict, rates: list[dict], rules: dict, payload: dict | None, service_date: str, review: dict) -> dict:
     """Compare EMG scenarios using the same collection rules as the visit."""
     return _emg_option(result, rates, rules, payload, service_date, review, build_collection=build)
 def build(result: dict, review: dict | None = None) -> dict:
@@ -216,8 +215,7 @@ def build(result: dict, review: dict | None = None) -> dict:
         amount = 0
         guidance.update(status='zero_advance', basis='published_geha_pshb_zero_office',
             reason='The matched 2026 G.E.H.A High PSHB Medicare Advantage plan publishes a $0 in-network specialist office visit, $0 medical deductible and $0 in-network medical out-of-pocket maximum. No payment is due for this planned covered office visit; final coding and claim adjudication still control.')
-    healthselect_zero_televisit = healthselect_zero_applies(
-        result, member_bound=member_bound, source_errors=source_errors,
+    healthselect_zero_televisit = healthselect_zero_applies(result, member_bound=member_bound, source_errors=source_errors,
         adverse=adverse, note=note, line_blocker=line_blocker,
         same_policy_conflict=same_policy_conflict)
     if healthselect_zero_televisit:
@@ -450,6 +448,7 @@ def build(result: dict, review: dict | None = None) -> dict:
     secondary_order.apply_part_b_deferral(result, guidance, source_errors, member_bound, ma_ppo)
     apply_aetna_choice_family_oop_deferral(result, guidance, member_bound=member_bound, source_errors=source_errors, adverse=bool(adverse), same_policy_conflict=same_policy_conflict)
     apply_uhc_choice_plus_family_oop_deferral(result, guidance, adverse=bool(adverse), same_policy_conflict=same_policy_conflict, source_errors=source_errors)
+    apply_aetna_office_deposit(result, guidance, review, safe=bool(safe), adverse=bool(adverse), source_errors=source_errors, same_policy_conflict=same_policy_conflict)
     apply_trs_hd_office_refundable_deposit(result, guidance, member_bound=member_bound, source_errors=source_errors, adverse=bool(adverse), same_policy_conflict=same_policy_conflict, review=review)
     apply_bluecard_family_deposit(result, guidance, review, safe=bool(safe),
         qmb_protected=bool(qmb_protected), qmb_unresolved=bool(qmb_unresolved))
@@ -478,7 +477,7 @@ def build(result: dict, review: dict | None = None) -> dict:
             if note['kind'] == 'no_collection' else 'This advance uses the office copay recorded by the clinic. Additional services and final responsibility follow claim processing.')
         for service in guidance['services']:
             service['patient_cents'] = None
-    if guidance['amount_cents'] is not None and guidance['basis'] in {'patient_obligations', 'anticipated_services', 'bcbstx_proxy_advance', 'cigna_fee_proxy_advance', 'bcbstx_refundable_advance'}:
+    if guidance['amount_cents'] is not None and guidance['basis'] in {'patient_obligations', 'anticipated_services', 'bcbstx_proxy_advance', 'cigna_fee_proxy_advance', 'bcbstx_refundable_advance', 'aetna_office_refundable_deposit'}:
         error = encounter_summary.build({**result, 'collection_guidance': guidance}, review)['integrity_error']
         if error:
             reasons = {

@@ -150,8 +150,9 @@ def _collection_action(code: str, result: dict, source_errors: list[dict] | None
                 steps.append('ask UHC which remaining individual out-of-pocket balance applies')
             return ', '.join(steps[:-1]) + (', and ' if len(steps) > 1 else '') + steps[-1]
         if code == 'clinic_payer_connection_draft':
-            return ('clinic administrator: link an applicable agreement and verified network for this exact UHC '
-                    'product and provider, enable its payer connection and estimate profile, then rerun the insured estimate')
+            return (f"clinic administrator: link an applicable agreement and verified network for this exact "
+                    f"{_payer_label(result, 'payer')} product and provider, enable its payer connection and "
+                    'estimate profile, then rerun the insured estimate')
         return (f"confirm this exact product and rendering provider with {_payer_label(result, 'the payer')}, "
                 'then select the clinician-documented CPT')
     if code == 'provider_network_unresolved':

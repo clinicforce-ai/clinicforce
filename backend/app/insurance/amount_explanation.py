@@ -13,9 +13,8 @@ from app.insurance.insurance_product import is_medicare_advantage
 from app.insurance.amount_explanation_terms import choice_plus_reported_terms as _choice_plus_reported_terms
 def _money(cents: int) -> str:
     return f'${cents // 100:,}.{cents % 100:02d}'
-def _cash_cause(result: dict, failure: dict, recovery: dict, card: dict, network: str,
-                benefits: dict, unpriced: list[str], missing: str,
-                source_errors: list[dict] | None = None) -> tuple[str, str]:
+def _cash_cause(result: dict, failure: dict, recovery: dict, card: dict, network: str, benefits: dict, unpriced: list[str],
+                missing: str, source_errors: list[dict] | None = None) -> tuple[str, str]:
     reason = recovery.get('reason_code')
     identity = result.get('identity') or benefits.get('identity') or {}
     active_benefits = benefits.get('active') is True and benefits.get('service_date_matches') is not False
@@ -230,9 +229,7 @@ def build(result: dict, guidance: dict, review: dict | None = None) -> dict:
     elif amount is not None:
         if basis == 'claim_after_service':
             cause, code = _cash_cause(result, failure, recovery, card, network, benefits, unpriced, missing, guidance.get('source_errors'))
-            if (guidance.get('collection_rule') or {}).get('mode') == 'aetna_choice_family_oop_deferral':
-                sentence, code = (guidance['reason'], 'collection_deferred')
-            elif (guidance.get('collection_rule') or {}).get('mode') == 'uhc_choice_plus_family_oop_deferral':
+            if (guidance.get('collection_rule') or {}).get('mode') in {'aetna_choice_family_oop_deferral', 'uhc_choice_plus_family_oop_deferral'}:
                 sentence, code = (guidance['reason'], 'collection_deferred')
             elif (guidance.get('collection_rule') or {}).get('mode') == 'cms_msp_part_b_deferral':
                 sentence, code = ('Collect $0.00 at arrival: the payer reports Original Medicare Part B as secondary. Submit the claims and determine any patient balance from the remittances; the office copay is not due at check-in', 'collection_deferred')
@@ -291,6 +288,7 @@ def build(result: dict, guidance: dict, review: dict | None = None) -> dict:
         elif basis == 'qmb_protection':
             sentence, code = ('Collect $0 now because confirmed QMB protection prohibits Medicare cost-sharing collection; any other liability requires separate covered-service and claim evidence', 'qmb_protected')
         elif basis == 'healthselect_ma_zero_televisit': sentence, code = ('Collect $0 now: this matched UHC HealthSelect Medicare Advantage PPO reports a $0 virtual-visit copay and 0% coinsurance, with no annual medical deductible. The proposed code, payer order and final claim remain open', basis)
+        elif basis == 'aetna_office_refundable_deposit': sentence, code = (f'Collect {_money(amount)} as a refundable clinic office deposit for CPT 99213. The clinic-supplied Availity MPPO Office maximum is a reference, not this member’s confirmed Aetna allowance or final patient share; apply it to the processed claim and refund any excess', basis)
         elif basis in {'bcbstx_proxy_advance', 'bcbstx_refundable_advance'}:
             sentence, code = (f'Collect {_money(amount)} as the clinic-approved BCBS Texas fee proxy advance for the planned diagnostic services; the UHC allowed amount and final claim share remain unknown' if basis == 'bcbstx_proxy_advance' else
                 f'Collect {_money(amount)} as a refundable deposit using the clinic BCBS Texas CPT 99203 fee reference; remaining balances were not returned and final patient liability follows the processed claim' if (guidance.get('collection_rule') or {}).get('mode') == 'trs_hd_office_refundable_deposit' else

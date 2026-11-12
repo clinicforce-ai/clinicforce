@@ -14,6 +14,7 @@ const { aetnaPriorDateReferenceCopay } = await load('../frontend/src/features/co
 const { collectionAtVisitRow } = await load('../frontend/src/features/commercial-estimate/collectionAtVisitRow.ts')
 const { deriveCommercialEstimateView } = await load('../frontend/src/features/commercial-estimate/deriveCommercialEstimateView.ts')
 const { commercialOopRows } = await load('../frontend/src/features/commercial-estimate/commercialOopRows.ts')
+const { default: PayerReportedPlanFigures } = await load('../frontend/src/features/commercial-estimate/PayerReportedPlanFigures.tsx')
 const { suggestedDiagnosisRows } = await load('../frontend/src/features/commercial-estimate/suggestedDiagnosisRows.ts')
 const { commercialRequirementRows } = await load('../frontend/src/features/commercial-estimate/commercialRequirementStatus.ts')
 const { payerOrderRow } = await load('../frontend/src/features/commercial-estimate/referenceCoverageRow.ts')
@@ -69,6 +70,29 @@ assert.match(paidRow.value, /\$30\.00/)
 const oopRows = commercialOopRows(result, result, result.benefits, false, false, null)
 assert.match(oopRows.find((entry) => entry.label === 'Individual out-of-pocket maximum').detail, /separate copay/i)
 assert.match(oopRows.find((entry) => entry.label === 'Separate office copay maximum').value, /\$900\.00/)
+const ambiguousResult = { ...result, benefits: { ...result.benefits, oop_annual_cents: 0,
+  reported_options: [
+    { kind: 'out_of_pocket', service_type_code: '30', plan_association: 'medical',
+      coverage_level: 'INDIVIDUAL', network: 'IN_AND_OUT_OF_NETWORK',
+      time_period: 'CALENDAR_YEAR', amount_cents: 0, plan_index: 0 },
+    { kind: 'out_of_pocket', service_type_code: '30', plan_association: 'medical',
+      coverage_level: 'INDIVIDUAL', network: 'IN_AND_OUT_OF_NETWORK',
+      time_period: 'REMAINING', amount_cents: 0, plan_index: 0 },
+    { kind: 'out_of_pocket', service_type_code: '30', plan_association: 'medical',
+      coverage_level: 'FAMILY', network: 'IN_NETWORK',
+      time_period: 'REMAINING', amount_cents: 28407, plan_index: 0 },
+  ] }, price_range: { ...result.price_range, lines: [{ ...result.price_range.lines[0],
+    benefits: { ...terms, separate_copay_limit: false, copay_remaining_cents: null } }] } }
+const ambiguousRows = commercialOopRows(ambiguousResult, ambiguousResult,
+  ambiguousResult.benefits, false, false, null)
+assert.equal(ambiguousRows.find((entry) => entry.label === 'Individual out-of-pocket maximum').value,
+  'Not returned for this visit')
+assert.match(ambiguousRows.find((entry) => entry.label === 'Individual out-of-pocket maximum').detail,
+  /Confirm which limit applies/)
+const ambiguousTermsHtml = renderToStaticMarkup(React.createElement(PayerReportedPlanFigures,
+  { result: ambiguousResult }))
+assert.match(ambiguousTermsHtml, /Confirm combined \$0 rows with payer/)
+assert.doesNotMatch(ambiguousTermsHtml, /Individual out-of-pocket remaining/)
 const secondaryResult = {
   ...result,
   benefits: { ...result.benefits, has_secondary: true, primary_secondary_order: {
@@ -218,9 +242,39 @@ assert.match(savedTable, /Payer order.*Aetna 271 lists MEDICARE as secondary/)
 assert.match(savedTable, /Calculated Aetna share for this office visit.*\$60\.00 before any Medicare secondary payment/)
 assert.match(savedTable, /Amount to collect at visit.*\$60\.00 if Aetna is the only applicable payer/)
 assert.match(savedTable, /\$0\.00 if Medicare is confirmed secondary/)
+assert.doesNotMatch(savedTable, /Cash alternative/)
 const savedSummary = renderToStaticMarkup(React.createElement(ArrivalAmountSummary,
   { model: savedModel, result: savedResult, partialCopay: null, visibleAmount: true }))
 assert.match(savedSummary, /Aetna office copay · Medicare review/)
 assert.match(savedSummary, /\$60\.00/)
 assert.doesNotMatch(savedSummary, /Confirm payer order/)
+const depositResult = { ...result,
+  plan_details: { stedi: { names: ['Aetna Choice POS II'] } },
+  benefits: { ...result.benefits, oop_remaining_cents: null, family_oop_remaining_cents: 28407 },
+  price_range: { ...result.price_range, lines: [{ ...result.price_range.lines[0],
+    benefits: { active: true, service_date_matches: true, deductible_applies: false } }] },
+  collection_guidance: { amount_cents: 7553, status: 'estimated',
+    basis: 'aetna_office_refundable_deposit',
+    reason: 'Refundable clinic deposit from the dated Availity MPPO Office reference; final share follows the claim.',
+    services: [], patient_actions: [], assumptions: [] },
+  encounter_summary: { collect_today_cents: 7553, estimated_total_patient_min_cents: null,
+    estimated_total_patient_max_cents: null, payments_verified_cents: null, components: {} } }
+const depositModel = { ...model, supportedAmount: true, amount: '$75.53',
+  amountText: '$75.53', amountLabel: 'Refundable deposit to collect now' }
+const derivedDeposit = deriveCommercialEstimateView({ result: depositResult,
+  appointments: [], selectedVisit: null, busy: null, error: null, readOnly: false,
+  recovering: false })
+assert.equal(derivedDeposit.amount, '$75.53')
+assert.equal(derivedDeposit.amountLabel, 'Refundable deposit to collect now')
+const depositRow = collectionAtVisitRow(depositResult, depositModel, {
+  combinedPlan: null, feeProxy: null, aetnaPlanning: null, aetnaCopayPlanning: null,
+  officeReferenceCopay: null, humanaReferenceCopay: null, partialOfficeCopay: null,
+  pendingAetnaCopay: null, cardPlanningCopay: null, automaticCashFallback: false,
+  cignaFeeProxy: false, proxyFormula: undefined })
+assert.equal(depositRow.label, 'Refundable deposit at visit')
+assert.match(depositRow.value, /\$75\.53/)
+const depositSummary = renderToStaticMarkup(React.createElement(ArrivalAmountSummary,
+  { model: depositModel, result: depositResult, partialCopay: null, visibleAmount: true }))
+assert.match(depositSummary, /Refundable deposit to collect now/)
+assert.match(depositSummary, /\$75\.53/)
 console.log('Aetna separate copay: $40 office reference; $0 general OOP does not erase the separate cap')
