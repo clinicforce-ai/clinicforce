@@ -157,8 +157,8 @@ async def saved_previsit(case_id: str, request: _api.Request) -> dict:
     unqualified plan-wide family accumulators and matching general coinsurance
     can instead show an explicitly assumed office-deductible planning scenario.
     reported_options.diagnosis_scoped marks payer rows with diagnosis limits.
-    The amount to collect is $0 at arrival when no fixed copay is reported;
-    final liability remains open until a Cigna estimate or processed claim.
+    Without the governed clinic Cigna quote, the amount to collect is $0 at arrival when no fixed copay is reported;
+    final liability remains open until a Cigna estimate or processed claim. The clinic Cigna quote reads active manual Cigna rates before matching BCBS Texas fees for other selected CPTs, applies the individual deductible before coinsurance and the out-of-pocket cap, and subtracts verified payments. It is refundable, and missing codes or benefits withhold a full collection amount.
     Saved reads can re-read the protected exact-CPT 271 for this family-only
     term when the stored patient, date, network and CPT scope still match.
     For an in-network Cigna Open Access Plus office visit with selected EMG/NCS

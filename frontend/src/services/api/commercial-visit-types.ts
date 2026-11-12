@@ -7,6 +7,7 @@ export type FeeProxyBasis =
   | 'bcbstx_uhc_choice_plus_fee_proxy'
   | 'bcbstx_uhc_dsnp_office_proxy'
   | 'bcbstx_cigna_fee_proxy'
+  | 'cigna_clinic_fee_quote'
 
 export type TemporaryRateReference = {
   source: string

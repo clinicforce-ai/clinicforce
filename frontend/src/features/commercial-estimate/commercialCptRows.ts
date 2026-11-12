@@ -30,6 +30,17 @@ export function commercialAllowedTotalRow(
     botoxPreview,
   } = options
   const price = result.price_range
+  const clinicQuote =
+    result.fee_proxy_estimate?.basis === 'cigna_clinic_fee_quote' ? result.fee_proxy_estimate : null
+  if (clinicQuote && lineAllowedTotal == null) {
+    const allCigna = clinicQuote.lines?.every((line) => line.source === 'Cigna clinic contract')
+    return {
+      label: 'Total payer allowed',
+      value: allCigna
+        ? `${money(clinicQuote.reference_total_cents)} clinic Cigna contract`
+        : 'Not fully priced by Cigna · BCBS Texas proxy used for other CPTs',
+    }
+  }
   if (
     ['blue_ppo_family_deductible_quote', 'cigna_ppo_deductible_quote'].includes(
       result.collection_guidance?.collection_rule?.mode || '',
@@ -140,6 +151,18 @@ export function commercialFeeReferenceRows(
   aetnaRateReference: boolean,
   result: PrevisitEstimate,
 ): CostBreakdownRow[] {
+  if (feeProxy?.basis === 'cigna_clinic_fee_quote')
+    return [
+      {
+        label: 'Clinic pricing basis',
+        value: `${money(feeProxy.reference_total_cents)} total; ${
+          feeProxy.lines
+            ?.map((line) => `CPT ${line.code}: ${money(line.reference_cents)} ${line.source}`)
+            .join('; ') || ''
+        }`,
+        detail: feeProxy.message,
+      },
+    ]
   if (!rate?.lines.length) return []
   const total = rate.lines.reduce(
     (sum, line) => sum + line.unit_reference_cents * (Number(line.units) || 1),
@@ -307,6 +330,12 @@ export function commercialPricedCptRows({
 }): CostBreakdownRow[] {
   if (!lines.length) return [fallback]
   return lines.map((line) => {
+    const clinicQuoteLine =
+      result.fee_proxy_estimate?.basis === 'cigna_clinic_fee_quote'
+        ? result.fee_proxy_estimate.lines?.find(
+            (row) => row.code === line.code && row.units === line.units,
+          )
+        : null
     const trsDeposit =
       result.collection_guidance?.collection_rule?.mode === 'trs_hd_office_refundable_deposit'
     const proxyRate = temporaryRateReference?.lines.find(
@@ -329,21 +358,24 @@ export function commercialPricedCptRows({
         code: line.code,
         units: line.units,
       }),
-      value:
-        resolved && line.allowed_cents != null
+      value: clinicQuoteLine
+        ? `${money(clinicQuoteLine.reference_cents)} ${clinicQuoteLine.source === 'Cigna clinic contract' ? 'Cigna contract allowance' : 'BCBS Texas reference'}`
+        : resolved && line.allowed_cents != null
           ? trsDeposit
             ? `${money(result.collection_guidance!.reference_total_cents!)} clinic fee reference`
             : money(line.allowed_cents)
           : proxyRate
             ? `${money(proxyRate.unit_reference_cents * (Number(line.units) || 1))} ${bluecardDeductible ? 'Blue Choice PPO fee reference' : aetnaRateReference ? 'Aetna fee reference' : 'BCBS Texas reference'}`
             : 'Allowed amount unavailable',
-      detail: trsDeposit
-        ? `${money(result.collection_guidance!.reference_total_cents!)} per unit × 1; insured allowed amount unknown`
-        : resolved && line.unit_allowed_cents != null
-          ? `${money(line.unit_allowed_cents)} per unit × ${line.units || 1}`
-          : proxyRate
-            ? `${money(proxyRate.unit_reference_cents)} per unit × ${line.units || 1}; ${result.payer || 'payer'} allowed amount unknown`
-            : line.description || undefined,
+      detail: clinicQuoteLine
+        ? `${money(clinicQuoteLine.reference_cents / (Number(line.units) || 1))} per unit × ${line.units || 1}; ${clinicQuoteLine.source === 'Cigna clinic contract' ? 'clinic-supplied Cigna rate' : 'Cigna allowance unknown; refundable clinic proxy'}`
+        : trsDeposit
+          ? `${money(result.collection_guidance!.reference_total_cents!)} per unit × 1; insured allowed amount unknown`
+          : resolved && line.unit_allowed_cents != null
+            ? `${money(line.unit_allowed_cents)} per unit × ${line.units || 1}`
+            : proxyRate
+              ? `${money(proxyRate.unit_reference_cents)} per unit × ${line.units || 1}; ${result.payer || 'payer'} allowed amount unknown`
+              : line.description || undefined,
     }
   })
 }
