@@ -41,6 +41,8 @@ export type PrevisitBenefits = null | {
     | 'clinic_contract_inventory'
     | 'clinic_no_insurer_contract'
     | 'clinic_attested_phcs_roster'
+    | 'clinic_attested_cigna_tpa'
+    | 'clinic_attested_cigna_ppo'
     | null
   network_evidence_ids?: string[]
   selected_benefit_ids?: string[]

@@ -12,7 +12,7 @@ from unittest.mock import patch
 from app.api.routers import commercial_estimator as api
 from app.api.routers.commercial_flow import commercial_previsit_pricing as pricing
 from app.api.routers.commercial_flow import commercial_previsit_requirements as requirements
-from app.api.routers.commercial_flow.commercial_previsit_network_guard import apply_nmct_contract_absence, recheck_saved_network_evidence, scoped_admin_nonparticipation
+from app.api.routers.commercial_flow.commercial_previsit_network_guard import apply_nmct_cigna_ppo_attestation, apply_nmct_contract_absence, recheck_saved_network_evidence, scoped_admin_nonparticipation
 from app.api.routers.commercial_flow.commercial_previsit_status import _reprice_saved_new_network
 from app.insurance import amount_explanation
 from app.insurance import collection_guidance
@@ -98,6 +98,55 @@ def test_cigna_payer_specific_nonparticipation_is_not_overridden_by_roster():
                 'network_status': 'out_of_network', 'network_source': 'payer_participation_message'}
     assert not apply_nmct_contract_absence(result, benefits, 'Cigna', None, '2026-11-07', True)
     assert network_participation.verified_out_of_network(benefits)
+
+
+def test_nmct_cigna_ppo_clinic_attestation_reprojects_saved_office_provider(monkeypatch):
+    from app.api.routers.commercial_flow import commercial_previsit_network_guard as guard
+    npi = '1234567890'
+    inputs = {'service_date': '2026-11-12', 'place_of_service': '11',
+              'rendering_provider': {'npi': npi}}
+    source = {'rendering_provider': {'npi': npi}}
+    payload = {'provider': {'npi': npi}}
+    identity = {'status': 'matched', 'match_version': 2, 'binding': 'synthetic-binding'}
+    result = {'payer': 'Cigna', 'plan_details': {'stedi': {'names': ['PPO']}},
+              'identity': identity, 'benefits': {'active': True, 'service_date_matches': True,
+                  'network_status': 'unknown', 'identity': identity},
+              'price_range': {'complete': False, 'lines': []}}
+    assert apply_nmct_cigna_ppo_attestation(result, result['benefits'], 'primary',
+                                            'Cigna', payload, inputs, source)
+    assert result['benefits']['network_source'] == 'clinic_attested_cigna_ppo'
+    assert network_participation.verified_in_network(result['benefits'])
+    assert result['network_evidence']['source'] == 'clinic_attested_cigna_ppo'
+    raw = json.dumps(payload).encode()
+    case = {'previsit_context': {'inputs': inputs, 'source': source},
+            'previsit_raw_object_key': 'synthetic-protected-response',
+            'previsit_raw_sha256': hashlib.sha256(raw).hexdigest()}
+    monkeypatch.setattr(guard.object_store, 'get_object_bytes', lambda *_: raw)
+    recheck_saved_network_evidence(result, case, 'primary', None)
+    assert result['benefits']['network_source'] == 'clinic_attested_cigna_ppo'
+    assert result['benefits']['network_status'] == 'in_network'
+
+
+@pytest.mark.parametrize('change', ['product', 'provider', 'payer_statement', 'date', 'place', 'identity'])
+def test_nmct_cigna_ppo_attestation_requires_bound_scope(change):
+    npi = '1234567890'
+    inputs = {'service_date': '2026-11-12', 'place_of_service': '11',
+              'rendering_provider': {'npi': npi}}
+    source = {'rendering_provider': {'npi': npi}}
+    payload = {'provider': {'npi': npi}}
+    identity = {'status': 'matched', 'match_version': 2, 'binding': 'synthetic-binding'}
+    result = {'plan_details': {'stedi': {'names': ['PPO']}}, 'identity': identity}
+    benefits = {'active': True, 'service_date_matches': True,
+                'network_status': 'unknown', 'identity': identity}
+    if change == 'product': result['plan_details']['stedi']['names'] = ['Open Access Plus']
+    if change == 'provider': payload['provider']['npi'] = '9999999999'
+    if change == 'payer_statement': benefits['network_source'] = 'payer_participation_message'
+    if change == 'date': inputs['service_date'] = '2026-11-11'
+    if change == 'place': inputs['place_of_service'] = '02'
+    if change == 'identity': benefits['identity'] = result['identity'] = {}
+    assert not apply_nmct_cigna_ppo_attestation(result, benefits, 'primary', 'Cigna',
+                                                payload, inputs, source)
+    assert benefits['network_status'] == 'unknown'
 
 
 def test_nmct_connected_payer_without_current_contract_is_out_of_network(monkeypatch):

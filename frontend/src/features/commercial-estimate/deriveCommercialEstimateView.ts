@@ -152,6 +152,8 @@ export function deriveCommercialEstimateView({
         : result?.network_evidence?.decision === 'in_network_contract_supported' &&
             patientBenefitsBound
           ? 'In network · clinic agreement'
+          : benefits?.network_source === 'clinic_attested_cigna_ppo' && patientBenefitsBound
+            ? 'In network · clinic attestation'
           : benefits?.active === true &&
               !patientBenefitsBound &&
               ['in_network', 'out_of_network'].includes(benefits.network_status || '')
@@ -172,6 +174,8 @@ export function deriveCommercialEstimateView({
       ? 'Current signed clinic agreement · review member product and clinician tier'
       : benefits?.network_source === 'clinic_library_contract'
         ? 'Current Clinical Library contract'
+          : benefits?.network_source === 'clinic_attested_cigna_ppo'
+            ? 'Clinic attestation for matched Cigna PPO office provider · not payer confirmed'
         : benefits?.network_source === 'clinic_library_absent'
           ? 'No contract linked to this exact payer product and provider'
           : benefits?.network_source === 'clinic_no_insurer_contract'

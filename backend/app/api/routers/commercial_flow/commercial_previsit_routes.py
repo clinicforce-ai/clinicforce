@@ -44,8 +44,12 @@ async def saved_previsit(case_id: str, request: _api.Request) -> dict:
     final patient liability and is reconciled and refunded after the claim.
     NMCT (practice_id primary) uses a current Clinical Library insurer contract
     for its HMO, PPO and Medicare Advantage products' in-network tier.
-    A Cigna product without current provider contract evidence remains network
-    unknown; other payer paths can use a scoped clinic nonparticipation rule.
+    A current patient-bound Cigna PPO office visit can use NMCT’s dated clinic
+    participation attestation when its Stedi, visit and clinic rendering NPIs
+    agree. Its network_source is clinic_attested_cigna_ppo, distinct from payer
+    confirmation. Saved reads recheck the hash-verified response before applying
+    that tier. Other Cigna products without current participation evidence
+    remain network unknown; other payer paths can use scoped clinic rules.
     Old clinic-derived out-of-network prices are cleared for recalculation.
     Other practices still use dated group-network contracts; absent Blue
     agreements can select clinic_no_blue_contract. Network tier alone does not

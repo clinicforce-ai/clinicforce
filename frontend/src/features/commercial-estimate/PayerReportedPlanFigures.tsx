@@ -39,6 +39,7 @@ export default function PayerReportedPlanFigures({ result }: { result: PrevisitE
         'clinic_group_agreement',
         'payer_participation_message',
         'clinic_attested_cigna_tpa',
+        'clinic_attested_cigna_ppo',
       ].includes(benefits.network_source || '')) ||
     (benefits.network_status === 'out_of_network' &&
       [

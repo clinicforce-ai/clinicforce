@@ -76,6 +76,19 @@ def finish(payload, inputs, source, review=None, payer=None, practice_id='synthe
     return result
 
 
+def test_nmct_direct_cigna_ppo_office_uses_clinic_provider_attestation():
+    payload, inputs, source = example()
+    inputs['service_date'] = '2026-11-12'
+    payload['subscriber']['dates']['service']['start'] = '2026-11-12'
+    payload['plans'][0]['name'] = 'PPO'
+    payload['plans'][0]['benefits']['limitations'] = []
+    result = finish(payload, inputs, source, payer='Cigna', practice_id='primary',
+                    configured_connections=[])
+    assert result['plan_details']['stedi']['names'] == ['PPO']
+    assert result['benefits']['network_source'] == 'clinic_attested_cigna_ppo'
+    assert result['network_evidence']['decision'] == 'in_network_by_clinic_attestation'
+
+
 def test_automatic_specialist_estimate_without_card_contract_or_ledger():
     result = finish(*example())
     assert result['identity']['reconciliation_rule'] == 'cigna_member_suffix'
