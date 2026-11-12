@@ -78,10 +78,28 @@ def test_mixed_cigna_and_blue_cross_lines_share_one_deductible_and_prior_payment
 
 def test_confirmed_office_and_maneuver_use_clinic_blue_cross_fees():
     result = visit()
+    result['reason'] = 'Dizziness, possible BPPV'
+    reasons = ['Separate medical and supplementary coverage was returned; unassigned out-of-pocket rows are retained but cannot set this medical visit’s limit.',
+               'Confirm the remaining individual deductible that applies to this visit.',
+               'Confirm the remaining individual out-of-pocket maximum.',
+               "Confirm the plan's referral requirement and, if required, that a referral is on file."]
+    result['benefits'].update(deductible_remaining_cents=None, oop_remaining_cents=None,
+        deductible_applies=False, reported_options=[
+            {'kind': kind, 'service_type_code': '30', 'procedure_code': '',
+             'coverage_level': 'Individual', 'network': 'Y', 'time_period': '29',
+             'plan_association': 'unassigned', 'amount_cents': 335505,
+             'payer_note': "Deductible does apply to member's out-of-pocket maximum" if kind == 'out_of_pocket' else ''}
+            for kind in ('deductible', 'out_of_pocket')] + [
+            {'id': 'preventive-office', 'kind': 'deductible', 'service_type_code': '98', 'network': 'Y',
+             'amount_cents': 0, 'payer_note': 'Preventive', 'places_of_service': ['11']}])
+    result['price_range']['lines'][0]['benefits'].update(
+        deductible_remaining_cents=None, oop_remaining_cents=None,
+        deductible_applies=False, deductible_waiver_ids=['preventive-office'],
+        requires_review=True, review_reasons=reasons)
     result['codes'].append({'id': 'maneuver', 'code': '95992', 'units': 1, 'modifiers': []})
     result['price_range']['lines'].append({
         'id': 'maneuver', 'code': '95992', 'units': 1, 'modifiers': [],
-        'benefits': deepcopy(result['benefits']), 'conditions': [], 'issues': []})
+        'benefits': deepcopy(result['price_range']['lines'][0]['benefits']), 'conditions': [], 'issues': []})
     result['temporary_rate_reference']['lines'].append({
         'id': 'maneuver', 'code': '95992', 'units': 1, 'modifiers': [],
         'unit_reference_cents': 3412,
@@ -90,8 +108,16 @@ def test_confirmed_office_and_maneuver_use_clinic_blue_cross_fees():
     result['selected_ids'].append('maneuver')
     quote = cigna_clinic_quote.estimate(result, result['service_date'])
     assert quote['reference_total_cents'] == quote['patient_share_cents'] == 13529
+    assert quote['paired_general_balances'] is True
+    assert quote['preventive_waiver_excluded'] is True
     result['fee_proxy_estimate'] = quote
     assert collection_guidance.build(result)['amount_cents'] == 13529
+    result['benefits']['reported_options'].append({
+        **result['benefits']['reported_options'][1], 'amount_cents': 1000})
+    assert cigna_clinic_quote.estimate(result, result['service_date']) is None
+    result['benefits']['reported_options'].pop()
+    result['reason'] = 'Preventive wellness visit'
+    assert cigna_clinic_quote.estimate(result, result['service_date']) is None
 
 
 def test_missing_rate_or_deductible_exclusion_blocks_quote():
@@ -100,6 +126,9 @@ def test_missing_rate_or_deductible_exclusion_blocks_quote():
     assert cigna_clinic_quote.estimate(result, result['service_date']) is None
     result = visit()
     result['price_range']['lines'][0]['benefits']['deductible_applies'] = False
+    assert cigna_clinic_quote.estimate(result, result['service_date']) is None
+    result = visit()
+    result['service_selection_status'] = 'preview'
     assert cigna_clinic_quote.estimate(result, result['service_date']) is None
 
 

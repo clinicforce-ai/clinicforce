@@ -158,7 +158,7 @@ async def saved_previsit(case_id: str, request: _api.Request) -> dict:
     can instead show an explicitly assumed office-deductible planning scenario.
     reported_options.diagnosis_scoped marks payer rows with diagnosis limits.
     Without the governed clinic Cigna quote, the amount to collect is $0 at arrival when no fixed copay is reported;
-    final liability remains open until a Cigna estimate or processed claim. The clinic Cigna quote reads active manual Cigna rates before matching BCBS Texas fees for other selected CPTs, applies the individual deductible before coinsurance and the out-of-pocket cap, and subtracts verified payments. The clinic-directed refundable amount is not a Cigna Cost of Care Estimator result; missing codes or benefits withhold a full collection quote.
+    final liability remains open until a Cigna estimate or processed claim. The clinic Cigna quote reads active manual Cigna rates before matching BCBS Texas fees for other clinician-selected CPTs, applies the individual deductible before coinsurance and the out-of-pocket cap, and subtracts verified payments. One matched unassigned general STC 30 deductible/out-of-pocket pair can support a disclosed provisional balance; a confirmed dizziness 99203 plus 95992 plan does not use preventive-only office deductible waivers. The clinic-directed refundable amount is not a Cigna Cost of Care Estimator result; missing codes or benefits withhold a full collection quote.
     Saved reads can re-read the protected exact-CPT 271 for this family-only
     term when the stored patient, date, network and CPT scope still match.
     For an in-network Cigna Open Access Plus office visit with selected EMG/NCS

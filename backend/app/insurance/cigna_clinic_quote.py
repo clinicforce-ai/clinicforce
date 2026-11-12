@@ -10,6 +10,42 @@ from app.insurance.network_participation import verified_in_network
 from app.insurance.stedi_cpt_authorization import visit_coverage_bound
 
 
+def _paired_general_balances(benefits: dict) -> tuple[int, int] | None:
+    """Use one matching payer-returned STC 30 deductible/OOP pair as a proxy."""
+    rows = [row for row in benefits.get('reported_options') or [] if
+            row.get('kind') in {'deductible', 'out_of_pocket'}
+            and row.get('service_type_code') == '30' and not row.get('procedure_code')
+            and row.get('coverage_level') == 'Individual' and row.get('network') == 'Y'
+            and row.get('time_period') == '29' and row.get('plan_association') == 'unassigned'
+            and not row.get('diagnosis_scoped') and not row.get('places_of_service')
+            and type(row.get('amount_cents')) is int and row['amount_cents'] >= 0]
+    deductible = [row for row in rows if row['kind'] == 'deductible']
+    oop = [row for row in rows if row['kind'] == 'out_of_pocket']
+    if (len(deductible) != 1 or len(oop) != 1
+            or deductible[0]['amount_cents'] != oop[0]['amount_cents']
+            or "Deductible does apply to member's out-of-pocket maximum" not in
+                str(oop[0].get('payer_note') or '')):
+        return None
+    return deductible[0]['amount_cents'], oop[0]['amount_cents']
+
+
+def _nonpreventive_maneuver_visit(result: dict, benefits: dict) -> bool:
+    """The confirmed dizziness office/maneuver plan cannot use preventive waivers."""
+    codes = {row.get('code') for row in result.get('codes') or []}
+    reason = str(result.get('reason') or '')
+    waivers = [row for row in benefits.get('reported_options') or [] if
+               row.get('kind') == 'deductible' and row.get('service_type_code') == '98'
+               and row.get('network') == 'Y' and row.get('amount_cents') == 0]
+    return (result.get('service_selection_status') == 'approved'
+            and len(result.get('codes') or []) == 2
+            and all(row.get('units') == 1 for row in result['codes'])
+            and codes == {'99203', '95992'}
+            and re.search(r'\b(?:dizziness|vertigo|bppv)\b', reason, re.I) is not None
+            and re.search(r'\b(?:preventive|screening|wellness|physical)\b', reason, re.I) is None
+            and bool(waivers) and all(re.fullmatch(r'Preventive(?: - Included For Specific Services)?',
+                                      str(row.get('payer_note') or ''), re.I) for row in waivers))
+
+
 def estimate(result: dict, service_date: str) -> dict | None:
     benefits = result.get('benefits') or {}
     identity = result.get('identity') or benefits.get('identity') or {}
@@ -28,6 +64,7 @@ def estimate(result: dict, service_date: str) -> dict | None:
             or benefits.get('has_secondary') or benefits.get('network_conflict')
             or benefits.get('source_errors') or benefits.get('coverage_status_conflict')
             or place_of_service != '11' or price.get('mode') != 'services' or price.get('service_issues')
+            or result.get('service_selection_status') != 'approved'
             or not codes or len(codes) != len(lines)
             or any(line.get('conditions') for line in lines)):
         return None
@@ -36,6 +73,14 @@ def estimate(result: dict, service_date: str) -> dict | None:
     priced = []
     terms = []
     deductible_assumed = False
+    paired_balances = _paired_general_balances(benefits)
+    paired_used = False
+    preventive_waiver_excluded = bool(paired_balances and _nonpreventive_maneuver_visit(result, benefits))
+    preventive_waiver_ids = {row.get('id') for row in benefits.get('reported_options') or []
+        if row.get('kind') == 'deductible' and row.get('service_type_code') == '98'
+        and row.get('network') == 'Y' and row.get('amount_cents') == 0
+        and re.fullmatch(r'Preventive(?: - Included For Specific Services)?',
+                         str(row.get('payer_note') or ''), re.I)}
     for code, line in zip(codes, lines):
         units = code.get('units')
         if (line.get('id') != code.get('id') or line.get('code') != code.get('code')
@@ -61,18 +106,31 @@ def estimate(result: dict, service_date: str) -> dict | None:
         if type(amount) is not int or not 0 < amount <= 100_000_000:
             return None
         term = line.get('benefits') or {}
-        if term.get('deductible_applies') is False:
-            return None  # This quote is only for deductible-applicable services.
-        deductible_assumed |= term.get('deductible_applies') is not True
+        if term.get('deductible_applies') is False and not (
+                preventive_waiver_excluded and term.get('deductible_waiver_ids')
+                and set(term['deductible_waiver_ids']) <= preventive_waiver_ids):
+            return None  # Only a source-linked preventive waiver can be excluded.
+        deductible_assumed |= term.get('deductible_applies') is not True or preventive_waiver_excluded
         deductible = term.get('deductible_remaining_cents')
         oop = term.get('oop_remaining_cents')
         coinsurance = term.get('coinsurance_percent')
         if deductible is None: deductible = benefits.get('deductible_remaining_cents')
         if oop is None: oop = benefits.get('oop_remaining_cents')
+        if paired_balances and deductible is None and oop is None:
+            deductible, oop = paired_balances
+            paired_used = True
         if coinsurance is None: coinsurance = benefits.get('coinsurance_percent')
+        review_reasons = term.get('review_reasons') or []
+        allowed_review = (
+            'Separate medical and supplementary coverage was returned; unassigned out-of-pocket rows',
+            'Confirm the remaining individual deductible that applies to this visit.',
+            'Confirm the remaining individual out-of-pocket maximum.',
+            "Confirm the plan's referral requirement and, if required, that a referral is on file.")
         if (type(deductible) is not int or type(oop) is not int
                 or coinsurance is None or term.get('copay_cents') is not None
-                or term.get('requires_review') or term.get('source_errors')):
+                or term.get('source_errors') or term.get('requires_review') and
+                    (not review_reasons or any(not str(reason).startswith(allowed_review)
+                                               for reason in review_reasons))):
             return None
         terms.append((deductible, oop, str(coinsurance)))
         priced.append({'code': code['code'], 'units': units, 'unit_reference_cents': amount,
@@ -112,9 +170,12 @@ def estimate(result: dict, service_date: str) -> dict | None:
             'copay_cents': 0, 'copay_unconfirmed': True,
             'oop_remaining_cents': oop, 'oop_reduction_cents': calculation['oop_adjustment_cents'],
             'patient_share_cents': calculation['patient_cents'], 'lines': priced,
+            **({'paired_general_balances': True} if paired_used else {}),
+            **({'preventive_waiver_excluded': True} if preventive_waiver_excluded else {}),
             'rate_source': 'Clinic Cigna contract and BCBS Texas fee schedule',
             'deductible_source': (f"${calculation['deductible_cents'] / 100:.2f} applied before coinsurance from the "
-                                  'individual in-network medical balance; '
+                                  + ('paired, unassigned in-network STC 30 balance; ' if paired_used else
+                                     'individual in-network medical balance; ')
                                   + ('applicability assumed' if deductible_assumed else 'applicability reported')),
             **({'deductible_applicability': 'assumed'} if deductible_assumed else {}),
             'message': ('Clinic Cigna contract rates are used for listed CPTs; other CPTs use matched BCBS Texas '
@@ -122,7 +183,10 @@ def estimate(result: dict, service_date: str) -> dict | None:
                         + ('assumed to apply' if deductible_assumed else 'reported applicable') +
                         ' before coinsurance and the remaining '
                         'out-of-pocket limit caps the share. No additional copay was returned; final claim '
-                        'adjudication may change this refundable quote.')}
+                        'adjudication may change this refundable quote.'
+                        + (' The remaining balances come from one matching payer-returned general medical '
+                           'STC 30 deductible and out-of-pocket pair whose product association was not supplied.'
+                           if paired_used else ''))}
 
 
 def apply_collection(result: dict, guidance: dict, review: dict | None,
