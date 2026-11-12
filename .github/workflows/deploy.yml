@@ -96,6 +96,7 @@ jobs:
           node testing/televisit-collection-ui.mjs
           node ../testing/healthselect-ma-televisit-ui.mjs
           node ../testing/cigna-office-collection-ui.mjs
+          node ../testing/cigna-clinic-quote-ui.mjs
           node ../testing/bluecard-office-ui.mjs
           node ../testing/fep-standard-office-ui.mjs
           node testing/bluecard-office-collection-ui.mjs

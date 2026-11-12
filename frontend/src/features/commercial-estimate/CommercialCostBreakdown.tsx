@@ -148,7 +148,7 @@ export default function CommercialCostBreakdown({
               : cignaOfficeScenario
                 ? `${money(feeProxy!.copay_cents)} specialist office visit · assumed once`
                 : feeProxy != null
-                  ? cignaFeeProxy && feeProxy.copay_unconfirmed
+                  ? feeProxy.basis.includes('cigna') && feeProxy.copay_unconfirmed
                     ? `${money(0)} assumed for calculation · no CPT copay returned`
                     : dsnpOffice
                       ? '$0.00 office copay · Stedi'
@@ -306,7 +306,7 @@ export default function CommercialCostBreakdown({
               : botoxPreview
                 ? `${botoxPreview.coinsurance_percent}% · ${money(botoxPreview.patient_share_cents)} provisional`
                 : feeProxy != null
-                  ? `${feeProxy.coinsurance_percent}%${cignaOfficeScenario ? ' assumed' : ''} · ${money(feeProxy.coinsurance_cents)} on the fee proxy`
+                  ? `${feeProxy.coinsurance_percent}%${cignaOfficeScenario ? ' assumed' : ''} · ${money(feeProxy.coinsurance_cents)} ${feeProxy.basis === 'cigna_clinic_fee_quote' ? 'after deductible' : 'on the fee proxy'}`
                   : result.collection_guidance?.basis === 'out_of_pocket_limit'
                     ? reportedCoinsurance != null
                       ? `${reportedCoinsurance}% reported; $0 payable after out-of-pocket limit`
@@ -397,7 +397,7 @@ export default function CommercialCostBreakdown({
                     : botoxPreview
                       ? `${money(botoxPreview.patient_share_cents)} provisional · CPT ${botoxPreview.code} scenario`
                       : feeProxy != null
-                        ? `${money(feeProxy.patient_share_cents)} provisional · BCBS Texas fee proxy`
+                        ? `${money(feeProxy.patient_share_cents)} provisional · ${feeProxy.basis === 'cigna_clinic_fee_quote' ? 'Cigna rates and BCBS Texas proxy' : 'BCBS Texas fee proxy'}`
                         : humanaReferenceCopay != null
                           ? `${money(humanaReferenceCopay)} conditional in-network office copay · collection pending`
                           : aetnaCopayPlanning != null
@@ -427,7 +427,7 @@ export default function CommercialCostBreakdown({
               ? 'Conditional patient share'
               : dsnpOffice
                 ? 'Pre-Medicaid planning share'
-                : cignaFeeProxy || summary?.conditional
+                : feeProxy?.basis.includes('cigna') || summary?.conditional
                   ? 'Conditional patient share'
                   : aetnaTable.share != null
                     ? 'Calculated Aetna share for this office visit'

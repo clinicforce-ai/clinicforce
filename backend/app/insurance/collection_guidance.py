@@ -8,7 +8,7 @@ from app.insurance.collection.bluecard_family_deposit import apply as apply_blue
 from app.insurance.collection.bluecard_epo import neurology_office_copay
 from app.insurance.collection.contract_advance import applies as contract_advance_applies
 from app.insurance.collection.blue_ppo_family_quote import apply as apply_blue_ppo_family_quote
-from app.insurance.collection.cigna_ppo_deductible_quote import apply as apply_cigna_ppo_deductible_quote
+from app.insurance.collection.cigna_quotes import apply as apply_cigna_quotes
 from app.insurance.collection.office_copay import (cigna_oap_televisit_office_copay, diagnostic_day_copay_amount, office_copay_amount, preview_office_copay_applies)
 from app.insurance.collection.billing_note import apply_billing_note
 from app.insurance.collection.aetna_office_deposit import apply as apply_aetna_office_deposit
@@ -452,7 +452,7 @@ def build(result: dict, review: dict | None = None) -> dict:
     apply_bluecard_family_deposit(result, guidance, review, safe=bool(safe),
         qmb_protected=bool(qmb_protected), qmb_unresolved=bool(qmb_unresolved))
     apply_blue_ppo_family_quote(result, guidance, review, assumptions, safe=bool(safe))
-    apply_cigna_ppo_deductible_quote(result, guidance, review, assumptions, safe=bool(safe))
+    apply_cigna_quotes(result, guidance, review, assumptions, safe=bool(safe))
     for line in lines:
         mapped = 'needs mapping' not in line.get('benefit_basis', '')
         terms = (line.get('benefits') or {}) if mapped else {}

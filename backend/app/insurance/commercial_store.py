@@ -379,6 +379,36 @@ def matching_rates(practice_id: str, profile: dict, network: dict, service_date:
     return list(selected.values())
 
 
+def cigna_clinic_rates(practice_id: str, service_date: str, place_of_service: str,
+                       codes: list[dict]) -> list[dict]:
+    """Read the clinic-wide Cigna schedule independently of a product-specific profile."""
+    requested = {str(line.get('code') or '') for line in codes if not line.get('modifiers')}
+    if (not requested or not place_of_service or
+            not patient_store.DATABASE_URL and not (os.getenv('DB_HOST') and os.getenv('DATABASE_PASSWORD'))):
+        return []
+    with _connection() as db:
+        rows = db.execute('''SELECT l.code,l.modifier,l.allowed_cents,v.id AS version_id,
+                v.source_reference
+            FROM commercial_rate_lines l
+            JOIN commercial_rate_versions v ON v.id=l.version_id
+            JOIN commercial_payer_connections p ON p.id=v.payer_connection_id
+            WHERE v.practice_id=%s AND p.practice_id=%s AND p.display_name='Cigna'
+              AND v.status='active' AND v.source_type='manual'
+              AND l.network_name='Cigna clinic-wide' AND l.plan_matcher=''
+              AND l.provider_npi='' AND l.tin='' AND l.place_of_service=%s
+              AND l.unit_rule='per_unit' AND l.modifier='' AND l.code=ANY(%s)
+              AND v.effective_from<=%s AND (v.effective_to IS NULL OR v.effective_to>=%s)''',
+            (practice_id, practice_id, place_of_service, list(requested), service_date,
+             service_date)).fetchall()
+    selected = {}
+    for row in rows:
+        value = dict(row)
+        if value['code'] in selected and value['allowed_cents'] != selected[value['code']]['allowed_cents']:
+            raise CommercialError(f"More than one active Cigna clinic rate matches {value['code']}.")
+        selected[value['code']] = value
+    return list(selected.values())
+
+
 def aetna_meppo_reference_rates(practice_id: str, payer_connection_id: str, service_date: str,
                                 codes: list[str]) -> list[dict]:
     """Read the dated, unapproved Aetna portal rows as reference prices only."""

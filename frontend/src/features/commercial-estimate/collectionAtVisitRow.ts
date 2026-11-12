@@ -3,112 +3,10 @@ import type { CostBreakdownRow } from '../insurance-estimate/CostBreakdownTable'
 import type { CommercialEstimateModel } from './useCommercialEstimateModel'
 import { feeProxyFormula } from './coinsuranceFormula'
 import { money } from './format'
-import { patientBenefitsBound } from './identityBinding'
 import type { bluecardOfficeDeductibleScenario } from './bluecardOfficeDeductibleScenario'
 
-export function pendingBluecardOfficeCopay(
-  result: PrevisitEstimate,
-  model: CommercialEstimateModel,
-): number | null {
-  const line =
-    result.price_range?.mode === 'services' && result.price_range.lines?.length === 1
-      ? result.price_range.lines[0]
-      : null
-  const terms = line?.benefits
-  const copay = terms?.copay_cents
-  if (
-    model.cash ||
-    model.calculating ||
-    model.previousEstimate ||
-    model.amount ||
-    result.collection_guidance?.amount_cents != null ||
-    !/\b(?:blue cross|bcbs(?:tx| texas)?)\b/i.test(result.payer || '') ||
-    result.plan_details?.stedi?.names?.length !== 1 ||
-    !/\b(?:PPO|Preferred Provider Organization)\b/i.test(result.plan_details.stedi.names[0]) ||
-    result.benefits?.active !== true ||
-    result.benefits.service_date_matches === false ||
-    result.benefits.has_secondary ||
-    result.benefits.network_conflict ||
-    result.benefits.coverage_status_conflict ||
-    result.benefits.coverage_dates_invalid ||
-    result.benefits.historical_only ||
-    result.benefits.source_errors?.length ||
-    result.benefits.network_status === 'out_of_network' ||
-    result.billing_protection?.status === 'qmb' ||
-    result.recovery?.reason_code === 'multiple_active_policies' ||
-    !patientBenefitsBound(result.identity) ||
-    !line ||
-    !/^992(?:0[2-5]|1[2-5])$/.test(line.code) ||
-    line.units !== 1 ||
-    line.modifiers?.length ||
-    terms?.active !== true ||
-    terms.network_status === 'out_of_network' ||
-    terms.service_date_matches === false ||
-    terms.has_secondary ||
-    terms.coverage_status_conflict ||
-    terms.coverage_dates_invalid ||
-    terms.source_errors?.length ||
-    (terms.copay_period && !['VISIT', '27', 'DAY', '7'].includes(terms.copay_period)) ||
-    (terms.deductible_applies !== false && terms.deductible_remaining_cents !== 0) ||
-    (terms.coinsurance_percent != null && Number(terms.coinsurance_percent) !== 0) ||
-    !Number.isInteger(copay) ||
-    copay! <= 0 ||
-    (terms.separate_copay_limit
-      ? terms.copay_remaining_cents == null || terms.copay_remaining_cents < copay!
-      : terms.oop_remaining_cents == null || terms.oop_remaining_cents < copay!)
-  )
-    return null
-  return Math.max(0, copay! - (result.encounter_summary?.payments_verified_cents || 0))
-}
-
-export function pendingCignaOfficeCopay(
-  result: PrevisitEstimate,
-  model: CommercialEstimateModel,
-): number | null {
-  const officeLine =
-    result.price_range?.mode === 'services' && result.price_range.lines?.length === 1
-      ? result.price_range.lines[0]
-      : null
-  return !model.cash &&
-    !model.previousEstimate &&
-    !model.requirementIssue &&
-    result.collection_guidance?.amount_cents == null &&
-    /\bcigna\b/i.test(result.payer || '') &&
-    result.benefits?.active !== false &&
-    result.benefits?.network_status === 'in_network' &&
-    !result.benefits?.network_conflict &&
-    result.benefits?.service_date_matches !== false &&
-    !result.benefits?.coverage_status_conflict &&
-    !result.benefits?.coverage_dates_invalid &&
-    !result.benefits?.has_secondary &&
-    !result.benefits?.source_errors?.length &&
-    !result.benefits?.historical_only &&
-    !result.price_range?.service_issues?.length &&
-    result.recovery?.reason_code !== 'multiple_active_policies' &&
-    result.identity?.status !== 'review' &&
-    result.billing_protection?.status !== 'qmb' &&
-    officeLine?.units === 1 &&
-    /^992(?:0[2-5]|1[2-5])$/.test(officeLine.code) &&
-    officeLine.benefits?.active !== false &&
-    officeLine.benefits?.network_status !== 'out_of_network' &&
-    !officeLine.benefits?.coverage_status_conflict &&
-    !officeLine.benefits?.coverage_dates_invalid &&
-    officeLine.benefits?.service_date_matches !== false &&
-    !officeLine.benefits?.source_errors?.length &&
-    (officeLine.benefits?.deductible_applies !== true ||
-      officeLine.benefits?.deductible_remaining_cents === 0) &&
-    [undefined, null, '0', '0.0', '0.00'].includes(officeLine.benefits?.coinsurance_percent) &&
-    (officeLine.benefits?.oop_remaining_cents == null ||
-      officeLine.benefits.oop_remaining_cents >= officeLine.benefits.copay_cents!) &&
-    Number.isInteger(officeLine.benefits?.copay_cents) &&
-    officeLine.benefits!.copay_cents! > 0
-    ? Math.max(
-        0,
-        officeLine.benefits.copay_cents! -
-          Math.max(0, result.encounter_summary?.payments_verified_cents || 0),
-      )
-    : null
-}
+export { pendingBluecardOfficeCopay, pendingCignaOfficeCopay } from './pendingOfficeCopays'
+import { pendingCignaOfficeCopay } from './pendingOfficeCopays'
 
 export function collectionAtVisitRow(
   result: PrevisitEstimate,
@@ -157,6 +55,7 @@ export function collectionAtVisitRow(
     feeProxy &&
     !dsnpOffice &&
     !cignaFeeProxy &&
+    feeProxy.basis !== 'cigna_clinic_fee_quote' &&
     (!choicePlusEmg ||
       (!model.previousEstimate &&
         !model.calculating &&
@@ -239,113 +138,121 @@ export function collectionAtVisitRow(
     collectionBlocker?.sentence ||
     'Review selected CPT, benefits and clinic rate before collecting'
   const row = {
-    label: dsnpOffice
-      ? 'Amount to collect at visit · dual status unresolved'
-      : bluecardDeductible?.familyDeductible
-        ? 'Amount to collect at visit · provisional target'
-        : biopsyBalance != null
-          ? biopsyOfficePending
-            ? 'Provisional biopsy target · office share pending'
-            : 'Provisional collection target · confirmation pending'
-          : aetnaOtherCoverage
-            ? payerOrderVerified
-              ? 'Amount to collect at visit · pending secondary claim'
-              : 'Amount to collect at visit · pending payer order'
-            : pendingAetnaCopay != null || pendingBluecardCopay != null
-              ? 'Amount to collect at visit · pending verification'
-              : priorDateAetnaBalance != null
-                ? aetnaMedicareScenario
-                  ? 'Amount to collect at visit · Aetna / Medicare scenario'
-                  : 'Amount to collect at visit · office copay reference'
-                : cignaCard
+    label:
+      result.collection_guidance?.basis === 'cigna_clinic_fee_quote' &&
+      result.collection_guidance.amount_cents != null
+        ? 'Amount to collect at visit · refundable clinic quote'
+        : dsnpOffice
+          ? 'Amount to collect at visit · dual status unresolved'
+          : bluecardDeductible?.familyDeductible
+            ? 'Amount to collect at visit · provisional target'
+            : biopsyBalance != null
+              ? biopsyOfficePending
+                ? 'Provisional biopsy target · office share pending'
+                : 'Provisional collection target · confirmation pending'
+              : aetnaOtherCoverage
+                ? payerOrderVerified
+                  ? 'Amount to collect at visit · pending secondary claim'
+                  : 'Amount to collect at visit · pending payer order'
+                : pendingAetnaCopay != null || pendingBluecardCopay != null
                   ? 'Amount to collect at visit · pending verification'
-                  : botoxPreview
-                    ? 'Planned amount to collect at visit'
-                    : diagnosticCopayReference != null
-                      ? 'Diagnostic copay · collection pending'
-                      : pendingUhcHmoPosCopay
-                        ? 'Amount to collect at visit · verify Medicare protection'
-                        : (partialOfficeCopay != null || cardPlanningCopay != null) &&
-                            feeProxyCheckin == null
-                          ? 'Suggested amount to collect at visit'
-                          : ((cignaFeeProxy &&
-                                !['claim_after_service', 'office_copay'].includes(
-                                  result.collection_guidance?.basis || '',
-                                )) ||
-                                feeProxyCheckin != null ||
-                                aetnaPlanning != null ||
-                                aetnaCopayPlanning != null) &&
-                              !['bcbstx_proxy_advance', 'qmb_protection'].includes(
-                                result.collection_guidance?.basis || '',
-                              )
-                            ? aetnaPolicyPending
-                              ? 'Amount to collect at visit · pending policy approval'
-                              : 'Planned amount to collect at visit'
-                            : 'Amount to collect at visit',
-    value: dsnpOffice
-      ? `${money(0)} at check-in · ${money(feeProxy!.patient_share_cents)} pre-Medicaid planning share`
-      : combinedPlan
-        ? `${money(combinedPlan.amount_cents)} planning estimate`
-        : result.collection_guidance?.basis === 'healthselect_ma_zero_televisit' &&
-            result.collection_guidance.amount_cents === 0
-          ? money(0)
-          : result.collection_guidance?.basis === 'published_geha_pshb_zero_office' &&
-              result.collection_guidance.amount_cents === 0
-            ? money(0)
-            : result.collection_guidance?.basis === 'qmb_protection' &&
+                  : priorDateAetnaBalance != null
+                    ? aetnaMedicareScenario
+                      ? 'Amount to collect at visit · Aetna / Medicare scenario'
+                      : 'Amount to collect at visit · office copay reference'
+                    : cignaCard
+                      ? 'Amount to collect at visit · pending verification'
+                      : botoxPreview
+                        ? 'Planned amount to collect at visit'
+                        : diagnosticCopayReference != null
+                          ? 'Diagnostic copay · collection pending'
+                          : pendingUhcHmoPosCopay
+                            ? 'Amount to collect at visit · verify Medicare protection'
+                            : (partialOfficeCopay != null || cardPlanningCopay != null) &&
+                                feeProxyCheckin == null
+                              ? 'Suggested amount to collect at visit'
+                              : ((cignaFeeProxy &&
+                                    !['claim_after_service', 'office_copay'].includes(
+                                      result.collection_guidance?.basis || '',
+                                    )) ||
+                                    feeProxyCheckin != null ||
+                                    aetnaPlanning != null ||
+                                    aetnaCopayPlanning != null) &&
+                                  !['bcbstx_proxy_advance', 'qmb_protection'].includes(
+                                    result.collection_guidance?.basis || '',
+                                  )
+                                ? aetnaPolicyPending
+                                  ? 'Amount to collect at visit · pending policy approval'
+                                  : 'Planned amount to collect at visit'
+                                : 'Amount to collect at visit',
+    value:
+      result.collection_guidance?.basis === 'cigna_clinic_fee_quote' &&
+      result.collection_guidance.amount_cents != null
+        ? money(result.collection_guidance.amount_cents)
+        : dsnpOffice
+          ? `${money(0)} at check-in · ${money(feeProxy!.patient_share_cents)} pre-Medicaid planning share`
+          : combinedPlan
+            ? `${money(combinedPlan.amount_cents)} planning estimate`
+            : result.collection_guidance?.basis === 'healthselect_ma_zero_televisit' &&
                 result.collection_guidance.amount_cents === 0
               ? money(0)
-              : biopsyBalance != null
-                ? `${money(biopsyBalance)} provisional${biopsyOfficePending ? ' biopsy only' : ''}`
-                : botoxPreview
-                  ? `${money(botoxPreview.patient_share_cents)} provisional · confirm CPT`
-                  : cignaFeeProxy &&
-                      result.collection_guidance?.basis === 'claim_after_service' &&
-                      result.collection_guidance.amount_cents === 0
-                    ? money(0)
-                    : !automaticCashFallback &&
-                        model.supportedAmount &&
-                        result.collection_guidance?.amount_cents != null
-                      ? money(result.collection_guidance.amount_cents)
-                      : bluecardDeductible
-                        ? `${money(bluecardDeductible.collect)} estimated · confirm before charging`
-                        : diagnosticCopayReference != null
-                          ? `${money(diagnosticCopayReference)} once per day · verify before charging`
-                          : cignaFeeProxy
-                            ? `${money(feeProxy!.patient_share_cents)} planning estimate`
-                            : feeProxyCheckin != null
-                              ? money(feeProxyCheckin)
-                              : aetnaPlanning
-                                ? `${money(aetnaBalance!)} planning estimate`
-                                : aetnaCopayPlanning != null
-                                  ? aetnaOtherCoverage
-                                    ? `Pending · ${money(officeBalance!)} Aetna office copay before secondary processing`
-                                    : aetnaPolicyPending
-                                      ? `Pending · ${money(officeBalance!)} specialist office copay`
-                                      : `${money(officeBalance!)} planning estimate`
-                                  : pendingBluecardCopay != null
-                                    ? `Pending · ${money(pendingBluecardCopay)} office copay if verified`
-                                    : officeReferenceCopay != null
-                                      ? `${money(officeReferenceCopay)} office-only reference`
-                                      : humanaReferenceCopay != null
-                                        ? `Pending · ${money(humanaReferenceCopay)} office copay if confirmed`
-                                        : partialOfficeCopay != null
-                                          ? pendingUhcHmoPosCopay
-                                            ? `${money(partialOfficeCopay)} specialist office copay`
-                                            : money(partialOfficeCopay)
-                                          : pendingAetnaCopay != null
-                                            ? `Pending · ${money(pendingAetnaCopay)} office copay if verified`
-                                            : priorDateAetnaBalance != null
-                                              ? aetnaMedicareScenario
-                                                ? `${money(priorDateAetnaBalance)} if Aetna is the only applicable payer · ${money(0)} if Medicare is confirmed secondary`
-                                                : money(priorDateAetnaBalance)
-                                              : cardPlanningCopay != null
-                                                ? `${money(cardPlanningCopay)} office-only card suggestion`
-                                                : pendingCignaCopay != null
-                                                  ? `Pending · ${money(pendingCignaCopay)} office copay if verified`
-                                                  : cignaCard
-                                                    ? `Pending · ${money(cignaCard.nontier1_specialist_copay_cents)} non-Tier-1 office-only reference; diagnostic CPT amount requires verification`
-                                                    : pendingCollectionAction,
+              : result.collection_guidance?.basis === 'published_geha_pshb_zero_office' &&
+                  result.collection_guidance.amount_cents === 0
+                ? money(0)
+                : result.collection_guidance?.basis === 'qmb_protection' &&
+                    result.collection_guidance.amount_cents === 0
+                  ? money(0)
+                  : biopsyBalance != null
+                    ? `${money(biopsyBalance)} provisional${biopsyOfficePending ? ' biopsy only' : ''}`
+                    : botoxPreview
+                      ? `${money(botoxPreview.patient_share_cents)} provisional · confirm CPT`
+                      : cignaFeeProxy &&
+                          result.collection_guidance?.basis === 'claim_after_service' &&
+                          result.collection_guidance.amount_cents === 0
+                        ? money(0)
+                        : !automaticCashFallback &&
+                            model.supportedAmount &&
+                            result.collection_guidance?.amount_cents != null
+                          ? money(result.collection_guidance.amount_cents)
+                          : bluecardDeductible
+                            ? `${money(bluecardDeductible.collect)} estimated · confirm before charging`
+                            : diagnosticCopayReference != null
+                              ? `${money(diagnosticCopayReference)} once per day · verify before charging`
+                              : cignaFeeProxy
+                                ? `${money(feeProxy!.patient_share_cents)} planning estimate`
+                                : feeProxyCheckin != null
+                                  ? money(feeProxyCheckin)
+                                  : aetnaPlanning
+                                    ? `${money(aetnaBalance!)} planning estimate`
+                                    : aetnaCopayPlanning != null
+                                      ? aetnaOtherCoverage
+                                        ? `Pending · ${money(officeBalance!)} Aetna office copay before secondary processing`
+                                        : aetnaPolicyPending
+                                          ? `Pending · ${money(officeBalance!)} specialist office copay`
+                                          : `${money(officeBalance!)} planning estimate`
+                                      : pendingBluecardCopay != null
+                                        ? `Pending · ${money(pendingBluecardCopay)} office copay if verified`
+                                        : officeReferenceCopay != null
+                                          ? `${money(officeReferenceCopay)} office-only reference`
+                                          : humanaReferenceCopay != null
+                                            ? `Pending · ${money(humanaReferenceCopay)} office copay if confirmed`
+                                            : partialOfficeCopay != null
+                                              ? pendingUhcHmoPosCopay
+                                                ? `${money(partialOfficeCopay)} specialist office copay`
+                                                : money(partialOfficeCopay)
+                                              : pendingAetnaCopay != null
+                                                ? `Pending · ${money(pendingAetnaCopay)} office copay if verified`
+                                                : priorDateAetnaBalance != null
+                                                  ? aetnaMedicareScenario
+                                                    ? `${money(priorDateAetnaBalance)} if Aetna is the only applicable payer · ${money(0)} if Medicare is confirmed secondary`
+                                                    : money(priorDateAetnaBalance)
+                                                  : cardPlanningCopay != null
+                                                    ? `${money(cardPlanningCopay)} office-only card suggestion`
+                                                    : pendingCignaCopay != null
+                                                      ? `Pending · ${money(pendingCignaCopay)} office copay if verified`
+                                                      : cignaCard
+                                                        ? `Pending · ${money(cignaCard.nontier1_specialist_copay_cents)} non-Tier-1 office-only reference; diagnostic CPT amount requires verification`
+                                                        : pendingCollectionAction,
     detail:
       result.collection_guidance?.collection_rule?.mode === 'bluecard_epo_neurology_office_copay' &&
       model.supportedAmount

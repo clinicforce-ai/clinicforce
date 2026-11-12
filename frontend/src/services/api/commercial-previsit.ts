@@ -66,6 +66,9 @@ export type PrevisitEstimate = {
       reference_cents: number
       coinsurance_base_cents?: number
       coinsurance_cents: number
+      deductible_cents?: number
+      source?: string
+      source_reference?: string
     }[]
     rate_source: string
     deductible_source: string

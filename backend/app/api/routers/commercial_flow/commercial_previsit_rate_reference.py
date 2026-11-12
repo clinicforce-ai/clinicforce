@@ -4,7 +4,7 @@ from __future__ import annotations
 from app.api.routers import commercial_estimator as _api
 from app.logs.logger import log_warning
 
-BCBSTX_2026_OTHER_CODES = {'70496': 22719, '70498': 22693}
+BCBSTX_2026_OTHER_CODES = {'70496': 22719, '70498': 22693, '95992': 3412}
 BCBSTX_2026_OFFICE_CODES = {'99202': 5686, '99203': 8807, '99204': 13066, '99205': 17245}
 BCBSTX_2026_OTHER_CODES_SOURCE = ('https://www.bcbstx.com/docs/provider/tx/standards/general-reimbursement-information/'
     'gri-info/professional-schedules/2026-internet-posting-notices/other-codes-2026-files/dft-2026-v1.pdf')
@@ -85,6 +85,13 @@ def _attach_temporary_blue_cross_rates(result: dict, practice_id: str, inputs: d
     pos = str(inputs.get('place_of_service') or '')
     date = str(inputs.get('service_date') or '')
     codes = result.get('codes') or []
+    if _api.re.search(r'\bcigna\b', payer_name, _api.re.I) and date and pos and codes:
+        try:
+            result['cigna_clinic_rates'] = _api.commercial_store.cigna_clinic_rates(
+                practice_id, date, pos, codes)
+        except _api.commercial.CommercialError as exc:
+            result['cigna_rate_conflict'] = True
+            result.setdefault('issues', []).append(str(exc))
     if not all((rendering_npi, billing_npi, location_id, pos, date, codes)):
         return
     selected_code = str(codes[0].get('code') or '') if len(codes) == 1 else ''
@@ -174,7 +181,7 @@ def _attach_temporary_blue_cross_rates(result: dict, practice_id: str, inputs: d
             'lines': lines, 'complete': len(lines) == len(codes),
             **({'alternatives': alternative_lines} if alternative_lines else {}),
             'reference_place_of_service': reference_pos,
-            'message': (f'Temporary CPT price reference only. Published unmodified CTA amounts are from the BCBSTX 2026 professional Other Codes schedule. These are not {payer_name} contracted allowances or a patient amount to collect.'
+            'message': (f'Temporary CPT price reference only. Published unmodified CPT amounts are from the BCBSTX 2026 professional Other Codes schedule. These are not {payer_name} contracted allowances or a patient amount to collect by themselves.'
                         if published else
                         f'Temporary CPT price reference only. These are Blue Cross rates, not {payer_name} contracted allowances.'
                         if payer_name == 'Cigna' else

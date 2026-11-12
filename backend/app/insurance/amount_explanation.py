@@ -289,6 +289,7 @@ def build(result: dict, guidance: dict, review: dict | None = None) -> dict:
             sentence, code = ('Collect $0 now because confirmed QMB protection prohibits Medicare cost-sharing collection; any other liability requires separate covered-service and claim evidence', 'qmb_protected')
         elif basis == 'healthselect_ma_zero_televisit': sentence, code = ('Collect $0 now: this matched UHC HealthSelect Medicare Advantage PPO reports a $0 virtual-visit copay and 0% coinsurance, with no annual medical deductible. The proposed code, payer order and final claim remain open', basis)
         elif basis == 'aetna_office_refundable_deposit': sentence, code = (f'Collect {_money(amount)} as a refundable clinic office deposit for CPT 99213. The clinic-supplied Availity MPPO Office maximum is a reference, not this member’s confirmed Aetna allowance or final patient share; apply it to the processed claim and refund any excess', basis)
+        elif basis in {'cigna_clinic_fee_quote', 'cigna_fee_proxy_advance'}: sentence, code = (f'Collect {_money(amount)} as a clinic-directed refundable advance using Cigna rates where available and BCBS Texas fees for other selected CPTs; apply deductible, coinsurance, out-of-pocket cap and prior payments. This is not a Cigna Cost of Care Estimator result; reconcile after the claim' if basis == 'cigna_clinic_fee_quote' else f'Collect {_money(amount)} for the planned diagnostic services using Cigna exact-CPT benefits and the clinic BCBS Texas fee schedule', basis)
         elif basis in {'bcbstx_proxy_advance', 'bcbstx_refundable_advance'}:
             sentence, code = (f'Collect {_money(amount)} as the clinic-approved BCBS Texas fee proxy advance for the planned diagnostic services; the UHC allowed amount and final claim share remain unknown' if basis == 'bcbstx_proxy_advance' else
                 f'Collect {_money(amount)} as a refundable deposit using the clinic BCBS Texas CPT 99203 fee reference; remaining balances were not returned and final patient liability follows the processed claim' if (guidance.get('collection_rule') or {}).get('mode') == 'trs_hd_office_refundable_deposit' else
@@ -296,7 +297,6 @@ def build(result: dict, guidance: dict, review: dict | None = None) -> dict:
                 f'Collect {_money(amount)} as a refundable Cigna PPO office quote using the clinic BCBS Texas fee reference; Cigna allowance remains unknown, {"the clinic reports this provider in network without payer confirmation" if (result.get("benefits") or {}).get("network_source") == "clinic_attested_cigna_ppo" else "provider tier remains unconfirmed"}, and any excess is refunded after the claim' if (guidance.get('collection_rule') or {}).get('mode') == 'cigna_ppo_deductible_quote' else
                 f'Collect {_money(amount)} as a refundable BlueCard office deposit using the clinic BCBS Texas fee reference and reported family deductible; reconcile and refund any excess after the processed claim' if (guidance.get('collection_rule') or {}).get('mode') == 'bluecard_family_office_refundable_deposit' else
                 f'Collect {_money(amount)} as a refundable advance against the selected CPTs using the clinic BCBS Texas fee schedule; the payer returned no financial terms, and final patient liability follows the processed claim', basis)
-        elif basis == 'cigna_fee_proxy_advance': sentence, code = f'Collect {_money(amount)} for the planned diagnostic services using Cigna exact-CPT benefits and the clinic BCBS Texas fee schedule', basis
         elif basis == 'ecw_billing_note': sentence, code = 'No payment is due now because the visit’s eCW billing note says not to collect', 'ecw_no_collection'
         elif basis == 'practice_cash_price':
             sentence, code = 'This is NMCT’s cash price for the planned care', 'practice_cash_price'
@@ -370,8 +370,7 @@ def build(result: dict, guidance: dict, review: dict | None = None) -> dict:
         if result.get('service_selection_status') == 'preview' and (result.get('service_plan') or {}).get('recommended_ids'):
             sentence += '. This estimate uses suggested CPTs; update the service plan if the intended care changes'
     else:
-        cause, cause_code = _cash_cause(result, failure, recovery, card, network, benefits, unpriced, missing,
-                                        guidance.get('source_errors'))
+        cause, cause_code = _cash_cause(result, failure, recovery, card, network, benefits, unpriced, missing, guidance.get('source_errors'))
         proxy = result.get('fee_proxy_estimate') or {}
         if proxy.get('basis') in {'bcbstx_fee_proxy', 'bcbstx_uhc_in_network_fee_proxy', 'bcbstx_uhc_choice_plus_fee_proxy'} and type(proxy.get('patient_share_cents')) is int:
             condition = ('confirm deductible applicability, clinic collection policy and the UHC allowance before charging' if proxy.get('basis') == 'bcbstx_uhc_choice_plus_fee_proxy' else 'do not collect until the clinic policy and Medicare billing-protection checks clear this member')

@@ -4,7 +4,7 @@ from __future__ import annotations
 from app.api.routers import commercial_estimator as _api
 from app.api.routers.commercial_flow.commercial_previsit_finish import _payer_plan_pricing_source
 from app.api.routers.commercial_flow.commercial_previsit_rate_reference import refresh_saved_temporary_rates
-from app.insurance import blue_cross_proxy, choice_plus_emg_proxy, group_contract_support, published_plan_benefits, uhc_dsnp_office_proxy
+from app.insurance import blue_cross_proxy, choice_plus_emg_proxy, cigna_clinic_quote, group_contract_support, published_plan_benefits, uhc_dsnp_office_proxy
 from app.insurance.identity import patient_plan_applies
 from app.insurance.stedi_benefits.normalize import ambiguous_combined_zero_oop
 
@@ -254,7 +254,7 @@ def refresh_saved_network_pricing(result: dict, case: dict, practice_id: str,
 
 def refresh_saved_cross_payer_planning(result: dict, case: dict, practice_id: str, route_payer: dict | None) -> None:
     """Rebuild a saved visit's current fee references and conditional target."""
-    for key in ('fee_proxy_estimate', 'temporary_rate_reference', 'aetna_diagnostic_reference',
+    for key in ('fee_proxy_estimate', 'temporary_rate_reference', 'cigna_clinic_rates', 'cigna_rate_conflict', 'aetna_diagnostic_reference',
                 'provisional_collection_target'):
         result.pop(key, None)
     context = case['previsit_context']
@@ -264,7 +264,8 @@ def refresh_saved_cross_payer_planning(result: dict, case: dict, practice_id: st
     result.pop('cigna_office_fee_scenarios', None)
     if office_scenarios := blue_cross_proxy.cigna_office_fee_scenarios(result, str(result.get('service_date') or '')):
         result['cigna_office_fee_scenarios'] = office_scenarios
-    if proxy := (choice_plus_emg_proxy.choice_plus_emg_estimate(result, str(result.get('service_date') or ''))
+    if proxy := (cigna_clinic_quote.estimate(result, str(result.get('service_date') or ''))
+                 or choice_plus_emg_proxy.choice_plus_emg_estimate(result, str(result.get('service_date') or ''))
                  or blue_cross_proxy.estimate(result, str(result.get('service_date') or ''))
                  or uhc_dsnp_office_proxy.estimate(result, str(result.get('service_date') or ''))
                  or blue_cross_proxy.cigna_estimate(result, str(result.get('service_date') or ''))
