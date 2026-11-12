@@ -25,6 +25,7 @@ export type CommercialNetworkEvidence = {
   network_name?: string
   product?: string
   product_network_source?: string
+  home_plan?: string
   product_network_reference?: string
   provider_participation?: 'unresolved' | 'clinic_agreement'
   mismatch_warnings?: string[]

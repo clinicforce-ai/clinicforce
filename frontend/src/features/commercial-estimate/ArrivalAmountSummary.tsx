@@ -441,6 +441,12 @@ export default function ArrivalAmountSummary({
           Refundable Cigna office copay advance; provider network and final share remain
           unconfirmed.
         </p>
+      ) : model.guidance?.collection_rule?.mode === 'bluecard_epo_neurology_office_copay' &&
+        model.amount ? (
+        <p>
+          One payer-reported in-network neurologist office copay after recorded payments. Separately
+          performed testing and the final claim may change the total.
+        </p>
       ) : model.guidance?.basis === 'office_copay' && model.amount ? (
         <p>Office copay advance; other service costs may follow the claim.</p>
       ) : model.guidance?.basis === 'diagnostic_day_copay' && model.amount ? (

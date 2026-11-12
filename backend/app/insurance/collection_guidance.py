@@ -5,6 +5,8 @@ from app.insurance.collection.options import emg_option as _emg_option
 from app.insurance.collection.requirements import summarize_requirements
 from app.insurance.collection.refundable_advance import apply as apply_refundable_advance, advance_patient_message
 from app.insurance.collection.bluecard_family_deposit import apply as apply_bluecard_family_deposit
+from app.insurance.collection.bluecard_epo import neurology_office_copay
+from app.insurance.collection.contract_advance import applies as contract_advance_applies
 from app.insurance.collection.blue_ppo_family_quote import apply as apply_blue_ppo_family_quote
 from app.insurance.collection.cigna_ppo_deductible_quote import apply as apply_cigna_ppo_deductible_quote
 from app.insurance.collection.office_copay import (cigna_oap_televisit_office_copay, diagnostic_day_copay_amount, office_copay_amount, preview_office_copay_applies)
@@ -245,8 +247,8 @@ def build(result: dict, review: dict | None = None) -> dict:
             and verified_out_of_network(benefits)):
         amount = fee_proxy['patient_share_cents']
         guidance.update(status='estimated', basis='bcbstx_proxy_advance',
-            reason='Provisional advance from the clinic-approved BCBS Texas fee proxy and the member diagnostic benefit. The UHC allowed amount is unknown.')
-        assumptions.append('The advance uses clinic BCBS Texas fee references, not a payer-confirmed UHC allowance. Final responsibility follows the processed claim.')
+            reason='Provisional advance from the clinic-approved BCBS Texas fee proxy and the member diagnostic benefit. The payer allowed amount is unknown.')
+        assumptions.append('The advance uses clinic BCBS Texas fee references, not a payer-confirmed allowance. Final responsibility follows the processed claim.')
     if (amount is None and safe and not primary_secondary_copay and not qmb_protected and not qmb_unresolved
             and fee_proxy.get('basis') == 'bcbstx_uhc_in_network_fee_proxy'
             and type(fee_proxy.get('patient_share_cents')) is int
@@ -256,8 +258,8 @@ def build(result: dict, review: dict | None = None) -> dict:
             and verified_in_network(benefits)):
         amount = fee_proxy['patient_share_cents']
         guidance.update(status='estimated', basis='bcbstx_proxy_advance',
-            reason='Provisional in-network advance from the clinic-approved BCBS Texas fee proxy and member diagnostic benefits. The UHC allowed amount is unknown.')
-        assumptions.append('The advance uses clinic BCBS Texas fee references, not a payer-confirmed UHC allowance. Final responsibility follows the processed claim.')
+            reason='Provisional in-network advance from the clinic-approved BCBS Texas fee proxy and member diagnostic benefits. The payer allowed amount is unknown.')
+        assumptions.append('The advance uses clinic BCBS Texas fee references, not a payer-confirmed allowance. Final responsibility follows the processed claim.')
     amount = secondary_order.allowed_advance(amount, medicare_secondary)
     oon_advance = (not verified_out_of_network(benefits) or
         policy.get('allow_supported_oon_advance') is True and
@@ -266,25 +268,19 @@ def build(result: dict, review: dict | None = None) -> dict:
     fixed_copay = guidance['basis'] == 'office_copay' or strict.get('status') == 'copay_only'
     published_copay = any((line.get('benefits') or {}).get('published_plan_rule') for line in lines)
     published_fep_standard = any((line.get('benefits') or {}).get('published_plan_rule') == FEP_STANDARD_2026 for line in lines)
+    bluecard_epo_neurology_copay = neurology_office_copay(
+        result, benefits, price, lines, amount, policy_approved, guidance['basis'])
     clinic_delegated_copay = (not policy_approved and guidance['basis'] == 'office_copay'
         and result.get('nmct_cigna_delegated_office') is True
         and verified_in_network(benefits)
         and result.get('benefit_source') == 'Stedi · plan administrator')
-    policy_allows_advance = clinic_delegated_copay or (cigna_oap_televisit and not policy_approved) or (guidance['basis'] == 'cigna_refundable_office_copay' and (not policy_approved or policy_mode in {'collect_verified_copay', 'collect_supported_advance'})) or (policy_mode == 'collect_verified_copay' or published_fep_standard and fixed_copay and policy_mode == 'collect_supported_advance' if published_copay else
+    policy_allows_advance = bluecard_epo_neurology_copay or clinic_delegated_copay or (cigna_oap_televisit and not policy_approved) or (guidance['basis'] == 'cigna_refundable_office_copay' and (not policy_approved or policy_mode in {'collect_verified_copay', 'collect_supported_advance'})) or (policy_mode == 'collect_verified_copay' or published_fep_standard and fixed_copay and policy_mode == 'collect_supported_advance' if published_copay else
         policy_mode == 'collect_supported_advance' or
         fixed_copay and policy_mode == 'collect_verified_copay' or
         verified_out_of_network(benefits) and policy_mode == 'defer_to_claim'
         and policy.get('allow_supported_oon_advance') is True)
-    calculated_in_network_advance = (
-        not policy_approved and not published_copay and verified_in_network(benefits)
-        and guidance['basis'] in {'patient_obligations', 'anticipated_services'}
-        and price.get('complete') is True and not price.get('conditional')
-        and price.get('mode') == 'services' and bool(lines)
-        and price.get('patient_min_cents') == price.get('patient_max_cents')
-        and all(line.get('rate_resolution', {}).get('status') == 'RESOLVED'
-                and line.get('allowed_basis') == 'clinic_contract'
-                and line.get('allowed_cents') is not None for line in lines)
-    )
+    calculated_in_network_advance = contract_advance_applies(
+        benefits, price, lines, guidance['basis'], policy_approved, published_copay)
     if (amount is not None and amount > 0 and guidance['basis'] != 'ecw_billing_note'
             and not (oon_advance and (policy_allows_advance or calculated_in_network_advance))):
         if guidance['basis'] == 'diagnostic_day_copay' and not policy_approved and not unconfirmed_zero_oop:
@@ -316,6 +312,9 @@ def build(result: dict, review: dict | None = None) -> dict:
     elif amount is not None and amount > 0 and cigna_oap_televisit:
         guidance['collection_rule'] = {'mode': 'cigna_oap_televisit_office_copay',
             'reference': 'Current member-bound Cigna specialist office benefit and virtual-care billing guidance'}
+    elif amount is not None and amount > 0 and bluecard_epo_neurology_copay:
+        guidance['collection_rule'] = {'mode': 'bluecard_epo_neurology_office_copay',
+            'reference': 'Current Highmark BlueCard EPO specialist office benefit and signed Texas clinic agreement'}
     failure_codes = set((result.get('eligibility_failure') or {}).get('codes') or [])
     if not active_payer_benefits and failure_codes & {'72', '73', '65', '67', '71', '75', '76'}:
         actions.append('Contact your insurer to confirm the member ID, policyholder name and date of birth. Bring the corrected insurance details.')

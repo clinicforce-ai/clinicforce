@@ -99,7 +99,8 @@ def price_lines(codes: list[dict], rates: list[dict], benefits: dict, rules: dic
             provider_out_of_network_verified=verified_out_of_network(benefits),
             selected_ids=selection.get('selected_ids') if selection_valid else None,
             office_service_types=rules.get('office_service_types'), place_of_service=rules.get('place_of_service'),
-            visit_context=rules.get('visit_context'), provider_npi=rules.get('provider_npi')) if payload is not None else deepcopy(benefits)
+            visit_context=rules.get('visit_context'), provider_npi=rules.get('provider_npi'),
+            provider_specialties=rules.get('provider_specialties')) if payload is not None else deepcopy(benefits)
         if payload is not None and line_payload is payload and stc == '98':
             raw_benefits = merge_linked_medical_oop(payload, raw_benefits, service_date)
         if benefits.get('network_status') in {'in_network', 'out_of_network'} and benefits.get('network_source'):

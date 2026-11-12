@@ -89,7 +89,8 @@ def normalize_stedi_271(payload: dict[str, Any], service_type_code: str, provide
                         office_visit: bool = False,
                         service_date: str | None = None, selected_ids: list[str] | None = None,
                         office_service_types: list[str] | None = None, place_of_service: str | None = None,
-                        visit_context: dict | None = None, provider_npi: str | None = None) -> dict[str, Any]:
+                        visit_context: dict | None = None, provider_npi: str | None = None,
+                        provider_specialties: list[str] | None = None) -> dict[str, Any]:
     """Normalize individual benefits for the provider's verified network tier.
 
     A benefit network indicator is not provider participation. Use a verified
@@ -103,7 +104,7 @@ def normalize_stedi_271(payload: dict[str, Any], service_type_code: str, provide
         procedure_code=procedure_code, office_visit=office_visit, service_date=service_date,
         selected_ids=selected_ids, office_service_types=office_service_types,
         place_of_service=place_of_service, visit_context=visit_context,
-        provider_npi=provider_npi,
+        provider_npi=provider_npi, provider_specialties=provider_specialties,
     )
     entries = selected.entries
     service_type_code = selected.service_type_code
@@ -289,6 +290,10 @@ def normalize_stedi_271(payload: dict[str, Any], service_type_code: str, provide
         if str(row.get('code') or '').upper() not in {'F', 'Y'}:
             return False
         labels = notes([row.get('messages'), row.get('additionalInformation')])
+        if labels and all(re.fullmatch(
+                r'LIMITS DO NOT APPLY FOR MH/SA DIAGNOSIS FOR SERVICES BILLED WITH A PRIMARY DIAGNOSIS OF MH/SA',
+                label.strip(), re.I) for label in labels):
+            return False
         # General administrative messages do not establish a service limit.
         if not row.get('benefitAmount') and not row.get('quantity') and all(
             (_provider_participation(note, provider_npi) or re.search(r'participating in this patient|may require precert|Plan includes NAP|^SELF-FUNDED$|^All Other In-Network Providers$|/Plan Ded Waived$', note, re.I))
@@ -303,7 +308,7 @@ def normalize_stedi_271(payload: dict[str, Any], service_type_code: str, provide
         return True
     limitations = any(unresolved_limit(row) for row in relevant)
     conditional_terms = selected_ids is None and any(re.search(r"\b(first|after|before|beginning|visits?|waived|unless|only|limit|specialist|primary care)\b", note, re.IGNORECASE) for row in (copay, coinsurance) if row for note in notes([row.get("messages"), row.get("additionalInformation")])
-        if not all(_deductible_message(label) is not None or re.fullmatch(r'BENEFITCLASS-SPECIALIST', label.strip(), re.I) or re.fullmatch(r"(?:All Other In-Network Providers\s+)?(?:(?:specialist |physician )?office visits?(?: (?:specialist|primary care(?: prov(?:ider)?)?|with (?:labs|xray)))?|Specialist(?: AND PCP)?|PCP AND Specialist|per visit|(?:Specialist|Primary Care) Visit or Evaluation|GYN Visit|Walk In Clinic Visit|Telemedicine (?:General Medicine|Specialist) Visit|phy visit\s*-\s*specialist|(?:PCP AND )?BenefitTier Non Tier 1 Specialist|diagnostic medical procedure)(?:\s*-\s*professional)?(?:\s*,\s*COINS APPLIES TO OUT OF POCKET)?", label.strip(), re.I)
+        if not all(_deductible_message(label) is not None or re.fullmatch(r'BENEFITCLASS-SPECIALIST', label.strip(), re.I) or re.fullmatch(r'SPECIALIST APPLY ONLY 1 COPAYMENT, PER DATE OF SERVICE, PER PROVIDER', label.strip(), re.I) or re.fullmatch(r"(?:All Other In-Network Providers\s+)?(?:(?:specialist |physician )?office visits?(?: (?:specialist|primary care(?: prov(?:ider)?)?|with (?:labs|xray)))?|Specialist(?: AND PCP)?|PCP AND Specialist|per visit|(?:Specialist|Primary Care) Visit or Evaluation|GYN Visit|Walk In Clinic Visit|Telemedicine (?:General Medicine|Specialist) Visit|phy visit\s*-\s*specialist|(?:PCP AND )?BenefitTier Non Tier 1 Specialist|diagnostic medical procedure)(?:\s*-\s*professional)?(?:\s*,\s*COINS APPLIES TO OUT OF POCKET)?", label.strip(), re.I)
                    for label in note.split(';') if label.strip()))
     source_errors = []
     for _, row in wanted:

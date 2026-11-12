@@ -79,6 +79,113 @@ def test_payer_matched_dependent_does_not_trigger_repeat_policy_recovery():
     assert identity.unresolved_policy_difference(identity.compare(different_patient, recorded))
 
 
+def test_payer_matched_life_partner_dependent_binds_stale_self_registration():
+    recorded = {**policy(), 'subscriber_first': 'Alex', 'subscriber_last': 'Morgan',
+                'relationship': '18', 'group_number': 'GROUP-A'}
+    payer = response()
+    payer['dependent']['relationToSubscriber'] = 'LIFE_PARTNER'
+    payer['plans'] = [{'groupNumber': 'GROUP-A'}]
+    comparison = identity.compare(payer, recorded)
+    assert comparison['status'] == 'warning'
+    assert comparison['reconciliation_rule'] == 'payer_matched_patient'
+    assert identity.patient_benefits_bound(comparison)
+    assert not identity.unresolved_policy_difference(comparison)
+
+    payer['dependent']['dateOfBirth'] = '2001-02-04'
+    assert identity.compare(payer, recorded)['status'] == 'review'
+
+
+def test_named_specialist_exceptions_do_not_override_neurology_office_copay():
+    scope = {'coverageLevel': 'INDIVIDUAL', 'network': {'indicator': 'IN_NETWORK'},
+             'service': {'value': '98', 'system': 'STC'}}
+    medical = {**scope, 'service': {'value': '30', 'system': 'STC'}}
+    payer = {'payerId': '84980', 'subscriber': {'memberId': 'ABC123'},
+             'dependent': {'relationToSubscriber': 'LIFE_PARTNER'},
+             'plans': [{'name': 'Synthetic medical EPO', 'benefits': {
+                 'statuses': [{'status': 'ACTIVE_COVERAGE', 'coverageLevel': 'FAMILY',
+                               'service': {'value': '30', 'system': 'STC'}}],
+                 'coPayment': [
+                     {**scope, 'amount': 70, 'timePeriod': 'CONTRACT',
+                      'messages': ['SPECIALIST APPLY ONLY 1 COPAYMENT, PER DATE OF SERVICE, PER PROVIDER']},
+                     {**scope, 'amount': 25, 'timePeriod': 'CONTRACT',
+                      'messages': ['SPECIALIST NURSE PRACTITIONERS APPLY ONLY 1 COPAYMENT, PER DATE OF SERVICE, PER PROVIDER']},
+                     {**scope, 'amount': 25, 'timePeriod': 'CONTRACT',
+                      'messages': ['SPECIALIST OB/GYN APPLY ONLY 1 COPAYMENT, PER DATE OF SERVICE, PER PROVIDER']},
+                     {**scope, 'amount': 50, 'timePeriod': 'CONTRACT',
+                      'messages': ['SPECIALIST DERMATOLOGIST APPLY ONLY 1 COPAYMENT, PER DATE OF SERVICE, PER PROVIDER']},
+                     {**scope, 'amount': 0, 'messages': ['SPECIALIST ONDUO DIABETES PROGRAM']},
+                     {**scope, 'amount': 0, 'messages': ['SPECIALIST WELL360 MOTION PROGRAM']},
+                     {**scope, 'amount': 50, 'timePeriod': 'CONTRACT',
+                      'messages': ['SPECIALIST TELEMEDICINE VENDOR APPLY ONLY 1 COPAYMENT, PER DATE OF SERVICE, PER PROVIDER']}],
+                 'coInsurance': [{**scope, 'percent': 0, 'messages': ['SPECIALIST']}],
+                 'deductible': [{**scope, 'amount': 0, 'messages': ['SPECIALIST']}],
+                 'limitations': [
+                     {**medical, 'network': {'indicator': 'IN_AND_OUT_OF_NETWORK'},
+                      'messages': ['LIMITS DO NOT APPLY FOR MH/SA DIAGNOSIS FOR SERVICES BILLED WITH A PRIMARY DIAGNOSIS OF MH/SA']},
+                     {**scope, 'messages': ['SPECIALIST TELEMEDICINE VENDOR AMWELL']},
+                     {**scope, 'messages': ['SPECIALIST SERVICES FOR ONDUO PROGRAMS VIRTUAL VISITS AND DISEASE MANAGEMENT']}],
+                 'outOfPocket': [
+                     {**medical, 'amount': 6250, 'timePeriod': 'CALENDAR_YEAR', 'messages': ['AGGREGATE']},
+                     {**medical, 'amount': 6250, 'timePeriod': 'CALENDAR_YEAR', 'messages': ['TOTAL MAXIMUM AGGREGATE']},
+                     {**medical, 'amount': 4484.61, 'timePeriod': 'REMAINING', 'messages': ['AGGREGATE']},
+                     {**medical, 'amount': 4484.61, 'timePeriod': 'REMAINING', 'messages': ['TOTAL MAXIMUM AGGREGATE']}],
+             }}]}
+    terms = commercial.normalize_stedi_271(payer, '98', True, office_visit=True,
+        procedure_code='99203', office_service_types=['98', 'BQ', 'BY', '1'],
+        place_of_service='11', provider_specialties=['Neurology'])
+    assert terms['active'] is True
+    assert terms['copay_cents'] == 7000
+    assert terms['copay_period'] == 'CONTRACT'
+    assert terms['coinsurance_percent'] == '0'
+    assert terms['deductible_applies'] is False
+    assert terms['oop_remaining_cents'] == 448461
+    assert not any('benefit limits' in reason for reason in terms['review_reasons'])
+
+    dermatologist = commercial.normalize_stedi_271(payer, '98', True, office_visit=True,
+        procedure_code='99203', office_service_types=['98', 'BQ', 'BY', '1'],
+        place_of_service='11', provider_specialties=['Dermatology'])
+    assert dermatologist['copay_cents'] == 5000
+    unknown_role = commercial.normalize_stedi_271(payer, '98', True, office_visit=True,
+        procedure_code='99203', office_service_types=['98', 'BQ', 'BY', '1'],
+        place_of_service='11')
+    assert unknown_role['copay_cents'] is None
+
+    terms.update(network_status='in_network', network_source='clinic_library_contract')
+    price = visit_estimate.price_lines([{'id': 'office', 'code': '99203', 'units': 1}],
+        [{'code': '99203', 'allowed_cents': 10117}], terms,
+        {'cost_share': 'payer_returned', 'place_of_service': '11',
+         'provider_office_role': 'specialist', 'provider_specialties': ['Neurology'],
+         'office_service_types': ['98', 'BQ', 'BY', '1']}, payload=payer, service_date='2026-11-12')
+    result = {'payer': 'BCBSTX', 'benefits': terms,
+              'identity': {'status': 'matched', 'match_version': 2, 'binding': 'synthetic'},
+              'price_range': price,
+              'collection_policy': {'mode': 'collect_verified_copay', 'approved_by': 'synthetic-admin',
+                                    'approved_at': '2026-11-12', 'reference': 'synthetic policy'}}
+    guidance = collection_guidance.build(result)
+    assert guidance['amount_cents'] == 7000
+    assert guidance['basis'] == 'office_copay'
+
+    bluecard = {**result, 'benefits': {**terms, 'network_source': 'clinic_group_agreement'},
+                'collection_policy': {},
+                'network_evidence': {'product_network_source': 'signed_bluecard_agreement',
+                                     'home_plan': 'Highmark Pennsylvania'},
+                'plan_details': {'stedi': {'names': ['BCBS EPO, NATIONAL MED/SURG']}},
+                'appointment_context': {'place_of_service': '11',
+                                        'rendering_provider': {'roles': ['Neurology']}}}
+    current = collection_guidance.build(bluecard)
+    assert current['amount_cents'] == 7000
+    assert current['collection_rule']['mode'] == 'bluecard_epo_neurology_office_copay'
+    assert collection_guidance.build(bluecard, {'payments': {
+        'reference': 'synthetic receipt', 'amount_cents': 2500}})['amount_cents'] == 4500
+
+    wrong_role = deepcopy(bluecard)
+    wrong_role['appointment_context']['rendering_provider']['roles'] = ['Dermatology']
+    assert collection_guidance.build(wrong_role)['amount_cents'] is None
+    wrong_network = deepcopy(bluecard)
+    wrong_network['network_evidence']['product_network_source'] = None
+    assert collection_guidance.build(wrong_network)['amount_cents'] is None
+
+
 def test_dependent_with_one_letter_surname_error_and_stale_subscriber_still_binds():
     recorded = {**policy(), 'subscriber_first': 'Alex', 'subscriber_last': 'Morgan', 'relationship': '18',
                 'group_number': 'GROUP-A'}

@@ -346,93 +346,100 @@ export function collectionAtVisitRow(
                                                   : cignaCard
                                                     ? `Pending · ${money(cignaCard.nontier1_specialist_copay_cents)} non-Tier-1 office-only reference; diagnostic CPT amount requires verification`
                                                     : pendingCollectionAction,
-    detail: dsnpOffice
-      ? `${proxyFormula?.total} ${feeProxy!.message}`
-      : combinedPlan
-        ? `${money(combinedPlan.office_copay_cents)} + ${combinedPlan.coinsurance_percent}% × ${money(combinedPlan.diagnostic_allowed_cents)} = ${money(combinedPlan.patient_share_cents)}${combinedPlan.payments_cents ? `; less ${money(combinedPlan.payments_cents)} already paid` : ''}. Separate follow-up E/M is planned; deductible and out-of-pocket adjustments remain assumptions until payer balances are returned.`
-        : result.collection_guidance?.basis === 'healthselect_ma_zero_televisit'
-          ? '$0.00 at check-in from the payer’s $0 virtual-visit copay, ERS no-deductible rule and 0% coinsurance. Final billed code, payer order and claim liability remain open.'
-          : result.collection_guidance?.basis === 'published_geha_pshb_zero_office'
-            ? result.collection_guidance.reason
-            : result.collection_guidance?.basis === 'qmb_protection'
-              ? 'QMB protection prohibits collecting Medicare cost sharing for covered care'
-              : biopsyBalance != null
-                ? `min(${money(biopsyTarget!.reference_cents)} BCBS Texas CPT reference, ${money(biopsyTarget!.oop_remaining_cents)} remaining out-of-pocket) = ${money(biopsyTarget!.amount_cents)}${result.encounter_summary?.payments_verified_cents ? `; less ${money(result.encounter_summary.payments_verified_cents)} already paid = ${money(biopsyBalance)}` : ''}. ${biopsyTarget!.message}`
-                : bluecardDeductible
-                  ? `Deductible: min(${money(bluecardDeductible.reference)}, ${money(bluecardDeductible.deductibleRemaining)}) = ${money(bluecardDeductible.deductible)}; coinsurance: 20% × (${money(bluecardDeductible.reference)} − ${money(bluecardDeductible.deductible)}) = ${money(bluecardDeductible.coinsurance)}; total: min(${money(bluecardDeductible.deductible + bluecardDeductible.coinsurance)}, ${money(bluecardDeductible.oopRemaining)} out-of-pocket remaining) = ${money(bluecardDeductible.patientShare)}${bluecardDeductible.paid ? `; less ${money(bluecardDeductible.paid)} already paid = ${money(bluecardDeductible.collect)}` : ''}. Assumes the BCBSTX clinic fee and ${bluecardDeductible.familyDeductible ? 'family' : 'general'} deductible apply to this visit; confirm the allowance, CPT and clinic collection rule before charging.`
-                  : botoxPreview
-                    ? `${botoxPreview.coinsurance_percent}% × ${money(botoxPreview.allowed_cents)} for CPT ${botoxPreview.code} = ${money(botoxPreview.patient_share_cents)}. Confirm the injection site, individual limits, and prior payments before charging.`
-                    : cignaFeeProxy && result.collection_guidance?.basis === 'claim_after_service'
-                      ? result.collection_guidance.reason
-                      : diagnosticCopayReference != null
-                        ? 'Payer-reported diagnostic copay for the selected testing. Approve the clinic collection policy and account for prior payments before charging; the full patient share remains unresolved.'
-                        : cignaFeeProxy && result.collection_guidance?.basis !== 'office_copay'
-                          ? `${proxyFormula?.total} ${feeProxy!.message || result.collection_guidance?.reason || ''}`
-                          : feeProxy != null && result.collection_guidance?.basis !== 'office_copay'
-                            ? result.collection_guidance?.basis === 'bcbstx_proxy_advance'
-                              ? `${proxyFormula?.total} Clinic-approved BCBS Texas fee proxy advance; final responsibility follows the UHC claim.`
-                              : `${proxyFormula?.total} ${
-                                  choicePlusEmg
-                                    ? 'Provisional BCBSTX clinic fee scenario; deductible applicability and UHC allowance require confirmation before charging.'
-                                    : 'Provisional BCBS Texas fee proxy; collect only after clinic policy and Medicare billing-protection clearance.'
-                                }`
-                            : aetnaPlanning
-                              ? `min((${money(aetnaPlanning.copay_cents / 2)} per test × 2) + ${money(aetnaPlanning.deductible_cents)} deductible + ${money(aetnaPlanning.coinsurance_cents)} coinsurance, ${money(aetnaPlanning.estimated_allowed_cents)} Aetna fee reference, ${money(aetnaPlanning.oop_remaining_cents)} remaining out-of-pocket) = ${money(aetnaPlanning.patient_share_cents)}${aetnaPaid ? `; less ${money(aetnaPaid)} already paid = ${money(aetnaBalance!)}` : ' before any prior payment'}. ${aetnaPlanning.message}`
-                              : aetnaCopayPlanning != null
-                                ? aetnaOtherCoverage
-                                  ? `${money(aetnaCopayPlanning)} Aetna specialist office copay + ${money(0)} office deductible + 0% office coinsurance = ${money(aetnaCopayPlanning)} before secondary processing. ${medicareSecondary ? 'Medicare is reported as secondary; send the primary claim, then Medicare, and collect only any balance after its remittance.' : 'Confirm payer order and the secondary benefit before collecting.'}`
-                                  : `${
-                                      aetnaSeparateCopayCap != null
-                                        ? `min(${money(aetnaOfficeTerms?.copay_cents || 0)} specialist office copay, ${money(aetnaSeparateCopayCap)} separate copay maximum remaining) = ${money(aetnaCopayPlanning)}. The general out-of-pocket balance does not reduce this separate copay.`
-                                        : `${money(aetnaCopayPlanning)} specialist office copay + ${money(0)} deductible + 0% coinsurance = ${money(aetnaCopayPlanning)}.`
-                                    }${aetnaPaid ? ` Less ${money(aetnaPaid)} already paid = ${money(officeBalance!)}.` : ' Confirm prior payments.'} ${aetnaPolicyPending ? 'Collection is pending clinic policy approval.' : 'Planning amount.'} Confirm the final allowed charge before collection.`
-                                : pendingBluecardCopay != null
-                                  ? 'Payer-reported BlueCard specialist copay for one CPT 99204 office visit, less recorded payments. Confirm member plan, provider participation, home-plan authorization, and collection policy before charging.'
-                                  : officeReferenceCopay != null
-                                    ? 'Planning figure for one specialist office visit on the appointment date; not an authorized collection instruction. Other services, prior payments and Medicare cost-sharing protection are not included.'
-                                    : humanaReferenceCopay != null
-                                      ? 'Published in-network specialist copay only. Confirm the member card, provider network, Medicare billing protection, clinic collection policy, and prior payments before charging.'
-                                      : partialOfficeCopay != null
-                                        ? pendingUhcHmoPosCopay
-                                          ? 'Payer-reported specialist office copay after recorded payments. Confirm QMB protection, prior payments, and the current clinic CPT rate before charging; the UnitedHealthcare allowance and final claim share remain unknown.'
-                                          : 'Suggested office visit copay after recorded payments. Separately performed DBS device services may add cost.'
-                                        : pendingAetnaCopay != null
-                                          ? 'Stedi reported one specialist office copay for CPT 99204. Confirm the remaining deductible, out-of-pocket balance, conditional benefit, prior payments, and clinic collection policy before charging. Full patient share remains unresolved.'
-                                          : priorDateAetnaBalance != null
-                                            ? `Payer-reported in-network specialist office copay after recorded payments. The saved response covers another date; confirm visit-date coverage and the provider's network. ${aetnaMedicareScenario ? 'Aetna reports Medicare as secondary; verify entitlement and payer order. If confirmed, collect $0 at check-in, submit the primary and Medicare secondary claims, and collect only any balance after adjudication.' : 'Confirm other coverage and clinic collection policy before charging.'} This reference does not authorize a charge.`
-                                            : cardPlanningCopay != null
-                                              ? 'Printed specialist copay for one office visit; verify before charging. Planned imaging and final payer share are unresolved.'
-                                              : pendingCignaCopay != null
-                                                ? 'Complete the visit-date payer check, confirm this copay and the clinic collection policy, and account for verified payments before charging. Full patient share remains unresolved.'
-                                                : cignaCard
-                                                  ? 'Card reference only: confirm the visit-date coverage, provider tier, separately documented office E/M, clinic collection policy, and prior payments before charging. Diagnostic CPT share remains unknown.'
-                                                  : automaticCashFallback
-                                                    ? 'Insurance collection is unresolved; any cash quote is listed separately'
-                                                    : result.collection_guidance
-                                                          ?.unconfirmed_zero_oop
-                                                      ? 'Confirm the reported $0 out-of-pocket balance with the payer before collection'
-                                                      : model.supportedAmount
-                                                        ? result.collection_guidance
-                                                            ?.primary_secondary_copay
-                                                          ? 'Provisional primary office copay; the secondary claim may change final responsibility'
-                                                          : result.collection_guidance?.basis ===
-                                                              'office_copay'
-                                                            ? 'Office copay advance; the payer allowed amount and final share remain unresolved'
-                                                            : result.collection_guidance?.basis ===
-                                                                'out_of_pocket_limit'
-                                                              ? 'Applicable out-of-pocket maximum has no remaining balance for covered care'
+    detail:
+      result.collection_guidance?.collection_rule?.mode === 'bluecard_epo_neurology_office_copay' &&
+      model.supportedAmount
+        ? `One ${money(result.price_range?.lines?.[0]?.benefits?.copay_cents || 0)} in-network neurologist office copay per date of service and provider${result.encounter_summary?.payments_verified_cents ? ` less ${money(result.encounter_summary.payments_verified_cents)} already paid` : ''} = ${money(result.collection_guidance.amount_cents!)} to collect. The payer allowed amount and any separately performed testing follow the claim.`
+        : dsnpOffice
+          ? `${proxyFormula?.total} ${feeProxy!.message}`
+          : combinedPlan
+            ? `${money(combinedPlan.office_copay_cents)} + ${combinedPlan.coinsurance_percent}% × ${money(combinedPlan.diagnostic_allowed_cents)} = ${money(combinedPlan.patient_share_cents)}${combinedPlan.payments_cents ? `; less ${money(combinedPlan.payments_cents)} already paid` : ''}. Separate follow-up E/M is planned; deductible and out-of-pocket adjustments remain assumptions until payer balances are returned.`
+            : result.collection_guidance?.basis === 'healthselect_ma_zero_televisit'
+              ? '$0.00 at check-in from the payer’s $0 virtual-visit copay, ERS no-deductible rule and 0% coinsurance. Final billed code, payer order and claim liability remain open.'
+              : result.collection_guidance?.basis === 'published_geha_pshb_zero_office'
+                ? result.collection_guidance.reason
+                : result.collection_guidance?.basis === 'qmb_protection'
+                  ? 'QMB protection prohibits collecting Medicare cost sharing for covered care'
+                  : biopsyBalance != null
+                    ? `min(${money(biopsyTarget!.reference_cents)} BCBS Texas CPT reference, ${money(biopsyTarget!.oop_remaining_cents)} remaining out-of-pocket) = ${money(biopsyTarget!.amount_cents)}${result.encounter_summary?.payments_verified_cents ? `; less ${money(result.encounter_summary.payments_verified_cents)} already paid = ${money(biopsyBalance)}` : ''}. ${biopsyTarget!.message}`
+                    : bluecardDeductible
+                      ? `Deductible: min(${money(bluecardDeductible.reference)}, ${money(bluecardDeductible.deductibleRemaining)}) = ${money(bluecardDeductible.deductible)}; coinsurance: 20% × (${money(bluecardDeductible.reference)} − ${money(bluecardDeductible.deductible)}) = ${money(bluecardDeductible.coinsurance)}; total: min(${money(bluecardDeductible.deductible + bluecardDeductible.coinsurance)}, ${money(bluecardDeductible.oopRemaining)} out-of-pocket remaining) = ${money(bluecardDeductible.patientShare)}${bluecardDeductible.paid ? `; less ${money(bluecardDeductible.paid)} already paid = ${money(bluecardDeductible.collect)}` : ''}. Assumes the BCBSTX clinic fee and ${bluecardDeductible.familyDeductible ? 'family' : 'general'} deductible apply to this visit; confirm the allowance, CPT and clinic collection rule before charging.`
+                      : botoxPreview
+                        ? `${botoxPreview.coinsurance_percent}% × ${money(botoxPreview.allowed_cents)} for CPT ${botoxPreview.code} = ${money(botoxPreview.patient_share_cents)}. Confirm the injection site, individual limits, and prior payments before charging.`
+                        : cignaFeeProxy &&
+                            result.collection_guidance?.basis === 'claim_after_service'
+                          ? result.collection_guidance.reason
+                          : diagnosticCopayReference != null
+                            ? 'Payer-reported diagnostic copay for the selected testing. Approve the clinic collection policy and account for prior payments before charging; the full patient share remains unresolved.'
+                            : cignaFeeProxy && result.collection_guidance?.basis !== 'office_copay'
+                              ? `${proxyFormula?.total} ${feeProxy!.message || result.collection_guidance?.reason || ''}`
+                              : feeProxy != null &&
+                                  result.collection_guidance?.basis !== 'office_copay'
+                                ? result.collection_guidance?.basis === 'bcbstx_proxy_advance'
+                                  ? `${proxyFormula?.total} Clinic-approved BCBS Texas fee proxy advance; final responsibility follows the UHC claim.`
+                                  : `${proxyFormula?.total} ${
+                                      choicePlusEmg
+                                        ? 'Provisional BCBSTX clinic fee scenario; deductible applicability and UHC allowance require confirmation before charging.'
+                                        : 'Provisional BCBS Texas fee proxy; collect only after clinic policy and Medicare billing-protection clearance.'
+                                    }`
+                                : aetnaPlanning
+                                  ? `min((${money(aetnaPlanning.copay_cents / 2)} per test × 2) + ${money(aetnaPlanning.deductible_cents)} deductible + ${money(aetnaPlanning.coinsurance_cents)} coinsurance, ${money(aetnaPlanning.estimated_allowed_cents)} Aetna fee reference, ${money(aetnaPlanning.oop_remaining_cents)} remaining out-of-pocket) = ${money(aetnaPlanning.patient_share_cents)}${aetnaPaid ? `; less ${money(aetnaPaid)} already paid = ${money(aetnaBalance!)}` : ' before any prior payment'}. ${aetnaPlanning.message}`
+                                  : aetnaCopayPlanning != null
+                                    ? aetnaOtherCoverage
+                                      ? `${money(aetnaCopayPlanning)} Aetna specialist office copay + ${money(0)} office deductible + 0% office coinsurance = ${money(aetnaCopayPlanning)} before secondary processing. ${medicareSecondary ? 'Medicare is reported as secondary; send the primary claim, then Medicare, and collect only any balance after its remittance.' : 'Confirm payer order and the secondary benefit before collecting.'}`
+                                      : `${
+                                          aetnaSeparateCopayCap != null
+                                            ? `min(${money(aetnaOfficeTerms?.copay_cents || 0)} specialist office copay, ${money(aetnaSeparateCopayCap)} separate copay maximum remaining) = ${money(aetnaCopayPlanning)}. The general out-of-pocket balance does not reduce this separate copay.`
+                                            : `${money(aetnaCopayPlanning)} specialist office copay + ${money(0)} deductible + 0% coinsurance = ${money(aetnaCopayPlanning)}.`
+                                        }${aetnaPaid ? ` Less ${money(aetnaPaid)} already paid = ${money(officeBalance!)}.` : ' Confirm prior payments.'} ${aetnaPolicyPending ? 'Collection is pending clinic policy approval.' : 'Planning amount.'} Confirm the final allowed charge before collection.`
+                                    : pendingBluecardCopay != null
+                                      ? 'Payer-reported BlueCard specialist copay for one CPT 99204 office visit, less recorded payments. Confirm member plan, provider participation, home-plan authorization, and collection policy before charging.'
+                                      : officeReferenceCopay != null
+                                        ? 'Planning figure for one specialist office visit on the appointment date; not an authorized collection instruction. Other services, prior payments and Medicare cost-sharing protection are not included.'
+                                        : humanaReferenceCopay != null
+                                          ? 'Published in-network specialist copay only. Confirm the member card, provider network, Medicare billing protection, clinic collection policy, and prior payments before charging.'
+                                          : partialOfficeCopay != null
+                                            ? pendingUhcHmoPosCopay
+                                              ? 'Payer-reported specialist office copay after recorded payments. Confirm QMB protection, prior payments, and the current clinic CPT rate before charging; the UnitedHealthcare allowance and final claim share remain unknown.'
+                                              : 'Suggested office visit copay after recorded payments. Separately performed DBS device services may add cost.'
+                                            : pendingAetnaCopay != null
+                                              ? 'Stedi reported one specialist office copay for CPT 99204. Confirm the remaining deductible, out-of-pocket balance, conditional benefit, prior payments, and clinic collection policy before charging. Full patient share remains unresolved.'
+                                              : priorDateAetnaBalance != null
+                                                ? `Payer-reported in-network specialist office copay after recorded payments. The saved response covers another date; confirm visit-date coverage and the provider's network. ${aetnaMedicareScenario ? 'Aetna reports Medicare as secondary; verify entitlement and payer order. If confirmed, collect $0 at check-in, submit the primary and Medicare secondary claims, and collect only any balance after adjudication.' : 'Confirm other coverage and clinic collection policy before charging.'} This reference does not authorize a charge.`
+                                                : cardPlanningCopay != null
+                                                  ? 'Printed specialist copay for one office visit; verify before charging. Planned imaging and final payer share are unresolved.'
+                                                  : pendingCignaCopay != null
+                                                    ? 'Complete the visit-date payer check, confirm this copay and the clinic collection policy, and account for verified payments before charging. Full patient share remains unresolved.'
+                                                    : cignaCard
+                                                      ? 'Card reference only: confirm the visit-date coverage, provider tier, separately documented office E/M, clinic collection policy, and prior payments before charging. Diagnostic CPT share remains unknown.'
+                                                      : automaticCashFallback
+                                                        ? 'Insurance collection is unresolved; any cash quote is listed separately'
+                                                        : result.collection_guidance
+                                                              ?.unconfirmed_zero_oop
+                                                          ? 'Confirm the reported $0 out-of-pocket balance with the payer before collection'
+                                                          : model.supportedAmount
+                                                            ? result.collection_guidance
+                                                                ?.primary_secondary_copay
+                                                              ? 'Provisional primary office copay; the secondary claim may change final responsibility'
                                                               : result.collection_guidance
-                                                                    ?.basis ===
-                                                                  'diagnostic_day_copay'
-                                                                ? 'One diagnostic copay advance; other costs may follow the claim'
+                                                                    ?.basis === 'office_copay'
+                                                                ? 'Office copay advance; the payer allowed amount and final share remain unresolved'
                                                                 : result.collection_guidance
                                                                       ?.basis ===
-                                                                    'claim_after_service'
-                                                                  ? 'Clinic policy defers collection until after the claim'
-                                                                  : undefined
-                                                        : namedCollectionAction
-                                                          ? collectionBlocker?.sentence
-                                                          : undefined,
+                                                                    'out_of_pocket_limit'
+                                                                  ? 'Applicable out-of-pocket maximum has no remaining balance for covered care'
+                                                                  : result.collection_guidance
+                                                                        ?.basis ===
+                                                                      'diagnostic_day_copay'
+                                                                    ? 'One diagnostic copay advance; other costs may follow the claim'
+                                                                    : result.collection_guidance
+                                                                          ?.basis ===
+                                                                        'claim_after_service'
+                                                                      ? 'Clinic policy defers collection until after the claim'
+                                                                      : undefined
+                                                            : namedCollectionAction
+                                                              ? collectionBlocker?.sentence
+                                                              : undefined,
     emphasis: true,
   }
   if (

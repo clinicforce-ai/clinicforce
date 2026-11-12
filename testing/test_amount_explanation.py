@@ -6,10 +6,41 @@ import pytest
 
 from app.insurance import commercial, collection_guidance, visit_estimate, amount_explanation
 from app.insurance.benefit_review import selected_service_blocker
+from app.insurance.collection.amount_actions import _collection_action
 from app.api.routers import commercial_estimator as api
 from app.api.routers.commercial_estimator import _compare_card_hints
 from test_visit_estimate import DAY, payload
 from testing.synthetic_policy import ADVANCE_POLICY, COPAY_POLICY
+
+
+def test_identity_reconciliation_names_the_actual_payer():
+    result = {
+        'payer': 'Blue Cross Blue Shield Tx',
+        'identity': {'policy_differences': [
+            {'field': 'subscriber_first'}, {'field': 'relationship'},
+        ]},
+        'service_plan': {'kind': 'office', 'selected_codes': []},
+        'benefits': {'review_reasons': ['Which copay or coinsurance term applies to this office visit']},
+    }
+    action = _collection_action('policy_identity_mismatch', result)
+    assert 'reconcile subscriber first name, subscriber relationship with Blue Cross Blue Shield Tx' in action
+    assert 'ask Blue Cross Blue Shield Tx which office copay applies' in action
+    assert 'UHC' not in action
+
+
+def test_missing_identity_fields_name_the_actual_payer():
+    result = {'payer': 'Blue Cross Blue Shield Tx',
+              'identity': {'missing_fields': ['member_id', 'patient_demographics']}}
+    action = _collection_action('payer_identity_match_missing', result)
+    assert 'confirm member ID, patient name/date of birth with Blue Cross Blue Shield Tx and eCW' in action
+    assert 'UHC' not in action
+
+
+def test_stale_directory_payer_does_not_override_current_blue_payer():
+    result = {'payer': 'Blue Cross Blue Shield Tx',
+              'stedi_payer': {'name': 'UnitedHealthcare'},
+              'identity': {'missing_fields': ['member_id']}}
+    assert 'Blue Cross Blue Shield Tx' in _collection_action('payer_identity_match_missing', result)
 
 
 def matched_terms(*args, **kwargs):
@@ -734,7 +765,7 @@ def test_zero_advance_identity_line_names_only_mismatched_fields():
     guidance = collection_guidance.build(result)
     explanation = amount_explanation.build(result, guidance)
     assert explanation['reason_code'] == 'policy_identity_mismatch'
-    assert 'reconcile date of birth with UHC' in explanation['sentence']
+    assert 'reconcile date of birth with the payer' in explanation['sentence']
     assert 'synthetic' not in explanation['sentence']
 
 

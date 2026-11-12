@@ -33,7 +33,8 @@ def select_benefit_rows(payload: dict[str, Any], service_type_code: str,
                         service_date: str | None, selected_ids: list[str] | None,
                         office_service_types: list[str] | None,
                         place_of_service: str | None, visit_context: dict | None,
-                        provider_npi: str | None) -> BenefitRows:
+                        provider_npi: str | None,
+                        provider_specialties: list[str] | None = None) -> BenefitRows:
     """Apply service, location, date and provider-specific network evidence."""
     entries = [row for row in _stedi_entries(payload) if coverage_kind(row, payload) != 'supplementary']
     priorities = office_service_types or ['98', 'BY', '1']
@@ -72,11 +73,26 @@ def select_benefit_rows(payload: dict[str, Any], service_type_code: str,
     if office and place_of_service == '11':
         # STC 98 is broad: a specialist telemedicine or ABA copay is not the
         # in-person office copay, even when the payer omits POS on that row.
+        role = ' '.join(str(value).casefold() for value in (provider_specialties or []))
+        named_roles = {
+            'nurse practitioners': r'\b(?:nurse practitioner|np|aprn)\b',
+            'ob/gyn': r'\b(?:ob/?gyn|obstetric|gynecolog)\b',
+            'dermatologist': r'\bdermatolog',
+        }
+        matched_label = next((label for label, matching_role in named_roles.items()
+                              if re.search(matching_role, role, re.I)), None)
         def other_office_service(row: dict) -> bool:
             if _procedure(row):
                 return False
             clauses = [part.strip() for note in _benefit_notes([row.get('messages'), row.get('additionalInformation')])
                        for part in note.split(';') if part.strip()]
+            for label, matching_role in named_roles.items():
+                if any(re.search(r'\bspecialist\s+' + re.escape(label) + r'\b', clause, re.I)
+                       for clause in clauses):
+                    return bool(role and not re.search(matching_role, role, re.I))
+            if clauses and all(re.search(r'\b(?:onduo|well360 motion)\b', clause, re.I)
+                               for clause in clauses):
+                return True
             classes = [match.group(1).upper() for clause in clauses
                        if (match := re.fullmatch(r'BENEFITCLASS-(.+)', clause, re.I))]
             if classes:
@@ -92,6 +108,12 @@ def select_benefit_rows(payload: dict[str, Any], service_type_code: str,
         rejected = [row for row in entries if other_office_service(row)]
         excluded_service_ids.extend(row['evidence_path'] for row in rejected)
         entries = [row for row in entries if row not in rejected]
+        if matched_label:
+            named_copays = [row for row in entries if row.get('code') == 'B' and any(
+                re.search(r'\bspecialist\s+' + re.escape(matched_label) + r'\b', note, re.I)
+                for note in _benefit_notes([row.get('messages'), row.get('additionalInformation')]))]
+            if named_copays:
+                entries = [row for row in entries if row.get('code') != 'B' or row in named_copays]
     if office and selected_ids is None:
         # Diagnosis context must establish an unrelated visit. Unknown/TMJ/jaw
         # context retains the exclusion; an office CPT alone cannot disprove TMJ.
@@ -101,13 +123,25 @@ def select_benefit_rows(payload: dict[str, Any], service_type_code: str,
             and all(re.fullmatch(r'[A-Z][0-9][A-Z0-9]{1,5}', code) for code in diagnoses)
             and not any(code.startswith(('M26', 'R6884')) for code in diagnoses)
             and not re.search(r'\b(?:TMJ|TMD|temporomandibular|jaw)\b', str(context.get('reason') or ''), re.I))
+        nonpreventive_visit = (bool(diagnoses) and all(
+            re.fullmatch(r'[A-Z][0-9][A-Z0-9]{1,5}', code) and not code.startswith('Z')
+            for code in diagnoses) and not re.search(
+                r'\b(?:preventive|screening|wellness|annual physical)\b',
+                str(context.get('reason') or ''), re.I))
         def unrelated_exclusion(row: dict) -> bool:
             labels = _benefit_notes([row.get('messages'), row.get('additionalInformation')])
             return bool(unrelated_tmj and row.get('code') == 'I' and not _procedure(row) and labels
-                and all(re.fullmatch(r'TMJ (?:PCP AND TMJ Specialist|Specialist|PCP)', label.strip(), re.I) for label in labels))
-        excluded_tmj_ids = [row['evidence_path'] for row in entries if unrelated_exclusion(row)]
-        excluded_service_ids.extend(excluded_tmj_ids)
-        entries = [row for row in entries if row['evidence_path'] not in excluded_tmj_ids]
+                and all(re.fullmatch(r'TMJ (?:PCP AND TMJ Specialist|Specialist AND TMJ PCP|Specialist|PCP)',
+                                     label.strip(), re.I) for label in labels))
+        def unrelated_preventive(row: dict) -> bool:
+            labels = _benefit_notes([row.get('messages'), row.get('additionalInformation')])
+            return bool(nonpreventive_visit and row.get('code') == 'C' and not _procedure(row)
+                and labels and all(re.fullmatch(r'Preventive(?: - Included For Specific Services)?',
+                                            label.strip(), re.I) for label in labels))
+        excluded_ids = [row['evidence_path'] for row in entries
+                        if unrelated_exclusion(row) or unrelated_preventive(row)]
+        excluded_service_ids.extend(excluded_ids)
+        entries = [row for row in entries if row['evidence_path'] not in excluded_ids]
         # Named alcohol/mental-health exceptions are conditional rows. For the
         # delegated office route, retain the unconditional specialist default
         # when eCW has no primary ICD and the visit reason does not name that

@@ -1,5 +1,6 @@
 """Concrete collection actions for unresolved insured estimates."""
 from __future__ import annotations
+import re
 
 from app.insurance import commercial
 from app.insurance.benefit_review import selected_service_blocker, selected_service_detail
@@ -9,7 +10,10 @@ from app.insurance.collection.requirements import requirement_blocker
 
 
 def _payer_label(result: dict, fallback: str) -> str:
-    return 'UHC' if commercial.is_united_healthcare_payer(result) else str(result.get('payer') or fallback)
+    current = str(result.get('payer') or '').strip()
+    if current and re.search(r'\b(?:BCBS|Blue Cross|Blue Shield)\b', current, re.I):
+        return current
+    return 'UHC' if commercial.is_united_healthcare_payer(result) else current or fallback
 
 
 def _mismatch_fields(result: dict) -> str:
@@ -40,7 +44,7 @@ def _collection_action(code: str, result: dict, source_errors: list[dict] | None
         if (result.get('network_evidence') or {}).get('decision') == 'out_of_network_by_clinic_contract_inventory':
             return ('select the clinician-documented CPT and obtain its applicable out-of-network '
                     'allowance before collecting')
-        return ('verify a separately executed agreement or a product-specific UHC provider network statement, '
+        return (f'verify a separately executed agreement or a product-specific {_payer_label(result, "payer")} provider network statement, '
                 'select the clinician-documented CPT, and obtain its applicable allowed amount before collecting')
     if code == 'qmb_protected':
         return 'submit the claim and follow the QMB billing protections'
@@ -114,7 +118,8 @@ def _collection_action(code: str, result: dict, source_errors: list[dict] | None
                 + (f' and reconcile {mismatches}' if mismatches else '') + ' before billing')
     if code == 'policy_identity_mismatch':
         mismatches = _mismatch_fields(result)
-        action = f'reconcile {mismatches or "patient identity"} with UHC'
+        payer = _payer_label(result, 'the payer')
+        action = f'reconcile {mismatches or "patient identity"} with {payer}'
         service_plan = result.get('service_plan') or {}
         if botox and not result.get('codes'):
             action += ', then select the documented injection, drug units and any separate E/M service'
@@ -123,14 +128,14 @@ def _collection_action(code: str, result: dict, source_errors: list[dict] | None
             action += ', select the documented office CPT'
         if (not botox or any(str(row.get('code') or '').startswith('992') for row in result.get('codes') or [])) and any('which copay or coinsurance term applies' in str(reason).lower()
                for reason in (result.get('benefits') or {}).get('review_reasons', [])):
-            action += ', and ask UHC which office copay applies at this place of service'
+            action += f', and ask {payer} which office copay applies at this place of service'
         return action + ' before using these benefit balances'
     if code == 'payer_identity_match_missing':
         missing = (result.get('identity') or (result.get('benefits') or {}).get('identity') or {}).get('missing_fields') or []
         labels = {'member_id': 'member ID', 'patient_demographics': 'patient name/date of birth',
                   'relationship': 'subscriber relationship'}
         fields = ', '.join(labels.get(field, field) for field in missing)
-        return (f'confirm {fields} with UHC and eCW, then rerun the insured estimate' if fields else
+        return (f'confirm {fields} with {_payer_label(result, "the payer")} and eCW, then rerun the insured estimate' if fields else
                 'compare the saved payer patient, subscriber and member ID with eCW, then rerun the insured estimate')
     if code == 'payer_route_ambiguous':
         return 'select the matching insurer route and complete the eligibility check before using its benefits'

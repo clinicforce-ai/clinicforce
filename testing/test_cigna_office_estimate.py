@@ -569,6 +569,37 @@ def test_attribution_metadata_does_not_cancel_active_cigna_coverage():
     assert other_payer['coverage_status_conflict'] is True
 
 
+def test_cigna_symptom_visit_ignores_unrelated_tmj_and_preventive_benefits():
+    """A general accumulator is not a preventive office deductible waiver."""
+    day = '2026-11-12'
+    general = {'service': {'system': 'STC', 'value': '30'},
+               'coverageLevel': 'INDIVIDUAL', 'network': {'indicator': 'IN_NETWORK'}}
+    office = {**general, 'service': {'system': 'STC', 'value': '98'}}
+    payload = {'payerId': '62308', 'provider': {'npi': NPI},
+        'subscriber': {'dates': {'plan': {'start': '2026-01-01', 'end': '2026-12-31'}}},
+        'plans': [{'name': 'SYNTHETIC OAP', 'benefits': {
+            'statuses': [{**general, 'status': 'ACTIVE_COVERAGE',
+                          'messages': ['Provider is in network based on NPI ID provided in request']},
+                         {**office, 'status': 'ACTIVE_COVERAGE'}],
+            'nonCovered': [{**office, 'messages': ['TMJ Specialist AND TMJ PCP']}],
+            'coInsurance': [{**general, 'percent': '0'}],
+            'deductible': [{**general, 'amount': '4000', 'timePeriod': 'CALENDAR_YEAR'},
+                           {**general, 'amount': '3355.05', 'timePeriod': 'REMAINING'},
+                           {**office, 'amount': '0', 'messages': ['Preventive'],
+                            'placesOfService': [{'code': '11'}]}],
+            'outOfPocket': [{**general, 'amount': '3355.05', 'timePeriod': 'REMAINING'}],
+        }}]}
+    terms = commercial.normalize_stedi_271(
+        payload, '98', True, office_visit=True, service_date=day,
+        procedure_code='99203', place_of_service='11', provider_npi=NPI,
+        visit_context={'reason': 'Dizziness', 'diagnoses': ['R42']})
+    assert terms['active'] is True
+    assert terms['coverage_status_conflict'] is False
+    assert terms['deductible_remaining_cents'] == 335505
+    assert terms.get('deductible_applies') is not False
+    assert terms['coinsurance_percent'] == '0'
+
+
 @pytest.mark.parametrize('amount,cents', [('60', 6000), ('91.37', 9137)])
 def test_uses_returned_amount_even_with_a_remaining_plan_deductible(amount, cents):
     payload, inputs, source = example()

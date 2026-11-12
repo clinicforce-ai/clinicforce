@@ -137,6 +137,12 @@ def select_cost_share_rows(entries: list[dict[str, Any]], payload: dict[str, Any
         if code in {'A', 'B'} and all(
                 not row.get('messages') or row['messages'] == ['SPECIALIST'] for row in selected):
             nonfinancial.add('messages')
+        if code == 'G' and all(
+                [note.strip().upper() for note in _benefit_notes(row.get('messages'))]
+                in (['AGGREGATE'], ['TOTAL MAXIMUM AGGREGATE']) for row in selected):
+            # BlueCard can repeat one medical accumulator under these two
+            # labels. The amount, tier, dates and all other fields must agree.
+            nonfinancial.add('messages')
         signatures = {json.dumps({k: v for k, v in row.items()
                                   if k != 'evidence_path' and k not in nonfinancial}, sort_keys=True)
                       for row in selected}

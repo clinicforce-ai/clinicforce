@@ -28,15 +28,22 @@ export function referenceCoverageRow(
         ? `${model.policyStatus} · Visit ${requestedDate}`
         : model.policyStatus
   const order = benefits?.primary_secondary_order
+  const bluecardHome =
+    result.network_evidence?.product_network_source === 'signed_bluecard_agreement'
+      ? result.plan_details?.stedi?.verification_payer?.name || result.network_evidence.home_plan
+      : null
+  const coverageDetail = bluecardHome
+    ? `${detail} · ${bluecardHome} is the BlueCard home plan; BCBS Texas is the local route`
+    : detail
   return {
     label: 'Coverage',
     value,
     detail:
       order?.status === 'verified'
-        ? `${detail} · ${result.payer || 'Selected plan'} primary · ${order.secondary_payer} secondary`
+        ? `${coverageDetail} · ${result.payer || 'Selected plan'} primary · ${order.secondary_payer} secondary`
         : benefits?.medicare_part_b_secondary?.status === 'reported'
-          ? `${detail} · Payer reports Original Medicare Part B as secondary; claim order not independently verified`
-          : detail,
+          ? `${coverageDetail} · Payer reports Original Medicare Part B as secondary; claim order not independently verified`
+          : coverageDetail,
   }
 }
 
@@ -51,13 +58,28 @@ export function memberGroupRow(result: PrevisitEstimate): CostBreakdownRow | nul
   }
 }
 
-export function networkRow(model: CommercialEstimateModel, dsnpOffice: boolean): CostBreakdownRow {
+export function networkRow(
+  model: CommercialEstimateModel,
+  dsnpOffice: boolean,
+  result: PrevisitEstimate,
+): CostBreakdownRow {
+  const texasEpo =
+    /(?:blue cross.*blue shield.*(?:tx|texas)|bcbs\s*(?:tx|texas))/i.test(result.payer || '') &&
+    result.plan_details?.stedi?.names?.some((name) => /\bEPO\b/i.test(name))
   return {
     label: 'Network',
     value:
       dsnpOffice && model.networkLabel === 'Not determined'
         ? 'Office benefit in/out of network · provider participation unknown'
         : model.networkLabel,
+    detail:
+      texasEpo &&
+      result.network_evidence?.product_network_source === 'signed_bluecard_agreement' &&
+      model.networkLabel.startsWith('In network')
+        ? 'Signed Texas BlueCard agreement and the scoped clinic provider record support this in-network EPO visit.'
+        : texasEpo && model.networkLabel === 'Patient plan not matched'
+          ? 'BCBSTX EPO uses the Blue Choice PPO network. Reconcile the subscriber identity, then confirm the clinic agreement and this provider’s participation for the member plan and visit.'
+          : undefined,
   }
 }
 

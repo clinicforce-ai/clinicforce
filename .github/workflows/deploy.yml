@@ -99,6 +99,9 @@ jobs:
           node ../testing/bluecard-office-ui.mjs
           node ../testing/fep-standard-office-ui.mjs
           node testing/bluecard-office-collection-ui.mjs
+          node testing/bcbstx-epo-unmatched-ui.mjs
+          node testing/bcbstx-epo-copay-ui.mjs
+          node testing/hand-paresthesia-options-ui.mjs
           node testing/blue-ppo-family-quote-ui.mjs
           node testing/aetna-choice-pos-reference-ui.mjs
           node ../testing/medicare-part-b-secondary-ui.mjs

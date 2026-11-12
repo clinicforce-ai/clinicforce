@@ -94,6 +94,7 @@ def _benefit_context(inputs: dict, source: dict) -> dict:
     return {'place_of_service': inputs.get('place_of_service'),
             'visit_context': {key: inputs.get(key) for key in ('reason', 'diagnoses')},
             'provider_office_role': _api.provider_specialty.office_role(rendering.get('roles') or []),
+            'provider_specialties': rendering.get('roles') or [],
             'provider_npi': npi, 'provider_npi_conflict': conflict}
 
 def _previsit_range(practice_id: str, inputs: dict, source: dict, payer_id: str,
@@ -287,7 +288,6 @@ def _network_contract_evidence(practice_id: str, network: dict, profile: dict, s
             elif len(contracts) > 1:
                 evidence['reason'] = 'Multiple current payer contracts are in the Clinical Library; none is linked to this plan.'
     return evidence
-
 
 def _product_mapping_evidence(profile: dict, network: dict, source: dict, service_date: str) -> dict | None:
     """Retain the administrator record used to alias a payer product."""

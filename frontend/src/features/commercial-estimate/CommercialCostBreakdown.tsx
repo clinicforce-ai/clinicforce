@@ -97,7 +97,7 @@ export default function CommercialCostBreakdown({
     ...[payerOrderRow(result, benefits)].filter((row): row is CostBreakdownRow => row != null),
     ...[memberGroupRow(result)].filter((row): row is CostBreakdownRow => row != null),
     ...healthselectRows.card,
-    networkRow(model, dsnpOffice),
+    networkRow(model, dsnpOffice, result),
     {
       label: result.reason ? 'Reason for visit' : 'Planned service',
       value: commercialVisitReason(result, model.anticipatedService || ''),
