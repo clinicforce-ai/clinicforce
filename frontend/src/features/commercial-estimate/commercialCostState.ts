@@ -51,7 +51,11 @@ export function visibleRateReference(result: PrevisitEstimate) {
 export function applyBluePpoFamilyQuote(rows: CostBreakdownRow[], result: PrevisitEstimate) {
   const guidance = result.collection_guidance
   const mode = guidance?.collection_rule?.mode
-  if (!guidance || !['blue_ppo_family_deductible_quote', 'cigna_ppo_deductible_quote'].includes(mode || '')) return
+  if (
+    !guidance ||
+    !['blue_ppo_family_deductible_quote', 'cigna_ppo_deductible_quote'].includes(mode || '')
+  )
+    return
   const share = rows.find((row) => row.label.endsWith('patient share'))
   if (!share) return
   share.value = `${money(guidance.reference_total_cents!)} provisional · ${mode === 'cigna_ppo_deductible_quote' ? 'office deductible assumed' : 'family deductible assumed'}`
