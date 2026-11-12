@@ -29,6 +29,20 @@ const summaryCompiled = await summaryBundle.generate({ format: 'esm' })
 const { default: ArrivalAmountSummary } = await import(
   `data:text/javascript;base64,${Buffer.from(summaryCompiled.output[0].code).toString('base64')}`
 )
+const costStateBundle = await rolldown({
+  input: new URL('../frontend/src/features/commercial-estimate/commercialCostState.ts', import.meta.url).pathname,
+})
+const costStateCompiled = await costStateBundle.generate({ format: 'esm' })
+const { applyBluePpoFamilyQuote } = await import(
+  `data:text/javascript;base64,${Buffer.from(costStateCompiled.output[0].code).toString('base64')}`
+)
+const cptBundle = await rolldown({
+  input: new URL('../frontend/src/features/commercial-estimate/commercialCptRows.ts', import.meta.url).pathname,
+})
+const cptCompiled = await cptBundle.generate({ format: 'esm' })
+const { commercialAllowedTotalRow } = await import(
+  `data:text/javascript;base64,${Buffer.from(cptCompiled.output[0].code).toString('base64')}`
+)
 const React = require('react')
 const { renderToStaticMarkup } = require('react-dom/server')
 
@@ -99,6 +113,32 @@ const depositSummary = renderToStaticMarkup(React.createElement(ArrivalAmountSum
 }))
 assert.match(depositSummary, /Refundable advance to collect now/)
 assert.match(depositSummary, /\$76\.15/)
+const ppoQuote = { ...deposit,
+  plan_details: { stedi: { names: ['PPO'] } },
+  collection_guidance: { ...deposit.collection_guidance,
+    reason: 'Collect the refundable Cigna PPO office quote; reconcile after the claim.',
+    collection_rule: { mode: 'cigna_ppo_deductible_quote' },
+    clinic_fee_reference_cents: 7615 },
+}
+const derivedPpoQuote = deriveCommercialEstimateView({
+  result: ppoQuote, appointments: [], selectedVisit: null, busy: false,
+  error: null, readOnly: false, recovering: false,
+})
+assert.equal(derivedPpoQuote.supportedAmount, true)
+const ppoQuoteRow = collectionAtVisitRow(ppoQuote, depositModel,
+  { ...values, feeProxy: null, cignaFeeProxy: false })
+assert.equal(ppoQuoteRow.label, 'Amount to collect at visit')
+assert.equal(ppoQuoteRow.value, '$76.15')
+assert.match(ppoQuoteRow.detail, /refundable Cigna PPO office quote/)
+const ppoShareRows = [{ label: 'Estimated patient share', value: 'Not fully calculated' }]
+applyBluePpoFamilyQuote(ppoShareRows, ppoQuote)
+assert.equal(ppoShareRows[0].value, '$76.15 provisional · office deductible assumed')
+const ppoAllowedRow = commercialAllowedTotalRow(ppoQuote, {
+  healthselectZero: false, cardPlanningCopay: null, dsnpOffice: false,
+  automaticCashFallback: false, lineAllowedTotal: null,
+  bluecardDeductible: null, botoxPreview: null,
+})
+assert.match(ppoAllowedRow.value, /Not established.*\$76\.15 clinic fee reference/)
 const unconfirmedCopay = { ...deposit,
   price_range: { mode: 'services', lines: [{ id: 'office', code: '99205', units: 1,
     benefits: { active: true, copay_cents: 10000 } }] },

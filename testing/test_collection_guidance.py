@@ -87,6 +87,72 @@ def test_cigna_calculated_share_defers_deductible_and_coinsurance_collection():
     assert guidance['services'][0]['patient_cents'] is None
 
 
+def test_cigna_ppo_single_office_quote_uses_refundable_clinic_reference_only_for_matching_case():
+    result = scenario()
+    result.pop('collection_policy')
+    result.update(payer='Cigna', service_date='2026-11-12', checked_at='2026-11-11T12:00:00Z',
+        nmct_bcbstx_refundable_advance_enabled=True,
+        plan_details={'stedi': {'names': ['PPO']}},
+        network_evidence={'decision': 'lacking_applicable_network_evidence'},
+        appointment_context={'place_of_service': '11'},
+        cpt_authorization={'pos': '11', 'network': 'unknown', 'patient_binding': 'synthetic-current-binding'},
+        selected_ids=['office'], codes=[{'id': 'office', 'code': '99203', 'units': 1, 'modifiers': []}],
+        temporary_rate_reference={'complete': True, 'source': 'BCBS Texas clinic schedule',
+            'lines': [{'id': 'office', 'code': '99203', 'units': 1, 'modifiers': [],
+                       'unit_reference_cents': 12345, 'source_reference': 'library:synthetic-fee'}]})
+    result['benefits'].update(network_status='unknown', network_source='clinic_library_absent',
+        service_date_matches=True, deductible_remaining_cents=90000, oop_remaining_cents=210000,
+        reported_options=[
+            {'kind': 'deductible', 'service_type_code': '30', 'coverage_level': 'INDIVIDUAL',
+             'network': 'IN_NETWORK', 'plan_association': 'medical', 'plan_index': 0,
+             'time_period': 'REMAINING', 'amount_cents': 90000},
+            {'kind': 'deductible', 'service_type_code': '30', 'coverage_level': 'FAMILY',
+             'network': 'IN_NETWORK', 'plan_association': 'medical', 'plan_index': 0,
+             'time_period': 'REMAINING', 'amount_cents': 30000},
+            {'kind': 'coinsurance', 'service_type_code': '98', 'coverage_level': 'INDIVIDUAL',
+             'network': 'IN_NETWORK', 'plan_association': 'medical', 'plan_index': 0,
+             'percent': '20.0'},
+            {'kind': 'out_of_pocket', 'service_type_code': '30', 'coverage_level': 'INDIVIDUAL',
+             'network': 'IN_NETWORK', 'plan_association': 'medical', 'plan_index': 0,
+             'time_period': 'REMAINING', 'amount_cents': 210000},
+            {'kind': 'out_of_pocket', 'service_type_code': '30', 'coverage_level': 'FAMILY',
+             'network': 'IN_NETWORK', 'plan_association': 'medical', 'plan_index': 0,
+             'time_period': 'REMAINING', 'amount_cents': 350000},
+        ])
+    result['price_range'].update(complete=False, patient_min_cents=None, patient_max_cents=None)
+    line = result['price_range']['lines'][0]
+    line.update(calculation=None, allowed_cents=None, modifiers=[],
+        rate_resolution={'status': 'RATE_UNAVAILABLE'})
+    line['benefits'].update(network_status='unknown', copay_cents=None,
+        deductible_remaining_cents=90000, oop_remaining_cents=210000,
+        coinsurance_percent='20.0', deductible_applies=None)
+    guidance = collection_guidance.build(result)
+    assert guidance['amount_cents'] == 12345
+    assert guidance['collection_rule']['mode'] == 'cigna_ppo_deductible_quote'
+    assert encounter_summary.build({**result, 'collection_guidance': guidance})['collect_today_cents'] == 12345
+    assert 'refundable Cigna PPO office quote' in amount_explanation.build(result, guidance)['sentence']
+    assert collection_guidance.build(result, {'payments': {'reference': 'synthetic-receipt',
+        'amount_cents': 2000}})['amount_cents'] == 10345
+    lower_fee = deepcopy(result)
+    lower_fee['temporary_rate_reference']['lines'][0]['unit_reference_cents'] = 10117
+    assert collection_guidance.build(lower_fee)['amount_cents'] == 10117
+    for mutation in (
+        lambda value: value.update(payer='Aetna'),
+        lambda value: value['plan_details']['stedi'].update(names=['Open Access Plus']),
+        lambda value: value['benefits'].update(network_status='out_of_network'),
+        lambda value: value['benefits'].update(has_secondary=True),
+        lambda value: value['benefits']['reported_options'][1].update(amount_cents=10000),
+        lambda value: value['benefits']['reported_options'][3].update(amount_cents=10000),
+        lambda value: value['price_range']['lines'][0]['benefits'].update(copay_cents=2500),
+        lambda value: value['temporary_rate_reference']['lines'][0].update(code='99204'),
+        lambda value: value['cpt_authorization'].update(patient_binding='other-binding'),
+        lambda value: value['codes'].append({'id': 'extra', 'code': '95886', 'units': 1}),
+    ):
+        blocked = deepcopy(result)
+        mutation(blocked)
+        assert collection_guidance.build(blocked)['amount_cents'] is None
+
+
 def test_approved_bluecard_family_office_deposit_uses_scoped_fee_and_refunds_excess():
     result = scenario()
     result.update(payer='Blue Cross Blue Shield Tx', service_date='2026-11-19',
