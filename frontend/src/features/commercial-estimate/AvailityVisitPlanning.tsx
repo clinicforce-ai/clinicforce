@@ -135,11 +135,6 @@ export function AvailityVisitTable({
       value: code ? requirementStatus(result, 'authorization') : 'Not determined',
     },
     {
-      label: 'Cash alternative',
-      value: model.cashPrice || 'Not quoted',
-      detail: 'Separate self-pay price; not used as the insurance allowed amount.',
-    },
-    {
       label: 'Estimated patient share',
       value: money(Math.min(evidence.copay_cents, evidence.oop_remaining_cents)),
       detail: 'Provisional office-only copay before the processed claim and any prior payments.',

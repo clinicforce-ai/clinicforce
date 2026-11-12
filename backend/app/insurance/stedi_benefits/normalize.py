@@ -24,6 +24,33 @@ from app.insurance.stedi_benefits.fields import (
 )
 
 
+def ambiguous_combined_zero_oop(options: list[dict]) -> bool:
+    """Recognize saved medical source rows whose combined $0 limit needs confirmation."""
+    rows = [row for row in options if row.get('kind') == 'out_of_pocket'
+            and row.get('service_type_code') == '30' and row.get('plan_association') == 'medical']
+    for annual in rows:
+        if not (annual.get('coverage_level') == 'INDIVIDUAL'
+                and annual.get('time_period') == 'CALENDAR_YEAR'
+                and annual.get('network') == 'IN_AND_OUT_OF_NETWORK'
+                and annual.get('amount_cents') == 0
+                and type(annual.get('plan_index')) is int):
+            continue
+        plan = [row for row in rows if row.get('plan_index') == annual['plan_index']]
+        if (any(row.get('coverage_level') == 'INDIVIDUAL'
+                and row.get('time_period') == 'REMAINING'
+                and row.get('network') == 'IN_AND_OUT_OF_NETWORK'
+                and row.get('amount_cents') == 0 for row in plan)
+                and any(row.get('coverage_level') == 'FAMILY'
+                        and row.get('time_period') == 'REMAINING'
+                        and row.get('network') == 'IN_NETWORK'
+                        and type(row.get('amount_cents')) is int
+                        and row['amount_cents'] > 0 for row in plan)
+                and not any(row.get('coverage_level') == 'INDIVIDUAL'
+                            and row.get('network') == 'IN_NETWORK' for row in plan)):
+            return True
+    return False
+
+
 def _oop_conflict_reason(payload: dict, wanted: list[tuple[int, dict]], ids: list[str],
                          *, annual: bool) -> str:
     label = ('a conflicting annual individual out-of-pocket maximum' if annual
@@ -152,6 +179,25 @@ def normalize_stedi_271(payload: dict[str, Any], service_type_code: str, provide
     family_best = [row for score, row in family_scores if score == max(s for s, _ in family_scores)] if family_scores else []
     family_amounts = {_stedi_cents(row.get('benefitAmount')) for row in family_best}
     family_oop_cents = next(iter(family_amounts)) if len(family_amounts) == 1 else None
+    # A zero combined individual limit cannot settle office liability when the
+    # same plan still reports a positive in-network family balance.
+    zero_combined_individual_unresolved = bool(
+        oop and annual_oop and type(oop.get('plan_index')) is int
+        and annual_oop.get('plan_index') == oop['plan_index']
+        and _network_indicator(oop) in {'W', 'IN_AND_OUT_OF_NETWORK'}
+        and _network_indicator(annual_oop) in {'W', 'IN_AND_OUT_OF_NETWORK'}
+        and _stedi_cents(oop.get('benefitAmount')) == 0
+        and _stedi_cents(annual_oop.get('benefitAmount')) == 0
+        and family_oop_cents is not None and family_oop_cents > 0
+        and any(row.get('plan_index') == oop['plan_index']
+                and _network_indicator(row) in {'Y', 'IN_NETWORK'} for row in family_best)
+        and not any(row.get('code') == 'G' and row.get('plan_index') == oop['plan_index']
+                    and str(row.get('coverageLevel') or row.get('coverageLevelCode') or '').upper()
+                        in {'INDIVIDUAL', 'IND'}
+                    and _network_indicator(row) in {'Y', 'IN_NETWORK'} for _, row in wanted)
+    )
+    if zero_combined_individual_unresolved:
+        oop = annual_oop = None
     family_oop_zero_applies = (family_oop_cents == 0 and not any(
         re.fullmatch(r'COPAY MAX(?:IMUM)?', note.strip(), re.I)
         for row in relevant for note in notes([row.get('messages'), row.get('additionalInformation')])))
@@ -275,6 +321,8 @@ def normalize_stedi_271(payload: dict[str, Any], service_type_code: str, provide
                     'kind': 'invalid_financial_value',
                     'message': 'Invalid financial evidence: the payer returned an invalid amount or percentage. Verify the source before collection.'})
     review_reasons = list(dict.fromkeys(error['message'] for error in source_errors))
+    if zero_combined_individual_unresolved:
+        review_reasons.append('The payer reports a $0 combined individual out-of-pocket limit while the in-network family balance is positive. Confirm the individual limit for this office visit with the payer.')
     if cost_share.conflicts.get('oop_annual'):
         review_reasons.append(_oop_conflict_reason(payload, wanted, cost_share.conflicts['oop_annual'], annual=True))
     if cost_share.conflicts.get('oop_remaining'):

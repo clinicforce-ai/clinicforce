@@ -570,6 +570,21 @@ def test_draft_uhc_pricing_connection_keeps_payer_benefits_and_names_setup_actio
     assert 'enable its payer connection and estimate profile' in explanation['sentence']
 
 
+def test_draft_aetna_pricing_connection_names_aetna_in_setup_action(monkeypatch):
+    monkeypatch.setattr(api.commercial_store, 'list_connections', lambda _practice: [
+        {'stedi_payer_id': 'synthetic-aetna-route', 'status': 'draft',
+         'display_name': 'Aetna'}])
+    benefits = {'active': True, 'network_status': 'unknown'}
+    result = {'payer': 'Aetna', 'issues': [], 'codes': [], 'benefits': benefits,
+              'identity': {'status': 'matched', 'binding': 'synthetic-current-binding', 'match_version': 2}}
+    api._attach_previsit_pricing(result, 'synthetic-clinic', {'service_date': '2026-11-12'},
+                                 {}, 'synthetic-aetna-route', benefits)
+    explanation = amount_explanation.build(result, {'amount_cents': None, 'basis': 'missing_collection_inputs'})
+    assert explanation['reason_code'] == 'clinic_payer_connection_draft'
+    assert 'exact Aetna product and provider' in explanation['sentence']
+    assert 'UHC' not in explanation['sentence']
+
+
 def test_deferred_uhc_explanation_names_missing_visit_code_and_financial_source_error():
     result = {'payment_mode': 'insurance', 'identity': {'status': 'matched', 'binding': 'synthetic-current-binding', 'match_version': 2}, 'benefits': {'active': True},
               'service_plan': {'selected_codes': [], 'alternatives': []},
