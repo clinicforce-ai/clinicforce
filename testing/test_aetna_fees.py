@@ -96,7 +96,7 @@ def test_ambiguous_aetna_product_never_falls_back_to_a_different_schedule():
     medicare.assert_not_called()
     contract.assert_not_called()
     assert price.call_args.args[1] == []
-    assert any('Identify one Aetna' in issue for issue in issues)
+    assert any('patient-bound Aetna' in issue for issue in issues)
 
 
 def test_unbound_aetna_product_has_no_allowed_fee():
@@ -130,9 +130,11 @@ def test_enabled_aetna_connection_still_uses_database_schedule():
          patch.object(previsit, 'apply_nmct_cigna_administrator_attestation'), \
          patch.object(previsit, 'apply_nmct_cigna_ppo_attestation'), \
          patch.object(previsit._api, '_previsit_range', return_value=({'lines': []}, [])) as schedule, \
-         patch.object(previsit._api, '_previsit_practice_path') as old_contract:
+         patch.object(previsit._api, '_previsit_practice_path',
+                      side_effect=previsit._api.HTTPException(409, 'No linked contract')) as network_lookup, \
+         patch.object(previsit.group_contract_support, 'resolve', return_value=None):
         previsit._attach_previsit_pricing(result, 'another-practice',
             {'service_date': '2026-11-14'}, {}, 'aetna-route', benefits)
     schedule.assert_called_once()
     assert schedule.call_args.kwargs['payer_name'] == 'Aetna'
-    old_contract.assert_not_called()
+    network_lookup.assert_called_once()

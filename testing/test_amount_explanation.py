@@ -601,7 +601,7 @@ def test_draft_uhc_pricing_connection_keeps_payer_benefits_and_names_setup_actio
     assert 'enable its payer connection and estimate profile' in explanation['sentence']
 
 
-def test_draft_aetna_pricing_connection_names_aetna_in_setup_action(monkeypatch):
+def test_draft_aetna_connection_does_not_replace_missing_cpt_with_setup_action(monkeypatch):
     monkeypatch.setattr(api.commercial_store, 'list_connections', lambda _practice: [
         {'stedi_payer_id': 'synthetic-aetna-route', 'status': 'draft',
          'display_name': 'Aetna'}])
@@ -611,9 +611,8 @@ def test_draft_aetna_pricing_connection_names_aetna_in_setup_action(monkeypatch)
     api._attach_previsit_pricing(result, 'synthetic-clinic', {'service_date': '2026-11-12'},
                                  {}, 'synthetic-aetna-route', benefits)
     explanation = amount_explanation.build(result, {'amount_cents': None, 'basis': 'missing_collection_inputs'})
-    assert explanation['reason_code'] == 'clinic_payer_connection_draft'
-    assert 'exact Aetna product and provider' in explanation['sentence']
-    assert 'UHC' not in explanation['sentence']
+    assert explanation['reason_code'] == 'planned_cpt_missing'
+    assert 'document the planned CPT' in explanation['sentence']
 
 
 def test_deferred_uhc_explanation_names_missing_visit_code_and_financial_source_error():

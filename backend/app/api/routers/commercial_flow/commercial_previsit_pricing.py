@@ -9,6 +9,7 @@ from app.api.routers.commercial_flow.commercial_previsit_context import ecw_case
 from app.api.routers.commercial_flow.commercial_previsit_context import past_visit_with_saved_estimate as _past_visit_with_saved_estimate
 from app.api.routers.commercial_flow.commercial_previsit_tpa import merge_administrator_benefits
 from app.insurance import aetna_fees, botox_review, cms_locality, cms_pfs, cpt_rules, fep_preferred, insurance_product, inventory_certification, library_network_exclusions, group_contract_support
+from app.api.routers.commercial_flow.commercial_previsit_context import benefit_context as _benefit_context
 from app.insurance.stedi_benefits.payer_order import primary_secondary_order
 from app.insurance.stedi_benefits.linked import merge_linked_medical_oop
 from app.api.routers.commercial_flow.commercial_previsit_medicare import bind as bind_medicare_part_b
@@ -82,21 +83,6 @@ def _office_service_types(practice_id: str, source: dict) -> list[str]:
     specialist = _api.provider_specialty.office_role((source.get('rendering_provider') or {}).get('roles', [])) == 'specialist'
     return ['98', 'BQ', 'BY', '1'] if specialist else ['98', 'BY', '1']
 
-def _benefit_context(inputs: dict, source: dict) -> dict:
-    rendering = source.get('rendering_provider') or {}
-    # Eligibility submission still requires its own name fields; CMS pricing
-    # uses a validated NPI and rejects contradictory visit/provider records.
-    source_npi = str(rendering.get('npi') or '')
-    visit_npi = str((inputs.get('rendering_provider') or {}).get('npi') or '')
-    conflict = bool(source_npi and visit_npi and source_npi != visit_npi)
-    npi = None if conflict else (visit_npi or source_npi)
-    npi = npi if npi and len(npi) == 10 and npi.isdigit() else None
-    return {'place_of_service': inputs.get('place_of_service'),
-            'visit_context': {key: inputs.get(key) for key in ('reason', 'diagnoses')},
-            'provider_office_role': _api.provider_specialty.office_role(rendering.get('roles') or []),
-            'provider_specialties': rendering.get('roles') or [],
-            'provider_npi': npi, 'provider_npi_conflict': conflict}
-
 def _previsit_range(practice_id: str, inputs: dict, source: dict, payer_id: str,
                     codes: list[dict], benefits: dict, *, payload: dict | None = None,
                     review: dict | None = None, payer_route_id: str | None = None,
@@ -123,24 +109,16 @@ def _previsit_range(practice_id: str, inputs: dict, source: dict, payer_id: str,
         issues.append('The eCW rendering NPI conflicts with the selected visit provider; resolve it before pricing.')
     medical_names = (benefits.get('plan_details') or {}).get('names') or []
     is_aetna = aetna_fees.is_aetna_payer(payer_name)
-    aetna_category = aetna_fees.category(payer_name, medical_names)
     rules['aetna_schedule'] = is_aetna
-    rules['medicare_advantage'] = aetna_category == 'advantage' or insurance_product.is_medicare_advantage(medical_names)
+    rules['medicare_advantage'] = insurance_product.is_medicare_advantage(medical_names)
     rules['patient_binding'] = (benefits.get('identity') or {}).get('binding') or ''
     rules['product_binding'] = _api.payer_allowance.product_binding(benefits.get('plan_details'))
     if is_aetna:
         rules['cost_share'] = 'payer_returned'
-        if aetna_category and source.get('payer_plan_bound') is True and benefits.get('network_status') != 'out_of_network':
-            rates = aetna_fees.matching_rates(aetna_category, str(inputs.get('service_date') or ''), selected,
-                place_of_service=str(rules.get('place_of_service') or ''),
-                provider_npi=str(rules.get('provider_npi') or ''),
-                patient_binding=rules['patient_binding'], product_binding=rules['product_binding'])
-            if len(rates) != len(selected):
-                issues.append('The Aetna fee schedule has no applicable unmodified rate for every selected CPT and visit.')
-        elif aetna_category:
-            issues.append('Obtain the payer out-of-network allowed amount for each selected CPT; the Aetna in-network schedule does not apply.')
-        else:
-            issues.append('Identify one Aetna Advantage or Commercial medical product before applying its fee schedule.')
+        aetna_category, rates, aetna_issues = aetna_fees.visit_rates(
+            payer_name, medical_names, source, benefits, inputs, selected, rules)
+        rules['medicare_advantage'] |= aetna_category == 'advantage'
+        issues.extend(aetna_issues)
     elif benefits.get('network_status') == 'out_of_network':
         binding = (benefits.get('identity') or {}).get('binding') or ''
         rules['patient_binding'] = binding
@@ -393,12 +371,6 @@ def _attach_previsit_pricing(result: dict, practice_id: str, inputs: dict, sourc
     elif (rate_payer_name := str(result.get('payer') or (route_payer or {}).get('display_name') or '')) and not _api.re.search(
             r'blue cross|bcbstx|blue shield|aetna', rate_payer_name, _api.re.I):
         _attach_temporary_blue_cross_rates(result, practice_id, inputs, source, rate_payer_name)
-    if aetna_fees.is_aetna_payer(payer_name):
-        result['price_range'], issues = _api._previsit_range(
-            practice_id, inputs, source, payer_id, result['codes'], benefits,
-            payload=payload, review=review, payer_route_id=payer_id, payer_name=payer_name)
-        result['issues'].extend(issues)
-        return
     if len(connections) != 1:
         apply_nmct_library_contract(result, benefits, nmct_contract)
         if (not exclusion and len(route_connections) <= 1 and resolve_unlinked_blue_route(
@@ -427,6 +399,12 @@ def _attach_previsit_pricing(result: dict, practice_id: str, inputs: dict, sourc
             return
         draft = [row for row in payer_connections if row.get('stedi_payer_id') == payer_id
                  and row.get('status') == 'draft']
+        if aetna_fees.is_aetna_payer(payer_name):
+            result['price_range'], issues = _api._previsit_range(
+                practice_id, inputs, source, payer_id, result['codes'], benefits,
+                payload=payload, review=review, payer_route_id=payer_id, payer_name=payer_name)
+            result['issues'].extend(issues)
+            return
         result["issues"].append(
             "Clinic pricing: this payer's clinic estimator connection is still a draft."
             if not connections and len(draft) == 1 else

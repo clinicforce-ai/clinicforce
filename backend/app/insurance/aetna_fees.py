@@ -58,3 +58,21 @@ def matching_rates(category_name: str, service_date: str, lines: list[dict], *,
         'product_binding': product_binding, 'units': line['units'],
     } for line in lines if line.get('code') in found and not line.get('modifiers')
         and type(line.get('units')) is int and line['units'] > 0]
+
+
+def visit_rates(payer_name: str, medical_names: list[str], source: dict,
+                benefits: dict, inputs: dict, selected: list[dict], rules: dict) -> tuple[str | None, list[dict], list[str]]:
+    """Resolve one patient's Aetna category and applicable clinic-wide rates."""
+    plan_category = category(payer_name, medical_names)
+    if not plan_category or source.get('payer_plan_bound') is not True:
+        return plan_category, [], ['Identify one patient-bound Aetna Advantage or Commercial medical product before applying its fee schedule.']
+    if benefits.get('network_status') == 'out_of_network':
+        return plan_category, [], ['Obtain the payer out-of-network allowed amount for each selected CPT; the Aetna in-network schedule does not apply.']
+    rates = matching_rates(plan_category, str(inputs.get('service_date') or ''), selected,
+        place_of_service=str(rules.get('place_of_service') or ''),
+        provider_npi=str(rules.get('provider_npi') or ''),
+        patient_binding=str(rules.get('patient_binding') or ''),
+        product_binding=str(rules.get('product_binding') or ''))
+    issues = [] if len(rates) == len(selected) else [
+        'The Aetna fee schedule has no applicable unmodified rate for every selected CPT and visit.']
+    return plan_category, rates, issues
