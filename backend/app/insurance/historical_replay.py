@@ -7,9 +7,9 @@ import base64
 import hashlib
 import json
 
-from app.insurance import (amount_explanation, cms_locality, cms_pfs, collection_guidance,
+from app.insurance import (amount_explanation, collection_guidance,
                            commercial, encounter_summary, insurance_product, inventory_certification,
-                           library_network_exclusions, payer_allowance, stedi_discovery,
+                           library_network_exclusions, medicare_fees, payer_allowance, stedi_discovery,
                            visit_estimate)
 from app.insurance.identity import compare as compare_identity, patient_benefits_bound
 
@@ -154,16 +154,12 @@ def replay(bundle: dict) -> dict:
         service_date=service_date, provider_npi=str((inputs.get('rendering_provider') or {}).get('npi') or ''),
         place_of_service=str(inputs.get('place_of_service') or ''), patient_binding=str(identity.get('binding') or ''),
         product_binding=payer_allowance.product_binding(product))
-    scope = (inventory or {}).get('scope') or {}
-    locality, locality_evidence = cms_locality.pricing_locality(source.get('cms_service_zip'),
-        str(scope.get('cms_locality') or source.get('cms_locality') or '') or None)
-    if inventory:
+    product_family = insurance_product.classify(named, payer_id=str(context.get('payer_id') or ''))
+    if product_family == 'original_medicare' or product_family.startswith('medicare_advantage_'):
+        rates = []
         for line in codes:
-            if any(rate.get('line_id') == line['id'] for rate in rates):
-                continue
-            rate = cms_pfs.estimate_rate(line['code'], line.get('modifiers') or [], line['units'],
-                service_date=service_date, locality=str(locality or ''),
-                qp_status=str(scope.get('cms_qp_status') or source.get('cms_qp_status') or ''),
+            rate = medicare_fees.estimate_rate(line['code'], line.get('modifiers') or [], line['units'],
+                service_date=service_date,
                 place_of_service=str(inputs.get('place_of_service') or ''),
                 provider_npi=str((inputs.get('rendering_provider') or {}).get('npi') or ''),
                 patient_binding=str(identity.get('binding') or ''))
@@ -171,11 +167,9 @@ def replay(bundle: dict) -> dict:
                 rates.append({**rate, 'line_id': line['id'], 'units': line['units'],
                               'product_binding': payer_allowance.product_binding(product)})
     rules = {'cost_share': 'payer_returned', 'office_service_types': ['98'],
-             'medicare_advantage': insurance_product.is_medicare_advantage(named),
+             'medicare_advantage': product_family.startswith('medicare_advantage_'),
              'patient_binding': identity.get('binding'),
              'product_binding': payer_allowance.product_binding(product),
-             'cms_locality': locality, 'cms_locality_evidence': locality_evidence,
-             'cms_qp_status': (inventory or {}).get('scope', {}).get('cms_qp_status'),
              'provider_npi': (inputs.get('rendering_provider') or {}).get('npi'),
              'place_of_service': inputs.get('place_of_service'),
              'visit_context': {key: inputs.get(key) for key in ('reason', 'diagnoses')}}

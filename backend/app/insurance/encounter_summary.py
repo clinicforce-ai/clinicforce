@@ -78,7 +78,7 @@ def build(result: dict, review: dict | None = None) -> dict:
     # known plan share, but cannot establish the full balance-billed total.
     out_of_network_share = bool(not cash and priced and verified_out_of_network(benefits)
         and price.get('mode') == 'services' and not price.get('conditional') and lines
-        and all(line.get('allowed_basis') in {'payer_out_of_network', 'cms_original_medicare_estimate'}
+        and all(line.get('allowed_basis') in {'payer_out_of_network', 'medicare_fee_schedule'}
                 and type(line.get('allowed_cents')) is int and line['allowed_cents'] >= 0
                 and (line.get('rate_resolution') or {}).get('status') == 'RESOLVED'
                 and isinstance(line.get('calculation'), dict) for line in lines))

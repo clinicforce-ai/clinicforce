@@ -347,10 +347,10 @@ export function ServicePlanner({
                   <div className="procedure-price-note">
                     {row.unit_allowed_cents != null &&
                     (result.benefits?.network_status !== 'out_of_network' ||
-                      ['payer_out_of_network', 'cms_original_medicare_estimate'].includes(
+                      ['payer_out_of_network', 'medicare_fee_schedule'].includes(
                         row.allowed_basis || '',
                       ))
-                      ? `${row.allowed_basis === 'cms_original_medicare_estimate' ? 'CMS benchmark' : row.allowed_basis === 'payer_out_of_network' ? 'Payer allowed' : 'Contract'} / unit ${money(row.unit_allowed_cents)}`
+                      ? `${row.allowed_basis === 'medicare_fee_schedule' ? 'Medicare fee' : row.allowed_basis === 'payer_out_of_network' ? 'Payer allowed' : 'Contract'} / unit ${money(row.unit_allowed_cents)}`
                       : row.unit_cash_cents != null
                         ? `Cash / unit ${money(row.unit_cash_cents)}`
                         : 'Price follows plan and clinic schedule'}

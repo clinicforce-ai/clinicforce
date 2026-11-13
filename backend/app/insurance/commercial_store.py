@@ -162,7 +162,7 @@ def add_connection_aliases(practice_id: str, connection_id: str, aliases: list[s
 
 def set_collection_policy(practice_id: str, connection_id: str, mode: str,
                           reference: str, actor_id: str, *, allow_supported_oon_advance: bool = False,
-                          allow_cms_based_advance: bool = False,
+                          allow_medicare_schedule_advance: bool = False,
                           allow_blue_cross_proxy_advance: bool = False,
                           allow_bluecard_office_refundable_deposit: bool = False) -> dict:
     """Set a practice-scoped payer policy with an administrator and source reference."""
@@ -185,7 +185,7 @@ def set_collection_policy(practice_id: str, connection_id: str, mode: str,
             rules['collection_policy'] = {'mode': mode, 'reference': reference.strip(),
                                           'approved_by': actor_id, 'approved_at': now,
                                           'allow_supported_oon_advance': allow_supported_oon_advance,
-                                          'allow_cms_based_advance': allow_cms_based_advance,
+                                          'allow_medicare_schedule_advance': allow_medicare_schedule_advance,
                                           'allow_blue_cross_proxy_advance': allow_blue_cross_proxy_advance,
                                           'allow_bluecard_office_refundable_deposit': allow_bluecard_office_refundable_deposit}
         db.execute('UPDATE commercial_payer_connections SET rules_json=%s,updated_at=%s WHERE id=%s AND practice_id=%s',
@@ -215,10 +215,6 @@ def set_agreement_inventory(practice_id: str, connection_id: str, mode: str,
                 raise CommercialError('Upload the payer agreements and provide at least one covered provider and location scope.')
             if any(scope.get('effective_to') and scope['effective_to'] < scope['effective_from'] for scope in scopes):
                 raise CommercialError('An inventory scope ends before its effective date.')
-            if any(any(scope.get(key) for key in ('cms_locality', 'cms_qp_status', 'cms_payment_reference'))
-                   and not all(scope.get(key) for key in ('cms_locality', 'cms_qp_status', 'cms_payment_reference'))
-                   for scope in scopes):
-                raise CommercialError('CMS pricing requires locality, QP status and a payment-scope evidence reference together.')
             rules['agreement_inventory'] = {'reference': reference.strip(),
                 'approved_by': actor_id, 'approved_at': now,
                 'document_hashes': hashes, 'scopes': scopes}

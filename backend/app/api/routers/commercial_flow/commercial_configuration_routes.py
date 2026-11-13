@@ -72,7 +72,7 @@ async def set_collection_policy(connection_id: str, value: _api.CollectionPolicy
             session['practice_id'], connection_id, value.mode, value.reference,
             str(session['staff']['id']),
             allow_supported_oon_advance=value.allow_supported_oon_advance,
-            allow_cms_based_advance=value.allow_cms_based_advance,
+            allow_medicare_schedule_advance=value.allow_medicare_schedule_advance,
             allow_blue_cross_proxy_advance=value.allow_blue_cross_proxy_advance,
             allow_bluecard_office_refundable_deposit=value.allow_bluecard_office_refundable_deposit)
     except _api.commercial.CommercialError as exc:
