@@ -272,7 +272,7 @@ async def previsit_estimate(value: _api.PrevisitInput, request: _api.Request, ba
     calculation_conflict for a one-line staff action.
     Each price_range line reports a typed rate_resolution status and the exact
     candidate rows supplied to the calculator. Aetna database fees report allowed_basis=aetna_fee_schedule after category, date and code matching;
-    an allowed fee alone does not establish the patient's share.
+    Cigna Commercial, Wellpoint Advantage, UHC Commercial, Humana Medicare, and MultiPlan PHCS database rows report allowed_basis=payer_fee_schedule. Missing codes remain unpriced; an allowed fee alone does not establish the patient's share.
     Exact plan and CPT research comes from the bundled three-sheet NMCT matrix
     or a valid current Clinical Library plan_matrix upload; research is labeled
     and never implies a successful portal check or authorization approval.

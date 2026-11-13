@@ -7,7 +7,7 @@ from app.api.routers.commercial_flow.commercial_previsit_requirements import att
 from app.api.routers.commercial_flow.commercial_previsit_rate_reference import _attach_uhc_dsnp_office_reference
 from app.api.routers.commercial_flow.commercial_previsit_tpa import cigna_primary_route
 from app.insurance.identity import patient_benefits_bound, patient_plan_applies
-from app.insurance import blue_cross_proxy, botox_review, choice_plus_emg_proxy, cigna_clinic_quote, evidence_resolution, published_plan_benefits, uhc_dsnp_office_proxy
+from app.insurance import blue_cross_proxy, botox_review, choice_plus_emg_proxy, cigna_clinic_quote, evidence_resolution, payer_fees, published_plan_benefits, uhc_dsnp_office_proxy
 
 def _visit_context_parts(inputs: dict, source: dict) -> dict:
     context = {'coverage': {k: v for k, v in _api._coverage_snapshot(inputs, source).items() if k != 'other_active_coverage'},
@@ -288,20 +288,24 @@ def _finish_previsit(result: dict, case: dict, inputs: dict, source: dict, paylo
     _api.practice_prices.apply_visit_quote(result, review)
     attach_requirements(_api, result, case, planning_inputs, source, session, connections, payer_id)
     result.pop('cigna_office_fee_scenarios', None)
-    if office_scenarios := blue_cross_proxy.cigna_office_fee_scenarios(result, inputs['service_date']):
-        result['cigna_office_fee_scenarios'] = office_scenarios
     result.pop('fee_proxy_estimate', None)
-    if proxy := (cigna_clinic_quote.estimate(result, inputs['service_date'])
-                 or choice_plus_emg_proxy.choice_plus_emg_estimate(result, inputs['service_date'])
-                 or blue_cross_proxy.estimate(result, inputs['service_date'])
-                 or uhc_dsnp_office_proxy.estimate(result, inputs['service_date'])
-                 or blue_cross_proxy.cigna_estimate(result, inputs['service_date'])
-                 or blue_cross_proxy.cigna_oap_family_office_estimate(result, inputs['service_date'])
-                 or blue_cross_proxy.cigna_oap_office_scenario(result, inputs['service_date'])):
-        result['fee_proxy_estimate'] = proxy
+    if payer_fees.schedule_for_result(result):
+        result.pop('temporary_rate_reference', None)
+    else:
+        if office_scenarios := blue_cross_proxy.cigna_office_fee_scenarios(result, inputs['service_date']):
+            result['cigna_office_fee_scenarios'] = office_scenarios
+        if proxy := (cigna_clinic_quote.estimate(result, inputs['service_date'])
+                     or choice_plus_emg_proxy.choice_plus_emg_estimate(result, inputs['service_date'])
+                     or blue_cross_proxy.estimate(result, inputs['service_date'])
+                     or uhc_dsnp_office_proxy.estimate(result, inputs['service_date'])
+                     or blue_cross_proxy.cigna_estimate(result, inputs['service_date'])
+                     or blue_cross_proxy.cigna_oap_family_office_estimate(result, inputs['service_date'])
+                     or blue_cross_proxy.cigna_oap_office_scenario(result, inputs['service_date'])):
+            result['fee_proxy_estimate'] = proxy
     result.pop('provisional_collection_target', None)
-    if target := blue_cross_proxy.biopsy_collection_target(result, inputs['service_date']):
-        result['provisional_collection_target'] = target
+    if not payer_fees.schedule_for_result(result):
+        if target := blue_cross_proxy.biopsy_collection_target(result, inputs['service_date']):
+            result['provisional_collection_target'] = target
     result['nmct_bcbstx_refundable_advance_enabled'] = _api.network_participation.is_nmct_practice(session['practice_id'])
     result['collection_guidance'] = _api.collection_guidance.build(result, review)
     result.pop('botox_preview', None)

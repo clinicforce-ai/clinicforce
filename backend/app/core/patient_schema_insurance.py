@@ -8,18 +8,18 @@ def initialize_insurance(cursor) -> None:
         source_reference TEXT NOT NULL, effective_from DATE NOT NULL,
         PRIMARY KEY (category, code, effective_from)
     )""")
-    from app.insurance.medicare_fees import EFFECTIVE_FROM, FEE_ROWS, SOURCE_REFERENCE
-
+    cursor.execute("""CREATE TABLE IF NOT EXISTS payer_fee_schedule (
+        payer_key TEXT NOT NULL, category TEXT NOT NULL, code TEXT NOT NULL,
+        description TEXT NOT NULL, allowed_cents INTEGER NOT NULL CHECK (allowed_cents > 0),
+        source_reference TEXT NOT NULL, effective_from DATE NOT NULL,
+        PRIMARY KEY (payer_key, category, code, effective_from)
+    )""")
     cursor.execute("""CREATE TABLE IF NOT EXISTS medicare_fee_schedule (
         code TEXT NOT NULL, description TEXT NOT NULL,
         allowed_cents INTEGER NOT NULL CHECK (allowed_cents > 0),
         source_reference TEXT NOT NULL, effective_from TEXT NOT NULL,
         PRIMARY KEY (code,effective_from)
     )""")
-    cursor.executemany('''INSERT INTO medicare_fee_schedule
-        (code,description,allowed_cents,source_reference,effective_from)
-        VALUES (%s,%s,%s,%s,%s) ON CONFLICT (code,effective_from) DO NOTHING''',
-        [(code, description, cents, SOURCE_REFERENCE, EFFECTIVE_FROM) for code, description, cents in FEE_ROWS])
     cursor.execute("""CREATE TABLE IF NOT EXISTS insurance_cases (
         id TEXT PRIMARY KEY, patient_id TEXT NOT NULL REFERENCES patients(patient_id),
         share_manifest_id TEXT NOT NULL, evidence_manifest_id TEXT NOT NULL,

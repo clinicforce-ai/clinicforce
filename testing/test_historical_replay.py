@@ -6,6 +6,8 @@ import asyncio
 import base64
 import hashlib
 import json
+import re
+from pathlib import Path
 from unittest.mock import AsyncMock
 
 import pytest
@@ -25,14 +27,15 @@ EXCLUSION = {'decision': 'excluded_under_available_agreement',
 
 
 def synthetic_fee_rate(code, modifiers, units, *, service_date, place_of_service, provider_npi, patient_binding):
-    amounts = {code: cents for code, _, cents in medicare_fees.FEE_ROWS}
+    sql = (Path(__file__).resolve().parents[1] / 'scripts/sql/2026-11-13-medicare-fee-schedule.sql').read_text()
+    amounts = {c: int(cents) for c, cents in re.findall(r"^\s*\('([^']+)',\s*'[^']*',\s*(\d+),", sql, re.M)}
     if (code not in amounts or modifiers or not units or not place_of_service
-            or not provider_npi or not patient_binding or service_date < medicare_fees.EFFECTIVE_FROM):
+            or not provider_npi or not patient_binding or service_date < DAY):
         return None
     return {'id': f'medicare:{code}', 'code': code, 'modifier': '',
             'allowed_cents': amounts[code], 'basis': 'medicare_fee_schedule',
-            'source_reference': medicare_fees.SOURCE_REFERENCE,
-            'effective_from': medicare_fees.EFFECTIVE_FROM,
+            'source_reference': 'Synthetic Medicare SQL import',
+            'effective_from': DAY,
             'service_date': service_date, 'place_of_service': place_of_service,
             'provider_npi': provider_npi, 'patient_binding': patient_binding}
 

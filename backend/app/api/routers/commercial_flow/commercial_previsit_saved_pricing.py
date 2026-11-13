@@ -4,7 +4,7 @@ from __future__ import annotations
 from app.api.routers import commercial_estimator as _api
 from app.api.routers.commercial_flow.commercial_previsit_finish import _payer_plan_pricing_source
 from app.api.routers.commercial_flow.commercial_previsit_rate_reference import refresh_saved_temporary_rates
-from app.insurance import aetna_fees, blue_cross_proxy, choice_plus_emg_proxy, cigna_clinic_quote, group_contract_support, published_plan_benefits, uhc_dsnp_office_proxy
+from app.insurance import aetna_fees, blue_cross_proxy, choice_plus_emg_proxy, cigna_clinic_quote, group_contract_support, payer_fees, published_plan_benefits, uhc_dsnp_office_proxy
 from app.insurance.identity import patient_plan_applies
 from app.insurance.stedi_benefits.normalize import ambiguous_combined_zero_oop
 
@@ -209,8 +209,9 @@ def _reprice_saved_new_network(result: dict, case: dict, practice_id: str, payer
     result['price_range'] = price
     result.pop('arrival_collection', None)
     result.pop('planning_estimate', None)
-    is_aetna = aetna_fees.is_aetna_payer(str((payer or {}).get('display_name') or result.get('payer') or ''))
-    if (not payer and not is_aetna) or not case.get('previsit_raw_object_key') or not case.get('previsit_raw_sha256'):
+    payer_name = str((payer or {}).get('display_name') or result.get('payer') or '')
+    is_schedule_payer = aetna_fees.is_aetna_payer(payer_name) or bool(payer_fees.schedule_for_result({**result, 'payer': payer_name}))
+    if (not payer and not is_schedule_payer) or not case.get('previsit_raw_object_key') or not case.get('previsit_raw_sha256'):
         return
     try:
         raw = _api.object_store.get_object_bytes(case['previsit_raw_object_key'])
@@ -249,8 +250,9 @@ def refresh_saved_network_pricing(result: dict, case: dict, practice_id: str,
     current_network = (benefits.get('network_status'), benefits.get('network_source'))
     network_changed = (prior_network != current_network and current_network[1] in {
         'clinic_group_agreement', 'clinic_nonparticipation_rule', 'clinic_attested_phcs_roster'})
-    is_aetna = aetna_fees.is_aetna_payer(str((route_payer or {}).get('display_name') or result.get('payer') or ''))
-    if network_changed or saved_fep_standard_office_needs_reprice(result) or is_aetna:
+    payer_name = str((route_payer or {}).get('display_name') or result.get('payer') or '')
+    is_schedule_payer = aetna_fees.is_aetna_payer(payer_name) or bool(payer_fees.schedule_for_result({**result, 'payer': payer_name}))
+    if network_changed or saved_fep_standard_office_needs_reprice(result) or is_schedule_payer:
         payer_id = str((case.get('previsit_context') or {}).get('payer_id') or '')
         route = group_contract_support.eligibility_route(result, payer_id, route_payer)
         _reprice_saved_new_network(result, case, practice_id, route)
@@ -261,6 +263,9 @@ def refresh_saved_cross_payer_planning(result: dict, case: dict, practice_id: st
     for key in ('fee_proxy_estimate', 'temporary_rate_reference', 'cigna_clinic_rates', 'cigna_rate_conflict', 'aetna_diagnostic_reference',
                 'provisional_collection_target'):
         result.pop(key, None)
+    if payer_fees.schedule_for_result(result):
+        result.pop('cigna_office_fee_scenarios', None)
+        return
     context = case['previsit_context']
     result['visit_type'] = (context.get('inputs') or {}).get('visit_type')
     refresh_saved_temporary_rates(result, practice_id, context.get('inputs') or {},
