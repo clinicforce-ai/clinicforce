@@ -70,7 +70,7 @@ def test_missing_or_mixed_product_never_chooses_a_schedule():
 
 def test_lookup_uses_database_amount_and_leaves_missing_code_unpriced():
     db = FakeDatabase([{'code': '99203', 'allowed_cents': 10117,
-                        'source_reference': 'Synthetic BCBSTX fee row',
+                        'source_reference': 'BCBSTX synthetic fee row',
                         'effective_from': date(2026, 11, 13)}])
     lines = [{'id': 'office', 'code': '99203', 'units': 1, 'modifiers': []},
              {'id': 'missing', 'code': 'J0585', 'units': 1, 'modifiers': []},
@@ -84,6 +84,10 @@ def test_lookup_uses_database_amount_and_leaves_missing_code_unpriced():
     assert len(rates) == 1
     assert rates[0]['allowed_cents'] == 10117
     assert rates[0]['basis'] == 'payer_fee_schedule'
+    with patch.object(payer_fees, '_connection', return_value=db):
+        assert payer_fees.matching_rates('cigna', 'commercial', '2026-11-14', lines,
+            place_of_service='10', provider_npi='1234567890',
+            patient_binding='synthetic-person', product_binding='synthetic-product') == []
 
 
 @pytest.mark.parametrize(('payer', 'plan'), [

@@ -94,7 +94,8 @@ def matching_rates(payer: str, plan_category: str, service_date: str, lines: lis
             FROM payer_fee_schedule WHERE payer_key=%s AND category=%s AND code=ANY(%s)
             AND effective_from<=%s ORDER BY code, effective_from DESC''',
             (payer, plan_category, list(requested), day)).fetchall()
-    found = {row['code']: row for row in rows}
+    found = {row['code']: row for row in rows
+             if place_of_service == '11' or not row['source_reference'].startswith('BCBSTX ')}
     return [{
         'id': f"{payer}:{plan_category}:{found[line['code']]['effective_from']}:{line['code']}",
         'line_id': line['id'], 'code': line['code'], 'modifier': '', 'units': line['units'],
