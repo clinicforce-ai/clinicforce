@@ -35,9 +35,7 @@ export function networkEvidenceStatus(result: PrevisitEstimate | null) {
     !!price.lines?.length &&
     price.lines.every(
       (line) =>
-        ['payer_out_of_network', 'medicare_fee_schedule'].includes(
-          line.allowed_basis || '',
-        ) &&
+        ['payer_out_of_network', 'medicare_fee_schedule'].includes(line.allowed_basis || '') &&
         Number.isInteger(line.allowed_cents) &&
         line.allowed_cents! >= 0 &&
         line.rate_resolution?.status === 'RESOLVED' &&
