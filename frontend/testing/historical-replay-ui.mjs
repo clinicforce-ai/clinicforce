@@ -31,14 +31,14 @@ try {
     assert(html.includes('RPPO-UHC Complete Care Support TX-1A'), name)
     assert(html.includes('excluded from NMCT'), name)
     if (name === 'fixed_copay') assert(html.includes('$40.00'), name)
-    if (name === 'deductible_coinsurance') assert(html.includes('$75.33'), name)
+    if (name === 'deductible_coinsurance') assert(html.includes('$76.10'), name)
     if (name === 'multi_service') {
-      assert(html.includes('$114.07'), name)
-      for (const code of ['99204', '95907', '95886']) assert(html.includes(code), name)
+      assert(html.includes('$140.30'), name)
+      for (const code of ['99204', '95911', '95886']) assert(html.includes(code), name)
     }
     if (name === 'incomplete') assert(!html.includes('Amount to collect now: $0'), name)
     if (['deductible_coinsurance', 'multi_service'].includes(name))
-      assert(html.includes('CMS'), name)
+      assert(html.includes('clinic-approved Medicare fee schedule'), name)
   }
   console.log('Historical replay UI scenarios: 4 passed')
 } finally {
